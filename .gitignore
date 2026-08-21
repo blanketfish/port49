@@ -1,0 +1,14 @@
+# Build artifacts
+/bin/
+/dist/
+*.test
+*.out
+coverage.out
+
+# Local environment
+.env
+.env.local
+
+# Editor / OS
+.DS_Store
+*.swp
