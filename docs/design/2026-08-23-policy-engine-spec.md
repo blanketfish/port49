@@ -114,19 +114,21 @@ entire class.
 A rule is a whitespace-separated sequence of terms, matched against the canonical command
 vector.
 
-| Term | Matches |
-|---|---|
-| `word` | exactly that argument, case-insensitively |
-| `*` | exactly one argument, any value |
-| `**` | zero or more arguments — **trailing position only** |
-| `/re/` | exactly one argument matching the RE2 expression |
+| Term | Matches | Specificity |
+|---|---|---|
+| `word` | exactly that argument, case-insensitively | 4 (most specific) |
+| `@class` | one argument in a platform-defined entity class (§8) | 3 |
+| `/re/` | one argument matching the RE2 expression | 2 |
+| `*` | exactly one argument, any value | 1 |
+| `**` | zero or more arguments — **trailing position only** | 0 (least specific) |
 
 ```yaml
 permit:
   - show **                          # show, and anything after it
   - show bgp summary                 # exactly that, nothing more
   - clear counters *                 # one argument
-  - interface /^(Ethernet|Port-Channel)[0-9/.]+$/
+  - interface @physical              # platform-defined class
+  - interface /^(ethernet|port-channel)[0-9/.]+$/
 ```
 
 **Rules match the full vector.** There is no implicit prefix match — `show bgp summary`
@@ -142,7 +144,16 @@ rather than in the grammar.
 **Regex is confined to a single argument.** RE2 (Go's `regexp`) has no catastrophic
 backtracking, and a leaf regex can never span argument boundaries, so its blast radius is
 one position. Regex terms are also the only construct that degrades the effective-permission
-diff (§10), which is a reason to prefer literals and `*` where either will do.
+diff (§12), which is a reason to prefer literals, `@class`, and `*` where any will do.
+
+**Entity classes solve cross-platform naming.** A rule reading
+`deny: interface /^(management|mgmt)/` works on EOS and NX-OS and silently does nothing on
+Junos, where the interface is `fxp0` — no error, no warning, the deny simply never matches.
+Writing `deny: interface @management` instead delegates the spelling to the platform
+adapter, which classifies rather than canonicalizes. We never need to know that `ge-0/0/1`
+and `Ethernet1/1` are the same kind of thing; we only need each platform to say which of
+its names are management interfaces. A rule referencing a class the platform does not
+define is a **policy load error**, which makes the silent-no-match failure impossible.
 
 ### Pipeline stages
 
@@ -181,7 +192,7 @@ principal
   → grants              those whose subject matches AND whose scope matches this device
                         AND whose `expires` has not passed
   → roles               union across matching grants
-  → privilege           max over granted roles, or the grant's override
+  → privilege           max over granted roles (no grant-level override)
   → max_privilege       max over matching grants; absent means no escalation
   → effective rules     resolved permit/deny/pipe sets
   → av_pairs            rendered for this device's platform
@@ -207,11 +218,13 @@ never share a log line.
 
 ```
 normalize(request)
-  → if no session context             → DENY (context_missing)
-  → if command matches deny set        → DENY (rule, role)
-  → if command matches no permit rule  → DENY (default_deny)
+  → if no session context                → DENY (context_missing)
+  → collect every matching rule, permit and deny alike
+  → if none match                        → DENY (default_deny)
+  → winner = greatest specificity tuple; ties → deny
+  → if winner is a deny                  → DENY (rule, role)
   → for each pipeline stage:
-        if stage matches no pipe permit → DENY (pipe_stage, stage_name)
+        if stage matches no pipe permit  → DENY (pipe_stage, stage_name)
   → PERMIT (rule, role)
 ```
 
@@ -223,49 +236,125 @@ configurable per platform.
 
 ### 5.4 Composition across roles
 
-**Recommended: deny-overrides, order-independent.**
+**Most-specific match wins, resolved position by position. Ties go to deny.**
+
+There is exactly one deny mechanism. Permits and denies from every granted role are
+collected into one set, and the rule whose specificity tuple is greatest decides.
 
 ```
-permits = ∪ permit rules across granted roles
-denies  = ∪ deny  rules across granted roles
+specificity of a rule = the per-position tuple from §4,
+                        compared lexicographically
 
-decision = match(permits) ∧ ¬match(denies)          default: deny
+show chassis hardware   →  (lit, lit, lit)     permit
+show chassis **         →  (lit, lit, ** )     deny
+                                    ↑ first difference: lit > **  →  PERMIT
 ```
 
-Union is commutative, so reordering roles, grants, or rules cannot change any decision.
-That buys four things the design document already asks for:
+Specificity is a property of the rule, not of its position in the file, so **evaluation is
+order-independent**: reordering roles, grants, or rules within a role cannot change any
+decision. Formatters, merge conflicts, and role refactors are provably safe.
 
-- **The CI effective-permission diff becomes exact rather than sampled.** Under ordered
-  first-match, the effective set depends on rule position and a diff can only report *"of
-  the commands we tried, these changed."*
-- **`explain` names exactly one reason.** No shadowed rules.
-- **Reordering YAML is provably a no-op** — formatters, merge conflicts, and refactors
-  cannot silently change permissions.
-- **The broker can precompute the whole rule set at mint**, because an order-free result is
-  a value. This is what keeps the daemon inventory-free.
+Because rules insert into a trie and the result is a total function over command space, the
+**effective-permission diff stays exact** — old versus new is a computable difference, not a
+sample of whatever commands a test corpus happened to contain.
 
-Two useful properties follow: adding a deny can only reduce access, and only permit-set
-growth can widen it — so *"is this change privilege-expanding?"* is a cheap, exact CI gate.
+**Why not deny-overrides.** A global deny-wins rule is simpler to state, but it cannot
+express an exception. Once `show chassis **` is denied — say, in response to a CVE — the
+only remedy is to narrow the deny itself, which requires negation: *deny `show chassis`
+anything except `hardware`*. The leaf regex is RE2, which has **no lookahead**, so
+`/^(?!hardware$)/` does not compile, and the alternative is enumerating every subcommand
+positively and being wrong the next time the vendor adds one. Deny-overrides therefore
+needs an exception mechanism bolted on regardless; most-specific supplies one in the grammar
+already present. This is not hypothetical — a broad `show chassis *` deny added for a CVE
+breaking a backup account's `show chassis hardware` is the motivating case.
 
-**Cost.** A deny cannot be carved out by adding a role. The idiomatic answer is to express
-prohibitions as their own roles so they travel with the grant rather than hiding inside a
-capability:
+**What is given up, and what replaces it.** Under deny-overrides a deny is a guarantee.
+Under most-specific it is a default that a more specific permit can override. The
+replacement is not a second construct but **visibility**: CI MUST report every shadowed
+deny, naming the rule, the subject, and the permit that beats it.
+
+```
+⚠ SHADOWED — this deny will NOT apply:
+    svc_oxidized  permits "show chassis hardware"        (more specific)
+    security_ir   permits "show chassis cluster status"  (more specific)
+```
+
+You learn the deny is incomplete when you write it, not when a backup run fails.
+
+**Deliberate exemptions use the same mechanism.** A narrower permit is how an exception is
+expressed, so incident response reaching one command under a broad prohibition needs no new
+concept:
 
 ```yaml
 roles:
-  - name: bgp_operator
-    permit: [show bgp **, clear bgp /^[0-9]+$/ **]
-  - name: no_disruptive
-    deny:   [clear bgp all, reload **, write erase **]
+  - name: cve_2026_xxxx
+    reason: "CVE-2026-XXXX — SRX cluster subsystem"
+    deny:  [show chassis cluster **]
 
-grants:
-  - {subject: netops, scope: prod_edge, roles: [bgp_operator, no_disruptive]}
-  - {subject: netops, scope: lab,       roles: [bgp_operator]}
+  - name: cve_2026_xxxx_assess
+    reason: "CVE-2026-XXXX — IR needs cluster state to assess exposure"
+    permit: [show chassis cluster status]
 ```
 
-> **OPEN DECISION.** The alternative is most-specific-match-wins (longest matching prefix,
-> deny wins ties), which allows narrow carve-outs inside broad grants at the cost of
-> requiring specificity computation in `explain` and overlap reasoning in the diff. See §13.
+**Two consequences for CI.** A deny may be inert if shadowed, so *"adding a deny is always
+safe"* no longer holds; and a permit may override a deny, so *"only permit growth widens
+access"* becomes the check that matters. Both are computable from the trie, and the gate is
+stated directly: **this change makes command C permitted where it was denied.**
+
+### 5.5 Scoping policy to device state
+
+Scopes match device attributes (§10), and those attributes change. A scope keyed on a
+*changing* fact makes the population it selects shrink as reality changes, which turns
+mitigation into something that lapses on its own:
+
+```yaml
+scopes:
+  - name: srx_unpatched
+    match:
+      platform: juniper_junos
+      os_version: {lt: "21.4R3-S5"}
+    on_missing: include        # no version data → assume vulnerable
+    security_log: true         # membership changes log as security events
+
+grants:
+  - {subject: everyone, scope: srx_unpatched, roles: [cve_2026_xxxx]}
+```
+
+`everyone` is a built-in subject matching every principal. It is not a special deny path —
+the same role and grant machinery, applied universally — which is why there is still only
+one place to deny a command.
+
+Three properties make this materially better than a curated device list:
+
+- **Coverage includes devices that do not exist yet.** A device racked after the CVE lands
+  is covered the moment it appears in inventory. Hand-maintained lists cannot do this.
+- **Mitigation lifts per device as it is remediated**, so partial upgrades behave correctly
+  and no coordinated removal step is required.
+- **Scope size is the remediation burndown**, queryable rather than tracked in a spreadsheet.
+
+The same shape covers other lifecycle states: `{tag: change_freeze}` to deny configuration
+during a freeze, `{status: staged}` to restrict pre-production devices, `{status:
+decommissioning}` for read-only on the way out.
+
+**Two requirements this places on the implementation.**
+
+`on_missing` MUST be explicit where an attribute is optional, and the safe direction differs
+by rule type: for a deny-bearing scope, a missing attribute means *include* (assume
+vulnerable); for a permit-bearing scope it means *exclude*. A broken inventory sync silently
+lifting a mitigation is the failure to design against.
+
+`security_log: true` marks a scope whose membership changes are security events. This is
+required because a scope keyed on device state makes **source-of-truth write access
+security-relevant** — whoever can edit `os_version` can lift a mitigation without touching
+policy, and that field is often written by a discovery tool rather than a person. Version
+data used for security scoping SHOULD come from an attested path.
+
+Ordered version comparison across vendors is fragile; v1 supports exact and regex matching
+on version strings, with `lt`/`gte` as a per-platform refinement where the format is known
+to parse reliably.
+
+CI SHOULD report a scope that has matched no devices for an extended period — a mitigation
+whose population has emptied is dead code, and saying so is how policy cleans itself up.
 
 ---
 
@@ -310,15 +399,76 @@ role, not as a formality. Two CI checks make the relationship visible (§12).
 
 ### Abstract levels
 
-Levels are an **ordered enum** declared once:
+Levels are an **ordered enum**. `readonly`, `operator`, and `admin` ship built in, are
+reserved, and cannot be renamed or removed — that guarantees every shipped platform file
+keeps working regardless of what an operator declares. Unused levels cost nothing.
+
+Declaring `privilege_levels` **replaces the default ordering**, because order is what the
+max-join uses:
 
 ```yaml
-privilege_levels: [readonly, operator, admin]
+privilege_levels:
+  - {name: readonly}
+  - {name: read_only_limited, parent: readonly}
+  - {name: operator}
+  - {name: senior_operator,   parent: operator}
+  - {name: admin}
 ```
 
-The operator writes `privilege: readonly`; the platform adapter renders it. Where multiple
-roles are granted, the effective level is the **max** over the enum. A role with no
-`privilege` contributes nothing, which is what prohibition-only roles want.
+`parent:` is the escape hatch that makes custom levels practical. A new level would
+otherwise need a mapping for every platform in the fleet; `parent: operator` says *render as
+`operator` on any platform that does not define this level explicitly*, resolved
+transitively up the chain.
+
+This also turns an existing wart into declared behavior. NX-OS is role-native with two
+built-in roles, so `readonly` and `operator` render identically there — with `parent:` that
+is visible and intentional rather than a surprise. Usually it is exactly right:
+`read_only_limited` differs from `readonly` in *which commands port49 permits*, not in what
+the device needs to be told. Platforms may still override where the distinction is real.
+
+A level with no mapping and no resolvable `parent:` chain, on a platform present in
+inventory, is a **policy load error**.
+
+**Reordering the list is a breaking change.** Inserting a level mid-list changes every
+max-join that crosses it, and the effective-permission diff MUST report that as a privilege
+change rather than a cosmetic one.
+
+The operator writes `privilege: readonly` on a role. Where multiple roles are granted, the
+effective level is the **max** over the enum. A role with no `privilege` contributes
+nothing.
+
+### Three role shapes
+
+Privilege is declared on the **role**, never overridden on a grant. An override has nowhere
+to record *why* it exists, and — because the level also determines the device-local role
+that applies when port49 is unreachable — burying one in a grant row silently changes
+degraded-mode behavior. A named role can carry a `reason:`.
+
+Composition, not variants, prevents role explosion. A role may carry only a privilege:
+
+```yaml
+roles:
+  - name: read_only
+    privilege: readonly
+    permit: [show **]
+
+  - name: elevated_session
+    privilege: admin
+    reason: "device exposes show running-config only at level 15"
+    # no permit/deny — contributes a level and nothing else
+
+grants:
+  - {subject: svc_oxidized, scope: all_devices, roles: [read_only, elevated_session]}
+```
+
+Effective level is `max(readonly, admin)`; commands stay `show **`. One named elevation is
+granted where needed rather than forking `read_only_admin`, `read_only_operator`, and so on.
+
+| Shape | Carries | Example |
+|---|---|---|
+| commands + privilege | both | `read_only`, `bgp_operator` |
+| commands only | contributes nothing to the max | `no_disruptive`, `cve_2026_xxxx` |
+| privilege only | no rules | `elevated_session` |
 
 ### Attributes are transported, not understood
 
@@ -489,8 +639,8 @@ the **real principal** even though the wire said `$enab15$`.
 
 ## 8. Platform adapters
 
-A platform adapter is a small declarative file. Adapters ship with port49, are tested in the
-containerlab matrix where an image exists, and are contributable.
+A platform adapter is a small declarative file. Adapters ship built in, are verified in the
+containerlab matrix where an image exists, and are both overridable and contributable.
 
 ```yaml
 platforms:
@@ -500,6 +650,10 @@ platforms:
       readonly: ["shell:priv-lvl=1",  "shell:roles*network-operator"]
       operator: ["shell:priv-lvl=7"]
       admin:    ["shell:priv-lvl=15", "shell:roles*network-admin"]
+    entity_classes:
+      management: ['^Management[0-9]+$']
+      loopback:   ['^Loopback[0-9]+$']
+      physical:   ['^Ethernet[0-9/.]+$', '^Port-Channel[0-9]+$']
     enable_username: principal
     expands_abbreviations: true
     pipe_token: "|"
@@ -522,13 +676,169 @@ attribute is complete in four lines:
 
 | Field | Purpose | Required |
 |---|---|---|
-| `privilege` | level → AV pairs at session authorization | always |
+| `privilege` | level → attributes at session authorization | always |
 | `supports` | capability declaration (see §9) | always |
+| `entity_classes` | named sets of device entity names, referenced as `@class` in rules | if rules use classes |
 | `enable_username` | `principal`, or a template such as `$enab{level}$` | if enable is supported |
 | `expands_abbreviations` | whether the device sends resolved command words | if `commands` |
 | `pipe_token` / `pipe_authorized` | modifier separator; whether it reaches us | if `commands` |
+| `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
 | `service` | authorization `service` value if not `shell` | rarely |
 | `port_pattern` | expected `port` shape, used only for drift detection | optional |
+
+### Entity classes
+
+Entity classes **classify, they do not canonicalize**. port49 never needs to know that
+`ge-0/0/1` and `Ethernet1/1` denote the same kind of thing — a general cross-vendor
+canonical naming scheme is a substantial project in its own right and is not required here.
+Each platform states only which of *its* names belong to which class:
+
+```yaml
+  cisco_nxos:
+    entity_classes:
+      management: ['^mgmt[0-9]+$']
+  juniper_junos:
+    entity_classes:
+      management: ['^(fxp0|em0)$']
+```
+
+One rule — `deny: interface @management` — then means the same thing everywhere, and a
+platform that fails to define a referenced class produces a load error rather than a silent
+non-match.
+
+The same construct extends naturally to VRFs, VLAN ranges, and protocol instances. A more
+capable variant sources classes from **inventory** rather than regex — `@core_uplinks`
+defined by interface tags in the source of truth, so the class reflects the network rather
+than a naming convention. That is deliberately deferred: interface-level inventory is a far
+larger dataset (10,000 devices times tens of ports) than the device-level sync in §10.
+
+### Projection for session-only platforms
+
+Platforms that do not authorize per command receive port49's decision **projected** into
+their native model. Junos is the motivating case: `allow-commands` and `deny-commands` are
+returned as attributes at session authorization, generated from the role's rules rather than
+looked up from a static table.
+
+```yaml
+  juniper_junos:
+    supports: [session]
+    command_projection: junos_regex
+```
+
+A trie of literal prefixes converts to an alternation mechanically —
+`[start, **]` and `[file, **]` become `(start.*|file.*)` — and Junos uses extended regex, so
+the absence of lookahead is no constraint that our grammar does not already accept.
+
+**The risk is semantic, not syntactic.** Our precedence is most-specific-wins; the target
+platform resolves its own allow/deny interaction by its own rules, which may differ and have
+differed across releases. A policy correct in port49 can therefore be wrong on the device,
+silently, because nothing errors. Two requirements follow:
+
+- **Emit the resolved decision where possible.** Because evaluation is a total function, a
+  result expressible as a pure allowlist is emitted as `allow-commands` alone, and the
+  platform's own precedence never engages. Carve-outs force a `deny-commands` and reintroduce
+  it, because an exception cannot be expressed in an allowlist without negation.
+- **Differentially test the projection.** Generate the attributes, apply them in
+  containerlab, and assert that the device's own view — `show cli authorization` on Junos —
+  agrees with port49's decision across a corpus of probe commands. Where equivalence cannot
+  be established for a rule shape, CI MUST refuse the policy rather than ship something
+  unprovable.
+
+**Anchoring is a per-platform property.** Our rules match the full vector. A device treating
+`start.*` as unanchored would also match `request start …`, diverging from our semantics.
+That belongs in the adapter and is asserted in the lab, never assumed.
+
+**Importing existing configuration.** Simple alternations of prefix patterns convert to
+token rules mechanically; arbitrary regex does not. A migration tool MUST convert what it can
+and **flag the remainder for human review rather than approximating**, because a
+mistranslated deny is precisely the failure a migration must not introduce.
+
+### User-editable, day one
+
+Operators MUST be able to define and override platforms without an upstream change. A fleet
+containing Supermicro BMCs, Meinberg time servers, and HPE gear cannot wait on releases —
+that is the ticket-queue bottleneck the design exists to remove.
+
+Built-ins ship embedded in the binary; user files live in the policy repository and merge
+over them, per top-level key:
+
+```yaml
+# platforms/arista_eos.yaml — adds one class, inherits everything else
+platforms:
+  arista_eos:
+    entity_classes:
+      uplink: ['^Ethernet(49|50|51|52)$']
+```
+
+`replace: true` on a platform block discards the built-in and starts clean. `based_on:`
+declares a variant, using the same vocabulary as `parent:` on privilege levels:
+
+```yaml
+  whitebox_nos:
+    based_on: arista_eos
+    entity_classes:
+      management: ['^ma1$']
+```
+
+User files receive identical structural validation to shipped ones: required fields,
+attribute syntax, the 255-byte limit, and entity-class patterns must compile under RE2.
+
+### Knowing what is shipped
+
+Embedded definitions must not be opaque.
+
+**They are files.** Sources live at `platforms/*.yaml` in the repository — browsable and
+diffable across tags without running anything.
+
+**They are introspectable**, and honest about verification:
+
+```
+$ port49 platform list
+PLATFORM           SOURCE     VERIFIED       SUPPORTS
+arista_eos         built-in   containerlab   session,commands,config_commands
+cisco_nxos         built-in   containerlab   session,commands,config_commands
+juniper_junos      built-in   containerlab   session
+f5_bigip           built-in   community      session
+meinberg_lantime   local      —              session
+```
+
+A community-contributed adapter nobody has run against a real image MUST say so rather than
+appearing identical to one verified on every commit. `platform show <name>` prints a
+definition, `--effective` the merged result after overrides, and `platform export --all`
+writes them to disk.
+
+**Published documentation is generated from the embedded files** at release time, so it
+cannot drift from the binary.
+
+**And the platform set is pinned.** If `arista_eos.privilege.admin` gains an attribute in a
+release, upgrading the binary silently changes what every EOS admin session receives — a
+**binary upgrade becomes an unreviewed policy change**. Policy therefore pins a version:
+
+```yaml
+platform_set: 1.4.0
+```
+
+Upgrading the binary changes nothing about rendering. `port49 platform upgrade` moves the pin
+and reports exactly what changes:
+
+```
+platform_set 1.4.0 → 1.5.0
+
+  arista_eos.privilege.admin
+    + shell:roles*network-admin        (was absent)
+    affects 4,412 devices, 6 subjects
+
+  juniper_junos.supports
+    + config_commands                  ⚠ 2 roles have config rules
+                                         that were previously dead
+```
+
+CI SHOULD also report override drift — an override that now matches the built-in and can be
+removed, or a built-in change an override shadows — so local platform files do not rot
+silently as upstream improves.
+
+**`port49 platform export <name>`** emits a file suitable for an upstream pull request:
+written for one fleet on day one, contributed once proven.
 
 ### Unknown platforms
 
@@ -564,6 +874,26 @@ an operator to assert it:
 The third is evidence, not proof — an operator can enter config mode and immediately leave —
 so it MUST be evaluated statistically over a window rather than per session.
 
+**Reconciling accounting against authorization** generalizes the technique. Where command
+accounting is enabled, a command appearing in an accounting record with no corresponding
+authorization request proves the device decided it locally:
+
+```
+⚠ UNAUTHORIZED TIER — leaf-04
+    47 commands in accounting had no corresponding authorization request
+    example: "show interfaces", "show version", "ping 10.0.0.1"
+```
+
+Every platform has a way to under-authorize silently, and each spells it differently — a
+missing level on IOS (`aaa authorization commands 1`), a missing `config-commands` on NX-OS,
+a level list instead of `all` on EOS. Reconciliation finds the gap without knowing which
+spelling caused it, which is why it belongs here rather than in per-platform documentation.
+
+This matters most in combination with privilege level. A session returned at `priv-lvl=2`
+on a device configured only for `aaa authorization commands 15` submits **nothing** for
+authorization — every command in that session is decided locally, and port49's rules, however
+carefully written, are never consulted. The device looks entirely healthy throughout.
+
 ```
 $ port49 devices capabilities
 DEVICE      PLATFORM      SUPPORTS                          OBSERVED
@@ -588,42 +918,120 @@ Two checks fall out, and both are needed:
 
 ## 10. Device inventory
 
-### Admission and keys
+TACACS+ carries no device identity — the daemon observes a source address and nothing more.
+Every device attribute the engine depends on comes from an inventory, and so does the shared
+secret each NAS uses.
 
-RFC 8907 requires a shared key per NAS or NAS group. This is absent from the design
-document and is a prerequisite for everything above.
+### The inventory service
 
-```yaml
-devices:
-  admission:
-    - {cidr: 10.0.0.0/8,       key: "${TACACS_KEY_PROD}"}
-    - {cidr: 192.168.100.0/24, key: "${TACACS_KEY_LAB}", attributes: {env: lab}}
+Source-of-truth interaction belongs in its own workload, `port49-inventory`. This is the
+same rule the architecture applies one layer down: the daemon never talks to the directory,
+and neither the broker nor the daemon talks to NetBox.
+
+Three properties justify the separate component:
+
+- **Connector faults cannot reach the authentication path.** Connectors are a contributable
+  surface (below); running them out of process means a third-party connector that leaks
+  memory or chokes on a large response takes down a syncer, not authentication.
+- **Source-of-truth credentials live in exactly one workload.**
+- **It is the component permitted to be a singleton.** One replica, no leader election, no
+  high-availability story — because nothing depends on it being up. Placing the singleton
+  where availability does not matter is a deliberate architectural choice.
+
+```
+GET  /v1/snapshot                    full snapshot; ETag for cheap no-op refresh
+GET  /v1/snapshot/version            current version, for polling
+GET  /v1/snapshot/diff?from=<ver>    for CI and `port49 inventory diff`
+POST /v1/sync                        on-demand trigger
+GET  /v1/healthz
+GET  /v1/devices/{address}           diagnostic only — MUST NOT be used on the hot path
 ```
 
-Sources outside an admission entry are refused at the transport layer. RFC 9887 (§11 of the
-design document) replaces the key with mTLS, so a device record must be able to express
+**Consumers pull and cache; they never query per request.** A daemon calling this API per
+connection would make the syncer a hot-path dependency and rebuild the problem the component
+exists to prevent.
+
+**The service emits key *references*, never key material.** A snapshot carries
+`key_ref: prod_key`, and the daemon resolves that from its own secret mount. A compromised
+inventory service leaks the fleet list, not the ability to speak to it.
+
+### Admission and keys
+
+Admission splits along where the risk actually sits. The address list is not the security
+boundary — **the shared key is.** A device connecting from an admitted range without the
+right key sends unreadable data and gets nowhere. Admitting a broad range therefore costs
+little, provided key *assignment* is controlled.
+
+| Layer | Holds | Source |
+|---|---|---|
+| Inventory (synced) | device exists, its addresses, platform, attributes | NetBox / Nautobot |
+| Policy repository | key groups — which CIDR or attribute pattern maps to which key reference; default deny | reviewed in a pull request |
+| Secret manager | the key material | environment, Vault, or equivalent |
+
+```yaml
+# policy repository — intent
+key_groups:
+  - {match: {cidr: 10.0.0.0/8},       key_ref: prod_key}
+  - {match: {attributes: {env: lab}}, key_ref: lab_key}
+  # anything matching no group is refused
+```
+
+A device racked in a known site is admitted automatically with the correct key. One
+appearing in an unexpected range matches no key group and is refused. The fleet list is
+maintained once, in the source of truth, while the admission *decision* stays in review.
+
+RFC 9887 replaces the shared key with mutual TLS, so a device record MUST be able to express
 both.
 
-### Records
+### Device records
 
 ```yaml
   - name: leaf-01
     addresses: [10.0.1.5, 10.0.1.6, 2001:db8::5]
     platform: arista_eos
-    attributes: {site: dc1, role: leaf}
+    attributes: {site: dc1, role: leaf, os_version: "4.31.2F"}
 ```
 
-**Every address a device may source from must be listed.** TACACS is commonly sourced from
-a loopback or dedicated management interface that is not the device's primary address. A
-device that sources from an unlisted interface fails device binding, and the failure will
-not obviously trace back to inventory. `ip tacacs source-interface` — or the platform
-equivalent — MUST be pinned in the reference AAA configuration.
+**Every address a device may source from must be listed.** TACACS is commonly sourced from a
+loopback or dedicated management interface that is not the device's primary address. A
+device sourcing from an unlisted interface fails device binding, and the failure will not
+obviously trace back to inventory. `ip tacacs source-interface` — or the platform equivalent
+— MUST be pinned in the reference AAA configuration.
 
-### Source-of-truth sync
+### Connectors and sync cadence
 
-Connectors pull on a schedule and produce a snapshot. **The broker loads snapshots; it never
-queries a source of truth synchronously.** This is the same rule the design document applies
-to the directory, for the same reason.
+**NetBox and Nautobot** are the verified pair. Infrahub, Ansible inventory, and a plain file
+follow the same snapshot contract. A file connector is required regardless, as the inventory
+equivalent of the in-memory store — containerlab runs, CI policy tests, and `port49 explain`
+against a hypothetical device all need an inventory that is not a live source of truth.
+
+Four triggers, not one:
+
+- **Scheduled full sync every 10 minutes.** That is the window a newly-racked device sits
+  un-admittable if a webhook is missed, which is about the tolerance before it becomes a
+  ticket.
+- **Webhook-driven refresh.** Both products emit outbound webhooks on device create and
+  update, giving seconds for the common case without polling harder.
+- **`port49 inventory sync`** on demand.
+- **Full sync at startup**, refusing to serve with no snapshot at all.
+
+Four requirements:
+
+**Version detection.** NetBox 4.x renamed `device_role` to `role`; Nautobot 2.0 did the same
+and dropped `slug` from most models. The connector selects a mapping profile from the API
+root version, with an explicit override available.
+
+**GraphQL first.** At 10,000 devices, REST pagination is hundreds of round trips per sync.
+Both products expose GraphQL; one query returns devices, addresses, platform, site, role,
+and tags. REST remains a fallback for older installations.
+
+**Bounded change per sync.** A sync that would remove more than `max_removed_percent` of the
+fleet MUST refuse, retain the last good snapshot, and alarm. A partially-available source of
+truth or a mistyped filter would otherwise silently deauthorize the fleet.
+
+**Platform slug translation.** Real installations say `eos`, `arista-eos`, `arista_eos`, or
+`veos`. Ship an alias table, allow overrides, and warn on unrecognized slugs rather than
+falling back to generic in silence.
 
 ```yaml
 inventory:
@@ -632,66 +1040,99 @@ inventory:
       type: netbox
       url: https://netbox.example.com
       token: ${NETBOX_TOKEN}
-      interval: 15m
+      interval: 10m
       filter: {status: active, has_primary_ip: true}
       map:
-        site:     site.slug
-        role:     device_role.slug
-        platform: platform.slug
+        site:       site.slug
+        role:       device_role.slug
+        platform:   platform.slug
+        os_version: custom_fields.os_version
       safety:
         max_removed_percent: 10
 ```
 
-Connectors: **NetBox and Nautobot** are the tested pair; Infrahub, Ansible inventory, and a
-plain file follow the same snapshot contract. A file connector is required regardless, as
-the inventory equivalent of the in-memory store — containerlab runs, CI policy tests, and
-`port49 explain` against a hypothetical device all need an inventory that is not a live SoT.
+### How a daemon refreshes its snapshot
 
-Four requirements:
+```
+every 30s:
+  GET /v1/snapshot/version
+  if version == held.version:  done          ← the common case
+  GET /v1/snapshot  (If-None-Match: <etag>)
+  parse → build index → validate → atomic pointer swap
+```
 
-**Version detection.** NetBox 4.x renamed `device_role` → `role`; Nautobot 2.0 did the same
-and dropped `slug` from most models. The connector selects a mapping profile from the API
-root version, with an explicit override available.
+**Build fully, then swap.** The snapshot is parsed and indexed into a prefix trie
+(`address or CIDR → device, key_ref`) before anything is exchanged, then swapped by a single
+atomic pointer store. Readers take no lock, and in-flight connections complete against the
+snapshot they began with. Never mutate in place.
 
-**GraphQL first.** At 10,000 devices, REST pagination is hundreds of round trips per sync.
-Both products expose GraphQL; one query returns devices, addresses, platform, site, role,
-and tags. REST remains as a fallback for older installs.
+**Validate locally before swapping.** The service already applies bounded-change safety, but
+the daemon MUST NOT trust the payload: reject a snapshot that fails to parse, that is empty,
+or that drops more than the configured share; retain the previous one and alarm.
 
-**Bounded change per sync.** A sync that would remove more than `max_removed_percent` of the
-fleet MUST refuse, retain the last good snapshot, and alarm. A partially-available SoT or a
-mistyped filter would otherwise silently deauthorize the fleet.
+**The snapshot never expires.** Staleness is a metric and an alarm —
+`inventory_snapshot_age_seconds` — never a fail-closed. An admission table with a TTL means a
+prolonged syncer outage eventually halts all authentication fleet-wide, which is the
+readiness-probe mistake of §12 of the design document in a different form. A stale device
+list is a far smaller problem than no device list; revoking a specific device is a key
+rotation, not a sync.
 
-**Platform slug translation.** Real installs say `eos`, `arista-eos`, `arista_eos`, or
-`veos`. Ship an alias table, allow overrides, and warn on unrecognized slugs rather than
-falling back to generic in silence.
+**Cold start is the one case where readiness gating is correct.** A daemon with no snapshot
+genuinely cannot serve, so it remains unready and retries. This is safe precisely because,
+unlike store health, only *new* pods lack a snapshot — existing replicas continue serving and
+all endpoints are never lost at once. The last good snapshot SHOULD be persisted to local
+disk so a restart does not require the service at all.
 
-### Security note: SoT write access is privilege-granting
+**Key resolution stays local.** An unresolvable `key_ref` fails that device closed — not the
+daemon — and alarms, because that is a misconfiguration worth hearing about on the first
+device rather than the ten-thousandth.
 
-If scopes match on synced attributes, then whoever can change a device's `role` in NetBox
-can move it into or out of a scope — with no policy change, no PR, and no diff. The policy
-file looks untouched.
+**Every swap logs a summary** — `snapshot v1841 → v1842: +3 devices, -1, 2 changed` — so an
+unexpected fleet change is visible in the daemon's own logs, not only in the service's.
+
+### Source-of-truth write access is privilege-granting
+
+If scopes match on synced attributes (§5.5), whoever can change a device's `role` or
+`os_version` can move it into or out of a scope — with no policy change, no pull request, and
+no diff. The policy file looks untouched.
 
 Mitigations, designed in rather than documented afterward:
 
 - Scope-membership changes MUST appear in the sync diff and be reviewable.
 - A scope MUST be able to pin a device set explicitly instead of by attribute.
-- SoT write access MUST be documented as privileged.
+- Scopes carrying denies SHOULD set `security_log: true`, so membership changes are logged
+  and alerted as security events rather than routine inventory churn.
+- Attributes used for security scoping SHOULD come from an attested path rather than a
+  hand-editable field.
 
 > **Principle.** The source of truth supplies facts about devices; the policy repository
-> supplies intent. The moment an SoT tag can grant a permission, authorization has left code
-> review — which is the outcome the design document's §9 exists to prevent.
+> supplies intent. The moment a source-of-truth tag can grant a permission, authorization has
+> left code review — which is the outcome the design document's §9 exists to prevent.
 
 ---
 
 ## 11. Complete policy example
 
 ```yaml
-privilege_levels: [readonly, operator, admin]
+platform_set: 1.4.0
+
+privilege_levels:
+  - {name: readonly}
+  - {name: read_only_limited, parent: readonly}
+  - {name: operator}
+  - {name: admin}
+
+key_groups:
+  - {match: {cidr: 10.0.0.0/8},       key_ref: prod_key}
+  - {match: {attributes: {env: lab}}, key_ref: lab_key}
 
 scopes:
   - {name: all_devices, match: {}}
   - {name: dc_fabric,   match: {site: [dc1, dc2], role: [leaf, spine]}}
-  - {name: lab,         match: {env: lab}}
+  - name: srx_unpatched
+    match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}
+    on_missing: include
+    security_log: true
 
 roles:
   - name: read_only
@@ -699,6 +1140,13 @@ roles:
     permit:
       - show **
       - terminal length *
+
+  - name: read_only_limited
+    privilege: read_only_limited
+    permit:
+      - show version
+      - show interfaces **
+      - show ip route **
 
   - name: network_admin
     privilege: admin
@@ -719,59 +1167,79 @@ roles:
     privilege: operator
     permit:
       - configure **
-      - interface /^(ethernet|port-channel)[0-9/.]+$/
+      - interface @physical
       - shutdown
       - no shutdown
       - description **
       - end
     deny:
-      - interface /^(management|mgmt)/
+      - interface @management
+
+  - name: elevated_session
+    privilege: admin
+    reason: "device exposes show running-config only at level 15"
 
   - name: no_disruptive
     deny:
       - reload **
       - write erase **
 
+  - name: cve_2026_xxxx
+    reason: "CVE-2026-XXXX — SRX cluster subsystem"
+    deny:
+      - show chassis cluster **
+
+  - name: cve_2026_xxxx_assess
+    reason: "CVE-2026-XXXX — IR needs cluster state to assess exposure"
+    permit:
+      - show chassis cluster status
+
 subjects:
-  - name: netops_admins
-    group: "CN=netops-admins,OU=Groups,DC=example,DC=com"
-    enable: token
-    token_ttl: 60s
-
-  - name: noc_tier1
-    group: "CN=noc-tier1,OU=Groups,DC=example,DC=com"
-    enable: none
-    token_ttl: 60s
-
-  - name: svc_oxidized
-    identity: "system:serviceaccount:netops:oxidized"
-    enable: token
-    token_ttl: 900s
+  - {name: netops_admins, group: "CN=netops-admins,OU=Groups,DC=example,DC=com",
+     enable: token, token_ttl: 60s}
+  - {name: noc_tier1,     group: "CN=noc-tier1,OU=Groups,DC=example,DC=com",
+     enable: none,  token_ttl: 60s}
+  - {name: security_ir,   group: "CN=security-ir,OU=Groups,DC=example,DC=com",
+     enable: token, token_ttl: 60s}
+  - {name: svc_oxidized,  identity: "system:serviceaccount:netops:oxidized",
+     enable: token, token_ttl: 900s}
 
 grants:
-  - {subject: netops_admins, scope: all_devices, roles: [network_admin],
-     max_privilege: admin}
-
-  - {subject: noc_tier1, scope: all_devices, roles: [read_only, no_disruptive]}
-
-  - {subject: noc_tier1, scope: dc_fabric, roles: [interface_tech],
-     expires: 2026-12-01}
-
-  - {subject: svc_oxidized, scope: all_devices, roles: [read_only],
-     privilege: admin}
+  - {subject: netops_admins, scope: all_devices,   roles: [network_admin], max_privilege: admin}
+  - {subject: noc_tier1,     scope: all_devices,   roles: [read_only, no_disruptive]}
+  - {subject: noc_tier1,     scope: dc_fabric,     roles: [interface_tech], expires: 2026-12-01}
+  - {subject: svc_oxidized,  scope: all_devices,   roles: [read_only, elevated_session]}
+  - {subject: security_ir,   scope: srx_unpatched, roles: [cve_2026_xxxx_assess]}
+  - {subject: everyone,      scope: srx_unpatched, roles: [cve_2026_xxxx]}
 
 tests:
-  - {subject: noc_tier1, device: leaf-01, command: "show version",   expect: permit}
-  - {subject: noc_tier1, device: leaf-01, command: "reload",         expect: deny}
-  - {subject: noc_tier1, device: leaf-01, command: "show run | redirect ftp://x",
+  - {subject: noc_tier1,    device: leaf-01, command: "show version",   expect: permit}
+  - {subject: noc_tier1,    device: leaf-01, command: "reload",         expect: deny}
+  - {subject: noc_tier1,    device: leaf-01, command: "show run | redirect ftp://x",
      expect: deny}
   - {subject: svc_oxidized, device: leaf-01, command: "show running-config",
      expect: permit}
+  - {subject: svc_oxidized, device: srx-fw-04, command: "show chassis hardware",
+     expect: permit}      # more specific permit beats the CVE deny
+  - {subject: noc_tier1,    device: srx-fw-04, command: "show chassis cluster status",
+     expect: deny}
+  - {subject: security_ir,  device: srx-fw-04, command: "show chassis cluster status",
+     expect: permit}
 ```
 
-The `interface_tech` deny illustrates a real dialect problem: `management` is the EOS
-spelling and `mgmt0` is the NX-OS one. Either the regex knows both, or interface naming is
-something the adapter normalizes. See §13.
+Three things this example is chosen to show.
+
+**No vendor attribute string appears anywhere.** `interface @management` and
+`privilege: readonly` carry all the platform-specific knowledge, resolved by the adapter.
+
+**`svc_oxidized` composes two roles rather than overriding a level.** `read_only` supplies
+the command rules, `elevated_session` supplies the privilege, and the reason the elevation
+exists is recorded on the role that carries it.
+
+**The CVE mitigation is three lines and self-limiting.** It applies to every principal on
+every unpatched SRX including devices not yet racked, lapses per device as inventory reflects
+the upgrade, and admits a deliberate, narrow exemption for incident response through the same
+mechanism as everything else.
 
 ---
 
@@ -813,28 +1281,66 @@ the same name (§6), CI MUST name both so the override is deliberate.
 
 **`port49 devices capabilities`** reports the `supports`-versus-`observed` matrix from §9.
 
+**Shadowed-deny report.** Because a more specific permit can override a deny (§5.4), CI MUST
+name every shadowed deny, the subject it fails to bind, and the permit that beats it. This is
+what replaces the guarantee deny-overrides would have provided.
+
+**Privilege-expansion gate.** The check that matters under most-specific semantics is not
+"did the permit set grow" but **"does this change make command C permitted where it was
+denied"** — computable exactly from the trie.
+
+**`port49 platform upgrade`** reports what a platform-set bump changes, so a binary upgrade
+is never an unreviewed policy change (§8).
+
 **Access review** is a rendering of the flat grant table, not an investigation.
 
 ---
 
-## 13. Open decisions
+## 13. Decisions
 
-1. **Precedence.** Deny-overrides (recommended, §5.4) versus most-specific-match-wins.
-   Deny-overrides is order-free and makes the CI diff exact; most-specific allows narrow
-   carve-outs inside broad grants.
-2. **Grant shape.** Flat — subject, scope, roles, level, expiry, one row each — versus
-   nested under a subject. Flat is greppable and renders directly as the access-review
-   report; nested is less repetitive to author. The example in §11 assumes flat.
-3. **Role default privilege.** Whether a role carries a default level that a grant may
-   override (assumed in §11), or whether level is always set on the grant.
-4. **Privilege levels.** Fixed shipped enum versus user-extensible with shipped defaults.
-   Extensible costs a mapping per non-`priv-lvl`-native platform.
-5. **Device admission location.** Policy repository versus inventory snapshot. It is the
-   boundary between operator intent and imported fact, and blanket RFC 1918 admission blurs
-   it.
-6. **Entity-name normalization.** Whether the adapter normalizes interface and entity naming
-   across platforms (`Management1` / `mgmt0`), or whether rules carry per-platform spellings.
-   §11 shows the problem.
+Six questions were left open in the first draft of this document and have since been
+resolved. Recorded here because the reasoning matters more than the outcome.
+
+**1. Precedence — most-specific-wins, ties to deny.** Deny-overrides is simpler to state but
+cannot express an exception without negation, and RE2 has no lookahead. The motivating case
+was real: a broad `show chassis *` deny added for a CVE broke a backup account's
+`show chassis hardware`. Most-specific supplies exceptions in the existing grammar while
+keeping order-independence and an exact diff. There is exactly **one** deny mechanism; a
+shadowed deny is surfaced by CI rather than prevented by a second construct. (§5.4)
+
+**2. Grant shape — flat.** One row per subject × scope × roles. Greppable, renders directly
+as the access-review report, and makes a fleet-wide emergency grant a single appended line
+rather than a structural edit made under pressure. The cost is offboarding across scattered
+rows, addressed by tooling. (§11)
+
+**3. Privilege on the role, never overridden on a grant.** An override has nowhere to record
+why it exists, and because the level also selects the device-local role that applies when
+port49 is unreachable, an inline override silently changes degraded-mode behavior. Role
+explosion is avoided by composition — a privilege-only role such as `elevated_session` —
+rather than by variants. (§6)
+
+**4. Privilege levels — shipped defaults plus user extension.** `readonly`, `operator`, and
+`admin` are reserved and always present so shipped platform files always resolve; operators
+declare their own ordering and add levels, with `parent:` supplying a rendering fallback so a
+new level does not require a mapping for every vendor. (§6)
+
+**5. Device admission — inventory for existence, policy repository for key assignment.** The
+address list is not the security boundary; the key is. Splitting there means the fleet is
+maintained once in the source of truth while the admission decision stays in review. (§10)
+
+**6. Entity naming — classes, not canonicalization.** Adapters classify their own names into
+`@management`, `@physical`, and similar rather than mapping every vendor into a common
+scheme. A rule referencing an undefined class is a load error, which eliminates the silent
+non-match. (§4, §8)
+
+### Still open
+
+- **Ordered version comparison** across vendor version strings. v1 supports exact and regex
+  matching, with `lt`/`gte` as a per-platform refinement (§5.5).
+- **Inventory-sourced entity classes** — `@core_uplinks` from interface tags rather than
+  regex. Better, but requires interface-level sync at a far larger scale (§8).
+- **Projection equivalence** for each session-only platform: which rule shapes can be proven
+  to render faithfully, and which CI must refuse (§8).
 
 ---
 
@@ -842,20 +1348,68 @@ the same name (§6), CI MUST name both so the override is deliberate.
 
 Beyond those already listed in the design document's §14:
 
-- **Session authorization returns correct AV pairs per platform**, with mandatory versus
-  optional flags honored. A mandatory attribute a platform cannot parse must be caught here,
-  not in production.
-- **Case-insensitive literal matching**: `SHOW RUN` is treated as `show run`.
-- **Abbreviation handling**: on a platform with `expands_abbreviations: false`, an
-  abbreviated command either expands correctly or is denied — never silently unmatched.
-- **Pipeline enforcement**: `show run | redirect …` denied under a role permitting `show **`.
+**Matching and precedence**
+
 - **Full-vector matching**: `show bgp summary` does not match `show bgp summary detail`.
-- **Enable**: all three mechanisms, including the `$enab15$` username path resolving through
-  session context on `(nas, port)`.
-- **Config-mode inference**: a device with `aaa authorization config-commands` disabled is
-  detected and reported.
+- **Case-insensitive literals**: `SHOW RUN` is treated as `show run`.
+- **Most-specific resolution**: a permit of `show chassis hardware` beats a deny of
+  `show chassis **`, while `show chassis hardware detail` remains denied.
+- **Ties go to deny** for rules of equal specificity.
 - **Order independence**: a policy file with roles, grants, and rules shuffled produces
   byte-identical decisions across the full test corpus.
+- **Entity classes**: one rule using `@management` denies `Management1` on EOS, `mgmt0` on
+  NX-OS, and `fxp0` on Junos; a rule referencing a class a platform does not define fails at
+  load.
+- **Pipeline enforcement**: `show run | redirect …` denied under a role permitting `show **`;
+  chained stages each evaluated.
+- **Abbreviation handling**: on a platform with `expands_abbreviations: false`, an
+  abbreviated command either expands correctly or is denied — never silently unmatched.
+
+**Attributes and privilege**
+
+- **Session authorization returns correct attributes per platform**, with mandatory versus
+  optional honored. A mandatory attribute a platform cannot parse causes the device to reject
+  the session, so it must be caught in the lab.
+- **Attribute layering**: platform → role → grant, most specific winning, shadowing reported.
+- **255-byte argument limit** enforced at policy load, including generated projection
+  attributes.
+- **Unknown attributes default to optional.**
+- **Privilege composition**: `max` across granted roles over the declared ordering;
+  `parent:` resolves transitively; an unresolvable level fails at load.
+- **Enable**: all three mechanisms, including the `$enab15$` username path resolving through
+  session context keyed on `(nas, port)`.
+
+**Platform and projection**
+
+- **Projection equivalence**: generated `allow-commands`/`deny-commands` produce the same
+  decisions on a real device — asserted via `show cli authorization` on Junos — across a
+  probe corpus; CI refuses rule shapes that cannot be proven equivalent.
+- **Platform layering**: user files merge per top-level key; `replace: true` discards the
+  built-in; `based_on:` inherits.
+- **`platform_set` pinning**: changing the binary without moving the pin produces
+  byte-identical rendered attributes.
+
+**Inventory and capability**
+
+- **Snapshot refresh**: atomic swap; in-flight connections complete against the prior
+  snapshot; a malformed, empty, or over-shrinking snapshot is rejected and the previous one
+  retained.
+- **Snapshot never expires**: a daemon with a stale snapshot and an unreachable inventory
+  service continues authenticating, alarming on age.
+- **Cold start**: a daemon with no snapshot stays unready while existing replicas keep
+  serving.
+- **Unresolvable `key_ref`** fails that device closed, not the daemon.
 - **Inventory sync safety**: a sync removing more than the configured share is refused and
   the previous snapshot retained.
+- **Config-mode inference**: a device with config-command authorization disabled is detected
+  and reported.
+- **Accounting reconciliation**: commands present in accounting with no authorization request
+  are reported as an unauthorized tier.
 - **Unknown platform** falls back to generic and alarms; **unknown device** is refused.
+
+**Scoping**
+
+- **State-scoped mitigation**: a device leaving `srx_unpatched` on the next sync regains the
+  denied command with no policy change.
+- **`on_missing`**: a device lacking the scoped attribute is included for a deny-bearing
+  scope and excluded for a permit-bearing one.
