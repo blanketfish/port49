@@ -53,12 +53,12 @@ or `system:serviceaccount:netops:oxidized`. A subject is how policy addresses a 
 them, and it has exactly two forms — an LDAP group, or a literal identity. That single
 mechanism covers both directory-driven human access and hand-maintained service accounts.
 
-**Privilege level is the aperture; the role is the filter inside it.** The two are not
-independent — they are gates in series. The level determines what the device will let the
-session reach at all; command rules narrow what executes within that, and can never widen
-it. A backup account needs `admin` privilege so `show running-config` is *reachable*, while
-command rules confine it to `show`. Set the level too low and permitting rules become dead
-letters, because the device never submits those commands. See §6.
+**Privilege decides what the device will offer; the role decides what port49 will permit
+within it.** The two are not independent axes — the effective permission set is the
+intersection, and the role is always a subset. A backup account needs `admin` privilege so
+`show running-config` is *reachable*, while command rules confine it to `show`. Set the
+level too low and permitting rules become dead letters, because the device never submits
+those commands. See §6.
 
 ---
 
@@ -273,9 +273,12 @@ grants:
 
 ### What a privilege level is
 
-A privilege level is **the session's local access level on the device**. It is not an
-independent axis alongside command authorization — it is the *aperture within which command
-authorization operates*, and it is the policy that applies when port49 is unreachable.
+**Privilege decides what the device will offer. The role decides what port49 will let you
+run. The effective permission set is the intersection, and the role is always a subset.**
+
+A privilege level is the session's local access level on the device. It is not an
+independent axis alongside command authorization, and it is also the policy that applies
+when port49 is unreachable.
 
 ```
 login  →  broker returns  priv-lvl=15, shell:roles*network-admin
@@ -287,7 +290,7 @@ login  →  broker returns  priv-lvl=15, shell:roles*network-admin
               └─ gate 2: for commands the device submits, port49 rules decide.
 ```
 
-Command rules can only **narrow** what the level opened; they can never widen it. Returning
+Command rules can only **narrow** what the level offered; they can never widen it. Returning
 `priv-lvl=1` means the device will not offer `show running-config`, will never submit an
 authorization request for it, and a rule permitting it is dead. Conversely, a backup account
 needs `privilege: admin` so the command is *reachable*, while `permit: show **` is what
@@ -789,8 +792,8 @@ listing commands. This is contained, and is a reason to prefer literals and `*`.
 
 **Policy tests** run in CI against a file-backed inventory, as in §11.
 
-**Aperture checks.** Because privilege level and command rules are gates in series (§6),
-CI MUST report where they disagree. Neither of these is visible in any existing TACACS+
+**Intersection checks.** Because the effective permission set is the intersection of what
+the device offers and what port49 permits (§6), CI MUST report where the two disagree. Neither of these is visible in any existing TACACS+
 system, and both are ordinary review questions once surfaced:
 
 ```
