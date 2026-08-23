@@ -53,11 +53,12 @@ or `system:serviceaccount:netops:oxidized`. A subject is how policy addresses a 
 them, and it has exactly two forms — an LDAP group, or a literal identity. That single
 mechanism covers both directory-driven human access and hand-maintained service accounts.
 
-**Privilege level and command authorization are independent axes.** The level tells the
-device what shell to construct; the role governs what may execute inside it. Welding them
-together is a large part of why per-vendor read-only definitions are painful to maintain
-today. A backup account can hold `admin` privilege — so `show running-config` returns in
-full — while command rules confine it to `show`.
+**Privilege level is the aperture; the role is the filter inside it.** The two are not
+independent — they are gates in series. The level determines what the device will let the
+session reach at all; command rules narrow what executes within that, and can never widen
+it. A backup account needs `admin` privilege so `show running-config` is *reachable*, while
+command rules confine it to `show`. Set the level too low and permitting rules become dead
+letters, because the device never submits those commands. See §6.
 
 ---
 
@@ -268,55 +269,151 @@ grants:
 
 ---
 
-## 6. Privilege levels and AV pairs
+## 6. Privilege levels and session attributes
+
+### What a privilege level is
+
+A privilege level is **the session's local access level on the device**. It is not an
+independent axis alongside command authorization — it is the *aperture within which command
+authorization operates*, and it is the policy that applies when port49 is unreachable.
+
+```
+login  →  broker returns  priv-lvl=15, shell:roles*network-admin
+              │
+              ├─ gate 1: the DEVICE decides what this session can reach.
+              │          priv-lvl governs what is present in the CLI at all;
+              │          any device-local role carries its own permit/deny set.
+              │
+              └─ gate 2: for commands the device submits, port49 rules decide.
+```
+
+Command rules can only **narrow** what the level opened; they can never widen it. Returning
+`priv-lvl=1` means the device will not offer `show running-config`, will never submit an
+authorization request for it, and a rule permitting it is dead. Conversely, a backup account
+needs `privilege: admin` so the command is *reachable*, while `permit: show **` is what
+confines it once it is.
+
+**The device-local role is not vestigial.** It governs two situations that port49 does not:
+
+- **When port49 is unreachable.** Under `aaa authorization commands … group tacacs+ local`,
+  the device falls back to local authorization, and the role assigned at login is what
+  remains. This is the "active login" column of the design document's failure matrix — the
+  device role *is* the degraded-mode policy.
+- **Commands the device never submits.** With `aaa authorization commands 15` and no
+  `commands 1`, everything below that tier is governed by the device role alone, always.
+
+The device-local role SHOULD therefore be chosen as a sane approximation of the port49
+role, not as a formality. Two CI checks make the relationship visible (§12).
 
 ### Abstract levels
 
-Privilege levels are an **ordered enum** declared once:
+Levels are an **ordered enum** declared once:
 
 ```yaml
 privilege_levels: [readonly, operator, admin]
 ```
 
-The operator writes `privilege: readonly`. The platform adapter renders it. No vendor
-attribute string appears in operator-authored policy.
+The operator writes `privilege: readonly`; the platform adapter renders it. Where multiple
+roles are granted, the effective level is the **max** over the enum. A role with no
+`privilege` contributes nothing, which is what prohibition-only roles want.
 
-Where multiple roles are granted, the effective level is the **max** over the ordered enum.
+### Attributes are transported, not understood
 
-### Rendering
+Vendor attributes are unbounded — F5 partitions, Palo Alto access domains, Fortinet
+profiles, Nokia home directories, and whatever ships next quarter. port49 MUST NOT require
+knowledge of any of them.
 
-Attribute syntax follows RFC 8907 directly: `=` is mandatory, `*` is optional. No invented
-key, no translation layer.
+RFC 8907 already defines the wire format: `attribute=value` is mandatory,
+`attribute*value` is optional. Every vendor attribute ever invented fits that. port49's
+obligation is therefore to **transport faithfully and validate structurally**, never to
+interpret. Unboundedness stops being a problem provided the schema accepts anything and
+defaults to the non-breaking choice.
+
+### Where attributes are declared
+
+**Platform file**, for anything tied to a level. Operators may extend a shipped platform or
+define their own in the policy repository, with no upstream change required:
 
 ```yaml
 platforms:
-  arista_eos:
+  f5_bigip:
+    authorizes: [session]
     privilege:
-      readonly: ["shell:priv-lvl=1",  "shell:roles*network-operator"]
-      operator: ["shell:priv-lvl=7"]
-      admin:    ["shell:priv-lvl=15", "shell:roles*network-admin"]
-
-  cisco_nxos:
-    privilege:
-      readonly: ['shell:roles*"network-operator"']
-      operator: ['shell:roles*"network-operator"']
-      admin:    ['shell:roles*"network-admin"']
+      readonly: ["F5-LTM-User-Role*700", "F5-LTM-User-Partition*all",
+                 "F5-LTM-User-Console*1"]
+      admin:    ["F5-LTM-User-Role*0",   "F5-LTM-User-Partition*all",
+                 "F5-LTM-User-Console*1"]
 ```
 
-**Mandatory versus optional is not cosmetic.** A device that does not understand a
-*mandatory* attribute must reject the session outright. Sending `shell:roles` as mandatory
-to a platform that does not parse it breaks every login on that platform. Which attributes
-are mandatory per platform is exactly the knowledge that belongs in a shipped, tested file
-rather than in each organization's collective memory.
+Most vendor attributes live here, because most of them *are* the level expression.
 
-**Not every level is natively representable.** NX-OS is role-native with two built-in
-roles, so `readonly` and `operator` render identically and the distinction is carried
-entirely by command authorization. That is acceptable — it is the two-axes property from §2
-— but it must be visible in the platform file rather than silently surprising.
+**Role and grant**, keyed by platform, for anything that is not a level:
 
-**Platforms that are not `priv-lvl`-native** (Junos maps to `local_user_name`) MUST declare
+```yaml
+roles:
+  - name: read_only
+    privilege: readonly
+    permit: [show **]
+    attributes:
+      all: ["idletime*30", "timeout*480"]
+
+grants:
+  - subject: team_a
+    scope: f5_fleet
+    roles: [read_only]
+    attributes:
+      f5_bigip: ["F5-LTM-User-Partition*prod"]
+```
+
+Layering is **platform → role → grant**, most specific wins on a duplicate attribute name,
+and CI MUST report the shadowing so an override never happens silently.
+
+Values support a **fixed** substitution vocabulary — `{username}`, `{principal}`,
+`{device}`, `{privilege}` — and nothing more. `home-directory*/home/{username}` is the
+motivating case; a general template language would be a footgun.
+
+### Validation without semantics
+
+port49 cannot check what an attribute means. It MUST check everything else:
+
+- Exactly one `=` or `*` separator, non-empty attribute name, no duplicate names.
+- **Length.** The RFC's argument length field is one byte, so **255 bytes per attribute**,
+  and `arg_cnt` is likewise one byte. A generated `deny-commands` regex (§8) will exceed
+  this before anything else does, and it fails as a truncated or dropped attribute rather
+  than a clean error. Enforce at policy load.
+- Mandatory versus optional, with a warning on any mandatory attribute not recognized.
+
+**Unknown attributes default to optional (`*`).** A mandatory attribute a device cannot
+parse causes it to reject the entire session, breaking every login on that platform.
+Defaulting to optional means adding a custom attribute cannot take down a fleet; declaring
+one mandatory is then a deliberate, reviewable act.
+
+**Not every level is natively representable.** NX-OS is role-native with two built-in roles,
+so `readonly` and `operator` render identically and the distinction is carried entirely by
+command authorization. That is acceptable, but it MUST be visible in the platform file
+rather than silently surprising.
+
+**Platforms that are not `priv-lvl`-native** (Junos maps to `local-user-name`) MUST declare
 a mapping for every level. A missing mapping is a **policy load error in CI**, not a broken
 login at 3am.
+
+### Diagnosing an unfamiliar vendor
+
+Because port49 cannot validate semantics, it MUST make the outcome inspectable:
+
+```
+$ port49 explain --subject team_a --device f5-lb-01 --show-attributes
+session attributes that would be returned:
+  F5-LTM-User-Role*0            (optional)  ← platform f5_bigip, level admin
+  F5-LTM-User-Partition*prod    (optional)  ← grant override, shadows platform "all"
+  F5-LTM-User-Console*1         (optional)  ← platform f5_bigip, level admin
+  idletime*30                   (optional)  ← role read_only
+```
+
+And when a device rejects session authorization immediately after attributes are returned,
+port49 MUST name the likely cause rather than leaving it to be guessed: *"f5-lb-01 rejected
+session authorization; 1 mandatory attribute was sent (`X=Y`) — an unsupported mandatory
+attribute causes rejection."*
 
 ---
 
@@ -691,6 +788,25 @@ the diff reports *"argument 3 is regex-constrained and the constraint changed"* 
 listing commands. This is contained, and is a reason to prefer literals and `*`.
 
 **Policy tests** run in CI against a file-backed inventory, as in §11.
+
+**Aperture checks.** Because privilege level and command rules are gates in series (§6),
+CI MUST report where they disagree. Neither of these is visible in any existing TACACS+
+system, and both are ordinary review questions once surfaced:
+
+```
+⚠ DEAD RULES — interface_tech permits commands its privilege cannot reach
+    privilege: readonly  →  arista_eos priv-lvl=1
+    unreachable: configure **, interface /^(ethernet|port-channel)/, shutdown
+    the device will never submit these for authorization
+
+⚠ FALLBACK EXPOSURE — svc_oxidized
+    port49 rules confine it to:  show **
+    device role on failure:      network-admin  (full administrative access)
+    if port49 is unreachable, this subject has more access than policy grants
+```
+
+**Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
+the same name (§6), CI MUST name both so the override is deliberate.
 
 **`port49 devices capabilities`** reports the `supports`-versus-`observed` matrix from §9.
 
