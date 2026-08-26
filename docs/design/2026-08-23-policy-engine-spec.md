@@ -383,9 +383,14 @@ per-vendor configuration and fails in the safe direction.
 
 Letters are compared by equality because their meaning is vendor-specific: in Arista's scheme
 `F` and `M` mark lifecycle stage within one train, while Cisco's `E` and `S` are separately
-built trains that are genuinely not orderable. Refusing to compare rather than guessing is
-correct in both cases; the cost is a false positive when a genuinely patched device carries a
-different letter.
+built trains that are genuinely not orderable.
+
+**Letters are reached only when every preceding number is equal**, which makes incomparability
+rare in practice. Arista increments the third digit across the F-to-M transition, so
+`4.31.5M` versus `4.31.2F` resolves at position 2 — `2 < 5` — and the letters never enter into
+it. The genuine collision is `15.2(4)E10` versus `15.2(4)S10`, where the numeric prefixes match
+and position 3 is `E` against `S`; refusing there is correct, because those are different code
+bases rather than different points on one line.
 
 **That cost MUST be visible.** Any scope resolving a version comparison MUST report the
 devices it included because comparison failed:
