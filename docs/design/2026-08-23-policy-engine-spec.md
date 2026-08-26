@@ -50,8 +50,32 @@ Scopes are authored and describe intent. Keeping them separate is what makes
 
 **Principal is runtime; Subject is policy.** A principal is `CN=alice,OU=netops,O=example`
 or `system:serviceaccount:netops:oxidized`. A subject is how policy addresses a set of
-them, and it has exactly two forms — an LDAP group, or a literal identity. That single
-mechanism covers both directory-driven human access and hand-maintained service accounts.
+them, and it has exactly two forms — an LDAP group, or one or more literal identities. That
+single mechanism covers both directory-driven human access and hand-maintained service
+accounts.
+
+**A subject MAY list several identities.** Matching already resolves a set — an LDAP group
+yields many principals — so accepting a list costs nothing and makes credential migration a
+non-event:
+
+```yaml
+subjects:
+  - name: svc_oxidized
+    identity:
+      - "spiffe://port49/host/oxidized-01"        # VM, workload certificate
+      - "system:serviceaccount:netops:oxidized"   # Kubernetes, once migrated
+    enable: token
+    token_ttl: 900s
+```
+
+Both resolve to the same subject and therefore the same grants. An operator adds the second
+identity, cuts over, and removes the first — with no window in which the workload is denied
+and no policy change during the migration. It also covers a workload that legitimately runs
+in two places at once.
+
+Identities from different trust domains MUST remain distinguishable (§7 of the design
+document): listing a human and a machine identity under one subject is a policy load error,
+not a convenience.
 
 **Privilege decides what the device will offer; the role decides what port49 will permit
 within it.** The two are not independent axes — the effective permission set is the
@@ -188,7 +212,7 @@ explain` MUST say so when asked about a pipeline rule on such a platform.
 
 ```
 principal
-  → subjects            match by LDAP group membership or literal identity
+  → subjects            match by LDAP group membership or any listed identity
   → grants              those whose subject matches AND whose scope matches this device
                         AND whose `expires` has not passed
   → roles               union across matching grants
