@@ -349,9 +349,58 @@ security-relevant** — whoever can edit `os_version` can lift a mitigation with
 policy, and that field is often written by a discovery tool rather than a person. Version
 data used for security scoping SHOULD come from an attested path.
 
-Ordered version comparison across vendors is fragile; v1 supports exact and regex matching
-on version strings, with `lt`/`gte` as a per-platform refinement where the format is known
-to parse reliably.
+### Version comparison
+
+`lt` and `gte` on a version string use one generic comparator. Vendor version strings are not
+semver — `21.4R3-S5`, `4.31.2F`, `10.2(5a)`, `15.2(4)E10` — and a semver library would
+actively mis-order them, since semver treats a suffix after a dash as a *pre*-release and
+would sort Junos service release `21.4R3-S5` **below** `21.4R3`.
+
+Instead, tokenize into runs of digits and runs of letters, discarding separators
+(`.`, `-`, `(`, `)`, `_`, `/`), upper-casing letters, then compare element by element:
+
+| Comparison | Rule |
+|---|---|
+| digit run vs digit run | numeric |
+| letter run vs letter run | **equality only** — never alphabetical, since `M > F` is meaningless |
+| letter run vs digit run | incomparable |
+| one sequence is a prefix of the other | the shorter is lower |
+
+```
+21.4R2-S9  → (21,4,R,2,S,9)
+21.4R3     → (21,4,R,3)         position 3: 2 < 3   → R2-S9 is older
+4.31.2F    → (4,31,2,F)
+4.31.10F   → (4,31,10,F)        position 2: 2 < 10
+17.09.04a  → (17,9,4,A)
+17.09.04   → (17,9,4)           shorter is lower    → the rebuild is newer
+10.2(5a)   → (10,2,5,A)
+```
+
+**An incomparable version is treated exactly as a missing one**, resolving through
+`on_missing` — included in a deny-bearing scope, excluded from a permit-bearing one. If it
+cannot be determined whether a device is patched, it is assumed not to be. This requires no
+per-vendor configuration and fails in the safe direction.
+
+Letters are compared by equality because their meaning is vendor-specific: in Arista's scheme
+`F` and `M` mark lifecycle stage within one train, while Cisco's `E` and `S` are separately
+built trains that are genuinely not orderable. Refusing to compare rather than guessing is
+correct in both cases; the cost is a false positive when a genuinely patched device carries a
+different letter.
+
+**That cost MUST be visible.** Any scope resolving a version comparison MUST report the
+devices it included because comparison failed:
+
+```
+srx_unpatched: 47 devices
+  ⚠ 3 included because their version could not be compared to "21.4R3-S5"
+      srx-fw-22 (21.4X75-D40), srx-lab-01 ("unknown"), srx-fw-31 (21.2R1-EVO)
+```
+
+The remedy is then obvious — an explicit version list, a regex, or exclusion by another
+attribute. Silent inclusion is what makes this dangerous; reported inclusion makes it
+ordinary.
+
+Exact and regex matching on version strings remain available and require no comparator.
 
 CI SHOULD report a scope that has matched no devices for an extended period — a mitigation
 whose population has emptied is dead code, and saying so is how policy cleans itself up.
@@ -1328,6 +1377,13 @@ new level does not require a mapping for every vendor. (§6)
 address list is not the security boundary; the key is. Splitting there means the fleet is
 maintained once in the source of truth while the admission decision stays in review. (§10)
 
+**7. Version comparison — one generic comparator, no per-vendor setting.** Tokenize into
+digit and letter runs; digits compare numerically, letters by equality only. An incomparable
+version folds into `on_missing` and is assumed unpatched, and the devices affected are always
+reported rather than silently swept in. Fleets cluster at a few versions through natural
+upgrade cycles, so the ambiguous case is rare — and when it fires, over-mitigating is the
+right failure. (§5.5)
+
 **6. Entity naming — classes, not canonicalization.** Adapters classify their own names into
 `@management`, `@physical`, and similar rather than mapping every vendor into a common
 scheme. A rule referencing an undefined class is a load error, which eliminates the silent
@@ -1335,8 +1391,6 @@ non-match. (§4, §8)
 
 ### Still open
 
-- **Ordered version comparison** across vendor version strings. v1 supports exact and regex
-  matching, with `lt`/`gte` as a per-platform refinement (§5.5).
 - **Inventory-sourced entity classes** — `@core_uplinks` from interface tags rather than
   regex. Better, but requires interface-level sync at a far larger scale (§8).
 - **Projection equivalence** for each session-only platform: which rule shapes can be proven
