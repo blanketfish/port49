@@ -1394,12 +1394,27 @@ right failure. (§5.5)
 scheme. A rule referencing an undefined class is a load error, which eliminates the silent
 non-match. (§4, §8)
 
-### Still open
+### Deferred, with reasons
 
-- **Inventory-sourced entity classes** — `@core_uplinks` from interface tags rather than
-  regex. Better, but requires interface-level sync at a far larger scale (§8).
-- **Projection equivalence** for each session-only platform: which rule shapes can be proven
-  to render faithfully, and which CI must refuse (§8).
+Neither of these is an open question about the design. Both are closed for v1 on the
+reasoning below.
+
+**Inventory-sourced entity classes.** Defining `@core_uplinks` from interface tags in the
+source of truth is better in principle than a regex, because *which* ports are uplinks is a
+fact about the network rather than a naming convention. It is deferred because regex classes
+cover what command rules actually reference — `@management`, `@loopback`, `@physical`, and
+site-specific port ranges — while interface-level sync is a far larger dataset than the
+device-level sync in §10: tens of ports per device against 10,000 devices, rather than 10,000
+records. Revisit only when a rule proves inexpressible with regex classes, which is a concrete
+trigger rather than a guess.
+
+**Projection equivalence.** Which rule shapes render faithfully into a session-only platform's
+native model — Junos `allow-commands` and `deny-commands` — cannot be settled on paper. It
+requires a device image, a generated attribute pair, and a probe corpus compared against the
+device's own view (`show cli authorization`). It is therefore a work item in sequencing step 4,
+not a decision: the requirement is already specified in §8, and the outcome is a per-platform
+list of shapes CI refuses. Recorded here only so it is not mistaken for an unresolved design
+question.
 
 ---
 
