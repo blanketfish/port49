@@ -222,12 +222,69 @@ principal
   → av_pairs            rendered for this device's platform
 ```
 
-The result is written to session context as a **precomputed value**. The daemon evaluates
-against it and never consults inventory, policy, or the directory — preserving the design
-document's rule that the daemon's only dependency is the token store.
-
 Failure to match any grant means the device is unreachable for that principal, and the mint
 fails **before an SSH connection is opened**.
+
+### 5.1.1 Where the resolved policy waits
+
+The broker computes this result, but the daemon needs it — and the key it will eventually
+live under is not knowable at mint. Session context is keyed on `(nas, port)`, and the port
+is the device's tty or vty string, which does not exist until the device opens the
+authentication exchange. **The broker therefore cannot write session context.**
+
+The resolved result is instead stored as an immutable, **content-addressed policy blob**,
+referenced by the token:
+
+```
+blob:<sha256>            the resolved value: rules, pipe allowlist, attributes,
+                         privilege, max_privilege, enable mechanism
+token:(nas, username)    { handle, blob_hash, principal, ... }
+```
+
+On successful redemption the daemon creates session context, which holds **the hash rather
+than a copy**:
+
+```
+ctx:(nas, port)          { principal, username, privilege, blob_hash }
+```
+
+**Why content-addressed.** A batch mint resolves to the same value for every device in one
+scope — what varies is the rendered attributes, and those vary by *platform*, not by device.
+A sweep across 10,000 devices spanning four platforms therefore produces **four** blobs, not
+ten thousand. The blob is written once and referenced by every token that resolves to it.
+
+**Why the context holds a hash.** Blobs are immutable, so each daemon replica caches them by
+hash indefinitely with no invalidation problem. Per-command authorization is then one small
+context read plus a local cache hit, rather than two store round trips — which is what keeps
+the p99 target reachable.
+
+**Lifetime.** A blob carries a TTL slightly exceeding the maximum token TTL, so it expires on
+its own. No reference counting is required.
+
+**Cost.** One additional store read at redemption, on the *login* path. The p99 < 5ms target
+governs per-command authorization, which is unaffected.
+
+### 5.1.2 Refreshing live context
+
+The broker refreshes session context while a login remains active (design document §9), which
+requires it to discover which contexts exist. Nothing in the store makes that discoverable by
+itself, and scanning the keyspace is both store-specific and expensive at scale.
+
+The daemon MUST therefore maintain an index as it creates and tears down context:
+
+```
+contexts_by_principal:(principal)   → set of (nas, port)
+```
+
+Refresh then means: the broker re-resolves for a principal whose group membership has
+changed, writes a new blob if the result differs, and updates `blob_hash` in each of that
+principal's live contexts. Contexts are small, so the update is cheap, and because blobs are
+immutable a replica's cached copy of the old blob is never wrong — it is simply no longer
+referenced.
+
+This also makes **policy-driven revocation reach active sessions**, not only directory-driven
+revocation. A policy change that removes a grant produces a different blob, and live contexts
+pick it up on the next refresh.
 
 ### 5.2 Session authorization (daemon)
 
