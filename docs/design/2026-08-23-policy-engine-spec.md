@@ -493,6 +493,88 @@ whose population has emptied is dead code, and saying so is how policy cleans it
 
 ---
 
+### 5.6 Session context lifecycle
+
+**Creation.** Session context is created **only on successful token redemption**, by the
+daemon, keyed `(nas, port)`. Nothing else creates it. A session port49 did not authenticate
+therefore has no context and is denied — which is correct, since port49 has no basis on which
+to authorize it.
+
+```
+ctx:(nas, port)   { principal, username, rem_addr, privilege, blob_hash }
+```
+
+**Bound attributes.** `username` and `rem_addr` are recorded at creation and compared
+thereafter:
+
+| Exchange | Check |
+|---|---|
+| command authorization | `username` MUST match; a mismatch denies and invalidates |
+| enable, `enable_username: principal` | `username` MUST match |
+| enable, `$enab{level}$` platforms | `rem_addr` MUST match |
+
+**Teardown.** Four triggers, in decreasing reliability:
+
+1. **Successful redemption** for the same `(nas, port)` — overwrites unconditionally.
+2. **An authentication START for the same `(nas, port)` carrying a different username** —
+   invalidates, *including one port49 rejects*. A failed authentication is still evidence
+   that a new session is beginning on that line. With ASCII login the username may arrive in
+   a CONTINUE, so the check fires once the username is known rather than on the START itself.
+3. **Exec accounting START or STOP** for that port, where accounting is configured and
+   reaches us. START is the more useful signal: a STOP can be lost, but a START means whatever
+   was on that line is over regardless.
+4. **TTL expiry.**
+
+**TTL is a backstop, not a control.** It SHOULD match the session lifetime and be extended by
+activity. A short TTL was previously doing security work it cannot do — it narrows a window
+without closing it, while denying idle operators mid-session with `context_missing`. The
+bindings above close the window; the TTL only bounds abandoned state.
+
+#### Why `enable: auto` is restricted
+
+Method lists fall through to a later method only on **ERROR** (the server is unreachable), not
+on **FAIL** (an explicit reject). So a session that authenticates locally rather than through
+port49 implies port49 was *unreachable at that moment* — which means trigger 2 never fired,
+because we never saw the START.
+
+The remaining exposure is therefore: port49 unreachable when a session begins, reachable again
+by the time that session issues `enable`, on a platform whose enable exchange carries
+`$enab{level}$` rather than the principal. The stale context resolves and the new occupant
+inherits the previous user's ceiling.
+
+**`enable: auto` MUST NOT be available on a platform whose `enable_username` is not
+`principal`.** Granting it there is a policy load error. Those platforms use `enable: token`
+or `enable: none`, both of which require a credential the previous occupant's context cannot
+supply. `rem_addr` comparison covers the same case as defense in depth, and a mismatch is a
+high-signal event worth alerting on.
+
+**Blast radius when it does occur** is limited by the command-authorization username check:
+the escalated occupant obtains an elevated shell, but every command they run arrives with
+their own username, mismatches the stored one, and is denied — and a denial is FAIL, so no
+fallback to local authorization follows. The escalation converts into real access only on
+devices where command authorization does not cover that privilege tier, which is precisely
+what the accounting reconciliation in §9 exists to surface.
+
+**Local account names MUST NOT collide with principal names.** A device-local `bob` that is
+not the port49 principal `bob` matches on username and inherits the context. The reference AAA
+configuration MUST require disjoint namespaces for break-glass and local accounts, and port49
+SHOULD warn when it observes a local fallback succeed for a name it knows.
+
+#### To be established in the lab
+
+These are measurements, not assumptions, and belong in the containerlab matrix:
+
+- Whether the enable START carries `rem_addr` on each platform, and what it contains — the
+  field is free-form in RFC 8907 and devices are believed to send the bare address, but if any
+  platform includes a source port it discriminates sessions from a shared jump host, which
+  the address alone cannot.
+- Method-list fall-through and `deadtime` behavior per platform, since both bound the exposure
+  window above.
+- Whether exec accounting START and STOP arrive reliably enough for trigger 3 to be worth
+  depending on.
+
+---
+
 ## 6. Privilege levels and session attributes
 
 ### What a privilege level is
@@ -745,7 +827,7 @@ and lives on the subject, so two grants can never disagree about it.
 | Mechanism | Behavior | Fits |
 |---|---|---|
 | `none` | Enable is refused. The login-time privilege is all there is. | Read-only pollers whose granted level already suffices. |
-| `auto` | Daemon resolves `(nas, port)` → session context, checks the ceiling, PASSes. Any password accepted. | Tools that insist on typing `enable` where plumbing a second secret is awkward. |
+| `auto` | Daemon resolves `(nas, port)` → session context, checks the ceiling, PASSes. Any password accepted. **Available only where `enable_username: principal`** (§5.6). | Tools that insist on typing `enable` where plumbing a second secret is awkward. |
 | `token` | A second minted token, supplied at the prompt. | Anything needing a discrete, attributable escalation record. |
 
 ### Automation
@@ -1533,6 +1615,20 @@ Beyond those already listed in the design document's §14:
   `parent:` resolves transitively; an unresolvable level fails at load.
 - **Enable**: all three mechanisms, including the `$enab15$` username path resolving through
   session context keyed on `(nas, port)`.
+- **`enable: auto` is refused at policy load** on a platform whose `enable_username` is not
+  `principal`.
+- **Context teardown**: a redemption overwrites; an authentication START with a different
+  username invalidates even when rejected; an ASCII login invalidates once the username
+  arrives in a CONTINUE; an exec accounting START for the port invalidates.
+- **Context is never created without redemption** — a locally-authenticated session has none
+  and is denied.
+- **Username binding on the command path**: a request whose username differs from the stored
+  one is denied and the context invalidated.
+- **`rem_addr` binding on enable**: a mismatch is refused and alerted.
+- **Recycled line**: a context outliving its session is not inheritable by the next occupant
+  of that line under any of the teardown triggers.
+- **Idle session survives**: a login quiet for longer than the former five-minute TTL still
+  authorizes its next command.
 
 **Platform and projection**
 
