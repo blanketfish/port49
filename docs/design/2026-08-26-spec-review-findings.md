@@ -1,21 +1,32 @@
 # port49 — Spec review findings
 
 **Date:** 2026-08-26
-**Status:** In progress — clusters 1 and 3 resolved; 2, 4, the inconsistency sweep, and
-accounting remain
 **Reviews:** [`2026-08-21-port49-design.md`](2026-08-21-port49-design.md),
 [`2026-08-23-policy-engine-spec.md`](2026-08-23-policy-engine-spec.md)
 
 Independent review of both design documents. Findings verified before recording; several are
 errors introduced during the design session rather than reviewer speculation.
 
-Fix in the order below — the first cluster is the core data flow of the product.
+## Status
+
+| Item | State |
+|---|---|
+| Cluster 1 — token and login-context data flow | **resolved** |
+| Cluster 2 — matcher determinism | open |
+| Cluster 3 — the CHAP consequence | **resolved** |
+| Cluster 4 — remaining blocking issues | open |
+| Inconsistencies — nine items of stale text | open |
+| Architecture recommendations | open |
+| Gaps — accounting first | open |
+
+Clusters are ordered by severity; cluster 1 is the core data flow of the product. Resolved
+sections keep their original finding text beneath the resolution note.
 
 ---
 
-## Cluster 1 — token and session-context data flow — **RESOLVED**
+## Cluster 1 — token and login-context data flow
 
-Resolved in policy engine spec §5.1.1, §5.1.2, §5.6 and design document §8, §9.
+> **Resolved.** Policy engine spec §5.1.1, §5.1.2, §5.6 and design document §8, §9.
 Commits `8320715`, `f4ad48e`, `6d5189e`, `f4f579f`.
 
 - **1.1** — the broker writes an immutable, content-addressed policy blob referenced by the
@@ -32,9 +43,7 @@ Commits `8320715`, `f4ad48e`, `6d5189e`, `f4f579f`.
 - **1.3** — the receipt binds a hash of the **presented credential**, not `(nas, port, user)`
   alone. A CHAP re-prompt correctly fails rather than replaying.
 
-Original text follows for reference.
-
-## Cluster 1 — token and session-context data flow (as reported)
+### As reported
 
 **1.1 Session context cannot be created at mint.** Spec §5.1 has the broker writing session
 context as a precomputed value, but context is keyed on `(nas, port)` and the port — the
@@ -78,7 +87,7 @@ whether CHAP retries simply fail.
 
 ---
 
-## Cluster 2 — matcher determinism (blocking)
+## Cluster 2 — matcher determinism
 
 **2.1 Case normalization contradicts the shipped entity classes.** Spec §3 lower-cases the
 command vector and states that regex terms match as written. Spec §8 then ships
@@ -103,9 +112,9 @@ explicit rule for zero-width `**`.
 
 ---
 
-## Cluster 3 — the CHAP consequence — **RESOLVED**
+## Cluster 3 — the CHAP consequence
 
-Resolved in design document §8 ("Tokens are encrypted at rest") and §12. Commit `6d5189e`.
+> **Resolved.** Design document §8 ("Tokens are encrypted at rest") and §12. Commit `6d5189e`.
 
 Rather than making CHAP opt-in and accepting plaintext, **tokens are encrypted at rest** with
 the key in the daemon's secret mount, alongside the RFC 8907 shared keys it already holds. A
@@ -117,9 +126,7 @@ should size TTL to the sweep; the CHAP candidate set is bounded by store-enforce
 rather than by filtering; and match-and-delete is necessarily two steps, with the atomic
 removal — not the verification — being the single-use authority.
 
-Original text follows for reference.
-
-## Cluster 3 — the CHAP consequence (as reported)
+### As reported
 
 Keying tokens on `(nas, username)` exists to make CHAP verifiable, which requires the daemon
 to read token **plaintext**. Neither document acknowledges the consequence: the token store
