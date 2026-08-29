@@ -1,7 +1,8 @@
 # port49 — Spec review findings
 
 **Date:** 2026-08-26
-**Status:** Open — to be worked through before writing the implementation plan
+**Status:** In progress — clusters 1 and 3 resolved; 2, 4, the inconsistency sweep, and
+accounting remain
 **Reviews:** [`2026-08-21-port49-design.md`](2026-08-21-port49-design.md),
 [`2026-08-23-policy-engine-spec.md`](2026-08-23-policy-engine-spec.md)
 
@@ -12,7 +13,28 @@ Fix in the order below — the first cluster is the core data flow of the produc
 
 ---
 
-## Cluster 1 — token and session-context data flow (blocking)
+## Cluster 1 — token and session-context data flow — **RESOLVED**
+
+Resolved in policy engine spec §5.1.1, §5.1.2, §5.6 and design document §8, §9.
+Commits `8320715`, `f4ad48e`, `6d5189e`, `f4f579f`.
+
+- **1.1** — the broker writes an immutable, content-addressed policy blob referenced by the
+  token; the daemon creates login context on redemption holding the blob hash. Batch mints
+  collapse to one blob per platform. The daemon maintains a `contexts_by_principal` index so
+  the broker can find live contexts to refresh, which also makes policy-driven revocation
+  reach active logins.
+- **1.2** — context is created only on redemption and torn down by a later redemption, by an
+  authentication START on the same line under a different username (including a rejected
+  one), by exec accounting, or by TTL. Username and `rem_addr` are recorded and compared.
+  Because method lists fall through only on ERROR, `enable: auto` is now a policy load error
+  on platforms whose enable exchange does not carry a verifiable username. TTL is demoted to
+  a backstop and lengthened to session lifetime.
+- **1.3** — the receipt binds a hash of the **presented credential**, not `(nas, port, user)`
+  alone. A CHAP re-prompt correctly fails rather than replaying.
+
+Original text follows for reference.
+
+## Cluster 1 — token and session-context data flow (as reported)
 
 **1.1 Session context cannot be created at mint.** Spec §5.1 has the broker writing session
 context as a precomputed value, but context is keyed on `(nas, port)` and the port — the
@@ -81,7 +103,23 @@ explicit rule for zero-width `**`.
 
 ---
 
-## Cluster 3 — the CHAP consequence (blocking)
+## Cluster 3 — the CHAP consequence — **RESOLVED**
+
+Resolved in design document §8 ("Tokens are encrypted at rest") and §12. Commit `6d5189e`.
+
+Rather than making CHAP opt-in and accepting plaintext, **tokens are encrypted at rest** with
+the key in the daemon's secret mount, alongside the RFC 8907 shared keys it already holds. A
+store compromise alone yields nothing usable; rotation is trivial given sub-900s token
+lifetimes. CHAP remains fully supported and conformance is intact.
+
+Also recorded: `token_ttl` is an exposure window and not only a replay window, so batch mints
+should size TTL to the sweep; the CHAP candidate set is bounded by store-enforced expiry
+rather than by filtering; and match-and-delete is necessarily two steps, with the atomic
+removal — not the verification — being the single-use authority.
+
+Original text follows for reference.
+
+## Cluster 3 — the CHAP consequence (as reported)
 
 Keying tokens on `(nas, username)` exists to make CHAP verifiable, which requires the daemon
 to read token **plaintext**. Neither document acknowledges the consequence: the token store
