@@ -86,13 +86,34 @@ those commands. See §6.
 
 ---
 
+### Terminology
+
+Several words in this problem space are overloaded. These are used precisely throughout both
+documents.
+
+| Term | Means |
+|---|---|
+| **session** | the operator's authenticated state, 8–16 hours, held by the agent and never sent to a device |
+| **login** | one shell session on one device |
+| **login context** | the daemon's per-login record, keyed `(nas, port)` |
+| **session authorization** | the TACACS+ exchange at login — `service=shell` with an empty `cmd` — which returns the shell profile |
+| **token** | the short-lived, single-use, device-bound secret port49 mints |
+| **presented credential** | what arrives in the authentication packet: the token itself for PAP and ASCII, and `ppp_id ‖ challenge ‖ response` for CHAP |
+
+Note that **session authorization** names a protocol exchange while **session** names the
+operator's day; they are unrelated despite the shared word, and the protocol term is fixed by
+RFC 8907. **Token** and *handle* were previously used interchangeably; *handle* is retained
+only where the design document contrasts an opaque handle with a signed token.
+
+---
+
 ## 3. Request normalization
 
 The matcher never sees raw wire data. A platform adapter converts an authorization request
 into a canonical form:
 
 ```
-principal      resolved from session context, not from the wire
+principal      resolved from login context, not from the wire
 device         resolved from source address via inventory
 service        shell | <other>
 privilege      priv_lvl from the request header
@@ -228,9 +249,9 @@ fails **before an SSH connection is opened**.
 ### 5.1.1 Where the resolved policy waits
 
 The broker computes this result, but the daemon needs it — and the key it will eventually
-live under is not knowable at mint. Session context is keyed on `(nas, port)`, and the port
+live under is not knowable at mint. Login context is keyed on `(nas, port)`, and the port
 is the device's tty or vty string, which does not exist until the device opens the
-authentication exchange. **The broker therefore cannot write session context.**
+authentication exchange. **The broker therefore cannot write login context.**
 
 The resolved result is instead stored as an immutable, **content-addressed policy blob**,
 referenced by the token:
@@ -241,7 +262,7 @@ blob:<sha256>            the resolved value: rules, pipe allowlist, attributes,
 token:(nas, username)    { handle, blob_hash, principal, ... }
 ```
 
-On successful redemption the daemon creates session context, which holds **the hash rather
+On successful redemption the daemon creates login context, which holds **the hash rather
 than a copy**:
 
 ```
@@ -266,7 +287,7 @@ governs per-command authorization, which is unaffected.
 
 ### 5.1.2 Refreshing live context
 
-The broker refreshes session context while a login remains active (design document §9), which
+The broker refreshes login context while a login remains active (design document §9), which
 requires it to discover which contexts exist. Nothing in the store makes that discoverable by
 itself, and scanning the keyspace is both store-specific and expensive at scale.
 
@@ -289,9 +310,9 @@ pick it up on the next refresh.
 ### 5.2 Session authorization (daemon)
 
 On `service=shell` with an empty `cmd`, the daemon returns the AV pairs already stored in
-session context. No computation, no platform knowledge, one store read.
+login context. No computation, no platform knowledge, one store read.
 
-If session context is absent, the daemon fails closed and logs a distinct reason —
+If login context is absent, the daemon fails closed and logs a distinct reason —
 `context_missing` is operationally very different from `denied_by_policy` and the two must
 never share a log line.
 
@@ -299,7 +320,7 @@ never share a log line.
 
 ```
 normalize(request)
-  → if no session context                → DENY (context_missing)
+  → if no login context                → DENY (context_missing)
   → collect every matching rule, permit and deny alike
   → if none match                        → DENY (default_deny)
   → winner = greatest specificity tuple; ties → deny
@@ -493,9 +514,9 @@ whose population has emptied is dead code, and saying so is how policy cleans it
 
 ---
 
-### 5.6 Session context lifecycle
+### 5.6 Login context lifecycle
 
-**Creation.** Session context is created **only on successful token redemption**, by the
+**Creation.** Login context is created **only on successful token redemption**, by the
 daemon, keyed `(nas, port)`. Nothing else creates it. A session port49 did not authenticate
 therefore has no context and is denied — which is correct, since port49 has no basis on which
 to authorize it.
@@ -801,7 +822,7 @@ principal.
 Three consequences:
 
 1. No token exists for it — the operator is already logged in and typing interactively.
-2. The username does not identify the principal, so **session context MUST be keyed on
+2. The username does not identify the principal, so **login context MUST be keyed on
    `(nas, port)`**, with the username as a verified attribute rather than part of the key.
 3. The enable password was never a second authentication. It is a shared device secret or a
    per-user password in the TACACS database. With certificate identity, whoever holds that
@@ -827,7 +848,7 @@ and lives on the subject, so two grants can never disagree about it.
 | Mechanism | Behavior | Fits |
 |---|---|---|
 | `none` | Enable is refused. The login-time privilege is all there is. | Read-only pollers whose granted level already suffices. |
-| `auto` | Daemon resolves `(nas, port)` → session context, checks the ceiling, PASSes. Any password accepted. **Available only where `enable_username: principal`** (§5.6). | Tools that insist on typing `enable` where plumbing a second secret is awkward. |
+| `auto` | Daemon resolves `(nas, port)` → login context, checks the ceiling, PASSes. Any password accepted. **Available only where `enable_username: principal`** (§5.6). | Tools that insist on typing `enable` where plumbing a second secret is awkward. |
 | `token` | A second minted token, supplied at the prompt. | Anything needing a discrete, attributable escalation record. |
 
 ### Automation
@@ -848,7 +869,7 @@ Worth noting that `enable: none` is often the honest answer for backup accounts:
 `enable` because the account landed at privilege 1. Granting the read-only role at `admin`
 privilege removes the escalation entirely.
 
-After a successful escalation, session context records the new privilege level, since
+After a successful escalation, login context records the new privilege level, since
 command rules may differ above and below the line, and accounting attributes the event to
 the **real principal** even though the wire said `$enab15$`.
 
@@ -1614,7 +1635,16 @@ Beyond those already listed in the design document's §14:
 - **Privilege composition**: `max` across granted roles over the declared ordering;
   `parent:` resolves transitively; an unresolvable level fails at load.
 - **Enable**: all three mechanisms, including the `$enab15$` username path resolving through
-  session context keyed on `(nas, port)`.
+  login context keyed on `(nas, port)`.
+- **Receipt binds the credential**: a retry presenting a different credential from the same
+  device, line, and username is rejected, while a byte-identical retransmission replays.
+- **CHAP verification**: a candidate set of several unspent tokens resolves to the one that
+  produces the matching digest; the atomic removal, not the verification, decides single use,
+  and two replicas racing the same token yield exactly one success.
+- **CHAP re-prompt**: a fresh challenge does not match the receipt and correctly fails rather
+  than replaying.
+- **Encryption at rest**: a store dump contains no recoverable token; redemption succeeds
+  across a key rotation window in which both keys are accepted.
 - **`enable: auto` is refused at policy load** on a platform whose `enable_username` is not
   `principal`.
 - **Context teardown**: a redemption overwrites; an authentication START with a different
