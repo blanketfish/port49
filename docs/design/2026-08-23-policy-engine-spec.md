@@ -140,9 +140,18 @@ entire class.
 
 1. **Strip the trailing `<cr>`** where the platform sends one.
 2. **Split at the pipe token** into a command and zero or more pipeline stages.
-3. **Lower-case for comparison.** Device CLIs accept mixed-case keywords, so
-   case-sensitive matching would be trivially bypassable with `SHOW run`. Literal terms
-   therefore match case-insensitively. Regex terms match as written.
+3. **Comparison is case-insensitive; the vector is not altered.** Device CLIs accept
+   mixed-case keywords, so a case-sensitive match is bypassable with `SHOW run`. Literal
+   terms and entity-class patterns therefore compare case-insensitively, and regex terms
+   compile case-insensitive **by default**, with `(?-i)` available to opt into exactness
+   where a device object really is case-sensitive (IOS ACL names, for instance).
+
+   Insensitive must be the default because a case-sensitive deny fails *open*: a rule
+   reading `deny: interface /^Management/` would otherwise be evaded by typing
+   `interface management1`.
+
+   The vector itself is left as received, so accounting records what the operator actually
+   typed.
 4. **Expand abbreviations** where `expands_abbreviations: false`. If a platform sends what
    the operator typed rather than the resolved command, `sh run` must be expanded to
    `show running-config` before matching, or `show **` is bypassable. Where port49 cannot
@@ -161,11 +170,23 @@ vector.
 
 | Term | Matches | Specificity |
 |---|---|---|
-| `word` | exactly that argument, case-insensitively | 4 (most specific) |
-| `@class` | one argument in a platform-defined entity class (§8) | 3 |
+| `word` | exactly that argument, case-insensitively | 3 (most specific) |
+| `@class` | one argument in a platform-defined entity class (§8) | 2 |
 | `/re/` | one argument matching the RE2 expression | 2 |
 | `*` | exactly one argument, any value | 1 |
 | `**` | zero or more arguments — **trailing position only** | 0 (least specific) |
+
+**`@class` and `/re/` share a rank deliberately.** Neither is reliably narrower than the
+other: a regex may name exactly one interface while a class holds forty-eight, or the
+reverse. Ranking one above the other would be an invented ordering that is wrong half the
+time, and it would let `interface @physical` silently beat
+`interface /^Ethernet1$/`. Equal rank means neither dominates the other at that position, so
+the conflict resolves conservatively (§5.4).
+
+A corollary: `/^.*$/` is semantically identical to `*` but would rank higher, so CI SHOULD
+flag a regex that is equivalent to `*` or to a literal and require the simpler spelling.
+This is a lint concern rather than a soundness one, but an unlinted policy would let a rule
+buy specificity by how it is written rather than by what it constrains.
 
 ```yaml
 permit:
@@ -322,9 +343,9 @@ never share a log line.
 normalize(request)
   → if no login context                → DENY (context_missing)
   → collect every matching rule, permit and deny alike
-  → if none match                        → DENY (default_deny)
-  → winner = greatest specificity tuple; ties → deny
-  → if winner is a deny                  → DENY (rule, role)
+  → if no permit matches                 → DENY (default_deny)
+  → if no permit dominates every
+    matching deny (§5.4)                 → DENY (rule, role)
   → for each pipeline stage:
         if stage matches no pipe permit  → DENY (pipe_stage, stage_name)
   → PERMIT (rule, role)
@@ -338,23 +359,87 @@ configurable per platform.
 
 ### 5.4 Composition across roles
 
-**Most-specific match wins, resolved position by position. Ties go to deny.**
+> **Permit if some permit rule dominates every matching deny. Otherwise deny.**
 
 There is exactly one deny mechanism. Permits and denies from every granted role are
-collected into one set, and the rule whose specificity tuple is greatest decides.
+collected into one set and resolved by specificity — but specificity is a **partial** order,
+not a total one, and that is the point.
+
+**Specificity tuples.** A rule matching an N-argument command produces an N-element tuple:
+one slot per argument of the *command*, not per term of the rule, each holding the rank
+(§4) of whatever term covered it. A trailing `**` contributes a `0` for every position it
+absorbs.
 
 ```
-specificity of a rule = the per-position tuple from §4,
-                        compared lexicographically
-
-show chassis hardware   →  (lit, lit, lit)     permit
-show chassis **         →  (lit, lit, ** )     deny
-                                    ↑ first difference: lit > **  →  PERMIT
+command:    show     chassis    hardware
+            ────     ───────    ────────
+rule A:     show     chassis    hardware
+                3          3           3      →  (3, 3, 3)
+rule B:     show     chassis    **
+                3          3           0      →  (3, 3, 0)
+rule C:     show     **
+                3          0           0      →  (3, 0, 0)
 ```
 
-Specificity is a property of the rule, not of its position in the file, so **evaluation is
-order-independent**: reordering roles, grants, or rules within a role cannot change any
-decision. Formatters, merge conflicts, and role refactors are provably safe.
+**Dominance.** Rule X dominates rule Y when X is greater than or equal to Y at *every*
+position and strictly greater at *at least one*. This is all-or-nothing: losing a single
+position is enough to fail, no matter how many others are won.
+
+```
+copy running-config tftp://evil/
+
+permit copy **                     (3, 0, 0)
+deny   * * /^(tftp|ftp|scp|http):/ (1, 1, 2)
+
+does the permit dominate?   requires ≥ at EVERY position
+  pos 1:  3 ≥ 1   ✓
+  pos 2:  0 ≥ 1   ✗   ← fails here
+→ no                                          result: DENY
+```
+
+The two rules disagree about which position matters — the permit named the command, the
+deny named the destination — so no dominance relation exists and the deny stands.
+
+**The test is one-sided.** A deny never has to dominate anything; it is the default and wins
+by not being beaten. Only the permit must prove itself. That asymmetry is the safety
+property: an exception is admitted only when it is unambiguously narrower, never merely
+narrower in the places its author happened to care about.
+
+```
+show chassis hardware
+
+permit show chassis hardware  (3, 3, 3)
+deny   show chassis **        (3, 3, 0)
+  pos 1: 3 ≥ 3 ✓   pos 2: 3 ≥ 3 ✓   pos 3: 3 ≥ 0 ✓, strictly greater
+→ dominates                                   result: PERMIT
+```
+
+**The practical rule for authors:** an exception must be at least as precise as the rule it
+excepts, at every position that rule constrained. Naming `copy running-config` does not buy
+back an unrestricted destination — the destination must be named too:
+
+```
+permit copy running-config @backup_targets   (3, 3, 2)   → dominates, PERMIT
+permit copy running-config *                 (3, 3, 1)   → pos 3 fails, DENY
+```
+
+**Why not a single score.** Lexicographic comparison, a sum of ranks, and a run-collapsed
+distance metric were each evaluated and each fails on real policies, in different places.
+Any scheme reducing the tuple to one comparable number *must* produce an answer even when
+the rules genuinely disagree about which position matters — so some case always resolves
+against intent. Under lexicographic ordering, for instance, a permit naming the first word
+beats any deny constraining a later argument, defeating exfiltration and disruptive-form
+denies outright. The vulnerability is in the collapsing, not the arithmetic. A partial order
+that declines to rank incomparable rules is the only formulation that stays conservative in
+every case.
+
+**Ties and explain.** Where several rules of the same verdict match and `explain` must name
+one, the tie is broken by lexicographic comparison of the tuples, then by declaration order.
+This is presentation only and cannot change a decision.
+
+Specificity is a property of the rule and the command, never of position in a file, so
+**evaluation is order-independent**: reordering roles, grants, or rules within a role cannot
+change any decision. Formatters, merge conflicts, and role refactors are provably safe.
 
 Because rules insert into a trie and the result is a total function over command space, the
 **effective-permission diff stays exact** — old versus new is a computable difference, not a
@@ -1539,12 +1624,20 @@ is never an unreviewed policy change (§8).
 Six questions were left open in the first draft of this document and have since been
 resolved. Recorded here because the reasoning matters more than the outcome.
 
-**1. Precedence — most-specific-wins, ties to deny.** Deny-overrides is simpler to state but
-cannot express an exception without negation, and RE2 has no lookahead. The motivating case
-was real: a broad `show chassis *` deny added for a CVE broke a backup account's
-`show chassis hardware`. Most-specific supplies exceptions in the existing grammar while
-keeping order-independence and an exact diff. There is exactly **one** deny mechanism; a
-shadowed deny is surfaced by CI rather than prevented by a second construct. (§5.4)
+**1. Precedence — specificity dominance, a partial order.** Deny-overrides is simpler to
+state but cannot express an exception without negation, and RE2 has no lookahead. The
+motivating case was real: a broad `show chassis *` deny added for a CVE broke a backup
+account's `show chassis hardware`.
+
+A permit therefore applies only when it dominates every matching deny — at least as specific
+at every argument position, strictly more somewhere. The ordering is deliberately **partial**:
+three total orderings were tried (lexicographic, sum of ranks, run-collapsed distance) and
+each failed on real policies, because collapsing the tuple to one number forces an answer
+even where two rules genuinely disagree about which position matters. Declining to rank
+incomparable rules is what keeps the result conservative in every case.
+
+There is exactly **one** deny mechanism; a shadowed deny is surfaced by CI rather than
+prevented by a second construct. (§5.4)
 
 **2. Grant shape — flat.** One row per subject × scope × roles. Greppable, renders directly
 as the access-review report, and makes a fleet-wide emergency grant a single appended line
@@ -1609,10 +1702,19 @@ Beyond those already listed in the design document's §14:
 **Matching and precedence**
 
 - **Full-vector matching**: `show bgp summary` does not match `show bgp summary detail`.
-- **Case-insensitive literals**: `SHOW RUN` is treated as `show run`.
-- **Most-specific resolution**: a permit of `show chassis hardware` beats a deny of
-  `show chassis **`, while `show chassis hardware detail` remains denied.
-- **Ties go to deny** for rules of equal specificity.
+- **Case insensitivity**: `SHOW RUN` matches `show run`; `interface MANAGEMENT1` matches
+  `@management` defined as `^Management[0-9]+$`; a `(?-i)` regex matches case-sensitively;
+  the vector reaching accounting is unaltered.
+- **Dominance, permitting**: a permit of `show chassis hardware` (3,3,3) beats a deny of
+  `show chassis **` (3,3,0), while `show chassis hardware detail` remains denied.
+- **Dominance, denying**: each of these resolves to DENY because no permit dominates —
+  `copy **` against `* * /^tftp:/`; `copy * *` against the same deny; `clear bgp **`
+  against `* * all`; `interface @physical` against `interface /^Ethernet1$/`.
+- **Dominance, buying it back**: `copy running-config @backup_targets` (3,3,2) dominates
+  `* * /^tftp:/` (1,1,2) and permits, while `copy running-config *` (3,3,1) does not.
+- **Equal tuples do not dominate**, so an equally specific permit and deny resolve to deny.
+- **Class and regex are equally ranked**: neither dominates the other at a shared position.
+- **Rank lint**: a regex equivalent to `*` or to a literal is flagged at policy load.
 - **Order independence**: a policy file with roles, grants, and rules shuffled produces
   byte-identical decisions across the full test corpus.
 - **Entity classes**: one rule using `@management` denies `Management1` on EOS, `mgmt0` on

@@ -12,7 +12,7 @@ errors introduced during the design session rather than reviewer speculation.
 | Item | State |
 |---|---|
 | Cluster 1 — token and login-context data flow | **resolved** |
-| Cluster 2 — matcher determinism | open |
+| Cluster 2 — matcher determinism | **resolved** |
 | Cluster 3 — the CHAP consequence | **resolved** |
 | Cluster 4 — remaining blocking issues | open |
 | Inconsistencies — nine items of stale text | open |
@@ -88,6 +88,31 @@ whether CHAP retries simply fail.
 ---
 
 ## Cluster 2 — matcher determinism
+
+> **Resolved.** Policy engine spec §3, §4, §5.4 and design document §9.
+
+- **2.1** — the vector is no longer lower-cased. Literals and entity classes compare
+  case-insensitively, and regex compiles case-insensitive by default with `(?-i)` to opt
+  out. Insensitive must be the default because a case-sensitive deny fails *open*. Leaving
+  the vector unaltered also means accounting records what was typed.
+- **2.2** — tuples are built per *command* position, with `**` contributing a zero for each
+  position it absorbs. Resolution is **dominance**, a partial order: a permit applies only
+  when it is ≥ every matching deny at every position and strictly greater somewhere.
+
+  Three total orderings were tried and each failed on real policies. Lexicographic let a
+  permit naming the first word beat any deny constraining a later argument, defeating
+  exfiltration denies (`copy **` over `* * /^tftp:/`) and disruptive-form denies
+  (`clear bgp **` over `* * all`). A sum of ranks and a run-collapsed distance metric each
+  fixed some cases and broke others. The defect is common to all of them: collapsing the
+  tuple to a single number forces an answer even where two rules genuinely disagree about
+  which position matters. A partial order declines to rank incomparable rules, and the
+  one-sided test — only the permit must prove itself — then resolves those cases safely.
+
+  `@class` and `/re/` were also collapsed to a single rank, since neither is reliably
+  narrower and an invented ordering let `interface @physical` beat
+  `interface /^Ethernet1$/`.
+
+### As reported
 
 **2.1 Case normalization contradicts the shipped entity classes.** Spec §3 lower-cases the
 command vector and states that regex terms match as written. Spec §8 then ships
