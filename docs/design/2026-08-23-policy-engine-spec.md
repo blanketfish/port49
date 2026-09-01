@@ -77,6 +77,43 @@ Identities from different trust domains MUST remain distinguishable (§7 of the 
 document): listing a human and a machine identity under one subject is a policy load error,
 not a convenience.
 
+### The device-facing username
+
+A principal is not what anyone types at a login prompt. `CN=alice,OU=netops,O=example` is
+the identity; `alice` is the username the device sends. The two are distinct strings and
+both are load-bearing — the token store is keyed `(nas, username)`, username binding is a
+MUST (design document §8), and accounting attributes to the principal behind it. The mapping
+between them therefore has to be explicit.
+
+**For human identities it is already resolved at mint**, by the same directory lookup that
+fetches groups. No additional query:
+
+| Identity path | Username source |
+|---|---|
+| LDAP or AD | `sAMAccountName` / `uid`, from the group-resolution query |
+| OIDC | the `preferred_username` claim |
+| certificate | via the certificate-to-directory mapping (§7 of the design document) |
+
+**Machine identities have no directory entry**, so the subject declares one:
+
+```yaml
+subjects:
+  - name: svc_oxidized
+    identity: ["system:serviceaccount:netops:oxidized"]
+    username: svc-config-backup        # what the device will present
+```
+
+**Usernames MUST be unique across subjects.** Two subjects claiming one username collide in
+the `(nas, username)` store key and make the audit trail ambiguous; this is a policy load
+error. Collision with a device-local account name is the same hazard described in §5.6 and
+SHOULD be reported where port49 can observe it.
+
+**Comparison is normalized.** The device sends whatever the operator typed — `alice`,
+`DOMAIN\alice`, or `alice@corp.example.com`. The broker records a canonical form, and the
+daemon compares case-insensitively after stripping a domain prefix or UPN suffix. Without
+this, a user who types their address rather than their shortname is denied with
+`context_missing` and no obvious cause.
+
 **Privilege decides what the device will offer; the role decides what port49 will permit
 within it.** The two are not independent axes — the effective permission set is the
 intersection, and the role is always a subset. A backup account needs `admin` privilege so
@@ -1756,6 +1793,12 @@ Beyond those already listed in the design document's §14:
   and is denied.
 - **Username binding on the command path**: a request whose username differs from the stored
   one is denied and the context invalidated.
+- **Username resolution**: a human principal's device-facing username is derived at mint from
+  the directory or the OIDC claim; a machine subject uses its declared `username`; a subject
+  with neither fails at policy load.
+- **Username uniqueness**: two subjects declaring the same username fail at policy load.
+- **Username normalization**: `alice`, `ALICE`, `DOMAIN\alice`, and `alice@corp.example.com`
+  all match a canonical `alice`.
 - **`rem_addr` binding on enable**: a mismatch is refused and alerted.
 - **Recycled line**: a context outliving its session is not inheritable by the next occupant
   of that line under any of the teardown triggers.
