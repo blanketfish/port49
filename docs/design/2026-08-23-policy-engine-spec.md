@@ -31,18 +31,9 @@ deployments do *all* of their authorization, and it must be first class.
 
 ## 2. Concept model
 
-| Concept | Answers | Authored by | Lives in |
-|---|---|---|---|
-| **Device** | Which NASes may connect, what vendor, where, with what key | imported or generated | inventory snapshot |
-| **Platform** | How to speak a vendor's dialect | port49 ships it | built-in, override rare |
-| **Scope** | Which devices a rule covers | operator | policy repo |
-| **Principal** | Who actually walked in the door | nobody — runtime | request |
-| **Subject** | Which principals a rule applies to | operator | policy repo |
-| **Role** | Which commands | operator | policy repo |
-| **Privilege level** | What the device is told at login | operator names, port49 renders | policy repo + platform |
-| **Grant** | Subject × scope × roles × level × expiry | operator | policy repo |
-
-Two distinctions carry most of the weight:
+The full taxonomy — every authored, imported, and runtime object, what creates each, and how
+they compose — lives in the design document, §6. This section covers only the distinctions
+that need argument rather than definition.
 
 **Device is a fact; Scope is a selector.** Inventory is imported and describes reality.
 Scopes are authored and describe intent. Keeping them separate is what makes
@@ -125,22 +116,27 @@ those commands. See §6.
 
 ### Terminology
 
-Several words in this problem space are overloaded. These are used precisely throughout both
-documents.
+The complete taxonomy — every authored, imported, and runtime object, and how they compose —
+is in the design document, §6. It is maintained there rather than duplicated here so the two
+cannot drift.
 
-| Term | Means |
-|---|---|
-| **session** | the operator's authenticated state, 8–16 hours, held by the agent and never sent to a device |
-| **login** | one shell session on one device |
-| **login context** | the daemon's per-login record, keyed `(nas, port)` |
-| **session authorization** | the TACACS+ exchange at login — `service=shell` with an empty `cmd` — which returns the shell profile |
-| **token** | the short-lived, single-use, device-bound secret port49 mints |
-| **presented credential** | what arrives in the authentication packet: the token itself for PAP and ASCII, and `ppp_id ‖ challenge ‖ response` for CHAP |
+Four overloads are worth restating, because they are the ones that mislead implementers:
 
-Note that **session authorization** names a protocol exchange while **session** names the
-operator's day; they are unrelated despite the shared word, and the protocol term is fixed by
-RFC 8907. **Token** and *handle* were previously used interchangeably; *handle* is retained
-only where the design document contrasts an opaque handle with a signed token.
+**`session` versus `session authorization`.** The first is the operator's 8–16 hour
+authenticated state, held by the agent. The second is a TACACS+ exchange at login —
+`service=shell` with an empty `cmd` — which returns the shell profile. They are unrelated
+despite the shared word, and the protocol term is fixed by RFC 8907.
+
+**`login context` is per *login*, not per session.** One operator session produces many
+logins, each with its own context keyed `(nas, port)`.
+
+**`token` versus `presented credential`.** The token is what port49 mints. The presented
+credential is what arrives in the authentication packet — the token verbatim for PAP and
+ASCII, but `ppp_id ‖ challenge ‖ response` for CHAP, which proves possession without
+carrying it. The distinction is what lets one receipt rule (§5.6) cover all three types.
+
+**`token` versus `handle`.** The same thing. *Handle* survives only where the design document
+contrasts an opaque handle with a signed token; new text says token.
 
 ---
 
