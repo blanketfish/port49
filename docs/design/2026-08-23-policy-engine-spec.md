@@ -315,8 +315,7 @@ The resolved result is instead stored as an immutable, **content-addressed polic
 referenced by the token:
 
 ```
-blob:<sha256>            the resolved value: rules, pipe allowlist, attributes,
-                         privilege, max_privilege, enable mechanism
+blob:<sha256>            the fully compiled decision — see 5.1.2
 token:(nas, username)    { handle, blob_hash, principal, ... }
 ```
 
@@ -342,6 +341,63 @@ its own. No reference counting is required.
 
 **Cost.** One additional store read at redemption, on the *login* path. The p99 < 5ms target
 governs per-command authorization, which is unaffected.
+
+### 5.1.2 The blob is fully compiled
+
+Evaluating a command requires platform knowledge: normalization needs the pipe token, the
+`<cr>` convention, and the abbreviation flag, while matching needs the actual regexes behind
+each `@class`. The design document's claim that the daemon "never learns what a platform is"
+therefore cannot hold for command authorization as literally as it does for attributes.
+
+It is resolved by **compiling the platform into the blob** rather than shipping platform
+definitions to the daemon. The broker already knows the device's platform at mint, so it
+expands entity classes and embeds the normalization parameters:
+
+```yaml
+blob:a3f9c1…
+  rules:
+    permit: [[show, **], [interface, /^Ethernet[0-9/]+$/]]
+    deny:   [[reload, **], [interface, /^mgmt[0-9]+$/]]     # @management, expanded
+    pipe:   [[include, **], [section, **], [json]]
+  normalize:
+    pipe_token:            "|"
+    strip_cr:              true
+    expands_abbreviations: true
+  enable_username:  "$enab{level}$"
+  privilege:        operator
+  max_privilege:    admin
+  attributes:       ['shell:roles*"network-operator"']
+```
+
+The daemon becomes a pure executor: it normalizes with the given parameters and matches
+against compiled rules. It never reads a platform file, never resolves a class, never decides
+whether to strip a terminator.
+
+**The governing distinction:**
+
+> The inventory bundle (§10) carries **facts**. The blob carries **decisions**.
+
+The daemon needs facts to accept a connection — which device this source address is, which
+shared key to use. It needs a decision to authorize a command. Dialect data is used only
+while evaluating a decision, so it travels with the decision.
+
+**Why not distribute platform definitions to the daemon.** A shared bundle version would make
+that safe in principle, but it has to actually be shared: a replica that has not refreshed, a
+rolling upgrade in flight, or a pod started before the bundle rotated all reintroduce skew.
+A hash-named blob is self-describing — whatever compiled it is what evaluates it, permanently
+— so the failure cannot occur rather than merely being unlikely. It is also far easier to
+debug: one blob dump shows exactly what was evaluated, with no need to recover which platform
+version a daemon held at the time.
+
+**Cost.** Blobs grow from a few hundred bytes to a few kilobytes. Because they are
+content-addressed, deduplication is per policy-version and platform rather than per token, so
+a 10,000-device fleet across four platforms yields a few dozen blobs.
+
+**One escape hatch.** If a platform is found to require genuine abbreviation expansion, its
+command vocabulary is too large to embed per blob; that table alone would ride in the
+inventory bundle while everything else stays compiled. Most platforms expand server-side and
+§3 already fails closed where expansion is unreliable, so this is recorded rather than
+designed for.
 
 ### 5.1.2 Refreshing live context
 
@@ -1299,9 +1355,9 @@ Three properties justify the separate component:
   where availability does not matter is a deliberate architectural choice.
 
 ```
-GET  /v1/snapshot                    full snapshot; ETag for cheap no-op refresh
-GET  /v1/snapshot/version            current version, for polling
-GET  /v1/snapshot/diff?from=<ver>    for CI and `port49 inventory diff`
+GET  /v1/bundle                      full bundle; ETag for cheap no-op refresh
+GET  /v1/bundle/version              current version, for polling
+GET  /v1/bundle/diff?from=<ver>      for CI and `port49 inventory diff`
 POST /v1/sync                        on-demand trigger
 GET  /v1/healthz
 GET  /v1/devices/{address}           diagnostic only — MUST NOT be used on the hot path
@@ -1310,6 +1366,41 @@ GET  /v1/devices/{address}           diagnostic only — MUST NOT be used on the
 **Consumers pull and cache; they never query per request.** A daemon calling this API per
 connection would make the syncer a hot-path dependency and rebuild the problem the component
 exists to prevent.
+
+### One versioned bundle
+
+Three things must reach the other components: device inventory, the policy repository, and
+the pinned platform set (§8). Distributing them separately means they can disagree — a broker
+evaluating policy `v88` against inventory `v1841` and platform set `1.4.0`, while another
+replica holds a different combination. Nothing would report the mismatch.
+
+They are therefore published as **one versioned bundle**:
+
+```
+bundle v2291
+  inventory      device records, addresses, platforms, attributes
+  policy         compiled roles, scopes, subjects, grants
+  platform_set   1.4.0, as pinned by the policy repository
+```
+
+A consumer runs on exactly one bundle version at a time, so a decision is always attributable
+to a single, nameable state of the world. `bundle/diff` then covers policy change, inventory
+drift, and platform-set movement in one review artifact rather than three.
+
+This also closes a gap the documents otherwise leave open: **how policy reaches the broker**
+was previously unspecified.
+
+**Consumers take what they need**, which is not the same thing:
+
+| Component | Consumes | Why |
+|---|---|---|
+| broker | inventory, policy, platform set | resolves and compiles decisions |
+| daemon | inventory only — addresses and `key_ref` | to admit a connection and select a key |
+
+The daemon deliberately does **not** consume policy or platform definitions. It receives
+compiled decisions through blobs (§5.1.2) instead, so a version mismatch between broker and
+daemon cannot change how a command is evaluated. The bundle carries facts; the blob carries
+decisions.
 
 **The service emits key *references*, never key material.** A snapshot carries
 `key_ref: prod_key`, and the daemon resolves that from its own secret mount. A compromised
@@ -1413,11 +1504,14 @@ inventory:
 
 ### How a daemon refreshes its snapshot
 
+The daemon consumes only the inventory portion of the bundle; "snapshot" below means that
+portion, refreshed as a whole because the bundle is versioned as a whole.
+
 ```
 every 30s:
-  GET /v1/snapshot/version
+  GET /v1/bundle/version
   if version == held.version:  done          ← the common case
-  GET /v1/snapshot  (If-None-Match: <etag>)
+  GET /v1/bundle  (If-None-Match: <etag>)
   parse → build index → validate → atomic pointer swap
 ```
 

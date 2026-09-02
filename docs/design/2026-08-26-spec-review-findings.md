@@ -14,7 +14,7 @@ errors introduced during the design session rather than reviewer speculation.
 | Cluster 1 — token and login-context data flow | **resolved** |
 | Cluster 2 — matcher determinism | **resolved** |
 | Cluster 3 — the CHAP consequence | **resolved** |
-| Cluster 4 — remaining blocking issues | open |
+| Cluster 4 — remaining blocking issues | 4.1, 4.2 resolved; **4.3 open** |
 | Inconsistencies — nine items of stale text | open |
 | Architecture recommendations | open |
 | Gaps — accounting first | open |
@@ -172,6 +172,23 @@ to assume server-side matching. Spell out the two-step shape.
 
 ## Cluster 4 — remaining blocking issues
 
+> **4.1 and 4.2 resolved. 4.3 open.**
+
+- **4.1** — the device-facing username is resolved at mint from the same directory query that
+  fetches groups (`sAMAccountName`, `uid`, or the OIDC `preferred_username`), and machine
+  subjects declare one in policy since they have no directory entry. Usernames are unique
+  across subjects and compared after case and domain normalization. Policy engine spec §2.
+- **4.2** — platform data is **compiled into the blob** rather than distributed to daemons:
+  the broker expands entity classes and embeds normalization parameters, so the daemon stays
+  a pure executor and broker/daemon skew is impossible by construction. The governing line is
+  *the bundle carries facts, the blob carries decisions*. Policy engine spec §5.1.2.
+
+  Related: inventory, policy, and the pinned platform set are now published as **one versioned
+  bundle**, which also closes the previously unspecified question of how policy reaches the
+  broker. Policy engine spec §10.
+
+### As reported
+
 **4.1 The device-facing username is never defined.** Design §8 makes username binding a MUST
 and the store key is `(nas, username)`, but principals are `CN=alice,OU=netops,O=example` and
 `system:serviceaccount:netops:oxidized` — which nobody types at an SSH prompt. The examples log
@@ -249,11 +266,15 @@ rotation routine.
 specified — endpoint shapes, batch mint, error semantics, authentication of the call itself. An
 outline is enough, but the implementation plan cannot be written without one.
 
-**Specify policy distribution.** How merged policy reaches the broker, how a change is
-versioned and rolled out, and what happens to *live* session contexts when policy changes.
-Design §9 says context is "refreshed from the directory," implying groups only — which would
-mean a policy-based revocation never reaches an active session. That is a revocation-latency
-question the failure model does not cover.
+**Specify policy distribution.** ~~How merged policy reaches the broker, how a change is
+versioned and rolled out, and what happens to *live* session contexts when policy changes.~~
+
+**Resolved.** Policy is published in the versioned bundle alongside inventory and the pinned
+platform set (spec §10), so a consumer always runs on one nameable state of the world and
+`bundle/diff` reviews all three together. Live contexts pick up a policy change because a
+changed policy produces a different blob hash, which refresh writes into each affected
+context (spec §5.1.2) — so policy-driven revocation reaches active logins, not only
+directory-driven revocation.
 
 ---
 
