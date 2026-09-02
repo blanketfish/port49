@@ -15,7 +15,7 @@ errors introduced during the design session rather than reviewer speculation.
 | Cluster 2 — matcher determinism | **resolved** |
 | Cluster 3 — the CHAP consequence | **resolved** |
 | Cluster 4 — remaining blocking issues | 4.1, 4.2 resolved; **4.3 open** |
-| Inconsistencies — nine items of stale text | open |
+| Inconsistencies — nine items of stale text | **resolved** |
 | Architecture recommendations | open |
 | Gaps — accounting first | open |
 
@@ -215,6 +215,29 @@ written, the flagship session-only platform cannot carry a moderate role.
 ---
 
 ## Inconsistencies — stale text from mid-stream revisions
+
+> **All nine resolved.** Several were corrected substantively rather than editorially — the
+> failure matrix rows and the cross-region latency claim were understating real degradation,
+> and the singleton claim required a new requirement to become true.
+>
+> 1. Both partial concept tables removed in favour of the single taxonomy in design §6.
+> 2. Store-unavailable and 3. broker-unavailable rows are now `⚠` with their real conditions
+>    stated — a warm cache entry, and the staleness ceiling respectively. The mitigation text
+>    now says *degraded and uneven* rather than *active sessions continue*, since consecutive
+>    commands in one login may land on different replicas.
+> 4. The global-store row no longer claims cross-region cost is redemption-only, and the
+>    p99 < 5ms target in §5 is explicitly conditional on a warm cache or same-region store.
+> 5. Spec §1 no longer describes the design document's prior state; it now maps the three
+>    evaluation points onto `aaa authorization exec` / `commands` / `config-commands`.
+> 6. Decisions renumbered, with the two new decisions from cluster 4 appended.
+> 7. The fossil test comment is replaced; all three CVE assertions now carry accurate ones.
+> 8. Bare `priv-lvl` throughout, plus a new requirement that shipped attribute spellings be
+>    lab-confirmed before an adapter is marked `VERIFIED`.
+> 9. Local bundle persistence promoted to MUST and a shared object-store copy added, so a
+>    daemon can *start* without the inventory service. Without that the singleton was a
+>    startup dependency under another name.
+
+### As reported
 
 1. **Grant concept tables still list "level"** in both documents. Decision 3 removed
    grant-level privilege; grants carry only `max_privilege`. Actively contradicts spec §5.1.

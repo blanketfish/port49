@@ -22,10 +22,13 @@ The engine answers three questions, at three different moments:
 | **Session** | What shell profile does this login get? | daemon |
 | **Command** | May this command run here, now? | daemon |
 
-The original design named only the first and third. The session point — the `service=shell`
+The middle one is easily overlooked and must not be. The session point is the `service=shell`
 authorization with an empty `cmd`, which returns `priv-lvl`, `shell:roles`,
-`local-user-name`, `idletime`, and friends — is where a large share of real-world TACACS+
-deployments do *all* of their authorization, and it must be first class.
+`local-user-name`, `idletime`, and friends — and it is where a large share of real-world
+TACACS+ deployments do *all* of their authorization, because platforms such as Junos have no
+meaningful per-command path. It maps directly onto `aaa authorization exec` in device
+configuration, as the other two map onto `aaa authorization commands` and
+`config-commands`.
 
 ---
 
@@ -962,6 +965,14 @@ rather than silently surprising.
 a mapping for every level. A missing mapping is a **policy load error in CI**, not a broken
 login at 3am.
 
+**Exact attribute spellings are lab-verified, not asserted.** The shipped adapters use bare
+`priv-lvl` for the TACACS+ shell-service reply and `shell:roles` for EOS and NX-OS roles.
+Those spellings — and every other attribute name in a shipped platform file — MUST be
+confirmed against a real image in the containerlab matrix before that adapter is marked
+`VERIFIED` (§8). A wrong attribute name fails silently as an ignored optional attribute, or
+loudly as a rejected session if declared mandatory, and neither outcome should be discovered
+in production.
+
 ### Diagnosing an unfamiliar vendor
 
 Because port49 cannot validate semantics, it MUST make the outcome inspectable:
@@ -1059,9 +1070,9 @@ platforms:
   arista_eos:
     supports: [session, commands, config_commands]
     privilege:
-      readonly: ["shell:priv-lvl=1",  "shell:roles*network-operator"]
-      operator: ["shell:priv-lvl=7"]
-      admin:    ["shell:priv-lvl=15", "shell:roles*network-admin"]
+      readonly: ["priv-lvl=1",  "shell:roles*network-operator"]
+      operator: ["priv-lvl=7"]
+      admin:    ["priv-lvl=15", "shell:roles*network-admin"]
     entity_classes:
       management: ['^Management[0-9]+$']
       loopback:   ['^Loopback[0-9]+$']
@@ -1530,8 +1541,21 @@ rotation, not a sync.
 **Cold start is the one case where readiness gating is correct.** A daemon with no snapshot
 genuinely cannot serve, so it remains unready and retries. This is safe precisely because,
 unlike store health, only *new* pods lack a snapshot — existing replicas continue serving and
-all endpoints are never lost at once. The last good snapshot SHOULD be persisted to local
-disk so a restart does not require the service at all.
+all endpoints are never lost at once.
+
+**A daemon MUST be able to start without the inventory service**, or the claim that nothing
+depends on that service being up is false. A fresh pod would otherwise stay unready for the
+duration of an inventory outage, which means no autoscaling under load and no recovery from a
+crash loop or a node replacement — precisely when capacity matters. Two mechanisms, in order:
+
+1. **The last good bundle is persisted to local disk** (a MUST, not a SHOULD), so a restart in
+   place needs nothing.
+2. **A shared object-store location** holds the most recent bundle, written by the inventory
+   service and readable by daemons. A pod scheduled onto a fresh node reads that and serves.
+
+Both are cold and cached; neither puts the inventory service on a request path. Without at
+least one of them, the singleton is not free after all — it is a startup dependency wearing a
+different name.
 
 **Key resolution stays local.** An unresolvable `key_ref` fails that device closed — not the
 daemon — and alarms, because that is a misconfiguration worth hearing about on the first
@@ -1670,11 +1694,11 @@ tests:
   - {subject: svc_oxidized, device: leaf-01, command: "show running-config",
      expect: permit}
   - {subject: svc_oxidized, device: srx-fw-04, command: "show chassis hardware",
-     expect: permit}      # more specific permit beats the CVE deny
+     expect: permit}      # the CVE deny is scoped to `cluster`, so no conflict arises
   - {subject: noc_tier1,    device: srx-fw-04, command: "show chassis cluster status",
-     expect: deny}
+     expect: deny}        # only the CVE deny matches
   - {subject: security_ir,  device: srx-fw-04, command: "show chassis cluster status",
-     expect: permit}
+     expect: permit}      # the assess permit dominates the CVE deny at every position
 ```
 
 Three things this example is chosen to show.
@@ -1786,6 +1810,11 @@ new level does not require a mapping for every vendor. (§6)
 address list is not the security boundary; the key is. Splitting there means the fleet is
 maintained once in the source of truth while the admission decision stays in review. (§10)
 
+**6. Entity naming — classes, not canonicalization.** Adapters classify their own names into
+`@management`, `@physical`, and similar rather than mapping every vendor into a common
+scheme. A rule referencing an undefined class is a load error, which eliminates the silent
+non-match. (§4, §8)
+
 **7. Version comparison — one generic comparator, no per-vendor setting.** Tokenize into
 digit and letter runs; digits compare numerically, letters by equality only. An incomparable
 version folds into `on_missing` and is assumed unpatched, and the devices affected are always
@@ -1793,10 +1822,15 @@ reported rather than silently swept in. Fleets cluster at a few versions through
 upgrade cycles, so the ambiguous case is rare — and when it fires, over-mitigating is the
 right failure. (§5.5)
 
-**6. Entity naming — classes, not canonicalization.** Adapters classify their own names into
-`@management`, `@physical`, and similar rather than mapping every vendor into a common
-scheme. A rule referencing an undefined class is a load error, which eliminates the silent
-non-match. (§4, §8)
+**8. The device-facing username — derived at mint, declared for machines.** Human usernames
+come from the same directory query that resolves groups, or the OIDC `preferred_username`
+claim; machine subjects declare one, since they have no directory entry. Unique across
+subjects, and compared after case and domain normalization. (§2)
+
+**9. Platform data — compiled into the decision, not distributed to daemons.** The broker
+expands entity classes and embeds normalization parameters into a hash-named blob, so a
+daemon and a broker can never disagree about how a rule is evaluated, even mid-upgrade. The
+bundle carries facts; the blob carries decisions. (§5.1.2, §10)
 
 ### Deferred, with reasons
 
@@ -1913,7 +1947,8 @@ Beyond those already listed in the design document's §14:
 - **Snapshot never expires**: a daemon with a stale snapshot and an unreachable inventory
   service continues authenticating, alarming on age.
 - **Cold start**: a daemon with no snapshot stays unready while existing replicas keep
-  serving.
+  serving; a daemon restarted with the inventory service down starts from its persisted
+  bundle, and one scheduled onto a fresh node starts from the shared object-store copy.
 - **Unresolvable `key_ref`** fails that device closed, not the daemon.
 - **Inventory sync safety**: a sync removing more than the configured share is refused and
   the previous snapshot retained.
