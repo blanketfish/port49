@@ -14,7 +14,7 @@ errors introduced during the design session rather than reviewer speculation.
 | Cluster 1 — token and login-context data flow | **resolved** |
 | Cluster 2 — matcher determinism | **resolved** |
 | Cluster 3 — the CHAP consequence | **resolved** |
-| Cluster 4 — remaining blocking issues | 4.1, 4.2 resolved; **4.3 open** |
+| Cluster 4 — remaining blocking issues | **resolved** |
 | Inconsistencies — nine items of stale text | **resolved** |
 | Architecture recommendations | open |
 | Gaps — accounting first | open |
@@ -172,7 +172,7 @@ to assume server-side matching. Spell out the two-step shape.
 
 ## Cluster 4 — remaining blocking issues
 
-> **4.1 and 4.2 resolved. 4.3 open.**
+> **All resolved.**
 
 - **4.1** — the device-facing username is resolved at mint from the same directory query that
   fetches groups (`sAMAccountName`, `uid`, or the OIDC `preferred_username`), and machine
@@ -186,6 +186,23 @@ to assume server-side matching. Spell out the two-step shape.
   Related: inventory, policy, and the pinned platform set are now published as **one versioned
   bundle**, which also closes the previously unspecified question of how policy reaches the
   broker. Policy engine spec §10.
+- **4.3** — resolved by lab testing on an SRX rather than by design argument. Junos merges
+  class and wire rules into one set, and a matching permit *regex* beats a matching deny
+  regex from either origin. Broad capability comes from the class's `permissions` bits, not a
+  permit regex, which is what lets denies apply cleanly beneath it.
+
+  The 255-byte limit is a TACACS+ protocol constraint, not a Junos one — class config is not
+  subject to it and was verified enforced past 255 with no truncation. So there are two
+  channels: the wire (240 bytes, no provisioning, fully dynamic) and the class (unbounded,
+  needs deployment and drift monitoring). **Wire-only by default; class-assisted only when the
+  deny set exceeds the budget**, with CI reporting when a role crosses that line.
+
+  Which permits are emitted follows from port49's own dominance rule: only permits that
+  dominate their competing deny are safe to emit, because on the target any permit wins.
+
+  Five generator constraints, none of which the device catches — the device validates config
+  but not wire attributes, so the generator is the only validation layer. Policy engine spec
+  §8.
 
 ### As reported
 

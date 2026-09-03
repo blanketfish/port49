@@ -1152,20 +1152,101 @@ A trie of literal prefixes converts to an alternation mechanically —
 `[start, **]` and `[file, **]` become `(start.*|file.*)` — and Junos uses extended regex, so
 the absence of lookahead is no constraint that our grammar does not already accept.
 
-**The risk is semantic, not syntactic.** Our precedence is most-specific-wins; the target
-platform resolves its own allow/deny interaction by its own rules, which may differ and have
-differed across releases. A policy correct in port49 can therefore be wrong on the device,
-silently, because nothing errors. Two requirements follow:
+#### Measured target behavior
 
-- **Emit the resolved decision where possible.** Because evaluation is a total function, a
-  result expressible as a pure allowlist is emitted as `allow-commands` alone, and the
-  platform's own precedence never engages. Carve-outs force a `deny-commands` and reintroduce
-  it, because an exception cannot be expressed in an allowlist without negation.
-- **Differentially test the projection.** Generate the attributes, apply them in
-  containerlab, and assert that the device's own view — `show cli authorization` on Junos —
-  agrees with port49's decision across a corpus of probe commands. Where equivalence cannot
-  be established for a rule shape, CI MUST refuse the policy rather than ship something
-  unprovable.
+The following was established by lab testing rather than inferred from documentation, which
+does not specify precedence, repetition, or length behavior.
+
+**Class-resident and wire-delivered rules flatten into one merged set, and a matching permit
+regex beats a matching deny regex — regardless of specificity and regardless of origin.**
+
+| Deny | Allow | Origin | Result |
+|---|---|---|---|
+| `show chassis cluster status` | `show chassis .*` | both wire | all `show chassis` permitted |
+| `show chassis .*` | `show chassis cluster status` | both wire | only the allowed command permitted |
+| `show chassis cluster status` (wire) | `show chassis .*` (class) | split | all permitted |
+| `show chassis .*` (class) | `show chassis cluster status` (wire) | split | only the allowed command permitted |
+
+**Broad capability comes from the login class's `permissions` bits, not from a permit regex.**
+This is what makes the model work: with no permit regex covering a command, a deny applies
+cleanly against the capability baseline. Modelling the baseline as `allow-commands "show .*"`
+would instead defeat every deny beneath it.
+
+**Two delivery channels, both carrying either attribute:**
+
+| | Ceiling | Provisioning | Changes |
+|---|---|---|---|
+| **Wire** (TACACS attributes) | 240 bytes, **one argument per name** | none | fully dynamic |
+| **Class** (device config) | none — verified enforced past 255 with no truncation | deploy and monitor for drift | config push |
+
+**Repeated attribute names collapse to the first, silently.** A policy needing two instances
+of one name arrives incomplete with no signal.
+
+**`allow-commands` and `allow-commands-regexps` are mutually exclusive.** The commit checker
+rejects the combination in config; over the wire the device accepts it and then locks the user
+out of everything.
+
+**The device validates configuration but not wire attributes.** There is no device-side
+backstop for anything port49 sends, which makes the generator the only validation layer that
+exists — and makes the commit checker a free specification: any combination port49 might emit
+should be commit-tested first, and anything the CLI refuses must never reach the wire.
+
+#### The projection model
+
+**Wire-only by default; class-assisted only when the deny set exceeds the wire budget.**
+
+```
+class:   permissions      view                       ← capability, not a regex
+         deny-commands    <broad denies>             ← only if the wire budget is exceeded
+wire:    deny-commands    <broad denies>             ← default home
+         allow-commands   <narrow exceptions>
+```
+
+Starting on the wire means zero device provisioning and fully dynamic policy. Moving denies
+into the class buys unbounded capacity at the cost of a config push and a drift-monitoring
+obligation, so CI MUST report when a role crosses that line rather than letting it happen
+quietly.
+
+**Which permits are emitted follows from port49's own semantics.** Under dominance (§5.4) a
+permit prevails only when it is strictly more specific than the deny it competes with — so
+the permits worth emitting are exactly the ones that dominate. A permit that would not
+dominate in port49 MUST NOT be emitted, because on the target it would win anyway and
+silently void the deny. Permits competing with no deny need no regex at all; the capability
+bits already cover them. That is why the wire payload stays small by construction.
+
+#### Generator constraints
+
+None of these are caught by the device. All MUST be enforced at policy load:
+
+1. **One instance per attribute name.** Duplicates are silently discarded after the first.
+2. **240 bytes for a wire attribute**, enforced in the encoder — the one-octet argument length
+   makes it a protocol impossibility rather than a policy choice, so an over-length argument
+   is never emitted at all.
+3. **Never emit `allow-commands` together with `allow-commands-regexps`.**
+4. **Never emit a permit broader than its intended grant.** An over-broad permit silently
+   voids the entire deny baseline beneath it.
+5. **Reject invalid or over-budget policy loudly at load time**, never silently at session
+   time. A server that skips an attribute at session time produces a fail-open shape.
+
+**Blast radius.** An invalid projection locks out every user authenticating against that
+device simultaneously. Lockout is fail-closed, but deployments MUST have a break-glass path
+independent of TACACS attributes — a local account or console access (design document §4).
+
+#### Verification
+
+`show cli authorization` is not available on all releases. Where it is absent, **`?`
+completion substitutes**: denied commands are absent from completion rather than merely
+rejected on execution, so the device exposes its computed effective set through it. That is
+also how class-side enforcement past 255 bytes was confirmed.
+
+**Differential testing is required, not optional.** Generate the attributes, apply them in
+containerlab, and assert the device's effective set matches port49's own decisions across a
+probe corpus covering every rule shape the generator can produce. Where equivalence cannot be
+established for a shape, CI MUST refuse the policy rather than ship something unprovable.
+
+The class baseline is part of the security model but lives outside port49's control, so
+**drift MUST be detected**, not merely documented — completion output makes the device's
+computed set observable by the same technique as capability inference (§9).
 
 **Anchoring is a per-platform property.** Our rules match the full vector. A device treating
 `start.*` as unanchored would also match `request start …`, diverging from our semantics.
@@ -1931,9 +2012,20 @@ Beyond those already listed in the design document's §14:
 
 **Platform and projection**
 
-- **Projection equivalence**: generated `allow-commands`/`deny-commands` produce the same
-  decisions on a real device — asserted via `show cli authorization` on Junos — across a
-  probe corpus; CI refuses rule shapes that cannot be proven equivalent.
+- **Projection equivalence**: generated attributes produce the same decisions on a real device
+  as port49's own evaluation, across a probe corpus covering every rule shape the generator
+  can emit. Verified through `show cli authorization` where available and `?` completion
+  where not. CI refuses shapes that cannot be proven equivalent.
+- **Projection precedence**: the four-row matrix in §8 reproduces — a permit regex beats a
+  deny regex from either origin, and a deny applies cleanly where no permit regex covers the
+  command.
+- **Projection generator constraints**: duplicate attribute names, an over-length argument,
+  `allow-commands` with `allow-commands-regexps`, and a permit broader than its grant are each
+  rejected at policy load rather than emitted.
+- **Wire-to-class escalation**: a role whose deny set exceeds the wire budget is reported by
+  CI as requiring a class baseline, and is never silently truncated.
+- **Class drift detection**: a class baseline altered on the device is detected from the
+  device's computed effective set.
 - **Platform layering**: user files merge per top-level key; `replace: true` discards the
   built-in; `based_on:` inherits.
 - **`platform_set` pinning**: changing the binary without moving the pin produces
