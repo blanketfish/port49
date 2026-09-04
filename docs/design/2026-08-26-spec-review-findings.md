@@ -17,7 +17,7 @@ errors introduced during the design session rather than reviewer speculation.
 | Cluster 4 — remaining blocking issues | **resolved** |
 | Inconsistencies — nine items of stale text | **resolved** |
 | Architecture recommendations | open |
-| Gaps — accounting first | open |
+| Gaps — decision log resolved; device accounting next | open |
 
 Clusters are ordered by severity; cluster 1 is the core data flow of the product. Resolved
 sections keep their original finding text beneath the resolution note.
@@ -320,10 +320,27 @@ directory-driven revocation.
 
 ## Gaps
 
-- **Accounting** — as above, the single largest omission for production use.
-- **Observability and audit.** One metric is named across both documents. There is no
+- **Accounting** — as above, the single largest omission for production use. The reviewer
+  treated this as one gap; it is two streams. The **decision log** is resolved below. Device
+  accounting — wire handling, `task_id` correlation, delivery durability, destination —
+  remains open, along with the transport and durability questions shared by both streams.
+- **Observability and audit.** ~~One metric is named across both documents. There is no
   **decision audit log** — every permit and deny with principal, device, rule, and role — which
-  is the compliance artifact this product will be bought for. No metrics inventory, no tracing.
+  is the compliance artifact this product will be bought for.~~ No metrics inventory, no
+  tracing.
+
+  **Decision log resolved** — policy engine spec §5.7, with tooling in §12, a decision in §13
+  and assertions in §14. One record per evaluation at four events, permits never suppressed.
+  The record names the immutable blob it was decided against rather than narrating a
+  rationale, so `port49 policy replay` can re-derive the verdict: a decision is verifiable
+  rather than asserted, and a replay divergence detects log or blob tampering. Raw arguments
+  are kept beside the normalized vector so a normalization bug cannot erase its own evidence,
+  denial reasons are a closed vocabulary so operational denials are countable apart from
+  policy ones, and no credential material is ever written — the credential appears only as
+  the hash the receipt binds. Replaying a captured corpus against a candidate build also
+  turns "did this release change anyone's access" into a diff.
+
+  Metrics inventory and tracing remain open.
 - **Abuse resistance.** No rate limiting on failed authentications, no per-NAS connection
   limits, no stated behavior for malformed-packet floods on an unauthenticated TCP listener.
 - **Duplicate or overlapping addresses.** Device binding assumes source-to-device is injective.

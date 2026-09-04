@@ -773,6 +773,157 @@ These are measurements, not assumptions, and belong in the containerlab matrix:
 
 ---
 
+### 5.7 The decision log
+
+Every evaluation emits exactly one record. This is port49's own stream, produced by the
+component that made the decision, and it is distinct from the accounting records a device
+sends — those report what a device *did*, after the fact, only for the tiers it was
+configured to report. The decision log records what port49 *decided*, for whom, and against
+which rule. It is complete by construction, because every decision passes through us.
+
+> **A decision record must be replayable.**
+
+Blobs are content-addressed and immutable (§5.1.2). A record that names its blob can be
+re-evaluated offline and must produce the same verdict. "Why" is therefore not prose port49
+wrote at decision time — it is something a reader can verify.
+
+A deny at the per-command point:
+
+```json
+{
+  "ts": "2026-09-04T02:11:07.412Z",
+  "event": "authorize_command",
+  "verdict": "deny",
+  "reason": "no_permit_dominates_deny",
+  "principal": "alice@example.com",
+  "auth": { "method": "oidc", "credential_sha256": "9f2c8b…" },
+  "device": { "nas": "10.20.0.7", "name": "core-sw01", "platform": "arista_eos" },
+  "session": { "port": "vty0", "rem_addr": "198.51.100.4", "privilege": 15 },
+  "request": {
+    "raw": ["service=shell", "cmd=copy", "cmd-arg=running-config", "cmd-arg=tftp://10.9.9.9/x"],
+    "vector": ["copy", "running-config", "tftp://10.9.9.9/x"]
+  },
+  "policy": {
+    "bundle": 2291,
+    "blob": "sha256:a3f9c1…",
+    "matched_deny":    { "rule": ["*", "*", "/^tftp:/"], "specificity": [1,1,2], "role": "no-exfil" },
+    "matched_permits": [{ "rule": ["copy", "**"],        "specificity": [3,0,0], "role": "net-operator" }]
+  }
+}
+```
+
+The record answers the question without anyone reading port49's source: Alice held a permit
+for `copy`, a deny matched the destination more specifically, and dominance failed.
+
+#### Three properties
+
+**Log inputs and policy identity, not a narrative.** The matched rules are included because
+they make a record readable on its own, but the blob hash is what makes it provable. A replay
+that disagrees with the logged verdict is itself a finding — version skew, or tampering — so
+`bundle` and `blob` are mandatory on every record that consulted policy.
+
+**Keep the raw arguments alongside the normalized vector.** Normalization (§3) is where
+matcher bugs live. A record holding only the vector erases the evidence of its own
+normalization bug, and the two together are what make a projection or abbreviation defect
+diagnosable from logs rather than reproducible only in a lab.
+
+**Never suppress permits.** Sampling, or logging denies only, looks thrifty and destroys the
+artifact: *what did Alice run on Tuesday* is answered entirely by permits. Volume is the cost
+of the product, not a problem to optimize away.
+
+#### Events
+
+One envelope, four events, at each point a decision is made:
+
+| `event` | Emitted by | Decides |
+|---|---|---|
+| `mint` | broker | which grants matched, which roles composed, which blob resulted |
+| `authorize_session` | daemon | the session and its returned attributes (§6) |
+| `authorize_command` | daemon | one command vector |
+| `escalate` | daemon | an `enable` exchange, attributed to the principal (§7) |
+
+`escalate` exists as its own event because the device-facing username on those platforms is
+`$enab{level}$`, not a person. The record carries the principal resolved from login context,
+which is the only place that attribution is recoverable.
+
+A `mint` record is the audit trail for *authority*, where the others are the trail for *use*:
+
+```json
+{
+  "ts": "2026-09-04T02:04:55.108Z",
+  "event": "mint",
+  "verdict": "permit",
+  "reason": "grants_matched",
+  "principal": "alice@example.com",
+  "auth": { "method": "oidc", "credential_sha256": "9f2c8b…" },
+  "policy": {
+    "bundle": 2291,
+    "subject": "network-operators",
+    "grants": [{ "scope": "campus", "roles": ["net-operator", "no-exfil"], "expires": null }],
+    "blobs":  { "arista_eos": "sha256:a3f9c1…", "cisco_nxos": "sha256:77b0de…" }
+  },
+  "scope": { "devices": 412, "ttl_seconds": 900 }
+}
+```
+
+#### Reason codes
+
+`reason` is a closed vocabulary, so denials are countable and alertable without parsing prose:
+
+| `reason` | Meaning |
+|---|---|
+| `permit_dominates` | a permit dominated every matching deny (§5.4) |
+| `no_rule_matched` | nothing matched; deny by default |
+| `no_permit_dominates_deny` | a deny matched and no permit dominated it |
+| `context_missing` | no login context for `(nas, port)` — port49 did not authenticate this session |
+| `username_mismatch` | the request's username differs from the one bound at redemption (§5.6) |
+| `rem_addr_mismatch` | enable arrived from a different address than the bound one |
+| `privilege_exceeded` | the request is above the session's granted level |
+| `device_unknown` | the source address is not in the admission trie (§10) |
+| `platform_unknown` | the device's platform has no adapter; generic fallback applied |
+| `blob_unavailable` | the referenced blob could not be resolved |
+| `no_grants_matched` | mint found no grant for this principal in scope |
+
+A denial whose reason is `context_missing`, `device_unknown`, or `blob_unavailable` is an
+operational condition rather than a policy outcome, and each MUST be separately alertable —
+a rise in `context_missing` means sessions are being authenticated somewhere other than
+port49.
+
+#### Credentials never appear
+
+The log MUST NOT contain a token, a password, a CHAP challenge or response, or any value from
+which a credential can be recovered. The credential is identified by `credential_sha256`
+only — the same hash the receipt binds (§5.1.1), which is what lets a retransmission be
+recognized in the log as one decision retried rather than two decisions made.
+
+#### Replay
+
+`port49 policy replay <record>` re-evaluates a record against the blob it names and reports
+agreement or divergence. It is the same evaluator the daemon runs, so a divergence is real.
+Three uses:
+
+1. **Answering an auditor** — reconstruct a decision from the record alone.
+2. **Regression testing** — replay a captured corpus against a candidate build; any verdict
+   that changes is either an intended fix or a regression, and both must be explained.
+3. **Integrity checking** — a record whose replay disagrees indicates the log or the blob
+   store has been altered.
+
+Replay requires the blob, so blobs MUST be retained at least as long as the decision records
+that reference them. They are small, immutable, and shared across every login that resolved
+to the same policy.
+
+#### Deliberately not specified here
+
+**Transport and durability.** Where records go, and whether port49 ever fails a request it
+cannot record, are deployment-shaping decisions taken separately. Nothing above depends on
+the answer.
+
+**Device accounting.** A second stream with different guarantees — best-effort, incomplete by
+configuration, and unverifiable. It is consumed by capability inference (§9) and by context
+teardown (§5.6), and it is specified in its own right rather than folded in here.
+
+---
+
 ## 6. Privilege levels and session attributes
 
 ### What a privilege level is
@@ -1847,14 +1998,19 @@ denied"** — computable exactly from the trie.
 **`port49 platform upgrade`** reports what a platform-set bump changes, so a binary upgrade
 is never an unreviewed policy change (§8).
 
+**`port49 policy replay`** re-evaluates a decision record against the blob it names (§5.7).
+It is the same evaluator the daemon runs. Beyond answering an auditor, a captured corpus
+replayed against a candidate build turns "did this release change anyone's access" into a
+diff — which is the only form of that question a reviewer can actually check.
+
 **Access review** is a rendering of the flat grant table, not an investigation.
 
 ---
 
 ## 13. Decisions
 
-Six questions were left open in the first draft of this document and have since been
-resolved. Recorded here because the reasoning matters more than the outcome.
+Questions left open in the first draft of this document and since resolved. Recorded here
+because the reasoning matters more than the outcome.
 
 **1. Precedence — specificity dominance, a partial order.** Deny-overrides is simpler to
 state but cannot express an exception without negation, and RE2 has no lookahead. The
@@ -1912,6 +2068,14 @@ subjects, and compared after case and domain normalization. (§2)
 expands entity classes and embeds normalization parameters into a hash-named blob, so a
 daemon and a broker can never disagree about how a rule is evaluated, even mid-upgrade. The
 bundle carries facts; the blob carries decisions. (§5.1.2, §10)
+
+**10. The decision log is separate from device accounting, and is replayable.** Two streams
+with different guarantees: accounting reports what a device did, incompletely and only where
+configured; the decision log records what port49 decided, completely, because every decision
+passes through it. Records name the immutable blob they were decided against rather than
+narrating a rationale, so a decision can be re-evaluated and verified instead of taken on
+trust — and a divergence on replay is itself a finding. Permits are never sampled or
+suppressed; the artifact is worthless without them. (§5.7)
 
 ### Deferred, with reasons
 
@@ -2009,6 +2173,27 @@ Beyond those already listed in the design document's §14:
   of that line under any of the teardown triggers.
 - **Idle session survives**: a login quiet for longer than the former five-minute TTL still
   authorizes its next command.
+
+**Decision log**
+
+- **One record per evaluation**, at each of the four events, permits included — a corpus
+  exercising the matcher produces exactly as many records as decisions.
+- **Replay agreement**: every record in the corpus replays against its named blob and
+  reproduces the logged verdict and reason.
+- **Replay divergence is detected**: a record whose blob is substituted, or whose verdict is
+  edited, is reported as divergent rather than silently accepted.
+- **Raw arguments survive normalization**: a record's `raw` reproduces the arguments as
+  received, including case and any pipe or abbreviation the normalizer rewrote.
+- **No credential material**: a log dump over the full corpus — ASCII, PAP, CHAP, and enable
+  — contains no token, password, challenge, or response, and `credential_sha256` matches the
+  hash bound by the receipt.
+- **Retransmission logs as one retried decision**, correlated by `credential_sha256`, not as
+  two independent decisions.
+- **Enable attribution**: an `escalate` record on a `$enab{level}$` platform names the
+  principal from login context, never `$enab15$`.
+- **Reason codes are closed**: every denial in the corpus carries a reason from the table, and
+  the operational reasons are countable separately from policy denials.
+- **Blob retention**: a blob referenced by a retained record is not collected.
 
 **Platform and projection**
 
