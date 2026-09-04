@@ -17,7 +17,7 @@ errors introduced during the design session rather than reviewer speculation.
 | Cluster 4 — remaining blocking issues | **resolved** |
 | Inconsistencies — nine items of stale text | **resolved** |
 | Architecture recommendations | open |
-| Gaps — decision log resolved; device accounting next | open |
+| Gaps — accounting resolved; key rotation and the mint API next | open |
 
 Clusters are ordered by severity; cluster 1 is the core data flow of the product. Resolved
 sections keep their original finding text beneath the resolution note.
@@ -290,11 +290,15 @@ written, the flagship session-only platform cannot carry a moderate role.
 
 ## Architecture recommendations
 
-**Promote accounting to a first-class section.** It is already load-bearing — capability
+**Promote accounting to a first-class section.** ~~It is already load-bearing — capability
 inference and the unauthorized-tier report consume it, enable attribution depends on it, and
 context lifecycle (1.2) needs it — yet nothing specifies wire handling, `task_id` correlation,
 delivery durability, or destination. The largest structural gap relative to the weight the
-documents quietly place on it.
+documents quietly place on it.~~
+
+**Resolved** as two sections, §5.7 and §5.8 — see Gaps below. The reviewer's observation that
+it was load-bearing turned out to be the finding: being load-bearing was itself the defect for
+context lifecycle, and the fix was to unload it rather than to specify it more carefully.
 
 **Design key rotation now.** §2 names never-rotated shared secrets as a core problem, and the
 `key_groups → key_ref → secret mount` scheme has no rotation story: no dual-key acceptance
@@ -313,17 +317,48 @@ versioned and rolled out, and what happens to *live* session contexts when polic
 platform set (spec §10), so a consumer always runs on one nameable state of the world and
 `bundle/diff` reviews all three together. Live contexts pick up a policy change because a
 changed policy produces a different blob hash, which refresh writes into each affected
-context (spec §5.1.2) — so policy-driven revocation reaches active logins, not only
+context (spec §5.1.3) — so policy-driven revocation reaches active logins, not only
 directory-driven revocation.
 
 ---
 
 ## Gaps
 
-- **Accounting** — as above, the single largest omission for production use. The reviewer
-  treated this as one gap; it is two streams. The **decision log** is resolved below. Device
-  accounting — wire handling, `task_id` correlation, delivery durability, destination —
-  remains open, along with the transport and durability questions shared by both streams.
+- **Accounting** — ~~as above, the single largest omission for production use.~~
+
+  **Resolved.** The reviewer treated this as one gap; it is two streams, and separating them
+  answered both. The decision log is below; device accounting is policy engine spec §5.8,
+  with §5.1.1, §5.1.4 and §5.6 rewritten around it.
+
+  Wire handling: three record types on a flags octet, an empty `cmd` marking exec records
+  exactly as it marks session authorization. Destination: the decision log's envelope,
+  emitter and sink as `event: "account"`, defaulting to stdout JSON lines — never the token
+  store, which is the only SPOF and would take the highest-volume traffic port49 handles.
+  Durability: `SUCCESS` on a durable spool write, `ERROR` only when the spool refuses, which
+  correctly means *ask another replica*; spool depth and drops are metrics. Correlation:
+  `task_id` is device-local and collides across reboots, so login context carries a `ctx_id`
+  that joins both streams from SSO login to typed command, and records that resolve to no
+  context are recorded as `unattributed` rather than dropped.
+
+  Two wire details would have broken reconciliation silently: the trailing `cmd-arg=<cr>`
+  several vendors send, which offsets every join by one argument, and the fact that command
+  accounting carries typed secrets verbatim — so adapters declare `redact` patterns applied
+  before emit, preserving vector shape so the join still matches.
+
+  **The larger correction came from Ryan.** Accounting had been teardown trigger 3 in §5.6
+  and was allowed to delete login context. It is best-effort, device-generated, and delivered
+  on a separate connection, so a logout STOP delayed past a line's reuse denies the *next*
+  operator mid-session. Teardown is now ordered by **authority** rather than reliability —
+  redemption, revocation, the session ceiling, a username conflict, idle TTL — and accounting
+  only annotates. Two further decisions followed: credential expiry bounds the mint rather
+  than the session (`auth_time + max_session_age` instead, warned in-session through
+  `server_msg`, refreshed in place, with a grace window, since port49 can deny commands but
+  cannot close a session), and login context records credential identity — OIDC `sid`,
+  certificate issuer and serial — so revocation reaches live device sessions, which in turn
+  extends the encryption-at-rest requirement from tokens to context.
+
+  Still open: WATCHDOG behavior per platform and whether `server_msg` is actually displayed,
+  both lab measurements.
 - **Observability and audit.** ~~One metric is named across both documents. There is no
   **decision audit log** — every permit and deny with principal, device, rule, and role — which
   is the compliance artifact this product will be bought for.~~ No metrics inventory, no

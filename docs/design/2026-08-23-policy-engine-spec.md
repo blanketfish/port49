@@ -322,8 +322,23 @@ On successful redemption the daemon creates login context, which holds **the has
 than a copy**:
 
 ```
-ctx:(nas, port)          { principal, username, privilege, blob_hash }
+ctx:(nas, port)
+  ctx_id            01J9F3QK…            assigned at creation; correlates every record
+  principal         alice@example.com
+  username          alice                bound; compared on every later exchange
+  rem_addr          198.51.100.4         bound; compared on enable
+  privilege         15
+  blob_hash         sha256:a3f9c1…
+  credential        see 5.1.4
+  auth_time         1757041495           when the human actually authenticated
+  session_expires   1757070295           auth_time + max_session_age
+  task_id           42                   from exec accounting, once observed (5.8)
+  accounting_state  open | closing       advisory (5.8); never authorizes or denies
 ```
+
+`ctx_id` is assigned once, at creation, and never changes. It is the join key between the two
+record streams: every decision (§5.7) and every resolvable accounting record (§5.8) carries
+it, which is what makes a single identifier reach from an OIDC login to a typed command.
 
 **Why content-addressed.** A batch mint resolves to the same value for every device in one
 scope — what varies is the rendered attributes, and those vary by *platform*, not by device.
@@ -398,7 +413,7 @@ inventory bundle while everything else stays compiled. Most platforms expand ser
 §3 already fails closed where expansion is unreliable, so this is recorded rather than
 designed for.
 
-### 5.1.2 Refreshing live context
+### 5.1.3 Refreshing live context
 
 The broker refreshes login context while a login remains active (design document §9), which
 requires it to discover which contexts exist. Nothing in the store makes that discoverable by
@@ -419,6 +434,55 @@ referenced.
 This also makes **policy-driven revocation reach active sessions**, not only directory-driven
 revocation. A policy change that removes a grant produces a different blob, and live contexts
 pick it up on the next refresh.
+
+### 5.1.4 Credential identity and revocation
+
+Login context records which credential authorized it. Not to re-verify — **the daemon never
+sees the credential.** The certificate or OIDC assertion is presented to the *broker* at mint;
+the command exchange carries only `user`, `port`, `rem_addr`, and `priv_lvl`. A fingerprint
+therefore cannot tighten per-command comparison, because the device has nothing to compare it
+against.
+
+What it buys instead is revocation that reaches a live device session, and attribution that
+survives in the log. The test applied to each field is narrow: **does it enable an action
+otherwise impossible?**
+
+```
+credential:
+  method       cert | oidc
+
+  # cert
+  fingerprint  sha256:4c1e…        what an operator or tool actually pastes
+  issuer       CN=Corp Issuing CA  }  a CRL or OCSP response names exactly
+  serial       0x3f9a01…           }  these two
+  subject      CN=alice,OU=…
+
+  # oidc
+  iss          https://sso.example.com
+  sub          a7f3-…              revokes every session of a principal
+  sid          9c2b-…              back-channel logout names this
+  amr          ["pwd", "mfa"]      recorded, not yet acted upon
+  acr          urn:…:loa2
+```
+
+**`sid` is the most valuable field here.** OIDC back-channel logout delivers a logout token
+naming `sid` (or `sub`), so an SSO logout — a stolen laptop, an offboarding — reaches the
+operator's live router sessions. Without it, that is not merely slow; it is impossible.
+
+**`amr` and `acr` are recorded because they are unrecoverable later.** Nothing can establish
+afterward how someone authenticated. They are not consulted by v1 evaluation; a role that
+requires MFA is a natural extension and would be unimplementable retroactively without them.
+
+**Certificate `notAfter` and the OIDC `exp` are deliberately absent.** They bound the *mint* —
+the credential MUST be valid when the broker resolves it — and not the session. An ID token's
+`exp` is commonly minutes, and treating it as a session ceiling would end a router session
+every hour for no security gain. Session lifetime is port49 policy, held in
+`session_expires` and derived from `auth_time` (§5.6).
+
+**Consequence for the store.** Context now holds identity material — subject DNs, `sub`
+claims, an operator's name. None of it is a credential, but it is PII-adjacent, so **login
+context MUST receive the same encryption-at-rest treatment as tokens** (design document §8).
+That obligation previously covered tokens alone.
 
 ### 5.2 Session authorization (daemon)
 
@@ -698,9 +762,7 @@ daemon, keyed `(nas, port)`. Nothing else creates it. A session port49 did not a
 therefore has no context and is denied — which is correct, since port49 has no basis on which
 to authorize it.
 
-```
-ctx:(nas, port)   { principal, username, rem_addr, privilege, blob_hash }
-```
+The shape is given in §5.1.1; §5.1.4 covers the credential fields.
 
 **Bound attributes.** `username` and `rem_addr` are recorded at creation and compared
 thereafter:
@@ -711,28 +773,95 @@ thereafter:
 | enable, `enable_username: principal` | `username` MUST match |
 | enable, `$enab{level}$` platforms | `rem_addr` MUST match |
 
-**Teardown.** Four triggers, in decreasing reliability:
+#### port49 denies commands; it cannot end a session
 
-1. **Successful redemption** for the same `(nas, port)` — overwrites unconditionally.
-2. **An authentication START for the same `(nas, port)` carrying a different username** —
-   invalidates, *including one port49 rejects*. A failed authentication is still evidence
-   that a new session is beginning on that line. With ASCII login the username may arrive in
-   a CONTINUE, so the check fires once the username is known rather than on the START itself.
-3. **Exec accounting START or STOP** for that port, where accounting is configured and
-   reaches us. START is the more useful signal: a STOP can be lost, but a START means whatever
-   was on that line is over regardless.
-4. **TTL expiry.**
+There is no server-to-device disconnect in TACACS+. Every mechanism below stops port49
+*authorizing* — the TCP session stays up, a candidate configuration stays intact, an
+in-progress commit is untouched. "Teardown" throughout this document means discarding state,
+never dropping a connection. That bounds the worst case of every rule here: an operator is
+told no, not cut off.
 
-**TTL is a backstop, not a control.** It SHOULD match the session lifetime and be extended by
-activity. A short TTL was previously doing security work it cannot do — it narrows a window
-without closing it, while denying idle operators mid-session with `context_missing`. The
-bindings above close the window; the TTL only bounds abandoned state.
+#### Teardown, ordered by authority
+
+Earlier drafts listed triggers by *reliability* and let all of them delete state. That was
+wrong. The bindings above are the security control; teardown is state hygiene. A signal port49
+did not generate and cannot verify MUST NOT delete state.
+
+| | Trigger | Authority |
+|---|---|---|
+| 1 | **Redemption** on the same `(nas, port)` | port49 performed it — overwrites unconditionally |
+| 2 | **Revocation** — OIDC back-channel logout by `sid` or `sub`; a certificate appearing on a CRL or OCSP response by issuer and serial; a policy change withdrawing every grant | authoritative, from the identity layer (§5.1.4) |
+| 3 | **Session ceiling** — `session_expires` reached and the grace window elapsed | local, needs no external signal |
+| 4 | **Username mismatch** on a command or enable exchange | a genuine conflict on that line — denies and invalidates |
+| 5 | **Authentication START** on the same `(nas, port)` under a different username, *including one port49 rejects* | a failed authentication is still evidence a new session is beginning. With ASCII login the username arrives in a CONTINUE, so the check fires once it is known |
+| 6 | **Idle TTL** | hygiene; bounds abandoned state |
+| 7 | **Exec accounting** | **advisory only — annotates, never deletes** (§5.8) |
+
+**Why accounting was demoted.** It is best-effort, device-generated, and delivered on a
+separate connection that can be queued or bounced off another server first. A delayed logout
+STOP therefore arrives after the line has been reused:
+
+```
+t0   Bob's session on ls01 vty0 ends
+t1   device emits  STOP user=bob port=vty0 task_id=42   → delayed 4s
+t2   Alice authenticates, redeems, ctx:(ls01, vty0) = { alice, … }
+t3   the delayed STOP arrives  →  teardown fires on (ls01, vty0)
+t4   Alice's next command  →  context_missing  →  denied mid-session
+```
+
+Fail-closed, so not dangerous — but a self-inflicted outage, and one whose two halves look
+unrelated in a log. Matching on username fixes Bob-then-Alice and not Bob reconnecting to the
+same line. Rather than patch it, accounting now sets `accounting_state: closing` and nothing
+more; row 6 reclaims the state. §5.8 specifies the annotation, including the `task_id`
+binding that makes it correct.
+
+**Idle TTL is a backstop, not a control.** It SHOULD be extended by activity. A short TTL was
+previously doing security work it cannot do — it narrows a window without closing it, while
+denying idle operators mid-session with `context_missing`. Rows 1 through 5 close the window.
+
+#### Session lifetime
+
+`session_expires` is `auth_time + max_session_age`, where `auth_time` is when the human
+actually authenticated (§5.1.4) and `max_session_age` is port49 policy, declared per role and
+defaulting long. It is the compliance-relevant clock: *how long may a session run on the
+strength of one authentication event.*
+
+A session approaching the ceiling is **warned in the session**. The authorization REPLY
+carries `server_msg`, which devices display, so the operator is told on the device before
+anything stops working — and re-authentication does not require reconnecting, because the
+broker can refresh live context (§5.1.3) through the `contexts_by_principal` index:
+
+```
+t+0h00   Alice authenticates (OIDC, amr=["pwd","mfa"]), mints, logs into core-sw01
+         ctx { auth_time=T, session_expires=T+8h }
+
+t+7h50   authorization REPLY carries server_msg:
+           "port49: re-authenticate within 10m — run `port49 login`"
+
+t+7h55   Alice runs `port49 login`; the broker verifies, finds her live contexts,
+         writes auth_time=T2 and session_expires=T2+8h
+
+t+7h56   her next command authorizes normally — no reconnect, candidate config intact
+```
+
+Past the ceiling, commands are denied with a `server_msg` naming the reason, and **context is
+retained through a grace window** so a late `port49 login` resumes the session rather than
+forcing a reconnect. Requirements:
+
+- The warning window MUST be long enough to complete a change, not merely to notice the
+  message. It and the grace window are both configurable.
+- Refresh MUST NOT extend a session whose principal has lost the grant; refresh re-resolves
+  policy, so a withdrawn grant produces a blob that denies.
+- Denial at the ceiling is FAIL, not ERROR, so no fall-through to local authorization opens
+  up (see below).
+- `max_session_age: never` MUST be expressible. Some deployments have no such requirement,
+  and a ceiling nobody asked for is an outage waiting to happen.
 
 #### Why `enable: auto` is restricted
 
 Method lists fall through to a later method only on **ERROR** (the server is unreachable), not
 on **FAIL** (an explicit reject). So a session that authenticates locally rather than through
-port49 implies port49 was *unreachable at that moment* — which means trigger 2 never fired,
+port49 implies port49 was *unreachable at that moment* — which means row 5 never fired,
 because we never saw the START.
 
 The remaining exposure is therefore: port49 unreachable when a session begins, reachable again
@@ -768,8 +897,13 @@ These are measurements, not assumptions, and belong in the containerlab matrix:
   the address alone cannot.
 - Method-list fall-through and `deadtime` behavior per platform, since both bound the exposure
   window above.
-- Whether exec accounting START and STOP arrive reliably enough for trigger 3 to be worth
-  depending on.
+- How reliably and how late exec accounting START and STOP arrive per platform. This no
+  longer decides correctness, since accounting is advisory — but it bounds how much a
+  reconciliation report (§9) can conclude from silence, and it sizes the delay the
+  `task_id` binding in §5.8 has to tolerate.
+- Whether `server_msg` on an authorization REPLY is actually displayed to the operator on
+  each platform, and at what length it is truncated. The re-authentication warning is
+  useless if it is silently discarded.
 
 ---
 
@@ -798,7 +932,7 @@ A deny at the per-command point:
   "principal": "alice@example.com",
   "auth": { "method": "oidc", "credential_sha256": "9f2c8b…" },
   "device": { "nas": "10.20.0.7", "name": "core-sw01", "platform": "arista_eos" },
-  "session": { "port": "vty0", "rem_addr": "198.51.100.4", "privilege": 15 },
+  "session": { "ctx_id": "01J9F3QK…", "port": "vty0", "rem_addr": "198.51.100.4", "privilege": 15 },
   "request": {
     "raw": ["service=shell", "cmd=copy", "cmd-arg=running-config", "cmd-arg=tftp://10.9.9.9/x"],
     "vector": ["copy", "running-config", "tftp://10.9.9.9/x"]
@@ -833,14 +967,18 @@ of the product, not a problem to optimize away.
 
 #### Events
 
-One envelope, four events, at each point a decision is made:
+One envelope, five events, at each point a decision is made:
 
 | `event` | Emitted by | Decides |
 |---|---|---|
 | `mint` | broker | which grants matched, which roles composed, which blob resulted |
+| `redeem` | daemon | whether a presented credential is valid, and creates the context |
 | `authorize_session` | daemon | the session and its returned attributes (§6) |
 | `authorize_command` | daemon | one command vector |
 | `escalate` | daemon | an `enable` exchange, attributed to the principal (§7) |
+
+Device accounting shares this envelope as a sixth event, `account`, and is specified in §5.8.
+It is not a decision — it is a report — so it carries no `policy` block and no verdict.
 
 `escalate` exists as its own event because the device-facing username on those platforms is
 `$enab{level}$`, not a person. The record carries the principal resolved from login context,
@@ -879,6 +1017,8 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 | `username_mismatch` | the request's username differs from the one bound at redemption (§5.6) |
 | `rem_addr_mismatch` | enable arrived from a different address than the bound one |
 | `privilege_exceeded` | the request is above the session's granted level |
+| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6) |
+| `credential_revoked` | the authorizing credential was revoked — CRL, OCSP, or back-channel logout |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved |
@@ -887,7 +1027,8 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 A denial whose reason is `context_missing`, `device_unknown`, or `blob_unavailable` is an
 operational condition rather than a policy outcome, and each MUST be separately alertable —
 a rise in `context_missing` means sessions are being authenticated somewhere other than
-port49.
+port49. `session_expired` is a third category again: expected, and a signal that the
+re-authentication warning is not reaching operators (§5.6).
 
 #### Credentials never appear
 
@@ -912,15 +1053,188 @@ Replay requires the blob, so blobs MUST be retained at least as long as the deci
 that reference them. They are small, immutable, and shared across every login that resolved
 to the same policy.
 
+#### Correlation
+
+Every record resolved against a login context carries its `ctx_id` (§5.1.1). A `mint` record
+carries the token handle instead, since context does not exist yet; the daemon's redemption
+record joins the two. One chain therefore runs from an SSO login to a typed command:
+
+```
+mint (handle) → redemption (handle → ctx_id) → authorize_session
+                                             → authorize_command ×N
+                                             → escalate
+                                             → account ×N          (§5.8)
+```
+
+---
+
+### 5.8 Device accounting
+
+Accounting is the third exchange in TACACS+ and the only one where the device reports rather
+than asks. A record says *I did this*. There is no deny status in the reply, and the device
+has already acted by the time it arrives.
+
+Three record types, distinguished by a flags octet: START, WATCHDOG (still running), STOP.
+A login, one command, and a logout — three separate exchanges, each acknowledged:
+
+```
+flags=START     user=alice  port=vty0  rem_addr=198.51.100.4  priv_lvl=1
+  task_id=42  service=shell  cmd=  start_time=1757041495
+        → REPLY status=SUCCESS
+
+flags=STOP      user=alice  port=vty0  rem_addr=198.51.100.4  priv_lvl=15
+  task_id=43  service=shell  cmd=show  cmd-arg=running-config  cmd-arg=<cr>
+  start_time=1757041502  stop_time=1757041502
+        → REPLY status=SUCCESS
+
+flags=STOP      user=alice  port=vty0  priv_lvl=1
+  task_id=42  service=shell  cmd=  elapsed_time=214
+        → REPLY status=SUCCESS
+```
+
+Note the shape: an empty `cmd` marks the exec records — session start and session end —
+exactly as it marks session authorization (§5.2). Command records are STOP-only, since a
+command that already ran has no start to report.
+
+#### What accounting is not
+
+**It is not a complete record of what ran.** A device sends only the classes it was
+configured to send. `aaa accounting commands 15` alone means every privilege-1 command is
+invisible; console sessions, out-of-band access, and local-fallback logins produce nothing at
+all. Silence is not evidence of inactivity, which is the whole reason §9 exists — the gap
+between what port49 authorized and what it was told ran identifies tiers a device executes
+without asking anyone.
+
+**It is not enforcement, and MUST NOT be made to act like it.** Authorization and accounting
+are separate exchanges; a device that cannot account still runs the command. Any attempt to
+gate access on a successful accounting write is theatre that costs availability and buys
+nothing.
+
+**It is not trusted input.** Records are device-generated and unverifiable. They are recorded
+and reported; they never delete state (§5.6) and never grant anything.
+
+#### Destination
+
+**Accounting shares the decision log's envelope, emitter, and sink**, as `event: "account"`.
+The two streams are joined constantly — reconciliation, audit, incident review — and
+splitting them means every consumer reassembles them. Default sink is JSON lines on stdout,
+so a deployment's existing log pipeline handles retention, indexing, and shipping.
+
+Accounting MUST NOT be written to the token store. The store is the only shared state and the
+only single point of failure (design document §6), and accounting is the highest-volume
+traffic port49 handles.
+
+```json
+{
+  "ts": "2026-09-04T02:11:42.006Z",
+  "event": "account",
+  "flags": "stop",
+  "attribution": "resolved",
+  "principal": "alice@example.com",
+  "device": { "nas": "10.20.0.7", "name": "core-sw01", "platform": "arista_eos" },
+  "session": { "ctx_id": "01J9F3QK…", "port": "vty0", "rem_addr": "198.51.100.4" },
+  "task_id": "43",
+  "record": {
+    "raw": ["task_id=43", "service=shell", "cmd=show", "cmd-arg=running-config", "cmd-arg=<cr>"],
+    "vector": ["show", "running-config"],
+    "priv_lvl": 15,
+    "start_time": 1757041502,
+    "stop_time": 1757041502
+  }
+}
+```
+
+`raw` and `vector` follow the same rule as the decision log: the record as received, plus the
+normalized form the reconciliation join uses.
+
+#### Durability
+
+Reply `SUCCESS` once the record is durably handed to the local spool; reply `ERROR` only when
+the spool cannot take it. RFC 8907 offers nothing else — there is no way for a server to
+refuse a record on policy grounds.
+
+`ERROR` means *not me, ask another replica*. Devices are not known to retry to the same
+server, but most fall through to the next server in the group, which is the correct outcome
+when this replica genuinely cannot record. It MUST NOT be used for anything else: an `ERROR`
+returned for a malformed or unwelcome record makes every replica in turn try to accept it and
+loses the record anyway.
+
+The spool is a bounded local buffer with a disk-backed overflow, drained to the sink. Sizing,
+and whether overflow blocks or discards oldest-first, are deployment settings. Spool depth and
+drop count MUST be metrics — an accounting stream silently discarding records destroys the
+reconciliation report without failing anything visibly.
+
+#### Two wire details that break the join
+
+**Strip the trailing `cmd-arg=<cr>`.** Several vendors terminate the argument list with a
+literal `<cr>`. It is not an argument, and left in place every reconciliation join misses by
+one position and every command looks unauthorized. Normalization (§3) removes it; the raw
+record keeps it.
+
+**Redact secrets before emit.** Command accounting carries typed text verbatim, so
+`username bob secret Hunter2` arrives in full. This is the well-known way TACACS+ accounting
+logs fill with plaintext passwords, and it is worse here than in a conventional deployment
+because port49's stream is designed to be shipped and retained.
+
+Platform adapters therefore declare redaction patterns, applied before emit:
+
+```yaml
+# platforms/arista_eos.yaml
+redact:
+  - {match: ['username', '*', 'secret', '**'],        from: 3}
+  - {match: ['username', '*', 'password', '**'],      from: 3}
+  - {match: ['enable', 'secret', '**'],               from: 2}
+  - {match: ['**', 'key', '*'],                       from: -1}
+```
+
+Redaction replaces argument *values* with `«redacted»` and preserves the vector's shape and
+length, so the reconciliation join still works on a redacted record. It applies to `raw` as
+well — a rule that redacted only the normalized form would defeat itself.
+
+Redaction is best-effort by nature and MUST NOT be presented otherwise: a pattern that misses
+leaks. It is strictly better than emitting verbatim, and the honest mitigation is that
+port49's own credentials are never typed at a device prompt in the first place.
+
+#### Annotating login context
+
+Exec accounting annotates context and never deletes it (§5.6). The annotation is still worth
+getting right, and `task_id` is what makes it correct — it pairs a START with its STOP, and
+context is already keyed on `(nas, port)`, so device-local uniqueness suffices:
+
+```
+exec START for (nas, port):
+    ctx has no task_id and user matches   →  bind task_id (our own session's START)
+    otherwise                             →  annotate foreign_session, alert
+
+exec STOP for (nas, port):
+    ctx.task_id set    →  accounting_state = closing, only on a task_id match
+    ctx.task_id unset  →  accounting_state = closing, only on a username match
+```
+
+The unset branch covers `stop-only` accounting and a lost START. `closing` stops refresh
+(§5.1.3) and is reported; the idle TTL reclaims the state. A record that matches neither is
+logged as unattributable to that context and left alone.
+
+An exec START whose `user` does not match the bound username is a **session port49 did not
+authenticate** — a local fallback, a console login, or a name collision. That is precisely the
+condition §5.6 requires a warning for, and it is high-signal: it means either port49 was
+unreachable or a device-local account shares a principal's name.
+
+#### Unresolvable records
+
+A record port49 cannot tie to a context — no `ctx_id`, no principal — is still recorded, with
+`attribution: "unattributed"` and `ctx_id: null`. It is never discarded. This is the primary
+evidence that something authenticated outside port49, and a rate of unattributed records
+above the deployment's break-glass baseline MUST be alertable.
+
 #### Deliberately not specified here
 
-**Transport and durability.** Where records go, and whether port49 ever fails a request it
-cannot record, are deployment-shaping decisions taken separately. Nothing above depends on
-the answer.
+**Sink implementations.** Beyond the stdout default, a sink is an integration, not a design
+decision: syslog, an HTTP endpoint, a message bus. The envelope is the contract.
 
-**Device accounting.** A second stream with different guarantees — best-effort, incomplete by
-configuration, and unverifiable. It is consumed by capability inference (§9) and by context
-teardown (§5.6), and it is specified in its own right rather than folded in here.
+**WATCHDOG semantics per platform.** A WATCHDOG carrying no arguments is a keepalive; one
+carrying arguments is an update. Which platforms send them, and how often, is a lab
+measurement rather than a design choice.
 
 ---
 
@@ -1257,6 +1571,7 @@ attribute is complete in four lines:
 | `expands_abbreviations` | whether the device sends resolved command words | if `commands` |
 | `pipe_token` / `pipe_authorized` | modifier separator; whether it reaches us | if `commands` |
 | `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
+| `redact` | patterns whose argument values are removed before an accounting record is emitted (§5.8) | if `commands` |
 | `service` | authorization `service` value if not `shell` | rarely |
 | `port_pattern` | expected `port` shape, used only for drift detection | optional |
 
@@ -1531,7 +1846,10 @@ so it MUST be evaluated statistically over a window rather than per session.
 
 **Reconciling accounting against authorization** generalizes the technique. Where command
 accounting is enabled, a command appearing in an accounting record with no corresponding
-authorization request proves the device decided it locally:
+authorization request proves the device decided it locally. The join is `ctx_id` plus the
+normalized vector, over the single stream both events share (§5.7, §5.8) — which is why the
+`<cr>` stripping and shape-preserving redaction in §5.8 are correctness requirements here and
+not cosmetic:
 
 ```
 ⚠ UNAUTHORIZED TIER — leaf-04
@@ -1564,6 +1882,14 @@ Two checks fall out, and both are needed:
   enforce. Caught at review time.
 - **Runtime**: the platform is capable but the device is not configured. Caught by drift
   detection.
+
+**What silence can and cannot mean.** Every conclusion here reads a *gap* between two streams,
+and accounting is best-effort — so a gap can also mean records were lost in transit or dropped
+from a full spool. Reconciliation MUST therefore be qualified by the accounting stream's own
+health over the same window: spool drops, `ERROR` replies, and unattributed-record counts
+(§5.8). A report that cannot distinguish "the device did not ask" from "we did not receive"
+will eventually accuse a correctly configured device, and once that happens nobody reads the
+report again.
 
 > **Principle.** Never require an operator to assert something the system can observe.
 > Anything declared by hand about device behavior will eventually be wrong, and it will be
@@ -2077,6 +2403,36 @@ narrating a rationale, so a decision can be re-evaluated and verified instead of
 trust — and a divergence on replay is itself a finding. Permits are never sampled or
 suppressed; the artifact is worthless without them. (§5.7)
 
+**11. Accounting is advisory — it annotates login context and never deletes it.** Earlier
+drafts ordered teardown triggers by reliability and let all of them delete state, which made
+a best-effort, device-generated, separately-delivered signal load-bearing. A logout STOP
+delayed past a line's reuse then denies the *next* operator mid-session: fail-closed, but a
+self-inflicted outage whose two halves look unrelated in a log. Teardown is now ordered by
+**authority** — port49's own redemption, revocation from the identity layer, the local
+session ceiling, a username conflict, idle TTL — and accounting only sets
+`accounting_state: closing`. The bindings were always the security control; teardown is state
+hygiene, and hygiene must not be able to cause an outage. (§5.6, §5.8)
+
+**12. Credential expiry bounds the mint, not the session.** An OIDC `exp` is commonly minutes
+and a certificate's `notAfter` describes validity at authentication, so neither is a session
+ceiling — using them as one would end a router session every hour for no security gain. The
+session clock is `auth_time + max_session_age`, port49 policy, per-role, and `never` is
+expressible. Because port49 can deny commands but has no way to close a session, reaching the
+ceiling never drops a connection or abandons a candidate configuration: the operator is warned
+in-session through `server_msg`, re-authenticates out of band while the session stays open, and
+context survives a grace window so a late re-auth resumes rather than reconnects. (§5.1.4,
+§5.6)
+
+**13. Login context records credential identity for revocation, not for verification.** The
+daemon never sees the credential — the command exchange carries only `user`, `port`,
+`rem_addr`, and `priv_lvl` — so a fingerprint cannot tighten per-command comparison. It is
+recorded because it enables actions otherwise impossible: OIDC `sid` makes back-channel logout
+reach live device sessions, and certificate issuer and serial are exactly what a CRL or OCSP
+response names. `amr` and `acr` are recorded but unused, because how someone authenticated
+cannot be established after the fact. The cost is that context now holds PII-adjacent
+material, so it inherits the encryption-at-rest requirement previously applied only to
+tokens. (§5.1.4)
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -2169,8 +2525,10 @@ Beyond those already listed in the design document's §14:
 - **Username normalization**: `alice`, `ALICE`, `DOMAIN\alice`, and `alice@corp.example.com`
   all match a canonical `alice`.
 - **`rem_addr` binding on enable**: a mismatch is refused and alerted.
-- **Recycled line**: a context outliving its session is not inheritable by the next occupant
-  of that line under any of the teardown triggers.
+- **Recycled line**: a context now routinely outlives its session, since accounting no longer
+  deletes it — so the assertion is that it is not inheritable by the next occupant of that
+  line through command authorization, through enable under any of the three mechanisms, or
+  through a local-fallback login.
 - **Idle session survives**: a login quiet for longer than the former five-minute TTL still
   authorizes its next command.
 
@@ -2194,6 +2552,52 @@ Beyond those already listed in the design document's §14:
 - **Reason codes are closed**: every denial in the corpus carries a reason from the table, and
   the operational reasons are countable separately from policy denials.
 - **Blob retention**: a blob referenced by a retained record is not collected.
+- **Correlation chain**: one `ctx_id` joins the mint's redemption, the session, every command,
+  any escalation, and every resolved accounting record for that login.
+
+**Device accounting**
+
+- **Record types**: START, WATCHDOG, and STOP each parse and emit; an empty `cmd` is
+  recognized as an exec record and a populated one as a command record.
+- **`<cr>` stripping**: a record terminated with `cmd-arg=<cr>` normalizes to the same vector
+  as the authorization request for the same command, and the join matches. `raw` retains it.
+- **Redaction**: `username bob secret Hunter2` emits with the secret removed, in both `raw`
+  and `vector`, with the vector's length unchanged so the join still matches. A corpus of
+  credential-bearing commands per platform emits no plaintext secret.
+- **Durability**: `SUCCESS` follows a durable spool write; a full or unwritable spool returns
+  `ERROR` and nothing else does; spool depth and drop count are exported as metrics.
+- **Accounting never enforces**: an unreachable sink denies no command, and no code path
+  gates an authorization reply on an accounting write.
+- **Accounting never deletes context**: the late-STOP sequence in §5.6 leaves the new
+  occupant's context intact and authorizing.
+- **`task_id` binding**: an exec START binds `task_id`; a STOP bearing a different `task_id`
+  does not annotate; a STOP matching it sets `accounting_state: closing`; with no bound
+  `task_id`, a username match is required.
+- **Foreign session detection**: an exec START whose username differs from the bound one is
+  reported as a session port49 did not authenticate.
+- **Unattributed records** are recorded rather than discarded, carry `ctx_id: null`, and are
+  counted separately.
+
+**Session lifetime and revocation**
+
+- **Credential expiry does not bound the session**: a login authorized by an OIDC token with a
+  five-minute `exp` still authorizes commands an hour later.
+- **Mint requires validity**: an expired certificate or token is refused at mint.
+- **Ceiling warning**: an authorization REPLY inside the warning window carries `server_msg`,
+  and the message is confirmed displayed per platform in the lab matrix.
+- **In-place refresh**: `port49 login` during the warning window extends `session_expires`
+  without a reconnect, and the next command authorizes.
+- **Refresh re-resolves policy**: a principal whose grant was withdrawn cannot extend a
+  session into continued access.
+- **Grace window**: a command past the ceiling is denied with `session_expired` while context
+  is retained; a re-auth inside the grace window resumes the same session; past it, context is
+  gone and the reason becomes `context_missing`.
+- **`max_session_age: never`** is accepted and produces no ceiling.
+- **Revocation reaches live sessions**: a back-channel logout naming `sid`, a `sub`-wide
+  revocation, and a certificate appearing on a CRL each invalidate the matching contexts and
+  no others.
+- **Context encryption at rest**: a store dump contains no recoverable subject DN, `sub`
+  claim, or principal name.
 
 **Platform and projection**
 
