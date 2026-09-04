@@ -2077,6 +2077,61 @@ lab_key          1       88  —
 The 41 devices MUST be nameable, not merely counted — a rotation stalls on a specific list of
 boxes someone has to go and fix, and a count alone cannot be actioned.
 
+#### Devices presenting a key that does not validate
+
+The same report MUST cover the other half of a rotation: devices we are failing to admit. This
+is possible because **the RFC 8907 header is cleartext** — version, type, `seq_no`,
+`session_id`, and `length` — as is the TCP source address. Only the body is obfuscated. A
+packet that validates against nothing is therefore still attributable.
+
+```
+UNVALIDATED SOURCES (24h)
+SOURCE        DEVICE     KEY_REF    ATTEMPTS  LAST     DIAGNOSIS
+10.20.4.9     leaf-19    prod_key       212   30s ago  matches retired v1
+10.20.7.3     spine-02   prod_key        14   4m ago   no known key matches
+10.99.0.5     —          —                3   1h ago   unadmitted source
+203.0.113.7   —          —            1,204   2s ago   not TACACS+ (header invalid)
+```
+
+Three mechanisms produce those diagnoses.
+
+**Header validation separates clients from noise.** Version major MUST be `0xc`, type in
+{1, 2, 3}, a client `seq_no` odd, and the body within the 4096-byte bound RFC 8907 sets. A
+port scanner fails that and is counted as `not TACACS+`, so it never pollutes the key report.
+This distinction is the difference between a report an operator reads and one they mute.
+
+**Retired versions are retained for diagnosis and never for admission.** This is what turns
+"something is wrong with leaf-19" into "leaf-19 was missed in the rotation". The rule is
+absolute and MUST be enforced structurally rather than by convention:
+
+> A retired key version may **identify** a device. It MUST NOT admit one, and MUST NOT be used
+> to construct a reply.
+
+How many retired versions are kept for diagnosis is configurable, and keeping none is valid
+for a deployment that would rather not hold the material at all — at the cost of this column
+reading `no known key matches` for every straggler.
+
+**Cross-group probing is manual.** `port49 keys diagnose <device>` may test key material from
+*other* key groups, which names a real misconfiguration exactly — a lab device presenting the
+production key, say, which is a finding in its own right regardless of the rotation. It MUST
+NOT run automatically on validation failure: the listener is unauthenticated, and probing
+every key group on every malformed packet is a CPU amplifier available to anyone who can reach
+port 49.
+
+**What this cannot distinguish.** A wrong key on the device and wrong key material in the
+secret manager present identically — nothing validated, and the packet cannot say why. The
+report states `no known key matches` and does not guess; `keys diagnose` is the instrument for
+narrowing it. Claiming a cause the evidence does not support would make the whole report
+untrustworthy.
+
+Two properties fall out of counting attempts per source:
+
+- **It is most of the rate limiting an unauthenticated listener needs.** Guessing a key is
+  infeasible, but each attempt costs a pad computation, so per-source attempt limits with
+  backoff bound the CPU an unadmitted source can consume.
+- **An unvalidated body MUST NOT be logged.** It is undecodable and attacker-controlled.
+  Record the cleartext header fields, the source, and a hash of the body — never its content.
+
 #### Retirement is enforced, and that is the point
 
 `retire_after` is a date, and past it the version is refused. This is the tension worth
@@ -2452,11 +2507,15 @@ It is the same evaluator the daemon runs. Beyond answering an auditor, a capture
 replayed against a candidate build turns "did this release change anyone's access" into a
 diff — which is the only form of that question a reviewer can actually check.
 
-**`port49 keys status`** counts devices per accepted key version and names those still
-presenting an old one (§10). It is the instrument a rotation is driven by, and its output
-belongs in the pull request that retires a version. **`port49 keys show <device>`** resolves
-which `key_ref` a device matches; rendering the secret itself is a separately-authorized
-operation, since a group key is shared across the devices in its group.
+**`port49 keys status`** counts devices per accepted key version, names those still presenting
+an old one, and lists sources whose packets validated against nothing — separating a retired
+version, unknown material, an unadmitted source, and traffic that is not TACACS+ at all (§10).
+It is the instrument a rotation is driven by, and its output belongs in the pull request that
+retires a version. **`port49 keys diagnose <device>`** tests other key groups' material to
+name a misconfiguration exactly; it is manual because the equivalent automatic probe would be
+a CPU amplifier on an unauthenticated listener. **`port49 keys show <device>`** resolves which
+`key_ref` a device matches; rendering the secret itself is a separately-authorized operation,
+since a group key is shared across the devices in its group.
 
 **Access review** is a rendering of the flat grant table, not an investigation.
 
@@ -2569,9 +2628,13 @@ checks. Because every non-retired version is accepted at all times, rotation has
 add a version, provision devices at their own pace, retire the old one. The missing piece in
 current practice is not the mechanism but the *evidence* — nobody can prove an old key is
 unused, so it is never removed — so the daemon records the validating version and
-`keys status` names the devices still on it. `retire_after` is enforced rather than advisory,
-which is the only thing that prevents a nine-year-old key, with escalating alarms and a
-reviewed extension path as the answer to the lockout risk it creates.
+`keys status` names the devices still on it. Because the RFC 8907 header is cleartext, the
+same report also attributes the packets that validated against *nothing* — separating a
+retired version from unknown material, an unadmitted source, and traffic that is not TACACS+ —
+so both halves of a rotation are visible. Retired versions are retained to make that diagnosis
+and may identify a device but never admit one. `retire_after` is enforced rather than
+advisory, which is the only thing that prevents a nine-year-old key, with escalating alarms
+and a reviewed extension path as the answer to the lockout risk it creates.
 
 Per-device derived keys were considered and **rejected**: port49 cannot write device
 configuration, so it cannot install the key it would derive, and a per-device key nobody can
@@ -2790,6 +2853,17 @@ Beyond those already listed in the design document's §14:
   moving one device does not disturb another.
 - **Phase-out visibility**: `keys status` counts devices per version and names the ones still
   presenting an old version.
+- **Unvalidated sources are attributed**: a device presenting a retired version is named and
+  diagnosed as such; one presenting unknown material reports `no known key matches`; an
+  unadmitted source and a non-TACACS+ packet each land in their own bucket rather than in the
+  key report.
+- **A retired version never admits**: a request obfuscated with a retired key is refused and
+  no reply is constructed from it, while still being identified in the report. With diagnostic
+  retention disabled, the same request is refused and reports `no known key matches`.
+- **Cross-group probing is manual only**: no code path tests another key group's material on
+  validation failure; `keys diagnose` does, and names the group that matched.
+- **Attempt accounting**: repeated failures from one source are counted, rate-limited with
+  backoff, and never cause the daemon to log the obfuscated body.
 - **Retirement**: past `retire_after` the version is refused; an empty `accept` set for an
   assigned `key_ref` fails CI; an already-passed `retire_after` and a version with none at all
   are both reported.

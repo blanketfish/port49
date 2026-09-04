@@ -325,6 +325,17 @@ with escalating alarms and a reviewed extension as the answer to the lockout it 
 key mismatch is now a row of the failure matrix, since it is the one row a configuration change
 can cause.
 
+**Ryan asked for the other half of that report** — devices presenting a key that validates
+against nothing — and it turns out to be available, because the RFC 8907 header is cleartext
+and only the body is obfuscated. `keys status` therefore separates four cases that would
+otherwise be one undifferentiated failure count: a retired version (naming the boxes missed in
+a rotation), unknown material, an unadmitted source, and traffic that is not TACACS+ at all.
+Retired versions are retained to make that diagnosis under a structural rule — a retired key
+may identify a device and MUST NOT admit one or build a reply. Cross-group probing stays
+manual in `keys diagnose`, since the automatic form is a CPU amplifier on an unauthenticated
+listener. The report is honest about its limit: a wrong key on the device and wrong material
+in the secret manager present identically, and it does not guess between them.
+
 **Per-device keys were rejected, at Ryan's call.** Derivation narrows blast radius but port49
 cannot write device configuration, so it cannot install the key it would derive — a
 per-device key nobody can provision is worse than a shared key that rotates on schedule. Key
@@ -401,8 +412,16 @@ directory-driven revocation.
   turns "did this release change anyone's access" into a diff.
 
   Metrics inventory and tracing remain open.
-- **Abuse resistance.** No rate limiting on failed authentications, no per-NAS connection
-  limits, no stated behavior for malformed-packet floods on an unauthenticated TCP listener.
+- **Abuse resistance.** ~~No rate limiting on failed authentications, no per-NAS connection
+  limits, no stated behavior for malformed-packet floods on an unauthenticated TCP listener.~~
+
+  **Partly resolved** as a side effect of key rotation (spec §10). Per-source attempt counting
+  with backoff bounds the CPU an unadmitted source can consume, header validation classifies
+  malformed-packet floods as `not TACACS+` rather than letting them pollute the key report, and
+  an unvalidated body is never logged — it is undecodable and attacker-controlled.
+
+  Still open: per-NAS connection limits, and rate limiting on *failed authentications* from an
+  admitted device, which is a different path from a failed de-obfuscation.
 - **Duplicate or overlapping addresses.** Device binding assumes source-to-device is injective.
   Snapshot validation for collisions, including CIDR overlap in the admission trie, is
   unspecified.
