@@ -1999,6 +1999,129 @@ maintained once, in the source of truth, while the admission *decision* stays in
 RFC 9887 replaces the shared key with mutual TLS, so a device record MUST be able to express
 both.
 
+### Key rotation
+
+§2 of the design document names shared secrets that are never rotated as one of three
+problems with deployed TACACS+. Rotation is therefore a feature, not an operational detail,
+and it has to work without a flag day — because the key lives in device configuration, so
+there is no such thing as a server-side-only rotation.
+
+#### There is no key identifier on the wire
+
+RFC 8907 obfuscates the body with an MD5 pad keyed on
+`session_id ‖ key ‖ version ‖ seq_no`, and carries nothing that says which key was used.
+The daemon cannot be told; it MUST try.
+
+Trying is reliably decidable, because the header's `length` field is cleartext. After
+de-obfuscating with a candidate key, the body must be self-consistent:
+
+```
+authentication START:
+    user_len + port_len + rem_addr_len + data_len  ==  length - 8
+    action, priv_lvl, authen_type, authen_service   all in valid ranges
+```
+
+A wrong key yields pseudorandom bytes. Four of them summing to one exact target is on the
+order of 10⁻⁶, and the enum checks drive it several orders lower. Every packet type carries an
+equivalent length identity, so validation is not specific to authentication.
+
+Two requirements follow:
+
+- **The reply MUST be obfuscated with the key that validated the request**, not with
+  `current`. The device understands only its own key.
+- **The resolved key MUST be cached for the life of the TCP connection.** A CONTINUE, or a
+  session multiplexed under single-connection mode, re-tries otherwise. The cost of a failed
+  candidate is one pad computation, which is acceptable once per connection and wasteful per
+  packet.
+
+#### Version sets, and no cutover
+
+A `key_ref` resolves to a set of versions, all of which the daemon accepts until retired:
+
+```yaml
+keys:
+  prod_key:
+    current: {version: 3, secret_ref: vault:port49/prod/v3}
+    accept:
+      - {version: 2, secret_ref: vault:port49/prod/v2, retire_after: 2026-10-01}
+```
+
+`current` decides only two things: what `port49 keys show <device>` renders for provisioning,
+and the order candidates are tried in. **Validation accepts any listed version**, so nothing
+needs promoting and there is no moment at which a device must already have been updated:
+
+```
+day 0     add v3 to the set; the daemon accepts v2 and v3
+          → every device still on v2 keeps working, untouched
+day 1-20  push v3 device by device, at whatever pace the fleet allows
+          → each device works before and after its own change
+day 21    `port49 keys status` shows zero devices on v2
+day 22    retire v2 in a reviewed change
+```
+
+#### Phase-out has to be observable
+
+Step 21 is the one that does not exist in current practice, and its absence is why rotations
+get abandoned half-finished — nobody can prove the old key is unused, so it is never removed.
+The daemon records which `key_ref` and version validated each connection, which makes the
+question answerable:
+
+```
+$ port49 keys status
+KEY_REF    VERSION  DEVICES  LAST OLD-KEY USE
+prod_key         3    8,412  —
+                 2       41  12m ago         ⚠ rotation not finished
+lab_key          1       88  —
+```
+
+The 41 devices MUST be nameable, not merely counted — a rotation stalls on a specific list of
+boxes someone has to go and fix, and a count alone cannot be actioned.
+
+#### Retirement is enforced, and that is the point
+
+`retire_after` is a date, and past it the version is refused. This is the tension worth
+stating plainly: **automatic retirement is what prevents a key living for nine years, and
+retiring a key still in use locks those devices out.** Both halves are true, and the design
+resolves it by making the deadline visible long before it arrives rather than by softening it.
+
+- Alarm severity escalates as `retire_after` approaches while devices still present the
+  version, and the remaining device list is in the alarm.
+- Retirement and extension are both reviewed changes in the policy repository. Extending is
+  legitimate; forgetting is what the date prevents.
+- CI MUST refuse a policy whose `accept` set is empty for a `key_ref` still assigned by a key
+  group, and MUST report any version whose `retire_after` has already passed.
+- A key with no `retire_after` at all SHOULD be reported. An indefinitely accepted version is
+  the state this whole mechanism exists to prevent.
+
+#### Per-device keys are not supported
+
+Deriving a key per device — `KDF(master, device_id)` — narrows blast radius from a CIDR to one
+box, and looks attractive on paper. It is **deliberately not offered**, because the key has to
+reach the device's configuration and port49 has no way to put it there. Shipping the
+derivation without the provisioning would produce a feature that cannot be used, and a
+per-device key nobody can install is worse than a shared key that rotates on schedule.
+
+What remains available is that key groups may be narrowed arbitrarily — a group matching a
+single device name is legal — so a deployment with its own config automation can express what
+it can actually provision. port49 neither builds nor claims that path.
+
+The real answer for per-device credentials is RFC 9887: mutual TLS makes the device credential
+a certificate, and certificate rotation is automatable in a way that a secret pasted into
+`tacacs-server key` is not. That is a reason to prefer the TLS transport as clients appear,
+and it is recorded rather than acted on because no mainstream network OS ships a TLS-capable
+TACACS+ client (design document §2).
+
+#### Three key types, and only one is hard
+
+| Key | Rotation |
+|---|---|
+| RFC 8907 device-facing shared keys | the mechanism above: version sets, try-and-validate, observed phase-out |
+| Encryption at rest for tokens and login context (design document §8) | envelope each value with its key id and accept both during a window; re-encrypt on next write. No external party is involved, so this is ordinary |
+| mTLS material — RFC 9887, agent, broker, internal APIs | certificate lifecycle, handled by whatever issues them |
+
+Only the first is genuinely difficult, and only because a remote party holds a copy that
+port49 cannot reach.
+
 ### Device records
 
 ```yaml
@@ -2329,6 +2452,12 @@ It is the same evaluator the daemon runs. Beyond answering an auditor, a capture
 replayed against a candidate build turns "did this release change anyone's access" into a
 diff — which is the only form of that question a reviewer can actually check.
 
+**`port49 keys status`** counts devices per accepted key version and names those still
+presenting an old one (§10). It is the instrument a rotation is driven by, and its output
+belongs in the pull request that retires a version. **`port49 keys show <device>`** resolves
+which `key_ref` a device matches; rendering the secret itself is a separately-authorized
+operation, since a group key is shared across the devices in its group.
+
 **Access review** is a rendering of the flat grant table, not an investigation.
 
 ---
@@ -2432,6 +2561,22 @@ response names. `amr` and `acr` are recorded but unused, because how someone aut
 cannot be established after the fact. The cost is that context now holds PII-adjacent
 material, so it inherits the encryption-at-rest requirement previously applied only to
 tokens. (§5.1.4)
+
+**14. Key rotation is a version set with no cutover, and per-device keys are refused.** RFC
+8907 carries no key identifier, so the daemon tries each accepted version and validates the
+de-obfuscated body against the cleartext `length` field — reliable to around 10⁻⁶ before enum
+checks. Because every non-retired version is accepted at all times, rotation has no flag day:
+add a version, provision devices at their own pace, retire the old one. The missing piece in
+current practice is not the mechanism but the *evidence* — nobody can prove an old key is
+unused, so it is never removed — so the daemon records the validating version and
+`keys status` names the devices still on it. `retire_after` is enforced rather than advisory,
+which is the only thing that prevents a nine-year-old key, with escalating alarms and a
+reviewed extension path as the answer to the lockout risk it creates.
+
+Per-device derived keys were considered and **rejected**: port49 cannot write device
+configuration, so it cannot install the key it would derive, and a per-device key nobody can
+provision is worse than a shared key that rotates on schedule. Key groups may be narrowed to a
+single device for deployments with their own automation; port49 does not claim that path. (§10)
 
 ### Deferred, with reasons
 
@@ -2631,6 +2776,25 @@ Beyond those already listed in the design document's §14:
   serving; a daemon restarted with the inventory service down starts from its persisted
   bundle, and one scheduled onto a fresh node starts from the shared object-store copy.
 - **Unresolvable `key_ref`** fails that device closed, not the daemon.
+
+**Key rotation**
+
+- **Try-and-validate**: a request obfuscated with any accepted version is admitted; one
+  obfuscated with a retired or unknown key is refused, and over a large random-key corpus no
+  wrong key validates.
+- **The reply uses the validating key**, not `current` — a device on the older version can
+  complete a full authentication and authorization exchange.
+- **Per-connection caching**: a CONTINUE on an established connection performs no further key
+  candidates.
+- **No cutover**: with two versions accepted, devices on either work simultaneously, and
+  moving one device does not disturb another.
+- **Phase-out visibility**: `keys status` counts devices per version and names the ones still
+  presenting an old version.
+- **Retirement**: past `retire_after` the version is refused; an empty `accept` set for an
+  assigned `key_ref` fails CI; an already-passed `retire_after` and a version with none at all
+  are both reported.
+- **Encryption-at-rest rotation**: values written under the previous key still decrypt during
+  the window, and redemption succeeds across it.
 - **Inventory sync safety**: a sync removing more than the configured share is refused and
   the previous snapshot retained.
 - **Config-mode inference**: a device with config-command authorization disabled is detected

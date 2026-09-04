@@ -300,11 +300,36 @@ documents quietly place on it.~~
 it was load-bearing turned out to be the finding: being load-bearing was itself the defect for
 context lifecycle, and the fix was to unload it rather than to specify it more carefully.
 
-**Design key rotation now.** §2 names never-rotated shared secrets as a core problem, and the
+**Design key rotation now.** ~~§2 names never-rotated shared secrets as a core problem, and the
 `key_groups → key_ref → secret mount` scheme has no rotation story: no dual-key acceptance
 during rollout, no per-device key option (the example maps `10.0.0.0/8` to one key, so
 fleet-wide blast radius), no tooling. Dual-key try-both on the daemon is cheap and makes
-rotation routine.
+rotation routine.~~
+
+**Resolved.** Policy engine spec §10 ("Key rotation"), tooling in §12, decision 14 in §13,
+assertions in §14, deployment and failure-model consequences in design §12 and §13.
+
+A `key_ref` resolves to a set of versions and the daemon accepts every non-retired one, so
+there is no cutover: add a version, provision devices at their own pace, retire the old one.
+RFC 8907 carries no key identifier, so the daemon tries candidates and validates the
+de-obfuscated body against the cleartext `length` field — reliable to about 10⁻⁶ before enum
+checks. The reply must use the key that validated, not `current`, and the resolved key is
+cached per connection.
+
+The reviewer framed the gap as missing dual-key acceptance. The mechanism was the easy half;
+the missing half was **evidence**. Nobody retires a key they cannot prove is unused, which is
+why real deployments never finish a rotation — so the daemon records the validating version and
+`port49 keys status` names the devices still on an old one. `retire_after` is then enforced
+rather than advisory, which is the only thing that prevents an indefinitely accepted version,
+with escalating alarms and a reviewed extension as the answer to the lockout it can cause. A
+key mismatch is now a row of the failure matrix, since it is the one row a configuration change
+can cause.
+
+**Per-device keys were rejected, at Ryan's call.** Derivation narrows blast radius but port49
+cannot write device configuration, so it cannot install the key it would derive — a
+per-device key nobody can provision is worse than a shared key that rotates on schedule. Key
+groups may be narrowed to a single device by deployments with their own automation; port49
+does not claim that path. RFC 9887 mutual TLS is the real answer and is recorded as such.
 
 **Specify the broker's mint API.** §16 declares the HTTP API to be the product, and it is never
 specified — endpoint shapes, batch mint, error semantics, authentication of the call itself. An
