@@ -16,8 +16,8 @@ errors introduced during the design session rather than reviewer speculation.
 | Cluster 3 — the CHAP consequence | **resolved** |
 | Cluster 4 — remaining blocking issues | **resolved** |
 | Inconsistencies — nine items of stale text | **resolved** |
-| Architecture recommendations | open |
-| Gaps — accounting resolved; key rotation and the mint API next | open |
+| Architecture recommendations | **resolved** |
+| Gaps — accounting, key rotation and the mint API resolved | open |
 
 Clusters are ordered by severity; cluster 1 is the core data flow of the product. Resolved
 sections keep their original finding text beneath the resolution note.
@@ -342,9 +342,33 @@ per-device key nobody can provision is worse than a shared key that rotates on s
 groups may be narrowed to a single device by deployments with their own automation; port49
 does not claim that path. RFC 9887 mutual TLS is the real answer and is recorded as such.
 
-**Specify the broker's mint API.** §16 declares the HTTP API to be the product, and it is never
+**Specify the broker's mint API.** ~~§16 declares the HTTP API to be the product, and it is never
 specified — endpoint shapes, batch mint, error semantics, authentication of the call itself. An
-outline is enough, but the implementation plan cannot be written without one.
+outline is enough, but the implementation plan cannot be written without one.~~
+
+**Resolved.** Design document §16, retitled *Broker API and client libraries*: eight
+endpoints, the mint request and response, and seven requirements.
+
+Two of those shape the implementation. **Idempotency is mandatory**, because tokens are
+single-use — a batch mint that times out leaves the caller unable to retry without knowing
+whether it burned four thousand tokens, so the broker keys the response on
+`(principal, Idempotency-Key)` in the store, not in memory, so a retry reaching another
+replica behaves identically. **Partial failure is per item**, since any sweep over a scope
+includes devices the caller has no grant on; failing the whole call would push callers back to
+minting one device at a time, which is the overhead batch minting exists to remove. `status`
+and `reason` reuse the decision log's closed vocabulary so the response and the audit record
+agree.
+
+The rest are prohibitions: no API keys ever (a minting key would be a long-lived shared secret
+guarding the service that exists to remove them, and worse than the device key since one key
+mints for the fleet); write-once, with no endpoint that reads a token back; a capped batch with
+client-side paging; a `mint` decision record for every call; and typed errors that do not let
+an authenticated principal distinguish "no such device" from "no grant on it", which would make
+the API a fleet enumeration oracle.
+
+`/v1/logout` is new, and follows from cluster 4's resolution rather than from this finding:
+OIDC back-channel logout needs an endpoint the IdP can POST to for an SSO logout to reach live
+device sessions.
 
 **Specify policy distribution.** ~~How merged policy reaches the broker, how a change is
 versioned and rolled out, and what happens to *live* session contexts when policy changes.~~
@@ -428,13 +452,19 @@ directory-driven revocation.
 - **Internal API authentication.** The inventory service's snapshot API and `POST /v1/sync`,
   and broker-to-store, have no stated authentication. A compromised pod network should not be
   able to trigger syncs or read the fleet list.
+
+  The external surface is settled — design §16 requires mTLS or an OIDC assertion and forbids
+  API keys — and the same rule should extend inward, but the internal callers and their
+  identities are not yet written down. Still open.
 - **Multi-tenancy** is absent. Fine to exclude — but say so in non-goals.
 - **`everyone` spans trust domains** while a subject mixing human and machine identities is a
   load error. Probably intended for deny-only use, but a permit role granted to `everyone`
   quietly crosses the boundary §7 calls out as carrying much of the security value. State the
   asymmetry, or restrict `everyone` to deny-carrying roles.
-- Minor: the `sshpass -p "$(port49 token …)"` example places a live token in argv, visible in
-  `ps`. Single-use and short TTL mitigate it, but the canonical example should not model it.
+- Minor: ~~the `sshpass -p "$(port49 token …)"` example places a live token in argv, visible in
+  `ps`. Single-use and short TTL mitigate it, but the canonical example should not model it.~~
+  **Resolved** — design §16's shell example is now `port49 ssh`, passing the token on a file
+  descriptor, with the reason stated inline.
 
 ---
 
