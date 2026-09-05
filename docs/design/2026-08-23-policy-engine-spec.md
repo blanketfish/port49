@@ -69,7 +69,10 @@ in two places at once.
 
 Identities from different trust domains MUST remain distinguishable (§7 of the design
 document): listing a human and a machine identity under one subject is a policy load error,
-not a convenience.
+not a convenience. For CI to enforce that, an identity string carries its domain in its form —
+`user:alice@example.com`, `spiffe://…`, `system:serviceaccount:…`, `app:<client_id>` — and a
+string in no recognized form is itself a load error. At runtime the domain is never read from
+the string; it is whichever verifier validated the credential (design document §7).
 
 ### The device-facing username
 
@@ -350,8 +353,15 @@ hash indefinitely with no invalidation problem. Per-command authorization is the
 context read plus a local cache hit, rather than two store round trips — which is what keeps
 the p99 target reachable.
 
-**Lifetime.** A blob carries a TTL slightly exceeding the maximum token TTL, so it expires on
-its own. No reference counting is required.
+**Lifetime.** A blob has two consumers with different needs, and each is served separately.
+Live contexts reference a blob for the life of the login — hours, or `never` — so a blob's
+store TTL is bumped at every redemption and refresh to the referencing context's remaining
+lifetime; a blob referenced by nothing expires on its own once the last token that named it
+has. No reference counting is required. Replay (§5.7) needs the blob for as long as records
+name it, which is the audit retention period, so **the blob is emitted once into the decision
+log as a `blob` event when it is first written**; replay reads the log and owes the store
+nothing. On the command path `blob_unavailable` is therefore a store fault, not a verdict: the
+daemon serves its cached copy and alarms.
 
 **Cost.** One additional store read at redemption, on the *login* path. The p99 < 5ms target
 governs per-command authorization, which is unaffected.
@@ -675,9 +685,16 @@ definition, so there are three, and **there is no bare `everyone`**:
 
 | Subject | Matches |
 |---|---|
-| `all_humans` | every human principal |
-| `all_machines` | every workload principal |
+| `all_humans` | every human principal **that some non-universal subject also matches** |
+| `all_machines` | every workload principal, under the same condition |
 | `all_principals` | both — the boundary is crossed deliberately and visibly |
+
+**Universal means everyone who already has access, not everyone who can authenticate.** Under
+OIDC, "every human principal" would otherwise be the whole identity provider — every employee,
+not the network team — and a permit-carrying grant to `all_humans` would hand every one of them
+a device login. Ranging over principals matched by at least one ordinary subject costs nothing
+for denies (a principal matched by no subject cannot mint, so a deny that fails to reach them
+changes nothing) and makes the permit case mean what its author means.
 
 The point is lexical. A fleet-wide CVE deny genuinely should reach both humans and automation,
 so forbidding permits on a universal subject would be wrong — a baseline `show version` permit
@@ -686,8 +703,8 @@ boundary *quietly*, and requiring the author to type `all_principals` rather tha
 makes the crossing explicit at the point of authorship. The same device as `on_missing`
 (§5.5): where a default would be silently load-bearing, there is no default.
 
-CI MUST additionally report every permit-carrying grant to `all_principals`, since a deny to
-the whole fleet is routine and a permit to the whole fleet rarely is.
+CI MUST additionally report every permit-carrying grant to **any** universal subject, since a
+deny to the whole fleet is routine and a permit to the whole fleet rarely is.
 
 Three properties make this materially better than a curated device list:
 
@@ -841,6 +858,26 @@ binding that makes it correct.
 previously doing security work it cannot do — it narrows a window without closing it, while
 denying idle operators mid-session with `context_missing`. Rows 1 through 5 close the window.
 
+#### Where these controls do not reach
+
+Every mechanism in this section acts at the *next authorization request*: a ceiling denies a
+command, revocation deletes context so the next command is denied, a username mismatch denies
+and invalidates, and the ceiling warning rides on an authorization REPLY. A platform that
+authorizes only at login — `supports: [session]`, Junos foremost — asks port49 once and never
+again. On such a platform, and on any privilege tier a device does not authorize (§9):
+
+- a back-channel logout, a CRL entry, or a withdrawn grant reaches a context nobody will read;
+- `session_expires` passes and nothing changes on the device;
+- there is no REPLY to carry `server_msg`, so no warning is delivered.
+
+Post-login control there is bounded by the device's own session, and port49 can neither warn
+nor revoke. This MUST be stated rather than implied: `port49 explain` MUST say so when asked
+about revocation or a ceiling on such a platform, exactly as it must for `pipe_authorized:
+false`. Two levers exist and both are used. The adapter renders the class `idle-timeout` from
+`max_session_age`, which is an approximation but an enforced one. And every revocation record
+names the live contexts it could **not** reach, so an incident responder knows which devices
+still need a manual disconnect.
+
 #### Session lifetime
 
 `session_expires` is `auth_time + max_session_age`, where `auth_time` is when the human
@@ -860,8 +897,9 @@ t+0h00   Alice authenticates (OIDC, amr=["pwd","mfa"]), mints, logs into core-sw
 t+7h50   authorization REPLY carries server_msg:
            "port49: re-authenticate within 10m — run `port49 login`"
 
-t+7h55   Alice runs `port49 login`; the broker verifies, finds her live contexts,
-         writes auth_time=T2 and session_expires=T2+8h
+t+7h55   Alice runs `port49 login`; a fresh authentication event (prompt=login, MFA),
+         the broker takes auth_time=T2 from the new assertion, finds her live
+         contexts through contexts_by_principal, writes session_expires=T2+8h
 
 t+7h56   her next command authorizes normally — no reconnect, candidate config intact
 ```
@@ -877,7 +915,15 @@ forcing a reconnect. Requirements:
 - Denial at the ceiling is FAIL, not ERROR, so no fall-through to local authorization opens
   up (see below).
 - `max_session_age: never` MUST be expressible. Some deployments have no such requirement,
-  and a ceiling nobody asked for is an outage waiting to happen.
+  and a ceiling nobody asked for is an outage waiting to happen. The default is **12h**; a
+  compliance parameter with an unstated default is one nobody sets.
+- **Refresh MUST be a fresh authentication event, and `auth_time` MUST come from the
+  assertion.** An OIDC client holding a refresh token can obtain a new ID token silently, and
+  the identity provider will correctly report the *original* `auth_time` — nobody re-proved
+  anything. The agent therefore requests `prompt=login` (or `max_age=0`) on refresh, and on
+  the certificate path performs a new proof-of-possession challenge. The broker never sets
+  `auth_time` from its own clock; if it did, the ceiling would measure time since a CLI
+  command ran rather than time since identity was proven.
 
 #### Why `enable: auto` is restricted
 
@@ -909,23 +955,14 @@ not the port49 principal `bob` matches on username and inherits the context. The
 configuration MUST require disjoint namespaces for break-glass and local accounts, and port49
 SHOULD warn when it observes a local fallback succeed for a name it knows.
 
-#### To be established in the lab
+#### Gated on the lab
 
-These are measurements, not assumptions, and belong in the containerlab matrix:
-
-- Whether the enable START carries `rem_addr` on each platform, and what it contains — the
-  field is free-form in RFC 8907 and devices are believed to send the bare address, but if any
-  platform includes a source port it discriminates sessions from a shared jump host, which
-  the address alone cannot.
-- Method-list fall-through and `deadtime` behavior per platform, since both bound the exposure
-  window above.
-- How reliably and how late exec accounting START and STOP arrive per platform. This no
-  longer decides correctness, since accounting is advisory — but it bounds how much a
-  reconciliation report (§9) can conclude from silence, and it sizes the delay the
-  `task_id` binding in §5.8 has to tolerate.
-- Whether `server_msg` on an authorization REPLY is actually displayed to the operator on
-  each platform, and at what length it is truncated. The re-authentication warning is
-  useless if it is silently discarded.
+Four claims in this section rest on device behavior that has not been measured. They are
+entries in the lab register (§15) and are cited by ID rather than restated: **L1** (`port`
+contents per platform and transport), **L3** (`rem_addr` on the enable START), **L4**
+(method-list fall-through on FAIL, and `deadtime`), and **L2** (`server_msg` display). Until
+L4 is closed, the fall-through argument above is a requirement on the reference AAA
+configuration, not a fact about the protocol.
 
 ---
 
@@ -998,6 +1035,7 @@ One envelope, five events, at each point a decision is made:
 | `authorize_session` | daemon | the session and its returned attributes (§6) |
 | `authorize_command` | daemon | one command vector |
 | `escalate` | daemon | an `enable` exchange, attributed to the principal (§7) |
+| `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
 Device accounting shares this envelope as a sixth event, `account`, and is specified in §5.8.
 It is not a decision — it is a report — so it carries no `policy` block and no verdict.
@@ -1043,8 +1081,9 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 | `credential_revoked` | the authorizing credential was revoked — CRL, OCSP, or back-channel logout |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
-| `blob_unavailable` | the referenced blob could not be resolved |
+| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) |
 | `no_grants_matched` | mint found no grant for this principal in scope |
+| `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); admitted nowhere until fixed |
 
 A denial whose reason is `context_missing`, `device_unknown`, or `blob_unavailable` is an
 operational condition rather than a policy outcome, and each MUST be separately alertable —
@@ -1071,9 +1110,11 @@ Three uses:
 3. **Integrity checking** — a record whose replay disagrees indicates the log or the blob
    store has been altered.
 
-Replay requires the blob, so blobs MUST be retained at least as long as the decision records
-that reference them. They are small, immutable, and shared across every login that resolved
-to the same policy.
+Replay requires the blob, so the blob is in the log: a `blob` event carrying the full compiled
+content is emitted once, when the broker first writes it (§5.1.1). Replay reads the log alone,
+the store owes the auditor nothing, and the blob a record names sits in the same
+tamper-evident stream as the record. Blobs are small, immutable, and shared across every login
+that resolved to the same policy, so the log cost is one event per policy version per platform.
 
 #### Correlation
 
@@ -1255,8 +1296,8 @@ above the deployment's break-glass baseline MUST be alertable.
 decision: syslog, an HTTP endpoint, a message bus. The envelope is the contract.
 
 **WATCHDOG semantics per platform.** A WATCHDOG carrying no arguments is a keepalive; one
-carrying arguments is an update. Which platforms send them, and how often, is a lab
-measurement rather than a design choice.
+carrying arguments is an update. Which platforms send them, and how often, is lab register
+entry **L5**, and how late START and STOP arrive is **L6**.
 
 ---
 
@@ -1665,7 +1706,7 @@ would instead defeat every deny beneath it.
 | | Ceiling | Provisioning | Changes |
 |---|---|---|---|
 | **Wire** (TACACS attributes) | 240 bytes, **one argument per name** | none | fully dynamic |
-| **Class** (device config) | none — verified enforced past 255 with no truncation | deploy and monitor for drift | config push |
+| **Class** (device config) | none — verified enforced past 255 with no truncation | deploy; compliance is the deployment's tooling | config push |
 
 **Repeated attribute names collapse to the first, silently.** A policy needing two instances
 of one name arrives incomplete with no signal.
@@ -1691,9 +1732,10 @@ wire:    deny-commands    <broad denies>             ← default home
 ```
 
 Starting on the wire means zero device provisioning and fully dynamic policy. Moving denies
-into the class buys unbounded capacity at the cost of a config push and a drift-monitoring
-obligation, so CI MUST report when a role crosses that line rather than letting it happen
-quietly.
+into the class buys unbounded capacity at the cost of a config push, so CI MUST report when a
+role crosses that line rather than letting it happen quietly — naming the role, and emitting
+the class snippet that would carry the overflow, so the workaround is in the same report as
+the warning.
 
 **Which permits are emitted follows from port49's own semantics.** Under dominance (§5.4) a
 permit prevails only when it is strictly more specific than the deny it competes with — so
@@ -1732,9 +1774,16 @@ containerlab, and assert the device's effective set matches port49's own decisio
 probe corpus covering every rule shape the generator can produce. Where equivalence cannot be
 established for a shape, CI MUST refuse the policy rather than ship something unprovable.
 
-The class baseline is part of the security model but lives outside port49's control, so
-**drift MUST be detected**, not merely documented — completion output makes the device's
-computed set observable by the same technique as capability inference (§9).
+**The class is device configuration, and port49 does not police device configuration.** On
+every other platform the equivalent — `aaa authorization commands` present or absent — is
+inferred from traffic (§9) and otherwise left to the deployment's configuration compliance
+tooling. Junos is not an exception to that boundary merely because nothing arrives after login
+to infer from. port49's obligations are three: warn at policy load when a role needs the class
+(above); publish the reference class per privilege level through `port49 platform export`, so a
+compliance tool has a known-good to check against; and have `explain` state that on a
+session-only platform the effective set is *class ∩ wire*, with the class half outside port49.
+No component logs into a device to verify it, and the `?` completion technique is a lab
+instrument for the differential test, not a runtime one.
 
 **Anchoring is a per-platform property.** Our rules match the full vector. A device treating
 `start.*` as unanchored would also match `request start …`, diverging from our semantics.
@@ -1970,6 +2019,18 @@ bundle v2291
   platform_set   1.4.0, as pinned by the policy repository
 ```
 
+**A sync can make a valid policy invalid, and the bundle builder quarantines rather than
+refuses.** Several load checks are joint over policy and inventory — a privilege level with no
+mapping on a platform present in inventory (§6), `enable: auto` reaching a platform whose
+enable exchange carries no principal (§5.6). A device racked tomorrow with a new platform can
+fail them against a policy that was valid today. Refusing the whole bundle would block every
+inventory change fleet-wide until someone edits policy, including the leaf racked in another
+site — a ticket-queue bottleneck created by the safety mechanism. Instead the offending
+device is published with `admission: quarantined` and the reason; the daemon refuses it with
+`device_quarantined` (§5.7), the alarm names it, CI reports the same list against the policy
+change that would clear it, and `port49 devices capabilities` shows it. The rest of the fleet
+moves.
+
 A consumer runs on exactly one bundle version at a time, so a decision is always attributable
 to a single, nameable state of the world. `bundle/diff` then covers policy change, inventory
 drift, and platform-set movement in one review artifact rather than three.
@@ -2157,6 +2218,17 @@ Three mechanisms produce those diagnoses.
 {1, 2, 3}, a client `seq_no` odd, and the body within the 4096-byte bound RFC 8907 sets. A
 port scanner fails that and is counted as `not TACACS+`, so it never pollutes the key report.
 This distinction is the difference between a report an operator reads and one they mute.
+
+**The unencrypted flag is refused.** RFC 8907 defines `TAC_PLUS_UNENCRYPTED_FLAG` in the
+header's flags octet, marking a body sent in the clear. The shared key is the admission
+boundary (above), and a server that honors the flag has no boundary: anything able to
+complete a TCP handshake from an admitted address could then tear down a live context with a
+forged START (§5.6, row 5), inject accounting, or drive an operator's failure counters, all
+without key material. The daemon MUST refuse such a packet without parsing the body, and the
+report carries its own bucket — `unencrypted — refused` — so a device misconfigured with no
+key is diagnosable rather than counted as noise. `TAC_PLUS_SINGLE_CONNECT_FLAG` is honored;
+the per-connection key cache (above) and the per-NAS connection cap (design document §11)
+both apply to the one connection it produces.
 
 **Retired versions are retained for diagnosis and never for admission.** This is what turns
 "something is wrong with leaf-19" into "leaf-19 was missed in the rotation". The rule is
@@ -2366,7 +2438,10 @@ no diff. The policy file looks untouched.
 
 Mitigations, designed in rather than documented afterward:
 
-- Scope-membership changes MUST appear in the sync diff and be reviewable.
+- Scope-membership changes MUST appear in the sync diff and be reviewable, and so MUST an
+  address added to an existing device — the mint response carries that address back for the
+  operator's SSH client to connect to, so a rogue address on a real device's record is a
+  credential-capture path (design document §17).
 - A scope MUST be able to pin a device set explicitly instead of by attribute.
 - Scopes carrying denies SHOULD set `security_log: true`, so membership changes are logged
   and alerted as security events rather than routine inventory churn.
@@ -2699,6 +2774,78 @@ configuration, so it cannot install the key it would derive, and a per-device ke
 provision is worse than a shared key that rotates on schedule. Key groups may be narrowed to a
 single device for deployments with their own automation; port49 does not claim that path. (§10)
 
+**15. Reusable tokens for API transports — provisional, gated on L1 and L7.** eAPI and
+NX-API with basic authentication present the credential on every HTTP request, and the device
+runs AAA per request, so a single-use token serves one API call. Those transports carry a large
+share of real automation and cannot be designed around. A subject MAY therefore be granted
+`reusable: true`, in which case its tokens are valid until TTL rather than for one redemption:
+the store operation is match-without-delete, the receipt is unnecessary because a retry is
+simply another use, and device binding and username binding are unchanged.
+
+There is no use counter. TTL already bounds exposure, and a counter would add store semantics
+for a bound nobody would tune. `reusable` is reported by CI beside `token_ttl`, since a captured
+reusable token replays for its remaining TTL from the bound device — an exposure widening of the
+same kind as a long TTL, and visible in review for the same reason.
+
+What is not decided: how login context behaves when `port` is constant across API sessions
+(L1), and whether API commands are authorized per command at all (L7). If `port` is constant,
+the candidate is keying API contexts on `(nas, port, rem_addr)`, which is safe because no enable
+exchange exists on that path; it is not chosen until measured. (§5.1.1, §15)
+
+**16. Trust domain is assigned by the verifier, never inferred from the credential.** The
+design requires humans and machines to be unforgeably distinct, and nothing previously said
+what makes a principal one or the other — an OIDC issuer that serves both people and
+application registrations would have been read as human by default. port49 configuration now
+declares its verifiers in two lists, `identity.humans` and `identity.machines`, each a trust
+anchor, an OIDC issuer-and-audience pair, or a cluster JWKS; a principal's domain is the list
+its verifier is in. The same issuer may appear in both with different audiences, which is
+exactly the client-credentials case. A credential no verifier accepts is refused at mint with
+its own reason. Policy identity strings carry the domain in their form so CI can classify at
+load. There is no password path for service accounts: an LDAP-authenticated account moves to a
+workload certificate, a cluster token, or one OIDC application per service, and its directory
+entry may still supply groups through the certificate-to-directory mapping. (§2, design
+document §7)
+
+**17. Session refresh is a fresh authentication event, and the certificate-path session is a
+held connection.** The ceiling `auth_time + max_session_age` is only a compliance clock if
+`auth_time` moves when a human proves identity and never otherwise. An OIDC client with a
+refresh token can mint a new ID token silently, and the provider correctly preserves the
+original `auth_time`; a broker stamping its own clock instead would measure time since a CLI
+command ran. Refresh therefore requests `prompt=login` or a new proof-of-possession challenge,
+and `auth_time` is read from the assertion. Separately, "one certificate authentication per
+day" and "a hardware-held session" were both claimed and could not both be true unless the
+agent's session is the mTLS connection itself — so it is: the key is exercised at handshake,
+mints ride the held connection, a reconnect costs one more touch, and no broker-issued session
+token exists on that path. The default `max_session_age` is 12h. (§5.6, design document §7)
+
+**18. Universal subjects range over principals some ordinary subject already matches.** The
+`all_*` reversal correctly allowed permits on universal subjects, and in doing so defined
+`all_humans` as every human principal — which under OIDC is the whole identity provider, so a
+baseline permit would have handed every employee a device login. Restricting the range costs
+denies nothing, since a principal no subject matches cannot mint, and it makes the permit case
+mean what an author means by everyone. CI reports permits on any universal subject. (§5.5)
+
+**19. The blob lives as long as its longest context, and is emitted into the log.** The blob
+TTL had been sized to the token TTL while contexts referenced it for the session and replay
+needed it for the retention period — three incompatible lifetimes, the shortest of which would
+have denied a command three hours into a login on a restarted replica. Live contexts bump the
+store TTL; replay reads a `blob` event from the log, so the store owes the auditor nothing and
+the blob sits in the same tamper-evident stream as the records that name it. (§5.1.1, §5.7)
+
+**20. Joint policy-and-inventory validation quarantines a device rather than refusing the
+bundle.** A sync can introduce a platform that makes a valid policy invalid. Refusing the
+bundle would block every inventory change fleet-wide until policy is edited, a bottleneck
+created by the safety mechanism; instead the offending device is published quarantined, refused
+with its own reason, and named in the alarm and the CI report, while the rest of the fleet
+moves. (§10)
+
+**21. Post-login controls do not reach a session-only platform, and the spec says so.** The
+ceiling, revocation, username binding, and the in-session warning all act at the next
+authorization request, and Junos never makes one. Rather than claim reach that does not exist,
+`explain` states the limit, the adapter renders class `idle-timeout` from `max_session_age` as
+the enforced approximation, and revocation records name the contexts they could not reach.
+(§5.6)
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -2770,7 +2917,9 @@ Beyond those already listed in the design document's §14:
   device, line, and username is rejected, while a byte-identical retransmission replays.
 - **CHAP verification**: a candidate set of several unspent tokens resolves to the one that
   produces the matching digest; the atomic removal, not the verification, decides single use,
-  and two replicas racing the same token yield exactly one success.
+  and two replicas racing the same token yield exactly one success — **and the loser answers
+  PASS from the receipt, never FAIL**, with the same `ctx_id` as the winner (design document
+  §8).
 - **CHAP re-prompt**: a fresh challenge does not match the receipt and correctly fails rather
   than replaying.
 - **Encryption at rest**: a store dump contains no recoverable token; redemption succeeds
@@ -2859,9 +3008,22 @@ Beyond those already listed in the design document's §14:
   is retained; a re-auth inside the grace window resumes the same session; past it, context is
   gone and the reason becomes `context_missing`.
 - **`max_session_age: never`** is accepted and produces no ceiling.
-- **Revocation reaches live sessions**: a back-channel logout naming `sid`, a `sub`-wide
-  revocation, and a certificate appearing on a CRL each invalidate the matching contexts and
-  no others.
+- **Revocation reaches live sessions on command-authorizing platforms**: a back-channel
+  logout naming `sid`, a `sub`-wide revocation, and a certificate appearing on a CRL each
+  invalidate the matching contexts and no others, and the next command on each is denied.
+- **Revocation does not reach a session-only platform, and says so**: the same events against
+  a live Junos login leave the device session running, the revocation record names that
+  context as unreached, and `explain` reports the limit for that platform.
+- **Blob lifetime follows the context**: a command three hours into a login, on a replica that
+  has restarted since redemption, resolves the blob; a `blob` event exists in the log for every
+  hash any record names.
+- **Quarantine**: a sync introducing a device whose platform fails joint validation publishes
+  the bundle with that device quarantined, the rest of the sync applies, and the device is
+  refused with `device_quarantined`.
+- **Unencrypted flag**: a packet with `TAC_PLUS_UNENCRYPTED_FLAG` set is refused before its
+  body is parsed and lands in its own report bucket.
+- **Fall-through on FAIL** is asserted absent per platform under the reference AAA
+  configuration (§15, L4).
 - **Context encryption at rest**: a store dump contains no recoverable subject DN, `sub`
   claim, or principal name.
 
@@ -2879,8 +3041,9 @@ Beyond those already listed in the design document's §14:
   rejected at policy load rather than emitted.
 - **Wire-to-class escalation**: a role whose deny set exceeds the wire budget is reported by
   CI as requiring a class baseline, and is never silently truncated.
-- **Class drift detection**: a class baseline altered on the device is detected from the
-  device's computed effective set.
+- **Class overflow is reported with its remedy**: a role whose deny set exceeds the wire budget
+  produces a CI report naming the role and the class snippet that would carry it;
+  `port49 platform export` renders the reference class per level.
 - **Platform layering**: user files merge per top-level key; `replace: true` discards the
   built-in; `based_on:` inherits.
 - **`platform_set` pinning**: changing the binary without moving the pin produces
@@ -2935,8 +3098,9 @@ Beyond those already listed in the design document's §14:
   CIDR groups resolves to the pin; removing it resolves to the attribute group, then to the
   longer prefix; two groups matching in the same tier fail at policy load naming both.
 - **Universal subjects**: a bare `everyone` fails at policy load; `all_humans` does not match
-  a workload principal and `all_machines` does not match a human; a permit-carrying grant to
-  `all_principals` is reported by CI while a deny-carrying one is not.
+  a workload principal and `all_machines` does not match a human; a principal matched by no
+  ordinary subject is matched by no universal subject either; a permit-carrying grant to any
+  universal subject is reported by CI while a deny-carrying one is not.
 - **Config-mode inference**: a device with config-command authorization disabled is detected
   and reported.
 - **Accounting reconciliation**: commands present in accounting with no authorization request
@@ -2949,3 +3113,42 @@ Beyond those already listed in the design document's §14:
   denied command with no policy change.
 - **`on_missing`**: a device lacking the scoped attribute is included for a deny-bearing
   scope and excluded for a permit-bearing one.
+
+---
+
+## 15. Lab register
+
+Some of what this document says about devices has been measured and some has not. The two
+are not the same kind of statement, and a spec that lets them read alike will eventually be
+implemented against a guess. This section is the one place the distinction is kept.
+
+**The rules:**
+
+1. Every claim about device or protocol behavior that a design decision rests on is an entry
+   here, with an ID. The rest of the document cites the ID and does not restate the claim as
+   fact.
+2. A decision in §13 that depends on an open entry is **provisional**, and says so.
+3. An entry closes with a platform, an image version, the observation, and a pointer to the
+   capture — a file under `tests/lab/` in this repository, or a results note. Closing on
+   documentation alone is not closing.
+4. The containerlab step of the implementation plan *is* this table. Lab work is not listed
+   anywhere else.
+5. An entry may close differently per platform. A row with one platform measured and three
+   open is still open.
+
+| ID | Claim to measure | What rests on it | Platforms | Status |
+|---|---|---|---|---|
+| **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key `(nas, port)` (§5.1.1, §5.6); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open |
+| **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open |
+| **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6) | EOS, NX-OS, IOS-XE | open |
+| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open |
+| **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | open |
+| **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open |
+| **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open |
+| **L8** | The maximum password length each platform accepts at an interactive prompt and via PAP. | The 30-character handle (design document §8) | all | open |
+| **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. | Projection generator constraints (§8) | Junos | open |
+| **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open |
+| **L11** | Junos precedence, repetition, and length behavior for wire and class rules. | The projection model (§8) | Junos (SRX) | **closed** — measured 2026-09-03; results in `port49-junos-lab-tests-results.md` |
+
+Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
+later reader can find the evidence.
