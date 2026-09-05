@@ -22,7 +22,7 @@ lab, not this review, should settle.
 | Cluster | Items | State |
 |---|---|---|
 | A — would change the implementation plan | A1–A14 | **resolved** — all fourteen, 2026-09-05 |
-| B — polish, stale text, small gaps | B1–B20 | open |
+| B — polish, stale text, small gaps | B1–B20 | **resolved** — one editing pass, 2026-09-05 |
 | C — challenged and upheld | — | recorded |
 
 Cluster A closed in one session. Five needed Ryan's call (A1, A2, A9, A12, A13) and are noted
@@ -501,6 +501,17 @@ the failure model; §14 asserts fall-through absent per platform.
 
 ## Cluster B — polish, stale text, and small gaps
 
+> **All twenty resolved, 2026-09-05.** B1–B3 and B14 were textual fixes. B4 closed the
+> reason vocabulary with twelve new codes across `redeem`, `escalate`, pipe, service, and
+> trust domain. B5, B6, B7, and B19 were folded into spec §7 as a "which field, when" table
+> and a token `kind` check. B8 finished the accounting demotion: `closing` now has no effect
+> on anything. B9 restricts the unauthorized-tier join to authorized tiers. B10 states the
+> context cache TTL as seconds and adds it to the revocation-latency sum in design §9. B11
+> adds a context sweep to encryption-key rotation. B12 and B13 are single sentences in design
+> §17 and §8. B15 puts the cross-domain username check on the broker at mint. B16 closed with
+> A4. B17 gives every denial a `server_msg`. B18 names the offboarding commands and states
+> rollback as revert-and-sync. B20 reorders design §19 around a vertical slice at step 3.
+
 Textual unless marked otherwise. None changes the plan's shape; several would mislead an
 implementer reading the spec cold.
 
@@ -623,9 +634,7 @@ is exactly the reason it should not be retrofitted.
 
 ## What to do with this
 
-A1, A3, A4, A6, A7, A8 are each a paragraph in the spec and a line item in the plan. A2, A9,
-A12, A13 are decisions that need Ryan's call before the plan is written, because each has two
-defensible answers with different scope. A5 and A11 are honesty edits that change what
-`explain` and the bundle builder promise. A10 and A14 are one lab afternoon each.
-
-Cluster B can be cleared in one editing pass, as the nine inconsistencies were.
+Nothing further in this document. Every finding is resolved in the two design documents, the
+policy engine spec carries decisions 15–21 and the lab register, and the next artifact is the
+implementation plan. The register's open entries — L1 through L10 — are the lab work the plan
+schedules, and decision 15 stays provisional until L1 and L7 close.

@@ -100,7 +100,11 @@ subjects:
     username: svc-config-backup        # what the device will present
 ```
 
-**Usernames MUST be unique across subjects.** Two subjects claiming one username collide in
+**Usernames MUST be unique across subjects, and CI can only check half of it.** Declared
+machine usernames are checked against each other at load. Human usernames come from the
+directory at mint, so a machine subject declaring `username: alice` collides with a human
+`alice` only at runtime; the broker checks at mint and refuses the *later* claimant with a
+reason naming both. Two subjects claiming one username collide in
 the `(nas, username)` store key and make the audit trail ambiguous; this is a policy load
 error. Collision with a device-local account name is the same hazard described in §5.6 and
 SHOULD be reported where port49 can observe it.
@@ -156,7 +160,7 @@ principal      resolved from login context, not from the wire
 device         resolved from source address via inventory
 service        shell | <other>
 privilege      priv_lvl from the request header
-command        [cmd, arg1, arg2, ...]     lower-cased, <cr> stripped
+command        [cmd, arg1, arg2, ...]     as received; <cr> stripped; compared case-insensitively
 pipeline       [[stage_cmd, arg, ...], ...]   split at the platform's pipe token
 ```
 
@@ -509,19 +513,26 @@ never share a log line.
 normalize(request)
   → if no login context                → DENY (context_missing)
   → collect every matching rule, permit and deny alike
-  → if no permit matches                 → DENY (default_deny)
+  → if no permit matches                 → DENY (no_rule_matched)
   → if no permit dominates every
-    matching deny (§5.4)                 → DENY (rule, role)
+    matching deny (§5.4)                 → DENY (no_permit_dominates_deny; rule, role)
   → for each pipeline stage:
-        if stage matches no pipe permit  → DENY (pipe_stage, stage_name)
-  → PERMIT (rule, role)
+        if stage matches no pipe permit  → DENY (pipe_stage_denied; stage)
+  → PERMIT (permit_dominates; rule, role)
 ```
 
 Default is deny. Every decision carries the rule and role that produced it, which is what
 makes `explain` able to name exactly one reason.
 
-Requests for a `service` other than `shell` are denied by default with a distinct reason,
+Requests for a `service` other than `shell` are denied by default with `service_unsupported`,
 configurable per platform.
+
+**A denial tells the person who typed the command why.** The REPLY carries `server_msg` —
+`port49: denied by no-exfil (* * /^tftp:/) — see 'port49 explain'` — so the operator at the
+CLI has the reason and the instrument without a ticket. It names the rule that decided, which
+the operator has just exercised, and nothing about rules they have not; operational reasons
+(`context_missing`, `session_expired`) say what to do next rather than what went wrong inside.
+Whether the device displays it is lab register entry L2.
 
 ### 5.4 Composition across roles
 
@@ -828,7 +839,7 @@ did not generate and cannot verify MUST NOT delete state.
 
 | | Trigger | Authority |
 |---|---|---|
-| 1 | **Redemption** on the same `(nas, port)` | port49 performed it — overwrites unconditionally |
+| 1 | **Login redemption** on the same `(nas, port)` | port49 performed it — overwrites unconditionally. An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7) |
 | 2 | **Revocation** — OIDC back-channel logout by `sid` or `sub`; a certificate appearing on a CRL or OCSP response by issuer and serial; a policy change withdrawing every grant | authoritative, from the identity layer (§5.1.4) |
 | 3 | **Session ceiling** — `session_expires` reached and the grace window elapsed | local, needs no external signal |
 | 4 | **Username mismatch** on a command or enable exchange | a genuine conflict on that line — denies and invalidates |
@@ -851,8 +862,9 @@ t4   Alice's next command  →  context_missing  →  denied mid-session
 Fail-closed, so not dangerous — but a self-inflicted outage, and one whose two halves look
 unrelated in a log. Matching on username fixes Bob-then-Alice and not Bob reconnecting to the
 same line. Rather than patch it, accounting now sets `accounting_state: closing` and nothing
-more; row 6 reclaims the state. §5.8 specifies the annotation, including the `task_id`
-binding that makes it correct.
+more — it is reported, and it has **no effect on refresh, authorization, or teardown**; row 6
+reclaims the state. §5.8 specifies the annotation, including the `task_id` binding that makes
+it correct.
 
 **Idle TTL is a backstop, not a control.** It SHOULD be extended by activity. A short TTL was
 previously doing security work it cannot do — it narrows a window without closing it, while
@@ -1026,7 +1038,8 @@ of the product, not a problem to optimize away.
 
 #### Events
 
-One envelope, five events, at each point a decision is made:
+One envelope. Five decision events, one at each point a decision is made, plus two report
+events (`account`, `blob`) that share the envelope and carry no verdict:
 
 | `event` | Emitted by | Decides |
 |---|---|---|
@@ -1071,6 +1084,17 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 | `reason` | Meaning |
 |---|---|
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
+| `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
+| `service_unsupported` | the authorization `service` is not one the platform authorizes |
+| `token_redeemed` | `redeem`: a presented credential matched an unspent token |
+| `token_not_found` | `redeem`: no unspent token for `(nas, username)` matched — expired, spent, or never minted |
+| `device_mismatch` | `redeem`: the token exists but was minted for another device |
+| `credential_mismatch` | `redeem`: a receipt exists for this line but the presented credential differs (§5.6) |
+| `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision |
+| `token_kind_mismatch` | `redeem`/`escalate`: a login token presented at `enable`, or the reverse (§7) |
+| `enable_refused` | `escalate`: the subject's mechanism is `none` |
+| `ceiling_exceeded` | `escalate`: the requested level is above `max_privilege` |
+| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7) |
 | `no_rule_matched` | nothing matched; deny by default |
 | `no_permit_dominates_deny` | a deny matched and no permit dominated it |
 | `context_missing` | no login context for `(nas, port)` — port49 did not authenticate this session |
@@ -1274,9 +1298,12 @@ exec STOP for (nas, port):
     ctx.task_id unset  →  accounting_state = closing, only on a username match
 ```
 
-The unset branch covers `stop-only` accounting and a lost START. `closing` stops refresh
-(§5.1.3) and is reported; the idle TTL reclaims the state. A record that matches neither is
-logged as unattributable to that context and left alone.
+The unset branch covers `stop-only` accounting and a lost START. `closing` is reported and
+nothing else — it does not stop refresh (§5.1.3), because a STOP from a previous session on the
+same line under the same username would otherwise mark a live session closing and let the
+staleness ceiling deny it later, which is the demotion's own defect in slow motion. Any later
+authorization or START on the context clears it. The idle TTL reclaims the state. A record
+that matches neither is logged as unattributable to that context and left alone.
 
 An exec START whose `user` does not match the bound username is a **session port49 did not
 authenticate** — a local fallback, a console login, or a name collision. That is precisely the
@@ -1558,6 +1585,21 @@ The **ceiling** (`max_privilege`) is an authorization fact and lives on the gran
 as a max across matching grants. The **mechanism** (`enable`) is a property of the consumer
 and lives on the subject, so two grants can never disagree about it.
 
+**Which field, when.** Three settings touch privilege and they answer different questions:
+
+| Field | On | Answers |
+|---|---|---|
+| `privilege` | role | what level the session *lands at* on login |
+| `max_privilege` | grant | how far `enable` may *raise* it afterwards |
+| `enable` | subject | *how* the raise is authenticated: refused, automatic, or by token |
+
+If the role's `privilege` already reaches what the subject needs, leave `max_privilege` and
+`enable` unset — the session lands there and nothing needs escalating. Set `max_privilege`
+only when a session should start low and be raised on demand, and then `enable` says how.
+Both tokens of a mint pair carry a `kind`, and the daemon checks it against
+`authen_service`: a login token at the `enable` prompt, or the reverse, is refused with
+`token_kind_mismatch` so the `redeem` and `escalate` records can never disagree with the wire.
+
 | Mechanism | Behavior | Fits |
 |---|---|---|
 | `none` | Enable is refused. The login-time privilege is all there is. | Read-only pollers whose granted level already suffices. |
@@ -1582,9 +1624,12 @@ Worth noting that `enable: none` is often the honest answer for backup accounts:
 `enable` because the account landed at privilege 1. Granting the read-only role at `admin`
 privilege removes the escalation entirely.
 
-After a successful escalation, login context records the new privilege level, since
-command rules may differ above and below the line, and accounting attributes the event to
-the **real principal** even though the wire said `$enab15$`.
+After a successful escalation, login context records the new privilege level in place —
+same `ctx_id`, same bindings. The rules do not change: a role's permits and denies apply at
+every level, and what escalation changes is which commands the device *offers* and therefore
+submits. The recorded level feeds `privilege_exceeded` for a request above it. Accounting and
+the `escalate` record attribute the event to the **real principal** even though the wire said
+`$enab15$`.
 
 ---
 
@@ -1917,7 +1962,9 @@ so it MUST be evaluated statistically over a window rather than per session.
 
 **Reconciling accounting against authorization** generalizes the technique. Where command
 accounting is enabled, a command appearing in an accounting record with no corresponding
-authorization request proves the device decided it locally. The join is `ctx_id` plus the
+authorization request proves the device decided it locally. The join runs only over tiers the
+platform's `supports` says it authorizes: on a `supports: [session]` platform every command is
+decided locally by design, and reporting each one would make the report noise on day one. The join is `ctx_id` plus the
 normalized vector, over the single stream both events share (§5.7, §5.8) — which is why the
 `<cr>` stripping and shape-preserving redaction in §5.8 are correctness requirements here and
 not cosmetic:
@@ -2301,7 +2348,7 @@ TACACS+ client (design document §2).
 | Key | Rotation |
 |---|---|
 | RFC 8907 device-facing shared keys | the mechanism above: version sets, try-and-validate, observed phase-out |
-| Encryption at rest for tokens and login context (design document §8) | envelope each value with its key id and accept both during a window; re-encrypt on next write. No external party is involved, so this is ordinary |
+| Encryption at rest for tokens and login context (design document §8) | envelope each value with its key id and accept both during a window; re-encrypt on next write, and sweep the contexts that have none — an idle session on a session-only platform is never written to — before the old key is dropped. No external party is involved, so this is ordinary |
 | mTLS material — RFC 9887, agent, broker, internal APIs | certificate lifecycle, handled by whatever issues them |
 
 Only the first is genuinely difficult, and only because a remote party holds a copy that
@@ -2650,7 +2697,17 @@ a CPU amplifier on an unauthenticated listener. **`port49 keys show <device>`** 
 `key_ref` a device matches; rendering the secret itself is a separately-authorized operation,
 since a group key is shared across the devices in its group.
 
-**Access review** is a rendering of the flat grant table, not an investigation.
+**Access review** is a rendering of the flat grant table, not an investigation:
+`port49 access review --subject <name>` lists every grant row the subject appears in, with
+scope size and expiry, and `port49 grants remove --subject <name>` produces the pull request
+that deletes them all. Directory-driven humans are offboarded by group removal; these two
+commands are the offboarding path for machine subjects and literal identities, which is the
+cost decision 2 accepted.
+
+**Rollback** is `git revert` of the policy change and `port49 inventory sync`; the bundle
+that results is a new version, not a reused old one, so a rollback is attributable like any
+other publish. There is no pin-to-old-version command, because a consumer holding a bundle
+the repository no longer describes is the drift the bundle exists to prevent.
 
 ---
 
@@ -2863,7 +2920,7 @@ trigger rather than a guess.
 **Projection equivalence.** Which rule shapes render faithfully into a session-only platform's
 native model — Junos `allow-commands` and `deny-commands` — cannot be settled on paper. It
 requires a device image, a generated attribute pair, and a probe corpus compared against the
-device's own view (`show cli authorization`). It is therefore a work item in sequencing step 4,
+device's own view (`show cli authorization`). It is therefore a work item in sequencing step 5,
 not a decision: the requirement is already specified in §8, and the outcome is a per-platform
 list of shapes CI refuses. Recorded here only so it is not mistaken for an unresolved design
 question.
@@ -2928,7 +2985,8 @@ Beyond those already listed in the design document's §14:
   `principal`.
 - **Context teardown**: a redemption overwrites; an authentication START with a different
   username invalidates even when rejected; an ASCII login invalidates once the username
-  arrives in a CONTINUE; an exec accounting START for the port invalidates.
+  arrives in a CONTINUE; an exec accounting START for the port annotates and never
+  invalidates.
 - **Context is never created without redemption** — a locally-authenticated session has none
   and is denied.
 - **Username binding on the command path**: a request whose username differs from the stored
@@ -2949,7 +3007,7 @@ Beyond those already listed in the design document's §14:
 
 **Decision log**
 
-- **One record per evaluation**, at each of the four events, permits included — a corpus
+- **One record per evaluation**, at each of the five decision events, permits included — a corpus
   exercising the matcher produces exactly as many records as decisions.
 - **Replay agreement**: every record in the corpus replays against its named blob and
   reproduces the logged verdict and reason.
