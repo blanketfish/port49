@@ -660,12 +660,34 @@ scopes:
     security_log: true         # membership changes log as security events
 
 grants:
-  - {subject: everyone, scope: srx_unpatched, roles: [cve_2026_xxxx]}
+  - {subject: all_principals, scope: srx_unpatched, roles: [cve_2026_xxxx]}
 ```
 
-`everyone` is a built-in subject matching every principal. It is not a special deny path —
-the same role and grant machinery, applied universally — which is why there is still only
-one place to deny a command.
+`all_principals` is a built-in subject matching every principal. It is not a special deny
+path — the same role and grant machinery, applied universally — which is why there is still
+only one place to deny a command.
+
+#### Universal subjects name their trust domain
+
+§7 of the design document requires human and machine identities to be unforgeably distinct,
+and a subject that mixes them is a load error. A universal subject crosses that boundary by
+definition, so there are three, and **there is no bare `everyone`**:
+
+| Subject | Matches |
+|---|---|
+| `all_humans` | every human principal |
+| `all_machines` | every workload principal |
+| `all_principals` | both — the boundary is crossed deliberately and visibly |
+
+The point is lexical. A fleet-wide CVE deny genuinely should reach both humans and automation,
+so forbidding permits on a universal subject would be wrong — a baseline `show version` permit
+is a legitimate thing to want. What must not happen is a permit crossing the trust-domain
+boundary *quietly*, and requiring the author to type `all_principals` rather than `everyone`
+makes the crossing explicit at the point of authorship. The same device as `on_missing`
+(§5.5): where a default would be silently load-bearing, there is no default.
+
+CI MUST additionally report every permit-carrying grant to `all_principals`, since a deny to
+the whole fleet is routine and a permit to the whole fleet rarely is.
 
 Three properties make this materially better than a curated device list:
 
@@ -1999,6 +2021,42 @@ maintained once, in the source of truth, while the admission *decision* stays in
 RFC 9887 replaces the shared key with mutual TLS, so a device record MUST be able to express
 both.
 
+#### Addresses must resolve to one device
+
+Device binding depends on the source address identifying a device (design document §13). That
+relation is many-to-one, and the two directions are not symmetric:
+
+| Case | Handling |
+|---|---|
+| One device, several addresses — loopback and management | **Normal.** All are admitted and resolve to the same device. |
+| One address, several devices | **Snapshot validation error.** The snapshot is refused, the previous one retained, and both device names are named in the alarm. |
+| Several devices behind one NAT address | Unsupported, and indistinguishable from the row above. Design document §13 already forbids SNAT on device traffic; this is where it becomes visible. |
+
+Refusing the snapshot rather than picking a winner is deliberate: a collision means the source
+of truth is wrong, and silently binding to whichever record sorted first would attribute one
+device's sessions to another — in the audit log, in the decision record, and in every report
+built on them.
+
+#### Key group matching is deterministic
+
+Key groups can overlap — a `10.0.0.0/8` group and a `10.20.0.0/16` group, or a CIDR group and
+an attribute group covering the same device. Resolution is by tier, most specific first:
+
+```
+1  a device record pinning key_ref explicitly
+2  an attribute match
+3  the longest matching CIDR prefix
+```
+
+**Two groups matching in the same tier is a policy load error**, naming both. This follows the
+same rule as the matcher (§4): where two rules genuinely disagree about which is more
+specific, refusing to guess is the only conservative answer, and a device silently admitted
+under the wrong key group is admitted under the wrong *key* — which fails at the worst moment
+and looks like an outage (design document §12).
+
+The device-pinned tier exists so an overlap can be resolved explicitly rather than by
+contorting the CIDR layout.
+
 ### Key rotation
 
 §2 of the design document names shared secrets that are never rotated as one of three
@@ -2420,7 +2478,7 @@ grants:
   - {subject: noc_tier1,     scope: dc_fabric,     roles: [interface_tech], expires: 2026-12-01}
   - {subject: svc_oxidized,  scope: all_devices,   roles: [read_only, elevated_session]}
   - {subject: security_ir,   scope: srx_unpatched, roles: [cve_2026_xxxx_assess]}
-  - {subject: everyone,      scope: srx_unpatched, roles: [cve_2026_xxxx]}
+  - {subject: all_principals, scope: srx_unpatched, roles: [cve_2026_xxxx]}
 
 tests:
   - {subject: noc_tier1,    device: leaf-01, command: "show version",   expect: permit}
@@ -2871,6 +2929,14 @@ Beyond those already listed in the design document's §14:
   the window, and redemption succeeds across it.
 - **Inventory sync safety**: a sync removing more than the configured share is refused and
   the previous snapshot retained.
+- **Address collision**: a snapshot binding one address to two devices is refused with both
+  named; one device holding several addresses is accepted and all resolve to it.
+- **Key group determinism**: a device matched by an explicit pin, an attribute group, and two
+  CIDR groups resolves to the pin; removing it resolves to the attribute group, then to the
+  longer prefix; two groups matching in the same tier fail at policy load naming both.
+- **Universal subjects**: a bare `everyone` fails at policy load; `all_humans` does not match
+  a workload principal and `all_machines` does not match a human; a permit-carrying grant to
+  `all_principals` is reported by CI while a deny-carrying one is not.
 - **Config-mode inference**: a device with config-command authorization disabled is detected
   and reported.
 - **Accounting reconciliation**: commands present in accounting with no authorization request

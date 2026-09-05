@@ -17,7 +17,12 @@ errors introduced during the design session rather than reviewer speculation.
 | Cluster 4 — remaining blocking issues | **resolved** |
 | Inconsistencies — nine items of stale text | **resolved** |
 | Architecture recommendations | **resolved** |
-| Gaps — accounting, key rotation and the mint API resolved | open |
+| Gaps | **resolved** |
+
+All findings are closed. What remains is not review debt but **lab measurement** — the
+adapter field observations in policy engine spec §5.6, WATCHDOG behavior and `server_msg`
+display per platform, and exhaustive containerlab coverage of the Junos projection. Those
+belong in the implementation plan, not here.
 
 Clusters are ordered by severity; cluster 1 is the core data flow of the product. Resolved
 sections keep their original finding text beneath the resolution note.
@@ -435,7 +440,22 @@ directory-driven revocation.
   the hash the receipt binds. Replaying a captured corpus against a candidate build also
   turns "did this release change anyone's access" into a diff.
 
-  Metrics inventory and tracing remain open.
+  **Metrics and tracing resolved** — design §15. Three streams with different guarantees: the
+  log is complete and never sampled, metrics are aggregate, traces are sampled. The metrics set
+  is **derived from the MUST-alarm statements already scattered through both documents** rather
+  than invented separately, so an alarm with no metric is an unimplemented requirement — and
+  §14 asserts exactly that.
+
+  The constraint that shapes it is cardinality: **device identity does not belong in metric
+  labels.** Ten thousand devices across several metrics is the standard way this shape of
+  system destabilizes its metrics backend, so labels stay bounded — platform, `key_ref`, reason
+  code, outcome — and per-device questions are answered from the log stream, which already
+  carries device identity per record. That is why `keys status` and the capability report are
+  CLI commands over the log rather than dashboards.
+
+  Tracing is OpenTelemetry with a span per exchange. TACACS+ has nowhere to carry trace
+  context, so a trace begins at the daemon and is joined to the broker's mint trace after the
+  fact by `ctx_id` and token handle, rather than by attempting propagation.
 - **Abuse resistance.** ~~No rate limiting on failed authentications, no per-NAS connection
   limits, no stated behavior for malformed-packet floods on an unauthenticated TCP listener.~~
 
@@ -444,23 +464,77 @@ directory-driven revocation.
   malformed-packet floods as `not TACACS+` rather than letting them pollute the key report, and
   an unvalidated body is never logged — it is undecodable and attacker-controlled.
 
-  Still open: per-NAS connection limits, and rate limiting on *failed authentications* from an
-  admitted device, which is a different path from a failed de-obfuscation.
-- **Duplicate or overlapping addresses.** Device binding assumes source-to-device is injective.
+  **Remainder resolved** — design §11, "Listener limits". The governing rule is that limits
+  are **per source before they are global**, so one flapping or hostile device cannot deny the
+  fleet; a global cap reached first turns a single bad box into an outage. Per-NAS concurrent
+  connections are capped, malformed input closes the connection and backs off, and accept-queue
+  pressure sheds rather than queues — a reply the device has already given up waiting for is
+  worse than a refusal, because it has failed over while the server still holds the work.
+
+  Repeated authentication failures from an admitted device are counted per `(nas, username)`,
+  answered with increasing delay, and alarmed — but **MUST NOT lock the account**. Tokens are
+  single-use and high-entropy, so this path exists for resource protection and signal, not to
+  defend a guessable credential, and locking out an operator mid-incident is a worse outcome
+  than the attack it would prevent.
+- **Duplicate or overlapping addresses.** ~~Device binding assumes source-to-device is injective.
   Snapshot validation for collisions, including CIDR overlap in the admission trie, is
-  unspecified.
+  unspecified.~~
+
+  **Resolved** — spec §10. The relation is many-to-one and the directions are not symmetric:
+  one device with several addresses is normal, while one address resolving to two devices is a
+  **snapshot validation error** that refuses the snapshot and names both. Picking a winner
+  would attribute one device's sessions to another in the audit log and every report built on
+  it, so there is nothing to pick. Several devices behind one NAT address is indistinguishable
+  from that case, which is where design §13's SNAT prohibition becomes visible rather than
+  advisory.
+
+  Key group overlap resolves by tier — an explicit device pin, then an attribute match, then
+  the longest CIDR prefix — and **two groups matching in the same tier is a policy load
+  error**, by the same rule as the matcher: where two rules genuinely disagree about which is
+  more specific, refusing to guess is the conservative answer. A device silently admitted under
+  the wrong key group is admitted under the wrong key, which fails at the worst moment and
+  looks like an outage.
 - **Internal API authentication.** The inventory service's snapshot API and `POST /v1/sync`,
   and broker-to-store, have no stated authentication. A compromised pod network should not be
   able to trigger syncs or read the fleet list.
 
-  The external surface is settled — design §16 requires mTLS or an OIDC assertion and forbids
-  API keys — and the same rule should extend inward, but the internal callers and their
-  identities are not yet written down. Still open.
-- **Multi-tenancy** is absent. Fine to exclude — but say so in non-goals.
-- **`everyone` spans trust domains** while a subject mixing human and machine identities is a
+  **Resolved** — design §17, "Internal interfaces". The external rule extends inward: every
+  internal call authenticates as a workload identity and **no interface accepts a shared bearer
+  token**, with a table of caller, identity, and permitted operation.
+
+  Two things the table makes explicit. **Reading a snapshot is not the same right as triggering
+  a sync** — the daemon holds only the first, because a sync reaches an external system and can
+  change what the fleet looks like, so it is an operator action despite being an API. And **key
+  material never enters the snapshot**: it carries `key_ref`, a name, resolved at the daemon
+  against the secret manager. Someone obtaining a snapshot learns the fleet and its key
+  assignments — worth protecting — but not one key.
+
+  The token store remains the one place a password may still exist, since store-native
+  authentication is whatever the chosen store offers; it is scoped per component and rotated
+  like any other credential.
+- **Multi-tenancy** ~~is absent. Fine to exclude — but say so in non-goals.~~
+
+  **Resolved** — design §4 now excludes it, with the reason: scope and subject names are
+  global within a deployment, `all_principals` spans it, and the admission trie is a single
+  address namespace, so tenancy could not be added later without changing all three. Isolation
+  is by running separate deployments, which is cheap precisely because the daemon's only
+  hot-path dependency is the token store.
+
+- **`everyone` spans trust domains** ~~while a subject mixing human and machine identities is a
   load error. Probably intended for deny-only use, but a permit role granted to `everyone`
   quietly crosses the boundary §7 calls out as carrying much of the security value. State the
-  asymmetry, or restrict `everyone` to deny-carrying roles.
+  asymmetry, or restrict `everyone` to deny-carrying roles.~~
+
+  **Resolved** — spec §5.5. Neither suggested option was taken. Restricting universal subjects
+  to denies would be wrong: a fleet-wide CVE deny genuinely should reach humans and automation
+  alike, and a baseline `show version` permit is a legitimate thing to want. The problem is not
+  that permits cross the boundary but that `everyone` crosses it *silently*.
+
+  So the fix is lexical. There is no bare `everyone`; there are `all_humans`, `all_machines`,
+  and `all_principals`, and crossing the trust domain means typing the subject that says so.
+  Same device as `on_missing` — where a default would be silently load-bearing, there is no
+  default. CI additionally reports every permit-carrying grant to `all_principals`, since a
+  fleet-wide deny is routine and a fleet-wide permit rarely is.
 - Minor: ~~the `sshpass -p "$(port49 token …)"` example places a live token in argv, visible in
   `ps`. Single-use and short TTL mitigate it, but the canonical example should not model it.~~
   **Resolved** — design §16's shell example is now `port49 ssh`, passing the token on a file
