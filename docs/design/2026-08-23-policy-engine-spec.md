@@ -1395,6 +1395,9 @@ built-in roles, so `readonly` and `operator` render identically there — with `
 is visible and intentional rather than a surprise. Usually it is exactly right:
 `read_only_limited` differs from `readonly` in *which commands port49 permits*, not in what
 the device needs to be told. Platforms may still override where the distinction is real.
+On a session-only platform that distinction has to reach the device anyway, because nothing
+asks port49 per command; §8's projection carries it, and picks its rendering model per
+grant from exactly this difference between a role's permits and its level's capability.
 
 A level with no mapping and no resolvable `parent:` chain, on a platform present in
 inventory, is a **policy load error**.
@@ -1679,6 +1682,7 @@ attribute is complete in four lines:
 | `expands_abbreviations` | whether the device sends resolved command words | if `commands` |
 | `pipe_token` / `pipe_authorized` | modifier separator; whether it reaches us | if `commands` |
 | `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
+| `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |
 | `redact` | patterns whose argument values are removed before an accounting record is emitted (§5.8) | if `commands` |
 | `service` | authorization `service` value if not `shell` | rarely |
 | `port_pattern` | expected `port` shape, used only for drift detection | optional |
@@ -1741,10 +1745,11 @@ regex beats a matching deny regex — regardless of specificity and regardless o
 | `show chassis cluster status` (wire) | `show chassis .*` (class) | split | all permitted |
 | `show chassis .*` (class) | `show chassis cluster status` (wire) | split | only the allowed command permitted |
 
-**Broad capability comes from the login class's `permissions` bits, not from a permit regex.**
-This is what makes the model work: with no permit regex covering a command, a deny applies
-cleanly against the capability baseline. Modelling the baseline as `allow-commands "show .*"`
-would instead defeat every deny beneath it.
+**Broad capability comes from permission bits, not from a permit regex.** In the lab the bits
+sat in the login class; Junos also accepts them per session as the `user-permissions`
+attribute (L12). Either way, with no permit regex covering a command a deny applies cleanly
+against the bit baseline. Modelling the baseline as `allow-commands "show .*"` would instead
+defeat every deny beneath it.
 
 **Two delivery channels, both carrying either attribute:**
 
@@ -1767,27 +1772,107 @@ should be commit-tested first, and anything the CLI refuses must never reach the
 
 #### The projection model
 
-**Wire-only by default; class-assisted only when the deny set exceeds the wire budget.**
+Junos has two layers of authorization and port49 uses both, in that order. **Permission
+bits** are the coarse layer: `view`, `view-configuration`, `configure`, `all`, and the rest,
+each reaching a subsystem rather than a command. **Regexes** are the fine layer, and the
+measured precedence (L11) is that a matching `allow-commands` beats a matching
+`deny-commands` from any origin. The projection is computed per **effective rule set** — the
+composition of every role in the grant (§5.4), per grant on a session-only device — never
+per role, since two roles that each render can compose into a shape that does not.
+
+**Bits first.** The generator chooses the smallest bit set that covers the grant's permits,
+never exceeding the level's ceiling. A deny that aligns with a bit boundary drops the bit
+instead of emitting a regex: a readonly role that denies `show configuration **` sends
+`view` without `view-configuration`, and nothing on the wire has to be beaten by anything.
+The realistic readonly is exactly that — `view view-configuration` plus a short
+`deny-commands` for the carve-outs the bits cannot separate — and it is the shape this
+generator produces by default.
+
+Bits reach the device one of two ways, both in use in real fleets and selected per adapter:
+
+| `bit_delivery` | What is sent | Device provisioning |
+|---|---|---|
+| `user_permissions` | `user-permissions=<bits>` per session, chosen per grant | one template user (`remote` or named) whose class carries no bits of its own |
+| `local_user_name` | `local-user-name=<template>`, one template per level, bits in its class | one class per level, rendered by `port49 platform export` |
+
+`user_permissions` is the default: zero per-level provisioning, and the bit set follows the
+grant rather than the level. `local_user_name` is for deployments that already provision
+classes and want the ceiling in device config where their compliance tooling can see it.
+
+**Regexes for what bits cannot separate.** After the bits are chosen:
 
 ```
-class:   permissions      view                       ← capability, not a regex
-         deny-commands    <broad denies>             ← only if the wire budget is exceeded
-wire:    deny-commands    <broad denies>             ← default home
-         allow-commands   <narrow exceptions>
+wire:    user-permissions   view view-configuration     ← or local-user-name=<template>
+         deny-commands      <denies beneath a bit>      ← the carve-outs
+         allow-commands     <permits that dominate a deny under §5.4>
 ```
 
-Starting on the wire means zero device provisioning and fully dynamic policy. Moving denies
-into the class buys unbounded capacity at the cost of a config push, so CI MUST report when a
-role crosses that line rather than letting it happen quietly — naming the role, and emitting
-the class snippet that would carry the overflow, so the workaround is in the same report as
-the warning.
+A permit that would not dominate in port49 MUST NOT be emitted, because on the target it
+would win anyway and silently void the deny. Permits the bits already cover emit nothing.
+This is the **capability shape**, and it is the common case.
 
-**Which permits are emitted follows from port49's own semantics.** Under dominance (§5.4) a
-permit prevails only when it is strictly more specific than the deny it competes with — so
-the permits worth emitting are exactly the ones that dominate. A permit that would not
-dominate in port49 MUST NOT be emitted, because on the target it would win anyway and
-silently void the deny. Permits competing with no deny need no regex at all; the capability
-bits already cover them. That is why the wire payload stays small by construction.
+**Narrow shape.** A grant whose permits are narrower than every bit that would cover them —
+`read_only_limited` (§6) with three show commands — cannot be expressed by bits at all, and
+emitting nothing widens it to all of `view`. On a command-authorizing platform the daemon
+enforces the difference per command; on Junos the projection is the whole enforcement. The
+rendering is a `deny-commands .*` baseline plus one `allow-commands` alternation, under the
+smallest bits that make the commands exist:
+
+```
+wire:    user-permissions   view
+         deny-commands      .*
+         allow-commands     (show version|show interfaces .*|show ip route .*)
+```
+
+The effective set is exactly the permits. Because the allow beats every deny, this shape
+cannot carry a deny beneath a permit.
+
+**Refused shape.** Permits narrower than the covering bits *and* a deny beneath one of them —
+`permit: [show interfaces **], deny: [show interfaces terse]` — fits neither. Junos regex
+has no lookahead, so "everything under X except Y" cannot be written as one allow. CI MUST
+refuse the policy at load, naming the grant, the two rules, and the platform, rather than
+rendering the nearest shape. Junos documents a second attribute family,
+`allow-commands-regexps` / `deny-commands-regexps`, in which **deny takes precedence by
+default** and which is mutually exclusive with the plain family on the wire. If that
+precedence holds over TACACS+ (L12), the refused shape becomes expressible in that family
+and the generator picks a family per grant; until it is measured, the shape is refused.
+
+For the generator to choose bits and to tell "narrower than the bits" from "covered by
+them", the adapter declares each bit's reach in rule form and each level's ceiling:
+
+```yaml
+  juniper_junos:
+    supports: [session]
+    command_projection: junos_regex
+    bit_delivery: user_permissions
+    bits:
+      view:               [show **]
+      view-configuration: [show configuration **]
+      clear:              [clear **]
+      configure:          [configure **, edit **, commit **, rollback **]
+      all:                [**]
+    privilege:
+      readonly: [view, view-configuration]
+      operator: [view, view-configuration, clear, network, reset, trace]
+      admin:    [all]
+```
+
+`bits:` and `privilege:` are required for a session-only platform; `privilege:` is the
+ceiling, in bits, and `port49 platform export` renders the reference class per level from
+it under `local_user_name`. CI reports which shape each grant rendered under, the bit set it
+chose, and any grant whose shape or bits changed between two policy versions, since that is
+a change in what the wire says even when no rule changed.
+
+Both shapes start on the wire. Moving denies into the class buys unbounded capacity at the
+cost of a config push, so CI MUST report when a grant crosses that line rather than letting
+it happen quietly — naming the grant, and emitting the class snippet that would carry the
+overflow, so the workaround is in the same report as the warning.
+
+This rendering rule is decision 22 and is **provisional on L12**. The SRX tests measured
+class-resident bits with wire regexes; `user-permissions` over TACACS+ is in production use
+but has no capture, and neither has the reach of each bit, the `.*` baseline on the wire, nor
+the `-regexps` family's precedence. The plan's containerlab step closes L12 before the
+generator is final.
 
 #### Generator constraints
 
@@ -2903,6 +2988,17 @@ authorization request, and Junos never makes one. Rather than claim reach that d
 the enforced approximation, and revocation records name the contexts they could not reach.
 (§5.6)
 
+**22. Session-only projection is bits first, regexes second, chosen per grant, with one
+shape refused.** *Provisional on L12.* The generator picks the smallest permission-bit set
+covering the composed grant's permits within the level's ceiling, drops a bit where a deny
+aligns with it, and emits regexes only for what bits cannot separate: denies beneath a bit,
+and permits that dominate a deny under §5.4. A grant narrower than any covering bit renders
+as `deny .*` plus one allow alternation, since emitting nothing widens it to the bit. Bits
+travel as `user-permissions` per session by default, or as a `local-user-name` template
+where a deployment provisions classes. A permit narrower than the bits with a deny beneath
+it is refused at load; the `-regexps` family's documented deny-precedence may lift that once
+measured. The choice is made from the composed grant, never per role. (§8, §15)
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -2920,10 +3016,10 @@ trigger rather than a guess.
 **Projection equivalence.** Which rule shapes render faithfully into a session-only platform's
 native model — Junos `allow-commands` and `deny-commands` — cannot be settled on paper. It
 requires a device image, a generated attribute pair, and a probe corpus compared against the
-device's own view (`show cli authorization`). It is therefore a work item in sequencing step 5,
-not a decision: the requirement is already specified in §8, and the outcome is a per-platform
-list of shapes CI refuses. Recorded here only so it is not mistaken for an unresolved design
-question.
+device's own view (`show cli authorization`). Decision 22 states the rendering rule and the
+one shape it refuses; L12 is the lab work that confirms or narrows both, in sequencing step 5.
+The outcome is a per-platform list of shapes CI refuses. Recorded here only so it is not
+mistaken for an unresolved design question.
 
 ---
 
@@ -3097,6 +3193,13 @@ Beyond those already listed in the design document's §14:
 - **Projection generator constraints**: duplicate attribute names, an over-length argument,
   `allow-commands` with `allow-commands-regexps`, and a permit broader than its grant are each
   rejected at policy load rather than emitted.
+- **Projection shape selection**: a readonly grant denying `show configuration **` renders
+  as `view` without `view-configuration` and no deny regex; a grant whose composed permits
+  are narrower than any covering bit renders as `deny .*` plus one allow alternation and the
+  device's effective set is exactly the permits (`read_only_limited` on Junos reaches three
+  commands, not all of `view`); a grant never receives a bit outside its level's `privilege:`
+  ceiling; the mixed shape is refused at load naming the grant, both rules, and the platform.
+  A session-only platform without `bits:` is a load error.
 - **Wire-to-class escalation**: a role whose deny set exceeds the wire budget is reported by
   CI as requiring a class baseline, and is never silently truncated.
 - **Class overflow is reported with its remedy**: a role whose deny set exceeds the wire budget
@@ -3207,6 +3310,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. | Projection generator constraints (§8) | Junos | open |
 | **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open |
 | **L11** | Junos precedence, repetition, and length behavior for wire and class rules. | The projection model (§8) | Junos (SRX) | **closed** — measured 2026-09-03; results in `port49-junos-lab-tests-results.md` |
+| **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
