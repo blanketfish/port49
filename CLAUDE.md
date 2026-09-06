@@ -16,7 +16,10 @@ unmodified network devices. Apache-2.0. Read this file first, then the plan you 
 ## How the work is sequenced
 
 - **One plan per design §19 step group**, named `YYYY-MM-DD-NN-<slug>.md` where `NN` is the
-  step order. Plan 1 is the protocol core. The expected sequence is listed in plan 1's header.
+  step order. Plan 1 is the protocol core. **`docs/superpowers/plans/README.md` is the
+  roadmap**: for every plan it lists what it builds, the spec sections it implements, what
+  earlier plans hand it, what it leaves for later, and which lab entries close in it. Start
+  there when writing a plan, and update its status line when a plan is written.
 - **Write plan N+1 only after plan N is merged.** A plan names exact files and signatures,
   so it is written against real code, not a guess. The one exception: plan 2 may be written
   from plan 1's text, because plan 1 fixes the interfaces plan 2 builds on.
