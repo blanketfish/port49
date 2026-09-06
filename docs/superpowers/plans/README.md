@@ -5,7 +5,7 @@ the standing brief for each plan: what it builds, which spec sections it impleme
 earlier plans hand it, what it must leave for later, and which lab register entries close in
 it. When writing plan N, start here, then read the cited sections, then the previous plan.
 
-Status: **1 written**; 2–12 not yet.
+Status: **1 and 2 written**; 3–12 not yet. Plan 3 waits for plan 1's lab results.
 
 ---
 
@@ -15,7 +15,7 @@ RFC 8907 wire, key trial, admission from a file inventory, per-source limits, in
 store, authentication/authorization/accounting handlers, decision log, config, `port49d`
 binary, containerlab harness. Closes L1 (SSH transport only), L2, L5, L6, L8, L10.
 
-## Plan 2 — Token model (§19 step 2)
+## Plan 2 — Token model (§19 step 2) — `2026-09-06-02-token-model.md`
 
 **Builds:** the full token semantics on top of plan 1's store interface and handlers.
 
