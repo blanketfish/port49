@@ -22,8 +22,8 @@ Not ready for a plan as-is, but close: five blocking items, each fixable in one 
 | F4 | resolved 2026-09-06 — `refreshed_at`, teardown row 3a, `context_stale`, `staleness_ceiling` named |
 | F5 | resolved 2026-09-06 — universal subjects **removed**; `attached_roles` on scopes, split by trust domain (decision 18 superseded) |
 | S1–S12, S14–S16 | resolved 2026-09-06 as recommended, except S3: `device_mismatch` is **kept** via a keyed device tag in the token (design §8), Ryan's proposal |
-| S13 | **open** — quarantine refusal shape (FAIL vs silence); deferred by Ryan |
-| Noted | resolved 2026-09-06 except the two folded into S13 |
+| S13 | resolved 2026-09-06 — **silence**, as for `device_unknown`; the device falls to local as in an outage; Ryan's call |
+| Noted | resolved 2026-09-06 |
 
 **F5 as resolved.** Ryan's objection to any subject-shaped form: `all_humans` will be read as
 "everyone" and overused. Replaced by `attached_roles: {humans: [...], machines: [...]}` on a

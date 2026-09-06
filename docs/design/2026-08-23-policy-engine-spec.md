@@ -1208,7 +1208,7 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) |
-| `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); admitted nowhere until fixed |
+| `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed |
 
 Every event has a success reason and at least one failure reason in this table, so
 "decisions by event, verdict, and reason" (design document §15) is a complete metric. A
@@ -2188,11 +2188,12 @@ carefully written, are never consulted. The device looks entirely healthy throug
 
 ```
 $ port49 devices capabilities
-DEVICE      PLATFORM      SUPPORTS                          OBSERVED
-leaf-01     arista_eos    session,commands,config_commands  session,commands,config_commands
-leaf-04     arista_eos    session,commands,config_commands  session,commands   ⚠ config-commands off
-pdu-dc1-a   generic       session                           session
-ntp-01      meinberg      session                           —                  ⚠ never seen
+DEVICE      PLATFORM       ADMISSION    SUPPORTS                          OBSERVED
+leaf-01     arista_eos     admitted     session,commands,config_commands  session,commands,config_commands
+leaf-04     arista_eos     admitted     session,commands,config_commands  session,commands   ⚠ config-commands off
+pdu-dc1-a   generic        admitted     session                           session
+ntp-01      meinberg       admitted     session                           —                  ⚠ never seen
+xr-edge-1   cisco_ios_xr   quarantined  session,commands                  —                  ✗ @management undefined for cisco_ios_xr (no_disruptive); bundle 2292
 ```
 
 Two checks fall out, and both are needed:
@@ -2274,10 +2275,21 @@ enable exchange carries no principal (§5.6). A device racked tomorrow with a ne
 fail them against a policy that was valid today. Refusing the whole bundle would block every
 inventory change fleet-wide until someone edits policy, including the leaf racked in another
 site — a ticket-queue bottleneck created by the safety mechanism. Instead the offending
-device is published with `admission: quarantined` and the reason; the daemon refuses it with
+device is published with `admission: quarantined` and the reason; the daemon logs
 `device_quarantined` (§5.7), the alarm names it, CI reports the same list against the policy
 change that would clear it, and `port49 devices capabilities` shows it. The rest of the fleet
 moves.
+
+**A quarantined device gets silence, not FAIL.** The daemon closes the connection without a
+reply, exactly as for `device_unknown`. The device then declares the server dead and falls to
+its local method, which is the posture every platform documents for a port49 outage and the
+one the reference AAA configuration and the runbook already cover. Answering FAIL would be a
+new posture: the device believes AAA is healthy and refuses everyone, and whether it then
+tries local is L4, unmeasured and platform-dependent. Quarantine means port49 cannot compute a
+correct policy for the device, not that the device is suspect, and port49 cannot block the
+console or a local account under either shape — so the choice is only whether the failure
+looks like a rejection or an outage, and the outage is the one whose consequences are known.
+Clearing it is the policy or adapter change CI named, followed by the next sync.
 
 A consumer runs on exactly one bundle version at a time, so a decision is always attributable
 to a single, nameable state of the world. `bundle/diff` then covers policy change, inventory
@@ -3102,9 +3114,9 @@ the blob sits in the same tamper-evident stream as the records that name it. (§
 **20. Joint policy-and-inventory validation quarantines a device rather than refusing the
 bundle.** A sync can introduce a platform that makes a valid policy invalid. Refusing the
 bundle would block every inventory change fleet-wide until policy is edited, a bottleneck
-created by the safety mechanism; instead the offending device is published quarantined, refused
-with its own reason, and named in the alarm and the CI report, while the rest of the fleet
-moves. (§10)
+created by the safety mechanism; instead the offending device is published quarantined, given
+silence rather than FAIL so it falls to local exactly as in an outage, logged with its own
+reason, and named in the alarm and the CI report, while the rest of the fleet moves. (§10)
 
 **21. Post-login controls do not reach a session-only platform, and the spec says so.** The
 ceiling, revocation, username binding, and the in-session warning all act at the next
@@ -3298,8 +3310,9 @@ Beyond those already listed in the design document's §14:
   has restarted since redemption, resolves the blob; a `blob` event exists in the log for every
   hash any record names.
 - **Quarantine**: a sync introducing a device whose platform fails joint validation publishes
-  the bundle with that device quarantined, the rest of the sync applies, and the device is
-  refused with `device_quarantined`.
+  the bundle with that device quarantined, the rest of the sync applies, a connection from
+  the device is closed without a reply and logged `device_quarantined`, the device falls to
+  its local method in the lab, and the next sync after the named fix admits it.
 - **Unencrypted flag**: a packet with `TAC_PLUS_UNENCRYPTED_FLAG` set is refused before its
   body is parsed and lands in its own report bucket.
 - **Fall-through on FAIL** is asserted absent per platform under the reference AAA
