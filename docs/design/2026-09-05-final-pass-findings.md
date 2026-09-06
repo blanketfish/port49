@@ -16,10 +16,25 @@ Not ready for a plan as-is, but close: five blocking items, each fixable in one 
 
 | Item | Status |
 |---|---|
+| F1 | resolved 2026-09-06 — `api:` rights on the subject, default self-only; spec §2, design §17 |
+| F2 | resolved 2026-09-06 — `token_sha256` in mint records and spans; spec §5.7, design §15 |
 | F3 | resolved 2026-09-05 — decision 22, provisional on L12 |
-| F1, F2, F4, F5 | open |
-| S1–S16 | open |
-| Noted | open |
+| F4 | resolved 2026-09-06 — `refreshed_at`, teardown row 3a, `context_stale`, `staleness_ceiling` named |
+| F5 | resolved 2026-09-06 — universal subjects **removed**; `attached_roles` on scopes, split by trust domain (decision 18 superseded) |
+| S1–S12, S14–S16 | resolved 2026-09-06 as recommended, except S3: `device_mismatch` is **kept** via a keyed device tag in the token (design §8), Ryan's proposal |
+| S13 | **open** — quarantine refusal shape (FAIL vs silence); deferred by Ryan |
+| Noted | resolved 2026-09-06 except the two folded into S13 |
+
+**F5 as resolved.** Ryan's objection to any subject-shaped form: `all_humans` will be read as
+"everyone" and overused. Replaced by `attached_roles: {humans: [...], machines: [...]}` on a
+scope — every grant reaching a device in the scope also carries those roles; nothing creates
+access; a principal with no declared grant on the device is refused. `grants remove
+--subject` also removes the emptied subject block; CI reports grant-less subjects.
+
+**S3 as resolved.** Token = `tag ‖ secret`, `tag = base62(HMAC(k, device_id))[:6]` with the
+key broker and daemons already share, 24 random characters after it. A daemon compares its
+own tag before any store access, so a wrong-device presentation is `device_mismatch` with
+certainty under PAP, ASCII, and HTTP APIs; CHAP still yields `token_not_found`.
 
 ---
 

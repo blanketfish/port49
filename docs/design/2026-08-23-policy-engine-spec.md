@@ -74,6 +74,47 @@ not a convenience. For CI to enforce that, an identity string carries its domain
 string in no recognized form is itself a load error. At runtime the domain is never read from
 the string; it is whichever verifier validated the credential (design document §7).
 
+**Each verifier produces the principal string, prefix included**, so the runtime string and
+the policy string are the same string and the subject matcher is a comparison:
+
+| Verifier | Principal string |
+|---|---|
+| human x509 | `user:` + the directory attribute the certificate maps to (design document §7) |
+| human OIDC | `user:` + `preferred_username` (or `email` where the deployment says so) |
+| workload x509 | the SAN URI verbatim — `spiffe://…` |
+| Kubernetes | `system:serviceaccount:<namespace>:<name>` from the token's `sub` |
+| machine OIDC | `app:` + the token's `client_id` (`azp`) |
+
+Every example in this document that shows a principal shows the prefixed form. §5.1.4's
+`credential.method` takes `cert`, `oidc`, or `k8s`, matching the verifier types.
+
+**What a subject may do through the broker API.** The API (design document §17) authorizes
+the caller as a principal and, by default, lets a principal act only on its own tokens and
+contexts: mint for itself, revoke its own, explain its own hypothetical decisions. Acting on
+someone else is a right the subject declares:
+
+```yaml
+subjects:
+  - name: netops_oncall
+    group: NetOps-OnCall
+    api: [revoke_others, explain_others]
+  - name: ci_policy_bot
+    identity: ["app:port49-ci"]
+    api: [sync, replay]
+```
+
+| Right | Unlocks |
+|---|---|
+| `revoke_others` | `/v1/tokens/revoke` by another principal or `sid` |
+| `explain_others` | `/v1/explain` for a principal other than the caller |
+| `sync` | triggering an inventory sync |
+| `keys_show` | rendering a device key's secret (§12) |
+| `replay` | reading the decision log through the API |
+
+`/v1/logout` needs no right, since it authenticates by the identity provider's signature on
+the logout token rather than by a caller. CI reports every subject carrying an `api:` list,
+because it is a grant of authority over other people's sessions and reads like one.
+
 ### The device-facing username
 
 A principal is not what anyone types at a login prompt. `CN=alice,OU=netops,O=example` is
@@ -109,11 +150,13 @@ the `(nas, username)` store key and make the audit trail ambiguous; this is a po
 error. Collision with a device-local account name is the same hazard described in §5.6 and
 SHOULD be reported where port49 can observe it.
 
-**Comparison is normalized.** The device sends whatever the operator typed — `alice`,
-`DOMAIN\alice`, or `alice@corp.example.com`. The broker records a canonical form, and the
-daemon compares case-insensitively after stripping a domain prefix or UPN suffix. Without
-this, a user who types their address rather than their shortname is denied with
-`context_missing` and no obvious cause.
+**The username is canonicalized before it is used as a key, not merely compared.** The
+device sends whatever the operator typed — `alice`, `DOMAIN\alice`, or
+`alice@corp.example.com`. The broker writes the token under the canonical form — lower-cased,
+domain prefix and UPN suffix stripped — and the daemon canonicalizes the wire username the
+same way before every store access and every binding check. Without this, a user who types
+their address rather than their shortname is denied at redemption with `token_not_found` and
+no obvious cause.
 
 **Privilege decides what the device will offer; the role decides what port49 will permit
 within it.** The two are not independent axes — the effective permission set is the
@@ -273,7 +316,7 @@ Every role inherits a shipped default allowlist unless it declares its own:
 
 ```yaml
 pipe:
-  permit: [include **, exclude **, begin **, section **, json, count, no_more]
+  permit: [include **, exclude **, begin **, section **, json, count, no-more]
 ```
 
 This matters because `show running-config | redirect ftp://…` is an exfiltration primitive
@@ -322,8 +365,13 @@ referenced by the token:
 
 ```
 blob:<sha256>            the fully compiled decision — see 5.1.2
-token:(nas, username)    { handle, blob_hash, principal, ... }
+token:(nas, username)    { handle, kind, blob_hash, principal, username,
+                           max_session_age, reusable, expires, ... }
 ```
+
+`max_session_age` rides in the token record because the daemon computes `session_expires`
+at redemption and the blob is shared across principals; where a principal holds several roles
+the broker writes the **minimum** over them.
 
 On successful redemption the daemon creates login context, which holds **the hash rather
 than a copy**:
@@ -331,7 +379,7 @@ than a copy**:
 ```
 ctx:(nas, port)
   ctx_id            01J9F3QK…            assigned at creation; correlates every record
-  principal         alice@example.com
+  principal         user:alice@example.com
   username          alice                bound; compared on every later exchange
   rem_addr          198.51.100.4         bound; compared on enable
   privilege         15
@@ -339,9 +387,16 @@ ctx:(nas, port)
   credential        see 5.1.4
   auth_time         1757041495           when the human actually authenticated
   session_expires   1757070295           auth_time + max_session_age
+  refreshed_at      1757041495           last broker refresh (5.1.3); the staleness clock
+  revoked_at        —                    set by revocation (5.6); denies until idle TTL reclaims
   task_id           42                   from exec accounting, once observed (5.8)
   accounting_state  open | closing       advisory (5.8); never authorizes or denies
 ```
+
+`refreshed_at` is written at creation and on every refresh. When `now - refreshed_at`
+exceeds the configured `staleness_ceiling` (design document §9 and §12) the daemon denies
+with `context_stale`, which is how "serve stale up to a ceiling, then fail closed" reaches
+the command path.
 
 `ctx_id` is assigned once, at creation, and never changes. It is the join key between the two
 record streams: every decision (§5.7) and every resolvable accounting record (§5.8) carries
@@ -437,7 +492,11 @@ The daemon MUST therefore maintain an index as it creates and tears down context
 
 ```
 contexts_by_principal:(principal)   → set of (nas, port)
+active_principals                   → set of principal, entries expiring with their last context
 ```
+
+`active_principals` exists because the scheduled refresh must enumerate principals with live
+contexts, and an index keyed by principal cannot be listed without a keyspace scan.
 
 Refresh then means: the broker re-resolves for a principal whose group membership has
 changed, writes a new blob if the result differs, and updates `blob_hash` in each of that
@@ -463,7 +522,7 @@ otherwise impossible?**
 
 ```
 credential:
-  method       cert | oidc
+  method       cert | oidc | k8s     the verifier type that validated it (§2)
 
   # cert
   fingerprint  sha256:4c1e…        what an operator or tool actually pastes
@@ -500,11 +559,14 @@ That obligation previously covered tokens alone.
 
 ### 5.2 Session authorization (daemon)
 
-On `service=shell` with an empty `cmd`, the daemon returns the AV pairs already stored in
-login context. No computation, no platform knowledge, one store read.
+On `service=shell` with an empty `cmd`, the daemon returns the session attributes from the
+blob the context names, with `{username}`, `{principal}`, and `{device}` substituted from the
+context (§6). The blob is one per platform and shared across principals, so substitution
+happens here, in the daemon, at each session authorization — never at mint. No platform
+knowledge, one context read, one cached blob.
 
 If login context is absent, the daemon fails closed and logs a distinct reason —
-`context_missing` is operationally very different from `denied_by_policy` and the two must
+`context_missing` is operationally very different from `no_rule_matched` and the two must
 never share a log line.
 
 ### 5.3 Command authorization (daemon)
@@ -512,6 +574,12 @@ never share a log line.
 ```
 normalize(request)
   → if no login context                → DENY (context_missing)
+  → if username ≠ ctx.username         → DENY (username_mismatch); invalidate (§5.6)
+  → if ctx.revoked_at set              → DENY (credential_revoked)
+  → if now > ctx.session_expires       → DENY (session_expired)
+  → if now - ctx.refreshed_at
+       > staleness_ceiling             → DENY (context_stale)
+  → if request level > ctx.privilege   → DENY (privilege_exceeded)
   → collect every matching rule, permit and deny alike
   → if no permit matches                 → DENY (no_rule_matched)
   → if no permit dominates every
@@ -679,43 +747,61 @@ scopes:
       os_version: {lt: "21.4R3-S5"}
     on_missing: include        # no version data → assume vulnerable
     security_log: true         # membership changes log as security events
-
-grants:
-  - {subject: all_principals, scope: srx_unpatched, roles: [cve_2026_xxxx]}
+    attached_roles:
+      humans:   [cve_2026_xxxx]
+      machines: [cve_2026_xxxx]
 ```
 
-`all_principals` is a built-in subject matching every principal. It is not a special deny
-path — the same role and grant machinery, applied universally — which is why there is still
-only one place to deny a command.
+`attached_roles` is not a special deny path — the same role machinery, composed into every
+grant that lands on the scope — which is why there is still only one place to deny a command.
 
-#### Universal subjects name their trust domain
+#### Roles attach to scopes; there is no subject that means everyone
 
-§7 of the design document requires human and machine identities to be unforgeably distinct,
-and a subject that mixes them is a load error. A universal subject crosses that boundary by
-definition, so there are three, and **there is no bare `everyone`**:
+Earlier drafts had universal subjects — `all_humans`, `all_machines`, `all_principals` —
+usable in a grant like any declared subject. They were removed because the word cannot be
+made to mean what it has to mean. Under OIDC "all humans" is the whole identity provider,
+every employee, so the range had to be narrowed to "principals who already have access", and
+then a reader of `{subject: all_humans, …}` sees *everyone* and is wrong. A subject-shaped
+form invites its own overuse.
 
-| Subject | Matches |
-|---|---|
-| `all_humans` | every human principal **that some non-universal subject also matches** |
-| `all_machines` | every workload principal, under the same condition |
-| `all_principals` | both — the boundary is crossed deliberately and visibly |
+The thing actually being described is not a set of people. It is *every grant that reaches
+these devices also carries these roles*. So it is declared on the scope:
 
-**Universal means everyone who already has access, not everyone who can authenticate.** Under
-OIDC, "every human principal" would otherwise be the whole identity provider — every employee,
-not the network team — and a permit-carrying grant to `all_humans` would hand every one of them
-a device login. Ranging over principals matched by at least one ordinary subject costs nothing
-for denies (a principal matched by no subject cannot mint, so a deny that fails to reach them
-changes nothing) and makes the permit case mean what its author means.
+```yaml
+scopes:
+  - name: all_devices
+    attached_roles:
+      humans:   [baseline_show]
+      machines: [baseline_show]
+  - name: dc_fabric
+    match: {site: dc1}
+    attached_roles:
+      humans: [dc_safety_denies]
+```
 
-The point is lexical. A fleet-wide CVE deny genuinely should reach both humans and automation,
-so forbidding permits on a universal subject would be wrong — a baseline `show version` permit
-is a legitimate thing to want. What must not happen is a permit crossing the trust-domain
-boundary *quietly*, and requiring the author to type `all_principals` rather than `everyone`
-makes the crossing explicit at the point of authorship. The same device as `on_missing`
-(§5.5): where a default would be silently load-bearing, there is no default.
+**Evaluation.** At mint the broker finds the grants whose declared subject matches the
+principal and whose scope selects the device. If there are none, the mint is refused with
+`no_grants_matched` — attached roles have nothing to attach to. Otherwise, for every scope
+that selects the device, the `attached_roles` for the principal's trust domain compose into
+the grant under §5.4, exactly as if they had been listed on it.
 
-CI MUST additionally report every permit-carrying grant to **any** universal subject, since a
-deny to the whole fleet is routine and a permit to the whole fleet rarely is.
+| Principal | Declared grant selects the device? | Result |
+|---|---|---|
+| Alice, `noc_tier1` on `dc_fabric` | `dc-leaf-1` — yes | `dc_operator` + `baseline_show` + `dc_safety_denies` |
+| Alice | `campus-sw-7` — no | refused; attached roles do not create access |
+| offboarded `svc_oxidized`, grants removed, subject block still present | any — no | refused |
+| Carol, Finance, valid SSO, no subject | any — no | refused |
+
+Three consequences worth stating. Attached roles **add commands to devices a principal
+already reaches and never add a device**; a fleet-wide baseline for a team is a declared
+grant on `all_devices`, in the grants list where access review looks. The trust-domain split
+of design document §7 is kept by the `humans:` / `machines:` keys, and a scope may attach to
+one, both, or neither. And offboarding is `port49 grants remove --subject` (§12), after
+which a lingering subject block is inert.
+
+CI MUST report every scope carrying `attached_roles` whose roles carry a permit, since a
+fleet-wide deny is routine and a fleet-wide permit rarely is; `all_devices` remains an
+ordinary scope name.
 
 Three properties make this materially better than a curated device list:
 
@@ -840,8 +926,9 @@ did not generate and cannot verify MUST NOT delete state.
 | | Trigger | Authority |
 |---|---|---|
 | 1 | **Login redemption** on the same `(nas, port)` | port49 performed it — overwrites unconditionally. An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7) |
-| 2 | **Revocation** — OIDC back-channel logout by `sid` or `sub`; a certificate appearing on a CRL or OCSP response by issuer and serial; a policy change withdrawing every grant | authoritative, from the identity layer (§5.1.4) |
+| 2 | **Revocation** — OIDC back-channel logout by `sid` or `sub`; a certificate appearing on a CRL or OCSP response by issuer and serial; a policy change withdrawing every grant | authoritative, from the identity layer (§5.1.4). Sets `revoked_at` rather than deleting, so the next command is denied `credential_revoked` with a `server_msg` saying so — distinguishable from a session port49 never saw. Row 6 reclaims the state |
 | 3 | **Session ceiling** — `session_expires` reached and the grace window elapsed | local, needs no external signal |
+| 3a | **Staleness ceiling** — `now - refreshed_at` beyond `staleness_ceiling` because the broker has been unreachable that long (design document §9) | local; denies `context_stale` with a `server_msg` naming the broker outage, retains the context so recovery resumes it |
 | 4 | **Username mismatch** on a command or enable exchange | a genuine conflict on that line — denies and invalidates |
 | 5 | **Authentication START** on the same `(nas, port)` under a different username, *including one port49 rejects* | a failed authentication is still evidence a new session is beginning. With ASCII login the username arrives in a CONTINUE, so the check fires once it is known |
 | 6 | **Idle TTL** | hygiene; bounds abandoned state |
@@ -893,8 +980,9 @@ still need a manual disconnect.
 #### Session lifetime
 
 `session_expires` is `auth_time + max_session_age`, where `auth_time` is when the human
-actually authenticated (§5.1.4) and `max_session_age` is port49 policy, declared per role and
-defaulting long. It is the compliance-relevant clock: *how long may a session run on the
+actually authenticated (§5.1.4) and `max_session_age` is port49 policy, declared per role,
+composed as the **minimum** across a principal's roles, carried in the token record (§5.1.1),
+and defaulting long. It is the compliance-relevant clock: *how long may a session run on the
 strength of one authentication event.*
 
 A session approaching the ceiling is **warned in the session**. The authorization REPLY
@@ -910,8 +998,10 @@ t+7h50   authorization REPLY carries server_msg:
            "port49: re-authenticate within 10m — run `port49 login`"
 
 t+7h55   Alice runs `port49 login`; a fresh authentication event (prompt=login, MFA),
-         the broker takes auth_time=T2 from the new assertion, finds her live
-         contexts through contexts_by_principal, writes session_expires=T2+8h
+         the agent calls /v1/refresh, the broker takes auth_time=T2 from the new
+         assertion, finds her live contexts through contexts_by_principal, writes
+         session_expires=T2+8h and refreshed_at, and re-indexes contexts_by_sid
+         under the new assertion's sid so a later back-channel logout still lands
 
 t+7h56   her next command authorizes normally — no reconnect, candidate config intact
 ```
@@ -932,10 +1022,15 @@ forcing a reconnect. Requirements:
 - **Refresh MUST be a fresh authentication event, and `auth_time` MUST come from the
   assertion.** An OIDC client holding a refresh token can obtain a new ID token silently, and
   the identity provider will correctly report the *original* `auth_time` — nobody re-proved
-  anything. The agent therefore requests `prompt=login` (or `max_age=0`) on refresh, and on
-  the certificate path performs a new proof-of-possession challenge. The broker never sets
-  `auth_time` from its own clock; if it did, the ceiling would measure time since a CLI
-  command ran rather than time since identity was proven.
+  anything. The agent therefore requests `prompt=login` (or `max_age=0`) on refresh, and the
+  broker takes `auth_time` from the assertion, never from its own clock; if it did, the
+  ceiling would measure time since a CLI command ran rather than time since identity was
+  proven. On the certificate path there is no assertion and no re-handshake — TLS 1.3 has no
+  renegotiation — so refresh is an application-level challenge over the held connection: the
+  broker sends a nonce, the agent signs it with the certificate's key after a fresh hardware
+  touch where the key is on a token, and `auth_time` is the broker's verification time. That
+  is the one place the broker's clock is the source, and it is a time at which possession was
+  just proven.
 
 #### Why `enable: auto` is restricted
 
@@ -962,10 +1057,11 @@ fallback to local authorization follows. The escalation converts into real acces
 devices where command authorization does not cover that privilege tier, which is precisely
 what the accounting reconciliation in §9 exists to surface.
 
-**Local account names MUST NOT collide with principal names.** A device-local `bob` that is
-not the port49 principal `bob` matches on username and inherits the context. The reference AAA
-configuration MUST require disjoint namespaces for break-glass and local accounts, and port49
-SHOULD warn when it observes a local fallback succeed for a name it knows.
+**Local account names MUST NOT collide with device-facing usernames.** A device-local `bob`
+that is not the port49 username `bob` matches on username and inherits the context. The
+reference AAA configuration MUST require disjoint namespaces for break-glass and local
+accounts, and port49 SHOULD warn when it observes a local fallback succeed for a username it
+knows.
 
 #### Gated on the lab
 
@@ -1000,7 +1096,7 @@ A deny at the per-command point:
   "event": "authorize_command",
   "verdict": "deny",
   "reason": "no_permit_dominates_deny",
-  "principal": "alice@example.com",
+  "principal": "user:alice@example.com",
   "auth": { "method": "oidc", "credential_sha256": "9f2c8b…" },
   "device": { "nas": "10.20.0.7", "name": "core-sw01", "platform": "arista_eos" },
   "session": { "ctx_id": "01J9F3QK…", "port": "vty0", "rem_addr": "198.51.100.4", "privilege": 15 },
@@ -1050,8 +1146,8 @@ events (`account`, `blob`) that share the envelope and carry no verdict:
 | `escalate` | daemon | an `enable` exchange, attributed to the principal (§7) |
 | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
-Device accounting shares this envelope as a sixth event, `account`, and is specified in §5.8.
-It is not a decision — it is a report — so it carries no `policy` block and no verdict.
+Device accounting shares this envelope as the seventh event, `account`, and is specified in
+§5.8. It is not a decision — it is a report — so it carries no `policy` block and no verdict.
 
 `escalate` exists as its own event because the device-facing username on those platforms is
 `$enab{level}$`, not a person. The record carries the principal resolved from login context,
@@ -1065,7 +1161,7 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
   "event": "mint",
   "verdict": "permit",
   "reason": "grants_matched",
-  "principal": "alice@example.com",
+  "principal": "user:alice@example.com",
   "auth": { "method": "oidc", "credential_sha256": "9f2c8b…" },
   "policy": {
     "bundle": 2291,
@@ -1083,18 +1179,23 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 
 | `reason` | Meaning |
 |---|---|
+| `grants_matched` | `mint`: at least one declared grant selected the device; blob written |
+| `no_grants_matched` | `mint`: no declared grant for this principal selects the device |
+| `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2) |
+| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7) |
+| `context_matched` | `authorize_session`: context found, attributes returned |
+| `escalation_granted` | `escalate`: the level was within `max_privilege` and the mechanism succeeded |
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
-| `token_not_found` | `redeem`: no unspent token for `(nas, username)` matched — expired, spent, or never minted |
-| `device_mismatch` | `redeem`: the token exists but was minted for another device |
+| `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
+| `device_mismatch` | `redeem`: the presented token's device tag is not this device's (design document §8) — PAP and ASCII only; under CHAP the tag is not visible and the outcome is `token_not_found` |
 | `credential_mismatch` | `redeem`: a receipt exists for this line but the presented credential differs (§5.6) |
 | `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision |
 | `token_kind_mismatch` | `redeem`/`escalate`: a login token presented at `enable`, or the reverse (§7) |
 | `enable_refused` | `escalate`: the subject's mechanism is `none` |
 | `ceiling_exceeded` | `escalate`: the requested level is above `max_privilege` |
-| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7) |
 | `no_rule_matched` | nothing matched; deny by default |
 | `no_permit_dominates_deny` | a deny matched and no permit dominated it |
 | `context_missing` | no login context for `(nas, port)` — port49 did not authenticate this session |
@@ -1102,18 +1203,22 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 | `rem_addr_mismatch` | enable arrived from a different address than the bound one |
 | `privilege_exceeded` | the request is above the session's granted level |
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6) |
-| `credential_revoked` | the authorizing credential was revoked — CRL, OCSP, or back-channel logout |
+| `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
+| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) |
-| `no_grants_matched` | mint found no grant for this principal in scope |
 | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); admitted nowhere until fixed |
 
-A denial whose reason is `context_missing`, `device_unknown`, or `blob_unavailable` is an
-operational condition rather than a policy outcome, and each MUST be separately alertable —
-a rise in `context_missing` means sessions are being authenticated somewhere other than
-port49. `session_expired` is a third category again: expected, and a signal that the
-re-authentication warning is not reaching operators (§5.6).
+Every event has a success reason and at least one failure reason in this table, so
+"decisions by event, verdict, and reason" (design document §15) is a complete metric. A
+denial whose reason is `context_missing`, `context_stale`, `device_unknown`, or
+`blob_unavailable` is an operational condition rather than a policy outcome, and each MUST be
+separately alertable — a rise in `context_missing` means sessions are being authenticated
+somewhere other than port49, and any `context_stale` means the broker has been down longer
+than the ceiling. `credential_revoked` MUST be alertable on its own: a revoked operator still
+typing is an incident signal. `session_expired` is a further category: expected, and a signal
+that the re-authentication warning is not reaching operators (§5.6).
 
 #### Credentials never appear
 
@@ -1143,11 +1248,13 @@ that resolved to the same policy, so the log cost is one event per policy versio
 #### Correlation
 
 Every record resolved against a login context carries its `ctx_id` (§5.1.1). A `mint` record
-carries the token handle instead, since context does not exist yet; the daemon's redemption
-record joins the two. One chain therefore runs from an SSO login to a typed command:
+carries `token_sha256` per minted token instead — never the token — since context does not
+exist yet; the daemon's redemption record carries the same hash beside `credential_sha256`
+(they differ under CHAP) and joins the two. One chain therefore runs from an SSO login to a
+typed command:
 
 ```
-mint (handle) → redemption (handle → ctx_id) → authorize_session
+mint (token_sha256) → redemption (token_sha256 → ctx_id) → authorize_session
                                              → authorize_command ×N
                                              → escalate
                                              → account ×N          (§5.8)
@@ -1217,7 +1324,7 @@ traffic port49 handles.
   "event": "account",
   "flags": "stop",
   "attribution": "resolved",
-  "principal": "alice@example.com",
+  "principal": "user:alice@example.com",
   "device": { "nas": "10.20.0.7", "name": "core-sw01", "platform": "arista_eos" },
   "session": { "ctx_id": "01J9F3QK…", "port": "vty0", "rem_addr": "198.51.100.4" },
   "task_id": "43",
@@ -1505,8 +1612,9 @@ port49 cannot check what an attribute means. It MUST check everything else:
 - Exactly one `=` or `*` separator, non-empty attribute name, no duplicate names.
 - **Length.** The RFC's argument length field is one byte, so **255 bytes per attribute**,
   and `arg_cnt` is likewise one byte. A generated `deny-commands` regex (§8) will exceed
-  this before anything else does, and it fails as a truncated or dropped attribute rather
-  than a clean error. Enforce at policy load.
+  this before anything else does. The encoder cannot emit an over-length argument at all, so
+  the failure is never truncation on the device (L11); it is a refusal at policy load, which
+  is where this MUST be caught.
 - Mandatory versus optional, with a warning on any mandatory attribute not recognized.
 
 **Unknown attributes default to optional (`*`).** A mandatory attribute a device cannot
@@ -1609,6 +1717,14 @@ Both tokens of a mint pair carry a `kind`, and the daemon checks it against
 | `auto` | Daemon resolves `(nas, port)` → login context, checks the ceiling, PASSes. Any password accepted. **Available only where `enable_username: principal`** (§5.6). | Tools that insist on typing `enable` where plumbing a second secret is awkward. |
 | `token` | A second minted token, supplied at the prompt. | Anything needing a discrete, attributable escalation record. |
 
+**How an enable token is found.** Tokens are stored under `(nas, username)`, and on a
+`$enab{level}$` platform the enable START carries `$enab15$`, not the username. The daemon
+resolves `(nas, port)` → login context → the bound `username`, and fetches the candidate set
+under that key filtered to `kind: enable`. Two consequences follow and both are correct: an
+enable token is unredeemable on a line port49 did not authenticate, because there is no
+context to resolve the username from; and an enable token minted for Alice cannot be
+redeemed on Bob's line, because the lookup key comes from the context rather than the wire.
+
 ### Automation
 
 The mint returns a **pair**, because every relevant tool already has a second credential
@@ -1683,7 +1799,7 @@ attribute is complete in four lines:
 | `pipe_token` / `pipe_authorized` | modifier separator; whether it reaches us | if `commands` |
 | `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
 | `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |
-| `redact` | patterns whose argument values are removed before an accounting record is emitted (§5.8) | if `commands` |
+| `redact` | patterns whose argument values are removed before an accounting record is emitted (§5.8) | if the platform sends command accounting — session-only platforms included |
 | `service` | authorization `service` value if not `shell` | rarely |
 | `port_pattern` | expected `port` shape, used only for drift detection | optional |
 
@@ -2347,7 +2463,9 @@ SOURCE        DEVICE     KEY_REF    ATTEMPTS  LAST     DIAGNOSIS
 Three mechanisms produce those diagnoses.
 
 **Header validation separates clients from noise.** Version major MUST be `0xc`, type in
-{1, 2, 3}, a client `seq_no` odd, and the body within the 4096-byte bound RFC 8907 sets. A
+{1, 2, 3}, a client `seq_no` odd, and the body within port49's own 4096-byte ceiling — an
+implementation limit, since RFC 8907 sets none and an ASCII `user_msg` may in principle run
+to 65535 bytes; a legitimate packet larger than this is not known to exist (L10). A
 port scanner fails that and is counted as `not TACACS+`, so it never pollutes the key report.
 This distinction is the difference between a report an operator reads and one they mute.
 
@@ -2406,7 +2524,8 @@ resolves it by making the deadline visible long before it arrives rather than by
 - Retirement and extension are both reviewed changes in the policy repository. Extending is
   legitimate; forgetting is what the date prevents.
 - CI MUST refuse a policy whose `accept` set is empty for a `key_ref` still assigned by a key
-  group, and MUST report any version whose `retire_after` has already passed.
+  group, and MUST report any version whose `retire_after` has already passed. `current` is
+  implicitly accepted; `accept` lists the *additional* versions still honored.
 - A key with no `retire_after` at all SHOULD be reported. An indefinitely accepted version is
   the state this whole mechanism exists to prevent.
 
@@ -2495,7 +2614,7 @@ inventory:
     - name: netbox_prod
       type: netbox
       url: https://netbox.example.com
-      token: ${NETBOX_TOKEN}
+      token_secret_ref: vault:port49/prod/netbox   # resolved like a key secret_ref, never inline
       interval: 10m
       filter: {status: active, has_primary_ip: true}
       map:
@@ -2608,6 +2727,9 @@ scopes:
     match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}
     on_missing: include
     security_log: true
+    attached_roles:
+      humans:   [cve_2026_xxxx]
+      machines: [cve_2026_xxxx]
 
 roles:
   - name: read_only
@@ -2685,7 +2807,6 @@ grants:
   - {subject: noc_tier1,     scope: dc_fabric,     roles: [interface_tech], expires: 2026-12-01}
   - {subject: svc_oxidized,  scope: all_devices,   roles: [read_only, elevated_session]}
   - {subject: security_ir,   scope: srx_unpatched, roles: [cve_2026_xxxx_assess]}
-  - {subject: all_principals, scope: srx_unpatched, roles: [cve_2026_xxxx]}
 
 tests:
   - {subject: noc_tier1,    device: leaf-01, command: "show version",   expect: permit}
@@ -2785,9 +2906,10 @@ since a group key is shared across the devices in its group.
 **Access review** is a rendering of the flat grant table, not an investigation:
 `port49 access review --subject <name>` lists every grant row the subject appears in, with
 scope size and expiry, and `port49 grants remove --subject <name>` produces the pull request
-that deletes them all. Directory-driven humans are offboarded by group removal; these two
-commands are the offboarding path for machine subjects and literal identities, which is the
-cost decision 2 accepted.
+that deletes them all — and, when no grant on the subject remains, the subject block itself,
+so nothing is left behind to match. Directory-driven humans are offboarded by group removal;
+these two commands are the offboarding path for machine subjects and literal identities,
+which is the cost decision 2 accepted. A subject block with no grants is reported by CI.
 
 **Rollback** is `git revert` of the policy change and `port49 inventory sync`; the bundle
 that results is a new version, not a reused old one, so a rollback is attributable like any
@@ -2960,12 +3082,15 @@ agent's session is the mTLS connection itself — so it is: the key is exercised
 mints ride the held connection, a reconnect costs one more touch, and no broker-issued session
 token exists on that path. The default `max_session_age` is 12h. (§5.6, design document §7)
 
-**18. Universal subjects range over principals some ordinary subject already matches.** The
-`all_*` reversal correctly allowed permits on universal subjects, and in doing so defined
-`all_humans` as every human principal — which under OIDC is the whole identity provider, so a
-baseline permit would have handed every employee a device login. Restricting the range costs
-denies nothing, since a principal no subject matches cannot mint, and it makes the permit case
-mean what an author means by everyone. CI reports permits on any universal subject. (§5.5)
+**18. No subject means everyone; fleet-wide roles attach to scopes.** *Supersedes the
+universal subjects `all_humans`, `all_machines`, and `all_principals`.* Under OIDC "all
+humans" is the whole identity provider, so the range had to be narrowed to principals who
+already hold access — and then a reader of `subject: all_humans` sees *everyone* and is
+wrong, which invites overuse. The mechanism is therefore `attached_roles` on a scope, split by
+trust domain: every grant that reaches a device in the scope also carries those roles. It adds
+commands to devices a principal already reaches and never adds a device; a principal with no
+declared grant on a device is refused. Offboarding by `grants remove --subject` then leaves
+nothing that can match. CI reports any scope whose attached roles carry a permit. (§5.5)
 
 **19. The blob lives as long as its longest context, and is emitted into the log.** The blob
 TTL had been sized to the token TTL while contexts referenced it for the session and replay
@@ -3113,7 +3238,8 @@ Beyond those already listed in the design document's §14:
   received, including case and any pipe or abbreviation the normalizer rewrote.
 - **No credential material**: a log dump over the full corpus — ASCII, PAP, CHAP, and enable
   — contains no token, password, challenge, or response, and `credential_sha256` matches the
-  hash bound by the receipt.
+  hash bound by the receipt. A `mint` record carries `token_sha256` and never the token; the
+  `redeem` record's `token_sha256` matches it.
 - **Retransmission logs as one retried decision**, correlated by `credential_sha256`, not as
   two independent decisions.
 - **Enable attribution**: an `escalate` record on a `$enab{level}$` platform names the
@@ -3258,10 +3384,23 @@ Beyond those already listed in the design document's §14:
 - **Key group determinism**: a device matched by an explicit pin, an attribute group, and two
   CIDR groups resolves to the pin; removing it resolves to the attribute group, then to the
   longer prefix; two groups matching in the same tier fail at policy load naming both.
-- **Universal subjects**: a bare `everyone` fails at policy load; `all_humans` does not match
-  a workload principal and `all_machines` does not match a human; a principal matched by no
-  ordinary subject is matched by no universal subject either; a permit-carrying grant to any
-  universal subject is reported by CI while a deny-carrying one is not.
+- **Attached roles**: `subject: all_humans`, `all_machines`, `all_principals`, and `everyone`
+  each fail at policy load as undefined subjects; a scope's `attached_roles.humans` composes
+  into a human's grant and not a workload's, and `machines` the reverse; a principal with no
+  declared grant selecting the device is refused `no_grants_matched` regardless of attached
+  roles; a subject whose grants were all removed collects nothing; a scope whose attached
+  roles carry a permit is reported by CI while a deny-only one is not.
+- **API rights**: a principal without `api:` can revoke its own tokens and not another's;
+  `revoke_others` unlocks exactly that; `/v1/logout` succeeds with a valid logout token and no
+  caller rights; every subject carrying `api:` appears in the CI report.
+- **Staleness ceiling**: with the broker unreachable, a context authorizes until
+  `staleness_ceiling` elapses since `refreshed_at`, then denies `context_stale` with a
+  `server_msg`, and resumes on the first refresh after the broker returns.
+- **Revocation is distinguishable**: a revoked context's next command is denied
+  `credential_revoked`, not `context_missing`, until the idle TTL reclaims it.
+- **Device tag**: a token minted for device A presented on device B under PAP or ASCII is
+  refused `device_mismatch` without a store read; the same under CHAP is `token_not_found`;
+  the tag is a keyed hash and two devices never share one.
 - **Config-mode inference**: a device with config-command authorization disabled is detected
   and reported.
 - **Accounting reconciliation**: commands present in accounting with no authorization request
