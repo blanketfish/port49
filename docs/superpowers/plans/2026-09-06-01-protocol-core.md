@@ -6,7 +6,7 @@
 
 **Architecture:** One Go module, one binary for this plan (`cmd/port49d`). The wire layer (`internal/tacacs/wire`) is pure encode/decode with no I/O. Key trial (`internal/keyring`) and admission (`internal/admission`) decide whether a packet is readable and who sent it. Handlers (`internal/daemon/authen`, `author`, `acct`) run one exchange each against a narrow `store.Store` interface whose only implementation here is in-memory. Everything the device sees is produced by `internal/daemon/server`, which owns the listener limits. The decision log (`internal/decision`) is the single emitter for every record.
 
-**Tech Stack:** Go 1.22 (installed: 1.22.2), standard library only for the wire and handlers; `github.com/prometheus/client_golang` for metrics; `gopkg.in/yaml.v3` for config; `golang.org/x/crypto/ssh` in the lab harness only. containerlab + Docker for the lab (containerlab is **not yet installed** on Ryan's machine; lab tasks are behind the `lab` build tag and are the last tasks).
+**Tech Stack:** Go 1.22 is the module's language target (toolchain installed 2026-09-07: 1.27.1 at `/usr/local/go`; the older apt `go1.22.2` at `/usr/bin/go` is shadowed, so confirm `go version` before blaming a build). Standard library only for the wire and handlers; `github.com/prometheus/client_golang` for metrics; `gopkg.in/yaml.v3` for config; `golang.org/x/crypto/ssh` in the lab harness only. containerlab + Docker for the lab (containerlab **0.79.0 installed 2026-09-07**; device images are still missing, so Task 15 stays blocked — see its prerequisites. Lab tasks are behind the `lab` build tag and are the last tasks).
 
 **Spec:** `docs/design/2026-08-21-port49-design.md` (§5, §8, §11, §12, §14, §15, §16, §19 step 1) and `docs/design/2026-08-23-policy-engine-spec.md` (§5.7, §5.8, §10 "Admission and keys" through "Devices presenting a key that does not validate", §15 lab register). This plan is design §19 **step 1** plus the store-record slice of step 2 that step 1 cannot run without. Later plans: 2 (token model), 3 (vertical slice), 4 (policy engine), 5 (adapters), 6 (inventory), 7 (broker), 8–12.
 
@@ -4982,7 +4982,52 @@ git commit -m "feat(port49d): config, connection loop with key trial and limits,
 - Consumes: the built `bin/port49d`; SSH via `golang.org/x/crypto/ssh`; `tcpdump` inside the containerlab host namespace for captures.
 - Produces: `tests/lab/results/L<N>-<platform>.md`, one per closed entry, in the format spec §15 rule 3 requires: platform, image version, observation, pointer to the capture in `tests/lab/captures/` (git-ignored; the results note quotes the relevant bytes).
 
-**Prerequisites (Ryan, later):** `containerlab` installed (`bash -c "$(curl -sL https://get.containerlab.dev)"`), Docker running, and at least one image: `ceos:4.32.x` (free with an Arista account, `docker import` the tarball) or `vrnetlab/juniper_vjunos-router` built from the free vJunos-router image. The lab tasks are written for both and skip a platform whose image is absent.
+**Prerequisites (Ryan):**
+
+1. **containerlab** — installed 2026-09-07, v0.79.0, via the official installer
+   (`curl -fsSL https://get.containerlab.dev -o /tmp/clab-install.sh && sudo bash /tmp/clab-install.sh`;
+   it checksum-verifies the release `.deb`). Upgrade with `containerlab version upgrade`. On a
+   *different* machine, redo this — and the subnet check below, whose answer is per-machine.
+2. **Docker running**, with the user in `docker` and `clab_admins`. On WSL2 prefer Docker
+   installed natively in the distro over Docker Desktop: containerlab drives network namespaces
+   directly. Verified working on this PC (Docker 29.1.3, native, systemd, cgroups v2).
+3. **A free management subnet — check before you deploy, it is machine-specific.** The
+   topologies below are written against `172.100.100.0/24`, *not* containerlab's `172.20.20.0/24`
+   default, because on this PC an idle compose network (`thecape_default`) already claims
+   `172.20.0.0/16` and the deploy fails with `Requested subnet(s) ... overlap an existing Docker
+   network`. Deleting that network does not hold — compose recreates it on the same subnet — so
+   the lab moves instead. On any machine, list what is taken first and pick a subnet that is not:
+
+   ```sh
+   for n in $(docker network ls --format '{{.Name}}'); do
+     printf '%-24s %s\n' "$n" "$(docker network inspect "$n" \
+       --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}')"
+   done
+   ip -4 route | awk '{print $1}'   # also avoid anything the host already routes
+   ```
+
+   If the answer differs from `172.100.100.0/24`, it changes in **seven files of this task, which
+   must all agree**: `topologies/ceos.clab.yml` and `topologies/vjunos.clab.yml` (`ipv4-subnet`
+   and `mgmt-ipv4`), both startup configs (`tacacs-server host` for cEOS, `tacplus-server` for
+   Junos), `inventory-lab.yaml` (device addresses and the `cidr` match), `port49d-lab.yaml`
+   (`listen`), and the platform table in `harness_test.go`. `grep -rn '172\.100\.100\.' tests/lab/`
+   should find them all and nothing else. Note that the address in the startup configs and in
+   `listen` is the subnet's **`.1` gateway** — the host namespace, where `port49d` runs; the
+   device reaches it across the clab bridge. Smoke-tested on this PC with a throwaway
+   `linux`-kind node: the device container reached a host listener at the bridge `.1` over both
+   ICMP and TCP.
+4. **At least one device image — the remaining blocker.** As of 2026-09-07 neither is on this
+   machine; both are behind vendor logins and cannot be scripted. Expected 2026-09-08.
+   - Arista cEOS: free arista.com account, then `docker import cEOS64-lab-4.32.2F.tar.xz ceos:4.32.2F`.
+     Faster to stand up; take this one first if you only want L1/L2/L5 closed quickly.
+   - Juniper vJunos-router: download the qcow2, build with vrnetlab
+     (`git clone https://github.com/hellt/vrnetlab && cd vrnetlab/vjunosrouter && cp ~/Downloads/vJunos-router-*.qcow2 . && make`).
+     Needs working KVM — verified on this PC (`/dev/kvm` present, `KVM_GET_API_VERSION = 12`,
+     nested virtualization on by default, no `.wslconfig` needed).
+
+   The lab tasks are written for both and skip a platform whose image is absent, so one is enough
+   to start. **Task 15 cannot close any register entry until at least one image exists**; every
+   earlier task in this plan runs without it.
 
 - [ ] **Step 1: Write the lab README**
 
@@ -4996,14 +5041,24 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
 
 ## Setup
 
-1. `bash -c "$(curl -sL https://get.containerlab.dev)"`
-2. Images (any subset; absent platforms are skipped):
+1. containerlab: `bash -c "$(curl -sL https://get.containerlab.dev)"`, and Docker running.
+2. **Check the management subnet is free on *this* machine before deploying.** These topologies
+   use `172.100.100.0/24` rather than containerlab's `172.20.20.0/24` default, because that
+   default collided with an existing Docker network on the machine they were written on. The
+   collision is per-machine, so re-check on any new one: list the taken subnets with
+   `docker network ls --format '{{.Name}}'` piped through
+   `docker network inspect <n> --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}'`, and check
+   `ip -4 route` too. A clash fails the deploy with `Requested subnet(s) ... overlap an existing
+   Docker network`. To move the lab, change the address in all seven files that carry it —
+   `grep -rn '172\.100\.100\.' .` finds them — keeping `port49d`'s `listen` and the device
+   configs' server address on the subnet's `.1` gateway.
+3. Images (any subset; absent platforms are skipped):
    - Arista cEOS: download from arista.com (free account), then
      `docker import cEOS64-lab-4.32.2F.tar.xz ceos:4.32.2F`
    - Juniper vJunos-router: build with vrnetlab
      (`git clone https://github.com/hellt/vrnetlab && cd vrnetlab/vjunosrouter && cp ~/Downloads/vJunos-router-*.qcow2 . && make`)
-3. `export PORT49_LAB_KEY=labsecret`
-4. `make build && make lab`
+4. `export PORT49_LAB_KEY=labsecret`
+5. `make build && make lab`
 
 ## What runs
 
@@ -5029,10 +5084,10 @@ topology:
       kind: ceos
       image: ceos:4.32.2F
       startup-config: ../configs/ceos-startup.cfg
-      mgmt-ipv4: 172.20.20.11
+      mgmt-ipv4: 172.100.100.11
 mgmt:
   network: port49-lab
-  ipv4-subnet: 172.20.20.0/24
+  ipv4-subnet: 172.100.100.0/24
 ```
 
 `tests/lab/configs/ceos-startup.cfg`:
@@ -5040,10 +5095,10 @@ mgmt:
 hostname leaf1
 username breakglass privilege 15 secret 0 breakglass-only
 !
-tacacs-server host 172.20.20.1 key 0 labsecret
+tacacs-server host 172.100.100.1 key 0 labsecret
 !
 aaa group server tacacs+ port49
-   server 172.20.20.1
+   server 172.100.100.1
 !
 aaa authentication login default group port49 local
 aaa authentication enable default group port49 local
@@ -5068,10 +5123,10 @@ topology:
       kind: juniper_vjunosrouter
       image: vrnetlab/juniper_vjunos-router:23.2R1.15
       startup-config: ../configs/vjunos-startup.conf
-      mgmt-ipv4: 172.20.20.21
+      mgmt-ipv4: 172.100.100.21
 mgmt:
   network: port49-lab
-  ipv4-subnet: 172.20.20.0/24
+  ipv4-subnet: 172.100.100.0/24
 ```
 
 `tests/lab/configs/vjunos-startup.conf`:
@@ -5080,7 +5135,7 @@ system {
     host-name srx1;
     authentication-order tacplus;
     tacplus-server {
-        172.20.20.1 secret "labsecret";
+        172.100.100.1 secret "labsecret";
     }
     login {
         user remote {
@@ -5103,7 +5158,7 @@ system {
         destination {
             tacplus {
                 server {
-                    172.20.20.1 secret "labsecret";
+                    172.100.100.1 secret "labsecret";
                 }
             }
         }
@@ -5114,15 +5169,15 @@ system {
 `tests/lab/inventory-lab.yaml`:
 ```yaml
 devices:
-  - {name: leaf1, platform: arista_eos,    addresses: [172.20.20.11]}
-  - {name: srx1,  platform: juniper_junos, addresses: [172.20.20.21]}
+  - {name: leaf1, platform: arista_eos,    addresses: [172.100.100.11]}
+  - {name: srx1,  platform: juniper_junos, addresses: [172.100.100.21]}
 key_groups:
-  - {match: {cidr: 172.20.20.0/24}, key_ref: lab_key}
+  - {match: {cidr: 172.100.100.0/24}, key_ref: lab_key}
 ```
 
 `tests/lab/port49d-lab.yaml`:
 ```yaml
-listen: "172.20.20.1:49"
+listen: "172.100.100.1:49"
 metrics_listen: "127.0.0.1:9049"
 inventory_file: tests/lab/inventory-lab.yaml
 keys:
@@ -5172,8 +5227,8 @@ type platform struct {
 }
 
 var platforms = []platform{
-	{"arista_eos", "topologies/ceos.clab.yml", "172.20.20.11", "leaf1"},
-	{"juniper_junos", "topologies/vjunos.clab.yml", "172.20.20.21", "srx1"},
+	{"arista_eos", "topologies/ceos.clab.yml", "172.100.100.11", "leaf1"},
+	{"juniper_junos", "topologies/vjunos.clab.yml", "172.100.100.21", "srx1"},
 }
 
 type lab struct {
