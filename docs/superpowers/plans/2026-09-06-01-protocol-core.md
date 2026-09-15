@@ -5026,9 +5026,14 @@ git commit -m "feat(port49d): config, connection loop with key trial and limits,
    makes it stick). Build from a **local copy**, never from the Drive mount — vrnetlab reads
    the disk repeatedly and drvfs is slow. On Ryan's main PC the full set is already copied to
    `/mnt/c/Users/rhwen/Network Images/` (sizes verified against Drive 2026-09-15); on any other
-   machine, copy the three this task needs from Drive to local storage first. **Everything in the folder is a VM disk built with vrnetlab**
-   (`git clone https://github.com/srl-labs/vrnetlab`; KVM required, and `/dev/kvm` is present
-   on both PCs). The Arista platform is therefore vEOS, a VM like the Junos ones. cEOS would
+   machine, copy the three this task needs from Drive to local storage first.
+   **Everything in the folder is a VM disk built with vrnetlab**
+   (`git clone https://github.com/srl-labs/vrnetlab ~/git/vrnetlab`; KVM required, and
+   `/dev/kvm` is present on both PCs). vrnetlab is laid out per vendor (`arista/veos`,
+   `juniper/vjunosrouter`, `juniper/vsrx`), and every NOS Dockerfile is `FROM
+   ghcr.io/srl-labs/vrnetlab-base:0.3.0`, which is **not pullable** — build it once first with
+   `sudo ./build-base-image.sh 0.3.0` from the repo root (about a minute). The Arista
+   platform is vEOS, a VM like the Junos ones. cEOS would
    be simpler — a native container, no KVM, boots in seconds — but the download needs an
    arista.com account, which Ryan does not have, so it is an optional swap, not the plan.
 
@@ -5048,21 +5053,48 @@ git commit -m "feat(port49d): config, connection loop with key trial and limits,
    | `veos-4.29.2F/` | `arista_veos` | `veos` | spare older EOS |
 
    Build steps for the three this task uses:
-   - **vEOS.** vrnetlab's `veos` build globs Arista's file names, so copy `hda.qcow2` to
-     `vrnetlab/veos/vEOS-lab-4.32.2F.qcow2` and `cdrom.iso` to
-     `vrnetlab/veos/Aboot-veos-serial-8.0.2.iso` (any `Aboot-veos-serial-*.iso` name is
-     accepted; the ISO is the Aboot loader the VM needs), then `make` in `vrnetlab/veos`.
-     With a cEOS tarball instead, `docker import` it as `ceos:4.32.2F` and switch the `kind:`
+   - **vEOS.** vrnetlab's `arista/veos` build globs `*.vmdk` only and its launcher never mounts
+     an ISO, so the qcow2 is converted and the Aboot ISO is unused:
+     `qemu-img convert -f qcow2 -O vmdk hda.qcow2 vrnetlab/arista/veos/vEOS-lab-4.32.2F.vmdk`
+     (`apt install qemu-utils` for `qemu-img`), then `make` in `vrnetlab/arista/veos`. That
+     build disables ZTP by running a guestfish container with `-it`, so it needs a TTY; from
+     a non-interactive shell run it as `script -qec make /dev/null`. Whether the disk boots
+     without the ISO is confirmed at first deploy, not at build. With a cEOS tarball instead, `docker import` it as `ceos:4.32.2F` and switch the `kind:`
      and `image:` lines in `eos.clab.yml` to the values in its comment; the startup config is
      the same EOS CLI either way.
-   - **vJunos-router.** `cp vJunos-router-23.4R2-S2.1.qcow2 vrnetlab/vjunosrouter/ && make -C vrnetlab/vjunosrouter`.
-   - **vSRX.** `cp junos-vsrx3-x86-64-21.4R3.15.qcow2 vrnetlab/vsrx/ && make -C vrnetlab/vsrx`.
+   - **vJunos-router.** `cp vJunos-router-23.4R2-S2.1.qcow2 vrnetlab/juniper/vjunosrouter/`. On an
+     **AMD host** the Makefile's default target first pulls
+     `ghcr.io/birbnetworks/vjunos-amd-enable`, which is not pullable (denied, 2026-09-15). Its
+     source is public and is a one-line `virt-edit`: the outer VM's
+     `/home/pfe/junos/start-junos.sh` checks `/proc/cpuinfo` for `vmx` only, and the patch makes
+     it accept `svm` too. Do it by hand with the guestfish container the vEOS build already
+     uses, then build with the target that skips the pull:
+     ```sh
+     cd vrnetlab/juniper/vjunosrouter
+     GF="docker run --rm --device /dev/kvm -e LIBGUESTFS_DEBUG=0 -v $PWD:/work cmattoon/guestfish"
+     $GF -a vJunos-router-23.4R2-S2.1.qcow2 -m /dev/sda2 download /home/pfe/junos/start-junos.sh /work/start-junos.sh
+     sed -i 's@CPU_FLAG=.*@CPU_FLAG=$(cat /proc/cpuinfo | grep -ci "vmx\\|svm")@' start-junos.sh
+     $GF -a vJunos-router-23.4R2-S2.1.qcow2 -m /dev/sda2 upload /work/start-junos.sh /home/pfe/junos/start-junos.sh
+     rm start-junos.sh && make docker-image
+     ```
+     (In zsh use a function or a script for `GF`; a plain variable is not word-split.) On an
+     Intel host, `make` alone works. Done on the main PC 2026-09-15; the line reads
+     `CPU_FLAG=$(cat /proc/cpuinfo | grep -ci "vmx\|svm")` afterward.
+   - **vSRX.** `cp junos-vsrx3-x86-64-21.4R3.15.qcow2 vrnetlab/juniper/vsrx/ && make -C vrnetlab/juniper/vsrx`.
+     No AMD step; the Makefile's hard-coded `IMAGE=` default is overridden by the glob.
 
    After each `make`, read the tag off `docker images`. vrnetlab renamed its images from
    `vrnetlab/vr-<kind>` to `vrnetlab/<vendor>_<kind>` in 2024 and the topologies below use the
    new names; if a checkout produced the old form, edit the `image:` line to match. The lab
    tasks skip any platform whose image is absent, so one built image is enough to start. All
    three are VMs and take several minutes to boot on first deploy; the harness waits up to six.
+
+   **Built on the main PC 2026-09-15**, tags exactly as the topologies name them:
+   `vrnetlab/arista_veos:4.32.2F` (1.08 GB), `vrnetlab/juniper_vjunos-router:23.4R2-S2.1`
+   (4.14 GB, CPU check patched for AMD), `vrnetlab/juniper_vsrx:21.4R3.15` (1.28 GB), plus the
+   base `ghcr.io/srl-labs/vrnetlab-base:0.3.0`. The vrnetlab checkout is `~/git/vrnetlab`.
+   None has been booted yet; the first `containerlab deploy` in Task 15 is where a boot problem
+   (the vEOS-without-ISO question above, or the vJunos nested VM on AMD) would show.
 
 - [ ] **Step 1: Write the lab README**
 
@@ -5090,17 +5122,22 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
 3. Images: the source is Google Drive `My Drive/Network Images` (on WSL:
    `sudo mount -t drvfs G: /mnt/g`); build from a local copy, not the mount (on the main PC:
    `/mnt/c/Users/rhwen/Network Images/`). All are VM disks built with vrnetlab
-   (`git clone https://github.com/srl-labs/vrnetlab`; KVM required). Any subset works and an
-   absent image skips its platform:
-   - vEOS 4.32.2F: copy `veos-4.32.2F/hda.qcow2` to `vrnetlab/veos/vEOS-lab-4.32.2F.qcow2` and
-     `cdrom.iso` to `vrnetlab/veos/Aboot-veos-serial-8.0.2.iso`, then `make -C vrnetlab/veos`.
+   (`git clone https://github.com/srl-labs/vrnetlab`; KVM required). First build the base
+   image once: `sudo ./build-base-image.sh 0.3.0` in the repo root (it is not pullable). Any
+   subset works and an absent image skips its platform:
+   - vEOS 4.32.2F: `qemu-img convert -f qcow2 -O vmdk veos-4.32.2F/hda.qcow2 vrnetlab/arista/veos/vEOS-lab-4.32.2F.vmdk`
+     (needs `qemu-utils`; the launcher wants a vmdk and ignores the Aboot ISO), then
+     `script -qec make /dev/null` in `vrnetlab/arista/veos` (the ZTP step needs a TTY).
      (A cEOS tarball, which needs an arista.com account, would instead be `docker import`ed
      as `ceos:4.32.2F` with the `kind:`/`image:` in `topologies/eos.clab.yml` changed per its
      comment.)
-   - vJunos-router 23.4R2-S2.1: copy the qcow2 into `vrnetlab/vjunosrouter`, `make` there.
-   - vSRX 21.4R3.15: copy the qcow2 into `vrnetlab/vsrx`, `make` there.
+   - vJunos-router 23.4R2-S2.1: copy the qcow2 into `vrnetlab/juniper/vjunosrouter`. On an
+     AMD host, patch the CPU check by hand and use `make docker-image` — see the plan's
+     Task 15 prerequisites for the exact guestfish lines. On Intel, `make`.
+   - vSRX 21.4R3.15: copy the qcow2 into `vrnetlab/juniper/vsrx`, `make` there.
    Check `docker images` for the tag each build produced and match the `image:` lines in
-   `topologies/`.
+   `topologies/`. Expected: `vrnetlab/arista_veos:4.32.2F`,
+   `vrnetlab/juniper_vjunos-router:23.4R2-S2.1`, `vrnetlab/juniper_vsrx:21.4R3.15`.
 4. `export PORT49_LAB_KEY=labsecret`
 5. `make build && make lab`
 
