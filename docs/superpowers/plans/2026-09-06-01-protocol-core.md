@@ -6,7 +6,7 @@
 
 **Architecture:** One Go module, one binary for this plan (`cmd/port49d`). The wire layer (`internal/tacacs/wire`) is pure encode/decode with no I/O. Key trial (`internal/keyring`) and admission (`internal/admission`) decide whether a packet is readable and who sent it. Handlers (`internal/daemon/authen`, `author`, `acct`) run one exchange each against a narrow `store.Store` interface whose only implementation here is in-memory. Everything the device sees is produced by `internal/daemon/server`, which owns the listener limits. The decision log (`internal/decision`) is the single emitter for every record.
 
-**Tech Stack:** Go 1.22 is the module's language target (toolchain installed 2026-09-07: 1.27.1 at `/usr/local/go`; the older apt `go1.22.2` at `/usr/bin/go` is shadowed, so confirm `go version` before blaming a build). Standard library only for the wire and handlers; `github.com/prometheus/client_golang` for metrics; `gopkg.in/yaml.v3` for config; `golang.org/x/crypto/ssh` in the lab harness only. containerlab + Docker for the lab (containerlab **0.79.0 installed 2026-09-07** on the lab PC; device images **arrived 2026-09-15**, all VM disks built with vrnetlab; see Task 15's prerequisites. Lab tasks are behind the `lab` build tag and are the last tasks).
+**Tech Stack:** Go 1.22 is the module's language target (toolchain installed 2026-09-07: 1.27.1 at `/usr/local/go`; the older apt `go1.22.2` at `/usr/bin/go` is shadowed, so confirm `go version` before blaming a build). Standard library only for the wire and handlers; `github.com/prometheus/client_golang` for metrics; `gopkg.in/yaml.v3` for config; `golang.org/x/crypto/ssh` in the lab harness only. containerlab + Docker for the lab (containerlab **0.79.0 on both PCs** as of 2026-09-15; device images **arrived 2026-09-15**, all VM disks built with vrnetlab; see Task 15's prerequisites. Lab tasks are behind the `lab` build tag and are the last tasks).
 
 **Spec:** `docs/design/2026-08-21-port49-design.md` (§5, §8, §11, §12, §14, §15, §16, §19 step 1) and `docs/design/2026-08-23-policy-engine-spec.md` (§5.7, §5.8, §10 "Admission and keys" through "Devices presenting a key that does not validate", §15 lab register). This plan is design §19 **step 1** plus the store-record slice of step 2 that step 1 cannot run without. Later plans: 2 (token model), 3 (vertical slice), 4 (policy engine), 5 (adapters), 6 (inventory), 7 (broker), 8–12.
 
@@ -4984,10 +4984,12 @@ git commit -m "feat(port49d): config, connection loop with key trial and limits,
 
 **Prerequisites (Ryan):**
 
-1. **containerlab** — installed 2026-09-07, v0.79.0, via the official installer
-   (`curl -fsSL https://get.containerlab.dev -o /tmp/clab-install.sh && sudo bash /tmp/clab-install.sh`;
-   it checksum-verifies the release `.deb`). Upgrade with `containerlab version upgrade`. On a
-   *different* machine, redo this — and the subnet check below, whose answer is per-machine.
+1. **containerlab** — v0.79.0 on both PCs (lab PC 2026-09-07, main PC 2026-09-15), via the
+   official installer
+   (`curl -fsSL https://get.containerlab.dev -o /tmp/clab-install.sh && sudo bash /tmp/clab-install.sh --verify-checksum`;
+   it checksum-verifies the release `.deb`), followed by `sudo usermod -aG clab_admins $USER`
+   and a new login shell. Upgrade with `containerlab version upgrade`. On any *other* machine,
+   redo this — and the subnet check below, whose answer is per-machine.
 2. **Docker running**, with the user in `docker` and `clab_admins`. On WSL2 prefer Docker
    installed natively in the distro over Docker Desktop: containerlab drives network namespaces
    directly. Verified working on this PC (Docker 29.1.3, native, systemd, cgroups v2).
@@ -4996,7 +4998,9 @@ git commit -m "feat(port49d): config, connection loop with key trial and limits,
    default, because on this PC an idle compose network (`thecape_default`) already claims
    `172.20.0.0/16` and the deploy fails with `Requested subnet(s) ... overlap an existing Docker
    network`. Deleting that network does not hold — compose recreates it on the same subnet — so
-   the lab moves instead. On any machine, list what is taken first and pick a subnet that is not:
+   the lab moves instead. On the main PC the same check ran 2026-09-15 and `172.100.100.0/24`
+   is free there too (Docker holds `172.17.0.0/16` and `172.18.0.0/16`; the host routes
+   `172.25.112.0/20`). On any machine, list what is taken first and pick a subnet that is not:
 
    ```sh
    for n in $(docker network ls --format '{{.Name}}'); do
