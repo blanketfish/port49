@@ -5016,11 +5016,13 @@ git commit -m "feat(port49d): config, connection loop with key trial and limits,
    device reaches it across the clab bridge. Smoke-tested on this PC with a throwaway
    `linux`-kind node: the device container reached a host listener at the bridge `.1` over both
    ICMP and TCP.
-4. **Device images — on hand as of 2026-09-15.** They live in Google Drive at
-   `My Drive/Network Images`. On WSL the streaming drive is not automounted, so run
+4. **Device images — on hand as of 2026-09-15.** The source of truth is Google Drive,
+   `My Drive/Network Images`; on WSL the streaming drive is not automounted, so
    `sudo mount -t drvfs G: /mnt/g` first (a line `G: /mnt/g drvfs defaults 0 0` in `/etc/fstab`
-   makes it stick). Copy a disk to local storage before building; vrnetlab reads it repeatedly
-   and drvfs is slow. **Everything in the folder is a VM disk built with vrnetlab**
+   makes it stick). Build from a **local copy**, never from the Drive mount — vrnetlab reads
+   the disk repeatedly and drvfs is slow. On Ryan's main PC the full set is already copied to
+   `/mnt/c/Users/rhwen/Network Images/` (sizes verified against Drive 2026-09-15); on any other
+   machine, copy the three this task needs from Drive to local storage first. **Everything in the folder is a VM disk built with vrnetlab**
    (`git clone https://github.com/srl-labs/vrnetlab`; KVM required, and `/dev/kvm` is present
    on both PCs). The Arista platform is therefore vEOS, a VM like the Junos ones. cEOS would
    be simpler — a native container, no KVM, boots in seconds — but the download needs an
@@ -5081,8 +5083,9 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
    Docker network`. To move the lab, change the address in all eight files that carry it —
    `grep -rn '172\.100\.100\.' .` finds them — keeping `port49d`'s `listen` and the device
    configs' server address on the subnet's `.1` gateway.
-3. Images live in Google Drive under `My Drive/Network Images` (on WSL:
-   `sudo mount -t drvfs G: /mnt/g`). All are VM disks built with vrnetlab
+3. Images: the source is Google Drive `My Drive/Network Images` (on WSL:
+   `sudo mount -t drvfs G: /mnt/g`); build from a local copy, not the mount (on the main PC:
+   `/mnt/c/Users/rhwen/Network Images/`). All are VM disks built with vrnetlab
    (`git clone https://github.com/srl-labs/vrnetlab`; KVM required). Any subset works and an
    absent image skips its platform:
    - vEOS 4.32.2F: copy `veos-4.32.2F/hda.qcow2` to `vrnetlab/veos/vEOS-lab-4.32.2F.qcow2` and
