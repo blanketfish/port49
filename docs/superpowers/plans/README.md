@@ -62,6 +62,9 @@ tagged token.
   and key group (plan 6), one blob written and read (plan 4), one platform's session
   attributes (plan 5).
 - **eAPI / NX-API per-request authentication** measured in the lab with reusable tokens.
+  Images for this are on hand (plan 1 Task 15 lists them with their vrnetlab kinds): Nexus
+  9300v 10.4(2)F for NX-API and the L7 question; Catalyst 9000v 17.12 and C8000v 17.13 for
+  IOS-XE, where the `$enab15$` enable path (L3) lives; vEOS 4.32.2F for eAPI.
 
 **Lab:** closes L3 (enable `rem_addr`), L4 (fall-through on FAIL per platform, Junos
 `authentication-order`), L7 (eAPI/NX-API per-request AAA), and the API-transport half of L1.

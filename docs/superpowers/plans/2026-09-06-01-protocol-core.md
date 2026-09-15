@@ -6,7 +6,7 @@
 
 **Architecture:** One Go module, one binary for this plan (`cmd/port49d`). The wire layer (`internal/tacacs/wire`) is pure encode/decode with no I/O. Key trial (`internal/keyring`) and admission (`internal/admission`) decide whether a packet is readable and who sent it. Handlers (`internal/daemon/authen`, `author`, `acct`) run one exchange each against a narrow `store.Store` interface whose only implementation here is in-memory. Everything the device sees is produced by `internal/daemon/server`, which owns the listener limits. The decision log (`internal/decision`) is the single emitter for every record.
 
-**Tech Stack:** Go 1.22 is the module's language target (toolchain installed 2026-09-07: 1.27.1 at `/usr/local/go`; the older apt `go1.22.2` at `/usr/bin/go` is shadowed, so confirm `go version` before blaming a build). Standard library only for the wire and handlers; `github.com/prometheus/client_golang` for metrics; `gopkg.in/yaml.v3` for config; `golang.org/x/crypto/ssh` in the lab harness only. containerlab + Docker for the lab (containerlab **0.79.0 installed 2026-09-07**; device images are still missing, so Task 15 stays blocked — see its prerequisites. Lab tasks are behind the `lab` build tag and are the last tasks).
+**Tech Stack:** Go 1.22 is the module's language target (toolchain installed 2026-09-07: 1.27.1 at `/usr/local/go`; the older apt `go1.22.2` at `/usr/bin/go` is shadowed, so confirm `go version` before blaming a build). Standard library only for the wire and handlers; `github.com/prometheus/client_golang` for metrics; `gopkg.in/yaml.v3` for config; `golang.org/x/crypto/ssh` in the lab harness only. containerlab + Docker for the lab (containerlab **0.79.0 installed 2026-09-07** on the lab PC; device images **arrived 2026-09-15** — cEOS as a container, the rest as VM disks built with vrnetlab; see Task 15's prerequisites. Lab tasks are behind the `lab` build tag and are the last tasks).
 
 **Spec:** `docs/design/2026-08-21-port49-design.md` (§5, §8, §11, §12, §14, §15, §16, §19 step 1) and `docs/design/2026-08-23-policy-engine-spec.md` (§5.7, §5.8, §10 "Admission and keys" through "Devices presenting a key that does not validate", §15 lab register). This plan is design §19 **step 1** plus the store-record slice of step 2 that step 1 cannot run without. Later plans: 2 (token model), 3 (vertical slice), 4 (policy engine), 5 (adapters), 6 (inventory), 7 (broker), 8–12.
 
@@ -4975,7 +4975,7 @@ git commit -m "feat(port49d): config, connection loop with key trial and limits,
 ### Task 15: Containerlab harness and the lab register tests
 
 **Files:**
-- Create: `tests/lab/README.md`, `tests/lab/topologies/ceos.clab.yml`, `tests/lab/topologies/vjunos.clab.yml`, `tests/lab/configs/ceos-startup.cfg`, `tests/lab/configs/vjunos-startup.conf`, `tests/lab/inventory-lab.yaml`, `tests/lab/port49d-lab.yaml`, `tests/lab/harness_test.go`, `tests/lab/register_test.go`, `tests/lab/results/.gitkeep`
+- Create: `tests/lab/README.md`, `tests/lab/topologies/ceos.clab.yml`, `tests/lab/topologies/vjunos.clab.yml`, `tests/lab/configs/eos-startup.cfg`, `tests/lab/configs/vjunos-startup.conf`, `tests/lab/inventory-lab.yaml`, `tests/lab/port49d-lab.yaml`, `tests/lab/harness_test.go`, `tests/lab/register_test.go`, `tests/lab/results/.gitkeep`
 - All Go files: `//go:build lab`
 
 **Interfaces:**
@@ -5006,9 +5006,9 @@ git commit -m "feat(port49d): config, connection loop with key trial and limits,
    ip -4 route | awk '{print $1}'   # also avoid anything the host already routes
    ```
 
-   If the answer differs from `172.100.100.0/24`, it changes in **seven files of this task, which
-   must all agree**: `topologies/ceos.clab.yml` and `topologies/vjunos.clab.yml` (`ipv4-subnet`
-   and `mgmt-ipv4`), both startup configs (`tacacs-server host` for cEOS, `tacplus-server` for
+   If the answer differs from `172.100.100.0/24`, it changes in **eight files of this task, which
+   must all agree**: `topologies/ceos.clab.yml`, `topologies/vjunos.clab.yml`, and
+   `topologies/vsrx.clab.yml` (`ipv4-subnet` and `mgmt-ipv4`), both startup configs (`tacacs-server host` for cEOS, `tacplus-server` for
    Junos), `inventory-lab.yaml` (device addresses and the `cidr` match), `port49d-lab.yaml`
    (`listen`), and the platform table in `harness_test.go`. `grep -rn '172\.100\.100\.' tests/lab/`
    should find them all and nothing else. Note that the address in the startup configs and in
@@ -5016,18 +5016,48 @@ git commit -m "feat(port49d): config, connection loop with key trial and limits,
    device reaches it across the clab bridge. Smoke-tested on this PC with a throwaway
    `linux`-kind node: the device container reached a host listener at the bridge `.1` over both
    ICMP and TCP.
-4. **At least one device image — the remaining blocker.** As of 2026-09-07 neither is on this
-   machine; both are behind vendor logins and cannot be scripted. Expected 2026-09-08.
-   - Arista cEOS: free arista.com account, then `docker import cEOS64-lab-4.32.2F.tar.xz ceos:4.32.2F`.
-     Faster to stand up; take this one first if you only want L1/L2/L5 closed quickly.
-   - Juniper vJunos-router: download the qcow2, build with vrnetlab
-     (`git clone https://github.com/hellt/vrnetlab && cd vrnetlab/vjunosrouter && cp ~/Downloads/vJunos-router-*.qcow2 . && make`).
-     Needs working KVM — verified on this PC (`/dev/kvm` present, `KVM_GET_API_VERSION = 12`,
-     nested virtualization on by default, no `.wslconfig` needed).
+4. **Device images — on hand as of 2026-09-15.** They live in Google Drive at
+   `My Drive/Network Images`. On WSL the streaming drive is not automounted, so run
+   `sudo mount -t drvfs G: /mnt/g` first (a line `G: /mnt/g drvfs defaults 0 0` in `/etc/fstab`
+   makes it stick). Copy a disk to local storage before building; vrnetlab reads it repeatedly
+   and drvfs is slow. **Everything in the folder is a VM disk built with vrnetlab**
+   (`git clone https://github.com/srl-labs/vrnetlab`; KVM required, and `/dev/kvm` is present
+   on both PCs). The one exception is cEOS, which Ryan is adding separately as of 2026-09-15:
+   it is a native container, imports with one command, boots in seconds, and needs no KVM, so
+   it is the Arista platform for this task. vEOS is the fallback if the tarball is not there yet.
 
-   The lab tasks are written for both and skip a platform whose image is absent, so one is enough
-   to start. **Task 15 cannot close any register entry until at least one image exists**; every
-   earlier task in this plan runs without it.
+   | File | containerlab kind | vrnetlab dir | Used by |
+   |---|---|---|---|
+   | `cEOS64-lab-4.32.2F.tar.xz` (incoming) | `ceos` | none — `docker import` | this task, `arista_eos` |
+   | `veos-4.32.2F/hda.qcow2` + `cdrom.iso` | `arista_veos` | `veos` | fallback for `arista_eos` |
+   | `vJunos-router-23.4R2-S2.1.qcow2` | `juniper_vjunosrouter` | `vjunosrouter` | this task, `juniper_junos` |
+   | `junos-vsrx3-x86-64-21.4R3.15.qcow2` | `juniper_vsrx` | `vsrx` | this task, `juniper_junos` — the platform L11 was measured on, at the spec's own `srx_unpatched` example version |
+   | `junos-vsrx3-x86-64-23.4R1.9.qcow2` | `juniper_vsrx` | `vsrx` | plan 5, projection across Junos versions |
+   | `vJunosEvolved-23.4R2-S2.1.qcow2` | `juniper_vjunosevolved` | `vjunosevolved` | plan 5 |
+   | `nexus9300v64.10.4.2.F.qcow2` | `cisco_n9kv` | `n9kv` | plan 3, NX-API (L7) |
+   | `cat9kv-prd-17.12.01prd9.qcow2` | `cisco_cat9kv` | `cat9kv` | plan 3, IOS-XE `$enab15$` (L3) |
+   | `c8000v-universalk9_8G_serial.17.13.01a.qcow2` | `cisco_c8000v` | `c8000v` | plan 3, IOS-XE |
+   | `xrv9k-fullk9-x-7.11.1.qcow2` | `cisco_xrv9k` | `xrv9k` | later |
+   | `asav9-20-2-2.qcow2`, `paloalto-10.1.6.qcow2` | `cisco_asav`, `paloalto_panos` | `asav`, `pan` | later |
+   | `veos-4.29.2F/` | `arista_veos` | `veos` | spare older EOS |
+
+   Build steps for the three this task uses:
+   - **cEOS.** `docker import cEOS64-lab-4.32.2F.tar.xz ceos:4.32.2F`. No build.
+     If only vEOS is available: vrnetlab's `veos` build globs Arista's file names, so copy
+     `hda.qcow2` to `vrnetlab/veos/vEOS-lab-4.32.2F.qcow2` and `cdrom.iso` to
+     `vrnetlab/veos/Aboot-veos-serial-8.0.2.iso` (any `Aboot-veos-serial-*.iso` name is
+     accepted; the ISO is the Aboot loader the VM needs), `make` in `vrnetlab/veos`, and
+     switch the `kind:` and `image:` lines in `ceos.clab.yml` to the values in its comment.
+     The startup config is the same EOS CLI either way.
+   - **vJunos-router.** `cp vJunos-router-23.4R2-S2.1.qcow2 vrnetlab/vjunosrouter/ && make -C vrnetlab/vjunosrouter`.
+   - **vSRX.** `cp junos-vsrx3-x86-64-21.4R3.15.qcow2 vrnetlab/vsrx/ && make -C vrnetlab/vsrx`.
+
+   After each `make`, read the tag off `docker images`. vrnetlab renamed its images from
+   `vrnetlab/vr-<kind>` to `vrnetlab/<vendor>_<kind>` in 2024 and the topologies below use the
+   new names; if a checkout produced the old form, edit the `image:` line to match. The lab
+   tasks skip any platform whose image is absent, so one image is enough to start; cEOS is the
+   quickest first result. The two Junos VMs take several minutes to boot on first deploy; the
+   harness waits up to six.
 
 - [ ] **Step 1: Write the lab README**
 
@@ -5049,14 +5079,21 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
    `docker network ls --format '{{.Name}}'` piped through
    `docker network inspect <n> --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}'`, and check
    `ip -4 route` too. A clash fails the deploy with `Requested subnet(s) ... overlap an existing
-   Docker network`. To move the lab, change the address in all seven files that carry it —
+   Docker network`. To move the lab, change the address in all eight files that carry it —
    `grep -rn '172\.100\.100\.' .` finds them — keeping `port49d`'s `listen` and the device
    configs' server address on the subnet's `.1` gateway.
-3. Images (any subset; absent platforms are skipped):
-   - Arista cEOS: download from arista.com (free account), then
-     `docker import cEOS64-lab-4.32.2F.tar.xz ceos:4.32.2F`
-   - Juniper vJunos-router: build with vrnetlab
-     (`git clone https://github.com/hellt/vrnetlab && cd vrnetlab/vjunosrouter && cp ~/Downloads/vJunos-router-*.qcow2 . && make`)
+3. Images live in Google Drive under `My Drive/Network Images` (on WSL:
+   `sudo mount -t drvfs G: /mnt/g`). cEOS is a container; the rest are VM disks built with
+   vrnetlab (`git clone https://github.com/srl-labs/vrnetlab`; KVM required). Any subset works
+   and an absent image skips its platform:
+   - cEOS 4.32.2F: `docker import cEOS64-lab-4.32.2F.tar.xz ceos:4.32.2F`. (vEOS fallback:
+     copy `veos-4.32.2F/hda.qcow2` to `vrnetlab/veos/vEOS-lab-4.32.2F.qcow2` and `cdrom.iso`
+     to `vrnetlab/veos/Aboot-veos-serial-8.0.2.iso`, `make -C vrnetlab/veos`, and change the
+     `kind:`/`image:` in `topologies/ceos.clab.yml` per its comment.)
+   - vJunos-router 23.4R2-S2.1: copy the qcow2 into `vrnetlab/vjunosrouter`, `make` there.
+   - vSRX 21.4R3.15: copy the qcow2 into `vrnetlab/vsrx`, `make` there.
+   Check `docker images` for the tag each build produced and match the `image:` lines in
+   `topologies/`.
 4. `export PORT49_LAB_KEY=labsecret`
 5. `make build && make lab`
 
@@ -5081,16 +5118,16 @@ name: port49-ceos
 topology:
   nodes:
     leaf1:
-      kind: ceos
+      kind: ceos                    # vEOS fallback: kind arista_veos, image vrnetlab/arista_veos:4.32.2F
       image: ceos:4.32.2F
-      startup-config: ../configs/ceos-startup.cfg
+      startup-config: ../configs/eos-startup.cfg
       mgmt-ipv4: 172.100.100.11
 mgmt:
   network: port49-lab
   ipv4-subnet: 172.100.100.0/24
 ```
 
-`tests/lab/configs/ceos-startup.cfg`:
+`tests/lab/configs/eos-startup.cfg`:
 ```
 hostname leaf1
 username breakglass privilege 15 secret 0 breakglass-only
@@ -5121,7 +5158,7 @@ topology:
   nodes:
     srx1:
       kind: juniper_vjunosrouter
-      image: vrnetlab/juniper_vjunos-router:23.2R1.15
+      image: vrnetlab/juniper_vjunos-router:23.4R2-S2.1
       startup-config: ../configs/vjunos-startup.conf
       mgmt-ipv4: 172.100.100.21
 mgmt:
@@ -5129,7 +5166,23 @@ mgmt:
   ipv4-subnet: 172.100.100.0/24
 ```
 
-`tests/lab/configs/vjunos-startup.conf`:
+`tests/lab/topologies/vsrx.clab.yml` (the SRX is the platform the L11 measurements came from;
+it shares the Junos startup config):
+```yaml
+name: port49-vsrx
+topology:
+  nodes:
+    vsrx1:
+      kind: juniper_vsrx
+      image: vrnetlab/juniper_vsrx:21.4R3.15
+      startup-config: ../configs/vjunos-startup.conf
+      mgmt-ipv4: 172.100.100.22
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24
+```
+
+`tests/lab/configs/vjunos-startup.conf` (shared by both Junos topologies):
 ```
 system {
     host-name srx1;
@@ -5171,6 +5224,7 @@ system {
 devices:
   - {name: leaf1, platform: arista_eos,    addresses: [172.100.100.11]}
   - {name: srx1,  platform: juniper_junos, addresses: [172.100.100.21]}
+  - {name: vsrx1, platform: juniper_junos, addresses: [172.100.100.22]}
 key_groups:
   - {match: {cidr: 172.100.100.0/24}, key_ref: lab_key}
 ```
@@ -5194,8 +5248,11 @@ lab:
     - {nas: leaf1, username: alice, secret: p49_labtoken3, kind: login}
     - {nas: srx1,  username: alice, secret: p49_labtoken1, kind: login}
     - {nas: srx1,  username: alice, secret: p49_labtoken2, kind: login}
+    - {nas: vsrx1, username: alice, secret: p49_labtoken1, kind: login}
+    - {nas: vsrx1, username: alice, secret: p49_labtoken2, kind: login}
     - {nas: leaf1, username: longpw, secret: p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567890123456789, kind: login}
     - {nas: srx1,  username: longpw, secret: p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567890123456789, kind: login}
+    - {nas: vsrx1, username: longpw, secret: p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567890123456789, kind: login}
 ```
 
 - [ ] **Step 3: Write the harness**
@@ -5229,6 +5286,7 @@ type platform struct {
 var platforms = []platform{
 	{"arista_eos", "topologies/ceos.clab.yml", "172.100.100.11", "leaf1"},
 	{"juniper_junos", "topologies/vjunos.clab.yml", "172.100.100.21", "srx1"},
+	{"juniper_junos-vsrx", "topologies/vsrx.clab.yml", "172.100.100.22", "vsrx1"},
 }
 
 type lab struct {
@@ -5420,7 +5478,7 @@ func TestL1PortField(t *testing.T) {
 func TestL2ServerMsgDisplayed(t *testing.T) {
 	for _, p := range platforms {
 		t.Run(p.name, func(t *testing.T) {
-			if p.name == "juniper_junos" {
+			if strings.HasPrefix(p.name, "juniper_junos") {
 				t.Skip("session-only platform: no per-command REPLY (spec decision 21)")
 			}
 			l := deploy(t, p)
