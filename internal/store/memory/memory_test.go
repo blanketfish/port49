@@ -95,3 +95,71 @@ func TestContextTTL(t *testing.T) {
 		t.Fatalf("expired context still readable: %v", err)
 	}
 }
+
+func TestSecretsAreNotAliased(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "n", Username: "u"}
+
+	// Put a token with a mutable secret
+	secret := []byte("mysecret")
+	_, err := s.PutToken(ctx, k, store.Token{Secret: secret, Kind: "login", ExpiresAt: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mutate the caller's secret after putting
+	secret[0] = 'X'
+
+	// Candidates should still return the original secret
+	c, _ := s.Candidates(ctx, k)
+	if len(c) != 1 || !bytes.Equal(c[0].Secret, []byte("mysecret")) {
+		t.Fatalf("secret was aliased, got %q", c[0].Secret)
+	}
+
+	// Mutate the returned secret
+	c[0].Secret[0] = 'Y'
+
+	// A second Candidates call should return the original secret unchanged
+	c2, _ := s.Candidates(ctx, k)
+	if len(c2) != 1 || !bytes.Equal(c2[0].Secret, []byte("mysecret")) {
+		t.Fatalf("returned secret was not copied, got %q", c2[0].Secret)
+	}
+}
+
+func TestSweepDropsExpiredKeys(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+
+	// Write tokens, receipts, contexts under distinct keys with short TTLs
+	for i := 0; i < 3; i++ {
+		tk := store.TokenKey{NAS: "n", Username: "u" + string(rune(i))}
+		s.PutToken(ctx, tk, store.Token{Secret: []byte("s"), ExpiresAt: now.Add(time.Second)})
+
+		rk := store.ReceiptKey{NAS: "n", Port: "p", Username: "u" + string(rune(i))}
+		s.receipts[rk] = store.Receipt{ExpiresAt: now.Add(time.Second)}
+
+		ck := store.ContextKey{NAS: "n", Port: "p" + string(rune(i))}
+		s.contexts[ck] = ctxEntry{c: store.Context{CtxID: "c"}, exp: now.Add(time.Second)}
+	}
+
+	// Verify entries exist
+	if len(s.tokens) != 3 || len(s.receipts) != 3 || len(s.contexts) != 3 {
+		t.Fatalf("setup failed: tokens=%d receipts=%d contexts=%d", len(s.tokens), len(s.receipts), len(s.contexts))
+	}
+
+	// Advance time past expiry
+	now = now.Add(2 * time.Second)
+
+	// Call sweepLocked directly while holding the lock
+	s.mu.Lock()
+	s.sweepLocked()
+	s.mu.Unlock()
+
+	// Verify all expired entries are gone
+	if len(s.tokens) != 0 || len(s.receipts) != 0 || len(s.contexts) != 0 {
+		t.Fatalf("sweep failed: tokens=%d receipts=%d contexts=%d", len(s.tokens), len(s.receipts), len(s.contexts))
+	}
+}

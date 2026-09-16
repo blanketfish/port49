@@ -17,6 +17,7 @@ type Store struct {
 	tokens   map[store.TokenKey][]store.Token
 	receipts map[store.ReceiptKey]store.Receipt
 	contexts map[store.ContextKey]ctxEntry
+	writes   int // incremented on every write; triggers sweep at sweepEvery
 }
 
 type ctxEntry struct {
@@ -49,18 +50,66 @@ func (s *Store) live(k store.TokenKey) []store.Token {
 	return out
 }
 
+const sweepEvery = 1024
+
+func (s *Store) sweepLocked() {
+	now := s.now()
+
+	// Sweep tokens: delete TokenKey entries whose live set is empty
+	for k := range s.tokens {
+		live := s.tokens[k][:0]
+		for _, t := range s.tokens[k] {
+			if t.ExpiresAt.After(now) {
+				live = append(live, t)
+			}
+		}
+		if len(live) == 0 {
+			delete(s.tokens, k)
+		} else {
+			s.tokens[k] = live
+		}
+	}
+
+	// Sweep receipts: delete expired receipts
+	for k, r := range s.receipts {
+		if !r.ExpiresAt.After(now) {
+			delete(s.receipts, k)
+		}
+	}
+
+	// Sweep contexts: delete expired contexts
+	for k, e := range s.contexts {
+		if !e.exp.After(now) {
+			delete(s.contexts, k)
+		}
+	}
+}
+
 func (s *Store) PutToken(_ context.Context, k store.TokenKey, t store.Token) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.live(k)
+	// Copy Secret to prevent aliasing
+	t.Secret = bytes.Clone(t.Secret)
 	s.tokens[k] = append(s.tokens[k], t)
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
 	return len(s.tokens[k]), nil
 }
 
 func (s *Store) Candidates(_ context.Context, k store.TokenKey) ([]store.Token, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]store.Token(nil), s.live(k)...), nil
+	live := s.live(k)
+	// Return a copy of each Token's Secret to prevent aliasing
+	result := make([]store.Token, len(live))
+	for i, t := range live {
+		result[i] = t
+		result[i].Secret = bytes.Clone(t.Secret)
+	}
+	return result, nil
 }
 
 func (s *Store) RedeemAndReceipt(_ context.Context, k store.TokenKey, secret []byte, rk store.ReceiptKey, r store.Receipt) error {
@@ -76,6 +125,10 @@ func (s *Store) RedeemAndReceipt(_ context.Context, k store.TokenKey, secret []b
 				}
 			}
 			s.receipts[rk] = r
+			s.writes++
+			if s.writes%sweepEvery == 0 {
+				s.sweepLocked()
+			}
 			return nil
 		}
 	}
@@ -97,6 +150,10 @@ func (s *Store) PutContext(_ context.Context, k store.ContextKey, c store.Contex
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.contexts[k] = ctxEntry{c: c, exp: s.now().Add(ttl)}
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
 	return nil
 }
 
