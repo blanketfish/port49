@@ -63,6 +63,21 @@ func TestBuildRefusesSameTierOverlap(t *testing.T) {
 	}
 }
 
+func TestBuildRefusesEqualLengthCIDROverlap(t *testing.T) {
+	// Tier-3: two CIDR groups with same prefix and different key_refs matching one address must error
+	inv := Inventory{
+		Devices: []Device{{Name: "d", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.5")}}},
+		KeyGroups: []KeyGroup{
+			{CIDR: netip.MustParsePrefix("10.0.0.0/24"), KeyRef: "key_a"},
+			{CIDR: netip.MustParsePrefix("10.0.0.0/24"), KeyRef: "key_b"},
+		},
+	}
+	_, err := Build(inv)
+	if err == nil || !strings.Contains(err.Error(), "key_a") || !strings.Contains(err.Error(), "key_b") {
+		t.Fatalf("want error naming both key groups, got %v", err)
+	}
+}
+
 func TestDeviceMatchingNoGroupIsNotAdmitted(t *testing.T) {
 	inv := Inventory{Devices: []Device{{Name: "d", Addresses: []netip.Addr{netip.MustParseAddr("172.16.0.1")}}},
 		KeyGroups: []KeyGroup{{CIDR: netip.MustParsePrefix("10.0.0.0/8"), KeyRef: "k"}}}
