@@ -14,8 +14,8 @@ type AuthorResponse struct {
 	Args            [][]byte
 }
 
-// decodeArgs reads cnt one-octet lengths starting at *off, then the args
-// themselves starting at argsOff. It is shared by author and acct requests.
+// argsTotal sums the one-octet arg lengths so a decoder can check the length
+// identity before cutting. Shared by the author and acct request decoders.
 func argsTotal(lens []byte) int {
 	n := 0
 	for _, l := range lens {
