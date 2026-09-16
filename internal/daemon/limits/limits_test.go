@@ -8,7 +8,7 @@ import (
 
 func cfg() Config {
 	return Config{PerNASConnections: 2, IdleTimeout: time.Second,
-		MalformedBackoffBase: 100 * time.Millisecond, MalformedBackoffMax: time.Second,
+		MalformedBackoffBase: 100 * time.Millisecond, MalformedBackoffMax: time.Second, MalformedWindow: time.Minute,
 		AuthFailureDelayBase: 200 * time.Millisecond, AuthFailureDelayMax: 2 * time.Second, AuthFailureWindow: time.Minute}
 }
 
@@ -60,5 +60,39 @@ func TestAuthFailureDelaysButNeverLocks(t *testing.T) {
 	now = now.Add(2 * time.Minute)
 	if d := l.AuthFailure("leaf-01", "alice"); d != d1 {
 		t.Fatalf("window reset: %v vs %v", d, d1)
+	}
+}
+
+func TestSweepEvictsIdleEntries(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := New(cfg(), func() time.Time { return now })
+
+	// Strike a few sources and (nas, user) keys.
+	a := netip.MustParseAddr("10.0.0.1")
+	b := netip.MustParseAddr("10.0.0.2")
+	l.Malformed(a)
+	l.Malformed(b)
+	l.AuthFailure("leaf-01", "alice")
+	l.AuthFailure("leaf-02", "bob")
+
+	// Verify maps have entries.
+	if len(l.bad) != 2 || len(l.auth) != 2 {
+		t.Fatalf("before: bad=%d auth=%d", len(l.bad), len(l.auth))
+	}
+
+	// Advance past both windows and sweep.
+	now = now.Add(2 * time.Minute)
+	l.sweepLocked(now)
+
+	// Both maps should be empty.
+	if len(l.bad) != 0 || len(l.auth) != 0 {
+		t.Fatalf("after sweep: bad=%d auth=%d", len(l.bad), len(l.auth))
+	}
+
+	// A fresh strike after the window starts the count over.
+	d1 := l.Malformed(a)
+	d2 := l.Malformed(a)
+	if d1 >= d2 {
+		t.Fatalf("restart: first %v should be less than second %v", d1, d2)
 	}
 }

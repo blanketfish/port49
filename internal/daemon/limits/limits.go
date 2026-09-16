@@ -14,6 +14,7 @@ type Config struct {
 	IdleTimeout          time.Duration
 	MalformedBackoffBase time.Duration
 	MalformedBackoffMax  time.Duration
+	MalformedWindow      time.Duration // a source's malformed-strike count resets when no strike has arrived within the window
 	AuthFailureDelayBase time.Duration
 	AuthFailureDelayMax  time.Duration
 	AuthFailureWindow    time.Duration
@@ -25,16 +26,17 @@ type failure struct {
 }
 
 type Limiter struct {
-	cfg  Config
-	now  func() time.Time
-	mu   sync.Mutex
-	open map[netip.Addr]int
-	bad  map[netip.Addr]int
-	auth map[string]failure // key: nas + "\x00" + username
+	cfg    Config
+	now    func() time.Time
+	mu     sync.Mutex
+	open   map[netip.Addr]int
+	bad    map[netip.Addr]failure // malformed strikes per source
+	auth   map[string]failure     // key: nas + "\x00" + username
+	writes int                    // incremented on every Malformed/AuthFailure; triggers sweep at sweepEvery
 }
 
 func New(c Config, now func() time.Time) *Limiter {
-	return &Limiter{cfg: c, now: now, open: map[netip.Addr]int{}, bad: map[netip.Addr]int{}, auth: map[string]failure{}}
+	return &Limiter{cfg: c, now: now, open: map[netip.Addr]int{}, bad: map[netip.Addr]failure{}, auth: map[string]failure{}}
 }
 
 // Acquire takes a connection slot for src. ok is false when the per-NAS cap is
@@ -60,12 +62,24 @@ func (l *Limiter) Acquire(src netip.Addr) (func(), bool) {
 }
 
 // Malformed records a malformed packet from src and returns how long to hold
-// the connection before closing it: base * 2^(strikes-1), capped.
+// the connection before closing it: base * 2^(strikes-1), capped. Counts reset
+// after MalformedWindow elapses with no new strikes.
 func (l *Limiter) Malformed(src netip.Addr) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.bad[src]++
-	return backoff(l.cfg.MalformedBackoffBase, l.cfg.MalformedBackoffMax, l.bad[src])
+	f := l.bad[src]
+	now := l.now()
+	if l.cfg.MalformedWindow > 0 && now.Sub(f.last) > l.cfg.MalformedWindow {
+		f.count = 0
+	}
+	f.count++
+	f.last = now
+	l.bad[src] = f
+	l.writes++
+	if l.writes%1024 == 0 {
+		l.sweepLocked(now)
+	}
+	return backoff(l.cfg.MalformedBackoffBase, l.cfg.MalformedBackoffMax, f.count)
 }
 
 // AuthFailure records a failed authentication for (nas, username) and returns
@@ -75,13 +89,38 @@ func (l *Limiter) AuthFailure(nas, username string) time.Duration {
 	defer l.mu.Unlock()
 	k := nas + "\x00" + username
 	f := l.auth[k]
-	if l.now().Sub(f.last) > l.cfg.AuthFailureWindow {
+	now := l.now()
+	if l.cfg.AuthFailureWindow > 0 && now.Sub(f.last) > l.cfg.AuthFailureWindow {
 		f.count = 0
 	}
 	f.count++
-	f.last = l.now()
+	f.last = now
 	l.auth[k] = f
+	l.writes++
+	if l.writes%1024 == 0 {
+		l.sweepLocked(now)
+	}
 	return backoff(l.cfg.AuthFailureDelayBase, l.cfg.AuthFailureDelayMax, f.count)
+}
+
+func (l *Limiter) sweepLocked(now time.Time) {
+	// Delete malformed-strike entries older than MalformedWindow.
+	if l.cfg.MalformedWindow > 0 {
+		for src, f := range l.bad {
+			if now.Sub(f.last) > l.cfg.MalformedWindow {
+				delete(l.bad, src)
+			}
+		}
+	}
+
+	// Delete auth-failure entries older than AuthFailureWindow.
+	if l.cfg.AuthFailureWindow > 0 {
+		for k, f := range l.auth {
+			if now.Sub(f.last) > l.cfg.AuthFailureWindow {
+				delete(l.auth, k)
+			}
+		}
+	}
 }
 
 func backoff(base, max time.Duration, n int) time.Duration {
