@@ -17,10 +17,16 @@ type TokenKey struct {
 
 type Token struct {
 	Secret    []byte
-	Kind      string // "login" | "enable"
+	Kind      string // KindLogin | KindEnable
 	Reusable  bool
 	ExpiresAt time.Time
 }
+
+// Token kinds.
+const (
+	KindLogin  = "login"
+	KindEnable = "enable"
+)
 
 type ReceiptKey struct{ NAS, Port, Username string }
 

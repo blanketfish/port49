@@ -7,6 +7,7 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -15,6 +16,13 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+)
+
+// Authentication methods, as recorded in a redeem record's auth.method.
+const (
+	methodPAP   = "pap"
+	methodASCII = "ascii"
+	methodCHAP  = "chap"
 )
 
 type Peer struct {
@@ -39,13 +47,16 @@ func New(s store.Store, e decision.Emitter, l *limits.Limiter, m *metrics.Metric
 	return &Handler{store: s, log: e, limits: l, metrics: m, now: now, newCtxID: newCtxID, receiptTTL: receiptTTL, contextTTL: contextTTL}
 }
 
-// Session phases. phaseDone is terminal: once a session has replied with
-// done == true, any further Start or Continue on it takes the unsupported path
-// (ERROR, service_unsupported) rather than resuming a finished exchange.
+// phase is a Session's place in a multi-round ASCII exchange. phaseDone is
+// terminal: once a session has replied with done == true, any further Start
+// or Continue on it takes the unsupported path (ERROR, service_unsupported)
+// rather than resuming a finished exchange.
+type phase int
+
 const (
-	phaseNew = iota
-	phaseWaitUser
-	phaseWaitPass
+	phaseStart phase = iota
+	phaseGetUser
+	phaseGetPass
 	phaseDone
 )
 
@@ -54,7 +65,7 @@ type Session struct {
 	peer  Peer
 	start wire.AuthenStart
 	user  string // as typed
-	phase int
+	phase phase
 }
 
 func (h *Handler) NewSession(peer Peer) *Session { return &Session{h: h, peer: peer} }
@@ -73,15 +84,15 @@ func (s *Session) Start(ctx context.Context, p wire.AuthenStart) (wire.AuthenRep
 	}
 	switch p.AuthenType {
 	case wire.AuthenTypePAP:
-		return s.verify(ctx, "pap", p.Data, p.Data)
+		return s.verify(ctx, methodPAP, p.Data, p.Data)
 	case wire.AuthenTypeCHAP:
 		return s.verifyCHAP(ctx, p.Data)
 	case wire.AuthenTypeASCII:
 		if s.user == "" {
-			s.phase = phaseWaitUser
+			s.phase = phaseGetUser
 			return wire.AuthenReply{Status: wire.AuthenStatusGetUser, ServerMsg: []byte("Username: ")}, false
 		}
-		s.phase = phaseWaitPass
+		s.phase = phaseGetPass
 		return wire.AuthenReply{Status: wire.AuthenStatusGetPass, Flags: wire.AuthenReplyFlagNoEcho, ServerMsg: []byte("Password: ")}, false
 	default:
 		return s.unsupported("port49: authentication type not supported")
@@ -97,12 +108,12 @@ func (s *Session) Continue(ctx context.Context, p wire.AuthenContinue) (wire.Aut
 		return wire.AuthenReply{}, true
 	}
 	switch s.phase {
-	case phaseWaitUser:
+	case phaseGetUser:
 		s.user = string(p.UserMsg)
-		s.phase = phaseWaitPass
+		s.phase = phaseGetPass
 		return wire.AuthenReply{Status: wire.AuthenStatusGetPass, Flags: wire.AuthenReplyFlagNoEcho, ServerMsg: []byte("Password: ")}, false
-	case phaseWaitPass:
-		return s.verify(ctx, "ascii", p.UserMsg, p.UserMsg)
+	case phaseGetPass:
+		return s.verify(ctx, methodASCII, p.UserMsg, p.UserMsg)
 	}
 	return s.unsupported("port49: unexpected CONTINUE")
 }
@@ -118,10 +129,11 @@ func (s *Session) verifyCHAP(ctx context.Context, data []byte) (wire.AuthenReply
 	if len(data) < 1+1+md5.Size {
 		// Too short to carry ppp_id, a challenge, and a 16-byte response: it cannot
 		// match anything, so it fails the same way an unmatched credential does.
-		return s.fail(ctx, s.newRecord("chap", data), decision.TokenNotFound)
+		credHash := sha256.Sum256(data)
+		return s.fail(ctx, s.newRecord(methodCHAP, credHash), decision.TokenNotFound)
 	}
 	id, challenge, response := data[0], data[1:len(data)-md5.Size], data[len(data)-md5.Size:]
-	return s.redeem(ctx, "chap", data, func(t store.Token) bool {
+	return s.redeem(ctx, methodCHAP, data, func(t store.Token) bool {
 		m := md5.New()
 		m.Write([]byte{id})
 		m.Write(t.Secret)
@@ -131,27 +143,33 @@ func (s *Session) verifyCHAP(ctx context.Context, data []byte) (wire.AuthenReply
 }
 
 // newRecord builds the redeem record shared by every outcome for the current
-// session. method is empty for outcomes that never inspected a credential
-// (an unsupported action/type, or a packet in the wrong phase); presented is
-// only hashed when method is set.
-func (s *Session) newRecord(method string, presented []byte) decision.Record {
+// session. method is empty for outcomes that never inspected a credential (an
+// unsupported action/type, or a packet in the wrong phase), in which case
+// credHash is ignored.
+func (s *Session) newRecord(method string, credHash [32]byte) decision.Record {
 	rec := decision.Record{TS: s.h.now(), Event: decision.EventRedeem,
 		Device: &decision.Device{NAS: s.peer.NASAddr, Name: s.peer.NAS, Platform: s.peer.Platform},
 		Session: &decision.Session{Port: string(s.start.Port), RemAddr: string(s.start.RemAddr),
 			Privilege: s.start.PrivLvl, Username: Canonical(s.user)}}
 	if method != "" {
-		rec.Auth = &decision.Auth{Method: method, CredentialSHA256: decision.CredentialHash(presented)}
+		rec.Auth = &decision.Auth{Method: method, CredentialSHA256: hex.EncodeToString(credHash[:])}
 	}
 	return rec
 }
 
 func (s *Session) redeem(ctx context.Context, method string, presented []byte, match func(store.Token) bool) (wire.AuthenReply, bool) {
+	credHash := sha256.Sum256(presented)
+	rec := s.newRecord(method, credHash)
+
 	username := Canonical(s.user)
+	if username == "" {
+		// Nothing under an empty username could ever be minted: fail without
+		// touching the store.
+		return s.fail(ctx, rec, decision.TokenNotFound)
+	}
 	port := string(s.start.Port)
 	remAddr := string(s.start.RemAddr)
 	rk := store.ReceiptKey{NAS: s.peer.NAS, Port: port, Username: username}
-	credHash := sha256.Sum256(presented)
-	rec := s.newRecord(method, presented)
 
 	// 1. Receipt: a retransmission replays; a different credential on the same line fails.
 	r, err := s.h.store.GetReceipt(ctx, rk)
@@ -170,9 +188,9 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// 2. Candidates under (nas, username), filtered by kind: a login token for a
 	// login START, an enable token for an enable START. A credential that matches
 	// a token of the other kind is a kind mismatch, not a missing token.
-	kind := "login"
+	kind := store.KindLogin
 	if s.start.Service == wire.AuthenServiceEnable {
-		kind = "enable"
+		kind = store.KindEnable
 	}
 	cands, err := s.h.store.Candidates(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username})
 	s.h.metrics.StoreOps.WithLabelValues("candidates", storeOutcome(err)).Inc()
@@ -262,7 +280,7 @@ func (s *Session) fail(ctx context.Context, rec decision.Record, reason decision
 	case <-ctx.Done():
 		timer.Stop()
 	}
-	rec.ServerMsg = "port49: authentication failed — mint a new token with `port49 token`"
+	rec.ServerMsg = "port49: authentication failed, mint a new token with `port49 token`"
 	reply, done := s.finish(rec, wire.AuthenStatusFail, reason)
 	reply.ServerMsg = []byte(rec.ServerMsg)
 	return reply, done
@@ -273,7 +291,7 @@ func (s *Session) fail(ctx context.Context, rec decision.Record, reason decision
 // does not implement, or a packet sent to a session that has already finished
 // or is not expecting one.
 func (s *Session) unsupported(serverMsg string) (wire.AuthenReply, bool) {
-	rec := s.newRecord("", nil)
+	rec := s.newRecord("", [32]byte{})
 	reply, done := s.finish(rec, wire.AuthenStatusError, decision.ServiceUnsupported)
 	reply.ServerMsg = []byte(serverMsg)
 	return reply, done

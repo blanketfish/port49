@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -37,8 +38,10 @@ func setup(t *testing.T) *fixture {
 	f.h = New(f.st, decision.NewJSONLines(f.log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return f.now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
 		30*time.Second, time.Hour)
-	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_tok1"), Kind: "login", ExpiresAt: f.now.Add(15 * time.Minute)})
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{Secret: []byte("p49_tok1"), Kind: store.KindLogin, ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
 	return f
 }
 
@@ -56,14 +59,6 @@ func (f *fixture) records(t *testing.T) []map[string]any {
 		out = append(out, m)
 	}
 	return out
-}
-
-func TestCanonical(t *testing.T) {
-	for in, want := range map[string]string{"alice": "alice", "ALICE": "alice", `CORP\Alice`: "alice", "alice@corp.example.com": "alice"} {
-		if got := Canonical(in); got != want {
-			t.Fatalf("%q → %q", in, got)
-		}
-	}
 }
 
 func TestPAPRedeemsAndCreatesContext(t *testing.T) {
@@ -140,6 +135,9 @@ func TestASCIIMultiRound(t *testing.T) {
 	if !done || r3.Status != wire.AuthenStatusPass {
 		t.Fatalf("%+v", r3)
 	}
+	if strings.Contains(f.log.String(), "p49_tok1") {
+		t.Fatal("password leaked into the log")
+	}
 }
 
 func TestASCIIAbort(t *testing.T) {
@@ -170,16 +168,34 @@ func TestCHAP(t *testing.T) {
 	if reply.Status != wire.AuthenStatusFail {
 		t.Fatalf("fresh challenge must not replay: %+v", reply)
 	}
+
+	for _, leak := range []struct {
+		name string
+		want []byte
+	}{
+		{"challenge raw", challenge},
+		{"challenge hex", []byte(hex.EncodeToString(challenge))},
+		{"response raw", sum[:]},
+		{"response hex", []byte(hex.EncodeToString(sum[:]))},
+	} {
+		if strings.Contains(f.log.String(), string(leak.want)) {
+			t.Fatalf("%s leaked into the log", leak.name)
+		}
+	}
 }
 
 // TestLoginTokenLaterInSetIsFound guards against the fix for Important 1: the
 // candidate search must not stop at the first token whose kind doesn't match.
 func TestLoginTokenLaterInSetIsFound(t *testing.T) {
 	f := setup(t)
-	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
-		store.Token{Secret: []byte("bob_enable_tok"), Kind: "enable", ExpiresAt: f.now.Add(15 * time.Minute)})
-	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
-		store.Token{Secret: []byte("bob_login_tok"), Kind: "login", ExpiresAt: f.now.Add(15 * time.Minute)})
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
+		store.Token{Secret: []byte("bob_enable_tok"), Kind: store.KindEnable, ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
+		store.Token{Secret: []byte("bob_login_tok"), Kind: store.KindLogin, ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
 
 	reply, done := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
 		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("bob"), Port: []byte("vty0"), Data: []byte("bob_login_tok")})
@@ -298,6 +314,64 @@ func TestSessionIsTerminalAfterFinish(t *testing.T) {
 	r := f.records(t)
 	if r[1]["reason"] != "service_unsupported" {
 		t.Fatalf("%v", r[1])
+	}
+}
+
+// noStore panics on every call, so a test built on it fails loudly if the
+// code under test ever reaches the store.
+type noStore struct{}
+
+func (noStore) PutToken(context.Context, store.TokenKey, store.Token) (int, error) {
+	panic("store called")
+}
+func (noStore) Candidates(context.Context, store.TokenKey) ([]store.Token, error) {
+	panic("store called")
+}
+func (noStore) RedeemAndReceipt(context.Context, store.TokenKey, []byte, store.ReceiptKey, store.Receipt) error {
+	panic("store called")
+}
+func (noStore) GetReceipt(context.Context, store.ReceiptKey) (store.Receipt, error) {
+	panic("store called")
+}
+func (noStore) PutContext(context.Context, store.ContextKey, store.Context, time.Duration) error {
+	panic("store called")
+}
+func (noStore) GetContext(context.Context, store.ContextKey) (store.Context, error) {
+	panic("store called")
+}
+func (noStore) DeleteContext(context.Context, store.ContextKey) error {
+	panic("store called")
+}
+
+var _ store.Store = noStore{}
+
+func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {
+	log := &bytes.Buffer{}
+	now := time.Unix(1_757_041_495, 0)
+	l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return now })
+	ids := 0
+	h := New(noStore{}, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
+		func() time.Time { return now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
+		30*time.Second, time.Hour)
+
+	// "@corp.example.com" canonicalizes to "" (spec §2): everything before the
+	// first "@" is stripped, leaving nothing.
+	reply, done := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}).Start(context.Background(),
+		wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+			User: []byte("@corp.example.com"), Port: []byte("vty0"), Data: []byte("whatever")})
+	if !done || reply.Status != wire.AuthenStatusFail {
+		t.Fatalf("%+v", reply)
+	}
+	r := []map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(log.String()), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		r = append(r, m)
+	}
+	if len(r) != 1 || r[0]["reason"] != "token_not_found" {
+		t.Fatalf("%v", r)
 	}
 }
 
