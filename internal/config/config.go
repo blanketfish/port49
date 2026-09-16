@@ -210,6 +210,22 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// A device that matches no key group builds without error (admission.Build
+	// simply omits it from the table) and then fails every packet at runtime as
+	// an unresolved key. That is a configuration mistake, not a device it's fine
+	// to leave unreachable, so it is refused here rather than discovered later.
+	for _, d := range inv.Devices {
+		resolved := false
+		for _, a := range d.Addresses {
+			if r, ok := trie.Lookup(a); ok && r.KeyRef != "" {
+				resolved = true
+				break
+			}
+		}
+		if !resolved {
+			return Config{}, fmt.Errorf("inventory: device %q matches no key group", d.Name)
+		}
+	}
 	c.Inventory, c.Admission = inv, trie
 	return c, nil
 }

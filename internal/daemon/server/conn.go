@@ -41,21 +41,30 @@ type conn struct {
 // unvalidated records a packet no accepted key validated. It carries the
 // cleartext header fields, the source, and a hash of whatever bytes arrived —
 // never the bytes, which at this point are either not ours or not decodable.
+// body is nil on the header-only paths (an unadmitted source, a header that
+// fails Validate): no bytes were read, so BodySHA256 is left empty rather
+// than reporting the hash of nothing.
 func (s *conn) unvalidated(h wire.Header, body []byte, diag keyring.Diagnosis, version int) {
-	sum := sha256.Sum256(body)
+	var sum string
+	if body != nil {
+		digest := sha256.Sum256(body)
+		sum = hex.EncodeToString(digest[:])
+	}
 	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Unvalidated: &decision.Unvalidated{
 		Source: s.src.String(), Diagnosis: string(diag), KeyRef: s.dev.KeyRef, Version: version,
-		Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length, BodySHA256: hex.EncodeToString(sum[:])}})
+		Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length, BodySHA256: sum}})
 	s.d.Metrics.Unvalidated.WithLabelValues(string(diag)).Inc()
 }
 
 // backoff holds the connection for the limiter's per-source delay before it is
 // closed, so a source that floods malformed packets pays a growing cost while
 // every other source is untouched. It is cancellable so shutdown is not stuck
-// behind it.
-func (s *conn) backoff(ctx context.Context) {
+// behind it. event is the ConnectionEvents label: callers pass a diagnosis
+// distinct from "malformed_backoff" when the strike isn't itself a malformed
+// packet (an unadmitted source), so the two are distinguishable in metrics.
+func (s *conn) backoff(ctx context.Context, event string) {
 	d := s.d.Limits.Malformed(s.src)
-	s.d.Metrics.ConnectionEvents.WithLabelValues("malformed_backoff").Inc()
+	s.d.Metrics.ConnectionEvents.WithLabelValues(event).Inc()
 	if d <= 0 {
 		return
 	}
@@ -88,10 +97,12 @@ func (s *conn) serve(ctx context.Context) {
 		}
 
 		// An unadmitted source never costs more than one header read: no body is
-		// read, no key is tried, nothing is decoded.
+		// read, no key is tried, nothing is decoded. Counted separately from
+		// malformed_backoff so an operator can tell "unknown device" from
+		// "known device sending garbage" at a glance.
 		if !s.admitted {
 			s.unvalidated(h, nil, keyring.DiagUnadmittedSource, 0)
-			s.backoff(ctx)
+			s.backoff(ctx, "unadmitted_source")
 			return
 		}
 
@@ -103,12 +114,15 @@ func (s *conn) serve(ctx context.Context) {
 				diag = keyring.DiagUnencrypted
 			}
 			s.unvalidated(h, nil, diag, 0)
-			s.backoff(ctx)
+			s.backoff(ctx, "malformed_backoff")
 			return
 		}
 
 		obf := make([]byte, h.Length) // Validate has already bounded Length at wire.MaxBodyLen
 		if _, err := io.ReadFull(s.c, obf); err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				s.d.Metrics.ConnectionEvents.WithLabelValues("idle_closed").Inc()
+			}
 			return
 		}
 
@@ -117,12 +131,21 @@ func (s *conn) serve(ctx context.Context) {
 			return
 		}
 
+		if h.SeqNo == 255 {
+			// RFC 8907: seq_no wraps after 255, and the reply would need
+			// seq_no 256, which does not fit a uint8. The session must be
+			// restarted, not continued, so this sends nothing and closes.
+			delete(s.sessions, h.SessionID)
+			s.backoff(ctx, "malformed_backoff")
+			return
+		}
+
 		reply, done, protoErr := s.dispatch(ctx, h, body)
 		if protoErr {
 			// The key validated, so this is a real device speaking a sequence
 			// port49 cannot answer. There is no reply that would help it; count
 			// the strike and hang up.
-			s.backoff(ctx)
+			s.backoff(ctx, "malformed_backoff")
 			return
 		}
 		if reply != nil && !s.write(h, reply) {
@@ -145,7 +168,7 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 			// A retired version identifies the sender in the record and nothing
 			// more: no admission, no reply.
 			s.unvalidated(h, obf, r.Diagnosis, r.Version)
-			s.backoff(ctx)
+			s.backoff(ctx, "malformed_backoff")
 			return nil, false
 		}
 		s.version = r.Version
@@ -157,7 +180,7 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 	body := wire.Obfuscate(h, s.keys.Secret(s.version), obf)
 	if !keyring.Validates(h, body) {
 		s.unvalidated(h, obf, keyring.DiagMalformedAfterValidation, s.version)
-		s.backoff(ctx)
+		s.backoff(ctx, "malformed_backoff")
 		return nil, false
 	}
 	return body, true

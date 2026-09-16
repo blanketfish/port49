@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/daemon/acct"
@@ -102,7 +103,7 @@ func (c *client) recv(t *testing.T) (wire.Header, []byte) {
 	return h, wire.Obfuscate(h, c.key, body)
 }
 
-func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store) {
+func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store, m *metrics.Metrics) {
 	t.Helper()
 	inv := admission.Inventory{
 		Devices:   []admission.Device{{Name: "leaf-01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}},
@@ -117,7 +118,7 @@ func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store) 
 		store.Token{Secret: []byte("p49_e2e"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	m := metrics.New(prometheus.NewRegistry())
+	m = metrics.New(prometheus.NewRegistry())
 	em := decision.NewJSONLines(log)
 	lim := limits.New(limits.Config{PerNASConnections: 2, IdleTimeout: time.Second,
 		MalformedBackoffBase: time.Millisecond, MalformedBackoffMax: time.Millisecond, MalformedWindow: time.Minute,
@@ -150,7 +151,7 @@ func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store) 
 		<-served
 		<-spoolDone
 	})
-	return ln.Addr().String(), st
+	return ln.Addr().String(), st, m
 }
 
 func dial(t *testing.T, addr string, key []byte) *client {
@@ -165,7 +166,7 @@ func dial(t *testing.T, addr string, key []byte) *client {
 
 func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 	log := &syncBuffer{}
-	addr, _ := startServer(t, log)
+	addr, _, _ := startServer(t, log)
 
 	c := dial(t, addr, []byte("k2"))
 	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
@@ -202,7 +203,7 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 
 func TestRetiredKeyIdentifiesButIsRefused(t *testing.T) {
 	log := &syncBuffer{}
-	addr, _ := startServer(t, log)
+	addr, _, _ := startServer(t, log)
 	c := dial(t, addr, []byte("k1"))
 	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
 	c.conn.SetReadDeadline(time.Now().Add(time.Second))
@@ -216,7 +217,7 @@ func TestRetiredKeyIdentifiesButIsRefused(t *testing.T) {
 
 func TestUnencryptedFlagIsRefusedBeforeBody(t *testing.T) {
 	log := &syncBuffer{}
-	addr, _ := startServer(t, log)
+	addr, _, _ := startServer(t, log)
 	c := dial(t, addr, nil)
 	body := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("SECRET")}.Encode()
 	h := wire.Header{MajorVersion: 0xc, Type: wire.TypeAuthen, SeqNo: 1, Flags: wire.FlagUnencrypted, SessionID: 1, Length: uint32(len(body))}
@@ -230,7 +231,7 @@ func TestUnencryptedFlagIsRefusedBeforeBody(t *testing.T) {
 
 func TestNotTACACSIsCountedAndBodyNeverLogged(t *testing.T) {
 	log := &syncBuffer{}
-	addr, _ := startServer(t, log)
+	addr, _, m := startServer(t, log)
 	c := dial(t, addr, nil)
 	junk := make([]byte, 40)
 	binary.BigEndian.PutUint32(junk[8:12], 4) // a plausible length but version 0x00
@@ -241,11 +242,14 @@ func TestNotTACACSIsCountedAndBodyNeverLogged(t *testing.T) {
 	if !log.contains(`"diagnosis":"not_tacacs"`) || log.contains("HTTP") {
 		t.Fatalf("log: %s", log.String())
 	}
+	if !waitFor(t, func() bool { return testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("malformed_backoff")) >= 1 }) {
+		t.Fatalf("malformed_backoff metric was not incremented: %v", testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("malformed_backoff")))
+	}
 }
 
 func TestUnadmittedSourceIsRecordedAndClosed(t *testing.T) {
 	log := &syncBuffer{}
-	addr, _ := startServer(t, log)
+	addr, _, _ := startServer(t, log)
 	// 127.0.0.2 is loopback but not in the inventory; if this host cannot
 	// source from it there is nothing to test here.
 	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 2)}}
@@ -271,10 +275,8 @@ func TestUnadmittedSourceIsRecordedAndClosed(t *testing.T) {
 
 func TestPerNASCapRefusesThirdConnection(t *testing.T) {
 	log := &syncBuffer{}
-	addr, _ := startServer(t, log)
+	addr, _, m := startServer(t, log)
 	c1, c2 := dial(t, addr, []byte("k2")), dial(t, addr, []byte("k2"))
-	_ = c1
-	_ = c2
 	time.Sleep(20 * time.Millisecond)
 	c3 := dial(t, addr, []byte("k2"))
 	c3.conn.SetReadDeadline(time.Now().Add(time.Second))
@@ -286,11 +288,21 @@ func TestPerNASCapRefusesThirdConnection(t *testing.T) {
 	if errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
 		t.Fatalf("third connection was not refused, the read timed out instead: %v", err)
 	}
+	if got := testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("refused_cap")); got < 1 {
+		t.Fatalf("refused_cap metric was not incremented: %v", got)
+	}
+	// The two admitted connections still count toward Connections{open}; once
+	// they close, the gauge must fall back to 0, not stay stuck above it.
+	c1.conn.Close()
+	c2.conn.Close()
+	if !waitFor(t, func() bool { return testutil.ToFloat64(m.Connections.WithLabelValues("open")) == 0 }) {
+		t.Fatalf("open connections gauge did not return to 0 after close: %v", testutil.ToFloat64(m.Connections.WithLabelValues("open")))
+	}
 }
 
 func TestSingleConnectServesTwoExchanges(t *testing.T) {
 	log := &syncBuffer{}
-	addr, st := startServer(t, log)
+	addr, st, _ := startServer(t, log)
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
 		store.Token{Secret: []byte("p49_second"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
@@ -310,7 +322,7 @@ func TestSingleConnectServesTwoExchanges(t *testing.T) {
 
 func TestASCIILoginRunsThreeRounds(t *testing.T) {
 	log := &syncBuffer{}
-	addr, _ := startServer(t, log)
+	addr, _, _ := startServer(t, log)
 	c := dial(t, addr, []byte("k2"))
 	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypeASCII,
 		Service: wire.AuthenServiceLogin, Port: []byte("vty0")}.Encode(), 0)
@@ -332,7 +344,7 @@ func TestASCIILoginRunsThreeRounds(t *testing.T) {
 
 func TestContinueWithoutSessionClosesTheConnection(t *testing.T) {
 	log := &syncBuffer{}
-	addr, _ := startServer(t, log)
+	addr, _, _ := startServer(t, log)
 	c := dial(t, addr, []byte("k2"))
 	c.seq = 3 // a CONTINUE for a session this connection never started
 	c.send(t, wire.TypeAuthen, wire.AuthenContinue{UserMsg: []byte("alice")}.Encode(), 0)
@@ -344,9 +356,26 @@ func TestContinueWithoutSessionClosesTheConnection(t *testing.T) {
 	}
 }
 
+func TestSeqNoWrapGetsNoReplyAndCloses(t *testing.T) {
+	log := &syncBuffer{}
+	addr, _, m := startServer(t, log)
+	c := dial(t, addr, []byte("k2"))
+	c.seq = 255 // RFC 8907: seq_no 255 has no valid successor; the session must restart
+	c.send(t, wire.TypeAuthen, wire.AuthenContinue{UserMsg: []byte("alice")}.Encode(), 0)
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a request with seq_no 255 must get no reply")
+	} else if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the connection must be closed, not left open: %v", err)
+	}
+	if !waitFor(t, func() bool { return testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("malformed_backoff")) >= 1 }) {
+		t.Fatalf("malformed_backoff metric was not incremented for a seq_no wrap")
+	}
+}
+
 func TestIdleConnectionIsClosed(t *testing.T) {
 	log := &syncBuffer{}
-	addr, _ := startServer(t, log) // IdleTimeout is 1s
+	addr, _, _ := startServer(t, log) // IdleTimeout is 1s
 	c := dial(t, addr, []byte("k2"))
 	c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	n, err := c.conn.Read(make([]byte, 1))
@@ -355,5 +384,27 @@ func TestIdleConnectionIsClosed(t *testing.T) {
 	}
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("the server did not close an idle connection: %v", err)
+	}
+}
+
+func TestBodyReadTimeoutIsCountedAsIdleClosed(t *testing.T) {
+	log := &syncBuffer{}
+	addr, _, m := startServer(t, log) // IdleTimeout is 1s
+	c := dial(t, addr, []byte("k2"))
+	body := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+		User: []byte("alice"), Data: []byte("p49_e2e")}.Encode()
+	h := wire.Header{MajorVersion: 0xc, Type: wire.TypeAuthen, SeqNo: 1, Flags: 0, SessionID: 1, Length: uint32(len(body))}
+	// Send a valid, admitted header but never send the body: the read deadline
+	// set before the header read still governs the body read, so this must
+	// time out the same way an idle connection does, not hang or panic.
+	if _, err := c.conn.Write(h.Encode()); err != nil {
+		t.Fatal(err)
+	}
+	c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a connection whose body never arrives must be closed")
+	}
+	if !waitFor(t, func() bool { return testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("idle_closed")) >= 1 }) {
+		t.Fatalf("idle_closed metric was not incremented for a body read timeout")
 	}
 }

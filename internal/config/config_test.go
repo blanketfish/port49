@@ -97,6 +97,26 @@ func TestLoadRefusesMissingSecretAndUnknownKeyRef(t *testing.T) {
 	}
 }
 
+func TestLoadRefusesDeviceMatchingNoKeyGroup(t *testing.T) {
+	setSecrets(t)
+	// orphan's address is outside every key group's CIDR, so admission.Build
+	// silently omits it from the table; Load must catch that at startup rather
+	// than letting the daemon run with a device every packet from it fails.
+	bad := write(t, "orphan.yaml", `
+devices:
+  - {name: orphan, addresses: [10.99.99.1]}
+key_groups:
+  - {match: {cidr: 127.0.0.0/8}, key_ref: prod_key}
+`)
+	_, err := Load(write(t, "e.yaml", fmt.Sprintf(sample, bad)))
+	if err == nil {
+		t.Fatal("a device matching no key group must fail at load, not at the first packet")
+	}
+	if !strings.Contains(err.Error(), `device "orphan" matches no key group`) {
+		t.Fatalf("error must name the device: %v", err)
+	}
+}
+
 func TestLoadParsesDurationsAndBoundsWindows(t *testing.T) {
 	setSecrets(t)
 	invPath := write(t, "inventory.yaml", inv)

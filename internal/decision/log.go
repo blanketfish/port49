@@ -74,7 +74,7 @@ type Unvalidated struct {
 	SeqNo      uint8  `json:"seq_no"`
 	SessionID  uint32 `json:"session_id"`
 	Length     uint32 `json:"length"`
-	BodySHA256 string `json:"body_sha256"`
+	BodySHA256 string `json:"body_sha256,omitempty"`
 }
 
 type Emitter interface {
