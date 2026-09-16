@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -17,17 +18,31 @@ import (
 var ErrSpoolFull = errors.New("acct: spool full")
 
 // Spool is a durable, append-only file log (spec §5.8, §14): Offer returns nil
-// only after the record has been written to the file and fsynced, so a
-// SUCCESS reply built on that nil is backed by disk, not memory. Run drains
-// the file to the sink in order, in batches of up to capacity records per
-// pass, by renaming it aside (to path+".draining") under the same lock Offer
-// uses, then reading and forwarding it outside the lock so new offers are not
-// blocked on delivery.
+// only after the record has been written to the file, fsynced, and (when the
+// file was just created) its parent directory entry fsynced too, so a
+// SUCCESS reply built on that nil is backed by disk, not memory.
+//
+// Run drains the whole file to the sink in one streamed pass per wake-up, by
+// renaming it aside (to path+".draining") under the same lock Offer uses,
+// then reading and forwarding it line by line outside the lock so new offers
+// are not blocked on delivery. capacity only bounds the constructor's `< 1`
+// validation; it is reserved for a future batching sink and does not limit
+// how much a pass drains today.
 //
 // Delivery is at-least-once: a crash between forwarding a record to the sink
 // and removing the .draining file re-forwards that record the next time Run
 // starts (TestSpoolResumesDrainingFile). Consumers of the sink must tolerate
-// duplicates.
+// duplicates. Every error on the drain path is logged (path and error, never
+// record contents). If a pass fully forwards .draining but cannot remove it
+// (for example, the directory is not writable), the spool remembers that and
+// retries only the removal on later passes — it never re-forwards records it
+// already delivered — logging at most once per minute
+// (TestDrainDoesNotReemitWhenRemoveFails). On a clean shutdown, Run keeps
+// draining until the file is empty; if drainOnce fails three times in a row
+// (for example .draining exists but cannot be read), Run logs that and gives
+// up, leaving whatever is on disk for the next start — at-least-once still
+// holds, since nothing durably written is ever deleted without having been
+// forwarded first (TestShutdownGivesUpOnPersistentReadError).
 type Spool struct {
 	path     string
 	sink     decision.Emitter
@@ -38,6 +53,9 @@ type Spool struct {
 	depth int // records durably written but not yet forwarded
 
 	signal chan struct{}
+
+	stuck        bool // .draining is fully forwarded; only removal is retried
+	lastStuckLog time.Time
 }
 
 func NewSpool(capacity int, overflowPath string, sink decision.Emitter, m *metrics.Metrics) (*Spool, error) {
@@ -73,9 +91,11 @@ func countLines(path string) (int, error) {
 }
 
 // Offer marshals r to one JSON line, appends it to the spool file, and syncs
-// before returning. It returns nil only once that durable write has
-// succeeded; any open/write/sync error counts a drop and returns
-// ErrSpoolFull.
+// before returning. If this write created the file, it also syncs the
+// parent directory so the new directory entry survives a crash (a data
+// fsync alone does not guarantee the file is findable after one). It
+// returns nil only once every one of those durable writes has succeeded;
+// any error along the way counts a drop and returns ErrSpoolFull.
 func (s *Spool) Offer(r decision.Record) error {
 	b, err := json.Marshal(r)
 	if err != nil {
@@ -85,9 +105,13 @@ func (s *Spool) Offer(r decision.Record) error {
 	b = append(b, '\n')
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, statErr := os.Stat(s.path)
+	isNew := os.IsNotExist(statErr)
+
 	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		s.mu.Unlock()
 		s.metrics.SpoolDrops.Inc()
 		return ErrSpoolFull
 	}
@@ -98,14 +122,20 @@ func (s *Spool) Offer(r decision.Record) error {
 	}
 	cerr := f.Close()
 	if werr != nil || serr != nil {
-		s.mu.Unlock()
 		s.metrics.SpoolDrops.Inc()
 		return ErrSpoolFull
 	}
 	_ = cerr // a close failure after a successful sync does not lose the write
+
+	if isNew {
+		if err := syncDir(filepath.Dir(s.path)); err != nil {
+			s.metrics.SpoolDrops.Inc()
+			return ErrSpoolFull
+		}
+	}
+
 	s.depth++
 	s.metrics.SpoolDepth.Set(float64(s.depth))
-	s.mu.Unlock()
 
 	select {
 	case s.signal <- struct{}{}:
@@ -114,8 +144,20 @@ func (s *Spool) Offer(r decision.Record) error {
 	return nil
 }
 
+// syncDir fsyncs a directory's own entry so a file just created (or removed)
+// inside it survives a crash, not only the file's own data.
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
 // Run drains the spool to the sink until ctx is done and the file (and any
-// in-flight .draining file) is empty.
+// in-flight .draining file) is empty, or the shutdown drain gives up after
+// repeated failures (see the package doc).
 func (s *Spool) Run(ctx context.Context) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -123,16 +165,36 @@ func (s *Spool) Run(ctx context.Context) {
 		s.drainOnce()
 		select {
 		case <-ctx.Done():
-			// Keep draining until every durably-written record has been
-			// forwarded; a record already on disk must never be lost on
-			// shutdown.
-			for s.hasWork() {
-				s.drainOnce()
-			}
+			s.drainUntilEmptyOrGiveUp()
 			return
 		case <-s.signal:
 		case <-ticker.C:
 		}
+	}
+}
+
+// drainUntilEmptyOrGiveUp is Run's shutdown path. It keeps calling drainOnce
+// until there is nothing left to forward. A failing drainOnce (an open or
+// read error, or a stuck removal) is retried after a short sleep; three
+// consecutive failures and it gives up, logging so the operator can see why
+// records are still on disk. Giving up never deletes anything: at-least-once
+// delivery holds across the next start.
+func (s *Spool) drainUntilEmptyOrGiveUp() {
+	failures := 0
+	for {
+		if s.drainOnce() {
+			failures = 0
+			if !s.hasWork() {
+				return
+			}
+			continue
+		}
+		failures++
+		if failures >= 3 {
+			log.Printf("acct: spool giving up draining on shutdown after %d consecutive failures; records remain on disk for the next start", failures)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -142,56 +204,81 @@ func (s *Spool) hasWork() bool {
 	return s.depth > 0
 }
 
+// markStuck records that .draining is fully forwarded but could not be
+// removed, so later passes retry only the removal. It logs at most once per
+// minute to avoid flooding the log while the underlying condition persists.
+func (s *Spool) markStuck(path string, err error) {
+	s.stuck = true
+	if time.Since(s.lastStuckLog) >= time.Minute {
+		log.Printf("acct: spool cannot remove drained file %s: %v", path, err)
+		s.lastStuckLog = time.Now()
+	}
+}
+
 // drainOnce renames the spool file aside (or picks up a leftover .draining
-// file from a previous crash) and forwards up to capacity records from it to
-// the sink, in order. Any records left over (more than capacity were
-// pending) are written back to the .draining file so the next pass resumes
-// where this one left off; a crash between forwarding and that rewrite (or
-// the final removal) re-forwards the already-delivered records next start.
-func (s *Spool) drainOnce() {
+// file from a previous crash) and streams every record in it to the sink, in
+// order, in one pass. It reports true on success (including when there was
+// nothing to do) and false on an error, which it has already logged.
+//
+// If a previous pass forwarded every record but failed to remove .draining
+// (s.stuck), this pass retries only the removal: it never re-opens or
+// re-forwards a file it has already fully delivered.
+func (s *Spool) drainOnce() bool {
 	draining := s.path + ".draining"
+
+	if s.stuck {
+		if err := os.Remove(draining); err != nil {
+			s.markStuck(draining, err)
+			return false
+		}
+		s.stuck = false
+		return true
+	}
 
 	s.mu.Lock()
 	if _, err := os.Stat(draining); err != nil {
+		if !os.IsNotExist(err) {
+			s.mu.Unlock()
+			log.Printf("acct: spool stat %s failed: %v", draining, err)
+			return false
+		}
 		// No leftover .draining file: try to start a fresh one from path.
 		if err := os.Rename(s.path, draining); err != nil {
 			s.mu.Unlock()
-			return
+			if os.IsNotExist(err) {
+				return true // nothing pending
+			}
+			log.Printf("acct: spool rename %s -> %s failed: %v", s.path, draining, err)
+			return false
 		}
 	}
 	s.mu.Unlock()
 
-	lines, err := readLines(draining)
+	f, err := os.Open(draining)
 	if err != nil {
-		return
+		log.Printf("acct: spool open %s failed: %v", draining, err)
+		return false
 	}
-	if len(lines) == 0 {
-		os.Remove(draining)
-		return
-	}
-
-	batch, rest := lines, []string(nil)
-	if len(batch) > s.capacity {
-		batch, rest = lines[:s.capacity], lines[s.capacity:]
-	}
-
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 4096), 1<<20)
 	forwarded := 0
-	for _, line := range batch {
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
 		var r decision.Record
-		if err := r.UnmarshalJSON([]byte(line)); err != nil {
-			log.Printf("acct: dropping spool line that failed to unmarshal")
+		if err := r.UnmarshalJSON(line); err != nil {
+			log.Printf("acct: dropping spool line that failed to unmarshal: %v", err)
+			s.metrics.SpoolDrops.Inc()
 			forwarded++
 			continue
 		}
 		s.sink.Emit(r)
 		forwarded++
 	}
-
-	if len(rest) == 0 {
-		os.Remove(draining)
-	} else {
-		writeLines(draining, rest)
-	}
+	scErr := sc.Err()
+	f.Close()
 
 	s.mu.Lock()
 	s.depth -= forwarded
@@ -200,46 +287,15 @@ func (s *Spool) drainOnce() {
 	}
 	s.metrics.SpoolDepth.Set(float64(s.depth))
 	s.mu.Unlock()
-}
 
-// readLines reads path as newline-separated records, skipping blank lines.
-func readLines(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
+	if scErr != nil {
+		log.Printf("acct: spool read %s failed: %v", draining, scErr)
+		return false
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	var lines []string
-	for sc.Scan() {
-		if line := sc.Text(); line != "" {
-			lines = append(lines, line)
-		}
-	}
-	return lines, sc.Err()
-}
 
-// writeLines atomically rewrites path with lines, fsynced before the rename
-// so a crash mid-rewrite never leaves a truncated file the next pass trusts.
-func writeLines(path string, lines []string) {
-	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return
+	if err := os.Remove(draining); err != nil {
+		s.markStuck(draining, err)
+		return false
 	}
-	for _, line := range lines {
-		if _, err := f.WriteString(line + "\n"); err != nil {
-			f.Close()
-			return
-		}
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return
-	}
-	if err := f.Close(); err != nil {
-		return
-	}
-	os.Rename(tmp, path)
+	return true
 }

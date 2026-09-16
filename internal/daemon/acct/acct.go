@@ -69,7 +69,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 
 	if err := h.spool.Offer(rec); err != nil {
 		h.metrics.Requests.WithLabelValues("acct", "error").Inc()
-		return wire.AcctReply{Status: wire.AcctStatusError, ServerMsg: []byte("port49: accounting spool full")}
+		return wire.AcctReply{Status: wire.AcctStatusError, ServerMsg: []byte("port49: accounting spool unavailable")}
 	}
 	h.metrics.Requests.WithLabelValues("acct", "success").Inc()
 	return wire.AcctReply{Status: wire.AcctStatusSuccess}
