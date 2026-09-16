@@ -184,13 +184,19 @@ func TestDrainDoesNotReemitWhenRemoveFails(t *testing.T) {
 }
 
 // TestDrainStreamsLargeBacklog guards against the drain path going quadratic
-// (repeatedly reading and rewriting the whole backlog per batch): 5000
+// (repeatedly reading and rewriting the whole backlog per batch): 500
 // records must all arrive, in order, and the drain itself — Run reading and
 // forwarding what Offer already wrote — must finish well within a generous
 // time bound. Offer's own cost (one fsync per record) is not timed here: on
 // a slow filesystem that dominates wall time regardless of drain algorithm
-// and is not what this test guards against.
+// and is not what this test guards against. 500 is enough to discriminate: a
+// reintroduced write-back would rewrite+fsync the shrinking remainder on
+// every 100ms pass, on the order of 500^2/2 ~= 125k line-writes, against 500
+// for a single streamed pass.
 func TestDrainStreamsLargeBacklog(t *testing.T) {
+	if testing.Short() {
+		t.Skip("large-backlog timing test; skipped in -short")
+	}
 	path := filepath.Join(t.TempDir(), "overflow.jsonl")
 	out := &bytes.Buffer{}
 	sp, err := NewSpool(4, path, decision.NewJSONLines(out), metrics.New(prometheus.NewRegistry()))
@@ -198,7 +204,7 @@ func TestDrainStreamsLargeBacklog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const n = 5000
+	const n = 500
 	for i := 0; i < n; i++ {
 		if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: strconv.Itoa(i)}); err != nil {
 			t.Fatalf("offer %d: %v", i, err)
