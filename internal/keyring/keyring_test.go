@@ -89,3 +89,22 @@ func TestValidatesEveryType(t *testing.T) {
 		t.Fatal("continue")
 	}
 }
+
+func TestSecretNilForRetiredAndUnknown(t *testing.T) {
+	s := set()
+	// Current and accepted versions return their secrets.
+	if secret := s.Secret(3); string(secret) != "v3-secret" {
+		t.Fatalf("version 3: got %q, want %q", secret, "v3-secret")
+	}
+	if secret := s.Secret(2); string(secret) != "v2-secret" {
+		t.Fatalf("version 2: got %q, want %q", secret, "v2-secret")
+	}
+	// Retired version returns nil.
+	if secret := s.Secret(1); secret != nil {
+		t.Fatalf("retired version 1: got %v, want nil", secret)
+	}
+	// Unknown version returns nil.
+	if secret := s.Secret(99); secret != nil {
+		t.Fatalf("unknown version 99: got %v, want nil", secret)
+	}
+}

@@ -24,11 +24,12 @@ type Set struct {
 type Diagnosis string
 
 const (
-	DiagValidated                Diagnosis = "validated"
-	DiagMatchesRetired           Diagnosis = "matches_retired"
-	DiagNoKnownKey               Diagnosis = "no_known_key_matches"
-	DiagUnencrypted              Diagnosis = "unencrypted_refused"
-	DiagNotTACACS                Diagnosis = "not_tacacs"
+	DiagValidated      Diagnosis = "validated"
+	DiagMatchesRetired Diagnosis = "matches_retired"
+	DiagNoKnownKey     Diagnosis = "no_known_key_matches"
+	DiagUnencrypted    Diagnosis = "unencrypted_refused"
+	DiagNotTACACS      Diagnosis = "not_tacacs"
+	// Emitted by the connection layer for packets the keyring never sees; Resolve never returns them.
 	DiagUnadmittedSource         Diagnosis = "unadmitted_source"          // source address not in the inventory
 	DiagMalformedAfterValidation Diagnosis = "malformed_after_validation" // key validated, body did not decode
 )
