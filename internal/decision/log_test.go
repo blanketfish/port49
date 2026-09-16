@@ -13,10 +13,13 @@ func TestEmitWritesOneLinePerRecord(t *testing.T) {
 	e := NewJSONLines(&buf)
 	ts := time.Date(2026, 9, 4, 2, 11, 7, 412_000_000, time.UTC)
 	e.Emit(Record{TS: ts, Event: EventRedeem, Verdict: VerdictPermit, Reason: TokenRedeemed,
-		Principal: "user:alice@example.com",
-		Auth:      &Auth{Method: "pap", CredentialSHA256: CredentialHash([]byte("tok"))},
-		Device:    &Device{NAS: "10.20.0.7", Name: "leaf-01", Platform: "arista_eos"},
-		Session:   &Session{CtxID: "01J", Port: "vty0", RemAddr: "198.51.100.4", Privilege: 1}})
+		Principal:   "user:alice@example.com",
+		Auth:        &Auth{Method: "pap", CredentialSHA256: CredentialHash([]byte("tok"))},
+		Device:      &Device{NAS: "10.20.0.7", Name: "leaf-01", Platform: "arista_eos"},
+		Session:     &Session{CtxID: "01J", Port: "vty0", RemAddr: "198.51.100.4", Privilege: 1},
+		Request:     &Request{Raw: []string{"user"}, Vector: []string{"tacacs"}},
+		AcctRecord:  &AcctRecord{Raw: []string{"start"}, Vector: []string{"tacacs"}, PrivLvl: 15},
+		Unvalidated: &Unvalidated{Source: "10.0.0.1", Diagnosis: "unknown_key", Type: 0xc0, SeqNo: 1, SessionID: 123, Length: 100, BodySHA256: "abc123"}})
 	e.Emit(Record{TS: ts, Event: EventAccount, Flags: "stop", Attribution: "unattributed"})
 
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
@@ -33,9 +36,21 @@ func TestEmitWritesOneLinePerRecord(t *testing.T) {
 	if strings.Contains(lines[0], "tok\"") {
 		t.Fatal("credential leaked into the log")
 	}
-	for k := range m {
-		if strings.ToLower(k) != k || strings.Contains(k, "-") {
-			t.Fatalf("key %q is not snake_case", k)
+	assertSnakeCase(t, "", m)
+}
+
+func assertSnakeCase(t *testing.T, path string, v any) {
+	switch v := v.(type) {
+	case map[string]any:
+		for k, val := range v {
+			if strings.ToLower(k) != k || strings.Contains(k, "-") {
+				t.Fatalf("key %q is not snake_case", path+"."+k)
+			}
+			assertSnakeCase(t, path+"."+k, val)
+		}
+	case []any:
+		for i, val := range v {
+			assertSnakeCase(t, path+"["+string(rune(i))+"]", val)
 		}
 	}
 }
