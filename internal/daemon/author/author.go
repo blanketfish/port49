@@ -93,7 +93,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
 	if errors.Is(err, store.ErrNotFound) {
 		rec.Session.Username = authen.Canonical(string(req.User))
-		return h.deny(rec, decision.ContextMissing, "port49: this session was not authenticated by port49 — log in again")
+		return h.deny(rec, decision.ContextMissing, "port49: this session was not authenticated by port49")
 	}
 	if err != nil {
 		rec.Session.Username = authen.Canonical(string(req.User))
@@ -107,8 +107,10 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		h.metrics.StoreOps.WithLabelValues("delete_context", storeOutcome(derr)).Inc()
 		return h.deny(rec, decision.UsernameMismatch, "port49: username does not match the authenticated session")
 	}
-	if svc := kv["service"]; svc != "shell" {
-		return h.deny(rec, decision.ServiceUnsupported, "port49: service "+svc+" is not authorized by port49")
+	if kv["service"] != "shell" {
+		// server_msg is never built from device-supplied bytes; the service
+		// value the NAS sent is already recorded in request.raw on this record.
+		return h.deny(rec, decision.ServiceUnsupported, "port49: service not authorized by port49")
 	}
 
 	var d Decision

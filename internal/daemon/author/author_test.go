@@ -111,6 +111,93 @@ func TestUnsupportedService(t *testing.T) {
 	}
 }
 
+func TestVector(t *testing.T) {
+	if v := Vector("", nil); v != nil {
+		t.Fatalf("expected nil vector for an empty command, got %v", v)
+	}
+	if v := Vector("show", []string{"version"}); len(v) != 2 || v[0] != "show" || v[1] != "version" {
+		t.Fatalf("%v", v)
+	}
+}
+
+func TestLabCommandPrefixBoundary(t *testing.T) {
+	l := &Lab{DenyPrefixes: []string{"show"}}
+	if d := l.Command(context.Background(), store.Context{}, []string{"show", "version"}, nil); d.Permit {
+		t.Fatalf("expected \"show version\" to be denied by prefix \"show\": %+v", d)
+	}
+	if d := l.Command(context.Background(), store.Context{}, []string{"shower"}, nil); !d.Permit {
+		t.Fatalf("expected \"shower\" to be permitted (no token boundary match): %+v", d)
+	}
+}
+
+// TestServiceUnsupportedDoesNotEchoDeviceInput guards against a NAS-supplied
+// service value landing verbatim in a server_msg rendered on a device console.
+func TestServiceUnsupportedDoesNotEchoDeviceInput(t *testing.T) {
+	h, _, _ := setup(t)
+	svc := "ppp\x1b[31m"
+	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service="+svc, "protocol=ip"))
+	if resp.Status != wire.AuthorStatusFail {
+		t.Fatalf("%+v", resp)
+	}
+	if strings.Contains(string(resp.ServerMsg), svc) {
+		t.Fatalf("server_msg echoes device-supplied service value: %q", resp.ServerMsg)
+	}
+}
+
+func isPrintableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b < 0x20 || b > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// TestServerMsgIsPrintableASCII covers every server_msg this package can
+// produce: server_msg is never anything but printable ASCII, since it is
+// rendered on a device console.
+func TestServerMsgIsPrintableASCII(t *testing.T) {
+	tests := []struct {
+		name string
+		resp func(t *testing.T) wire.AuthorResponse
+	}{
+		{"context_missing", func(t *testing.T) wire.AuthorResponse {
+			h, _, _ := setup(t)
+			return h.Handle(context.Background(), peer, req("alice", "vty9", "service=shell", "cmd=show"))
+		}},
+		{"username_mismatch", func(t *testing.T) wire.AuthorResponse {
+			h, _, _ := setup(t)
+			return h.Handle(context.Background(), peer, req("bob", "vty0", "service=shell", "cmd=show"))
+		}},
+		{"service_unsupported", func(t *testing.T) wire.AuthorResponse {
+			h, _, _ := setup(t)
+			return h.Handle(context.Background(), peer, req("alice", "vty0", "service=ppp\x1b[31m", "protocol=ip"))
+		}},
+		{"store_unavailable", func(t *testing.T) wire.AuthorResponse {
+			st := &errGetContextStore{Store: memory.New(time.Now), err: errors.New("store: connection refused")}
+			log := &bytes.Buffer{}
+			lab := &Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
+			h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now)
+			return h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+		}},
+		{"lab_deny", func(t *testing.T) wire.AuthorResponse {
+			h, _, _ := setup(t)
+			return h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=reload", "cmd-arg=<cr>"))
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := tt.resp(t)
+			if len(resp.ServerMsg) == 0 {
+				t.Fatal("expected a non-empty server_msg")
+			}
+			if !isPrintableASCII(string(resp.ServerMsg)) {
+				t.Fatalf("server_msg is not printable ASCII: %q", resp.ServerMsg)
+			}
+		})
+	}
+}
+
 // errGetContextStore embeds a real memory.Store (for DeleteContext and any
 // other calls) but forces GetContext to fail with a non-ErrNotFound error, to
 // exercise the store_unavailable path.

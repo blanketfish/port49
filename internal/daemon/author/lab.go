@@ -13,7 +13,10 @@ import (
 // server_msg, which is exactly what lab register entries L2 and L10 need.
 type Lab struct {
 	SessionAttributes []string
-	DenyPrefixes      []string
+	// DenyPrefixes lists commands denied by prefix match on a token boundary:
+	// the joined command line must equal the prefix, or begin with the prefix
+	// followed by a space, so "show" denies "show version" but not "shower".
+	DenyPrefixes []string
 }
 
 func (l *Lab) Session(_ context.Context, _ store.Context, _ []string) Decision {
@@ -23,9 +26,9 @@ func (l *Lab) Session(_ context.Context, _ store.Context, _ []string) Decision {
 func (l *Lab) Command(_ context.Context, _ store.Context, vector []string, _ []string) Decision {
 	line := strings.Join(vector, " ")
 	for _, p := range l.DenyPrefixes {
-		if strings.HasPrefix(line, p) {
+		if line == p || strings.HasPrefix(line, p+" ") {
 			return Decision{Permit: false, Reason: decision.NoPermitDominatesDeny,
-				ServerMsg: "port49: denied by lab_deny (" + p + ") — see 'port49 explain'"}
+				ServerMsg: "port49: denied by lab_deny (" + p + "); see 'port49 explain'"}
 		}
 	}
 	return Decision{Permit: true, Reason: decision.PermitDominates}
