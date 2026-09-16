@@ -280,3 +280,41 @@ func TestShortCHAPDataFailsWithDelayAndRecord(t *testing.T) {
 		t.Fatalf("missing credential hash: %v", r[0])
 	}
 }
+
+func TestSessionIsTerminalAfterFinish(t *testing.T) {
+	f := setup(t)
+	s := f.h.NewSession(f.peer)
+	reply, done := s.Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")})
+	if !done || reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("%+v", reply)
+	}
+	// A second Start on the same finished session must not resume the exchange.
+	reply, done = s.Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")})
+	if !done || reply.Status != wire.AuthenStatusError {
+		t.Fatalf("%+v", reply)
+	}
+	r := f.records(t)
+	if r[1]["reason"] != "service_unsupported" {
+		t.Fatalf("%v", r[1])
+	}
+}
+
+func TestFailDelayIsCancellable(t *testing.T) {
+	f := setup(t)
+	// A long failure delay, then a cancelled context: the FAIL reply must
+	// return promptly rather than waiting out the full delay.
+	f.h.limits = limits.New(limits.Config{AuthFailureDelayBase: time.Hour, AuthFailureDelayMax: time.Hour, AuthFailureWindow: time.Minute}, func() time.Time { return f.now })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	reply, done := f.h.NewSession(f.peer).Start(ctx, wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty1"), Data: []byte("wrong")})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("fail did not honor context cancellation: took %s", elapsed)
+	}
+	if !done || reply.Status != wire.AuthenStatusFail {
+		t.Fatalf("%+v", reply)
+	}
+}

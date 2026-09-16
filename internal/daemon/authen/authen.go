@@ -3,10 +3,10 @@
 package authen
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"time"
 
@@ -39,17 +39,33 @@ func New(s store.Store, e decision.Emitter, l *limits.Limiter, m *metrics.Metric
 	return &Handler{store: s, log: e, limits: l, metrics: m, now: now, newCtxID: newCtxID, receiptTTL: receiptTTL, contextTTL: contextTTL}
 }
 
+// Session phases. phaseDone is terminal: once a session has replied with
+// done == true, any further Start or Continue on it takes the unsupported path
+// (ERROR, service_unsupported) rather than resuming a finished exchange.
+const (
+	phaseNew = iota
+	phaseWaitUser
+	phaseWaitPass
+	phaseDone
+)
+
 type Session struct {
 	h     *Handler
 	peer  Peer
 	start wire.AuthenStart
 	user  string // as typed
-	phase int    // 0 new, 1 waiting for user, 2 waiting for password
+	phase int
 }
 
 func (h *Handler) NewSession(peer Peer) *Session { return &Session{h: h, peer: peer} }
 
+// Start begins an authentication session. A zero Status in the reply together
+// with done == true means: send nothing to the NAS and close out the session
+// (the connection layer, Task 14, honors that).
 func (s *Session) Start(ctx context.Context, p wire.AuthenStart) (wire.AuthenReply, bool) {
+	if s.phase == phaseDone {
+		return s.unsupported("port49: session already finished")
+	}
 	s.start = p
 	s.user = string(p.User)
 	if p.Action != wire.AuthenActionLogin {
@@ -62,26 +78,30 @@ func (s *Session) Start(ctx context.Context, p wire.AuthenStart) (wire.AuthenRep
 		return s.verifyCHAP(ctx, p.Data)
 	case wire.AuthenTypeASCII:
 		if s.user == "" {
-			s.phase = 1
+			s.phase = phaseWaitUser
 			return wire.AuthenReply{Status: wire.AuthenStatusGetUser, ServerMsg: []byte("Username: ")}, false
 		}
-		s.phase = 2
+		s.phase = phaseWaitPass
 		return wire.AuthenReply{Status: wire.AuthenStatusGetPass, Flags: wire.AuthenReplyFlagNoEcho, ServerMsg: []byte("Password: ")}, false
 	default:
 		return s.unsupported("port49: authentication type not supported")
 	}
 }
 
+// Continue advances a multi-round ASCII exchange. A zero Status in the reply
+// together with done == true means: send nothing to the NAS (the ABORT case
+// below); the connection layer (Task 14) honors that.
 func (s *Session) Continue(ctx context.Context, p wire.AuthenContinue) (wire.AuthenReply, bool) {
 	if p.Flags&wire.AuthenContinueFlagAbort != 0 {
+		s.phase = phaseDone
 		return wire.AuthenReply{}, true
 	}
 	switch s.phase {
-	case 1:
+	case phaseWaitUser:
 		s.user = string(p.UserMsg)
-		s.phase = 2
+		s.phase = phaseWaitPass
 		return wire.AuthenReply{Status: wire.AuthenStatusGetPass, Flags: wire.AuthenReplyFlagNoEcho, ServerMsg: []byte("Password: ")}, false
-	case 2:
+	case phaseWaitPass:
 		return s.verify(ctx, "ascii", p.UserMsg, p.UserMsg)
 	}
 	return s.unsupported("port49: unexpected CONTINUE")
@@ -89,14 +109,16 @@ func (s *Session) Continue(ctx context.Context, p wire.AuthenContinue) (wire.Aut
 
 // verify handles PAP and ASCII, where the presented credential is the token itself.
 func (s *Session) verify(ctx context.Context, method string, presented, secret []byte) (wire.AuthenReply, bool) {
-	return s.redeem(ctx, method, presented, func(t store.Token) bool { return bytes.Equal(t.Secret, secret) })
+	return s.redeem(ctx, method, presented, func(t store.Token) bool {
+		return subtle.ConstantTimeCompare(t.Secret, secret) == 1
+	})
 }
 
 func (s *Session) verifyCHAP(ctx context.Context, data []byte) (wire.AuthenReply, bool) {
 	if len(data) < 1+1+md5.Size {
 		// Too short to carry ppp_id, a challenge, and a 16-byte response: it cannot
 		// match anything, so it fails the same way an unmatched credential does.
-		return s.fail(s.newRecord("chap", data), decision.TokenNotFound)
+		return s.fail(ctx, s.newRecord("chap", data), decision.TokenNotFound)
 	}
 	id, challenge, response := data[0], data[1:len(data)-md5.Size], data[len(data)-md5.Size:]
 	return s.redeem(ctx, "chap", data, func(t store.Token) bool {
@@ -104,7 +126,7 @@ func (s *Session) verifyCHAP(ctx context.Context, data []byte) (wire.AuthenReply
 		m.Write([]byte{id})
 		m.Write(t.Secret)
 		m.Write(challenge)
-		return bytes.Equal(m.Sum(nil), response)
+		return subtle.ConstantTimeCompare(m.Sum(nil), response) == 1
 	})
 }
 
@@ -140,7 +162,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 			rec.Session.CtxID = r.CtxID
 			return s.finish(rec, r.Status, decision.ReceiptReplayed)
 		}
-		return s.fail(rec, decision.CredentialMismatch)
+		return s.fail(ctx, rec, decision.CredentialMismatch)
 	case !errors.Is(err, store.ErrNotFound):
 		return s.storeError(rec)
 	}
@@ -167,10 +189,10 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	if winner == nil {
 		for i := range cands {
 			if cands[i].Kind != kind && match(cands[i]) {
-				return s.fail(rec, decision.TokenKindMismatch)
+				return s.fail(ctx, rec, decision.TokenKindMismatch)
 			}
 		}
-		return s.fail(rec, decision.TokenNotFound)
+		return s.fail(ctx, rec, decision.TokenNotFound)
 	}
 
 	// 3. Atomic redemption; the loser of a race adopts the winner's receipt.
@@ -186,7 +208,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 				rec.Session.CtxID = r.CtxID
 				return s.finish(rec, r.Status, decision.ReceiptReplayed)
 			}
-			return s.fail(rec, decision.TokenNotFound)
+			return s.fail(ctx, rec, decision.TokenNotFound)
 		}
 		return s.storeError(rec)
 	}
@@ -215,7 +237,10 @@ func storeOutcome(err error) string {
 	}
 }
 
+// finish records the outcome and ends the session: every path that reaches it
+// returns done == true, so phaseDone is set here unconditionally.
 func (s *Session) finish(rec decision.Record, status uint8, reason decision.Reason) (wire.AuthenReply, bool) {
+	s.phase = phaseDone
 	rec.Verdict = decision.VerdictPermit
 	if status != wire.AuthenStatusPass {
 		rec.Verdict = decision.VerdictDeny
@@ -226,10 +251,17 @@ func (s *Session) finish(rec decision.Record, status uint8, reason decision.Reas
 	return wire.AuthenReply{Status: status}, true
 }
 
-func (s *Session) fail(rec decision.Record, reason decision.Reason) (wire.AuthenReply, bool) {
+// fail replies FAIL after the per-(nas, username) failure delay, cancellable by
+// ctx so a closed connection does not pin a goroutine on the sleep.
+func (s *Session) fail(ctx context.Context, rec decision.Record, reason decision.Reason) (wire.AuthenReply, bool) {
 	delay := s.h.limits.AuthFailure(s.peer.NAS, Canonical(s.user))
 	s.h.metrics.AuthFailures.Inc()
-	time.Sleep(delay)
+	timer := time.NewTimer(delay)
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		timer.Stop()
+	}
 	rec.ServerMsg = "port49: authentication failed — mint a new token with `port49 token`"
 	reply, done := s.finish(rec, wire.AuthenStatusFail, reason)
 	reply.ServerMsg = []byte(rec.ServerMsg)
@@ -238,7 +270,8 @@ func (s *Session) fail(rec decision.Record, reason decision.Reason) (wire.Authen
 
 // unsupported replies ERROR and logs one redeem record with reason
 // ServiceUnsupported: a non-login action, an authentication type this package
-// does not implement, or a CONTINUE sent in a phase that isn't expecting one.
+// does not implement, or a packet sent to a session that has already finished
+// or is not expecting one.
 func (s *Session) unsupported(serverMsg string) (wire.AuthenReply, bool) {
 	rec := s.newRecord("", nil)
 	reply, done := s.finish(rec, wire.AuthenStatusError, decision.ServiceUnsupported)
