@@ -74,3 +74,43 @@ func TestDeviceMatchingNoGroupIsNotAdmitted(t *testing.T) {
 		t.Fatal("device with no key group must be refused")
 	}
 }
+
+func TestBuildRefusesDisagreeingAddresses(t *testing.T) {
+	// Case 1: two addresses resolving to different keys at same prefix length must error
+	inv := Inventory{
+		Devices: []Device{{
+			Name:      "leaf-02",
+			Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.5"), netip.MustParseAddr("10.0.1.5")},
+		}},
+		KeyGroups: []KeyGroup{
+			{CIDR: netip.MustParsePrefix("10.0.0.0/24"), KeyRef: "key_a"},
+			{CIDR: netip.MustParsePrefix("10.0.1.0/24"), KeyRef: "key_b"},
+		},
+	}
+	_, err := Build(inv)
+	if err == nil || !strings.Contains(err.Error(), "10.0.0.0/24") || !strings.Contains(err.Error(), "10.0.1.0/24") {
+		t.Fatalf("want error naming both CIDRs, got %v", err)
+	}
+
+	// Case 2: two addresses resolving to different groups with same key_ref must succeed
+	inv2 := Inventory{
+		Devices: []Device{{
+			Name:      "leaf-03",
+			Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.5"), netip.MustParseAddr("10.0.1.5")},
+		}},
+		KeyGroups: []KeyGroup{
+			{CIDR: netip.MustParsePrefix("10.0.0.0/24"), KeyRef: "unified_key"},
+			{CIDR: netip.MustParsePrefix("10.0.1.0/24"), KeyRef: "unified_key"},
+		},
+	}
+	tr, err := Build(inv2)
+	if err != nil {
+		t.Fatalf("two addresses with same key_ref should succeed: %v", err)
+	}
+	// Both addresses should resolve to unified_key
+	r1, ok1 := tr.Lookup(netip.MustParseAddr("10.0.0.5"))
+	r2, ok2 := tr.Lookup(netip.MustParseAddr("10.0.1.5"))
+	if !ok1 || !ok2 || r1.KeyRef != "unified_key" || r2.KeyRef != "unified_key" {
+		t.Fatalf("both addresses should resolve to unified_key: %v, %v", r1, r2)
+	}
+}

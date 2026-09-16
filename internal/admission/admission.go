@@ -85,8 +85,9 @@ func resolveKeyRef(d Device, groups []KeyGroup) (string, error) {
 		return attrHits[0].KeyRef, nil // tier 2
 	}
 	// Tier 3: longest prefix across all the device's addresses must agree.
-	best := ""
-	bestBits := -1
+	// Each address resolves to its longest matching CIDR group; all must have the same KeyRef.
+	var addressKeys []string        // key_ref for each address that matched
+	var addressCIDRs []netip.Prefix // CIDR of winning group for each address
 	for _, a := range d.Addresses {
 		var hits []KeyGroup
 		for _, g := range groups {
@@ -101,11 +102,20 @@ func resolveKeyRef(d Device, groups []KeyGroup) (string, error) {
 		if len(hits) > 1 && hits[0].CIDR.Bits() == hits[1].CIDR.Bits() {
 			return "", fmt.Errorf("admission: device %q address %s matches key groups %q and %q at equal prefix length", d.Name, a, hits[0].KeyRef, hits[1].KeyRef)
 		}
-		if hits[0].CIDR.Bits() > bestBits {
-			best, bestBits = hits[0].KeyRef, hits[0].CIDR.Bits()
-		}
+		addressKeys = append(addressKeys, hits[0].KeyRef)
+		addressCIDRs = append(addressCIDRs, hits[0].CIDR)
 	}
-	return best, nil
+	// All addresses that matched must have resolved to the same key_ref.
+	if len(addressKeys) > 0 {
+		firstKey := addressKeys[0]
+		for i := 1; i < len(addressKeys); i++ {
+			if addressKeys[i] != firstKey {
+				return "", fmt.Errorf("admission: device %q: addresses resolve to different keys: %s (%s) and %s (%s)", d.Name, addressCIDRs[0], addressKeys[0], addressCIDRs[i], addressKeys[i])
+			}
+		}
+		return firstKey, nil
+	}
+	return "", nil
 }
 
 func attrsMatch(have, want map[string]string) bool {
