@@ -117,3 +117,24 @@ func (r Record) MarshalJSON() ([]byte, error) {
 		*alias
 	}{TS: r.TS.Format("2006-01-02T15:04:05.000Z07:00"), alias: (*alias)(&r)})
 }
+
+// UnmarshalJSON is MarshalJSON's counterpart, parsing ts back into a
+// time.Time. It exists so a Record round-trips through the accounting
+// spool's on-disk overflow file (package acct).
+func (r *Record) UnmarshalJSON(b []byte) error {
+	type alias Record
+	var a struct {
+		TS string `json:"ts"`
+		*alias
+	}
+	a.alias = (*alias)(r)
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	ts, err := time.Parse("2006-01-02T15:04:05.000Z07:00", a.TS)
+	if err != nil {
+		return err
+	}
+	r.TS = ts
+	return nil
+}

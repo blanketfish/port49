@@ -55,6 +55,34 @@ func assertSnakeCase(t *testing.T, path string, v any) {
 	}
 }
 
+func TestRecordJSONRoundTrips(t *testing.T) {
+	ts := time.Date(2026, 9, 4, 2, 11, 7, 412_000_000, time.UTC)
+	want := Record{TS: ts, Event: EventAccount, Flags: "stop", Attribution: "resolved", TaskID: "43",
+		Principal: "user:alice@example.com",
+		Device:    &Device{NAS: "10.20.0.7", Name: "leaf-01", Platform: "arista_eos"},
+		Session:   &Session{CtxID: "ctx1", Port: "vty0", RemAddr: "198.51.100.4", Privilege: 15},
+		AcctRecord: &AcctRecord{Raw: []string{"task_id=43", "cmd=show"}, Vector: []string{"show"},
+			PrivLvl: 15, StartTime: 1757041502, StopTime: 1757041502}}
+
+	b, err := want.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Record
+	if err := got.UnmarshalJSON(b); err != nil {
+		t.Fatal(err)
+	}
+	if !got.TS.Equal(want.TS) {
+		t.Fatalf("ts: got %v want %v", got.TS, want.TS)
+	}
+	got.TS, want.TS = time.Time{}, time.Time{}
+	gotB, _ := json.Marshal(got)
+	wantB, _ := json.Marshal(want)
+	if string(gotB) != string(wantB) {
+		t.Fatalf("round trip mismatch:\ngot  %s\nwant %s", gotB, wantB)
+	}
+}
+
 func TestCredentialHashIsHexSHA256(t *testing.T) {
 	h := CredentialHash([]byte("abc"))
 	if h != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
