@@ -12,3 +12,6 @@ coverage.out
 # Editor / OS
 .DS_Store
 *.swp
+
+# Lab
+/tests/lab/captures/
