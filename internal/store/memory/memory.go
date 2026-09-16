@@ -5,6 +5,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"sync"
 	"time"
 
@@ -117,7 +118,7 @@ func (s *Store) RedeemAndReceipt(_ context.Context, k store.TokenKey, secret []b
 	defer s.mu.Unlock()
 	set := s.live(k)
 	for i, t := range set {
-		if bytes.Equal(t.Secret, secret) {
+		if subtle.ConstantTimeCompare(t.Secret, secret) == 1 {
 			if !t.Reusable {
 				s.tokens[k] = append(set[:i:i], set[i+1:]...)
 				if len(s.tokens[k]) == 0 {
