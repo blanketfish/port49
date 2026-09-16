@@ -1187,7 +1187,8 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 | `escalation_granted` | `escalate`: the level was within `max_privilege` and the mechanism succeeded |
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
-| `service_unsupported` | the authorization `service` is not one the platform authorizes |
+| `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
+| `store_unavailable` | any event: the store did not answer or returned an error; the reply is `ERROR` so the device falls through to its next method (design document §12) — the log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
 | `device_mismatch` | `redeem`: the presented token's device tag is not this device's (design document §8) — PAP and ASCII only; under CHAP the tag is not visible and the outcome is `token_not_found` |
