@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
@@ -261,5 +262,103 @@ func TestShutdownGivesUpOnPersistentReadError(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return within 2s despite a persistent read error")
+	}
+}
+
+// TestDrainResumesAfterReadErrorWithoutDuplicates covers a line over
+// maxLineBytes: it must be dropped and skipped, not treated as fatal, so
+// drainOnce makes it through the whole file (including the records after
+// the oversized line) in one streamed pass without re-forwarding anything
+// it already emitted, and depth is not left over- or under-reported.
+func TestDrainResumesAfterReadErrorWithoutDuplicates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	draining := path + ".draining"
+
+	line := func(taskID string) []byte {
+		rec := decision.Record{Event: decision.EventAccount, TaskID: taskID}
+		b, err := rec.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return append(b, '\n')
+	}
+	oversized := append(bytes.Repeat([]byte("x"), 2*1024*1024), '\n') // > maxLineBytes, no embedded newline
+
+	var data []byte
+	data = append(data, line("1")...)
+	data = append(data, line("2")...)
+	data = append(data, oversized...)
+	data = append(data, line("4")...)
+	data = append(data, line("5")...)
+	if err := os.WriteFile(draining, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &bytes.Buffer{}
+	m := metrics.New(prometheus.NewRegistry())
+	sp, err := NewSpool(4, path, decision.NewJSONLines(out), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A handful of passes is enough regardless of exactly how many the
+	// implementation needs; extra passes on an already-empty spool are
+	// no-ops.
+	for i := 0; i < 3; i++ {
+		sp.drainOnce()
+	}
+
+	want := []string{`"task_id":"1"`, `"task_id":"2"`, `"task_id":"4"`, `"task_id":"5"`}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != len(want) {
+		t.Fatalf("want %d records (1,2,4,5; 3 dropped as oversized), got %d: %q", len(want), len(lines), out.String())
+	}
+	for _, w := range want {
+		if n := strings.Count(out.String(), w); n != 1 {
+			t.Fatalf("want %s forwarded exactly once, got %d: %q", w, n, out.String())
+		}
+	}
+	if got := testutil.ToFloat64(m.SpoolDrops); got != 1 {
+		t.Fatalf("want SpoolDrops == 1 (the oversized line), got %v", got)
+	}
+	if got := testutil.ToFloat64(m.SpoolDepth); got != 0 {
+		t.Fatalf("want SpoolDepth == 0 once the drain has caught up, got %v", got)
+	}
+	if _, err := os.Stat(draining); !os.IsNotExist(err) {
+		t.Fatalf("draining file should be removed, stat err: %v", err)
+	}
+}
+
+// TestStuckClearsWhenFileVanishes covers a stuck spool (fully forwarded,
+// removal failed) whose .draining file then disappears out from under it:
+// os.Remove reports IsNotExist, which must clear stuck rather than wedge it
+// permanently, since there is nothing left to remove.
+func TestStuckClearsWhenFileVanishes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	out := &bytes.Buffer{}
+	sp, err := NewSpool(4, path, decision.NewJSONLines(out), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sp.stuck = true // simulate a prior pass that forwarded everything but couldn't remove .draining
+	// No .draining file exists here, simulating it having vanished (e.g. an
+	// operator cleaned it up) since the pass that set stuck.
+
+	ok, forwarded := sp.drainOnce()
+	if !ok || forwarded != 0 {
+		t.Fatalf("want ok=true forwarded=0 when the stuck file has vanished, got ok=%v forwarded=%d", ok, forwarded)
+	}
+	if sp.stuck {
+		t.Fatal("stuck should clear once .draining no longer exists")
+	}
+
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "after"}); err != nil {
+		t.Fatal(err)
+	}
+	sp.drainOnce()
+
+	if !strings.Contains(out.String(), `"task_id":"after"`) {
+		t.Fatalf("an offer after stuck clears should be forwarded normally: %q", out.String())
 	}
 }
