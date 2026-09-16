@@ -20,9 +20,11 @@ import (
 
 var ErrSpoolFull = errors.New("acct: spool full")
 
-// maxLineBytes bounds a single spool line. It is not a hard read limit (see
-// drainOnce): a longer line is still read, but dropped rather than treated
-// as fatal, so one corrupt or pathological record can never block the drain.
+// maxLineBytes bounds how much of a single spool line is held in memory. It
+// is not a hard read limit: a longer line is still fully consumed from the
+// stream (see readBoundedLine), but dropped rather than treated as fatal, so
+// one corrupt or pathological record can never block the drain, and reading
+// it can never allocate more than roughly this many bytes.
 const maxLineBytes = 1 << 20 // 1 MiB
 
 // Spool is a durable, append-only file log (spec §5.8, §14): Offer returns nil
@@ -40,16 +42,22 @@ const maxLineBytes = 1 << 20 // 1 MiB
 // and removing the .draining file re-forwards that record the next time Run
 // starts (TestSpoolResumesDrainingFile). Consumers of the sink must tolerate
 // duplicates. Every error on the drain path is logged (path and error, never
-// record contents).
+// record contents), throttled to once a minute per failure kind once a
+// condition persists, so a stuck filesystem cannot flood the log.
 //
 // A read error partway through .draining does not lose or repeat the prefix
 // already forwarded: the spool remembers how many bytes of the file it has
 // forwarded (drainOffset) and the next pass resumes there instead of
-// re-reading from the start (TestDrainResumesAfterReadErrorWithoutDuplicates).
-// If the same offset fails three passes in a row, the file is quarantined —
-// renamed to <path>.draining.failed-<unix-seconds> — so the drain can
-// continue with whatever comes after it; a quarantined file is left for an
-// operator, never read or deleted automatically by this package.
+// re-reading from the start (TestDrainResumesAtOffsetWithoutDuplicates). A
+// line over maxLineBytes is dropped, not treated as a read error
+// (TestOversizedLineIsDroppedNotFatal). A genuine read error, or a
+// stat/open/seek failure on .draining itself, counts toward the same
+// 3-strikes-then-quarantine mechanism: on the third consecutive failure at
+// the same point, the file is renamed to
+// <path>.draining.failed-<unix-seconds> so the drain can continue with
+// whatever comes after it; a quarantined file is left for an operator,
+// never read or deleted automatically by this package
+// (TestShutdownQuarantinesUnreadableDrainingFile).
 //
 // If a pass fully forwards .draining but cannot remove it (for example, the
 // directory is not writable), the spool remembers that and retries only the
@@ -62,10 +70,11 @@ const maxLineBytes = 1 << 20 // 1 MiB
 // On a clean shutdown, Run keeps draining until the file is empty; a pass
 // that fails, or that succeeds without forwarding anything while work
 // remains, counts toward a 3-strike give-up (with a short sleep between
-// attempts either way) so shutdown can never spin. Giving up leaves whatever
-// is on disk for the next start — at-least-once delivery still holds, since
+// attempts either way) so shutdown can never spin
+// (TestShutdownGivesUpAfterThreeStrikes). Giving up leaves whatever is on
+// disk for the next start — at-least-once delivery still holds, since
 // nothing durably written is ever deleted without having been forwarded
-// first (TestShutdownGivesUpOnPersistentReadError).
+// first.
 type Spool struct {
 	path     string
 	sink     decision.Emitter
@@ -80,11 +89,18 @@ type Spool struct {
 	// The rest belong exclusively to the single goroutine that calls
 	// drainOnce (Run, or a test calling it directly with nothing else
 	// running concurrently): no mutex, since nothing else ever touches them.
-	stuck           bool // .draining is fully forwarded; only removal is retried
-	lastStuckLog    time.Time
-	drainOffset     int64 // bytes of .draining already forwarded; 0 for a file not yet started
-	offsetFailAt    int64 // drainOffset at the last read failure
-	offsetFailCount int   // consecutive read failures at offsetFailAt
+	stuck             bool // .draining is fully forwarded; only removal is retried
+	lastStuckLog      time.Time
+	lastStructLog     time.Time // throttles stat/open/seek/rename failure logs
+	lastQuarantineLog time.Time // throttles a failing quarantine rename's log
+	drainOffset       int64     // bytes of .draining already forwarded; 0 for a file not yet started
+	offsetFailAt      int64     // drainOffset (or -1 for a structural failure) at the last failure
+	offsetFailCount   int       // consecutive failures at offsetFailAt
+
+	// Test-only hooks (see spool_test.go); both are zero-valued no-ops in
+	// production.
+	failAfterBytes int64 // >0: fail the read after this many bytes of .draining, once
+	forceFail      bool  // true: drainOnce returns (false, 0) immediately, touching nothing
 }
 
 func NewSpool(capacity int, overflowPath string, sink decision.Emitter, m *metrics.Metrics) (*Spool, error) {
@@ -102,21 +118,64 @@ func NewSpool(capacity int, overflowPath string, sink decision.Emitter, m *metri
 	return s, nil
 }
 
+// countLines estimates how many records are already in path, using the same
+// bounded line reader the drain itself uses, so an oversized or truncated
+// (torn) line is counted as one line rather than aborting the count early —
+// the drain will forward-or-drop it and adjust depth exactly when it does.
 func countLines(path string) (int, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, err
 	}
 	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	br := bufio.NewReader(f)
 	n := 0
-	for sc.Scan() {
-		if len(sc.Bytes()) > 0 {
+	for {
+		_, read, _, rerr := readBoundedLine(br)
+		if read > 0 {
 			n++
 		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return n, nil
+			}
+			return n, rerr
+		}
 	}
-	return n, nil
+}
+
+// readBoundedLine reads one newline-terminated line from br. It returns the
+// line's content (nil if oversized — see below), the number of bytes
+// actually consumed from br for this line (always accurate, even when
+// oversized), whether the line exceeded maxLineBytes, and any error
+// (often io.EOF once the stream is exhausted).
+//
+// A line longer than maxLineBytes is still fully consumed from the stream
+// (so the caller's byte offset stays correct), but its content is dropped
+// once the cap is crossed rather than accumulated, so peak memory for one
+// line never grows much past maxLineBytes regardless of how long the actual
+// line is.
+func readBoundedLine(br *bufio.Reader) (line []byte, read int64, oversized bool, err error) {
+	var buf []byte
+	for {
+		chunk, e := br.ReadSlice('\n')
+		read += int64(len(chunk))
+		if !oversized {
+			if len(buf)+len(chunk) > maxLineBytes {
+				oversized = true
+				buf = nil
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		if e == nil {
+			return buf, read, oversized, nil
+		}
+		if e == bufio.ErrBufferFull {
+			continue // delimiter not found yet within this line; keep reading it
+		}
+		return buf, read, oversized, e
+	}
 }
 
 // Offer marshals r to one JSON line, appends it to the spool file, and syncs
@@ -238,15 +297,21 @@ func (s *Spool) hasWork() bool {
 	return s.depth > 0
 }
 
+// logThrottled logs at most once per minute per call site (tracked via
+// last), so a persistent failure condition cannot flood the log while
+// drainOnce keeps retrying it every tick.
+func (s *Spool) logThrottled(last *time.Time, format string, args ...any) {
+	if time.Since(*last) >= time.Minute {
+		log.Printf(format, args...)
+		*last = time.Now()
+	}
+}
+
 // markStuck records that .draining is fully forwarded but could not be
-// removed, so later passes retry only the removal. It logs at most once per
-// minute to avoid flooding the log while the underlying condition persists.
+// removed, so later passes retry only the removal.
 func (s *Spool) markStuck(path string, err error) {
 	s.stuck = true
-	if time.Since(s.lastStuckLog) >= time.Minute {
-		log.Printf("acct: spool cannot remove drained file %s: %v", path, err)
-		s.lastStuckLog = time.Now()
-	}
+	s.logThrottled(&s.lastStuckLog, "acct: spool cannot remove drained file %s: %v", path, err)
 }
 
 // drainOnce renames the spool file aside (or picks up a leftover .draining
@@ -261,6 +326,10 @@ func (s *Spool) markStuck(path string, err error) {
 // re-forwards a file it has already fully delivered. If the file has since
 // vanished, that counts as removed.
 func (s *Spool) drainOnce() (ok bool, forwarded int) {
+	if s.forceFail { // test-only hook; see spool_test.go
+		return false, 0
+	}
+
 	draining := s.path + ".draining"
 
 	if s.stuck {
@@ -282,7 +351,8 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 	if _, err := os.Stat(draining); err != nil {
 		if !os.IsNotExist(err) {
 			s.mu.Unlock()
-			log.Printf("acct: spool stat %s failed: %v", draining, err)
+			s.logThrottled(&s.lastStructLog, "acct: spool stat %s failed: %v", draining, err)
+			s.recordReadFailure(draining, -1)
 			return false, 0
 		}
 		// No leftover .draining file: try to start a fresh one from path.
@@ -291,7 +361,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 			if os.IsNotExist(err) {
 				return true, 0 // nothing pending
 			}
-			log.Printf("acct: spool rename %s -> %s failed: %v", s.path, draining, err)
+			s.logThrottled(&s.lastStructLog, "acct: spool rename %s -> %s failed: %v", s.path, draining, err)
 			return false, 0
 		}
 		s.drainOffset = 0
@@ -302,25 +372,37 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 
 	f, err := os.Open(draining)
 	if err != nil {
-		log.Printf("acct: spool open %s failed: %v", draining, err)
+		s.logThrottled(&s.lastStructLog, "acct: spool open %s failed: %v", draining, err)
+		s.recordReadFailure(draining, -1)
 		return false, 0
 	}
 	defer f.Close()
 	if offset > 0 {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
-			log.Printf("acct: spool seek %s to %d failed: %v", draining, offset, err)
+			s.logThrottled(&s.lastStructLog, "acct: spool seek %s to %d failed: %v", draining, offset, err)
+			s.recordReadFailure(draining, -1)
 			return false, 0
 		}
 	}
 
-	br := bufio.NewReader(f)
+	var r io.Reader = f
+	if s.failAfterBytes > 0 { // test-only hook; see spool_test.go
+		r = &failAfterReader{r: f, n: s.failAfterBytes}
+	}
+	br := bufio.NewReader(r)
 	pos := offset
 	for {
-		line, rerr := br.ReadBytes('\n')
-		if len(line) > 0 {
-			s.deliverLine(bytes.TrimRight(line, "\n"))
+		line, n, oversized, rerr := readBoundedLine(br)
+		if n > 0 {
+			switch {
+			case oversized:
+				log.Printf("acct: dropping oversized spool line (over %d bytes)", maxLineBytes)
+				s.metrics.SpoolDrops.Inc()
+			default:
+				s.deliverLine(bytes.TrimRight(line, "\n"))
+			}
 			forwarded++
-			pos += int64(len(line))
+			pos += n
 		}
 		if rerr != nil {
 			if rerr == io.EOF {
@@ -348,15 +430,11 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 }
 
 // deliverLine unmarshals one record and forwards it, or logs and counts a
-// drop for a line that is empty, too long (over maxLineBytes — never
-// fatal, just skipped), or fails to unmarshal.
+// drop for a line that is empty or fails to unmarshal. An oversized line
+// never reaches here — drainOnce handles that case itself, since
+// readBoundedLine already discarded its content.
 func (s *Spool) deliverLine(line []byte) {
 	if len(line) == 0 {
-		return
-	}
-	if len(line) > maxLineBytes {
-		log.Printf("acct: dropping oversized spool line (%d bytes > %d max)", len(line), maxLineBytes)
-		s.metrics.SpoolDrops.Inc()
 		return
 	}
 	var r decision.Record
@@ -383,16 +461,20 @@ func (s *Spool) applyForwarded(forwarded int, pos int64) {
 	s.drainOffset = pos
 }
 
-// recordReadFailure tracks consecutive read failures at the same offset. On
-// the third, the file is quarantined so the drain can move on: no
-// persistently unreadable file can block the spool forever. Records left in
-// a quarantined file need an operator's attention; this package does not
-// read or delete it.
-func (s *Spool) recordReadFailure(draining string, offset int64) {
-	if offset == s.offsetFailAt {
+// recordReadFailure tracks consecutive failures at the same point: either a
+// genuine offset (>= 0) into .draining's content, or -1 for a
+// stat/open/seek failure on .draining itself (which has no byte offset of
+// its own). On the third consecutive failure at the same point, the file is
+// quarantined so the drain can move on: no persistently unreadable file can
+// block the spool forever. If the quarantine rename itself keeps failing,
+// its log is throttled the same way a stuck removal's is. Records left in a
+// quarantined file need an operator's attention; this package does not read
+// or delete it.
+func (s *Spool) recordReadFailure(draining string, at int64) {
+	if at == s.offsetFailAt {
 		s.offsetFailCount++
 	} else {
-		s.offsetFailAt = offset
+		s.offsetFailAt = at
 		s.offsetFailCount = 1
 	}
 	if s.offsetFailCount < 3 {
@@ -400,11 +482,34 @@ func (s *Spool) recordReadFailure(draining string, offset int64) {
 	}
 	quarantine := fmt.Sprintf("%s.failed-%d", draining, time.Now().Unix())
 	if err := os.Rename(draining, quarantine); err != nil {
-		log.Printf("acct: spool could not quarantine unreadable %s: %v", draining, err)
+		s.logThrottled(&s.lastQuarantineLog, "acct: spool could not quarantine unreadable %s: %v", draining, err)
 		return
 	}
-	log.Printf("acct: spool quarantined %s after %d consecutive read failures at offset %d; it is left for an operator, not read or deleted automatically", quarantine, s.offsetFailCount, offset)
+	log.Printf("acct: spool quarantined %s after %d consecutive failures; it is left for an operator, not read or deleted automatically", quarantine, s.offsetFailCount)
 	s.drainOffset = 0
 	s.offsetFailAt = 0
 	s.offsetFailCount = 0
+}
+
+// failAfterReader wraps an io.Reader and fails with errInjectedFailure once
+// more than n bytes have been read from it. It exists only so tests can
+// force drainOnce's read-error path at an exact, deterministic byte offset
+// without corrupting an actual file on disk (see spool_test.go).
+type failAfterReader struct {
+	r io.Reader
+	n int64 // bytes still allowed before the injected failure
+}
+
+var errInjectedFailure = errors.New("acct: test-injected read failure")
+
+func (f *failAfterReader) Read(p []byte) (int, error) {
+	if f.n <= 0 {
+		return 0, errInjectedFailure
+	}
+	if int64(len(p)) > f.n {
+		p = p[:f.n]
+	}
+	n, err := f.r.Read(p)
+	f.n -= int64(n)
+	return n, err
 }

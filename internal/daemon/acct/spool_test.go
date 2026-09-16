@@ -235,11 +235,13 @@ func TestDrainStreamsLargeBacklog(t *testing.T) {
 	}
 }
 
-// TestShutdownGivesUpOnPersistentReadError covers the shutdown drain: if
-// .draining can never be read (here, because it is a directory, not a
-// file), Run must give up after a bounded number of attempts rather than
-// spin forever.
-func TestShutdownGivesUpOnPersistentReadError(t *testing.T) {
+// TestShutdownQuarantinesUnreadableDrainingFile covers the shutdown drain:
+// if .draining can never be read (here, because it is a directory, not a
+// file), the per-offset failure counter quarantines it (renames it aside)
+// after three consecutive failures, and Run then finds nothing left to do
+// and returns cleanly -- well within a bounded number of attempts, never
+// spinning forever.
+func TestShutdownQuarantinesUnreadableDrainingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "overflow.jsonl")
 	draining := path + ".draining"
@@ -265,12 +267,46 @@ func TestShutdownGivesUpOnPersistentReadError(t *testing.T) {
 	}
 }
 
-// TestDrainResumesAfterReadErrorWithoutDuplicates covers a line over
-// maxLineBytes: it must be dropped and skipped, not treated as fatal, so
-// drainOnce makes it through the whole file (including the records after
-// the oversized line) in one streamed pass without re-forwarding anything
-// it already emitted, and depth is not left over- or under-reported.
-func TestDrainResumesAfterReadErrorWithoutDuplicates(t *testing.T) {
+// TestShutdownGivesUpAfterThreeStrikes covers Run's bounded give-up path
+// directly: with drainOnce forced to fail on every call (via the forceFail
+// test hook, so the outcome does not depend on any real filesystem
+// behavior or on the quarantine mechanism resolving things), the shutdown
+// drain must still return within a bounded time, leaving the still-durable
+// record on disk rather than losing it.
+func TestShutdownGivesUpAfterThreeStrikes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	sp, err := NewSpool(4, path, decision.NewJSONLines(&bytes.Buffer{}), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "stuck-in-file"}); err != nil {
+		t.Fatal(err)
+	}
+	sp.forceFail = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sp.Run(ctx); close(done) }()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not give up within 2s despite drainOnce always failing")
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the offered record should remain on disk after giving up, stat err: %v", err)
+	}
+}
+
+// TestOversizedLineIsDroppedNotFatal covers a line over maxLineBytes: it
+// must be dropped and skipped, not treated as a read error, so drainOnce
+// makes it through the whole file (including the records after the
+// oversized line) in one streamed pass without re-forwarding anything it
+// already emitted, and depth is not left over- or under-reported.
+func TestOversizedLineIsDroppedNotFatal(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "overflow.jsonl")
 	draining := path + ".draining"
 
@@ -361,4 +397,137 @@ func TestStuckClearsWhenFileVanishes(t *testing.T) {
 	if !strings.Contains(out.String(), `"task_id":"after"`) {
 		t.Fatalf("an offer after stuck clears should be forwarded normally: %q", out.String())
 	}
+}
+
+// fiveLines writes 5 small, distinct JSON lines and returns each one's raw
+// bytes (including its trailing newline) alongside the concatenated whole,
+// so a test can both write a .draining file by hand and compute exact byte
+// offsets into it.
+func fiveLines(t *testing.T) (lines [5][]byte, all []byte) {
+	t.Helper()
+	for i := range lines {
+		rec := decision.Record{Event: decision.EventAccount, TaskID: strconv.Itoa(i + 1)}
+		b, err := rec.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines[i] = append(b, '\n')
+		all = append(all, lines[i]...)
+	}
+	return lines, all
+}
+
+// TestDrainResumesAtOffsetWithoutDuplicates is the real resume-at-offset
+// test TestOversizedLineIsDroppedNotFatal was mistaken for: that test never
+// makes drainOnce fail, so drainOffset never leaves zero. This one exercises
+// drainOffset directly, both as a starting point and as state that survives
+// a failed pass.
+func TestDrainResumesAtOffsetWithoutDuplicates(t *testing.T) {
+	t.Run("starts mid-file and delivers only what's left", func(t *testing.T) {
+		lines, all := fiveLines(t)
+		path := filepath.Join(t.TempDir(), "overflow.jsonl")
+		draining := path + ".draining"
+		if err := os.WriteFile(draining, all, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		out := &bytes.Buffer{}
+		m := metrics.New(prometheus.NewRegistry())
+		sp, err := NewSpool(4, path, decision.NewJSONLines(out), m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Simulate a prior pass (within the same process) having already
+		// forwarded records 1 and 2: set drainOffset past them and bring
+		// depth down to match, exactly as applyForwarded would have left
+		// them after that pass.
+		sp.mu.Lock()
+		sp.drainOffset = int64(len(lines[0]) + len(lines[1]))
+		sp.depth -= 2
+		m.SpoolDepth.Set(float64(sp.depth))
+		sp.mu.Unlock()
+
+		ok, forwarded := sp.drainOnce()
+		if !ok || forwarded != 3 {
+			t.Fatalf("want ok=true forwarded=3, got ok=%v forwarded=%d", ok, forwarded)
+		}
+
+		got := strings.Split(strings.TrimSpace(out.String()), "\n")
+		if len(got) != 3 {
+			t.Fatalf("want exactly records 3,4,5, got %d lines: %q", len(got), out.String())
+		}
+		for i, want := range []string{`"task_id":"3"`, `"task_id":"4"`, `"task_id":"5"`} {
+			if !strings.Contains(got[i], want) {
+				t.Fatalf("line %d: want %s, got %q", i, want, got[i])
+			}
+		}
+		for _, unwanted := range []string{`"task_id":"1"`, `"task_id":"2"`} {
+			if strings.Contains(out.String(), unwanted) {
+				t.Fatalf("record %s should not have been re-delivered: %q", unwanted, out.String())
+			}
+		}
+		if sp.drainOffset != 0 {
+			t.Fatalf("want drainOffset == 0 after a full drain, got %d", sp.drainOffset)
+		}
+		if _, err := os.Stat(draining); !os.IsNotExist(err) {
+			t.Fatalf("draining file should be removed, stat err: %v", err)
+		}
+		if got := testutil.ToFloat64(m.SpoolDepth); got != 0 {
+			t.Fatalf("want SpoolDepth == 0, got %v", got)
+		}
+	})
+
+	t.Run("offset survives a failed pass and the next pass resumes cleanly", func(t *testing.T) {
+		lines, all := fiveLines(t)
+		path := filepath.Join(t.TempDir(), "overflow.jsonl")
+		draining := path + ".draining"
+		if err := os.WriteFile(draining, all, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		out := &bytes.Buffer{}
+		m := metrics.New(prometheus.NewRegistry())
+		sp, err := NewSpool(4, path, decision.NewJSONLines(out), m)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wantOffset := int64(len(lines[0]) + len(lines[1]))
+		sp.failAfterBytes = wantOffset
+		ok, forwarded := sp.drainOnce()
+		if ok || forwarded != 2 {
+			t.Fatalf("want ok=false forwarded=2 on the injected failure, got ok=%v forwarded=%d", ok, forwarded)
+		}
+		if sp.drainOffset != wantOffset {
+			t.Fatalf("want drainOffset == %d after the failed pass, got %d", wantOffset, sp.drainOffset)
+		}
+		got := strings.Split(strings.TrimSpace(out.String()), "\n")
+		if len(got) != 2 || !strings.Contains(got[0], `"task_id":"1"`) || !strings.Contains(got[1], `"task_id":"2"`) {
+			t.Fatalf("want records 1,2 delivered once each, got %q", out.String())
+		}
+
+		sp.failAfterBytes = 0
+		ok, forwarded = sp.drainOnce()
+		if !ok || forwarded != 3 {
+			t.Fatalf("want ok=true forwarded=3 on the resumed pass, got ok=%v forwarded=%d", ok, forwarded)
+		}
+		got = strings.Split(strings.TrimSpace(out.String()), "\n")
+		if len(got) != 5 {
+			t.Fatalf("want all 5 records total, got %d: %q", len(got), out.String())
+		}
+		for _, want := range []string{`"task_id":"1"`, `"task_id":"2"`, `"task_id":"3"`, `"task_id":"4"`, `"task_id":"5"`} {
+			if n := strings.Count(out.String(), want); n != 1 {
+				t.Fatalf("want %s delivered exactly once, got %d: %q", want, n, out.String())
+			}
+		}
+		if sp.drainOffset != 0 {
+			t.Fatalf("want drainOffset == 0 after the resumed pass completes, got %d", sp.drainOffset)
+		}
+		if _, err := os.Stat(draining); !os.IsNotExist(err) {
+			t.Fatalf("draining file should be removed, stat err: %v", err)
+		}
+		if got := testutil.ToFloat64(m.SpoolDepth); got != 0 {
+			t.Fatalf("want SpoolDepth == 0, got %v", got)
+		}
+	})
 }
