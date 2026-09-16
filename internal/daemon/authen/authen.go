@@ -53,7 +53,7 @@ func (s *Session) Start(ctx context.Context, p wire.AuthenStart) (wire.AuthenRep
 	s.start = p
 	s.user = string(p.User)
 	if p.Action != wire.AuthenActionLogin {
-		return wire.AuthenReply{Status: wire.AuthenStatusFail}, true
+		return s.unsupported("port49: only the login action is supported")
 	}
 	switch p.AuthenType {
 	case wire.AuthenTypePAP:
@@ -68,7 +68,7 @@ func (s *Session) Start(ctx context.Context, p wire.AuthenStart) (wire.AuthenRep
 		s.phase = 2
 		return wire.AuthenReply{Status: wire.AuthenStatusGetPass, Flags: wire.AuthenReplyFlagNoEcho, ServerMsg: []byte("Password: ")}, false
 	default:
-		return wire.AuthenReply{Status: wire.AuthenStatusError, ServerMsg: []byte("port49: authentication type not supported")}, true
+		return s.unsupported("port49: authentication type not supported")
 	}
 }
 
@@ -84,7 +84,7 @@ func (s *Session) Continue(ctx context.Context, p wire.AuthenContinue) (wire.Aut
 	case 2:
 		return s.verify(ctx, "ascii", p.UserMsg, p.UserMsg)
 	}
-	return wire.AuthenReply{Status: wire.AuthenStatusError}, true
+	return s.unsupported("port49: unexpected CONTINUE")
 }
 
 // verify handles PAP and ASCII, where the presented credential is the token itself.
@@ -94,7 +94,9 @@ func (s *Session) verify(ctx context.Context, method string, presented, secret [
 
 func (s *Session) verifyCHAP(ctx context.Context, data []byte) (wire.AuthenReply, bool) {
 	if len(data) < 1+1+md5.Size {
-		return wire.AuthenReply{Status: wire.AuthenStatusFail}, true
+		// Too short to carry ppp_id, a challenge, and a 16-byte response: it cannot
+		// match anything, so it fails the same way an unmatched credential does.
+		return s.fail(s.newRecord("chap", data), decision.TokenNotFound)
 	}
 	id, challenge, response := data[0], data[1:len(data)-md5.Size], data[len(data)-md5.Size:]
 	return s.redeem(ctx, "chap", data, func(t store.Token) bool {
@@ -106,66 +108,111 @@ func (s *Session) verifyCHAP(ctx context.Context, data []byte) (wire.AuthenReply
 	})
 }
 
+// newRecord builds the redeem record shared by every outcome for the current
+// session. method is empty for outcomes that never inspected a credential
+// (an unsupported action/type, or a packet in the wrong phase); presented is
+// only hashed when method is set.
+func (s *Session) newRecord(method string, presented []byte) decision.Record {
+	rec := decision.Record{TS: s.h.now(), Event: decision.EventRedeem,
+		Device: &decision.Device{NAS: s.peer.NASAddr, Name: s.peer.NAS, Platform: s.peer.Platform},
+		Session: &decision.Session{Port: string(s.start.Port), RemAddr: string(s.start.RemAddr),
+			Privilege: s.start.PrivLvl, Username: Canonical(s.user)}}
+	if method != "" {
+		rec.Auth = &decision.Auth{Method: method, CredentialSHA256: decision.CredentialHash(presented)}
+	}
+	return rec
+}
+
 func (s *Session) redeem(ctx context.Context, method string, presented []byte, match func(store.Token) bool) (wire.AuthenReply, bool) {
 	username := Canonical(s.user)
 	port := string(s.start.Port)
 	remAddr := string(s.start.RemAddr)
 	rk := store.ReceiptKey{NAS: s.peer.NAS, Port: port, Username: username}
 	credHash := sha256.Sum256(presented)
-	rec := decision.Record{TS: s.h.now(), Event: decision.EventRedeem,
-		Auth:    &decision.Auth{Method: method, CredentialSHA256: decision.CredentialHash(presented)},
-		Device:  &decision.Device{NAS: s.peer.NASAddr, Name: s.peer.NAS, Platform: s.peer.Platform},
-		Session: &decision.Session{Port: port, RemAddr: remAddr, Privilege: s.start.PrivLvl}}
+	rec := s.newRecord(method, presented)
 
 	// 1. Receipt: a retransmission replays; a different credential on the same line fails.
-	if r, err := s.h.store.GetReceipt(ctx, rk); err == nil {
+	r, err := s.h.store.GetReceipt(ctx, rk)
+	s.h.metrics.StoreOps.WithLabelValues("get_receipt", storeOutcome(err)).Inc()
+	switch {
+	case err == nil:
 		if r.CredentialSHA256 == credHash {
 			rec.Session.CtxID = r.CtxID
 			return s.finish(rec, r.Status, decision.ReceiptReplayed)
 		}
 		return s.fail(rec, decision.CredentialMismatch)
+	case !errors.Is(err, store.ErrNotFound):
+		return s.storeError(rec)
 	}
 
-	// 2. Candidates under (nas, username), filtered by kind.
+	// 2. Candidates under (nas, username), filtered by kind: a login token for a
+	// login START, an enable token for an enable START. A credential that matches
+	// a token of the other kind is a kind mismatch, not a missing token.
 	kind := "login"
 	if s.start.Service == wire.AuthenServiceEnable {
 		kind = "enable"
 	}
 	cands, err := s.h.store.Candidates(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username})
+	s.h.metrics.StoreOps.WithLabelValues("candidates", storeOutcome(err)).Inc()
 	if err != nil {
-		return wire.AuthenReply{Status: wire.AuthenStatusError, ServerMsg: []byte("port49: store unavailable")}, true
+		return s.storeError(rec)
 	}
 	var winner *store.Token
 	for i := range cands {
-		if match(cands[i]) {
+		if cands[i].Kind == kind && match(cands[i]) {
 			winner = &cands[i]
 			break
 		}
 	}
 	if winner == nil {
+		for i := range cands {
+			if cands[i].Kind != kind && match(cands[i]) {
+				return s.fail(rec, decision.TokenKindMismatch)
+			}
+		}
 		return s.fail(rec, decision.TokenNotFound)
-	}
-	if winner.Kind != kind {
-		return s.fail(rec, decision.TokenKindMismatch)
 	}
 
 	// 3. Atomic redemption; the loser of a race adopts the winner's receipt.
 	ctxID := s.h.newCtxID()
 	receipt := store.Receipt{CredentialSHA256: credHash, Status: wire.AuthenStatusPass, CtxID: ctxID, ExpiresAt: s.h.now().Add(s.h.receiptTTL)}
-	if err := s.h.store.RedeemAndReceipt(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username}, winner.Secret, rk, receipt); err != nil {
+	err = s.h.store.RedeemAndReceipt(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username}, winner.Secret, rk, receipt)
+	s.h.metrics.StoreOps.WithLabelValues("redeem", storeOutcome(err)).Inc()
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			if r, rerr := s.h.store.GetReceipt(ctx, rk); rerr == nil && r.CredentialSHA256 == credHash {
+			r, rerr := s.h.store.GetReceipt(ctx, rk)
+			s.h.metrics.StoreOps.WithLabelValues("get_receipt", storeOutcome(rerr)).Inc()
+			if rerr == nil && r.CredentialSHA256 == credHash {
 				rec.Session.CtxID = r.CtxID
 				return s.finish(rec, r.Status, decision.ReceiptReplayed)
 			}
 			return s.fail(rec, decision.TokenNotFound)
 		}
-		return wire.AuthenReply{Status: wire.AuthenStatusError, ServerMsg: []byte("port49: store unavailable")}, true
+		return s.storeError(rec)
 	}
-	_ = s.h.store.PutContext(ctx, store.ContextKey{NAS: s.peer.NAS, Port: port},
+
+	err = s.h.store.PutContext(ctx, store.ContextKey{NAS: s.peer.NAS, Port: port},
 		store.Context{CtxID: ctxID, Username: username, RemAddr: remAddr, PrivLvl: s.start.PrivLvl, CreatedAt: s.h.now()}, s.h.contextTTL)
+	s.h.metrics.StoreOps.WithLabelValues("put_context", storeOutcome(err)).Inc()
+	if err != nil {
+		// The token is already redeemed, but without a context a later authorization
+		// request has nothing to check against: ERROR, not a PASS we can't back up.
+		return s.storeError(rec)
+	}
 	rec.Session.CtxID = ctxID
 	return s.finish(rec, wire.AuthenStatusPass, decision.TokenRedeemed)
+}
+
+// storeOutcome maps a store error to the StoreOps metric's outcome label.
+func storeOutcome(err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, store.ErrNotFound):
+		return "not_found"
+	default:
+		return "error"
+	}
 }
 
 func (s *Session) finish(rec decision.Record, status uint8, reason decision.Reason) (wire.AuthenReply, bool) {
@@ -186,5 +233,23 @@ func (s *Session) fail(rec decision.Record, reason decision.Reason) (wire.Authen
 	rec.ServerMsg = "port49: authentication failed — mint a new token with `port49 token`"
 	reply, done := s.finish(rec, wire.AuthenStatusFail, reason)
 	reply.ServerMsg = []byte(rec.ServerMsg)
+	return reply, done
+}
+
+// unsupported replies ERROR and logs one redeem record with reason
+// ServiceUnsupported: a non-login action, an authentication type this package
+// does not implement, or a CONTINUE sent in a phase that isn't expecting one.
+func (s *Session) unsupported(serverMsg string) (wire.AuthenReply, bool) {
+	rec := s.newRecord("", nil)
+	reply, done := s.finish(rec, wire.AuthenStatusError, decision.ServiceUnsupported)
+	reply.ServerMsg = []byte(serverMsg)
+	return reply, done
+}
+
+// storeError replies ERROR and logs one redeem record with reason
+// StoreUnavailable, for any store failure other than store.ErrNotFound.
+func (s *Session) storeError(rec decision.Record) (wire.AuthenReply, bool) {
+	reply, done := s.finish(rec, wire.AuthenStatusError, decision.StoreUnavailable)
+	reply.ServerMsg = []byte("port49: store unavailable")
 	return reply, done
 }

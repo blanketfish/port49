@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,9 @@ func TestPAPRedeemsAndCreatesContext(t *testing.T) {
 	r := f.records(t)
 	if len(r) != 1 || r[0]["event"] != "redeem" || r[0]["verdict"] != "permit" || r[0]["reason"] != "token_redeemed" {
 		t.Fatalf("%v", r)
+	}
+	if r[0]["session"].(map[string]any)["username"] != "alice" {
+		t.Fatalf("session.username: %v", r[0]["session"])
 	}
 	if strings.Contains(f.log.String(), "p49_tok1") {
 		t.Fatal("token leaked into the log")
@@ -165,5 +169,114 @@ func TestCHAP(t *testing.T) {
 		AuthenType: wire.AuthenTypeCHAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: data2})
 	if reply.Status != wire.AuthenStatusFail {
 		t.Fatalf("fresh challenge must not replay: %+v", reply)
+	}
+}
+
+// TestLoginTokenLaterInSetIsFound guards against the fix for Important 1: the
+// candidate search must not stop at the first token whose kind doesn't match.
+func TestLoginTokenLaterInSetIsFound(t *testing.T) {
+	f := setup(t)
+	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
+		store.Token{Secret: []byte("bob_enable_tok"), Kind: "enable", ExpiresAt: f.now.Add(15 * time.Minute)})
+	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
+		store.Token{Secret: []byte("bob_login_tok"), Kind: "login", ExpiresAt: f.now.Add(15 * time.Minute)})
+
+	reply, done := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("bob"), Port: []byte("vty0"), Data: []byte("bob_login_tok")})
+	if !done || reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("%+v", reply)
+	}
+}
+
+func TestEnableStartWithLoginTokenIsKindMismatch(t *testing.T) {
+	f := setup(t)
+	// alice has only a login token (from setup). Presenting it at enable is a
+	// kind mismatch, not a missing token.
+	reply, done := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceEnable, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")})
+	if !done || reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "token_kind_mismatch" {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+
+	// An enable START with a credential that matches nothing at all is a plain miss.
+	reply, done = f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceEnable, User: []byte("alice"), Port: []byte("vty1"), Data: []byte("unknown")})
+	if !done || reply.Status != wire.AuthenStatusFail || f.records(t)[1]["reason"] != "token_not_found" {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+}
+
+func TestUnsupportedAuthenTypeIsErrorWithRecord(t *testing.T) {
+	f := setup(t)
+	reply, done := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypeMSCHAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0")})
+	if !done || reply.Status != wire.AuthenStatusError {
+		t.Fatalf("%+v", reply)
+	}
+	r := f.records(t)
+	if len(r) != 1 || r[0]["event"] != "redeem" || r[0]["verdict"] != "deny" || r[0]["reason"] != "service_unsupported" {
+		t.Fatalf("%v", r)
+	}
+}
+
+// erroringCandidatesStore wraps a real store.Store but fails Candidates, to
+// exercise the ERROR/store_unavailable path without a real backend failure.
+type erroringCandidatesStore struct {
+	store.Store
+	err error
+}
+
+func (e *erroringCandidatesStore) Candidates(context.Context, store.TokenKey) ([]store.Token, error) {
+	return nil, e.err
+}
+
+func TestStoreErrorIsErrorWithRecord(t *testing.T) {
+	log := &bytes.Buffer{}
+	now := time.Unix(1_757_041_495, 0)
+	mem := memory.New(func() time.Time { return now })
+	st := &erroringCandidatesStore{Store: mem, err: errors.New("store: connection refused")}
+	l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return now })
+	ids := 0
+	h := New(st, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
+		func() time.Time { return now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
+		30*time.Second, time.Hour)
+
+	reply, done := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}).Start(context.Background(),
+		wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+			User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")})
+	if !done || reply.Status != wire.AuthenStatusError {
+		t.Fatalf("%+v", reply)
+	}
+
+	lines := strings.Split(strings.TrimSpace(log.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("records: %v", lines)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["event"] != "redeem" || m["verdict"] != "deny" || m["reason"] != "store_unavailable" {
+		t.Fatalf("%v", m)
+	}
+	if strings.Contains(log.String(), "p49_tok1") {
+		t.Fatal("token leaked into the log")
+	}
+}
+
+func TestShortCHAPDataFailsWithDelayAndRecord(t *testing.T) {
+	f := setup(t)
+	reply, done := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypeCHAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte{0x2a}})
+	if !done || reply.Status != wire.AuthenStatusFail {
+		t.Fatalf("%+v", reply)
+	}
+	r := f.records(t)
+	if len(r) != 1 || r[0]["reason"] != "token_not_found" {
+		t.Fatalf("%v", r)
+	}
+	auth, ok := r[0]["auth"].(map[string]any)
+	if !ok || auth["credential_sha256"] == "" {
+		t.Fatalf("missing credential hash: %v", r[0])
 	}
 }

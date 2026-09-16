@@ -43,6 +43,7 @@ type Device struct {
 
 type Session struct {
 	CtxID     string `json:"ctx_id"`
+	Username  string `json:"username,omitempty"`
 	Port      string `json:"port"`
 	RemAddr   string `json:"rem_addr"`
 	Privilege uint8  `json:"privilege"`

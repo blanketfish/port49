@@ -18,6 +18,7 @@ const (
 	CredentialMismatch Reason = "credential_mismatch"
 	ReceiptReplayed    Reason = "receipt_replayed"
 	TokenKindMismatch  Reason = "token_kind_mismatch"
+	StoreUnavailable   Reason = "store_unavailable"
 
 	// authorize_session / authorize_command / escalate
 	ContextMatched        Reason = "context_matched"
