@@ -5,6 +5,7 @@ package lab
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -18,11 +19,22 @@ func TestL1PortField(t *testing.T) {
 		defer stop()
 		off := l.mark()
 
-		if _, err := l.login("alice", l.nextToken(t), "show version"); err != nil {
-			t.Fatalf("first SSH login failed, so no port value was observed: %v", err)
-		}
-		if _, err := l.login("alice", l.nextToken(t), "show version"); err != nil {
-			t.Fatalf("second SSH login failed, so uniqueness could not be observed: %v", err)
+		// The claim is about CONCURRENT sessions, so the two logins overlap:
+		// each holds an interactive shell open while the other is logging in.
+		// Two logins one after the other would not tell them apart.
+		u1, s1 := l.nextLogin(t)
+		u2, s2 := l.nextLogin(t)
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		wg.Add(2)
+		go func() { defer wg.Done(); errs[0] = l.holdSession(u1, s1, 20*time.Second) }()
+		time.Sleep(2 * time.Second) // let the first session be established first
+		go func() { defer wg.Done(); errs[1] = l.holdSession(u2, s2, 15*time.Second) }()
+		wg.Wait()
+		for i, err := range errs {
+			if err != nil {
+				t.Fatalf("concurrent SSH login %d failed, so no port value was observed: %v", i+1, err)
+			}
 		}
 
 		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
@@ -30,20 +42,67 @@ func TestL1PortField(t *testing.T) {
 		})
 		ports := redeemPorts(recs)
 		if len(ports) < 2 {
-			t.Fatalf("expected a port value from each of two logins, got %d (%q):%s", len(ports), ports, summarize(recs))
+			t.Fatalf("expected a port value from each of two concurrent logins, got %d (%q):%s", len(ports), ports, summarize(recs))
 		}
 
 		unique := ports[0] != ports[1]
-		obs := fmt.Sprintf("Two consecutive SSH logins produced these `port` values on the authentication START:\n\n"+
-			"| login | `port` |\n|---|---|\n| 1 | `%s` |\n| 2 | `%s` |\n\n"+
-			"**Distinct between the two sessions: %v.**\n\n"+
+		uniqueNote := "**The two concurrent sessions reported the SAME `port` value.** The login context key " +
+			"`(nas, port)` therefore does not distinguish them: the second login overwrites the first login's " +
+			"context, and the receipt key `(nas, port, username)` collides for repeated logins by one user."
+		if unique {
+			uniqueNote = "**The two concurrent sessions reported DIFFERENT `port` values**, so the login context " +
+				"key `(nas, port)` distinguishes them."
+		}
+		obs := fmt.Sprintf("Two overlapping SSH sessions, each holding an interactive shell open, produced these "+
+			"`port` values on the authentication START:\n\n"+
+			"| session | user | `port` |\n|---|---|---|\n| 1 | %s | `%s` |\n| 2 | %s | `%s` |\n\n%s\n\n"+
 			"All %d `port` values seen in this test: %q.\n\n"+
+			"Stability for the life of a session: %s\n\n"+
 			"Transport measured: SSH only. Console, eAPI, NX-API and NETCONF are not measured here "+
 			"(eAPI and NX-API are plan 3), so L1 is not answered for those transports.",
-			ports[0], ports[1], unique, len(ports), ports)
+			u1, ports[0], u2, ports[1], uniqueNote, len(ports), ports, portStability(recs))
 		l.result(t, "L1", "What the `port` field contains, per platform and per transport — SSH, console, eAPI, "+
 			"NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life.", obs)
 	})
+}
+
+// portStability answers the second half of L1 from the records rather than
+// asserting it: every record carrying a ctx_id belongs to one session, so if a
+// session's `port` ever changed, that ctx_id would show two values.
+func portStability(recs []map[string]any) string {
+	byCtx := map[string]map[string]bool{}
+	records := 0
+	for _, r := range recs {
+		s := sub(r, "session")
+		if s == nil {
+			continue
+		}
+		ctx := str(s, "ctx_id")
+		if ctx == "" {
+			continue
+		}
+		records++
+		if byCtx[ctx] == nil {
+			byCtx[ctx] = map[string]bool{}
+		}
+		byCtx[ctx][str(s, "port")] = true
+	}
+	if len(byCtx) == 0 {
+		return "not measured: no record in this window carried a ctx_id."
+	}
+	var unstable []string
+	for ctx, ports := range byCtx {
+		if len(ports) > 1 {
+			unstable = append(unstable, ctx)
+		}
+	}
+	if len(unstable) == 0 {
+		return fmt.Sprintf("stable. Across %d sessions and %d records carrying a ctx_id, every record for a "+
+			"session reported the same `port` as that session's authentication START.", len(byCtx), records)
+	}
+	sortStrings(unstable)
+	return fmt.Sprintf("**NOT stable**: %d of %d sessions reported more than one `port` value over their life (%s).",
+		len(unstable), len(byCtx), strings.Join(unstable, ", "))
 }
 
 func redeemPorts(recs []map[string]any) []string {
@@ -70,7 +129,8 @@ func TestL2ServerMsgDisplayed(t *testing.T) {
 		defer stop()
 		off := l.mark()
 
-		out, err := l.login("alice", l.nextToken(t), shortDenyPrefix)
+		user, secret := l.nextLogin(t)
+		out, err := l.login(user, secret, shortDenyPrefix)
 		if err != nil {
 			t.Fatalf("SSH login failed, so no denial could be shown: %v", err)
 		}
@@ -98,7 +158,7 @@ func TestL2ServerMsgDisplayed(t *testing.T) {
 		// authorization leaves the truncation length unmeasured, which is
 		// recorded rather than failed — the display question above is the one
 		// this test guarantees.
-		longNote := measureTruncation(t, l, out[0])
+		longNote := measureTruncation(t, l)
 
 		obs := fmt.Sprintf("Command `%s` was denied by the lab authorizer with a %d-character `server_msg`:\n\n"+
 			"```\n%s\n```\n\n**The operator saw it: %s.**\n\nWhat the device printed for the denied command:\n\n"+
@@ -124,11 +184,12 @@ func findDenial(recs []map[string]any, msg string) map[string]any {
 	return nil
 }
 
-func measureTruncation(t *testing.T, l *lab, shortOutput string) string {
+func measureTruncation(t *testing.T, l *lab) string {
 	t.Helper()
 	mustBeSeeded(t, longDenyPrefix)
 	off := l.mark()
-	out, err := l.login("alice", l.nextToken(t), longDenyPrefix)
+	user, secret := l.nextLogin(t)
+	out, err := l.login(user, secret, longDenyPrefix)
 	if err != nil {
 		return fmt.Sprintf("Not measured: the second login, for the long denial, failed (%v).", err)
 	}
@@ -137,9 +198,11 @@ func measureTruncation(t *testing.T, l *lab, shortOutput string) string {
 		return findDenial(rs, longMsg) != nil
 	})
 	if findDenial(recs, longMsg) == nil {
-		return fmt.Sprintf("Not measured: the device did not send the %d-character command line for authorization, "+
-			"so port49 never replied with a long `server_msg`. The device printed:\n\n```\n%s\n```",
-			len(longDenyPrefix), strings.TrimRight(outFirst(out), "\n"))
+		return fmt.Sprintf("Not measured, and the reason is itself an observation. The operator typed a "+
+			"%d-character line, but the device did not send that line for authorization, so port49 never "+
+			"built a long `server_msg` to truncate. What the device actually asked port49 to authorize:\n\n"+
+			"```\n%s\n```\n\nThe device printed:\n\n```\n%s\n```",
+			len(longDenyPrefix), strings.Join(vectorsAuthorized(recs), "\n"), strings.TrimRight(outFirst(out), "\n"))
 	}
 	printed := outFirst(out)
 	if strings.Contains(printed, longMsg) {
@@ -149,6 +212,24 @@ func measureTruncation(t *testing.T, l *lab, shortOutput string) string {
 	return fmt.Sprintf("A %d-character `server_msg` was **not** shown in full. The longest run of it the device "+
 		"printed was %d characters:\n\n```\n%s\n```\n\nFull device output:\n\n```\n%s\n```",
 		len(longMsg), len(shownPrefix), shownPrefix, strings.TrimRight(printed, "\n"))
+}
+
+// vectorsAuthorized lists the command vectors the device actually asked port49
+// to authorize, which is how a device that rewrites the operator's line before
+// sending it shows up in the results note.
+func vectorsAuthorized(recs []map[string]any) []string {
+	var out []string
+	for _, r := range recs {
+		if str(r, "event") != "authorize_command" {
+			continue
+		}
+		v := strs(sub(r, "request"), "vector")
+		out = append(out, fmt.Sprintf("%q", strings.Join(v, " ")))
+	}
+	if len(out) == 0 {
+		return []string{"(the device sent no command authorization request at all)"}
+	}
+	return out
 }
 
 func outFirst(out []string) string {
@@ -181,7 +262,8 @@ func TestL5Watchdog(t *testing.T) {
 
 		const hold = 150 * time.Second
 		t0 := time.Now()
-		if err := l.holdSession("alice", l.nextToken(t), hold); err != nil {
+		user, secret := l.nextLogin(t)
+		if err := l.holdSession(user, secret, hold); err != nil {
 			t.Fatalf("could not hold an interactive session open, so no watchdog window existed: %v", err)
 		}
 
@@ -274,7 +356,8 @@ func TestL6AccountingLatency(t *testing.T) {
 		off := l.mark()
 
 		t0 := time.Now()
-		if _, err := l.login("alice", l.nextToken(t), "show version"); err != nil {
+		user, secret := l.nextLogin(t)
+		if _, err := l.login(user, secret, "show version"); err != nil {
 			t.Fatalf("SSH login failed, so there was no session to account for: %v", err)
 		}
 		t1 := time.Now() // the SSH connection is closed by the time login returns
@@ -468,7 +551,8 @@ func TestL10ServiceAndAttributeSpellings(t *testing.T) {
 		defer stop()
 		off := l.mark()
 
-		if _, err := l.login("alice", l.nextToken(t), "show version"); err != nil {
+		user, secret := l.nextLogin(t)
+		if _, err := l.login(user, secret, "show version"); err != nil {
 			t.Fatalf("SSH login failed, so no authorization request was sent: %v", err)
 		}
 		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {

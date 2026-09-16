@@ -26,9 +26,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -43,15 +45,21 @@ type platform struct {
 	node    string // node name, which is also the NAS name in the inventory
 	image   string // container image, matched against `docker image inspect`
 	version string // image version for the results note
+
+	// boot is how long this image is given to become usable. It is per platform
+	// because the images differ by an order of magnitude: vEOS is ready in about
+	// a minute, while the vJunos images boot Junos inside a nested VM and were
+	// measured still finishing their SSH service more than four minutes in.
+	boot time.Duration
 }
 
 var platforms = []platform{
 	{"eos", "arista_eos", "topologies/eos.clab.yml", "172.100.100.11", "leaf1",
-		"vrnetlab/arista_veos:4.32.2F", "vEOS-lab 4.32.2F"},
+		"vrnetlab/arista_veos:4.32.2F", "vEOS-lab 4.32.2F", 6 * time.Minute},
 	{"vjunos", "juniper_vjunos-router", "topologies/vjunos.clab.yml", "172.100.100.21", "srx1",
-		"vrnetlab/juniper_vjunos-router:23.4R2-S2.1", "vJunos-router 23.4R2-S2.1"},
+		"vrnetlab/juniper_vjunos-router:23.4R2-S2.1", "vJunos-router 23.4R2-S2.1", 20 * time.Minute},
 	{"vsrx", "juniper_vsrx", "topologies/vsrx.clab.yml", "172.100.100.22", "vsrx1",
-		"vrnetlab/juniper_vsrx:21.4R3.15", "vSRX3 21.4R3.15"},
+		"vrnetlab/juniper_vsrx:21.4R3.15", "vSRX3 21.4R3.15", 20 * time.Minute},
 }
 
 const (
@@ -60,7 +68,6 @@ const (
 	metricsAddr   = "127.0.0.1:9049"
 	tacacsAddr    = "172.100.100.1:49"
 	tokenPoolSize = 16
-	bootWait      = 6 * time.Minute
 )
 
 // A device password of each of these lengths is seeded under user longpw<N>.
@@ -85,6 +92,7 @@ var (
 
 	labsMu sync.Mutex
 	labs   = map[string]*lab{}
+	active *lab // the one platform currently deployed; see bringUp
 )
 
 type lab struct {
@@ -118,7 +126,21 @@ type lab struct {
 // TestMain owns only the teardown. Bring-up is lazy — the first test that asks
 // for a platform deploys it — so a run that matches no test (`-run XXX`, the
 // compile check) deploys nothing and costs nothing.
+//
+// The signal handler is not decoration. An interrupted run that skips teardown
+// leaves a port49d bound to the bridge address, and the next run's device then
+// has its AAA answered by a daemon that run does not own: every measurement
+// after that is of the wrong process, and the symptom (logins denied for no
+// visible reason) points nowhere near the cause.
 func TestMain(m *testing.M) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		s := <-sig
+		fmt.Fprintf(os.Stderr, "\nlab: %v received, tearing down before exit\n", s)
+		teardown()
+		os.Exit(1)
+	}()
 	code := m.Run()
 	teardown()
 	os.Exit(code)
@@ -155,7 +177,36 @@ func initGlobal() error {
 
 // bringUp deploys this platform and starts its daemon, once per run. Every
 // register test then measures against the device it left running.
+//
+// Only one platform can be up at a time: they share the management subnet, the
+// bridge address, and port 49 on the host. So bringing one up takes the
+// previous one down. That makes a run that selects several platforms correct
+// but slow — the platforms cycle once per test rather than once per run — which
+// is why `make lab` runs one `go test` per platform instead of one for all.
 func (l *lab) bringUp() {
+	labsMu.Lock()
+	prev := active
+	active = l
+	labsMu.Unlock()
+	if prev != nil && prev != l {
+		fmt.Fprintf(os.Stderr, "lab: taking %s down to bring %s up; run one platform per `go test` to avoid this\n",
+			prev.p.name, l.p.name)
+		prev.down()
+		prev.resetForRedeploy()
+	}
+	l.deploy()
+}
+
+// resetForRedeploy lets a platform be brought up again later in the same run.
+func (l *lab) resetForRedeploy() {
+	l.once = sync.Once{}
+	l.err = nil
+	l.mu.Lock()
+	l.tokenN = 0
+	l.mu.Unlock()
+}
+
+func (l *lab) deploy() {
 	if err := func() error {
 		globalOnce.Do(func() { globalErr = initGlobal() })
 		return globalErr
@@ -238,7 +289,16 @@ func (l *lab) up() error {
 	}
 	l.deployed = true
 
-	if err := waitSSH(l.p.addr, bootWait); err != nil {
+	deadline := time.Now().Add(l.p.boot)
+	if err := waitSSH(l.p.addr, time.Until(deadline)); err != nil {
+		return err
+	}
+	// A banner is not a working SSH service. vrnetlab forwards port 22 into the
+	// nested VM, so the TCP connect and the banner can both succeed minutes
+	// before Junos will finish a key exchange: the vJunos-router image answered
+	// with a banner and then timed out mid-handshake for another four minutes.
+	// Readiness is a handshake that reaches the authentication stage.
+	if err := l.waitHandshake(time.Until(deadline)); err != nil {
 		return err
 	}
 	// The device's SSH answering is not the same as its startup config being
@@ -259,6 +319,17 @@ func (l *lab) up() error {
 }
 
 func (l *lab) startDaemon() error {
+	// Refuse to run beside a daemon this run does not own. A leftover port49d
+	// still holds its socket on the bridge address even across a destroy and
+	// redeploy, and it would answer this device's AAA with its own spent
+	// tokens — measurements of the wrong process, with no symptom that says so.
+	if c, err := net.DialTimeout("tcp", tacacsAddr, 2*time.Second); err == nil {
+		c.Close()
+		return fmt.Errorf("something is already listening on %s, most likely a port49d left by an interrupted run. "+
+			"It would answer this device's AAA instead of the daemon this run starts. Find and stop it:\n"+
+			"  sudo ss -lptn 'sport = :49'\n  pkill -f 'port49d -config .*tests/lab/port49d-lab.yaml'", tacacsAddr)
+	}
+
 	dir := filepath.Join(root, "tests", "lab", "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -343,6 +414,31 @@ func waitSSH(addr string, within time.Duration) error {
 		time.Sleep(5 * time.Second)
 	}
 	return fmt.Errorf("%s: SSH never answered within %v (last error: %v)", addr, within, last)
+}
+
+// waitHandshake waits until a full SSH handshake reaches the authentication
+// stage. A probe user that does not exist is enough: being told the credential
+// is wrong proves the service is really serving, which a banner does not.
+func (l *lab) waitHandshake(within time.Duration) error {
+	if within <= 0 {
+		return fmt.Errorf("%s: no time left to wait for SSH to serve", l.p.addr)
+	}
+	deadline := time.Now().Add(within)
+	var last error
+	for time.Now().Before(deadline) {
+		c, err := l.dial("port49probe", "not-a-real-password", 30*time.Second)
+		if err == nil {
+			c.Close()
+			return nil
+		}
+		if strings.Contains(err.Error(), "unable to authenticate") {
+			return nil // the service is up; the probe user failing is the point
+		}
+		last = err
+		time.Sleep(10 * time.Second)
+	}
+	return fmt.Errorf("%s: SSH answered with a banner but never completed a handshake within %v (last error: %v)",
+		l.p.addr, within, last)
 }
 
 func (l *lab) waitConfigApplied(within time.Duration) error {
@@ -450,19 +546,31 @@ func eachPlatform(t *testing.T, fn func(t *testing.T, l *lab)) {
 // Tokens
 // ---------------------------------------------------------------------------
 
-// nextToken hands out the next unspent seeded token. Redemption deletes the
-// token, so every login in a run spends one and no test may reuse another's.
-func (l *lab) nextToken(t *testing.T) string {
+// nextLogin hands out the next unspent seeded login: a username and the token
+// seeded under it. Two things make each login need its own username.
+//
+// Redemption deletes the token, so every login in a run spends one. And EOS
+// reports `port` as the constant string "ssh" (L1), which makes the receipt key
+// (nas, port, username) identical for every SSH login by one user: a second
+// login inside receipt_ttl presents a different token against the first login's
+// receipt and is refused as credential_mismatch. A username per login gives
+// each its own receipt key, so the harness measures the device rather than that
+// collision.
+func (l *lab) nextLogin(t *testing.T) (user, secret string) {
 	t.Helper()
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.tokenN++
-	if l.tokenN > tokenPoolSize {
-		t.Fatalf("%s: the seeded token pool of %d is exhausted; seed more in tests/lab/port49d-lab.yaml", l.p.name, tokenPoolSize)
+	n := l.tokenN + 1
+	l.tokenN = n
+	l.mu.Unlock()
+	if n > tokenPoolSize {
+		t.Fatalf("%s: the seeded login pool of %d is exhausted; seed more in tests/lab/port49d-lab.yaml", l.p.name, tokenPoolSize)
 	}
-	s := fmt.Sprintf("p49_labtoken%02d", l.tokenN)
-	mustBeSeeded(t, s)
-	return s
+	user, secret = fmt.Sprintf("alice%02d", n), fmt.Sprintf("p49_labtoken%02d", n)
+	mustBeSeeded(t, secret)
+	if !strings.Contains(labYAML, "username: "+user+",") {
+		t.Fatalf("tests/lab/port49d-lab.yaml seeds no login for %q; the harness and the config have drifted apart", user)
+	}
+	return user, secret
 }
 
 // passwordOfLength is the seeded secret for user longpw<n>. The test computes
@@ -718,8 +826,15 @@ func (l *lab) capture(t *testing.T, name string) func() {
 	abs := filepath.Join(dir, fmt.Sprintf("%s-%s.pcap", name, l.p.name))
 	l.capPath = filepath.Join("tests/lab/captures", filepath.Base(abs))
 
-	args := []string{"-i", "any", "-U", "-n", "-s", "0", "-w", abs, "tcp port 49"}
-	cmd := exec.Command("sudo", append([]string{"-n", "tcpdump"}, args...)...)
+	// tcpdump runs as root under sudo and drops privileges to its own user, so
+	// it cannot be signalled directly and its pid is not the pid of sudo. The
+	// shell wrapper writes the pid the harness must signal. Matching on the
+	// command line instead would be one typo away from a capture that is never
+	// stopped and a run that waits on it forever.
+	pidPath := abs + ".pid"
+	os.Remove(pidPath)
+	script := fmt.Sprintf("echo $$ > %s; exec tcpdump -i any -U -n -s 0 -w %s 'tcp port 49'", shellQuote(pidPath), shellQuote(abs))
+	cmd := exec.Command("sudo", "-n", "sh", "-c", script)
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	if err := cmd.Start(); err != nil {
@@ -735,25 +850,45 @@ func (l *lab) capture(t *testing.T, name string) func() {
 			return
 		}
 		stopped = true
-		// The leading [t] keeps the pattern from matching pkill's own command
-		// line, which would kill the sudo that launched it.
-		pattern := "[t]cpdump " + strings.Join(args[:len(args)-1], " ") + " " + abs
-		_ = exec.Command("sudo", "-n", "pkill", "-INT", "-f", pattern).Run()
 		done := make(chan struct{})
 		go func() { cmd.Wait(); close(done) }()
+		signalCapture(pidPath, "-INT")
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):
-			_ = exec.Command("sudo", "-n", "pkill", "-KILL", "-f", pattern).Run()
-			<-done
+			signalCapture(pidPath, "-KILL")
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				// -U wrote every packet through as it arrived, so the file is
+				// complete and readable whatever this process is now doing.
+				t.Logf("WARNING: tcpdump for %s did not exit; the capture is still valid but a process was left behind", abs)
+			}
 		}
-		// tcpdump wrote the file as root; make it readable without sudo.
+		// tcpdump wrote the file as its own dropped-privilege user.
 		_ = exec.Command("sudo", "-n", "chown", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), abs).Run()
+		os.Remove(pidPath)
 		if fi, err := os.Stat(abs); err != nil || fi.Size() == 0 {
 			t.Logf("capture %s is empty or missing (%v); tcpdump said: %s", abs, err, errBuf.String())
 		}
 	}
 }
+
+func signalCapture(pidPath, sig string) {
+	out, err := exec.Command("sudo", "-n", "cat", pidPath).Output()
+	if err != nil {
+		return
+	}
+	pid := strings.TrimSpace(string(out))
+	if pid == "" {
+		return
+	}
+	// The shell exec'd into tcpdump, so this pid is tcpdump's own.
+	_ = exec.Command("sudo", "-n", "kill", sig, pid).Run()
+}
+
+// shellQuote wraps a path for the `sudo sh -c` wrapper above.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // ---------------------------------------------------------------------------
 // Results notes
@@ -797,9 +932,10 @@ func TestLoginRoundTrip(t *testing.T) {
 		defer stop()
 		off := l.mark()
 
-		out, err := l.login("alice", l.nextToken(t), "show version")
+		user, secret := l.nextLogin(t)
+		out, err := l.login(user, secret, "show version")
 		if err != nil {
-			t.Fatalf("SSH login as alice failed, so no exchange happened: %v\nrecords:%s", err, summarize(l.recordsSince(off)))
+			t.Fatalf("SSH login as %s failed, so no exchange happened: %v\nrecords:%s", user, err, summarize(l.recordsSince(off)))
 		}
 		if len(out) == 0 || strings.TrimSpace(out[0]) == "" {
 			t.Logf("`show version` produced no output; the login itself is what this test asserts")

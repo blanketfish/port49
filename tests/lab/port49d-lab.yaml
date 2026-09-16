@@ -35,56 +35,63 @@ lab:
     - "request system reboot"
     - "show clock"
   # Redemption deletes the token, so every login in a run spends one. The pool
-  # is larger than the run needs; lab.nextToken() hands them out in order.
+  # is larger than the run needs; lab.nextLogin() hands them out in order.
+  #
+  # Each login gets its OWN username, and that is a measurement, not a style
+  # choice. EOS reports `port` as the constant string "ssh" (L1), so the receipt
+  # key (nas, port, username) is identical for every SSH login by one user: a
+  # second login inside receipt_ttl presents a different token against the first
+  # login's receipt and is refused as credential_mismatch. Distinct usernames
+  # give each login its own receipt key. See tests/lab/results/L1-arista_eos.md.
   seed_tokens:
-    - {nas: leaf1, username: alice, secret: p49_labtoken01, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken02, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken03, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken04, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken05, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken06, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken07, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken08, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken09, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken10, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken11, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken12, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken13, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken14, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken15, kind: login}
-    - {nas: leaf1, username: alice, secret: p49_labtoken16, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken01, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken02, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken03, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken04, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken05, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken06, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken07, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken08, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken09, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken10, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken11, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken12, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken13, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken14, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken15, kind: login}
-    - {nas: srx1, username: alice, secret: p49_labtoken16, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken01, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken02, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken03, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken04, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken05, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken06, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken07, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken08, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken09, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken10, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken11, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken12, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken13, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken14, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken15, kind: login}
-    - {nas: vsrx1, username: alice, secret: p49_labtoken16, kind: login}
+    - {nas: leaf1, username: alice01, secret: p49_labtoken01, kind: login}
+    - {nas: leaf1, username: alice02, secret: p49_labtoken02, kind: login}
+    - {nas: leaf1, username: alice03, secret: p49_labtoken03, kind: login}
+    - {nas: leaf1, username: alice04, secret: p49_labtoken04, kind: login}
+    - {nas: leaf1, username: alice05, secret: p49_labtoken05, kind: login}
+    - {nas: leaf1, username: alice06, secret: p49_labtoken06, kind: login}
+    - {nas: leaf1, username: alice07, secret: p49_labtoken07, kind: login}
+    - {nas: leaf1, username: alice08, secret: p49_labtoken08, kind: login}
+    - {nas: leaf1, username: alice09, secret: p49_labtoken09, kind: login}
+    - {nas: leaf1, username: alice10, secret: p49_labtoken10, kind: login}
+    - {nas: leaf1, username: alice11, secret: p49_labtoken11, kind: login}
+    - {nas: leaf1, username: alice12, secret: p49_labtoken12, kind: login}
+    - {nas: leaf1, username: alice13, secret: p49_labtoken13, kind: login}
+    - {nas: leaf1, username: alice14, secret: p49_labtoken14, kind: login}
+    - {nas: leaf1, username: alice15, secret: p49_labtoken15, kind: login}
+    - {nas: leaf1, username: alice16, secret: p49_labtoken16, kind: login}
+    - {nas: srx1, username: alice01, secret: p49_labtoken01, kind: login}
+    - {nas: srx1, username: alice02, secret: p49_labtoken02, kind: login}
+    - {nas: srx1, username: alice03, secret: p49_labtoken03, kind: login}
+    - {nas: srx1, username: alice04, secret: p49_labtoken04, kind: login}
+    - {nas: srx1, username: alice05, secret: p49_labtoken05, kind: login}
+    - {nas: srx1, username: alice06, secret: p49_labtoken06, kind: login}
+    - {nas: srx1, username: alice07, secret: p49_labtoken07, kind: login}
+    - {nas: srx1, username: alice08, secret: p49_labtoken08, kind: login}
+    - {nas: srx1, username: alice09, secret: p49_labtoken09, kind: login}
+    - {nas: srx1, username: alice10, secret: p49_labtoken10, kind: login}
+    - {nas: srx1, username: alice11, secret: p49_labtoken11, kind: login}
+    - {nas: srx1, username: alice12, secret: p49_labtoken12, kind: login}
+    - {nas: srx1, username: alice13, secret: p49_labtoken13, kind: login}
+    - {nas: srx1, username: alice14, secret: p49_labtoken14, kind: login}
+    - {nas: srx1, username: alice15, secret: p49_labtoken15, kind: login}
+    - {nas: srx1, username: alice16, secret: p49_labtoken16, kind: login}
+    - {nas: vsrx1, username: alice01, secret: p49_labtoken01, kind: login}
+    - {nas: vsrx1, username: alice02, secret: p49_labtoken02, kind: login}
+    - {nas: vsrx1, username: alice03, secret: p49_labtoken03, kind: login}
+    - {nas: vsrx1, username: alice04, secret: p49_labtoken04, kind: login}
+    - {nas: vsrx1, username: alice05, secret: p49_labtoken05, kind: login}
+    - {nas: vsrx1, username: alice06, secret: p49_labtoken06, kind: login}
+    - {nas: vsrx1, username: alice07, secret: p49_labtoken07, kind: login}
+    - {nas: vsrx1, username: alice08, secret: p49_labtoken08, kind: login}
+    - {nas: vsrx1, username: alice09, secret: p49_labtoken09, kind: login}
+    - {nas: vsrx1, username: alice10, secret: p49_labtoken10, kind: login}
+    - {nas: vsrx1, username: alice11, secret: p49_labtoken11, kind: login}
+    - {nas: vsrx1, username: alice12, secret: p49_labtoken12, kind: login}
+    - {nas: vsrx1, username: alice13, secret: p49_labtoken13, kind: login}
+    - {nas: vsrx1, username: alice14, secret: p49_labtoken14, kind: login}
+    - {nas: vsrx1, username: alice15, secret: p49_labtoken15, kind: login}
+    - {nas: vsrx1, username: alice16, secret: p49_labtoken16, kind: login}
     # L8: one token per password length under test, each under its own username,
     # so a device that truncates produces credential_mismatch against that user
     # rather than a silent pass against a shorter token.
