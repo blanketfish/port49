@@ -1,0 +1,555 @@
+//go:build lab
+
+package lab
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+)
+
+// L1: what the `port` field contains per platform and per transport, and
+// whether it is unique per concurrent session. This plan measures SSH only;
+// eAPI and NX-API are plan 3.
+func TestL1PortField(t *testing.T) {
+	eachPlatform(t, func(t *testing.T, l *lab) {
+		stop := l.capture(t, "L1")
+		defer stop()
+		off := l.mark()
+
+		if _, err := l.login("alice", l.nextToken(t), "show version"); err != nil {
+			t.Fatalf("first SSH login failed, so no port value was observed: %v", err)
+		}
+		if _, err := l.login("alice", l.nextToken(t), "show version"); err != nil {
+			t.Fatalf("second SSH login failed, so uniqueness could not be observed: %v", err)
+		}
+
+		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
+			return len(redeemPorts(rs)) >= 2
+		})
+		ports := redeemPorts(recs)
+		if len(ports) < 2 {
+			t.Fatalf("expected a port value from each of two logins, got %d (%q):%s", len(ports), ports, summarize(recs))
+		}
+
+		unique := ports[0] != ports[1]
+		obs := fmt.Sprintf("Two consecutive SSH logins produced these `port` values on the authentication START:\n\n"+
+			"| login | `port` |\n|---|---|\n| 1 | `%s` |\n| 2 | `%s` |\n\n"+
+			"**Distinct between the two sessions: %v.**\n\n"+
+			"All %d `port` values seen in this test: %q.\n\n"+
+			"Transport measured: SSH only. Console, eAPI, NX-API and NETCONF are not measured here "+
+			"(eAPI and NX-API are plan 3), so L1 is not answered for those transports.",
+			ports[0], ports[1], unique, len(ports), ports)
+		l.result(t, "L1", "What the `port` field contains, per platform and per transport — SSH, console, eAPI, "+
+			"NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life.", obs)
+	})
+}
+
+func redeemPorts(recs []map[string]any) []string {
+	var out []string
+	for _, r := range recs {
+		if str(r, "event") != "redeem" || str(r, "reason") != "token_redeemed" {
+			continue
+		}
+		if s := sub(r, "session"); s != nil {
+			out = append(out, str(s, "port"))
+		}
+	}
+	return out
+}
+
+// L2: whether `server_msg` on an authorization REPLY is displayed to the
+// operator, and at what length it truncates.
+func TestL2ServerMsgDisplayed(t *testing.T) {
+	eachPlatform(t, func(t *testing.T, l *lab) {
+		if strings.HasPrefix(l.p.name, "juniper_") {
+			t.Skip("session-only platform: no per-command REPLY (spec decision 21)")
+		}
+		stop := l.capture(t, "L2")
+		defer stop()
+		off := l.mark()
+
+		out, err := l.login("alice", l.nextToken(t), shortDenyPrefix)
+		if err != nil {
+			t.Fatalf("SSH login failed, so no denial could be shown: %v", err)
+		}
+		if len(out) == 0 {
+			t.Fatal("the device returned no output for the denied command, so nothing could be observed")
+		}
+		shortMsg := denialMessage(shortDenyPrefix)
+
+		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
+			return findDenial(rs, shortMsg) != nil
+		})
+		if findDenial(recs, shortMsg) == nil {
+			t.Fatalf("the device never asked port49 to authorize %q, so whether it would display a server_msg "+
+				"could not be measured. Device output was:\n%s\nrecords:%s", shortDenyPrefix, out[0], summarize(recs))
+		}
+
+		shown := strings.Contains(out[0], shortMsg)
+		verdict := "NOT displayed"
+		if shown {
+			verdict = "displayed"
+		}
+
+		// Second half of the claim, best effort: a denial whose server_msg is
+		// long enough to truncate. A device that never sends this line for
+		// authorization leaves the truncation length unmeasured, which is
+		// recorded rather than failed — the display question above is the one
+		// this test guarantees.
+		longNote := measureTruncation(t, l, out[0])
+
+		obs := fmt.Sprintf("Command `%s` was denied by the lab authorizer with a %d-character `server_msg`:\n\n"+
+			"```\n%s\n```\n\n**The operator saw it: %s.**\n\nWhat the device printed for the denied command:\n\n"+
+			"```\n%s\n```\n\n### Truncation length\n\n%s\n",
+			shortDenyPrefix, len(shortMsg), shortMsg, verdict, strings.TrimRight(out[0], "\n"), longNote)
+		l.result(t, "L2", "Whether `server_msg` on an authorization REPLY is displayed to the operator, and at "+
+			"what length it truncates.", obs)
+	})
+}
+
+// denialMessage is the server_msg author.Lab builds for a denied prefix. The
+// test compares the device's output against it verbatim.
+func denialMessage(prefix string) string {
+	return "port49: denied by lab_deny (" + prefix + "); see 'port49 explain'"
+}
+
+func findDenial(recs []map[string]any, msg string) map[string]any {
+	for _, r := range recs {
+		if str(r, "event") == "authorize_command" && str(r, "verdict") == "deny" && str(r, "server_msg") == msg {
+			return r
+		}
+	}
+	return nil
+}
+
+func measureTruncation(t *testing.T, l *lab, shortOutput string) string {
+	t.Helper()
+	mustBeSeeded(t, longDenyPrefix)
+	off := l.mark()
+	out, err := l.login("alice", l.nextToken(t), longDenyPrefix)
+	if err != nil {
+		return fmt.Sprintf("Not measured: the second login, for the long denial, failed (%v).", err)
+	}
+	longMsg := denialMessage(longDenyPrefix)
+	recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
+		return findDenial(rs, longMsg) != nil
+	})
+	if findDenial(recs, longMsg) == nil {
+		return fmt.Sprintf("Not measured: the device did not send the %d-character command line for authorization, "+
+			"so port49 never replied with a long `server_msg`. The device printed:\n\n```\n%s\n```",
+			len(longDenyPrefix), strings.TrimRight(outFirst(out), "\n"))
+	}
+	printed := outFirst(out)
+	if strings.Contains(printed, longMsg) {
+		return fmt.Sprintf("A %d-character `server_msg` was displayed in full; no truncation at this length.", len(longMsg))
+	}
+	shownPrefix := longestCommonPrefixShown(printed, longMsg)
+	return fmt.Sprintf("A %d-character `server_msg` was **not** shown in full. The longest run of it the device "+
+		"printed was %d characters:\n\n```\n%s\n```\n\nFull device output:\n\n```\n%s\n```",
+		len(longMsg), len(shownPrefix), shownPrefix, strings.TrimRight(printed, "\n"))
+}
+
+func outFirst(out []string) string {
+	if len(out) == 0 {
+		return ""
+	}
+	return out[0]
+}
+
+// longestCommonPrefixShown returns the longest leading run of msg that appears
+// verbatim in printed, which is where a device cut the message off.
+func longestCommonPrefixShown(printed, msg string) string {
+	best := ""
+	for n := len(msg); n > 0; n-- {
+		if strings.Contains(printed, msg[:n]) {
+			best = msg[:n]
+			break
+		}
+	}
+	return best
+}
+
+// L5: which platforms send accounting WATCHDOG, how often, and with or without
+// arguments.
+func TestL5Watchdog(t *testing.T) {
+	eachPlatform(t, func(t *testing.T, l *lab) {
+		stop := l.capture(t, "L5")
+		defer stop()
+		off := l.mark()
+
+		const hold = 150 * time.Second
+		t0 := time.Now()
+		if err := l.holdSession("alice", l.nextToken(t), hold); err != nil {
+			t.Fatalf("could not hold an interactive session open, so no watchdog window existed: %v", err)
+		}
+
+		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool { return false })
+		acct := recordsOfEvent(recs, "account")
+		if len(acct) == 0 {
+			t.Fatalf("no accounting record of any kind arrived during a %v session, so whether this platform "+
+				"sends WATCHDOG could not be measured:%s", hold, summarize(recs))
+		}
+
+		var watchdogs []map[string]any
+		withArgs := 0
+		for _, r := range acct {
+			if str(r, "flags") != "watchdog" {
+				continue
+			}
+			watchdogs = append(watchdogs, r)
+			if rec := sub(r, "record"); rec != nil && len(strs(rec, "raw")) > 2 {
+				withArgs++
+			}
+		}
+
+		var gaps []string
+		var prev time.Time
+		for _, r := range watchdogs {
+			ts, ok := recTime(r)
+			if !ok {
+				continue
+			}
+			if !prev.IsZero() {
+				gaps = append(gaps, ts.Sub(prev).Round(time.Second).String())
+			}
+			prev = ts
+		}
+
+		summary := fmt.Sprintf("**%d WATCHDOG records** over a %v idle interactive session (login at %s UTC).",
+			len(watchdogs), hold, t0.UTC().Format(time.RFC3339))
+		if len(watchdogs) == 0 {
+			summary += "\n\nThis platform sent no WATCHDOG at all in that window. It did send accounting: " +
+				accountFlagsTable(acct)
+		} else {
+			summary += fmt.Sprintf("\n\n- Carrying arguments (more than two AV pairs): %d of %d.\n- Intervals between them: %s.\n\n"+
+				"First WATCHDOG's raw AV pairs:\n\n```\n%s\n```\n\nAll accounting seen in the window: %s",
+				withArgs, len(watchdogs), strings.Join(gaps, ", "), strings.Join(rawOf(watchdogs[0]), "\n"), accountFlagsTable(acct))
+		}
+		l.result(t, "L5", "Which platforms send accounting WATCHDOG, how often, and with or without arguments.", summary)
+	})
+}
+
+func recordsOfEvent(recs []map[string]any, event string) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		if str(r, "event") == event {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func rawOf(r map[string]any) []string {
+	rec := sub(r, "record")
+	if rec == nil {
+		return nil
+	}
+	return strs(rec, "raw")
+}
+
+func accountFlagsTable(acct []map[string]any) string {
+	counts := map[string]int{}
+	for _, r := range acct {
+		counts[str(r, "flags")]++
+	}
+	var parts []string
+	for _, f := range []string{"start", "watchdog", "stop", "unknown"} {
+		if counts[f] > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", f, counts[f]))
+		}
+	}
+	if len(parts) == 0 {
+		return "none"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// L6: how reliably and how late exec accounting START and STOP arrive.
+func TestL6AccountingLatency(t *testing.T) {
+	eachPlatform(t, func(t *testing.T, l *lab) {
+		stop := l.capture(t, "L6")
+		defer stop()
+		off := l.mark()
+
+		t0 := time.Now()
+		if _, err := l.login("alice", l.nextToken(t), "show version"); err != nil {
+			t.Fatalf("SSH login failed, so there was no session to account for: %v", err)
+		}
+		t1 := time.Now() // the SSH connection is closed by the time login returns
+
+		recs := l.waitForRecords(off, 60*time.Second, func(rs []map[string]any) bool {
+			s, st := execStartStop(rs)
+			return !s.IsZero() && !st.IsZero()
+		})
+		acct := recordsOfEvent(recs, "account")
+		if len(acct) == 0 {
+			t.Fatalf("no accounting record arrived within 60s of a complete login and logout, so neither the "+
+				"reliability nor the latency of exec START and STOP could be measured:%s", summarize(recs))
+		}
+
+		start, stopT := execStartStop(recs)
+		startNote, stopNote := "**never arrived**", "**never arrived**"
+		if !start.IsZero() {
+			startNote = fmt.Sprintf("arrived %v after the login began", start.Sub(t0).Round(time.Millisecond))
+		}
+		if !stopT.IsZero() {
+			stopNote = fmt.Sprintf("arrived %v after the session closed", stopT.Sub(t1).Round(time.Millisecond))
+		}
+
+		obs := fmt.Sprintf("One SSH login that ran `show version` and disconnected. Login began %s UTC; the "+
+			"connection closed %s UTC.\n\n- Exec **START**: %s.\n- Exec **STOP**: %s.\n\n"+
+			"Accounting records in the window: %s (an exec record is one whose command vector is null; a "+
+			"per-command record carries one).\n\nAll accounting AV pairs, in arrival order:\n\n```\n%s\n```\n\n"+
+			"Retry-to-the-next-server behavior is not measured here: this lab has a single TACACS+ server, so "+
+			"nothing in this run shows what the device does when one is unreachable.",
+			t0.UTC().Format(time.RFC3339Nano), t1.UTC().Format(time.RFC3339Nano),
+			startNote, stopNote, accountFlagsTable(acct), acctDump(acct))
+		l.result(t, "L6", "How reliably and how late exec accounting START and STOP arrive, and whether a device "+
+			"retries accounting to the same server or fails to the next.", obs)
+	})
+}
+
+// execStartStop returns the first exec START and the first exec STOP. An exec
+// record is one with no command vector; a per-command record has one.
+func execStartStop(recs []map[string]any) (start, stop time.Time) {
+	for _, r := range recs {
+		if str(r, "event") != "account" {
+			continue
+		}
+		rec := sub(r, "record")
+		if rec == nil || rec["vector"] != nil {
+			continue
+		}
+		ts, ok := recTime(r)
+		if !ok {
+			continue
+		}
+		switch str(r, "flags") {
+		case "start":
+			if start.IsZero() {
+				start = ts
+			}
+		case "stop":
+			if stop.IsZero() {
+				stop = ts
+			}
+		}
+	}
+	return start, stop
+}
+
+func acctDump(acct []map[string]any) string {
+	var b strings.Builder
+	for _, r := range acct {
+		fmt.Fprintf(&b, "%s flags=%s attribution=%s raw=%v\n", str(r, "ts"), str(r, "flags"), str(r, "attribution"), rawOf(r))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// L8: the maximum password length the platform accepts at an interactive
+// prompt. A token of each length is seeded under its own username, so a device
+// that truncates yields credential_mismatch against that user rather than a
+// silent pass against a shorter token.
+func TestL8PasswordLength(t *testing.T) {
+	eachPlatform(t, func(t *testing.T, l *lab) {
+		stop := l.capture(t, "L8")
+		defer stop()
+
+		var rows []l8Row
+		longestOK := 0
+
+		for _, n := range passwordLengths {
+			pw := passwordOfLength(n)
+			mustBeSeeded(t, pw)
+			user := fmt.Sprintf("longpw%d", n)
+			off := l.mark()
+			_, err := l.login(user, pw, "show version")
+			recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
+				return redeemFor(rs, user) != nil
+			})
+			r := l8Row{n: n, loginErr: err}
+			if rec := redeemFor(recs, user); rec != nil {
+				r.seen, r.verdict, r.reason = true, str(rec, "verdict"), str(rec, "reason")
+				if r.reason == "token_redeemed" && n > longestOK {
+					longestOK = n
+				}
+			}
+			rows = append(rows, r)
+		}
+
+		anySeen := false
+		for _, r := range rows {
+			anySeen = anySeen || r.seen
+		}
+		if !anySeen {
+			t.Fatalf("no redeem record arrived for any of the %d password lengths, so the device's maximum "+
+				"accepted password length could not be measured", len(rows))
+		}
+
+		var table strings.Builder
+		table.WriteString("| length | reached port49 | verdict | reason | SSH result |\n|---|---|---|---|---|\n")
+		for _, r := range rows {
+			reached, verdict, reason := "no", "—", "—"
+			if r.seen {
+				reached, verdict, reason = "yes", r.verdict, r.reason
+			}
+			ssh := "logged in"
+			if r.loginErr != nil {
+				ssh = "rejected"
+			}
+			fmt.Fprintf(&table, "| %d | %s | %s | `%s` | %s |\n", r.n, reached, verdict, reason, ssh)
+		}
+
+		longest := "**none of the lengths tested arrived intact.**"
+		if longestOK > 0 {
+			longest = fmt.Sprintf("**Longest password that arrived intact: %d characters.**", longestOK)
+		}
+		obs := fmt.Sprintf("A seeded token of each length, each under its own username, presented at the SSH "+
+			"password prompt:\n\n%s\n%s\n\n"+
+			"How to read this: `token_redeemed` means the full password reached port49 byte for byte. "+
+			"`credential_mismatch` means the username arrived but the password did not match what was seeded, "+
+			"so the device altered or truncated it. `token_not_found` or no record at all means the device "+
+			"refused the password before sending anything.\n\n"+
+			"The 30-character handle the design document depends on: %s.\n\n"+
+			"PAP is not measured here; this is the interactive SSH prompt only.",
+			table.String(), longest, handleVerdict(rows30(rows)))
+		l.result(t, "L8", "The maximum password length each platform accepts at an interactive prompt and via PAP.", obs)
+	})
+}
+
+// l8Row is one password length's outcome: whether the login succeeded over SSH,
+// and what port49 made of what actually arrived.
+type l8Row struct {
+	n        int
+	loginErr error
+	verdict  string
+	reason   string
+	seen     bool
+}
+
+func rows30(rows []l8Row) string {
+	for _, r := range rows {
+		if r.n == 30 {
+			return r.reason
+		}
+	}
+	return ""
+}
+
+func handleVerdict(reason string) string {
+	if reason == "token_redeemed" {
+		return "**accepted**"
+	}
+	if reason == "" {
+		return "**not measured** (no record for the 30-character login)"
+	}
+	return fmt.Sprintf("**not accepted** (`%s`)", reason)
+}
+
+func redeemFor(recs []map[string]any, user string) map[string]any {
+	for _, r := range recs {
+		if str(r, "event") != "redeem" {
+			continue
+		}
+		if s := sub(r, "session"); s != nil && str(s, "username") == user {
+			return r
+		}
+	}
+	return nil
+}
+
+// L10: whether `service` arrives as `shell` or `junos-exec`, and the exact
+// spelling of every attribute on an authorization request.
+func TestL10ServiceAndAttributeSpellings(t *testing.T) {
+	eachPlatform(t, func(t *testing.T, l *lab) {
+		stop := l.capture(t, "L10")
+		defer stop()
+		off := l.mark()
+
+		if _, err := l.login("alice", l.nextToken(t), "show version"); err != nil {
+			t.Fatalf("SSH login failed, so no authorization request was sent: %v", err)
+		}
+		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
+			return len(authzRequests(rs)) > 0
+		})
+		reqs := authzRequests(recs)
+		if len(reqs) == 0 {
+			t.Fatalf("no authorization request reached port49, so neither the `service` value nor any attribute "+
+				"spelling could be measured:%s", summarize(recs))
+		}
+
+		services := map[string]int{}
+		names := map[string]bool{}
+		var perEvent strings.Builder
+		for _, r := range reqs {
+			raw := strs(sub(r, "request"), "raw")
+			fmt.Fprintf(&perEvent, "\n%s (%s/%s):\n", str(r, "event"), str(r, "verdict"), str(r, "reason"))
+			for _, a := range raw {
+				fmt.Fprintf(&perEvent, "  %s\n", a)
+				k, v := splitAV(a)
+				names[k] = true
+				if k == "service" {
+					services[v]++
+				}
+			}
+		}
+
+		serviceNote := "**no `service` attribute was present on any request.**"
+		if len(services) > 0 {
+			var parts []string
+			for v, n := range services {
+				parts = append(parts, fmt.Sprintf("`%s` (%d requests)", v, n))
+			}
+			serviceNote = "`service` arrived as " + strings.Join(parts, ", ") + "."
+		}
+
+		var keys []string
+		for k := range names {
+			keys = append(keys, "`"+k+"`")
+		}
+		sortStrings(keys)
+
+		obs := fmt.Sprintf("One SSH login running `show version` produced %d authorization request(s).\n\n"+
+			"%s\n\nAttribute names seen, exactly as spelled on the wire: %s.\n\n"+
+			"Every AV pair, per request:\n\n```%s```\n\n"+
+			"Only this platform's own spellings are measured here; a shipped adapter is `VERIFIED` only for "+
+			"the platform its note names.",
+			len(reqs), serviceNote, strings.Join(keys, ", "), perEvent.String())
+		l.result(t, "L10", "Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every "+
+			"attribute in a shipped adapter.", obs)
+	})
+}
+
+func authzRequests(recs []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		e := str(r, "event")
+		if e != "authorize_session" && e != "authorize_command" {
+			continue
+		}
+		if sub(r, "request") != nil {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// splitAV splits an AV pair on the first `=` or `*`, which is how the protocol
+// separates a mandatory from an optional argument.
+func splitAV(a string) (string, string) {
+	i := strings.IndexAny(a, "=*")
+	if i < 0 {
+		return a, ""
+	}
+	return a[:i], a[i+1:]
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}

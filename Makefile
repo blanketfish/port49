@@ -17,5 +17,9 @@ fuzz:
 	done
 
 # Requires containerlab and device images; see tests/lab/README.md.
+#
+# 120m, not 30m: these are VM images that take minutes to boot, the harness
+# waits up to six for each, and L5 alone holds a session open for 150 seconds
+# per platform. Select one platform at a time with PORT49_LAB_PLATFORMS.
 lab:
-	go test -tags lab ./tests/lab/... -count=1 -v -timeout 30m
+	go test -tags lab ./tests/lab/... -count=1 -v -timeout 120m

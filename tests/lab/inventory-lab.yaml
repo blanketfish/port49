@@ -1,0 +1,6 @@
+devices:
+  - {name: leaf1, platform: arista_eos,    addresses: [172.100.100.11]}
+  - {name: srx1,  platform: juniper_junos, addresses: [172.100.100.21]}
+  - {name: vsrx1, platform: juniper_junos, addresses: [172.100.100.22]}
+key_groups:
+  - {match: {cidr: 172.100.100.0/24}, key_ref: lab_key}

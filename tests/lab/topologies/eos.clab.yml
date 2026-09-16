@@ -1,0 +1,11 @@
+name: port49-eos
+topology:
+  nodes:
+    leaf1:
+      kind: arista_veos             # with a cEOS tarball instead: kind ceos, image ceos:4.32.2F
+      image: vrnetlab/arista_veos:4.32.2F
+      startup-config: ../configs/eos-startup.cfg
+      mgmt-ipv4: 172.100.100.11
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24
