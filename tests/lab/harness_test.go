@@ -19,6 +19,7 @@ package lab
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,7 +68,18 @@ const (
 	spoolPath     = "/tmp/port49-lab-acct.jsonl"
 	metricsAddr   = "127.0.0.1:9049"
 	tacacsAddr    = "172.100.100.1:49"
+	labSubnet     = "172.100.100.0/24"
 	tokenPoolSize = 16
+
+	// capProbeAddr is where the capture's liveness probe connects. Nothing
+	// listens there — port49d binds the clab bridge address, never the
+	// loopback — so the kernel answers with a RST and the probe is two packets
+	// that match the capture filter and reach nothing under test.
+	capProbeAddr = "127.0.0.1:49"
+
+	// pcapHeaderSize is the 24-byte file header tcpdump writes when it opens a
+	// savefile. A file this size has captured nothing.
+	pcapHeaderSize = 24
 )
 
 // A device password of each of these lengths is seeded under user longpw<N>.
@@ -116,7 +128,8 @@ type lab struct {
 
 	mu      sync.Mutex
 	tokenN  int
-	capPath string
+	capPath string // repo-relative, for the results note
+	capAbs  string // absolute, for reading the capture back
 }
 
 // ---------------------------------------------------------------------------
@@ -289,23 +302,32 @@ func (l *lab) up() error {
 	}
 	l.deployed = true
 
+	// Readiness is a successful breakglass login and nothing weaker. Every
+	// cheaper signal proved false on the vJunos-router image: vrnetlab forwards
+	// port 22 into the VM, so the TCP connect succeeds immediately, and
+	// something answered a banner and even a key exchange around 40 seconds in
+	// while Junos itself was still minutes from serving SSH. A breakglass login
+	// cannot be faked by whatever answers first — that account exists only in
+	// the config from tests/lab/configs, and port49 is not listening yet, so
+	// reaching it also proves the device fell back to local as intended.
+	//
+	// waitSSH still runs first, for an early sign of life in the log, but it is
+	// advisory and capped: on this image the banner never appeared at all for
+	// the first four minutes, and letting that consume the boot budget would
+	// starve the gate that actually decides.
 	deadline := time.Now().Add(l.p.boot)
-	if err := waitSSH(l.p.addr, time.Until(deadline)); err != nil {
-		return err
+	if err := waitSSH(l.p.addr, min(2*time.Minute, time.Until(deadline))); err != nil {
+		fmt.Fprintf(os.Stderr, "lab: %s: no SSH banner yet (%v); still waiting for a login\n", l.p.name, err)
 	}
-	// A banner is not a working SSH service. vrnetlab forwards port 22 into the
-	// nested VM, so the TCP connect and the banner can both succeed minutes
-	// before Junos will finish a key exchange: the vJunos-router image answered
-	// with a banner and then timed out mid-handshake for another four minutes.
-	// Readiness is a handshake that reaches the authentication stage.
-	if err := l.waitHandshake(time.Until(deadline)); err != nil {
-		return err
-	}
-	// The device's SSH answering is not the same as its startup config being
-	// applied. port49 is not listening yet, so TACACS is refused outright and
-	// the device falls back to local: a breakglass login proves the config from
-	// tests/lab/configs is in place.
-	if err := l.waitConfigApplied(3 * time.Minute); err != nil {
+	// Capped, because this gate is advisory. If a local login never succeeds the
+	// register tests still have something to say — they authenticate over
+	// TACACS, which is the path under test — and spending the whole budget here
+	// would trade that for nothing. The cap is generous enough to cover a slow
+	// boot and short enough to leave the measurements time to run.
+	if err := l.waitConfigApplied(min(8*time.Minute, time.Until(deadline))); err != nil {
+		// Not fatal: the register tests still run and report exactly what they
+		// see, which is more useful than a bare setup failure. Every results
+		// note carries this caveat.
 		l.configWarn = err.Error()
 		fmt.Fprintf(os.Stderr, "lab: %s: WARNING: %v\n", l.p.name, err)
 	}
@@ -414,31 +436,6 @@ func waitSSH(addr string, within time.Duration) error {
 		time.Sleep(5 * time.Second)
 	}
 	return fmt.Errorf("%s: SSH never answered within %v (last error: %v)", addr, within, last)
-}
-
-// waitHandshake waits until a full SSH handshake reaches the authentication
-// stage. A probe user that does not exist is enough: being told the credential
-// is wrong proves the service is really serving, which a banner does not.
-func (l *lab) waitHandshake(within time.Duration) error {
-	if within <= 0 {
-		return fmt.Errorf("%s: no time left to wait for SSH to serve", l.p.addr)
-	}
-	deadline := time.Now().Add(within)
-	var last error
-	for time.Now().Before(deadline) {
-		c, err := l.dial("port49probe", "not-a-real-password", 30*time.Second)
-		if err == nil {
-			c.Close()
-			return nil
-		}
-		if strings.Contains(err.Error(), "unable to authenticate") {
-			return nil // the service is up; the probe user failing is the point
-		}
-		last = err
-		time.Sleep(10 * time.Second)
-	}
-	return fmt.Errorf("%s: SSH answered with a banner but never completed a handshake within %v (last error: %v)",
-		l.p.addr, within, last)
 }
 
 func (l *lab) waitConfigApplied(within time.Duration) error {
@@ -587,13 +584,6 @@ func mustBeSeeded(t *testing.T, secret string) {
 		t.Fatalf("tests/lab/port49d-lab.yaml does not seed the secret this test uses (%d characters, starting %q); the two have drifted apart",
 			len(secret), secret[:min(16, len(secret))])
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // ---------------------------------------------------------------------------
@@ -815,8 +805,25 @@ func summarize(recs []map[string]any) string {
 // Captures
 // ---------------------------------------------------------------------------
 
-// capture runs tcpdump around a test. -U writes each packet through, so the
-// file is readable even if the process is killed rather than interrupted.
+// capture runs tcpdump around a test.
+//
+// Two flags and two probes, and each one is here because its absence cost a
+// measurement. `--immediate-mode` is the important one: without it libpcap
+// hands tcpdump the kernel's ring buffer on a one-second read timeout, so a
+// test that stops the capture within a second of its last packet loses that
+// packet. That is exactly what happened to the first vEOS run — L10's whole
+// exchange lasted 263ms and was never written, leaving a 24-byte file beside a
+// results note that claimed a measurement, and L6 and L8 each lost their
+// accounting tail the same way. `-U` then flushes each packet to the file as it
+// is written, so the file is complete even if tcpdump is killed rather than
+// interrupted.
+//
+// The probes turn "tcpdump is running" into "this file is capturing". One at
+// the start must appear in the file before the test is allowed to generate
+// traffic; one at the end must appear before tcpdump is stopped, which proves
+// by ordering that everything the test produced is already on disk. They are
+// loopback packets, so they never appear in the device-packet count a results
+// note reports.
 func (l *lab) capture(t *testing.T, name string) func() {
 	t.Helper()
 	dir := filepath.Join(root, "tests", "lab", "captures")
@@ -825,6 +832,7 @@ func (l *lab) capture(t *testing.T, name string) func() {
 	}
 	abs := filepath.Join(dir, fmt.Sprintf("%s-%s.pcap", name, l.p.name))
 	l.capPath = filepath.Join("tests/lab/captures", filepath.Base(abs))
+	l.capAbs = abs
 
 	// tcpdump runs as root under sudo and drops privileges to its own user, so
 	// it cannot be signalled directly and its pid is not the pid of sudo. The
@@ -833,16 +841,22 @@ func (l *lab) capture(t *testing.T, name string) func() {
 	// stopped and a run that waits on it forever.
 	pidPath := abs + ".pid"
 	os.Remove(pidPath)
-	script := fmt.Sprintf("echo $$ > %s; exec tcpdump -i any -U -n -s 0 -w %s 'tcp port 49'", shellQuote(pidPath), shellQuote(abs))
+	os.Remove(abs)
+	script := fmt.Sprintf("echo $$ > %s; exec tcpdump --immediate-mode -i any -U -n -s 0 -w %s 'tcp port 49'",
+		shellQuote(pidPath), shellQuote(abs))
 	cmd := exec.Command("sudo", "-n", "sh", "-c", script)
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start tcpdump: %v", err)
 	}
-	// tcpdump prints "listening on ..." once the capture is live; a second is
-	// enough on a loopback-speed bridge and keeps the first packet in the file.
-	time.Sleep(time.Second)
+	// A test that runs without a live capture measures without evidence, and a
+	// results note may not point at a capture that holds nothing, so this is
+	// fatal rather than a warning.
+	if err := waitCaptureLive(abs); err != nil {
+		t.Fatalf("the capture for %s never became live, so this test would measure without evidence: %v\ntcpdump said: %s",
+			abs, err, errBuf.String())
+	}
 
 	stopped := false
 	return func() {
@@ -850,6 +864,7 @@ func (l *lab) capture(t *testing.T, name string) func() {
 			return
 		}
 		stopped = true
+		l.flushCapture(t)
 		done := make(chan struct{})
 		go func() { cmd.Wait(); close(done) }()
 		signalCapture(pidPath, "-INT")
@@ -868,10 +883,155 @@ func (l *lab) capture(t *testing.T, name string) func() {
 		// tcpdump wrote the file as its own dropped-privilege user.
 		_ = exec.Command("sudo", "-n", "chown", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), abs).Run()
 		os.Remove(pidPath)
-		if fi, err := os.Stat(abs); err != nil || fi.Size() == 0 {
-			t.Logf("capture %s is empty or missing (%v); tcpdump said: %s", abs, err, errBuf.String())
+		total, device, err := pcapCounts(abs)
+		if err != nil {
+			t.Logf("could not read the capture %s back (%v); tcpdump said: %s", abs, err, errBuf.String())
+			return
+		}
+		t.Logf("capture %s: %d packets, %d of them between the device and port49d", abs, total, device)
+		if device == 0 {
+			t.Logf("WARNING: the capture %s holds no TACACS packet to or from %s; tcpdump said: %s",
+				abs, labSubnet, errBuf.String())
 		}
 	}
+}
+
+// flushCapture makes tcpdump prove it has written everything the test produced,
+// by sending a probe and waiting for it to reach the file. Packets are written
+// in the order they arrive, so a probe that is on disk means every earlier
+// packet is too. It is called both before the capture is stopped and before a
+// results note quotes the capture, and is safe to call repeatedly.
+func (l *lab) flushCapture(t *testing.T) {
+	t.Helper()
+	if l.capAbs == "" {
+		return
+	}
+	before := pcapSize(l.capAbs)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		capProbe()
+		for i := 0; i < 10 && time.Now().Before(deadline); i++ {
+			if pcapSize(l.capAbs) > before {
+				// A short settle: the probe's own RST follows its SYN.
+				time.Sleep(200 * time.Millisecond)
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	t.Logf("WARNING: the capture %s did not grow when probed, so its tail may be short", l.capAbs)
+}
+
+// waitCaptureLive blocks until a probe packet has reached the capture file,
+// which is the only proof that tcpdump has its socket open, its filter set, and
+// its savefile written to. A running tcpdump process is not that proof.
+func waitCaptureLive(path string) error {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		capProbe()
+		for i := 0; i < 10 && time.Now().Before(deadline); i++ {
+			if pcapSize(path) > pcapHeaderSize {
+				return nil
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("no probe packet reached %s within 30s", path)
+}
+
+// capProbe generates the two loopback packets that prove a capture is live: a
+// SYN to a port nothing listens on, and the kernel's RST.
+func capProbe() {
+	c, err := net.DialTimeout("tcp", capProbeAddr, 500*time.Millisecond)
+	if err == nil {
+		c.Close()
+	}
+}
+
+func pcapSize(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// pcapCounts reads a capture back and returns how many packets it holds and how
+// many of those are to or from the lab management subnet. The second number is
+// the one a results note may rest on: it excludes the harness's own loopback
+// liveness probes, so a note that quotes a capture is quoting device traffic.
+//
+// The parser handles only what this harness produces — a little-endian pcap of
+// `-i any`, which on Linux is LINUX_SLL2 — and reports what it cannot read
+// rather than guessing.
+func pcapCounts(path string) (total, device int, err error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(raw) < pcapHeaderSize {
+		return 0, 0, fmt.Errorf("%s is %d bytes, shorter than a pcap file header", path, len(raw))
+	}
+	magic := binary.LittleEndian.Uint32(raw[0:4])
+	if magic != 0xa1b2c3d4 && magic != 0xa1b23c4d {
+		return 0, 0, fmt.Errorf("%s: unexpected pcap magic %#x; this parser reads only little-endian pcap", path, magic)
+	}
+	link := binary.LittleEndian.Uint32(raw[20:24])
+
+	_, subnet, err := net.ParseCIDR(labSubnet)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	for off := pcapHeaderSize; off+16 <= len(raw); {
+		inclLen := int(binary.LittleEndian.Uint32(raw[off+8 : off+12]))
+		off += 16
+		if inclLen < 0 || off+inclLen > len(raw) {
+			return total, device, fmt.Errorf("%s: truncated packet record at offset %d", path, off)
+		}
+		total++
+		if src, dst, ok := ipv4Of(link, raw[off:off+inclLen]); ok && (subnet.Contains(src) || subnet.Contains(dst)) {
+			device++
+		}
+		off += inclLen
+	}
+	return total, device, nil
+}
+
+// ipv4Of pulls the source and destination address out of one captured packet.
+func ipv4Of(link uint32, b []byte) (src, dst net.IP, ok bool) {
+	var hdr int
+	var proto uint16
+	switch link {
+	case 276: // LINUX_SLL2, what `-i any` produces on Linux
+		hdr, proto = 20, 0
+		if len(b) < hdr {
+			return nil, nil, false
+		}
+		proto = binary.BigEndian.Uint16(b[0:2])
+	case 113: // LINUX_SLL
+		hdr = 16
+		if len(b) < hdr {
+			return nil, nil, false
+		}
+		proto = binary.BigEndian.Uint16(b[14:16])
+	case 1: // Ethernet
+		hdr = 14
+		if len(b) < hdr {
+			return nil, nil, false
+		}
+		proto = binary.BigEndian.Uint16(b[12:14])
+	default:
+		return nil, nil, false
+	}
+	if proto != 0x0800 || len(b) < hdr+20 {
+		return nil, nil, false
+	}
+	ip := b[hdr:]
+	if ip[0]>>4 != 4 {
+		return nil, nil, false
+	}
+	return net.IP(ip[12:16]), net.IP(ip[16:20]), true
 }
 
 func signalCapture(pidPath, sig string) {
@@ -897,12 +1057,32 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''
 // result writes tests/lab/results/L<N>-<platform>.md in the form spec §15 rule
 // 3 requires: platform, image version, observation, and a pointer to the
 // capture.
+//
+// The capture line reports how many packets the file actually holds between the
+// device and port49d, read back from the file at the moment the note is
+// written. A note whose capture holds none of them cannot close a register row,
+// and says so in place of a pointer that would imply evidence it does not have.
 func (l *lab) result(t *testing.T, entry, claim, observation string) {
 	t.Helper()
 	dir := filepath.Join(root, "tests", "lab", "results")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("results directory: %v", err)
 	}
+	l.flushCapture(t)
+	capLine := fmt.Sprintf("`%s`", l.capPath)
+	if total, device, err := pcapCounts(l.capAbs); err != nil {
+		capLine += fmt.Sprintf(" — **could not be read back** (%v), so this note quotes the decision log only", err)
+		t.Errorf("the capture %s could not be read back: %v", l.capAbs, err)
+	} else if device == 0 {
+		capLine += fmt.Sprintf(" — **empty of device traffic**: %d packets, none of them to or from %s. "+
+			"This note's observation rests on the decision log alone and cannot close a register row.", total, labSubnet)
+		t.Errorf("the capture %s holds no packet to or from %s, so this measurement has no capture to point at",
+			l.capAbs, labSubnet)
+	} else {
+		capLine += fmt.Sprintf(" — %d packets between the device and port49d (of %d captured; the rest are the "+
+			"harness's own loopback liveness probes)", device, total)
+	}
+
 	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", entry, l.p.name))
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s — %s\n\n", entry, l.p.name)
@@ -910,7 +1090,7 @@ func (l *lab) result(t *testing.T, entry, claim, observation string) {
 	fmt.Fprintf(&b, "- **Platform:** %s (containerlab node `%s`, %s)\n", l.p.name, l.p.node, l.p.addr)
 	fmt.Fprintf(&b, "- **Image version:** %s (`%s`)\n", l.p.version, l.p.image)
 	fmt.Fprintf(&b, "- **Topology:** `tests/lab/%s`\n", l.p.topo)
-	fmt.Fprintf(&b, "- **Capture:** `%s`\n", l.capPath)
+	fmt.Fprintf(&b, "- **Capture:** %s\n", capLine)
 	fmt.Fprintf(&b, "- **Transport:** SSH\n")
 	if l.configWarn != "" {
 		fmt.Fprintf(&b, "- **Caveat:** %s\n", l.configWarn)

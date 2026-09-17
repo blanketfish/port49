@@ -78,5 +78,17 @@ each and reads the outcome, so a device that truncates the password produces
 
 ## Captures
 
-`tcpdump -i any -U -w captures/<test>-<platform>.pcap 'tcp port 49'` runs around each test.
-Captures are git-ignored; the results note quotes the fields that matter and names the file.
+`tcpdump --immediate-mode -i any -U -n -s 0 -w captures/<test>-<platform>.pcap 'tcp port 49'`
+runs around each test. Captures are git-ignored; the results note quotes the fields that
+matter, names the file, and reports how many packets in it are device traffic.
+
+`--immediate-mode` is not decoration. Without it libpcap hands tcpdump the kernel ring on a
+one-second read timeout, so a capture stopped within a second of its last packet loses that
+packet — which is how the first vEOS run produced a 24-byte L10 capture beside a results note
+that claimed a measurement.
+
+The harness brackets each capture with a TCP connection to `127.0.0.1:49`, where nothing
+listens. Those two loopback packets are its proof that the file is really capturing: the test
+does not start until one has reached the file, and tcpdump is not stopped until another has,
+which by ordering means everything the test produced is already on disk. They are on the
+loopback, so they are excluded from the device-packet count a results note quotes.
