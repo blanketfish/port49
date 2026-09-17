@@ -1079,8 +1079,12 @@ func (l *lab) result(t *testing.T, entry, claim, observation string) {
 		t.Errorf("the capture %s holds no packet to or from %s, so this measurement has no capture to point at",
 			l.capAbs, labSubnet)
 	} else {
-		capLine += fmt.Sprintf(" — %d packets between the device and port49d (of %d captured; the rest are the "+
-			"harness's own loopback liveness probes)", device, total)
+		// The device-packet count, not the file's total: the harness brackets
+		// every capture with loopback probes and adds one more pair when it
+		// stops the capture, after this note is written. Counting only what
+		// crossed the bridge gives a number the reader can reproduce.
+		capLine += fmt.Sprintf(" — %d packets to or from the device, countable with "+
+			"`tcpdump -r %s -n 'net %s' | wc -l`", device, l.capPath, labSubnet)
 	}
 
 	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", entry, l.p.name))
