@@ -48,9 +48,12 @@ type platform struct {
 	version string // image version for the results note
 
 	// boot is how long this image is given to become usable. It is per platform
-	// because the images differ by an order of magnitude: vEOS is ready in about
-	// a minute, while the vJunos images boot Junos inside a nested VM and were
-	// measured still finishing their SSH service more than four minutes in.
+	// because the images differ by an order of magnitude, and the Junos figure is
+	// measured on this host rather than guessed: vEOS answers a breakglass login
+	// 57 seconds after `containerlab deploy`, while vJunos-router 23.4R2-S2.1 was
+	// still mounting Junos package sets 15 minutes in and had not served an SSH
+	// handshake at 17 minutes, when the run ended. Junos boots inside a nested VM
+	// and that is what it costs here.
 	boot time.Duration
 }
 
@@ -58,9 +61,9 @@ var platforms = []platform{
 	{"eos", "arista_eos", "topologies/eos.clab.yml", "172.100.100.11", "leaf1",
 		"vrnetlab/arista_veos:4.32.2F", "vEOS-lab 4.32.2F", 6 * time.Minute},
 	{"vjunos", "juniper_vjunos-router", "topologies/vjunos.clab.yml", "172.100.100.21", "srx1",
-		"vrnetlab/juniper_vjunos-router:23.4R2-S2.1", "vJunos-router 23.4R2-S2.1", 20 * time.Minute},
+		"vrnetlab/juniper_vjunos-router:23.4R2-S2.1", "vJunos-router 23.4R2-S2.1", 35 * time.Minute},
 	{"vsrx", "juniper_vsrx", "topologies/vsrx.clab.yml", "172.100.100.22", "vsrx1",
-		"vrnetlab/juniper_vsrx:21.4R3.15", "vSRX3 21.4R3.15", 20 * time.Minute},
+		"vrnetlab/juniper_vsrx:21.4R3.15", "vSRX3 21.4R3.15", 35 * time.Minute},
 }
 
 const (
@@ -319,12 +322,16 @@ func (l *lab) up() error {
 	if err := waitSSH(l.p.addr, min(2*time.Minute, time.Until(deadline))); err != nil {
 		fmt.Fprintf(os.Stderr, "lab: %s: no SSH banner yet (%v); still waiting for a login\n", l.p.name, err)
 	}
-	// Capped, because this gate is advisory. If a local login never succeeds the
-	// register tests still have something to say — they authenticate over
-	// TACACS, which is the path under test — and spending the whole budget here
-	// would trade that for nothing. The cap is generous enough to cover a slow
-	// boot and short enough to leave the measurements time to run.
-	if err := l.waitConfigApplied(min(8*time.Minute, time.Until(deadline))); err != nil {
+	// This gate gets the whole remaining boot budget, and the reason is a run
+	// that was thrown away. It used to be capped at 8 minutes, on the theory
+	// that the register tests could still say something against a device whose
+	// local login had not come up. On vJunos-router that theory cost 17 minutes
+	// and measured nothing: the gate gave up at 8m23s while the VM was still
+	// mounting Junos packages, then all six register tests ran against a device
+	// whose SSH would not complete a handshake, and every one of them failed on
+	// the same i/o timeout. Waiting is what the budget is for; if the budget is
+	// wrong, the budget is what to change.
+	if err := l.waitConfigApplied(time.Until(deadline)); err != nil {
 		// Not fatal: the register tests still run and report exactly what they
 		// see, which is more useful than a bare setup failure. Every results
 		// note carries this caveat.
