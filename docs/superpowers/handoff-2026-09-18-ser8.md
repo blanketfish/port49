@@ -29,20 +29,29 @@ plan is reproduced verbatim in the appendix; it is the recovery map and every ru
 2. Packages: Docker (native, user in `docker`), containerlab 0.79.0 per the plan's Task 15
    prerequisites (user in `clab_admins`), Go 1.22+, `tcpdump`, `qemu-utils`, `make`, `gh`.
    Passwordless `sudo -n` for the harness (it runs `containerlab` and `setcap`).
-3. Images: both handoff files were written to `C:\Users\rhwen\Network Images\` on the old
-   PC (not to Google Drive); copy them to the SER8 by Drive, USB, or scp. Load
-   `vrnetlab-images-2026-09-18.tar` with `docker load -i`. It holds the three plan-1 images plus the vrnetlab base, including the
+3. Images: the whole image library, including both handoff files, is on the TrueNAS in the
+   dataset `blanketfish/network-images`, exported over NFS to `192.168.0.0/16` with every
+   client mapped to `rwendt` (uid 1000). Mount it and load the images:
+   ```sh
+   sudo apt install -y nfs-common && sudo mkdir -p /mnt/images
+   sudo mount -t nfs -o vers=4,soft,timeo=100 192.168.42.128:/mnt/blanketfish/network-images /mnt/images
+   docker load -i /mnt/images/vrnetlab-images-2026-09-18.tar
+   ```
+   (TrueNAS also answers on `192.168.48.128`. Add an `/etc/fstab` line with `_netdev,soft`
+   for a permanent mount. The export has the `secure` flag, so it cannot be mounted from
+   WSL2 behind NAT; that is why the old PC copied over ssh instead.) Keep Docker's data
+   root and the repo on the SER8's NVMe, never on NFS. It holds the three plan-1 images plus the vrnetlab base, including the
    hand-applied vJunos AMD CPU-check patch, so nothing needs rebuilding. If you rebuild
    anyway, the gotchas are in plan 1 Task 15.
 4. Management subnet: run the subnet check in Task 15's prerequisites. The topologies use
    `172.100.100.0/24`; if it is taken on the SER8, all eight files it names must change together.
 5. Repo: `git clone git@github.com:rhwendt/port49.git ~/git/port49 && git checkout feature/protocol-core`.
-6. Restore the local-only state from `port49-handoff-2026-09-18.tar.gz` (same folder):
+6. Restore the local-only state from `port49-handoff-2026-09-18.tar.gz` (same share):
    ```sh
-   cd ~/git/port49 && tar xzf ".../port49-handoff-2026-09-18.tar.gz" \
+   cd ~/git/port49 && tar xzf /mnt/images/port49-handoff-2026-09-18.tar.gz \
      .superpowers tests/lab/captures tests/lab/logs
    mkdir -p ~/.claude/projects/-home-$USER-git-port49 && \
-     tar xzf ".../port49-handoff-2026-09-18.tar.gz" -C ~/.claude/projects/-home-$USER-git-port49 memory
+     tar xzf /mnt/images/port49-handoff-2026-09-18.tar.gz -C ~/.claude/projects/-home-$USER-git-port49 memory
    ```
    The first restores the SDD workspace (ledger, briefs, reports, review packages) and the
    vEOS captures and logs; the second restores Claude's memory files. The memory directory
