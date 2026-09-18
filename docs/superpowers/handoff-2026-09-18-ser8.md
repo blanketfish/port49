@@ -30,8 +30,8 @@ plan is reproduced verbatim in the appendix; it is the recovery map and every ru
    prerequisites (user in `clab_admins`), Go 1.22+, `tcpdump`, `qemu-utils`, `make`, `gh`.
    Passwordless `sudo -n` for the harness (it runs `containerlab` and `setcap`).
 3. Images: the whole image library, including both handoff files, is on the TrueNAS in the
-   dataset `blanketfish/network-images`, exported over NFS to `192.168.0.0/16` with every
-   client mapped to `rwendt` (uid 1000). Mount it and load the images:
+   dataset `blanketfish/network-images`, exported over NFS to `192.168.0.0/16` with root
+   mapped to root and other users by uid (`rwendt` is 1000 on both ends). Mount it and load the images:
    ```sh
    sudo apt install -y nfs-common && sudo mkdir -p /mnt/images
    sudo mount -t nfs -o vers=4,soft,timeo=100 192.168.42.128:/mnt/blanketfish/network-images /mnt/images
