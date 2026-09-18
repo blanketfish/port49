@@ -29,14 +29,15 @@ plan is reproduced verbatim in the appendix; it is the recovery map and every ru
 2. Packages: Docker (native, user in `docker`), containerlab 0.79.0 per the plan's Task 15
    prerequisites (user in `clab_admins`), Go 1.22+, `tcpdump`, `qemu-utils`, `make`, `gh`.
    Passwordless `sudo -n` for the harness (it runs `containerlab` and `setcap`).
-3. Images: load `Network Images/vrnetlab-images-2026-09-18.tar` from Google Drive with
-   `docker load -i`. It holds the three plan-1 images plus the vrnetlab base, including the
+3. Images: both handoff files were written to `C:\Users\rhwen\Network Images\` on the old
+   PC (not to Google Drive); copy them to the SER8 by Drive, USB, or scp. Load
+   `vrnetlab-images-2026-09-18.tar` with `docker load -i`. It holds the three plan-1 images plus the vrnetlab base, including the
    hand-applied vJunos AMD CPU-check patch, so nothing needs rebuilding. If you rebuild
    anyway, the gotchas are in plan 1 Task 15.
 4. Management subnet: run the subnet check in Task 15's prerequisites. The topologies use
    `172.100.100.0/24`; if it is taken on the SER8, all eight files it names must change together.
 5. Repo: `git clone git@github.com:rhwendt/port49.git ~/git/port49 && git checkout feature/protocol-core`.
-6. Restore the local-only state from `Network Images/port49-handoff-2026-09-18.tar.gz`:
+6. Restore the local-only state from `port49-handoff-2026-09-18.tar.gz` (same folder):
    ```sh
    cd ~/git/port49 && tar xzf ".../port49-handoff-2026-09-18.tar.gz" \
      .superpowers tests/lab/captures tests/lab/logs
