@@ -17,9 +17,9 @@ Transport measured: **NETCONF over SSH (port 830)**. Each step below was a separ
 
 | step | user | device answered | authentications | session authz | command authz | accounting | elapsed |
 |---|---|---|---|---|---|---|---|
-| session 1: open and `get-config running` | `netconf01` | **no**: the NETCONF channel closed: EOF | 1 | 1 | 0 | none | 270ms |
-| session 2: open again with the same token | `netconf01` | **no**: the NETCONF channel closed: EOF | 1 | 1 | 0 | none | 280ms |
-| session 3: `edit-config` and commit | `netconf02` | **no**: the NETCONF channel closed: EOF | 1 | 1 | 0 | none | 300ms |
+| session 1: open and `get-config running` | `netconf01` | **no**: the NETCONF channel closed: EOF | 1 | 1 | 0 | none | 330ms |
+| session 2: open again with the same token | `netconf01` | **no**: the NETCONF channel closed: EOF | 1 | 1 | 0 | none | 260ms |
+| session 3: `edit-config` and commit | `netconf02` | **no**: the NETCONF channel closed: EOF | 1 | 1 | 0 | none | 280ms |
 
 ### Does a second request with the same token re-authenticate?
 
@@ -37,7 +37,7 @@ These are the values this transport produced. Compare them with the SSH figures 
 
 ### How many TCP connections the device opened to port49d
 
-**12** TCP connection(s) were opened toward port49d during this test, from source port(s) 46562, 46568, 53402, 53404, 53412.
+**12** TCP connection(s) were opened toward port49d during this test, from source port(s) 36060, 36064, 43662, 43664, 60708, 60724.
 
 Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/captures/netconf-cisco_nxos.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
 
@@ -46,8 +46,8 @@ Read this against the step table above. One connection per authentication exchan
 **session 1: open and `get-config running`** (as `netconf01`)
 
 ```
-2026-09-20T17:23:19.312Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
-2026-09-20T17:23:19.331Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
+2026-09-20T17:33:31.035Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
+2026-09-20T17:33:31.053Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=
     request AV: cisco-av-pair*
@@ -57,8 +57,8 @@ Read this against the step table above. One connection per authentication exchan
 **session 2: open again with the same token** (as `netconf01`)
 
 ```
-2026-09-20T17:23:29.604Z event=redeem verdict=permit reason=receipt_replayed auth.method=pap port="0" rem_addr="172.100.100.1"
-2026-09-20T17:23:29.622Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
+2026-09-20T17:33:41.380Z event=redeem verdict=permit reason=receipt_replayed auth.method=pap port="0" rem_addr="172.100.100.1"
+2026-09-20T17:33:41.398Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=
     request AV: cisco-av-pair*
@@ -68,8 +68,8 @@ Read this against the step table above. One connection per authentication exchan
 **session 3: `edit-config` and commit** (as `netconf02`)
 
 ```
-2026-09-20T17:23:39.891Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
-2026-09-20T17:23:39.909Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
+2026-09-20T17:33:51.662Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
+2026-09-20T17:33:51.681Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=
     request AV: cisco-av-pair*
@@ -112,7 +112,7 @@ The device's NETCONF hello:
         <capability>urn:ietf:params:netconf:capability:with-defaults:1.0?basic-mode=report-all</capability>
         <capability>http://cisco.com/ns/yang/cisco-nx-os-device?revision=2023-12-13&amp;module=Cisco-NX-OS-device</capability>
     </capabilities>
-    <session-id>244199602</session-id>
+    <session-id>1491389739</session-id>
 </hello>
 ```
 

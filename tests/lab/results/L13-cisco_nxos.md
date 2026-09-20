@@ -58,13 +58,15 @@ port49d was restarted before each row with `limits.auth_failure_delay_base` and 
 
 | FAIL delayed by | SSH login | elapsed | redeem records for the account | reasons |
 |---|---|---|---|---|
-| 2s | refused | 6.09s | 2 | deny/token_not_found, deny/token_not_found |
-| 6s | **logged in** | 8.01s | 1 | deny/token_not_found |
-| 12s | **logged in** | 8.01s | 1 | deny/token_not_found |
+| 2s | refused | 4.88s | 2 | deny/token_not_found, deny/token_not_found |
+| 6s | **logged in** | 5.61s | 1 | deny/token_not_found |
+| 12s | **logged in** | 5.61s | 1 | deny/token_not_found |
 
-**Measured reply timeout: about 8s.** A FAIL delayed by 6s was waited out (8.01s elapsed); one delayed by 12s was not, and the login resolved after 8.01s. So the timeout lies between 6s and 8s.
+**Measured reply timeout: about 5.6s.** A FAIL delayed by 2s was acted on — the login was refused, 4.88s elapsed. One delayed by 6s was not: that login **succeeded on the local password** after 5.61s. So the timeout lies between 2s and 5.6s.
 
-When the FAIL arrived after that, the device **accepted the local password**, exactly as it does when the server is unreachable (L4). A denial delayed past the timeout is therefore not a denial: it is indistinguishable from an outage, and the device takes the fall-through branch. **port49's own default `limits.auth_failure_delay_max` is 5s** (internal/config), reached after five consecutive failures for one `(nas, username)` pair. Compare that with the figure above before treating a repeated-failure delay as a way to slow an attacker down: past the device's timeout it stops slowing anything down and starts changing the answer the device acts on.
+When the FAIL arrived after that, the device **accepted the local password**, exactly as it does when the server is unreachable (L4). A denial delayed past the timeout is therefore not a denial: it is indistinguishable from an outage, and the device takes the fall-through branch. 
+
+**This device retransmits**: 1 of 3 rows produced more than one redeem record for a single login attempt. So the elapsed column measures the retransmission schedule as much as the reply timeout, and the figure above is read off which logins the device acted on rather than off the clock. **port49's own default `limits.auth_failure_delay_max` is 5s** (internal/config), reached after five consecutive failures for one `(nas, username)` pair. Compare that with the figure above before treating a repeated-failure delay as a way to slow an attacker down: past the device's timeout it stops slowing anything down and starts changing the answer the device acts on.
 
 
 **How to read the elapsed column.** An elapsed time at or just above the delay means the device waited for the reply. An elapsed time well below it means the device stopped waiting, and what it did next — refuse, or fall through to the local password — is the outcome column. More than one redeem record for a single login attempt means the device gave up and asked again, which is the retransmission half of the same behavior.

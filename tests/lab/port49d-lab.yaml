@@ -25,7 +25,22 @@ accounting:
   spool_path: /tmp/port49-lab-acct.jsonl
 
 lab:
-  session_attributes: ["priv-lvl=15"]
+  # `shell:roles` is here because the N9Kv asks for it by name. Its session
+  # authorization request is:
+  #
+  #   service=shell cmd= cisco-av-pair* shell:roles*
+  #
+  # where EOS asks `service=shell cmd*` and Junos asks for `service` alone. A
+  # reply carrying only `priv-lvl=15` tells NX-OS nothing about what the session
+  # may do: NX-OS assigns privileges by ROLE, not by privilege level, which is
+  # the same lesson `role network-admin` taught in the two startup configs.
+  #
+  # It is sent as an OPTIONAL argument (`*`, not `=`). A mandatory argument a
+  # device does not understand makes it fail the whole authorization, and EOS
+  # and Junos do not understand this one. Optional, they ignore it (RFC 8907
+  # §8.2) and NX-OS reads it, which is what lets one lab authorizer serve all
+  # four platforms.
+  session_attributes: ["priv-lvl=15", "shell:roles*network-admin"]
   # The long prefix is first: Lab.Command returns on the first prefix that
   # matches, and "show clock" would otherwise shadow it. L2 types this exact
   # line to see how long a server_msg the device will display.

@@ -21,39 +21,35 @@ Two overlapping sessions, each logged in with its own token and each holding at 
 
 ### What the device said
 
+**alice01**:
+
+```
+THIS PLATFORM HAS NO ENABLE COMMAND. The device rejected it outright:
+^
+% Invalid command at '^' marker.
+```
+
 **alice02**:
 
 ```
-the device did not drop to an unprivileged prompt on `disable`: none of [">"] appeared on the SSH CLI as alice02 within 45s; what it said was:
-disable
-       ^
+THIS PLATFORM HAS NO ENABLE COMMAND. The device rejected it outright:
+^
 % Invalid command at '^' marker.
-nx1# 
-```
-
-**alice03**:
-
-```
-the device did not drop to an unprivileged prompt on `disable`: none of [">"] appeared on the SSH CLI as alice03 within 45s; what it said was:
-disable
-       ^
-% Invalid command at '^' marker.
-nx1# 
 ```
 
 ### The enable authentication, in the decision log
 
 **No authentication record arrived under a username other than the two the harness logged in as.** Either the device sent the operator's own username on the enable START — which the wire table below settles — or it never asked port49 about the enable at all. Every record in the window:
   event=redeem verdict=permit reason=token_redeemed flags= user=alice02 port=0
-  event=redeem verdict=permit reason=token_redeemed flags= user=alice03 port=0
+  event=redeem verdict=permit reason=token_redeemed flags= user=alice01 port=0
   event=authorize_session verdict=deny reason=username_mismatch flags= user=alice02 port=0
-  event=authorize_session verdict=deny reason=context_missing flags= user=alice03 port=0
-  event=account verdict= reason= flags=start user=alice03 port=0
+  event=authorize_session verdict=deny reason=context_missing flags= user=alice01 port=0
   event=account verdict= reason= flags=start user=alice02 port=0
-  event=authorize_command verdict=deny reason=context_missing flags= user=alice03 port=
+  event=account verdict= reason= flags=start user=alice01 port=0
   event=authorize_command verdict=deny reason=context_missing flags= user=alice02 port=
-  event=account verdict= reason= flags=stop user=alice03 port=0
+  event=authorize_command verdict=deny reason=context_missing flags= user=alice01 port=
   event=account verdict= reason= flags=stop user=alice02 port=0
+  event=account verdict= reason= flags=stop user=alice01 port=0
 
 
 ### The enable exchange on the wire
@@ -62,26 +58,26 @@ Decoded from the capture with the daemon's own `internal/tacacs/wire` package an
 
 | device connection | session_id | seq | single-connect | packet |
 |---|---|---|---|---|
-| 172.100.100.31:45792 → | `0x42bc3c57` | 1 | clear | AUTHEN START action=login(1) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice02" port="0" rem_addr="172.100.100.1" data=14 bytes |
-| 172.100.100.31:45802 → | `0x25828232` | 1 | clear | AUTHEN START action=login(1) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice03" port="0" rem_addr="172.100.100.1" data=14 bytes |
-| 172.100.100.1:49 ← | `0x42bc3c57` | 2 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
-| 172.100.100.1:49 ← | `0x25828232` | 2 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
-| 172.100.100.31:45806 → | `0x6e8f0ce1` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice02" port="0" rem_addr="172.100.100.1" args=[service=shell cmd= cisco-av-pair* shell:roles*] |
-| 172.100.100.1:49 ← | `0x6e8f0ce1` | 2 | clear | AUTHOR RESPONSE status=0x10 server_msg="port49: username does not match the authenticated session" args=[] |
-| 172.100.100.31:45818 → | `0x60e23824` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice03" port="0" rem_addr="172.100.100.1" args=[service=shell cmd= cisco-av-pair* shell:roles*] |
-| 172.100.100.1:49 ← | `0x60e23824` | 2 | clear | AUTHOR RESPONSE status=0x10 server_msg="port49: this session was not authenticated by port49" args=[] |
-| 172.100.100.31:45832 → | `0x2675c11e` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice03" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/3 start_time=1789924522 timezone=UTC service=none] |
-| 172.100.100.1:49 ← | `0x2675c11e` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.31:45836 → | `0x5222bf59` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice02" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/4 start_time=1789924522 timezone=UTC service=none] |
-| 172.100.100.1:49 ← | `0x5222bf59` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.31:45842 → | `0x2e478aeb` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=none(0) priv_lvl=1 user="alice03" port="" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
-| 172.100.100.1:49 ← | `0x2e478aeb` | 2 | clear | AUTHOR RESPONSE status=0x10 server_msg="port49: this session was not authenticated by port49" args=[] |
-| 172.100.100.31:45854 → | `0x5fe5ff5e` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=none(0) priv_lvl=1 user="alice02" port="" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
-| 172.100.100.1:49 ← | `0x5fe5ff5e` | 2 | clear | AUTHOR RESPONSE status=0x10 server_msg="port49: this session was not authenticated by port49" args=[] |
-| 172.100.100.31:34018 → | `0x639cba6f` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice03" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/3 start_time=1789924567 timezone=UTC stop_time=1789924567 service=none] |
-| 172.100.100.1:49 ← | `0x639cba6f` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.31:34030 → | `0x17730006` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice02" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/4 start_time=1789924567 timezone=UTC stop_time=1789924567 service=none] |
-| 172.100.100.1:49 ← | `0x17730006` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.31:43866 → | `0x74c98e6c` | 1 | clear | AUTHEN START action=login(1) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice02" port="0" rem_addr="172.100.100.1" data=14 bytes |
+| 172.100.100.31:43872 → | `0x2e6ca24f` | 1 | clear | AUTHEN START action=login(1) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice01" port="0" rem_addr="172.100.100.1" data=14 bytes |
+| 172.100.100.1:49 ← | `0x2e6ca24f` | 2 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
+| 172.100.100.1:49 ← | `0x74c98e6c` | 2 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
+| 172.100.100.31:43886 → | `0x62e25485` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice02" port="0" rem_addr="172.100.100.1" args=[service=shell cmd= cisco-av-pair* shell:roles*] |
+| 172.100.100.31:43894 → | `0x5481955e` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice01" port="0" rem_addr="172.100.100.1" args=[service=shell cmd= cisco-av-pair* shell:roles*] |
+| 172.100.100.1:49 ← | `0x62e25485` | 2 | clear | AUTHOR RESPONSE status=0x10 server_msg="port49: username does not match the authenticated session" args=[] |
+| 172.100.100.1:49 ← | `0x5481955e` | 2 | clear | AUTHOR RESPONSE status=0x10 server_msg="port49: this session was not authenticated by port49" args=[] |
+| 172.100.100.31:43910 → | `0x571059d0` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice02" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/3 start_time=1789925521 timezone=UTC service=none] |
+| 172.100.100.1:49 ← | `0x571059d0` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.31:43912 → | `0x3179537b` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice01" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/4 start_time=1789925521 timezone=UTC service=none] |
+| 172.100.100.1:49 ← | `0x3179537b` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.31:43918 → | `0x7486534a` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=none(0) priv_lvl=1 user="alice02" port="" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
+| 172.100.100.1:49 ← | `0x7486534a` | 2 | clear | AUTHOR RESPONSE status=0x10 server_msg="port49: this session was not authenticated by port49" args=[] |
+| 172.100.100.31:43920 → | `0x5822791f` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=none(0) priv_lvl=1 user="alice01" port="" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
+| 172.100.100.1:49 ← | `0x5822791f` | 2 | clear | AUTHOR RESPONSE status=0x10 server_msg="port49: this session was not authenticated by port49" args=[] |
+| 172.100.100.31:43924 → | `0x7da184d4` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice02" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/3 start_time=1789925522 timezone=UTC stop_time=1789925522 service=none] |
+| 172.100.100.1:49 ← | `0x7da184d4` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.31:43936 → | `0x1e044237` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice01" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/4 start_time=1789925522 timezone=UTC stop_time=1789925522 service=none] |
+| 172.100.100.1:49 ← | `0x1e044237` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
 
 - **TCP connections the device opened:** 10, carrying 10 distinct `session_id`(s). The busiest connection carried **1** `session_id`(s).
   That is **one TCP connection per exchange**: the device tears the connection down and opens another for the next one, so nothing at the transport layer joins two exchanges either.
