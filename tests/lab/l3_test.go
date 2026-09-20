@@ -132,6 +132,11 @@ func l3RejectedCommand(out string) bool {
 // knows which username to seed it under.
 const l3EnablePassword = "p49_labenable01"
 
+// l3LoginStagger is how long the second session waits before logging in. See
+// the comment at its use in l3Concurrent: it spaces the two LOGINS and not the
+// two enables, which are what this test is about.
+const l3LoginStagger = 5 * time.Second
+
 // l3Concurrent drives two overlapping sessions through `disable` then `enable`,
 // and returns what both devices said. Overlapping is the point: the third
 // question is whether anything on the wire tells two simultaneous enables
@@ -152,11 +157,29 @@ func (l *lab) l3Concurrent(t *testing.T, u1, s1, u2, s2 string) string {
 	release := make(chan struct{})
 
 	var wg sync.WaitGroup
-	for _, cred := range []struct{ user, secret string }{{u1, s1}, {u2, s2}} {
-		cred := cred
+	for i, cred := range []struct{ user, secret string }{{u1, s1}, {u2, s2}} {
+		i, cred := i, cred
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// The two LOGINS are staggered; the two ENABLES are not. What this
+			// test measures is two enable exchanges in flight together, and the
+			// atPrompt/release rendezvous below is what guarantees that — it
+			// holds both sessions at the password prompt until both have
+			// reached it, whenever each logged in. So spacing the logins costs
+			// the measurement nothing.
+			//
+			// It buys something real on IOS-XE. On the 2026-09-20 run two
+			// simultaneous token logins produced one session and one
+			// `ssh: handshake failed`, with no TACACS+ packet for the failed
+			// one anywhere in the capture — the device refused it without
+			// asking port49 — and the surviving session then sat at its enable
+			// prompt until the device answered `% Password: timeout expired!`.
+			// One refused login had become a second session's false
+			// measurement.
+			if i > 0 {
+				time.Sleep(l3LoginStagger)
+			}
 			c, err := l.l3CLI(cred.user, cred.secret)
 			if err != nil {
 				record(cred.user, "could not open a CLI: "+err.Error())
@@ -263,7 +286,7 @@ func (l *lab) l3CLI(user, password string) (*cliConn, error) {
 	// session authorization's `priv-lvl=15` reached the device, `>` means it did
 	// not -- and the `disable` below works from either.
 	if l.p.name == "cisco_iosxe" {
-		return l.iosxeCLIRaising(user, password, false)
+		return l.iosxeTokenCLI(user, password)
 	}
 	c, err := l.sshCLI(user, password)
 	if err != nil {

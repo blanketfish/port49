@@ -594,14 +594,52 @@ func nxosShow(c *cliConn, cmd string) (string, error) {
 // Third, an IOS-XE prompt is `xe1#` with no trailing space, like EOS and unlike
 // Junos, so the node name is the only thing specific enough to wait for.
 func (l *lab) iosxeCLI(user, password string) (*cliConn, error) {
-	return l.iosxeCLIRaising(user, password, true)
+	return l.iosxeCLIRaising(user, password, true, true)
 }
 
-// iosxeCLIRaising is iosxeCLI with the enable step made optional. L3 opens its
-// token sessions with raise=false, because on this platform `enable` IS the
-// exchange under test: performing it here would measure it during setup, and
-// the prompt the login produced unaided is itself one of L3's findings.
-func (l *lab) iosxeCLIRaising(user, password string, raise bool) (*cliConn, error) {
+// iosxeTokenCLI opens a session as an operator port49 authenticated: no enable,
+// and no console fallback.
+//
+// Neither omission is fussiness. `enable` is the exchange L3 measures, so
+// performing it during setup would measure it in the wrong place. The console
+// cannot help a token user at all: configs/iosxe-startup.cfg pins `line con 0`
+// to a `CONSOLE` method list of `local`, so the console authenticates against
+// the local user database and a token operator has no local account -- which is
+// the point of port49. On the 2026-09-20 run the fallback was tried anyway and
+// cost 90 seconds per failed session, and that is what made L3 fail: the OTHER
+// session sat at its enable password prompt for the whole of it and the device
+// answered `% Password: timeout expired!`. One session's SSH refusal became a
+// second session's false measurement.
+//
+// The retry is for the refusal itself. On that run two simultaneous token
+// logins produced one session and one
+//
+//	ssh: handshake failed: ... no supported methods remain
+//
+// with NO TACACS+ packet for the failed one anywhere in the capture, so the
+// device refused it without asking port49. Whether that is a race in the
+// device's SSH server or something this lab configures wrongly is unmeasured;
+// what the retry does is stop a single refusal from deciding the run, and
+// report how many attempts it took so the note can say a retry was needed.
+func (l *lab) iosxeTokenCLI(user, password string) (*cliConn, error) {
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		var c *cliConn
+		c, err = l.iosxeCLIRaising(user, password, false, false)
+		if err == nil {
+			if attempt > 1 {
+				c.name += fmt.Sprintf(" (opened on attempt %d; earlier attempts were refused)", attempt)
+			}
+			return c, nil
+		}
+		time.Sleep(3 * time.Second)
+	}
+	return nil, fmt.Errorf("three SSH attempts as %s were all refused; the last said: %w", user, err)
+}
+
+// iosxeCLIRaising is iosxeCLI with the enable step and the console fallback
+// made optional. See iosxeTokenCLI for who turns them off and why.
+func (l *lab) iosxeCLIRaising(user, password string, raise, allowConsole bool) (*cliConn, error) {
 	enable := func(c *cliConn) error {
 		if !raise {
 			return nil
@@ -609,6 +647,9 @@ func (l *lab) iosxeCLIRaising(user, password string, raise bool) (*cliConn, erro
 		return iosxeEnable(c, l.p.node)
 	}
 	c, sshErr := l.sshCLI(user, password)
+	if sshErr != nil && !allowConsole {
+		return nil, sshErr
+	}
 	if sshErr == nil {
 		c.prompt = l.p.node + "#"
 		if _, err := c.expect(60*time.Second, c.prompt, l.p.node+">"); err != nil {

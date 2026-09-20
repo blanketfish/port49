@@ -1028,6 +1028,26 @@ func (l *lab) nextLogin(t *testing.T) (user, secret string) {
 	return user, secret
 }
 
+// nextLoginOrErr is nextLogin for a caller that cannot fail the test — a
+// closure a driver hands to shared code, where a t.Fatal would fire on the
+// wrong goroutine or abandon a device mid-restore. Same pool, same counter.
+func (l *lab) nextLoginOrErr() (user, secret string, err error) {
+	l.mu.Lock()
+	n := l.tokenN + 1
+	l.tokenN = n
+	l.mu.Unlock()
+	if n > tokenPoolSize {
+		return "", "", fmt.Errorf("%s: the seeded login pool of %d is exhausted; seed more in "+
+			"tests/lab/port49d-lab.yaml", l.p.name, tokenPoolSize)
+	}
+	user, secret = fmt.Sprintf("alice%02d", n), fmt.Sprintf("p49_labtoken%02d", n)
+	if !strings.Contains(labYAML, "username: "+user+",") {
+		return "", "", fmt.Errorf("tests/lab/port49d-lab.yaml seeds no login for %q; the harness and the "+
+			"config have drifted apart", user)
+	}
+	return user, secret, nil
+}
+
 // passwordOfLength is the seeded secret for user longpw<n>. The test computes
 // it rather than copying it, and mustBeSeeded proves the YAML agrees.
 func passwordOfLength(n int) string {

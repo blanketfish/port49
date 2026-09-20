@@ -293,8 +293,65 @@ type l4AAADriver struct {
 	// a list with no local method at all.
 	alternative string
 
+	// restoreOpen, when set, is how this platform gets a CLI back at the end of
+	// the matrix, with port49d still RUNNING. It exists for IOS-XE, where the
+	// last cell's method list has no local method and the device's console runs
+	// the same list as every vty, so nothing local can get in at all and the
+	// only account left is one port49 itself authenticates. nil means the
+	// default: stop the daemon and log in as the break-glass account.
+	restoreOpen func() (*cliConn, error)
+
 	// evidence is the platform's paragraph under "### The local account".
 	evidence string
+}
+
+// l4ProbeUser is a username no platform in this lab has a local account for and
+// port49 holds no token for, so a login as it is answered FAIL and is refused
+// whatever the method list says. That makes it a liveness probe that cannot be
+// mistaken for the measurement: nothing about whether it got in is read, only
+// whether the device asked port49 about it at all.
+const (
+	l4ProbeUser     = "port49-liveness-probe"
+	l4ProbePassword = "no-credential-here"
+)
+
+// l4WaitServerLive waits until the device is seen sending port49d a packet
+// again, and returns a sentence for the cell's evidence column when it had to
+// wait or gave up.
+//
+// It exists because of a cell that measured nothing on 2026-09-20. Under `aaa
+// authentication login default group port49 local`, the FAIL cell's login
+// succeeded in **20ms** with no record of any kind in the decision log: port49d
+// had been stopped for the previous cell, IOS-XE had marked the server down,
+// and when the daemon came back the device went straight to `local` without
+// asking. Read naively that is "the device fell through on a FAIL", which is
+// the opposite of what happened -- it never received a FAIL. The cell's own
+// decision-log check caught it, which is the check working; this is what stops
+// it happening.
+func (l *lab) l4WaitServerLive(within time.Duration) string {
+	deadline := time.Now().Add(within)
+	for attempt := 1; ; attempt++ {
+		off := l.mark()
+		if c, err := l.dial(l4ProbeUser, l4ProbePassword, 30*time.Second); err == nil {
+			c.Close()
+		}
+		recs := l.waitForRecords(off, 15*time.Second, func(rs []map[string]any) bool {
+			return redeemFor(rs, l4ProbeUser) != nil
+		})
+		if redeemFor(recs, l4ProbeUser) != nil {
+			if attempt == 1 {
+				return ""
+			}
+			return fmt.Sprintf("The device had stopped asking port49 after the previous cell took the server "+
+				"down, and was seen asking again only on probe attempt %d.", attempt)
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Sprintf("**The device was never seen asking port49 about anything in the %v before this "+
+				"attempt**, so it was still treating the server as down and this cell is about a dead server "+
+				"rather than about a denial.", within)
+		}
+		time.Sleep(5 * time.Second)
+	}
 }
 
 func l4EOS(t *testing.T, l *lab) {
@@ -344,6 +401,22 @@ func l4IOSXE(t *testing.T, l *lab) {
 		configure:   iosxeConfigure,
 		show:        iosxeShow,
 		alternative: "aaa authentication login default group port49",
+		restoreOpen: func() (*cliConn, error) {
+			user, secret, err := l.nextLoginOrErr()
+			if err != nil {
+				return nil, err
+			}
+			// A token operator, not the break-glass account: the list left in
+			// force has no local method, so this is the only identity the
+			// device can still authenticate. Exec authorization puts it at
+			// privilege 15 (`priv-lvl=15`), which is what `configure terminal`
+			// needs.
+			c, err := l.iosxeCLI(user, secret)
+			if err != nil {
+				return nil, fmt.Errorf("as the token operator %s: %w", user, err)
+			}
+			return c, nil
+		},
 		evidence: "The local account is the `username " + breakglassUser + " privilege 15 secret ...` line in " +
 			"`tests/lab/configs/iosxe-startup.cfg`. Every cell above that logged in is the proof it exists, and " +
 			"`privilege 15` is what lets it configure anything once it is in: IOS-XE command authorization under " +
@@ -412,15 +485,41 @@ func l4AAA(t *testing.T, l *lab, d l4AAADriver) {
 		if err := l.startDaemonWith(cfg, true); err != nil {
 			t.Fatalf("could not restart port49d, so the FAIL condition could not be created: %v", err)
 		}
-		cells = append(cells, l.l4Attempt(t, order, "port49d answering FAIL", true))
+		live := l.l4WaitServerLive(30 * time.Second)
+		cell := l.l4Attempt(t, order, "port49d answering FAIL", true)
+		if live != "" {
+			cell.evidence += " " + live
+		}
+		cells = append(cells, cell)
 	}
 
+	// Putting the method list back. Two shapes, because the last cell leaves
+	// the device on a list with no `local` method and what can still get in
+	// then is a platform fact.
+	//
+	// The default is to stop port49d and log in locally, which is what EOS,
+	// NX-OS and Junos allow. IOS-XE does not: under `group port49` with the
+	// daemon stopped, SSH has no method left, and unlike NX-OS its console runs
+	// the `default` list too -- the named CONSOLE list in
+	// configs/iosxe-startup.cfg is what keeps the console usable at all, and on
+	// the 2026-09-20 run the console still did not reach a prompt inside 90s.
+	// So that platform supplies restoreOpen, which leaves the daemon UP and
+	// goes in as a token operator: the one account that list can still
+	// authenticate.
 	restore := "restored"
 	channel := "SSH CLI as " + breakglassUser
-	if err := l.stopDaemon(); err != nil {
-		restore = "not restored: " + err.Error()
+	restoreErr := error(nil)
+	if d.restoreOpen == nil {
+		restoreErr = l.stopDaemon()
+	}
+	if restoreErr != nil {
+		restore = "not restored: " + restoreErr.Error()
 	} else {
-		if c, err := d.open(breakglassUser, breakglassPassword); err != nil {
+		open := func() (*cliConn, error) { return d.open(breakglassUser, breakglassPassword) }
+		if d.restoreOpen != nil {
+			open = d.restoreOpen
+		}
+		if c, err := open(); err != nil {
 			restore = "not restored: " + err.Error()
 		} else {
 			channel = c.name
@@ -430,13 +529,16 @@ func l4AAA(t *testing.T, l *lab, d l4AAADriver) {
 				restore = "not restored: " + err.Error()
 			}
 		}
-		cfg, err := l.configPath()
-		if err != nil {
-			t.Fatalf("derive this platform's daemon config: %v", err)
-		}
-		if err := l.startDaemonWith(cfg, true); err != nil {
-			t.Fatalf("could not restart port49d after the test: %v", err)
-		}
+	}
+	// Either way the run continues against a daemon on this platform's own
+	// config, not the pinned-delay one this test has been using.
+	if err := l.stopDaemon(); err != nil {
+		t.Errorf("could not stop the delayed daemon after L4: %v", err)
+	}
+	if base, err := l.configPath(); err != nil {
+		t.Fatalf("derive this platform's daemon config: %v", err)
+	} else if err := l.startDaemonWith(base, true); err != nil {
+		t.Fatalf("could not restart port49d after the test: %v", err)
 	}
 
 	l.result(t, "L4", l4Claim, l4Observation(l, cells, d.evidence, channel,

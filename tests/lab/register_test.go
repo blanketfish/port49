@@ -271,7 +271,7 @@ func TestL2ServerMsgDisplayed(t *testing.T) {
 		// stayed silent three times and a channel that dropped one transcript.
 		var out []string
 		var err error
-		user, attempts := "", 0
+		user, attempts, channel := "", 0, "SSH exec channel"
 		for attempts = 1; attempts <= 3; attempts++ {
 			var secret string
 			user, secret = l.nextLogin(t)
@@ -283,8 +283,29 @@ func TestL2ServerMsgDisplayed(t *testing.T) {
 				break
 			}
 		}
-		if len(out) == 0 {
-			t.Fatal("the device returned no output for the denied command, so nothing could be observed")
+
+		// If three exec channels all came back empty, try the channel an
+		// operator actually uses. IOS-XE is why: on the 2026-09-20 run every
+		// exec channel returned nothing while an interactive session on the
+		// same device, in the same condition, printed the denial in full. The
+		// note said "NOT displayed" about a device that displays it, which is
+		// the exact false measurement the retry above was added to prevent —
+		// the retry fixed the flake and not the case where the channel is
+		// simply the wrong one.
+		if len(out) == 0 || strings.TrimSpace(out[0]) == "" {
+			user2, secret2 := l.nextLogin(t)
+			if c, cerr := l.l3CLI(user2, secret2); cerr == nil {
+				said, _ := c.sendExpect(shortDenyPrefix, 60*time.Second, c.prompt, l.p.node+">")
+				c.Close()
+				if strings.TrimSpace(stripPrompt(said)) != "" {
+					out, user, channel = []string{stripPrompt(said)}, user2, "interactive SSH CLI"
+				}
+			}
+		}
+		if len(out) == 0 || strings.TrimSpace(out[0]) == "" {
+			t.Fatalf("every channel returned an empty transcript for %q, so whether the device displays a "+
+				"server_msg was not measured. An empty transcript is not a device that printed nothing.",
+				shortDenyPrefix)
 		}
 		shortMsg := denialMessage(shortDenyPrefix)
 
@@ -317,9 +338,9 @@ func TestL2ServerMsgDisplayed(t *testing.T) {
 				"this test reports, so the attempt is retried rather than recorded.", attempts)
 		}
 		obs := fmt.Sprintf("Command `%s` was denied by the lab authorizer with a %d-character `server_msg`:\n\n"+
-			"```\n%s\n```\n\n**The operator saw it: %s.**%s\n\nWhat the device printed for the denied command "+
-			"(login as `%s`):\n\n```\n%s\n```\n\n### Truncation length\n\n%s\n",
-			shortDenyPrefix, len(shortMsg), shortMsg, verdict, attemptNote, user,
+			"```\n%s\n```\n\n**The operator saw it: %s.**%s\n\nRead over the **%s**. What the device printed "+
+			"for the denied command (login as `%s`):\n\n```\n%s\n```\n\n### Truncation length\n\n%s\n",
+			shortDenyPrefix, len(shortMsg), shortMsg, verdict, attemptNote, channel, user,
 			strings.TrimRight(out[0], "\n"), longNote)
 		l.result(t, "L2", "Whether `server_msg` on an authorization REPLY is displayed to the operator, and at "+
 			"what length it truncates.", obs)

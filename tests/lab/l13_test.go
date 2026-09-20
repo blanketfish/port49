@@ -178,18 +178,24 @@ func l13ConfiguredTimeout(t *testing.T, l *lab) string {
 			return "Not read: no CLI channel was available (" + err.Error() + ")."
 		}
 		defer c.Close()
-		// `show tacacs` prints the per-server state; `show aaa servers` is the
-		// one that names IOS-XE's own timeout figure, which makes this the
-		// second platform in the lab whose claim can be read against the
-		// measurement rather than only the measurement standing alone.
-		show, _ := iosxeShow(c, "show tacacs")
-		servers, _ := iosxeShow(c, "show aaa servers")
-		cfg, _ := iosxeShow(c, "show running-config | include tacacs")
-		return fmt.Sprintf("`show tacacs`:\n\n```\n%s\n```\n\n`show aaa servers`:\n\n```\n%s\n```\n\n"+
-			"`show running-config | include tacacs`:\n\n```\n%s\n```",
-			redactSecrets(strings.TrimSpace(stripPrompt(show))),
-			redactSecrets(strings.TrimSpace(stripPrompt(l13GrepTimeout(servers)))),
-			redactSecrets(strings.TrimSpace(stripPrompt(cfg))))
+		// `show tacacs` prints the per-server state; `show aaa servers` carries
+		// the per-request timeout counters, which say whether the device
+		// believes it timed out at all.
+		//
+		// `show aaa servers` is NOT filtered through l13GrepTimeout the way the
+		// Junos reference page is, and the 2026-09-20 run is why: filtered, it
+		// produced an empty code block, and an empty block in a results note
+		// reads as "the device said nothing" — the same class of false
+		// statement the L2 flake made. Whatever the device says goes in whole,
+		// and if it says nothing the note says so in words.
+		show, showErr := iosxeShow(c, "show tacacs")
+		servers, serversErr := iosxeShow(c, "show aaa servers")
+		cfg, cfgErr := iosxeShow(c, "show running-config | include tacacs")
+		return fmt.Sprintf("`show tacacs`:\n\n%s\n\n`show aaa servers`:\n\n%s\n\n"+
+			"`show running-config | include tacacs`:\n\n%s",
+			deviceSaid(show, showErr),
+			deviceSaid(servers, serversErr),
+			deviceSaid(cfg, cfgErr))
 	}
 	c, err := l.eosCLI(breakglassUser, breakglassPassword)
 	if err != nil {
@@ -200,6 +206,22 @@ func l13ConfiguredTimeout(t *testing.T, l *lab) string {
 	cfg, _ := eosShow(c, "show running-config | include tacacs")
 	return fmt.Sprintf("`show tacacs`:\n\n```\n%s\n```\n\n`show running-config | include tacacs`:\n\n```\n%s\n```",
 		redactSecrets(strings.TrimSpace(stripPrompt(show))), redactSecrets(strings.TrimSpace(stripPrompt(cfg))))
+}
+
+// deviceSaid renders one command's output for a results note, and refuses to
+// render nothing as an empty code block. A fenced block with nothing in it says
+// "the device answered with silence", which is a measurement; it is almost
+// always "the harness never got the answer", which is not.
+func deviceSaid(out string, err error) string {
+	body := redactSecrets(strings.TrimSpace(stripPrompt(out)))
+	if body != "" {
+		return "```\n" + body + "\n```"
+	}
+	if err != nil {
+		return "Not read: the device did not answer within the harness's window (" + err.Error() + ")."
+	}
+	return "Not read: the device returned no output for this command. That is a gap in the note, " +
+		"not a device that stayed silent — nothing here distinguishes the two."
 }
 
 // l13GrepTimeout keeps the part of a long `help reference` page that mentions
