@@ -19,12 +19,14 @@ Command `show clock` was denied by the lab authorizer with a 61-character `serve
 port49: denied by lab_deny (show clock); see 'port49 explain'
 ```
 
-**The operator saw it: NOT displayed.**
+**The operator saw it: displayed.**
 
-What the device printed for the denied command:
+What the device printed for the denied command (login as `alice05`):
 
 ```
 
+> show clock
+% Authorization denied for command 'show clock': port49: denied by lab_deny (show clock); see 'port49 explain' at line 1
 ```
 
 ### Truncation length

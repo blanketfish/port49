@@ -247,7 +247,23 @@ func (l *lab) l3RelaxExecAuthz(t *testing.T) (func(), string) {
 			"and cannot restore anything. It said:\n%s", before)
 	}
 
-	relaxed := []string{"aaa authorization exec default local", "aaa authorization commands all default local"}
+	// Negate the exact lines that are in force, rather than naming a method.
+	//
+	// The first attempt pointed them at `local` and measured nothing for a new
+	// reason: vEOS answered `Authorization denied: Unknown user`. A token user
+	// has no local account — that is the entire point of port49 — so `local`
+	// exec authorization has nobody to authorize and refuses. Removing the
+	// statement instead leaves EOS with no exec authorization to run at all,
+	// which is the only shape in which a TACACS+-authenticated user with no
+	// local account reaches a prompt on this image today.
+	//
+	// `no <the line the device printed>` also cannot fail to parse: whatever
+	// spelling `show running-config` gave back is a spelling the device already
+	// accepted.
+	var relaxed []string
+	for _, ln := range original {
+		relaxed = append(relaxed, "no "+ln)
+	}
 	if out, err := apply(relaxed...); err != nil {
 		t.Fatalf("could not point the device's authorization at `local`, so a token session cannot reach a "+
 			"prompt on this image: %v (device said: %s)", err, oneLine(out))
@@ -259,18 +275,24 @@ func (l *lab) l3RelaxExecAuthz(t *testing.T) (func(), string) {
 				"The lines that should be in force are: %s", err, oneLine(out), strings.Join(original, "; "))
 		}
 	}
-	note := fmt.Sprintf("**The device's authorization configuration was changed for this test, and the reason "+
-		"is a finding of its own.** The first attempt measured nothing: both token sessions logged in, both "+
-		"were denied their exec authorization, and vEOS killed them with `Authorization denied: port49: this "+
-		"session was not authenticated by port49`. The decision log for that moment reads `redeem permit … "+
-		"port=ssh` and then `authorize_session deny context_missing … port=vty5`. port49 writes the login "+
-		"context under `(nas, port)` at the authentication, where this image says `ssh`, and reads it at the "+
-		"authorization, where the same image says `vty5`. **On vEOS 4.32.2F no interactive session that gets a "+
-		"vty allocated can pass authorization through port49 today.**\n\n"+
-		"So for the duration of this test, and only for it, the device was set to:\n\n```\n%s\n```\n\n"+
-		"and put back to:\n\n```\n%s\n```\n\n"+
-		"afterwards. The enable exchange is authenticated by `aaa authentication enable default`, which was "+
-		"**not** touched, so nothing measured below depends on the change.\n",
+	note := fmt.Sprintf("**The device's authorization configuration was removed for this test, and the reason "+
+		"is a finding of its own.**\n\n"+
+		"The first attempt measured nothing: both token sessions logged in, both were denied their exec "+
+		"authorization, and vEOS killed them with `Authorization denied: port49: this session was not "+
+		"authenticated by port49`. The decision log for that moment reads `redeem permit … port=ssh` and then "+
+		"`authorize_session deny context_missing … port=vty5`. port49 writes the login context under "+
+		"`(nas, port)` at the authentication, where this image says `ssh`, and reads it at the authorization, "+
+		"where the same image says `vty5`. **On vEOS 4.32.2F no interactive session that gets a vty allocated "+
+		"can pass authorization through port49 today.**\n\n"+
+		"The second attempt pointed the same statements at `local` and measured nothing for a second reason "+
+		"worth writing down: vEOS answered **`Authorization denied: Unknown user`**. A token user has no local "+
+		"account — that is the entire point of port49 — so `local` exec authorization has nobody to authorize. "+
+		"The two together say that on this image a port49-authenticated operator reaches a prompt only if the "+
+		"`(nas, port)` lookup succeeds, and it does not.\n\n"+
+		"So for the duration of this test, and only for it, these lines were removed:\n\n```\n%s\n```\n\n"+
+		"and put back afterwards:\n\n```\n%s\n```\n\n"+
+		"The enable exchange is authenticated by `aaa authentication enable default`, which was **not** "+
+		"touched, so nothing measured below depends on the change.\n",
 		strings.Join(relaxed, "\n"), strings.Join(original, "\n"))
 	return restore, note
 }
