@@ -573,7 +573,13 @@ func (l *lab) writeSeedConfig(user, secret string) (string, error) {
 	// Quote the username: the enable name a device sends is commonly `$enab15$`,
 	// and an unquoted `$` at the start of a YAML scalar is not something to rely
 	// on parsing the way it looks.
-	out := string(raw) + fmt.Sprintf("    - {nas: %s, username: \"%s\", secret: %s, kind: login}\n",
+	// `kind: enable`, not `kind: login`, and the first run is why the
+	// distinction is spelled out here. Seeded as a login token, the enable was
+	// refused `token_kind_mismatch` — port49 reads the authentication START's
+	// `service` and looks for a token of the matching kind
+	// (internal/daemon/authen/authen.go, internal/store). A note that reported
+	// that as device behavior would have been reporting a harness mistake.
+	out := string(raw) + fmt.Sprintf("    - {nas: %s, username: \"%s\", secret: %s, kind: enable}\n",
 		l.p.node, user, secret)
 	path := filepath.Join(root, "tests", "lab", "logs", "port49d-lab-enable-seed.yaml")
 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
