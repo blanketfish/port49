@@ -922,8 +922,9 @@ identical-content context under a new `ctx_id`. Same principal, same privilege, 
 nothing is authorized that was not already authorized — but the older shell now logs the
 newer `ctx_id`, and a log reader cannot tell the two apart. No wire field distinguishes them
 (§15, L1), so this is unavoidable rather than merely unfixed. The overwrite MUST therefore be
-logged, so the reader at 3am sees "second login by alice on ls01, context replaced" rather
-than silence.
+logged: the `redeem` record that performs it carries `session.replaced_ctx_id`, the `ctx_id`
+it displaced, so the reader at 3am sees "second login by alice on ls01, context replaced"
+rather than silence, and can join the older shell's records to the newer ones.
 
 **Bound attributes.** `username` is in the key, so a context is only ever found by the name
 that created it. `rem_addr` is recorded at creation and compared where the wire username is
@@ -1242,7 +1243,7 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
 | `device_mismatch` | `redeem`: the presented token's device tag is not this device's (design document §8) — PAP and ASCII only; under CHAP the tag is not visible and the outcome is `token_not_found` |
-| `credential_mismatch` | `redeem`: a receipt exists for this line but the presented credential differs (§5.6) |
+| `credential_mismatch` | `redeem`: the receipt the store returned does not carry the credential hash the lookup asked for. Since 2026-09-20 the hash is *in* the receipt key (§13, decision 15), so a differing credential finds no receipt and redeems normally instead; this reason now covers only a store that answered with a record it was not asked for, which is a store fault and never a normal outcome |
 | `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision |
 | `token_kind_mismatch` | `redeem`/`escalate`: a login token presented at `enable`, or the reverse (§7) |
 | `enable_refused` | `escalate`: the subject's mechanism is `none` |
