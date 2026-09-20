@@ -10,10 +10,19 @@ vet:
 	gofmt -l . | tee /dev/stderr | test -z "$$(cat)"
 	go vet ./...
 
-# Short fuzz pass for every FuzzXxx in the wire package; CI-sized.
+# Short fuzz pass for every FuzzXxx in the packages that parse bytes off an
+# unauthenticated connection; CI-sized. keyring is here because Resolve runs
+# before any admission decision has been made: it is the first code a packet
+# from an unknown source reaches.
+FUZZ_PACKAGES ?= ./internal/tacacs/wire ./internal/keyring
+
 fuzz:
-	@for f in $$(go test -list 'Fuzz.*' ./internal/tacacs/wire | grep '^Fuzz'); do \
-	  go test ./internal/tacacs/wire -run '^$$' -fuzz "^$$f$$" -fuzztime 20s || exit 1; \
+	@set -e; \
+	for p in $(FUZZ_PACKAGES); do \
+	  for f in $$(go test -list 'Fuzz.*' $$p | grep '^Fuzz'); do \
+	    echo "=== $$p $$f ==="; \
+	    go test $$p -run '^$$' -fuzz "^$$f$$" -fuzztime 20s || exit 1; \
+	  done; \
 	done
 
 # Requires containerlab and device images; see tests/lab/README.md.
