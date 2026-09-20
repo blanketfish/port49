@@ -27,9 +27,9 @@ immediately, the clearest possible "server is not there" — every local account
 over SSH:
 
 ```
-breakglass / breakglass-only  -> ssh: unable to authenticate
-admin      / admin@123        -> ssh: unable to authenticate
-root       / admin@123        -> ssh: unable to authenticate
+breakglass  (password from tests/lab/configs/vjunos-startup.conf) -> ssh: unable to authenticate
+admin       (password from the vrnetlab image's /init.conf)       -> ssh: unable to authenticate
+root        (password from the vrnetlab image's /init.conf)       -> ssh: unable to authenticate
 ```
 
 Tried three times across a minute, roughly three minutes after vrnetlab reported
