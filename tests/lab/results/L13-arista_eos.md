@@ -4,7 +4,7 @@
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
-- **Capture:** `tests/lab/captures/L13-arista_eos.pcap` — 276 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L13-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/captures/L13-arista_eos.pcap` — 277 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L13-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`
 - **Transport:** SSH
 
 ## Claim
@@ -52,11 +52,11 @@ port49d was restarted before each row with `limits.auth_failure_delay_base` and 
 
 | FAIL delayed by | SSH login | elapsed | redeem records for the account | reasons |
 |---|---|---|---|---|
-| 2s | refused | 2.05s | 1 | deny/token_not_found |
+| 2s | refused | 2.04s | 1 | deny/token_not_found |
 | 6s | **logged in** | 5.04s | 1 | deny/token_not_found |
 | 12s | **logged in** | 5.04s | 1 | deny/token_not_found |
 
-**Measured reply timeout: about 5s.** A FAIL delayed by 2s was waited out (2.05s elapsed); one delayed by 6s was not, and the login resolved after 5.04s. So the timeout lies between 2s and 5s.
+**Measured reply timeout: about 5s.** A FAIL delayed by 2s was acted on — the login was refused, 2.04s elapsed. One delayed by 6s was not: that login **succeeded on the local password** after 5.04s. So the timeout lies between 2s and 5s.
 
 When the FAIL arrived after that, the device **accepted the local password**, exactly as it does when the server is unreachable (L4). A denial delayed past the timeout is therefore not a denial: it is indistinguishable from an outage, and the device takes the fall-through branch. **port49's own default `limits.auth_failure_delay_max` is 5s** (internal/config), reached after five consecutive failures for one `(nas, username)` pair. Compare that with the figure above before treating a repeated-failure delay as a way to slow an attacker down: past the device's timeout it stops slowing anything down and starts changing the answer the device acts on.
 

@@ -314,8 +314,9 @@ func transportObservation(l *lab, transport string, steps []transportStep, paylo
 			joinOrNone(uniqueField(all, "port")), joinOrNone(uniqueField(all, "rem_addr")),
 			joinOrNone(uniqueAuthMethods(all)))
 		b.WriteString("\nThese are the values this transport produced. Compare them with the SSH figures in " +
-			"`L1-" + l.p.name + ".md`: a transport that reports the same constant `port` as SSH gives the login " +
-			"context key `(nas, port)` nothing to tell an API call and a shell session apart.\n")
+			"`L1-" + l.p.name + ".md`. Nothing keys on `port` any more (spec §13, decision 15), so a " +
+			"transport reporting the same constant as SSH no longer costs anything; what these values are " +
+			"still for is accounting annotation and the record an operator reads at 3am.\n")
 	}
 
 	b.WriteString("\n### How many TCP connections the device opened to port49d\n\n")
@@ -386,7 +387,8 @@ func transportReauthVerdict(steps []transportStep) string {
 			case verdict == "permit":
 				out += fmt.Sprintf("**And it was allowed anyway**: `verdict=%s reason=%s`. The token was spent "+
 					"by the first call, and the second was answered out of the receipt port49 kept for "+
-					"`(nas, port, username)` rather than out of the store. So a script that makes forty calls "+
+					"`(nas, username, credential_sha256)` rather than out of the store — the same credential "+
+					"hashes to the same key, so a repeat finds its own receipt. So a script that makes forty calls "+
 					"with one token works — for as long as that receipt lives. What decision 15 rests on is "+
 					"therefore not \"does it re-authenticate\" but **`receipt_ttl`**: past it, the next call in "+
 					"the same script is the first denial, and nothing about the credential has changed.\n", verdict, reason)

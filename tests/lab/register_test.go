@@ -54,23 +54,27 @@ func TestL1PortField(t *testing.T) {
 		}
 
 		unique := ports[0] != ports[1]
-		uniqueNote := "**The two concurrent sessions reported the SAME `port` value.** The login context key " +
-			"`(nas, port)` therefore does not distinguish them: the second login overwrites the first login's " +
-			"context, and the receipt key `(nas, port, username)` collides for repeated logins by one user."
+		uniqueNote := "**The two concurrent sessions reported the SAME `port` value**, so `port` does not tell " +
+			"two simultaneous operators apart on this platform. That is now a fact about the device rather " +
+			"than a fact about port49: since 2026-09-20 the login context is keyed `(nas, username)` and the " +
+			"receipt `(nas, username, credential_sha256)`, so neither collides here (spec §13, decision 15). " +
+			"It is recorded because it is what a `port`-based key would have cost."
 		if unique {
-			uniqueNote = "**The two concurrent sessions reported DIFFERENT `port` values**, so the login context " +
-				"key `(nas, port)` distinguishes them."
+			uniqueNote = "**The two concurrent sessions reported DIFFERENT `port` values** on this run. " +
+				"Nothing rests on that either way: the login context is keyed `(nas, username)` " +
+				"(spec §13, decision 15). Recorded because the value is what L1 asks for."
 		}
 		obs := fmt.Sprintf("Two overlapping SSH sessions, each holding an interactive shell open, produced these "+
 			"`port` values on the authentication START:\n\n"+
 			"| session | user | `port` |\n|---|---|---|\n| 1 | %s | `%s` |\n| 2 | %s | `%s` |\n\n%s\n\n"+
 			"All %d `port` values seen at a `redeem` in this test: %q.\n\n"+
 			"### Stability for the life of a session\n\n%s\n\n"+
+			"### What the two sessions were actually told\n\n%s\n"+
 			"### What the header carried\n\n%s\n"+
 			"Transport measured: SSH only. Console, eAPI, NX-API and NETCONF are not measured here, so L1 is not "+
 			"answered for those transports.",
 			u1, ports[0], u2, ports[1], uniqueNote, len(ports), ports,
-			portStability(recs, u1, u2), l.tacacsHeaderFacts())
+			portStability(recs, u1, u2), sessionAuthzOutcomes(recs, u1, u2), l.tacacsHeaderFacts())
 		l.result(t, "L1", "What the `port` field contains, per platform and per transport — SSH, console, eAPI, "+
 			"NX-API, NETCONF. Whether it is unique per concurrent session, stable for its life, and **the same "+
 			"value at authentication and at authorization time**.", obs)
@@ -150,15 +154,82 @@ func portStability(recs []map[string]any, users ...string) string {
 
 	if len(unstable) == 0 {
 		fmt.Fprintf(&b, "\n**Stable.** Across %d session(s), every record for a session reported the same `port` "+
-			"as that session's authentication START, so a key built on `port` reads the same value at "+
-			"authorization time as it wrote at authentication time.\n", len(trail))
+			"as that session's authentication START.\n", len(trail))
 		return b.String()
 	}
 	sort.Strings(unstable)
 	fmt.Fprintf(&b, "\n**NOT stable**: %d of %d session(s) reported more than one `port` value over their life "+
-		"(%s). A login context keyed on `(nas, port)` is written under one value and looked up under another, "+
-		"so the authorization misses and the session is denied for a reason that has nothing to do with policy.\n",
+		"(%s). This is the measurement that re-cut the login-context key (spec §13, decision 15): a context "+
+		"keyed on `(nas, port)` is written under one value and looked up under another, so the authorization "+
+		"missed and the session was denied for a reason that had nothing to do with policy. Under "+
+		"`(nas, username)` the lookup does not read this field at all — the section below is that claim "+
+		"measured rather than asserted.\n",
 		len(unstable), len(trail), strings.Join(unstable, ", "))
+	return b.String()
+}
+
+// sessionAuthzOutcomes reports what each of the two concurrent logins was
+// actually told at its session authorization.
+//
+// It exists because every other section of this note measures a field and then
+// reasons about what the key does with it. This one measures the outcome. Under
+// the `(nas, port)` key the answer on vEOS was `deny context_missing` for every
+// session that got a vty allocated, and the device killed the session with
+// "Authorization denied: port49: this session was not authenticated by port49";
+// under `(nas, username)` it should be `permit context_matched` for both,
+// whatever the two sessions' `port` values did in between.
+func sessionAuthzOutcomes(recs []map[string]any, users ...string) string {
+	want := map[string]bool{}
+	for _, u := range users {
+		want[u] = true
+	}
+	type outcome struct{ verdict, reason, port, ctxID string }
+	got := map[string][]outcome{}
+	for _, r := range recordsOfEvent(recs, "authorize_session") {
+		s := sub(r, "session")
+		if s == nil || !want[str(s, "username")] {
+			continue
+		}
+		got[str(s, "username")] = append(got[str(s, "username")], outcome{
+			verdict: str(r, "verdict"), reason: str(r, "reason"),
+			port: str(s, "port"), ctxID: str(s, "ctx_id")})
+	}
+	if len(got) == 0 {
+		return "Not measured: neither login produced a session-authorization record in this window.\n"
+	}
+
+	var b strings.Builder
+	b.WriteString("What each login was told when the device asked to authorize its session, and the `port` the " +
+		"device put on that request — which is not the `port` it authenticated under.\n\n")
+	b.WriteString("| user | `port` at authorization | verdict | reason | `ctx_id` |\n|---|---|---|---|---|\n")
+	denied, permitted, ctxIDs := 0, 0, map[string]bool{}
+	for _, u := range users {
+		if len(got[u]) == 0 {
+			fmt.Fprintf(&b, "| `%s` | — | (no record) | | |\n", u)
+			continue
+		}
+		for _, o := range got[u] {
+			p := o.port
+			if p == "" {
+				p = "(empty string)"
+			}
+			fmt.Fprintf(&b, "| `%s` | `%s` | %s | `%s` | `%s` |\n", u, p, o.verdict, o.reason, o.ctxID)
+			if o.verdict == "permit" {
+				permitted++
+			} else {
+				denied++
+			}
+			ctxIDs[o.ctxID] = true
+		}
+	}
+	fmt.Fprintf(&b, "\n%d permitted, %d denied. ", permitted, denied)
+	if denied == 0 && permitted > 0 {
+		fmt.Fprintf(&b, "**Both concurrent sessions matched their own context and were authorized**, across "+
+			"%d distinct `ctx_id`(s) — neither login disturbed the other, and the `port` changing between "+
+			"the authentication and this request did not cost either of them anything.\n", len(ctxIDs))
+	} else {
+		b.WriteString("A denial here is the finding: the reason column says which lookup failed.\n")
+	}
 	return b.String()
 }
 
@@ -553,8 +624,8 @@ func acctDump(acct []map[string]any) string {
 
 // L8: the maximum password length the platform accepts at an interactive
 // prompt. A token of each length is seeded under its own username, so a device
-// that truncates yields credential_mismatch against that user rather than a
-// silent pass against a shorter token.
+// that truncates yields token_not_found against that user rather than a silent
+// pass against a shorter token.
 func TestL8PasswordLength(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		stop := l.capture(t, "L8")
@@ -613,11 +684,10 @@ func TestL8PasswordLength(t *testing.T) {
 			"password prompt:\n\n%s\n%s\n\n"+
 			"How to read this: `token_redeemed` means the full password reached port49 byte for byte. "+
 			"`token_not_found` means the device did send a password under this username and no seeded "+
-			"token matched it, so the device altered or truncated what was typed -- each length has its "+
-			"own username, so there is no earlier receipt to compare against and truncation lands here, "+
-			"not on `credential_mismatch`. `credential_mismatch` would mean a second attempt under a "+
-			"username that already had a receipt, which this test does not do. No record at all means the "+
-			"device refused the password locally and sent nothing.\n\n"+
+			"token matched it, so the device altered or truncated what was typed. Truncation cannot land "+
+			"anywhere else: the receipt key carries the credential hash (spec §13, decision 15), so a "+
+			"truncated password finds no receipt at all rather than colliding with one. No record at all "+
+			"means the device refused the password locally and sent nothing.\n\n"+
 			"The 30-character handle the design document depends on: %s.\n\n"+
 			"PAP is not measured here; this is the interactive SSH prompt only.",
 			table.String(), longest, handleVerdict(rows30(rows)))

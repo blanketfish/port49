@@ -4,7 +4,7 @@
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
-- **Capture:** `tests/lab/captures/L1-arista_eos.pcap` — 148 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L1-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/captures/L1-arista_eos.pcap` — 168 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L1-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`
 - **Transport:** SSH
 
 ## Claim
@@ -17,8 +17,8 @@ Two overlapping SSH sessions, each holding an interactive shell open, produced t
 
 | session | user | `port` |
 |---|---|---|
-| 1 | alice03 | `ssh` |
-| 2 | alice04 | `ssh` |
+| 1 | alice05 | `ssh` |
+| 2 | alice06 | `ssh` |
 
 **The two concurrent sessions reported the SAME `port` value.** The login context key `(nas, port)` therefore does not distinguish them: the second login overwrites the first login's context, and the receipt key `(nas, port, username)` collides for repeated logins by one user.
 
@@ -30,10 +30,10 @@ Every record naming either login, in arrival order, with the `port` it carried. 
 
 | user | records, `event`=`port` |
 |---|---|
-| `alice03` | `redeem`=ssh, `account`=ssh, `authorize_session`=vty4 |
-| `alice04` | `redeem`=ssh, `account`=ssh, `authorize_session`=vty4, `account`=vty4 |
+| `alice05` | `redeem`=ssh, `account`=ssh, `authorize_session`=vty4, `account`=vty4 |
+| `alice06` | `redeem`=ssh, `account`=ssh, `authorize_session`=vty6, `account`=vty6 |
 
-**NOT stable**: 2 of 2 session(s) reported more than one `port` value over their life (alice03, alice04). A login context keyed on `(nas, port)` is written under one value and looked up under another, so the authorization misses and the session is denied for a reason that has nothing to do with policy.
+**NOT stable**: 2 of 2 session(s) reported more than one `port` value over their life (alice05, alice06). A login context keyed on `(nas, port)` is written under one value and looked up under another, so the authorization misses and the session is denied for a reason that has nothing to do with policy.
 
 
 ### What the header carried
@@ -42,29 +42,31 @@ Decoded from the capture with the daemon's own `internal/tacacs/wire` package an
 
 | device connection | session_id | seq | single-connect | packet |
 |---|---|---|---|---|
-| 172.100.100.11:39850 → | `0x9d665c1c` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="ssh" rem_addr="172.100.100.1" data=0 bytes |
-| 172.100.100.11:39850 → | `0x9d665c1c` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=14 bytes data=0 bytes |
-| 172.100.100.1:49 ← | `0x9d665c1c` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
-| 172.100.100.1:49 ← | `0x9d665c1c` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
-| 172.100.100.11:39856 → | `0x60b1da57` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="ssh" rem_addr="172.100.100.1" args=[task_id=10 service=shell start_time=1789922749 timezone=UTC] |
-| 172.100.100.1:49 ← | `0x60b1da57` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:39872 → | `0x3e5d0ac7` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd*] |
-| 172.100.100.1:49 ← | `0x3e5d0ac7` | 2 | clear | AUTHOR RESPONSE status=0x10 server_msg="port49: this session was not authenticated by port49" args=[] |
-| 172.100.100.11:39882 → | `0xe53f9de2` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice04" port="ssh" rem_addr="172.100.100.1" data=0 bytes |
-| 172.100.100.11:39882 → | `0xe53f9de2` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=14 bytes data=0 bytes |
-| 172.100.100.1:49 ← | `0xe53f9de2` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
-| 172.100.100.1:49 ← | `0xe53f9de2` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
-| 172.100.100.11:39884 → | `0xbb58371c` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice04" port="ssh" rem_addr="172.100.100.1" args=[task_id=11 service=shell start_time=1789922751 timezone=UTC] |
-| 172.100.100.1:49 ← | `0xbb58371c` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.11:39894 → | `0x36e7fba5` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice04" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd*] |
-| 172.100.100.1:49 ← | `0x36e7fba5` | 2 | clear | AUTHOR RESPONSE status=0x10 server_msg="port49: this session was not authenticated by port49" args=[] |
-| 172.100.100.11:55616 → | `0x0ac10a6b` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice04" port="vty4" rem_addr="172.100.100.1" args=[task_id=11 service=shell start_time=1789922751 timezone=UTC elapsed_time=16] |
-| 172.100.100.1:49 ← | `0x0ac10a6b` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:38422 → | `0x977a5a83` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice05" port="ssh" rem_addr="172.100.100.1" data=0 bytes |
+| 172.100.100.11:38422 → | `0x977a5a83` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=14 bytes data=0 bytes |
+| 172.100.100.1:49 ← | `0x977a5a83` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
+| 172.100.100.1:49 ← | `0x977a5a83` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
+| 172.100.100.11:38428 → | `0xc9c44cb6` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice05" port="ssh" rem_addr="172.100.100.1" args=[task_id=22 service=shell start_time=1789927261 timezone=UTC] |
+| 172.100.100.1:49 ← | `0xc9c44cb6` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:38434 → | `0x0059cbc0` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice05" port="vty4" rem_addr="172.100.100.1" args=[service=shell cmd*] |
+| 172.100.100.1:49 ← | `0x0059cbc0` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15 shell:roles*network-admin] |
+| 172.100.100.11:38448 → | `0x95949d1a` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice06" port="ssh" rem_addr="172.100.100.1" data=0 bytes |
+| 172.100.100.11:38448 → | `0x95949d1a` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=14 bytes data=0 bytes |
+| 172.100.100.1:49 ← | `0x95949d1a` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
+| 172.100.100.1:49 ← | `0x95949d1a` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
+| 172.100.100.11:38452 → | `0xa6c4853d` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice06" port="ssh" rem_addr="172.100.100.1" args=[task_id=23 service=shell start_time=1789927263 timezone=UTC] |
+| 172.100.100.1:49 ← | `0xa6c4853d` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:38468 → | `0x3fbb123d` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice06" port="vty6" rem_addr="172.100.100.1" args=[service=shell cmd*] |
+| 172.100.100.1:49 ← | `0x3fbb123d` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15 shell:roles*network-admin] |
+| 172.100.100.11:56438 → | `0xbdab9566` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice06" port="vty6" rem_addr="172.100.100.1" args=[task_id=23 service=shell start_time=1789927263 timezone=UTC elapsed_time=16] |
+| 172.100.100.1:49 ← | `0xbdab9566` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.11:56446 → | `0xa2a6c44a` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice05" port="vty4" rem_addr="172.100.100.1" args=[task_id=22 service=shell start_time=1789927261 timezone=UTC elapsed_time=21] |
+| 172.100.100.1:49 ← | `0xa2a6c44a` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
 
-- **TCP connections the device opened:** 7, carrying 7 distinct `session_id`(s). The busiest connection carried **1** `session_id`(s).
+- **TCP connections the device opened:** 8, carrying 8 distinct `session_id`(s). The busiest connection carried **1** `session_id`(s).
   That is **one TCP connection per exchange**: the device tears the connection down and opens another for the next one, so nothing at the transport layer joins two exchanges either.
-- **Single-connect flag:** set on 0 of 9 requests from the device. The device never asks to hold the connection open, whatever it then does with it.
-- **Exchanges seen:** ACCT on 3 connection(s), AUTHEN on 2 connection(s), AUTHOR on 2 connection(s).
+- **Single-connect flag:** set on 0 of 10 requests from the device. The device never asks to hold the connection open, whatever it then does with it.
+- **Exchanges seen:** ACCT on 4 connection(s), AUTHEN on 2 connection(s), AUTHOR on 2 connection(s).
 - **What `session_id` can join:** a `session_id` that appears on exactly one connection and under exactly one exchange links the packets *within* that exchange — a START and its CONTINUE, which is what makes an ASCII login work at all — and links nothing across exchanges. Read the table: if the authentication and the authorization for one login carry different `session_id`s, no field in the header joins them, and the login-context key cannot be built out of one.
 
 Transport measured: SSH only. Console, eAPI, NX-API and NETCONF are not measured here, so L1 is not answered for those transports.

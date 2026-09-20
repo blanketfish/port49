@@ -4,7 +4,7 @@
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
-- **Capture:** `tests/lab/captures/L4-arista_eos.pcap` — 368 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L4-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/captures/L4-arista_eos.pcap` — 396 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L4-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`
 - **Transport:** SSH
 
 ## Claim
@@ -19,7 +19,7 @@ The time column is the device's, not port49's: for this test both `limits.auth_f
 
 | method list | port49d | local login | time | decision log |
 |---|---|---|---|---|
-| `aaa authentication login default group port49 local` | port49d not listening | **logged in** | 30ms | port49d was not listening, so no decision record could exist for this attempt. The capture holds the device's refused connection attempts to port 49. |
+| `aaa authentication login default group port49 local` | port49d not listening | **logged in** | 40ms | port49d was not listening, so no decision record could exist for this attempt. The capture holds the device's refused connection attempts to port 49. |
 | `aaa authentication login default group port49 local` | port49d answering FAIL | refused | 130ms | `event=redeem verdict=deny reason=token_not_found`, so port49 replied FAIL for this attempt. |
 | `aaa authentication login default group tacacs+ local` | port49d not listening | **logged in** | 30ms | port49d was not listening, so no decision record could exist for this attempt. The capture holds the device's refused connection attempts to port 49. |
 | `aaa authentication login default group tacacs+ local` | port49d answering FAIL | refused | 130ms | `event=redeem verdict=deny reason=token_not_found`, so port49 replied FAIL for this attempt. |

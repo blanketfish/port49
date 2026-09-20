@@ -13,19 +13,19 @@ How reliably and how late exec accounting START and STOP arrive, and whether a d
 
 ## Observation
 
-One SSH login that ran `show version` and disconnected. Login began 2026-09-20T16:40:31.250285076Z UTC; the connection closed 2026-09-20T16:40:31.542578245Z UTC.
+One SSH login that ran `show version` and disconnected. Login began 2026-09-20T18:05:13.10845132Z UTC; the connection closed 2026-09-20T18:05:13.409387276Z UTC.
 
-- Exec **START**: arrived 194ms after the login began.
-- Exec **STOP**: arrived 2ms after the session closed.
+- Exec **START**: arrived 199ms after the login began.
+- Exec **STOP**: arrived 3ms after the session closed.
 
 Accounting records in the window: start=1, stop=2 (an exec record is one that carries no command at all, as on EOS, or carries only `login` or `logout`, as on Junos; anything else is a per-command record).
 
 All accounting AV pairs, in arrival order:
 
 ```
-2026-09-20T16:40:31.444Z flags=start attribution=resolved raw=[task_id=26 service=shell start_time=1789922430 timezone=UTC]
-2026-09-20T16:40:31.525Z flags=stop attribution=resolved raw=[task_id=27 service=shell priv-lvl=15 start_time=1789922430 timezone=UTC cmd=show version <cr>]
-2026-09-20T16:40:31.545Z flags=stop attribution=resolved raw=[task_id=26 service=shell start_time=1789922430 timezone=UTC elapsed_time=1]
+2026-09-20T18:05:13.307Z flags=start attribution=resolved raw=[task_id=27 service=shell start_time=1789927512 timezone=UTC]
+2026-09-20T18:05:13.391Z flags=stop attribution=resolved raw=[task_id=28 service=shell priv-lvl=15 start_time=1789927512 timezone=UTC cmd=show version <cr>]
+2026-09-20T18:05:13.412Z flags=stop attribution=resolved raw=[task_id=27 service=shell start_time=1789927512 timezone=UTC elapsed_time=1]
 ```
 
 Retry-to-the-next-server behavior is not measured here: this lab has a single TACACS+ server, so nothing in this run shows what the device does when one is unreachable.

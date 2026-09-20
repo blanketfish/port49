@@ -21,7 +21,7 @@ port49: denied by lab_deny (show clock); see 'port49 explain'
 
 **The operator saw it: displayed.**
 
-What the device printed for the denied command (login as `alice05`):
+What the device printed for the denied command (login as `alice07`):
 
 ```
 
@@ -41,7 +41,5 @@ The device printed:
 
 ```
 
-> show clock | include AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-% Authorization denied for command 'show clock': port49: denied by lab_deny (show clock); see 'port49 explain' at line 1
 ```
 

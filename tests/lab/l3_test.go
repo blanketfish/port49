@@ -50,9 +50,6 @@ func TestL3Enable(t *testing.T) {
 		stop := l.capture(t, "L3")
 		defer stop()
 
-		relaxRestore, relaxNote := l.l3RelaxExecAuthz(t)
-		defer relaxRestore()
-
 		u1, s1 := l.nextLogin(t)
 		u2, s2 := l.nextLogin(t)
 
@@ -64,7 +61,7 @@ func TestL3Enable(t *testing.T) {
 		recs = l.drainRecords(off, 10*time.Second)
 
 		enables := l3EnableRecords(recs, u1, u2)
-		obs := "### Before anything was measured\n\n" + relaxNote + "\n" + l3Observation(l, trans, recs, enables)
+		obs := "### Before anything was measured\n\n" + l3AuthzConfigNote + "\n" + l3Observation(l, trans, recs, enables)
 
 		// Phase two only runs if phase one learned a username, because the seed
 		// is that username. A run that learned nothing writes the note anyway —
@@ -218,129 +215,30 @@ func (l *lab) l3Concurrent(t *testing.T, u1, s1, u2, s2 string) string {
 	return b.String()
 }
 
-// l3RelaxExecAuthz removes the device's exec and command authorization for
-// the duration of this test, and returns a function that puts them
-// back plus the paragraph the note owes the reader.
+// l3AuthzConfigNote is the paragraph this test's note owes the reader about
+// the device's authorization configuration. It says "left alone" because it
+// now is.
 //
-// It exists because the first run of this test measured nothing, and what
-// stopped it is worth more than what it was trying to measure. Both token
-// sessions logged in, both were denied their exec authorization, and vEOS
-// killed them with:
+// It used to be produced by l3RelaxExecAuthz, which removed the device's
+// `aaa authorization exec` and `aaa authorization commands` lines for this
+// test's duration and put them back afterwards. That workaround existed for
+// one reason: under the `(nas, port)` login-context key, vEOS wrote the
+// context at the authentication (where it says `port=ssh`) and read it at the
+// authorization (where the same image says `port=vty5`), the lookup missed,
+// and the device killed the session with
+// `Authorization denied: port49: this session was not authenticated by
+// port49`. No token user could reach a prompt, so the enable exchange this
+// test measures could not happen. Pointing the same statements at `local`
+// failed differently — `Authorization denied: Unknown user`, because a token
+// user has no local account, which is the point of port49.
 //
-//	Authorization denied: port49: this session was not authenticated by port49
-//
-// The decision log for the same moment:
-//
-//	redeem            permit context…       alice02 port=ssh
-//	authorize_session deny   context_missing alice02 port=vty5
-//
-// port49 creates the login context under `(nas, port)` at the authentication,
-// where vEOS reports `port=ssh`, and looks it up at the authorization, where
-// vEOS reports `port=vty5`. The lookup misses, and the device is told the
-// session it just authenticated was not authenticated. **Today, on this image,
-// no interactive session that gets a vty allocated can pass authorization.**
-//
-// That is a product defect, not a harness one, and it is exactly what the
-// `(nas, username)` key decision fixes. It is not this test's to fix. What this
-// test needs is a device on which a token user can reach a prompt at all, so
-// the enable exchange — which is authenticated by a different method list,
-// `aaa authentication enable default`, and is untouched by this — can happen.
-//
-// Both lines have to move, not just the exec one: command authorization looks
-// the context up the same way and would deny `disable` for the same reason.
-func (l *lab) l3RelaxExecAuthz(t *testing.T) (func(), string) {
-	t.Helper()
-	if l.p.name != "arista_eos" {
-		return func() {}, "The device's authorization configuration was left exactly as `tests/lab/configs` " +
-			"deploys it.\n"
-	}
-
-	// Every CLI here is opened with port49d stopped. On EOS a local account
-	// cannot log in at all while port49 is up and denying it (L4), so a CLI
-	// opened in any other condition is a coin toss.
-	apply := func(lines ...string) (string, error) {
-		if err := l.stopDaemon(); err != nil {
-			return "", err
-		}
-		defer func() { _ = l.startDaemonWith(labConfigPath(), true) }()
-		c, err := l.eosCLI(breakglassUser, breakglassPassword)
-		if err != nil {
-			return "", err
-		}
-		defer c.Close()
-		if len(lines) == 0 {
-			return eosShow(c, "show running-config | include aaa authorization")
-		}
-		return eosConfigure(c, lines...)
-	}
-
-	before, err := apply()
-	if err != nil {
-		t.Fatalf("could not read the device's authorization configuration, so this test cannot tell what it "+
-			"changed or put it back: %v", err)
-	}
-	var original []string
-	for _, ln := range strings.Split(stripPrompt(before), "\n") {
-		ln = strings.TrimSpace(strings.TrimRight(ln, "\r"))
-		if strings.HasPrefix(ln, "aaa authorization exec default") ||
-			strings.HasPrefix(ln, "aaa authorization commands") {
-			original = append(original, ln)
-		}
-	}
-	if len(original) == 0 {
-		t.Fatalf("the device reports no `aaa authorization` lines to relax, so this test cannot reach a prompt "+
-			"and cannot restore anything. It said:\n%s", before)
-	}
-
-	// Negate the exact lines that are in force, rather than naming a method.
-	//
-	// The first attempt pointed them at `local` and measured nothing for a new
-	// reason: vEOS answered `Authorization denied: Unknown user`. A token user
-	// has no local account — that is the entire point of port49 — so `local`
-	// exec authorization has nobody to authorize and refuses. Removing the
-	// statement instead leaves EOS with no exec authorization to run at all,
-	// which is the only shape in which a TACACS+-authenticated user with no
-	// local account reaches a prompt on this image today.
-	//
-	// `no <the line the device printed>` also cannot fail to parse: whatever
-	// spelling `show running-config` gave back is a spelling the device already
-	// accepted.
-	var relaxed []string
-	for _, ln := range original {
-		relaxed = append(relaxed, "no "+ln)
-	}
-	if out, err := apply(relaxed...); err != nil {
-		t.Fatalf("could not point the device's authorization at `local`, so a token session cannot reach a "+
-			"prompt on this image: %v (device said: %s)", err, oneLine(out))
-	}
-
-	restore := func() {
-		if out, err := apply(original...); err != nil {
-			t.Errorf("the device's authorization configuration was NOT restored: %v (device said: %s). "+
-				"The lines that should be in force are: %s", err, oneLine(out), strings.Join(original, "; "))
-		}
-	}
-	note := fmt.Sprintf("**The device's authorization configuration was removed for this test, and the reason "+
-		"is a finding of its own.**\n\n"+
-		"The first attempt measured nothing: both token sessions logged in, both were denied their exec "+
-		"authorization, and vEOS killed them with `Authorization denied: port49: this session was not "+
-		"authenticated by port49`. The decision log for that moment reads `redeem permit … port=ssh` and then "+
-		"`authorize_session deny context_missing … port=vty5`. port49 writes the login context under "+
-		"`(nas, port)` at the authentication, where this image says `ssh`, and reads it at the authorization, "+
-		"where the same image says `vty5`. **On vEOS 4.32.2F no interactive session that gets a vty allocated "+
-		"can pass authorization through port49 today.**\n\n"+
-		"The second attempt pointed the same statements at `local` and measured nothing for a second reason "+
-		"worth writing down: vEOS answered **`Authorization denied: Unknown user`**. A token user has no local "+
-		"account — that is the entire point of port49 — so `local` exec authorization has nobody to authorize. "+
-		"The two together say that on this image a port49-authenticated operator reaches a prompt only if the "+
-		"`(nas, port)` lookup succeeds, and it does not.\n\n"+
-		"So for the duration of this test, and only for it, these lines were removed:\n\n```\n%s\n```\n\n"+
-		"and put back afterwards:\n\n```\n%s\n```\n\n"+
-		"The enable exchange is authenticated by `aaa authentication enable default`, which was **not** "+
-		"touched, so nothing measured below depends on the change.\n",
-		strings.Join(relaxed, "\n"), strings.Join(original, "\n"))
-	return restore, note
-}
+// The key is now `(nas, username)` (spec §13, decision 15) and the lookup no
+// longer depends on a field the device changes mid-session, so the device's
+// own authorization configuration stays in force for this test like every
+// other.
+const l3AuthzConfigNote = "The device's authorization configuration was left exactly as `tests/lab/configs` " +
+	"deploys it: `aaa authorization exec` and `aaa authorization commands` were in force throughout, and the " +
+	"token sessions below passed them.\n"
 
 // l3CLI opens an interactive CLI as a token user rather than as the break-glass
 // account. It is the token session that matters here: the enable is performed

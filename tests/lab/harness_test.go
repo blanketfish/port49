@@ -914,15 +914,23 @@ func eachPlatform(t *testing.T, fn func(t *testing.T, l *lab)) {
 // ---------------------------------------------------------------------------
 
 // nextLogin hands out the next unspent seeded login: a username and the token
-// seeded under it. Two things make each login need its own username.
+// seeded under it. Redemption deletes the token, so every login in a run spends
+// one.
 //
-// Redemption deletes the token, so every login in a run spends one. And EOS
-// reports `port` as the constant string "ssh" (L1), which makes the receipt key
-// (nas, port, username) identical for every SSH login by one user: a second
-// login inside receipt_ttl presents a different token against the first login's
-// receipt and is refused as credential_mismatch. A username per login gives
-// each its own receipt key, so the harness measures the device rather than that
-// collision.
+// A username per login is also what makes the decision log readable as a set of
+// sessions: the username is written on every record whether or not a context
+// lookup found anything, so it is the only session key the log always carries
+// (see portStability in register_test.go, which was measuring the wrong set
+// until it grouped by this).
+//
+// It used to be load-bearing for a second reason that has expired. The receipt
+// key was `(nas, port, username)`, and EOS reports `port` as the constant
+// string "ssh" at authentication (L1), so every SSH login by one user shared a
+// receipt: a second login inside receipt_ttl presented a fresh token against
+// the first login's receipt and was refused `credential_mismatch`. The receipt
+// key now carries the credential hash (spec §13, decision 15), so a fresh token
+// finds no receipt and redeems normally. Repeating a username is no longer a
+// collision; it is just harder to read.
 func (l *lab) nextLogin(t *testing.T) (user, secret string) {
 	t.Helper()
 	l.mu.Lock()
