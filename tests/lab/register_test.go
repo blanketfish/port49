@@ -527,9 +527,12 @@ func TestL8PasswordLength(t *testing.T) {
 		obs := fmt.Sprintf("A seeded token of each length, each under its own username, presented at the SSH "+
 			"password prompt:\n\n%s\n%s\n\n"+
 			"How to read this: `token_redeemed` means the full password reached port49 byte for byte. "+
-			"`credential_mismatch` means the username arrived but the password did not match what was seeded, "+
-			"so the device altered or truncated it. `token_not_found` or no record at all means the device "+
-			"refused the password before sending anything.\n\n"+
+			"`token_not_found` means the device did send a password under this username and no seeded "+
+			"token matched it, so the device altered or truncated what was typed -- each length has its "+
+			"own username, so there is no earlier receipt to compare against and truncation lands here, "+
+			"not on `credential_mismatch`. `credential_mismatch` would mean a second attempt under a "+
+			"username that already had a receipt, which this test does not do. No record at all means the "+
+			"device refused the password locally and sent nothing.\n\n"+
 			"The 30-character handle the design document depends on: %s.\n\n"+
 			"PAP is not measured here; this is the interactive SSH prompt only.",
 			table.String(), longest, handleVerdict(rows30(rows)))

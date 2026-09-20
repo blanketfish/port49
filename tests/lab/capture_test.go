@@ -197,6 +197,11 @@ func pcapCounts(path string) (total, device int, err error) {
 		return 0, 0, fmt.Errorf("%s: unexpected pcap magic %#x; this parser reads only little-endian pcap", path, magic)
 	}
 	link := binary.LittleEndian.Uint32(raw[20:24])
+	// snaplen bounds every record's inclLen by construction: tcpdump never
+	// stores more of a packet than it captured. A larger value is corruption
+	// in the middle of the file, not the truncated tail handled below, and a
+	// results note must not quote a count taken from a corrupt capture.
+	snaplen := int(binary.LittleEndian.Uint32(raw[16:20]))
 
 	_, subnet, err := net.ParseCIDR(labSubnet)
 	if err != nil {
@@ -206,6 +211,10 @@ func pcapCounts(path string) (total, device int, err error) {
 	for off := pcapHeaderSize; off+16 <= len(raw); {
 		inclLen := int(binary.LittleEndian.Uint32(raw[off+8 : off+12]))
 		off += 16
+		if snaplen > 0 && inclLen > snaplen {
+			return 0, 0, fmt.Errorf("%s: record at offset %d claims %d bytes, more than the file's snaplen of %d; the capture is corrupt",
+				path, off-16, inclLen, snaplen)
+		}
 		if off+inclLen > len(raw) {
 			// A short tail is not corruption, it is a snapshot. Notes are written
 			// while tcpdump is still running, so a read can land between the
