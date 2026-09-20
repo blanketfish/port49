@@ -2493,11 +2493,14 @@ key is diagnosable rather than counted as noise. `TAC_PLUS_SINGLE_CONNECT_FLAG` 
 the per-connection key cache (above) and the per-NAS connection cap (design document §11)
 both apply to the one connection it produces.
 
-A packet whose key validates but whose body then fails to decode is a fifth bucket,
-`malformed after validation`: the sender holds the right key, so it is neither noise nor a
-rotation miss, and the report keeps it apart so a codec gap or an unusual device is seen as
-such. The body is still not logged; the record carries the header fields and the body hash
-like every other unvalidated packet.
+A packet whose key validates but which the daemon then cannot answer is a fifth bucket,
+`malformed after validation`: either its body fails to decode, or the exchange it belongs to
+is one no reply can continue — a CONTINUE naming a session the connection never started, a
+`seq_no` of 255, which has no successor, or more unfinished sessions on one connection than
+the daemon will hold. The sender holds the right key, so it is neither noise nor a rotation
+miss, and the report keeps it apart so a codec gap or an unusual device is seen as such. The
+body is still not logged; the record carries the header fields, and the body hash where there
+were body bytes to hash.
 
 **Retired versions are retained for diagnosis and never for admission.** This is what turns
 "something is wrong with leaf-19" into "leaf-19 was missed in the rotation". The rule is
