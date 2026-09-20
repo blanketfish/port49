@@ -1,0 +1,471 @@
+//go:build lab
+
+package lab
+
+import (
+	"encoding/binary"
+	"fmt"
+	"net"
+	"os"
+	"sort"
+	"strings"
+
+	"github.com/rhwendt/port49/internal/tacacs/wire"
+)
+
+// Header facts read back out of a capture.
+//
+// The decision log cannot answer these. A record carries a ctx_id and a
+// session, not the TCP connection it arrived on, not the header `session_id`,
+// not the single-connect flag, and not the fixed fields of the body — the
+// authentication action, type and service, or the `authen_method` a device
+// claims on an authorization request. Those are the fields an adapter is
+// written against and the ones that say whether two exchanges can be joined up
+// at all, which is the whole question behind the login-context key.
+//
+// This decodes them from the capture the test already takes, using the daemon's
+// own wire package rather than a second implementation of RFC 8907. The bodies
+// are obfuscated with the shared key, which the harness knows, so decoding them
+// costs nothing but the key the lab publishes anyway.
+//
+// **No credential material leaves this file.** An AuthenStart's `data` carries
+// the password on a PAP exchange and an AuthenContinue's `user_msg` carries it
+// on an ASCII one; both are reported as a byte count and never as bytes. The
+// username, `port` and `rem_addr` are reported in full, because those are the
+// measurement.
+
+// wirePacket is one TACACS+ packet lifted out of a capture.
+type wirePacket struct {
+	conn       string // "<device>:<sport> -> <server>:49"
+	srcPort    uint16
+	fromDevice bool
+	hdr        wire.Header
+	decoded    string // credential-free rendering of the body
+	decodeErr  error
+}
+
+func (p wirePacket) kind() string {
+	switch p.hdr.Type {
+	case wire.TypeAuthen:
+		return "AUTHEN"
+	case wire.TypeAuthor:
+		return "AUTHOR"
+	case wire.TypeAcct:
+		return "ACCT"
+	}
+	return fmt.Sprintf("type=%d", p.hdr.Type)
+}
+
+// tcpStream is one direction of one TCP connection, reassembled by
+// concatenating payloads in capture order.
+//
+// That is a simplification and it is a safe one here: this is a point-to-point
+// lab bridge with no loss and no reordering, both endpoints are on the same
+// host, and the capture is taken on that host. A parser that tracked sequence
+// numbers would be more code for no measurement. If a future capture ever shows
+// a packet out of order, the symptom is a header whose length runs off the end
+// of the stream, which stops the decode with a message rather than inventing a
+// packet.
+type tcpStream struct {
+	key        string
+	conn       string
+	srcPort    uint16
+	fromDevice bool
+	payload    []byte
+	order      int
+}
+
+// pcapTACACSPackets decodes every TACACS+ packet in a capture.
+func pcapTACACSPackets(path, key string) ([]wirePacket, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) < pcapHeaderSize {
+		return nil, fmt.Errorf("%s is %d bytes, shorter than a pcap file header", path, len(raw))
+	}
+	magic := binary.LittleEndian.Uint32(raw[0:4])
+	if magic != 0xa1b2c3d4 && magic != 0xa1b23c4d {
+		return nil, fmt.Errorf("%s: unexpected pcap magic %#x; this parser reads only little-endian pcap", path, magic)
+	}
+	link := binary.LittleEndian.Uint32(raw[20:24])
+	snaplen := int(binary.LittleEndian.Uint32(raw[16:20]))
+
+	_, subnet, err := net.ParseCIDR(labSubnet)
+	if err != nil {
+		return nil, err
+	}
+
+	streams := map[string]*tcpStream{}
+	var order []string
+	for off := pcapHeaderSize; off+16 <= len(raw); {
+		inclLen := int(binary.LittleEndian.Uint32(raw[off+8 : off+12]))
+		off += 16
+		if snaplen > 0 && inclLen > snaplen {
+			return nil, fmt.Errorf("%s: record at offset %d claims %d bytes, more than the file's snaplen of %d; the capture is corrupt",
+				path, off-16, inclLen, snaplen)
+		}
+		if off+inclLen > len(raw) {
+			break // a short tail is a snapshot, not corruption; see pcapCounts
+		}
+		pkt := raw[off : off+inclLen]
+		off += inclLen
+
+		src, dst, sport, dport, payload, ok := tcpFlowOf(link, pkt)
+		if !ok || len(payload) == 0 {
+			continue
+		}
+		// Only the lab bridge, so the harness's own loopback liveness probes
+		// never reach the decoder.
+		if !subnet.Contains(src) && !subnet.Contains(dst) {
+			continue
+		}
+		if dport != 49 && sport != 49 {
+			continue
+		}
+		k := fmt.Sprintf("%s:%d>%s:%d", src, sport, dst, dport)
+		s := streams[k]
+		if s == nil {
+			fromDevice := dport == 49
+			shownPort := sport
+			if !fromDevice {
+				shownPort = dport
+			}
+			s = &tcpStream{
+				key:        k,
+				conn:       fmt.Sprintf("%s:%d", src, sport),
+				srcPort:    shownPort,
+				fromDevice: fromDevice,
+				order:      len(order),
+			}
+			streams[k] = s
+			order = append(order, k)
+		}
+		s.payload = append(s.payload, payload...)
+	}
+
+	var out []wirePacket
+	for _, k := range order {
+		s := streams[k]
+		for i := 0; i+wire.HeaderLen <= len(s.payload); {
+			h, err := wire.DecodeHeader(s.payload[i : i+wire.HeaderLen])
+			if err != nil {
+				break
+			}
+			end := i + wire.HeaderLen + int(h.Length)
+			if h.Length > wire.MaxBodyLen || end > len(s.payload) {
+				break
+			}
+			body := s.payload[i+wire.HeaderLen : end]
+			if h.Flags&wire.FlagUnencrypted == 0 {
+				body = wire.Obfuscate(h, []byte(key), body)
+			}
+			p := wirePacket{conn: s.conn, srcPort: s.srcPort, fromDevice: s.fromDevice, hdr: h}
+			p.decoded, p.decodeErr = describeBody(h, body)
+			out = append(out, p)
+			i = end
+		}
+	}
+	return out, nil
+}
+
+// describeBody renders one packet's body without any credential material.
+func describeBody(h wire.Header, body []byte) (string, error) {
+	switch h.Type {
+	case wire.TypeAuthen:
+		switch {
+		case h.SeqNo == 1:
+			p, err := wire.DecodeAuthenStart(body)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("START action=%s authen_type=%s service=%s priv_lvl=%d user=%q port=%q rem_addr=%q data=%d bytes",
+				authenActionName(p.Action), authenTypeName(p.AuthenType), authenServiceName(p.Service),
+				p.PrivLvl, p.User, p.Port, p.RemAddr, len(p.Data)), nil
+		case h.SeqNo%2 == 0:
+			p, err := wire.DecodeAuthenReply(body)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("REPLY status=%s flags=%#02x server_msg=%q data=%d bytes",
+				authenStatusName(p.Status), p.Flags, p.ServerMsg, len(p.Data)), nil
+		default:
+			p, err := wire.DecodeAuthenContinue(body)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("CONTINUE flags=%#02x user_msg=%d bytes data=%d bytes",
+				p.Flags, len(p.UserMsg), len(p.Data)), nil
+		}
+	case wire.TypeAuthor:
+		if h.SeqNo%2 == 1 {
+			p, err := wire.DecodeAuthorRequest(body)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("REQUEST authen_method=%s authen_type=%s service=%s priv_lvl=%d user=%q port=%q rem_addr=%q args=[%s]",
+				authenMethodName(p.AuthenMethod), authenTypeName(p.AuthenType), authenServiceName(p.Service),
+				p.PrivLvl, p.User, p.Port, p.RemAddr, joinArgs(p.Args)), nil
+		}
+		p, err := wire.DecodeAuthorResponse(body)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("RESPONSE status=%#02x server_msg=%q args=[%s]", p.Status, p.ServerMsg, joinArgs(p.Args)), nil
+	case wire.TypeAcct:
+		if h.SeqNo%2 == 1 {
+			p, err := wire.DecodeAcctRequest(body)
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("REQUEST flags=%s authen_method=%s authen_type=%s service=%s priv_lvl=%d user=%q port=%q rem_addr=%q args=[%s]",
+				acctFlagsName(p.Flags), authenMethodName(p.AuthenMethod), authenTypeName(p.AuthenType),
+				authenServiceName(p.Service), p.PrivLvl, p.User, p.Port, p.RemAddr, joinArgs(p.Args)), nil
+		}
+		p, err := wire.DecodeAcctReply(body)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("REPLY status=%#02x server_msg=%q", p.Status, p.ServerMsg), nil
+	}
+	return "", fmt.Errorf("unknown packet type %d", h.Type)
+}
+
+// joinArgs renders authorization and accounting AV pairs. They never carry a
+// credential: the protocol's password fields are in the authentication body,
+// which is where the redaction above lives.
+func joinArgs(args [][]byte) string {
+	var out []string
+	for _, a := range args {
+		out = append(out, string(a))
+	}
+	return strings.Join(out, " ")
+}
+
+func authenActionName(a uint8) string {
+	switch a {
+	case wire.AuthenActionLogin:
+		return "login(1)"
+	case wire.AuthenActionChPass:
+		return "chpass(2)"
+	case wire.AuthenActionSendAuth:
+		return "sendauth(4)"
+	}
+	return fmt.Sprintf("unknown(%d)", a)
+}
+
+func authenTypeName(t uint8) string {
+	switch t {
+	case 0:
+		return "not-set(0)"
+	case wire.AuthenTypeASCII:
+		return "ascii(1)"
+	case wire.AuthenTypePAP:
+		return "pap(2)"
+	case wire.AuthenTypeCHAP:
+		return "chap(3)"
+	case wire.AuthenTypeMSCHAP:
+		return "mschap(5)"
+	case wire.AuthenTypeMSCHAPv2:
+		return "mschapv2(6)"
+	}
+	return fmt.Sprintf("unknown(%d)", t)
+}
+
+func authenServiceName(s uint8) string {
+	switch s {
+	case wire.AuthenServiceNone:
+		return "none(0)"
+	case wire.AuthenServiceLogin:
+		return "login(1)"
+	case wire.AuthenServiceEnable:
+		return "enable(2)"
+	case wire.AuthenServicePPP:
+		return "ppp(3)"
+	}
+	return fmt.Sprintf("unknown(%d)", s)
+}
+
+func authenStatusName(s uint8) string {
+	switch s {
+	case wire.AuthenStatusPass:
+		return "PASS(1)"
+	case wire.AuthenStatusFail:
+		return "FAIL(2)"
+	case wire.AuthenStatusGetData:
+		return "GETDATA(3)"
+	case wire.AuthenStatusGetUser:
+		return "GETUSER(4)"
+	case wire.AuthenStatusGetPass:
+		return "GETPASS(5)"
+	case wire.AuthenStatusRestart:
+		return "RESTART(6)"
+	case wire.AuthenStatusError:
+		return "ERROR(7)"
+	}
+	return fmt.Sprintf("status(%#02x)", s)
+}
+
+func authenMethodName(m uint8) string {
+	switch m {
+	case wire.AuthenMethodNotSet:
+		return "not-set(0)"
+	case wire.AuthenMethodNone:
+		return "none(1)"
+	case wire.AuthenMethodKRB5:
+		return "krb5(2)"
+	case wire.AuthenMethodLine:
+		return "line(3)"
+	case wire.AuthenMethodEnable:
+		return "enable(4)"
+	case wire.AuthenMethodLocal:
+		return "local(5)"
+	case wire.AuthenMethodTACACSPlus:
+		return "tacacsplus(6)"
+	case wire.AuthenMethodGuest:
+		return "guest(8)"
+	case wire.AuthenMethodRADIUS:
+		return "radius(16)"
+	}
+	return fmt.Sprintf("unknown(%d)", m)
+}
+
+func acctFlagsName(f uint8) string {
+	var parts []string
+	if f&wire.AcctFlagStart != 0 {
+		parts = append(parts, "start")
+	}
+	if f&wire.AcctFlagStop != 0 {
+		parts = append(parts, "stop")
+	}
+	if f&wire.AcctFlagWatchdog != 0 {
+		parts = append(parts, "watchdog")
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("%#02x", f)
+	}
+	return strings.Join(parts, "+")
+}
+
+// tcpFlowOf pulls the addresses, ports and payload out of one captured packet.
+func tcpFlowOf(link uint32, b []byte) (src, dst net.IP, sport, dport uint16, payload []byte, ok bool) {
+	s, d, ok := ipv4Of(link, b)
+	if !ok {
+		return nil, nil, 0, 0, nil, false
+	}
+	tcp, ok := tcpOf(link, b)
+	if !ok || len(tcp) < 20 {
+		return nil, nil, 0, 0, nil, false
+	}
+	dataOff := int(tcp[12]>>4) * 4
+	if dataOff < 20 || dataOff > len(tcp) {
+		return nil, nil, 0, 0, nil, false
+	}
+	return s, d, binary.BigEndian.Uint16(tcp[0:2]), binary.BigEndian.Uint16(tcp[2:4]), tcp[dataOff:], true
+}
+
+// ---------------------------------------------------------------------------
+// The note section
+// ---------------------------------------------------------------------------
+
+// tacacsHeaderFacts renders, for a results note, everything the decision log
+// does not carry: one line per packet, then the four summary answers.
+func (l *lab) tacacsHeaderFacts() string {
+	key := os.Getenv("PORT49_LAB_KEY")
+	if key == "" {
+		key = labKeyDefault
+	}
+	pkts, err := pcapTACACSPackets(l.capAbs, key)
+	if err != nil {
+		return fmt.Sprintf("Not measured: the capture could not be decoded (%v).\n", err)
+	}
+	if len(pkts) == 0 {
+		return "Not measured: the capture holds no TACACS+ packet this parser could decode. Either the device " +
+			"never connected, or it used a key this harness does not hold.\n"
+	}
+
+	var b strings.Builder
+	b.WriteString("Decoded from the capture with the daemon's own `internal/tacacs/wire` package and the lab " +
+		"shared key. Passwords are never rendered: an AUTHEN START's `data` and a CONTINUE's `user_msg` are " +
+		"reported as byte counts, which is where a PAP password and an ASCII one respectively live.\n\n")
+	b.WriteString("| device connection | session_id | seq | single-connect | packet |\n|---|---|---|---|---|\n")
+	for _, p := range pkts {
+		sc := "clear"
+		if p.hdr.Flags&wire.FlagSingleConnect != 0 {
+			sc = "**SET**"
+		}
+		dir := "→"
+		if !p.fromDevice {
+			dir = "←"
+		}
+		body := p.decoded
+		if p.decodeErr != nil {
+			body = "**undecodable**: " + p.decodeErr.Error()
+		}
+		fmt.Fprintf(&b, "| %s %s | `%#08x` | %d | %s | %s %s |\n",
+			p.conn, dir, p.hdr.SessionID, p.hdr.SeqNo, sc, p.kind(),
+			strings.ReplaceAll(body, "|", "\\|"))
+	}
+
+	// The four answers, computed rather than asserted.
+	connSessions := map[string]map[uint32]bool{}
+	sessionConns := map[uint32]map[string]bool{}
+	exchangeConns := map[string]map[string]bool{} // exchange kind -> connections
+	singleConnect := 0
+	requests := 0
+	for _, p := range pkts {
+		if !p.fromDevice {
+			continue
+		}
+		requests++
+		if p.hdr.Flags&wire.FlagSingleConnect != 0 {
+			singleConnect++
+		}
+		if connSessions[p.conn] == nil {
+			connSessions[p.conn] = map[uint32]bool{}
+		}
+		connSessions[p.conn][p.hdr.SessionID] = true
+		if sessionConns[p.hdr.SessionID] == nil {
+			sessionConns[p.hdr.SessionID] = map[string]bool{}
+		}
+		sessionConns[p.hdr.SessionID][p.conn] = true
+		if exchangeConns[p.kind()] == nil {
+			exchangeConns[p.kind()] = map[string]bool{}
+		}
+		exchangeConns[p.kind()][p.conn] = true
+	}
+
+	maxSessionsPerConn := 0
+	for _, s := range connSessions {
+		if len(s) > maxSessionsPerConn {
+			maxSessionsPerConn = len(s)
+		}
+	}
+	var kinds []string
+	for k, conns := range exchangeConns {
+		kinds = append(kinds, fmt.Sprintf("%s on %d connection(s)", k, len(conns)))
+	}
+	sort.Strings(kinds)
+
+	fmt.Fprintf(&b, "\n- **TCP connections the device opened:** %d, carrying %d distinct `session_id`(s). "+
+		"The busiest connection carried **%d** `session_id`(s).\n",
+		len(connSessions), len(sessionConns), maxSessionsPerConn)
+	if maxSessionsPerConn <= 1 && len(connSessions) > 1 {
+		b.WriteString("  That is **one TCP connection per exchange**: the device tears the connection down and " +
+			"opens another for the next one, so nothing at the transport layer joins two exchanges either.\n")
+	} else if maxSessionsPerConn > 1 {
+		b.WriteString("  So the device **multiplexes** several exchanges onto one connection.\n")
+	}
+	fmt.Fprintf(&b, "- **Single-connect flag:** set on %d of %d requests from the device.", singleConnect, requests)
+	if singleConnect == 0 {
+		b.WriteString(" The device never asks to hold the connection open, whatever it then does with it.")
+	}
+	b.WriteString("\n")
+	fmt.Fprintf(&b, "- **Exchanges seen:** %s.\n", strings.Join(kinds, ", "))
+	b.WriteString("- **What `session_id` can join:** a `session_id` that appears on exactly one connection and " +
+		"under exactly one exchange links the packets *within* that exchange — a START and its CONTINUE, which " +
+		"is what makes an ASCII login work at all — and links nothing across exchanges. Read the table: if the " +
+		"authentication and the authorization for one login carry different `session_id`s, no field in the " +
+		"header joins them, and the login-context key cannot be built out of one.\n")
+	return b.String()
+}

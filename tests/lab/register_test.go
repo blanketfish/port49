@@ -38,9 +38,16 @@ func TestL1PortField(t *testing.T) {
 			}
 		}
 
-		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
-			return len(redeemPorts(rs)) >= 2
+		// Wait for the authorizations too, not only the two redeems, and then
+		// drain further for the accounting. The stability half of the claim is a
+		// comparison between the `port` on the authentication and the `port` on
+		// every later record for the same session, so a window that closes at the
+		// second redeem has nothing to compare and would report "stable" for a
+		// device whose value moves a moment later.
+		recs := l.waitForRecords(off, 60*time.Second, func(rs []map[string]any) bool {
+			return len(redeemPorts(rs)) >= 2 && len(recordsOfEvent(rs, "authorize_session")) >= 2
 		})
+		recs = l.drainRecords(off, 15*time.Second)
 		ports := redeemPorts(recs)
 		if len(ports) < 2 {
 			t.Fatalf("expected a port value from each of two concurrent logins, got %d (%q):%s", len(ports), ports, summarize(recs))
@@ -57,53 +64,102 @@ func TestL1PortField(t *testing.T) {
 		obs := fmt.Sprintf("Two overlapping SSH sessions, each holding an interactive shell open, produced these "+
 			"`port` values on the authentication START:\n\n"+
 			"| session | user | `port` |\n|---|---|---|\n| 1 | %s | `%s` |\n| 2 | %s | `%s` |\n\n%s\n\n"+
-			"All %d `port` values seen in this test: %q.\n\n"+
-			"Stability for the life of a session: %s\n\n"+
-			"Transport measured: SSH only. Console, eAPI, NX-API and NETCONF are not measured here "+
-			"(eAPI and NX-API are plan 3), so L1 is not answered for those transports.",
-			u1, ports[0], u2, ports[1], uniqueNote, len(ports), ports, portStability(recs))
+			"All %d `port` values seen at a `redeem` in this test: %q.\n\n"+
+			"### Stability for the life of a session\n\n%s\n\n"+
+			"### What the header carried\n\n%s\n"+
+			"Transport measured: SSH only. Console, eAPI, NX-API and NETCONF are not measured here, so L1 is not "+
+			"answered for those transports.",
+			u1, ports[0], u2, ports[1], uniqueNote, len(ports), ports,
+			portStability(recs, u1, u2), l.tacacsHeaderFacts())
 		l.result(t, "L1", "What the `port` field contains, per platform and per transport — SSH, console, eAPI, "+
-			"NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life.", obs)
+			"NX-API, NETCONF. Whether it is unique per concurrent session, stable for its life, and **the same "+
+			"value at authentication and at authorization time**.", obs)
 	})
 }
 
-// portStability answers the second half of L1 from the records rather than
-// asserting it: every record carrying a ctx_id belongs to one session, so if a
-// session's `port` ever changed, that ctx_id would show two values.
-func portStability(recs []map[string]any) string {
-	byCtx := map[string]map[string]bool{}
-	records := 0
+// portStability answers the second half of L1 from the records, and it does it
+// by username because the obvious key gave a false answer.
+//
+// It used to group by `ctx_id`, on the reasoning that every record carrying one
+// belongs to one session. That is true and it is the wrong set. A `ctx_id` is
+// written on a record whose context lookup *succeeded*, so grouping by it
+// selects exactly the sessions whose `port` did not move — and the note went on
+// to report "stable" for a run in which three of twelve vEOS sessions reported
+// `ssh` at authentication and `vty4` at authorization, and in which exactly
+// those three were denied `context_missing`. The test could not see the
+// instability it existed to measure.
+//
+// The harness gives every login its own username (nextLogin, and the comment
+// there says why), so the username is a session key that is written on every
+// record whether or not the lookup found anything. That is what this groups by
+// now, and it reports the sequence rather than a set: the order in which the
+// values changed is what tells an authorization that arrived under a new `port`
+// from one that never had a `port` at all.
+func portStability(recs []map[string]any, users ...string) string {
+	type seen struct {
+		port  string
+		event string
+	}
+	trail := map[string][]seen{}
+	want := map[string]bool{}
+	for _, u := range users {
+		want[u] = true
+	}
 	for _, r := range recs {
 		s := sub(r, "session")
 		if s == nil {
 			continue
 		}
-		ctx := str(s, "ctx_id")
-		if ctx == "" {
+		u := str(s, "username")
+		if !want[u] {
 			continue
 		}
-		records++
-		if byCtx[ctx] == nil {
-			byCtx[ctx] = map[string]bool{}
-		}
-		byCtx[ctx][str(s, "port")] = true
+		trail[u] = append(trail[u], seen{port: str(s, "port"), event: str(r, "event")})
 	}
-	if len(byCtx) == 0 {
-		return "not measured: no record in this window carried a ctx_id."
+	if len(trail) == 0 {
+		return "Not measured: no record in this window named either of the two logins."
 	}
+
+	var b strings.Builder
+	b.WriteString("Every record naming either login, in arrival order, with the `port` it carried. " +
+		"Grouped by username rather than by `ctx_id`: a `ctx_id` is only written when the context lookup " +
+		"succeeded, so grouping by it hides exactly the sessions whose `port` moved.\n\n")
+	b.WriteString("| user | records, `event`=`port` |\n|---|---|\n")
 	var unstable []string
-	for ctx, ports := range byCtx {
-		if len(ports) > 1 {
-			unstable = append(unstable, ctx)
+	for _, u := range users {
+		ss := trail[u]
+		if len(ss) == 0 {
+			fmt.Fprintf(&b, "| `%s` | (no record) |\n", u)
+			continue
 		}
+		var parts []string
+		distinct := map[string]bool{}
+		for _, s := range ss {
+			p := s.port
+			if p == "" {
+				p = "(empty string)"
+			}
+			parts = append(parts, fmt.Sprintf("`%s`=%s", s.event, p))
+			distinct[s.port] = true
+		}
+		if len(distinct) > 1 {
+			unstable = append(unstable, u)
+		}
+		fmt.Fprintf(&b, "| `%s` | %s |\n", u, strings.Join(parts, ", "))
 	}
+
 	if len(unstable) == 0 {
-		return fmt.Sprintf("stable. Across %d sessions and %d records carrying a ctx_id, every record for a "+
-			"session reported the same `port` as that session's authentication START.", len(byCtx), records)
+		fmt.Fprintf(&b, "\n**Stable.** Across %d session(s), every record for a session reported the same `port` "+
+			"as that session's authentication START, so a key built on `port` reads the same value at "+
+			"authorization time as it wrote at authentication time.\n", len(trail))
+		return b.String()
 	}
 	sort.Strings(unstable)
-	return fmt.Sprintf("**NOT stable**: %d of %d sessions reported more than one `port` value over their life (%s).",
-		len(unstable), len(byCtx), strings.Join(unstable, ", "))
+	fmt.Fprintf(&b, "\n**NOT stable**: %d of %d session(s) reported more than one `port` value over their life "+
+		"(%s). A login context keyed on `(nas, port)` is written under one value and looked up under another, "+
+		"so the authorization misses and the session is denied for a reason that has nothing to do with policy.\n",
+		len(unstable), len(trail), strings.Join(unstable, ", "))
+	return b.String()
 }
 
 func redeemPorts(recs []map[string]any) []string {
