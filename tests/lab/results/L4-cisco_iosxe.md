@@ -4,7 +4,7 @@
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
-- **Capture:** `tests/lab/captures/L4-cisco_iosxe.pcap` — 168 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L4-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/captures/L4-cisco_iosxe.pcap` — 570 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L4-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`
 - **Transport:** SSH
 
 ## Claim
@@ -20,18 +20,19 @@ The time column is the device's, not port49's: for this test both `limits.auth_f
 | method list | port49d | local login | time | decision log |
 |---|---|---|---|---|
 | `aaa authentication login default group port49 local` | port49d not listening | **logged in** | 20ms | port49d was not listening, so no decision record could exist for this attempt. The capture holds the device's refused connection attempts to port 49. |
-| `aaa authentication login default group port49 local` | port49d answering FAIL | **logged in** | 20ms | **no redeem record for `breakglass` reached the decision log**, so port49 did not answer this login at all and whatever the device did is not a response to a FAIL.(no records at all reached the decision log) |
+| `aaa authentication login default group port49 local` | port49d answering FAIL | refused | 4.22s | `event=redeem verdict=deny reason=token_not_found`, so port49 replied FAIL for this attempt. |
 | `aaa authentication login default group port49` | port49d not listening | refused | 4.02s | port49d was not listening, so no decision record could exist for this attempt. The capture holds the device's refused connection attempts to port 49. |
 | `aaa authentication login default group port49` | port49d answering FAIL | refused | 4.22s | `event=redeem verdict=deny reason=token_not_found`, so port49 replied FAIL for this attempt. |
 
 ### What the device said when it refused
 
+- `aaa authentication login default group port49 local` / port49d answering FAIL: `ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain`
 - `aaa authentication login default group port49` / port49d not listening: `ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain`
 - `aaa authentication login default group port49` / port49d answering FAIL: `ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain`
 
 ### Does fall-through happen on a denial?
 
-- `aaa authentication login default group port49 local`: **yes.** port49 replied FAIL and the device then accepted the local password. A denial is not treated as final.
+- `aaa authentication login default group port49 local`: **no.** port49 replied FAIL and the device refused the login rather than trying the local password.
 - `aaa authentication login default group port49`: **no.** port49 replied FAIL and the device refused the login rather than trying the local password.
 
 
@@ -43,12 +44,7 @@ The second method list is NX-OS's contrast, not EOS's: the lab line already name
 
 Setting that list on IOS-XE costs something no other platform here charges, and it is why `configs/iosxe-startup.cfg` carries an `aaa authentication login CONSOLE local` list pinned to `line con 0`. NX-OS keeps a console method list of its own that defaults to `local`; IOS-XE runs the console through the same `default` list as every vty, so `group port49` with the daemon stopped would shut out SSH and the console together and the restore below could not happen at all. The named list changes nothing this test measures -- every login here is over SSH, on a vty using the `default` list under test.
 
-CLI channel used: SSH CLI as breakglass. The method list was switched in place over the device's own CLI and not restored: none of ["Username:" "Password:" "xe1#" "xe1>"] appeared on the serial console (172.100.100.41:5000) as breakglass, after SSH failed (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain) within 1m30s; what it said was:
-
-*Sep 20 19:14:43.699: %SSH-5-SSH2_USERAUTH: User '' authentication for SSH2 Session from 172.100.100.1 (tty = 1) using crypto cipher 'aes128-gcm@openssh.com', hmac 'hmac-sha2-512' Failed
-*Sep 20 19:14:43.699: %SSH-5-SSH2_CLOSE: SSH2 Session from 172.100.100.1 (tty = 1) for user '' using crypto cipher 'aes128-gcm@openssh.com', hmac 'hmac-sha2-512' closed
-*Sep 20 19:15:09.696: %AAA-6-METHOD_LIST_STATE: authen mlist  pvt_authen_0 of DOT1X service is marked for notifyingstate and its current state is : DEAD
-*Sep 20 19:15:09.696: %AAA-6-METHOD_LIST_STATE: authen mlist  pvt_authen_0 of DOT1X service is marked for notifyingstate and its current state is : DEAD afterwards.
+CLI channel used: SSH CLI as alice05. The method list was switched in place over the device's own CLI and restored afterwards.
 
 ### Not measured
 

@@ -540,6 +540,15 @@ func l4AAA(t *testing.T, l *lab, d l4AAADriver) {
 	} else if err := l.startDaemonWith(base, true); err != nil {
 		t.Fatalf("could not restart port49d after the test: %v", err)
 	}
+	// And it continues against a device that is speaking to that daemon. This
+	// test takes the server down four times; a device that has concluded the
+	// server is dead stays that way after the last restart, and the next test
+	// in the run then measures a dead server without knowing it. On the
+	// 2026-09-20 run L2 ran straight after this one, could not log in at all,
+	// and its capture held **zero** TACACS+ packets.
+	if why := l.l4WaitServerLive(90 * time.Second); why != "" {
+		t.Logf("after L4: %s", why)
+	}
 
 	l.result(t, "L4", l4Claim, l4Observation(l, cells, d.evidence, channel,
 		fmt.Sprintf("The method list was switched in place over the device's own CLI and %s afterwards.", restore)))

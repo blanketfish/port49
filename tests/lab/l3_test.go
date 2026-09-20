@@ -73,7 +73,7 @@ func TestL3Enable(t *testing.T) {
 				"authentication record, so there was no username to seed a token under.\n"
 		}
 
-		obs += l3Caveats
+		obs += l3Caveats(l)
 		l.result(t, "L3", l3Claim, obs)
 
 		// "This device has no enable command" is an answer to L3, not a failure
@@ -571,11 +571,22 @@ func (l *lab) writeSeedConfig(user, secret string) (string, error) {
 	return path, nil
 }
 
-const l3Caveats = "\n### Not measured\n\n" +
-	"- Two operators from two different client addresses. Both sessions here come from the harness at the " +
-	"bridge's `.1`, so `rem_addr` not distinguishing them is measured only for the shared-bastion case.\n" +
-	"- Privilege levels other than the one `enable` with no argument asks for.\n" +
-	"- `enable` over any transport but the interactive SSH CLI.\n" +
-	"- IOS-XE, which is the platform the `$enab{level}$` spelling comes from and the one this row most needs.\n" +
-	"- Whether a device that is refused an enable falls back to a local enable secret, which is L4's question " +
-	"asked of the enable method list rather than the login one.\n"
+// l3Caveats is built from the platform rather than written out as a constant,
+// and the 2026-09-20 IOS-XE run is why. The fixed version ended with "IOS-XE,
+// which is the platform the `$enab{level}$` spelling comes from and the one this
+// row most needs", which was true until IOS-XE became a platform of this lab and
+// then appeared, unchanged, in IOS-XE's own note -- declaring unmeasured the
+// very thing the note above it measures. Exactly the defect
+// `tests/lab/results/L4-cisco_nxos.md` carried.
+func l3Caveats(l *lab) string {
+	return "\n### Not measured\n\n" +
+		"- Two operators from two different client addresses. Both sessions here come from the harness at the " +
+		"bridge's `.1`, so `rem_addr` not distinguishing them is measured only for the shared-bastion case.\n" +
+		"- Privilege levels other than the one `enable` with no argument asks for.\n" +
+		"- `enable` over any transport but the interactive SSH CLI.\n" +
+		"- Any " + l.p.name + " release but the one named above, and every platform family this lab does not " +
+		"deploy. The families it does are " + otherPlatformNames(l.p.name) + ", each in its own L3 note where " +
+		"that platform has an enable exchange at all.\n" +
+		"- Whether a device that is refused an enable falls back to a local enable secret, which is L4's question " +
+		"asked of the enable method list rather than the login one.\n"
+}

@@ -4,7 +4,7 @@
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
-- **Capture:** `tests/lab/captures/L2-cisco_iosxe.pcap` — 424 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L2-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/captures/L2-cisco_iosxe.pcap` — 572 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L2-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`
 - **Transport:** SSH
 
 ## Claim
@@ -19,14 +19,14 @@ Command `show clock` was denied by the lab authorizer with a 61-character `serve
 port49: denied by lab_deny (show clock); see 'port49 explain'
 ```
 
-**The operator saw it: NOT displayed.**
+**The operator saw it: displayed.**
 
 This took **4 login attempts**: the earlier one(s) returned an empty transcript even though the decision log showed the command reaching port49 and being denied. An empty transcript cannot be told from a device that printed nothing, which is the very thing this test reports, so the attempt is retried rather than recorded.
 
-What the device printed for the denied command (login as `alice08`):
+Read over the **interactive SSH CLI**. What the device printed for the denied command (login as `alice09`):
 
 ```
-
+port49: denied by lab_deny (show clock); see 'port49 explain'
 ```
 
 ### Truncation length

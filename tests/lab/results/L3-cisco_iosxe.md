@@ -4,7 +4,7 @@
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
-- **Capture:** `tests/lab/captures/L3-cisco_iosxe.pcap` — 196 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L3-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/captures/L3-cisco_iosxe.pcap` — 529 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L3-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`
 - **Transport:** SSH
 
 ## Claim
@@ -24,11 +24,10 @@ Two overlapping sessions, each logged in with its own token and each holding at 
 **alice02**:
 
 ```
-could not open a CLI: none of ["Username:" "Password:" "xe1#" "xe1>"] appeared on the serial console (172.100.100.41:5000) as alice02, after SSH failed (ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain) within 1m30s; what it said was:
-
-*Sep 20 19:11:31.643: %SSH-5-SSH2_USERAUTH: User '' authentication for SSH2 Session from 172.100.100.1 (tty = 0) using crypto cipher 'aes128-gcm@openssh.com', hmac 'hmac-sha2-512' Failed
-*Sep 20 19:11:31.643: %SSH-5-SSH2_CLOSE: SSH2 Session from 172.100.100.1 (tty = 0) for user '' using crypto cipher 'aes128-gcm@openssh.com', hmac 'hmac-sha2-512' closed
-*Sep 20 19:11:34.220: %SMART_LIC-3-COMM_FAILED: Communications failure with the Cisco Smart License Utility (CSLU) : Unable to resolve server hostname/domain name 
+xe1>enable
+Password: 
+port49: authentication failed, mint a new token with `port49 token`
+port49: authentication failed, mint a new token with `port49 token` xe1>
 ```
 
 **alice03**:
@@ -36,25 +35,20 @@ could not open a CLI: none of ["Username:" "Password:" "xe1#" "xe1>"] appeared o
 ```
 xe1>enable
 Password: 
-% Password:  timeout expired!
-% Error in authentication.
-
-xe1>p49_labenable01
-% Bad IP address or host name% Unknown command or computer name, or unable to find computer address
-p49_labenable01 % Bad IP address or host name% Unknown command or computer name, or unable to find computer address xe1>
+port49: authentication failed, mint a new token with `port49 token`
+port49: authentication failed, mint a new token with `port49 token` xe1>
 ```
 
 ### The enable authentication, in the decision log
 
-**No authentication record arrived under a username other than the two the harness logged in as.** Either the device sent the operator's own username on the enable START — which the wire table below settles — or it never asked port49 about the enable at all. Every record in the window:
-  event=redeem verdict=permit reason=token_redeemed flags= user=alice03 port=tty435
-  event=authorize_session verdict=permit reason=context_matched flags= user=alice03 port=tty435
-  event=account verdict= reason= flags=start user=alice03 port=tty435
-  event=authorize_command verdict=permit reason=permit_dominates flags= user=alice03 port=tty435
-  event=account verdict= reason= flags=stop user=alice03 port=tty435
-  event=authorize_command verdict=permit reason=permit_dominates flags= user=alice03 port=tty435
-  event=account verdict= reason= flags=stop user=alice03 port=tty435
-  event=account verdict= reason= flags=stop user=alice03 port=tty435
+| wire username | verdict | reason | `port` | `rem_addr` |
+|---|---|---|---|---|
+| `alice03` | deny | `token_not_found` | tty435 | 172.100.100.1 |
+| `alice02` | deny | `token_not_found` | tty434 | 172.100.100.1 |
+
+**The two concurrent enables arrived under different usernames**, so the device puts the operator's own identity on the enable START and `(nas, username)` keeps them apart.
+
+Distinct `port` values across the two: 2. Distinct `rem_addr` values: 1. A field with one distinct value across two concurrent enables cannot tell them apart.
 
 
 ### The enable exchange on the wire
@@ -63,44 +57,111 @@ Decoded from the capture with the daemon's own `internal/tacacs/wire` package an
 
 | device connection | session_id | seq | single-connect | packet |
 |---|---|---|---|---|
-| 172.100.100.41:59924 → | `0x97a63dc5` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="tty435" rem_addr="172.100.100.1" data=0 bytes |
-| 172.100.100.41:59924 → | `0x97a63dc5` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=14 bytes data=0 bytes |
-| 172.100.100.1:49 ← | `0x97a63dc5` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
-| 172.100.100.1:49 ← | `0x97a63dc5` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
-| 172.100.100.41:59928 → | `0x8a037355` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[service=shell cmd*] |
-| 172.100.100.1:49 ← | `0x8a037355` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15] |
-| 172.100.100.41:59930 → | `0x7a2d689e` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[task_id=4017 timezone=UTC service=shell] |
-| 172.100.100.1:49 ← | `0x7a2d689e` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.41:43208 → | `0x9f139439` | 1 | clear | AUTHOR REQUEST authen_method=none(1) authen_type=ascii(1) service=none(0) priv_lvl=1 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
-| 172.100.100.1:49 ← | `0x9f139439` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
-| 172.100.100.41:43218 → | `0x6b899844` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[task_id=4017 timezone=UTC service=shell priv-lvl=1 cmd=terminal length 0 <cr>] |
-| 172.100.100.1:49 ← | `0x6b899844` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.41:43228 → | `0x13e1266d` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=enable(2) priv_lvl=15 user="alice03" port="tty435" rem_addr="172.100.100.1" data=0 bytes |
-| 172.100.100.1:49 ← | `0x13e1266d` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
-| 172.100.100.41:58510 → | `0x41d08fc2` | 1 | clear | AUTHOR REQUEST authen_method=none(1) authen_type=ascii(1) service=none(0) priv_lvl=1 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[service=shell cmd=connect cmd-arg=p49_labenable01 cmd-arg=<cr>] |
-| 172.100.100.1:49 ← | `0x41d08fc2` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
-| 172.100.100.41:58522 → | `0x95954a88` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[task_id=4019 timezone=UTC service=shell priv-lvl=1 cmd=connect p49_labenable01 <cr>] |
-| 172.100.100.1:49 ← | `0x95954a88` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.41:58524 → | `0xc04432b7` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[task_id=4017 timezone=UTC service=shell disc-cause=1 disc-cause-ext=9 pre-session-time=0 elapsed_time=95 stop_time=1789931582] |
-| 172.100.100.1:49 ← | `0xc04432b7` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.41:35840 → | `0x52806b1b` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="tty434" rem_addr="172.100.100.1" data=0 bytes |
+| 172.100.100.41:35840 → | `0x52806b1b` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=14 bytes data=0 bytes |
+| 172.100.100.1:49 ← | `0x52806b1b` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
+| 172.100.100.1:49 ← | `0x52806b1b` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
+| 172.100.100.41:35852 → | `0x3f9c288a` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="tty434" rem_addr="172.100.100.1" args=[service=shell cmd*] |
+| 172.100.100.1:49 ← | `0x3f9c288a` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15] |
+| 172.100.100.41:35854 → | `0x465f3e45` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice02" port="tty434" rem_addr="172.100.100.1" args=[task_id=4007 timezone=UTC service=shell] |
+| 172.100.100.1:49 ← | `0x465f3e45` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.41:35870 → | `0x26a077f8` | 1 | clear | AUTHOR REQUEST authen_method=none(1) authen_type=ascii(1) service=none(0) priv_lvl=1 user="alice02" port="tty434" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
+| 172.100.100.1:49 ← | `0x26a077f8` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
+| 172.100.100.41:35886 → | `0x5a139d9c` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice02" port="tty434" rem_addr="172.100.100.1" args=[task_id=4007 timezone=UTC service=shell priv-lvl=1 cmd=terminal length 0 <cr>] |
+| 172.100.100.1:49 ← | `0x5a139d9c` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.41:35892 → | `0x642b9b1d` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=enable(2) priv_lvl=15 user="alice02" port="tty434" rem_addr="172.100.100.1" data=0 bytes |
+| 172.100.100.41:35892 → | `0x642b9b1d` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=15 bytes data=0 bytes |
+| 172.100.100.1:49 ← | `0x642b9b1d` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
+| 172.100.100.1:49 ← | `0x642b9b1d` | 4 | clear | AUTHEN REPLY status=FAIL(2) flags=0x00 server_msg="port49: authentication failed, mint a new token with `port49 token`" data=0 bytes |
+| 172.100.100.41:35898 → | `0x85208197` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="tty435" rem_addr="172.100.100.1" data=0 bytes |
+| 172.100.100.41:35898 → | `0x85208197` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=14 bytes data=0 bytes |
+| 172.100.100.1:49 ← | `0x85208197` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
+| 172.100.100.1:49 ← | `0x85208197` | 4 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
+| 172.100.100.41:35912 → | `0x56dc7153` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[service=shell cmd*] |
+| 172.100.100.1:49 ← | `0x56dc7153` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15] |
+| 172.100.100.41:35914 → | `0x134eeaad` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[task_id=4009 timezone=UTC service=shell] |
+| 172.100.100.1:49 ← | `0x134eeaad` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.41:35928 → | `0x382434ae` | 1 | clear | AUTHOR REQUEST authen_method=none(1) authen_type=ascii(1) service=none(0) priv_lvl=1 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[service=shell cmd=terminal cmd-arg=length cmd-arg=0 cmd-arg=<cr>] |
+| 172.100.100.1:49 ← | `0x382434ae` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[] |
+| 172.100.100.41:35932 → | `0x7492b6b0` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=15 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[task_id=4009 timezone=UTC service=shell priv-lvl=1 cmd=terminal length 0 <cr>] |
+| 172.100.100.1:49 ← | `0x7492b6b0` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.41:35940 → | `0x58d40187` | 1 | clear | AUTHEN START action=login(1) authen_type=ascii(1) service=enable(2) priv_lvl=15 user="alice03" port="tty435" rem_addr="172.100.100.1" data=0 bytes |
+| 172.100.100.41:35940 → | `0x58d40187` | 3 | clear | AUTHEN CONTINUE flags=0x00 user_msg=15 bytes data=0 bytes |
+| 172.100.100.1:49 ← | `0x58d40187` | 2 | clear | AUTHEN REPLY status=GETPASS(5) flags=0x01 server_msg="Password: " data=0 bytes |
+| 172.100.100.1:49 ← | `0x58d40187` | 4 | clear | AUTHEN REPLY status=FAIL(2) flags=0x00 server_msg="port49: authentication failed, mint a new token with `port49 token`" data=0 bytes |
+| 172.100.100.41:35956 → | `0x00c3dcaa` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice02" port="tty434" rem_addr="172.100.100.1" args=[task_id=4007 timezone=UTC service=shell disc-cause=1 disc-cause-ext=9 pre-session-time=0 elapsed_time=7 stop_time=1789932467] |
+| 172.100.100.41:35970 → | `0xd9922670` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=login(1) priv_lvl=1 user="alice03" port="tty435" rem_addr="172.100.100.1" args=[task_id=4009 timezone=UTC service=shell disc-cause=1 disc-cause-ext=9 pre-session-time=0 elapsed_time=2 stop_time=1789932467] |
+| 172.100.100.1:49 ← | `0xd9922670` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.1:49 ← | `0x00c3dcaa` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.41:43042 → | `0x0b75d4a3` | 1 | clear | ACCT REQUEST flags=stop authen_method=none(1) authen_type=not-set(0) service=none(0) priv_lvl=1 user="yang_mgmt_infra" port="" rem_addr="" args=[task_id=4001 timezone=UTC service=shell priv-lvl=15 cmd=show running-config yang <cr>] |
+| 172.100.100.1:49 ← | `0x0b75d4a3` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
 
-- **TCP connections the device opened:** 9, carrying 9 distinct `session_id`(s). The busiest connection carried **1** `session_id`(s).
+- **TCP connections the device opened:** 15, carrying 15 distinct `session_id`(s). The busiest connection carried **1** `session_id`(s).
   That is **one TCP connection per exchange**: the device tears the connection down and opens another for the next one, so nothing at the transport layer joins two exchanges either.
-- **Single-connect flag:** set on 0 of 10 requests from the device. The device never asks to hold the connection open, whatever it then does with it.
-- **Exchanges seen:** ACCT on 4 connection(s), AUTHEN on 2 connection(s), AUTHOR on 3 connection(s).
+- **Single-connect flag:** set on 0 of 19 requests from the device. The device never asks to hold the connection open, whatever it then does with it.
+- **Exchanges seen:** ACCT on 7 connection(s), AUTHEN on 4 connection(s), AUTHOR on 4 connection(s).
 - **What `session_id` can join:** a `session_id` that appears on exactly one connection and under exactly one exchange links the packets *within* that exchange — a START and its CONTINUE, which is what makes an ASCII login work at all — and links nothing across exchanges. Read the table: if the authentication and the authorization for one login carry different `session_id`s, no field in the header joins them, and the login-context key cannot be built out of one.
 
 Read the `service=` field in that table: a login START is `login(1)` and an enable START is `enable(2)`. `priv_lvl` on the enable START is the level being asked for, which is what decides whether the username is `$enab15$` or something else on a device that spells it that way.
 
 ### When the enable is allowed
 
-Not measured: phase one produced no enable authentication record, so there was no username to seed a token under.
+phase one measured that this device puts **the operator's own username** on the enable START. port49d was therefore restarted on a config seeding one token under `alice04`, and the same keystrokes were repeated as `alice04`. Nothing else changed.
+
+What the device said:
+
+```
+xe1>enable
+Password: 
+xe1#show clock
+port49: denied by lab_deny (show clock); see 'port49 explain'
+```
+
+Every record in that window:
+
+```
+2026-09-20T19:27:57.603Z event=redeem verdict=permit reason=token_redeemed user="alice04" port="tty434" rem_addr="172.100.100.1"
+2026-09-20T19:27:57.606Z event=authorize_session verdict=permit reason=context_matched user="alice04" port="tty434" rem_addr="172.100.100.1"
+    request AV: service=shell
+    request AV: cmd*
+2026-09-20T19:27:57.608Z event=account verdict= reason= user="alice04" port="tty434" rem_addr="172.100.100.1"
+    accounting AV: task_id=4012
+    accounting AV: timezone=UTC
+    accounting AV: service=shell
+2026-09-20T19:27:57.962Z event=authorize_command verdict=permit reason=permit_dominates user="alice04" port="tty434" rem_addr="172.100.100.1"
+    request AV: service=shell
+    request AV: cmd=terminal
+    request AV: cmd-arg=length
+    request AV: cmd-arg=0
+    request AV: cmd-arg=<cr>
+2026-09-20T19:27:58.064Z event=account verdict= reason= user="alice04" port="tty434" rem_addr="172.100.100.1"
+    accounting AV: task_id=4012
+    accounting AV: timezone=UTC
+    accounting AV: service=shell
+    accounting AV: priv-lvl=1
+    accounting AV: cmd=terminal length 0 <cr>
+2026-09-20T19:27:58.711Z event=redeem verdict=permit reason=token_redeemed user="alice04" port="tty434" rem_addr="172.100.100.1"
+2026-09-20T19:27:58.962Z event=authorize_command verdict=deny reason=no_permit_dominates_deny user="alice04" port="tty434" rem_addr="172.100.100.1"
+    request AV: service=shell
+    request AV: cmd=show
+    request AV: cmd-arg=clock
+    request AV: cmd-arg=<cr>
+2026-09-20T19:27:59.110Z event=account verdict= reason= user="alice04" port="tty434" rem_addr="172.100.100.1"
+    accounting AV: task_id=4012
+    accounting AV: timezone=UTC
+    accounting AV: service=shell
+    accounting AV: disc-cause=1
+    accounting AV: disc-cause-ext=9
+    accounting AV: pre-session-time=0
+    accounting AV: elapsed_time=2
+    accounting AV: stop_time=1789932479
+```
 
 ### Not measured
 
 - Two operators from two different client addresses. Both sessions here come from the harness at the bridge's `.1`, so `rem_addr` not distinguishing them is measured only for the shared-bastion case.
 - Privilege levels other than the one `enable` with no argument asks for.
 - `enable` over any transport but the interactive SSH CLI.
-- IOS-XE, which is the platform the `$enab{level}$` spelling comes from and the one this row most needs.
+- Any cisco_iosxe release but the one named above, and every platform family this lab does not deploy. The families it does are `arista_eos`, `juniper_vjunos-router`, `juniper_vsrx`, `cisco_nxos`, each in its own L3 note where that platform has an enable exchange at all.
 - Whether a device that is refused an enable falls back to a local enable secret, which is L4's question asked of the enable method list rather than the login one.
 
