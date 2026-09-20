@@ -774,7 +774,9 @@ func TestAcceptErrorIsCountedAndTheListenerKeepsGoing(t *testing.T) {
 	if !waitFor(t, func() bool { return testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("accept_error")) >= 1 }) {
 		t.Fatal("connection_events_total{accept_error} was not incremented")
 	}
-	if !logged.contains("accept failed") {
+	// The counter moves before the line is written, so the line is waited
+	// for too rather than read once.
+	if !waitFor(t, func() bool { return logged.contains("accept failed") }) {
 		t.Fatalf("an accept failure must say so: %q", logged.String())
 	}
 	// And the listener is still live: the transient error did not end Serve.
