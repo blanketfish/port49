@@ -923,6 +923,17 @@ func (l *lab) waitForRecords(off int64, timeout time.Duration, want func([]map[s
 	}
 }
 
+// drainRecords waits the full duration and returns everything that arrived,
+// for a test whose answer is a count rather than the presence of a record.
+//
+// L5 needs this: "no WATCHDOG arrived" is its measurement, so there is nothing
+// to wait *for* — only a window long enough that a late record cannot be
+// mistaken for an absent one. Spelling that as waitForRecords with a predicate
+// returning false works, but reads like a bug rather than a decision.
+func (l *lab) drainRecords(off int64, d time.Duration) []map[string]any {
+	return l.waitForRecords(off, d, func([]map[string]any) bool { return false })
+}
+
 func str(m map[string]any, key string) string {
 	s, _ := m[key].(string)
 	return s

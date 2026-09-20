@@ -4,6 +4,7 @@ package lab
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -100,7 +101,7 @@ func portStability(recs []map[string]any) string {
 		return fmt.Sprintf("stable. Across %d sessions and %d records carrying a ctx_id, every record for a "+
 			"session reported the same `port` as that session's authentication START.", len(byCtx), records)
 	}
-	sortStrings(unstable)
+	sort.Strings(unstable)
 	return fmt.Sprintf("**NOT stable**: %d of %d sessions reported more than one `port` value over their life (%s).",
 		len(unstable), len(byCtx), strings.Join(unstable, ", "))
 }
@@ -267,7 +268,10 @@ func TestL5Watchdog(t *testing.T) {
 			t.Fatalf("could not hold an interactive session open, so no watchdog window existed: %v", err)
 		}
 
-		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool { return false })
+		// Nothing to wait for: "no WATCHDOG arrived" is the measurement, so this
+		// only needs a window wide enough that a late record cannot be mistaken
+		// for an absent one, and the spool drained into the log before counting.
+		recs := l.drainRecords(off, 30*time.Second)
 		acct := recordsOfEvent(recs, "account")
 		if len(acct) == 0 {
 			t.Fatalf("no accounting record of any kind arrived during a %v session, so whether this platform "+
@@ -363,7 +367,7 @@ func TestL6AccountingLatency(t *testing.T) {
 		t1 := time.Now() // the SSH connection is closed by the time login returns
 
 		recs := l.waitForRecords(off, 60*time.Second, func(rs []map[string]any) bool {
-			s, st := execStartStop(rs)
+			s, st := execStartStop(rs, l.p.name)
 			return !s.IsZero() && !st.IsZero()
 		})
 		acct := recordsOfEvent(recs, "account")
@@ -372,7 +376,7 @@ func TestL6AccountingLatency(t *testing.T) {
 				"reliability nor the latency of exec START and STOP could be measured:%s", summarize(recs))
 		}
 
-		start, stopT := execStartStop(recs)
+		start, stopT := execStartStop(recs, l.p.name)
 		startNote, stopNote := "**never arrived**", "**never arrived**"
 		if !start.IsZero() {
 			startNote = fmt.Sprintf("arrived %v after the login began", start.Sub(t0).Round(time.Millisecond))
@@ -395,14 +399,15 @@ func TestL6AccountingLatency(t *testing.T) {
 	})
 }
 
-// execStartStop returns the first exec START and the first exec STOP.
-func execStartStop(recs []map[string]any) (start, stop time.Time) {
+// execStartStop returns the first exec START and the first exec STOP, using the
+// platform's rule for what counts as an exec record.
+func execStartStop(recs []map[string]any, platform string) (start, stop time.Time) {
 	for _, r := range recs {
 		if str(r, "event") != "account" {
 			continue
 		}
 		rec := sub(r, "record")
-		if rec == nil || !isExecRecord(rec) {
+		if rec == nil || !isExecRecord(rec, platform) {
 			continue
 		}
 		ts, ok := recTime(r)
@@ -424,19 +429,30 @@ func execStartStop(recs []map[string]any) (start, stop time.Time) {
 }
 
 // isExecRecord says whether an accounting record describes the session rather
-// than a command the operator typed.
+// than a command the operator typed. The rule is per platform because the
+// devices disagree about how a session record looks.
 //
-// On EOS the exec records carry no command at all, so a null command vector was
-// the whole test. Junos does not do that. It sends the session START and STOP
-// with `cmd=login` and `cmd=logout`, which parse into a command vector like any
-// other, and reading those as per-command records made the L6 note announce that
-// exec START and STOP "never arrived" immediately above the two records that
-// were exactly that. `login` and `logout` are not commands an operator can type
-// at the Junos CLI, so treating a lone one of them as a session marker does not
-// swallow a real command.
-func isExecRecord(rec map[string]any) bool {
+// Everywhere, a record with no command vector is an exec record. On EOS that is
+// the whole rule: its session START and STOP carry `task_id`, `service` and
+// timestamps and nothing else.
+//
+// Junos does not do that. It sends the session START and STOP as `cmd=login`
+// and `cmd=logout`, which parse into a command vector like any other, and
+// reading those as per-command records made the L6 note announce that exec
+// START and STOP "never arrived" immediately above the two records that were
+// exactly that.
+//
+// That extra rule is confined to Junos on purpose. `logout` IS a command an
+// operator can type on EOS, so applying it everywhere would mean a future test
+// that types `logout` silently has it counted as a session marker. Nothing
+// types it today — L6 runs `show version` — but the reasoning only ever held
+// for one vendor, so neither should the code.
+func isExecRecord(rec map[string]any, platform string) bool {
 	if rec["vector"] == nil {
 		return true
+	}
+	if !strings.HasPrefix(platform, "juniper_") {
+		return false
 	}
 	v := strs(rec, "vector")
 	return len(v) == 1 && (v[0] == "login" || v[0] == "logout")
@@ -608,11 +624,17 @@ func TestL10ServiceAndAttributeSpellings(t *testing.T) {
 			serviceNote = "`service` arrived as " + strings.Join(parts, ", ") + "."
 		}
 
+		// Sort the bare names, then wrap. Sorting the backtick-wrapped strings
+		// put `cmd-arg` before `cmd`, because `-` sorts below the backtick.
+		// Presentation order only; it changes no measurement.
 		var keys []string
 		for k := range names {
-			keys = append(keys, "`"+k+"`")
+			keys = append(keys, k)
 		}
-		sortStrings(keys)
+		sort.Strings(keys)
+		for i, k := range keys {
+			keys[i] = "`" + k + "`"
+		}
 
 		obs := fmt.Sprintf("One SSH login running `show version` produced %d authorization request(s).\n\n"+
 			"%s\n\nAttribute names seen, exactly as spelled on the wire: %s.\n\n"+
@@ -647,12 +669,4 @@ func splitAV(a string) (string, string) {
 		return a, ""
 	}
 	return a[:i], a[i+1:]
-}
-
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
 }
