@@ -1,6 +1,6 @@
 # L2 — arista_eos
 
-- **Date measured:** 2026-09-17
+- **Date measured:** 2026-09-20
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
@@ -19,14 +19,12 @@ Command `show clock` was denied by the lab authorizer with a 61-character `serve
 port49: denied by lab_deny (show clock); see 'port49 explain'
 ```
 
-**The operator saw it: displayed.**
+**The operator saw it: NOT displayed.**
 
 What the device printed for the denied command:
 
 ```
 
-> show clock
-% Authorization denied for command 'show clock': port49: denied by lab_deny (show clock); see 'port49 explain' at line 1
 ```
 
 ### Truncation length

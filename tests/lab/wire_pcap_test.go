@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"testing"
 
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
@@ -56,16 +58,24 @@ func (p wirePacket) kind() string {
 	return fmt.Sprintf("type=%d", p.hdr.Type)
 }
 
-// tcpStream is one direction of one TCP connection, reassembled by
-// concatenating payloads in capture order.
+// tcpStream is one direction of one TCP connection, reassembled by sequence
+// number.
 //
-// That is a simplification and it is a safe one here: this is a point-to-point
-// lab bridge with no loss and no reordering, both endpoints are on the same
-// host, and the capture is taken on that host. A parser that tracked sequence
-// numbers would be more code for no measurement. If a future capture ever shows
-// a packet out of order, the symptom is a header whose length runs off the end
-// of the stream, which stops the decode with a message rather than inventing a
-// packet.
+// The sequence number is not optional here, and the first run proved it. The
+// harness captures with `tcpdump -i any`, which sees a packet on the bridge
+// *and* on the veth, so every segment appears twice — and a reassembly that
+// simply concatenated payloads in capture order produced a stream holding two
+// copies of every TACACS+ packet. The note then reported eighteen requests
+// where the device had sent nine, and "set on 0 of 18" for the single-connect
+// flag, which is the right answer arrived at by the wrong arithmetic. Counting
+// is half of what this file is for, so the duplicates have to go before the
+// count is taken.
+//
+// So: a segment whose sequence number is the one expected next is appended, a
+// segment that repeats bytes already seen is dropped, and a segment that starts
+// beyond the expected point is a gap. A gap stops the decode for that stream
+// and is reported, rather than being silently spliced into a packet that never
+// existed.
 type tcpStream struct {
 	key        string
 	conn       string
@@ -73,27 +83,57 @@ type tcpStream struct {
 	fromDevice bool
 	payload    []byte
 	order      int
+
+	started bool
+	nextSeq uint32
+	gap     bool
+}
+
+// add appends one TCP segment's payload, dropping duplicates and refusing to
+// splice across a gap.
+func (s *tcpStream) add(seq uint32, payload []byte) {
+	if s.gap {
+		return
+	}
+	if !s.started {
+		s.started, s.nextSeq = true, seq
+	}
+	switch {
+	case seq == s.nextSeq:
+		s.payload = append(s.payload, payload...)
+		s.nextSeq += uint32(len(payload))
+	case int32(seq-s.nextSeq) < 0:
+		// Starts before the point already reached: a duplicate, possibly
+		// overlapping. Keep only the tail that is new.
+		skip := s.nextSeq - seq
+		if int(skip) < len(payload) {
+			s.payload = append(s.payload, payload[skip:]...)
+			s.nextSeq += uint32(len(payload)) - skip
+		}
+	default:
+		s.gap = true
+	}
 }
 
 // pcapTACACSPackets decodes every TACACS+ packet in a capture.
-func pcapTACACSPackets(path, key string) ([]wirePacket, error) {
+func pcapTACACSPackets(path, key string) ([]wirePacket, []string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(raw) < pcapHeaderSize {
-		return nil, fmt.Errorf("%s is %d bytes, shorter than a pcap file header", path, len(raw))
+		return nil, nil, fmt.Errorf("%s is %d bytes, shorter than a pcap file header", path, len(raw))
 	}
 	magic := binary.LittleEndian.Uint32(raw[0:4])
 	if magic != 0xa1b2c3d4 && magic != 0xa1b23c4d {
-		return nil, fmt.Errorf("%s: unexpected pcap magic %#x; this parser reads only little-endian pcap", path, magic)
+		return nil, nil, fmt.Errorf("%s: unexpected pcap magic %#x; this parser reads only little-endian pcap", path, magic)
 	}
 	link := binary.LittleEndian.Uint32(raw[20:24])
 	snaplen := int(binary.LittleEndian.Uint32(raw[16:20]))
 
 	_, subnet, err := net.ParseCIDR(labSubnet)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	streams := map[string]*tcpStream{}
@@ -102,7 +142,7 @@ func pcapTACACSPackets(path, key string) ([]wirePacket, error) {
 		inclLen := int(binary.LittleEndian.Uint32(raw[off+8 : off+12]))
 		off += 16
 		if snaplen > 0 && inclLen > snaplen {
-			return nil, fmt.Errorf("%s: record at offset %d claims %d bytes, more than the file's snaplen of %d; the capture is corrupt",
+			return nil, nil, fmt.Errorf("%s: record at offset %d claims %d bytes, more than the file's snaplen of %d; the capture is corrupt",
 				path, off-16, inclLen, snaplen)
 		}
 		if off+inclLen > len(raw) {
@@ -111,7 +151,7 @@ func pcapTACACSPackets(path, key string) ([]wirePacket, error) {
 		pkt := raw[off : off+inclLen]
 		off += inclLen
 
-		src, dst, sport, dport, payload, ok := tcpFlowOf(link, pkt)
+		src, dst, sport, dport, seq, payload, ok := tcpFlowOf(link, pkt)
 		if !ok || len(payload) == 0 {
 			continue
 		}
@@ -141,12 +181,16 @@ func pcapTACACSPackets(path, key string) ([]wirePacket, error) {
 			streams[k] = s
 			order = append(order, k)
 		}
-		s.payload = append(s.payload, payload...)
+		s.add(seq, payload)
 	}
 
 	var out []wirePacket
+	var gaps []string
 	for _, k := range order {
 		s := streams[k]
+		if s.gap {
+			gaps = append(gaps, s.key)
+		}
 		for i := 0; i+wire.HeaderLen <= len(s.payload); {
 			h, err := wire.DecodeHeader(s.payload[i : i+wire.HeaderLen])
 			if err != nil {
@@ -166,7 +210,7 @@ func pcapTACACSPackets(path, key string) ([]wirePacket, error) {
 			i = end
 		}
 	}
-	return out, nil
+	return out, gaps, nil
 }
 
 // describeBody renders one packet's body without any credential material.
@@ -347,21 +391,79 @@ func acctFlagsName(f uint8) string {
 	return strings.Join(parts, "+")
 }
 
-// tcpFlowOf pulls the addresses, ports and payload out of one captured packet.
-func tcpFlowOf(link uint32, b []byte) (src, dst net.IP, sport, dport uint16, payload []byte, ok bool) {
+// tcpFlowOf pulls the addresses, ports, sequence number and payload out of one
+// captured packet.
+func tcpFlowOf(link uint32, b []byte) (src, dst net.IP, sport, dport uint16, seq uint32, payload []byte, ok bool) {
 	s, d, ok := ipv4Of(link, b)
 	if !ok {
-		return nil, nil, 0, 0, nil, false
+		return nil, nil, 0, 0, 0, nil, false
 	}
 	tcp, ok := tcpOf(link, b)
 	if !ok || len(tcp) < 20 {
-		return nil, nil, 0, 0, nil, false
+		return nil, nil, 0, 0, 0, nil, false
 	}
 	dataOff := int(tcp[12]>>4) * 4
 	if dataOff < 20 || dataOff > len(tcp) {
-		return nil, nil, 0, 0, nil, false
+		return nil, nil, 0, 0, 0, nil, false
 	}
-	return s, d, binary.BigEndian.Uint16(tcp[0:2]), binary.BigEndian.Uint16(tcp[2:4]), tcp[dataOff:], true
+	return s, d, binary.BigEndian.Uint16(tcp[0:2]), binary.BigEndian.Uint16(tcp[2:4]),
+		binary.BigEndian.Uint32(tcp[4:8]), tcp[dataOff:], true
+}
+
+// TestWirePcapSelfCheck decodes whatever captures this checkout already holds
+// and asserts the two properties the reassembly exists to guarantee: no
+// sequence gap, and no packet decoded twice.
+//
+// It deploys nothing and needs no device, and it is here because the bug it
+// guards was invisible in the output. The first version of this parser
+// concatenated payloads in capture order, `tcpdump -i any` handed it every
+// segment twice, and the note it produced was perfectly well-formed and said
+// the device had sent eighteen requests when it had sent nine. A count that is
+// exactly double is not a count that looks wrong.
+//
+// Captures are git-ignored, so a fresh checkout has none and this skips. That
+// is not the "a test that measured nothing must fail" rule bending: this
+// measures a parser, not a device, and its input is a by-product of other runs
+// rather than something it can produce for itself.
+func TestWirePcapSelfCheck(t *testing.T) {
+	root, err := repoRoot()
+	if err != nil {
+		t.Fatalf("repository root: %v", err)
+	}
+	files, _ := filepath.Glob(filepath.Join(root, "tests", "lab", "captures", "*.pcap"))
+	key := os.Getenv("PORT49_LAB_KEY")
+	if key == "" {
+		key = labKeyDefault
+	}
+
+	decoded := 0
+	for _, f := range files {
+		pkts, gaps, err := pcapTACACSPackets(f, key)
+		if err != nil {
+			t.Errorf("%s: %v", filepath.Base(f), err)
+			continue
+		}
+		if len(gaps) > 0 {
+			t.Errorf("%s: %d stream(s) had a sequence gap (%s); the decode stopped there and anything after it "+
+				"is missing from every note that quotes this capture", filepath.Base(f), len(gaps), strings.Join(gaps, ", "))
+		}
+		seen := map[string]int{}
+		for _, p := range pkts {
+			decoded++
+			seen[fmt.Sprintf("%s|%#08x|%d", p.conn, p.hdr.SessionID, p.hdr.SeqNo)]++
+		}
+		for k, n := range seen {
+			if n > 1 {
+				t.Errorf("%s: packet %s decoded %d times. Duplicate segments are reaching the stream, so every "+
+					"count in every note from this capture is wrong by that factor", filepath.Base(f), k, n)
+			}
+		}
+	}
+	if decoded == 0 {
+		t.Skipf("no capture in tests/lab/captures holds a decodable TACACS+ packet (%d file(s) present); "+
+			"captures are git-ignored, so a checkout that has not run the lab has nothing to check", len(files))
+	}
+	t.Logf("decoded %d TACACS+ packets across %d capture file(s) with no gap and no duplicate", decoded, len(files))
 }
 
 // ---------------------------------------------------------------------------
@@ -375,7 +477,7 @@ func (l *lab) tacacsHeaderFacts() string {
 	if key == "" {
 		key = labKeyDefault
 	}
-	pkts, err := pcapTACACSPackets(l.capAbs, key)
+	pkts, gaps, err := pcapTACACSPackets(l.capAbs, key)
 	if err != nil {
 		return fmt.Sprintf("Not measured: the capture could not be decoded (%v).\n", err)
 	}
@@ -387,7 +489,14 @@ func (l *lab) tacacsHeaderFacts() string {
 	var b strings.Builder
 	b.WriteString("Decoded from the capture with the daemon's own `internal/tacacs/wire` package and the lab " +
 		"shared key. Passwords are never rendered: an AUTHEN START's `data` and a CONTINUE's `user_msg` are " +
-		"reported as byte counts, which is where a PAP password and an ASCII one respectively live.\n\n")
+		"reported as byte counts, which is where a PAP password and an ASCII one respectively live. " +
+		"`tcpdump -i any` sees each segment twice, on the bridge and on the veth, so the streams are " +
+		"reassembled by TCP sequence number and the duplicates dropped before anything below is counted.\n\n")
+	if len(gaps) > 0 {
+		fmt.Fprintf(&b, "**Incomplete:** %d stream(s) had a sequence gap and were decoded only as far as it "+
+			"(%s). Everything after the gap on those streams is missing from this table.\n\n",
+			len(gaps), strings.Join(gaps, ", "))
+	}
 	b.WriteString("| device connection | session_id | seq | single-connect | packet |\n|---|---|---|---|---|\n")
 	for _, p := range pkts {
 		sc := "clear"
