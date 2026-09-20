@@ -11,7 +11,6 @@ import (
 	"net/netip"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -397,8 +396,9 @@ func (panicAuthorizer) Command(context.Context, store.Context, []string, []strin
 // admitted device. The panicking connection closes, the event is counted, and
 // the next connection is served normally.
 func TestPanicInOneConnectionDoesNotStopTheDaemon(t *testing.T) {
-	var panicLog bytes.Buffer
-	stdlog.SetOutput(&panicLog)
+	// Written from the panicking connection's goroutine, read from this one.
+	panicLog := &syncBuffer{}
+	stdlog.SetOutput(panicLog)
 	t.Cleanup(func() { stdlog.SetOutput(os.Stderr) })
 
 	log := &syncBuffer{}
@@ -436,10 +436,10 @@ func TestPanicInOneConnectionDoesNotStopTheDaemon(t *testing.T) {
 
 	// A panic counter without a stack says something broke and nothing about
 	// where. The stack is port49's own frames -- no packet bytes.
-	if !strings.Contains(panicLog.String(), "goroutine") || !strings.Contains(panicLog.String(), "server.go") {
+	if !panicLog.contains("goroutine") || !panicLog.contains("server.go") {
 		t.Fatalf("the panic log must carry a stack: %q", panicLog.String())
 	}
-	if strings.Contains(panicLog.String(), "p49_e2e") {
+	if panicLog.contains("p49_e2e") {
 		t.Fatalf("the panic log must never carry a credential: %q", panicLog.String())
 	}
 
@@ -745,8 +745,10 @@ func (f *flakyListener) Accept() (net.Conn, error) {
 // at all, and an operator saw nothing -- no counter, no line. The loop must
 // still recover on its own once the condition passes.
 func TestAcceptErrorIsCountedAndTheListenerKeepsGoing(t *testing.T) {
-	var logged bytes.Buffer
-	stdlog.SetOutput(&logged)
+	// The standard logger is written from Serve's goroutine and read from
+	// this one, so the sink has to be locked on both sides.
+	logged := &syncBuffer{}
+	stdlog.SetOutput(logged)
 	t.Cleanup(func() { stdlog.SetOutput(os.Stderr) })
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -772,7 +774,7 @@ func TestAcceptErrorIsCountedAndTheListenerKeepsGoing(t *testing.T) {
 	if !waitFor(t, func() bool { return testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("accept_error")) >= 1 }) {
 		t.Fatal("connection_events_total{accept_error} was not incremented")
 	}
-	if !strings.Contains(logged.String(), "accept failed") {
+	if !logged.contains("accept failed") {
 		t.Fatalf("an accept failure must say so: %q", logged.String())
 	}
 	// And the listener is still live: the transient error did not end Serve.
