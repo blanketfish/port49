@@ -18,10 +18,19 @@ type Metrics struct {
 	// (a strike from an address not in the inventory), "panic" (a connection
 	// recovered from a panic), and "accept_error" (Accept failed and the
 	// listener is being retried).
-	ConnectionEvents         *prometheus.CounterVec
-	AuthFailures             prometheus.Counter // port49_authentication_failures_total
-	SpoolDepth               prometheus.Gauge   // port49_accounting_spool_depth
-	SpoolDrops               prometheus.Counter // port49_accounting_spool_drops_total
+	ConnectionEvents *prometheus.CounterVec
+	AuthFailures     prometheus.Counter // port49_authentication_failures_total
+	SpoolDepth       prometheus.Gauge   // port49_accounting_spool_depth
+	// port49_accounting_spool_drops_total{stage}. The two stages are not the
+	// same event and must not be alerted on together: "offer_refused" means
+	// the record never became durable, so its device was answered ERROR and
+	// will retry — nothing is lost. "drain_unparseable" means the record was
+	// durable, its device was answered SUCCESS, and it is gone.
+	SpoolDrops *prometheus.CounterVec
+	// port49_accounting_spool_quarantines_total: .draining files set aside for
+	// an operator after three consecutive read failures. Not a record count —
+	// the records are still in the quarantined file.
+	SpoolQuarantines         prometheus.Counter
 	StoreOps                 *prometheus.CounterVec
 	DecisionLogWriteFailures prometheus.Counter // port49_decision_log_write_failures_total
 }
@@ -46,8 +55,10 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Authentication failures from admitted devices."}),
 		SpoolDepth: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_accounting_spool_depth",
 			Help: "Accounting records waiting for the sink."}),
-		SpoolDrops: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_accounting_spool_drops_total",
-			Help: "Accounting records discarded by the spool."}),
+		SpoolDrops: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_spool_drops_total",
+			Help: "Accounting records discarded by the spool, by the stage that discarded them."}, []string{"stage"}),
+		SpoolQuarantines: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_accounting_spool_quarantines_total",
+			Help: "Unreadable spool files renamed aside for an operator."}),
 		StoreOps: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_operations_total",
 			Help: "Store operations by op and outcome."}, []string{"op", "outcome"}),
 		// A decision record the sink refused is a record that does not exist:
@@ -57,7 +68,7 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Decision records the log sink refused to write."}),
 	}
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
-		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.StoreOps,
-		m.DecisionLogWriteFailures)
+		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
+		m.StoreOps, m.DecisionLogWriteFailures)
 	return m
 }

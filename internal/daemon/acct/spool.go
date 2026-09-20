@@ -20,6 +20,16 @@ import (
 
 var ErrSpoolFull = errors.New("acct: spool full")
 
+// The stages a record can be dropped at, as the spool_drops_total{stage}
+// label. They are different events: a record refused at Offer never became
+// durable, so its device was answered ERROR and will send it again, while a
+// record dropped at drain was durable, its device was answered SUCCESS, and
+// it is gone. Alerting on their sum hides the second inside the first.
+const (
+	dropOfferRefused     = "offer_refused"
+	dropDrainUnparseable = "drain_unparseable"
+)
+
 // maxLineBytes bounds how much of a single spool line is held in memory. It
 // is not a hard read limit: a longer line is still fully consumed from the
 // stream (see readBoundedLine), but dropped rather than treated as fatal, so
@@ -103,6 +113,7 @@ type Spool struct {
 	lastStuckLog      time.Time
 	lastStructLog     time.Time // throttles stat/open/seek/rename failure logs
 	lastQuarantineLog time.Time // throttles a failing quarantine rename's log
+	lastReadLog       time.Time // throttles the read-failure log
 	drainOffset       int64     // bytes of .draining already forwarded; 0 for a file not yet started
 	offsetFailAt      int64     // drainOffset (or -1 for a structural failure) at the last failure
 	offsetFailCount   int       // consecutive failures at offsetFailAt
@@ -329,7 +340,7 @@ func (s *Spool) Offer(r decision.Record) error {
 //
 // Called with mu held.
 func (s *Spool) offerFailed(stage string, err error) {
-	s.metrics.SpoolDrops.Inc()
+	s.metrics.SpoolDrops.WithLabelValues(dropOfferRefused).Inc()
 	s.logThrottled(&s.lastOfferLog,
 		"acct: spool %s failed on %s, accounting records are being refused: %v", stage, s.path, err)
 }
@@ -499,7 +510,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 			switch {
 			case oversized:
 				log.Printf("acct: dropping oversized spool line (over %d bytes)", maxLineBytes)
-				s.metrics.SpoolDrops.Inc()
+				s.metrics.SpoolDrops.WithLabelValues(dropDrainUnparseable).Inc()
 			default:
 				s.deliverLine(bytes.TrimRight(line, "\n"))
 			}
@@ -512,7 +523,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 			}
 			s.applyForwarded(forwarded, pos)
 			s.recordReadFailure(draining, pos)
-			log.Printf("acct: spool read %s at offset %d failed: %v", draining, pos, rerr)
+			s.logThrottled(&s.lastReadLog, "acct: spool read %s at offset %d failed: %v", draining, pos, rerr)
 			return false, forwarded
 		}
 	}
@@ -542,7 +553,7 @@ func (s *Spool) deliverLine(line []byte) {
 	var r decision.Record
 	if err := r.UnmarshalJSON(line); err != nil {
 		log.Printf("acct: dropping spool line that failed to unmarshal: %v", err)
-		s.metrics.SpoolDrops.Inc()
+		s.metrics.SpoolDrops.WithLabelValues(dropDrainUnparseable).Inc()
 		return
 	}
 	s.sink.Emit(r)
@@ -587,6 +598,7 @@ func (s *Spool) recordReadFailure(draining string, at int64) {
 		s.logThrottled(&s.lastQuarantineLog, "acct: spool could not quarantine unreadable %s: %v", draining, err)
 		return
 	}
+	s.metrics.SpoolQuarantines.Inc()
 	log.Printf("acct: spool quarantined %s after %d consecutive failures; it is left for an operator, not read or deleted automatically", quarantine, s.offsetFailCount)
 	s.drainOffset = 0
 	s.offsetFailAt = 0

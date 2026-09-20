@@ -21,7 +21,8 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.ConnectionEvents.WithLabelValues("refused_cap").Inc()
 	m.AuthFailures.Inc()
 	m.SpoolDepth.Set(10)
-	m.SpoolDrops.Inc()
+	m.SpoolDrops.WithLabelValues("offer_refused").Inc()
+	m.SpoolQuarantines.Inc()
 	m.StoreOps.WithLabelValues("put", "ok").Inc()
 	m.DecisionLogWriteFailures.Inc()
 

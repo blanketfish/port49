@@ -32,7 +32,6 @@ func TestSpoolDrainsInOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	time.Sleep(150 * time.Millisecond)
 	cancel()
 	<-done
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
@@ -41,20 +40,26 @@ func TestSpoolDrainsInOrder(t *testing.T) {
 	}
 }
 
-func TestSpoolOverflowsToDiskNotToError(t *testing.T) {
+// TestOffersBeyondCapacityAreAccepted is named for what it now tests. It was
+// TestSpoolOverflowsToDiskNotToError, from when the spool was a memory ring
+// that spilled to disk past `capacity`; there is no ring any more, every offer
+// is a durable append, and capacity bounds nothing but its own validation. The
+// property that survived the rewrite is the one that matters: more offers than
+// capacity are all accepted and all delivered.
+func TestOffersBeyondCapacityAreAccepted(t *testing.T) {
 	out := &bytes.Buffer{}
 	path := filepath.Join(t.TempDir(), "overflow.jsonl")
 	sp, _ := NewSpool(2, path, decision.NewJSONLines(out), metrics.New(prometheus.NewRegistry()))
-	// Every offer is a durable disk append now, whether or not Run is draining.
 	for i := 0; i < 5; i++ {
 		if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "x"}); err != nil {
 			t.Fatalf("offer %d: %v", i, err)
 		}
 	}
+	// No sleep before the cancel: Run's shutdown path drains until the spool
+	// is empty, so cancelling immediately still delivers everything.
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { sp.Run(ctx); close(done) }()
-	time.Sleep(200 * time.Millisecond)
 	cancel()
 	<-done
 	if n := strings.Count(out.String(), "\n"); n != 5 {
@@ -179,7 +184,6 @@ func TestSpoolSurvivesRestart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { sp2.Run(ctx); close(done) }()
-	time.Sleep(200 * time.Millisecond)
 	cancel()
 	<-done
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
@@ -208,7 +212,6 @@ func TestSpoolResumesDrainingFile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { sp.Run(ctx); close(done) }()
-	time.Sleep(200 * time.Millisecond)
 	cancel()
 	<-done
 
@@ -344,7 +347,6 @@ func TestShutdownQuarantinesUnreadableDrainingFile(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { sp.Run(ctx); close(done) }()
-	time.Sleep(20 * time.Millisecond)
 	cancel()
 
 	select {
@@ -374,7 +376,6 @@ func TestShutdownGivesUpAfterThreeStrikes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { sp.Run(ctx); close(done) }()
-	time.Sleep(20 * time.Millisecond)
 	cancel()
 
 	select {
@@ -441,8 +442,8 @@ func TestOversizedLineIsDroppedNotFatal(t *testing.T) {
 			t.Fatalf("want %s forwarded exactly once, got %d: %q", w, n, out.String())
 		}
 	}
-	if got := testutil.ToFloat64(m.SpoolDrops); got != 1 {
-		t.Fatalf("want SpoolDrops == 1 (the oversized line), got %v", got)
+	if got := testutil.ToFloat64(m.SpoolDrops.WithLabelValues(dropDrainUnparseable)); got != 1 {
+		t.Fatalf("want SpoolDrops{drain_unparseable} == 1 (the oversized line), got %v", got)
 	}
 	if got := testutil.ToFloat64(m.SpoolDepth); got != 0 {
 		t.Fatalf("want SpoolDepth == 0 once the drain has caught up, got %v", got)
@@ -519,7 +520,7 @@ func TestTornTailDoesNotSwallowTheNextRecord(t *testing.T) {
 	if !strings.Contains(out.String(), `"task_id":"acked"`) {
 		t.Fatalf("a record acknowledged with SUCCESS must reach the sink, got %q", out.String())
 	}
-	if got := testutil.ToFloat64(m.SpoolDrops); got != 1 {
+	if got := testutil.ToFloat64(m.SpoolDrops.WithLabelValues(dropDrainUnparseable)); got != 1 {
 		t.Fatalf("want exactly 1 drop (the torn fragment alone), got %v", got)
 	}
 }
@@ -563,6 +564,89 @@ func TestTornTailWithinOneProcessIsSeparated(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("want %s forwarded, got %q", want, out.String())
 		}
+	}
+}
+
+// TestDropsAreSplitByStage covers the difference an operator has to be able
+// to see at 3am. A drop at Offer means the record never became durable, the
+// device was answered ERROR, and it will retry: nothing is lost. A drop at
+// drain means the record was durable, its device was answered SUCCESS, and
+// it is gone. One counter for both makes the second invisible inside the
+// first, and nobody can alert on it.
+func TestDropsAreSplitByStage(t *testing.T) {
+	m := metrics.New(prometheus.NewRegistry())
+
+	broken := brokenSpool(filepath.Join(t.TempDir(), "absent", "o.jsonl"), m)
+	if err := broken.Offer(decision.Record{Event: decision.EventAccount}); err != ErrSpoolFull {
+		t.Fatalf("want ErrSpoolFull, got %v", err)
+	}
+
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	if err := os.WriteFile(path+".draining", []byte("{not json at all}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sp, err := NewSpool(4, path, decision.NewJSONLines(&bytes.Buffer{}), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.drainOnce()
+
+	if got := testutil.ToFloat64(m.SpoolDrops.WithLabelValues("offer_refused")); got != 1 {
+		t.Fatalf("want one offer_refused drop, got %v", got)
+	}
+	if got := testutil.ToFloat64(m.SpoolDrops.WithLabelValues("drain_unparseable")); got != 1 {
+		t.Fatalf("want one drain_unparseable drop, got %v", got)
+	}
+}
+
+// TestQuarantineIsCounted covers the other thing that leaves records behind:
+// a .draining file the spool gave up reading is renamed aside and left for an
+// operator. It is not a record drop -- the records are still in the file --
+// so it gets its own counter, and it must not be silent.
+func TestQuarantineIsCounted(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "overflow.jsonl")
+	// A directory where .draining should be: unreadable, every pass, forever.
+	if err := os.Mkdir(path+".draining", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	m := metrics.New(prometheus.NewRegistry())
+	sp, err := NewSpool(4, path, decision.NewJSONLines(&bytes.Buffer{}), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		sp.drainOnce()
+	}
+	if got := testutil.ToFloat64(m.SpoolQuarantines); got != 1 {
+		t.Fatalf("want one quarantine counted, got %v", got)
+	}
+}
+
+// TestDrainReadFailureLogIsThrottled covers the type comment's claim that
+// every drain-path error is throttled. The read failure was not: with the
+// quarantine rename also failing, it printed ten lines a second.
+func TestDrainReadFailureLogIsThrottled(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(os.Stderr); log.SetFlags(log.LstdFlags) })
+
+	_, all := fiveLines(t)
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	if err := os.WriteFile(path+".draining", all, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sp, err := NewSpool(4, path, decision.NewJSONLines(&bytes.Buffer{}), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.failAfterBytes = 1
+	for i := 0; i < 5; i++ {
+		sp.drainOnce()
+	}
+	if n := strings.Count(logged.String(), "spool read"); n > 1 {
+		t.Fatalf("the drain read-failure log must be throttled, got %d lines: %q", n, logged.String())
 	}
 }
 

@@ -504,8 +504,10 @@ func TestUnadmittedSourceIsRecordedAndClosed(t *testing.T) {
 func TestPerNASCapRefusesThirdConnection(t *testing.T) {
 	log := &syncBuffer{}
 	addr, _, m := startServer(t, log)
+	// No sleep between the dials: Serve accepts in one goroutine and the
+	// kernel's accept queue is FIFO, so c1 and c2 have taken their limiter
+	// slots before Accept ever returns c3.
 	c1, c2 := dial(t, addr, []byte("k2")), dial(t, addr, []byte("k2"))
-	time.Sleep(20 * time.Millisecond)
 	c3 := dial(t, addr, []byte("k2"))
 	c3.conn.SetReadDeadline(time.Now().Add(time.Second))
 	_, err := c3.conn.Read(make([]byte, 1))
