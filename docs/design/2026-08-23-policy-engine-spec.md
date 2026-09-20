@@ -3473,6 +3473,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos; see below |
 | **L11** | Junos precedence, repetition, and length behavior for wire and class rules. | The projection model (§8) | Junos (SRX) | **closed** — measured 2026-09-03; results in `port49-junos-lab-tests-results.md` |
 | **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
+| **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 5s**, which is the "answered with increasing delay" of design document §11 and is unmeasured against any device timeout. A ceiling above that timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX and vEOS: about 3s on both Junos images and 5.0s on vEOS, and past it every one of the three takes the fall-through branch; other platforms, other transports and the next-server case unmeasured; see below |
 
 **What has been measured so far, per row.** These entries are all still open — rule 5 keeps a
 row open while any platform it lists is unmeasured, and NX-OS and IOS-XE arrive with plan 3 —
@@ -3561,6 +3562,40 @@ but the measurements exist and the notes are in the repository.
   Junos 2026-09-20: `service=junos-exec`, with `service` the only attribute on the session
   request. `tests/lab/results/L10-arista_eos.md`, `L10-juniper_vjunos-router.md`,
   `L10-juniper_vsrx.md`. *Unmeasured:* NX-OS, IOS-XE.
+- **L13** — 2026-09-20, SSH, all three images. port49's FAIL was delayed by a fixed 2s, 6s and
+  12s (`auth_failure_delay_base` and `..._max` set equal, so the first failure carries the
+  full delay), and the login timed from the client. `tests/lab/results/L13-arista_eos.md`,
+  `L13-juniper_vjunos-router.md`, `L13-juniper_vsrx.md`.
+
+  | FAIL delayed by | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.32.2F |
+  |---|---|---|---|
+  | 2s | waited 2.03s, local login | waited 2.06s, local login | waited 2.04s, **refused** |
+  | 6s | gave up at 3.28s, local login | gave up at 3.51s, local login | gave up at 5.04s, local login |
+  | 12s | gave up at 3.04s, local login | gave up at 3.02s, local login | gave up at 5.04s, local login |
+
+  **Measured reply timeout: about 3s on both Junos images, 5.0s on vEOS.** Neither device
+  states it in its configuration; `show configuration system tacplus-server | display
+  inheritance defaults` prints no `timeout`, and `show tacacs` prints counters rather than
+  timers, so the figures above are the measurement and not a quotation.
+
+  Past that timeout **every one of the three took the fall-through branch and accepted the
+  local password**, including vEOS, which under L4 refuses a FAIL that arrives in time. That
+  is the point of this row: a denial delivered late is not a denial. The device cannot tell it
+  from an outage and does not try to.
+
+  `limits.auth_failure_delay_max` **defaults to 5s** (`internal/config`), reached after five
+  consecutive failures for one `(nas, username)` pair. That default is above the Junos timeout
+  and equal to the vEOS one, so the mechanism design document §11 describes as "answered with
+  increasing delay" converts, at its own default ceiling, into the mechanism §5.6 relies on
+  *not* happening. Also note design document §11's own rule, which this measures for the first
+  time: "A request answered after the device has already given up is worse than a refused
+  connection."
+
+  *Unmeasured:* NX-OS, IOS-XE and any other release; every transport but SSH; whether a device
+  retries to the **next server** rather than to the next method, since the lab has one server;
+  `deadtime` and the device retransmission timers as configured values; delays above 12s; and
+  which end tears the connection down. The authentication order in force was whatever
+  `tests/lab/configs` deploys — this row does not sweep it, L4 does.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
