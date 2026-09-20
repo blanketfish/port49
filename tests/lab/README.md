@@ -41,6 +41,32 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
 4. `export PORT49_LAB_KEY=labsecret`
 5. `make build && make lab`
 
+## Why this needs bare metal
+
+The Junos platforms need a host where KVM is not itself inside a VM. This is not a
+performance preference; on a nested host they do not boot at all.
+
+The lab was first run on a Windows machine with Docker under WSL2, which puts the vrnetlab
+VM at the bottom of four levels of virtualisation. vEOS was fine there — it answered a
+breakglass login 57 seconds after `containerlab deploy`. `vrnetlab/juniper_vjunos-router`
+was not. Measured from the container console on that host: the FreeBSD kernel came up about
+4 minutes in, Junos userland started about 10 minutes in, package mounting finished
+(`mount done`) at 35 minutes and 2 seconds, and SSH never served a handshake at all. Two runs
+with budgets of 20 and 35 minutes measured nothing, and `vrnetlab/juniper_vsrx` behaved the
+same way: the gate gave up at 35m10s with no handshake, an empty decision log, and captures
+holding nothing but the harness's own loopback probes.
+
+The symptom is a trap worth naming, because it looks like a device fault rather than a host
+one. vrnetlab forwards port 22 into the VM from the moment the container starts, so TCP to
+port 22 succeeds immediately and stays up for the whole boot. The tests fail with
+`ssh: handshake failed: ... i/o timeout`, which reads like an SSH problem on a device that is
+plainly listening. It is not; the VM inside has not finished booting.
+
+On bare metal with nested KVM enabled (the current lab host: Ubuntu 26.04, `/dev/kvm`
+present, no outer hypervisor) the same image answers a breakglass login **1 minute 31
+seconds** after deploy, reproducibly. The boot budgets in `harness_test.go` are set from
+these figures.
+
 ## What runs
 
 `make lab` is `go test -tags lab ./tests/lab/... -timeout 120m`. One `go test` run does this:
