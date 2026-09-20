@@ -67,7 +67,9 @@ func TestL13ReplyTimeout(t *testing.T) {
 		// inherits a 12-second failure delay.
 		if err := l.stopDaemon(); err != nil {
 			t.Errorf("could not stop the delayed daemon: %v", err)
-		} else if err := l.startDaemonWith(labConfigPath(), true); err != nil {
+		} else if cfg, err := l.configPath(); err != nil {
+			t.Fatalf("derive this platform's daemon config: %v", err)
+		} else if err := l.startDaemonWith(cfg, true); err != nil {
 			t.Fatalf("could not restart port49d on the lab config: %v", err)
 		}
 

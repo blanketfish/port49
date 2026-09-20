@@ -218,7 +218,11 @@ func l4Junos(t *testing.T, l *lab) {
 				restore = "not restored: " + err.Error()
 			}
 		}
-		if err := l.startDaemonWith(labConfigPath(), true); err != nil {
+		cfg, err := l.configPath()
+		if err != nil {
+			t.Fatalf("derive this platform's daemon config: %v", err)
+		}
+		if err := l.startDaemonWith(cfg, true); err != nil {
 			t.Fatalf("could not restart port49d after the test: %v", err)
 		}
 	}
@@ -426,7 +430,11 @@ func l4AAA(t *testing.T, l *lab, d l4AAADriver) {
 				restore = "not restored: " + err.Error()
 			}
 		}
-		if err := l.startDaemonWith(labConfigPath(), true); err != nil {
+		cfg, err := l.configPath()
+		if err != nil {
+			t.Fatalf("derive this platform's daemon config: %v", err)
+		}
+		if err := l.startDaemonWith(cfg, true); err != nil {
 			t.Fatalf("could not restart port49d after the test: %v", err)
 		}
 	}

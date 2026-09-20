@@ -88,14 +88,14 @@ var platforms = []platform{
 	// number with what was measured, the way the three platforms above were.
 	{"nxos", "cisco_nxos", "topologies/nxos.clab.yml", "172.100.100.31", "nx1",
 		"vrnetlab/cisco_n9kv:9300v64-10.4.2.F", "Nexus 9300v 10.4(2)F", 15 * time.Minute},
-	// The c8000v's budget is a placeholder in the same sense the N9Kv's was:
-	// replace it with the first measured boot. The launcher gives this VM 4 GB
-	// of RAM and waits for `CVAC-4-CONFIG_DONE` on the serial console, which is
-	// the device reporting that the startup configuration has been applied --
-	// so unlike every other platform here, "booted" and "configured" are the
-	// same event on IOS-XE.
+	// The c8000v is the fastest platform in this lab and the only one where
+	// "booted" and "configured" are the same event: the launcher waits for
+	// `CVAC-4-CONFIG_DONE` on the serial console, which is the device saying it
+	// has applied the startup configuration, and reports `Startup complete in:
+	// 0:01:21` — measured on this host on 2026-09-20. Six minutes is several
+	// times that, which is what a budget is for.
 	{"iosxe", "cisco_iosxe", "topologies/iosxe.clab.yml", "172.100.100.41", "xe1",
-		"vrnetlab/cisco_c8000v:17.13.01a", "Catalyst 8000V 17.13.01a", 12 * time.Minute},
+		"vrnetlab/cisco_c8000v:17.13.01a", "Catalyst 8000V 17.13.01a", 6 * time.Minute},
 }
 
 const (
@@ -587,9 +587,69 @@ func (l *lab) waitTACACSReady(within time.Duration) error {
 	}
 }
 
-func (l *lab) startDaemon() error { return l.startDaemonWith(labConfigPath(), false) }
+func (l *lab) startDaemon() error {
+	cfg, err := l.configPath()
+	if err != nil {
+		return err
+	}
+	return l.startDaemonWith(cfg, false)
+}
 
 func labConfigPath() string { return filepath.Join(root, "tests", "lab", "port49d-lab.yaml") }
+
+// configPath is the daemon config this platform runs against: the checked-in
+// one for every platform but IOS-XE, and a derived copy there.
+//
+// The derivation exists because of a measurement, and it is a measurement that
+// contradicts what `lab.session_attributes` in port49d-lab.yaml says about
+// itself. That comment claims `shell:roles*network-admin` is safe to send
+// everywhere because an OPTIONAL argument a device does not understand is
+// ignored (RFC 8907 §8.2), which is why one lab authorizer could serve every
+// platform. EOS and Junos do ignore it. **IOS-XE 17.13.01a does not.** With it
+// in the reply, a session port49 permitted `context_matched` is refused by the
+// device with
+//
+//	% Authorization failed.
+//
+// and the SSH session is closed, so no token operator can reach a prompt and
+// L2, L3 and L10 measure nothing. It is not specific to `shell:roles`: an
+// invented optional attribute fails the same way, which makes this "IOS-XE
+// fails an EXEC authorization carrying any attribute it does not recognise",
+// not "IOS-XE dislikes NX-OS's roles attribute". Both were measured on
+// 2026-09-20; see tests/lab/results/L10-cisco_iosxe.md.
+//
+// So this platform gets `priv-lvl=15` alone. That is the attribute IOS-XE is
+// being asked about anyway, and dropping the other one changes nothing any
+// other platform sees.
+func (l *lab) configPath() (string, error) {
+	if l.p.name != "cisco_iosxe" {
+		return labConfigPath(), nil
+	}
+	raw, err := os.ReadFile(labConfigPath())
+	if err != nil {
+		return "", err
+	}
+	const anchor = "  session_attributes: "
+	i := strings.Index(string(raw), anchor)
+	if i < 0 {
+		return "", fmt.Errorf("tests/lab/port49d-lab.yaml has no `%s` line, so the attribute IOS-XE refuses "+
+			"cannot be removed and every token session on it would be refused by the device", strings.TrimSpace(anchor))
+	}
+	j := strings.Index(string(raw)[i:], "\n")
+	if j < 0 {
+		return "", fmt.Errorf("tests/lab/port49d-lab.yaml ends inside its session_attributes line")
+	}
+	out := string(raw)[:i] + `  session_attributes: ["priv-lvl=15"]` + string(raw)[i+j:]
+	dir := filepath.Join(root, "tests", "lab", "logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "port49d-lab-cisco_iosxe.yaml")
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
 
 // startDaemonWith starts port49d against cfgPath. resume appends to this
 // platform's log files instead of truncating them, which is what a test that
@@ -682,7 +742,11 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 // measurement would then be of a different attempt than the one being timed.
 func (l *lab) writeDelayConfig(t *testing.T, d time.Duration) string {
 	t.Helper()
-	raw, err := os.ReadFile(labConfigPath())
+	base, err := l.configPath()
+	if err != nil {
+		t.Fatalf("derive this platform's daemon config: %v", err)
+	}
+	raw, err := os.ReadFile(base)
 	if err != nil {
 		t.Fatalf("read the lab daemon config: %v", err)
 	}

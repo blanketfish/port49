@@ -38,8 +38,22 @@ lab:
   # It is sent as an OPTIONAL argument (`*`, not `=`). A mandatory argument a
   # device does not understand makes it fail the whole authorization, and EOS
   # and Junos do not understand this one. Optional, they ignore it (RFC 8907
-  # §8.2) and NX-OS reads it, which is what lets one lab authorizer serve all
-  # four platforms.
+  # §8.2) and NX-OS reads it.
+  #
+  # That is true of EOS, Junos and NX-OS and it is NOT true of IOS-XE, which is
+  # a measurement rather than a caveat. On Catalyst 8000V 17.13.01a a session
+  # authorization whose reply carries this attribute is refused by the device
+  # -- `% Authorization failed.`, the SSH session closed -- even though port49
+  # permitted it `context_matched`. An invented optional attribute fails the
+  # same way, so it is not about `shell:roles` in particular: that image fails
+  # an EXEC authorization carrying any attribute it does not recognise.
+  # Measured 2026-09-20; see tests/lab/results/L10-cisco_iosxe.md.
+  #
+  # So this line is no longer one authorizer serving every platform. The
+  # harness derives a copy of this file for `cisco_iosxe` with
+  # `priv-lvl=15` alone -- see (*lab).configPath in tests/lab/harness_test.go.
+  # Editing the line below changes four platforms; the fifth follows it only in
+  # its first element.
   session_attributes: ["priv-lvl=15", "shell:roles*network-admin"]
   # The long prefix is first: Lab.Command returns on the first prefix that
   # matches, and "show clock" would otherwise shadow it. L2 types this exact

@@ -448,7 +448,11 @@ func (l *lab) l3Allowed(t *testing.T, wireUser string, echoesOperator bool) stri
 			t.Errorf("could not stop the seeded daemon: %v", err)
 			return
 		}
-		if err := l.startDaemonWith(labConfigPath(), true); err != nil {
+		cfg, err := l.configPath()
+		if err != nil {
+			t.Fatalf("derive this platform's daemon config: %v", err)
+		}
+		if err := l.startDaemonWith(cfg, true); err != nil {
 			t.Fatalf("could not put port49d back on the lab config: %v", err)
 		}
 	}()
@@ -513,7 +517,11 @@ func (l *lab) l3Allowed(t *testing.T, wireUser string, echoesOperator bool) stri
 // entirely, and a daemon that started on a config the test did not intend
 // would answer every later measurement wrongly with no symptom that says so.
 func (l *lab) writeSeedConfig(user, secret string) (string, error) {
-	raw, err := os.ReadFile(labConfigPath())
+	base, err := l.configPath()
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(base)
 	if err != nil {
 		return "", err
 	}
