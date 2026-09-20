@@ -439,7 +439,70 @@ func (l *lab) up() error {
 	os.Remove(spoolPath)
 	os.Remove(spoolPath + ".draining")
 
-	return l.startDaemon()
+	if err := l.startDaemon(); err != nil {
+		return err
+	}
+	// The gate that actually decides. See waitTACACSReady: everything above
+	// proves sshd is serving, and nothing above proves the device is using
+	// TACACS+ yet.
+	return l.waitTACACSReady(tacacsReadyBudget)
+}
+
+// tacacsReadyBudget is how long a device is given, after its SSH authentication
+// is serving, to be seen sending port49d a packet. It is separate from the boot
+// budget because it measures a different thing: the boot budget ends a VM that
+// is not going to come up, and this one ends a device that came up without the
+// startup configuration this lab depends on. Eight minutes is what L4 and L13
+// used for the same gate before it was shared.
+const tacacsReadyBudget = 8 * time.Minute
+
+// waitTACACSReady blocks until the device has been seen speaking TACACS+ to
+// port49d, and exists because the run without it produced a measurement that
+// was simply false.
+//
+// waitDeviceReady passes as soon as the device runs SSH authentication through
+// to a rejection, and the long comment there says why that is the right gate
+// for "is sshd serving". On vJunos-router it passed **11 seconds** after
+// deploy, minutes before Junos had committed the startup configuration. L4's
+// first cell therefore asked a device with no `breakglass` account and no
+// `tacplus-server` whether it falls through to a local password, got "refused"
+// in 10ms, and recorded a false negative that the same run's third cell
+// contradicted.
+//
+// L4 and L13 grew this gate for themselves and the rest of the register tests
+// did not have it. Their notes were written on runs that happened to be slower;
+// nothing guaranteed the next one would be. So it is now part of bring-up, and
+// a platform that never speaks TACACS+ fails every test on it rather than
+// producing notes about a device that was not yet configured.
+//
+// What makes it a stronger gate is what the probe is: a login attempt that
+// makes the device send port49 a packet. Only a device that has committed its
+// `tacacs-server` / `tacplus-server` statement does that. The attempt is a
+// login port49 will deny — the break-glass account has no token — so the gate
+// assumes nothing about fall-through, which is the property L4 measures and
+// must not be baked into the gate that L4 runs behind.
+func (l *lab) waitTACACSReady(within time.Duration) error {
+	deadline := time.Now().Add(within)
+	for attempt := 1; ; attempt++ {
+		off := l.mark()
+		if c, err := l.dial(breakglassUser, breakglassPassword, 60*time.Second); err == nil {
+			c.Close()
+		}
+		recs := l.waitForRecords(off, 20*time.Second, func(rs []map[string]any) bool {
+			return redeemFor(rs, breakglassUser) != nil
+		})
+		if redeemFor(recs, breakglassUser) != nil {
+			fmt.Fprintf(os.Stderr, "lab: %s: ready: the device sent port49d a packet after %d login attempt(s), "+
+				"so its startup configuration is applied\n", l.p.name, attempt)
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("the device never sent port49d a packet within %v, so its startup configuration was "+
+				"never seen to apply and nothing measured against it would be about the configuration under test",
+				within)
+		}
+		time.Sleep(10 * time.Second)
+	}
 }
 
 func (l *lab) startDaemon() error { return l.startDaemonWith(labConfigPath(), false) }

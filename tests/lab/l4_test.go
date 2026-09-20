@@ -54,49 +54,11 @@ func TestL4FallThrough(t *testing.T) {
 // one.
 const l4FailDelay = 100 * time.Millisecond
 
-// waitTACACSReady blocks until the device has been seen speaking TACACS+ to
-// port49d, and exists because the run without it produced a measurement that
-// was simply false.
-//
-// The harness's own readiness gate passes as soon as the device runs SSH
-// authentication through to a rejection (waitDeviceReady, and the long comment
-// there says why). On vJunos-router that happened **11 seconds** after deploy,
-// minutes before Junos had committed the startup configuration. L4's first cell
-// therefore asked a device with no `breakglass` account and no `tacplus-server`
-// whether it falls through to a local password, got "refused" in 10ms, and
-// recorded a false negative directly contradicted by the same run's third cell.
-//
-// A rejection proves sshd is serving. It does not prove the configuration
-// applied, and every cell of this matrix is about the configuration. So the
-// gate here is the stronger one the register tests get for free: a login
-// attempt that makes the device send port49 a packet. Only a device that has
-// committed `system tacplus-server` does that, and the attempt is a login
-// port49 will deny, so it assumes nothing about fall-through — which is the
-// property under test and must not be in the gate.
-func (l *lab) waitTACACSReady(t *testing.T, within time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(within)
-	for attempt := 1; ; attempt++ {
-		off := l.mark()
-		if c, err := l.dial(breakglassUser, breakglassPassword, 60*time.Second); err == nil {
-			c.Close()
-		}
-		recs := l.waitForRecords(off, 20*time.Second, func(rs []map[string]any) bool {
-			return redeemFor(rs, breakglassUser) != nil
-		})
-		if redeemFor(recs, breakglassUser) != nil {
-			t.Logf("%s: device is speaking TACACS+ after %d login attempt(s); the startup config is applied",
-				l.p.name, attempt)
-			return
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("%s: the device never sent port49 a packet within %v, so its startup configuration was "+
-				"never seen to apply and nothing measured here would be about the configuration under test",
-				l.p.name, within)
-		}
-		time.Sleep(10 * time.Second)
-	}
-}
+// The gate this test used to carry now lives in harness_test.go as
+// waitTACACSReady and runs once per platform during bring-up, so every register
+// test gets it rather than only L4 and L13. Nothing here waits for it again:
+// by the time a test body runs, the device has been seen sending port49d a
+// packet.
 
 // l4Cell is one (order, condition) measurement.
 type l4Cell struct {
@@ -182,7 +144,6 @@ var l4JunosOrders = []struct {
 }
 
 func l4Junos(t *testing.T, l *lab) {
-	l.waitTACACSReady(t, 8*time.Minute)
 	cfg := l.writeDelayConfig(t, l4FailDelay)
 
 	var cells []l4Cell
@@ -305,7 +266,6 @@ func l4JunosConfigEvidence(t *testing.T, l *lab) (evidence, channel string) {
 // ---------------------------------------------------------------------------
 
 func l4EOS(t *testing.T, l *lab) {
-	l.waitTACACSReady(t, 8*time.Minute)
 	cfg := l.writeDelayConfig(t, l4FailDelay)
 
 	// What the lab's startup config already carries, read back from the device

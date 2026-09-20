@@ -42,7 +42,6 @@ func TestL13ReplyTimeout(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		stop := l.capture(t, "L13")
 		defer stop()
-		l.waitTACACSReady(t, 8*time.Minute)
 
 		// Read the device's own timers with port49d stopped. On EOS a local
 		// account cannot log in at all while port49 is up and denying it (L4),
