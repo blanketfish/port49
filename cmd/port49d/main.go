@@ -76,8 +76,16 @@ func run(cfgPath string) error {
 	if err != nil {
 		return err
 	}
+	// The spool gets a context of its own, cancelled only once Serve has
+	// returned. Sharing the server's would start the final drain at the same
+	// instant connections begin closing: the drain returns as soon as the
+	// spool is empty, and a connection still inside Acct.Handle can offer a
+	// record after that — acknowledged to the device, left on disk, and gone
+	// for good on an ephemeral volume.
+	spoolCtx, stopSpool := context.WithCancel(context.Background())
+	defer stopSpool()
 	spoolDone := make(chan struct{})
-	go func() { defer close(spoolDone); spool.Run(ctx) }()
+	go func() { defer close(spoolDone); spool.Run(spoolCtx) }()
 
 	// The lab authorizer is the only authorizer until the policy engine lands
 	// (plan 4); config.Load refuses a config without it, so it is never nil and
@@ -86,7 +94,7 @@ func run(cfgPath string) error {
 	for _, t := range cfg.Lab.SeedTokens {
 		if _, err := st.PutToken(ctx, store.TokenKey{NAS: t.NAS, Username: authen.Canonical(t.Username)},
 			store.Token{Secret: []byte(t.Secret), Kind: t.Kind, ExpiresAt: time.Now().Add(cfg.ContextIdleTTL)}); err != nil {
-			cancel()
+			stopSpool()
 			<-spoolDone
 			return err
 		}
@@ -110,7 +118,7 @@ func run(cfgPath string) error {
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
-		cancel()
+		stopSpool()
 		<-spoolDone
 		return err
 	}
@@ -135,8 +143,9 @@ func run(cfgPath string) error {
 	}
 	cancel()
 
-	// Serve has returned, so no connection can offer another record: whatever
-	// the spool drains now is all of it.
+	// Serve has returned, so no connection can offer another record: only now
+	// is it true that whatever the spool drains is all of it.
+	stopSpool()
 	<-spoolDone
 	fmt.Fprintln(os.Stderr, "port49d: accounting spool drained, exiting")
 	return runErr

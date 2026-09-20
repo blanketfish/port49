@@ -103,7 +103,35 @@ func (c *client) recv(t *testing.T) (wire.Header, []byte) {
 	return h, wire.Obfuscate(h, c.key, body)
 }
 
-func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store, m *metrics.Metrics) {
+// testServer is a running daemon plus the handles needed to shut it down in
+// the daemon's own order. The spool has a context of its own, exactly as
+// cmd/port49d does: sharing the server's would let the final drain decide the
+// spool is empty while a connection is still inside a handler, and whatever
+// that connection offers next would be left on disk.
+type testServer struct {
+	addr      string
+	metrics   *metrics.Metrics
+	cancel    context.CancelFunc
+	stopSpool context.CancelFunc
+	served    chan struct{}
+	spoolDone chan struct{}
+	once      sync.Once
+}
+
+// shutdown stops accepting and closes open connections, waits for Serve to
+// return, and only then stops the spool and waits for its final drain.
+// Waiting before the cancel would deadlock; stopping the spool before Serve
+// returns would cut the drain short.
+func (ts *testServer) shutdown() {
+	ts.once.Do(func() {
+		ts.cancel()
+		<-ts.served
+		ts.stopSpool()
+		<-ts.spoolDone
+	})
+}
+
+func newTestServer(t *testing.T, log *syncBuffer, st store.Store) *testServer {
 	t.Helper()
 	inv := admission.Inventory{
 		Devices:   []admission.Device{{Name: "leaf-01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}},
@@ -113,12 +141,7 @@ func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	st = memory.New(time.Now)
-	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_e2e"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
-		t.Fatal(err)
-	}
-	m = metrics.New(prometheus.NewRegistry())
+	m := metrics.New(prometheus.NewRegistry())
 	em := decision.NewJSONLines(log)
 	lim := limits.New(limits.Config{PerNASConnections: 2, IdleTimeout: time.Second,
 		MalformedBackoffBase: time.Millisecond, MalformedBackoffMax: time.Millisecond, MalformedWindow: time.Minute,
@@ -128,8 +151,9 @@ func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store, 
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	spoolCtx, stopSpool := context.WithCancel(context.Background())
 	spoolDone := make(chan struct{})
-	go func() { defer close(spoolDone); sp.Run(ctx) }()
+	go func() { defer close(spoolDone); sp.Run(spoolCtx) }()
 	var ids atomic.Int64
 	d := Deps{Admission: trie,
 		Keys:   map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), Retired: true}}}},
@@ -143,15 +167,20 @@ func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store, 
 	}
 	served := make(chan struct{})
 	go func() { defer close(served); Serve(ctx, ln, d) }()
-	// One cleanup, in order: stop accepting and close open connections, wait for
-	// Serve to return, then let the spool finish draining. Waiting before the
-	// cancel would deadlock.
-	t.Cleanup(func() {
-		cancel()
-		<-served
-		<-spoolDone
-	})
-	return ln.Addr().String(), st, m
+	ts := &testServer{addr: ln.Addr().String(), metrics: m, cancel: cancel, stopSpool: stopSpool, served: served, spoolDone: spoolDone}
+	t.Cleanup(ts.shutdown)
+	return ts
+}
+
+func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store, m *metrics.Metrics) {
+	t.Helper()
+	st = memory.New(time.Now)
+	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{Secret: []byte("p49_e2e"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	ts := newTestServer(t, log, st)
+	return ts.addr, st, ts.metrics
 }
 
 func dial(t *testing.T, addr string, key []byte) *client {
@@ -370,6 +399,65 @@ func TestSeqNoWrapGetsNoReplyAndCloses(t *testing.T) {
 	}
 	if !waitFor(t, func() bool { return testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("malformed_backoff")) >= 1 }) {
 		t.Fatalf("malformed_backoff metric was not incremented for a seq_no wrap")
+	}
+}
+
+// gateStore parks the first GetContext until the test releases it, which puts
+// a connection inside Acct.Handle at a known point: the request has been
+// accepted, and the record has not yet been offered to the spool.
+type gateStore struct {
+	store.Store
+	enter   sync.Once
+	opened  sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gateStore) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	g.enter.Do(func() { close(g.entered) })
+	<-g.release
+	return g.Store.GetContext(ctx, k)
+}
+
+// open lets the parked handler run on. It is idempotent so a failing test can
+// defer it: leaving a connection goroutine parked would deadlock the shutdown
+// that t.Cleanup runs.
+func (g *gateStore) open() { g.opened.Do(func() { close(g.release) }) }
+
+// TestSpoolOutlivesServeSoShutdownDrainsEverything pins the shutdown order the
+// daemon's comments promise. A connection is held inside Acct.Handle while the
+// server is cancelled; the spool must still be running when that handler
+// finally offers its record, or the record is acknowledged to the device and
+// left on disk — invisible on an ephemeral volume, and making "accounting
+// spool drained, exiting" a false statement.
+func TestSpoolOutlivesServeSoShutdownDrainsEverything(t *testing.T) {
+	log := &syncBuffer{}
+	gate := &gateStore{Store: memory.New(time.Now), entered: make(chan struct{}), release: make(chan struct{})}
+	defer gate.open()
+	ts := newTestServer(t, log, gate)
+
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAcct, wire.AcctRequest{Flags: wire.AcctFlagStop, AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15,
+		AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"),
+		Args: [][]byte{[]byte("task_id=shutdown-race"), []byte("service=shell")}}.Encode(), 0)
+
+	<-gate.entered
+	ts.cancel()
+
+	// The spool must not stop here. Its own context is still live, so this wait
+	// is an assertion, not a sleep: if Run returns now, the record offered
+	// below never reaches the sink.
+	select {
+	case <-ts.spoolDone:
+		t.Fatal("the spool stopped draining while a connection was still inside a handler")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	gate.open()
+	ts.shutdown()
+
+	if !log.contains("shutdown-race") {
+		t.Fatalf("a record offered during shutdown must still be drained: %s", log.String())
 	}
 }
 
