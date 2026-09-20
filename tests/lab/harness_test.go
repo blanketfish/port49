@@ -81,8 +81,18 @@ var platforms = []platform{
 }
 
 const (
-	labKeyDefault = "labsecret"
-	spoolPath     = "/tmp/port49-lab-acct.jsonl"
+	// These four values also live in the startup configs and in
+	// port49d-lab.yaml, and nothing makes the compiler check that they agree.
+	// Editing a config to rename the breakglass account or change the shared
+	// secret breaks the harness silently — the readiness gate stops passing, or
+	// every device packet fails key trial — with no build error and no obvious
+	// cause. They are named here so the coupling has somewhere to be documented,
+	// and each config carries a comment pointing back at these names.
+	labKeyDefault      = "labsecret"       // `tacacs-server host ... key`, `tacplus-server ... secret`
+	breakglassUser     = "breakglass"      // the local account both startup configs define
+	breakglassPassword = "breakglass-only" // that account's password, in both configs
+
+	spoolPath = "/tmp/port49-lab-acct.jsonl"
 	metricsAddr   = "127.0.0.1:9049"
 	tacacsAddr    = "172.100.100.1:49"
 	labSubnet     = "172.100.100.0/24"
