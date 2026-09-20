@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -83,6 +84,30 @@ func TestUnattributedIsRecordedNotDiscarded(t *testing.T) {
 	json.Unmarshal([]byte(strings.TrimSpace(out.String())), &m)
 	if m["attribution"] != "unattributed" || m["session"].(map[string]any)["ctx_id"] != "" {
 		t.Fatalf("%v", m)
+	}
+}
+
+// TestSpoolFailureAnswersErrorAndCountsIt covers the one reply accounting
+// ever refuses with: the durable write failed, so the device must be told
+// ERROR and retry rather than believe a record was kept. The reply carries a
+// server_msg an operator can read, and the request is counted as an error.
+func TestSpoolFailureAnswersErrorAndCountsIt(t *testing.T) {
+	st := memory.New(time.Now)
+	m := metrics.New(prometheus.NewRegistry())
+	// A path under a directory that does not exist: every Offer fails the same
+	// way a full or unwritable disk does.
+	sp := brokenSpool(filepath.Join(t.TempDir(), "absent", "o.jsonl"), m)
+	h := New(st, sp, m, time.Now)
+
+	reply := h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=1", "service=shell", "cmd="))
+	if reply.Status != wire.AcctStatusError {
+		t.Fatalf("want AcctStatusError when the spool write fails, got %+v", reply)
+	}
+	if !strings.Contains(string(reply.ServerMsg), "spool") {
+		t.Fatalf("the reply must say what failed, got %q", reply.ServerMsg)
+	}
+	if got := testutil.ToFloat64(m.Requests.WithLabelValues("acct", "error")); got != 1 {
+		t.Fatalf("want requests_total{acct,error} == 1, got %v", got)
 	}
 }
 

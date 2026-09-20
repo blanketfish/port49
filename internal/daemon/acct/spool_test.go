@@ -3,6 +3,7 @@ package acct
 import (
 	"bytes"
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -61,13 +62,99 @@ func TestSpoolOverflowsToDiskNotToError(t *testing.T) {
 	}
 }
 
+// brokenSpool points a Spool at a path that cannot be written, bypassing
+// NewSpool's start-time probe. It models the disk that goes bad while the
+// daemon is running — the case the probe cannot catch and the ERROR reply
+// exists for.
+func brokenSpool(path string, m *metrics.Metrics) *Spool {
+	return &Spool{path: path, sink: decision.NewJSONLines(&bytes.Buffer{}), metrics: m, capacity: 1, signal: make(chan struct{}, 1)}
+}
+
 func TestSpoolFullWhenDiskUnwritable(t *testing.T) {
-	sp, _ := NewSpool(1, "/proc/port49-cannot-write-here/overflow.jsonl", decision.NewJSONLines(&bytes.Buffer{}), metrics.New(prometheus.NewRegistry()))
+	sp := brokenSpool("/proc/port49-cannot-write-here/overflow.jsonl", metrics.New(prometheus.NewRegistry()))
 	if err := sp.Offer(decision.Record{Event: decision.EventAccount}); err != ErrSpoolFull {
 		t.Fatalf("want ErrSpoolFull, got %v", err)
 	}
 	if err := sp.Offer(decision.Record{Event: decision.EventAccount}); err != ErrSpoolFull {
 		t.Fatalf("want ErrSpoolFull, got %v", err)
+	}
+}
+
+// TestNewSpoolRefusesAPathItCannotWrite covers the most likely accounting
+// misconfiguration there is: spool_path points somewhere the daemon cannot
+// write, usually because /var/lib/port49 was never created. main.go's rule is
+// that everything which can fail on a typo fails before the listener opens,
+// so this must be an error at construction, not a per-record ERROR reply
+// discovered at 3am.
+func TestNewSpoolRefusesAPathItCannotWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "absent-directory", "overflow.jsonl")
+	_, err := NewSpool(4, path, decision.NewJSONLines(&bytes.Buffer{}), metrics.New(prometheus.NewRegistry()))
+	if err == nil {
+		t.Fatal("NewSpool must refuse a spool path it cannot create or append to")
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Fatalf("the error must name the path an operator has to fix, got %v", err)
+	}
+}
+
+// TestNewSpoolLeavesAnExistingFileAlone guards the probe against damaging
+// what it is probing: records already on disk must survive it byte for byte.
+func TestNewSpoolLeavesAnExistingFileAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	b, err := decision.Record{Event: decision.EventAccount, TaskID: "pre-existing"}.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewSpool(4, path, decision.NewJSONLines(&bytes.Buffer{}), metrics.New(prometheus.NewRegistry())); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(append(b, '\n')) {
+		t.Fatalf("the probe must not alter an existing spool file, got %q", got)
+	}
+}
+
+// TestOfferLogsWhyItFailedWithoutTheRecord covers what the operator sees when
+// the spool stops accepting: without the underlying error, spool_drops_total
+// and requests_total{acct,error} climb together and ENOSPC, EACCES and a
+// missing directory are indistinguishable. The record itself must never reach
+// the log -- it is device accounting, and an unspooled record is no more
+// loggable than a spooled one.
+func TestOfferLogsWhyItFailedWithoutTheRecord(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(os.Stderr); log.SetFlags(log.LstdFlags) })
+
+	path := filepath.Join(t.TempDir(), "absent-directory", "overflow.jsonl")
+	sp := brokenSpool(path, metrics.New(prometheus.NewRegistry()))
+
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "never-log-me"}); err != ErrSpoolFull {
+		t.Fatalf("want ErrSpoolFull, got %v", err)
+	}
+	if !strings.Contains(logged.String(), path) {
+		t.Fatalf("the log must name the spool path, got %q", logged.String())
+	}
+	if !strings.Contains(logged.String(), "no such file or directory") {
+		t.Fatalf("the log must carry the underlying OS error, got %q", logged.String())
+	}
+	if strings.Contains(logged.String(), "never-log-me") {
+		t.Fatalf("the record must never reach the log, got %q", logged.String())
+	}
+
+	// A disk that stays full fails every offer; the log must not follow it.
+	before := strings.Count(logged.String(), path)
+	for i := 0; i < 5; i++ {
+		sp.Offer(decision.Record{Event: decision.EventAccount})
+	}
+	if after := strings.Count(logged.String(), path); after != before {
+		t.Fatalf("the offer-failure log must be throttled: %d lines, want %d", after, before)
 	}
 }
 

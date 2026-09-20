@@ -90,6 +90,10 @@ type Spool struct {
 	// starts on a line of its own. Guarded by mu, like depth.
 	needNewline bool
 
+	// lastOfferLog throttles the failing-Offer log. Guarded by mu, since Offer
+	// holds it; the drain path's own throttles belong to its goroutine alone.
+	lastOfferLog time.Time
+
 	signal chan struct{}
 
 	// The rest belong exclusively to the single goroutine that calls
@@ -109,9 +113,17 @@ type Spool struct {
 	forceFail      bool  // true: drainOnce returns (false, 0) immediately, touching nothing
 }
 
+// NewSpool prepares the spool at overflowPath. It refuses a path it cannot
+// create or append to, so an accounting directory that does not exist fails
+// at start with one actionable line instead of becoming an ERROR reply per
+// record once devices are live, and it notes whether the existing file ends
+// mid-record so the first Offer does not append onto a fragment.
 func NewSpool(capacity int, overflowPath string, sink decision.Emitter, m *metrics.Metrics) (*Spool, error) {
 	if capacity < 1 {
 		return nil, errors.New("acct: spool capacity must be at least 1")
+	}
+	if err := probeWritable(overflowPath); err != nil {
+		return nil, err
 	}
 	s := &Spool{path: overflowPath, sink: sink, metrics: m, capacity: capacity, signal: make(chan struct{}, 1)}
 	s.needNewline = endsMidRecord(overflowPath)
@@ -123,6 +135,28 @@ func NewSpool(capacity int, overflowPath string, sink decision.Emitter, m *metri
 	}
 	s.metrics.SpoolDepth.Set(float64(s.depth))
 	return s, nil
+}
+
+// probeWritable checks at construction that the spool file can be created and
+// appended to, so the commonest accounting misconfiguration there is — a
+// spool_path whose directory does not exist, or one the daemon cannot write —
+// fails at start with one line naming the path, rather than turning into an
+// ERROR reply per accounting record once devices are live. It leaves the
+// directory as it found it: a file it had to create is removed again, so
+// Offer still sees a brand-new file and fsyncs the directory entry for it.
+func probeWritable(path string) error {
+	_, statErr := os.Stat(path)
+	created := os.IsNotExist(statErr)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("acct: cannot write the accounting spool at %s: %w", path, err)
+	}
+	f.Close()
+	if created {
+		// A failure here leaves an empty spool file, which is harmless.
+		_ = os.Remove(path)
+	}
+	return nil
 }
 
 // endsMidRecord reports whether path exists and its last byte is not a
@@ -224,7 +258,9 @@ func readBoundedLine(br *bufio.Reader) (line []byte, read int64, oversized bool,
 func (s *Spool) Offer(r decision.Record) error {
 	b, err := json.Marshal(r)
 	if err != nil {
-		s.metrics.SpoolDrops.Inc()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.offerFailed("marshal", err)
 		return ErrSpoolFull
 	}
 	b = append(b, '\n')
@@ -237,7 +273,7 @@ func (s *Spool) Offer(r decision.Record) error {
 
 	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		s.metrics.SpoolDrops.Inc()
+		s.offerFailed("open", err)
 		return ErrSpoolFull
 	}
 	if s.needNewline {
@@ -257,7 +293,11 @@ func (s *Spool) Offer(r decision.Record) error {
 		// A partial write leaves the file ending mid-record; so does a write
 		// whose sync never landed. Either way the next Offer must separate.
 		s.needNewline = true
-		s.metrics.SpoolDrops.Inc()
+		if werr != nil {
+			s.offerFailed("write", werr)
+		} else {
+			s.offerFailed("sync", serr)
+		}
 		return ErrSpoolFull
 	}
 	s.needNewline = false
@@ -265,7 +305,7 @@ func (s *Spool) Offer(r decision.Record) error {
 
 	if isNew {
 		if err := syncDir(filepath.Dir(s.path)); err != nil {
-			s.metrics.SpoolDrops.Inc()
+			s.offerFailed("directory sync", err)
 			return ErrSpoolFull
 		}
 	}
@@ -278,6 +318,20 @@ func (s *Spool) Offer(r decision.Record) error {
 	default:
 	}
 	return nil
+}
+
+// offerFailed counts a drop and says why, at most once a minute: on a disk
+// that stays full every record would otherwise print its own line. Without
+// it, an operator sees spool_drops_total and requests_total{acct,error}
+// climbing together and cannot tell ENOSPC from EACCES from a directory that
+// was never created. The line names the stage, the path, and the OS error —
+// never the record, which is device accounting like any other.
+//
+// Called with mu held.
+func (s *Spool) offerFailed(stage string, err error) {
+	s.metrics.SpoolDrops.Inc()
+	s.logThrottled(&s.lastOfferLog,
+		"acct: spool %s failed on %s, accounting records are being refused: %v", stage, s.path, err)
 }
 
 // syncDir fsyncs a directory so a file Offer just created is durably
