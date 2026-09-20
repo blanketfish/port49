@@ -90,9 +90,16 @@ const (
 	// every device packet fails key trial — with no build error and no obvious
 	// cause. They are named here so the coupling has somewhere to be documented,
 	// and each config carries a comment pointing back at these names.
-	labKeyDefault      = "labsecret"       // `tacacs-server host ... key`, `tacplus-server ... secret`
-	breakglassUser     = "breakglass"      // the local account both startup configs define
-	breakglassPassword = "breakglass-only" // that account's password, in both configs
+	labKeyDefault  = "labsecret"  // `tacacs-server host ... key`, `tacplus-server ... secret`
+	breakglassUser = "breakglass" // the local account both startup configs define
+
+	// breakglassPassword is the source of truth for that account's password.
+	// The EOS config carries it verbatim; the Junos config carries a SHA-512
+	// crypt hash of it under `encrypted-password`, because the plain-text form
+	// does not produce a usable password on vSRX 21.4R3.15. Regenerate that
+	// hash with `openssl passwd -6 -salt p49labsalt` over this value if it
+	// changes.
+	breakglassPassword = "breakglass-only"
 
 	spoolPath     = "/tmp/port49-lab-acct.jsonl"
 	metricsAddr   = "127.0.0.1:9049"
@@ -427,7 +434,16 @@ func (l *lab) up() error {
 	return l.startDaemon()
 }
 
-func (l *lab) startDaemon() error {
+func (l *lab) startDaemon() error { return l.startDaemonWith(labConfigPath(), false) }
+
+func labConfigPath() string { return filepath.Join(root, "tests", "lab", "port49d-lab.yaml") }
+
+// startDaemonWith starts port49d against cfgPath. resume appends to this
+// platform's log files instead of truncating them, which is what a test that
+// stops and restarts the daemon mid-run needs: a truncated decision log would
+// invalidate every offset an earlier mark() handed out, and the records the
+// run has already measured against would simply vanish.
+func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	// Refuse to run beside a daemon this run does not own. A leftover port49d
 	// still holds its socket on the bridge address even across a destroy and
 	// redeploy, and it would answer this device's AAA with its own spent
@@ -445,11 +461,17 @@ func (l *lab) startDaemon() error {
 	}
 	l.logPath = filepath.Join(dir, "decisions-"+l.p.name+".jsonl")
 	l.errPath = filepath.Join(dir, "port49d-"+l.p.name+".log")
+	open := os.Create
+	if resume {
+		open = func(p string) (*os.File, error) {
+			return os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		}
+	}
 	var err error
-	if l.logFile, err = os.Create(l.logPath); err != nil {
+	if l.logFile, err = open(l.logPath); err != nil {
 		return err
 	}
-	if l.errFile, err = os.Create(l.errPath); err != nil {
+	if l.errFile, err = open(l.errPath); err != nil {
 		return err
 	}
 
@@ -457,8 +479,7 @@ func (l *lab) startDaemon() error {
 	if key == "" {
 		key = labKeyDefault
 	}
-	l.daemon = exec.Command(filepath.Join(root, "bin", "port49d"),
-		"-config", filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
+	l.daemon = exec.Command(filepath.Join(root, "bin", "port49d"), "-config", cfgPath)
 	l.daemon.Dir = root
 	l.daemon.Stdout = l.logFile
 	l.daemon.Stderr = io.MultiWriter(l.errFile, os.Stderr)
@@ -500,6 +521,29 @@ func (l *lab) startDaemon() error {
 	}
 	stderr, _ := os.ReadFile(l.errPath)
 	return fmt.Errorf("port49d did not come up within 30s; its stderr was:\n%s", stderr)
+}
+
+// writeDelayConfig copies the lab daemon config with both failure-delay knobs
+// set to d, and returns the new path. Both are set, not just the ceiling,
+// because the base alone would take several failures to reach d and the
+// measurement would then be of a different attempt than the one being timed.
+func (l *lab) writeDelayConfig(t *testing.T, d time.Duration) string {
+	t.Helper()
+	raw, err := os.ReadFile(labConfigPath())
+	if err != nil {
+		t.Fatalf("read the lab daemon config: %v", err)
+	}
+	const anchor = "limits:\n"
+	if !strings.Contains(string(raw), anchor) {
+		t.Fatalf("tests/lab/port49d-lab.yaml has no `limits:` block to set a failure delay under")
+	}
+	inject := fmt.Sprintf("limits:\n  auth_failure_delay_base: %s\n  auth_failure_delay_max: %s\n", d, d)
+	out := strings.Replace(string(raw), anchor, inject, 1)
+	path := filepath.Join(root, "tests", "lab", "logs", fmt.Sprintf("port49d-lab-delay-%s.yaml", d))
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
 }
 
 func daemonHealthy() bool {
@@ -643,7 +687,12 @@ func teardown() {
 	}
 }
 
-func (l *lab) down() {
+// stopDaemon stops port49d and leaves the topology running, so a test can
+// measure the device against a TACACS+ server that is not listening. It returns
+// once the listening socket is gone: startDaemonWith refuses to start beside
+// anything still bound to it, and a device that reached a socket in TIME_WAIT
+// from the previous daemon would be measured against the wrong condition.
+func (l *lab) stopDaemon() error {
 	if l.daemon != nil && l.daemon.Process != nil {
 		// SIGINT, not Kill: port49d installs signal.NotifyContext for SIGINT and
 		// SIGTERM (cmd/port49d), and on either it stops the listener and drains
@@ -666,6 +715,20 @@ func (l *lab) down() {
 		l.errFile.Close()
 		l.errFile = nil
 	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", tacacsAddr, 2*time.Second)
+		if err != nil {
+			return nil
+		}
+		c.Close()
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("port49d was stopped but something is still listening on %s after 30s", tacacsAddr)
+}
+
+func (l *lab) down() {
+	_ = l.stopDaemon()
 	if l.deployed {
 		out, err := exec.Command("sudo", "-n", "containerlab", "destroy", "-t", l.topoPath(), "--cleanup").CombinedOutput()
 		if err != nil {
