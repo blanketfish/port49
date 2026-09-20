@@ -245,6 +245,14 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// field can either (spec §15, L1). The overwrite is benign — same
 	// principal, same privilege, same blob — but it must not be silent, so the
 	// record names the ctx_id it displaces (spec §5.6).
+	//
+	// This read and the write below are not atomic. Two simultaneous
+	// redemptions by one user on one device can both read the same `prev` and
+	// both report it, and then one of the two new contexts is overwritten with
+	// nothing naming it — the silence `replaced_ctx_id` exists to prevent, in
+	// the one case it cannot cover. Closing it needs a compare-and-set on
+	// PutContext, which the store interface does not have; plan 2 owns whether
+	// to add one.
 	ck := store.ContextKey{NAS: s.peer.NAS, Username: username}
 	prev, perr := s.h.store.GetContext(ctx, ck)
 	s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(perr)).Inc()

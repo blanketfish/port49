@@ -81,5 +81,10 @@ type Store interface {
 	GetReceipt(ctx context.Context, rk ReceiptKey) (Receipt, error)
 	PutContext(ctx context.Context, k ContextKey, c Context, ttl time.Duration) error
 	GetContext(ctx context.Context, k ContextKey) (Context, error)
+	// DeleteContext has no production caller today: the caller it had was
+	// author's `username_mismatch` branch, which under the old `(nas, port)`
+	// key could delete a live operator's context on an uncredentialed request.
+	// Plan 2 owns it — revocation and §5.6 teardown rows 2 through 4 all need
+	// it — so it stays.
 	DeleteContext(ctx context.Context, k ContextKey) error
 }

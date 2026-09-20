@@ -4,6 +4,7 @@ package author
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"strings"
 	"time"
@@ -97,9 +98,8 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	//
 	// Because the username is the key, a request under a name port49 did not
 	// authenticate finds no context and is `context_missing`. It cannot land
-	// on someone else's context, so there is nothing here to invalidate and no
-	// `username_mismatch` to report; that reason now belongs to the enable
-	// path, where the username comes from the context rather than the wire.
+	// on someone else's context, so there is nothing here to invalidate — the
+	// deletion this path used to perform is gone with the old key.
 	user := authen.Canonical(string(req.User))
 	rec.Session.Username = user
 	c, err := h.store.GetContext(ctx, store.ContextKey{NAS: peer.NAS, Username: user})
@@ -109,6 +109,22 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	}
 	if err != nil {
 		return h.deny(rec, decision.StoreUnavailable, "port49: authorization store unavailable")
+	}
+	// The key already selected on the username; this re-checks what came back,
+	// for the same reason package authen re-checks the receipt hash after its
+	// lookup. A correct store cannot fail it. A store that answers with a
+	// record it was not asked for would otherwise get a permit evaluated
+	// against another principal's context — their privilege, their blob — and
+	// a record asserting this username belongs to that principal. `subtle`
+	// because this is the same class of compare as the receipt's and one rule
+	// is easier to audit than an exception.
+	//
+	// The record keeps the sender's username and drops the principal: it is
+	// this request being denied, not the context's owner, and ctx_id already
+	// says which context it collided with.
+	if subtle.ConstantTimeCompare([]byte(c.Username), []byte(user)) != 1 {
+		rec.Session.CtxID = c.CtxID
+		return h.deny(rec, decision.UsernameMismatch, "port49: username does not match the authenticated session")
 	}
 	rec.Session.CtxID = c.CtxID
 	rec.Principal = c.Principal

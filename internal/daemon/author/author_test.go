@@ -33,7 +33,7 @@ func setup(t *testing.T) (*Handler, *memory.Store, *bytes.Buffer) {
 
 func req(user, port string, args ...string) wire.AuthorRequest {
 	r := wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15, AuthenType: wire.AuthenTypeASCII,
-		Service: wire.AuthenServiceLogin, User: []byte(user), Port: []byte(port)}
+		Service: wire.AuthenServiceLogin, User: []byte(user), Port: []byte(port), RemAddr: []byte("198.51.100.4")}
 	for _, a := range args {
 		r.Args = append(r.Args, []byte(a))
 	}

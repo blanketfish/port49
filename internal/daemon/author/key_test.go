@@ -1,11 +1,17 @@
 package author
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
@@ -27,9 +33,14 @@ func TestPortMayDifferBetweenAuthenticationAndAuthorization(t *testing.T) {
 			if r["reason"] != "context_matched" {
 				t.Fatalf("%v", r)
 			}
-			// Requirement (e): the port as seen on this exchange is in the record.
-			if s := r["session"].(map[string]any); s["port"] != port {
+			// Requirement (e): the port and rem_addr as seen on this exchange
+			// are in the record, whatever the context holds.
+			s := r["session"].(map[string]any)
+			if s["port"] != port {
 				t.Fatalf("port on the record: %v, want %q", s["port"], port)
+			}
+			if s["rem_addr"] != "198.51.100.4" {
+				t.Fatalf("rem_addr on the record: %v", s["rem_addr"])
 			}
 		})
 	}
@@ -110,5 +121,60 @@ func TestAuthorizationSurvivesAContextReplacement(t *testing.T) {
 	}
 	if s := lastRecord(t, log)["session"].(map[string]any); s["ctx_id"] != "ctx2" {
 		t.Fatalf("%v", s)
+	}
+}
+
+// wrongContextStore answers GetContext with a context belonging to somebody
+// else, whatever key it was asked for. No correct store does this — the key
+// selects on the username — so this is the store-fault path: a Redis key
+// collision under plan 2's prefixing, a cache-coherency bug in a replicated
+// store, a compromised store.
+type wrongContextStore struct {
+	*memory.Store
+}
+
+func (wrongContextStore) GetContext(context.Context, store.ContextKey) (store.Context, error) {
+	return store.Context{CtxID: "ctxOTHER", Principal: "user:bob@example.com", Username: "bob",
+		Port: "ssh", PrivLvl: 15}, nil
+}
+
+// TestAStoreFaultIsNotAPermitUnderAnotherPrincipal: a permit evaluated against
+// another principal's context is the one outcome this path must never produce,
+// so the identity the store returned is re-checked after the lookup — the same
+// guard, for the same reason, as authen's re-check of the receipt hash
+// (review I-1).
+func TestAStoreFaultIsNotAPermitUnderAnotherPrincipal(t *testing.T) {
+	log := &bytes.Buffer{}
+	lab := &Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
+	h := New(wrongContextStore{Store: memory.New(time.Now)}, lab, decision.NewJSONLines(log),
+		metrics.New(prometheus.NewRegistry()), time.Now)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"session", []string{"service=shell", "cmd="}},
+		{"command", []string{"service=shell", "cmd=show", "cmd-arg=version"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			log.Reset()
+			resp := h.Handle(context.Background(), peer, req("alice", "vty4", tc.args...))
+			if resp.Status != wire.AuthorStatusFail {
+				t.Fatalf("a context for another principal must not authorize: %+v", resp)
+			}
+			r := lastRecord(t, log)
+			if r["reason"] != "username_mismatch" {
+				t.Fatalf("reason: %v", r["reason"])
+			}
+			// The record names the sender, and the principal it collided with
+			// is not asserted to own that name.
+			s := r["session"].(map[string]any)
+			if s["username"] != "alice" {
+				t.Fatalf("the record must name the sender, got %v", s["username"])
+			}
+			if r["principal"] != nil {
+				t.Fatalf("the record must not claim alice is %v", r["principal"])
+			}
+		})
 	}
 }
