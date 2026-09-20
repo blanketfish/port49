@@ -40,6 +40,7 @@ import (
 type wirePacket struct {
 	conn       string // "<device>:<sport> -> <server>:49"
 	srcPort    uint16
+	stream     int // index of the TCP stream it was reassembled from
 	fromDevice bool
 	hdr        wire.Header
 	decoded    string // credential-free rendering of the body
@@ -76,15 +77,28 @@ func (p wirePacket) kind() string {
 // beyond the expected point is a gap. A gap stops the decode for that stream
 // and is reported, rather than being silently spliced into a packet that never
 // existed.
+//
+// A second thing the sequence number alone cannot do is tell two *connections*
+// apart when they share a four-tuple, and this capture does that too. During
+// L3's relax phase port49d is stopped, so the device's connections are refused
+// and it retries — 78 distinct source ports produced 174 SYNs in
+// `L3-arista_eos.pcap`. A device that comes back on a source port it used
+// before lands in the same stream, and its reply then decodes a second time on
+// top of the earlier connection's. The self-check caught exactly that.
+//
+// So a bare SYN starts a new stream for that four-tuple. Duplicate SYNs — the
+// `-i any` copies — carry the same sequence number as the stream they would
+// start and are ignored.
 type tcpStream struct {
 	key        string
 	conn       string
 	srcPort    uint16
 	fromDevice bool
 	payload    []byte
-	order      int
 
 	started bool
+	synSeq  uint32
+	hasSyn  bool
 	nextSeq uint32
 	gap     bool
 }
@@ -136,8 +150,11 @@ func pcapTACACSPackets(path, key string) ([]wirePacket, []string, error) {
 		return nil, nil, err
 	}
 
+	// streams holds the live stream per four-tuple; allStreams holds every
+	// stream ever opened, in creation order, including those retired when their
+	// four-tuple was reused.
 	streams := map[string]*tcpStream{}
-	var order []string
+	var allStreams []*tcpStream
 	for off := pcapHeaderSize; off+16 <= len(raw); {
 		inclLen := int(binary.LittleEndian.Uint32(raw[off+8 : off+12]))
 		off += 16
@@ -151,8 +168,13 @@ func pcapTACACSPackets(path, key string) ([]wirePacket, []string, error) {
 		pkt := raw[off : off+inclLen]
 		off += inclLen
 
-		src, dst, sport, dport, seq, payload, ok := tcpFlowOf(link, pkt)
-		if !ok || len(payload) == 0 {
+		src, dst, sport, dport, seq, flags, payload, ok := tcpFlowOf(link, pkt)
+		if !ok {
+			continue
+		}
+		const synFlag, ackFlag = 0x02, 0x10
+		isSyn := flags&synFlag != 0 && flags&ackFlag == 0
+		if !isSyn && len(payload) == 0 {
 			continue
 		}
 		// Only the lab bridge, so the harness's own loopback liveness probes
@@ -164,7 +186,21 @@ func pcapTACACSPackets(path, key string) ([]wirePacket, []string, error) {
 			continue
 		}
 		k := fmt.Sprintf("%s:%d>%s:%d", src, sport, dst, dport)
+		reverse := fmt.Sprintf("%s:%d>%s:%d", dst, dport, src, sport)
 		s := streams[k]
+		if s != nil && isSyn && !(s.hasSyn && s.synSeq == seq) {
+			// A new connection on a four-tuple this capture has already seen.
+			// Start a fresh stream, so the new connection's bytes are not
+			// appended to the old one's; the old one stays in allStreams.
+			//
+			// BOTH directions have to reset, and only resetting this one left
+			// the duplicates in place: the reply direction never carries a bare
+			// SYN — the server answers SYN-ACK — so its stream would otherwise
+			// run on across every reconnection and decode each connection's
+			// replies on top of the last.
+			delete(streams, reverse)
+			s = nil
+		}
 		if s == nil {
 			fromDevice := dport == 49
 			shownPort := sport
@@ -176,18 +212,21 @@ func pcapTACACSPackets(path, key string) ([]wirePacket, []string, error) {
 				conn:       fmt.Sprintf("%s:%d", src, sport),
 				srcPort:    shownPort,
 				fromDevice: fromDevice,
-				order:      len(order),
 			}
 			streams[k] = s
-			order = append(order, k)
+			allStreams = append(allStreams, s)
 		}
-		s.add(seq, payload)
+		if isSyn {
+			s.hasSyn, s.synSeq = true, seq
+		}
+		if len(payload) > 0 {
+			s.add(seq, payload)
+		}
 	}
 
 	var out []wirePacket
 	var gaps []string
-	for _, k := range order {
-		s := streams[k]
+	for streamIdx, s := range allStreams {
 		if s.gap {
 			gaps = append(gaps, s.key)
 		}
@@ -204,7 +243,7 @@ func pcapTACACSPackets(path, key string) ([]wirePacket, []string, error) {
 			if h.Flags&wire.FlagUnencrypted == 0 {
 				body = wire.Obfuscate(h, []byte(key), body)
 			}
-			p := wirePacket{conn: s.conn, srcPort: s.srcPort, fromDevice: s.fromDevice, hdr: h}
+			p := wirePacket{conn: s.conn, srcPort: s.srcPort, stream: streamIdx, fromDevice: s.fromDevice, hdr: h}
 			p.decoded, p.decodeErr = describeBody(h, body)
 			out = append(out, p)
 			i = end
@@ -393,21 +432,21 @@ func acctFlagsName(f uint8) string {
 
 // tcpFlowOf pulls the addresses, ports, sequence number and payload out of one
 // captured packet.
-func tcpFlowOf(link uint32, b []byte) (src, dst net.IP, sport, dport uint16, seq uint32, payload []byte, ok bool) {
+func tcpFlowOf(link uint32, b []byte) (src, dst net.IP, sport, dport uint16, seq uint32, flags byte, payload []byte, ok bool) {
 	s, d, ok := ipv4Of(link, b)
 	if !ok {
-		return nil, nil, 0, 0, 0, nil, false
+		return nil, nil, 0, 0, 0, 0, nil, false
 	}
 	tcp, ok := tcpOf(link, b)
 	if !ok || len(tcp) < 20 {
-		return nil, nil, 0, 0, 0, nil, false
+		return nil, nil, 0, 0, 0, 0, nil, false
 	}
 	dataOff := int(tcp[12]>>4) * 4
 	if dataOff < 20 || dataOff > len(tcp) {
-		return nil, nil, 0, 0, 0, nil, false
+		return nil, nil, 0, 0, 0, 0, nil, false
 	}
 	return s, d, binary.BigEndian.Uint16(tcp[0:2]), binary.BigEndian.Uint16(tcp[2:4]),
-		binary.BigEndian.Uint32(tcp[4:8]), tcp[dataOff:], true
+		binary.BigEndian.Uint32(tcp[4:8]), tcp[13], tcp[dataOff:], true
 }
 
 // TestWirePcapSelfCheck decodes whatever captures this checkout already holds
@@ -450,20 +489,29 @@ func TestWirePcapSelfCheck(t *testing.T) {
 		seen := map[string]int{}
 		for _, p := range pkts {
 			decoded++
-			seen[fmt.Sprintf("%s|%#08x|%d", p.conn, p.hdr.SessionID, p.hdr.SeqNo)]++
+			// Keyed on the STREAM, not the connection string. A device that
+			// retries an exchange opens a new connection and keeps the same
+			// `session_id`, so port49 answers twice and both replies are real
+			// packets — `L3-arista_eos.pcap` holds several. Keying on
+			// `172.100.100.1:49`, which is every reply's source, called those
+			// legitimate retries duplicates.
+			seen[fmt.Sprintf("%d|%#08x|%d", p.stream, p.hdr.SessionID, p.hdr.SeqNo)]++
 		}
 		for k, n := range seen {
 			if n > 1 {
-				t.Errorf("%s: packet %s decoded %d times. Duplicate segments are reaching the stream, so every "+
-					"count in every note from this capture is wrong by that factor", filepath.Base(f), k, n)
+				t.Errorf("%s: stream|session|seq %s decoded %d times. Duplicate segments are reaching one "+
+					"stream, so every count in every note from this capture is wrong by that factor",
+					filepath.Base(f), k, n)
 			}
 		}
+	}
+	if !t.Failed() {
+		t.Logf("decoded %d TACACS+ packets across %d capture file(s) with no gap and no duplicate", decoded, len(files))
 	}
 	if decoded == 0 {
 		t.Skipf("no capture in tests/lab/captures holds a decodable TACACS+ packet (%d file(s) present); "+
 			"captures are git-ignored, so a checkout that has not run the lab has nothing to check", len(files))
 	}
-	t.Logf("decoded %d TACACS+ packets across %d capture file(s) with no gap and no duplicate", decoded, len(files))
 }
 
 // ---------------------------------------------------------------------------

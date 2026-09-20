@@ -79,6 +79,14 @@ func TestL3Enable(t *testing.T) {
 		obs += l3Caveats
 		l.result(t, "L3", l3Claim, obs)
 
+		// "This device has no enable command" is an answer to L3, not a failure
+		// to answer it. Only a run where the device *did* offer an enable and
+		// port49 never saw it has measured nothing.
+		if strings.Contains(trans, l3NoEnableMarker) {
+			t.Logf("%s: no enable exchange exists on this platform; the device rejected the command outright, "+
+				"which is what the note records", l.p.name)
+			return
+		}
 		if len(enables) == 0 {
 			t.Fatalf("no authentication record that could be an enable reached the decision log, so neither the "+
 				"wire username nor `rem_addr` was measured. What the device said:\n%s\nrecords:%s",
@@ -90,6 +98,34 @@ func TestL3Enable(t *testing.T) {
 const l3Claim = "Whether the enable START carries `rem_addr`, and what it contains — bare address, or address " +
 	"and source port. Also, because the login-context key now rests on it: what **username** the device puts " +
 	"on an enable START, and whether two concurrent enables are distinguishable."
+
+// l3NoSuchCommand are the things a device says when the command does not exist
+// on it, and l3NoEnableMarker is how a session records having been told so.
+//
+// NX-OS is why they are here. On the N9Kv, `disable` answers:
+//
+//	disable
+//	       ^
+//	% Invalid command at '^' marker.
+//
+// There is no enable exchange on that platform unless `feature privilege` is
+// configured, which this lab does not configure. "This device has no enable"
+// is a perfectly good answer to L3 for that platform — it is the measurement,
+// not the absence of one — so the test records it and passes, rather than
+// spending 45 seconds per session waiting for a prompt that cannot appear and
+// then failing as if nothing had been learned.
+var l3NoSuchCommand = []string{"% Invalid", "Invalid command", "% Incomplete", "unknown command"}
+
+const l3NoEnableMarker = "THIS PLATFORM HAS NO ENABLE COMMAND. The device rejected it outright:"
+
+func l3RejectedCommand(out string) bool {
+	for _, m := range l3NoSuchCommand {
+		if strings.Contains(out, m) {
+			return true
+		}
+	}
+	return false
+}
 
 // l3EnablePassword is typed at the enable prompt in both phases, so that the
 // only difference between the denied attempt and the allowed one is whether
@@ -132,14 +168,23 @@ func (l *lab) l3Concurrent(t *testing.T, u1, s1, u2, s2 string) string {
 			}
 			defer c.Close()
 			from := len(c.transcript())
-			if _, err := c.sendExpect("disable", 45*time.Second, ">"); err != nil {
+			if out, err := c.sendExpect("disable", 45*time.Second, append([]string{">"}, l3NoSuchCommand...)...); err != nil {
 				record(cred.user, "the device did not drop to an unprivileged prompt on `disable`: "+err.Error())
 				atPrompt <- struct{}{}
 				return
+			} else if l3RejectedCommand(out) {
+				record(cred.user, l3NoEnableMarker+"\n"+strings.TrimSpace(stripPrompt(out)))
+				atPrompt <- struct{}{}
+				return
 			}
-			out, err := c.sendExpect("enable", 45*time.Second, "assword", "#")
+			out, err := c.sendExpect("enable", 45*time.Second, append([]string{"assword", "#"}, l3NoSuchCommand...)...)
 			if err != nil {
 				record(cred.user, "`enable` produced neither a password prompt nor an enabled prompt: "+err.Error())
+				atPrompt <- struct{}{}
+				return
+			}
+			if l3RejectedCommand(out) {
+				record(cred.user, l3NoEnableMarker+"\n"+strings.TrimSpace(stripPrompt(out)))
 				atPrompt <- struct{}{}
 				return
 			}

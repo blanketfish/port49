@@ -202,45 +202,66 @@ func l13GrepTimeout(ref string) string {
 // l13Verdict turns the rows into the sentence the register row is asking for:
 // where the device stopped waiting, and what it did instead.
 //
-// A row whose login resolved well before its delay is a device that gave up.
-// The largest such delay bounds the timeout from above and the smallest
-// waited-out delay bounds it from below, so two rows on opposite sides of the
-// boundary pin it to an interval without a binary search.
+// A row where the device acted on the FAIL — refused the login — is a row it
+// waited for. A row where the login succeeded is a row where it gave up and
+// took the local password instead. The largest waited-out delay bounds the
+// timeout from below and the smallest given-up one from above, so two rows on
+// opposite sides pin it to an interval without a binary search.
+//
+// The classification is the **outcome**, not the elapsed time, and NX-OS is why
+// it had to change. On the N9Kv the 6s row took 8.01s and logged in: longer
+// than its own delay, so the elapsed-time rule filed it under "waited out" —
+// and then the same note said the device accepted the local password, which is
+// what a device does when it has stopped waiting. The reason for the gap is in
+// the row beside it: the 2s row shows **two** redeem records for one login, so
+// the device retransmits, and an elapsed time then measures the retransmission
+// schedule rather than the reply timeout. A login that succeeded did not act on
+// the FAIL, whatever the clock says, and that is the thing this row is about.
+//
+// On vEOS and both Junos images the two rules agree row for row, so the notes
+// already committed for those platforms are unchanged by this.
 func l13Verdict(rows []l13Row) string {
-	const slack = 500 * time.Millisecond
 	var waited, gaveUp []l13Row
 	for _, r := range rows {
-		if r.took+slack < r.delay {
+		if r.ok {
 			gaveUp = append(gaveUp, r)
 		} else {
 			waited = append(waited, r)
 		}
 	}
 	if len(gaveUp) == 0 {
-		return fmt.Sprintf("**The device waited every time.** No delay up to %s was long enough to make it stop "+
-			"waiting, so its reply timeout is above that and this run does not bound it from above.",
-			rows[len(rows)-1].delay)
+		return fmt.Sprintf("**The device acted on the denial every time.** No delay up to %s made it stop waiting "+
+			"and take the local password, so its reply timeout is above that and this run does not bound it from "+
+			"above.", rows[len(rows)-1].delay)
 	}
 	var b strings.Builder
 	first := gaveUp[0]
 	b.WriteString(fmt.Sprintf("**Measured reply timeout: about %s.** ", first.took.Round(100*time.Millisecond)))
 	if len(waited) > 0 {
 		last := waited[len(waited)-1]
-		b.WriteString(fmt.Sprintf("A FAIL delayed by %s was waited out (%s elapsed); one delayed by %s was not, "+
-			"and the login resolved after %s. So the timeout lies between %s and %s.\n\n",
+		b.WriteString(fmt.Sprintf("A FAIL delayed by %s was acted on — the login was refused, %s elapsed. One "+
+			"delayed by %s was not: that login **succeeded on the local password** after %s. So the timeout "+
+			"lies between %s and %s.\n\n",
 			last.delay, last.took.Round(10*time.Millisecond), first.delay, first.took.Round(10*time.Millisecond),
 			last.delay, first.took.Round(100*time.Millisecond)))
 	} else {
-		b.WriteString(fmt.Sprintf("Even the shortest delay tried, %s, was not waited out.\n\n", first.delay))
+		b.WriteString(fmt.Sprintf("Even the shortest delay tried, %s, was not acted on: that login succeeded on "+
+			"the local password.\n\n", first.delay))
 	}
-	outcome := "refused the login"
-	if first.ok {
-		outcome = "**accepted the local password**, exactly as it does when the server is unreachable (L4)"
+	b.WriteString("When the FAIL arrived after that, the device **accepted the local password**, exactly as it " +
+		"does when the server is unreachable (L4). A denial delayed past the timeout is therefore not a denial: " +
+		"it is indistinguishable from an outage, and the device takes the fall-through branch. ")
+	retrans := 0
+	for _, r := range rows {
+		if r.attempts > 1 {
+			retrans++
+		}
 	}
-	b.WriteString(fmt.Sprintf("When the FAIL arrived after that, the device %s. ", outcome))
-	if first.ok {
-		b.WriteString("A denial delayed past the timeout is therefore not a denial: it is indistinguishable " +
-			"from an outage, and the device takes the fall-through branch. ")
+	if retrans > 0 {
+		fmt.Fprintf(&b, "\n\n**This device retransmits**: %d of %d rows produced more than one redeem record for "+
+			"a single login attempt. So the elapsed column measures the retransmission schedule as much as the "+
+			"reply timeout, and the figure above is read off which logins the device acted on rather than off "+
+			"the clock. ", retrans, len(rows))
 	}
 	b.WriteString("**port49's own default `limits.auth_failure_delay_max` is 5s** " +
 		"(internal/config), reached after five consecutive failures for one `(nas, username)` pair. " +
