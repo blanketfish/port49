@@ -176,7 +176,10 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	s.h.metrics.StoreOps.WithLabelValues("get_receipt", storeOutcome(err)).Inc()
 	switch {
 	case err == nil:
-		if r.CredentialSHA256 == credHash {
+		// subtle, not ==, for the same reason every other credential
+		// comparison in this package uses it: these are attacker-influenced
+		// values, and one rule is easier to audit than an exception.
+		if subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
 			rec.Session.CtxID = r.CtxID
 			return s.finish(rec, r.Status, decision.ReceiptReplayed)
 		}
@@ -222,7 +225,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		if errors.Is(err, store.ErrNotFound) {
 			r, rerr := s.h.store.GetReceipt(ctx, rk)
 			s.h.metrics.StoreOps.WithLabelValues("get_receipt", storeOutcome(rerr)).Inc()
-			if rerr == nil && r.CredentialSHA256 == credHash {
+			if rerr == nil && subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
 				rec.Session.CtxID = r.CtxID
 				return s.finish(rec, r.Status, decision.ReceiptReplayed)
 			}

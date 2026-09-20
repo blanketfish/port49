@@ -37,18 +37,34 @@ func New(now func() time.Time) *Store {
 
 func (s *Store) live(k store.TokenKey) []store.Token {
 	now := s.now()
-	out := s.tokens[k][:0]
-	for _, t := range s.tokens[k] {
+	set := s.tokens[k]
+	out := set[:0]
+	for _, t := range set {
 		if t.ExpiresAt.After(now) {
 			out = append(out, t)
 		}
 	}
+	clearTail(set, len(out))
 	if len(out) == 0 {
 		delete(s.tokens, k)
 	} else {
 		s.tokens[k] = out
 	}
 	return out
+}
+
+// clearTail zeroes what in-place compaction left past the new length. The
+// entries there are Token values for tokens that have been evicted, still
+// holding their Secret headers, unreachable through the map but alive for as
+// long as the backing array is.
+//
+// It clears the entries, never the secret bytes they point at: a surviving
+// token copied down during compaction leaves a duplicate of itself in the
+// tail, so wiping the bytes would destroy a live token's secret.
+func clearTail(set []store.Token, n int) {
+	for i := n; i < len(set); i++ {
+		set[i] = store.Token{}
+	}
 }
 
 const sweepEvery = 1024
@@ -58,12 +74,14 @@ func (s *Store) sweepLocked() {
 
 	// Sweep tokens: delete TokenKey entries whose live set is empty
 	for k := range s.tokens {
-		live := s.tokens[k][:0]
-		for _, t := range s.tokens[k] {
+		set := s.tokens[k]
+		live := set[:0]
+		for _, t := range set {
 			if t.ExpiresAt.After(now) {
 				live = append(live, t)
 			}
 		}
+		clearTail(set, len(live))
 		if len(live) == 0 {
 			delete(s.tokens, k)
 		} else {

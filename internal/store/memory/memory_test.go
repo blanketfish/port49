@@ -246,3 +246,36 @@ func TestDeleteContext(t *testing.T) {
 		t.Fatalf("delete of missing key returned error: %v", err)
 	}
 }
+
+// TestCompactionZeroesTheTail covers what in-place compaction leaves behind.
+// live() and sweepLocked() rewrite the slice over its own backing array, so
+// the elements past the new length still hold Token values -- Secret headers
+// included -- for tokens that have been evicted. They are unreachable through
+// the map but very much still in the process, for as long as the array lives.
+func TestCompactionZeroesTheTail(t *testing.T) {
+	now := time.Now()
+	s := New(func() time.Time { return now })
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	if _, err := s.PutToken(context.Background(), k, store.Token{Secret: []byte("p49_stays"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	// The expiring token is last, so compaction drops it from the tail rather
+	// than overwriting it with a live one.
+	if _, err := s.PutToken(context.Background(), k, store.Token{Secret: []byte("p49_expires"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(2 * time.Minute)
+	if cands, err := s.Candidates(context.Background(), k); err != nil || len(cands) != 1 {
+		t.Fatalf("want only the live token, got %d, %v", len(cands), err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	set := s.tokens[k]
+	for i, tok := range set[len(set):cap(set)] {
+		if tok.Secret != nil {
+			t.Fatalf("tail entry %d still holds an evicted token's secret: %q", i, tok.Secret)
+		}
+	}
+}
