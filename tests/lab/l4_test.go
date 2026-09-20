@@ -296,7 +296,7 @@ func l4JunosConfigEvidence(t *testing.T, l *lab) (evidence, channel string) {
 			"statement of either form**."
 	}
 	evidence += "\n\nThe order in force when this was read, per `show configuration system authentication-order`:\n\n```\n" +
-		strings.TrimSpace(stripPrompt(order)) + "\n```"
+		redactSecrets(strings.TrimSpace(stripPrompt(order))) + "\n```"
 	return evidence, c.name
 }
 
@@ -516,6 +516,30 @@ func l4Assert(t *testing.T, cells []l4Cell) {
 	if unreach == 0 {
 		t.Error("no cell measured a device's response to an unreachable server")
 	}
+}
+
+// redactSecrets removes credential material from device output before a results
+// note quotes it.
+//
+// A results note may not contain a password, key or hash, and a device is happy
+// to print all three at the slightest provocation. `show configuration system
+// tacplus-server` answers with `secret "$9$..."`, which is the shared key in
+// Junos' reversible type-9 encoding, and `show running-config | include tacacs`
+// on EOS answers with `key 7 ...`, which is the same thing in Arista's. Both
+// landed in a draft of the L13 note. The keyword survives so the reader can see
+// which statement was there; the value does not.
+func redactSecrets(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, ln := range lines {
+		lower := strings.ToLower(ln)
+		for _, kw := range []string{"secret", "password", "key"} {
+			if j := strings.Index(lower, kw); j >= 0 {
+				lines[i] = ln[:j+len(kw)] + " <redacted by the harness>"
+				break
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // oneLine flattens a device transcript for a table cell.
