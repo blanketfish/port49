@@ -80,6 +80,14 @@ var platforms = []platform{
 		"vrnetlab/juniper_vjunos-router:23.4R2-S2.1", "vJunos-router 23.4R2-S2.1", 8 * time.Minute},
 	{"vsrx", "juniper_vsrx", "topologies/vsrx.clab.yml", "172.100.100.22", "vsrx1",
 		"vrnetlab/juniper_vsrx:21.4R3.15", "vSRX3 21.4R3.15", 6 * time.Minute},
+	// N9Kv's budget is a placeholder, not a measurement: nothing on this host has
+	// ever booted this image. 15 minutes is a starting figure chosen because the
+	// vrnetlab launcher gives the VM 10 GB of RAM and 4 vCPUs and then drives a
+	// POAP-prompt dialogue over the serial console before it applies any
+	// configuration at all. Measure the first successful deploy and replace this
+	// number with what was measured, the way the three platforms above were.
+	{"nxos", "cisco_nxos", "topologies/nxos.clab.yml", "172.100.100.31", "nx1",
+		"vrnetlab/cisco_n9kv:9300v64-10.4.2.F", "Nexus 9300v 10.4(2)F", 15 * time.Minute},
 }
 
 const (

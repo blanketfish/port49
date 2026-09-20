@@ -35,9 +35,19 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
      AMD host, patch the CPU check by hand and use `make docker-image` — see the plan's
      Task 15 prerequisites for the exact guestfish lines. On Intel, `make`.
    - vSRX 21.4R3.15: copy the qcow2 into `vrnetlab/juniper/vsrx`, `make` there.
+   - Nexus 9300v 10.4(2)F: copy the qcow2 into `vrnetlab/cisco/n9kv` **renamed to
+     `n9kv-<version>.qcow2`** — the Makefile derives the image tag from that name with a `sed`,
+     and a name it cannot parse fails the build with a version-string error. The lab uses
+     `n9kv-9300v64-10.4.2.F.qcow2`, which gives `vrnetlab/cisco_n9kv:9300v64-10.4.2.F`. Then
+     `make docker-image` there. This build only packages the qcow2; it never boots the VM.
    Check `docker images` for the tag each build produced and match the `image:` lines in
    `topologies/`. Expected: `vrnetlab/arista_veos:4.32.2F`,
-   `vrnetlab/juniper_vjunos-router:23.4R2-S2.1`, `vrnetlab/juniper_vsrx:21.4R3.15`.
+   `vrnetlab/juniper_vjunos-router:23.4R2-S2.1`, `vrnetlab/juniper_vsrx:21.4R3.15`,
+   `vrnetlab/cisco_n9kv:9300v64-10.4.2.F`.
+
+   The N9Kv asks the host for more than the others: the launcher gives the VM **10 GB of RAM
+   and 4 vCPUs**. Do not deploy it beside another VM platform on a machine that cannot spare
+   both.
 4. `export PORT49_LAB_KEY=labsecret`
 5. `make build && make lab`
 
@@ -90,10 +100,11 @@ these figures.
 - At the end of the run every topology is destroyed with `containerlab destroy --cleanup`.
 
 Select platforms with `PORT49_LAB_PLATFORMS`, a comma-separated list of `eos`, `vjunos`,
-`vsrx` (default: all three). One at a time is the normal way to run it:
+`vsrx`, `nxos` (default: all four). One at a time is the normal way to run it:
 
 ```sh
 PORT49_LAB_PLATFORMS=eos make lab
+PORT49_LAB_PLATFORMS=nxos make lab
 ```
 
 `register_test.go` has one test per open register entry this plan closes: L1, L2, L5, L6, L8,
