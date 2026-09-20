@@ -113,6 +113,34 @@ when the measurement was made and fails when it is inconclusive** — whichever 
 behaved is the result, but "the login never happened" or "no matching record reached the log"
 is a failure, because nothing was measured.
 
+## Transports other than SSH
+
+`transport_test.go` measures eAPI, NX-API and NETCONF. Everything else here measures a person
+typing at an SSH session, and every register row closed so far is a claim about that one
+transport; these tests are the first that are not.
+
+The question they exist for is the third one in the file's own header: **does a second request
+with the same credential re-authenticate?** port49 tokens are single-use, so a transport that
+authenticates per HTTP request spends a token per request — an operator who pastes a token
+into a script that makes forty calls gets one success and thirty-nine denials. Spec §13
+decision 15 is provisional on that measurement and register entry L7 is the row it names.
+
+The eAPI and NX-API tests write `results/L7-<platform>.md`. The NETCONF test writes
+`results/netconf-<platform>.md` and not an `L<N>` name, because §15 has **no row** for NETCONF
+AAA behaviour and adding one is not a test's to do. Propose the row, then rename the note.
+
+These tests have not been run. The `<edit-config>` payloads in `netconfEdit` were written from
+model documentation, which is not a measurement: expect the first run to collect an
+`<rpc-error>` or two, and rewrite the payload from what the device said rather than from more
+documentation.
+
+The device-side switches they need are in the startup configs and nowhere else: `management
+api http-commands` and `management api netconf` in `configs/eos-startup.cfg`, `system services
+netconf ssh` in `configs/vjunos-startup.conf`, and `feature nxapi` / `feature netconf` /
+`nxapi use-vrf management` in `configs/nxos-startup.cfg`. EOS serves NETCONF on **port 22** as
+an SSH subsystem; Junos and NX-OS serve it on **830**. `netconfPort` in `transport_test.go`
+carries that difference, so change the two together.
+
 ## Tokens
 
 `port49d-lab.yaml` seeds single-use tokens, because redemption deletes the token: every login

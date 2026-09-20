@@ -835,7 +835,16 @@ func mustBeSeeded(t *testing.T, secret string) {
 // these are shipping network OS images, some of them years old, and a handshake
 // this client refuses would look exactly like a device that failed to boot.
 func (l *lab) dial(user, password string, timeout time.Duration) (*ssh.Client, error) {
-	nc, err := net.DialTimeout("tcp", l.p.addr+":22", timeout)
+	return l.dialHostPort(user, password, l.p.addr+":22", timeout)
+}
+
+// dialHostPort is dial against an explicit host:port. NETCONF is why it exists:
+// the transport tests reach it on 830 on Junos and NX-OS and on 22 on EOS, and
+// they need the same deliberately wide algorithm lists — a handshake refused
+// for want of a 2016 cipher would look exactly like a device that has not
+// enabled NETCONF at all.
+func (l *lab) dialHostPort(user, password, hostport string, timeout time.Duration) (*ssh.Client, error) {
+	nc, err := net.DialTimeout("tcp", hostport, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -881,7 +890,7 @@ func (l *lab) dial(user, password string, timeout time.Duration) (*ssh.Client, e
 			},
 		},
 	}
-	c, chans, reqs, err := ssh.NewClientConn(nc, l.p.addr+":22", cfg)
+	c, chans, reqs, err := ssh.NewClientConn(nc, hostport, cfg)
 	if err != nil {
 		nc.Close()
 		return nil, err
