@@ -3458,18 +3458,55 @@ implemented against a guess. This section is the one place the distinction is ke
 
 | ID | Claim to measure | What rests on it | Platforms | Status |
 |---|---|---|---|---|
-| **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key `(nas, port)` (§5.1.1, §5.6); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS 2026-09-17 (`port` is the constant string `ssh`) and on Junos 2026-09-20 (`port` is the empty string), both identical across concurrent sessions: `tests/lab/results/L1-arista_eos.md`, `L1-juniper_vjunos-router.md`, `L1-juniper_vsrx.md`. NX-OS and IOS-XE unmeasured; console, eAPI, NX-API and NETCONF unmeasured on every platform |
-| **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — measured on EOS 2026-09-17, displayed in full at 61 characters: `tests/lab/results/L2-arista_eos.md`. Truncation length still unmeasured (EOS authorizes the command word alone, so no long `server_msg` was ever built). Not applicable on Junos, which sends no per-command REPLY (decision 21). NX-OS and IOS-XE unmeasured |
+| **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key `(nas, port)` (§5.1.1, §5.6); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS and Junos; see below |
+| **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed on EOS; truncation length unmeasured; see below |
 | **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6) | EOS, NX-OS, IOS-XE | open |
-| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — first evidence 2026-09-20, and the two Junos images disagree. With `authentication-order [ tacplus password ]` and the TACACS+ server refusing the connection, vJunos-router 23.4R2-S2.1 falls through to the local password and vSRX 21.4R3.15 **does not** — it admits nobody over SSH, including `root`; only the console gets in. `tests/lab/results/juniper_vsrx-config-verified.md`. Fall-through on a *denial* rather than an unreachable server is unmeasured, as is `deadtime` and every non-Junos platform |
-| **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | open — measured on EOS 2026-09-17 and Junos 2026-09-20: no WATCHDOG at all on any of the three, over a 2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`, `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`. NX-OS and IOS-XE unmeasured |
-| **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — measured on EOS 2026-09-17 (START 187ms after login, STOP 15ms after close) and Junos 2026-09-20 (both ~4.2s late, as `cmd=login` / `cmd=logout`, all records within 3ms of each other — batching, not lag). `tests/lab/results/L6-arista_eos.md`, `L6-juniper_vjunos-router.md`, `L6-juniper_vsrx.md`. Retry-to-the-next-server unmeasured on every platform: the lab has one TACACS+ server. NX-OS and IOS-XE unmeasured |
+| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — first evidence 2026-09-20: the two Junos images disagree; see below |
+| **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | open — no WATCHDOG on EOS or Junos; see below |
+| **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
 | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open |
-| **L8** | The maximum password length each platform accepts at an interactive prompt and via PAP. | The 30-character handle (design document §8) | all | open — the interactive prompt measured on EOS 2026-09-17 and Junos 2026-09-20: 138 characters arrive intact on all three, so the 30-character handle clears easily. `tests/lab/results/L8-arista_eos.md`, `L8-juniper_vjunos-router.md`, `L8-juniper_vsrx.md`. **PAP unmeasured on every platform**, and it is half the claim. NX-OS and IOS-XE unmeasured |
+| **L8** | The maximum password length each platform accepts at an interactive prompt and via PAP. | The 30-character handle (design document §8) | all | open — interactive prompt measured on EOS and Junos; PAP unmeasured; see below |
 | **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. | Projection generator constraints (§8) | Junos | open |
-| **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — measured on EOS 2026-09-17 (`service=shell`; attributes `service`, `cmd`, `cmd-arg`) and Junos 2026-09-20 (`service=junos-exec`; `service` is the only attribute on the session request). `tests/lab/results/L10-arista_eos.md`, `L10-juniper_vjunos-router.md`, `L10-juniper_vsrx.md`. NX-OS and IOS-XE unmeasured |
+| **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos; see below |
 | **L11** | Junos precedence, repetition, and length behavior for wire and class rules. | The projection model (§8) | Junos (SRX) | **closed** — measured 2026-09-03; results in `port49-junos-lab-tests-results.md` |
 | **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
+
+**What has been measured so far, per row.** These entries are all still open — rule 5 keeps a
+row open while any platform it lists is unmeasured, and NX-OS and IOS-XE arrive with plan 3 —
+but the measurements exist and the notes are in the repository.
+
+- **L1** — SSH only. EOS 2026-09-17: `port` is the constant string `ssh`. Junos 2026-09-20:
+  `port` is the **empty string**. On both, the two concurrent sessions reported the same value,
+  and each session's value was stable for its life.
+  `tests/lab/results/L1-arista_eos.md`, `L1-juniper_vjunos-router.md`, `L1-juniper_vsrx.md`.
+  *Unmeasured:* NX-OS, IOS-XE, and the console, eAPI, NX-API and NETCONF transports everywhere.
+- **L2** — EOS 2026-09-17: the 61-character `server_msg` was displayed to the operator in full.
+  `tests/lab/results/L2-arista_eos.md`. Not applicable on Junos, which sends no per-command
+  REPLY (decision 21). *Unmeasured:* the truncation length, because EOS authorizes the command
+  word alone and no long `server_msg` was ever built; NX-OS and IOS-XE.
+- **L4** — 2026-09-20, first evidence, and the two Junos images disagree. With
+  `authentication-order [ tacplus password ]` and the TACACS+ connection refused, vJunos-router
+  23.4R2-S2.1 falls through to the local password; vSRX 21.4R3.15 **does not**, admitting nobody
+  over SSH including `root`, with only the serial console left.
+  `tests/lab/results/juniper_vsrx-config-verified.md`. *Unmeasured:* fall-through on a denial
+  rather than on an unreachable server, `deadtime`, and every non-Junos platform.
+- **L5** — EOS 2026-09-17 and Junos 2026-09-20: no WATCHDOG at all on any of the three, over a
+  2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`,
+  `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`. *Unmeasured:* NX-OS, IOS-XE.
+- **L6** — EOS 2026-09-17: exec START 187ms after the login, STOP 15ms after the close. Junos
+  2026-09-20: both about 4.2s late, sent as `cmd=login` and `cmd=logout`, with all records
+  landing within 3ms of each other — batching, not lag. `tests/lab/results/L6-arista_eos.md`,
+  `L6-juniper_vjunos-router.md`, `L6-juniper_vsrx.md`. *Unmeasured:* whether a device retries
+  accounting to the same server or fails to the next — the lab has one TACACS+ server — and
+  NX-OS and IOS-XE.
+- **L8** — the interactive prompt, EOS 2026-09-17 and Junos 2026-09-20: 138 characters arrive
+  intact on all three, so the 30-character handle clears easily.
+  `tests/lab/results/L8-arista_eos.md`, `L8-juniper_vjunos-router.md`, `L8-juniper_vsrx.md`.
+  *Unmeasured:* **PAP on every platform**, which is half the claim; NX-OS and IOS-XE.
+- **L10** — EOS 2026-09-17: `service=shell`, attributes spelled `cmd`, `cmd-arg`, `service`.
+  Junos 2026-09-20: `service=junos-exec`, with `service` the only attribute on the session
+  request. `tests/lab/results/L10-arista_eos.md`, `L10-juniper_vjunos-router.md`,
+  `L10-juniper_vsrx.md`. *Unmeasured:* NX-OS, IOS-XE.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
