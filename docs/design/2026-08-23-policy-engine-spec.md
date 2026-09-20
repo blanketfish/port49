@@ -3621,9 +3621,21 @@ but the measurements exist and the notes are in the repository.
   the session authorization matched and every *command* authorization missed, so the operator got `Error:
   AAA authorization failed`. Neither was intermittent: every session in every run behaved this way.
 
-  Concurrency does not rescue it either. Two overlapping vEOS sessions both reported `vty4` at authorization,
+  Concurrency did not rescue it either. Two overlapping vEOS sessions both reported `vty4` at authorization,
   and two overlapping N9Kv sessions both reported `0` — one denied `username_mismatch`, the other
   `context_missing`.
+
+  **Re-measured on vEOS after the re-key, 2026-09-20.** The `port` observations are unchanged — the device
+  still says `ssh` at authentication and `vty<n>` at authorization, and two concurrent sessions still cannot
+  be told apart by it — and the outcome is now the opposite. Both overlapping sessions were answered
+  `permit context_matched` at their session authorization, under two distinct `ctx_id`s, with the device
+  reporting a *different* vty for each (`vty4` and `vty6`) and neither matching the `ssh` they authenticated
+  under. Off the wire, the AUTHOR RESPONSE that was `status=0x10 server_msg="port49: this session was not
+  authenticated by port49"` is now `status=0x01` carrying `priv-lvl=15`. The whole vEOS decision log for
+  that run holds **no `context_missing` and no `username_mismatch` record at all**, where the previous run
+  denied three of twelve session authorizations. L3 is the corroboration: it previously had to strip the
+  device's `aaa authorization` lines to get a token user to a prompt, and now runs with them in force.
+  `tests/lab/results/L1-arista_eos.md` ("What the two sessions were actually told"), `L3-arista_eos.md`.
 
   The earlier EOS note said `port` was "stable for a session's life". It was not wrong about what it
   measured; it measured the wrong set, grouping records by `ctx_id`, which is written only when the lookup
@@ -3656,6 +3668,13 @@ but the measurements exist and the notes are in the repository.
   concurrent enables differ in `port` (`vty4` vs `vty5`) and not in `rem_addr`. An enable answered with a
   `kind: enable` token is allowed and raises the prompt; EOS sends no session re-authorization afterwards,
   and the per-command accounting that follows still carries `priv-lvl=1`.
+
+  The first measurement of this row had to strip the device's `aaa authorization exec` and `aaa
+  authorization commands` lines for the test's duration, because under the `(nas, port)` key no token user
+  could reach a prompt to type `enable` at. Re-measured 2026-09-20 after the re-key **with those lines in
+  force**, and the answers above are unchanged. What changed is that the run now also records AUTHOR
+  exchanges — none existed while the workaround was in place — and the allowed-enable trace is a complete
+  `redeem` → `authorize_session permit context_matched` → `authorize_command` path.
 
   **Nexus 9300v 10.4(2)F has no enable exchange at all.** `disable` answers `% Invalid command at '^'
   marker.` NX-OS raises privilege by role at login, and an enable exists only under `feature privilege`,

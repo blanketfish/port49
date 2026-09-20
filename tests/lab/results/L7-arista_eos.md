@@ -25,7 +25,7 @@ Transport measured: **eAPI (HTTPS JSON-RPC `runCmds`)**. Each step below was a s
 
 **Yes.** The first request as `eapi01` cost 1 authentication exchange(s) and the second, with the same token, cost 1 more. Every request is a fresh authentication over this transport.
 
-**And it was allowed anyway**: `verdict=permit reason=receipt_replayed`. The token was spent by the first call, and the second was answered out of the receipt port49 kept for `(nas, port, username)` rather than out of the store. So a script that makes forty calls with one token works — for as long as that receipt lives. What decision 15 rests on is therefore not "does it re-authenticate" but **`receipt_ttl`**: past it, the next call in the same script is the first denial, and nothing about the credential has changed.
+**And it was allowed anyway**: `verdict=permit reason=receipt_replayed`. The token was spent by the first call, and the second was answered out of the receipt port49 kept for `(nas, username, credential_sha256)` rather than out of the store — the same credential hashes to the same key, so a repeat finds its own receipt. So a script that makes forty calls with one token works — for as long as that receipt lives. What decision 15 rests on is therefore not "does it re-authenticate" but **`receipt_ttl`**: past it, the next call in the same script is the first denial, and nothing about the credential has changed.
 
 ### `port` and `rem_addr` over this transport
 
@@ -33,11 +33,11 @@ Transport measured: **eAPI (HTTPS JSON-RPC `runCmds`)**. Each step below was a s
 - `rem_addr`: `172.100.100.1`
 - `auth.method`: `ascii`
 
-These are the values this transport produced. Compare them with the SSH figures in `L1-arista_eos.md`: a transport that reports the same constant `port` as SSH gives the login context key `(nas, port)` nothing to tell an API call and a shell session apart.
+These are the values this transport produced. Compare them with the SSH figures in `L1-arista_eos.md`. Nothing keys on `port` any more (spec §13, decision 15), so a transport reporting the same constant as SSH no longer costs anything; what these values are still for is accounting annotation and the record an operator reads at 3am.
 
 ### How many TCP connections the device opened to port49d
 
-**46** TCP connection(s) were opened toward port49d during this test, from source port(s) 37668, 37684, 37690, 37706, 37720, 37724, 40820, 40834, 40848, 40850, 40862, 40878, ....
+**46** TCP connection(s) were opened toward port49d during this test, from source port(s) 36782, 36784, 36790, 36796, 36812, 36822, 55344, 55352, 55360, 55368, 55382, 55392, ....
 
 Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/captures/L7-eapi-arista_eos.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
 
@@ -46,31 +46,31 @@ Read this against the step table above. One connection per authentication exchan
 **read `show version`** (as `eapi01`)
 
 ```
-2026-09-20T18:05:19.783Z event=redeem verdict=permit reason=token_redeemed auth.method=ascii port="command-api" rem_addr="172.100.100.1"
-2026-09-20T18:05:19.939Z event=account verdict= reason= flags=start port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=39
+2026-09-20T18:13:06.170Z event=redeem verdict=permit reason=token_redeemed auth.method=ascii port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:06.327Z event=account verdict= reason= flags=start port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=44
     accounting AV: service=shell
-    accounting AV: start_time=1789927518
+    accounting AV: start_time=1789927985
     accounting AV: timezone=UTC
-2026-09-20T18:05:19.939Z event=authorize_session verdict=permit reason=context_matched port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:06.328Z event=authorize_session verdict=permit reason=context_matched port="command-api" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd*
-2026-09-20T18:05:19.950Z event=authorize_command verdict=permit reason=permit_dominates port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:06.340Z event=authorize_command verdict=permit reason=permit_dominates port="command-api" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=show
     request AV: cmd-arg=version
     request AV: cmd-arg=<cr>
-2026-09-20T18:05:19.953Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=27
+2026-09-20T18:13:06.342Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=1
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1789927518
+    accounting AV: start_time=1789927985
     accounting AV: timezone=UTC
     accounting AV: cmd=show version <cr>
-2026-09-20T18:05:19.955Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=39
+2026-09-20T18:13:06.344Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=44
     accounting AV: service=shell
-    accounting AV: start_time=1789927518
+    accounting AV: start_time=1789927985
     accounting AV: timezone=UTC
     accounting AV: elapsed_time=1
 ```
@@ -79,37 +79,37 @@ What the device answered:
 
 ```
 HTTP 200 OK
-{"jsonrpc": "2.0", "id": "1", "result": [{"mfgName": "Arista", "modelName": "vEOS-lab", "hardwareRevision": "", "serialNumber": "", "systemMacAddress": "0c:00:b9:01:d6:86", "hwMacAddress": "00:00:00:00:00:00", "configMacAddress": "00:00:00:00:00:00", "version": "4.31.2F", "architecture": "x86_64", "internalVersion": "4.31.2F-35442176.4312F", "internalBuildId": "48bb2b78-5325-4a32-b124-dcd4e37fd3bc", "imageFormatVersion": "1.0", "imageOptimization": "None", "bootupTimestamp": 1789927153.248726, "uptime": 365.68, "memTotal": 1979668, "memFree": 709856, "isIntlVersion": false}]}
+{"jsonrpc": "2.0", "id": "1", "result": [{"mfgName": "Arista", "modelName": "vEOS-lab", "hardwareRevision": "", "serialNumber": "", "systemMacAddress": "0c:00:78:8f:85:4e", "hwMacAddress": "00:00:00:00:00:00", "configMacAddress": "00:00:00:00:00:00", "version": "4.31.2F", "architecture": "x86_64", "internalVersion": "4.31.2F-35442176.4312F", "internalBuildId": "48bb2b78-5325-4a32-b124-dcd4e37fd3bc", "imageFormatVersion": "1.0", "imageOptimization": "None", "bootupTimestamp": 1789927620.2659044, "uptime": 365.64, "memTotal": 1979668, "memFree": 709936, "isIntlVersion": false}]}
 ```
 
 **read again, same token** (as `eapi01`)
 
 ```
-2026-09-20T18:05:29.974Z event=redeem verdict=permit reason=receipt_replayed auth.method=ascii port="command-api" rem_addr="172.100.100.1"
-2026-09-20T18:05:29.976Z event=account verdict= reason= flags=start port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=28
+2026-09-20T18:13:16.364Z event=redeem verdict=permit reason=receipt_replayed auth.method=ascii port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:16.366Z event=account verdict= reason= flags=start port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=2
     accounting AV: service=shell
-    accounting AV: start_time=1789927528
+    accounting AV: start_time=1789927995
     accounting AV: timezone=UTC
-2026-09-20T18:05:29.977Z event=authorize_session verdict=permit reason=context_matched port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:16.368Z event=authorize_session verdict=permit reason=context_matched port="command-api" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd*
-2026-09-20T18:05:29.982Z event=authorize_command verdict=permit reason=permit_dominates port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:16.373Z event=authorize_command verdict=permit reason=permit_dominates port="command-api" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=show
     request AV: cmd-arg=version
     request AV: cmd-arg=<cr>
-2026-09-20T18:05:29.985Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=40
+2026-09-20T18:13:16.375Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=3
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1789927528
+    accounting AV: start_time=1789927995
     accounting AV: timezone=UTC
     accounting AV: cmd=show version <cr>
-2026-09-20T18:05:29.986Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=28
+2026-09-20T18:13:16.377Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=2
     accounting AV: service=shell
-    accounting AV: start_time=1789927528
+    accounting AV: start_time=1789927995
     accounting AV: timezone=UTC
     accounting AV: elapsed_time=1
 ```
@@ -118,67 +118,67 @@ What the device answered:
 
 ```
 HTTP 200 OK
-{"jsonrpc": "2.0", "id": "1", "result": [{"mfgName": "Arista", "modelName": "vEOS-lab", "hardwareRevision": "", "serialNumber": "", "systemMacAddress": "0c:00:b9:01:d6:86", "hwMacAddress": "00:00:00:00:00:00", "configMacAddress": "00:00:00:00:00:00", "version": "4.31.2F", "architecture": "x86_64", "internalVersion": "4.31.2F-35442176.4312F", "internalBuildId": "48bb2b78-5325-4a32-b124-dcd4e37fd3bc", "imageFormatVersion": "1.0", "imageOptimization": "None", "bootupTimestamp": 1789927153.2409468, "uptime": 375.72, "memTotal": 1979668, "memFree": 710884, "isIntlVersion": false}]}
+{"jsonrpc": "2.0", "id": "1", "result": [{"mfgName": "Arista", "modelName": "vEOS-lab", "hardwareRevision": "", "serialNumber": "", "systemMacAddress": "0c:00:78:8f:85:4e", "hwMacAddress": "00:00:00:00:00:00", "configMacAddress": "00:00:00:00:00:00", "version": "4.31.2F", "architecture": "x86_64", "internalVersion": "4.31.2F-35442176.4312F", "internalBuildId": "48bb2b78-5325-4a32-b124-dcd4e37fd3bc", "imageFormatVersion": "1.0", "imageOptimization": "None", "bootupTimestamp": 1789927620.2588763, "uptime": 375.68, "memTotal": 1979668, "memFree": 711268, "isIntlVersion": false}]}
 ```
 
 **configure `snmp-server location`** (as `eapi02`)
 
 ```
-2026-09-20T18:05:40.007Z event=redeem verdict=permit reason=token_redeemed auth.method=ascii port="command-api" rem_addr="172.100.100.1"
-2026-09-20T18:05:40.163Z event=account verdict= reason= flags=start port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=41
+2026-09-20T18:13:26.400Z event=redeem verdict=permit reason=token_redeemed auth.method=ascii port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:26.556Z event=account verdict= reason= flags=start port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=4
     accounting AV: service=shell
-    accounting AV: start_time=1789927539
+    accounting AV: start_time=1789928006
     accounting AV: timezone=UTC
-2026-09-20T18:05:40.165Z event=authorize_session verdict=permit reason=context_matched port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:26.557Z event=authorize_session verdict=permit reason=context_matched port="command-api" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd*
-2026-09-20T18:05:40.171Z event=authorize_command verdict=permit reason=permit_dominates port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:26.563Z event=authorize_command verdict=permit reason=permit_dominates port="command-api" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=enable
     request AV: cmd-arg=<cr>
-2026-09-20T18:05:40.172Z event=authorize_command verdict=permit reason=permit_dominates port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:26.565Z event=authorize_command verdict=permit reason=permit_dominates port="command-api" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=configure
     request AV: cmd-arg=<cr>
-2026-09-20T18:05:40.173Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=29
+2026-09-20T18:13:26.565Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=45
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1789927539
+    accounting AV: start_time=1789928006
     accounting AV: timezone=UTC
     accounting AV: cmd=enable <cr>
-2026-09-20T18:05:40.175Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=30
+2026-09-20T18:13:26.566Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=46
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1789927539
+    accounting AV: start_time=1789928006
     accounting AV: timezone=UTC
     accounting AV: cmd=configure <cr>
-2026-09-20T18:05:40.176Z event=authorize_command verdict=permit reason=permit_dominates port="command-api" rem_addr="172.100.100.1"
+2026-09-20T18:13:26.568Z event=authorize_command verdict=permit reason=permit_dominates port="command-api" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=snmp-server
     request AV: cmd-arg=location
     request AV: cmd-arg=port49-lab-eapi
     request AV: cmd-arg=<cr>
-2026-09-20T18:05:40.179Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=42
+2026-09-20T18:13:26.569Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=47
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1789927539
+    accounting AV: start_time=1789928006
     accounting AV: timezone=UTC
     accounting AV: cmd=snmp-server location port49-lab-eapi <cr>
-2026-09-20T18:05:40.181Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=43
+2026-09-20T18:13:26.571Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=48
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1789927539
+    accounting AV: start_time=1789928006
     accounting AV: timezone=UTC
     accounting AV: cmd=end <cr>
-2026-09-20T18:05:40.182Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
-    accounting AV: task_id=41
+2026-09-20T18:13:26.572Z event=account verdict= reason= flags=stop port="command-api" rem_addr="172.100.100.1"
+    accounting AV: task_id=4
     accounting AV: service=shell
-    accounting AV: start_time=1789927539
+    accounting AV: start_time=1789928006
     accounting AV: timezone=UTC
     accounting AV: elapsed_time=1
 ```
