@@ -56,12 +56,13 @@ type platform struct {
 	// 3 minutes in. The budgets are several times those, because a budget exists
 	// to end a run that is not going to finish, not to race the device.
 	//
-	// vSRX spends its whole budget every run and there is nothing wrong with the
-	// device. The gate is a breakglass login, and vSRX will not fall through
-	// `authentication-order` to a local password while the TACACS+ server is
-	// unreachable — see results/juniper_vsrx-config-verified.md. Its budget is
-	// therefore the shortest one that still clears the 3 minutes it needs to
-	// serve SSH, so the wait is not longer than it has to be.
+	// vSRX used to spend its whole budget every run, because the gate was a
+	// breakglass login and vSRX will not fall through `authentication-order` to
+	// a local password while the TACACS+ server is unreachable
+	// (results/juniper_vsrx-config-verified.md). waitDeviceReady now also accepts
+	// an authentication rejection, so vSRX passes as soon as sshd is serving
+	// rather than at the budget. Its budget stays the shortest that clears the
+	// 3 minutes it takes to get there.
 	//
 	// These numbers are a property of the host. The previous host could not boot
 	// a vmhost Junos image at all — see tests/lab/README.md, "Why this needs bare
@@ -92,7 +93,7 @@ const (
 	breakglassUser     = "breakglass"      // the local account both startup configs define
 	breakglassPassword = "breakglass-only" // that account's password, in both configs
 
-	spoolPath = "/tmp/port49-lab-acct.jsonl"
+	spoolPath     = "/tmp/port49-lab-acct.jsonl"
 	metricsAddr   = "127.0.0.1:9049"
 	tacacsAddr    = "172.100.100.1:49"
 	labSubnet     = "172.100.100.0/24"
@@ -153,9 +154,10 @@ type lab struct {
 	logPath  string
 	errPath  string
 
-	// configWarn records that the device's SSH answered but the startup config
-	// could not be confirmed applied. Not fatal on its own; the tests will say
-	// so if the device then behaves as though it has no AAA configuration.
+	// configWarn records that the device never served SSH authentication within
+	// its boot budget — neither a breakglass login nor an authentication
+	// rejection. Not fatal on its own; the tests run anyway and report what they
+	// see, and any note written in that state carries this as a caveat.
 	configWarn string
 
 	mu      sync.Mutex
@@ -377,36 +379,34 @@ func (l *lab) up() error {
 	}
 	l.deployed = true
 
-	// Readiness is a successful breakglass login and nothing weaker. Every
-	// cheaper signal proved false on the vJunos-router image: vrnetlab forwards
-	// port 22 into the VM, so the TCP connect succeeds immediately, and
-	// something answered a banner and even a key exchange around 40 seconds in
-	// while Junos itself was still minutes from serving SSH. A breakglass login
-	// cannot be faked by whatever answers first — that account exists only in
-	// the config from tests/lab/configs, and port49 is not listening yet, so
-	// reaching it also proves the device fell back to local as intended.
+	// Readiness is the device serving SSH authentication, proved by a breakglass
+	// login or by an authentication rejection — see waitDeviceReady for why a
+	// rejection counts and why requiring the login was a mistake.
 	//
 	// waitSSH still runs first, for an early sign of life in the log, but it is
-	// advisory and capped: on this image the banner never appeared at all for
+	// advisory and capped: on vJunos-router the banner never appeared at all for
 	// the first four minutes, and letting that consume the boot budget would
-	// starve the gate that actually decides.
+	// starve the gate that actually decides. A banner on its own proves nothing
+	// anyway — vrnetlab forwards port 22 into the VM from container start, and
+	// something answered a key exchange around 40 seconds in while Junos was
+	// still minutes from serving SSH.
 	deadline := time.Now().Add(l.p.boot)
 	if err := waitSSH(l.p.addr, min(2*time.Minute, time.Until(deadline))); err != nil {
-		fmt.Fprintf(os.Stderr, "lab: %s: no SSH banner yet (%v); still waiting for a login\n", l.p.name, err)
+		fmt.Fprintf(os.Stderr, "lab: %s: no SSH banner yet (%v); still waiting for authentication\n", l.p.name, err)
 	}
-	// This gate gets the whole remaining boot budget, and the reason is a run
+	// The gate gets the whole remaining boot budget, and the reason is a run
 	// that was thrown away. It used to be capped at 8 minutes, on the theory
 	// that the register tests could still say something against a device whose
-	// local login had not come up. On vJunos-router that theory cost 17 minutes
-	// and measured nothing: the gate gave up at 8m23s while the VM was still
+	// login had not come up. On vJunos-router that theory cost 17 minutes and
+	// measured nothing: the gate gave up at 8m23s while the VM was still
 	// mounting Junos packages, then all six register tests ran against a device
 	// whose SSH would not complete a handshake, and every one of them failed on
 	// the same i/o timeout. Waiting is what the budget is for; if the budget is
 	// wrong, the budget is what to change.
-	if err := l.waitConfigApplied(time.Until(deadline)); err != nil {
+	if err := l.waitDeviceReady(time.Until(deadline)); err != nil {
 		// Not fatal: the register tests still run and report exactly what they
-		// see, which is more useful than a bare setup failure. Every results
-		// note carries this caveat.
+		// see, which is more useful than a bare setup failure. A note written
+		// against a device in this state carries the caveat.
 		l.configWarn = err.Error()
 		fmt.Fprintf(os.Stderr, "lab: %s: WARNING: %v\n", l.p.name, err)
 	}
@@ -517,19 +517,76 @@ func waitSSH(addr string, within time.Duration) error {
 	return fmt.Errorf("%s: SSH never answered within %v (last error: %v)", addr, within, last)
 }
 
-func (l *lab) waitConfigApplied(within time.Duration) error {
+// waitDeviceReady blocks until the device is serving SSH authentication. Either
+// of two signals will do, and the weaker one is why this function exists.
+//
+// The strong signal is a breakglass login. It proves the startup config in
+// tests/lab/configs reached the device, because that account exists nowhere
+// else. The gate used to require it — and that was wrong, because it rests on
+// Junos falling through `authentication-order [ tacplus password ]` to the
+// local password while port49d is not listening yet. vJunos-router 23.4R2-S2.1
+// does that. vSRX 21.4R3.15 does not, measured: with the TACACS+ connection
+// refused outright it turned away breakglass, admin and root, and only the
+// serial console got in (results/juniper_vsrx-config-verified.md). So on one of
+// three default platforms the gate could never pass. It burned the whole boot
+// budget every run learning nothing, and stamped every vSRX results note with a
+// caveat that reads as doubt about a measurement that is sound.
+//
+// The narrow signal is an authentication *rejection*: the device completed a
+// key exchange and ran the authentication exchange through to a decision. That
+// is exactly what the register tests need — sshd up, the authentication
+// subsystem up — and it assumes nothing about fall-through. It is also not
+// fakeable by whatever answers port 22 first, which was the original worry:
+// vrnetlab forwards that port into the VM from container start, but a forwarded
+// port cannot refuse a password.
+//
+// What the narrow signal does not prove is that the startup config applied.
+// Nothing is lost: the register tests prove it far better, by exchanging TACACS+
+// with a device that only this config points at port49. A device that had not
+// applied it sends no TACACS+ packet at all, and every test fails on an empty
+// capture — which is how the missing `authentication-order` was found.
+//
+// Only when neither signal appears within the budget is something wrong, and
+// only then is configWarn set.
+func (l *lab) waitDeviceReady(within time.Duration) error {
 	deadline := time.Now().Add(within)
 	var last error
-	for time.Now().Before(deadline) {
-		c, err := l.dial("breakglass", "breakglass-only", 30*time.Second)
+	for {
+		c, err := l.dial(breakglassUser, breakglassPassword, 30*time.Second)
 		if err == nil {
 			c.Close()
+			fmt.Fprintf(os.Stderr, "lab: %s: ready: %s logged in, so the startup config is applied\n",
+				l.p.name, breakglassUser)
+			return nil
+		}
+		if isAuthRejection(err) {
+			fmt.Fprintf(os.Stderr, "lab: %s: ready: the device ran SSH authentication to a rejection, so sshd and "+
+				"its authentication subsystem are serving. %s was refused, which on this image means only that it "+
+				"will not fall through to a local password while port49d is not listening yet.\n",
+				l.p.name, breakglassUser)
 			return nil
 		}
 		last = err
-		time.Sleep(10 * time.Second)
+		if !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Second)
 	}
-	return fmt.Errorf("could not confirm the startup config was applied: breakglass never logged in within %v (last error: %v)", within, last)
+	return fmt.Errorf("the device never served SSH authentication within %v: neither a %s login nor an "+
+		"authentication rejection (last error: %v)", within, breakglassUser, last)
+}
+
+// isAuthRejection reports whether an SSH dial failed because the device ran the
+// authentication exchange and refused, rather than because it never got that
+// far. A refusal means the device is up; a timeout or a failed key exchange
+// means it is not.
+//
+// x/crypto/ssh gives this no type, so the message is the only signal. Both
+// strings below come from its own authentication failure path, and neither
+// appears on a dial or key-exchange error.
+func isAuthRejection(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "unable to authenticate") || strings.Contains(s, "no supported methods remain")
 }
 
 // diagnose collects what an operator would want after a platform failed to come
