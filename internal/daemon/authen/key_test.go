@@ -189,6 +189,75 @@ func TestReceiptCarryingAnotherCredentialIsRefused(t *testing.T) {
 	}
 }
 
+// TestCanonicalIsTheWholeKeyDiscriminator pins Canonical, which under the ruled
+// key is the only thing that separates one principal's context and receipts
+// from another's on a device. Two names in the same row of this table are the
+// same operator as far as every store lookup in this package is concerned, so
+// a change to Canonical is a change to the key and has to break this test
+// rather than pass quietly. It lives here rather than beside the function for
+// that reason; username_test.go covers the four rules in isolation.
+func TestCanonicalIsTheWholeKeyDiscriminator(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// Case. The device chooses this, not the operator: a login typed
+		// as ALICE and one typed as alice reach one context.
+		{"lower_cases", "ALICE", "alice"},
+		{"mixed_case_unchanged_otherwise", "AlIcE", "alice"},
+
+		// Surrounding whitespace, including the tabs and newlines a pasted
+		// username carries and U+00A0, which unicode.IsSpace also trims.
+		{"trims_spaces", "  alice  ", "alice"},
+		{"trims_tab_and_newline", "\talice\n", "alice"},
+		{"trims_no_break_space", "alice ", "alice"},
+		{"keeps_interior_space", "al ice", "al ice"},
+
+		// Empty, and the inputs that become empty. authen refuses an empty
+		// canonical username before it touches the store, so these are the
+		// names no token and no context can ever be keyed under.
+		{"empty_stays_empty", "", ""},
+		{"only_space_becomes_empty", "   ", ""},
+		{"bare_domain_suffix_becomes_empty", "@corp.example", ""},
+		{"bare_domain_prefix_becomes_empty", `CORP\`, ""},
+
+		// $enab{level}$ names. IOS-XE sends one of these on an enable START.
+		// Canonical leaves the shape alone, so it is a principal like any
+		// other and no token is minted under it -- but it lower-cases, so a
+		// device that sends $ENAB15$ and one that sends $enab15$ are one name.
+		{"enable_name_survives_intact", "$enab15$", "$enab15$"},
+		{"enable_name_lower_cased", "$ENAB15$", "$enab15$"},
+		{"enable_name_other_level", "$enab1$", "$enab1$"},
+		{"enable_name_loses_at_suffix", "$enab15$@corp.example", "$enab15$"},
+		{"enable_name_loses_domain_prefix", `CORP\$enab15$`, "$enab15$"},
+
+		// Non-ASCII. ToLower is Unicode-aware, so a directory that admits
+		// non-ASCII names has its own collisions: I-with-dot folds onto a
+		// plain i on this implementation, which merges three spellings.
+		{"latin1_folds", "ÄLICE", "älice"},
+		{"latin1_already_folded", "älice", "älice"},
+		{"greek_folds", "ΑΛΊΚΗ", "αλίκη"},
+		{"dotted_capital_i_folds_to_plain_i", "İD", "id"},
+		{"plain_capital_i_folds_to_plain_i", "ID", "id"},
+
+		// Prefix and suffix stripping, where both are present and where the
+		// separators repeat. Last backslash wins, first @ wins.
+		{"strips_both_affixes", `CORP\Alice@corp.example`, "alice"},
+		{"last_backslash_wins", `a\b\c`, "c"},
+		{"first_at_wins", "alice@corp@b.example", "alice"},
+		{"trailing_at_strips_nothing_else", "alice@", "alice"},
+		{"slash_is_not_a_separator", "alice/ssh", "alice/ssh"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Canonical(c.in); got != c.want {
+				t.Errorf("Canonical(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
 // TestRedeemRecordCarriesPortAndRemAddr is requirement (e) on the redeem side:
 // the fields leave the key but stay in the record.
 func TestRedeemRecordCarriesPortAndRemAddr(t *testing.T) {
