@@ -73,8 +73,16 @@ these figures.
 
 - `TestMain` resolves the repository root, `setcap cap_net_bind_service=+ep` on `bin/port49d`
   so it can bind port 49 unprivileged, and then, **one platform at a time**, deploys that
-  platform's topology, starts a `port49d` for it, and waits up to six minutes for the device's
-  SSH to answer.
+  platform's topology, waits for the device to serve SSH authentication, and starts a
+  `port49d` for it.
+- The wait has a per-platform budget, set from boots measured on this host and listed in the
+  `platforms` table in `harness_test.go`: **6 minutes for vEOS and vSRX, 8 for vJunos-router**.
+  A budget is there to end a run that is not going to finish, not to race the device — the
+  measured boots are 57s, about 3 minutes, and 1m31s respectively.
+- The device counts as ready when it either lets `breakglass` log in or runs SSH
+  authentication through to a rejection. The second is deliberate: vSRX will not fall through
+  `authentication-order` to a local password while port49d is not listening yet, so requiring
+  the login meant that platform could never pass. See `waitDeviceReady`.
 - Every register test then runs against that already-deployed device. The topologies are
   **deployed once per run**, not once per test: these are VMs and each boot costs minutes.
 - At the end of the run every topology is destroyed with `containerlab destroy --cleanup`.

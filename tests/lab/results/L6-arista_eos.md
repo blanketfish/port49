@@ -29,3 +29,13 @@ All accounting AV pairs, in arrival order:
 ```
 
 Retry-to-the-next-server behavior is not measured here: this lab has a single TACACS+ server, so nothing in this run shows what the device does when one is unreachable.
+
+---
+
+*Footnote, added 2026-09-20 without re-running the measurement.* The parenthesis above defines
+an exec record as one whose command vector is null. The Junos notes in this directory define it
+as one carrying no command at all **or** carrying only `login` or `logout`, because Junos sends
+its session records as `cmd=login` and `cmd=logout`. The rule was widened after this note was
+written. It does not change this measurement: every EOS record above carries no command vector,
+so both definitions classify all three identically. The widened rule is also now confined to the
+`juniper_` platforms, since `logout` is a command an EOS operator can type.
