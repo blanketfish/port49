@@ -936,11 +936,20 @@ not the principal:
 | enable, `enable_username: principal` | the key is the username, as above |
 | enable, `$enab{level}$` platforms | resolved through the `(nas, rem_addr)` secondary index; `rem_addr` MUST match, and an index entry resolving to more than one context MUST refuse rather than guess |
 
-`username_mismatch` (§5.7) survives the re-key and is **not** reachable from the
-command-authorization path any more. It remains the reason for the enable path above, where
-the username is resolved from context rather than read off the wire and can therefore
-disagree with it. The `$enab{level}$` path itself is unmeasured (§15, L3 lists IOS-XE) and
-stays provisional.
+**The username on the record the store returns MUST be re-checked against the one the lookup
+asked for**, on the command path and on the accounting path alike, and a mismatch MUST deny
+rather than authorize. The key already selects on it, so a correct store can never fail this;
+it is a guard against one that answers with a record it was not asked for. Without it a store
+fault yields a permit evaluated against another principal's context, and an accounting record
+that names the wrong principal — silently, because the record takes its username from the wire
+and its principal from the context and would assert the two belong together. This mirrors the
+credential-hash re-check the receipt path performs after its own lookup (§5.1.4).
+
+`username_mismatch` (§5.7) is therefore reachable two ways and not from a stranger's command,
+which is `context_missing`: on the enable path above, where the username is resolved from
+context rather than read off the wire and can genuinely disagree with it, and as the
+store-fault guard just described. The `$enab{level}$` path itself is unmeasured (§15, L3 lists
+IOS-XE) and stays provisional.
 
 #### port49 denies commands; it cannot end a session
 
@@ -958,7 +967,7 @@ did not generate and cannot verify MUST NOT delete state.
 
 | | Trigger | Authority |
 |---|---|---|
-| 1 | **Login redemption** on the same `(nas, username)` | port49 performed it — overwrites unconditionally, and logs the overwrite (above). An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7) |
+| 1 | **Login redemption** on the same `(nas, username)` | port49 performed it — overwrites unconditionally, and logs the overwrite (above). An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7). **That is a requirement on plan 2's escalate path, not a description of the tree** — see below |
 | 2 | **Revocation** — OIDC back-channel logout by `sid` or `sub`; a certificate appearing on a CRL or OCSP response by issuer and serial; a policy change withdrawing every grant | authoritative, from the identity layer (§5.1.4). Sets `revoked_at` rather than deleting, so the next command is denied `credential_revoked` with a `server_msg` saying so — distinguishable from a session port49 never saw. Row 6 reclaims the state |
 | 3 | **Session ceiling** — `session_expires` reached and the grace window elapsed | local, needs no external signal |
 | 3a | **Staleness ceiling** — `now - refreshed_at` beyond `staleness_ceiling` because the broker has been unreachable that long (design document §9) | local; denies `context_stale` with a `server_msg` naming the broker outage, retains the context so recovery resumes it |
@@ -966,6 +975,27 @@ did not generate and cannot verify MUST NOT delete state.
 | 5 | — | **withdrawn 2026-09-20.** It read "authentication START on the same `(nas, port)` under a different username, including one port49 rejects". Under `(nas, username)` a START under a different username addresses a different context and is evidence of nothing about this one, so the row had no content left to carry. Deleting a live operator's context because someone else mistyped a name on the same device is exactly the mutual lockout the re-key removed |
 | 6 | **Idle TTL** | hygiene; bounds abandoned state |
 | 7 | **Exec accounting** | **advisory only — annotates, never deletes** (§5.8) |
+
+**Row 1's enable clause is not what plan 1 does.** Plan 1 has no escalate path: its `redeem`
+does not distinguish an enable START from a login START, so it mints a fresh `ctx_id` and
+writes it over the login context. Under `(nas, username)` that lands on the operator's own
+login context on any platform that puts their real username on the enable START — which vEOS
+does, measured (`tests/lab/results/L3-arista_eos.md`). Measured on vEOS 2026-09-20, one
+operator's whole sequence:
+
+```
+redeem            permit token_redeemed   port=ssh   priv=1   ctx=QOZ6DYFB
+authorize_session permit context_matched  port=vty4  priv=1   ctx=QOZ6DYFB
+redeem            permit token_redeemed   port=vty4  priv=15  ctx=TVGMSVTY  replaced_ctx_id=QOZ6DYFB
+```
+
+`session.replaced_ctx_id` is what surfaced it. Nothing breaks today — authorization resolves
+against the new context because the lookup is by username, and plan 1's authorizer reads no
+field of the context — but the log join across an escalation depends on `replaced_ctx_id`
+rather than on a stable `ctx_id`, and the converse holds too: a second *login* START carries
+`priv_lvl=1` and writes it over an enabled context, so once the policy engine reads
+`privilege` this oscillates both ways. Keeping `ctx_id` across an escalation, and updating
+`privilege` in place, is **plan 2's work**.
 
 **Why accounting was demoted.** It is best-effort, device-generated, and delivered on a
 separate connection that can be queued or bounced off another server first. A delayed logout
@@ -1251,7 +1281,7 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 | `no_rule_matched` | nothing matched; deny by default |
 | `no_permit_dominates_deny` | a deny matched and no permit dominated it |
 | `context_missing` | no login context for `(nas, username)` — port49 did not authenticate this session under that name |
-| `username_mismatch` | the request's username differs from the one bound at redemption (§5.6). Reachable only where the username is resolved from context rather than read off the wire — the `$enab{level}$` enable path through the `(nas, rem_addr)` index. On the command path the username *is* the key, so the same situation is `context_missing` |
+| `username_mismatch` | the request's username differs from the one bound at redemption (§5.6). Reachable two ways, and a request under a name port49 never authenticated is neither of them — that is `context_missing`, because the username is the key. First, wherever the username is resolved from context rather than read off the wire: the `$enab{level}$` enable path through the `(nas, rem_addr)` index. Second, as a **store-fault guard** — the context lookup selects on the username, so a store answering with another principal's record fails the re-check that follows it and is denied rather than authorized. A correct store never produces the second |
 | `rem_addr_mismatch` | enable arrived from a different address than the bound one |
 | `privilege_exceeded` | the request is above the session's granted level |
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6) |
@@ -1820,7 +1850,10 @@ Worth noting that `enable: none` is often the honest answer for backup accounts:
 privilege removes the escalation entirely.
 
 After a successful escalation, login context records the new privilege level in place —
-same `ctx_id`, same bindings. The rules do not change: a role's permits and denies apply at
+same `ctx_id`, same bindings. **This is the requirement on the escalate path, which plan 2
+builds; plan 1 does not do it.** Plan 1's `redeem` treats an enable START as an ordinary
+redemption, so it writes a fresh `ctx_id` over the login context — measured on vEOS
+2026-09-20 (§5.6, teardown row 1; `tests/lab/results/L3-arista_eos.md`). The rules do not change: a role's permits and denies apply at
 every level, and what escalation changes is which commands the device *offers* and therefore
 submits. The recorded level feeds `privilege_exceeded` for a request above it. Accounting and
 the `escalate` record attribute the event to the **real principal** even though the wire said
@@ -3164,11 +3197,38 @@ so nothing is authorized that was not already authorized, but a log reader canno
 two shells apart. No wire field distinguishes them, so this is not fixable by a better key;
 §5.6 requires the overwrite to be logged so it is at least visible.
 
+*The receipt's cost is separate, and also accepted.* `port` leaving the receipt key means a
+spent token replays for `receipt_ttl` **anywhere on that NAS and across every transport**,
+where `port` previously separated them on some platforms and not others. Measured: on vEOS
+`port` is `command-api` for eAPI and `ssh` for a login, so those did not share a receipt
+before and do now; on the N9Kv both are `0`, so there was never any separation there (L15).
+Concretely, a single-use token spent by an automation tool over eAPI — logged by that tool,
+captured at a proxy, read out of a CI variable — can be typed at the same device's SSH
+password prompt within `receipt_ttl` and is answered PASS `receipt_replayed`, carrying the
+`ctx_id` of the automation's context. The narrowing that is lost was a per-platform accident
+rather than a design, which is why the cost is accepted; what remains is `receipt_ttl`, now
+the only bound on a leaked spent token, and it is the open question this decision already
+names.
+
+*A security primitive this removed, worth recording.* Before the re-key, a command
+authorization under a name that differed from the context's owner **deleted that context** —
+`username_mismatch` denied and invalidated. That required no credential of any kind, so any
+device request naming a live operator ended their authorization until they logged in again.
+Under `(nas, username)` a stranger's request addresses its own empty slot and touches nothing;
+`DeleteContext` has no production caller left in the tree. Dropping that primitive is the
+largest security improvement in the change and was not stated anywhere else.
+
 *What stays open.* The `$enab{level}$` username form is unmeasured (L3 lists IOS-XE), so the
 enable path for that form is unchanged in substance and **provisional**: it resolves through
 a `(nas, rem_addr)` secondary index that must refuse rather than guess, and `rem_addr` is
-measured identical for two concurrent sessions behind one bastion. Everything the memo lists
-under §5 "What to measure next" stays open, L3 on IOS-XE first.
+measured identical for two concurrent sessions behind one bastion. That index's
+**ambiguity refusal needs a reason code that §5.7's table does not yet carry** — the
+vocabulary is closed, so the table comes first and plan 2 adds it there before emitting it.
+Plan 1 also has **no escalate path at all**: its `redeem` treats an enable START as an
+ordinary redemption and so replaces the login context and its `ctx_id`, measured on vEOS
+(§5.6, teardown row 1). "Updates `privilege` in place and keeps `ctx_id`" is a requirement on
+plan 2, not a description of the tree. Everything the memo lists under §5 "What to measure
+next" stays open, L3 on IOS-XE first.
 
 *Reusable tokens for API transports — provisional, gated on L7.* eAPI and
 NX-API with basic authentication present the credential on every HTTP request, and the device
@@ -3585,7 +3645,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE and the console unmeasured; see below |
 | **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below |
 | **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | open — measured 2026-09-20 on vEOS and the N9Kv; **IOS-XE, the platform the `$enab{level}$` spelling comes from, is unmeasured and is what this row most needs**; see below |
-| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX and vEOS over SSH: both Junos images fall through on a FAIL when `password` is listed, vEOS never does; `deadtime`, other platforms and other transports unmeasured; see below |
+| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS and the N9Kv over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS and the N9Kv never do; `deadtime`, IOS-XE, other transports and authorization fall-through unmeasured; see below |
 | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | open — no WATCHDOG on EOS or Junos; see below |
 | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
 | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open — eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. The `/login` cookie flow, which this row also names, is still unmeasured, and it is the only clause left open; see below |
@@ -3599,8 +3659,9 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L15** | How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and **what port49 then answers**. | Single-use tokens, and therefore whether reusable tokens are needed at all (§13, decision 15); the 30-character handle's blast radius (design §8) | EOS, NX-OS, Junos | open — measured 2026-09-20 on all four images: one exchange per API request and per NETCONF session, every time, and the repeat permitted out of the receipt rather than the store, which moves the question to `receipt_ttl`; IOS-XE, cookie sessions and kept-alive connections unmeasured; see below |
 
 **What has been measured so far, per row.** These entries are all still open — rule 5 keeps a
-row open while any platform it lists is unmeasured, and NX-OS and IOS-XE arrive with plan 3 —
-but the measurements exist and the notes are in the repository.
+row open while any platform it lists is unmeasured, and **IOS-XE** is the one every row below
+is still waiting on — but the measurements exist and the notes are in the repository. NX-OS
+was measured on 2026-09-20 and is no longer outstanding.
 
 - **L1** — the claim now has a third clause, added 2026-09-20 because the lab answered it "no" and nobody
   had been asking it: **is `port` the same value at authentication and at authorization?** On no measured
@@ -3710,11 +3771,12 @@ but the measurements exist and the notes are in the repository.
   a fixed username creates for a `(nas, username)` key is still entirely unmeasured. Also unmeasured: two
   operators from two different client addresses, privilege levels other than the default, and enable over
   any transport but the interactive CLI.
-- **L4** — 2026-09-20, the full two-by-two on three images: two method lists (one listing a
+- **L4** — 2026-09-20, the full two-by-two on four images: two method lists (one listing a
   local method, one not) crossed with port49 unreachable and port49 up and answering FAIL.
   Every FAIL cell is backed by a decision record for that attempt, so the device's behavior is
   attributable to a denial rather than to a reply that never arrived.
-  `tests/lab/results/L4-juniper_vjunos-router.md`, `L4-juniper_vsrx.md`, `L4-arista_eos.md`.
+  `tests/lab/results/L4-juniper_vjunos-router.md`, `L4-juniper_vsrx.md`, `L4-arista_eos.md`,
+  `L4-cisco_nxos.md`.
 
   | method list | port49 | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.32.2F | Nexus 9300v 10.4(2)F |
   |---|---|---|---|---|---|
@@ -3750,8 +3812,8 @@ but the measurements exist and the notes are in the repository.
   while port49 was unreachable and was then refused `configure` — EOS falls back to the local
   **role**, and a role is not a privilege level (`tests/lab/results/L4-arista_eos.md`).
 
-  *Unmeasured:* `deadtime`; every platform but the three images named above, so NX-OS and
-  IOS-XE in particular; every transport but SSH (console, eAPI, NX-API, NETCONF); a second
+  *Unmeasured:* `deadtime`; every platform but the four images named above, so **IOS-XE** in
+  particular; every transport but SSH (console, eAPI, NX-API, NETCONF); a second
   TACACS+ server, so "one server rejecting while another answers" is untested; and
   **authorization fall-through** — every cell above is the authentication method list, while
   the §5.6 sentences the table contradicts are written about authorization.

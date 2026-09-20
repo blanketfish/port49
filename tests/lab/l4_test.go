@@ -478,14 +478,20 @@ func l4Observation(l *lab, cells []l4Cell, configEvidence, channel, restoreNote 
 
 	fmt.Fprintf(&b, "\n### Does fall-through happen on a denial?\n\n%s\n", l4Verdict(cells))
 	fmt.Fprintf(&b, "\n### The local account\n\n%s\n\nCLI channel used: %s. %s\n", configEvidence, channel, restoreNote)
-	b.WriteString("\n### Not measured\n\n" +
-		"- `deadtime` — this lab has one TACACS+ server and no dead-server timer was exercised.\n" +
-		"- Every transport but SSH: console, eAPI, NX-API and NETCONF.\n" +
-		"- A second TACACS+ server, so nothing here says what a device does with one server rejecting and " +
-		"another reachable.\n" +
-		"- NX-OS and IOS-XE, and any Junos or EOS release but the one named above.\n" +
-		"- Authorization fall-through. This measures the authentication method list only; whether command " +
-		"authorization falls back to local on a deny is a separate question spec §5.6 also leans on.\n")
+	// The platform bullet is built from the platform, not written out as a
+	// constant. It used to be the fixed string "NX-OS and IOS-XE, and any Junos
+	// or EOS release but the one named above", which was copied into every
+	// note including `L4-cisco_nxos.md`, where it declared unmeasured the very
+	// platform the note measures.
+	fmt.Fprintf(&b, "\n### Not measured\n\n"+
+		"- `deadtime` — this lab has one TACACS+ server and no dead-server timer was exercised.\n"+
+		"- Every transport but SSH: console, eAPI, NX-API and NETCONF.\n"+
+		"- A second TACACS+ server, so nothing here says what a device does with one server rejecting and "+
+		"another reachable.\n"+
+		"- IOS-XE, and any %s release but the one named above.\n"+
+		"- Authorization fall-through. This measures the authentication method list only; whether command "+
+		"authorization falls back to local on a deny is a separate question spec §5.6 also leans on.\n",
+		l.p.name)
 	return b.String()
 }
 

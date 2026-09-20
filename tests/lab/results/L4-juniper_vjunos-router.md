@@ -52,6 +52,6 @@ CLI channel used: SSH CLI as breakglass. The order was switched in place over th
 - `deadtime` — this lab has one TACACS+ server and no dead-server timer was exercised.
 - Every transport but SSH: console, eAPI, NX-API and NETCONF.
 - A second TACACS+ server, so nothing here says what a device does with one server rejecting and another reachable.
-- NX-OS and IOS-XE, and any Junos or EOS release but the one named above.
+- IOS-XE, and any juniper_vjunos-router release but the one named above.
 - Authorization fall-through. This measures the authentication method list only; whether command authorization falls back to local on a deny is a separate question spec §5.6 also leans on.
 
