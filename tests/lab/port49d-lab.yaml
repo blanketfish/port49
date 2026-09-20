@@ -129,3 +129,28 @@ lab:
     - {nas: nx1, username: longpw64, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567", kind: login}
     - {nas: nx1, username: longpw128, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", kind: login}
     - {nas: nx1, username: longpw138, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ", kind: login}
+    # The API and NETCONF transports (tests/lab/transport_test.go, register
+    # entry L7). These are a pool of their own rather than more alice names, and
+    # the reason is the measurement itself: L7 asks how many authentication
+    # exchanges one API request costs and whether a SECOND request with the SAME
+    # token re-authenticates. A shared pool would make a test that spends three
+    # tokens per request look like a test that ran out.
+    #
+    # Two users per transport. The `01` user is presented TWICE with the same
+    # token — that repeat is the re-authentication measurement, and on a
+    # single-use token the second attempt is expected to be refused. The `02`
+    # user carries a FRESH token for the config-changing request, so a spent
+    # `01` token cannot block the half of the test that asks whether the device
+    # sends an authorization request for a configuration command at all.
+    - {nas: leaf1, username: eapi01, secret: p49_labeapi01, kind: login}
+    - {nas: leaf1, username: eapi02, secret: p49_labeapi02, kind: login}
+    - {nas: leaf1, username: netconf01, secret: p49_labnetconf01, kind: login}
+    - {nas: leaf1, username: netconf02, secret: p49_labnetconf02, kind: login}
+    - {nas: nx1, username: nxapi01, secret: p49_labnxapi01, kind: login}
+    - {nas: nx1, username: nxapi02, secret: p49_labnxapi02, kind: login}
+    - {nas: nx1, username: netconf01, secret: p49_labnetconf01, kind: login}
+    - {nas: nx1, username: netconf02, secret: p49_labnetconf02, kind: login}
+    - {nas: srx1, username: netconf01, secret: p49_labnetconf01, kind: login}
+    - {nas: srx1, username: netconf02, secret: p49_labnetconf02, kind: login}
+    - {nas: vsrx1, username: netconf01, secret: p49_labnetconf01, kind: login}
+    - {nas: vsrx1, username: netconf02, secret: p49_labnetconf02, kind: login}
