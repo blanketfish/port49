@@ -154,6 +154,13 @@ type lab struct {
 	logPath  string
 	errPath  string
 
+	// daemonDone is closed when the daemon's single Wait goroutine sees port49d
+	// exit, whether that is a crash during startup or the drain at teardown.
+	// daemonErr is what Wait returned and is safe to read once daemonDone is
+	// closed.
+	daemonDone chan struct{}
+	daemonErr  error
+
 	// configWarn records that the device never served SSH authentication within
 	// its boot budget — neither a breakglass login nor an authentication
 	// rejection. Not fatal on its own; the tests run anyway and report what they
@@ -459,12 +466,33 @@ func (l *lab) startDaemon() error {
 		return fmt.Errorf("start port49d: %w", err)
 	}
 
+	// One Wait goroutine for the daemon's whole life, because Cmd.Wait may be
+	// called only once and both startup and shutdown need to know it exited.
+	// daemonErr is written before daemonDone is closed, so anyone who has seen
+	// the close may read it.
+	//
+	// This is also the only way to detect a daemon that died on startup:
+	// ProcessState stays nil until something calls Wait, so the check that used
+	// to live in the loop below could never fire, and a port49d that exited
+	// immediately still cost the full 30 seconds before its stderr was printed.
+	l.daemonDone = make(chan struct{})
+	go func() {
+		l.daemonErr = l.daemon.Wait()
+		close(l.daemonDone)
+	}()
+
 	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
+	for {
 		if daemonHealthy() {
 			return nil
 		}
-		if l.daemon.ProcessState != nil {
+		select {
+		case <-l.daemonDone:
+			stderr, _ := os.ReadFile(l.errPath)
+			return fmt.Errorf("port49d exited during startup (%v); its stderr was:\n%s", l.daemonErr, stderr)
+		default:
+		}
+		if !time.Now().Before(deadline) {
 			break
 		}
 		time.Sleep(250 * time.Millisecond)
@@ -594,15 +622,14 @@ func isAuthRejection(err error) bool {
 func (l *lab) diagnose() {
 	out, _ := exec.Command("sudo", "-n", "containerlab", "inspect", "-t", l.topoPath()).CombinedOutput()
 	fmt.Fprintf(os.Stderr, "lab: %s: containerlab inspect:\n%s\n", l.p.name, out)
-	name := "clab-" + strings.TrimSuffix(filepath.Base(l.p.topo), ".clab.yml") + "-" + l.p.node
 	// The container name is derived from the topology's `name:`, not its file
-	// name; ask docker for anything that looks like this node.
+	// name, so it cannot be built from l.p.topo; ask docker for anything that
+	// looks like this node instead.
 	ids, _ := exec.Command("docker", "ps", "-a", "--filter", "name="+l.p.node, "--format", "{{.Names}}").Output()
 	for _, n := range strings.Fields(string(ids)) {
 		logs, _ := exec.Command("docker", "logs", "--tail", "50", n).CombinedOutput()
 		fmt.Fprintf(os.Stderr, "lab: %s: docker logs --tail 50 %s:\n%s\n", l.p.name, n, logs)
 	}
-	_ = name
 }
 
 func teardown() {
@@ -615,16 +642,16 @@ func teardown() {
 
 func (l *lab) down() {
 	if l.daemon != nil && l.daemon.Process != nil {
-		// SIGTERM, not Kill: the daemon drains the accounting spool on the way
-		// out, and a record still on disk is a record this run did not see.
+		// SIGINT, not Kill: port49d installs signal.NotifyContext for SIGINT and
+		// SIGTERM (cmd/port49d), and on either it stops the listener and drains
+		// the accounting spool on the way out. A record still on disk is a record
+		// this run did not see. Kill is the fallback below, after 20s.
 		_ = l.daemon.Process.Signal(os.Interrupt)
-		done := make(chan struct{})
-		go func() { l.daemon.Wait(); close(done) }()
 		select {
-		case <-done:
+		case <-l.daemonDone:
 		case <-time.After(20 * time.Second):
 			_ = l.daemon.Process.Kill()
-			<-done
+			<-l.daemonDone
 		}
 		l.daemon = nil
 	}
@@ -992,8 +1019,14 @@ func (l *lab) capture(t *testing.T, name string) func() {
 	}
 	// A test that runs without a live capture measures without evidence, and a
 	// results note may not point at a capture that holds nothing, so this is
-	// fatal rather than a warning.
+	// fatal rather than a warning. Kill tcpdump first: it runs as root under
+	// sudo and nothing else in this function will ever stop it — the stop
+	// closure below has not been returned yet — so failing without this leaves a
+	// privileged process and its pid file behind for the rest of the run.
 	if err := waitCaptureLive(abs); err != nil {
+		signalCapture(pidPath, "-KILL")
+		cmd.Wait()
+		os.Remove(pidPath)
 		t.Fatalf("the capture for %s never became live, so this test would measure without evidence: %v\ntcpdump said: %s",
 			abs, err, errBuf.String())
 	}
@@ -1126,8 +1159,14 @@ func pcapCounts(path string) (total, device int, err error) {
 	for off := pcapHeaderSize; off+16 <= len(raw); {
 		inclLen := int(binary.LittleEndian.Uint32(raw[off+8 : off+12]))
 		off += 16
-		if inclLen < 0 || off+inclLen > len(raw) {
-			return total, device, fmt.Errorf("%s: truncated packet record at offset %d", path, off)
+		if off+inclLen > len(raw) {
+			// A short tail is not corruption, it is a snapshot. Notes are written
+			// while tcpdump is still running, so a read can land between the
+			// record header and its bytes. Erroring here turned that race into a
+			// red test on a run where the device behaved perfectly. Every whole
+			// record before this point is counted and returned; the partial one
+			// is simply not one of them.
+			return total, device, nil
 		}
 		total++
 		if src, dst, ok := ipv4Of(link, raw[off:off+inclLen]); ok && (subnet.Contains(src) || subnet.Contains(dst)) {
