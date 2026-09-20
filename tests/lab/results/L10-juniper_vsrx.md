@@ -6,7 +6,6 @@
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
 - **Capture:** `tests/lab/captures/L10-juniper_vsrx.pcap` — 44 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L10-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`
 - **Transport:** SSH
-- **Caveat:** could not confirm the startup config was applied: breakglass never logged in within 8m54.675033002s (last error: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain)
 
 ## Claim
 

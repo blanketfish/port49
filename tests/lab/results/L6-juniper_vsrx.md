@@ -6,7 +6,6 @@
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
 - **Capture:** `tests/lab/captures/L6-juniper_vsrx.pcap` — 104 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L6-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`
 - **Transport:** SSH
-- **Caveat:** could not confirm the startup config was applied: breakglass never logged in within 8m54.675033002s (last error: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain)
 
 ## Claim
 
@@ -14,19 +13,19 @@ How reliably and how late exec accounting START and STOP arrive, and whether a d
 
 ## Observation
 
-One SSH login that ran `show version` and disconnected. Login began 2026-09-20T07:54:35.217438082Z UTC; the connection closed 2026-09-20T07:54:35.361338951Z UTC.
+One SSH login that ran `show version` and disconnected. Login began 2026-09-20T08:19:20.997769841Z UTC; the connection closed 2026-09-20T08:19:21.147324385Z UTC.
 
-- Exec **START**: arrived 4.156s after the login began.
-- Exec **STOP**: arrived 4.013s after the session closed.
+- Exec **START**: arrived 1.846s after the login began.
+- Exec **STOP**: arrived 1.698s after the session closed.
 
 Accounting records in the window: start=1, stop=2 (an exec record is one that carries no command at all, as on EOS, or carries only `login` or `logout`, as on Junos; anything else is a per-command record).
 
 All accounting AV pairs, in arrival order:
 
 ```
-2026-09-20T07:54:39.373Z flags=start attribution=unattributed raw=[task_id=1 service=shell session_pid = 29374 cmd=login]
-2026-09-20T07:54:39.373Z flags=stop attribution=unattributed raw=[task_id=2 service=shell session_pid = 29374 cmd=show version <cr>]
-2026-09-20T07:54:39.374Z flags=stop attribution=unattributed raw=[task_id=1 service=shell session_pid = 29374 elapsed_time=0 cmd=logout]
+2026-09-20T08:19:22.844Z flags=start attribution=unattributed raw=[task_id=1 service=shell session_pid = 28913 cmd=login]
+2026-09-20T08:19:22.845Z flags=stop attribution=unattributed raw=[task_id=2 service=shell session_pid = 28913 cmd=show version <cr>]
+2026-09-20T08:19:22.845Z flags=stop attribution=unattributed raw=[task_id=1 service=shell session_pid = 28913 elapsed_time=0 cmd=logout]
 ```
 
 Retry-to-the-next-server behavior is not measured here: this lab has a single TACACS+ server, so nothing in this run shows what the device does when one is unreachable.

@@ -4,9 +4,8 @@
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/captures/L8-juniper_vsrx.pcap` — 176 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L8-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/captures/L8-juniper_vsrx.pcap` — 178 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L8-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`
 - **Transport:** SSH
-- **Caveat:** could not confirm the startup config was applied: breakglass never logged in within 8m54.675033002s (last error: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain)
 
 ## Claim
 

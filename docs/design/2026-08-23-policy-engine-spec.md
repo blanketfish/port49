@@ -3494,8 +3494,9 @@ but the measurements exist and the notes are in the repository.
   2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`,
   `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`. *Unmeasured:* NX-OS, IOS-XE.
 - **L6** — EOS 2026-09-17: exec START 187ms after the login, STOP 15ms after the close. Junos
-  2026-09-20: both about 4.2s late, sent as `cmd=login` and `cmd=logout`, with all records
-  landing within 3ms of each other — batching, not lag. `tests/lab/results/L6-arista_eos.md`,
+  2026-09-20: both seconds late, sent as `cmd=login` and `cmd=logout` — 4.2s on vJunos-router,
+  and 4.2s then 1.8s on two vSRX runs, so the delay varies by seconds between runs. In every
+  case all three records land within 3ms of each other, so the device batches rather than lags. `tests/lab/results/L6-arista_eos.md`,
   `L6-juniper_vjunos-router.md`, `L6-juniper_vsrx.md`. *Unmeasured:* whether a device retries
   accounting to the same server or fails to the next — the lab has one TACACS+ server — and
   NX-OS and IOS-XE.
