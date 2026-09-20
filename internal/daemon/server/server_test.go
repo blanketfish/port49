@@ -721,6 +721,66 @@ func TestSpoolOutlivesServeSoShutdownDrainsEverything(t *testing.T) {
 	}
 }
 
+// flakyListener fails the first Accept and then behaves like the listener it
+// wraps. EMFILE is the realistic cause and cannot be provoked directly from a
+// test without exhausting the process's descriptors.
+type flakyListener struct {
+	net.Listener
+	once sync.Once
+}
+
+func (f *flakyListener) Accept() (net.Conn, error) {
+	failed := false
+	f.once.Do(func() { failed = true })
+	if failed {
+		return nil, errors.New("accept: too many open files")
+	}
+	return f.Listener.Accept()
+}
+
+// TestAcceptErrorIsCountedAndTheListenerKeepsGoing covers the retry loop that
+// used to be silent: while Accept is failing, no admitted device can connect
+// at all, and an operator saw nothing -- no counter, no line. The loop must
+// still recover on its own once the condition passes.
+func TestAcceptErrorIsCountedAndTheListenerKeepsGoing(t *testing.T) {
+	var logged bytes.Buffer
+	stdlog.SetOutput(&logged)
+	t.Cleanup(func() { stdlog.SetOutput(os.Stderr) })
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := metrics.New(prometheus.NewRegistry())
+	trie, err := admission.Build(admission.Inventory{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Enough of Deps for the accept path and for one connection that sends
+	// nothing: the handlers are never reached.
+	d := Deps{Admission: trie, Metrics: m, Log: decision.NewJSONLines(&syncBuffer{}), Now: time.Now, IdleTimeout: time.Second,
+		Limits: limits.New(limits.Config{PerNASConnections: 2, IdleTimeout: time.Second,
+			MalformedBackoffBase: time.Millisecond, MalformedBackoffMax: time.Millisecond, MalformedWindow: time.Minute,
+			AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: time.Millisecond, AuthFailureWindow: time.Minute}, time.Now)}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan struct{})
+	go func() { defer close(served); Serve(ctx, &flakyListener{Listener: ln}, d) }()
+	t.Cleanup(func() { cancel(); <-served })
+
+	if !waitFor(t, func() bool { return testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("accept_error")) >= 1 }) {
+		t.Fatal("connection_events_total{accept_error} was not incremented")
+	}
+	if !strings.Contains(logged.String(), "accept failed") {
+		t.Fatalf("an accept failure must say so: %q", logged.String())
+	}
+	// And the listener is still live: the transient error did not end Serve.
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("the listener must keep accepting after a transient error: %v", err)
+	}
+	conn.Close()
+}
+
 func TestIdleConnectionIsClosed(t *testing.T) {
 	log := &syncBuffer{}
 	addr, _, _ := startServer(t, log) // IdleTimeout is 1s

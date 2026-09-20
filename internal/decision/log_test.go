@@ -3,6 +3,7 @@ package decision
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -88,4 +89,30 @@ func TestCredentialHashIsHexSHA256(t *testing.T) {
 	if h != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
 		t.Fatalf("%s", h)
 	}
+}
+
+// failingWriter refuses every write, standing in for a full disk or a closed
+// pipe under the decision log.
+type failingWriter struct{ err error }
+
+func (f failingWriter) Write([]byte) (int, error) { return 0, f.err }
+
+// TestWriteFailureIsCounted covers design §11's rule that nothing fails
+// silently. A refused decision record is a record that does not exist, while
+// the device was still answered: the log is short and, without a counter,
+// nothing anywhere says so.
+func TestWriteFailureIsCounted(t *testing.T) {
+	var failures int
+	e := NewJSONLinesWithFailureHook(failingWriter{err: errors.New("write: no space left on device")}, func() { failures++ })
+	e.Emit(Record{Event: EventAccount})
+	e.Emit(Record{Event: EventAccount})
+	if failures != 2 {
+		t.Fatalf("want one count per refused record, got %d", failures)
+	}
+}
+
+// TestNoFailureHookIsFine keeps the hook optional: NewJSONLines is used all
+// over the tests and must not require one.
+func TestNoFailureHookIsFine(t *testing.T) {
+	NewJSONLines(failingWriter{err: errors.New("closed")}).Emit(Record{Event: EventAccount})
 }

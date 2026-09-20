@@ -5,17 +5,25 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 type Metrics struct {
-	Requests         *prometheus.CounterVec   // port49_requests_total{exchange, outcome}
-	Latency          *prometheus.HistogramVec // port49_request_seconds{exchange}
-	Decisions        *prometheus.CounterVec   // port49_decisions_total{event, verdict, reason}
-	Unvalidated      *prometheus.CounterVec   // port49_unvalidated_packets_total{diagnosis}
-	KeyValidations   *prometheus.CounterVec   // port49_key_validations_total{key_ref, version, outcome}
-	Connections      *prometheus.GaugeVec     // port49_connections{state="open"}
-	ConnectionEvents *prometheus.CounterVec   // port49_connection_events_total{event="refused_cap"|"idle_closed"|"malformed_backoff"}
-	AuthFailures     prometheus.Counter       // port49_authentication_failures_total
-	SpoolDepth       prometheus.Gauge         // port49_accounting_spool_depth
-	SpoolDrops       prometheus.Counter       // port49_accounting_spool_drops_total
-	StoreOps         *prometheus.CounterVec   // port49_store_operations_total{op, outcome}
+	Requests       *prometheus.CounterVec   // port49_requests_total{exchange, outcome}
+	Latency        *prometheus.HistogramVec // port49_request_seconds{exchange}
+	Decisions      *prometheus.CounterVec   // port49_decisions_total{event, verdict, reason}
+	Unvalidated    *prometheus.CounterVec   // port49_unvalidated_packets_total{diagnosis}
+	KeyValidations *prometheus.CounterVec   // port49_key_validations_total{key_ref, version, outcome}
+	Connections    *prometheus.GaugeVec     // port49_connections{state="open"}
+	// port49_connection_events_total{event}. The full set of event values:
+	// "refused_cap" (the per-source connection cap), "idle_closed" (the idle
+	// timeout, which also fires on a stall partway through a packet),
+	// "malformed_backoff" (a strike from an admitted source), "unadmitted_source"
+	// (a strike from an address not in the inventory), "panic" (a connection
+	// recovered from a panic), and "accept_error" (Accept failed and the
+	// listener is being retried).
+	ConnectionEvents         *prometheus.CounterVec
+	AuthFailures             prometheus.Counter // port49_authentication_failures_total
+	SpoolDepth               prometheus.Gauge   // port49_accounting_spool_depth
+	SpoolDrops               prometheus.Counter // port49_accounting_spool_drops_total
+	StoreOps                 *prometheus.CounterVec
+	DecisionLogWriteFailures prometheus.Counter // port49_decision_log_write_failures_total
 }
 
 func New(reg prometheus.Registerer) *Metrics {
@@ -42,8 +50,14 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Accounting records discarded by the spool."}),
 		StoreOps: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_operations_total",
 			Help: "Store operations by op and outcome."}, []string{"op", "outcome"}),
+		// A decision record the sink refused is a record that does not exist:
+		// the device was still answered, so without this counter the log is
+		// silently short and nothing says so (design §11).
+		DecisionLogWriteFailures: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_decision_log_write_failures_total",
+			Help: "Decision records the log sink refused to write."}),
 	}
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
-		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.StoreOps)
+		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.StoreOps,
+		m.DecisionLogWriteFailures)
 	return m
 }

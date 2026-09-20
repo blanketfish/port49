@@ -68,7 +68,7 @@ func run(cfgPath string) error {
 
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg)
-	log := decision.NewJSONLines(os.Stdout)
+	log := decision.NewJSONLinesWithFailureHook(os.Stdout, m.DecisionLogWriteFailures.Inc)
 	st := memory.New(time.Now)
 	lim := limits.New(cfg.Limits, time.Now)
 

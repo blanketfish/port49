@@ -82,17 +82,36 @@ type Emitter interface {
 }
 
 type jsonLines struct {
-	mu sync.Mutex
-	w  io.Writer
+	mu        sync.Mutex
+	w         io.Writer
+	onFailure func()
 }
 
 func NewJSONLines(w io.Writer) Emitter { return &jsonLines{w: w} }
+
+// NewJSONLinesWithFailureHook is NewJSONLines plus a callback run once for
+// every record the sink refuses. A refused record is a record that does not
+// exist while the device was still answered, so something has to count it;
+// the callback rather than a metric keeps this package's dependencies to the
+// standard library, so the record shape and the metric registry stay
+// independent of each other.
+func NewJSONLinesWithFailureHook(w io.Writer, onFailure func()) Emitter {
+	return &jsonLines{w: w, onFailure: onFailure}
+}
+
+// failed reports one record that did not reach the sink.
+func (j *jsonLines) failed() {
+	if j.onFailure != nil {
+		j.onFailure()
+	}
+}
 
 func (j *jsonLines) Emit(r Record) {
 	r.TS = r.TS.UTC()
 	b, err := json.Marshal(r)
 	if err != nil {
 		log.Printf("decision: dropping record that failed to marshal: %v", err)
+		j.failed()
 		return
 	}
 	j.mu.Lock()
@@ -100,6 +119,7 @@ func (j *jsonLines) Emit(r Record) {
 	_, err = j.w.Write(append(b, '\n'))
 	if err != nil {
 		log.Printf("decision: write failed: %v", err)
+		j.failed()
 	}
 }
 

@@ -23,6 +23,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.SpoolDepth.Set(10)
 	m.SpoolDrops.Inc()
 	m.StoreOps.WithLabelValues("put", "ok").Inc()
+	m.DecisionLogWriteFailures.Inc()
 
 	// Gather all metrics from registry.
 	families, err := reg.Gather()
@@ -32,17 +33,18 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 
 	// Expected metric names from brief + ConnectionEvents.
 	expectedMetrics := map[string]bool{
-		"port49_requests_total":                false,
-		"port49_request_seconds":               false,
-		"port49_decisions_total":               false,
-		"port49_unvalidated_packets_total":     false,
-		"port49_key_validations_total":         false,
-		"port49_connections":                   false,
-		"port49_connection_events_total":       false,
-		"port49_authentication_failures_total": false,
-		"port49_accounting_spool_depth":        false,
-		"port49_accounting_spool_drops_total":  false,
-		"port49_store_operations_total":        false,
+		"port49_requests_total":                    false,
+		"port49_request_seconds":                   false,
+		"port49_decisions_total":                   false,
+		"port49_unvalidated_packets_total":         false,
+		"port49_key_validations_total":             false,
+		"port49_connections":                       false,
+		"port49_connection_events_total":           false,
+		"port49_authentication_failures_total":     false,
+		"port49_accounting_spool_depth":            false,
+		"port49_accounting_spool_drops_total":      false,
+		"port49_store_operations_total":            false,
+		"port49_decision_log_write_failures_total": false,
 	}
 
 	// Check that all expected metrics are present and all gathered metrics are snake_case.

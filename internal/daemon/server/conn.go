@@ -25,6 +25,19 @@ import (
 // session_ids until the daemon runs out of memory.
 const maxLiveSessions = 64
 
+// unadmittedHeaderDeadline bounds how long a source that is not in the
+// inventory may hold a connection before sending its first header. An
+// admitted device gets the configured idle timeout; an unadmitted one has no
+// claim on it, and today the only global connection cap is EMFILE — the worst
+// one there is, since it refuses admitted devices too and fails the
+// accounting spool's own file open. Thirty seconds times the per-source cap,
+// per address, is a cheap way to sit on descriptors. Admission is already
+// known at Accept, so this costs nothing to apply.
+//
+// This is not the global cap, which is plan 12 along with its sizing and its
+// alarm. It is the part of it that is cheap to pull forward.
+const unadmittedHeaderDeadline = 5 * time.Second
+
 type conn struct {
 	d        Deps
 	c        net.Conn
@@ -97,7 +110,11 @@ func (s *conn) serve(ctx context.Context) {
 	for {
 		// The deadline is wall-clock I/O, so it uses the real clock even when a
 		// test injects Deps.Now for record timestamps.
-		if err := s.c.SetReadDeadline(time.Now().Add(s.d.IdleTimeout)); err != nil {
+		deadline := s.d.IdleTimeout
+		if !s.admitted && deadline > unadmittedHeaderDeadline {
+			deadline = unadmittedHeaderDeadline
+		}
+		if err := s.c.SetReadDeadline(time.Now().Add(deadline)); err != nil {
 			return
 		}
 		hb := make([]byte, wire.HeaderLen)

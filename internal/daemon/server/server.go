@@ -55,6 +55,7 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		wg.Wait()
 	}()
 
+	var lastAcceptLog time.Time
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -64,7 +65,18 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			if errors.Is(err, net.ErrClosed) {
 				return err // the listener is gone for good; retrying would spin
 			}
-			// Accept-queue pressure: back off briefly rather than spin; the kernel sheds.
+			// Accept-queue pressure: back off briefly rather than spin; the
+			// kernel sheds. EMFILE is the realistic cause, and it is not a
+			// detail: while it lasts, no admitted device can connect at all,
+			// and the same exhaustion fails the spool's own file open. Count
+			// and say so — a cap that engages silently is indistinguishable
+			// from a bug (design §11) — but throttle the line, since this
+			// retries every 10ms for as long as the condition holds.
+			d.Metrics.ConnectionEvents.WithLabelValues("accept_error").Inc()
+			if time.Since(lastAcceptLog) >= time.Minute {
+				log.Printf("server: accept failed, no new connection can be admitted while this lasts: %v", err)
+				lastAcceptLog = time.Now()
+			}
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
