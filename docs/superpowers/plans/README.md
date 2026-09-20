@@ -17,6 +17,12 @@ binary, containerlab harness. Closes L1 (SSH transport only), L2, L5, L6, L8, L1
 
 ## Plan 2 — Token model (§19 step 2) — `2026-09-06-02-token-model.md`
 
+**Not executable as written.** It assumes the `(nas, port)` login-context key, which the lab
+showed breaks every measured vendor; the key is now `(nas, username)` (spec §13 decision 15).
+Rewrite it against `2026-09-20-plan-2-revision-notes.md` first. One item there, whether
+`contexts_by_principal` may stay unencrypted now that its ref carries a username, is the
+owner's security call.
+
 **Builds:** the full token semantics on top of plan 1's store interface and handlers.
 
 - Token format with the **device tag**: `tag ‖ secret`, `tag = base62(HMAC(k, device_id))[:6]`,
