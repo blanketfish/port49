@@ -1,0 +1,18 @@
+name: port49-iosxe
+topology:
+  nodes:
+    xe1:
+      # `vrnetlab/cisco_c8000v:17.13.01a` is the AUTONOMOUS-mode build. There is
+      # also a `controller-17.13.01a` tag on this host and it is the wrong one:
+      # controller (SD-WAN) mode boots into a vManage-provisioning posture with
+      # a different AAA model, and its bootstrap config puts the management
+      # interface in VRF 513 with no `login local`. The tag without the prefix
+      # is what `MODE=autonomous` produces, and it is the only one this
+      # topology's startup config is written against.
+      kind: cisco_c8000v
+      image: vrnetlab/cisco_c8000v:17.13.01a
+      startup-config: ../configs/iosxe-startup.cfg
+      mgmt-ipv4: 172.100.100.41
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24

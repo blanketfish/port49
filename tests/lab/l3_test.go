@@ -256,6 +256,15 @@ func (l *lab) l3CLI(user, password string) (*cliConn, error) {
 	if l.p.name == "cisco_nxos" {
 		return l.nxosCLI(user, password)
 	}
+	// IOS-XE is the platform this row exists for, so its opener is the one that
+	// must not type `enable`: on this device that is the exchange under test.
+	// iosxeCLIRaising with raise=false takes whatever prompt the login produced
+	// and stops there. Which prompt that is is itself a finding -- `#` means the
+	// session authorization's `priv-lvl=15` reached the device, `>` means it did
+	// not -- and the `disable` below works from either.
+	if l.p.name == "cisco_iosxe" {
+		return l.iosxeCLIRaising(user, password, false)
+	}
 	c, err := l.sshCLI(user, password)
 	if err != nil {
 		return nil, err

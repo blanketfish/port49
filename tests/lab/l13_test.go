@@ -170,6 +170,25 @@ func l13ConfiguredTimeout(t *testing.T, l *lab) string {
 			redactSecrets(strings.TrimSpace(stripPrompt(groups))),
 			redactSecrets(strings.TrimSpace(stripPrompt(cfg))))
 	}
+	if l.p.name == "cisco_iosxe" {
+		c, err := l.iosxeCLI(breakglassUser, breakglassPassword)
+		if err != nil {
+			return "Not read: no CLI channel was available (" + err.Error() + ")."
+		}
+		defer c.Close()
+		// `show tacacs` prints the per-server state; `show aaa servers` is the
+		// one that names IOS-XE's own timeout figure, which makes this the
+		// second platform in the lab whose claim can be read against the
+		// measurement rather than only the measurement standing alone.
+		show, _ := iosxeShow(c, "show tacacs")
+		servers, _ := iosxeShow(c, "show aaa servers")
+		cfg, _ := iosxeShow(c, "show running-config | include tacacs")
+		return fmt.Sprintf("`show tacacs`:\n\n```\n%s\n```\n\n`show aaa servers`:\n\n```\n%s\n```\n\n"+
+			"`show running-config | include tacacs`:\n\n```\n%s\n```",
+			redactSecrets(strings.TrimSpace(stripPrompt(show))),
+			redactSecrets(strings.TrimSpace(stripPrompt(l13GrepTimeout(servers)))),
+			redactSecrets(strings.TrimSpace(stripPrompt(cfg))))
+	}
 	c, err := l.eosCLI(breakglassUser, breakglassPassword)
 	if err != nil {
 		return "Not read: no CLI channel was available (" + err.Error() + ")."

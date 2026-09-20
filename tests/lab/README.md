@@ -40,10 +40,26 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
      and a name it cannot parse fails the build with a version-string error. The lab uses
      `n9kv-9300v64-10.4.2.F.qcow2`, which gives `vrnetlab/cisco_n9kv:9300v64-10.4.2.F`. Then
      `make docker-image` there. This build only packages the qcow2; it never boots the VM.
+   - Catalyst 8000V 17.13.01a: copy the qcow2 into `vrnetlab/cisco/c8000v` and build the
+     **autonomous** variant:
+     ```sh
+     cp /mnt/images/c8000v-universalk9_8G_serial.17.13.01a.qcow2 ~/git/vrnetlab/cisco/c8000v/
+     cd ~/git/vrnetlab/cisco/c8000v && sg docker -c \
+       "make IMAGE=c8000v-universalk9_8G_serial.17.13.01a.qcow2 MODE=autonomous docker-build"
+     ```
+     Unlike every other build here, this one **boots the VM**: after the docker build it runs
+     the image with `--install`, which sets the serial console and the license level and then
+     commits the result. It took 1m24s on this host. The tag is
+     `vrnetlab/cisco_c8000v:17.13.01a`, derived from the version in the filename.
+
+     There is also a `controller-17.13.01a` tag, which `MODE=controller` produces without
+     booting anything, and it is the **wrong image for this lab**: controller (SD-WAN) mode has
+     a different AAA model, puts management in VRF 513, and expects vManage to provision it.
+     `configs/iosxe-startup.cfg` is written against the autonomous build and nothing else.
    Check `docker images` for the tag each build produced and match the `image:` lines in
    `topologies/`. Expected: `vrnetlab/arista_veos:4.32.2F`,
    `vrnetlab/juniper_vjunos-router:23.4R2-S2.1`, `vrnetlab/juniper_vsrx:21.4R3.15`,
-   `vrnetlab/cisco_n9kv:9300v64-10.4.2.F`.
+   `vrnetlab/cisco_n9kv:9300v64-10.4.2.F`, `vrnetlab/cisco_c8000v:17.13.01a`.
 
    The N9Kv asks the host for more than the others: the launcher gives the VM **10 GB of RAM
    and 4 vCPUs**. Do not deploy it beside another VM platform on a machine that cannot spare
@@ -100,12 +116,34 @@ these figures.
 - At the end of the run every topology is destroyed with `containerlab destroy --cleanup`.
 
 Select platforms with `PORT49_LAB_PLATFORMS`, a comma-separated list of `eos`, `vjunos`,
-`vsrx`, `nxos` (default: all four). One at a time is the normal way to run it:
+`vsrx`, `nxos`, `iosxe` (default: all five). One at a time is the normal way to run it:
 
 ```sh
 PORT49_LAB_PLATFORMS=eos make lab
 PORT49_LAB_PLATFORMS=nxos make lab
+PORT49_LAB_PLATFORMS=iosxe make lab
 ```
+
+## IOS-XE keeps its console on a method list of its own
+
+`configs/iosxe-startup.cfg` carries two lines no other startup config here needs:
+
+```
+aaa authentication login CONSOLE local
+line con 0
+ login authentication CONSOLE
+```
+
+They are there because of what L4 does. Its second cell sets `aaa authentication login default
+group port49` — a method list with no `local` method — and measures a login against it with
+port49d stopped. NX-OS survives that because it keeps a separate `aaa authentication login
+console` list which defaults to `local`; Junos survives it because the console is a root shell.
+IOS-XE runs `line con 0` through the same `default` list as every vty, so without the named
+list above, that cell would lock out SSH and the console at the same moment and the device
+could not be put back without a redeploy.
+
+It does not weaken L4: every login L4 attempts is over SSH, on a vty using the `default` list
+under test.
 
 `register_test.go` has one test per open register entry this plan closes: L1, L2, L5, L6, L8,
 L10. Each writes `results/L<N>-<platform>.md` with the observation. **A register test passes

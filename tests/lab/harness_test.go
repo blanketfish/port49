@@ -88,6 +88,14 @@ var platforms = []platform{
 	// number with what was measured, the way the three platforms above were.
 	{"nxos", "cisco_nxos", "topologies/nxos.clab.yml", "172.100.100.31", "nx1",
 		"vrnetlab/cisco_n9kv:9300v64-10.4.2.F", "Nexus 9300v 10.4(2)F", 15 * time.Minute},
+	// The c8000v's budget is a placeholder in the same sense the N9Kv's was:
+	// replace it with the first measured boot. The launcher gives this VM 4 GB
+	// of RAM and waits for `CVAC-4-CONFIG_DONE` on the serial console, which is
+	// the device reporting that the startup configuration has been applied --
+	// so unlike every other platform here, "booted" and "configured" are the
+	// same event on IOS-XE.
+	{"iosxe", "cisco_iosxe", "topologies/iosxe.clab.yml", "172.100.100.41", "xe1",
+		"vrnetlab/cisco_c8000v:17.13.01a", "Catalyst 8000V 17.13.01a", 12 * time.Minute},
 }
 
 const (
@@ -108,6 +116,14 @@ const (
 	// hash with `openssl passwd -6 -salt p49labsalt` over this value if it
 	// changes.
 	breakglassPassword = "breakglass-only"
+
+	// enableSecret is what `aaa authentication enable default group port49
+	// enable` falls back to on IOS-XE, and it is deliberately the same
+	// published lab constant as breakglassPassword: one value to keep in step
+	// with configs/iosxe-startup.cfg rather than two. No other platform in this
+	// lab has an enable secret -- EOS's enable takes the operator's own
+	// credential, and NX-OS has no enable command without `feature privilege`.
+	enableSecret = breakglassPassword
 
 	spoolPath     = "/tmp/port49-lab-acct.jsonl"
 	metricsAddr   = "127.0.0.1:9049"

@@ -563,3 +563,179 @@ func nxosConfigure(c *cliConn, lines ...string) (string, error) {
 func nxosShow(c *cliConn, cmd string) (string, error) {
 	return c.sendExpect(cmd, 90*time.Second, c.prompt)
 }
+
+// ---------------------------------------------------------------------------
+// IOS-XE
+// ---------------------------------------------------------------------------
+
+// iosxeCLI returns an IOS-XE privileged-exec CLI, over SSH as user if that
+// works and over the serial console if it does not, with paging off.
+//
+// Three things differ from the EOS and NX-OS helpers and each one is a place a
+// copied helper would hang or measure the wrong thing.
+//
+// First, where the session lands is not known in advance. The break-glass
+// account is `privilege 15`, and a token operator is put at privilege 15 by
+// port49's own `priv-lvl=15` session attribute, so both usually arrive at `#`.
+// But `enable` on IOS-XE is a real authentication exchange -- that is exactly
+// what L3 measures here -- so this only types it when the prompt is actually
+// `>`, and answers the password prompt with the enable secret if one appears.
+// Typing `enable` unconditionally at a `#` prompt would perform the exchange
+// under test during setup.
+//
+// Second, the console fallback works here for a different reason than on NX-OS,
+// and a weaker one. NX-OS keeps a separate `aaa authentication login console`
+// list that defaults to `local`; IOS-XE has no such default and would run the
+// console through the same `default` list a test may have just pointed at a
+// stopped daemon. configs/iosxe-startup.cfg therefore pins `line con 0` to a
+// named `CONSOLE` list of its own. Without that line this fallback is not a
+// fallback at all.
+//
+// Third, an IOS-XE prompt is `xe1#` with no trailing space, like EOS and unlike
+// Junos, so the node name is the only thing specific enough to wait for.
+func (l *lab) iosxeCLI(user, password string) (*cliConn, error) {
+	return l.iosxeCLIRaising(user, password, true)
+}
+
+// iosxeCLIRaising is iosxeCLI with the enable step made optional. L3 opens its
+// token sessions with raise=false, because on this platform `enable` IS the
+// exchange under test: performing it here would measure it during setup, and
+// the prompt the login produced unaided is itself one of L3's findings.
+func (l *lab) iosxeCLIRaising(user, password string, raise bool) (*cliConn, error) {
+	enable := func(c *cliConn) error {
+		if !raise {
+			return nil
+		}
+		return iosxeEnable(c, l.p.node)
+	}
+	c, sshErr := l.sshCLI(user, password)
+	if sshErr == nil {
+		c.prompt = l.p.node + "#"
+		if _, err := c.expect(60*time.Second, c.prompt, l.p.node+">"); err != nil {
+			c.Close()
+			return nil, err
+		}
+		if err := enable(c); err != nil {
+			c.Close()
+			return nil, err
+		}
+		if err := iosxePrepare(c); err != nil {
+			c.Close()
+			return nil, err
+		}
+		return c, nil
+	}
+
+	c, err := l.consoleCLI()
+	if err != nil {
+		return nil, fmt.Errorf("SSH CLI failed (%v) and the console did not open either: %w", sshErr, err)
+	}
+	c.prompt = l.p.node + "#"
+	c.name += " as " + user + ", after SSH failed (" + sshErr.Error() + ")"
+	out, err := c.sendExpect("", 90*time.Second, "Username:", "Password:", c.prompt, l.p.node+">")
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	if strings.Contains(out, "Username:") {
+		if out, err = c.sendExpect(user, 90*time.Second, "Password:", c.prompt, l.p.node+">"); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
+	if strings.Contains(out, "Password:") {
+		if out, err = c.sendExpect(password, 120*time.Second, c.prompt, l.p.node+">", "Username:", "denied", "Failed"); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
+	if !strings.Contains(out, c.prompt) && !strings.Contains(out, l.p.node+">") {
+		c.Close()
+		return nil, fmt.Errorf("the console did not reach %q for %s; it said: %s", c.prompt, user, oneLine(out))
+	}
+	if err := enable(c); err != nil {
+		c.Close()
+		return nil, err
+	}
+	if err := iosxePrepare(c); err != nil {
+		c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+// iosxeEnable raises the session to privileged exec, but only if it is not
+// there already. A session that is already at `#` is left alone on purpose; see
+// iosxeCLI.
+func iosxeEnable(c *cliConn, node string) error {
+	// Which prompt the session is at is whichever of the two appeared last.
+	// Testing only the final characters would be defeated by a trailing newline
+	// or by any of the notices IOS-XE prints after a login.
+	if t := c.transcript(); strings.LastIndex(t, c.prompt) > strings.LastIndex(t, node+">") {
+		return nil
+	}
+	out, err := c.sendExpect("enable", 60*time.Second, c.prompt, "assword")
+	if err != nil {
+		return fmt.Errorf("`enable`: %w", err)
+	}
+	if !strings.Contains(out, "assword") {
+		return nil
+	}
+	out, err = c.sendExpect(enableSecret, 90*time.Second, c.prompt, node+">", "denied", "Failed", "Bad secrets")
+	if err != nil {
+		return fmt.Errorf("answering the enable password prompt: %w", err)
+	}
+	if !strings.Contains(out, c.prompt) {
+		return fmt.Errorf("the enable secret was refused; the device said: %s", oneLine(out))
+	}
+	return nil
+}
+
+// iosxePrepare turns off paging, so a `show` command does not stop at a
+// `--More--` prompt that expect would wait out in full.
+func iosxePrepare(c *cliConn) error {
+	_, err := c.sendExpect("terminal length 0", 45*time.Second, c.prompt)
+	return err
+}
+
+// iosxeCfgPrompt is what IOS-XE shows in configuration mode. Like the NX-OS one
+// and unlike the EOS constant it cannot be a package constant, because the node
+// name is part of it: `xe1(config)#`.
+func iosxeCfgPrompt(c *cliConn) string {
+	return strings.TrimSuffix(c.prompt, "#") + "(config)#"
+}
+
+// iosxeConfigure applies configuration lines on IOS-XE. There is no commit. A
+// line the parser rejects answers with `% Invalid input` under a `^` marker,
+// and one command authorization refuses answers with `Command authorization
+// failed` -- which is a real possibility here, because
+// configs/iosxe-startup.cfg sets `aaa authorization config-commands`. Both are
+// checked for, because a silently ignored line would leave the next cell of
+// L4's matrix measuring the old method list.
+func iosxeConfigure(c *cliConn, lines ...string) (string, error) {
+	from := len(c.transcript())
+	cfg := iosxeCfgPrompt(c)
+	if _, err := c.sendExpect("configure terminal", 45*time.Second, cfg); err != nil {
+		return c.transcript(), err
+	}
+	for _, ln := range lines {
+		out, err := c.sendExpect(ln, 60*time.Second, cfg)
+		if err != nil {
+			return out, fmt.Errorf("%q: %w", ln, err)
+		}
+		if strings.Contains(out, "% Invalid input") || strings.Contains(out, "% Incomplete") ||
+			strings.Contains(out, "% Unrecognized") || strings.Contains(out, "% Ambiguous") ||
+			strings.Contains(out, "authorization failed") {
+			return out, fmt.Errorf("%q was refused by the device:\n%s", ln, out)
+		}
+	}
+	if _, err := c.sendExpect("end", 45*time.Second, c.prompt); err != nil {
+		return c.transcript(), err
+	}
+	return c.transcript()[from:], nil
+}
+
+// iosxeShow runs one command and returns just its output.
+func iosxeShow(c *cliConn, cmd string) (string, error) {
+	return c.sendExpect(cmd, 90*time.Second, c.prompt)
+}

@@ -43,6 +43,8 @@ func TestL4FallThrough(t *testing.T) {
 			l4Junos(t, l)
 		case l.p.name == "cisco_nxos":
 			l4NXOS(t, l)
+		case l.p.name == "cisco_iosxe":
+			l4IOSXE(t, l)
 		default:
 			l4EOS(t, l)
 		}
@@ -332,6 +334,31 @@ func l4NXOS(t *testing.T, l *lab) {
 	})
 }
 
+func l4IOSXE(t *testing.T, l *lab) {
+	l4AAA(t, l, l4AAADriver{
+		open:        l.iosxeCLI,
+		configure:   iosxeConfigure,
+		show:        iosxeShow,
+		alternative: "aaa authentication login default group port49",
+		evidence: "The local account is the `username " + breakglassUser + " privilege 15 secret ...` line in " +
+			"`tests/lab/configs/iosxe-startup.cfg`. Every cell above that logged in is the proof it exists, and " +
+			"`privilege 15` is what lets it configure anything once it is in: IOS-XE command authorization under " +
+			"`... group port49 local` authorizes a command only if the user's level is at or above the " +
+			"command's, which is the privilege-level form of the role lesson EOS taught in " +
+			"`tests/lab/results/L4-arista_eos.md`.\n\n" +
+			"The second method list is NX-OS's contrast, not EOS's: the lab line already names a group and ends " +
+			"in `local`, so the shape worth trying is the one Junos answered -- a list with **no local method " +
+			"at all**.\n\n" +
+			"Setting that list on IOS-XE costs something no other platform here charges, and it is why " +
+			"`configs/iosxe-startup.cfg` carries an `aaa authentication login CONSOLE local` list pinned to " +
+			"`line con 0`. NX-OS keeps a console method list of its own that defaults to `local`; IOS-XE runs " +
+			"the console through the same `default` list as every vty, so `group port49` with the daemon " +
+			"stopped would shut out SSH and the console together and the restore below could not happen at " +
+			"all. The named list changes nothing this test measures -- every login here is over SSH, on a vty " +
+			"using the `default` list under test.",
+	})
+}
+
 func l4AAA(t *testing.T, l *lab, d l4AAADriver) {
 	cfg := l.writeDelayConfig(t, l4FailDelay)
 
@@ -482,17 +509,32 @@ func l4Observation(l *lab, cells []l4Cell, configEvidence, channel, restoreNote 
 	// constant. It used to be the fixed string "NX-OS and IOS-XE, and any Junos
 	// or EOS release but the one named above", which was copied into every
 	// note including `L4-cisco_nxos.md`, where it declared unmeasured the very
-	// platform the note measures.
+	// platform the note measures — and which, once IOS-XE became a platform of
+	// this lab, would have declared that one unmeasured in its own note too.
 	fmt.Fprintf(&b, "\n### Not measured\n\n"+
 		"- `deadtime` — this lab has one TACACS+ server and no dead-server timer was exercised.\n"+
 		"- Every transport but SSH: console, eAPI, NX-API and NETCONF.\n"+
 		"- A second TACACS+ server, so nothing here says what a device does with one server rejecting and "+
 		"another reachable.\n"+
-		"- IOS-XE, and any %s release but the one named above.\n"+
+		"- Any %s release but the one named above, and every platform family this lab does not deploy. The "+
+		"families it does are %s, each in its own L4 note.\n"+
 		"- Authorization fall-through. This measures the authentication method list only; whether command "+
 		"authorization falls back to local on a deny is a separate question spec §5.6 also leans on.\n",
-		l.p.name)
+		l.p.name, otherPlatformNames(l.p.name))
 	return b.String()
+}
+
+// otherPlatformNames lists every platform this lab can deploy except one, for
+// a note that has to say what it did not measure without naming a family that
+// is in fact measured elsewhere.
+func otherPlatformNames(except string) string {
+	var out []string
+	for _, p := range platforms {
+		if p.name != except {
+			out = append(out, "`"+p.name+"`")
+		}
+	}
+	return strings.Join(out, ", ")
 }
 
 // l4Verdict states, in one sentence per method list, whether a denial produced

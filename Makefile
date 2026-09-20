@@ -38,10 +38,11 @@ fuzz:
 # Override the set with either spelling:
 #   PORT49_LAB_PLATFORMS=eos,vsrx make lab
 #   make lab LAB_PLATFORMS="eos vsrx"
-# `nxos` is last because it is the one platform here whose boot has never been
-# measured on this host; put it behind the three that are known to work so a
-# `make lab` with no selector still gets through them first.
-LAB_PLATFORMS ?= eos vjunos vsrx nxos
+# `iosxe` is last for the reason `nxos` used to be: it is the platform here
+# whose boot has never been measured on this host, so it sits behind the four
+# that are known to work and a `make lab` with no selector gets through them
+# first.
+LAB_PLATFORMS ?= eos vjunos vsrx nxos iosxe
 
 # A platform that does not measure stops the loop, and the `if` is how. `set -e`
 # alone was not enough, and the reason is not the shell: it fires on a non-zero
