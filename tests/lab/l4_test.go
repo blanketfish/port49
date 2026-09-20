@@ -38,11 +38,14 @@ func TestL4FallThrough(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		stop := l.capture(t, "L4")
 		defer stop()
-		if strings.HasPrefix(l.p.name, "juniper_") {
+		switch {
+		case strings.HasPrefix(l.p.name, "juniper_"):
 			l4Junos(t, l)
-			return
+		case l.p.name == "cisco_nxos":
+			l4NXOS(t, l)
+		default:
+			l4EOS(t, l)
 		}
-		l4EOS(t, l)
 	})
 }
 
@@ -262,10 +265,74 @@ func l4JunosConfigEvidence(t *testing.T, l *lab) (evidence, channel string) {
 }
 
 // ---------------------------------------------------------------------------
-// EOS
+// EOS and NX-OS: `aaa authentication login default`
 // ---------------------------------------------------------------------------
 
+// l4AAADriver is what one `aaa authentication login default` platform has to
+// supply. EOS and NX-OS run the identical matrix over an identical statement
+// and differ only in how a CLI is opened, how configuration is applied, and
+// which second method list is the interesting one, so the matrix itself is
+// written once. Junos keeps its own function: `authentication-order` is a
+// different statement with a commit step.
+type l4AAADriver struct {
+	open      func(user, password string) (*cliConn, error)
+	configure func(c *cliConn, lines ...string) (string, error)
+	show      func(c *cliConn, cmd string) (string, error)
+
+	// alternative is the second method list the matrix sets, chosen per
+	// platform because the interesting contrast differs. On EOS the lab's own
+	// line names a group and the question was whether the built-in `tacacs+`
+	// group behaves differently. On NX-OS the lab's line already ends in
+	// `local`, so the contrast worth measuring is the same one Junos gave:
+	// a list with no local method at all.
+	alternative string
+
+	// evidence is the platform's paragraph under "### The local account".
+	evidence string
+}
+
 func l4EOS(t *testing.T, l *lab) {
+	l4AAA(t, l, l4AAADriver{
+		open:        l.eosCLI,
+		configure:   eosConfigure,
+		show:        eosShow,
+		alternative: "aaa authentication login default group tacacs+ local",
+		evidence: "EOS has no equivalent of the Junos password-materialisation defect: the `username " +
+			breakglassUser + "` line in `tests/lab/configs/eos-startup.cfg` produces a usable local password, and " +
+			"every cell above that logged in proves it.\n\n" +
+			"That line now also carries `role network-admin`, and the reason belongs in this note. With " +
+			"`privilege 15` alone, this account logged in while port49d was unreachable and was then refused its " +
+			"first configuration command: `% Authorization denied for command 'configure'`. EOS command " +
+			"authorization under `... group port49 local` falls back to the local **role**, and a role is not a " +
+			"privilege level — an account with no role gets the default one, which authorizes `show` and `enable` " +
+			"and stops there. A break-glass account that can log in during an outage and cannot change anything is " +
+			"worth knowing about before the outage.",
+	})
+}
+
+func l4NXOS(t *testing.T, l *lab) {
+	l4AAA(t, l, l4AAADriver{
+		open:        l.nxosCLI,
+		configure:   nxosConfigure,
+		show:        nxosShow,
+		alternative: "aaa authentication login default group port49",
+		evidence: "The local account is the `username " + breakglassUser + " ... role network-admin` line in " +
+			"`tests/lab/configs/nxos-startup.cfg`, which only commits because `no password strength-check` " +
+			"precedes it: NX-OS rejects a password that fails its complexity rules, and the lab's does. Every " +
+			"cell above that logged in is the proof the account exists.\n\n" +
+			"The second method list here is not EOS's contrast. On EOS the lab line already names a group and " +
+			"ends in `local`, so the alternative worth trying was the built-in `tacacs+` group. On NX-OS the " +
+			"contrast that matters is the one Junos answered: a list with **no local method at all**, which is " +
+			"what `aaa authentication login default group port49` is. If NX-OS still takes a local password " +
+			"under that list when port49 is unreachable, it behaves like Junos — \"TACACS+ only while the " +
+			"server answers\" — and if it refuses, it behaves like the spec assumes.\n\n" +
+			"Console access is unaffected either way: NX-OS keeps a separate `aaa authentication login console` " +
+			"list and with none configured it defaults to `local`, which is why the restore below can use the " +
+			"console when SSH is shut out.",
+	})
+}
+
+func l4AAA(t *testing.T, l *lab, d l4AAADriver) {
 	cfg := l.writeDelayConfig(t, l4FailDelay)
 
 	// What the lab's startup config already carries, read back from the device
@@ -281,11 +348,11 @@ func l4EOS(t *testing.T, l *lab) {
 	if err := l.stopDaemon(); err != nil {
 		t.Fatalf("could not stop port49d before reading the device's configuration: %v", err)
 	}
-	configured, err := l4EOSConfigured(l)
+	configured, err := l4AAAConfigured(l, d)
 	if err != nil {
 		t.Fatalf("could not read the configured login method list, so there is nothing to attribute a result to: %v", err)
 	}
-	orders := []string{configured, "aaa authentication login default group tacacs+ local"}
+	orders := []string{configured, d.alternative}
 
 	var cells []l4Cell
 	for i, order := range orders {
@@ -293,14 +360,14 @@ func l4EOS(t *testing.T, l *lab) {
 			t.Fatalf("could not stop port49d, so the unreachable condition could not be created: %v", err)
 		}
 		if i > 0 {
-			c, err := l.eosCLI(breakglassUser, breakglassPassword)
+			c, err := d.open(breakglassUser, breakglassPassword)
 			if err != nil {
 				cells = append(cells,
 					l4Cell{order: order, condition: "port49d not listening", note: "the device could not be reached to set this method list: " + err.Error()},
 					l4Cell{order: order, condition: "port49d answering FAIL", note: "the method list was never set"})
 				break
 			}
-			out, err := eosConfigure(c, order)
+			out, err := d.configure(c, order)
 			c.Close()
 			if err != nil {
 				why := fmt.Sprintf("the method list could not be set: %v (device said: %s)", err, oneLine(out))
@@ -318,13 +385,15 @@ func l4EOS(t *testing.T, l *lab) {
 	}
 
 	restore := "restored"
+	channel := "SSH CLI as " + breakglassUser
 	if err := l.stopDaemon(); err != nil {
 		restore = "not restored: " + err.Error()
 	} else {
-		if c, err := l.eosCLI(breakglassUser, breakglassPassword); err != nil {
+		if c, err := d.open(breakglassUser, breakglassPassword); err != nil {
 			restore = "not restored: " + err.Error()
 		} else {
-			_, err := eosConfigure(c, orders[0])
+			channel = c.name
+			_, err := d.configure(c, orders[0])
 			c.Close()
 			if err != nil {
 				restore = "not restored: " + err.Error()
@@ -335,31 +404,27 @@ func l4EOS(t *testing.T, l *lab) {
 		}
 	}
 
-	evidence := "EOS has no equivalent of the Junos password-materialisation defect: the `username " +
-		breakglassUser + "` line in `tests/lab/configs/eos-startup.cfg` produces a usable local password, and " +
-		"every cell above that logged in proves it.\n\n" +
-		"That line now also carries `role network-admin`, and the reason belongs in this note. With " +
-		"`privilege 15` alone, this account logged in while port49d was unreachable and was then refused its " +
-		"first configuration command: `% Authorization denied for command 'configure'`. EOS command " +
-		"authorization under `... group port49 local` falls back to the local **role**, and a role is not a " +
-		"privilege level — an account with no role gets the default one, which authorizes `show` and `enable` " +
-		"and stops there. A break-glass account that can log in during an outage and cannot change anything is " +
-		"worth knowing about before the outage."
-	l.result(t, "L4", l4Claim, l4Observation(l, cells, evidence, "SSH CLI as "+breakglassUser,
+	l.result(t, "L4", l4Claim, l4Observation(l, cells, d.evidence, channel,
 		fmt.Sprintf("The method list was switched in place over the device's own CLI and %s afterwards.", restore)))
 	l4Assert(t, cells)
 }
 
-// l4EOSConfigured reads the login method list the lab config actually applied,
+// l4AAAConfigured reads the login method list the lab config actually applied,
 // so the results note attributes each row to the line that was in force rather
 // than to the line the test meant to set.
-func l4EOSConfigured(l *lab) (string, error) {
-	c, err := l.eosCLI(breakglassUser, breakglassPassword)
+//
+// The `| include` filter is deliberately one word. Both platforms take a longer
+// filter and both take it differently — NX-OS wants the multi-word form quoted
+// and EOS does not — so the line is picked out of a short `aaa` listing in Go
+// instead, where a quoting mistake cannot look like a device that has no such
+// statement.
+func l4AAAConfigured(l *lab, d l4AAADriver) (string, error) {
+	c, err := d.open(breakglassUser, breakglassPassword)
 	if err != nil {
 		return "", err
 	}
 	defer c.Close()
-	out, err := eosShow(c, "show running-config | include aaa authentication login default")
+	out, err := d.show(c, "show running-config | include aaa")
 	if err != nil {
 		return "", err
 	}

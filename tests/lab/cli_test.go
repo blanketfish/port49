@@ -448,3 +448,118 @@ func eosConfigure(c *cliConn, lines ...string) (string, error) {
 func eosShow(c *cliConn, cmd string) (string, error) {
 	return c.sendExpect(cmd, 60*time.Second, c.prompt)
 }
+
+// ---------------------------------------------------------------------------
+// NX-OS
+// ---------------------------------------------------------------------------
+
+// nxosCLI returns an NX-OS exec-mode CLI, over SSH as user if that works and
+// over the serial console if it does not, with paging off.
+//
+// Three differences from EOS, and each one is a place a copied helper would
+// hang. NX-OS has no `enable` step: a `role network-admin` account lands in
+// exec mode already, and typing `enable` on an image without `feature
+// privilege` answers with an error rather than a prompt. Paging is `terminal
+// length 0`, not `terminal length 0` after an enable. And configuration mode is
+// `configure terminal` with no commit at the end.
+//
+// The console fallback is not decoration here either, and it works for a reason
+// worth writing down: NX-OS keeps a separate `aaa authentication login console`
+// method list, and with none configured it defaults to **local**. So the
+// console still takes the break-glass account's local password while the
+// `default` list is pointed at a port49 that is stopped — which is exactly the
+// condition L4 creates when it sets a method list with no `local` method and
+// then has to put it back.
+func (l *lab) nxosCLI(user, password string) (*cliConn, error) {
+	c, sshErr := l.sshCLI(user, password)
+	if sshErr == nil {
+		c.prompt = l.p.node + "#"
+		if _, err := c.expect(60*time.Second, c.prompt); err != nil {
+			c.Close()
+			return nil, err
+		}
+		if err := nxosPrepare(c); err != nil {
+			c.Close()
+			return nil, err
+		}
+		return c, nil
+	}
+
+	c, err := l.consoleCLI()
+	if err != nil {
+		return nil, fmt.Errorf("SSH CLI failed (%v) and the console did not open either: %w", sshErr, err)
+	}
+	c.prompt = l.p.node + "#"
+	c.name += " as " + user + ", after SSH failed (" + sshErr.Error() + ")"
+	out, err := c.sendExpect("", 90*time.Second, "login:", "Password:", c.prompt)
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	if strings.Contains(out, "login:") {
+		if out, err = c.sendExpect(user, 90*time.Second, "Password:", c.prompt); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
+	if strings.Contains(out, "Password:") {
+		if out, err = c.sendExpect(password, 120*time.Second, c.prompt, "login:", "incorrect", "failed"); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
+	if !strings.Contains(out, c.prompt) {
+		c.Close()
+		return nil, fmt.Errorf("the console did not reach %q for %s; it said: %s", c.prompt, user, oneLine(out))
+	}
+	if err := nxosPrepare(c); err != nil {
+		c.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+// nxosPrepare turns off paging, so a `show` command does not stop at a
+// `--More--` prompt that expect would wait out in full.
+func nxosPrepare(c *cliConn) error {
+	_, err := c.sendExpect("terminal length 0", 45*time.Second, c.prompt)
+	return err
+}
+
+// nxosCfgPrompt is what NX-OS shows in configuration mode. Unlike the EOS
+// constant it cannot be a package constant, because the node name is part of
+// it: `nx1(config)#`.
+func nxosCfgPrompt(c *cliConn) string {
+	return strings.TrimSuffix(c.prompt, "#") + "(config)#"
+}
+
+// nxosConfigure applies configuration lines on NX-OS. There is no commit. A
+// line the parser rejects answers with `% Invalid command` or an `^` marker,
+// which is checked for because a silently ignored line would leave the next
+// cell of L4's matrix measuring the old method list.
+func nxosConfigure(c *cliConn, lines ...string) (string, error) {
+	from := len(c.transcript())
+	cfg := nxosCfgPrompt(c)
+	if _, err := c.sendExpect("configure terminal", 45*time.Second, cfg); err != nil {
+		return c.transcript(), err
+	}
+	for _, ln := range lines {
+		out, err := c.sendExpect(ln, 60*time.Second, cfg)
+		if err != nil {
+			return out, fmt.Errorf("%q: %w", ln, err)
+		}
+		if strings.Contains(out, "% Invalid") || strings.Contains(out, "Invalid command") ||
+			strings.Contains(out, "^\r\n% ") || strings.Contains(out, "ERROR:") {
+			return out, fmt.Errorf("%q was refused by the device:\n%s", ln, out)
+		}
+	}
+	if _, err := c.sendExpect("end", 45*time.Second, c.prompt); err != nil {
+		return c.transcript(), err
+	}
+	return c.transcript()[from:], nil
+}
+
+// nxosShow runs one command and returns just its output.
+func nxosShow(c *cliConn, cmd string) (string, error) {
+	return c.sendExpect(cmd, 90*time.Second, c.prompt)
+}

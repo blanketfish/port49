@@ -150,6 +150,26 @@ func l13ConfiguredTimeout(t *testing.T, l *lab) string {
 			"(`help reference system tacplus-server`):\n\n```\n%s\n```",
 			cfgOut, refOut)
 	}
+	if l.p.name == "cisco_nxos" {
+		c, err := l.nxosCLI(breakglassUser, breakglassPassword)
+		if err != nil {
+			return "Not read: no CLI channel was available (" + err.Error() + ")."
+		}
+		defer c.Close()
+		// `show tacacs-server` is the one that prints the timer. NX-OS states a
+		// global timeout there whether or not the configuration sets one, which
+		// makes it the only platform in this lab that names its own figure — so
+		// the note can be read against the device's claim rather than only
+		// against the measurement.
+		show, _ := nxosShow(c, "show tacacs-server")
+		groups, _ := nxosShow(c, "show tacacs-server groups")
+		cfg, _ := nxosShow(c, "show running-config | include tacacs")
+		return fmt.Sprintf("`show tacacs-server`:\n\n```\n%s\n```\n\n`show tacacs-server groups`:\n\n```\n%s\n```\n\n"+
+			"`show running-config | include tacacs`:\n\n```\n%s\n```",
+			redactSecrets(strings.TrimSpace(stripPrompt(show))),
+			redactSecrets(strings.TrimSpace(stripPrompt(groups))),
+			redactSecrets(strings.TrimSpace(stripPrompt(cfg))))
+	}
 	c, err := l.eosCLI(breakglassUser, breakglassPassword)
 	if err != nil {
 		return "Not read: no CLI channel was available (" + err.Error() + ")."
