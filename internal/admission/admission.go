@@ -3,7 +3,9 @@
 package admission
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/netip"
 	"os"
 	"sort"
@@ -44,6 +46,21 @@ type Trie struct {
 func Build(inv Inventory) (*Trie, error) {
 	t := &Trie{byAddr: make(map[netip.Addr]Resolved)}
 	owner := make(map[netip.Addr]string)
+	// The device name is a namespace, not a label: store.TokenKey and
+	// store.ContextKey are keyed on it, so two devices sharing a name (the
+	// empty string included) share a token namespace, and a token minted for
+	// one redeems on the other. Refuse both here, next to the address
+	// collision, rather than discovering it as a cross-device redemption.
+	named := make(map[string]bool, len(inv.Devices))
+	for _, d := range inv.Devices {
+		if d.Name == "" {
+			return nil, fmt.Errorf("admission: a device with addresses %v has no name; give every device a unique name", d.Addresses)
+		}
+		if named[d.Name] {
+			return nil, fmt.Errorf("admission: two devices are both named %q; device names are token namespaces and must be unique", d.Name)
+		}
+		named[d.Name] = true
+	}
 	for _, d := range inv.Devices {
 		keyRef, err := resolveKeyRef(d, inv.KeyGroups)
 		if err != nil {
@@ -150,9 +167,15 @@ func LoadFile(path string) (Inventory, error) {
 	if err != nil {
 		return Inventory{}, err
 	}
+	// KnownFields: an unknown key here is a typo with teeth. `keyref:` for
+	// `key_ref:` silently un-pins a device onto a group key, and the first
+	// packet from it reads `no_known_key_matches` — the 3am discovery this
+	// package's doc says cannot happen.
 	var f fileInventory
-	if err := yaml.Unmarshal(raw, &f); err != nil {
-		return Inventory{}, fmt.Errorf("admission: %s: %w", path, err)
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return Inventory{}, fmt.Errorf("admission: %s: %w; check the key spelling against the inventory schema", path, err)
 	}
 	var inv Inventory
 	for _, d := range f.Devices {
@@ -176,7 +199,14 @@ func LoadFile(path string) (Inventory, error) {
 			kg.CIDR = p
 		}
 		if kg.KeyRef == "" {
-			return Inventory{}, fmt.Errorf("admission: key group without key_ref")
+			return Inventory{}, fmt.Errorf("admission: %s: a key group has no key_ref; every group must name the key it admits", path)
+		}
+		// A group with neither match term is not a narrow group, it is a
+		// catch-all: attrsMatch against an empty want is vacuously true, so it
+		// would claim every device in the attribute tier and quietly admit the
+		// fleet under one key.
+		if !kg.CIDR.IsValid() && len(kg.Attributes) == 0 {
+			return Inventory{}, fmt.Errorf("admission: %s: key group %q matches on neither cidr nor attributes; give it one or remove it", path, kg.KeyRef)
 		}
 		inv.KeyGroups = append(inv.KeyGroups, kg)
 	}

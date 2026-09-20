@@ -2,6 +2,8 @@ package admission
 
 import (
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -46,6 +48,66 @@ func TestBuildRefusesAddressCollision(t *testing.T) {
 	_, err := Build(inv)
 	if err == nil || !strings.Contains(err.Error(), "a") || !strings.Contains(err.Error(), "b") {
 		t.Fatalf("want error naming both devices, got %v", err)
+	}
+}
+
+// TestBuildRefusesUnnamedOrDuplicateDevices covers the name as what it is: a
+// namespace. store.TokenKey and store.ContextKey are keyed on the device
+// name, so two devices sharing one (or sharing the empty string) share a
+// token namespace, and a token minted for one redeems on the other.
+func TestBuildRefusesUnnamedOrDuplicateDevices(t *testing.T) {
+	t.Run("a device with no name", func(t *testing.T) {
+		inv := Inventory{Devices: []Device{{Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}}}
+		_, err := Build(inv)
+		if err == nil || !strings.Contains(err.Error(), "10.0.0.1") {
+			t.Fatalf("want an error naming the address of the unnamed device, got %v", err)
+		}
+	})
+	t.Run("two devices with one name", func(t *testing.T) {
+		inv := Inventory{Devices: []Device{
+			{Name: "leaf-01", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
+			{Name: "leaf-01", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.2")}},
+		}}
+		_, err := Build(inv)
+		if err == nil || !strings.Contains(err.Error(), "leaf-01") {
+			t.Fatalf("want an error naming the duplicated device name, got %v", err)
+		}
+	})
+}
+
+// TestLoadFileRefusesUnknownKeys covers the 3am failure the package doc says
+// cannot happen: `keyref:` for `key_ref:` silently un-pins a device onto a
+// group key, and the first packet from it reads `no_known_key_matches`.
+func TestLoadFileRefusesUnknownKeys(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "inventory.yaml")
+	body := "devices:\n  - {name: leaf-01, addresses: [10.0.0.1], keyref: special_key}\nkey_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: k}\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(p)
+	if err == nil {
+		t.Fatal("a misspelled inventory key must be refused at load")
+	}
+	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "keyref") {
+		t.Fatalf("the error must name the file and the key, got %v", err)
+	}
+}
+
+// TestLoadFileRefusesAKeyGroupThatMatchesNothing covers a group with neither
+// cidr nor attributes: attrsMatch against an empty want is vacuously true, so
+// such a group silently claims every device in the attribute tier.
+func TestLoadFileRefusesAKeyGroupThatMatchesNothing(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "inventory.yaml")
+	body := "devices:\n  - {name: leaf-01, addresses: [10.0.0.1]}\nkey_groups:\n  - {match: {}, key_ref: catch_all}\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadFile(p)
+	if err == nil {
+		t.Fatal("a key group with neither cidr nor attributes must be refused")
+	}
+	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "catch_all") {
+		t.Fatalf("the error must name the file and the key group, got %v", err)
 	}
 }
 

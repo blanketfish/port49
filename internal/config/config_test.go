@@ -48,6 +48,23 @@ func setSecrets(t *testing.T) {
 	t.Setenv("T_PROD_V1", "one")
 }
 
+// TestLoadRefusesUnknownKeys covers the typo that costs the most: an ignored
+// `per_nas_conections` is not a missing limit, it is the default 32 silently
+// in force, and nothing in the log or the metrics ever says so.
+func TestLoadRefusesUnknownKeys(t *testing.T) {
+	setSecrets(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := strings.Replace(fmt.Sprintf(sample, invPath), "per_nas_connections", "per_nas_conections", 1)
+	p := write(t, "port49d.yaml", body)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("a misspelled config key must be refused at load")
+	}
+	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "per_nas_conections") {
+		t.Fatalf("the error must name the file and the key, got %v", err)
+	}
+}
+
 func TestLoadAppliesDefaultsAndResolvesKeys(t *testing.T) {
 	setSecrets(t)
 	invPath := write(t, "inventory.yaml", inv)

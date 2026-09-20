@@ -10,7 +10,9 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -108,9 +110,15 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// KnownFields: this file is read once, at start, and every key in it
+	// changes how the daemon answers devices. Silently ignoring an unknown one
+	// turns `per_nas_conections: 4` into the default 32 and `retire:` into a
+	// dropped key version — both invisible until a device is affected by them.
 	var f fileConfig
-	if err := yaml.Unmarshal(raw, &f); err != nil {
-		return Config{}, fmt.Errorf("config: %s: %w", path, err)
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, err)
 	}
 
 	malformedWindow, err := window("malformed_window", f.Limits.MalformedWindow)
