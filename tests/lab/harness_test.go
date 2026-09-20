@@ -105,6 +105,11 @@ var (
 	globalOnce sync.Once
 	globalErr  error
 
+	selOnce      sync.Once
+	selPlatforms []platform
+	selExplicit  bool
+	selErr       error
+
 	labsMu sync.Mutex
 	labs   = map[string]*lab{}
 	active *lab // the one platform currently deployed; see bringUp
@@ -231,7 +236,15 @@ func (l *lab) deploy() {
 		return
 	}
 	if exec.Command("docker", "image", "inspect", l.p.image).Run() != nil {
-		l.skip = "image " + l.p.image + " is not present"
+		absent := "image " + l.p.image + " is not present"
+		if _, explicit, _ := platformSelection(); explicit {
+			l.err = fmt.Errorf("%s, and this run named %q on PORT49_LAB_PLATFORMS; "+
+				"a named platform that measures nothing is a failed run, not a skip. "+
+				"Build it (tests/lab/README.md) or drop it from the selection", absent, l.p.sel)
+			fmt.Fprintf(os.Stderr, "lab: %s: %v\n", l.p.name, l.err)
+			return
+		}
+		l.skip = absent
 		fmt.Fprintf(os.Stderr, "lab: %s: %s, skipping\n", l.p.name, l.skip)
 		return
 	}
@@ -246,22 +259,57 @@ func (l *lab) deploy() {
 	fmt.Fprintf(os.Stderr, "lab: %s: ready after %v\n", l.p.name, time.Since(start).Round(time.Second))
 }
 
-func selectedPlatforms() []platform {
-	want := os.Getenv("PORT49_LAB_PLATFORMS")
-	if strings.TrimSpace(want) == "" {
-		return platforms
-	}
-	set := map[string]bool{}
-	for _, s := range strings.Split(want, ",") {
-		set[strings.TrimSpace(s)] = true
-	}
-	var out []platform
-	for _, p := range platforms {
-		if set[p.sel] {
-			out = append(out, p)
+// platformSelection reads PORT49_LAB_PLATFORMS once and says both which
+// platforms to run and whether the run named them.
+//
+// The second half matters more than it looks. When nothing is named, an absent
+// image skips its platform on purpose: one built image is enough to start, and
+// `make lab` on a half-provisioned machine should still measure what it can.
+// When a platform *is* named, that same skip is a run that measured nothing and
+// exited 0, which is how a `make lab` over several platforms sails past one that
+// never ran. So a named platform is a promise to measure it, and anything that
+// stops it from being measured is an error.
+//
+// A selector that matches no platform is the same trap spelled differently:
+// `PORT49_LAB_PLATFORMS=vjuno make lab` used to run zero tests and report
+// success.
+func platformSelection() ([]platform, bool, error) {
+	selOnce.Do(func() {
+		want := strings.TrimSpace(os.Getenv("PORT49_LAB_PLATFORMS"))
+		if want == "" {
+			selPlatforms = platforms
+			return
 		}
-	}
-	return out
+		selExplicit = true
+		var known []string
+		for _, p := range platforms {
+			known = append(known, p.sel)
+		}
+		for _, s := range strings.Split(want, ",") {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			found := false
+			for _, p := range platforms {
+				if p.sel == s {
+					selPlatforms = append(selPlatforms, p)
+					found = true
+					break
+				}
+			}
+			if !found {
+				selErr = fmt.Errorf("PORT49_LAB_PLATFORMS names %q, which is not a platform; known selectors are %s",
+					s, strings.Join(known, ", "))
+				return
+			}
+		}
+		if len(selPlatforms) == 0 {
+			selErr = fmt.Errorf("PORT49_LAB_PLATFORMS is %q, which selects no platform; known selectors are %s",
+				want, strings.Join(known, ", "))
+		}
+	})
+	return selPlatforms, selExplicit, selErr
 }
 
 // repoRoot resolves the repository root once. Everything the harness runs uses
@@ -540,7 +588,11 @@ func labFor(t *testing.T, p platform) *lab {
 
 // eachPlatform runs fn as a subtest per selected platform.
 func eachPlatform(t *testing.T, fn func(t *testing.T, l *lab)) {
-	for _, p := range selectedPlatforms() {
+	sel, _, err := platformSelection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range sel {
 		p := p
 		t.Run(p.name, func(t *testing.T) { fn(t, labFor(t, p)) })
 	}

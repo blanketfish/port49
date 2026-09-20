@@ -31,9 +31,20 @@ fuzz:
 #   make lab LAB_PLATFORMS="eos vsrx"
 LAB_PLATFORMS ?= eos vjunos vsrx
 
+# A platform that does not measure stops the loop, and the `if` is how. `set -e`
+# alone was not enough, and the reason is not the shell: it fires on a non-zero
+# exit, and a platform can fail to measure while `go test` exits 0. Naming a
+# platform whose image is absent used to skip every test and report success, so
+# a three-platform run walked straight past it; so did a typo in a selector,
+# which matched nothing and ran nothing. The harness now treats both as errors
+# (see platformSelection in tests/lab/harness_test.go) and the loop says which
+# platform stopped it rather than leaving that to `Error 1`.
 lab:
 	@set -e; \
 	for p in $$(echo "$${PORT49_LAB_PLATFORMS:-$(LAB_PLATFORMS)}" | tr ',' ' '); do \
 	  echo "=== lab platform: $$p ==="; \
-	  PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/... -count=1 -v -timeout 120m; \
+	  if ! PORT49_LAB_PLATFORMS=$$p go test -tags lab ./tests/lab/... -count=1 -v -timeout 120m; then \
+	    echo "=== lab platform $$p FAILED; the platforms after it were not run ==="; \
+	    exit 1; \
+	  fi; \
 	done
