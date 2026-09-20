@@ -186,10 +186,31 @@ func TestL2ServerMsgDisplayed(t *testing.T) {
 		defer stop()
 		off := l.mark()
 
-		user, secret := l.nextLogin(t)
-		out, err := l.login(user, secret, shortDenyPrefix)
-		if err != nil {
-			t.Fatalf("SSH login failed, so no denial could be shown: %v", err)
+		// Up to three logins, and the reason is a false measurement this test
+		// published once. On the 2026-09-20 run the first login came back with
+		// an EMPTY transcript while its own decision records showed the command
+		// reaching port49 and being denied — and the second login, in the same
+		// run and against the same device, printed the denial in full. An empty
+		// transcript is indistinguishable from "the device displayed nothing",
+		// which is exactly the thing this test reports, so the note announced
+		// "NOT displayed" for a device that displays it.
+		//
+		// Nothing here averages the flake away: the note says how many attempts
+		// it took, so a reader can see the difference between a device that
+		// stayed silent three times and a channel that dropped one transcript.
+		var out []string
+		var err error
+		user, attempts := "", 0
+		for attempts = 1; attempts <= 3; attempts++ {
+			var secret string
+			user, secret = l.nextLogin(t)
+			out, err = l.login(user, secret, shortDenyPrefix)
+			if err != nil {
+				t.Fatalf("SSH login failed, so no denial could be shown: %v", err)
+			}
+			if len(out) > 0 && strings.TrimSpace(out[0]) != "" {
+				break
+			}
 		}
 		if len(out) == 0 {
 			t.Fatal("the device returned no output for the denied command, so nothing could be observed")
@@ -217,10 +238,18 @@ func TestL2ServerMsgDisplayed(t *testing.T) {
 		// this test guarantees.
 		longNote := measureTruncation(t, l)
 
+		attemptNote := ""
+		if attempts > 1 {
+			attemptNote = fmt.Sprintf("\n\nThis took **%d login attempts**: the earlier one(s) returned an empty "+
+				"transcript even though the decision log showed the command reaching port49 and being denied. "+
+				"An empty transcript cannot be told from a device that printed nothing, which is the very thing "+
+				"this test reports, so the attempt is retried rather than recorded.", attempts)
+		}
 		obs := fmt.Sprintf("Command `%s` was denied by the lab authorizer with a %d-character `server_msg`:\n\n"+
-			"```\n%s\n```\n\n**The operator saw it: %s.**\n\nWhat the device printed for the denied command:\n\n"+
-			"```\n%s\n```\n\n### Truncation length\n\n%s\n",
-			shortDenyPrefix, len(shortMsg), shortMsg, verdict, strings.TrimRight(out[0], "\n"), longNote)
+			"```\n%s\n```\n\n**The operator saw it: %s.**%s\n\nWhat the device printed for the denied command "+
+			"(login as `%s`):\n\n```\n%s\n```\n\n### Truncation length\n\n%s\n",
+			shortDenyPrefix, len(shortMsg), shortMsg, verdict, attemptNote, user,
+			strings.TrimRight(out[0], "\n"), longNote)
 		l.result(t, "L2", "Whether `server_msg` on an authorization REPLY is displayed to the operator, and at "+
 			"what length it truncates.", obs)
 	})

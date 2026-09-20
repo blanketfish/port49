@@ -372,27 +372,50 @@ func transportReauthVerdict(steps []transportStep) string {
 				"the result, so a single-use token survives a session of repeated requests. Spec §13 decision "+
 				"15 can rest on this row for this transport.\n", u, first)
 		default:
-			return fmt.Sprintf("**Yes.** The first request as `%s` cost %d authentication exchange(s) and the "+
-				"second, with the same token, cost %d more. Every request is a fresh authentication, so a "+
-				"single-use token is spent by the first call and every later call in the same script is denied. "+
-				"That is the failure mode decision 15 is provisional on: the operator sees one success and then "+
-				"a run of denials with a working credential in hand. The outcome of the second request was: %s\n",
-				u, first, second, reauthOutcome(ss[1], u))
+			// The repeat re-authenticated. Whether that BREAKS anything is a
+			// second question, and the answer is in the record rather than in
+			// this sentence. Asserting "and so it is denied" here would be a
+			// note contradicting its own table: the first eAPI run measured a
+			// repeat that re-authenticated and was *permitted*, because port49
+			// answers a replayed credential from the receipt it kept.
+			verdict, reason := reauthVerdict(ss[1], u)
+			out := fmt.Sprintf("**Yes.** The first request as `%s` cost %d authentication exchange(s) and the "+
+				"second, with the same token, cost %d more. Every request is a fresh authentication over this "+
+				"transport.\n\n", u, first, second)
+			switch {
+			case verdict == "permit":
+				out += fmt.Sprintf("**And it was allowed anyway**: `verdict=%s reason=%s`. The token was spent "+
+					"by the first call, and the second was answered out of the receipt port49 kept for "+
+					"`(nas, port, username)` rather than out of the store. So a script that makes forty calls "+
+					"with one token works — for as long as that receipt lives. What decision 15 rests on is "+
+					"therefore not \"does it re-authenticate\" but **`receipt_ttl`**: past it, the next call in "+
+					"the same script is the first denial, and nothing about the credential has changed.\n", verdict, reason)
+			case verdict == "":
+				out += "The repeat produced no redeem record, which contradicts the count above and should be " +
+					"investigated before this note is trusted.\n"
+			default:
+				out += fmt.Sprintf("**And it was refused**: `verdict=%s reason=%s`. A single-use token is spent "+
+					"by the first call and every later call in the same script is denied. That is the failure "+
+					"mode decision 15 is provisional on: the operator sees one success and then a run of "+
+					"denials with a working credential in hand.\n", verdict, reason)
+			}
+			return out
 		}
 	}
 	return "**Not measured.** No two steps in this run presented the same credential twice.\n"
 }
 
-// reauthOutcome names what port49 decided on the repeat, using the reason the
-// daemon actually wrote. Never guess a reason code: spec §5.7 is a closed
-// vocabulary and this reads it out of the record.
-func reauthOutcome(s transportStep, user string) string {
+// reauthVerdict returns what port49 decided on the repeat, using the verdict
+// and reason the daemon actually wrote. Never guess a reason code: spec §5.7 is
+// a closed vocabulary and this reads it out of the record. An empty verdict
+// means no redeem record was found at all.
+func reauthVerdict(s transportStep, user string) (verdict, reason string) {
 	for _, r := range recordsForUser(s.recs, user) {
 		if str(r, "event") == "redeem" {
-			return fmt.Sprintf("`verdict=%s reason=%s`", str(r, "verdict"), str(r, "reason"))
+			return str(r, "verdict"), str(r, "reason")
 		}
 	}
-	return "no redeem record, which contradicts the count above and should be investigated before this note is trusted"
+	return "", ""
 }
 
 func joinOrNone(vs []string) string {

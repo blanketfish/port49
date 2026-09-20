@@ -1,6 +1,6 @@
 # L10 — arista_eos
 
-- **Date measured:** 2026-09-17
+- **Date measured:** 2026-09-20
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
@@ -17,7 +17,7 @@ One SSH login running `show version` produced 2 authorization request(s).
 
 `service` arrived as `shell` (2 requests).
 
-Attribute names seen, exactly as spelled on the wire: `cmd-arg`, `cmd`, `service`.
+Attribute names seen, exactly as spelled on the wire: `cmd`, `cmd-arg`, `service`.
 
 Every AV pair, per request:
 

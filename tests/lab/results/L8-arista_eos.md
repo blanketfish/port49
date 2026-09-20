@@ -1,6 +1,6 @@
 # L8 — arista_eos
 
-- **Date measured:** 2026-09-17
+- **Date measured:** 2026-09-20
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
@@ -24,7 +24,7 @@ A seeded token of each length, each under its own username, presented at the SSH
 
 **Longest password that arrived intact: 138 characters.**
 
-How to read this: `token_redeemed` means the full password reached port49 byte for byte. `credential_mismatch` means the username arrived but the password did not match what was seeded, so the device altered or truncated it. `token_not_found` or no record at all means the device refused the password before sending anything.
+How to read this: `token_redeemed` means the full password reached port49 byte for byte. `token_not_found` means the device did send a password under this username and no seeded token matched it, so the device altered or truncated what was typed -- each length has its own username, so there is no earlier receipt to compare against and truncation lands here, not on `credential_mismatch`. `credential_mismatch` would mean a second attempt under a username that already had a receipt, which this test does not do. No record at all means the device refused the password locally and sent nothing.
 
 The 30-character handle the design document depends on: **accepted**.
 
