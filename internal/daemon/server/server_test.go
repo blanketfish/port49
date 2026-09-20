@@ -383,23 +383,84 @@ func TestContinueWithoutSessionClosesTheConnection(t *testing.T) {
 	} else if errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("the connection must be closed, not left open: %v", err)
 	}
+	assertProtocolErrorRecorded(t, log)
 }
 
+// assertProtocolErrorRecorded checks what an operator has to go on after a
+// key-validated connection is closed without a reply. The counter carries no
+// device label, by design, so the record is the only thing that names the
+// source; and the cleartext at that point may hold a credential, so the
+// record must carry header fields and no body hash at all (spec §10,
+// "malformed after validation").
+func assertProtocolErrorRecorded(t *testing.T, log *syncBuffer) {
+	t.Helper()
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"malformed_after_validation"`) }) {
+		t.Fatalf("a protocol-error close must leave one record naming the source: %s", log.String())
+	}
+	if !log.contains(`"source":"127.0.0.1"`) {
+		t.Fatalf("the record must name the source: %s", log.String())
+	}
+	if log.contains("body_sha256") {
+		t.Fatalf("a protocol-error record must carry header fields only: %s", log.String())
+	}
+}
+
+// TestSeqNoWrapGetsNoReplyAndCloses uses an authorization request, not a
+// CONTINUE: a CONTINUE at seq_no 255 has no live session either, so it takes
+// the unknown-session path and passes whether or not the wrap guard exists.
+// An authorization request validates, dispatches, and would be answered — at
+// seq_no 255 + 1, which is 0 — so only the guard produces silence here.
 func TestSeqNoWrapGetsNoReplyAndCloses(t *testing.T) {
 	log := &syncBuffer{}
 	addr, _, m := startServer(t, log)
 	c := dial(t, addr, []byte("k2"))
 	c.seq = 255 // RFC 8907: seq_no 255 has no valid successor; the session must restart
-	c.send(t, wire.TypeAuthen, wire.AuthenContinue{UserMsg: []byte("alice")}.Encode(), 0)
+	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15,
+		AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"),
+		Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
 	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := c.conn.Read(make([]byte, 1)); err == nil {
-		t.Fatal("a request with seq_no 255 must get no reply")
+		t.Fatal("a request with seq_no 255 must get no reply; the wrap guard is missing")
 	} else if errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("the connection must be closed, not left open: %v", err)
 	}
 	if !waitFor(t, func() bool { return testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("malformed_backoff")) >= 1 }) {
 		t.Fatalf("malformed_backoff metric was not incremented for a seq_no wrap")
 	}
+	assertProtocolErrorRecorded(t, log)
+}
+
+// TestLiveSessionCapClosesTheConnection covers maxLiveSessions: the device
+// picks session_ids, so a single-connect connection that names new ones
+// forever would grow the map without bound. The cap must close the connection
+// and say so in the log, not silently.
+func TestLiveSessionCapClosesTheConnection(t *testing.T) {
+	log := &syncBuffer{}
+	addr, _, _ := startServer(t, log)
+	c := dial(t, addr, []byte("k2"))
+
+	// An ASCII START with no username is answered GETUSER and leaves the
+	// session live, which is exactly what fills the map.
+	start := func(sid uint32) {
+		c.sid, c.seq = sid, 1
+		c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypeASCII,
+			Service: wire.AuthenServiceLogin, Port: []byte("vty0")}.Encode(), wire.FlagSingleConnect)
+	}
+	for i := 0; i < maxLiveSessions; i++ {
+		start(uint32(1000 + i))
+		if _, body := c.recv(t); func() bool { r, _ := wire.DecodeAuthenReply(body); return r.Status != wire.AuthenStatusGetUser }() {
+			t.Fatalf("session %d should have been accepted", i)
+		}
+	}
+
+	start(uint32(1000 + maxLiveSessions))
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); err == nil {
+		t.Fatalf("the session past the cap must get no reply")
+	} else if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the connection must be closed, not left open: %v", err)
+	}
+	assertProtocolErrorRecorded(t, log)
 }
 
 // gateStore parks the first GetContext until the test releases it, which puts

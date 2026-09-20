@@ -76,6 +76,22 @@ func (s *conn) backoff(ctx context.Context, event string) {
 	}
 }
 
+// protocolError closes a connection whose key validated but whose packet
+// port49 cannot answer: a CONTINUE naming a session this connection never
+// started, a seq_no of 255, or more unfinished sessions than maxLiveSessions
+// holds (spec §10, "malformed after validation"). A real device is failing a
+// real login here, and the strike counter rightly carries no device label, so
+// without a record nothing at all says which device it was.
+//
+// The record carries header fields and no body hash. Unlike the other
+// malformed_after_validation path, the bytes in hand here are cleartext that
+// may include a credential, and BodySHA256 is documented as the hash of what
+// arrived on the wire.
+func (s *conn) protocolError(ctx context.Context, h wire.Header) {
+	s.unvalidated(h, nil, keyring.DiagMalformedAfterValidation, s.version)
+	s.backoff(ctx, "malformed_backoff")
+}
+
 func (s *conn) serve(ctx context.Context) {
 	defer s.c.Close()
 	for {
@@ -136,7 +152,7 @@ func (s *conn) serve(ctx context.Context) {
 			// seq_no 256, which does not fit a uint8. The session must be
 			// restarted, not continued, so this sends nothing and closes.
 			delete(s.sessions, h.SessionID)
-			s.backoff(ctx, "malformed_backoff")
+			s.protocolError(ctx, h)
 			return
 		}
 
@@ -145,7 +161,7 @@ func (s *conn) serve(ctx context.Context) {
 			// The key validated, so this is a real device speaking a sequence
 			// port49 cannot answer. There is no reply that would help it; count
 			// the strike and hang up.
-			s.backoff(ctx, "malformed_backoff")
+			s.protocolError(ctx, h)
 			return
 		}
 		if reply != nil && !s.write(h, reply) {
