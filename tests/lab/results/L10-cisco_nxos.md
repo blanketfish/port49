@@ -28,13 +28,13 @@ authorize_session (permit/context_matched):
   cisco-av-pair*
   shell:roles*
 
-authorize_command (deny/context_missing):
+authorize_command (permit/permit_dominates):
   service=shell
   cmd=show
   cmd-arg=version
   cmd-arg=<cr>
 
-authorize_command (deny/context_missing):
+authorize_command (permit/permit_dominates):
   service=shell
   cmd=end
   cmd-arg=<cr>

@@ -19,10 +19,10 @@ The time column is the device's, not port49's: for this test both `limits.auth_f
 
 | method list | port49d | local login | time | decision log |
 |---|---|---|---|---|
-| `aaa authentication login default group port49 local` | port49d not listening | **logged in** | 140ms | port49d was not listening, so no decision record could exist for this attempt. The capture holds the device's refused connection attempts to port 49. |
-| `aaa authentication login default group port49 local` | port49d answering FAIL | refused | 360ms | `event=redeem verdict=deny reason=token_not_found`, so port49 replied FAIL for this attempt. |
-| `aaa authentication login default group port49` | port49d not listening | **logged in** | 140ms | port49d was not listening, so no decision record could exist for this attempt. The capture holds the device's refused connection attempts to port 49. |
-| `aaa authentication login default group port49` | port49d answering FAIL | refused | 360ms | `event=redeem verdict=deny reason=token_not_found`, so port49 replied FAIL for this attempt. |
+| `aaa authentication login default group port49 local` | port49d not listening | **logged in** | 130ms | port49d was not listening, so no decision record could exist for this attempt. The capture holds the device's refused connection attempts to port 49. |
+| `aaa authentication login default group port49 local` | port49d answering FAIL | refused | 410ms | `event=redeem verdict=deny reason=token_not_found`, so port49 replied FAIL for this attempt. |
+| `aaa authentication login default group port49` | port49d not listening | **logged in** | 130ms | port49d was not listening, so no decision record could exist for this attempt. The capture holds the device's refused connection attempts to port 49. |
+| `aaa authentication login default group port49` | port49d answering FAIL | refused | 410ms | `event=redeem verdict=deny reason=token_not_found`, so port49 replied FAIL for this attempt. |
 
 ### What the device said when it refused
 

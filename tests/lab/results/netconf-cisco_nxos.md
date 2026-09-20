@@ -19,13 +19,13 @@ Transport measured: **NETCONF over SSH (port 830)**. Each step below was a separ
 |---|---|---|---|---|---|---|---|
 | session 1: open and `get-config running` | `netconf01` | **no**: the NETCONF channel closed: EOF | 1 | 1 | 0 | none | 330ms |
 | session 2: open again with the same token | `netconf01` | **no**: the NETCONF channel closed: EOF | 1 | 1 | 0 | none | 260ms |
-| session 3: `edit-config` and commit | `netconf02` | **no**: the NETCONF channel closed: EOF | 1 | 1 | 0 | none | 280ms |
+| session 3: `edit-config` and commit | `netconf02` | **no**: the NETCONF channel closed: EOF | 1 | 1 | 0 | none | 270ms |
 
 ### Does a second request with the same token re-authenticate?
 
 **Yes.** The first request as `netconf01` cost 1 authentication exchange(s) and the second, with the same token, cost 1 more. Every request is a fresh authentication over this transport.
 
-**And it was allowed anyway**: `verdict=permit reason=receipt_replayed`. The token was spent by the first call, and the second was answered out of the receipt port49 kept for `(nas, port, username)` rather than out of the store. So a script that makes forty calls with one token works — for as long as that receipt lives. What decision 15 rests on is therefore not "does it re-authenticate" but **`receipt_ttl`**: past it, the next call in the same script is the first denial, and nothing about the credential has changed.
+**And it was allowed anyway**: `verdict=permit reason=receipt_replayed`. The token was spent by the first call, and the second was answered out of the receipt port49 kept for `(nas, username, credential_sha256)` rather than out of the store — the same credential hashes to the same key, so a repeat finds its own receipt. So a script that makes forty calls with one token works — for as long as that receipt lives. What decision 15 rests on is therefore not "does it re-authenticate" but **`receipt_ttl`**: past it, the next call in the same script is the first denial, and nothing about the credential has changed.
 
 ### `port` and `rem_addr` over this transport
 
@@ -33,11 +33,11 @@ Transport measured: **NETCONF over SSH (port 830)**. Each step below was a separ
 - `rem_addr`: `172.100.100.1`
 - `auth.method`: `pap`
 
-These are the values this transport produced. Compare them with the SSH figures in `L1-cisco_nxos.md`: a transport that reports the same constant `port` as SSH gives the login context key `(nas, port)` nothing to tell an API call and a shell session apart.
+These are the values this transport produced. Compare them with the SSH figures in `L1-cisco_nxos.md`. Nothing keys on `port` any more (spec §13, decision 15), so a transport reporting the same constant as SSH no longer costs anything; what these values are still for is accounting annotation and the record an operator reads at 3am.
 
 ### How many TCP connections the device opened to port49d
 
-**12** TCP connection(s) were opened toward port49d during this test, from source port(s) 36060, 36064, 43662, 43664, 60708, 60724.
+**12** TCP connection(s) were opened toward port49d during this test, from source port(s) 37510, 37516, 43938, 43942, 54490, 54500.
 
 Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/captures/netconf-cisco_nxos.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
 
@@ -46,8 +46,8 @@ Read this against the step table above. One connection per authentication exchan
 **session 1: open and `get-config running`** (as `netconf01`)
 
 ```
-2026-09-20T17:33:31.035Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
-2026-09-20T17:33:31.053Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
+2026-09-20T18:25:46.754Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
+2026-09-20T18:25:46.773Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=
     request AV: cisco-av-pair*
@@ -57,8 +57,8 @@ Read this against the step table above. One connection per authentication exchan
 **session 2: open again with the same token** (as `netconf01`)
 
 ```
-2026-09-20T17:33:41.380Z event=redeem verdict=permit reason=receipt_replayed auth.method=pap port="0" rem_addr="172.100.100.1"
-2026-09-20T17:33:41.398Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
+2026-09-20T18:25:57.091Z event=redeem verdict=permit reason=receipt_replayed auth.method=pap port="0" rem_addr="172.100.100.1"
+2026-09-20T18:25:57.108Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=
     request AV: cisco-av-pair*
@@ -68,8 +68,8 @@ Read this against the step table above. One connection per authentication exchan
 **session 3: `edit-config` and commit** (as `netconf02`)
 
 ```
-2026-09-20T17:33:51.662Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
-2026-09-20T17:33:51.681Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
+2026-09-20T18:26:07.374Z event=redeem verdict=permit reason=token_redeemed auth.method=pap port="0" rem_addr="172.100.100.1"
+2026-09-20T18:26:07.392Z event=authorize_session verdict=permit reason=context_matched port="0" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=
     request AV: cisco-av-pair*
@@ -112,7 +112,7 @@ The device's NETCONF hello:
         <capability>urn:ietf:params:netconf:capability:with-defaults:1.0?basic-mode=report-all</capability>
         <capability>http://cisco.com/ns/yang/cisco-nx-os-device?revision=2023-12-13&amp;module=Cisco-NX-OS-device</capability>
     </capabilities>
-    <session-id>1491389739</session-id>
+    <session-id>1918628482</session-id>
 </hello>
 ```
 

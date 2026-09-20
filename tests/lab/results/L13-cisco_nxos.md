@@ -58,11 +58,11 @@ port49d was restarted before each row with `limits.auth_failure_delay_base` and 
 
 | FAIL delayed by | SSH login | elapsed | redeem records for the account | reasons |
 |---|---|---|---|---|
-| 2s | refused | 4.88s | 2 | deny/token_not_found, deny/token_not_found |
-| 6s | **logged in** | 5.61s | 1 | deny/token_not_found |
-| 12s | **logged in** | 5.61s | 1 | deny/token_not_found |
+| 2s | refused | 5.01s | 2 | deny/token_not_found, deny/token_not_found |
+| 6s | **logged in** | 5.86s | 1 | deny/token_not_found |
+| 12s | **logged in** | 5.86s | 1 | deny/token_not_found |
 
-**Measured reply timeout: about 5.6s.** A FAIL delayed by 2s was acted on — the login was refused, 4.88s elapsed. One delayed by 6s was not: that login **succeeded on the local password** after 5.61s. So the timeout lies between 2s and 5.6s.
+**Measured reply timeout: about 5.9s.** A FAIL delayed by 2s was acted on — the login was refused, 5.01s elapsed. One delayed by 6s was not: that login **succeeded on the local password** after 5.86s. So the timeout lies between 2s and 5.9s.
 
 When the FAIL arrived after that, the device **accepted the local password**, exactly as it does when the server is unreachable (L4). A denial delayed past the timeout is therefore not a denial: it is indistinguishable from an outage, and the device takes the fall-through branch. 
 

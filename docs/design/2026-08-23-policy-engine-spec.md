@@ -3650,8 +3650,33 @@ but the measurements exist and the notes are in the repository.
   *Unmeasured:* IOS-XE, the console transport, and NETCONF on the N9Kv beyond the authentication.
 - **L2** — EOS 2026-09-17: the 61-character `server_msg` was displayed to the operator in full.
   `tests/lab/results/L2-arista_eos.md`. Not applicable on Junos, which sends no per-command
-  REPLY (decision 21). *Unmeasured:* the truncation length, because EOS authorizes the command
-  word alone and no long `server_msg` was ever built; NX-OS and IOS-XE.
+  REPLY (decision 21).
+
+  **NX-OS measured for the first time, 2026-09-20**, and the answer is the opposite of EOS's:
+  **the N9Kv does not display `server_msg` at all.** A command denied by policy prints the
+  device's own text and nothing of port49's:
+
+  ```
+  Error: AAA authorization failed AAA_AUTHOR_STATUS_METHOD=16(0x10)
+
+  Cmd exec error.
+  ```
+
+  This row could not be measured on this platform until now, and the reason is the reason it
+  matters: under the `(nas, port)` key every N9Kv command was denied `context_missing` before
+  the authorizer ever ran, so nothing ever built a `server_msg` to display. With the key on
+  `(nas, username)` the device's command authorizations reach the authorizer, it denied
+  `show clock` by policy with a 61-character message, and the device printed its own error
+  instead. `tests/lab/results/L2-cisco_nxos.md`.
+
+  **What this costs, and it is not small.** Everything §5.6 delivers to an operator through
+  `server_msg` — the session-ceiling warning, `context_stale` naming a broker outage,
+  `credential_revoked` — reaches nobody on this platform. That is the same class of limit as
+  "Junos never makes a second request" (decision 21), and `port49 explain` MUST say so for
+  NX-OS as it must there.
+
+  *Unmeasured:* the truncation length on either platform — EOS and NX-OS both authorize the
+  command word alone, so no long `server_msg` was ever built; IOS-XE.
 - **L3** — measured for the first time on any platform, 2026-09-20.
   `tests/lab/results/L3-arista_eos.md`, `L3-cisco_nxos.md`.
 
@@ -3812,7 +3837,10 @@ but the measurements exist and the notes are in the repository.
   time: "A request answered after the device has already given up is worse than a refused
   connection."
 
-  The N9Kv joined 2026-09-20 at **about 5.6s** (`tests/lab/results/L13-cisco_nxos.md`), and it is the first
+  The N9Kv joined 2026-09-20 at **about 5.6s**, and re-measured the same day at **about 5.9s**
+  (`tests/lab/results/L13-cisco_nxos.md` holds the later run). The two runs agree on everything that
+  matters and differ by ~300 ms, so treat this platform's figure as *about 6s, ±0.5s* rather than as a
+  precise number. It is also the first
   device in this lab measured to **retransmit**: its 2s row produced two redeem records for one login
   attempt. That matters for how this row is read. The elapsed time then measures the retransmission schedule
   as much as the reply timeout, so the figure is taken from which logins the device *acted on* — a login
@@ -3822,7 +3850,7 @@ but the measurements exist and the notes are in the repository.
   row, so those notes are unchanged.
 
   Against port49's 5s default ceiling: Junos at ~3s is **below** it, vEOS at 5.0s sits **on** it, and the
-  N9Kv at ~5.6s is just **above** it. So the default converts a denial into a fall-through on two of the
+  N9Kv at ~6s is just **above** it. So the default converts a denial into a fall-through on two of the
   four images and not on the third, which is a worse property than either extreme — the behavior of the
   default depends on the vendor.
 

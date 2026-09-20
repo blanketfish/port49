@@ -24,7 +24,7 @@ A seeded token of each length, each under its own username, presented at the SSH
 
 **Longest password that arrived intact: 64 characters.**
 
-How to read this: `token_redeemed` means the full password reached port49 byte for byte. `token_not_found` means the device did send a password under this username and no seeded token matched it, so the device altered or truncated what was typed -- each length has its own username, so there is no earlier receipt to compare against and truncation lands here, not on `credential_mismatch`. `credential_mismatch` would mean a second attempt under a username that already had a receipt, which this test does not do. No record at all means the device refused the password locally and sent nothing.
+How to read this: `token_redeemed` means the full password reached port49 byte for byte. `token_not_found` means the device did send a password under this username and no seeded token matched it, so the device altered or truncated what was typed. Truncation cannot land anywhere else: the receipt key carries the credential hash (spec §13, decision 15), so a truncated password finds no receipt at all rather than colliding with one. No record at all means the device refused the password locally and sent nothing.
 
 The 30-character handle the design document depends on: **accepted**.
 

@@ -20,7 +20,7 @@ Two overlapping SSH sessions, each holding an interactive shell open, produced t
 | 1 | alice04 | `0` |
 | 2 | alice05 | `0` |
 
-**The two concurrent sessions reported the SAME `port` value.** The login context key `(nas, port)` therefore does not distinguish them: the second login overwrites the first login's context, and the receipt key `(nas, port, username)` collides for repeated logins by one user.
+**The two concurrent sessions reported the SAME `port` value**, so `port` does not tell two simultaneous operators apart on this platform. That is now a fact about the device rather than a fact about port49: since 2026-09-20 the login context is keyed `(nas, username)` and the receipt `(nas, username, credential_sha256)`, so neither collides here (spec §13, decision 15). It is recorded because it is what a `port`-based key would have cost.
 
 All 2 `port` values seen at a `redeem` in this test: ["0" "0"].
 
@@ -33,8 +33,19 @@ Every record naming either login, in arrival order, with the `port` it carried. 
 | `alice04` | `redeem`=0, `authorize_session`=0, `account`=0, `account`=0 |
 | `alice05` | `redeem`=0, `authorize_session`=0, `account`=0, `account`=0 |
 
-**Stable.** Across 2 session(s), every record for a session reported the same `port` as that session's authentication START, so a key built on `port` reads the same value at authorization time as it wrote at authentication time.
+**Stable.** Across 2 session(s), every record for a session reported the same `port` as that session's authentication START.
 
+
+### What the two sessions were actually told
+
+What each login was told when the device asked to authorize its session, and the `port` the device put on that request — which is not the `port` it authenticated under.
+
+| user | `port` at authorization | verdict | reason | `ctx_id` |
+|---|---|---|---|---|
+| `alice04` | `0` | permit | `context_matched` | `G3LIWOSOOQUO3JH5` |
+| `alice05` | `0` | permit | `context_matched` | `F6GPWUD5IJGWGB3R` |
+
+2 permitted, 0 denied. **Both concurrent sessions matched their own context and were authorized**, across 2 distinct `ctx_id`(s) — neither login disturbed the other, and the `port` changing between the authentication and this request did not cost either of them anything.
 
 ### What the header carried
 
@@ -42,22 +53,22 @@ Decoded from the capture with the daemon's own `internal/tacacs/wire` package an
 
 | device connection | session_id | seq | single-connect | packet |
 |---|---|---|---|---|
-| 172.100.100.31:49716 → | `0x56212664` | 1 | clear | AUTHEN START action=login(1) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice04" port="0" rem_addr="172.100.100.1" data=14 bytes |
-| 172.100.100.1:49 ← | `0x56212664` | 2 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
-| 172.100.100.31:49726 → | `0x4942f0c5` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice04" port="0" rem_addr="172.100.100.1" args=[service=shell cmd= cisco-av-pair* shell:roles*] |
-| 172.100.100.1:49 ← | `0x4942f0c5` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15] |
-| 172.100.100.31:49738 → | `0x63b459ac` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice04" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/3 start_time=1789924631 timezone=UTC service=none] |
-| 172.100.100.1:49 ← | `0x63b459ac` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.31:49748 → | `0x4912c981` | 1 | clear | AUTHEN START action=login(1) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice05" port="0" rem_addr="172.100.100.1" data=14 bytes |
-| 172.100.100.1:49 ← | `0x4912c981` | 2 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
-| 172.100.100.31:49760 → | `0x292ef038` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice05" port="0" rem_addr="172.100.100.1" args=[service=shell cmd= cisco-av-pair* shell:roles*] |
-| 172.100.100.1:49 ← | `0x292ef038` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15] |
-| 172.100.100.31:49776 → | `0x30e81f92` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice05" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/4 start_time=1789924633 timezone=UTC service=none] |
-| 172.100.100.1:49 ← | `0x30e81f92` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.31:56260 → | `0x15f23658` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice05" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/4 start_time=1789924648 timezone=UTC stop_time=1789924648 service=none] |
-| 172.100.100.1:49 ← | `0x15f23658` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
-| 172.100.100.31:56276 → | `0x7ec3abc2` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice04" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/3 start_time=1789924651 timezone=UTC stop_time=1789924651 service=none] |
-| 172.100.100.1:49 ← | `0x7ec3abc2` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.31:52822 → | `0x5dd6aeee` | 1 | clear | AUTHEN START action=login(1) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice04" port="0" rem_addr="172.100.100.1" data=14 bytes |
+| 172.100.100.1:49 ← | `0x5dd6aeee` | 2 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
+| 172.100.100.31:52836 → | `0x3dc7f796` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice04" port="0" rem_addr="172.100.100.1" args=[service=shell cmd= cisco-av-pair* shell:roles*] |
+| 172.100.100.1:49 ← | `0x3dc7f796` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15 shell:roles*network-admin] |
+| 172.100.100.31:52842 → | `0x74d525c2` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice04" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/3 start_time=1789928374 timezone=UTC service=none] |
+| 172.100.100.1:49 ← | `0x74d525c2` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.31:39592 → | `0x4643f73e` | 1 | clear | AUTHEN START action=login(1) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice05" port="0" rem_addr="172.100.100.1" data=14 bytes |
+| 172.100.100.1:49 ← | `0x4643f73e` | 2 | clear | AUTHEN REPLY status=PASS(1) flags=0x00 server_msg="" data=0 bytes |
+| 172.100.100.31:39602 → | `0x62b1439e` | 1 | clear | AUTHOR REQUEST authen_method=tacacsplus(6) authen_type=pap(2) service=login(1) priv_lvl=1 user="alice05" port="0" rem_addr="172.100.100.1" args=[service=shell cmd= cisco-av-pair* shell:roles*] |
+| 172.100.100.1:49 ← | `0x62b1439e` | 2 | clear | AUTHOR RESPONSE status=0x01 server_msg="" args=[priv-lvl=15 shell:roles*network-admin] |
+| 172.100.100.31:39604 → | `0x064a6210` | 1 | clear | ACCT REQUEST flags=start authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice05" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/4 start_time=1789928376 timezone=UTC service=none] |
+| 172.100.100.1:49 ← | `0x064a6210` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.31:44614 → | `0x7736d53f` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice05" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/4 start_time=1789928391 timezone=UTC stop_time=1789928391 service=none] |
+| 172.100.100.1:49 ← | `0x7736d53f` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
+| 172.100.100.31:44630 → | `0x7f3f62f2` | 1 | clear | ACCT REQUEST flags=stop authen_method=tacacsplus(6) authen_type=ascii(1) service=none(0) priv_lvl=0 user="alice04" port="0" rem_addr="172.100.100.1" args=[task_id=172.100.100.1@pts/3 start_time=1789928394 timezone=UTC stop_time=1789928394 service=none] |
+| 172.100.100.1:49 ← | `0x7f3f62f2` | 2 | clear | ACCT REPLY status=0x01 server_msg="" |
 
 - **TCP connections the device opened:** 8, carrying 8 distinct `session_id`(s). The busiest connection carried **1** `session_id`(s).
   That is **one TCP connection per exchange**: the device tears the connection down and opens another for the next one, so nothing at the transport layer joins two exchanges either.
