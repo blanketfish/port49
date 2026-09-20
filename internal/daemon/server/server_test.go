@@ -6,10 +6,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	stdlog "log"
 	"net"
 	"net/netip"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -131,8 +133,14 @@ func (ts *testServer) shutdown() {
 	})
 }
 
-func newTestServer(t *testing.T, log *syncBuffer, st store.Store) *testServer {
+// newTestServer starts a daemon against st. authz may be nil, which uses the
+// lab authorizer every other test wants; a test passes its own only to reach
+// a path the lab authorizer cannot produce.
+func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.Authorizer) *testServer {
 	t.Helper()
+	if authz == nil {
+		authz = &author.Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
+	}
 	inv := admission.Inventory{
 		Devices:   []admission.Device{{Name: "leaf-01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}},
 		KeyGroups: []admission.KeyGroup{{CIDR: netip.MustParsePrefix("127.0.0.0/8"), KeyRef: "prod_key"}},
@@ -158,7 +166,7 @@ func newTestServer(t *testing.T, log *syncBuffer, st store.Store) *testServer {
 	d := Deps{Admission: trie,
 		Keys:   map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), Retired: true}}}},
 		Authen: authen.New(st, em, lim, m, time.Now, func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) }, 30*time.Second, time.Hour),
-		Author: author.New(st, &author.Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}, em, m, time.Now),
+		Author: author.New(st, authz, em, m, time.Now),
 		Acct:   acct.New(st, sp, m, time.Now),
 		Limits: lim, Metrics: m, Log: em, Now: time.Now, IdleTimeout: time.Second}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -179,7 +187,7 @@ func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store, 
 		store.Token{Secret: []byte("p49_e2e"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	ts := newTestServer(t, log, st)
+	ts := newTestServer(t, log, st, nil)
 	return ts.addr, st, ts.metrics
 }
 
@@ -255,6 +263,197 @@ func TestUnencryptedFlagIsRefusedBeforeBody(t *testing.T) {
 	c.conn.Read(make([]byte, 1))
 	if !log.contains(`"diagnosis":"unencrypted_refused"`) || log.contains("SECRET") {
 		t.Fatalf("log: %s", log.String())
+	}
+	// "the credential is not in the log" cannot tell "the body was never read"
+	// from "the body was read and hashed". body_sha256 is the difference: the
+	// refusal happens on the header alone, so there is nothing to hash.
+	if log.contains("body_sha256") {
+		t.Fatalf("an unencrypted packet must be refused before its body is read: %s", log.String())
+	}
+}
+
+func TestNoKnownKeyIsRecordedAndRefused(t *testing.T) {
+	log := &syncBuffer{}
+	addr, _, m := startServer(t, log)
+	// Neither the current key (k2) nor the retired one (k1): the body decodes
+	// to noise under every version the keyring holds.
+	c := dial(t, addr, []byte("a-key-this-daemon-has-never-held"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	c.conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a packet no key validates must get no reply")
+	}
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"no_known_key_matches"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	// This is the rotation report's whole point: the record names the source
+	// and the key_ref it was expected under, and never the body.
+	if !log.contains(`"source":"127.0.0.1"`) || !log.contains(`"key_ref":"prod_key"`) {
+		t.Fatalf("the record must name the source and the key_ref: %s", log.String())
+	}
+	if log.contains("p49_e2e") {
+		t.Fatalf("the credential must never reach the log: %s", log.String())
+	}
+	if got := testutil.ToFloat64(m.Unvalidated.WithLabelValues("no_known_key_matches")); got < 1 {
+		t.Fatalf("unvalidated_packets_total{no_known_key_matches} was not incremented: %v", got)
+	}
+}
+
+// TestKeyChangeMidConnectionIsMalformedAfterValidation covers the rule that
+// the first packet decides a connection's key version and every later packet
+// is held to it: a device cannot walk the keyring packet by packet. The second
+// packet here is obfuscated with a different key, so it de-obfuscates to noise
+// under the pinned version and is refused -- with a body hash, because these
+// are wire bytes, unlike the protocol-error closes.
+func TestKeyChangeMidConnectionIsMalformedAfterValidation(t *testing.T) {
+	log := &syncBuffer{}
+	addr, _, m := startServer(t, log)
+	c := dial(t, addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypeASCII,
+		Service: wire.AuthenServiceLogin, Port: []byte("vty0")}.Encode(), wire.FlagSingleConnect)
+	if _, body := c.recv(t); func() bool { r, _ := wire.DecodeAuthenReply(body); return r.Status != wire.AuthenStatusGetUser }() {
+		t.Fatal("the first packet should have been accepted under k2")
+	}
+
+	c.key = []byte("k2-but-rotated-underneath-us")
+	c.send(t, wire.TypeAuthen, wire.AuthenContinue{UserMsg: []byte("alice")}.Encode(), 0)
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a packet under a different key must get no reply")
+	} else if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the connection must be closed, not left open: %v", err)
+	}
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"malformed_after_validation"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	if !log.contains(`"body_sha256"`) {
+		t.Fatalf("a body that arrived on the wire must be hashed in the record: %s", log.String())
+	}
+	if !log.contains(`"version":2`) {
+		t.Fatalf("the record must name the version the connection was pinned to: %s", log.String())
+	}
+	if got := testutil.ToFloat64(m.Unvalidated.WithLabelValues("malformed_after_validation")); got < 1 {
+		t.Fatalf("unvalidated_packets_total{malformed_after_validation} was not incremented: %v", got)
+	}
+}
+
+// brokenStore fails one store call, so a test can drive the store_unavailable
+// path end to end: a daemon that cannot reach its store must answer ERROR,
+// never a PASS or a FAIL it cannot back up.
+type brokenStore struct {
+	store.Store
+	err error
+}
+
+func (b *brokenStore) Candidates(context.Context, store.TokenKey) ([]store.Token, error) {
+	return nil, b.err
+}
+
+func TestStoreErrorAnswersErrorEndToEnd(t *testing.T) {
+	log := &syncBuffer{}
+	st := &brokenStore{Store: memory.New(time.Now), err: errors.New("store: connection refused")}
+	ts := newTestServer(t, log, st, nil)
+
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+		User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_e2e")}.Encode(), 0)
+	_, body := c.recv(t)
+	reply, err := wire.DecodeAuthenReply(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Status != wire.AuthenStatusError {
+		t.Fatalf("an unreachable store must answer ERROR, not %v", reply.Status)
+	}
+	if !waitFor(t, func() bool { return log.contains(`"reason":"store_unavailable"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	if got := testutil.ToFloat64(ts.metrics.Requests.WithLabelValues("authen", "error")); got < 1 {
+		t.Fatalf("requests_total{authen,error} was not incremented: %v", got)
+	}
+	if got := testutil.ToFloat64(ts.metrics.StoreOps.WithLabelValues("candidates", "error")); got < 1 {
+		t.Fatalf("store_operations_total{candidates,error} was not incremented: %v", got)
+	}
+	if log.contains("p49_e2e") {
+		t.Fatalf("the credential must never reach the log: %s", log.String())
+	}
+}
+
+// panicAuthorizer is the only way to reach the per-connection recover from
+// outside the package: nothing in the daemon's own code is meant to panic.
+type panicAuthorizer struct{}
+
+func (panicAuthorizer) Session(context.Context, store.Context, []string) author.Decision {
+	panic("port49 test: deliberate panic inside an authorizer")
+}
+
+func (panicAuthorizer) Command(context.Context, store.Context, []string, []string) author.Decision {
+	panic("port49 test: deliberate panic inside an authorizer")
+}
+
+// TestPanicInOneConnectionDoesNotStopTheDaemon pins what the recover in Serve
+// is for: one device's packet must never take service away from every other
+// admitted device. The panicking connection closes, the event is counted, and
+// the next connection is served normally.
+func TestPanicInOneConnectionDoesNotStopTheDaemon(t *testing.T) {
+	var panicLog bytes.Buffer
+	stdlog.SetOutput(&panicLog)
+	t.Cleanup(func() { stdlog.SetOutput(os.Stderr) })
+
+	log := &syncBuffer{}
+	st := memory.New(time.Now)
+	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{Secret: []byte("p49_e2e"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	ts := newTestServer(t, log, st, panicAuthorizer{})
+
+	// A login first: authorization only reaches the authorizer once there is a
+	// context for the line.
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+		User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_e2e")}.Encode(), 0)
+	if _, body := c.recv(t); func() bool { r, _ := wire.DecodeAuthenReply(body); return r.Status != wire.AuthenStatusPass }() {
+		t.Fatal("the login should have passed")
+	}
+	c.conn.Close() // release the per-source connection slot before the next dial
+
+	c = dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15, AuthenType: wire.AuthenTypeASCII,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"),
+		Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a panicking connection must be closed, not answered")
+	} else if errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the connection must be closed, not left open: %v", err)
+	}
+	if !waitFor(t, func() bool { return testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("panic")) >= 1 }) {
+		t.Fatal("connection_events_total{panic} was not incremented")
+	}
+	c.conn.Close()
+
+	// A panic counter without a stack says something broke and nothing about
+	// where. The stack is port49's own frames -- no packet bytes.
+	if !strings.Contains(panicLog.String(), "goroutine") || !strings.Contains(panicLog.String(), "server.go") {
+		t.Fatalf("the panic log must carry a stack: %q", panicLog.String())
+	}
+	if strings.Contains(panicLog.String(), "p49_e2e") {
+		t.Fatalf("the panic log must never carry a credential: %q", panicLog.String())
+	}
+
+	// The daemon is still serving: a fresh connection completes an exchange
+	// that does not reach the authorizer.
+	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
+		store.Token{Secret: []byte("p49_after"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	c = dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+		User: []byte("bob"), Port: []byte("vty1"), Data: []byte("p49_after")}.Encode(), 0)
+	if _, body := c.recv(t); func() bool { r, _ := wire.DecodeAuthenReply(body); return r.Status != wire.AuthenStatusPass }() {
+		t.Fatal("the daemon must keep serving after one connection panicked")
 	}
 }
 
@@ -495,7 +694,7 @@ func TestSpoolOutlivesServeSoShutdownDrainsEverything(t *testing.T) {
 	log := &syncBuffer{}
 	gate := &gateStore{Store: memory.New(time.Now), entered: make(chan struct{}), release: make(chan struct{})}
 	defer gate.open()
-	ts := newTestServer(t, log, gate)
+	ts := newTestServer(t, log, gate, nil)
 
 	c := dial(t, ts.addr, []byte("k2"))
 	c.send(t, wire.TypeAcct, wire.AcctRequest{Flags: wire.AcctFlagStop, AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15,

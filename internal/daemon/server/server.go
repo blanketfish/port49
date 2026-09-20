@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/netip"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -94,10 +95,14 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			defer d.Metrics.Connections.WithLabelValues("open").Dec()
 			// A panic in one connection must never take the daemon down with it,
 			// or every other admitted device loses service at once. Never log the
-			// packet itself: only the source and the recovered value.
+			// packet itself: only the source, the recovered value, and the stack.
+			// The stack is function names, files and line numbers — port49's own
+			// code, no packet bytes and no arguments — and without it a panic
+			// counter tells an operator that something broke and nothing about
+			// where.
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("conn %s: panic: %v", src, r)
+					log.Printf("conn %s: panic: %v\n%s", src, r, debug.Stack())
 					d.Metrics.ConnectionEvents.WithLabelValues("panic").Inc()
 					c.Close()
 				}
