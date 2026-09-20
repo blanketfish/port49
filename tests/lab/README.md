@@ -80,9 +80,11 @@ these figures.
   A budget is there to end a run that is not going to finish, not to race the device — the
   measured boots are 57s, about 3 minutes, and 1m31s respectively.
 - The device counts as ready when it either lets `breakglass` log in or runs SSH
-  authentication through to a rejection. The second is deliberate: vSRX will not fall through
-  `authentication-order` to a local password while port49d is not listening yet, so requiring
-  the login meant that platform could never pass. See `waitDeviceReady`.
+  authentication through to a rejection. The second is deliberate: on vSRX the `breakglass`
+  account has no password at all — the startup config's `plain-text-password-value` never
+  becomes an `encrypted-password` on that image — so requiring the login meant that platform
+  could never pass. See `waitDeviceReady` and
+  `results/juniper_vsrx-config-verified.md`.
 - Every register test then runs against that already-deployed device. The topologies are
   **deployed once per run**, not once per test: these are VMs and each boot costs minutes.
 - At the end of the run every topology is destroyed with `containerlab destroy --cleanup`.

@@ -1,86 +1,107 @@
-# juniper_vsrx — vSRX will not fall through to a local password
+# juniper_vsrx — no local account on this image has a password
 
-This note is the only measurement of a Junos behavior that register entry **L4** asks about,
-and it is kept for that reason. It was originally written to explain a caveat that the vSRX
-results notes carried; the harness has since been fixed and that caveat is gone, so nothing
-in this directory depends on this note any more. The measurement does.
+This note used to claim that vSRX 21.4R3.15 will not fall through
+`authentication-order [ tacplus password ]` to a local password. **That conclusion was wrong,
+and this note now records the measurement that overturns it.** The observation it rested on —
+`breakglass`, `admin` and `root` all refused over SSH with port49d not listening — is real and
+reproduced. The explanation was not: on this image none of those accounts has a password at
+all, so no login by password could have succeeded whatever `authentication-order` did.
 
-**What changed.** The readiness gate used to prove the startup config had been applied by
-logging in as `breakglass` before port49d starts. On vSRX that could never succeed, for the
-reason measured below, so the gate spent the whole boot budget and stamped every vSRX note
-with "could not confirm the startup config was applied". The gate now also accepts an SSH
-authentication *rejection* as proof the device is serving, so vSRX passes it in about 1m11s
-and its notes are written without a caveat.
+The original note reached the wrong conclusion because it read the configuration with
+`| except SECRET`, which filtered out exactly the lines that would have shown whether a
+password exists. `authentication { }` printed empty, and an empty block was read as "the
+filter removed the password" rather than "look closer".
 
 - **Date:** 2026-09-20
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
 - **Config under test:** `tests/lab/configs/vjunos-startup.conf` (shared by both Junos topologies)
+- **Capture pointer:** none. This is a console session, not device traffic; nothing on the
+  wire to capture. It closes no register entry, so CLAUDE.md rule 3 does not apply.
 
-## The measurement
+## What was done
 
-Logging in as the local `breakglass` account **before** port49d starts works only if Junos
-falls through `authentication-order [ tacplus password ]` to the local password while the
-TACACS+ server is not answering. vJunos-router 23.4R2-S2.1 does that. vSRX 21.4R3.15 does not.
+One deploy by hand. The serial console (`ttyu0`, the container's telnet port 5000) driven
+non-interactively, port49d never started, so the TACACS+ server was unreachable throughout.
 
-With nothing listening on 172.100.100.1:49 — so the device's TACACS+ connection was refused
-immediately, the clearest possible "server is not there" — every local account was refused
-over SSH:
-
-```
-breakglass  (password from tests/lab/configs/vjunos-startup.conf) -> ssh: unable to authenticate
-admin       (password from the vrnetlab image's /init.conf)       -> ssh: unable to authenticate
-root        (password from the vrnetlab image's /init.conf)       -> ssh: unable to authenticate
-```
-
-Tried three times across a minute, roughly three minutes after vrnetlab reported
-`Startup complete in: 0:00:57`.
-
-## The configuration, read off the device while it was refusing those logins
-
-Junos admits `root` on the serial console (`ttyu0`) without a password, so the console is a
-path that does not depend on `authentication-order` at all. Over the container's console port:
+### 1. `breakglass` on the console, with the password from the startup config
 
 ```
-> show configuration system authentication-order
-authentication-order [ tacplus password ];
+login: breakglass
+Password:            <- the prompt was offered
+Login incorrect
+```
 
-> show configuration system login | except SECRET
-class p49-readonly { permissions [ view view-configuration ]; }
-user admin      { uid 2000; class super-user; authentication { } }
-user breakglass { uid 2002; class super-user; authentication { } }
-user remote     { uid 2001; class p49-readonly; }
+The console is worth testing separately from SSH because `root` gets a shell on it with no
+password, so it is the one path known to work on this image.
 
-> show configuration system tacplus-server
-172.100.100.1 {
-    routing-instance mgmt_junos;
-    secret "$9$GcUH..."; ## SECRET-DATA
+### 2. The configuration, read WITHOUT `| except SECRET`
+
+```
+> show configuration system login user breakglass | no-more
+uid 2002;
+class super-user;
+authentication {
+    plain-text-password-value <value withheld>; ## SECRET-DATA
 }
 ```
 
-Every statement is present: the authentication order with `password` second, the `breakglass`
-account the gate was trying to use, the `remote` template user, and the TACACS+ server with
-its management routing instance.
+**There is no `encrypted-password` line.** The statement from the startup config is present in
+the committed configuration, in the plain-text input form it was written in. Junos normally
+converts that form to `encrypted-password "<hash>"` at commit; here it did not.
 
-## What confirms it independently
+### 3. The system password database — the decisive read
 
-Once port49d started listening, the device authenticated over TACACS+ on the first try —
-`TestLoginRoundTrip` passed with 44 packets between the device and port49d, and all six
-register tests then measured. A device that had not applied this file could not have done
-that: the `tacplus-server` statement it used is in this file.
+Classified, never printed: the password field of `/etc/master.passwd`.
 
-So the device's authentication path was working the whole time. What it would not do was fall
-back to a local password with the server unreachable.
+| account | password field |
+|---|---|
+| `root` | empty |
+| `admin` | `*` |
+| `breakglass` | `*` |
+| `remote` | `*` |
 
-## What this is and is not
+`*` in that field is FreeBSD for "this account has no password and cannot authenticate with
+one". **Not one local account on this image has a usable password.**
 
-This is not a results note and closes no register entry. The behavior it records is the first
-evidence this project has on register entry **L4** — whether a Junos `authentication-order`
-with `password` listed falls through to local — and L4 stays open: one platform, one
-condition, and the other half of the question (fall-through on a *denial* rather than on an
-unreachable server) unmeasured.
+## What this means
 
-It does mean the reference AAA configuration in the design must not be written as though
-local fall-through is available on Junos generally. On this image, with port49 down, only the
-console gets in.
+The three SSH refusals in the original note are explained without reference to
+`authentication-order` at all. `breakglass` and `admin` have no password to check. `root` has
+an empty one, which sshd refuses by policy. Fall-through could have been working perfectly and
+the result would have been identical.
+
+So this note is not evidence about Junos fall-through. It is a **lab configuration defect**:
+`plain-text-password-value` in `tests/lab/configs/vjunos-startup.conf` does not produce a
+usable password on vSRX 21.4R3.15.
+
+**It says nothing about vJunos-router 23.4R2-S2.1.** There, `breakglass` logs in, and a
+successful login needs both a password that materialized and a fall-through that happened. The
+positive result stands on its own; only the vSRX negative is withdrawn.
+
+## Register entry L4
+
+L4 stays open and now has **one** data point instead of two: vJunos-router 23.4R2-S2.1 falls
+through to the local password with the TACACS+ server unreachable. The vSRX half is withdrawn
+— not measured, not measurable while the account has no password. Unmeasured: vSRX
+fall-through, fall-through on a *denial* rather than on an unreachable server, `deadtime`, and
+every non-Junos platform.
+
+The design's reference AAA configuration still must not be written as though local
+fall-through is available on Junos generally — one platform, one condition is not a general
+rule — but the reason is now "barely measured", not "measured to fail".
+
+## What to do about it (not done here)
+
+Not changed in this pass: changing the lab's startup config needs a lab run to verify, and
+this was a single deploy for a single question. For whoever picks it up:
+
+- Set the account with `encrypted-password "<hash>"` and a pre-computed hash instead of
+  `plain-text-password-value`, then confirm `/etc/master.passwd` shows a hash for
+  `breakglass` on **both** Junos images before relying on it.
+- Until then, `breakglassPassword` in `tests/lab/harness_test.go` is dead weight on vSRX, and
+  the readiness gate's narrow signal (an authentication rejection) is the only one that fires
+  there. The gate is correct as written; this only explains why.
+- Re-run the vSRX fall-through question once the account actually has a password. That is the
+  measurement L4 wanted and has never had.

@@ -552,12 +552,14 @@ func waitSSH(addr string, within time.Duration) error {
 // else. The gate used to require it — and that was wrong, because it rests on
 // Junos falling through `authentication-order [ tacplus password ]` to the
 // local password while port49d is not listening yet. vJunos-router 23.4R2-S2.1
-// does that. vSRX 21.4R3.15 does not, measured: with the TACACS+ connection
-// refused outright it turned away breakglass, admin and root, and only the
-// serial console got in (results/juniper_vsrx-config-verified.md). So on one of
-// three default platforms the gate could never pass. It burned the whole boot
-// budget every run learning nothing, and stamped every vSRX results note with a
-// caveat that reads as doubt about a measurement that is sound.
+// does that. On vSRX 21.4R3.15 the gate could never pass — measured, though not
+// for the reason first recorded: on that image the breakglass account has no
+// password at all, because the startup config's plain-text-password-value never
+// becomes an encrypted-password there, so `*` is what lands in
+// /etc/master.passwd (results/juniper_vsrx-config-verified.md). A breakglass
+// login cannot succeed on vSRX whatever fall-through does. So on one of three
+// default platforms the gate burned the whole boot budget every run learning
+// nothing, and stamped every vSRX results note with a caveat.
 //
 // The narrow signal is an authentication *rejection*: the device completed a
 // key exchange and ran the authentication exchange through to a decision. That
@@ -588,8 +590,8 @@ func (l *lab) waitDeviceReady(within time.Duration) error {
 		}
 		if isAuthRejection(err) {
 			fmt.Fprintf(os.Stderr, "lab: %s: ready: the device ran SSH authentication to a rejection, so sshd and "+
-				"its authentication subsystem are serving. %s was refused, which on this image means only that it "+
-				"will not fall through to a local password while port49d is not listening yet.\n",
+				"its authentication subsystem are serving. %s was refused, which proves nothing either way: on "+
+				"vSRX that account has no password at all, and on any image port49d is not listening yet.\n",
 				l.p.name, breakglassUser)
 			return nil
 		}

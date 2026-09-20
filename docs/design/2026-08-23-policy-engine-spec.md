@@ -3487,12 +3487,16 @@ but the measurements exist and the notes are in the repository.
   `tests/lab/results/L2-arista_eos.md`. Not applicable on Junos, which sends no per-command
   REPLY (decision 21). *Unmeasured:* the truncation length, because EOS authorizes the command
   word alone and no long `server_msg` was ever built; NX-OS and IOS-XE.
-- **L4** — 2026-09-20, first evidence, and the two Junos images disagree. With
+- **L4** — 2026-09-20, first evidence, one platform. With
   `authentication-order [ tacplus password ]` and the TACACS+ connection refused, vJunos-router
-  23.4R2-S2.1 falls through to the local password; vSRX 21.4R3.15 **does not**, admitting nobody
-  over SSH including `root`, with only the serial console left.
-  `tests/lab/results/juniper_vsrx-config-verified.md`. *Unmeasured:* fall-through on a denial
-  rather than on an unreachable server, `deadtime`, and every non-Junos platform.
+  23.4R2-S2.1 falls through to the local password. A matching claim that vSRX 21.4R3.15 does
+  **not** was withdrawn the same day: on that image no local account has a password at all
+  (`*` in `/etc/master.passwd` for `breakglass`, `admin` and `remote`; empty for `root`),
+  because the startup config's `plain-text-password-value` never became an
+  `encrypted-password`, so the refusals it rested on say nothing about fall-through.
+  `tests/lab/results/juniper_vsrx-config-verified.md`. *Unmeasured:* vSRX fall-through at all,
+  fall-through on a denial rather than on an unreachable server, `deadtime`, and every
+  non-Junos platform.
 - **L5** — EOS 2026-09-17 and Junos 2026-09-20: no WATCHDOG at all on any of the three, over a
   2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`,
   `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`. *Unmeasured:* NX-OS, IOS-XE.
