@@ -269,8 +269,14 @@ func (s *Session) finish(rec decision.Record, status uint8, reason decision.Reas
 	return wire.AuthenReply{Status: status}, true
 }
 
-// fail replies FAIL after the per-(nas, username) failure delay, cancellable by
-// ctx so a closed connection does not pin a goroutine on the sleep.
+// fail replies FAIL after the per-(nas, username) failure delay. The sleep is
+// cancellable, but by the server's context, not the connection's: a device
+// that hangs up mid-delay does not shorten it, and only shutdown does. The
+// delay therefore holds the connection's single read goroutine for its
+// duration, which on a single-connect connection is head-of-line blocking for
+// every other session on it. That cost, and whether the default ceiling of
+// auth_failure_delay_max belongs under the shortest device TACACS+ timeout,
+// are open questions for the project owner; device timeouts are unmeasured.
 func (s *Session) fail(ctx context.Context, rec decision.Record, reason decision.Reason) (wire.AuthenReply, bool) {
 	delay := s.h.limits.AuthFailure(s.peer.NAS, Canonical(s.user))
 	s.h.metrics.AuthFailures.Inc()
