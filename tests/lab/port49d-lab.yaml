@@ -107,3 +107,25 @@ lab:
     - {nas: leaf1, username: longpw138, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ", kind: login}
     - {nas: srx1, username: longpw138, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ", kind: login}
     - {nas: vsrx1, username: longpw138, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ", kind: login}
+    # NX-OS. Same pool shape as the platforms above: nextLogin hands out
+    # alice01..alice16 per NAS, and L8 needs one token per password length.
+    - {nas: nx1, username: alice01, secret: p49_labtoken01, kind: login}
+    - {nas: nx1, username: alice02, secret: p49_labtoken02, kind: login}
+    - {nas: nx1, username: alice03, secret: p49_labtoken03, kind: login}
+    - {nas: nx1, username: alice04, secret: p49_labtoken04, kind: login}
+    - {nas: nx1, username: alice05, secret: p49_labtoken05, kind: login}
+    - {nas: nx1, username: alice06, secret: p49_labtoken06, kind: login}
+    - {nas: nx1, username: alice07, secret: p49_labtoken07, kind: login}
+    - {nas: nx1, username: alice08, secret: p49_labtoken08, kind: login}
+    - {nas: nx1, username: alice09, secret: p49_labtoken09, kind: login}
+    - {nas: nx1, username: alice10, secret: p49_labtoken10, kind: login}
+    - {nas: nx1, username: alice11, secret: p49_labtoken11, kind: login}
+    - {nas: nx1, username: alice12, secret: p49_labtoken12, kind: login}
+    - {nas: nx1, username: alice13, secret: p49_labtoken13, kind: login}
+    - {nas: nx1, username: alice14, secret: p49_labtoken14, kind: login}
+    - {nas: nx1, username: alice15, secret: p49_labtoken15, kind: login}
+    - {nas: nx1, username: alice16, secret: p49_labtoken16, kind: login}
+    - {nas: nx1, username: longpw30, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZ", kind: login}
+    - {nas: nx1, username: longpw64, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567", kind: login}
+    - {nas: nx1, username: longpw128, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", kind: login}
+    - {nas: nx1, username: longpw138, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ", kind: login}
