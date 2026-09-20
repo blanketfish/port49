@@ -55,15 +55,19 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 		AcctRecord: &decision.AcctRecord{Raw: raw, Vector: vector, PrivLvl: req.PrivLvl,
 			StartTime: num(kv["start_time"]), StopTime: num(kv["stop_time"]), ElapsedTime: num(kv["elapsed_time"])}}
 
-	c, err := h.store.GetContext(ctx, store.ContextKey{NAS: peer.NAS, Port: port})
+	// (nas, username), not (nas, port): the accounting port is a third value
+	// again on most platforms — `0`, `1` or `non-tty` on Junos where the
+	// authentication carried the empty string — so attributing on it resolved
+	// almost nothing (spec §5.8; §13, decision 15). The port stays on the
+	// record.
+	c, err := h.store.GetContext(ctx, store.ContextKey{NAS: peer.NAS, Username: canonical})
 	h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
 	// A store error other than ErrNotFound is not a reason to refuse
 	// accounting (spec §5.8: accounting never enforces): treat it the same
 	// as no context and still spool the record as unattributed.
-	if err == nil && c.Username == canonical {
+	if err == nil {
 		rec.Attribution = "resolved"
 		rec.Principal = c.Principal
-		rec.Session.Username = c.Username
 		rec.Session.CtxID = c.CtxID
 	}
 

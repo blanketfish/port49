@@ -24,8 +24,8 @@ var peer = authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_e
 func setup(t *testing.T) (*Handler, *memory.Store, *bytes.Buffer) {
 	t.Helper()
 	st := memory.New(time.Now)
-	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Port: "vty0"},
-		store.Context{CtxID: "ctx1", Username: "alice", PrivLvl: 15}, time.Hour)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "ctx1", Username: "alice", Port: "ssh", PrivLvl: 15}, time.Hour)
 	log := &bytes.Buffer{}
 	lab := &Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload", "copy running-config tftp:"}}
 	return New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now), st, log
@@ -84,37 +84,30 @@ func TestCommandPermitAndDenyWithServerMsg(t *testing.T) {
 	}
 }
 
+// TestNoContextIsDistinct: a name port49 never authenticated. The port is
+// irrelevant to the lookup now, so what makes this a miss is the username.
 func TestNoContextIsDistinct(t *testing.T) {
 	h, _, log := setup(t)
-	resp := h.Handle(context.Background(), peer, req("alice", "vty9", "service=shell", "cmd=show"))
+	resp := h.Handle(context.Background(), peer, req("carol", "vty0", "service=shell", "cmd=show"))
 	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "context_missing" || len(resp.ServerMsg) == 0 {
 		t.Fatalf("%+v", resp)
 	}
+	// The record names whoever sent the command. Under the old (nas, port)
+	// key this mattered because a stranger's command landed on someone else's
+	// context and used to be logged against its owner; the collision is gone
+	// with the key, but the record must still name the sender.
+	if s := lastRecord(t, log)["session"].(map[string]any); s["username"] != "carol" {
+		t.Fatalf("the record must name the user who sent the request, got %v", s["username"])
+	}
 }
 
-func TestUsernameMismatchInvalidates(t *testing.T) {
-	h, st, log := setup(t)
-	resp := h.Handle(context.Background(), peer, req("bob", "vty0", "service=shell", "cmd=show"))
-	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "username_mismatch" {
-		t.Fatalf("%+v", resp)
-	}
-	if _, err := st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Port: "vty0"}); err == nil {
-		t.Fatal("context must be invalidated")
-	}
-	// The record must name whoever sent the command, not whoever owned the
-	// context it collided with: alice's command landing on bob's line used to
-	// be logged as bob being denied, which accuses the wrong person and leaves
-	// alice nowhere in the record at all. ctx_id already identifies the
-	// context, so nothing is lost by keeping the request's username.
-	rec := lastRecord(t, log)
-	session := rec["session"].(map[string]any)
-	if session["username"] != "bob" {
-		t.Fatalf("the record must name the user who sent the request, got %v", session["username"])
-	}
-	if session["ctx_id"] != "ctx1" {
-		t.Fatalf("the record must still name the context it collided with, got %v", session["ctx_id"])
-	}
-}
+// TestUsernameMismatchInvalidates was here. It asserted that a command from
+// one user landing on another user's context denied `username_mismatch` and
+// deleted that context. Both halves went with the re-key (spec §13,
+// decision 15): the username is the lookup key, so a command cannot land on
+// another user's context, and nothing of anyone else's is deleted. Its
+// successor is TestUnknownUserIsContextMissingAndLeavesOthersAlone in
+// key_test.go, which asserts the opposite of the deletion.
 
 func TestUnsupportedService(t *testing.T) {
 	h, _, log := setup(t)
@@ -176,12 +169,12 @@ func TestServerMsgIsPrintableASCII(t *testing.T) {
 	}{
 		{"context_missing", func(t *testing.T) wire.AuthorResponse {
 			h, _, _ := setup(t)
-			return h.Handle(context.Background(), peer, req("alice", "vty9", "service=shell", "cmd=show"))
+			return h.Handle(context.Background(), peer, req("carol", "vty0", "service=shell", "cmd=show"))
 		}},
-		{"username_mismatch", func(t *testing.T) wire.AuthorResponse {
-			h, _, _ := setup(t)
-			return h.Handle(context.Background(), peer, req("bob", "vty0", "service=shell", "cmd=show"))
-		}},
+		// username_mismatch was a case here. This package can no longer produce
+		// it — the username is the lookup key — so there is no server_msg of
+		// its own left to check. The reason code survives for the enable path
+		// (spec §5.7), which plan 2 builds.
 		{"service_unsupported", func(t *testing.T) wire.AuthorResponse {
 			h, _, _ := setup(t)
 			return h.Handle(context.Background(), peer, req("alice", "vty0", "service=ppp\x1b[31m", "protocol=ip"))

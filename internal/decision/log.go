@@ -42,8 +42,16 @@ type Device struct {
 }
 
 type Session struct {
-	CtxID     string `json:"ctx_id"`
-	Username  string `json:"username,omitempty"`
+	CtxID    string `json:"ctx_id"`
+	Username string `json:"username,omitempty"`
+	// ReplacedCtxID is set on a redeem that overwrote an existing context for
+	// the same (nas, username) — the same operator logging into the same
+	// device twice. It names the displaced ctx_id so the two shells' records
+	// can still be joined (spec §5.6).
+	ReplacedCtxID string `json:"replaced_ctx_id,omitempty"`
+	// Port and RemAddr are as seen on this exchange, which is not necessarily
+	// what the context recorded: they are part of no key (spec §13,
+	// decision 15).
 	Port      string `json:"port"`
 	RemAddr   string `json:"rem_addr"`
 	Privilege uint8  `json:"privilege"`

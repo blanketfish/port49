@@ -25,8 +25,8 @@ var peer = authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_e
 func setup(t *testing.T) (*Handler, *bytes.Buffer, func()) {
 	t.Helper()
 	st := memory.New(time.Now)
-	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Port: "vty0"},
-		store.Context{CtxID: "ctx1", Principal: "user:alice@example.com", Username: "alice"}, time.Hour)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "ctx1", Principal: "user:alice@example.com", Username: "alice", Port: "ssh"}, time.Hour)
 	out := &bytes.Buffer{}
 	sp, err := NewSpool(16, filepath.Join(t.TempDir(), "o.jsonl"), decision.NewJSONLines(out), metrics.New(prometheus.NewRegistry()))
 	if err != nil {

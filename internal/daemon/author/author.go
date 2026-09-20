@@ -89,29 +89,29 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		rec.Event = decision.EventAuthorizeSession
 	}
 
-	c, err := h.store.GetContext(ctx, store.ContextKey{NAS: peer.NAS, Port: port})
+	// The lookup is (nas, username): the request's own name, never its port.
+	// The port on an authorization request is not the port the authentication
+	// carried on any platform measured — vEOS says `ssh` then `vty4`, the N9Kv
+	// sends it empty on every command — so keying on it denied sessions port49
+	// had just authenticated (spec §13, decision 15; §15, L1).
+	//
+	// Because the username is the key, a request under a name port49 did not
+	// authenticate finds no context and is `context_missing`. It cannot land
+	// on someone else's context, so there is nothing here to invalidate and no
+	// `username_mismatch` to report; that reason now belongs to the enable
+	// path, where the username comes from the context rather than the wire.
+	user := authen.Canonical(string(req.User))
+	rec.Session.Username = user
+	c, err := h.store.GetContext(ctx, store.ContextKey{NAS: peer.NAS, Username: user})
 	h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
 	if errors.Is(err, store.ErrNotFound) {
-		rec.Session.Username = authen.Canonical(string(req.User))
 		return h.deny(rec, decision.ContextMissing, "port49: this session was not authenticated by port49")
 	}
 	if err != nil {
-		rec.Session.Username = authen.Canonical(string(req.User))
 		return h.deny(rec, decision.StoreUnavailable, "port49: authorization store unavailable")
 	}
 	rec.Session.CtxID = c.CtxID
-	rec.Session.Username = c.Username
 	rec.Principal = c.Principal
-	if user := authen.Canonical(string(req.User)); user != c.Username {
-		// The record names whoever sent the request, not whoever owns the
-		// context it landed on: logging the context's username accuses the
-		// wrong person and leaves the sender out of the record entirely.
-		// ctx_id already says which context this collided with.
-		rec.Session.Username = user
-		derr := h.store.DeleteContext(ctx, store.ContextKey{NAS: peer.NAS, Port: port})
-		h.metrics.StoreOps.WithLabelValues("delete_context", storeOutcome(derr)).Inc()
-		return h.deny(rec, decision.UsernameMismatch, "port49: username does not match the authenticated session")
-	}
 	if kv["service"] != "shell" {
 		// server_msg is never built from device-supplied bytes; the service
 		// value the NAS sent is already recorded in request.raw on this record.

@@ -3,6 +3,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"sync"
 	"testing"
@@ -36,7 +37,7 @@ func TestTokenLifecycle(t *testing.T) {
 		t.Fatalf("after expiry %+v", c)
 	}
 
-	rk := store.ReceiptKey{NAS: "leaf-01", Port: "vty0", Username: "alice"}
+	rk := store.ReceiptKey{NAS: "leaf-01", Username: "alice", CredentialSHA256: sha256.Sum256([]byte("t1"))}
 	r := store.Receipt{Status: 1, CtxID: "01J", ExpiresAt: now.Add(30 * time.Second)}
 	if err := s.RedeemAndReceipt(ctx, k, []byte("t1"), rk, r); err != nil {
 		t.Fatal(err)
@@ -58,7 +59,7 @@ func TestRedeemIsAtomicUnderRace(t *testing.T) {
 	ctx := context.Background()
 	k := store.TokenKey{NAS: "n", Username: "u"}
 	s.PutToken(ctx, k, store.Token{Secret: []byte("x"), ExpiresAt: time.Now().Add(time.Minute)})
-	rk := store.ReceiptKey{NAS: "n", Port: "p", Username: "u"}
+	rk := store.ReceiptKey{NAS: "n", Username: "u", CredentialSHA256: sha256.Sum256([]byte("x"))}
 	var wg sync.WaitGroup
 	wins := 0
 	var mu sync.Mutex
@@ -83,7 +84,7 @@ func TestContextTTL(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	s := New(func() time.Time { return now })
 	ctx := context.Background()
-	k := store.ContextKey{NAS: "n", Port: "vty0"}
+	k := store.ContextKey{NAS: "n", Username: "u"}
 	if err := s.PutContext(ctx, k, store.Context{CtxID: "c1"}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
@@ -138,10 +139,10 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 		tk := store.TokenKey{NAS: "n", Username: "u" + string(rune(i))}
 		s.PutToken(ctx, tk, store.Token{Secret: []byte("s"), ExpiresAt: now.Add(time.Second)})
 
-		rk := store.ReceiptKey{NAS: "n", Port: "p", Username: "u" + string(rune(i))}
+		rk := store.ReceiptKey{NAS: "n", Username: "u" + string(rune(i))}
 		s.receipts[rk] = store.Receipt{ExpiresAt: now.Add(time.Second)}
 
-		ck := store.ContextKey{NAS: "n", Port: "p" + string(rune(i))}
+		ck := store.ContextKey{NAS: "n", Username: "u" + string(rune(i))}
 		s.contexts[ck] = ctxEntry{c: store.Context{CtxID: "c"}, exp: now.Add(time.Second)}
 	}
 
@@ -182,7 +183,7 @@ func TestReusableTokenRedeem(t *testing.T) {
 	}
 
 	// First redeem: should succeed and write receipt
-	rk := store.ReceiptKey{NAS: "n", Port: "vty0", Username: "u"}
+	rk := store.ReceiptKey{NAS: "n", Username: "u", CredentialSHA256: sha256.Sum256([]byte("reusable_secret"))}
 	r1 := store.Receipt{Status: 1, CtxID: "ctx1", ExpiresAt: now.Add(time.Minute)}
 	if err := s.RedeemAndReceipt(ctx, k, []byte("reusable_secret"), rk, r1); err != nil {
 		t.Fatal(err)
@@ -217,7 +218,7 @@ func TestDeleteContext(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	s := New(func() time.Time { return now })
 	ctx := context.Background()
-	k := store.ContextKey{NAS: "n", Port: "vty0"}
+	k := store.ContextKey{NAS: "n", Username: "u"}
 
 	// Put a context
 	if err := s.PutContext(ctx, k, store.Context{CtxID: "c1"}, time.Minute); err != nil {
@@ -241,7 +242,7 @@ func TestDeleteContext(t *testing.T) {
 	}
 
 	// Delete a missing key: verify it returns same as GetContext (should not error)
-	missingKey := store.ContextKey{NAS: "missing", Port: "missing"}
+	missingKey := store.ContextKey{NAS: "missing", Username: "missing"}
 	if err := s.DeleteContext(ctx, missingKey); err != nil {
 		t.Fatalf("delete of missing key returned error: %v", err)
 	}
