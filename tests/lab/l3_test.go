@@ -70,7 +70,7 @@ func TestL3Enable(t *testing.T) {
 		// is that username. A run that learned nothing writes the note anyway —
 		// what the device said is the finding — and fails below.
 		if len(enables) > 0 {
-			obs += l.l3Allowed(t, l3Username(enables[0]))
+			obs += l.l3Allowed(t, l3Username(enables[0]), l3EchoesOperator(enables, u1, u2))
 		} else {
 			obs += "\n### When the enable is allowed\n\nNot measured: phase one produced no enable " +
 				"authentication record, so there was no username to seed a token under.\n"
@@ -173,8 +173,8 @@ func (l *lab) l3Concurrent(t *testing.T, u1, s1, u2, s2 string) string {
 	return b.String()
 }
 
-// l3RelaxExecAuthz points the device's exec and command authorization at
-// `local` for the duration of this test, and returns a function that puts them
+// l3RelaxExecAuthz removes the device's exec and command authorization for
+// the duration of this test, and returns a function that puts them
 // back plus the paragraph the note owes the reader.
 //
 // It exists because the first run of this test measured nothing, and what
@@ -329,31 +329,59 @@ func (l *lab) l3CLI(user, password string) (*cliConn, error) {
 	return c, nil
 }
 
-// l3EnableRecords picks the authentication records that are not the login.
+// l3EnableRecords picks the authentication records that are the enable rather
+// than the login.
 //
 // It cannot filter on `service`, because the decision log does not carry it —
-// that is what the capture is for. What it can do is exclude the two usernames
-// the harness logged in as: any authentication record in this window under a
-// *different* username is the enable, and its username is the measurement. A
-// device that sends the operator's own username for an enable would produce no
-// such record, and that case is handled by the caller reading the capture.
+// that is what the capture is for. So it uses the two shapes an enable can
+// take, and the first version of this function only knew one of them:
+//
+//   - a *different* username. This is the `$enab{level}$` shape the whole row
+//     is named after, and the one the memo prices.
+//   - the **same** username, a second time. This is what vEOS 4.32.2F actually
+//     does, measured: the enable START carries `alice01`, the operator's own
+//     name. The first version excluded exactly those records and then failed
+//     the test for finding none — reporting a measurement it had made as a
+//     measurement it had not.
+//
+// Records arrive in order, so the first redeem for a login username is that
+// login and every later one is an enable.
 func l3EnableRecords(recs []map[string]any, loginUsers ...string) []map[string]any {
-	skip := map[string]bool{}
+	isLogin := map[string]bool{}
 	for _, u := range loginUsers {
-		skip[u] = true
+		isLogin[u] = true
 	}
+	seen := map[string]bool{}
 	var out []map[string]any
 	for _, r := range recs {
 		if str(r, "event") != "redeem" {
 			continue
 		}
 		s := sub(r, "session")
-		if s == nil || skip[str(s, "username")] {
+		if s == nil {
+			continue
+		}
+		u := str(s, "username")
+		if isLogin[u] && !seen[u] {
+			seen[u] = true // this is the login itself
 			continue
 		}
 		out = append(out, r)
 	}
 	return out
+}
+
+// l3EchoesOperator reports whether the device put the operator's own username
+// on the enable START rather than a fixed one.
+func l3EchoesOperator(enables []map[string]any, loginUsers ...string) bool {
+	for _, u := range loginUsers {
+		for _, r := range enables {
+			if l3Username(r) == u {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func l3Username(r map[string]any) string { return str(sub(r, "session"), "username") }
@@ -438,12 +466,23 @@ func l3KeyVerdict(enables []map[string]any) string {
 // sends an authorization request for the raised privilege, what `service` and
 // `priv-lvl` it carries, and what accounting follows — none of which can be
 // seen from a device that was refused.
-func (l *lab) l3Allowed(t *testing.T, wireUser string) string {
+func (l *lab) l3Allowed(t *testing.T, wireUser string, echoesOperator bool) string {
 	t.Helper()
-	cfg, err := l.writeSeedConfig(wireUser, l3EnablePassword)
+
+	// Which name to seed the token under depends on what phase one measured.
+	// If the device sends a fixed name like `$enab15$`, seed that. If it sends
+	// the operator's own — which vEOS does — the name that will arrive is the
+	// name of whoever logs in for phase two, so the login has to be taken
+	// first and its username seeded instead.
+	user, secret := l.nextLogin(t)
+	seedUser := wireUser
+	if echoesOperator {
+		seedUser = user
+	}
+	cfg, err := l.writeSeedConfig(seedUser, l3EnablePassword)
 	if err != nil {
 		return fmt.Sprintf("\n### When the enable is allowed\n\nNot measured: a daemon config seeding a token "+
-			"under `%s` could not be written (%v).\n", wireUser, err)
+			"under `%s` could not be written (%v).\n", seedUser, err)
 	}
 	if err := l.stopDaemon(); err != nil {
 		return fmt.Sprintf("\n### When the enable is allowed\n\nNot measured: port49d could not be stopped to "+
@@ -462,7 +501,6 @@ func (l *lab) l3Allowed(t *testing.T, wireUser string) string {
 		}
 	}()
 
-	user, secret := l.nextLogin(t)
 	off := l.mark()
 	said := "the CLI never opened"
 	c, err := l.l3CLI(user, secret)
@@ -489,10 +527,12 @@ func (l *lab) l3Allowed(t *testing.T, wireUser string) string {
 	recs = l.drainRecords(off, 15*time.Second)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n### When the enable is allowed\n\nport49d was restarted on a config seeding one token "+
-		"under the username the device itself sent, `%s`, and the same keystrokes were repeated as `%s`. "+
-		"Nothing else changed.\n\nWhat the device said:\n\n```\n%s\n```\n\nEvery record in that window:\n\n```\n",
-		wireUser, user, trimForNote(said))
+	fmt.Fprintf(&b, "\n### When the enable is allowed\n\nphase one measured that this device puts %s on the "+
+		"enable START. port49d was therefore restarted on a config seeding one token under `%s`, and the same "+
+		"keystrokes were repeated as `%s`. Nothing else changed.\n\nWhat the device said:\n\n```\n%s\n```\n\n"+
+		"Every record in that window:\n\n```\n",
+		map[bool]string{true: "**the operator's own username**", false: fmt.Sprintf("the fixed username `%s`", wireUser)}[echoesOperator],
+		seedUser, user, trimForNote(said))
 	if len(recs) == 0 {
 		b.WriteString("(none)\n")
 	}

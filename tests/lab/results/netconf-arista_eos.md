@@ -17,25 +17,27 @@ Transport measured: **NETCONF over SSH (port 22)**. Each step below was a separa
 
 | step | user | device answered | authentications | session authz | command authz | accounting | elapsed |
 |---|---|---|---|---|---|---|---|
-| session 1: open and `get-config running` | `netconf01` | yes | 1 | 1 | 1 | start=1, stop=2 | 330ms |
-| session 2: open again with the same token | `netconf01` | yes | 1 | 1 | 1 | start=1, stop=2 | 150ms |
-| session 3: `edit-config` and commit | `netconf02` | yes | 1 | 3 | 1 | start=3, stop=4 | 490ms |
+| session 1: open and `get-config running` | `netconf01` | yes | 1 | 1 | 1 | start=1, stop=2 | 320ms |
+| session 2: open again with the same token | `netconf01` | yes | 1 | 1 | 1 | start=1, stop=2 | 160ms |
+| session 3: `edit-config` and commit | `netconf02` | yes | 1 | 3 | 1 | start=3, stop=4 | 510ms |
 
 ### Does a second request with the same token re-authenticate?
 
-**Yes.** The first request as `netconf01` cost 1 authentication exchange(s) and the second, with the same token, cost 1 more. Every request is a fresh authentication, so a single-use token is spent by the first call and every later call in the same script is denied. That is the failure mode decision 15 is provisional on: the operator sees one success and then a run of denials with a working credential in hand. The outcome of the second request was: `verdict=permit reason=receipt_replayed`
+**Yes.** The first request as `netconf01` cost 1 authentication exchange(s) and the second, with the same token, cost 1 more. Every request is a fresh authentication over this transport.
+
+**And it was allowed anyway**: `verdict=permit reason=receipt_replayed`. The token was spent by the first call, and the second was answered out of the receipt port49 kept for `(nas, port, username)` rather than out of the store. So a script that makes forty calls with one token works — for as long as that receipt lives. What decision 15 rests on is therefore not "does it re-authenticate" but **`receipt_ttl`**: past it, the next call in the same script is the first denial, and nothing about the credential has changed.
 
 ### `port` and `rem_addr` over this transport
 
 - `port`: `NETCONF`, `ssh`
-- `rem_addr`: `172.100.100.1 50148 10.0.0.15 22`, `172.100.100.1`
+- `rem_addr`: `172.100.100.1 52314 10.0.0.15 22`, `172.100.100.1`
 - `auth.method`: `ascii`
 
 These are the values this transport produced. Compare them with the SSH figures in `L1-arista_eos.md`: a transport that reports the same constant `port` as SSH gives the login context key `(nas, port)` nothing to tell an API call and a shell session apart.
 
 ### How many TCP connections the device opened to port49d
 
-**48** TCP connection(s) were opened toward port49d during this test, from source port(s) 55908, 55922, 55928, 55938, 55940, 55950, 55966, 55968, 55972, 55978, 55988, 56004, ....
+**48** TCP connection(s) were opened toward port49d during this test, from source port(s) 32774, 32778, 32782, 32790, 39720, 39722, 39736, 39748, 39756, 39762, 40194, 40206, ....
 
 Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/captures/netconf-arista_eos.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
 
@@ -44,31 +46,31 @@ Read this against the step table above. One connection per authentication exchan
 **session 1: open and `get-config running`** (as `netconf01`)
 
 ```
-2026-09-20T16:41:09.822Z event=redeem verdict=permit reason=token_redeemed auth.method=ascii port="ssh" rem_addr="172.100.100.1"
-2026-09-20T16:41:09.985Z event=account verdict= reason= flags=start port="ssh" rem_addr="172.100.100.1"
-    accounting AV: task_id=45
+2026-09-20T16:47:30.292Z event=redeem verdict=permit reason=token_redeemed auth.method=ascii port="ssh" rem_addr="172.100.100.1"
+2026-09-20T16:47:30.455Z event=account verdict= reason= flags=start port="ssh" rem_addr="172.100.100.1"
+    accounting AV: task_id=18
     accounting AV: service=shell
-    accounting AV: start_time=1789922468
+    accounting AV: start_time=1789922849
     accounting AV: timezone=UTC
-2026-09-20T16:41:10.022Z event=authorize_session verdict=permit reason=context_matched port="ssh" rem_addr="172.100.100.1"
+2026-09-20T16:47:30.491Z event=authorize_session verdict=permit reason=context_matched port="ssh" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd*
-2026-09-20T16:41:10.065Z event=authorize_command verdict=permit reason=permit_dominates port="ssh" rem_addr="172.100.100.1"
+2026-09-20T16:47:30.534Z event=authorize_command verdict=permit reason=permit_dominates port="ssh" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=netconf
     request AV: cmd-arg=start-client
     request AV: cmd-arg=<cr>
-2026-09-20T16:41:10.069Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
-    accounting AV: task_id=46
+2026-09-20T16:47:30.541Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
+    accounting AV: task_id=19
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1789922469
+    accounting AV: start_time=1789922849
     accounting AV: timezone=UTC
     accounting AV: cmd=netconf start-client <cr>
-2026-09-20T16:41:10.130Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
-    accounting AV: task_id=45
+2026-09-20T16:47:30.594Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
+    accounting AV: task_id=18
     accounting AV: service=shell
-    accounting AV: start_time=1789922468
+    accounting AV: start_time=1789922849
     accounting AV: timezone=UTC
     accounting AV: elapsed_time=1
 ```
@@ -76,38 +78,38 @@ Read this against the step table above. One connection per authentication exchan
 What the device answered:
 
 ```
-<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1"><data xmlns:netconf="http://arista.com/yang/rpc/netconf" netconf:time-modified="2026-09-20T16:41:08.806812278Z"><acl xmlns="http://openconfig.net/yang/acl"></acl><arista xmlns="http://arista.com/yang/experimental/eos"><eos><bridging xmlns="http://arista.com/yang/experimental/igmpsnooping"><igmpsnooping><config></config></igmpsnooping></bridging><mlag xmlns="urn:aristanetworks:yang:experimental:eos"><config><dual-primary-action>action-none</dual-primary-action><reload-delay-mlag-configured>false</reload-delay-mlag-configured></config></mlag><qos xmlns="http://arista.com/yang/experimental/eos/qos"><acl xmlns="http://arista.com/yang/experimental/eos/qos/acl"><input><cli><cmapType><type>mapControlPlane</type><cmap><name>copp-system-mpls-arp-suppress</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mpls-label-miss</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mvrp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-glean</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-sflow</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3destmiss</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ptp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-egress-acllog</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-multicastsnoop</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-bfd</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l2rsvd</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-arp-inspect</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-lldp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-tc3to5</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-dot1x-vxlan</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3-exception</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipbroadcast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-cvx-heartbeat</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-arpresolver</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-acllog</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-selfip</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-iplocking</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mpls-ttl01</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3-high-pri</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-arp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-rsvp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-vxlan-vtep-learn</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipunicast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3-low-pri</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3lpmoverflow</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mcast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ptp-snoop</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-dot1x-eapol-data</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1"><data xmlns:netconf="http://arista.com/yang/rpc/netconf" netconf:time-modified="2026-09-20T16:47:29.804511185Z"><acl xmlns="http://openconfig.net/yang/acl"></acl><arista xmlns="http://arista.com/yang/experimental/eos"><eos><bridging xmlns="http://arista.com/yang/experimental/igmpsnooping"><igmpsnooping><config></config></igmpsnooping></bridging><mlag xmlns="urn:aristanetworks:yang:experimental:eos"><config><dual-primary-action>action-none</dual-primary-action><reload-delay-mlag-configured>false</reload-delay-mlag-configured></config></mlag><qos xmlns="http://arista.com/yang/experimental/eos/qos"><acl xmlns="http://arista.com/yang/experimental/eos/qos/acl"><input><cli><cmapType><type>mapControlPlane</type><cmap><name>copp-system-mpls-arp-suppress</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-lacp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-default-snoop</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-bfd</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l2forward-includes-cpu</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3-low-pri</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-arp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l2broadcast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-cfm-snoop</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ptp-snoop</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-vrrp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipmcmiss</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-tc3to5</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ptp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mpls-ttl01</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-dot1x-mba</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-lldp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipunicast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3ttl0</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipbroadcast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-arpresolver</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-pim</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ldp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-glean</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3-high-pri</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-PimPtp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-rsvp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mac-learn</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-linklocal</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-sflow</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-bgp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mcast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-bpdu</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipmc</name><matchCondition>matchCon
 ... (truncated for this note; the full answer is in the test log)
 ```
 
 **session 2: open again with the same token** (as `netconf01`)
 
 ```
-2026-09-20T16:41:20.174Z event=redeem verdict=permit reason=receipt_replayed auth.method=ascii port="ssh" rem_addr="172.100.100.1"
-2026-09-20T16:41:20.180Z event=account verdict= reason= flags=start port="ssh" rem_addr="172.100.100.1"
-    accounting AV: task_id=47
+2026-09-20T16:47:40.629Z event=redeem verdict=permit reason=receipt_replayed auth.method=ascii port="ssh" rem_addr="172.100.100.1"
+2026-09-20T16:47:40.636Z event=account verdict= reason= flags=start port="ssh" rem_addr="172.100.100.1"
+    accounting AV: task_id=20
     accounting AV: service=shell
-    accounting AV: start_time=1789922479
+    accounting AV: start_time=1789922860
     accounting AV: timezone=UTC
-2026-09-20T16:41:20.215Z event=authorize_session verdict=permit reason=context_matched port="ssh" rem_addr="172.100.100.1"
+2026-09-20T16:47:40.673Z event=authorize_session verdict=permit reason=context_matched port="ssh" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd*
-2026-09-20T16:41:20.259Z event=authorize_command verdict=permit reason=permit_dominates port="ssh" rem_addr="172.100.100.1"
+2026-09-20T16:47:40.718Z event=authorize_command verdict=permit reason=permit_dominates port="ssh" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=netconf
     request AV: cmd-arg=start-client
     request AV: cmd-arg=<cr>
-2026-09-20T16:41:20.265Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
-    accounting AV: task_id=48
+2026-09-20T16:47:40.725Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
+    accounting AV: task_id=21
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1789922479
+    accounting AV: start_time=1789922860
     accounting AV: timezone=UTC
     accounting AV: cmd=netconf start-client <cr>
-2026-09-20T16:41:20.300Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
-    accounting AV: task_id=47
+2026-09-20T16:47:40.770Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
+    accounting AV: task_id=20
     accounting AV: service=shell
-    accounting AV: start_time=1789922479
+    accounting AV: start_time=1789922860
     accounting AV: timezone=UTC
     accounting AV: elapsed_time=1
 ```
@@ -115,66 +117,66 @@ What the device answered:
 What the device answered:
 
 ```
-<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1"><data xmlns:netconf="http://arista.com/yang/rpc/netconf" netconf:time-modified="2026-09-20T16:41:19.176918878Z"><acl xmlns="http://openconfig.net/yang/acl"></acl><arista xmlns="http://arista.com/yang/experimental/eos"><eos><bridging xmlns="http://arista.com/yang/experimental/igmpsnooping"><igmpsnooping><config></config></igmpsnooping></bridging><mlag xmlns="urn:aristanetworks:yang:experimental:eos"><config><dual-primary-action>action-none</dual-primary-action><reload-delay-mlag-configured>false</reload-delay-mlag-configured></config></mlag><qos xmlns="http://arista.com/yang/experimental/eos/qos"><acl xmlns="http://arista.com/yang/experimental/eos/qos/acl"><input><cli><cmapType><type>mapControlPlane</type><cmap><name>copp-system-mpls-arp-suppress</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mpls-label-miss</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mvrp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-glean</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-sflow</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3destmiss</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ptp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-egress-acllog</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-multicastsnoop</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-bfd</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l2rsvd</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-arp-inspect</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-lldp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-tc3to5</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-dot1x-vxlan</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3-exception</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipbroadcast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-cvx-heartbeat</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-arpresolver</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-acllog</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-selfip</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-iplocking</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mpls-ttl01</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3-high-pri</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-arp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-rsvp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-vxlan-vtep-learn</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipunicast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3-low-pri</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3lpmoverflow</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mcast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ptp-snoop</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-dot1x-eapol-data</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1"><data xmlns:netconf="http://arista.com/yang/rpc/netconf" netconf:time-modified="2026-09-20T16:47:40.047421915Z"><acl xmlns="http://openconfig.net/yang/acl"></acl><arista xmlns="http://arista.com/yang/experimental/eos"><eos><bridging xmlns="http://arista.com/yang/experimental/igmpsnooping"><igmpsnooping><config></config></igmpsnooping></bridging><mlag xmlns="urn:aristanetworks:yang:experimental:eos"><config><dual-primary-action>action-none</dual-primary-action><reload-delay-mlag-configured>false</reload-delay-mlag-configured></config></mlag><qos xmlns="http://arista.com/yang/experimental/eos/qos"><acl xmlns="http://arista.com/yang/experimental/eos/qos/acl"><input><cli><cmapType><type>mapControlPlane</type><cmap><name>copp-system-mpls-arp-suppress</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-lacp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-default-snoop</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-bfd</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l2forward-includes-cpu</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3-low-pri</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-arp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l2broadcast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-cfm-snoop</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ptp-snoop</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-vrrp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipmcmiss</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-tc3to5</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ptp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mpls-ttl01</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-dot1x-mba</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-lldp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipunicast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3ttl0</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipbroadcast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-arpresolver</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-pim</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ldp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-glean</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-l3-high-pri</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-PimPtp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-rsvp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mac-learn</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-linklocal</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-sflow</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-bgp</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-mcast</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-bpdu</name><matchCondition>matchConditionAny</matchCondition></cmap><cmap><name>copp-system-ipmc</name><matchCondition>matchCon
 ... (truncated for this note; the full answer is in the test log)
 ```
 
 **session 3: `edit-config` and commit** (as `netconf02`)
 
 ```
-2026-09-20T16:41:30.336Z event=redeem verdict=permit reason=token_redeemed auth.method=ascii port="ssh" rem_addr="172.100.100.1"
-2026-09-20T16:41:30.498Z event=account verdict= reason= flags=start port="ssh" rem_addr="172.100.100.1"
-    accounting AV: task_id=49
+2026-09-20T16:47:50.814Z event=redeem verdict=permit reason=token_redeemed auth.method=ascii port="ssh" rem_addr="172.100.100.1"
+2026-09-20T16:47:50.977Z event=account verdict= reason= flags=start port="ssh" rem_addr="172.100.100.1"
+    accounting AV: task_id=22
     accounting AV: service=shell
-    accounting AV: start_time=1789922489
+    accounting AV: start_time=1789922870
     accounting AV: timezone=UTC
-2026-09-20T16:41:30.534Z event=authorize_session verdict=permit reason=context_matched port="ssh" rem_addr="172.100.100.1"
+2026-09-20T16:47:51.016Z event=authorize_session verdict=permit reason=context_matched port="ssh" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd*
-2026-09-20T16:41:30.578Z event=authorize_command verdict=permit reason=permit_dominates port="ssh" rem_addr="172.100.100.1"
+2026-09-20T16:47:51.061Z event=authorize_command verdict=permit reason=permit_dominates port="ssh" rem_addr="172.100.100.1"
     request AV: service=shell
     request AV: cmd=netconf
     request AV: cmd-arg=start-client
     request AV: cmd-arg=<cr>
-2026-09-20T16:41:30.582Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
-    accounting AV: task_id=50
+2026-09-20T16:47:51.067Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
+    accounting AV: task_id=23
     accounting AV: service=shell
     accounting AV: priv-lvl=15
-    accounting AV: start_time=1789922489
+    accounting AV: start_time=1789922870
     accounting AV: timezone=UTC
     accounting AV: cmd=netconf start-client <cr>
-2026-09-20T16:41:30.772Z event=account verdict= reason= flags=start port="NETCONF" rem_addr="172.100.100.1 50148 10.0.0.15 22"
-    accounting AV: task_id=51
+2026-09-20T16:47:51.262Z event=account verdict= reason= flags=start port="NETCONF" rem_addr="172.100.100.1 52314 10.0.0.15 22"
+    accounting AV: task_id=24
     accounting AV: service=shell
-    accounting AV: start_time=1789922489
+    accounting AV: start_time=1789922870
     accounting AV: timezone=UTC
-2026-09-20T16:41:30.786Z event=authorize_session verdict=deny reason=context_missing port="NETCONF" rem_addr="172.100.100.1 50148 10.0.0.15 22"
+2026-09-20T16:47:51.273Z event=authorize_session verdict=deny reason=context_missing port="NETCONF" rem_addr="172.100.100.1 52314 10.0.0.15 22"
     request AV: service=shell
     request AV: cmd*
-2026-09-20T16:41:30.791Z event=account verdict= reason= flags=stop port="NETCONF" rem_addr="172.100.100.1 50148 10.0.0.15 22"
-    accounting AV: task_id=51
+2026-09-20T16:47:51.277Z event=account verdict= reason= flags=stop port="NETCONF" rem_addr="172.100.100.1 52314 10.0.0.15 22"
+    accounting AV: task_id=24
     accounting AV: service=shell
-    accounting AV: start_time=1789922489
+    accounting AV: start_time=1789922870
     accounting AV: timezone=UTC
     accounting AV: elapsed_time=1
-2026-09-20T16:41:30.795Z event=account verdict= reason= flags=start port="NETCONF" rem_addr="172.100.100.1 50148 10.0.0.15 22"
-    accounting AV: task_id=52
+2026-09-20T16:47:51.281Z event=account verdict= reason= flags=start port="NETCONF" rem_addr="172.100.100.1 52314 10.0.0.15 22"
+    accounting AV: task_id=25
     accounting AV: service=shell
-    accounting AV: start_time=1789922489
+    accounting AV: start_time=1789922870
     accounting AV: timezone=UTC
-2026-09-20T16:41:30.802Z event=authorize_session verdict=deny reason=context_missing port="NETCONF" rem_addr="172.100.100.1 50148 10.0.0.15 22"
+2026-09-20T16:47:51.291Z event=authorize_session verdict=deny reason=context_missing port="NETCONF" rem_addr="172.100.100.1 52314 10.0.0.15 22"
     request AV: service=shell
     request AV: cmd*
-2026-09-20T16:41:30.806Z event=account verdict= reason= flags=stop port="NETCONF" rem_addr="172.100.100.1 50148 10.0.0.15 22"
-    accounting AV: task_id=52
+2026-09-20T16:47:51.294Z event=account verdict= reason= flags=stop port="NETCONF" rem_addr="172.100.100.1 52314 10.0.0.15 22"
+    accounting AV: task_id=25
     accounting AV: service=shell
-    accounting AV: start_time=1789922489
+    accounting AV: start_time=1789922870
     accounting AV: timezone=UTC
     accounting AV: elapsed_time=1
-2026-09-20T16:41:30.812Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
-    accounting AV: task_id=49
+2026-09-20T16:47:51.297Z event=account verdict= reason= flags=stop port="ssh" rem_addr="172.100.100.1"
+    accounting AV: task_id=22
     accounting AV: service=shell
-    accounting AV: start_time=1789922489
+    accounting AV: start_time=1789922870
     accounting AV: timezone=UTC
     accounting AV: elapsed_time=1
 ```
@@ -206,7 +208,7 @@ Write (session 3), target `running`:
 The device's NETCONF hello:
 
 ```xml
-<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><capabilities><capability>urn:ietf:params:netconf:base:1.0</capability><capability>urn:ietf:params:netconf:base:1.1</capability><capability>urn:ietf:params:xml:ns:netconf:base:1.0</capability><capability>urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring</capability><capability>urn:ietf:params:netconf:capability:writable-running:1.0</capability><capability>urn:ietf:params:netconf:capability:candidate:1.0</capability><capability>urn:ietf:params:netconf:capability:url:1.0?scheme=file,flash,ftp,http</capability><capability>http://arista.com/yang/openconfig/telemetry/augments?module=arista-telemetry-augments&amp;revision=2023-01-24</capability><capability>http://arista.com/yang/experimental/isis-flex-algo?module=openconfig-isis-flex-algo&amp;revision=2021-09-30</capability><capability>http://openconfig.net/yang/openconfig-ext?module=openconfig-extensions&amp;revision=2022-10-05</capability><capability>http://openconfig.net/yang/interfaces/ethernet?module=openconfig-if-ethernet&amp;revision=2023-03-10</capability><capability>http://openconfig.net/yang/rsvp?module=openconfig-mpls-rsvp&amp;revision=2023-02-06</capability><capability>urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring?module=ietf-netconf-monitoring&amp;revision=2010-10-04</capability><capability>http://openconfig.net/yang/telemetry?module=openconfig-telemetry&amp;revision=2018-11-21</capability><capability>http://openconfig.net/yang/mpls?module=openconfig-mpls&amp;revision=2023-07-25</capability><capability>http://arista.com/yang/openconfig/policy/augments?module=arista-rpol-augments&amp;revision=2023-08-21</capability><capability>http://openconfig.net/yang/network-instance-l3?module=openconfig-network-instance-l3&amp;revision=2022-11-08</capability><capability>http://openconfig.net/yang/isis-lsdb-types?module=openconfig-isis-lsdb-types&amp;revision=2018-11-21</capability><capability>http://arista.com/yang/openconfig/sflow/deviations?module=arista-sflow-deviations&amp;revision=2023-07-27</capability><capability>http://openconfig.net/yang/aft/ni?module=openconfig-aft-network-instance&amp;revision=2023-04-25</capability><capability>http://openconfig.net/yang/rib/bgp?module=openconfig-rib-bgp&amp;revision=2022-12-20</capability><capability>http://openconfig.net/yang/mpls-sr?module=openconfig-mpls-sr&amp;revision=2018-11-21</capability><capability>http://openconfig.net/yang/vlan-types?module=openconfig-vlan-types&amp;revision=2022-05-24</capability><capability>http://arista.com/yang/openconfig/lldp/augments?module=arista-lldp-augments&amp;revision=2020-11-30</capability><capability>http://openconfig.net/yang/openconfig-isis?module=openconfig-isis&amp;revision=2023-11-01</capability><capability>http://arista.com/yang/experimental/eos?module=arista-exp-eos&amp;revision=2016-11-09</capability><capability>http://arista.com/yang/openconfig/interfaces/deviations?module=arista-intf-deviations&amp;revision=2022-12-10</capability><capability>http://openconfig.net/yang/bgp-policy?module=openconfig-bgp-policy&amp;revision=2023-10-03</capability><capability>http://arista.com/yang/experimental/eos/arista-ale-counters-open-config-hardware-drop-counters?module=arista-ale-counters-open-config-hardware-drop-counters&amp;revision=2023-01-01</capability><capability>http://arista.com/yang/openconfig/policy/deviations?module=arista-rpol-deviations&amp;revision=2023-06-21</capability><capability>http://arista.com/yang/openconfig/bfd/notsupported-deviations?module=arista-bfd-notsupported-deviations&amp;revision=2024-02-03</capability><capability>http://arista.com/yang/openconfig/pim/augments?module=arista-pim-augments&amp;revision=2020-11-30</capability><capability>http://openconfig.net/yang/pim?module=openconfig-pim&amp;revision=2023-03-06</capability><capability>http://openconfig.net/yang/programming-errors?module=openconfig-programming-errors&amp;revision=2022-10-11</capability><capability>http://openconfig.net/yang/system?module=openco
+<hello xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"><capabilities><capability>urn:ietf:params:netconf:base:1.0</capability><capability>urn:ietf:params:netconf:base:1.1</capability><capability>urn:ietf:params:xml:ns:netconf:base:1.0</capability><capability>urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring</capability><capability>urn:ietf:params:netconf:capability:writable-running:1.0</capability><capability>urn:ietf:params:netconf:capability:candidate:1.0</capability><capability>urn:ietf:params:netconf:capability:url:1.0?scheme=file,flash,ftp,http</capability><capability>http://openconfig.net/yang/platform/port?module=openconfig-platform-port&amp;revision=2023-03-22</capability><capability>http://arista.com/yang/experimental/multicast?module=arista-exp-eos-multicast&amp;revision=2017-10-20</capability><capability>http://openconfig.net/yang/header-fields?module=openconfig-packet-match&amp;revision=2023-03-01</capability><capability>http://openconfig.net/yang/routing-policy?module=openconfig-routing-policy&amp;revision=2023-11-01</capability><capability>http://openconfig.net/yang/spanning-tree?module=openconfig-spanning-tree&amp;revision=2019-11-28</capability><capability>http://openconfig.net/yang/interfaces/tunnel?module=openconfig-if-tunnel&amp;revision=2018-11-21</capability><capability>http://openconfig.net/yang/system-grpc?module=openconfig-system-grpc&amp;revision=2022-04-19</capability><capability>http://openconfig.net/yang/platform-types?module=openconfig-platform-types&amp;revision=2023-06-27</capability><capability>http://arista.com/yang/openconfig/mpls/deviations?module=arista-mpls-deviations&amp;revision=2021-02-15</capability><capability>http://arista.com/yang/openconfig/isis/augments?module=arista-isis-augments&amp;revision=2023-02-20</capability><capability>http://arista.com/yang/openconfig/bfd/deviations?module=arista-bfd-deviations&amp;revision=2020-11-30</capability><capability>http://openconfig.net/yang/mpls-types?module=openconfig-mpls-types&amp;revision=2021-12-01</capability><capability>http://openconfig.net/yang/telemetry?module=openconfig-telemetry&amp;revision=2018-11-21</capability><capability>http://arista.com/yang/openconfig/messages/notsupported-deviations?module=arista-messages-notsupported-deviations&amp;revision=2024-02-03</capability><capability>http://openconfig.net/yang/alarms?module=openconfig-alarms&amp;revision=2019-07-09</capability><capability>http://openconfig.net/yang/bgp?module=openconfig-bgp&amp;revision=2023-11-01</capability><capability>http://openconfig.net/yang/acl?module=openconfig-acl&amp;revision=2023-02-06</capability><capability>http://openconfig.net/yang/bfd?module=openconfig-bfd&amp;revision=2023-08-09</capability><capability>http://arista.com/yang/openconfig/keychain/notsupported-deviations?module=arista-keychain-notsupported-deviations&amp;revision=2024-02-03</capability><capability>http://arista.com/yang/openconfig/lldp/augments?module=arista-lldp-augments&amp;revision=2020-11-30</capability><capability>http://arista.com/yang/experimental/eos/qos?module=arista-exp-eos-qos&amp;revision=2017-09-26</capability><capability>http://arista.com/yang/openconfig/pim/augments?module=arista-pim-augments&amp;revision=2020-11-30</capability><capability>urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring?module=ietf-netconf-monitoring&amp;revision=2010-10-04</capability><capability>http://arista.com/yang/openconfig/macsec/notsupported-deviations?module=arista-macsec-notsupported-deviations&amp;revision=2024-02-03</capability><capability>http://openconfig.net/yang/alarms/types?module=openconfig-alarm-types&amp;revision=2018-11-21</capability><capability>http://openconfig.net/yang/bgp-types?module=openconfig-bgp-types&amp;revision=2023-09-06</capability><capability>http://openconfig.net/yang/pim/types?module=openconfig-pim-types&amp;revision=2018-11-21</capability><capability>http://arista.com/yang/experimental/eos/arista-ebra-vlan-tpid?module=arista-ebra-vlan-tpid&amp;revision=2021-
 ... (truncated for this note; the full answer is in the test log)
 ```
 
