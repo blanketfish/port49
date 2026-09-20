@@ -48,12 +48,26 @@ type platform struct {
 	version string // image version for the results note
 
 	// boot is how long this image is given to become usable. It is per platform
-	// because the images differ by an order of magnitude, and the Junos figure is
-	// measured on this host rather than guessed: vEOS answers a breakglass login
-	// 57 seconds after `containerlab deploy`, while vJunos-router 23.4R2-S2.1 was
-	// still mounting Junos package sets 15 minutes in and had not served an SSH
-	// handshake at 17 minutes, when the run ended. Junos boots inside a nested VM
-	// and that is what it costs here.
+	// and measured on the host that runs the lab, not guessed. On the bare-metal
+	// lab host (KVM, nested virtualisation enabled): vEOS answers a breakglass
+	// login 57s after `containerlab deploy`; vJunos-router 23.4R2-S2.1 answers
+	// one in 1m31s, the same figure on three consecutive deploys; vSRX 21.4R3.15
+	// reports `Startup complete` at 57s and is serving SSH authentication about
+	// 3 minutes in. The budgets are several times those, because a budget exists
+	// to end a run that is not going to finish, not to race the device.
+	//
+	// vSRX spends its whole budget every run and there is nothing wrong with the
+	// device. The gate is a breakglass login, and vSRX will not fall through
+	// `authentication-order` to a local password while the TACACS+ server is
+	// unreachable — see results/juniper_vsrx-config-verified.md. Its budget is
+	// therefore the shortest one that still clears the 3 minutes it needs to
+	// serve SSH, so the wait is not longer than it has to be.
+	//
+	// These numbers are a property of the host. The previous host could not boot
+	// a vmhost Junos image at all — see tests/lab/README.md, "Why this needs bare
+	// metal" — and a 35-minute budget there still measured nothing. If Junos
+	// stops making the budget on some future host, measure the boot and change
+	// the number; do not assume the device is broken.
 	boot time.Duration
 }
 
@@ -61,9 +75,9 @@ var platforms = []platform{
 	{"eos", "arista_eos", "topologies/eos.clab.yml", "172.100.100.11", "leaf1",
 		"vrnetlab/arista_veos:4.32.2F", "vEOS-lab 4.32.2F", 6 * time.Minute},
 	{"vjunos", "juniper_vjunos-router", "topologies/vjunos.clab.yml", "172.100.100.21", "srx1",
-		"vrnetlab/juniper_vjunos-router:23.4R2-S2.1", "vJunos-router 23.4R2-S2.1", 35 * time.Minute},
+		"vrnetlab/juniper_vjunos-router:23.4R2-S2.1", "vJunos-router 23.4R2-S2.1", 8 * time.Minute},
 	{"vsrx", "juniper_vsrx", "topologies/vsrx.clab.yml", "172.100.100.22", "vsrx1",
-		"vrnetlab/juniper_vsrx:21.4R3.15", "vSRX3 21.4R3.15", 35 * time.Minute},
+		"vrnetlab/juniper_vsrx:21.4R3.15", "vSRX3 21.4R3.15", 6 * time.Minute},
 }
 
 const (
