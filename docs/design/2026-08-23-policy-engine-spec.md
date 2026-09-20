@@ -3464,7 +3464,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key `(nas, port)` (§5.1.1, §5.6); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS and Junos; see below |
 | **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed on EOS; truncation length unmeasured; see below |
 | **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6) | EOS, NX-OS, IOS-XE | open |
-| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — first evidence 2026-09-20: vJunos-router falls through with the server unreachable; a vSRX claim was withdrawn; see below |
+| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX and vEOS over SSH: both Junos images fall through on a FAIL when `password` is listed, vEOS never does; `deadtime`, other platforms and other transports unmeasured; see below |
 | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | open — no WATCHDOG on EOS or Junos; see below |
 | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
 | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open |
@@ -3487,16 +3487,62 @@ but the measurements exist and the notes are in the repository.
   `tests/lab/results/L2-arista_eos.md`. Not applicable on Junos, which sends no per-command
   REPLY (decision 21). *Unmeasured:* the truncation length, because EOS authorizes the command
   word alone and no long `server_msg` was ever built; NX-OS and IOS-XE.
-- **L4** — 2026-09-20, first evidence, one platform. With
-  `authentication-order [ tacplus password ]` and the TACACS+ connection refused, vJunos-router
-  23.4R2-S2.1 falls through to the local password. A matching claim that vSRX 21.4R3.15 does
-  **not** was withdrawn the same day: on that image no local account has a password at all
-  (`*` in `/etc/master.passwd` for `breakglass`, `admin` and `remote`; empty for `root`),
-  because the startup config's `plain-text-password-value` never became an
-  `encrypted-password`, so the refusals it rested on say nothing about fall-through.
-  `tests/lab/results/juniper_vsrx-config-verified.md`. *Unmeasured:* vSRX fall-through at all,
-  fall-through on a denial rather than on an unreachable server, `deadtime`, and every
-  non-Junos platform.
+- **L4** — 2026-09-20, the full two-by-two on three images: two method lists (one listing a
+  local method, one not) crossed with port49 unreachable and port49 up and answering FAIL.
+  Every FAIL cell is backed by a decision record for that attempt, so the device's behavior is
+  attributable to a denial rather than to a reply that never arrived.
+  `tests/lab/results/L4-juniper_vjunos-router.md`, `L4-juniper_vsrx.md`, `L4-arista_eos.md`.
+
+  | method list | port49 | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.32.2F |
+  |---|---|---|---|---|
+  | lists a local method | unreachable | local login | local login | local login |
+  | lists a local method | answering FAIL | **local login** | **local login** | refused |
+  | no local method | unreachable | local login | local login | local login |
+  | no local method | answering FAIL | refused | refused | refused |
+
+  "Lists a local method" is `authentication-order [ tacplus password ]` on Junos and
+  `aaa authentication login default group <g> local` on EOS; "no local method" is
+  `authentication-order tacplus`, and on EOS the same list under `group tacacs+` rather than
+  the named group — EOS behaved identically under both spellings. Three readings matter:
+
+  1. **On both Junos images, a FAIL is not final** when `password` is in the order: the device
+     accepts the local password after port49 has denied the login. §5.6's "denial is FAIL, so
+     no fall-through" does not hold for that shape. See the contradiction list under this row.
+  2. **On EOS a FAIL is final** under either spelling of the list, so the same sentence holds
+     there. The behavior is per platform, not per protocol.
+  3. **Removing `password` does not give you "TACACS+ only."** On both Junos images
+     `authentication-order tacplus` alone still falls through to the local password when the
+     server is unreachable. It gives you "TACACS+ only while the server answers" — which is
+     the shape that makes §5.6's argument true, and is exactly what the design document's §12
+     means by the reference configuration being what disables fall-through on FAIL.
+
+  A second finding from the same runs, about the *authorization* half rather than the
+  authentication half: on vEOS, a local account with `privilege 15` and no role logged in
+  while port49 was unreachable and was then refused `configure` — EOS falls back to the local
+  **role**, and a role is not a privilege level (`tests/lab/results/L4-arista_eos.md`).
+
+  *Unmeasured:* `deadtime`; every platform but the three images named above, so NX-OS and
+  IOS-XE in particular; every transport but SSH (console, eAPI, NX-API, NETCONF); a second
+  TACACS+ server, so "one server rejecting while another answers" is untested; and
+  **authorization fall-through** — every cell above is the authentication method list, while
+  the §5.6 sentences the table contradicts are written about authorization.
+
+  **Sentences this contradicts, as written.** Listed, not edited: whether to reword them is
+  the project owner's call.
+
+  - `docs/design/2026-08-23-policy-engine-spec.md:1017` — "Denial at the ceiling is FAIL, not
+    ERROR, so no fall-through to local authorization opens up (see below)."
+  - `docs/design/2026-08-23-policy-engine-spec.md:1055` — "and a denial is FAIL, so no
+    fallback to local authorization follows."
+
+  Both are stated as properties of the protocol. They are properties of a *configuration*, and
+  on two of three images the lab's other configuration breaks them. The design document
+  already says this correctly at `docs/design/2026-08-21-port49-design.md:1134` — "The
+  reference configuration per platform is what disables fall-through on FAIL" — and its
+  hedged "is believed to try the local password on a reject" one line above is now measured
+  true. Note also that both contradicted sentences are about *authorization* fall-through,
+  which this row has not measured; what is measured is that the general principle they appeal
+  to is false on Junos for authentication.
 - **L5** — EOS 2026-09-17 and Junos 2026-09-20: no WATCHDOG at all on any of the three, over a
   2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`,
   `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`. *Unmeasured:* NX-OS, IOS-XE.
