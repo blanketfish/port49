@@ -56,9 +56,11 @@ type platform struct {
 	// to end a run that is not going to finish, not to race the device.
 	//
 	// vSRX used to spend its whole budget every run, because the gate was a
-	// breakglass login and vSRX will not fall through `authentication-order` to
-	// a local password while the TACACS+ server is unreachable
-	// (results/juniper_vsrx-config-verified.md). waitDeviceReady now also accepts
+	// breakglass login and on vSRX 21.4R3.15 no local account has a password:
+	// the startup config's `plain-text-password-value` never becomes an
+	// `encrypted-password` there, so breakglass cannot log in by any route
+	// (results/juniper_vsrx-config-verified.md). That says nothing about whether
+	// vSRX falls through `authentication-order`. waitDeviceReady now also accepts
 	// an authentication rejection, so vSRX passes as soon as sshd is serving
 	// rather than at the budget. Its budget stays the shortest that clears the
 	// 3 minutes it takes to get there.

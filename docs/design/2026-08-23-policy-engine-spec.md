@@ -2499,8 +2499,8 @@ is one no reply can continue — a CONTINUE naming a session the connection neve
 `seq_no` of 255, which has no successor, or more unfinished sessions on one connection than
 the daemon will hold. The sender holds the right key, so it is neither noise nor a rotation
 miss, and the report keeps it apart so a codec gap or an unusual device is seen as such. The
-body is still not logged; the record carries the header fields, and the body hash where there
-were body bytes to hash.
+body is still not logged; the record carries the header fields, and a body hash only where
+that hash is of the bytes as they arrived on the wire, never of a deobfuscated body.
 
 **Retired versions are retained for diagnosis and never for admission.** This is what turns
 "something is wrong with leaf-19" into "leaf-19 was missed in the rotation". The rule is
@@ -3464,7 +3464,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key `(nas, port)` (§5.1.1, §5.6); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS and Junos; see below |
 | **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed on EOS; truncation length unmeasured; see below |
 | **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6) | EOS, NX-OS, IOS-XE | open |
-| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — first evidence 2026-09-20: the two Junos images disagree; see below |
+| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — first evidence 2026-09-20: vJunos-router falls through with the server unreachable; a vSRX claim was withdrawn; see below |
 | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | open — no WATCHDOG on EOS or Junos; see below |
 | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
 | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open |
