@@ -102,7 +102,12 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	rec.Session.CtxID = c.CtxID
 	rec.Session.Username = c.Username
 	rec.Principal = c.Principal
-	if authen.Canonical(string(req.User)) != c.Username {
+	if user := authen.Canonical(string(req.User)); user != c.Username {
+		// The record names whoever sent the request, not whoever owns the
+		// context it landed on: logging the context's username accuses the
+		// wrong person and leaves the sender out of the record entirely.
+		// ctx_id already says which context this collided with.
+		rec.Session.Username = user
 		derr := h.store.DeleteContext(ctx, store.ContextKey{NAS: peer.NAS, Port: port})
 		h.metrics.StoreOps.WithLabelValues("delete_context", storeOutcome(derr)).Inc()
 		return h.deny(rec, decision.UsernameMismatch, "port49: username does not match the authenticated session")

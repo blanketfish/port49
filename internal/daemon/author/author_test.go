@@ -101,6 +101,19 @@ func TestUsernameMismatchInvalidates(t *testing.T) {
 	if _, err := st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Port: "vty0"}); err == nil {
 		t.Fatal("context must be invalidated")
 	}
+	// The record must name whoever sent the command, not whoever owned the
+	// context it collided with: alice's command landing on bob's line used to
+	// be logged as bob being denied, which accuses the wrong person and leaves
+	// alice nowhere in the record at all. ctx_id already identifies the
+	// context, so nothing is lost by keeping the request's username.
+	rec := lastRecord(t, log)
+	session := rec["session"].(map[string]any)
+	if session["username"] != "bob" {
+		t.Fatalf("the record must name the user who sent the request, got %v", session["username"])
+	}
+	if session["ctx_id"] != "ctx1" {
+		t.Fatalf("the record must still name the context it collided with, got %v", session["ctx_id"])
+	}
 }
 
 func TestUnsupportedService(t *testing.T) {
