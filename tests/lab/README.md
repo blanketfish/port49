@@ -167,3 +167,19 @@ listens. Those two loopback packets are its proof that the file is really captur
 does not start until one has reached the file, and tcpdump is not stopped until another has,
 which by ordering means everything the test produced is already on disk. They are on the
 loopback, so they are excluded from the device-packet count a results note quotes.
+
+## Startup configs must be pure ASCII
+
+Every file in `configs/` is ASCII only, comments included, and `checkStartupConfigASCII` in
+`harness_test.go` refuses to deploy one that is not.
+
+The N9Kv launcher applies its config by typing it into the serial console one line at a time.
+The first NX-OS deploy stopped dead on line 8 of `nxos-startup.cfg`, which held an em dash in
+a comment. Every line after it — the break-glass account, `feature tacacs+`, the server, the
+group, all four method lists — was never sent. The device then came up looking perfect: SSH
+serving, authentication answering, `containerlab inspect` healthy, and no AAA configuration at
+all. Nothing in the launcher log said anything was wrong; it simply stopped.
+
+Write `--` for an em dash and `'` for a curly quote. The check costs nothing and the failure
+it prevents costs a ten-minute boot and a results note about a device that was never
+configured.

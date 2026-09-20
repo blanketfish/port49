@@ -394,7 +394,73 @@ func (l *lab) topoPath() string { return filepath.Join(root, "tests", "lab", l.p
 // does not exist until the deploy creates the network; and a device whose AAA
 // points at a port49 that is already answering would have no local fallback
 // while it is still booting.
+// startupConfigPath is the config file this platform's topology deploys, read
+// out of the topology rather than assumed, so the check below cannot drift from
+// what containerlab actually sends.
+func (l *lab) startupConfigPath() (string, error) {
+	raw, err := os.ReadFile(l.topoPath())
+	if err != nil {
+		return "", err
+	}
+	for _, ln := range strings.Split(string(raw), "\n") {
+		ln = strings.TrimSpace(ln)
+		rest, ok := strings.CutPrefix(ln, "startup-config:")
+		if !ok {
+			continue
+		}
+		p := strings.Trim(strings.TrimSpace(rest), `"'`)
+		return filepath.Clean(filepath.Join(filepath.Dir(l.topoPath()), p)), nil
+	}
+	return "", fmt.Errorf("%s names no startup-config", l.topoPath())
+}
+
+// checkStartupConfigASCII refuses to deploy a startup config that is not pure
+// ASCII, and this is not fastidiousness about character sets.
+//
+// The N9Kv launcher applies its config by typing it into the serial console one
+// line at a time. On the first NX-OS deploy, `tests/lab/configs/nxos-startup.cfg`
+// line 8 read:
+//
+//	! device line by line inside configuration mode — see `apply_config` in
+//
+// The em dash stopped the whole thing dead. Every line after it — the
+// break-glass account, `feature tacacs+`, the server, the group, the method
+// lists — was never sent. The device then came up perfectly: SSH serving,
+// authentication answering, healthy in `containerlab inspect`, and with no AAA
+// configuration at all. It cost a ten-minute boot to find out, and it would
+// have cost nothing at all to notice before the deploy.
+//
+// The check runs for every platform even though only NX-OS is known to be
+// vulnerable. The alternative is knowing which launchers type their config and
+// which copy it, per image and per vrnetlab version, and being wrong once.
+func (l *lab) checkStartupConfigASCII() error {
+	path, err := l.startupConfigPath()
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	for i, ln := range strings.Split(string(raw), "\n") {
+		for _, b := range []byte(ln) {
+			if b > 0x7e || (b < 0x20 && b != '\t' && b != '\r') {
+				return fmt.Errorf("%s line %d holds a byte outside ASCII (%#02x):\n  %s\n"+
+					"Startup configs must be pure ASCII, comments included. The N9Kv launcher types this file "+
+					"into the serial console line by line, and one em dash in a comment stopped it there and "+
+					"silently dropped every line after it — leaving a device that serves SSH and has no AAA. "+
+					"Replace the character (an em dash is `--`, a curly quote is `'`) and redeploy",
+					path, i+1, b, ln)
+			}
+		}
+	}
+	return nil
+}
+
 func (l *lab) up() error {
+	if err := l.checkStartupConfigASCII(); err != nil {
+		return err
+	}
 	topo := l.topoPath()
 	out, err := exec.Command("sudo", "-n", "containerlab", "deploy", "--reconfigure", "-t", topo).CombinedOutput()
 	if err != nil {
