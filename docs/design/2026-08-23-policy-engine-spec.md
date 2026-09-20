@@ -181,7 +181,9 @@ authenticated state, held by the agent. The second is a TACACS+ exchange at logi
 despite the shared word, and the protocol term is fixed by RFC 8907.
 
 **`login context` is per *login*, not per session.** One operator session produces many
-logins, each with its own context keyed `(nas, port)`.
+logins, each with its own context keyed `(nas, username)`. Two concurrent logins by the
+*same* operator to the *same* device therefore share one context; that is the accepted cost
+of the key and is stated plainly in §5.6.
 
 **`token` versus `presented credential`.** The token is what port49 mints. The presented
 credential is what arrives in the authentication packet — the token verbatim for PAP and
@@ -355,10 +357,16 @@ fails **before an SSH connection is opened**.
 
 ### 5.1.1 Where the resolved policy waits
 
-The broker computes this result, but the daemon needs it — and the key it will eventually
-live under is not knowable at mint. Login context is keyed on `(nas, port)`, and the port
-is the device's tty or vty string, which does not exist until the device opens the
-authentication exchange. **The broker therefore cannot write login context.**
+The broker computes this result, but the daemon needs it. Login context is keyed on
+`(nas, username)` — the same key the token already lives under — so the key *is* knowable at
+mint. **The broker nonetheless does not write login context**, for reasons that are design
+choices rather than facts about the protocol: the context records what happened at
+redemption (`ctx_id`, `auth_time`, the `port` and `rem_addr` the device actually presented),
+and only the daemon is there when it happens.
+
+This paragraph used to say the key was unknowable at mint, because the key was `(nas, port)`
+and the port does not exist until the device opens the authentication exchange. That stopped
+being true on 2026-09-20 (§13, decision 15).
 
 The resolved result is instead stored as an immutable, **content-addressed policy blob**,
 referenced by the token:
@@ -377,11 +385,13 @@ On successful redemption the daemon creates login context, which holds **the has
 than a copy**:
 
 ```
-ctx:(nas, port)
+ctx:(nas, username)
   ctx_id            01J9F3QK…            assigned at creation; correlates every record
   principal         user:alice@example.com
-  username          alice                bound; compared on every later exchange
-  rem_addr          198.51.100.4         bound; compared on enable
+  username          alice                in the key; also recorded here
+  port              ssh                  recorded as the device presented it at
+                                         authentication; part of no key (§13, decision 15)
+  rem_addr          198.51.100.4         recorded; compared on enable
   privilege         15
   blob_hash         sha256:a3f9c1…
   credential        see 5.1.4
@@ -491,7 +501,7 @@ itself, and scanning the keyspace is both store-specific and expensive at scale.
 The daemon MUST therefore maintain an index as it creates and tears down context:
 
 ```
-contexts_by_principal:(principal)   → set of (nas, port)
+contexts_by_principal:(principal)   → set of (nas, username)
 active_principals                   → set of principal, entries expiring with their last context
 ```
 
@@ -894,20 +904,42 @@ whose population has emptied is dead code, and saying so is how policy cleans it
 ### 5.6 Login context lifecycle
 
 **Creation.** Login context is created **only on successful token redemption**, by the
-daemon, keyed `(nas, port)`. Nothing else creates it. A session port49 did not authenticate
-therefore has no context and is denied — which is correct, since port49 has no basis on which
-to authorize it.
+daemon, keyed `(nas, username)`. Nothing else creates it. A session port49 did not
+authenticate therefore has no context and is denied — which is correct, since port49 has no
+basis on which to authorize it.
 
 The shape is given in §5.1.1; §5.1.4 covers the credential fields.
 
-**Bound attributes.** `username` and `rem_addr` are recorded at creation and compared
-thereafter:
+**`port` and `rem_addr` are recorded attributes and are part of no key, on every platform.**
+They are written into the context as the device presented them at authentication, logged on
+every record, and used to annotate accounting. Neither is ever looked up on. The measurement
+that forced this is in §15 (L1): on no platform in the lab is `port` the same value at
+authentication and at authorization.
+
+**One operator, one device, one context.** The accepted cost of this key is that a second
+login by the same username on the same device overwrites the first login's context with an
+identical-content context under a new `ctx_id`. Same principal, same privilege, same blob, so
+nothing is authorized that was not already authorized — but the older shell now logs the
+newer `ctx_id`, and a log reader cannot tell the two apart. No wire field distinguishes them
+(§15, L1), so this is unavoidable rather than merely unfixed. The overwrite MUST therefore be
+logged, so the reader at 3am sees "second login by alice on ls01, context replaced" rather
+than silence.
+
+**Bound attributes.** `username` is in the key, so a context is only ever found by the name
+that created it. `rem_addr` is recorded at creation and compared where the wire username is
+not the principal:
 
 | Exchange | Check |
 |---|---|
-| command authorization | `username` MUST match; a mismatch denies and invalidates |
-| enable, `enable_username: principal` | `username` MUST match |
-| enable, `$enab{level}$` platforms | `rem_addr` MUST match |
+| command authorization | the key *is* the username, so a request under another name finds no context and is denied `context_missing`, not `username_mismatch` |
+| enable, `enable_username: principal` | the key is the username, as above |
+| enable, `$enab{level}$` platforms | resolved through the `(nas, rem_addr)` secondary index; `rem_addr` MUST match, and an index entry resolving to more than one context MUST refuse rather than guess |
+
+`username_mismatch` (§5.7) survives the re-key and is **not** reachable from the
+command-authorization path any more. It remains the reason for the enable path above, where
+the username is resolved from context rather than read off the wire and can therefore
+disagree with it. The `$enab{level}$` path itself is unmeasured (§15, L3 lists IOS-XE) and
+stays provisional.
 
 #### port49 denies commands; it cannot end a session
 
@@ -925,12 +957,12 @@ did not generate and cannot verify MUST NOT delete state.
 
 | | Trigger | Authority |
 |---|---|---|
-| 1 | **Login redemption** on the same `(nas, port)` | port49 performed it — overwrites unconditionally. An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7) |
+| 1 | **Login redemption** on the same `(nas, username)` | port49 performed it — overwrites unconditionally, and logs the overwrite (above). An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7) |
 | 2 | **Revocation** — OIDC back-channel logout by `sid` or `sub`; a certificate appearing on a CRL or OCSP response by issuer and serial; a policy change withdrawing every grant | authoritative, from the identity layer (§5.1.4). Sets `revoked_at` rather than deleting, so the next command is denied `credential_revoked` with a `server_msg` saying so — distinguishable from a session port49 never saw. Row 6 reclaims the state |
 | 3 | **Session ceiling** — `session_expires` reached and the grace window elapsed | local, needs no external signal |
 | 3a | **Staleness ceiling** — `now - refreshed_at` beyond `staleness_ceiling` because the broker has been unreachable that long (design document §9) | local; denies `context_stale` with a `server_msg` naming the broker outage, retains the context so recovery resumes it |
-| 4 | **Username mismatch** on a command or enable exchange | a genuine conflict on that line — denies and invalidates |
-| 5 | **Authentication START** on the same `(nas, port)` under a different username, *including one port49 rejects* | a failed authentication is still evidence a new session is beginning. With ASCII login the username arrives in a CONTINUE, so the check fires once it is known |
+| 4 | **Username mismatch** on an enable exchange resolved through `(nas, rem_addr)` | a genuine conflict — denies and invalidates. On the command path this cannot arise: the username is the key |
+| 5 | — | **withdrawn 2026-09-20.** It read "authentication START on the same `(nas, port)` under a different username, including one port49 rejects". Under `(nas, username)` a START under a different username addresses a different context and is evidence of nothing about this one, so the row had no content left to carry. Deleting a live operator's context because someone else mistyped a name on the same device is exactly the mutual lockout the re-key removed |
 | 6 | **Idle TTL** | hygiene; bounds abandoned state |
 | 7 | **Exec accounting** | **advisory only — annotates, never deletes** (§5.8) |
 
@@ -939,23 +971,24 @@ separate connection that can be queued or bounced off another server first. A de
 STOP therefore arrives after the line has been reused:
 
 ```
-t0   Bob's session on ls01 vty0 ends
+t0   Bob's session on ls01 ends
 t1   device emits  STOP user=bob port=vty0 task_id=42   → delayed 4s
-t2   Alice authenticates, redeems, ctx:(ls01, vty0) = { alice, … }
-t3   the delayed STOP arrives  →  teardown fires on (ls01, vty0)
-t4   Alice's next command  →  context_missing  →  denied mid-session
+t2   Bob reconnects, redeems, ctx:(ls01, bob) = { bob, … }
+t3   the delayed STOP arrives  →  teardown fires on (ls01, bob)
+t4   Bob's next command  →  context_missing  →  denied mid-session
 ```
 
 Fail-closed, so not dangerous — but a self-inflicted outage, and one whose two halves look
-unrelated in a log. Matching on username fixes Bob-then-Alice and not Bob reconnecting to the
-same line. Rather than patch it, accounting now sets `accounting_state: closing` and nothing
+unrelated in a log. The `(nas, username)` key removes the Bob-then-Alice version of this and
+not this one, Bob reconnecting. Rather than patch it, accounting now sets
+`accounting_state: closing` and nothing
 more — it is reported, and it has **no effect on refresh, authorization, or teardown**; row 6
 reclaims the state. §5.8 specifies the annotation, including the `task_id` binding that makes
 it correct.
 
 **Idle TTL is a backstop, not a control.** It SHOULD be extended by activity. A short TTL was
 previously doing security work it cannot do — it narrows a window without closing it, while
-denying idle operators mid-session with `context_missing`. Rows 1 through 5 close the window.
+denying idle operators mid-session with `context_missing`. Rows 1 through 4 close the window.
 
 #### Where these controls do not reach
 
@@ -1014,8 +1047,14 @@ forcing a reconnect. Requirements:
   message. It and the grace window are both configurable.
 - Refresh MUST NOT extend a session whose principal has lost the grant; refresh re-resolves
   policy, so a withdrawn grant produces a blob that denies.
-- Denial at the ceiling is FAIL, not ERROR, so no fall-through to local authorization opens
-  up (see below).
+- Denial at the ceiling is FAIL, not ERROR. Whether that closes off fall-through to local
+  authorization is a property of the device's configuration, not of the protocol, and it is
+  measured only for *authentication*: on both Junos images a FAIL falls through to the local
+  password whenever `password` is in `authentication-order`, while vEOS and the N9Kv treat a
+  FAIL as final under every method list tested (`tests/lab/results/L4-juniper_vsrx.md`,
+  `L4-juniper_vjunos-router.md`, `L4-arista_eos.md`, `L4-cisco_nxos.md`). Authorization
+  fall-through is unmeasured on every platform. What closes the window is the reference AAA
+  configuration per platform, which the lab register tracks as L4.
 - `max_session_age: never` MUST be expressible. Some deployments have no such requirement,
   and a ceiling nobody asked for is an outage waiting to happen. The default is **12h**; a
   compliance parameter with an unstated default is one nobody sets.
@@ -1036,8 +1075,15 @@ forcing a reconnect. Requirements:
 
 Method lists fall through to a later method only on **ERROR** (the server is unreachable), not
 on **FAIL** (an explicit reject). So a session that authenticates locally rather than through
-port49 implies port49 was *unreachable at that moment* — which means row 5 never fired,
-because we never saw the START.
+port49 implies port49 was *unreachable at that moment*, so port49 never saw the START and
+holds no context for that occupant. (Until 2026-09-20 this sentence turned on teardown row 5,
+which withdrew with the re-key; the exposure below does not depend on it.)
+
+That fall-through is itself a configuration property rather than a protocol one: measured, a
+FAIL is final on vEOS and the N9Kv under every method list tested, and falls through to the
+local password on both Junos images whenever `password` is in `authentication-order`
+(`tests/lab/results/L4-*.md`). So on Junos a local login can follow a port49 denial as well as
+a port49 outage, which widens the window this section prices.
 
 The remaining exposure is therefore: port49 unreachable when a session begins, reachable again
 by the time that session issues `enable`, on a platform whose enable exchange carries
@@ -1050,12 +1096,16 @@ or `enable: none`, both of which require a credential the previous occupant's co
 supply. `rem_addr` comparison covers the same case as defense in depth, and a mismatch is a
 high-signal event worth alerting on.
 
-**Blast radius when it does occur** is limited by the command-authorization username check:
-the escalated occupant obtains an elevated shell, but every command they run arrives with
-their own username, mismatches the stored one, and is denied — and a denial is FAIL, so no
-fallback to local authorization follows. The escalation converts into real access only on
-devices where command authorization does not cover that privilege tier, which is precisely
-what the accounting reconciliation in §9 exists to surface.
+**Blast radius when it does occur** is limited by the key itself: the escalated occupant
+obtains an elevated shell, but every command they run arrives under *their own* username,
+which is the lookup key, so it finds no context of theirs and is denied `context_missing`.
+(Before 2026-09-20 the same commands landed on the stale context and were denied
+`username_mismatch`; the deny is unchanged, the reason code is not.) Whether that denial then
+falls through to local *authorization* is unmeasured on every platform — the L4 measurements
+cover authentication only — so it is the device's reference AAA configuration that must close
+that path, not the FAIL itself. The escalation converts into real access only on devices
+where command authorization does not cover that privilege tier, which is precisely what the
+accounting reconciliation in §9 exists to surface.
 
 **Local account names MUST NOT collide with device-facing usernames.** A device-local `bob`
 that is not the port49 username `bob` matches on username and inherits the context. The
@@ -1199,8 +1249,8 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 | `ceiling_exceeded` | `escalate`: the requested level is above `max_privilege` |
 | `no_rule_matched` | nothing matched; deny by default |
 | `no_permit_dominates_deny` | a deny matched and no permit dominated it |
-| `context_missing` | no login context for `(nas, port)` — port49 did not authenticate this session |
-| `username_mismatch` | the request's username differs from the one bound at redemption (§5.6) |
+| `context_missing` | no login context for `(nas, username)` — port49 did not authenticate this session under that name |
+| `username_mismatch` | the request's username differs from the one bound at redemption (§5.6). Reachable only where the username is resolved from context rather than read off the wire — the `$enab{level}$` enable path through the `(nas, rem_addr)` index. On the command path the username *is* the key, so the same situation is `context_missing` |
 | `rem_addr_mismatch` | enable arrived from a different address than the bound one |
 | `privilege_exceeded` | the request is above the session's granted level |
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6) |
@@ -1392,19 +1442,30 @@ port49's own credentials are never typed at a device prompt in the first place.
 
 #### Annotating login context
 
-Exec accounting annotates context and never deletes it (§5.6). The annotation is still worth
-getting right, and `task_id` is what makes it correct — it pairs a START with its STOP, and
-context is already keyed on `(nas, port)`, so device-local uniqueness suffices:
+Exec accounting annotates context and never deletes it (§5.6). The context is found by
+`(nas, username)` — the accounting record's own `user`, not its `port`, which is part of no
+key (§5.6):
 
 ```
-exec START for (nas, port):
-    ctx has no task_id and user matches   →  bind task_id (our own session's START)
+exec START for (nas, username):
+    ctx has no session discriminator      →  bind it (our own session's START)
     otherwise                             →  annotate foreign_session, alert
 
-exec STOP for (nas, port):
-    ctx.task_id set    →  accounting_state = closing, only on a task_id match
-    ctx.task_id unset  →  accounting_state = closing, only on a username match
+exec STOP for (nas, username):
+    discriminator set    →  accounting_state = closing, only on a discriminator match
+    discriminator unset  →  accounting_state = closing, on the username alone
 ```
+
+**What the discriminator is, is per platform, and `task_id` is not it.** This section used to
+say `task_id` pairs a START with its STOP because "context is already keyed on `(nas, port)`,
+so device-local uniqueness suffices". Both halves are now wrong: the key no longer contains
+`port`, and `task_id` is measured **not** device-unique — on both Junos images it restarts at
+`1` per session, so two concurrent logins both sent `task_id=1`
+(`tests/lab/results/L1-juniper_vsrx.md`, `L1-juniper_vjunos-router.md`). What is measured to
+work: `session_pid` on Junos, unique and stable across the device's immediate reuse of an
+accounting `port`; `task_id` on EOS, device-unique and monotonic
+(`tests/lab/results/L1-arista_eos.md`). Choosing per platform is adapter work and is
+specified with the adapters, not here.
 
 The unset branch covers `stop-only` accounting and a lost START. `closing` is reported and
 nothing else — it does not stop refresh (§5.1.3), because a STOP from a previous session on the
@@ -1674,8 +1735,18 @@ principal.
 Three consequences:
 
 1. No token exists for it — the operator is already logged in and typing interactively.
-2. The username does not identify the principal, so **login context MUST be keyed on
-   `(nas, port)`**, with the username as a verified attribute rather than part of the key.
+2. On a `$enab{level}$` platform the username does not identify the principal. This was the
+   whole reason login context was keyed on `(nas, port)`, with the username as a verified
+   attribute rather than part of the key. **That reason lost to measurement on 2026-09-20**
+   (§13, decision 15): `port` is not the same value at authentication and at authorization on
+   any platform in the lab, so the key it bought did not work, while the platform behavior it
+   was serving is unmeasured on the only platform that exhibits it (§15, L3 lists IOS-XE). On
+   vEOS, measured, the enable START carries the operator's **own** username with
+   `service=enable` — not `$enab15$` — so the key costs that platform nothing
+   (`tests/lab/results/L3-arista_eos.md`). Login context is now keyed on `(nas, username)`,
+   and the `$enab{level}$` case is served by a `(nas, rem_addr)` secondary index that MUST
+   refuse rather than guess when it resolves to more than one context. That path is
+   **provisional** until L3 is measured on IOS-XE.
 3. The enable password was never a second authentication. It is a shared device secret or a
    per-user password in the TACACS database. With certificate identity, whoever holds that
    TTY has already proven who they are — so enable is an *authorization* decision.
@@ -1715,16 +1786,19 @@ Both tokens of a mint pair carry a `kind`, and the daemon checks it against
 | Mechanism | Behavior | Fits |
 |---|---|---|
 | `none` | Enable is refused. The login-time privilege is all there is. | Read-only pollers whose granted level already suffices. |
-| `auto` | Daemon resolves `(nas, port)` → login context, checks the ceiling, PASSes. Any password accepted. **Available only where `enable_username: principal`** (§5.6). | Tools that insist on typing `enable` where plumbing a second secret is awkward. |
+| `auto` | Daemon resolves `(nas, username)` → login context, checks the ceiling, PASSes. Any password accepted. **Available only where `enable_username: principal`** (§5.6), which is what makes the wire username the key. | Tools that insist on typing `enable` where plumbing a second secret is awkward. |
 | `token` | A second minted token, supplied at the prompt. | Anything needing a discrete, attributable escalation record. |
 
-**How an enable token is found.** Tokens are stored under `(nas, username)`, and on a
-`$enab{level}$` platform the enable START carries `$enab15$`, not the username. The daemon
-resolves `(nas, port)` → login context → the bound `username`, and fetches the candidate set
-under that key filtered to `kind: enable`. Two consequences follow and both are correct: an
-enable token is unredeemable on a line port49 did not authenticate, because there is no
-context to resolve the username from; and an enable token minted for Alice cannot be
-redeemed on Bob's line, because the lookup key comes from the context rather than the wire.
+**How an enable token is found.** Tokens are stored under `(nas, username)`. Where the enable
+START carries the principal's own username — measured on vEOS, and required wherever
+`enable_username: principal` — that key is read straight off the wire and the candidate set is
+fetched under it, filtered to `kind: enable`. On a `$enab{level}$` platform the START carries
+`$enab15$` instead, and the daemon resolves `(nas, rem_addr)` → login context → the bound
+`username`, refusing rather than guessing if more than one context answers. Two consequences
+follow and both are correct: an enable token is unredeemable where port49 authenticated no
+session from that address, because there is no context to resolve the username from; and an
+enable token minted for Alice cannot be redeemed against Bob's context, because the lookup key
+comes from the context rather than the wire. The `$enab{level}$` half is provisional on L3.
 
 ### Automation
 
@@ -3060,7 +3134,42 @@ configuration, so it cannot install the key it would derive, and a per-device ke
 provision is worse than a shared key that rotates on schedule. Key groups may be narrowed to a
 single device for deployments with their own automation; port49 does not claim that path. (§10)
 
-**15. Reusable tokens for API transports — provisional, gated on L1 and L7.** eAPI and
+**15. The login context is keyed on `(nas, username)`; the receipt on
+`(nas, username, credential_sha256)`; `port` and `rem_addr` are recorded attributes and are
+part of no key, on every platform. Ruled 2026-09-20.** Until then the context was keyed
+`(nas, port)` and the receipt `(nas, port, username)`, deliberately excluding the username so
+that a `$enab{level}$` enable exchange could still resolve (§7).
+
+*What changed and why.* The lab measured `port` at every exchange rather than only at the
+authentication START, and the key did not survive it. On no platform in the lab is `port` the
+same value at authentication and at authorization: vEOS says `ssh` then `vty4`, the N9Kv says
+`0` then the empty string on every command, and both Junos images say the empty string
+throughout. The consequences were measured on shipping images, not inferred — vEOS killed
+every interactive session that got a vty allocated, telling the operator *"Authorization
+denied: port49: this session was not authenticated by port49"* about a session port49 had
+just authenticated, and the N9Kv denied every command. `port` also failed to do the one job
+the key needed from it: two concurrent vEOS sessions both reported `vty4`, two concurrent
+N9Kv sessions both reported `0`, so two operators on one device collided and locked each
+other out. The exclusion of the username was bought to serve `$enab{level}$`, which is
+unmeasured on the only platform that has it (L3 lists IOS-XE), and measured *not* to apply on
+vEOS, where the enable START carries the operator's own username with `service=enable`.
+Evidence: `docs/design/2026-09-20-login-context-key-options.md`, and
+`tests/lab/results/L1-arista_eos.md`, `L1-cisco_nxos.md`, `L1-juniper_vsrx.md`,
+`L1-juniper_vjunos-router.md`, `L3-arista_eos.md`, `L7-arista_eos.md`, `L7-cisco_nxos.md`.
+
+*The accepted cost, stated plainly.* One user's concurrent sessions on one device share a
+context. The second login overwrites the first with identical content under a new `ctx_id`,
+so nothing is authorized that was not already authorized, but a log reader cannot tell the
+two shells apart. No wire field distinguishes them, so this is not fixable by a better key;
+§5.6 requires the overwrite to be logged so it is at least visible.
+
+*What stays open.* The `$enab{level}$` username form is unmeasured (L3 lists IOS-XE), so the
+enable path for that form is unchanged in substance and **provisional**: it resolves through
+a `(nas, rem_addr)` secondary index that must refuse rather than guess, and `rem_addr` is
+measured identical for two concurrent sessions behind one bastion. Everything the memo lists
+under §5 "What to measure next" stays open, L3 on IOS-XE first.
+
+*Reusable tokens for API transports — provisional, gated on L7.* eAPI and
 NX-API with basic authentication present the credential on every HTTP request, and the device
 runs AAA per request, so a single-use token serves one API call. Those transports carry a large
 share of real automation and cannot be designed around. A subject MAY therefore be granted
@@ -3073,10 +3182,18 @@ for a bound nobody would tune. `reusable` is reported by CI beside `token_ttl`, 
 reusable token replays for its remaining TTL from the bound device — an exposure widening of the
 same kind as a long TTL, and visible in review for the same reason.
 
-What is not decided: how login context behaves when `port` is constant across API sessions
-(L1), and whether API commands are authorized per command at all (L7). If `port` is constant,
-the candidate is keying API contexts on `(nas, port, rem_addr)`, which is safe because no enable
-exchange exists on that path; it is not chosen until measured. (§5.1.1, §15)
+This paragraph used to ask how login context behaves when `port` is constant across API
+sessions, and proposed keying API contexts on `(nas, port, rem_addr)`. Both are answered and
+the proposal is withdrawn: `port` is constant or empty across *SSH* sessions too, and
+`rem_addr` is measured identical for two concurrent sessions, so the candidate discriminated
+nothing. Under `(nas, username)` an API transport needs no separate context key at all.
+
+What is still not decided is `receipt_ttl`. Measured on all four images (L15), every
+transport costs one authentication per unit of work and the repeat is permitted out of the
+**receipt**, not the store — so a script making forty calls with one single-use token works
+until the receipt expires, and the first call after that is a denial with nothing having
+changed in the operator's hand. Any argument for or against reusable tokens has to be made
+about that boundary. Also open: the eAPI `/login` cookie flow (L7). (§5.1.1, §15)
 
 **16. Trust domain is assigned by the verifier, never inferred from the credential.** The
 design requires humans and machines to be unforgeably distinct, and nothing previously said
@@ -3212,9 +3329,12 @@ Beyond those already listed in the design document's §14:
 - **Privilege composition**: `max` across granted roles over the declared ordering;
   `parent:` resolves transitively; an unresolvable level fails at load.
 - **Enable**: all three mechanisms, including the `$enab15$` username path resolving through
-  login context keyed on `(nas, port)`.
-- **Receipt binds the credential**: a retry presenting a different credential from the same
-  device, line, and username is rejected, while a byte-identical retransmission replays.
+  the `(nas, rem_addr)` secondary index, and its refusal when that index is ambiguous.
+- **Receipt binds the credential**: the hash is in the key, so a byte-identical
+  retransmission replays and a genuinely new login by the same user on the same device finds
+  no receipt and redeems normally rather than being rejected `credential_mismatch`. A spent
+  token replayed within `receipt_ttl` is honored only for the same
+  `(nas, username, credential_sha256)`.
 - **CHAP verification**: a candidate set of several unspent tokens resolves to the one that
   produces the matching digest; the atomic removal, not the verification, decides single use,
   and two replicas racing the same token yield exactly one success — **and the loser answers
@@ -3461,7 +3581,7 @@ implemented against a guess. This section is the one place the distinction is ke
 
 | ID | Claim to measure | What rests on it | Platforms | Status |
 |---|---|---|---|---|
-| **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key `(nas, port)` (§5.1.1, §5.6); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE and the console unmeasured; see below |
+| **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE and the console unmeasured; see below |
 | **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below |
 | **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | open — measured 2026-09-20 on vEOS and the N9Kv; **IOS-XE, the platform the `$enab{level}$` spelling comes from, is unmeasured and is what this row most needs**; see below |
 | **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX and vEOS over SSH: both Junos images fall through on a FAIL when `password` is listed, vEOS never does; `deadtime`, other platforms and other transports unmeasured; see below |
@@ -3491,12 +3611,14 @@ but the measurements exist and the notes are in the repository.
   | Nexus 9300v 10.4(2)F | `0` | `0` on the session, **empty string** on every command | `0` |
   | vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15 | empty string | empty string | `0`, `1`, `non-tty` |
 
-  The consequence is measured, not inferred. port49 writes the login context under `(nas, port)` at the
-  authentication and reads it at the authorization, so on vEOS every interactive session that gets a vty
-  allocated is denied `context_missing` and the device tells the operator **"Authorization denied: port49:
+  The consequence is measured, not inferred — and it is what re-cut the key on 2026-09-20 (§13, decision
+  15); everything in this paragraph is the behavior of the **superseded** `(nas, port)` key. port49 wrote
+  the login context under `(nas, port)` at the
+  authentication and read it at the authorization, so on vEOS every interactive session that got a vty
+  allocated was denied `context_missing` and the device told the operator **"Authorization denied: port49:
   this session was not authenticated by port49"** about a session port49 had just authenticated. On the N9Kv
-  the session authorization matches and every *command* authorization misses, so the operator gets `Error:
-  AAA authorization failed`. Neither is intermittent: every session in every run behaved this way.
+  the session authorization matched and every *command* authorization missed, so the operator got `Error:
+  AAA authorization failed`. Neither was intermittent: every session in every run behaved this way.
 
   Concurrency does not rescue it either. Two overlapping vEOS sessions both reported `vty4` at authorization,
   and two overlapping N9Kv sessions both reported `0` — one denied `username_mismatch`, the other
@@ -3589,16 +3711,16 @@ but the measurements exist and the notes are in the repository.
   **authorization fall-through** — every cell above is the authentication method list, while
   the §5.6 sentences the table contradicts are written about authorization.
 
-  **Sentences this contradicts, as written.** Listed, not edited: whether to reword them is
-  the project owner's call.
+  **Sentences this contradicted, now reworded (2026-09-20).** Both were in §5.6 and both
+  stated as a property of the protocol what is a property of a *configuration*:
 
-  - `docs/design/2026-08-23-policy-engine-spec.md:1017` — "Denial at the ceiling is FAIL, not
-    ERROR, so no fall-through to local authorization opens up (see below)."
-  - `docs/design/2026-08-23-policy-engine-spec.md:1055` — "and a denial is FAIL, so no
-    fallback to local authorization follows."
+  - "Denial at the ceiling is FAIL, not ERROR, so no fall-through to local authorization opens
+    up (see below)."
+  - "and a denial is FAIL, so no fallback to local authorization follows."
 
-  Both are stated as properties of the protocol. They are properties of a *configuration*, and
-  on two of three images the lab's other configuration breaks them. The design document
+  Each now says only what these runs measured — Junos falls through on an authentication FAIL
+  when `password` is in `authentication-order`, EOS and NX-OS do not, and authorization
+  fall-through is unmeasured everywhere — and cites these notes. The design document
   already says this correctly at `docs/design/2026-08-21-port49-design.md:1134` — "The
   reference configuration per platform is what disables fall-through on FAIL" — and its
   hedged "is believed to try the local password on a reject" one line above is now measured
@@ -3745,18 +3867,23 @@ but the measurements exist and the notes are in the repository.
   and NX-API, per session on NETCONF, per login on SSH. So a single-use token is spent by the first call.
 
   The second call was then **permitted anyway**, on every transport and every platform:
-  `verdict=permit reason=receipt_replayed`. port49 answered it out of the receipt it keeps for
-  `(nas, port, username)` rather than out of the store. A script that makes forty calls with one token
-  therefore works.
+  `verdict=permit reason=receipt_replayed`. port49 answered it out of the receipt rather than out of the
+  store. A script that makes forty calls with one token therefore works. (The receipt key at the time of
+  this run was `(nas, port, username)`; it became `(nas, username, credential_sha256)` on 2026-09-20 — §13,
+  decision 15. The hash moving into the key does not change this result, because a repeat presenting the
+  same token hashes the same; what it does change is that a *different* credential no longer collides with
+  this receipt, and a genuinely new login by the same user no longer fails `credential_mismatch`.)
 
   **The question is not whether the transport re-authenticates. It is `receipt_ttl`.** For as long as the
   receipt lives, the repeat is served; past it, the next call in the same script is the first denial, with
   nothing about the credential having changed and nothing in the operator's hand having changed either. Any
   argument for or against reusable tokens has to be made about that boundary, not about the exchange count.
 
-  Note what the receipt key contains: `port`. On vEOS, `port` is `command-api` for eAPI and `ssh` for a
-  login, so the two do not share a receipt; on the N9Kv both are `0`, so they do. And because `port` does
-  not distinguish two concurrent operators (L1), neither does the receipt.
+  Note what the receipt key no longer contains: `port`. Under the old key, on vEOS `port` was
+  `command-api` for eAPI and `ssh` for a login, so the two did not share a receipt, while on the N9Kv both
+  were `0`, so they did — per-platform behavior nobody chose. Under
+  `(nas, username, credential_sha256)` the same token presented over either transport finds the same
+  receipt on every platform, and a different credential finds none.
 
   *Unmeasured:* the actual `receipt_ttl` boundary — no test has yet driven a repeat past it; cookie
   sessions; kept-alive connections; IOS-XE.
