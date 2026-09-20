@@ -383,8 +383,9 @@ func TestL6AccountingLatency(t *testing.T) {
 
 		obs := fmt.Sprintf("One SSH login that ran `show version` and disconnected. Login began %s UTC; the "+
 			"connection closed %s UTC.\n\n- Exec **START**: %s.\n- Exec **STOP**: %s.\n\n"+
-			"Accounting records in the window: %s (an exec record is one whose command vector is null; a "+
-			"per-command record carries one).\n\nAll accounting AV pairs, in arrival order:\n\n```\n%s\n```\n\n"+
+			"Accounting records in the window: %s (an exec record is one that carries no command at all, as on "+
+			"EOS, or carries only `login` or `logout`, as on Junos; anything else is a per-command record).\n\n"+
+			"All accounting AV pairs, in arrival order:\n\n```\n%s\n```\n\n"+
 			"Retry-to-the-next-server behavior is not measured here: this lab has a single TACACS+ server, so "+
 			"nothing in this run shows what the device does when one is unreachable.",
 			t0.UTC().Format(time.RFC3339Nano), t1.UTC().Format(time.RFC3339Nano),
@@ -394,15 +395,14 @@ func TestL6AccountingLatency(t *testing.T) {
 	})
 }
 
-// execStartStop returns the first exec START and the first exec STOP. An exec
-// record is one with no command vector; a per-command record has one.
+// execStartStop returns the first exec START and the first exec STOP.
 func execStartStop(recs []map[string]any) (start, stop time.Time) {
 	for _, r := range recs {
 		if str(r, "event") != "account" {
 			continue
 		}
 		rec := sub(r, "record")
-		if rec == nil || rec["vector"] != nil {
+		if rec == nil || !isExecRecord(rec) {
 			continue
 		}
 		ts, ok := recTime(r)
@@ -421,6 +421,25 @@ func execStartStop(recs []map[string]any) (start, stop time.Time) {
 		}
 	}
 	return start, stop
+}
+
+// isExecRecord says whether an accounting record describes the session rather
+// than a command the operator typed.
+//
+// On EOS the exec records carry no command at all, so a null command vector was
+// the whole test. Junos does not do that. It sends the session START and STOP
+// with `cmd=login` and `cmd=logout`, which parse into a command vector like any
+// other, and reading those as per-command records made the L6 note announce that
+// exec START and STOP "never arrived" immediately above the two records that
+// were exactly that. `login` and `logout` are not commands an operator can type
+// at the Junos CLI, so treating a lone one of them as a session marker does not
+// swallow a real command.
+func isExecRecord(rec map[string]any) bool {
+	if rec["vector"] == nil {
+		return true
+	}
+	v := strs(rec, "vector")
+	return len(v) == 1 && (v[0] == "login" || v[0] == "logout")
 }
 
 func acctDump(acct []map[string]any) string {
