@@ -84,6 +84,12 @@ type Spool struct {
 	mu    sync.Mutex
 	depth int // records durably written but not yet forwarded; shared with Offer, so mutex-protected
 
+	// needNewline is set whenever the file may end mid-record: a write or sync
+	// that failed, or an existing file whose last byte is not "\n" at
+	// construction. The next Offer writes a leading newline so its record
+	// starts on a line of its own. Guarded by mu, like depth.
+	needNewline bool
+
 	signal chan struct{}
 
 	// The rest belong exclusively to the single goroutine that calls
@@ -108,6 +114,7 @@ func NewSpool(capacity int, overflowPath string, sink decision.Emitter, m *metri
 		return nil, errors.New("acct: spool capacity must be at least 1")
 	}
 	s := &Spool{path: overflowPath, sink: sink, metrics: m, capacity: capacity, signal: make(chan struct{}, 1)}
+	s.needNewline = endsMidRecord(overflowPath)
 	if n, err := countLines(overflowPath); err == nil {
 		s.depth = n
 	}
@@ -116,6 +123,28 @@ func NewSpool(capacity int, overflowPath string, sink decision.Emitter, m *metri
 	}
 	s.metrics.SpoolDepth.Set(float64(s.depth))
 	return s, nil
+}
+
+// endsMidRecord reports whether path exists and its last byte is not a
+// newline, which means a previous process died partway through an append (or
+// filled the disk mid-record). The next Offer must then start on a line of its
+// own rather than glue its record onto the fragment. A file that cannot be
+// read at all answers false: Offer's own probe is what reports that.
+func endsMidRecord(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.Size() == 0 {
+		return false
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], fi.Size()-1); err != nil {
+		return false
+	}
+	return last[0] != '\n'
 }
 
 // countLines estimates how many records are already in path, using the same
@@ -184,6 +213,14 @@ func readBoundedLine(br *bufio.Reader) (line []byte, read int64, oversized bool,
 // fsync alone does not guarantee the file is findable after one). It
 // returns nil only once every one of those durable writes has succeeded;
 // any error along the way counts a drop and returns ErrSpoolFull.
+//
+// A record is never appended to a line that may be incomplete. If the file
+// ends mid-record — a short write when the disk filled, or a crash partway
+// through one, detected here or at NewSpool — this record starts on a line of
+// its own, leaving the fragment alone for the drain to drop. Without that,
+// the fragment and this record would share a line, this Offer would return
+// nil, its device would be told SUCCESS, and the drain would discard both
+// (TestTornTailDoesNotSwallowTheNextRecord).
 func (s *Spool) Offer(r decision.Record) error {
 	b, err := json.Marshal(r)
 	if err != nil {
@@ -203,6 +240,13 @@ func (s *Spool) Offer(r decision.Record) error {
 		s.metrics.SpoolDrops.Inc()
 		return ErrSpoolFull
 	}
+	if s.needNewline {
+		// The file may end mid-record (a short write, or a crash during one).
+		// Starting this record on its own line keeps the fragment a line of its
+		// own, which the drain drops by itself, instead of gluing this record
+		// onto it and losing a record that is about to be acknowledged.
+		b = append([]byte{'\n'}, b...)
+	}
 	_, werr := f.Write(b)
 	var serr error
 	if werr == nil {
@@ -210,9 +254,13 @@ func (s *Spool) Offer(r decision.Record) error {
 	}
 	cerr := f.Close()
 	if werr != nil || serr != nil {
+		// A partial write leaves the file ending mid-record; so does a write
+		// whose sync never landed. Either way the next Offer must separate.
+		s.needNewline = true
 		s.metrics.SpoolDrops.Inc()
 		return ErrSpoolFull
 	}
+	s.needNewline = false
 	_ = cerr // a close failure after a successful sync does not lose the write
 
 	if isNew {

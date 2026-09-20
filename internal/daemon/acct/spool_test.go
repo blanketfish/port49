@@ -399,6 +399,86 @@ func TestStuckClearsWhenFileVanishes(t *testing.T) {
 	}
 }
 
+// TestTornTailDoesNotSwallowTheNextRecord covers the full-disk case: a short
+// write (ENOSPC mid-record) or a crash mid-append leaves the file ending
+// without a newline. The device that offered that record was told ERROR and
+// will retry, so losing the fragment is correct. What must not happen is the
+// *next* Offer appending onto the same line: that offer returns nil, its
+// device is told SUCCESS, and at drain the glued line fails to unmarshal and
+// is dropped — a record lost after SUCCESS, which is the one thing the spool's
+// durability contract forbids.
+func TestTornTailDoesNotSwallowTheNextRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	b, err := decision.Record{Event: decision.EventAccount, TaskID: "torn"}.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A record that was cut off mid-write: no trailing newline.
+	if err := os.WriteFile(path, b[:len(b)/2], 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &bytes.Buffer{}
+	m := metrics.New(prometheus.NewRegistry())
+	sp, err := NewSpool(4, path, decision.NewJSONLines(out), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "acked"}); err != nil {
+		t.Fatalf("the offer after a torn tail must succeed: %v", err)
+	}
+	sp.drainOnce()
+
+	if !strings.Contains(out.String(), `"task_id":"acked"`) {
+		t.Fatalf("a record acknowledged with SUCCESS must reach the sink, got %q", out.String())
+	}
+	if got := testutil.ToFloat64(m.SpoolDrops); got != 1 {
+		t.Fatalf("want exactly 1 drop (the torn fragment alone), got %v", got)
+	}
+}
+
+// TestTornTailWithinOneProcessIsSeparated covers the same hazard when the
+// failing write and the next offer happen in one process: Offer must remember
+// that its last write left the file in an unknown state, not only notice a
+// torn tail at construction.
+func TestTornTailWithinOneProcessIsSeparated(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "overflow.jsonl")
+	out := &bytes.Buffer{}
+	m := metrics.New(prometheus.NewRegistry())
+	sp, err := NewSpool(4, path, decision.NewJSONLines(out), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the write that failed partway: the bytes are on disk, the
+	// newline is not, and Offer knows its write did not complete.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"ts":"2026-09-20T00:00:00.00`); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	sp.mu.Lock()
+	sp.needNewline = true
+	sp.mu.Unlock()
+
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	sp.drainOnce()
+
+	for _, want := range []string{`"task_id":"first"`, `"task_id":"second"`} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("want %s forwarded, got %q", want, out.String())
+		}
+	}
+}
+
 // fiveLines writes 5 small, distinct JSON lines and returns each one's raw
 // bytes (including its trailing newline) alongside the concatenated whole,
 // so a test can both write a .draining file by hand and compute exact byte
