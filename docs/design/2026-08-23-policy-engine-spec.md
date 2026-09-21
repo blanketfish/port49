@@ -569,11 +569,30 @@ That obligation previously covered tokens alone.
 
 ### 5.2 Session authorization (daemon)
 
-On `service=shell` with an empty `cmd`, the daemon returns the session attributes from the
+On a session authorization — an empty `cmd`, carrying the platform's own session `service` —
+the daemon returns the session attributes from the
 blob the context names, with `{username}`, `{principal}`, and `{device}` substituted from the
 context (§6). The blob is one per platform and shared across principals, so substitution
 happens here, in the daemon, at each session authorization — never at mint. No platform
 knowledge, one context read, one cached blob.
+
+**Which `service` values a platform's sessions arrive with is a platform fact, not a
+constant.** EOS, NX-OS and IOS-XE all send `service=shell`; Junos sends `service=junos-exec`,
+and renames it per device with `set system tacplus-options service-name <name>` — SRX fleets
+running `junos-exec-fw` are real. The adapter therefore declares `session_services`, a list
+(§8), defaulting to `[shell]` for the Cisco and Arista platforms and `[junos-exec]` for
+`juniper_junos`, and an operator may set the list for a platform they have renamed it on. A
+request whose `service` is on no entry of that list is denied `service_unsupported` (§5.3).
+Measured: §15, L10.
+
+> **The `service` value never selects policy.** It is an envelope the device puts its
+> question in, and port49 answers it or refuses it. *Which* grants, roles and rules apply is
+> decided by scope membership — which devices the inventory places a principal's grants over
+> (§5.5, §10) — and by nothing on the wire. A device that renames its service to
+> `junos-exec-fw` does not thereby select a different policy, get a different privilege, or
+> reach a rule it could not reach as `junos-exec`. The name is recorded on the decision
+> record (`request.service`, §5.7) so a reader can see what was asked; it is an input to one
+> comparison and to no other.
 
 If login context is absent, the daemon fails closed and logs a distinct reason —
 `context_missing` is operationally very different from `no_rule_matched` and the two must
@@ -602,8 +621,11 @@ normalize(request)
 Default is deny. Every decision carries the rule and role that produced it, which is what
 makes `explain` able to name exactly one reason.
 
-Requests for a `service` other than `shell` are denied by default with `service_unsupported`,
-configurable per platform.
+A request whose `service` is not on the device's platform `session_services` list (§5.2, §8)
+is denied `service_unsupported` before any rule is consulted. The list is per platform, with
+built-in defaults and an operator override; a platform port49 ships no adapter for falls back
+to `[shell]`, which is what §8 "Unknown platforms" requires — a missing dialect file must not
+take down a login.
 
 **A denial tells the person who typed the command why.** The REPLY carries `server_msg` —
 `port49: denied by no-exfil (* * /^tftp:/) — see 'port49 explain'` — so the operator at the
@@ -1186,6 +1208,7 @@ A deny at the per-command point:
   "device": { "nas": "10.20.0.7", "name": "core-sw01", "platform": "arista_eos" },
   "session": { "ctx_id": "01J9F3QK…", "port": "vty0", "rem_addr": "198.51.100.4", "privilege": 15 },
   "request": {
+    "service": "shell",
     "raw": ["service=shell", "cmd=copy", "cmd-arg=running-config", "cmd-arg=tftp://10.9.9.9/x"],
     "vector": ["copy", "running-config", "tftp://10.9.9.9/x"]
   },
@@ -1212,6 +1235,13 @@ that disagrees with the logged verdict is itself a finding — version skew, or 
 matcher bugs live. A record holding only the vector erases the evidence of its own
 normalization bug, and the two together are what make a projection or abbreviation defect
 diagnosable from logs rather than reproducible only in a lab.
+
+`request.service` is the `service` AV pair lifted out of `raw`, on every `authorize_session`
+and `authorize_command` record including the denials. It is there so "which service did this
+fleet's devices actually ask under" is a field to group by rather than a string to parse out
+of an array — the question an operator has after renaming `tacplus-options service-name` on
+half an SRX fleet, and the one a `service_unsupported` denial has to answer. It is recorded,
+never consulted for policy (§5.2).
 
 **Never suppress permits.** Sampling, or logging denies only, looks thrifty and destroys the
 artifact: *what did Alice run on Tuesday* is answered entirely by permits. Volume is the cost
@@ -1914,8 +1944,37 @@ attribute is complete in four lines:
 | `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
 | `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |
 | `redact` | patterns whose argument values are removed before an accounting record is emitted (§5.8) | if the platform sends command accounting — session-only platforms included |
-| `service` | authorization `service` value if not `shell` | rarely |
+| `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
 | `port_pattern` | expected `port` shape, used only for drift detection | optional |
+
+### `session_services`
+
+The one adapter field plan 1 reads. It is the list of authorization `service` values a
+session on this platform may arrive with, and a request carrying anything else is denied
+`service_unsupported` (§5.3).
+
+```yaml
+platforms:
+  juniper_junos:
+    session_services: ["junos-exec", "junos-exec-fw"]
+```
+
+Built-in: `[shell]` for `arista_eos`, `cisco_nxos` and `cisco_iosxe`, `[junos-exec]` for
+`juniper_junos` (§15, L10). A platform with no adapter falls back to `[shell]`. It is a list
+and it is settable because Junos renames it on the device — `set system tacplus-options
+service-name junos-exec-fw` — so `junos-exec` is a default rather than a constant, and a
+fleet that has renamed it sets the list rather than waiting for a new built-in. Setting the
+list **replaces** the built-in; a fleet that renames some devices and not others lists both
+names.
+
+A name under `platforms:` that port49 ships no adapter for is refused at load, so
+`platforms: {junos: …}` is a startup error naming the platforms it could have meant rather
+than a block that silently applies to no device. That is the opposite of the *device* case
+above only in appearance: an unmodeled device still logs in, on the fallback; a misspelled
+configuration key never becomes a default nobody chose.
+
+Declaring a service here does not grant anything. See the rule in §5.2: the `service` value
+never selects policy — scope membership from the inventory does.
 
 ### Entity classes
 
@@ -4026,15 +4085,24 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   adapter sends has to be a set that image accepts, and the failure mode when it is not is
   indistinguishable in port49's log from a working session.
 
-  **A consequence worth stating here rather than leaving in a results note.** `internal/daemon/author`
-  accepts `service=shell` and denies anything else `service_unsupported`. Junos sends `junos-exec`, so
-  **every Junos session authorization port49 has ever answered has been a denial** — over SSH and over
-  NETCONF alike. It is visible in the NETCONF runs because those are the first notes to print the session
+  **A consequence worth stating here rather than leaving in a results note — fixed 2026-09-21.**
+  Until that date `internal/daemon/author` accepted `service=shell` and denied anything else
+  `service_unsupported`. Junos sends `junos-exec`, so **every Junos session authorization port49
+  answered before 2026-09-21 was a denial** — over SSH and over NETCONF alike. It is visible in the
+  2026-09-20 NETCONF runs because those are the first notes to print the session
   authorization's verdict: `event=authorize_session verdict=deny reason=service_unsupported` on all three
   vJunos sessions and all three vSRX ones. The device carries on regardless for a read-only session, and a
-  `<edit-config>` then fails `permission denied` — which is the denial arriving, not a bad payload. The
-  adapter that makes `junos-exec` a recognised service is plan 4's (§8); this row is where the gap is
-  recorded. *Unmeasured:* the attribute sets the other four platforms refuse — only IOS-XE has been probed
+  `<edit-config>` then fails `permission denied` — which is the denial arriving, not a bad payload.
+
+  Since 2026-09-21 the authorized `service` values are a per-platform list with built-in defaults
+  and an operator override, `platforms.<platform>.session_services` (§5.2, §8): `[shell]` for
+  `arista_eos`, `cisco_nxos` and `cisco_iosxe`, `[junos-exec]` for `juniper_junos`. A Junos
+  session authorization is now answered `permit context_matched` **carrying no attributes**. The
+  attributes are the part that is still plan 5's: the session-only projection — class,
+  `local-user-name`, `user-permissions`, the `allow-commands` / `deny-commands` regexes — is
+  decision 22 and gated on L12, and nothing here anticipates it. What changed is that the
+  envelope is recognised, not that any policy reaches the device.
+  *Unmeasured:* the attribute sets the other four platforms refuse — only IOS-XE has been probed
   with an attribute it does not know, so whether EOS, NX-OS and Junos merely ignore one or would refuse a
   different one is untested; and every non-SSH transport on IOS-XE.
 - **L13** — 2026-09-20, SSH, all three images. port49's FAIL was delayed by a fixed 2s, 6s and

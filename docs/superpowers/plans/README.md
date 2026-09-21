@@ -109,11 +109,16 @@ here), `capability`/`bits`/`bit_delivery`, the **Junos projection** under decisi
 `port49 platform export`. Spec §9 capability inference. **Lab:** L9, L11 (closed), L12; the
 projection generator is not final until L12 closes.
 
-**Inherits from plan 1:** every Junos login is answered `service_unsupported` on its session
-authorization. `author.Handle` requires `service=shell` and L10 measured Junos sending
-`service=junos-exec`, so plan 1 denies it by design — logins still work (the L10 notes show
-it), but the decision log carries an `authorize_session` deny for each one. The adapter that
-maps `junos-exec` is this plan; until it lands, that deny is expected and is not a finding.
+**Inherits from plan 1:** a Junos session authorization is **permitted and carries no
+attributes**. Plan 1 answered every one of them `service_unsupported` until 2026-09-21,
+because `author.Handle` required `service=shell` while L10 measured Junos sending
+`service=junos-exec`; it now reads the platform's `session_services` list (spec §5.2, §8),
+which defaults to `[junos-exec]` for `juniper_junos` and is settable for a fleet that has run
+`set system tacplus-options service-name`. So the envelope is recognised and the decision log
+shows `permit context_matched` for Junos. **The attributes are this plan's whole remaining
+job there**: the session-only projection — class, `local-user-name`, `user-permissions`, the
+`allow-commands` / `deny-commands` regexes — is decision 22, gated on L12, and plan 1 sends
+none of it.
 
 ## Plan 6 — Inventory service (§19 step 6)
 
