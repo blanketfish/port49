@@ -5,7 +5,8 @@ the standing brief for each plan: what it builds, which spec sections it impleme
 earlier plans hand it, what it must leave for later, and which lab register entries close in
 it. When writing plan N, start here, then read the cited sections, then the previous plan.
 
-Status: **1 and 2 written**; 3–12 not yet. Plan 3 waits for plan 1's lab results.
+Status: **1 merged 2026-09-21** (PR #2); **2 written but not executable** until rewritten for
+the `(nas, username)` key (see its entry); 3–12 not yet. Plan 3 waits for the lab work in PR #3.
 
 ---
 
