@@ -3,7 +3,6 @@
 package lab
 
 import (
-	"encoding/binary"
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/tests/lab/labpcap"
 )
 
 // Header facts read back out of a capture.
@@ -36,220 +36,51 @@ import (
 // username, `port` and `rem_addr` are reported in full, because those are the
 // measurement.
 
-// wirePacket is one TACACS+ packet lifted out of a capture.
+// wirePacket is one TACACS+ packet lifted out of a capture, with the
+// credential-free rendering a note prints.
+//
+// The framing — pcap records, TCP reassembly, RFC 8907 packet boundaries and
+// the de-obfuscation — is labpcap's, shared with the redactor that writes
+// tests/lab/evidence. Only the rendering is here.
 type wirePacket struct {
-	conn       string // "<device>:<sport> -> <server>:49"
-	srcPort    uint16
-	stream     int // index of the TCP stream it was reassembled from
-	fromDevice bool
-	hdr        wire.Header
-	decoded    string // credential-free rendering of the body
-	decodeErr  error
-}
-
-func (p wirePacket) kind() string {
-	switch p.hdr.Type {
-	case wire.TypeAuthen:
-		return "AUTHEN"
-	case wire.TypeAuthor:
-		return "AUTHOR"
-	case wire.TypeAcct:
-		return "ACCT"
-	}
-	return fmt.Sprintf("type=%d", p.hdr.Type)
-}
-
-// tcpStream is one direction of one TCP connection, reassembled by sequence
-// number.
-//
-// The sequence number is not optional here, and the first run proved it. The
-// harness captures with `tcpdump -i any`, which sees a packet on the bridge
-// *and* on the veth, so every segment appears twice — and a reassembly that
-// simply concatenated payloads in capture order produced a stream holding two
-// copies of every TACACS+ packet. The note then reported eighteen requests
-// where the device had sent nine, and "set on 0 of 18" for the single-connect
-// flag, which is the right answer arrived at by the wrong arithmetic. Counting
-// is half of what this file is for, so the duplicates have to go before the
-// count is taken.
-//
-// So: a segment whose sequence number is the one expected next is appended, a
-// segment that repeats bytes already seen is dropped, and a segment that starts
-// beyond the expected point is a gap. A gap stops the decode for that stream
-// and is reported, rather than being silently spliced into a packet that never
-// existed.
-//
-// A second thing the sequence number alone cannot do is tell two *connections*
-// apart when they share a four-tuple, and this capture does that too. During
-// L3's relax phase port49d is stopped, so the device's connections are refused
-// and it retries — 78 distinct source ports produced 174 SYNs in
-// `L3-arista_eos.pcap`. A device that comes back on a source port it used
-// before lands in the same stream, and its reply then decodes a second time on
-// top of the earlier connection's. The self-check caught exactly that.
-//
-// So a bare SYN starts a new stream for that four-tuple. Duplicate SYNs — the
-// `-i any` copies — carry the same sequence number as the stream they would
-// start and are ignored.
-type tcpStream struct {
-	key        string
-	conn       string
-	srcPort    uint16
-	fromDevice bool
-	payload    []byte
-
-	started bool
-	synSeq  uint32
-	hasSyn  bool
-	nextSeq uint32
-	gap     bool
-}
-
-// add appends one TCP segment's payload, dropping duplicates and refusing to
-// splice across a gap.
-func (s *tcpStream) add(seq uint32, payload []byte) {
-	if s.gap {
-		return
-	}
-	if !s.started {
-		s.started, s.nextSeq = true, seq
-	}
-	switch {
-	case seq == s.nextSeq:
-		s.payload = append(s.payload, payload...)
-		s.nextSeq += uint32(len(payload))
-	case int32(seq-s.nextSeq) < 0:
-		// Starts before the point already reached: a duplicate, possibly
-		// overlapping. Keep only the tail that is new.
-		skip := s.nextSeq - seq
-		if int(skip) < len(payload) {
-			s.payload = append(s.payload, payload[skip:]...)
-			s.nextSeq += uint32(len(payload)) - skip
-		}
-	default:
-		s.gap = true
-	}
+	labpcap.Packet
+	decoded   string // credential-free rendering of the body
+	decodeErr error
 }
 
 // pcapTACACSPackets decodes every TACACS+ packet in a capture.
+//
+// The reassembly it rests on is labpcap's, and the two properties that make its
+// counts trustworthy are documented there: duplicate segments (`tcpdump -i any`
+// sees each one on the bridge and on the veth) are dropped, and a four-tuple
+// reused by a reconnecting device starts a fresh stream rather than decoding
+// the new connection's replies on top of the old one's.
 func pcapTACACSPackets(path, key string) ([]wirePacket, []string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(raw) < pcapHeaderSize {
-		return nil, nil, fmt.Errorf("%s is %d bytes, shorter than a pcap file header", path, len(raw))
+	f, err := labpcap.Parse(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", path, err)
 	}
-	magic := binary.LittleEndian.Uint32(raw[0:4])
-	if magic != 0xa1b2c3d4 && magic != 0xa1b23c4d {
-		return nil, nil, fmt.Errorf("%s: unexpected pcap magic %#x; this parser reads only little-endian pcap", path, magic)
-	}
-	link := binary.LittleEndian.Uint32(raw[20:24])
-	snaplen := int(binary.LittleEndian.Uint32(raw[16:20]))
-
 	_, subnet, err := net.ParseCIDR(labSubnet)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// streams holds the live stream per four-tuple; allStreams holds every
-	// stream ever opened, in creation order, including those retired when their
-	// four-tuple was reused.
-	streams := map[string]*tcpStream{}
-	var allStreams []*tcpStream
-	for off := pcapHeaderSize; off+16 <= len(raw); {
-		inclLen := int(binary.LittleEndian.Uint32(raw[off+8 : off+12]))
-		off += 16
-		if snaplen > 0 && inclLen > snaplen {
-			return nil, nil, fmt.Errorf("%s: record at offset %d claims %d bytes, more than the file's snaplen of %d; the capture is corrupt",
-				path, off-16, inclLen, snaplen)
-		}
-		if off+inclLen > len(raw) {
-			break // a short tail is a snapshot, not corruption; see pcapCounts
-		}
-		pkt := raw[off : off+inclLen]
-		off += inclLen
-
-		src, dst, sport, dport, seq, flags, payload, ok := tcpFlowOf(link, pkt)
-		if !ok {
-			continue
-		}
-		const synFlag, ackFlag = 0x02, 0x10
-		isSyn := flags&synFlag != 0 && flags&ackFlag == 0
-		if !isSyn && len(payload) == 0 {
-			continue
-		}
-		// Only the lab bridge, so the harness's own loopback liveness probes
-		// never reach the decoder.
-		if !subnet.Contains(src) && !subnet.Contains(dst) {
-			continue
-		}
-		if dport != 49 && sport != 49 {
-			continue
-		}
-		k := fmt.Sprintf("%s:%d>%s:%d", src, sport, dst, dport)
-		reverse := fmt.Sprintf("%s:%d>%s:%d", dst, dport, src, sport)
-		s := streams[k]
-		if s != nil && isSyn && !(s.hasSyn && s.synSeq == seq) {
-			// A new connection on a four-tuple this capture has already seen.
-			// Start a fresh stream, so the new connection's bytes are not
-			// appended to the old one's; the old one stays in allStreams.
-			//
-			// BOTH directions have to reset, and only resetting this one left
-			// the duplicates in place: the reply direction never carries a bare
-			// SYN — the server answers SYN-ACK — so its stream would otherwise
-			// run on across every reconnection and decode each connection's
-			// replies on top of the last.
-			delete(streams, reverse)
-			s = nil
-		}
-		if s == nil {
-			fromDevice := dport == 49
-			shownPort := sport
-			if !fromDevice {
-				shownPort = dport
-			}
-			s = &tcpStream{
-				key:        k,
-				conn:       fmt.Sprintf("%s:%d", src, sport),
-				srcPort:    shownPort,
-				fromDevice: fromDevice,
-			}
-			streams[k] = s
-			allStreams = append(allStreams, s)
-		}
-		if isSyn {
-			s.hasSyn, s.synSeq = true, seq
-		}
-		if len(payload) > 0 {
-			s.add(seq, payload)
-		}
+	// The subnet filter is what keeps the harness's own loopback liveness
+	// probes out of a note's counts.
+	d, err := f.Decode(key, subnet)
+	if err != nil {
+		return nil, nil, err
 	}
-
-	var out []wirePacket
-	var gaps []string
-	for streamIdx, s := range allStreams {
-		if s.gap {
-			gaps = append(gaps, s.key)
-		}
-		for i := 0; i+wire.HeaderLen <= len(s.payload); {
-			h, err := wire.DecodeHeader(s.payload[i : i+wire.HeaderLen])
-			if err != nil {
-				break
-			}
-			end := i + wire.HeaderLen + int(h.Length)
-			if h.Length > wire.MaxBodyLen || end > len(s.payload) {
-				break
-			}
-			body := s.payload[i+wire.HeaderLen : end]
-			if h.Flags&wire.FlagUnencrypted == 0 {
-				body = wire.Obfuscate(h, []byte(key), body)
-			}
-			p := wirePacket{conn: s.conn, srcPort: s.srcPort, stream: streamIdx, fromDevice: s.fromDevice, hdr: h}
-			p.decoded, p.decodeErr = describeBody(h, body)
-			out = append(out, p)
-			i = end
-		}
+	out := make([]wirePacket, 0, len(d.Packets))
+	for _, p := range d.Packets {
+		w := wirePacket{Packet: p}
+		w.decoded, w.decodeErr = describeBody(p.Header, p.Body)
+		out = append(out, w)
 	}
-	return out, gaps, nil
+	return out, d.Gaps, nil
 }
 
 // describeBody renders one packet's body without any credential material.
@@ -430,25 +261,6 @@ func acctFlagsName(f uint8) string {
 	return strings.Join(parts, "+")
 }
 
-// tcpFlowOf pulls the addresses, ports, sequence number and payload out of one
-// captured packet.
-func tcpFlowOf(link uint32, b []byte) (src, dst net.IP, sport, dport uint16, seq uint32, flags byte, payload []byte, ok bool) {
-	s, d, ok := ipv4Of(link, b)
-	if !ok {
-		return nil, nil, 0, 0, 0, 0, nil, false
-	}
-	tcp, ok := tcpOf(link, b)
-	if !ok || len(tcp) < 20 {
-		return nil, nil, 0, 0, 0, 0, nil, false
-	}
-	dataOff := int(tcp[12]>>4) * 4
-	if dataOff < 20 || dataOff > len(tcp) {
-		return nil, nil, 0, 0, 0, 0, nil, false
-	}
-	return s, d, binary.BigEndian.Uint16(tcp[0:2]), binary.BigEndian.Uint16(tcp[2:4]),
-		binary.BigEndian.Uint32(tcp[4:8]), tcp[13], tcp[dataOff:], true
-}
-
 // TestWirePcapSelfCheck decodes whatever captures this checkout already holds
 // and asserts the two properties the reassembly exists to guarantee: no
 // sequence gap, and no packet decoded twice.
@@ -495,7 +307,7 @@ func TestWirePcapSelfCheck(t *testing.T) {
 			// packets — `L3-arista_eos.pcap` holds several. Keying on
 			// `172.100.100.1:49`, which is every reply's source, called those
 			// legitimate retries duplicates.
-			seen[fmt.Sprintf("%d|%#08x|%d", p.stream, p.hdr.SessionID, p.hdr.SeqNo)]++
+			seen[fmt.Sprintf("%d|%#08x|%d", p.Stream, p.Header.SessionID, p.Header.SeqNo)]++
 		}
 		for k, n := range seen {
 			if n > 1 {
@@ -548,11 +360,11 @@ func (l *lab) tacacsHeaderFacts() string {
 	b.WriteString("| device connection | session_id | seq | single-connect | packet |\n|---|---|---|---|---|\n")
 	for _, p := range pkts {
 		sc := "clear"
-		if p.hdr.Flags&wire.FlagSingleConnect != 0 {
+		if p.Header.Flags&wire.FlagSingleConnect != 0 {
 			sc = "**SET**"
 		}
 		dir := "→"
-		if !p.fromDevice {
+		if !p.FromDevice {
 			dir = "←"
 		}
 		body := p.decoded
@@ -560,7 +372,7 @@ func (l *lab) tacacsHeaderFacts() string {
 			body = "**undecodable**: " + p.decodeErr.Error()
 		}
 		fmt.Fprintf(&b, "| %s %s | `%#08x` | %d | %s | %s %s |\n",
-			p.conn, dir, p.hdr.SessionID, p.hdr.SeqNo, sc, p.kind(),
+			p.Conn, dir, p.Header.SessionID, p.Header.SeqNo, sc, p.Kind(),
 			strings.ReplaceAll(body, "|", "\\|"))
 	}
 
@@ -571,25 +383,25 @@ func (l *lab) tacacsHeaderFacts() string {
 	singleConnect := 0
 	requests := 0
 	for _, p := range pkts {
-		if !p.fromDevice {
+		if !p.FromDevice {
 			continue
 		}
 		requests++
-		if p.hdr.Flags&wire.FlagSingleConnect != 0 {
+		if p.Header.Flags&wire.FlagSingleConnect != 0 {
 			singleConnect++
 		}
-		if connSessions[p.conn] == nil {
-			connSessions[p.conn] = map[uint32]bool{}
+		if connSessions[p.Conn] == nil {
+			connSessions[p.Conn] = map[uint32]bool{}
 		}
-		connSessions[p.conn][p.hdr.SessionID] = true
-		if sessionConns[p.hdr.SessionID] == nil {
-			sessionConns[p.hdr.SessionID] = map[string]bool{}
+		connSessions[p.Conn][p.Header.SessionID] = true
+		if sessionConns[p.Header.SessionID] == nil {
+			sessionConns[p.Header.SessionID] = map[string]bool{}
 		}
-		sessionConns[p.hdr.SessionID][p.conn] = true
-		if exchangeConns[p.kind()] == nil {
-			exchangeConns[p.kind()] = map[string]bool{}
+		sessionConns[p.Header.SessionID][p.Conn] = true
+		if exchangeConns[p.Kind()] == nil {
+			exchangeConns[p.Kind()] = map[string]bool{}
 		}
-		exchangeConns[p.kind()][p.conn] = true
+		exchangeConns[p.Kind()][p.Conn] = true
 	}
 
 	maxSessionsPerConn := 0

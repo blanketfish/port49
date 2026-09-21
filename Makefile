@@ -1,4 +1,4 @@
-.PHONY: test vet fuzz lab build
+.PHONY: test vet fuzz lab build evidence
 
 build:
 	go build -o bin/port49d ./cmd/port49d
@@ -24,6 +24,18 @@ fuzz:
 	    go test $$p -run '^$$' -fuzz "^$$f$$" -fuzztime 20s || exit 1; \
 	  done; \
 	done
+
+# tests/lab/captures is git-ignored: a capture holds the lab tokens and the
+# breakglass password, readable by anyone with the key this repository
+# publishes. This rewrites each one into tests/lab/evidence with the credential
+# bytes overwritten and everything else byte-identical, which is what the
+# results notes point at and what gets committed.
+#
+# `make lab` runs this for itself at the end of a run, so a note never cites
+# evidence that does not exist. Run it by hand after editing the redactor, or to
+# regenerate the evidence from captures already on disk.
+evidence:
+	go run ./tests/lab/cmd/redact-pcap
 
 # Requires containerlab and device images; see tests/lab/README.md.
 #

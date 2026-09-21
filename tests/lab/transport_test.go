@@ -39,7 +39,6 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,6 +50,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/tests/lab/labpcap"
 )
 
 // ---------------------------------------------------------------------------
@@ -453,20 +454,7 @@ func (l *lab) resultOver(t *testing.T, entry, transport, claim, observation stri
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("results directory: %v", err)
 	}
-	l.flushCapture(t)
-	capLine := fmt.Sprintf("`%s`", l.capPath)
-	if total, device, err := pcapCounts(l.capAbs); err != nil {
-		capLine += fmt.Sprintf(" — **could not be read back** (%v), so this note quotes the decision log only", err)
-		t.Errorf("the capture %s could not be read back: %v", l.capAbs, err)
-	} else if device == 0 {
-		capLine += fmt.Sprintf(" — **empty of device traffic**: %d packets, none of them to or from %s. "+
-			"This note's observation rests on the decision log alone and cannot close a register row.", total, labSubnet)
-		t.Errorf("the capture %s holds no packet to or from %s, so this measurement has no capture to point at",
-			l.capAbs, labSubnet)
-	} else {
-		capLine += fmt.Sprintf(" — %d packets to or from the device, countable with "+
-			"`tcpdump -r %s -n 'net %s' | wc -l`", device, l.capPath, labSubnet)
-	}
+	capLine := l.captureLine(t)
 
 	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", entry, l.p.name))
 	var b strings.Builder
@@ -1067,67 +1055,41 @@ func transportConnectionNote(l *lab) string {
 		"means the device is not using single-connect; one connection carrying several exchanges means it is, "+
 		"or that it is holding the connection across requests. Count them yourself with "+
 		"`tcpdump -r %s -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.\n",
-		opens, strings.Join(shown, ", "), l.capPath)
+		opens, strings.Join(shown, ", "), l.evidencePath)
 }
 
 // pcapTACACSOpens counts the bare SYNs toward TCP 49 in a capture and returns
 // the source ports they came from.
 //
-// It parses the same little-endian pcap of `-i any` that pcapCounts does, and
-// stops at the same kinds of file rather than guessing. A bare SYN — SYN set,
-// ACK clear — is one connection attempt; counting SYN-ACKs too would double
-// every connection.
+// It reads the capture through tests/lab/labpcap, the same parser pcapCounts
+// and the redactor use, and stops at the same kinds of file rather than
+// guessing. A bare SYN — SYN set, ACK clear — is one connection attempt;
+// counting SYN-ACKs too would double every connection.
 func pcapTACACSOpens(path string) (opens int, srcPorts []string, err error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return 0, nil, err
 	}
-	if len(raw) < pcapHeaderSize {
-		return 0, nil, fmt.Errorf("%s is %d bytes, shorter than a pcap file header", path, len(raw))
+	f, err := labpcap.Parse(raw)
+	if err != nil {
+		return 0, nil, fmt.Errorf("%s: %w", path, err)
 	}
-	magic := binary.LittleEndian.Uint32(raw[0:4])
-	if magic != 0xa1b2c3d4 && magic != 0xa1b23c4d {
-		return 0, nil, fmt.Errorf("%s: unexpected pcap magic %#x; this parser reads only little-endian pcap", path, magic)
-	}
-	link := binary.LittleEndian.Uint32(raw[20:24])
-	snaplen := int(binary.LittleEndian.Uint32(raw[16:20]))
-
 	_, subnet, err := net.ParseCIDR(labSubnet)
 	if err != nil {
 		return 0, nil, err
 	}
 
 	seen := map[string]bool{}
-	for off := pcapHeaderSize; off+16 <= len(raw); {
-		inclLen := int(binary.LittleEndian.Uint32(raw[off+8 : off+12]))
-		off += 16
-		if snaplen > 0 && inclLen > snaplen {
-			return 0, nil, fmt.Errorf("%s: record at offset %d claims %d bytes, more than the file's snaplen of %d; the capture is corrupt",
-				path, off-16, inclLen, snaplen)
-		}
-		if off+inclLen > len(raw) {
-			// A short tail is a snapshot, not corruption; pcapCounts explains why.
-			break
-		}
-		pkt := raw[off : off+inclLen]
-		off += inclLen
-
-		src, _, ok := ipv4Of(link, pkt)
-		if !ok || !subnet.Contains(src) {
+	for _, r := range f.Records {
+		fl, ok := labpcap.FlowOf(f.Link, f.Bytes(r))
+		if !ok || !subnet.Contains(fl.Src) {
 			continue
 		}
-		tcp, ok := tcpOf(link, pkt)
-		if !ok || len(tcp) < 14 {
-			continue
-		}
-		dstPort := binary.BigEndian.Uint16(tcp[2:4])
-		flags := tcp[13]
-		const synFlag, ackFlag = 0x02, 0x10
-		if dstPort != 49 || flags&synFlag == 0 || flags&ackFlag != 0 {
+		if fl.DstPort != labpcap.Port || !fl.SYN() {
 			continue
 		}
 		opens++
-		p := fmt.Sprintf("%d", binary.BigEndian.Uint16(tcp[0:2]))
+		p := fmt.Sprintf("%d", fl.SrcPort)
 		if !seen[p] {
 			seen[p] = true
 			srcPorts = append(srcPorts, p)
@@ -1135,33 +1097,4 @@ func pcapTACACSOpens(path string) (opens int, srcPorts []string, err error) {
 	}
 	sort.Strings(srcPorts)
 	return opens, srcPorts, nil
-}
-
-// tcpOf returns the TCP header and payload of one captured packet. The
-// link-layer sizes match ipv4Of, which is the function that documents them.
-func tcpOf(link uint32, b []byte) ([]byte, bool) {
-	var hdr int
-	switch link {
-	case 276: // LINUX_SLL2, what `-i any` produces on Linux
-		hdr = 20
-	case 113: // LINUX_SLL
-		hdr = 16
-	case 1: // Ethernet
-		hdr = 14
-	default:
-		return nil, false
-	}
-	if len(b) < hdr+20 {
-		return nil, false
-	}
-	ip := b[hdr:]
-	if ip[0]>>4 != 4 {
-		return nil, false
-	}
-	ihl := int(ip[0]&0x0f) * 4
-	const protoTCP = 6
-	if ihl < 20 || len(ip) < ihl+20 || ip[9] != protoTCP {
-		return nil, false
-	}
-	return ip[ihl:], true
 }

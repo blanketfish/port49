@@ -14,6 +14,12 @@ coverage.out
 *.swp
 
 # Lab
+#
+# Raw captures hold the lab tokens and the breakglass password: obfuscated, but
+# under a key this repository publishes, so they are in the clear for anyone who
+# runs Wireshark. They never leave the machine that took them.
+# `tests/lab/evidence/` is the redacted copy, and IS committed: it is what every
+# results note points at. Do not add it here.
 /tests/lab/captures/
 /tests/lab/logs/
 # containerlab's per-lab working directory, created beside the topology it runs

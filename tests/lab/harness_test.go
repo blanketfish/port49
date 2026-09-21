@@ -35,6 +35,9 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/rhwendt/port49/tests/lab/labpcap"
 )
 
 type platform struct {
@@ -106,16 +109,22 @@ const (
 	// every device packet fails key trial — with no build error and no obvious
 	// cause. They are named here so the coupling has somewhere to be documented,
 	// and each config carries a comment pointing back at these names.
-	labKeyDefault  = "labsecret"  // `tacacs-server host ... key`, `tacplus-server ... secret`
-	breakglassUser = "breakglass" // the local account both startup configs define
+	//
+	// The values themselves live in tests/lab/labcreds, which is an ordinary
+	// package rather than a test file, because `tests/lab/cmd/redact-pcap`
+	// needs them too: it proves that no committed evidence file holds a lab
+	// credential by searching for these exact strings, and a redactor
+	// searching for a stale copy of the password would pass while the real one
+	// sat in the file. One definition, three readers.
+	labKeyDefault  = labcreds.Key            // `tacacs-server host ... key`, `tacplus-server ... secret`
+	breakglassUser = labcreds.BreakglassUser // the local account both startup configs define
 
-	// breakglassPassword is the source of truth for that account's password.
-	// The EOS config carries it verbatim; the Junos config carries a SHA-512
-	// crypt hash of it under `encrypted-password`, because the plain-text form
-	// does not produce a usable password on vSRX 21.4R3.15. Regenerate that
-	// hash with `openssl passwd -6 -salt p49labsalt` over this value if it
-	// changes.
-	breakglassPassword = "breakglass-only"
+	// breakglassPassword is that account's password. The EOS config carries it
+	// verbatim; the Junos config carries a SHA-512 crypt hash of it under
+	// `encrypted-password`, because the plain-text form does not produce a
+	// usable password on vSRX 21.4R3.15. Regenerate that hash with
+	// `openssl passwd -6 -salt p49labsalt` over this value if it changes.
+	breakglassPassword = labcreds.BreakglassPassword
 
 	// enableSecret is what `aaa authentication enable default group port49
 	// enable` falls back to on IOS-XE, and it is deliberately the same
@@ -199,10 +208,10 @@ type lab struct {
 	// see, and any note written in that state carries this as a caveat.
 	configWarn string
 
-	mu      sync.Mutex
-	tokenN  int
-	capPath string // repo-relative, for the results note
-	capAbs  string // absolute, for reading the capture back
+	mu           sync.Mutex
+	tokenN       int
+	capAbs       string // absolute path of the raw capture, which is git-ignored
+	evidencePath string // repo-relative, committed, redacted: what a note points at
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +238,62 @@ func TestMain(m *testing.M) {
 	}()
 	code := m.Run()
 	teardown()
+	if err := writeEvidence(); err != nil {
+		fmt.Fprintf(os.Stderr, "lab: %v\n", err)
+		code = 1
+	}
 	os.Exit(code)
+}
+
+// writeEvidence redacts this run's captures into tests/lab/evidence.
+//
+// It runs after teardown, which is the only point at which every tcpdump has
+// been stopped and every capture file is complete. Before that the redactor
+// would read a file still being written and refuse it as a partial record —
+// correctly, and uselessly.
+//
+// Every results note this run wrote points at tests/lab/evidence, because
+// tests/lab/captures is git-ignored and a pointer into it is a pointer to
+// nothing for everyone but this machine. So a run that fails to produce the
+// evidence has produced notes that cite files which do not exist, and that
+// fails the run: `code = 1` above. The alternative — notes pointing at absent
+// evidence — is the failure this whole mechanism exists to prevent.
+func writeEvidence() error {
+	if root == "" {
+		return nil // no platform was ever brought up, so nothing captured
+	}
+	in := filepath.Join(root, "tests", "lab", "captures")
+	out := filepath.Join(root, "tests", "lab", "evidence")
+	key := os.Getenv("PORT49_LAB_KEY")
+	if key == "" {
+		key = labKeyDefault
+	}
+	secrets, err := labcreds.Secrets(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
+	if err != nil {
+		return fmt.Errorf("evidence: %w", err)
+	}
+	_, subnet, err := net.ParseCIDR(labSubnet)
+	if err != nil {
+		return err
+	}
+	res, err := labpcap.RedactDir(in, out, labpcap.Options{Key: key, Secrets: secrets, Subnet: subnet})
+	if err != nil {
+		return fmt.Errorf("evidence: %w", err)
+	}
+	var failed int
+	for _, r := range res {
+		if r.Err != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "lab: evidence for %s: %v\n", r.Name, r.Err)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "lab: evidence %s: %s\n", r.Name, r.Stats)
+	}
+	if failed > 0 {
+		return fmt.Errorf("evidence: %d of %d capture(s) produced no evidence file; the results notes from this "+
+			"run point at files that do not exist", failed, len(res))
+	}
+	return nil
 }
 
 // initGlobal does the once-per-run work that every platform needs: find the
@@ -1303,27 +1367,30 @@ func summarize(recs []map[string]any) string {
 // Results notes
 // ---------------------------------------------------------------------------
 
-// result writes tests/lab/results/L<N>-<platform>.md in the form spec §15 rule
-// 3 requires: platform, image version, observation, and a pointer to the
-// capture.
+// captureLine is the "Capture:" line of a results note, and the reason spec §15
+// rule 3 can be satisfied at all: a pointer to evidence anyone can open.
 //
-// The capture line reports how many packets the file actually holds between the
-// device and port49d, read back from the file at the moment the note is
-// written. A note whose capture holds none of them cannot close a register row,
-// and says so in place of a pointer that would imply evidence it does not have.
-func (l *lab) result(t *testing.T, entry, claim, observation string) {
+// It reports how many packets the file actually holds between the device and
+// port49d, read back from the capture at the moment the note is written. A note
+// whose capture holds none of them cannot close a register row, and says so in
+// place of a pointer that would imply evidence it does not have.
+//
+// The pointer names the evidence file, not the capture. tests/lab/captures is
+// git-ignored — the lab tokens and the breakglass password are in it, readable
+// by anyone with the published key — so a note citing it cites nothing anyone
+// else can check. The redacted copy written at the end of the run holds the
+// same packets, and the count quoted here is therefore its count too: the
+// redactor keeps every TACACS+ packet and refuses outright to drop one to or
+// from the lab subnet.
+func (l *lab) captureLine(t *testing.T) string {
 	t.Helper()
-	dir := filepath.Join(root, "tests", "lab", "results")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("results directory: %v", err)
-	}
 	l.flushCapture(t)
-	capLine := fmt.Sprintf("`%s`", l.capPath)
+	line := fmt.Sprintf("`%s`", l.evidencePath)
 	if total, device, err := pcapCounts(l.capAbs); err != nil {
-		capLine += fmt.Sprintf(" — **could not be read back** (%v), so this note quotes the decision log only", err)
+		line += fmt.Sprintf(" — **could not be read back** (%v), so this note quotes the decision log only", err)
 		t.Errorf("the capture %s could not be read back: %v", l.capAbs, err)
 	} else if device == 0 {
-		capLine += fmt.Sprintf(" — **empty of device traffic**: %d packets, none of them to or from %s. "+
+		line += fmt.Sprintf(" — **empty of device traffic**: %d packets, none of them to or from %s. "+
 			"This note's observation rests on the decision log alone and cannot close a register row.", total, labSubnet)
 		t.Errorf("the capture %s holds no packet to or from %s, so this measurement has no capture to point at",
 			l.capAbs, labSubnet)
@@ -1332,11 +1399,24 @@ func (l *lab) result(t *testing.T, entry, claim, observation string) {
 		// every capture with loopback probes and adds one more pair when it
 		// stops the capture, after this note is written. Counting only what
 		// crossed the bridge gives a number the reader can reproduce.
-		capLine += fmt.Sprintf(" — %d packets to or from the device, countable with "+
-			"`tcpdump -r %s -n 'net %s' | wc -l`", device, l.capPath, labSubnet)
+		line += fmt.Sprintf(" — %d packets to or from the device, countable with "+
+			"`tcpdump -r %s -n 'net %s' | wc -l`", device, l.evidencePath, labSubnet)
 	}
+	return line + " A redacted copy of this run's capture: credential bytes overwritten with `x`, " +
+		"everything else byte-identical, decodable with the lab key (`tests/lab/README.md`)."
+}
 
+// result writes tests/lab/results/L<N>-<platform>.md in the form spec §15 rule
+// 3 requires: platform, image version, observation, and a pointer to the
+// evidence.
+func (l *lab) result(t *testing.T, entry, claim, observation string) {
+	t.Helper()
+	dir := filepath.Join(root, "tests", "lab", "results")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("results directory: %v", err)
+	}
 	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", entry, l.p.name))
+	capLine := l.captureLine(t)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s — %s\n\n", entry, l.p.name)
 	fmt.Fprintf(&b, "- **Date measured:** %s\n", time.Now().UTC().Format("2006-01-02"))

@@ -193,7 +193,8 @@ each and reads the outcome, so a device that truncates the password produces
 
 `tcpdump --immediate-mode -i any -U -n -s 0 -w captures/<test>-<platform>.pcap 'tcp port 49'`
 runs around each test. Captures are git-ignored; the results note quotes the fields that
-matter, names the file, and reports how many packets in it are device traffic.
+matter, names the **evidence** file (see below), and reports how many packets in it are
+device traffic.
 
 `--immediate-mode` is not decoration. Without it libpcap hands tcpdump the kernel ring on a
 one-second read timeout, so a capture stopped within a second of its last packet loses that
@@ -205,6 +206,50 @@ listens. Those two loopback packets are its proof that the file is really captur
 does not start until one has reached the file, and tcpdump is not stopped until another has,
 which by ordering means everything the test produced is already on disk. They are on the
 loopback, so they are excluded from the device-packet count a results note quotes.
+
+## Evidence: what a results note actually points at
+
+**`tests/lab/evidence/` is committed. `tests/lab/captures/` is not.**
+
+A capture holds the lab tokens and the breakglass password. They are obfuscated, but under
+`labcreds.Key`, which this repository publishes — so in a capture they are in the clear for
+anyone who opens it. That is why `captures/` is git-ignored. But a results note that pointed
+into it would point at nothing for everyone except the machine that took it, and spec §15
+rule 3 requires a capture pointer that closes a register row.
+
+So every capture gets a redacted copy in `tests/lab/evidence/`, and that is what the notes
+name. In an evidence file:
+
+- **Credential bytes are overwritten with `x`, byte for byte.** The fields are the ones RFC
+  8907 puts a secret in: an authentication START's `data` (a PAP password, a CHAP challenge
+  and response), a CONTINUE's `user_msg` and `data` (an ASCII password), and a REPLY's `data`
+  (a server challenge). A scan of every variable-length field of all 1803 packets in the
+  captures on this machine found lab credentials in exactly two of them —
+  `authen_continue.user_msg` and `authen_start.data` — and in no AV pair, username, port,
+  `rem_addr` or server message. `go run ./tests/lab/cmd/redact-pcap -scan` re-runs that scan
+  and fails if a credential turns up in a field the redactor does not overwrite.
+- **Everything else is byte-identical.** Same packets, same order, same timestamps, same
+  lengths, same TCP sequence numbers, same TACACS+ headers. The one exception is the TCP
+  checksum of a rewritten packet, and only when it was correct in the capture to begin with;
+  these captures come off a veth with checksum offload, so almost every checksum in them is
+  already wrong, and those are left exactly as they were found rather than "fixed" into
+  looking more correct than the device sent them.
+- **It still decodes with the lab key.** The body is de-obfuscated, the credential bytes
+  replaced, and the result re-obfuscated under the same header, so the MD5 pad is unchanged.
+  In Wireshark: **Edit → Preferences → Protocols → TACACS+ → key**, set to the value of
+  `labcreds.Key`. Nothing about reading an evidence file differs from reading the capture.
+
+`make evidence` rewrites `evidence/` from whatever is in `captures/`, and `make lab` does it
+automatically at the end of a run — so a note written by a run always points at a file that
+exists. A run whose evidence cannot be produced fails, because the alternative is notes
+citing files that are not there.
+
+Nothing is written unverified. For each file the redactor re-reads its own output from disk,
+de-obfuscates every body again, and refuses to leave the file in place unless every
+credential field is entirely `x`, no field and no body holds any seeded token or the
+breakglass password, no value that a credential field of the input carried appears anywhere
+in the output, and every other byte matches the input. `tests/lab/labpcap` holds the code and
+its tests, including one that deliberately misses a field to prove the verifier fails.
 
 ## Startup configs must be pure ASCII
 
