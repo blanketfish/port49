@@ -140,10 +140,25 @@ type l16Driver struct {
 	whoami     string
 	whoamiNote string
 
-	cli       func(l *lab, user, password string) (*cliConn, error)
-	adminCLI  func(*lab) (*cliConn, error)
-	configure func(c *cliConn, lines ...string) (string, error)
-	show      func(c *cliConn, cmd string) (string, error)
+	// cli opens the TOKEN session. It is deliberately not eosCLI: that helper
+	// types `enable` on the way in, and a variant that lands the operator at
+	// privilege 1 -- which is one of the variants -- would meet a password
+	// prompt there and have `terminal length 0` typed into it. `l3CLI` exists
+	// for exactly this reason (see its comment) and takes whatever prompt the
+	// login produced.
+	cli      func(l *lab, user, password string) (*cliConn, error)
+	adminCLI func(*lab) (*cliConn, error)
+	// show must wait for EITHER prompt, because which one the session got is
+	// one of the things being measured: `#` means the reply attributes reached
+	// the device, `>` means they did not.
+	// enterConfig is how this platform enters configuration mode. The lines
+	// that follow it define a role, which is a SUB-mode, and that is why L16
+	// cannot use eosConfigure or nxosConfigure: both wait for the exact
+	// `<node>(config)#` prompt, and `role p49-noc` puts the device at
+	// `<node>(config-role-p49-noc)#`, which they would wait out in full and
+	// then fail. l16Configure waits for any prompt ending `)#` instead.
+	enterConfig string
+	show        func(l *lab, c *cliConn, cmd string) (string, error)
 
 	// refusalMarkers are what this device says when it refuses a command. A
 	// refusal it does not recognise is reported as "unrecognised output"
@@ -166,14 +181,14 @@ var l16Drivers = map[string]l16Driver{
 			"exit",
 		},
 		deleteRole:     []string{"no role name p49-noc"},
+		enterConfig:    "configure terminal",
 		roleName:       "p49-noc",
 		secondRole:     "network-operator",
 		whoami:         "show user-account",
 		whoamiNote:     "the `roles:` line names the roles NX-OS believes this session holds",
-		cli:            func(l *lab, u, p string) (*cliConn, error) { return l.nxosCLI(u, p) },
+		cli:            (*lab).l3CLI,
 		adminCLI:       func(l *lab) (*cliConn, error) { return l.nxosCLI(breakglassUser, breakglassPassword) },
-		configure:      nxosConfigure,
-		show:           nxosShow,
+		show:           l16Show,
 		refusalMarkers: []string{"Permission denied", "permission denied", "% Permission", "AAA authorization failed", "Cmd exec error", "no permission", "Authorization failed"},
 	},
 	// EOS. Role rules are numbered and evaluated in ASCENDING order, first
@@ -188,14 +203,14 @@ var l16Drivers = map[string]l16Driver{
 			"exit",
 		},
 		deleteRole:     []string{"no role p49-noc"},
+		enterConfig:    "configure",
 		roleName:       "p49-noc",
 		secondRole:     "network-operator",
 		whoami:         "show users detail",
 		whoamiNote:     "the `Role` column names the role EOS believes this session holds",
-		cli:            func(l *lab, u, p string) (*cliConn, error) { return l.eosCLI(u, p) },
+		cli:            (*lab).l3CLI,
 		adminCLI:       func(l *lab) (*cliConn, error) { return l.eosCLI(breakglassUser, breakglassPassword) },
-		configure:      eosConfigure,
-		show:           eosShow,
+		show:           l16Show,
 		refusalMarkers: []string{"Authorization denied", "% Authorization", "Permission denied", "Invalid input", "not authorized"},
 	},
 }
@@ -313,7 +328,7 @@ func orNone(s string) string {
 func l16DefineRole(t *testing.T, l *lab, d l16Driver) {
 	t.Helper()
 	l.withAdminCLI(t, d.adminCLI, func(c *cliConn) error {
-		out, err := d.configure(c, d.defineRole...)
+		out, err := l16Configure(l, c, d, d.defineRole)
 		if err != nil {
 			return fmt.Errorf("defining role %s: %w\n%s", d.roleName, err, out)
 		}
@@ -325,7 +340,7 @@ func l16DefineRole(t *testing.T, l *lab, d l16Driver) {
 func l16DeleteRole(t *testing.T, l *lab, d l16Driver) {
 	t.Helper()
 	l.withAdminCLI(t, d.adminCLI, func(c *cliConn) error {
-		out, err := d.configure(c, d.deleteRole...)
+		out, err := l16Configure(l, c, d, d.deleteRole)
 		if err != nil {
 			return fmt.Errorf("removing role %s: %w\n%s", d.roleName, err, out)
 		}
@@ -360,7 +375,7 @@ func (l *lab) l16Run(t *testing.T, d l16Driver, v l16Variant) l16VariantResult {
 		l.drainRecords(off, 5*time.Second)
 		return r
 	}
-	if out, err := d.show(c, d.whoami); err == nil {
+	if out, err := d.show(l, c, d.whoami); err == nil {
 		r.whoami = l16TrimEcho(out, d.whoami)
 	}
 	for _, p := range []l16Probe{
@@ -368,7 +383,7 @@ func (l *lab) l16Run(t *testing.T, d l16Driver, v l16Variant) l16VariantResult {
 		{cmd: l16Port49Denied, expect: "the custom role permits this; port49 DENIES it"},
 		{cmd: l16BothPermit, expect: "both permit this — the control"},
 	} {
-		out, _ := d.show(c, p.cmd)
+		out, _ := d.show(l, c, p.cmd)
 		p.out = l16TrimEcho(out, p.cmd)
 		if strings.TrimSpace(p.out) == "" {
 			p.out = emptyDeviceReply
@@ -396,6 +411,44 @@ func (l *lab) l16Run(t *testing.T, d l16Driver, v l16Variant) l16VariantResult {
 		r.authzs[word] = r.probes[i].verdict
 	}
 	return r
+}
+
+// l16Configure applies configuration lines that may enter a sub-mode.
+//
+// Every configuration prompt on both platforms ends `)#` -- `leaf1(config)#`,
+// `leaf1(config-role-p49-noc)#`, `nx1(config-role)#` -- so that suffix is the
+// one matcher that works in and out of a role block. `end` returns to the exec
+// prompt, which is what is waited for last. A line the parser rejects is an
+// error rather than a silent skip: a role that was never defined would make
+// every variant below measure a device with no role on it, and the table would
+// read as "role delivery does nothing" about a role that does not exist.
+func l16Configure(l *lab, c *cliConn, d l16Driver, lines []string) (string, error) {
+	from := len(c.transcript())
+	if _, err := c.sendExpect(d.enterConfig, 45*time.Second, ")#"); err != nil {
+		return c.transcript(), fmt.Errorf("entering configuration mode with %q: %w", d.enterConfig, err)
+	}
+	for _, ln := range lines {
+		out, err := c.sendExpect(ln, 60*time.Second, ")#")
+		if err != nil {
+			return out, fmt.Errorf("%q: %w", ln, err)
+		}
+		for _, bad := range []string{"% Invalid", "Invalid command", "% Incomplete", "ERROR:", "% Error"} {
+			if strings.Contains(out, bad) {
+				return out, fmt.Errorf("%q was refused by the device:\n%s", ln, out)
+			}
+		}
+	}
+	if _, err := c.sendExpect("end", 45*time.Second, l.p.node+"#"); err != nil {
+		return c.transcript(), fmt.Errorf("leaving configuration mode: %w", err)
+	}
+	return c.transcript()[from:], nil
+}
+
+// l16Show runs one command and waits for either prompt shape. A variant that
+// left the session at `>` is a finding, not a hang, so waiting only for `#`
+// would turn it into a timeout that says nothing.
+func l16Show(l *lab, c *cliConn, cmd string) (string, error) {
+	return c.sendExpect(cmd, 60*time.Second, l.p.node+"#", l.p.node+">")
 }
 
 func l16Refused(out string, markers []string) bool {
