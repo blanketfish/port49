@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -21,6 +23,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/daemon/limits"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -58,6 +61,19 @@ type LabConfig struct {
 	SeedTokens        []SeedToken `yaml:"seed_tokens"`
 }
 
+// PlatformConfig is an operator's override of one built-in platform adapter
+// (spec §8). Plan 1 reads one field from an adapter, so it carries one;
+// plan 5 builds the rest.
+type PlatformConfig struct {
+	// SessionServices replaces the built-in list of authorization `service`
+	// values a session on this platform may arrive with. It is a list, and it
+	// is settable, because on Junos the name is a device setting: `set system
+	// tacplus-options service-name junos-exec-fw` renames it, so `junos-exec`
+	// is a default and not a constant. Setting it replaces the built-in — a
+	// fleet part-way through a rename lists both names.
+	SessionServices []string `yaml:"session_services"`
+}
+
 // limitsYAML mirrors the limits block. The two reset windows are pointers so
 // an absent key (take the default) is distinguishable from an explicit zero
 // (which would mean "never reset" in the limiter, and is refused).
@@ -73,15 +89,16 @@ type limitsYAML struct {
 }
 
 type fileConfig struct {
-	Listen         string            `yaml:"listen"`
-	MetricsListen  string            `yaml:"metrics_listen"`
-	InventoryFile  string            `yaml:"inventory_file"`
-	Keys           map[string]KeySet `yaml:"keys"`
-	Limits         limitsYAML        `yaml:"limits"`
-	ReceiptTTL     time.Duration     `yaml:"receipt_ttl"`
-	ContextIdleTTL time.Duration     `yaml:"context_idle_ttl"`
-	Accounting     AccountingConfig  `yaml:"accounting"`
-	Lab            *LabConfig        `yaml:"lab"`
+	Listen         string                    `yaml:"listen"`
+	MetricsListen  string                    `yaml:"metrics_listen"`
+	InventoryFile  string                    `yaml:"inventory_file"`
+	Keys           map[string]KeySet         `yaml:"keys"`
+	Limits         limitsYAML                `yaml:"limits"`
+	ReceiptTTL     time.Duration             `yaml:"receipt_ttl"`
+	ContextIdleTTL time.Duration             `yaml:"context_idle_ttl"`
+	Accounting     AccountingConfig          `yaml:"accounting"`
+	Platforms      map[string]PlatformConfig `yaml:"platforms"`
+	Lab            *LabConfig                `yaml:"lab"`
 }
 
 type Config struct {
@@ -94,6 +111,13 @@ type Config struct {
 	ContextIdleTTL time.Duration
 	Accounting     AccountingConfig
 	Lab            *LabConfig
+
+	// SessionServices is the resolved authorization-`service` table: every
+	// built-in platform, with any operator override already applied. It is
+	// resolved here rather than at each authorization so the daemon never
+	// consults two sources, and so a name the operator mistyped is a startup
+	// error rather than a platform silently on its default (spec §5.2, §8).
+	SessionServices map[string][]string
 
 	// Inventory and Admission are read and built once, here, so the daemon
 	// never re-reads the file and the two can never disagree.
@@ -169,6 +193,9 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config: inventory_file is required")
 	}
 	if err := checkPositive(c); err != nil {
+		return Config{}, err
+	}
+	if err := resolveSessionServices(&c, f.Platforms); err != nil {
 		return Config{}, err
 	}
 	if c.Lab == nil {
@@ -268,6 +295,49 @@ func allVersions(ks KeySet) []KeyVersion {
 	out = append(out, ks.Current)
 	out = append(out, ks.Accept...)
 	return append(out, ks.Retired...)
+}
+
+// resolveSessionServices builds c.SessionServices from the built-in table and
+// whatever `platforms:` overrides. Three things are refused rather than
+// accepted, and each is a configuration that would be invisible at runtime:
+//
+//   - a platform name port49 ships no adapter for. `platforms: {junos: ...}`
+//     is a typo for `juniper_junos`, and the operator would see Junos denied
+//     beside a file that plainly permits it.
+//   - an explicitly empty list. It authorizes nothing, so every session on
+//     that platform is denied `service_unsupported` — a whole vendor locked
+//     out by a key that looks like it is configuring something. Omitting the
+//     key is how you ask for the default.
+//   - an empty service name, which would match a request carrying no
+//     `service` at all.
+func resolveSessionServices(c *Config, overrides map[string]PlatformConfig) error {
+	c.SessionServices = platform.Defaults()
+	names := make([]string, 0, len(overrides))
+	for name := range overrides {
+		names = append(names, name)
+	}
+	sort.Strings(names) // one bad key in a map: report the same one every run
+	for _, name := range names {
+		if !platform.Known(name) {
+			return fmt.Errorf("config: platforms: %q is not a platform port49 ships an adapter for; known platforms are %s",
+				name, strings.Join(platform.Names(), ", "))
+		}
+		svc := overrides[name].SessionServices
+		if svc == nil {
+			continue // the block names the platform and sets nothing
+		}
+		if len(svc) == 0 {
+			return fmt.Errorf("config: platforms.%s.session_services is empty, which denies every session on that platform "+
+				"service_unsupported; remove the key to take the default [%s]", name, strings.Join(platform.SessionServices(name), " "))
+		}
+		for i, s := range svc {
+			if s == "" {
+				return fmt.Errorf("config: platforms.%s.session_services[%d] is the empty string; list the `service` value the device sends", name, i)
+			}
+		}
+		c.SessionServices[name] = append([]string(nil), svc...)
+	}
+	return nil
 }
 
 // window applies the 10m default for an absent key and refuses an explicit zero

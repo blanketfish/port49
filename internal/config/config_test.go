@@ -263,3 +263,157 @@ key_groups:
 		t.Fatal("a device whose addresses resolve to different keys must fail at load")
 	}
 }
+
+// loadWithPlatforms loads the sample config with a `platforms:` block spliced
+// in, which is how every test below varies one thing.
+func loadWithPlatforms(t *testing.T, platforms string) (Config, error) {
+	t.Helper()
+	setSecrets(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := fmt.Sprintf(sample, invPath) + platforms
+	return Load(write(t, "port49d.yaml", body))
+}
+
+// TestSessionServicesDefaultPerPlatform: a config with no `platforms:` block
+// resolves the built-in table, which is the whole point of the table — an
+// operator who has renamed nothing configures nothing. `junos-exec` for Junos
+// is the row that matters: before 2026-09-21 every Junos session
+// authorization was denied `service_unsupported` (spec §15, L10).
+func TestSessionServicesDefaultPerPlatform(t *testing.T) {
+	c, err := loadWithPlatforms(t, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for platform, want := range map[string]string{
+		"arista_eos":    "shell",
+		"cisco_nxos":    "shell",
+		"cisco_iosxe":   "shell",
+		"juniper_junos": "junos-exec",
+	} {
+		got := c.SessionServices[platform]
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("%s: session_services = %v, want [%s]", platform, got, want)
+		}
+	}
+}
+
+// TestSessionServicesOverrideReplacesTheDefault. The owner's production SRX
+// firewalls run `set system tacplus-options service-name junos-exec-fw`, so a
+// custom name is the case this key exists for. The override replaces the
+// built-in rather than adding to it, so a fleet mid-rename lists both names
+// and a fleet that has finished lists one.
+func TestSessionServicesOverrideReplacesTheDefault(t *testing.T) {
+	c, err := loadWithPlatforms(t, `
+platforms:
+  juniper_junos:
+    session_services: ["junos-exec-fw"]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.SessionServices["juniper_junos"]; len(got) != 1 || got[0] != "junos-exec-fw" {
+		t.Fatalf("the operator list must replace the built-in, got %v", got)
+	}
+	// An untouched platform keeps its default.
+	if got := c.SessionServices["arista_eos"]; len(got) != 1 || got[0] != "shell" {
+		t.Fatalf("configuring one platform must not disturb another, got %v", got)
+	}
+}
+
+func TestSessionServicesOverrideTakesSeveralNames(t *testing.T) {
+	c, err := loadWithPlatforms(t, `
+platforms:
+  juniper_junos:
+    session_services: ["junos-exec", "junos-exec-fw"]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.SessionServices["juniper_junos"]; len(got) != 2 || got[0] != "junos-exec" || got[1] != "junos-exec-fw" {
+		t.Fatalf("a fleet mid-rename must be able to list both names, got %v", got)
+	}
+}
+
+// TestPlatformsRefusesAnUnknownName: `platforms: {junos: ...}` is a typo for
+// `juniper_junos`, and a block that governs no device is invisible — the
+// operator would see Junos sessions denied and a configuration that plainly
+// permits them. The error names what they could have typed.
+func TestPlatformsRefusesAnUnknownName(t *testing.T) {
+	_, err := loadWithPlatforms(t, `
+platforms:
+  junos:
+    session_services: ["junos-exec"]
+`)
+	if err == nil {
+		t.Fatal("an unknown platform name under platforms: must be refused at load")
+	}
+	if !strings.Contains(err.Error(), "junos") || !strings.Contains(err.Error(), "juniper_junos") {
+		t.Fatalf("the error must name the bad key and the known platforms, got %v", err)
+	}
+}
+
+// TestPlatformsRefusesAnUnknownKeyInsideABlock: strict YAML has to reach into
+// the platform block too. `session_service:` for `session_services:` would
+// otherwise leave the default in force with a config that says otherwise.
+func TestPlatformsRefusesAnUnknownKeyInsideABlock(t *testing.T) {
+	_, err := loadWithPlatforms(t, `
+platforms:
+  juniper_junos:
+    session_service: ["junos-exec-fw"]
+`)
+	if err == nil {
+		t.Fatal("a misspelled key inside a platform block must be refused at load")
+	}
+	if !strings.Contains(err.Error(), "session_service") {
+		t.Fatalf("the error must name the key, got %v", err)
+	}
+}
+
+// TestSessionServicesRefusesAnEmptyList. An empty list authorizes nothing, so
+// every session on that platform is denied `service_unsupported` — a whole
+// vendor locked out by a key that looks like it is configuring something. An
+// absent key is how you ask for the default; `[]` is not.
+func TestSessionServicesRefusesAnEmptyList(t *testing.T) {
+	_, err := loadWithPlatforms(t, `
+platforms:
+  juniper_junos:
+    session_services: []
+`)
+	if err == nil {
+		t.Fatal("an empty session_services list must be refused at load")
+	}
+	if !strings.Contains(err.Error(), "junos-exec") {
+		t.Fatalf("the error must name the default the operator probably wanted, got %v", err)
+	}
+}
+
+// TestSessionServicesRefusesAnEmptyName. A `""` entry would match an
+// authorization request carrying no `service` AV pair at all, which is not a
+// session on any platform measured and is not something a list of service
+// names can mean.
+func TestSessionServicesRefusesAnEmptyName(t *testing.T) {
+	_, err := loadWithPlatforms(t, `
+platforms:
+  juniper_junos:
+    session_services: ["junos-exec", ""]
+`)
+	if err == nil {
+		t.Fatal("an empty service name must be refused at load")
+	}
+}
+
+// TestPlatformBlockWithNoFieldsKeepsTheDefault: `juniper_junos: {}` names a
+// platform and sets nothing, which is not the same as setting nothing to
+// nothing.
+func TestPlatformBlockWithNoFieldsKeepsTheDefault(t *testing.T) {
+	c, err := loadWithPlatforms(t, `
+platforms:
+  juniper_junos: {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := c.SessionServices["juniper_junos"]; len(got) != 1 || got[0] != "junos-exec" {
+		t.Fatalf("an empty platform block must leave the default in force, got %v", got)
+	}
+}
