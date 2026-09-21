@@ -9,7 +9,22 @@ lab showed that key breaks every measured vendor, and the owner ruled the key is
 recorded only (spec §13 decision 15; `docs/design/2026-09-20-login-context-key-options.md`).
 The code on `feature/lab-l4-fallthrough` implements the ruling. What follows is the
 implementer's list of what plan 2 must be rewritten against, line numbers as of commit
-`8160276`. One item (plan line 1305) is a security decision for the owner, not a rename.
+`8160276`. One item (plan line 1305) was a security decision for the owner, not a rename.
+
+**Ruled 2026-09-21: `contexts_by_principal` stays unencrypted.** The rewrite must replace
+the old justification ("the ref carries no identity", which was never true: `nas` was always
+in the ref) with this one: a dump of the index reveals principal, device and login name;
+every credential-bearing record (token, receipt, context body) stays sealed; the index is
+protected by store access control rather than by encryption, because revocation is the path
+needed most on a bad day and must not depend on the encryption key or its rotation window
+being available.
+
+**Also ruled 2026-09-21, and plan 2 must carry them:** `limits.auth_failure_delay_max`
+defaults to 2s (L13); a session `service` is checked against
+`platforms.<name>.session_services` and never selects policy (spec §5.2). Decision 15
+(reusable tokens) is still provisional: the lab's client matrix (L15) shows the
+authentication count per job belongs to the client, from 1 to 28 for ten tasks, and the first
+`receipt_ttl` crossing was measured (NAPALM `nxos`, `token_not_found` at 38.8 s).
 
 **The key types themselves**
 
