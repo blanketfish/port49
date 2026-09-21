@@ -1,0 +1,11 @@
+name: port49-vjunos
+topology:
+  nodes:
+    srx1:
+      kind: juniper_vjunosrouter
+      image: vrnetlab/juniper_vjunos-router:23.4R2-S2.1
+      startup-config: ../configs/vjunos-startup.conf
+      mgmt-ipv4: 172.100.100.21
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24

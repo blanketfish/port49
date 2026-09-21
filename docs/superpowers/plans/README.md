@@ -40,6 +40,10 @@ binary, containerlab harness. Closes L1 (SSH transport only), L2, L5, L6, L8, L1
   privilege). Accounting annotation: `task_id` binding, `closing`, `foreign_session`. Spec
   §5.1.1, §5.3, §5.6, §5.8.
 - A **mint function** callable in-process (no broker yet) that plan 3's minimal broker wraps.
+- **`context_idle_ttl` is absolute, not idle.** Plan 1 sets it at `PutContext` and never
+  extends it; `GetContext` does not touch it. Spec §5.6 says activity SHOULD extend it, so
+  either the refresh happens here or the key is renamed to say what it does. Plan 2 owns the
+  context shape, so it is named here.
 
 **Hands to plan 3:** `token.Mint(device, username, kind, ttl, reusable)`, the encrypted store
 records, the context refresh entry points.
@@ -81,6 +85,14 @@ corpus), §12 (`explain`, policy tests, access review, `grants remove --subject`
 "Matching and precedence" and "Decision log" assertions. Replaces plan 1's `author.Lab`
 with the real `Authorizer`. Produces the compiled blob plan 2 stores.
 
+**The accounting spool needs a sink that can fail.** Plan 1's at-least-once guarantee ends at
+`decision.Emitter.Emit`, which returns nothing: the spool deletes its `.draining` file whether
+or not the sink took the records. With stdout as the sink that is academic. Whichever plan
+first gives the decision log a real sink — this one owns the log in full, but it travels with
+the sink if it lands later — must give the spool a sink interface that returns an error, and
+the spool must not advance `drainOffset` past a refusal. Without both, the durability contract
+is enforced up to the last hop and not across it.
+
 ## Plan 5 — Platform adapters (§19 step 5)
 
 Spec §8 in full: built-in adapters, entity classes, user overrides and layering, pinned
@@ -89,6 +101,12 @@ here), `capability`/`bits`/`bit_delivery`, the **Junos projection** under decisi
 (bits first, regexes second, refused shape), differential testing in containerlab,
 `port49 platform export`. Spec §9 capability inference. **Lab:** L9, L11 (closed), L12; the
 projection generator is not final until L12 closes.
+
+**Inherits from plan 1:** every Junos login is answered `service_unsupported` on its session
+authorization. `author.Handle` requires `service=shell` and L10 measured Junos sending
+`service=junos-exec`, so plan 1 denies it by design — logins still work (the L10 notes show
+it), but the decision log carries an `authorize_session` deny for each one. The adapter that
+maps `junos-exec` is this plan; until it lands, that deny is expected and is not a finding.
 
 ## Plan 6 — Inventory service (§19 step 6)
 
@@ -135,6 +153,24 @@ Deployment artifacts, the **reference device AAA configuration per platform** (t
 disables fall-through on FAIL, design §12), load validation at the §5 target rate, the
 failure-matrix tests of design §12 and §14, observability alarms with a metric behind each
 (design §15).
+
+Carried here from plan 1's review:
+
+- **A global connection cap.** Today the only one is `EMFILE`, which is the worst possible
+  cap: it fails `Accept` for admitted devices too, and it fails the spool's own `OpenFile`, so
+  accounting starts answering ERROR. Plan 1 pulled forward the two cheap parts — the
+  `accept_error` counter and log, and a 5s header deadline for a source that is not admitted.
+  The cap itself, its sizing, and its alarm are this plan's.
+- **Accounting throughput is bounded by one disk's fsync latency.** `Offer` holds one mutex
+  across a `stat`, an open, a write, an fsync and a close, per record, for the whole fleet.
+  The fix is a group commit — batch concurrent offers into one fsync — and it needs this
+  plan's load numbers to size. Do not change it before there are numbers.
+- **`key_validations_total{key_ref}` is a device-identity label in one deployment shape.** Key
+  groups make `key_ref` a fleet-wide label with a handful of values, which is what the
+  cardinality rule assumes. A deployment that pins a key per device (the tier-1 pin) turns it
+  into one series per device — both a cardinality problem and, against design §15's "device
+  identity never appears in metric labels", a correctness one. Say which it is and bound it
+  when the alarms are written.
 
 ---
 

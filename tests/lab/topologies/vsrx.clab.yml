@@ -1,0 +1,11 @@
+name: port49-vsrx
+topology:
+  nodes:
+    vsrx1:
+      kind: juniper_vsrx
+      image: vrnetlab/juniper_vsrx:21.4R3.15
+      startup-config: ../configs/vjunos-startup.conf
+      mgmt-ipv4: 172.100.100.22
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24

@@ -6,7 +6,7 @@
 
 **Architecture:** One Go module, one binary for this plan (`cmd/port49d`). The wire layer (`internal/tacacs/wire`) is pure encode/decode with no I/O. Key trial (`internal/keyring`) and admission (`internal/admission`) decide whether a packet is readable and who sent it. Handlers (`internal/daemon/authen`, `author`, `acct`) run one exchange each against a narrow `store.Store` interface whose only implementation here is in-memory. Everything the device sees is produced by `internal/daemon/server`, which owns the listener limits. The decision log (`internal/decision`) is the single emitter for every record.
 
-**Tech Stack:** Go 1.22 is the module's language target (toolchain installed 2026-09-07: 1.27.1 at `/usr/local/go`; the older apt `go1.22.2` at `/usr/bin/go` is shadowed, so confirm `go version` before blaming a build). Standard library only for the wire and handlers; `github.com/prometheus/client_golang` for metrics; `gopkg.in/yaml.v3` for config; `golang.org/x/crypto/ssh` in the lab harness only. containerlab + Docker for the lab (containerlab **0.79.0 on both PCs** as of 2026-09-15; device images **arrived 2026-09-15**, all VM disks built with vrnetlab; see Task 15's prerequisites. Lab tasks are behind the `lab` build tag and are the last tasks).
+**Tech Stack:** Go 1.22 is the module's language target. Toolchains differ per PC: one has 1.27.1 at `/usr/local/go` (installed 2026-09-07, apt `go1.22.2` shadowed); the other has only `go1.22.2` at `/usr/bin/go`. Both build every task — nothing here needs a feature newer than 1.22 and no pinned dependency requires more — so confirm `go version` before blaming a build, but do not treat 1.22.2 as missing. Standard library only for the wire and handlers; `github.com/prometheus/client_golang` for metrics; `gopkg.in/yaml.v3` for config; `golang.org/x/crypto/ssh` in the lab harness only. containerlab + Docker for the lab (containerlab **0.79.0 on both PCs** as of 2026-09-15; device images **arrived 2026-09-15**, all VM disks built with vrnetlab; see Task 15's prerequisites. Lab tasks are behind the `lab` build tag and are the last tasks).
 
 **Spec:** `docs/design/2026-08-21-port49-design.md` (§5, §8, §11, §12, §14, §15, §16, §19 step 1) and `docs/design/2026-08-23-policy-engine-spec.md` (§5.7, §5.8, §10 "Admission and keys" through "Devices presenting a key that does not validate", §15 lab register). This plan is design §19 **step 1** plus the store-record slice of step 2 that step 1 cannot run without. Later plans: 2 (token model), 3 (vertical slice), 4 (policy engine), 5 (adapters), 6 (inventory), 7 (broker), 8–12.
 
@@ -21,7 +21,7 @@
 - **An unvalidated body is never logged.** Record cleartext header fields, source, and a SHA-256 of the body.
 - **Limits are per source before they are global** (design §11). Every limit is configurable and has a metric.
 - **Accounting replies `SUCCESS` after a durable spool hand-off; `ERROR` only when the spool cannot take it.** Never `ERROR` for a malformed or unwelcome record.
-- **Device identity never appears in a metric label.** Labels are bounded: `exchange`, `outcome`, `reason`, `diagnosis`, `key_ref`, `version`, `flags`.
+- **Device identity never appears in a metric label.** Labels are bounded to small closed sets (design §15): `exchange`, `outcome`, `reason`, `diagnosis`, `key_ref`, `version`, `event`, `verdict`, `state`, `op`.
 - **Reason codes are the closed vocabulary of spec §5.7.** No handler invents one.
 - **The log MUST NOT contain a token, a password, a CHAP challenge or response.** Credentials appear only as `credential_sha256`.
 - Conventional Commits; branch `feature/protocol-core`; never commit to `main`.
@@ -5691,7 +5691,7 @@ Expected: `TestLoginRoundTrip` passes on every platform whose image is present; 
 | Config in snake_case, secrets from the environment | 14 |
 | Lab register L1, L2, L5, L6, L8, L10 (spec §15; design §19 step 1) | 15 |
 
-**Deferred to plan 2, and said so in the task that would otherwise cover it:** device tag and `device_mismatch`; encryption at rest; blob, indexes, idempotency records; enable-token lookup through context; `task_id` binding and `closing`; redaction (plan 5, adapters). Plan 3 covers eAPI/NX-API transports for L1 and L7.
+**Deferred to plan 2, and said so in the task that would otherwise cover it:** device tag and `device_mismatch`; encryption at rest; blob, indexes, idempotency records; enable-token lookup through context; `task_id` binding and `closing`; redaction (plan 5, adapters). Plan 3 covers eAPI/NX-API transports for L1 and L7. **Deferred to plan 6:** per-version `retire_after` on key sets and the CI checks that refuse an empty `accept` set and report passed retirement dates (spec §10); plan 1 key versions carry only `version` and `secret_env`.
 
 **Placeholder scan:** no TBD/TODO; every code step carries the code; no "similar to Task N".
 

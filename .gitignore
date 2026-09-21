@@ -12,3 +12,9 @@ coverage.out
 # Editor / OS
 .DS_Store
 *.swp
+
+# Lab
+/tests/lab/captures/
+/tests/lab/logs/
+# containerlab's per-lab working directory, created beside the topology it runs
+/tests/lab/topologies/clab-*/

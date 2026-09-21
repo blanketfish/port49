@@ -1,0 +1,214 @@
+// Package admission answers "which device is this address, and which key_ref
+// admits it" from a file inventory and reviewed key groups (spec §10).
+package admission
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/netip"
+	"os"
+	"sort"
+
+	"gopkg.in/yaml.v3"
+)
+
+type Device struct {
+	Name       string
+	Platform   string
+	Addresses  []netip.Addr
+	Attributes map[string]string
+	KeyRef     string // tier 1 pin; empty when not pinned
+}
+
+type KeyGroup struct {
+	CIDR       netip.Prefix // zero value when this is an attribute group
+	Attributes map[string]string
+	KeyRef     string
+}
+
+type Inventory struct {
+	Devices   []Device
+	KeyGroups []KeyGroup
+}
+
+type Resolved struct {
+	Device Device
+	KeyRef string
+}
+
+// Trie is a map from address to resolved device; the key_ref is decided at build
+// time so Lookup is a single map read on the hot path.
+type Trie struct {
+	byAddr map[netip.Addr]Resolved
+}
+
+func Build(inv Inventory) (*Trie, error) {
+	t := &Trie{byAddr: make(map[netip.Addr]Resolved)}
+	owner := make(map[netip.Addr]string)
+	// The device name is a namespace, not a label: store.TokenKey and
+	// store.ContextKey are keyed on it, so two devices sharing a name (the
+	// empty string included) share a token namespace, and a token minted for
+	// one redeems on the other. Refuse both here, next to the address
+	// collision, rather than discovering it as a cross-device redemption.
+	named := make(map[string]bool, len(inv.Devices))
+	for _, d := range inv.Devices {
+		if d.Name == "" {
+			return nil, fmt.Errorf("admission: a device with addresses %v has no name; give every device a unique name", d.Addresses)
+		}
+		if named[d.Name] {
+			return nil, fmt.Errorf("admission: two devices are both named %q; device names are token namespaces and must be unique", d.Name)
+		}
+		named[d.Name] = true
+	}
+	for _, d := range inv.Devices {
+		keyRef, err := resolveKeyRef(d, inv.KeyGroups)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range d.Addresses {
+			if prev, dup := owner[a]; dup {
+				return nil, fmt.Errorf("admission: address %s claimed by both %q and %q", a, prev, d.Name)
+			}
+			owner[a] = d.Name
+			if keyRef == "" {
+				continue // in inventory, but no group admits it: refused (spec §10)
+			}
+			t.byAddr[a] = Resolved{Device: d, KeyRef: keyRef}
+		}
+	}
+	return t, nil
+}
+
+func (t *Trie) Lookup(a netip.Addr) (Resolved, bool) {
+	r, ok := t.byAddr[a]
+	return r, ok
+}
+
+func resolveKeyRef(d Device, groups []KeyGroup) (string, error) {
+	if d.KeyRef != "" {
+		return d.KeyRef, nil // tier 1
+	}
+	var attrHits []KeyGroup
+	for _, g := range groups {
+		if len(g.Attributes) > 0 && attrsMatch(d.Attributes, g.Attributes) {
+			attrHits = append(attrHits, g)
+		}
+	}
+	if len(attrHits) > 1 {
+		return "", fmt.Errorf("admission: device %q matches key groups %q and %q in the attribute tier", d.Name, attrHits[0].KeyRef, attrHits[1].KeyRef)
+	}
+	if len(attrHits) == 1 {
+		return attrHits[0].KeyRef, nil // tier 2
+	}
+	// Tier 3: longest prefix across all the device's addresses must agree.
+	// Each address resolves to its longest matching CIDR group; all must have the same KeyRef.
+	var addressKeys []string        // key_ref for each address that matched
+	var addressCIDRs []netip.Prefix // CIDR of winning group for each address
+	for _, a := range d.Addresses {
+		var hits []KeyGroup
+		for _, g := range groups {
+			if g.CIDR.IsValid() && g.CIDR.Contains(a) {
+				hits = append(hits, g)
+			}
+		}
+		sort.Slice(hits, func(i, j int) bool { return hits[i].CIDR.Bits() > hits[j].CIDR.Bits() })
+		if len(hits) == 0 {
+			continue
+		}
+		if len(hits) > 1 && hits[0].CIDR.Bits() == hits[1].CIDR.Bits() {
+			return "", fmt.Errorf("admission: device %q address %s matches key groups %q and %q at equal prefix length", d.Name, a, hits[0].KeyRef, hits[1].KeyRef)
+		}
+		addressKeys = append(addressKeys, hits[0].KeyRef)
+		addressCIDRs = append(addressCIDRs, hits[0].CIDR)
+	}
+	// All addresses that matched must have resolved to the same key_ref.
+	if len(addressKeys) > 0 {
+		firstKey := addressKeys[0]
+		for i := 1; i < len(addressKeys); i++ {
+			if addressKeys[i] != firstKey {
+				return "", fmt.Errorf("admission: device %q: addresses resolve to different keys: %s (%s) and %s (%s)", d.Name, addressCIDRs[0], addressKeys[0], addressCIDRs[i], addressKeys[i])
+			}
+		}
+		return firstKey, nil
+	}
+	return "", nil
+}
+
+func attrsMatch(have, want map[string]string) bool {
+	for k, v := range want {
+		if have[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// File schema (snake_case).
+type fileInventory struct {
+	Devices []struct {
+		Name       string            `yaml:"name"`
+		Platform   string            `yaml:"platform"`
+		Addresses  []string          `yaml:"addresses"`
+		Attributes map[string]string `yaml:"attributes"`
+		KeyRef     string            `yaml:"key_ref"`
+	} `yaml:"devices"`
+	KeyGroups []struct {
+		Match struct {
+			CIDR       string            `yaml:"cidr"`
+			Attributes map[string]string `yaml:"attributes"`
+		} `yaml:"match"`
+		KeyRef string `yaml:"key_ref"`
+	} `yaml:"key_groups"`
+}
+
+func LoadFile(path string) (Inventory, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return Inventory{}, err
+	}
+	// KnownFields: an unknown key here is a typo with teeth. `keyref:` for
+	// `key_ref:` silently un-pins a device onto a group key, and the first
+	// packet from it reads `no_known_key_matches` — the 3am discovery this
+	// package's doc says cannot happen.
+	var f fileInventory
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return Inventory{}, fmt.Errorf("admission: %s: %w; check the key spelling against the inventory schema", path, err)
+	}
+	var inv Inventory
+	for _, d := range f.Devices {
+		dev := Device{Name: d.Name, Platform: d.Platform, Attributes: d.Attributes, KeyRef: d.KeyRef}
+		for _, s := range d.Addresses {
+			a, err := netip.ParseAddr(s)
+			if err != nil {
+				return Inventory{}, fmt.Errorf("admission: device %q: %w", d.Name, err)
+			}
+			dev.Addresses = append(dev.Addresses, a)
+		}
+		inv.Devices = append(inv.Devices, dev)
+	}
+	for _, g := range f.KeyGroups {
+		kg := KeyGroup{Attributes: g.Match.Attributes, KeyRef: g.KeyRef}
+		if g.Match.CIDR != "" {
+			p, err := netip.ParsePrefix(g.Match.CIDR)
+			if err != nil {
+				return Inventory{}, fmt.Errorf("admission: key group %q: %w", g.KeyRef, err)
+			}
+			kg.CIDR = p
+		}
+		if kg.KeyRef == "" {
+			return Inventory{}, fmt.Errorf("admission: %s: a key group has no key_ref; every group must name the key it admits", path)
+		}
+		// A group with neither match term is not a narrow group, it is a
+		// catch-all: attrsMatch against an empty want is vacuously true, so it
+		// would claim every device in the attribute tier and quietly admit the
+		// fleet under one key.
+		if !kg.CIDR.IsValid() && len(kg.Attributes) == 0 {
+			return Inventory{}, fmt.Errorf("admission: %s: key group %q matches on neither cidr nor attributes; give it one or remove it", path, kg.KeyRef)
+		}
+		inv.KeyGroups = append(inv.KeyGroups, kg)
+	}
+	return inv, nil
+}
