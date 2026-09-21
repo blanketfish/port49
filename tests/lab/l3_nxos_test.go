@@ -58,8 +58,25 @@ func TestL3NXOSEnable(t *testing.T) {
 
 		// Phase 2 — the configuration NX-OS documents an enable under, and a
 		// session that is actually below 15 so there is something to raise.
+		//
+		// The image may not have it. `feature privilege` is refused outright on
+		// Nexus 9300v 10.4(2)F, and that is an ANSWER to this row rather than a
+		// failure to reach one — so it is recorded with its transcript and the
+		// note stops there, instead of the test dying and writing nothing.
 		b.WriteString("\n## Phase 2 — with `feature privilege` and an `enable secret`\n\n")
-		restore := l.l3nxEnableFeature(t)
+		restore, cfgErr := l.l3nxEnableFeature(t)
+		if cfgErr != "" {
+			b.WriteString(negativeFinding{
+				Claim: "this image has no `feature privilege` at all, so the configuration NX-OS documents " +
+					"an exec `enable` under cannot be applied here and phase 2 cannot be run. Taken with " +
+					"phase 1, that is the complete answer for this platform: no enable, under any " +
+					"configuration this image can be put into.",
+				Sent: "configure terminal\nfeature privilege",
+				Got:  cfgErr,
+			}.render(t))
+			l.result(t, "L3-nxos", l3nxClaim, b.String())
+			return
+		}
 		defer restore(t)
 
 		// Two attempts at putting the operator below 15, because which one
@@ -198,14 +215,26 @@ func (l *lab) l3nxTyped(t *testing.T, attrs string) l3nxTyped {
 
 // l3nxEnableFeature turns on `feature privilege` and sets an enable secret,
 // returning a function that removes both.
-func (l *lab) l3nxEnableFeature(t *testing.T) func(*testing.T) {
+// It returns a restore function and, when the device refused the
+// configuration, the device's exact reply — which the caller records as a
+// negative finding rather than treating as a broken run.
+func (l *lab) l3nxEnableFeature(t *testing.T) (func(*testing.T), string) {
 	t.Helper()
-	apply := func(t *testing.T, lines ...string) {
+	var refusal string
+	apply := func(t *testing.T, tolerate bool, lines ...string) {
 		t.Helper()
 		l.withAdminCLI(t, func(l *lab) (*cliConn, error) {
 			return l.nxosCLI(breakglassUser, breakglassPassword)
 		}, func(c *cliConn) error {
-			if out, err := nxosConfigure(c, lines...); err != nil {
+			out, err := nxosConfigure(c, lines...)
+			if err != nil {
+				if tolerate {
+					refusal = strings.TrimSpace(out)
+					if refusal == "" {
+						refusal = strings.TrimSpace(err.Error())
+					}
+					return nil
+				}
 				return fmt.Errorf("%v: %w\n%s", lines, err, out)
 			}
 			t.Logf("cisco_nxos: applied %v", lines)
@@ -214,10 +243,13 @@ func (l *lab) l3nxEnableFeature(t *testing.T) func(*testing.T) {
 	}
 	// The enable secret is the published lab break-glass password, the same
 	// constant IOS-XE's enable fallback uses. Nothing here is a secret.
-	apply(t, "feature privilege", "enable secret 0 "+enableSecret)
-	return func(t *testing.T) {
-		apply(t, "no enable secret", "no feature privilege")
+	apply(t, true, "feature privilege", "enable secret 0 "+enableSecret)
+	if refusal != "" {
+		return nil, refusal
 	}
+	return func(t *testing.T) {
+		apply(t, true, "no enable secret", "no feature privilege")
+	}, ""
 }
 
 // l3nxVerdict turns one session's transcripts into a claim, and routes the

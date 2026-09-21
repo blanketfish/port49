@@ -72,15 +72,20 @@ func TestClientAuthenticationCost(t *testing.T) {
 
 		l.result(t, "L15-clients", clientsClaim, b.String())
 
+		// A client whose job produced no successful task and no authentication
+		// measured nothing. Some failing is a finding — NAPALM's NX-API driver
+		// failing half its tasks past the receipt boundary is the most
+		// valuable row in the table — but all of them failing to even reach
+		// port49 is a harness fault.
 		ran := 0
 		for _, r := range results {
-			if r.ok {
+			if r.redeems > 0 {
 				ran++
 			}
 		}
 		if ran == 0 {
-			t.Fatalf("not one of the %d clients completed a job, so no authentication cost was measured "+
-				"on %s. Each client's output is in the note.", len(results), l.p.name)
+			t.Fatalf("not one of the %d clients reached port49 at all, so no authentication cost was "+
+				"measured on %s. Each client's output is in the note.", len(results), l.p.name)
 		}
 	})
 }
@@ -133,26 +138,72 @@ type clientResult struct {
 	cmdAuthz  int
 	ctxIDs    map[string]bool
 	elapsed   time.Duration
+
+	// tasksOK and tasksFailed are counted from the client's own output. They
+	// exist because `ok` is the process exit status and a script that catches
+	// its exceptions exits 0 with half its tasks failed -- which is exactly
+	// what NAPALM's nxos driver did on the first run, and the table called it
+	// "the job completed".
+	tasksOK, tasksFailed int
+
+	// firstFresh is when the token was spent and firstDenial when the first
+	// call after it was refused. The gap between them is the receipt window
+	// measured from the client side, which is the boundary decision 15 turns
+	// on and which no test had driven.
+	firstFresh, firstDenial time.Time
 }
+
+// labReceiptTTL is the receipt TTL in force for the lab. tests/lab/port49d-lab.yaml
+// sets no `receipt_ttl`, so this is internal/config's default, and
+// TestLabConfigSetsNoReceiptTTL keeps the two from drifting apart.
+const labReceiptTTL = 30 * time.Second
 
 func (r clientResult) render() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n### %s\n\n%s\n\n", r.spec.name, r.spec.what)
-	state := "**the job did not complete**"
+	state := "**the client exited non-zero**"
 	if r.ok {
-		state = "the job completed"
+		state = "the client exited 0"
 	}
-	fmt.Fprintf(&b, "Ten tasks, %s in %s.\n\n", state, r.elapsed.Round(time.Millisecond))
+	fmt.Fprintf(&b, "Ten tasks in %s; %s. **%d task(s) succeeded and %d failed**, counted from the "+
+		"client's own output — the exit status is not the measurement, because a script that catches its "+
+		"exceptions exits 0 with half its tasks refused.\n\n",
+		r.elapsed.Round(time.Millisecond), state, r.tasksOK, r.tasksFailed)
 	fmt.Fprintf(&b, "port49's own counts for the window:\n\n```\nredeem records        %d  (token_redeemed %d, receipt_replayed %d, denied %d)\n"+
 		"authorize_session     %d\nauthorize_command     %d\ndistinct ctx_id       %d\n```\n\n",
 		r.redeems, r.fresh, r.replayed, r.denied, r.sessAuthz, r.cmdAuthz, len(r.ctxIDs))
 	if len(r.denials) > 0 {
 		fmt.Fprintf(&b, "Denials, verbatim from the log:\n\n```\n%s\n```\n\n", strings.Join(r.denials, "\n"))
 	}
+	b.WriteString(r.receiptWindow())
 	fmt.Fprintf(&b, "**Inferred** from the authentication count, not measured — the capture holds no HTTPS or "+
 		"SSH bytes: %s\n\n", clientWireInference(r))
 	fmt.Fprintf(&b, "What the client printed:\n\n```\n%s\n```\n\n", strings.TrimRight(clientTail(r.out), "\n"))
 	return b.String()
+}
+
+// receiptWindow reports the gap between the token being spent and the first
+// call that was refused, which is the `receipt_ttl` boundary seen from the
+// client side. Decision 15 names that boundary as the thing it actually turns
+// on, and until this run no test had driven a job past it.
+func (r clientResult) receiptWindow() string {
+	if r.firstDenial.IsZero() {
+		return fmt.Sprintf("No call in this job was refused, so it did not reach the receipt boundary. "+
+			"The job took %s against a `receipt_ttl` of %s.\n\n",
+			r.elapsed.Round(time.Millisecond), labReceiptTTL)
+	}
+	if r.firstFresh.IsZero() {
+		return "Calls were refused but no fresh redemption was recorded, so this job cannot be read as a " +
+			"receipt-expiry measurement; see the denials above for what it was.\n\n"
+	}
+	gap := r.firstDenial.Sub(r.firstFresh)
+	return fmt.Sprintf("**The receipt boundary, measured.** The token was spent at the first redemption "+
+		"and the first refusal came **%s later**, against a configured `receipt_ttl` of %s. Every call "+
+		"in between was served `receipt_replayed` out of the receipt rather than out of the store. "+
+		"Past it, the same credential in the same script against the same device is `token_not_found` "+
+		"— nothing in the operator's hand changed. This is the boundary spec §13 decision 15 says any "+
+		"argument about reusable tokens has to be made about.\n\n",
+		gap.Round(100*time.Millisecond), labReceiptTTL)
 }
 
 // clientWireInference is the sentence the note prints for the wire column. It
@@ -191,19 +242,18 @@ func clientTail(s string) string {
 func clientTable(rs []clientResult) string {
 	var b strings.Builder
 	b.WriteString("\n## Every client side by side\n\n")
-	b.WriteString("| client | job completed | TACACS+ authentications per 10 tasks | fresh / replayed | " +
+	b.WriteString("| client | tasks ok | TACACS+ authentications per 10 tasks | fresh / replayed / denied | " +
 		"single-use token survived the job | wire, inferred |\n|---|---|---|---|---|---|\n")
 	for _, r := range rs {
-		done := "**no**"
-		survived := "—"
-		if r.ok {
-			done = "yes"
-			survived = "**yes**"
-			if r.denied > 0 {
-				survived = fmt.Sprintf("yes, with %d denial(s)", r.denied)
-			}
-		} else if r.denied > 0 {
-			survived = "**no**"
+		done := fmt.Sprintf("%d/%d", r.tasksOK, r.tasksOK+r.tasksFailed)
+		survived := "**yes**"
+		switch {
+		case r.tasksFailed > 0 && r.denied > 0:
+			survived = fmt.Sprintf("**no** — %d task(s) refused after the receipt expired", r.tasksFailed)
+		case r.tasksFailed > 0:
+			survived = fmt.Sprintf("**no** — %d task(s) failed", r.tasksFailed)
+		case !r.ok:
+			survived = "**unclear** — the client exited non-zero"
 		}
 		wire := "once"
 		switch {
@@ -214,8 +264,8 @@ func clientTable(rs []clientResult) string {
 		case r.redeems > 1:
 			wire = "partly reused"
 		}
-		fmt.Fprintf(&b, "| %s | %s | **%d** | %d / %d | %s | %s |\n",
-			r.spec.name, done, r.redeems, r.fresh, r.replayed, survived, wire)
+		fmt.Fprintf(&b, "| %s | %s | **%d** | %d / %d / %d | %s | %s |\n",
+			r.spec.name, done, r.redeems, r.fresh, r.replayed, r.denied, survived, wire)
 	}
 	return b.String()
 }
@@ -268,6 +318,15 @@ func (l *lab) runClient(t *testing.T, s clientSpec) clientResult {
 	}
 	r.ok = err == nil
 
+	for _, line := range strings.Split(r.out, "\n") {
+		switch {
+		case strings.Contains(line, "FAILED"):
+			r.tasksFailed++
+		case strings.HasPrefix(strings.TrimSpace(line), "task ") && strings.Contains(line, " ok"):
+			r.tasksOK++
+		}
+	}
+
 	for _, rec := range l.drainRecords(off, 10*time.Second) {
 		sess := sub(rec, "session")
 		if id := str(sess, "ctx_id"); id != "" {
@@ -276,14 +335,21 @@ func (l *lab) runClient(t *testing.T, s clientSpec) clientResult {
 		switch str(rec, "event") {
 		case "redeem":
 			r.redeems++
+			ts, _ := recTime(rec)
 			switch str(rec, "reason") {
 			case "token_redeemed":
 				r.fresh++
+				if r.firstFresh.IsZero() {
+					r.firstFresh = ts
+				}
 			case "receipt_replayed":
 				r.replayed++
 			}
 			if str(rec, "verdict") == "deny" {
 				r.denied++
+				if r.firstDenial.IsZero() {
+					r.firstDenial = ts
+				}
 				r.denials = append(r.denials, fmt.Sprintf("redeem deny %s user=%s port=%s",
 					str(rec, "reason"), str(sess, "username"), str(sess, "port")))
 			}
@@ -539,4 +605,27 @@ print(p.stdout[-4000:]); print(p.stderr[-2000:]); sys.exit(p.returncode)
 `,
 		},
 	},
+}
+
+// TestLabConfigSetsNoReceiptTTL keeps labReceiptTTL honest. The receipt
+// boundary the client notes quote is read from a constant here, and the
+// constant is only right while the lab config takes internal/config's default.
+// If someone sets `receipt_ttl` in port49d-lab.yaml, every one of those notes
+// quotes a number the daemon was not running with — which is the class of
+// error this whole harness exists to make impossible.
+//
+// It deploys nothing and needs no device.
+func TestLabConfigSetsNoReceiptTTL(t *testing.T) {
+	raw, err := os.ReadFile(labConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		s := strings.TrimSpace(line)
+		if strings.HasPrefix(s, "receipt_ttl:") {
+			t.Fatalf("tests/lab/port49d-lab.yaml now sets %q, so labReceiptTTL (%s) is no longer the "+
+				"value the daemon runs with and every client note quoting it is wrong. Set the constant "+
+				"to match, or remove the key to go back to internal/config's default.", s, labReceiptTTL)
+		}
+	}
 }
