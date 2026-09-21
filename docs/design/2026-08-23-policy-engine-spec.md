@@ -3750,6 +3750,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
 | **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 2s**, which is the "answered with increasing delay" of design document §11. The ceiling was 5s until this row measured device reply timeouts; **2026-09-21 it was lowered to 2s**, which is under every timeout measured here, so a FAIL is always delivered inside it (`tests/lab/results/L13-*.md`). A ceiling above a device's timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX, vEOS, N9Kv and Catalyst 8000V: about 3s on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, which also retransmits, and above 12s on IOS-XE, which this sweep does not bound from above; past that timeout every platform that reached it takes the fall-through branch; other transports and the next-server case unmeasured; see below |
 | **L14** | Whether a NETCONF session over SSH authenticates through TACACS+ the way an interactive login does; whether any authorization request is sent for the session or for an `<edit-config>`, and with what `service`, `cmd` and `cmd-arg`; what `port` and `rem_addr` contain; what accounting arrives for a NETCONF session and for a commit. | Adapter coverage for automation traffic (§8); the login context key (§5.1.1); what reconciliation may conclude from accounting (§9) | Junos, NX-OS, EOS | open — measured 2026-09-20 on vEOS, vJunos-router and vSRX; on the N9Kv the AAA half is measured and the RPC half is not, because the channel closes before any RPC is answered; IOS-XE and key-based SSH unmeasured; see below |
+| **L16** | Role delivery over TACACS+ and its interaction with command authorization. Whether a custom role named in a reply attribute takes effect — verified by a command it forbids being refused, never by the device echoing the name back; whether the device still sends a per-command authorization request for a command its own role forbids; which wins when the device's role and port49 disagree, **in both directions**; two roles at once (NX-OS documents a union with permit winning); a role name the device does not have; no role attribute at all; the accepted spellings (`shell:roles=` / `shell:roles*`, bare or inside `cisco-av-pair`); and the `priv-lvl=N` to `priv-N` mapping under `feature privilege`. | The session-attribute model (§6) and adapter `privilege` blocks (§8) — a custom role is the NX-OS and EOS analogue of a Junos login class, which is what decision 22 projects into. Also what the decision log means (§5.7, §9): if a device can refuse a command port49 permitted, the log records a permit for a command that never ran. | EOS, NX-OS | open — added 2026-09-21; see below |
 | **L15** | How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and **what port49 then answers**. | Single-use tokens, and therefore whether reusable tokens are needed at all (§13, decision 15); the 30-character handle's blast radius (design §8) | EOS, NX-OS, Junos | open — measured 2026-09-20 on all four images: one exchange per API request and per NETCONF session, every time, and the repeat permitted out of the receipt rather than the store, which moves the question to `receipt_ttl`; IOS-XE, cookie sessions and kept-alive connections unmeasured; see below |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
@@ -4102,6 +4103,48 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   `local-user-name`, `user-permissions`, the `allow-commands` / `deny-commands` regexes — is
   decision 22 and gated on L12, and nothing here anticipates it. What changed is that the
   envelope is recognised, not that any policy reaches the device.
+
+  **Measured on both Junos images the same day**, three phases against one deploy each
+  (`tests/lab/results/junos-session-service-juniper_vsrx.md`,
+  `junos-session-service-juniper_vjunos-router.md`). vSRX 21.4R3.15 and vJunos-router
+  23.4R2-S2.1 agree cell for cell.
+
+  1. **The permit arrives.** `event=authorize_session verdict=permit reason=context_matched`,
+     `request.service="junos-exec"`, and the request carries that one AV pair and nothing else.
+  2. **A device-renamed service reaches the authorization and NOT accounting.** With
+     `set system tacplus-options service-name junos-exec-fw` committed, the authorization's
+     `service` is `junos-exec-fw` — and every one of the seven accounting records the same
+     login produced still carries `service=shell`. So the rename is an authorization-side
+     setting only, and **`service` cannot be used to join the authorization stream to the
+     accounting stream** on this platform. Nothing in this lab had asked that before.
+  3. **The denial does not bind, and this is the correction.** With port49 configured to
+     authorize `shell` alone — precisely the comparison `author.Handle` made until
+     2026-09-21 — the session authorization was denied `service_unsupported` and **the login
+     completed anyway**. `show cli authorization` in that session reported the same class and
+     the same permissions as in the two phases port49 permitted:
+
+     ```
+     Current user: 'remote' login: 'alice04' class 'p49-readonly'
+     Permissions:
+         view        -- Can view current values and statistics
+         view-configuration-- Can view all configuration (not including secrets)
+     ```
+
+     The class comes from the device's own `user remote { class p49-readonly; }` template,
+     which Junos applies to any user it authenticates that has no local account. Denying the
+     authorization removes nothing port49 was providing, **because port49 was providing
+     nothing**: phase A's permit carries no attributes either, so a permitted and a denied
+     Junos session are indistinguishable to the operator and differ only in port49's log.
+
+  **What plan 5 inherits from that.** On these images port49's session authorization is
+  *advisory* under a reference configuration: the device authenticates through TACACS+ and
+  then assigns privilege from its own template whatever port49 answers. The projection is not
+  a refinement on top of a working denial — until it lands, port49 does not constrain a Junos
+  session at all, and the only thing between an authenticated operator and the device is the
+  class that device was configured with locally. Read alongside L4 reading 1, where a Junos
+  *authentication* FAIL is also not final when `password` is in `authentication-order`: on
+  this vendor both halves of AAA are advisory unless the device is configured to make them
+  binding.
   *Unmeasured:* the attribute sets the other four platforms refuse — only IOS-XE has been probed
   with an attribute it does not know, so whether EOS, NX-OS and Junos merely ignore one or would refuse a
   different one is untested; and every non-SSH transport on IOS-XE.
@@ -4218,6 +4261,17 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
     NETCONF session from a shell one at authorization time. No per-RPC authorization at all. Accounting
     does distinguish it: `port=non-tty` and `cmd=xml-mode netconf need-trailer <cr>`, alongside the usual
     `cmd=login` / `cmd=logout` pair and a `session_pid`. A `<commit>` produced no authorization of its own.
+
+    **One sentence in the 2026-09-20 Junos notes was wrong and is corrected here, 2026-09-21.** Those
+    runs read the `<edit-config>` failing `permission denied` as the session-authorization denial
+    arriving — "that error is the denial arriving, not the guessed payload being wrong". It is
+    neither. Measured since: a Junos session authorization denied `service_unsupported` does not
+    stop the login and does not change the session's class, which stays the `p49-readonly` the
+    device's own `user remote` template assigns (L10, 2026-09-21). `permission denied` is that
+    read-only class refusing a write, and the same `<edit-config>` would have returned it with the
+    authorization permitted. The denial and the read-only class are two separate facts that
+    happened to produce one symptom, and the `<edit-config>` payload is still unverified either
+    way. A rerun with a writable class is what settles the payload.
   - **NX-OS** authenticates and its session authorization is permitted, and then the channel closes with
     EOF before any RPC is answered. Its session request asks for `shell:roles`; answering with
     `shell:roles*network-admin` did not change the EOF, so the cause is elsewhere and is **not measured**.
@@ -4252,6 +4306,34 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   *Unmeasured:* the actual `receipt_ttl` boundary — no test has yet driven a repeat past it; cookie
   sessions; kept-alive connections; IOS-XE.
+- **L16** — added 2026-09-21. `tests/lab/l16_test.go`, results in `tests/lab/results/L16-*.md`.
+
+  **Why it exists.** `tests/lab/port49d-lab.yaml` has been sending `shell:roles*network-admin` to
+  every platform since the N9Kv's session request was seen asking for `shell:roles` by name
+  (L10), and **no test has ever checked that a device applied it** rather than ignored it. The
+  owner's framing is the one this row is written to: a custom role is the NX-OS and EOS analogue
+  of a Junos login class, so it is the thing decision 22's projection projects *into* on those
+  platforms, and the one place port49 can express a policy to a device that does not authorize
+  every command.
+
+  **The two questions that bear on the product**, and they are the ones a results note must not
+  answer by assumption:
+
+  1. *The role forbids a command port49 permitted.* If the device refuses it, a role is a second
+     policy engine port49 does not control, and port49's decision log carries a `permit` for a
+     command that never ran. That is a reconciliation gap (§9) arriving from a direction this
+     document does not describe — not a device that fails to ask, but a device that asks, is told
+     yes, and refuses anyway.
+  2. *port49 denies a command the role permits.* If the command runs, a per-command deny does not
+     bind on that platform and port49's command authorization is advisory there — the same shape
+     the Junos session authorization turned out to have (L10, 2026-09-21).
+
+  The lab test defines one role that permits everything and denies exactly one command, so one
+  variable separates the two. It deliberately does **not** probe with `reload`, the obvious second
+  deny prefix: if port49's deny turns out not to bind, which is question 2, the device reboots
+  mid-run.
+
+  *Status: nothing measured yet.* Every claim above is a question, not a finding.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
