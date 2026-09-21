@@ -14,7 +14,9 @@ import (
 //
 // This is not an idle question about device tuning. port49 delays a FAIL reply
 // on purpose, by `limits.auth_failure_delay_base` doubling per failure up to
-// `limits.auth_failure_delay_max` (default 500ms and **5s**, internal/config).
+// `limits.auth_failure_delay_max` (default 500ms and **2s**, internal/config;
+// the ceiling was 5s until this row measured device timeouts on 2026-09-20 and
+// it was lowered on 2026-09-21).
 // The delay holds the connection's read goroutine for its duration, and
 // nobody had measured what any device does while it is held. If the ceiling
 // sits above a device's reply timeout, the device stops waiting and the FAIL
@@ -306,11 +308,11 @@ func l13Verdict(rows []l13Row) string {
 			"reply timeout, and the figure above is read off which logins the device acted on rather than off "+
 			"the clock. ", retrans, len(rows))
 	}
-	b.WriteString("**port49's own default `limits.auth_failure_delay_max` is 5s** " +
-		"(internal/config), reached after five consecutive failures for one `(nas, username)` pair. " +
-		"Compare that with the figure above before treating a repeated-failure delay as a way to slow an " +
-		"attacker down: past the device's timeout it stops slowing anything down and starts changing the " +
-		"answer the device acts on.")
+	b.WriteString("**port49's own default `limits.auth_failure_delay_max` is 2s** " +
+		"(internal/config), reached after three consecutive failures for one `(nas, username)` pair. " +
+		"It was 5s until this row was measured, and was lowered on 2026-09-21 to sit under every reply " +
+		"timeout measured here. Compare it with the figure above before raising it: past the device's " +
+		"timeout a delay stops slowing an attacker down and starts changing the answer the device acts on.")
 	return b.String()
 }
 

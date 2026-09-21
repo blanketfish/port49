@@ -15,7 +15,7 @@ Whether any method-list configuration falls through to local on FAIL rather than
 
 The local account `breakglass` presented its own LOCAL password over SSH, under each method list and each server condition. Under `port49d answering FAIL` that account has no token in port49's store, so port49 answers the device FAIL; the decision log column is the proof that it did, for that attempt.
 
-The time column is the device's, not port49's: for this test both `limits.auth_failure_delay_base` and `limits.auth_failure_delay_max` were pinned to 100ms, rather than the product defaults of 500ms doubling to 5s, so nothing in these figures is the daemon sleeping.
+The time column is the device's, not port49's: for this test both `limits.auth_failure_delay_base` and `limits.auth_failure_delay_max` were pinned to 100ms, rather than the product defaults of 500ms doubling to 2s, so nothing in these figures is the daemon sleeping.
 
 | method list | port49d | local login | time | decision log |
 |---|---|---|---|---|

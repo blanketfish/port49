@@ -303,9 +303,15 @@ func (s *Session) finish(rec decision.Record, status uint8, reason decision.Reas
 // that hangs up mid-delay does not shorten it, and only shutdown does. The
 // delay therefore holds the connection's single read goroutine for its
 // duration, which on a single-connect connection is head-of-line blocking for
-// every other session on it. That cost, and whether the default ceiling of
-// auth_failure_delay_max belongs under the shortest device TACACS+ timeout,
-// are open questions for the project owner; device timeouts are unmeasured.
+// every other session on it. That cost is still an open question for the
+// project owner.
+//
+// The ceiling is no longer one. L13 measured device reply timeouts — about 3s
+// on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, above 12s on
+// IOS-XE — and auth_failure_delay_max now defaults to 2s so that a FAIL is
+// delivered while every one of them is still waiting for it (spec §15, L13).
+// Past a device's timeout a delayed FAIL is indistinguishable from an
+// unreachable server, and the device falls through to the local password.
 func (s *Session) fail(ctx context.Context, rec decision.Record, reason decision.Reason) (wire.AuthenReply, bool) {
 	delay := s.h.limits.AuthFailure(s.peer.NAS, Canonical(s.user))
 	s.h.metrics.AuthFailures.Inc()

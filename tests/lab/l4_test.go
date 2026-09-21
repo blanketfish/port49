@@ -597,7 +597,7 @@ func l4Observation(l *lab, cells []l4Cell, configEvidence, channel, restoreNote 
 		"so port49 answers the device FAIL; the decision log column is the proof that it did, for that attempt.\n\n"+
 		"The time column is the device's, not port49's: for this test both `limits.auth_failure_delay_base` and "+
 		"`limits.auth_failure_delay_max` were pinned to %s, rather than the product defaults of 500ms doubling "+
-		"to 5s, so nothing in these figures is the daemon sleeping.\n\n",
+		"to 2s, so nothing in these figures is the daemon sleeping.\n\n",
 		breakglassUser, l4FailDelay)
 	b.WriteString("| method list | port49d | local login | time | decision log |\n|---|---|---|---|---|\n")
 	for _, c := range cells {

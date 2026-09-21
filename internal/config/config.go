@@ -147,8 +147,16 @@ func Load(path string) (Config, error) {
 			MalformedBackoffMax:  orD(f.Limits.MalformedBackoffMax, 5*time.Second),
 			MalformedWindow:      malformedWindow,
 			AuthFailureDelayBase: orD(f.Limits.AuthFailureDelayBase, 500*time.Millisecond),
-			AuthFailureDelayMax:  orD(f.Limits.AuthFailureDelayMax, 5*time.Second),
-			AuthFailureWindow:    authFailureWindow,
+			// 2s, not 5s: the ceiling has to stay under the reply timeout of the
+			// devices being answered, or the FAIL it delays arrives after the
+			// device has given up and is read as an unreachable server — which
+			// falls through to the local password, so the brake undoes the
+			// denial. The shortest timeout measured is about 3s (spec §15, L13;
+			// tests/lab/results/L13-*.md). An operator who raises this above
+			// their own shortest device timeout converts denials into
+			// fall-through.
+			AuthFailureDelayMax: orD(f.Limits.AuthFailureDelayMax, 2*time.Second),
+			AuthFailureWindow:   authFailureWindow,
 		},
 	}
 	if c.Accounting.SpoolCapacity == 0 {

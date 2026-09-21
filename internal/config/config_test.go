@@ -102,6 +102,48 @@ func TestLoadAppliesDefaultsAndResolvesKeys(t *testing.T) {
 	}
 }
 
+// TestAuthFailureDelayCeilingIsUnderEveryMeasuredDeviceTimeout pins the two
+// numbers that decide whether a denial is delivered as a denial.
+//
+// The FAIL reply is delayed on purpose, 500ms doubling per consecutive failure
+// for one `(nas, username)` pair up to this ceiling. Past a device's own
+// TACACS+ reply timeout the delayed FAIL is not a denial at all: the device
+// cannot tell it from an unreachable server, so it falls through to the next
+// method and accepts the local password (spec §15, L13; `tests/lab/results/
+// L13-*.md`). The ceiling was 5s until 2026-09-21, which was above the ~3s
+// measured on both Junos images and exactly on the 5.0s measured on vEOS.
+//
+// 2s is under the lowest timeout measured on any of the five images, so it is
+// asserted here rather than left to whoever next edits the defaults. Raising it
+// is a device-behavior decision, and this test failing is where that has to be
+// argued.
+func TestAuthFailureDelayCeilingIsUnderEveryMeasuredDeviceTimeout(t *testing.T) {
+	setSecrets(t)
+	invPath := write(t, "inventory.yaml", inv)
+	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Limits.AuthFailureDelayBase != 500*time.Millisecond {
+		t.Errorf("auth_failure_delay_base defaults to %v, want 500ms", c.Limits.AuthFailureDelayBase)
+	}
+	if c.Limits.AuthFailureDelayMax != 2*time.Second {
+		t.Errorf("auth_failure_delay_max defaults to %v, want 2s. The shortest device reply timeout "+
+			"measured in the lab is about 3s (spec §15, L13): a ceiling at or above it turns a denial "+
+			"into a fall-through to the local password", c.Limits.AuthFailureDelayMax)
+	}
+	// An explicit value still wins; the default is a default, not a cap.
+	c, err = Load(write(t, "explicit.yaml",
+		strings.Replace(fmt.Sprintf(sample, invPath), "limits: {per_nas_connections: 4}",
+			"limits: {auth_failure_delay_max: 750ms}", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Limits.AuthFailureDelayMax != 750*time.Millisecond {
+		t.Errorf("an explicit auth_failure_delay_max must be honoured, got %v", c.Limits.AuthFailureDelayMax)
+	}
+}
+
 func TestLoadRefusesMissingSecretAndUnknownKeyRef(t *testing.T) {
 	invPath := write(t, "inventory.yaml", inv)
 	if _, err := Load(write(t, "a.yaml", fmt.Sprintf(sample, invPath))); err == nil {
