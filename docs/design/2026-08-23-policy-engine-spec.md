@@ -3743,7 +3743,7 @@ implemented against a guess. This section is the one place the distinction is ke
 |---|---|---|---|---|
 | **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE and the console unmeasured; see below |
 | **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below |
-| **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | open — reopened 2026-09-21, closed in error the day before. Measured: vEOS 4.32.2F and IOS-XE 17.13.01a both send the operator's own username with `service=enable` and a bare-address `rem_addr` (`tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`). **NX-OS is unmeasured**: `L3-cisco_nxos.md` concluded the N9Kv has no enable, but the note never shows which command the device rejected, the test types `disable` first, and `enable` was probably never typed; NX-OS has an exec `enable` under `feature privilege`, which the lab did not configure |
+| **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | open — reopened 2026-09-21, closed in error the day before. Measured: vEOS 4.32.2F and IOS-XE 17.13.01a both send the operator's own username with `service=enable` and a bare-address `rem_addr` (`tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`). **NX-OS re-measured 2026-09-21 with the transcript it was missing** (`tests/lab/results/L3-nxos-cisco_nxos.md`): `disable`, `enable` and `enable 15` were each typed separately and each answered `% Invalid command at '^' marker.`, and `feature privilege` is itself refused by this image, so the conclusion the reopened note reached without evidence is confirmed with it |
 | **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS and the N9Kv over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS and the N9Kv never do; `deadtime`, IOS-XE, other transports and authorization fall-through unmeasured; see below |
 | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | closed — measured 2026-09-20; `tests/lab/results/L5-arista_eos.md`, `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, `L5-cisco_nxos.md`, `L5-cisco_iosxe.md`. No image sends a WATCHDOG over a 2m30s idle interactive session under the lab's accounting config, which sets no periodic update; a device configured for periodic updates is outside what was measured |
 | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
@@ -3895,9 +3895,36 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   exchanges — none existed while the workaround was in place — and the allowed-enable trace is a complete
   `redeem` → `authorize_session permit context_matched` → `authorize_command` path.
 
-  **Nexus 9300v 10.4(2)F has no enable exchange at all.** `disable` answers `% Invalid command at '^'
-  marker.` NX-OS raises privilege by role at login, and an enable exists only under `feature privilege`,
-  which this lab does not configure. That is the measurement for this platform, not a gap in it.
+  **Nexus 9300v 10.4(2)F has no enable exchange at all — re-measured 2026-09-21, this time showing
+  which command the device rejected.** The 2026-09-20 note asserted this and quoted
+  `% Invalid command at '^' marker.` without naming the command; the test that wrote it types
+  `disable` first, so that reply was very probably `disable`'s and `enable` was never typed. The row
+  was closed on it and reopened the next day. `tests/lab/results/L3-nxos-cisco_nxos.md` types the
+  three commands separately and records each reply beside it:
+
+  ```
+  disable        ->        ^
+                    % Invalid command at '^' marker.
+  enable         ->        ^
+                    % Invalid command at '^' marker.
+  enable 15      ->        ^
+                    % Invalid command at '^' marker.
+  ```
+
+  and no authentication record beyond the login reached port49 in that session. The row also names
+  `feature privilege` as the configuration an exec `enable` would exist under. **This image does not
+  have it:**
+
+  ```
+  feature privilege
+                           ^
+  % Invalid command at '^' marker.
+  ```
+
+  so there is no configuration this image can be put into that produces an enable exchange. The
+  original conclusion was right; what it lacked was any way for a reader to check it, which is why
+  the lab harness now refuses to render a negative finding without the exact command sent and the
+  exact reply received (`negativeFinding` in `tests/lab/harness_test.go`).
 
   **Catalyst 8000V 17.13.01a, measured 2026-09-20 — the platform this row was named after, and the
   answer is not the one the design feared.** Two concurrent enables, off the wire
@@ -4478,9 +4505,60 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   attribute at all** on this image, which follows from 1: nothing in the `shell:roles` family
   reaches the session, so there is nothing for a union rule or a missing name to change.
 
-  *Unmeasured:* NX-OS, which is the platform that asks for `shell:roles` by name and the one
-  this attribute was added for; whether a role delivered some other way (a `local-user-name`
-  template, an EOS-specific spelling) does take effect; and the `cisco-av-pair` ambiguity in 3.
+  **NX-OS measured 2026-09-21** (`tests/lab/results/L16-cisco_nxos.md`), Nexus 9300v 10.4(2)F,
+  the same seven variants. **It answers the opposite way to vEOS on delivery and the same way
+  on binding**, and the role the device reports is read per user from `show user-account`.
+
+  | reply attributes | role the device reports for that session |
+  |---|---|
+  | `priv-lvl=15` alone | `network-admin` |
+  | `priv-lvl=15`, `shell:roles*p49-noc` | **`p49-noc`** |
+  | `priv-lvl=15`, `shell:roles=p49-noc` (mandatory) | **`p49-noc`** |
+  | `priv-lvl=15`, `cisco-av-pair*shell:roles="p49-noc"` | **`p49-noc`** |
+  | `priv-lvl=15`, `shell:roles*"p49-noc network-operator"` | **`p49-noc network-operator`** |
+  | `priv-lvl=15`, `shell:roles*p49-nosuchrole` | **`network-operator`** |
+  | `priv-lvl=1` alone | **`vdc-operator`** |
+
+  **1. All three spellings work.** `shell:roles*`, `shell:roles=` and
+  `cisco-av-pair*shell:roles="<name>"` each deliver the role, including the quoted form inside
+  `cisco-av-pair` that vEOS refuses outright. An adapter for this platform has a choice; an
+  adapter that has to serve both platforms with one string does not, because the two spellings
+  EOS tolerates and refuses are not the same two.
+
+  **2. Two roles at once are delivered as a union**, exactly as the documentation says:
+  `roles:p49-noc network-operator`.
+
+  **3. A role the device does not have degrades to `network-operator`, not to `network-admin`.**
+  That is the 3am answer and it is the safe direction: a policy naming a role that was renamed
+  or never created leaves the operator **read-only** rather than administrative. It does not
+  refuse the session, and port49 has no way to know it happened — the reply port49 sent and the
+  record it wrote are identical to the successful case.
+
+  **4. `priv-lvl=1` maps to `vdc-operator`**, with no `feature privilege` configured. Not
+  `priv-1`, which is what the row asked about: that name belongs to the `feature privilege`
+  world this image does not have (L3). So the privilege-level path does reach this platform,
+  and it reaches a role nobody named.
+
+  **5. The delivered role's own command rules do NOT bind.** `p49-noc` carries
+  `rule 10 deny command show version`, the device reports the session as holding `p49-noc`, and
+  `show version` **ran** — with port49 having answered `permit permit_dominates` for it. While
+  `aaa authorization commands` points at TACACS+, a delivered role is an **identity label**, not
+  a second command-authorization policy. port49 decides the command; the role decides what the
+  account is.
+
+  That is the good news and the limit in one sentence. The reconciliation gap L16 was written to
+  look for — a device that asks port49, is told yes, and refuses anyway — **does not occur on
+  either platform measured**. Neither does its mirror: port49's per-command deny was honoured in
+  every variant on both platforms, including where the device's own role permitted the command.
+  **And a role cannot be used to constrain a session port49 has permitted**, which is what plan 5
+  needs to know: on these platforms the role is where privilege *comes from*, not where it is
+  *limited*, and the limiting is entirely port49's per-command authorization.
+
+  *Unmeasured:* whether a role's rules bind when `aaa authorization commands` is **not** pointed
+  at TACACS+ — the case an operator has before port49 is deployed, and the one the role's rules
+  were presumably written for; the `cisco-av-pair` ambiguity in EOS finding 3; `feature
+  privilege` and its `priv-N` roles, which this image does not have at all (L3); and whether a
+  role delivered some other way takes effect on vEOS.
 
   **A note about the EOS image version, which this row is where it was caught.** Every EOS
   results note written before 2026-09-21, and every EOS row in this section, says

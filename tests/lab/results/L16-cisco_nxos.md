@@ -4,7 +4,7 @@
 - **Platform:** cisco_nxos (containerlab node `nx1`, 172.100.100.31)
 - **Image version:** Nexus 9300v 10.4(2)F (`vrnetlab/cisco_n9kv:9300v64-10.4.2.F`)
 - **Topology:** `tests/lab/topologies/nxos.clab.yml`
-- **Capture:** `tests/lab/evidence/L16-cisco_nxos.pcap` — 1548 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L16-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L16-cisco_nxos.pcap` — 1549 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L16-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -72,7 +72,7 @@ Software
 Hardware
   cisco Nexus9000 C9300v Chassis 
    with 10187700 kB of memory.
-  Processor Board ID 9LUWZRKS8C1
+  Processor Board ID 9BFJBM9IYXH
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -148,7 +148,7 @@ Software
 Hardware
   cisco Nexus9000 C9300v Chassis 
    with 10187700 kB of memory.
-  Processor Board ID 9LUWZRKS8C1
+  Processor Board ID 9BFJBM9IYXH
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -229,7 +229,7 @@ Software
 Hardware
   cisco Nexus9000 C9300v Chassis 
    with 10187700 kB of memory.
-  Processor Board ID 9LUWZRKS8C1
+  Processor Board ID 9BFJBM9IYXH
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -315,7 +315,7 @@ Software
 Hardware
   cisco Nexus9000 C9300v Chassis 
    with 10187700 kB of memory.
-  Processor Board ID 9LUWZRKS8C1
+  Processor Board ID 9BFJBM9IYXH
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -417,7 +417,7 @@ Software
 Hardware
   cisco Nexus9000 C9300v Chassis 
    with 10187700 kB of memory.
-  Processor Board ID 9LUWZRKS8C1
+  Processor Board ID 9BFJBM9IYXH
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -524,7 +524,7 @@ Software
 Hardware
   cisco Nexus9000 C9300v Chassis 
    with 10187700 kB of memory.
-  Processor Board ID 9LUWZRKS8C1
+  Processor Board ID 9BFJBM9IYXH
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -620,7 +620,7 @@ Software
 Hardware
   cisco Nexus9000 C9300v Chassis 
    with 10187700 kB of memory.
-  Processor Board ID 9LUWZRKS8C1
+  Processor Board ID 9BFJBM9IYXH
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -658,25 +658,32 @@ nx1
 
 | reply attributes | session | role reported | `show version` (role denies) | `show clock` (port49 denies) | `show hostname` (control) |
 |---|---|---|---|---|---|
-| no role attribute at all | opened | `roles:network-admin` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
-| `shell:roles*<role>` — bare, OPTIONAL | opened | `roles:p49-noc` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
-| `shell:roles=<role>` — bare, MANDATORY | opened | `roles:p49-noc` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
-| inside `cisco-av-pair` | opened | `roles:p49-noc` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
-| two roles at once | opened | `roles:network-admin` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
-| a role the device does not have | opened | `roles:network-admin` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
-| `priv-lvl=1` alone | opened | `roles:p49-noc` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
+| no role attribute at all | opened | `network-admin` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
+| `shell:roles*<role>` — bare, OPTIONAL | opened | `p49-noc` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
+| `shell:roles=<role>` — bare, MANDATORY | opened | `p49-noc` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
+| inside `cisco-av-pair` | opened | `p49-noc` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
+| two roles at once | opened | `p49-noc network-operator` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
+| a role the device does not have | opened | `network-operator` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
+| `priv-lvl=1` alone | opened | `vdc-operator` | ran; 1 req; permit permit_dominates | **refused**; 1 req; deny no_permit_dominates_deny | ran; 1 req; permit permit_dominates |
 
 ## What this answers
 
-**1.** Measured: delivering role `p49-noc` by name did NOT take effect: the command the role denies ran anyway. Whatever the device reported for `show user-account`, the role's rules were not applied to this session.
+**1. The role IS delivered, and its own command rules do NOT bind.** The device reports `p49-noc` for this session, against `network-admin` with no attribute sent, so the name reached it and was applied to the account. But `show version` -- which the role denies with an explicit rule -- **ran anyway**, and port49 had answered `permit permit_dominates` for it with 1 authorization request(s).
 
-Sent:
+That is the shape to take away: on this platform a delivered role is an **identity label**, not a second command-authorization policy, while `aaa authorization commands` points at TACACS+. port49 decides the command; the role decides what the account is. The two do not compete, which is the good news -- and it means a role cannot be used to constrain a session that port49 has permitted.
+
+The device's own words for this session:
 
 ```
-show version
+user:alice02
+        roles:p49-noc 
+account created through REMOTE authentication
+Credentials such as ssh server key will be cached temporarily only for this user account
+Local login not possible
+nx1# 
 ```
 
-The device replied:
+and for `show version`:
 
 ```
 Cisco Nexus Operating System (NX-OS) Software
@@ -701,7 +708,7 @@ Software
 Hardware
   cisco Nexus9000 C9300v Chassis 
    with 10187700 kB of memory.
-  Processor Board ID 9LUWZRKS8C1
+  Processor Board ID 9BFJBM9IYXH
   Device name: nx1
   bootflash:    4495360 kB
 
