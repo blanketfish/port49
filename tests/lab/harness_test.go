@@ -661,54 +661,91 @@ func (l *lab) startDaemon() error {
 
 func labConfigPath() string { return filepath.Join(root, "tests", "lab", "port49d-lab.yaml") }
 
-// configPath is the daemon config this platform runs against: the checked-in
-// one for every platform but IOS-XE, and a derived copy there.
+// platformSessionAttributes overrides `lab.session_attributes` for the
+// platforms where the checked-in list is wrong, keyed on the lab platform
+// name. A platform absent from this map runs the checked-in file byte for
+// byte. Each entry is a measurement, not a preference:
 //
-// The derivation exists because of a measurement, and it is a measurement that
-// contradicts what `lab.session_attributes` in port49d-lab.yaml says about
-// itself. That comment claims `shell:roles*network-admin` is safe to send
-// everywhere because an OPTIONAL argument a device does not understand is
-// ignored (RFC 8907 §8.2), which is why one lab authorizer could serve every
-// platform. EOS and Junos do ignore it. **IOS-XE 17.13.01a does not.** With it
-// in the reply, a session port49 permitted `context_matched` is refused by the
-// device with
+// **cisco_iosxe — `priv-lvl=15` alone.** The comment on
+// `lab.session_attributes` in port49d-lab.yaml claims
+// `shell:roles*network-admin` is safe to send everywhere, because an OPTIONAL
+// argument a device does not understand is ignored (RFC 8907 §8.2). EOS and
+// Junos do ignore it. **IOS-XE 17.13.01a does not.** With it in the reply, a
+// session port49 permitted `context_matched` is refused by the device with
 //
 //	% Authorization failed.
 //
-// and the SSH session is closed, so no token operator can reach a prompt and
-// L2, L3 and L10 measure nothing. It is not specific to `shell:roles`: an
-// invented optional attribute fails the same way, which makes this "IOS-XE
-// fails an EXEC authorization carrying any attribute it does not recognise",
-// not "IOS-XE dislikes NX-OS's roles attribute". Both were measured on
-// 2026-09-20; see tests/lab/results/L10-cisco_iosxe.md.
+// and the SSH session is closed, so no token operator reaches a prompt and L2,
+// L3 and L10 measure nothing. An invented optional attribute fails the same
+// way, so this is "IOS-XE fails an EXEC authorization carrying any attribute
+// it does not recognise", not "IOS-XE dislikes NX-OS's roles attribute".
+// Measured 2026-09-20; tests/lab/results/L10-cisco_iosxe.md.
 //
-// So this platform gets `priv-lvl=15` alone. That is the attribute IOS-XE is
-// being asked about anyway, and dropping the other one changes nothing any
-// other platform sees.
+// **The Junos platforms — no attributes at all.** port49 answered every Junos
+// session authorization `service_unsupported` until 2026-09-21, so no
+// attribute it sent has ever reached a Junos device and none of them is
+// measured there. Now that `junos-exec` is authorized, the reply would carry
+// `priv-lvl=15` and `shell:roles*network-admin` on a platform where IOS-XE has
+// already shown what an unrecognised attribute can cost, and where the real
+// answer — class, `local-user-name`, `user-permissions`, the allow/deny
+// regexes — is the session-only projection of decision 22, gated on L12 and
+// owned by plan 5. An empty list is the only shape that measures the thing
+// this session is measuring: does a Junos login now get a permit.
+var platformSessionAttributes = map[string]string{
+	"cisco_iosxe":           `["priv-lvl=15"]`,
+	"juniper_vjunos-router": `[]`,
+	"juniper_vsrx":          `[]`,
+}
+
+// configPath is the daemon config this platform runs against: the checked-in
+// one unless platformSessionAttributes has something to say about it.
 func (l *lab) configPath() (string, error) {
-	if l.p.name != "cisco_iosxe" {
+	return l.derivedConfig("", platformSessionAttributes[l.p.name], "")
+}
+
+// derivedConfig writes a copy of port49d-lab.yaml for this platform with
+// `lab.session_attributes` replaced by attrs (a YAML flow sequence, e.g.
+// `["priv-lvl=15"]`) when attrs is non-empty, and extra appended to the end of
+// the file — a `platforms:` block, say, for a test that renames a platform's
+// session service. With neither, it returns the checked-in file itself, so a
+// platform that needs no derivation reads exactly what is committed.
+//
+// suffix names the derivation when one platform needs more than one in a run;
+// "" is the platform's standing config.
+func (l *lab) derivedConfig(suffix, attrs, extra string) (string, error) {
+	if attrs == "" && extra == "" {
 		return labConfigPath(), nil
 	}
 	raw, err := os.ReadFile(labConfigPath())
 	if err != nil {
 		return "", err
 	}
-	const anchor = "  session_attributes: "
-	i := strings.Index(string(raw), anchor)
-	if i < 0 {
-		return "", fmt.Errorf("tests/lab/port49d-lab.yaml has no `%s` line, so the attribute IOS-XE refuses "+
-			"cannot be removed and every token session on it would be refused by the device", strings.TrimSpace(anchor))
+	out := string(raw)
+	if attrs != "" {
+		const anchor = "  session_attributes: "
+		i := strings.Index(out, anchor)
+		if i < 0 {
+			return "", fmt.Errorf("tests/lab/port49d-lab.yaml has no `%s` line, so the attribute set this platform "+
+				"needs cannot be substituted and the run would measure the wrong reply", strings.TrimSpace(anchor))
+		}
+		j := strings.Index(out[i:], "\n")
+		if j < 0 {
+			return "", fmt.Errorf("tests/lab/port49d-lab.yaml ends inside its session_attributes line")
+		}
+		out = out[:i] + anchor + attrs + out[i+j:]
 	}
-	j := strings.Index(string(raw)[i:], "\n")
-	if j < 0 {
-		return "", fmt.Errorf("tests/lab/port49d-lab.yaml ends inside its session_attributes line")
+	if extra != "" {
+		out += "\n" + extra
 	}
-	out := string(raw)[:i] + `  session_attributes: ["priv-lvl=15"]` + string(raw)[i+j:]
 	dir := filepath.Join(root, "tests", "lab", "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "port49d-lab-cisco_iosxe.yaml")
+	name := "port49d-lab-" + l.p.name
+	if suffix != "" {
+		name += "-" + suffix
+	}
+	path := filepath.Join(dir, name+".yaml")
 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
 		return "", err
 	}
@@ -1404,6 +1441,85 @@ func (l *lab) captureLine(t *testing.T) string {
 	}
 	return line + " A redacted copy of this run's capture: credential bytes overwritten with `x`, " +
 		"everything else byte-identical, decodable with the lab key (`tests/lab/README.md`)."
+}
+
+// negativeFinding is a claim of the form "this platform does not / cannot X".
+// It exists because of an error made on 2026-09-20 and caught on 2026-09-21:
+// `tests/lab/results/L3-cisco_nxos.md` asserted "the N9Kv has no enable
+// exchange at all" and showed no transcript. The test types `disable` first,
+// so the `% Invalid command at '^' marker.` it quoted was probably the
+// device's answer to `disable` and `enable` was very likely never typed. A
+// register row was closed on it and had to be reopened.
+//
+// The rule that came out of it: a negative is not a finding until the note
+// shows **the exact thing sent and the exact thing the device said back**. A
+// reader must be able to see, without trusting the test, that the command
+// whose absence is being claimed is the command that was actually rejected.
+//
+// So this type cannot be rendered without both, and render() fails the test
+// rather than writing a note without them — a negative without its transcript
+// measures nothing, and a test that measured nothing must fail.
+type negativeFinding struct {
+	// Claim is the negative itself, e.g. "NX-OS has no `enable` command
+	// without `feature privilege`".
+	Claim string
+	// Sent is the exact command typed or request put on the wire. Not a
+	// paraphrase and not the test's name for it: the bytes.
+	Sent string
+	// Got is the device's exact reply, verbatim, including its punctuation and
+	// its marker lines. An empty reply is itself a finding and must be written
+	// as such in Got (see emptyDeviceReply), never left blank.
+	Got string
+	// Inferred marks a claim reached from side effects rather than from the
+	// device saying so. The brief's distinction: an inferred claim is written
+	// down as inferred and never as measured.
+	Inferred bool
+	// Why explains an inferred claim: which side effect, and why it implies
+	// the claim. Required when Inferred is set.
+	Why string
+}
+
+// emptyDeviceReply is what Got holds when the device answered with nothing at
+// all. It is a sentence rather than an empty string so a note never renders a
+// blank fenced block, which reads as "the device said nothing" whether that
+// was measured or whether the transcript was simply never captured.
+const emptyDeviceReply = "(the device returned no output at all: zero bytes on the channel)"
+
+// render returns the markdown for a negative finding, or fails the test. Every
+// branch that fails here is a note that would have asserted a negative with
+// nothing behind it.
+func (f negativeFinding) render(t *testing.T) string {
+	t.Helper()
+	if strings.TrimSpace(f.Claim) == "" {
+		t.Fatal("a negativeFinding with no Claim: nothing is being asserted")
+	}
+	if strings.TrimSpace(f.Sent) == "" {
+		t.Fatalf("negative finding %q has no Sent: a claim that a platform cannot do something "+
+			"is not a measurement until the note shows the exact command or request that was sent. "+
+			"This is the L3-cisco_nxos defect (see negativeFinding's comment); the test fails rather "+
+			"than writing the note.", f.Claim)
+	}
+	if strings.TrimSpace(f.Got) == "" {
+		t.Fatalf("negative finding %q has no Got: the device's exact reply is what makes the claim "+
+			"checkable by a reader. If the device really answered nothing, set Got to emptyDeviceReply "+
+			"and say so; do not leave it blank.", f.Claim)
+	}
+	if f.Inferred && strings.TrimSpace(f.Why) == "" {
+		t.Fatalf("negative finding %q is marked Inferred with no Why: an inference has to name the "+
+			"side effect it rests on, or a reader cannot tell it from a measurement.", f.Claim)
+	}
+	kind := "Measured"
+	if f.Inferred {
+		kind = "**Inferred, not measured**"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: %s\n\n", kind, f.Claim)
+	fmt.Fprintf(&b, "Sent:\n\n```\n%s\n```\n\n", strings.TrimRight(f.Sent, "\n"))
+	fmt.Fprintf(&b, "The device replied:\n\n```\n%s\n```\n", strings.TrimRight(f.Got, "\n"))
+	if f.Inferred {
+		fmt.Fprintf(&b, "\nThis is an inference from a side effect, not the device stating it: %s\n", f.Why)
+	}
+	return b.String()
 }
 
 // result writes tests/lab/results/L<N>-<platform>.md in the form spec §15 rule
