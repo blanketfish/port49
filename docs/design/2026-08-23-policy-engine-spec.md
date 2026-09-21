@@ -3755,8 +3755,8 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
 | **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 2s**, which is the "answered with increasing delay" of design document §11. The ceiling was 5s until this row measured device reply timeouts; **2026-09-21 it was lowered to 2s**, which is under every timeout measured here, so a FAIL is always delivered inside it (`tests/lab/results/L13-*.md`). A ceiling above a device's timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX, vEOS, N9Kv and Catalyst 8000V: about 3s on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, which also retransmits, and above 12s on IOS-XE, which this sweep does not bound from above; past that timeout every platform that reached it takes the fall-through branch; other transports and the next-server case unmeasured; see below |
 | **L14** | Whether a NETCONF session over SSH authenticates through TACACS+ the way an interactive login does; whether any authorization request is sent for the session or for an `<edit-config>`, and with what `service`, `cmd` and `cmd-arg`; what `port` and `rem_addr` contain; what accounting arrives for a NETCONF session and for a commit. | Adapter coverage for automation traffic (§8); the login context key (§5.1.1); what reconciliation may conclude from accounting (§9) | Junos, NX-OS, EOS | open — measured 2026-09-20 on vEOS, vJunos-router and vSRX; on the N9Kv the AAA half is measured and the RPC half is not, because the channel closes before any RPC is answered; IOS-XE and key-based SSH unmeasured; see below |
-| **L16** | Role delivery over TACACS+ and its interaction with command authorization. Whether a custom role named in a reply attribute takes effect — verified by a command it forbids being refused, never by the device echoing the name back; whether the device still sends a per-command authorization request for a command its own role forbids; which wins when the device's role and port49 disagree, **in both directions**; two roles at once (NX-OS documents a union with permit winning); a role name the device does not have; no role attribute at all; the accepted spellings (`shell:roles=` / `shell:roles*`, bare or inside `cisco-av-pair`); and the `priv-lvl=N` to `priv-N` mapping under `feature privilege`. | The session-attribute model (§6) and adapter `privilege` blocks (§8) — a custom role is the NX-OS and EOS analogue of a Junos login class, which is what decision 22 projects into. Also what the decision log means (§5.7, §9): if a device can refuse a command port49 permitted, the log records a permit for a command that never ran. | EOS, NX-OS | open — added 2026-09-21; see below |
-| **L15** | How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and **what port49 then answers**. | Single-use tokens, and therefore whether reusable tokens are needed at all (§13, decision 15); the 30-character handle's blast radius (design §8) | EOS, NX-OS, Junos | open — measured 2026-09-20 on all four images: one exchange per API request and per NETCONF session, every time, and the repeat permitted out of the receipt rather than the store, which moves the question to `receipt_ttl`; IOS-XE, cookie sessions and kept-alive connections unmeasured; see below |
+| **L16** | Role delivery over TACACS+ and its interaction with command authorization. Whether a custom role named in a reply attribute takes effect — verified by a command it forbids being refused, never by the device echoing the name back; whether the device still sends a per-command authorization request for a command its own role forbids; which wins when the device's role and port49 disagree, **in both directions**; two roles at once (NX-OS documents a union with permit winning); a role name the device does not have; no role attribute at all; the accepted spellings (`shell:roles=` / `shell:roles*`, bare or inside `cisco-av-pair`); and the `priv-lvl=N` to `priv-N` mapping under `feature privilege`. | The session-attribute model (§6) and adapter `privilege` blocks (§8) — a custom role is the NX-OS and EOS analogue of a Junos login class, which is what decision 22 projects into. Also what the decision log means (§5.7, §9): if a device can refuse a command port49 permitted, the log records a permit for a command that never ran. | EOS, NX-OS | open — added 2026-09-21. vEOS measured: `shell:roles*<name>` **does not deliver a role** (the device reports the session's role as `<unknown>`), port49's per-command deny binds, and a `cisco-av-pair*` attribute sent as OPTIONAL is refused outright. NX-OS, the platform that asks for `shell:roles` by name, is unmeasured; see below |
+| **L15** | How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and **what port49 then answers**. | Single-use tokens, and therefore whether reusable tokens are needed at all (§13, decision 15); the 30-character handle's blast radius (design §8) | EOS, NX-OS, Junos | open — measured 2026-09-20 on all four images: one exchange per API request and per NETCONF session, every time, and the repeat permitted out of the receipt rather than the store, which moves the question to `receipt_ttl`; IOS-XE, cookie sessions and kept-alive connections unmeasured. **2026-09-21: the real clients were driven and the count is the client's, not the transport's** — one authentication per ten-task job for every SSH client that holds its connection and for Ansible `cisco.nxos` over `httpapi`, against 28 for NAPALM `nxos` over the same NX-API; and the `receipt_ttl` boundary was crossed for the first time, half a NAPALM job refused `token_not_found` 38.8s into a 30s TTL; see below |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -4326,8 +4326,72 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   `(nas, username, credential_sha256)` the same token presented over either transport finds the same
   receipt on every platform, and a different credential finds none.
 
-  *Unmeasured:* the actual `receipt_ttl` boundary — no test has yet driven a repeat past it; cookie
-  sessions; kept-alive connections; IOS-XE.
+  **2026-09-21: the real clients, and the receipt boundary driven for the first time.**
+  `tests/lab/clients_test.go`, `tests/lab/results/L15-clients-arista_eos.md`,
+  `L15-clients-cisco_nxos.md`. Each client runs a **ten-task job** against one device as one
+  user, on one single-use token. Counts are from port49's decision log.
+
+  | client | platform | authentications per 10 tasks | tasks ok | token survived |
+  |---|---|---|---|---|
+  | pyeapi (eAPI) | vEOS | 10 | 10/10 | yes |
+  | NAPALM `eos` (eAPI) | vEOS | 11 | 10/10 | yes |
+  | Ansible `arista.eos` over `httpapi` | vEOS | 13 | 10/10 | yes |
+  | netmiko `arista_eos` (one persistent SSH) | vEOS | **1** | 10/10 | yes |
+  | Ansible `arista.eos` over `network_cli` | vEOS | **1** | 10/10 | yes |
+  | Nornir + netmiko, **10 concurrent workers** | vEOS | 10 | 10/10 | yes |
+  | NAPALM `nxos` (NX-API) | N9Kv | 28 | **5/10** | **no** |
+  | NAPALM `nxos_ssh` | N9Kv | **1** | 10/10 | yes |
+  | netmiko `cisco_nxos` | N9Kv | **1** | 10/10 | yes |
+  | Ansible `cisco.nxos` over `httpapi` | N9Kv | **1** | 10/10 | yes |
+  | Ansible `cisco.nxos` over `network_cli` | N9Kv | **1** | 10/10 | yes |
+
+  **The transport does not decide the count; the client does.** Ansible's `cisco.nxos`
+  `httpapi` plugin costs **one** authentication for ten NX-API calls — it holds the
+  `nxapi_auth` cookie — while NAPALM's `nxos` driver costs 28 over the same API on the same
+  device. The `arista.eos` `httpapi` plugin does *not* do the same thing on eAPI and costs 13.
+  So "one authentication per unit of work" was never a fact about eAPI or NX-API: it is what
+  a client that re-presents its credential every call costs, and a client that keeps a session
+  costs one. Any SSH client that holds its connection costs one.
+
+  **The receipt boundary, measured — this is the finding decision 15 says it turns on.** The
+  NAPALM `nxos` job is the row to read. Tasks 0–4 succeeded; tasks 5–9 returned
+
+  ```
+  NXAPIAuthError Authentication to NX-API failed please verify your username, password, and hostname.
+  ```
+
+  and port49 denied five redemptions `token_not_found`. The token was spent by the first call;
+  the next 22 calls were served `receipt_replayed` out of the receipt; and then the receipt
+  expired, 38.8 seconds into a job against a `receipt_ttl` of 30s. **Nothing in the operator's
+  hand changed between task 4 and task 5.** That is the failure this document has described
+  three times and never seen, and it is not hypothetical: it is the default TTL against an
+  ordinary NAPALM job that takes longer than half a minute.
+
+  Note what it is *not* about. It is not about the transport re-authenticating, and not about
+  the token being single-use — the token being single-use is survivable for as long as the
+  receipt lives, which is the whole reason the earlier runs saw a repeat permitted. It is about
+  a job outliving `receipt_ttl`.
+
+  **Ten concurrent logins by one user, the accepted cost of decision 15, measured as a
+  workload.** The Nornir row runs ten netmiko sessions to one device as one user at once: ten
+  session authorizations, all permitted, **thirty command authorizations, and exactly one
+  `ctx_id`**. No session was refused. So the cost is exactly what decision 15 says it is —
+  the ten shells are one context and a log reader cannot tell them apart — and it is not worse
+  than that. Note also that nine of the ten logins were served out of the **receipt**: a
+  ten-worker job on one token works for the same reason and under the same limit as the API
+  jobs above.
+
+  Two honest limits on this table. `Ansible arista.eos over network_cli` produced **1**
+  authentication on one run and failed to reach port49 at all on the next, so that row is
+  flaky on this host and the `1` is the measured figure rather than a reliable one. And the
+  "wire" column in the notes is **inferred from the authentication count, not measured** — the
+  capture filter is `tcp port 49`, so no cookie or Basic header is in evidence; the notes say
+  so in those words in every row.
+
+  *Unmeasured:* the eAPI `/login` cookie flow driven by hand, and the NX-API `nxapi_auth`
+  cookie driven by hand — both are now *implied* by the Ansible `cisco.nxos` result rather
+  than driven directly; forcing a cookie to expire and watching what the device does; HTTP
+  keep-alive as a variable separated from the cookie; IOS-XE and Junos clients.
 - **L16** — added 2026-09-21. `tests/lab/l16_test.go`, results in `tests/lab/results/L16-*.md`.
 
   **Why it exists.** `tests/lab/port49d-lab.yaml` has been sending `shell:roles*network-admin` to
@@ -4355,7 +4419,83 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   deny prefix: if port49's deny turns out not to bind, which is question 2, the device reboots
   mid-run.
 
-  *Status: nothing measured yet.* Every claim above is a question, not a finding.
+  **vEOS measured 2026-09-21** (`tests/lab/results/L16-arista_eos.md`), seven reply-attribute
+  sets against one deploy, one token login each. The image reports itself as **4.31.2F** —
+  see the note under this row about the version label.
+
+  | reply attributes | session | `show version` (the role denies it) | `show clock` (port49 denies it) |
+  |---|---|---|---|
+  | `priv-lvl=15` alone | opened | ran | **refused** |
+  | `priv-lvl=15`, `shell:roles*p49-noc` | opened | **ran** | **refused** |
+  | `priv-lvl=15`, `shell:roles=p49-noc` (mandatory) | **refused** | — | — |
+  | `priv-lvl=15`, `cisco-av-pair*shell:roles="p49-noc"` | **refused** | — | — |
+  | `priv-lvl=15`, `shell:roles*"p49-noc network-operator"` | opened | ran | **refused** |
+  | `priv-lvl=15`, `shell:roles*p49-nosuchrole` | opened | ran | **refused** |
+  | `priv-lvl=1` alone | opened | ran | **refused** |
+
+  **1. `shell:roles*<name>` does not deliver a role on vEOS.** The device was asked, in the
+  session itself, and answered:
+
+  ```
+  Session  Username   Roles          TTY    State  Duration  Auth          Remote Host
+  1        admin      network-admin  con0   E      0:01:44   local
+  43       alice08    <unknown>      vty4   E      0:00:01   group port49  172.100.100.1
+  ```
+
+  `<unknown>`, against `network-admin` for the local console account, with
+  `shell:roles*p49-noc` in the reply. The command the role denies ran. The role exists on the
+  device — the test defines it and the device accepted the definition — and the session does
+  not hold it. **So the `shell:roles*network-admin` that `tests/lab/port49d-lab.yaml` has been
+  sending to every platform since the N9Kv asked for it has never done anything on EOS**, and
+  the comment in that file, which reasons only about whether EOS *ignores* it, has never been
+  tested against whether the platform it was aimed at applies it either.
+
+  **2. port49's per-command deny binds, and this is the reassuring half.** `show clock` was
+  refused in every variant that opened a session, including the one where the device's own role
+  permitted it, with `deny no_permit_dominates_deny` on the matching request. Command
+  authorization is real on this platform whatever the role says — the opposite of what the
+  Junos session authorization turned out to be (L10).
+
+  **3. EOS refuses a session authorization carrying an attribute it does not recognise, and
+  the OPTIONAL case is the surprise.** `shell:roles=p49-noc` sent as *mandatory* is refused —
+  that is RFC 8907 §8.2 working exactly as specified. But
+  `cisco-av-pair*shell:roles="p49-noc"`, sent as **optional**, is refused too:
+
+  ```
+  Authorization denied:
+  ```
+
+  and no session. That contradicts this document's own claim under L10 that "EOS and Junos do
+  ignore [an optional argument they do not understand] — that is why a single lab authorizer
+  could send NX-OS's `shell:roles*network-admin` to every platform". EOS ignores
+  `shell:roles*`, which it evidently parses and discards; it does **not** ignore
+  `cisco-av-pair*`. So **IOS-XE is not the only platform where an attribute an adapter sends
+  can end a session port49 permitted** — vEOS is the second, for at least one optional
+  spelling. *Not separated by this run:* whether EOS is refusing `cisco-av-pair` as a name or
+  refusing the embedded quotes in its value. One more variant settles it and it was not run.
+
+  **4. Two roles at once, an absent role, and `priv-lvl=1` all behave identically to no
+  attribute at all** on this image, which follows from 1: nothing in the `shell:roles` family
+  reaches the session, so there is nothing for a union rule or a missing name to change.
+
+  *Unmeasured:* NX-OS, which is the platform that asks for `shell:roles` by name and the one
+  this attribute was added for; whether a role delivered some other way (a `local-user-name`
+  template, an EOS-specific spelling) does take effect; and the `cisco-av-pair` ambiguity in 3.
+
+  **A note about the EOS image version, which this row is where it was caught.** Every EOS
+  results note written before 2026-09-21, and every EOS row in this section, says
+  **vEOS-lab 4.32.2F**. The device says otherwise, three times in this row's own note:
+
+  ```
+  Software image version: 4.31.2F
+  Internal build version: 4.31.2F-35442176.4312F
+  ```
+
+  The docker tag and the vmdk filename both say 4.32.2F; the file was named for a release it
+  does not contain. Under the rule in `CLAUDE.md` the device is right and the documents are
+  wrong. The harness now reports what the device reports. **Every EOS observation in this
+  section stands — only the release label on it was wrong**, and notes written before today
+  still carry the old label in their headers.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
