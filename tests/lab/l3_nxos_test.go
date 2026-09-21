@@ -202,15 +202,15 @@ func (l *lab) l3nxEnableFeature(t *testing.T) func(*testing.T) {
 	t.Helper()
 	apply := func(t *testing.T, lines ...string) {
 		t.Helper()
-		c, err := l.nxosCLI(breakglassUser, breakglassPassword)
-		if err != nil {
-			t.Fatalf("no admin CLI to configure `feature privilege` on: %v", err)
-		}
-		defer c.Close()
-		if out, err := nxosConfigure(c, lines...); err != nil {
-			t.Fatalf("%v: %v\n%s", lines, err, out)
-		}
-		t.Logf("cisco_nxos: applied %v", lines)
+		l.withAdminCLI(t, func(l *lab) (*cliConn, error) {
+			return l.nxosCLI(breakglassUser, breakglassPassword)
+		}, func(c *cliConn) error {
+			if out, err := nxosConfigure(c, lines...); err != nil {
+				return fmt.Errorf("%v: %w\n%s", lines, err, out)
+			}
+			t.Logf("cisco_nxos: applied %v", lines)
+			return nil
+		})
 	}
 	// The enable secret is the published lab break-glass password, the same
 	// constant IOS-XE's enable fallback uses. Nothing here is a secret.

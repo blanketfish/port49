@@ -252,15 +252,15 @@ func (l *lab) junosSetServiceName(t *testing.T, name string) func(*testing.T) {
 	t.Helper()
 	set := func(t *testing.T, line string) {
 		t.Helper()
-		c, err := l.junosCLI(breakglassUser, breakglassPassword)
-		if err != nil {
-			t.Fatalf("no channel to configure the device on: %v", err)
-		}
-		defer c.Close()
-		if out, err := junosConfigure(c, line); err != nil {
-			t.Fatalf("%q: %v\n%s", line, err, out)
-		}
-		t.Logf("%s: applied %q", l.p.name, line)
+		l.withAdminCLI(t, func(l *lab) (*cliConn, error) {
+			return l.junosCLI(breakglassUser, breakglassPassword)
+		}, func(c *cliConn) error {
+			if out, err := junosConfigure(c, line); err != nil {
+				return fmt.Errorf("%q: %w\n%s", line, err, out)
+			}
+			t.Logf("%s: applied %q", l.p.name, line)
+			return nil
+		})
 	}
 	set(t, "set system tacplus-options service-name "+name)
 	return func(t *testing.T) {

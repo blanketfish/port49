@@ -141,7 +141,7 @@ type l16Driver struct {
 	whoamiNote string
 
 	cli       func(l *lab, user, password string) (*cliConn, error)
-	adminCLI  func(l *lab) (*cliConn, error)
+	adminCLI  func(*lab) (*cliConn, error)
 	configure func(c *cliConn, lines ...string) (string, error)
 	show      func(c *cliConn, cmd string) (string, error)
 
@@ -312,29 +312,25 @@ func orNone(s string) string {
 // l16DefineRole puts the custom role on the device, as the break-glass account.
 func l16DefineRole(t *testing.T, l *lab, d l16Driver) {
 	t.Helper()
-	c, err := d.adminCLI(l)
-	if err != nil {
-		t.Fatalf("no admin CLI to define the role on: %v", err)
-	}
-	defer c.Close()
-	out, err := d.configure(c, d.defineRole...)
-	if err != nil {
-		t.Fatalf("defining role %s: %v\n%s", d.roleName, err, out)
-	}
-	t.Logf("%s: defined role %s", d.platform, d.roleName)
+	l.withAdminCLI(t, d.adminCLI, func(c *cliConn) error {
+		out, err := d.configure(c, d.defineRole...)
+		if err != nil {
+			return fmt.Errorf("defining role %s: %w\n%s", d.roleName, err, out)
+		}
+		t.Logf("%s: defined role %s", d.platform, d.roleName)
+		return nil
+	})
 }
 
 func l16DeleteRole(t *testing.T, l *lab, d l16Driver) {
 	t.Helper()
-	c, err := d.adminCLI(l)
-	if err != nil {
-		t.Errorf("the custom role %s was left on the device: no admin CLI to remove it: %v", d.roleName, err)
-		return
-	}
-	defer c.Close()
-	if out, err := d.configure(c, d.deleteRole...); err != nil {
-		t.Errorf("removing role %s: %v\n%s", d.roleName, err, out)
-	}
+	l.withAdminCLI(t, d.adminCLI, func(c *cliConn) error {
+		out, err := d.configure(c, d.deleteRole...)
+		if err != nil {
+			return fmt.Errorf("removing role %s: %w\n%s", d.roleName, err, out)
+		}
+		return nil
+	})
 }
 
 // l16Run measures one variant: restart the daemon with these reply attributes,

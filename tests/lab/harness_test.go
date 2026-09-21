@@ -1443,6 +1443,52 @@ func (l *lab) captureLine(t *testing.T) string {
 		"everything else byte-identical, decodable with the lab key (`tests/lab/README.md`)."
 }
 
+// withAdminCLI runs fn against a break-glass CLI with port49d **stopped**, and
+// restarts the daemon on this platform's standing config afterwards.
+//
+// Stopping it is not housekeeping, and L4 paid for the lesson first
+// (l4_test.go, and tests/lab/results/L4-*.md): under
+// `aaa authentication login default group port49 local` the device asks port49
+// about `breakglass`, port49 answers FAIL because it holds no token for that
+// name, and **on EOS, NX-OS and IOS-XE a FAIL is final** — the device never
+// tries the local password. So a test that opens an admin CLI with the daemon
+// running is refused by the device, and the refusal looks like a broken
+// break-glass account rather than the measured behaviour it is. The first
+// NX-OS run of TestL16Roles failed exactly this way:
+//
+//	no admin CLI to define the role on: the console did not reach "nx1#"
+//	for breakglass; it said: Login incorrect User Access Verification login:
+//
+// With the daemon down the device treats the server as unreachable, which is
+// the one condition where the local password is taken (L4, reading 3).
+func (l *lab) withAdminCLI(t *testing.T, open func(*lab) (*cliConn, error), fn func(*cliConn) error) {
+	t.Helper()
+	if err := l.stopDaemon(); err != nil {
+		t.Fatalf("could not stop port49d before opening an admin CLI: %v", err)
+	}
+	restart := func() {
+		base, err := l.configPath()
+		if err != nil {
+			t.Fatalf("recovering this platform's standing config: %v", err)
+		}
+		if err := l.startDaemonWith(base, true); err != nil {
+			t.Fatalf("restarting port49d after the admin CLI: %v", err)
+		}
+	}
+	c, err := open(l)
+	if err != nil {
+		restart()
+		t.Fatalf("no admin CLI (port49d was stopped for this, so the device should have taken the "+
+			"local password): %v", err)
+	}
+	fnErr := fn(c)
+	c.Close()
+	restart()
+	if fnErr != nil {
+		t.Fatalf("configuring the device over the admin CLI: %v", fnErr)
+	}
+}
+
 // negativeFinding is a claim of the form "this platform does not / cannot X".
 // It exists because of an error made on 2026-09-20 and caught on 2026-09-21:
 // `tests/lab/results/L3-cisco_nxos.md` asserted "the N9Kv has no enable
