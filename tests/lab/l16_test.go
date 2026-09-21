@@ -280,11 +280,19 @@ var l16Variants = []l16Variant{
 type l16VariantResult struct {
 	v        l16Variant
 	attrs    string
+	user     string // the token username this variant logged in as
 	loginErr string
 	whoami   string
-	probes   []l16Probe
-	authzs   map[string]string // probe command word -> port49's verdict/reason
-	cmdReqs  map[string]int    // probe command word -> how many authorization requests arrived
+	// role is the role the device reported for THIS session's user, pulled
+	// out of whoami. It is not the first `roles:` line in that output: on
+	// NX-OS `show user-account` lists every remote account the device has
+	// accumulated across the whole run, so the first line belongs to the
+	// earliest variant. The first version of this test took the first line
+	// and mislabelled every variant after the first.
+	role    string
+	probes  []l16Probe
+	authzs  map[string]string // probe command word -> port49's verdict/reason
+	cmdReqs map[string]int    // probe command word -> how many authorization requests arrived
 }
 
 // l16Probe is one command typed in a variant's session.
@@ -369,6 +377,7 @@ func (l *lab) l16Run(t *testing.T, d l16Driver, v l16Variant) l16VariantResult {
 	r := l16VariantResult{v: v, attrs: attrs, authzs: map[string]string{}, cmdReqs: map[string]int{}}
 
 	user, secret := l.nextLogin(t)
+	r.user = user
 	c, err := d.cli(l, user, secret)
 	if err != nil {
 		r.loginErr = err.Error()
@@ -377,6 +386,7 @@ func (l *lab) l16Run(t *testing.T, d l16Driver, v l16Variant) l16VariantResult {
 	}
 	if out, err := d.show(l, c, d.whoami); err == nil {
 		r.whoami = l16TrimEcho(out, d.whoami)
+		r.role = l16RoleOf(r.whoami, user)
 	}
 	for _, p := range []l16Probe{
 		{cmd: l16RoleDenied, expect: "the custom role DENIES this; port49 permits it"},
@@ -515,25 +525,62 @@ func l16Table(rs []l16VariantResult) string {
 			cells = append(cells, fmt.Sprintf("%s; %d req; %s", state, p.requests, orNone(p.verdict)))
 		}
 		fmt.Fprintf(&b, "| %s | opened | %s | %s | %s | %s |\n",
-			r.v.name, l16RoleSummary(r.whoami), cells[0], cells[1], cells[2])
+			r.v.name, l16RoleSummary(r), cells[0], cells[1], cells[2])
 	}
 	return b.String()
 }
 
-// l16RoleSummary pulls the roles line out of the whoami output for the table,
-// falling back to a marker rather than to silence.
-func l16RoleSummary(whoami string) string {
-	for _, line := range strings.Split(whoami, "\n") {
-		l := strings.TrimSpace(line)
-		low := strings.ToLower(l)
-		if strings.HasPrefix(low, "roles:") || strings.Contains(low, " role ") {
-			return "`" + strings.TrimSpace(l) + "`"
+// l16RoleOf pulls out the role the device reports for ONE user, which is the
+// only reading of this output that means anything.
+//
+// NX-OS `show user-account` prints a block per remote account and the device
+// keeps every account the run has created, so by the last variant the output
+// holds seven users and the first `roles:` line in it belongs to the first
+// variant. Taking that line labelled every later variant with the first one's
+// answer -- a column that looked plausible in all seven rows and was right in
+// one. EOS `show users detail` prints one row per session with the username in
+// it, so the same rule applies: find the user, then read.
+func l16RoleOf(whoami, user string) string {
+	lines := strings.Split(whoami, "\n")
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		if !strings.Contains(t, user) {
+			continue
+		}
+		// NX-OS: `user:alice02` on one line, `roles:...` on the next.
+		if strings.HasPrefix(t, "user:") {
+			for _, next := range lines[i+1:] {
+				n := strings.TrimSpace(next)
+				if strings.HasPrefix(n, "roles:") {
+					return strings.TrimSpace(strings.TrimPrefix(n, "roles:"))
+				}
+				if strings.HasPrefix(n, "user:") {
+					break // this account has no roles line
+				}
+			}
+			return ""
+		}
+		// EOS: one table row, `43 alice08 <unknown> vty4 ...`.
+		if f := strings.Fields(t); len(f) >= 3 {
+			for j, w := range f {
+				if w == user && j+1 < len(f) {
+					return f[j+1]
+				}
+			}
 		}
 	}
-	if strings.TrimSpace(whoami) == "" {
+	return ""
+}
+
+// l16RoleSummary renders that for the table.
+func l16RoleSummary(r l16VariantResult) string {
+	if r.role != "" {
+		return "`" + r.role + "`"
+	}
+	if strings.TrimSpace(r.whoami) == "" {
 		return "(nothing returned)"
 	}
-	return "(see the variant above)"
+	return "**no entry for this user**"
 }
 
 // l16Reading answers the row's own questions from the variants, and routes
@@ -551,42 +598,56 @@ func l16Reading(t *testing.T, d l16Driver, rs []l16VariantResult) string {
 	var b strings.Builder
 	b.WriteString("\n## What this answers\n\n")
 
-	// 1 and 2: does the role take effect, and is the command still authorized?
+	// 1 and 2. There are THREE outcomes here and the first version of this
+	// reading collapsed them into two, which produced a paragraph that
+	// contradicted its own table on NX-OS. The role can fail to arrive; it can
+	// arrive and its command rules can bind; or it can arrive and its command
+	// rules can NOT bind because command authorization has been handed to
+	// TACACS+. The third is what NX-OS does and it is the interesting one.
+	delivered := bare.role != "" && strings.Contains(bare.role, d.roleName)
+	baseline := none.role
+	p := l16ProbeOf(bare, l16RoleDenied)
 	switch {
 	case bare.loginErr != "":
 		b.WriteString("**1. Does a delivered role take effect?** Not measured on the bare optional " +
 			"spelling: that variant's session never opened, so the role could not be exercised.\n\n")
-	case l16ProbeOf(bare, l16RoleDenied).refused:
-		p := l16ProbeOf(bare, l16RoleDenied)
-		fmt.Fprintf(&b, "**1. A role delivered by name DOES take effect**, and it is verified by a refusal "+
-			"rather than by the device echoing the name back. `%s` is denied by the role and permitted by "+
-			"port49, and the device refused it:\n\n```\n%s\n```\n\n", p.cmd, strings.TrimRight(p.out, "\n"))
+	case !delivered:
+		b.WriteString("**1.** " + negativeFinding{
+			Claim: "`shell:roles*" + d.roleName + "` does NOT deliver a role on this platform. Asked in " +
+				"the session itself, the device reports `" + orNone2(bare.role) + "` for this user, " +
+				"against `" + orNone2(baseline) + "` with no attribute sent at all. The role exists -- " +
+				"this test defined it and the device accepted the definition -- and the session does " +
+				"not hold it.",
+			Sent: d.whoami,
+			Got:  strings.TrimRight(bare.whoami, "\n"),
+		}.render(t) + "\n")
+	case p.refused:
+		fmt.Fprintf(&b, "**1. The role is delivered AND its command rules bind.** The device reports "+
+			"`%s` for this session against `%s` with no attribute sent, and `%s`, which the role "+
+			"denies and port49 permits, was refused:\n\n```\n%s\n```\n\n",
+			bare.role, orNone2(baseline), p.cmd, strings.TrimRight(p.out, "\n"))
 		if p.requests > 0 {
-			fmt.Fprintf(&b, "**2. The device still asked port49 about it** — %d authorization request(s), "+
-				"answered `%s`. So the role's refusal is applied *after* port49 has been consulted and "+
-				"agreed, and **port49's decision log records a permit for a command that never ran.** "+
-				"That is the reconciliation gap of §9 arriving from a direction the spec does not "+
-				"describe: not a device that fails to ask, but a device that asks, is told yes, and "+
-				"refuses anyway.\n\n", p.requests, p.verdict)
-		} else {
-			b.WriteString("**2.** " + negativeFinding{
-				Claim: "the device does NOT send a per-command authorization request for a command its own " +
-					"role forbids: it refuses it locally first. port49 never learns the command was " +
-					"typed, so the decision log has no record of it at all — neither a permit nor a deny.",
-				Sent: p.cmd,
-				Got: strings.TrimRight(p.out, "\n") + "\n\n(and no authorize_command record for `" +
-					strings.Fields(p.cmd)[1] + "` reached the decision log in this variant's window)",
-			}.render(t) + "\n")
+			fmt.Fprintf(&b, "**2. And the device still asked port49 about it** -- %d request(s), answered "+
+				"`%s`. The role's refusal is applied AFTER port49 has been consulted and agreed, so "+
+				"**port49's decision log records a permit for a command that never ran.** That is a "+
+				"reconciliation gap (§9) from a direction the spec does not describe: not a device that "+
+				"fails to ask, but one that asks, is told yes, and refuses anyway.\n\n",
+				p.requests, p.verdict)
 		}
 	default:
-		p := l16ProbeOf(bare, l16RoleDenied)
-		b.WriteString("**1.** " + negativeFinding{
-			Claim: "delivering role `" + d.roleName + "` by name did NOT take effect: the command the role " +
-				"denies ran anyway. Whatever the device reported for `" + d.whoami + "`, the role's rules " +
-				"were not applied to this session.",
-			Sent: p.cmd,
-			Got:  strings.TrimRight(p.out, "\n"),
-		}.render(t) + "\n")
+		fmt.Fprintf(&b, "**1. The role IS delivered, and its own command rules do NOT bind.** The device "+
+			"reports `%s` for this session, against `%s` with no attribute sent, so the name reached it "+
+			"and was applied to the account. But `%s` -- which the role denies with an explicit rule -- "+
+			"**ran anyway**, and port49 had answered `%s` for it with %d authorization request(s).\n\n",
+			bare.role, orNone2(baseline), p.cmd, orNone(p.verdict), p.requests)
+		b.WriteString("That is the shape to take away: on this platform a delivered role is an **identity " +
+			"label**, not a second command-authorization policy, while `aaa authorization commands` " +
+			"points at TACACS+. port49 decides the command; the role decides what the account is. The " +
+			"two do not compete, which is the good news -- and it means a role cannot be used to " +
+			"constrain a session that port49 has permitted.\n\n")
+		fmt.Fprintf(&b, "The device's own words for this session:\n\n```\n%s\n```\n\n"+
+			"and for `%s`:\n\n```\n%s\n```\n\n",
+			strings.TrimRight(bare.whoami, "\n"), p.cmd, strings.TrimRight(p.out, "\n"))
 	}
 
 	// 3: role permits, port49 denies.
@@ -624,6 +685,15 @@ func l16Reading(t *testing.T, d l16Driver, rs []l16VariantResult) string {
 	b.WriteString("Every other question — the spellings, two roles at once, an absent role, `priv-lvl=1` — " +
 		"is answered by the table above, cell by cell, and each cell is what that variant's session did.\n")
 	return b.String()
+}
+
+// orNone2 renders an empty role as a phrase rather than as nothing, so a note
+// never shows an empty pair of backticks where a measurement should be.
+func orNone2(role string) string {
+	if role == "" {
+		return "no role entry for this user at all"
+	}
+	return role
 }
 
 func l16ProbeOf(r l16VariantResult, cmd string) l16Probe {
