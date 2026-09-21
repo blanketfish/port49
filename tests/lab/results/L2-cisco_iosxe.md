@@ -4,7 +4,7 @@
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
-- **Capture:** `tests/lab/captures/L2-cisco_iosxe.pcap` — 572 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L2-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/evidence/L2-cisco_iosxe.pcap` — 572 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L2-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim

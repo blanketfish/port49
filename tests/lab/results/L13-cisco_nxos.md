@@ -4,7 +4,7 @@
 - **Platform:** cisco_nxos (containerlab node `nx1`, 172.100.100.31)
 - **Image version:** Nexus 9300v 10.4(2)F (`vrnetlab/cisco_n9kv:9300v64-10.4.2.F`)
 - **Topology:** `tests/lab/topologies/nxos.clab.yml`
-- **Capture:** `tests/lab/captures/L13-cisco_nxos.pcap` — 214 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L13-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/evidence/L13-cisco_nxos.pcap` — 214 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L13-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim

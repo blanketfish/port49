@@ -60,8 +60,11 @@ Measured from `tests/lab/logs/decisions-arista_eos.jsonl` (2026-09-17 run, 64 re
 
 Measured from `tests/lab/logs/decisions-juniper_vjunos-router.jsonl` (67 records),
 `decisions-juniper_vsrx.jsonl` (35 records), `tests/lab/results/L1-*.md`, `L6-*.md`,
-`L10-*.md`, and my own parse of `tests/lab/captures/L1-juniper_vsrx.pcap`,
+`L10-*.md`, and my own parse of `tests/lab/evidence/L1-juniper_vsrx.pcap`,
 `L1-juniper_vjunos-router.pcap`, `L6-juniper_vsrx.pcap`. Both images answer identically.
+(Those three were read out of `tests/lab/captures/` at the time. The redacted copies in
+`tests/lab/evidence/` are committed and hold the same packets, so the parse is reproducible;
+nothing this memo measures is in a credential field.)
 
 | candidate | authen START | author request | acct START | acct STOP | unique per concurrent session? |
 |---|---|---|---|---|---|

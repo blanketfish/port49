@@ -4,7 +4,7 @@
 - **Platform:** cisco_nxos (containerlab node `nx1`, 172.100.100.31)
 - **Image version:** Nexus 9300v 10.4(2)F (`vrnetlab/cisco_n9kv:9300v64-10.4.2.F`)
 - **Topology:** `tests/lab/topologies/nxos.clab.yml`
-- **Capture:** `tests/lab/captures/netconf-cisco_nxos.pcap` — 120 packets to or from the device, countable with `tcpdump -r tests/lab/captures/netconf-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/evidence/netconf-cisco_nxos.pcap` — 120 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/netconf-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** NETCONF over SSH (port 830)
 
 ## Claim
@@ -39,7 +39,7 @@ These are the values this transport produced. Compare them with the SSH figures 
 
 **12** TCP connection(s) were opened toward port49d during this test, from source port(s) 37510, 37516, 43938, 43942, 54490, 54500.
 
-Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/captures/netconf-cisco_nxos.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
+Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/evidence/netconf-cisco_nxos.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
 
 ### Every record, per step
 

@@ -3661,6 +3661,15 @@ implemented against a guess. This section is the one place the distinction is ke
 3. An entry closes with a platform, an image version, the observation, and a pointer to the
    capture — a file under `tests/lab/` in this repository, or a results note. Closing on
    documentation alone is not closing.
+
+   The capture a note points at is in `tests/lab/evidence/`, and it is committed. The raw
+   capture in `tests/lab/captures/` is not, and never will be: it holds the lab tokens and
+   the breakglass password, in the clear for anyone who applies the key this repository
+   publishes. An evidence file is that capture with the credential bytes overwritten with
+   `x` and every other byte left alone — same packets, same lengths, same sequence numbers,
+   and it decodes in Wireshark under the same key. `tests/lab/README.md` has the details and
+   `tests/lab/cmd/redact-pcap` does the work. A pointer into `tests/lab/captures/` does not
+   close a row, because nobody but the machine that ran the lab can follow it.
 4. The containerlab step of the implementation plan *is* this table. Lab work is not listed
    anywhere else.
 5. An entry may close differently per platform. A row with one platform measured and three

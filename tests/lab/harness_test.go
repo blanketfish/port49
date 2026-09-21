@@ -1387,7 +1387,7 @@ func (l *lab) captureLine(t *testing.T) string {
 	l.flushCapture(t)
 	line := fmt.Sprintf("`%s`", l.evidencePath)
 	if total, device, err := pcapCounts(l.capAbs); err != nil {
-		line += fmt.Sprintf(" — **could not be read back** (%v), so this note quotes the decision log only", err)
+		line += fmt.Sprintf(" — **could not be read back** (%v), so this note quotes the decision log only.", err)
 		t.Errorf("the capture %s could not be read back: %v", l.capAbs, err)
 	} else if device == 0 {
 		line += fmt.Sprintf(" — **empty of device traffic**: %d packets, none of them to or from %s. "+
@@ -1400,7 +1400,7 @@ func (l *lab) captureLine(t *testing.T) string {
 		// stops the capture, after this note is written. Counting only what
 		// crossed the bridge gives a number the reader can reproduce.
 		line += fmt.Sprintf(" — %d packets to or from the device, countable with "+
-			"`tcpdump -r %s -n 'net %s' | wc -l`", device, l.evidencePath, labSubnet)
+			"`tcpdump -r %s -n 'net %s' | wc -l`.", device, l.evidencePath, labSubnet)
 	}
 	return line + " A redacted copy of this run's capture: credential bytes overwritten with `x`, " +
 		"everything else byte-identical, decodable with the lab key (`tests/lab/README.md`)."

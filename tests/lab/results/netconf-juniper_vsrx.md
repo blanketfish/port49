@@ -4,7 +4,7 @@
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/captures/netconf-juniper_vsrx.pcap` — 672 packets to or from the device, countable with `tcpdump -r tests/lab/captures/netconf-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/evidence/netconf-juniper_vsrx.pcap` — 672 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/netconf-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** NETCONF over SSH (port 830)
 
 ## Claim
@@ -39,7 +39,7 @@ These are the values this transport produced. Compare them with the SSH figures 
 
 **66** TCP connection(s) were opened toward port49d during this test, from source port(s) 34392, 34402, 34404, 34418, 34420, 34434, 34444, 34456, 34462, 34478, 34488, 34496, ....
 
-Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/captures/netconf-juniper_vsrx.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
+Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/evidence/netconf-juniper_vsrx.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
 
 ### Every record, per step
 

@@ -4,7 +4,7 @@
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
-- **Capture:** `tests/lab/captures/netconf-arista_eos.pcap` — 612 packets to or from the device, countable with `tcpdump -r tests/lab/captures/netconf-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/evidence/netconf-arista_eos.pcap` — 612 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/netconf-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** NETCONF over SSH (port 22)
 
 ## Claim
@@ -39,7 +39,7 @@ These are the values this transport produced. Compare them with the SSH figures 
 
 **60** TCP connection(s) were opened toward port49d during this test, from source port(s) 41796, 41808, 41818, 41820, 41822, 41824, 51416, 51418, 51430, 51438, 51440, 51452, ....
 
-Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/captures/netconf-arista_eos.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
+Read this against the step table above. One connection per authentication exchange means the device is not using single-connect; one connection carrying several exchanges means it is, or that it is holding the connection across requests. Count them yourself with `tcpdump -r tests/lab/evidence/netconf-arista_eos.pcap -n 'tcp port 49 and tcp[tcpflags] & tcp-syn != 0 and tcp[tcpflags] & tcp-ack == 0'`.
 
 ### Every record, per step
 
