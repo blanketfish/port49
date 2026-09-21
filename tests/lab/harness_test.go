@@ -77,8 +77,17 @@ type platform struct {
 }
 
 var platforms = []platform{
+	// The version string is what the DEVICE reports, not what the image is
+	// tagged. `show version` on this image says `Software image version:
+	// 4.31.2F` and `Internal build version: 4.31.2F-35442176.4312F`, three
+	// times over in tests/lab/results/L16-arista_eos.md, while the docker tag
+	// and the vmdk filename both say 4.32.2F -- the file was named for a
+	// release it does not contain. Every EOS results note written before
+	// 2026-09-21 carries `vEOS-lab 4.32.2F` in its header and is wrong about
+	// the release; the observations in them stand, the label does not.
+	// CLAUDE.md rule 4: the device is right and the docs are wrong.
 	{"eos", "arista_eos", "topologies/eos.clab.yml", "172.100.100.11", "leaf1",
-		"vrnetlab/arista_veos:4.32.2F", "vEOS-lab 4.32.2F", 6 * time.Minute},
+		"vrnetlab/arista_veos:4.32.2F", "vEOS-lab 4.31.2F (image tagged 4.32.2F)", 6 * time.Minute},
 	{"vjunos", "juniper_vjunos-router", "topologies/vjunos.clab.yml", "172.100.100.21", "srx1",
 		"vrnetlab/juniper_vjunos-router:23.4R2-S2.1", "vJunos-router 23.4R2-S2.1", 8 * time.Minute},
 	{"vsrx", "juniper_vsrx", "topologies/vsrx.clab.yml", "172.100.100.22", "vsrx1",

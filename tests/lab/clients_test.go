@@ -182,6 +182,46 @@ func (r clientResult) render() string {
 	return b.String()
 }
 
+// countTasks reads how many of a job's tasks succeeded out of the client's own
+// output. Two shapes, because the clients print two:
+//
+//   - the Python scripts print one `task <n> ok` or `task <n> FAILED` line
+//     each;
+//   - ansible-playbook prints a PLAY RECAP, `leaf1 : ok=10 ... failed=0 ...`,
+//     and no per-task line at all.
+//
+// The first version knew only the first shape, so every Ansible row in the
+// table read `0/0` about a play that had run all ten tasks. A column saying
+// nothing succeeded, about a job that succeeded, is worse than no column.
+func countTasks(out string) (ok, failed int) {
+	for _, line := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "task ") && strings.Contains(t, "FAILED"):
+			failed++
+		case strings.HasPrefix(t, "task ") && strings.Contains(t, " ok"):
+			ok++
+		case strings.Contains(t, "ok=") && strings.Contains(t, "failed="):
+			// An ansible PLAY RECAP line: `leaf1 : ok=10 changed=0 ... failed=0`.
+			for _, f := range strings.Fields(t) {
+				k, v, found := strings.Cut(f, "=")
+				if !found {
+					continue
+				}
+				n := 0
+				fmt.Sscanf(v, "%d", &n)
+				switch k {
+				case "ok":
+					ok += n
+				case "failed", "unreachable":
+					failed += n
+				}
+			}
+		}
+	}
+	return ok, failed
+}
+
 // receiptWindow reports the gap between the token being spent and the first
 // call that was refused, which is the `receipt_ttl` boundary seen from the
 // client side. Decision 15 names that boundary as the thing it actually turns
@@ -318,14 +358,7 @@ func (l *lab) runClient(t *testing.T, s clientSpec) clientResult {
 	}
 	r.ok = err == nil
 
-	for _, line := range strings.Split(r.out, "\n") {
-		switch {
-		case strings.Contains(line, "FAILED"):
-			r.tasksFailed++
-		case strings.HasPrefix(strings.TrimSpace(line), "task ") && strings.Contains(line, " ok"):
-			r.tasksOK++
-		}
-	}
+	r.tasksOK, r.tasksFailed = countTasks(r.out)
 
 	for _, rec := range l.drainRecords(off, 10*time.Second) {
 		sess := sub(rec, "session")
@@ -429,31 +462,38 @@ c.disconnect()
 		},
 		{
 			name: "Nornir + netmiko, 10 workers, one device, one user",
-			what: "Ten worker threads against one device as one user. **This is the `(nas, username)` " +
-				"login-context key under its accepted worst case**: ten concurrent logins sharing one " +
-				"context. What port49 logs, and whether any session is refused, is the finding.",
+			what: "Ten worker threads opening ten sessions to one device as one user **at the same " +
+				"time**. This is the `(nas, username)` login-context key under its accepted worst case: " +
+				"ten concurrent logins sharing one context (spec §13, decision 15). What port49 logs, " +
+				"and whether any session is refused, is the finding.\n\nThe inventory holds ten host " +
+				"entries that all point at the same device, and the job is ONE `nr.run` over them. The " +
+				"first version ran ten sequential `nr.run` calls against one host, and netmiko served " +
+				"them all from a single reused connection: one authentication, one ctx_id, 3.6 seconds " +
+				"and **no concurrency whatsoever**. It measured the opposite of what it claimed, and the " +
+				"count it produced looked perfectly reasonable, which is why it is called out here.",
 			timeout: 8 * time.Minute,
 			script: pyPreamble + `
 from nornir import InitNornir
 from nornir_netmiko.tasks import netmiko_send_command
 import yaml, tempfile, os
-hosts = {"leaf1": {"hostname": HOST, "username": USER, "password": PASS,
-                   "platform": "arista_eos",
-                   "connection_options": {"netmiko": {"extras": {"fast_cli": False}}}}}
+# N host entries, every one of them the same device and the same user, so the
+# threaded runner opens N sessions at once instead of reusing one.
+hosts = {}
+for i in range(N):
+    hosts["leaf1-%02d" % i] = {"hostname": HOST, "username": USER, "password": PASS,
+                               "platform": "arista_eos",
+                               "connection_options": {"netmiko": {"extras": {"fast_cli": False}}}}
 d = tempfile.mkdtemp()
 open(os.path.join(d, "hosts.yaml"), "w").write(yaml.safe_dump(hosts))
 open(os.path.join(d, "groups.yaml"), "w").write("{}\n")
-nr = InitNornir(runner={"plugin": "threaded", "options": {"num_workers": 10}},
+nr = InitNornir(runner={"plugin": "threaded", "options": {"num_workers": N}},
                 inventory={"plugin": "SimpleInventory",
                            "options": {"host_file": os.path.join(d, "hosts.yaml"),
                                        "group_file": os.path.join(d, "groups.yaml")}},
                 logging={"enabled": False})
-# Ten separate task runs against the one host, so ten workers really do open
-# ten sessions rather than one worker running ten commands on one.
-for i in range(N):
-    res = nr.run(task=netmiko_send_command, command_string="show hostname")
-    for h, r in res.items():
-        print("task", i, h, "FAILED" if r.failed else "ok", str(r.exception or r.result)[:120])
+res = nr.run(task=netmiko_send_command, command_string="show hostname")
+for i, (h, r) in enumerate(sorted(res.items())):
+    print("task", i, h, "FAILED" if r.failed else "ok", str(r.exception or r.result)[:120])
 `,
 		},
 		{
