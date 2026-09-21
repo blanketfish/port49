@@ -3680,7 +3680,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos; see below |
 | **L11** | Junos precedence, repetition, and length behavior for wire and class rules. | The projection model (§8) | Junos (SRX) | **closed** — measured 2026-09-03; results in `port49-junos-lab-tests-results.md` |
 | **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
-| **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 5s**, which is the "answered with increasing delay" of design document §11 and is unmeasured against any device timeout. A ceiling above that timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX, vEOS and N9Kv: about 3s on both Junos images, 5.0s on vEOS and about 5.6s on the N9Kv, which also retransmits; past it every one of the four takes the fall-through branch; other platforms, other transports and the next-server case unmeasured; see below |
+| **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 2s**, which is the "answered with increasing delay" of design document §11. The ceiling was 5s until this row measured device reply timeouts; **2026-09-21 it was lowered to 2s**, which is under every timeout measured here, so a FAIL is always delivered inside it (`tests/lab/results/L13-*.md`). A ceiling above a device's timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX, vEOS, N9Kv and Catalyst 8000V: about 3s on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, which also retransmits, and above 12s on IOS-XE, which this sweep does not bound from above; past that timeout every platform that reached it takes the fall-through branch; other transports and the next-server case unmeasured; see below |
 | **L14** | Whether a NETCONF session over SSH authenticates through TACACS+ the way an interactive login does; whether any authorization request is sent for the session or for an `<edit-config>`, and with what `service`, `cmd` and `cmd-arg`; what `port` and `rem_addr` contain; what accounting arrives for a NETCONF session and for a commit. | Adapter coverage for automation traffic (§8); the login context key (§5.1.1); what reconciliation may conclude from accounting (§9) | Junos, NX-OS, EOS | open — measured 2026-09-20 on vEOS, vJunos-router and vSRX; on the N9Kv the AAA half is measured and the RPC half is not, because the channel closes before any RPC is answered; IOS-XE and key-based SSH unmeasured; see below |
 | **L15** | How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and **what port49 then answers**. | Single-use tokens, and therefore whether reusable tokens are needed at all (§13, decision 15); the 30-character handle's blast radius (design §8) | EOS, NX-OS, Junos | open — measured 2026-09-20 on all four images: one exchange per API request and per NETCONF session, every time, and the repeat permitted out of the receipt rather than the store, which moves the question to `receipt_ttl`; IOS-XE, cookie sessions and kept-alive connections unmeasured; see below |
 
@@ -4054,18 +4054,26 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   from an outage and does not try to. IOS-XE is the exception only because nothing in this sweep
   was late enough for it.
 
-  `limits.auth_failure_delay_max` **defaults to 5s** (`internal/config`), reached after five
-  consecutive failures for one `(nas, username)` pair. That default is above the Junos timeout
-  and equal to the vEOS one, so the mechanism design document §11 describes as "answered with
-  increasing delay" converts, at its own default ceiling, into the mechanism §5.6 relies on
-  *not* happening. Also note design document §11's own rule, which this measures for the first
-  time: "A request answered after the device has already given up is worse than a refused
-  connection."
+  **`limits.auth_failure_delay_max` defaulted to 5s until 2026-09-21 and now defaults to 2s**
+  (`internal/config`; the base stays 500ms, so the ceiling is reached after three consecutive
+  failures for one `(nas, username)` pair rather than five). The 5s default was set before any
+  device timeout had been measured, and this row is the measurement: it was above the Junos ~3s
+  and exactly on the vEOS 5.0s boundary, so on two of the five images a denial delayed to the
+  ceiling was not a denial at all. The mechanism design document §11 describes as "answered with
+  increasing delay" converted, at its own default ceiling, into the mechanism §5.6 relies on
+  *not* happening. 2s is under every timeout in the table above — the lowest measured is the
+  Junos ~3s — so a FAIL now arrives while every one of these five devices is still waiting for
+  it, whatever the failure count. Also note design document §11's own rule, which this row
+  measures for the first time: "A request answered after the device has already given up is
+  worse than a refused connection."
 
-  **The default is safe on two of the five and unsafe on two.** It is below the N9Kv's ~6s and far
-  below IOS-XE's >12s, so on those platforms a denial delayed to the ceiling is still delivered and
-  still acted on; it is above the Junos ~3s and exactly on the vEOS 5.0s boundary, so on those it
-  is not. A per-platform ceiling is the shape this suggests, and nothing in plan 1 has one.
+  **An operator who raises `auth_failure_delay_max` above their own shortest device reply
+  timeout converts denials into fall-through**: past that timeout the device stops distinguishing
+  a late FAIL from an unreachable server and takes the next method — typically the local
+  password. The brake then no longer slows an attacker down; it changes the answer the device
+  acts on. Measure the timeout (this row is how) before raising the ceiling. A per-platform
+  ceiling is the shape this suggests, and nothing in plan 1 has one; the single default is set
+  low enough to be safe on every image measured here instead.
 
   The N9Kv joined 2026-09-20 at **about 5.6s**, and re-measured the same day at **about 5.9s**
   (`tests/lab/results/L13-cisco_nxos.md` holds the later run). The two runs agree on everything that
@@ -4079,10 +4087,11 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   said the device had accepted the local password. On vEOS and both Junos images the two rules agree row for
   row, so those notes are unchanged.
 
-  Against port49's 5s default ceiling: Junos at ~3s is **below** it, vEOS at 5.0s sits **on** it, and the
-  N9Kv at ~6s is just **above** it. So the default converts a denial into a fall-through on two of the
-  four images and not on the third, which is a worse property than either extreme — the behavior of the
-  default depends on the vendor.
+  Against the 5s ceiling this row replaced: Junos at ~3s is **below** it, vEOS at 5.0s sits **on** it,
+  and the N9Kv at ~6s is just **above** it. So that default converted a denial into a fall-through on two
+  of the four images and not on the third, which is a worse property than either extreme — the behavior of
+  the default depended on the vendor. Against the 2s ceiling now in force, all four are **above** it, and
+  so is IOS-XE, so the behavior no longer depends on the vendor for any image measured here.
 
   *Unmeasured:* any release but the five images named above; every transport but SSH; whether a
   device retries to the **next server** rather than to the next method, since the lab has one
