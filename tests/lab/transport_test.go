@@ -381,9 +381,23 @@ func transportReauthVerdict(steps []transportStep) string {
 			// repeat that re-authenticated and was *permitted*, because port49
 			// answers a replayed credential from the receipt it kept.
 			verdict, reason := reauthVerdict(ss[1], u)
-			out := fmt.Sprintf("**Yes.** The first request as `%s` cost %d authentication exchange(s) and the "+
-				"second, with the same token, cost %d more. Every request is a fresh authentication over this "+
-				"transport.\n\n", u, first, second)
+			// The scope of this sentence is the whole finding, and an earlier
+			// version overstated it. What this test drives is a client that
+			// sends Basic credentials on a FRESH CONNECTION every time —
+			// `DisableKeepAlives`, no cookie jar — which is the worst case and
+			// not how either API is meant to be used. "Every request is a
+			// fresh authentication over this transport" is a claim about the
+			// transport; what was measured is a claim about this client. The
+			// cookie flows (`/login` on eAPI, `nxapi_auth` on NX-API) and
+			// kept-alive connections are what L7 still lists as unmeasured,
+			// and they are exactly the shapes that would make the count lower.
+			out := fmt.Sprintf("**Yes, for a client shaped like this one.** The first request as `%s` cost %d "+
+				"authentication exchange(s) and the second, with the same token, cost %d more. **This client "+
+				"sends HTTP Basic credentials on a fresh TCP connection every call** (`DisableKeepAlives`, no "+
+				"cookie jar), so what is measured here is that the device runs AAA for each such request — not "+
+				"that the transport cannot do better. The `/login` session-cookie flow and HTTP keep-alive are "+
+				"the obvious ways a real client avoids this, and both are separately measured (L7).\n\n",
+				u, first, second)
 			switch {
 			case verdict == "permit":
 				out += fmt.Sprintf("**And it was allowed anyway**: `verdict=%s reason=%s`. The token was spent "+

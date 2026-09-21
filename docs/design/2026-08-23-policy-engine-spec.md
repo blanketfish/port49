@@ -3334,12 +3334,17 @@ the proposal is withdrawn: `port` is constant or empty across *SSH* sessions too
 `rem_addr` is measured identical for two concurrent sessions, so the candidate discriminated
 nothing. Under `(nas, username)` an API transport needs no separate context key at all.
 
-What is still not decided is `receipt_ttl`. Measured on all four images (L15), every
-transport costs one authentication per unit of work and the repeat is permitted out of the
-**receipt**, not the store — so a script making forty calls with one single-use token works
+What is still not decided is `receipt_ttl`. Measured on all four images (L15), a client that
+presents Basic credentials on a fresh connection each call costs one authentication per unit
+of work, and the repeat is permitted out of the **receipt**, not the store — so a script
+making forty calls with one single-use token works
 until the receipt expires, and the first call after that is a denial with nothing having
 changed in the operator's hand. Any argument for or against reusable tokens has to be made
-about that boundary. Also open: the eAPI `/login` cookie flow (L7). (§5.1.1, §15)
+about that boundary. Two things that bound how much the exchange count itself is worth
+arguing about are still open: the eAPI `/login` cookie flow and the NX-API `nxapi_auth`
+cookie, which are how a real client avoids re-presenting the credential at all, and HTTP
+keep-alive (L7, L15 — the per-request figure is an upper bound for the worst-shaped client,
+corrected 2026-09-21). (§5.1.1, §15)
 
 **16. Trust domain is assigned by the verifier, never inferred from the credential.** The
 design requires humans and machines to be unforgeably distinct, and nothing previously said
@@ -4234,9 +4239,17 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   | `auth.method` | `ascii` | `pap` |
   | elapsed per request | 190ms | 5.8s |
 
-  **Every request is a fresh authentication on both.** Each step opened its own TCP connection
-  (`DisableKeepAlives`), so nothing here is a kept-alive connection skipping AAA. What the repeat then got
-  is the finding decision 15 actually turns on, and it is in L15 below.
+  **Every request is a fresh authentication on both — for a client shaped like the one that was
+  driven, and the qualification is the whole point.** Corrected 2026-09-21: the test sends HTTP
+  Basic credentials **on a fresh TCP connection every call** (`DisableKeepAlives`, no cookie jar).
+  That is the worst case and it is not how either API is meant to be used. So what these runs
+  measured is that the device runs AAA for each such request — a fact about this client, not the
+  demonstration that the transport re-authenticates per request that the earlier wording made it.
+  The `/login` session-cookie flow named in this row's own claim, the NX-API `nxapi_auth` cookie,
+  and HTTP keep-alive are precisely the shapes that would lower the count, and all three are
+  unmeasured. Read every count in the table above as an upper bound.
+
+  What the repeat then got is the finding decision 15 actually turns on, and it is in L15 below.
 
   *Unmeasured:* the `/login` session-cookie flow, which this row names explicitly and which is the obvious
   way a device would avoid re-authenticating; HTTP keep-alive; the NX-API JSON-RPC dialect, which is a
@@ -4284,6 +4297,15 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   Every transport measured costs **one authentication exchange per unit of work**: per HTTP request on eAPI
   and NX-API, per session on NETCONF, per login on SSH. So a single-use token is spent by the first call.
+
+  **Corrected 2026-09-21: that is an upper bound, not the transports' floor.** The HTTP clients
+  driven here send Basic credentials on a fresh TCP connection every call (`DisableKeepAlives`,
+  no cookie jar), which is the most expensive way to use either API and is not how the real
+  clients an operator runs are built. A `/login` session cookie on eAPI, an `nxapi_auth` cookie
+  on NX-API, and plain HTTP keep-alive are each a way the count could be lower, and none of them
+  was driven. Until they are, "one authentication per unit of work" is what *this* client costs;
+  any argument about token lifetimes that depends on the number has to name the client it is
+  about.
 
   The second call was then **permitted anyway**, on every transport and every platform:
   `verdict=permit reason=receipt_replayed`. port49 answered it out of the receipt rather than out of the
