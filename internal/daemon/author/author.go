@@ -12,6 +12,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
@@ -36,10 +37,39 @@ type Handler struct {
 	log     decision.Emitter
 	metrics *metrics.Metrics
 	now     func() time.Time
+
+	// services is the resolved authorization-`service` table, platform name to
+	// the values that platform's sessions may arrive with (spec §5.2, §8).
+	// config.Load builds it from the built-in table plus any operator
+	// override; a nil map is legal and means every platform takes the
+	// fallback, which is `shell`.
+	services map[string][]string
 }
 
-func New(s store.Store, a Authorizer, e decision.Emitter, m *metrics.Metrics, now func() time.Time) *Handler {
-	return &Handler{store: s, authz: a, log: e, metrics: m, now: now}
+func New(s store.Store, a Authorizer, e decision.Emitter, m *metrics.Metrics, now func() time.Time, services map[string][]string) *Handler {
+	return &Handler{store: s, authz: a, log: e, metrics: m, now: now, services: services}
+}
+
+// authorizes reports whether a session on this platform may arrive with this
+// `service`. A platform with no entry falls back to the built-in table's
+// fallback, `shell` — what port49 required of every platform before the table
+// existed, so an unmodeled device keeps reaching a prompt (spec §8, "Unknown
+// platforms").
+//
+// The list is short — one or two entries — so this is a scan rather than a
+// set. It is the only thing the `service` value is ever compared against: it
+// selects no policy, no privilege and no rule (spec §5.2).
+func (h *Handler) authorizes(platformName, service string) bool {
+	list, ok := h.services[platformName]
+	if !ok {
+		list = platform.SessionServices(platformName)
+	}
+	for _, s := range list {
+		if s == service {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseArgs splits RFC 8907 AV pairs. A trailing cmd-arg of "<cr>" is dropped
@@ -85,7 +115,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	rec := decision.Record{TS: h.now(), Event: decision.EventAuthorizeCommand,
 		Device:  &decision.Device{NAS: peer.NASAddr, Name: peer.NAS, Platform: peer.Platform},
 		Session: &decision.Session{Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
-		Request: &decision.Request{Raw: raw, Vector: vector}}
+		Request: &decision.Request{Service: kv["service"], Raw: raw, Vector: vector}}
 	if cmd == "" {
 		rec.Event = decision.EventAuthorizeSession
 	}
@@ -128,9 +158,15 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	}
 	rec.Session.CtxID = c.CtxID
 	rec.Principal = c.Principal
-	if kv["service"] != "shell" {
+	// Which `service` values this platform's sessions arrive with is a platform
+	// fact and not the constant `shell`: L10 measured Junos sending
+	// `junos-exec`, and Junos renames it per device with `set system
+	// tacplus-options service-name`, so the list is configurable too
+	// (spec §5.2, §8; §15, L10).
+	if !h.authorizes(peer.Platform, kv["service"]) {
 		// server_msg is never built from device-supplied bytes; the service
-		// value the NAS sent is already recorded in request.raw on this record.
+		// value the NAS sent is already recorded in request.service and
+		// request.raw on this record.
 		return h.deny(rec, decision.ServiceUnsupported, "port49: service not authorized by port49")
 	}
 

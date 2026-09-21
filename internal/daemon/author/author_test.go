@@ -14,6 +14,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
@@ -28,7 +29,7 @@ func setup(t *testing.T) (*Handler, *memory.Store, *bytes.Buffer) {
 		store.Context{CtxID: "ctx1", Username: "alice", Port: "ssh", PrivLvl: 15}, time.Hour)
 	log := &bytes.Buffer{}
 	lab := &Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload", "copy running-config tftp:"}}
-	return New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now), st, log
+	return New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults()), st, log
 }
 
 func req(user, port string, args ...string) wire.AuthorRequest {
@@ -183,7 +184,7 @@ func TestServerMsgIsPrintableASCII(t *testing.T) {
 			st := &errGetContextStore{Store: memory.New(time.Now), err: errors.New("store: connection refused")}
 			log := &bytes.Buffer{}
 			lab := &Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
-			h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now)
+			h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults())
 			return h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
 		}},
 		{"lab_deny", func(t *testing.T) wire.AuthorResponse {
@@ -220,7 +221,7 @@ func TestGetContextStoreErrorIsNotContextMissing(t *testing.T) {
 	st := &errGetContextStore{Store: memory.New(time.Now), err: errors.New("store: connection refused")}
 	log := &bytes.Buffer{}
 	lab := &Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
-	h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now)
+	h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults())
 
 	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
 	if resp.Status != wire.AuthorStatusFail || string(resp.ServerMsg) != "port49: authorization store unavailable" {
@@ -229,5 +230,184 @@ func TestGetContextStoreErrorIsNotContextMissing(t *testing.T) {
 	r := lastRecord(t, log)
 	if r["reason"] != "store_unavailable" {
 		t.Fatalf("%v", r)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The session `service` is a per-platform list (spec §5.2, §8; §15, L10).
+// ---------------------------------------------------------------------------
+
+var junosPeer = authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "juniper_junos"}
+
+// setupOn is setup with a chosen session-service table, which is what an
+// operator override produces.
+func setupOn(t *testing.T, services map[string][]string) (*Handler, *bytes.Buffer) {
+	t.Helper()
+	st := memory.New(time.Now)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "ctx1", Username: "alice", Port: "ssh", PrivLvl: 15}, time.Hour)
+	log := &bytes.Buffer{}
+	lab := &Lab{DenyPrefixes: []string{"reload"}}
+	return New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now, services), log
+}
+
+// TestJunosSessionServiceIsPermitted is the regression this change exists for.
+// L10 measured Junos sending `service=junos-exec`, and until 2026-09-21
+// port49 required `shell`, so every Junos session authorization it had ever
+// answered was a denial (spec §15, L10).
+func TestJunosSessionServiceIsPermitted(t *testing.T) {
+	h, log := setupOn(t, platform.Defaults())
+	resp := h.Handle(context.Background(), junosPeer, req("alice", "", "service=junos-exec"))
+	if resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("a Junos session authorization must be permitted, got %+v", resp)
+	}
+	r := lastRecord(t, log)
+	if r["event"] != "authorize_session" || r["reason"] != "context_matched" {
+		t.Fatalf("%v", r)
+	}
+}
+
+// TestHandlerInventsNoAttributeOfItsOwn. Recognising `junos-exec` must not
+// start sending a session-only platform attributes nobody has measured it
+// accepting: the Junos projection — class, `local-user-name`,
+// `user-permissions`, the allow/deny regexes — is plan 5, decision 22, gated
+// on L12. This package is a pass-through, so what reaches the device is
+// exactly what the authorizer returned and nothing else; the Junos
+// authorizer is configured to return nothing (tests/lab/harness_test.go,
+// (*lab).configPath).
+func TestHandlerInventsNoAttributeOfItsOwn(t *testing.T) {
+	for _, attrs := range [][]string{nil, {"priv-lvl=15"}, {"priv-lvl=15", "shell:roles*network-admin"}} {
+		st := memory.New(time.Now)
+		st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+			store.Context{CtxID: "ctx1", Username: "alice", PrivLvl: 15}, time.Hour)
+		log := &bytes.Buffer{}
+		h := New(st, &Lab{SessionAttributes: attrs}, decision.NewJSONLines(log),
+			metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults())
+
+		resp := h.Handle(context.Background(), junosPeer, req("alice", "", "service=junos-exec"))
+		if resp.Status != wire.AuthorStatusPassAdd {
+			t.Fatalf("%v: %+v", attrs, resp)
+		}
+		if len(resp.Args) != len(attrs) {
+			t.Fatalf("authorizer returned %d attributes, the reply carries %d: %q", len(attrs), len(resp.Args), resp.Args)
+		}
+		for i, a := range attrs {
+			if string(resp.Args[i]) != a {
+				t.Fatalf("reply attribute %d is %q, the authorizer returned %q", i, resp.Args[i], a)
+			}
+		}
+	}
+}
+
+// TestPlatformsDoNotShareEachOthersServices: the check is per platform, not a
+// union. An EOS device asking `junos-exec` is asking something EOS has never
+// been measured asking, and a Junos device asking `shell` likewise.
+func TestPlatformsDoNotShareEachOthersServices(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		peer    authen.Peer
+		service string
+	}{
+		{"eos asking junos-exec", peer, "junos-exec"},
+		{"junos asking shell", junosPeer, "shell"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h, log := setupOn(t, platform.Defaults())
+			resp := h.Handle(context.Background(), tt.peer, req("alice", "vty0", "service="+tt.service))
+			if resp.Status != wire.AuthorStatusFail {
+				t.Fatalf("%+v", resp)
+			}
+			if r := lastRecord(t, log); r["reason"] != "service_unsupported" {
+				t.Fatalf("%v", r)
+			}
+		})
+	}
+}
+
+// TestOperatorCanNameACustomJunosService. Production SRX firewalls run
+// `set system tacplus-options service-name junos-exec-fw`, so the name on the
+// wire is a device setting and a custom one has to be configurable.
+func TestOperatorCanNameACustomJunosService(t *testing.T) {
+	services := platform.Defaults()
+	services["juniper_junos"] = []string{"junos-exec-fw"}
+	h, log := setupOn(t, services)
+
+	if resp := h.Handle(context.Background(), junosPeer, req("alice", "", "service=junos-exec-fw")); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("the configured service must be permitted, got %+v", resp)
+	}
+	// The override replaces the default, so the built-in name is now refused.
+	if resp := h.Handle(context.Background(), junosPeer, req("alice", "", "service=junos-exec")); resp.Status != wire.AuthorStatusFail {
+		t.Fatalf("the override must replace the built-in, got %+v", resp)
+	}
+	if r := lastRecord(t, log); r["reason"] != "service_unsupported" {
+		t.Fatalf("%v", r)
+	}
+}
+
+// TestUnmodeledPlatformStillAuthorizesShell: spec §8, "Unknown platforms". A
+// device port49 has no adapter for is legitimately admitted and must still
+// reach a prompt.
+func TestUnmodeledPlatformStillAuthorizesShell(t *testing.T) {
+	h, _ := setupOn(t, platform.Defaults())
+	odd := authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "meinberg_lantime"}
+	if resp := h.Handle(context.Background(), odd, req("alice", "vty0", "service=shell")); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("an unmodeled platform must still authorize a shell session, got %+v", resp)
+	}
+}
+
+// TestServiceIsRecordedOnEveryAuthorizationRecord. The value the fleet's
+// devices actually ask under has to be a field to group by, not a string to
+// parse out of `request.raw` — including on the denials, where it is the
+// whole explanation (spec §5.7).
+func TestServiceIsRecordedOnEveryAuthorizationRecord(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		peer   authen.Peer
+		user   string
+		args   []string
+		event  string
+		reason string
+		want   string
+	}{
+		{"session permit", peer, "alice", []string{"service=shell", "cmd="}, "authorize_session", "context_matched", "shell"},
+		{"command permit", peer, "alice", []string{"service=shell", "cmd=show", "cmd-arg=version"}, "authorize_command", "permit_dominates", "shell"},
+		{"command deny", peer, "alice", []string{"service=shell", "cmd=reload"}, "authorize_command", "no_permit_dominates_deny", "shell"},
+		{"junos session permit", junosPeer, "alice", []string{"service=junos-exec"}, "authorize_session", "context_matched", "junos-exec"},
+		{"service_unsupported", peer, "alice", []string{"service=ppp", "protocol=ip"}, "authorize_session", "service_unsupported", "ppp"},
+		{"context_missing", peer, "carol", []string{"service=shell", "cmd="}, "authorize_session", "context_missing", "shell"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h, log := setupOn(t, platform.Defaults())
+			h.Handle(context.Background(), tt.peer, req(tt.user, "vty0", tt.args...))
+			r := lastRecord(t, log)
+			if r["event"] != tt.event || r["reason"] != tt.reason {
+				t.Fatalf("event/reason = %v/%v, want %v/%v", r["event"], r["reason"], tt.event, tt.reason)
+			}
+			got := r["request"].(map[string]any)["service"]
+			if got != tt.want {
+				t.Fatalf("request.service = %v, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRecordedServiceIsNeverConsultedForPolicy: the rule in spec §5.2. Two
+// devices on two platforms, asking under two different service names, reach
+// the same authorizer decision for the same command — the service selects
+// nothing.
+func TestRecordedServiceIsNeverConsultedForPolicy(t *testing.T) {
+	services := map[string][]string{"arista_eos": {"shell"}, "juniper_junos": {"junos-exec"}}
+	for _, tt := range []struct {
+		peer    authen.Peer
+		service string
+	}{{peer, "shell"}, {junosPeer, "junos-exec"}} {
+		h, log := setupOn(t, services)
+		resp := h.Handle(context.Background(), tt.peer, req("alice", "vty0", "service="+tt.service, "cmd=reload", "cmd-arg=<cr>"))
+		if resp.Status != wire.AuthorStatusFail {
+			t.Fatalf("%s: a denied command must be denied whatever service asked, got %+v", tt.service, resp)
+		}
+		if r := lastRecord(t, log); r["reason"] != "no_permit_dominates_deny" {
+			t.Fatalf("%s: %v", tt.service, r)
+		}
 	}
 }

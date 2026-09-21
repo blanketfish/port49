@@ -58,8 +58,17 @@ type Session struct {
 }
 
 type Request struct {
-	Raw    []string `json:"raw"`
-	Vector []string `json:"vector"`
+	// Service is the `service` AV pair lifted out of Raw, on every
+	// authorize_session and authorize_command record including the denials.
+	// It is recorded so "which service is this fleet's devices asking under"
+	// is a field to group by rather than a string to parse out of an array —
+	// the question after renaming `tacplus-options service-name` on half an
+	// SRX fleet, and the one a service_unsupported denial has to answer. It is
+	// checked against the platform's session_services list and consulted for
+	// nothing else: the service never selects policy (spec §5.2, §5.7).
+	Service string   `json:"service,omitempty"`
+	Raw     []string `json:"raw"`
+	Vector  []string `json:"vector"`
 }
 
 type AcctRecord struct {
