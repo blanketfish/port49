@@ -217,9 +217,21 @@ type Store interface {
 	// it — so it stays.
 	DeleteContext(ctx context.Context, k ContextKey) error
 
-	// Task 3 appends here: PutBlob, GetBlob, BumpBlob, IndexContext,
-	// UnindexContext, ContextsByPrincipal, ContextsBySid, ContextsByCert,
-	// ReindexSid, ActivePrincipals, PutIdempotency, GetIdempotency.
+	PutBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error
+	GetBlob(ctx context.Context, hash string) ([]byte, error)
+	// BumpBlob extends a blob to at least now+ttl and never shortens it.
+	BumpBlob(ctx context.Context, hash string, ttl time.Duration) error
+
+	IndexContext(ctx context.Context, principal, sid, certKey string, ref ContextRef, ttl time.Duration) error
+	UnindexContext(ctx context.Context, principal, sid, certKey string, ref ContextRef) error
+	ContextsByPrincipal(ctx context.Context, principal string) ([]ContextRef, error)
+	ContextsBySid(ctx context.Context, sid string) ([]ContextRef, error)
+	ContextsByCert(ctx context.Context, certKey string) ([]ContextRef, error)
+	ReindexSid(ctx context.Context, oldSid, newSid string, ref ContextRef, ttl time.Duration) error
+	ActivePrincipals(ctx context.Context) ([]string, error)
+
+	PutIdempotency(ctx context.Context, principal, key string, rec Idempotency) error
+	GetIdempotency(ctx context.Context, principal, key string) (Idempotency, error)
 }
 
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).

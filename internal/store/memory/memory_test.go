@@ -422,3 +422,73 @@ func TestRedeemZeroesTheSpentToken(t *testing.T) {
 		t.Fatalf("the surviving token was damaged: %+v", c)
 	}
 }
+
+func TestBlobBump(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	s.PutBlob(ctx, "sha256:a", []byte("blob"), time.Minute)
+	s.BumpBlob(ctx, "sha256:a", time.Hour)
+	now = now.Add(30 * time.Minute)
+	if b, err := s.GetBlob(ctx, "sha256:a"); err != nil || string(b) != "blob" {
+		t.Fatalf("%s %v", b, err)
+	}
+	s.BumpBlob(ctx, "sha256:a", time.Minute) // must not shorten
+	now = now.Add(20 * time.Minute)
+	if _, err := s.GetBlob(ctx, "sha256:a"); err != nil {
+		t.Fatal("bump shortened the blob's life")
+	}
+	now = now.Add(time.Hour)
+	if _, err := s.GetBlob(ctx, "sha256:a"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("blob outlived its TTL")
+	}
+}
+
+func TestIndexes(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	s.IndexContext(ctx, "user:alice", "sid1", store.CertKey("ca", "01"), ref, time.Hour)
+	if r, _ := s.ContextsByPrincipal(ctx, "user:alice"); len(r) != 1 || r[0] != ref {
+		t.Fatalf("%v", r)
+	}
+	if r, _ := s.ContextsBySid(ctx, "sid1"); len(r) != 1 {
+		t.Fatalf("%v", r)
+	}
+	if r, _ := s.ContextsByCert(ctx, store.CertKey("ca", "01")); len(r) != 1 {
+		t.Fatalf("%v", r)
+	}
+	if p, _ := s.ActivePrincipals(ctx); len(p) != 1 || p[0] != "user:alice" {
+		t.Fatalf("%v", p)
+	}
+	s.ReindexSid(ctx, "sid1", "sid2", ref, time.Hour)
+	if r, _ := s.ContextsBySid(ctx, "sid1"); len(r) != 0 {
+		t.Fatal("old sid still indexed")
+	}
+	if r, _ := s.ContextsBySid(ctx, "sid2"); len(r) != 1 {
+		t.Fatal("new sid not indexed")
+	}
+	s.UnindexContext(ctx, "user:alice", "sid2", store.CertKey("ca", "01"), ref)
+	if p, _ := s.ActivePrincipals(ctx); len(p) != 0 {
+		t.Fatalf("still active: %v", p)
+	}
+	s.IndexContext(ctx, "user:bob", "", "", ref, time.Minute)
+	now = now.Add(2 * time.Minute)
+	if p, _ := s.ActivePrincipals(ctx); len(p) != 0 {
+		t.Fatal("expired index entry still active")
+	}
+}
+
+func TestIdempotency(t *testing.T) {
+	s := New(time.Now)
+	ctx := context.Background()
+	s.PutIdempotency(ctx, "user:alice", "k1", store.Idempotency{BodyHash: "h", Response: []byte("resp"), ExpiresAt: time.Now().Add(time.Minute)})
+	r, err := s.GetIdempotency(ctx, "user:alice", "k1")
+	if err != nil || string(r.Response) != "resp" {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if _, err := s.GetIdempotency(ctx, "user:bob", "k1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("idempotency is per principal")
+	}
+}

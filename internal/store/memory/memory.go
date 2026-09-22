@@ -5,6 +5,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -22,12 +23,28 @@ type Store struct {
 	// the records it points at are sealed, the index is not (store.ReceiptWrite).
 	receiptsByPrincipal map[string]map[store.ReceiptKey]time.Time
 	contexts            map[store.ContextKey]ctxEntry
-	writes              int // incremented on every write; triggers sweep at sweepEvery
+	blobs               map[string]blobEntry
+
+	// byPrincipal, bySid, and byCert are the context indexes (design §12):
+	// each maps its key to the set of ContextRefs live under it, with each
+	// ref's own expiry so the sweep can reclaim an index entry whose context
+	// is already gone.
+	byPrincipal map[string]map[store.ContextRef]time.Time
+	bySid       map[string]map[store.ContextRef]time.Time
+	byCert      map[string]map[store.ContextRef]time.Time
+	idem        map[string]store.Idempotency
+
+	writes int // incremented on every write; triggers sweep at sweepEvery
 }
 
 type ctxEntry struct {
 	c   store.Context
 	exp time.Time
+}
+
+type blobEntry struct {
+	body []byte
+	exp  time.Time
 }
 
 func New(now func() time.Time) *Store {
@@ -37,6 +54,11 @@ func New(now func() time.Time) *Store {
 		receipts:            make(map[store.ReceiptKey]store.Receipt),
 		receiptsByPrincipal: make(map[string]map[store.ReceiptKey]time.Time),
 		contexts:            make(map[store.ContextKey]ctxEntry),
+		blobs:               make(map[string]blobEntry),
+		byPrincipal:         make(map[string]map[store.ContextRef]time.Time),
+		bySid:               make(map[string]map[store.ContextRef]time.Time),
+		byCert:              make(map[string]map[store.ContextRef]time.Time),
+		idem:                make(map[string]store.Idempotency),
 	}
 }
 
@@ -121,6 +143,40 @@ func (s *Store) sweepLocked() {
 	for k, e := range s.contexts {
 		if !e.exp.After(now) {
 			delete(s.contexts, k)
+		}
+	}
+
+	// Sweep blobs: delete blobs past their expiry.
+	for h, b := range s.blobs {
+		if !b.exp.After(now) {
+			delete(s.blobs, h)
+		}
+	}
+
+	// Sweep idempotency records: delete past ExpiresAt.
+	for k, r := range s.idem {
+		if !r.ExpiresAt.After(now) {
+			delete(s.idem, k)
+		}
+	}
+
+	// Sweep the context indexes: an entry expires on its own TTL, and a key
+	// whose last entry is gone drops out entirely — the same shape as
+	// receiptsByPrincipal, and for the same reason.
+	sweepIndex(s.byPrincipal, now)
+	sweepIndex(s.bySid, now)
+	sweepIndex(s.byCert, now)
+}
+
+func sweepIndex(idx map[string]map[store.ContextRef]time.Time, now time.Time) {
+	for k, set := range idx {
+		for ref, exp := range set {
+			if !exp.After(now) {
+				delete(set, ref)
+			}
+		}
+		if len(set) == 0 {
+			delete(idx, k)
 		}
 	}
 }
@@ -315,6 +371,233 @@ func (s *Store) DeleteContext(_ context.Context, k store.ContextKey) error {
 	defer s.mu.Unlock()
 	delete(s.contexts, k)
 	return nil
+}
+
+// PutBlob writes body under hash, keeping the later of the existing and the
+// new expiry: a re-put must not shorten a blob another context still
+// references.
+func (s *Store) PutBlob(_ context.Context, hash string, body []byte, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exp := s.now().Add(ttl)
+	if existing, ok := s.blobs[hash]; ok && existing.exp.After(exp) {
+		exp = existing.exp
+	}
+	s.blobs[hash] = blobEntry{body: bytes.Clone(body), exp: exp}
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
+	return nil
+}
+
+// GetBlob returns a copy of the blob's body, or ErrNotFound if it is absent
+// or has expired.
+func (s *Store) GetBlob(_ context.Context, hash string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.blobs[hash]
+	if !ok || !b.exp.After(s.now()) {
+		delete(s.blobs, hash)
+		return nil, store.ErrNotFound
+	}
+	return bytes.Clone(b.body), nil
+}
+
+// BumpBlob extends a blob to at least now+ttl and never shortens it.
+func (s *Store) BumpBlob(_ context.Context, hash string, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.blobs[hash]
+	if !ok || !b.exp.After(s.now()) {
+		delete(s.blobs, hash)
+		return store.ErrNotFound
+	}
+	if newExp := s.now().Add(ttl); newExp.After(b.exp) {
+		b.exp = newExp
+		s.blobs[hash] = b
+	}
+	return nil
+}
+
+// addRef adds ref to idx[key] with the given expiry. An empty key is a
+// caller opting out of that index — IndexContext passes "" for a sid or cert
+// it does not have — and is a no-op rather than an entry under the empty
+// string.
+func addRef(idx map[string]map[store.ContextRef]time.Time, key string, ref store.ContextRef, exp time.Time) {
+	if key == "" {
+		return
+	}
+	set := idx[key]
+	if set == nil {
+		set = make(map[store.ContextRef]time.Time)
+		idx[key] = set
+	}
+	set[ref] = exp
+}
+
+// removeRef removes ref from idx[key] and drops the key entirely once its
+// last ref is gone, the same shape as receiptsByPrincipal.
+func removeRef(idx map[string]map[store.ContextRef]time.Time, key string, ref store.ContextRef) {
+	if key == "" {
+		return
+	}
+	set := idx[key]
+	if set == nil {
+		return
+	}
+	delete(set, ref)
+	if len(set) == 0 {
+		delete(idx, key)
+	}
+}
+
+// listRefs returns the live refs under idx[key], sorted on NAS+"\x00"+Username,
+// dropping expired entries as it walks.
+func listRefs(idx map[string]map[store.ContextRef]time.Time, key string, now time.Time) []store.ContextRef {
+	set := idx[key]
+	if set == nil {
+		return nil
+	}
+	out := make([]store.ContextRef, 0, len(set))
+	for ref, exp := range set {
+		if exp.After(now) {
+			out = append(out, ref)
+		} else {
+			delete(set, ref)
+		}
+	}
+	if len(set) == 0 {
+		delete(idx, key)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].NAS+"\x00"+out[i].Username < out[j].NAS+"\x00"+out[j].Username
+	})
+	return out
+}
+
+// IndexContext adds ref to each non-empty index — principal, sid, and cert —
+// sharing the one ttl. A caller with no sid or cert passes "" to skip that
+// index (store.ContextRef alone is not enough to reconstruct the context).
+func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exp := s.now().Add(ttl)
+	addRef(s.byPrincipal, principal, ref, exp)
+	addRef(s.bySid, sid, ref, exp)
+	addRef(s.byCert, certKey, ref, exp)
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
+	return nil
+}
+
+// UnindexContext removes ref from each of the three indexes it was written
+// under.
+func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removeRef(s.byPrincipal, principal, ref)
+	removeRef(s.bySid, sid, ref)
+	removeRef(s.byCert, certKey, ref)
+	return nil
+}
+
+// ContextsByPrincipal returns the live context refs indexed under principal.
+func (s *Store) ContextsByPrincipal(_ context.Context, principal string) ([]store.ContextRef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return listRefs(s.byPrincipal, principal, s.now()), nil
+}
+
+// ContextsBySid returns the live context refs indexed under sid.
+func (s *Store) ContextsBySid(_ context.Context, sid string) ([]store.ContextRef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return listRefs(s.bySid, sid, s.now()), nil
+}
+
+// ContextsByCert returns the live context refs indexed under certKey.
+func (s *Store) ContextsByCert(_ context.Context, certKey string) ([]store.ContextRef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return listRefs(s.byCert, certKey, s.now()), nil
+}
+
+// ReindexSid moves ref from oldSid's index entry to newSid's, re-stamping its
+// expiry from ttl. A session ID that changes mid-session (spec §5.8) must not
+// leave the ref answering lookups under a sid the device no longer uses.
+func (s *Store) ReindexSid(_ context.Context, oldSid, newSid string, ref store.ContextRef, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removeRef(s.bySid, oldSid, ref)
+	addRef(s.bySid, newSid, ref, s.now().Add(ttl))
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
+	return nil
+}
+
+// ActivePrincipals returns, sorted, every principal with at least one live
+// context ref, dropping expired refs as it walks.
+func (s *Store) ActivePrincipals(_ context.Context) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	var out []string
+	for p, set := range s.byPrincipal {
+		live := false
+		for ref, exp := range set {
+			if exp.After(now) {
+				live = true
+			} else {
+				delete(set, ref)
+			}
+		}
+		if len(set) == 0 {
+			delete(s.byPrincipal, p)
+		}
+		if live {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// idemKey joins principal and key so idempotency is scoped per principal:
+// one principal's replay must not answer another's request.
+func idemKey(principal, key string) string {
+	return principal + "\x00" + key
+}
+
+// PutIdempotency records rec under (principal, key), expiring on rec.ExpiresAt.
+func (s *Store) PutIdempotency(_ context.Context, principal, key string, rec store.Idempotency) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.idem[idemKey(principal, key)] = rec
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
+	return nil
+}
+
+// GetIdempotency returns the record written under (principal, key), or
+// ErrNotFound if it is absent, expired, or was written under a different
+// principal.
+func (s *Store) GetIdempotency(_ context.Context, principal, key string) (store.Idempotency, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := idemKey(principal, key)
+	r, ok := s.idem[k]
+	if !ok || !r.ExpiresAt.After(s.now()) {
+		delete(s.idem, k)
+		return store.Idempotency{}, store.ErrNotFound
+	}
+	return r, nil
 }
 
 var _ store.Store = (*Store)(nil)
