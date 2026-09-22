@@ -110,3 +110,101 @@ func EnableUsernames() map[string]string {
 // for `platforms.<name>.enable_username` — either the shipping default or the
 // refused-but-named `enab` — as opposed to a typo, which is a different error.
 func KnownEnableUsername(v string) bool { return v == EnablePrincipal || v == EnableEnab }
+
+// sessionDiscriminators names the AV pair whose value separates two sessions of
+// one user on one device, per platform (spec §5.8). Every entry is measured:
+//
+//   - juniper_junos: session_pid. NOT task_id — it restarts at 1 per session on
+//     both Junos images, so two concurrent logins both sent task_id=1 while
+//     session_pid was 31048/31050 on vSRX and 17244/17246 on vJunos-router
+//     (tests/lab/results/L17-juniper_vsrx.md, L17-juniper_vjunos-router.md).
+//   - arista_eos: task_id, 27 and 28 across two concurrent sessions and stable
+//     start to stop (tests/lab/results/L1-arista_eos.md).
+//   - cisco_nxos: task_id, which is `<addr>@pts/<n>` and differed across two
+//     concurrent sessions (tests/lab/results/L1-cisco_nxos.md).
+//   - cisco_iosxe: task_id, 4033 and 4034 across two concurrent sessions
+//     (tests/lab/results/L1-cisco_iosxe.md).
+//
+// Unmeasured: durability across a reboot or a pid wrap, behaviour under load,
+// and every non-SSH transport. A platform with no entry binds nothing and takes
+// §5.8's username-only branch, which is the safe direction.
+var sessionDiscriminators = map[string]string{
+	"arista_eos":    "task_id",
+	"cisco_iosxe":   "task_id",
+	"cisco_nxos":    "task_id",
+	"juniper_junos": "session_pid",
+}
+
+// SessionDiscriminator returns the AV pair whose value separates two sessions
+// of one user on one device, and whether this platform has one.
+func SessionDiscriminator(platformName string) (string, bool) {
+	av, ok := sessionDiscriminators[platformName]
+	return av, ok
+}
+
+// execCommands names the `cmd` values that mark a record as the session's own
+// exec record on platforms that put a command there at all. It is per platform
+// because the shape is:
+//
+//   - arista_eos, cisco_nxos, cisco_iosxe: the exec START and STOP carry no
+//     `cmd` argument, so "no command" identifies them
+//     (tests/lab/results/L6-arista_eos.md, L6-cisco_nxos.md, L6-cisco_iosxe.md,
+//     and the packet dumps in L1-*).
+//   - juniper_junos: they carry `cmd=login` and `cmd=logout`, alongside
+//     per-command records carrying the typed command
+//     (tests/lab/results/L6-juniper_vsrx.md, L6-juniper_vjunos-router.md:
+//     "an exec record is one that carries no command at all, as on EOS, or
+//     carries only `login` or `logout`, as on Junos").
+//
+// A reader that knows only the first shape annotates nothing whatsoever on
+// Junos, and does so silently — every Junos session takes the unset branch.
+var execCommands = map[string][]string{
+	"juniper_junos": {"login", "logout"},
+}
+
+// IsExecRecord reports whether an accounting record carrying this `cmd` is the
+// session's own exec record rather than a per-command one, on platformName.
+// Only exec records annotate login context (spec §5.8).
+//
+// An unmodeled platform gets the majority shape — no `cmd` at all — rather
+// than Junos's, because guessing the other way would treat a device that
+// really does send `cmd=login` as a command as an exec record and clear a
+// live session's accounting_state on it.
+func IsExecRecord(platformName, cmd string) bool {
+	if cmd == "" {
+		return true
+	}
+	for _, c := range execCommands[platformName] {
+		if c == cmd {
+			return true
+		}
+	}
+	return false
+}
+
+// systemUsers are the usernames a platform's own machinery writes accounting
+// under. It is EMPTY for every shipped platform and stays that way until a
+// tests/lab/results/ note measures one: the Junos lab measured the opposite,
+// every record naming the logged-in operator and none naming root under this
+// lab's accounting event list (L17-juniper_vsrx.md, L17-juniper_vjunos-router.md).
+// Two production observations — a Junos RPC-driven `show` as root, and an NX-OS
+// admin record with task_id=vsh.bin.$port after a cancelled sudo — are
+// unmeasured in this lab and are recorded as such in spec §5.8; neither is
+// entered here. Plan 5's adapters own the list; the rule that reads it is
+// plan 2's.
+var systemUsers = map[string][]string{}
+
+// SystemUsers is the per-platform table of usernames a platform's own
+// machinery writes accounting under. It returns a copy, and every shipped
+// platform's entry is empty.
+//
+// main.go hands it to acct.New; the handler never reads this package at
+// request time, so there is no global for a test to mutate and no lock to get
+// wrong under -race.
+func SystemUsers() map[string][]string {
+	out := make(map[string][]string, len(systemUsers))
+	for name, users := range systemUsers {
+		out[name] = append([]string(nil), users...)
+	}
+	return out
+}

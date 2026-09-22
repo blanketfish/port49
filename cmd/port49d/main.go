@@ -31,6 +31,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/daemon/server"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/token"
@@ -142,7 +143,12 @@ func run(cfgPath string) error {
 		// today.
 		Author: author.New(st, authz, log, m, time.Now, cfg.SessionServices,
 			0, 10*time.Minute, cfg.ContextIdleTTL),
-		Acct:   acct.New(st, spool, m, time.Now),
+		// The system-user table is injected rather than looked up through a
+		// package global, so nothing can mutate a security rule at run time.
+		// Every shipped platform's list is empty (internal/platform), so no
+		// record is attributed `system` until plan 5's adapters fill one from
+		// a tests/lab/results/ note.
+		Acct:   acct.New(st, spool, m, time.Now, cfg.ContextIdleTTL, platform.SystemUsers()),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}
 
 	// A dead metrics listener is not a detail: without it nobody can see the
