@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base32"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -32,8 +33,12 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/server"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/session"
+	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/token"
+	"github.com/rhwendt/port49/internal/username"
 )
 
 func main() {
@@ -56,6 +61,56 @@ func newCtxID() string {
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b[:])
 }
 
+// mintSeeds cuts a token pair for every `lab.seed_tokens` entry and writes the
+// credentials to `lab.seed_token_file`, one JSON object per line.
+//
+// The file is opened O_TRUNC with mode 0600 before the first mint: 0600 because
+// it is the only place a minted secret is ever written down, and truncated
+// because the tokens of the previous run are gone with the store that held them
+// — a file still naming them would hand a harness a credential that redeems as
+// `token_not_found`, which reads as a device fault.
+//
+// It is the caller's job to unwind the spool on an error, the way every other
+// startup failure in run does.
+func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) error {
+	f, err := os.OpenFile(cfg.Lab.SeedTokenFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for _, t := range cfg.Lab.SeedTokens {
+		// Canonicalizing here is belt and braces, not a fix: the mint refuses
+		// any name canonicalization would change. It is written this way so
+		// there is one answer to whose job canonicalization is — the caller's,
+		// before the mint checks it.
+		user := username.Canonical(t.Username)
+		res, err := minter.Mint(ctx, token.Request{
+			Subject: token.Subject{
+				Principal:     "user:" + t.Username + "@lab",
+				Username:      user,
+				TokenTTL:      cfg.ContextIdleTTL,
+				Enable:        "token",
+				MaxPrivilege:  15,
+				MaxSessionAge: cfg.Session.MaxSessionAgeDefault,
+				AuthTime:      time.Now(),
+				Credential:    store.Credential{Method: "lab"},
+			},
+			Device: t.NAS, Platform: "lab", WithEnable: t.Enable, TTL: cfg.ContextIdleTTL})
+		if err != nil {
+			return fmt.Errorf("port49d: minting the lab seed for %s on %s: %w", user, t.NAS, err)
+		}
+		line, err := json.Marshal(map[string]string{"nas": t.NAS, "username": user,
+			"login": res.Login, "enable": res.Enable, "expires_at": res.ExpiresAt.Format(time.RFC3339)})
+		if err != nil {
+			return err
+		}
+		if _, err := f.Write(append(line, '\n')); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func run(cfgPath string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -70,22 +125,25 @@ func run(cfgPath string) error {
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg)
 	log := decision.NewJSONLinesWithFailureHook(os.Stdout, m.DecisionLogWriteFailures.Inc)
-	st := memory.New(time.Now)
 	lim := limits.New(cfg.Limits, time.Now)
 
-	// The tag key binds a token to the device it was minted for (design §8).
-	// Nothing mints tokens yet — Task 15 wires the Minter and derives this
-	// from the encryption-at-rest key, the same place the RFC 8907 shared keys
-	// live — so until then it is process-local, which is exactly as long as
-	// the in-memory token set it tags survives a restart. Random rather than
-	// constant: a constant here would be a published key that lets anyone
-	// compute any device's tag. Lab seed tokens are not token-shaped, so the
-	// tag check never fires on them.
-	var tagSeed [32]byte
-	if _, err := rand.Read(tagSeed[:]); err != nil {
-		return fmt.Errorf("port49d: crypto/rand is unavailable: %w", err)
+	// Everything that holds a credential, a principal or a context is sealed
+	// before it reaches the backend (design §8). config.Load has already
+	// refused a config without an encryption key and refused a key that is not
+	// 32 bytes, so this fails only on the backstop in key32.
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		return err
 	}
-	tagKey := token.TagKey(tagSeed[:])
+	// The tag key binds a token to the device it was minted for (design §8),
+	// and it is derived from the current encryption key rather than generated
+	// per process: a process-local key would make every token minted by one
+	// daemon a device_mismatch at the next, which is a fleet-wide denial that
+	// nothing in the log would attribute to a restart. Derived, the tag is a
+	// function of configuration, so two daemons on one key agree and retiring
+	// that key retires the tags with the records it sealed.
+	tagKey := token.TagKey(keys.Current.Bytes[:])
+	st := crypt.Wrap(memory.New(time.Now), keys, m.CryptOpenFailures)
 
 	spool, err := acct.NewSpool(cfg.Accounting.SpoolCapacity, cfg.Accounting.SpoolPath, log, m)
 	if err != nil {
@@ -110,16 +168,32 @@ func run(cfgPath string) error {
 		CommandAttributes: cfg.Lab.CommandAttributes,
 		DenyPrefixes:      cfg.Lab.DenyPrefixes,
 	}
-	// A lab seed no longer carries a secret: it names who gets a token and the
-	// daemon mints the pair, which needs the Minter that Task 15 wires in here
-	// along with the file the pair is written to. Until then a config that asks
-	// for seeds is refused rather than started with none — an operator whose lab
-	// logins had quietly stopped working would have nothing at all to read.
-	if n := len(cfg.Lab.SeedTokens); n > 0 {
-		stopSpool()
-		<-spoolDone
-		return fmt.Errorf("port49d: lab.seed_tokens names %d seed(s), but the minter that cuts their "+
-			"credentials is not wired in yet; remove the seeds or run a build that has it", n)
+	minter := token.NewMinter(st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
+	// Plan 7's broker exposes Refresh, RevokeByPrincipal and RevokeBySID over
+	// HTTP. Nothing in this binary calls them yet; the Manager is built here so
+	// the wiring is proven by the compiler rather than by plan 7 discovering it.
+	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
+	_ = sessions
+
+	// The seeded pair is a credential. It goes to a file the operator named, at
+	// 0600, and never to a stream: stderr on a systemd unit lands in the same
+	// journal the operator ships the decision log to, and `CLAUDE.md` is
+	// unconditional — the log never contains a token, and credentials appear
+	// only as credential_sha256. Plan 1's shape was different in kind: the
+	// operator put the secret in the config file themselves and the daemon
+	// never re-emitted it. Here the daemon mints the secret, so it is the
+	// daemon that must not publish it.
+	//
+	// One line per seed, JSON, written before the listener opens; the file is
+	// truncated at start so a restart cannot leave a spent token behind.
+	if len(cfg.Lab.SeedTokens) > 0 {
+		if err := mintSeeds(ctx, cfg, minter); err != nil {
+			stopSpool()
+			<-spoolDone
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "port49d lab: %d token pair(s) minted, credentials written to %s\n",
+			len(cfg.Lab.SeedTokens), cfg.Lab.SeedTokenFile)
 	}
 
 	deps := server.Deps{Admission: cfg.Admission, Keys: cfg.Keyring(),
@@ -127,20 +201,18 @@ func run(cfgPath string) error {
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
 		Authen: authen.New(st, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
-			cfg.ContextIdleTTL, cfg.ContextIdleTTL, tagKey),
-		// The staleness ceiling is 0 — no staleness check — until there is a
-		// refresh to be stale relative to. `refreshed_at` is stamped once at
-		// login and nothing moves it until plan 2's broker-side Refresh (task
-		// 13); `session.staleness_ceiling` arrives with the config in task 14
-		// and is wired here in task 15. Any finite ceiling before then denies
-		// a steadily working operator `context_stale` — "the broker is
-		// unreachable" — at login plus the ceiling, with no broker to reach,
-		// which is the failure the idle TTL was just made extendable to avoid.
+			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tagKey),
+		// `session.staleness_ceiling` defaults to 0 — no staleness check — and
+		// that default is the operational one, not an unfinished wiring: a
+		// finite ceiling denies a steadily working operator `context_stale`,
+		// "the broker is unreachable", at login plus the ceiling, whether or
+		// not any broker exists to refresh from. It is worth setting only once
+		// something is calling session.Manager.Refresh on a schedule.
 		//
 		// The grace window is carried for plan 7's sweep and read by nothing
 		// today.
 		Author: author.New(st, authz, log, m, time.Now, cfg.SessionServices,
-			0, 10*time.Minute, cfg.ContextIdleTTL),
+			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL),
 		// The system-user table is injected rather than looked up through a
 		// package global, so nothing can mutate a security rule at run time.
 		// It carries `root` for juniper_junos and nothing else
