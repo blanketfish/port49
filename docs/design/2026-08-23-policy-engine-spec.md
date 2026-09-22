@@ -347,7 +347,10 @@ principal
                         AND whose `expires` has not passed
   → roles               union across matching grants
   → privilege           max over granted roles (no grant-level override)
-  → max_privilege       max over matching grants; absent means no escalation
+  → max_privilege       max over matching grants; absent (zero on the token) means
+                        NO CEILING, not a ceiling of zero — whether escalation is
+                        offered at all is `enable`'s job (unset → enable_refused);
+                        `store.Context.PrivilegeCeiling()` is the one reading of it
   → effective rules     resolved permit/deny/pipe sets
   → av_pairs            rendered for this device's platform
 ```
