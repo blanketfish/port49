@@ -129,7 +129,15 @@ func run(cfgPath string) error {
 		// nothing the context does not.
 		Authen: authen.New(st, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
 			cfg.ContextIdleTTL, cfg.ContextIdleTTL, tagKey),
-		Author: author.New(st, authz, log, m, time.Now, cfg.SessionServices),
+		// The staleness ceiling and grace window become `session.staleness_ceiling`
+		// and `session.grace_window` in Task 12; until then they are wired here.
+		// The ceiling is the context's own idle TTL rather than the 15m the
+		// config will default to, because nothing refreshes `refreshed_at` yet:
+		// a shorter one would deny a working operator `context_stale` — "the
+		// broker is unreachable" — when port49 has no broker to reach. At the
+		// idle TTL it denies no session that would otherwise still be served.
+		Author: author.New(st, authz, log, m, time.Now, cfg.SessionServices,
+			cfg.ContextIdleTTL, 10*time.Minute, cfg.ContextIdleTTL),
 		Acct:   acct.New(st, spool, m, time.Now),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}
 

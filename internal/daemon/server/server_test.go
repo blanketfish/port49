@@ -191,7 +191,7 @@ func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.A
 		// fires; the key only has to be non-nil and stable.
 		Authen: authen.New(st, em, lim, m, time.Now, func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) },
 			15*time.Minute, 2*time.Hour, time.Hour, time.Hour, token.TagKey([]byte("server_test"))),
-		Author: author.New(st, authz, em, m, time.Now, platform.Defaults()),
+		Author: author.New(st, authz, em, m, time.Now, platform.Defaults(), time.Hour, 10*time.Minute, time.Hour),
 		Acct:   acct.New(st, sp, m, time.Now),
 		Limits: lim, Metrics: m, Log: em, Now: time.Now, IdleTimeout: time.Second}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -239,8 +239,15 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 		t.Fatalf("%+v %v seq=%d", reply, err, h.SeqNo)
 	}
 
+	// priv_lvl=1 on the session authorization, matching the login START above
+	// and what every device in the lab was measured sending: EOS asks
+	// `priv_lvl=1 args=[service=shell cmd*]` and only raises to 15 once this
+	// reply has granted `priv-lvl=15` (tests/lab/results/L1-arista_eos.md,
+	// L3-arista_eos.md). It used to say 15 here, which the §5.3 privilege check
+	// now denies -- see TestTheDevicePrivLvlRaisedByOurOwnSessionReply in
+	// internal/daemon/author.
 	c = dial(t, addr, []byte("k2"))
-	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
+	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 1, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
 		User: []byte("alice"), Port: []byte("vty0"), Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
 	_, body = c.recv(t)
 	ar, _ := wire.DecodeAuthorResponse(body)
@@ -549,15 +556,18 @@ func TestPanicInOneConnectionDoesNotStopTheDaemon(t *testing.T) {
 	// A login first: authorization only reaches the authorizer once there is a
 	// context for the line.
 	c := dial(t, ts.addr, []byte("k2"))
-	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
 		User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_e2e")}.Encode(), 0)
 	if _, body := c.recv(t); func() bool { r, _ := wire.DecodeAuthenReply(body); return r.Status != wire.AuthenStatusPass }() {
 		t.Fatal("the login should have passed")
 	}
 	c.conn.Close() // release the per-source connection slot before the next dial
 
+	// Both levels are 1, as the lab measured them, so the request reaches the
+	// authorizer at all: a §5.3 privilege denial would answer before it and the
+	// panic under test would never be provoked.
 	c = dial(t, ts.addr, []byte("k2"))
-	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15, AuthenType: wire.AuthenTypeASCII,
+	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 1, AuthenType: wire.AuthenTypeASCII,
 		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"),
 		Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
 	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))

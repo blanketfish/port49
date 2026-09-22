@@ -44,10 +44,29 @@ type Handler struct {
 	// override; a nil map is legal and means every platform takes the
 	// fallback, which is `shell`.
 	services map[string][]string
+
+	// stalenessCeiling is how long a context may go without a policy refresh
+	// before authorization denies on it (spec §5.1.4, §5.3). It is measured
+	// from RefreshedAt; a context with no RefreshedAt is not subject to it.
+	stalenessCeiling time.Duration
+	// graceWindow is how long past session_expires a context is retained so a
+	// late `port49 login` can resume the session (spec §5.6). It is a
+	// retention decision, not a denial one: this package denies at the ceiling
+	// and deletes nothing, so nothing here reads it. Plan 7's idle sweep is
+	// the reader.
+	graceWindow time.Duration
+	// contextIdleTTL is the idle lifetime a permitted request extends a
+	// context to. It is an idle clock, not a session clock — session_expires
+	// is the session clock — so activity slides it forward (spec §5.6).
+	contextIdleTTL time.Duration
 }
 
-func New(s store.Store, a Authorizer, e decision.Emitter, m *metrics.Metrics, now func() time.Time, services map[string][]string) *Handler {
-	return &Handler{store: s, authz: a, log: e, metrics: m, now: now, services: services}
+// New builds an authorization handler. stalenessCeiling, graceWindow and
+// contextIdleTTL are the three §5.6 durations; see the Handler fields.
+func New(s store.Store, a Authorizer, e decision.Emitter, m *metrics.Metrics, now func() time.Time,
+	services map[string][]string, stalenessCeiling, graceWindow, contextIdleTTL time.Duration) *Handler {
+	return &Handler{store: s, authz: a, log: e, metrics: m, now: now, services: services,
+		stalenessCeiling: stalenessCeiling, graceWindow: graceWindow, contextIdleTTL: contextIdleTTL}
 }
 
 // authorizes reports whether a session on this platform may arrive with this
@@ -158,6 +177,25 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	}
 	rec.Session.CtxID = c.CtxID
 	rec.Principal = c.Principal
+
+	// Spec §5.3, in order. Each denial says what to do next rather than what
+	// went wrong inside: the person who typed the command is reading this.
+	now := h.now()
+	if !c.RevokedAt.IsZero() {
+		return h.deny(rec, decision.CredentialRevoked, "port49: this session was revoked - log in again")
+	}
+	if !c.SessionExpires.IsZero() && now.After(c.SessionExpires) {
+		// Denial at the ceiling is FAIL, not ERROR, and the context is
+		// retained: the grace window is plan 7's sweep, not a check here.
+		return h.deny(rec, decision.SessionExpired, "port49: session expired - run `port49 login` to resume")
+	}
+	if !c.RefreshedAt.IsZero() && now.Sub(c.RefreshedAt) > h.stalenessCeiling {
+		return h.deny(rec, decision.ContextStale, "port49: policy has not been refreshed within the staleness ceiling - the broker is unreachable")
+	}
+	if req.PrivLvl > c.PrivLvl {
+		return h.deny(rec, decision.PrivilegeExceeded, "port49: request is above the session's privilege level")
+	}
+
 	// Which `service` values this platform's sessions arrive with is a platform
 	// fact and not the constant `shell`: L10 measured Junos sending
 	// `junos-exec`, and Junos renames it per device with `set system
@@ -181,6 +219,30 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	}
 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason
 	h.emit(rec)
+
+	// Activity extends the idle TTL (spec §5.6): it is a backstop against
+	// abandoned state, not a session clock, and session_expires is the clock.
+	// Only a permit extends it — a denied loop must not keep a revoked context
+	// alive.
+	//
+	// TouchContext, never PutContext: `c` was read at the top of this request,
+	// and writing it back would discard a revocation, an accounting annotation
+	// or an escalation that landed since. It is the difference between a
+	// narrow race and a routine one.
+	//
+	// And only when the remaining life has fallen below half, which is what
+	// LastTouchedAt is for: a steady operator costs one store write per half
+	// TTL, not one per command.
+	if now.Sub(c.LastTouchedAt) >= h.contextIdleTTL/2 {
+		err := h.store.TouchContext(ctx, store.ContextKey{NAS: peer.NAS, Username: user}, h.contextIdleTTL)
+		// Counted on both outcomes, as every other store call site in this
+		// package is, or the "ok" label means nothing. ErrNotFound means the
+		// context was reclaimed or revoked out from under this request; the
+		// next one reads it for itself and is denied on its own terms, so
+		// there is nothing to do here but count it.
+		h.metrics.StoreOps.WithLabelValues("touch_context", storeOutcome(err)).Inc()
+	}
+
 	resp := wire.AuthorResponse{Status: wire.AuthorStatusPassAdd}
 	for _, a := range d.Attributes {
 		resp.Args = append(resp.Args, []byte(a))

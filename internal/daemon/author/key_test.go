@@ -148,7 +148,7 @@ func TestAStoreFaultIsNotAPermitUnderAnotherPrincipal(t *testing.T) {
 	log := &bytes.Buffer{}
 	lab := &Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
 	h := New(wrongContextStore{Store: memory.New(time.Now)}, lab, decision.NewJSONLines(log),
-		metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults())
+		metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
 
 	for _, tc := range []struct {
 		name string

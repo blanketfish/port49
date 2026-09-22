@@ -22,14 +22,19 @@ import (
 
 var peer = authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}
 
-func setup(t *testing.T) (*Handler, *memory.Store, *bytes.Buffer) {
+func setupClock(t *testing.T, now func() time.Time, ceiling, grace, idle time.Duration) (*Handler, *memory.Store, *bytes.Buffer) {
 	t.Helper()
-	st := memory.New(time.Now)
+	st := memory.New(now)
 	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
-		store.Context{CtxID: "ctx1", Username: "alice", Port: "ssh", PrivLvl: 15}, time.Hour)
+		store.Context{CtxID: "ctx1", Username: "alice", Port: "ssh", PrivLvl: 15, RefreshedAt: now()}, time.Hour)
 	log := &bytes.Buffer{}
 	lab := &Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload", "copy running-config tftp:"}}
-	return New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults()), st, log
+	return New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), now,
+		platform.Defaults(), ceiling, grace, idle), st, log
+}
+
+func setup(t *testing.T) (*Handler, *memory.Store, *bytes.Buffer) {
+	return setupClock(t, time.Now, time.Hour, time.Minute, time.Hour)
 }
 
 func req(user, port string, args ...string) wire.AuthorRequest {
@@ -184,12 +189,43 @@ func TestServerMsgIsPrintableASCII(t *testing.T) {
 			st := &errGetContextStore{Store: memory.New(time.Now), err: errors.New("store: connection refused")}
 			log := &bytes.Buffer{}
 			lab := &Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
-			h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults())
+			h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now,
+				platform.Defaults(), time.Hour, time.Minute, time.Hour)
 			return h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
 		}},
 		{"lab_deny", func(t *testing.T) wire.AuthorResponse {
 			h, _, _ := setup(t)
 			return h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=reload", "cmd-arg=<cr>"))
+		}},
+		// The §5.3 denials. Their messages are the ones an operator is most
+		// likely to see mid-session, and an em dash renders as garbage on a
+		// console that speaks whatever the device's terminal speaks, so they
+		// are held to the same rule as every other server_msg here.
+		{"credential_revoked", func(t *testing.T) wire.AuthorResponse {
+			h, st, _ := setup(t)
+			st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+				store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, RevokedAt: time.Now().Add(-time.Second)}, time.Hour)
+			return h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+		}},
+		{"session_expired", func(t *testing.T) wire.AuthorResponse {
+			h, st, _ := setup(t)
+			st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+				store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, SessionExpires: time.Now().Add(-time.Minute)}, time.Hour)
+			return h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+		}},
+		{"context_stale", func(t *testing.T) wire.AuthorResponse {
+			h, st, _ := setupClock(t, time.Now, time.Minute, time.Minute, time.Hour)
+			st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+				store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, RefreshedAt: time.Now().Add(-2 * time.Minute)}, time.Hour)
+			return h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+		}},
+		{"privilege_exceeded", func(t *testing.T) wire.AuthorResponse {
+			h, st, _ := setup(t)
+			st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+				store.Context{CtxID: "c", Username: "alice", PrivLvl: 1}, time.Hour)
+			r := req("alice", "vty0", "service=shell", "cmd=configure")
+			r.PrivLvl = 15
+			return h.Handle(context.Background(), peer, r)
 		}},
 	}
 	for _, tt := range tests {
@@ -221,7 +257,8 @@ func TestGetContextStoreErrorIsNotContextMissing(t *testing.T) {
 	st := &errGetContextStore{Store: memory.New(time.Now), err: errors.New("store: connection refused")}
 	log := &bytes.Buffer{}
 	lab := &Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
-	h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults())
+	h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now,
+		platform.Defaults(), time.Hour, time.Minute, time.Hour)
 
 	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
 	if resp.Status != wire.AuthorStatusFail || string(resp.ServerMsg) != "port49: authorization store unavailable" {
@@ -248,7 +285,8 @@ func setupOn(t *testing.T, services map[string][]string) (*Handler, *bytes.Buffe
 		store.Context{CtxID: "ctx1", Username: "alice", Port: "ssh", PrivLvl: 15}, time.Hour)
 	log := &bytes.Buffer{}
 	lab := &Lab{DenyPrefixes: []string{"reload"}}
-	return New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now, services), log
+	return New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now,
+		services, time.Hour, time.Minute, time.Hour), log
 }
 
 // TestJunosSessionServiceIsPermitted is the regression this change exists for.
@@ -282,7 +320,7 @@ func TestHandlerInventsNoAttributeOfItsOwn(t *testing.T) {
 			store.Context{CtxID: "ctx1", Username: "alice", PrivLvl: 15}, time.Hour)
 		log := &bytes.Buffer{}
 		h := New(st, &Lab{SessionAttributes: attrs}, decision.NewJSONLines(log),
-			metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults())
+			metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
 
 		resp := h.Handle(context.Background(), junosPeer, req("alice", "", "service=junos-exec"))
 		if resp.Status != wire.AuthorStatusPassAdd {
@@ -460,4 +498,219 @@ func TestLabCommandAttributes(t *testing.T) {
 	if d := bare.Command(context.Background(), store.Context{}, []string{"show", "version"}, nil); len(d.Attributes) != 0 {
 		t.Fatalf("with no command_attributes configured the reply must carry none, got %q", d.Attributes)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// The §5.3 checks, in order, and the idle TTL (spec §5.3, §5.6).
+// ---------------------------------------------------------------------------
+
+func TestRevokedContextDenies(t *testing.T) {
+	h, st, log := setup(t)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, RefreshedAt: time.Now(), RevokedAt: time.Now().Add(-time.Second)}, time.Hour)
+	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "credential_revoked" || len(resp.ServerMsg) == 0 {
+		t.Fatalf("%+v %v", resp, lastRecord(t, log))
+	}
+}
+
+func TestStaleContextDenies(t *testing.T) {
+	h, st, log := setupClock(t, time.Now, time.Minute, time.Minute, time.Hour)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, RefreshedAt: time.Now().Add(-2 * time.Minute)}, time.Hour)
+	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "context_stale" {
+		t.Fatalf("%+v %v", resp, lastRecord(t, log))
+	}
+}
+
+// The name says what it asserts: the context is still there afterwards.
+// `graceWindow` is carried but unread — nothing in this plan deletes a context
+// on expiry, with or without a window — so this test would pass either way, and
+// plan 7's author must not read it as evidence that the window is exercised.
+func TestExpiredSessionDeniesAndDoesNotDeleteTheContext(t *testing.T) {
+	h, st, log := setupClock(t, time.Now, time.Hour, 10*time.Minute, time.Hour)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, RefreshedAt: time.Now(), SessionExpires: time.Now().Add(-time.Minute)}, time.Hour)
+	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "session_expired" {
+		t.Fatalf("%+v %v", resp, lastRecord(t, log))
+	}
+	if _, err := st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); err != nil {
+		t.Fatal("context must be retained through the grace window so a late `port49 login` resumes it")
+	}
+}
+
+func TestPrivilegeExceededDenies(t *testing.T) {
+	h, st, log := setup(t)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, RefreshedAt: time.Now()}, time.Hour)
+	r := req("alice", "vty0", "service=shell", "cmd=configure")
+	r.PrivLvl = 15
+	resp := h.Handle(context.Background(), peer, r)
+	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "privilege_exceeded" {
+		t.Fatalf("%+v %v", resp, lastRecord(t, log))
+	}
+}
+
+func TestNoCeilingMeansNoExpiry(t *testing.T) {
+	h, st, log := setup(t)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, RefreshedAt: time.Now()}, time.Hour)
+	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+	if resp.Status != wire.AuthorStatusPassAdd || lastRecord(t, log)["reason"] != "permit_dominates" {
+		t.Fatalf("%+v %v", resp, lastRecord(t, log))
+	}
+}
+
+// context_idle_ttl is an IDLE ttl: an operator working steadily is never
+// dropped, and the same context with no activity is (spec §5.6).
+//
+// The staleness ceiling is 24h — longer than the 2h this test drives the clock
+// through — because it is the idle TTL under test here and nothing refreshes
+// `RefreshedAt`. With the ceiling at an hour the fifth command would be denied
+// `context_stale` and the test would be measuring the other clock.
+func TestActivityExtendsTheIdleTTL(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	clock := func() time.Time { return now }
+	h, st, _ := setupClock(t, clock, 24*time.Hour, time.Minute, 30*time.Minute)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	st.PutContext(context.Background(), key,
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, RefreshedAt: now, LastTouchedAt: now}, 30*time.Minute)
+	for i := 0; i < 6; i++ { // 2h of work on a 30m idle TTL
+		now = now.Add(20 * time.Minute)
+		if resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show")); resp.Status != wire.AuthorStatusPassAdd {
+			t.Fatalf("command %d denied: %+v", i, resp)
+		}
+	}
+	now = now.Add(31 * time.Minute) // idle past the TTL
+	if _, err := st.GetContext(context.Background(), key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("an idle context must still be reclaimed")
+	}
+}
+
+// A denial does not extend it: the TTL measures authorized activity, not
+// attempts, or a denied loop would keep a revoked context alive indefinitely.
+func TestADenialDoesNotExtendTheIdleTTL(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	clock := func() time.Time { return now }
+	h, st, _ := setupClock(t, clock, time.Hour, time.Minute, 30*time.Minute)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	st.PutContext(context.Background(), key, store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, RefreshedAt: now}, 30*time.Minute)
+	for i := 0; i < 3; i++ {
+		now = now.Add(20 * time.Minute)
+		h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=reload"))
+	}
+	if _, err := st.GetContext(context.Background(), key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("denied commands extended the idle TTL")
+	}
+}
+
+// The extension costs one store write per half TTL, not one per command. This
+// is the test that fails if someone "simplifies" the half-TTL check away.
+//
+// Its ceiling is 24h for the same reason TestActivityExtendsTheIdleTTL's is:
+// the clock runs out to 80 minutes, and at an hour's ceiling the last Handle
+// would be a `context_stale` denial, which touches nothing — so the anti-clobber
+// assertion below would pass without the extension ever having run.
+func TestTheIdleTTLIsExtendedAtMostOncePerHalfTTL(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	clock := func() time.Time { return now }
+	inner := memory.New(clock)
+	st := &countingTouchStore{Store: inner}
+	h := New(st, &Lab{SessionAttributes: []string{"priv-lvl=15"}}, decision.NewJSONLines(&bytes.Buffer{}),
+		metrics.New(prometheus.NewRegistry()), clock, platform.Defaults(), 24*time.Hour, time.Minute, 30*time.Minute)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	inner.PutContext(context.Background(), key,
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, RefreshedAt: now, LastTouchedAt: now}, 30*time.Minute)
+	for i := 0; i < 60; i++ { // one command a minute for an hour
+		now = now.Add(time.Minute)
+		if resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show")); resp.Status != wire.AuthorStatusPassAdd {
+			t.Fatalf("command %d denied: %+v", i, resp)
+		}
+	}
+	if st.touches != 4 { // minutes 15, 30, 45, 60
+		t.Fatalf("60 authorized commands cost %d store writes; the half-TTL rule is not being applied", st.touches)
+	}
+	// And a write that landed between two commands survives the extension. The
+	// accounting annotation is the one a permitted command can be tested
+	// against — a revocation would be denied before the extension is reached,
+	// which is why the store-level proof lives in Task 2's
+	// TestTouchContextExtendsWithoutClobbering.
+	c, _ := inner.GetContext(context.Background(), key)
+	c.SessionDiscriminator = "14656"
+	inner.PutContext(context.Background(), key, c, 30*time.Minute)
+	now = now.Add(20 * time.Minute)
+	if resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show")); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("the command that must extend the TTL was denied: %+v", resp)
+	}
+	if st.touches != 5 {
+		t.Fatalf("the extension did not run, so the assertion below proves nothing: %d touches", st.touches)
+	}
+	if got, _ := inner.GetContext(context.Background(), key); got.SessionDiscriminator != "14656" {
+		t.Fatalf("the extension discarded the accounting annotation: %+v", got)
+	}
+}
+
+// TestTheDevicePrivLvlRaisedByOurOwnSessionReply pins the behaviour the §5.3
+// privilege check produces against the sequence the lab actually measured, and
+// it is here because that behaviour looks wrong and the decision is not this
+// task's to make.
+//
+// Measured on vEOS (tests/lab/results/L1-arista_eos.md lines 62-63;
+// L3-arista_eos.md lines 72-76), and the same shape on the other platforms:
+//
+//	AUTHOR REQUEST  priv_lvl=1  args=[service=shell cmd*]      <- session
+//	AUTHOR RESPONSE status=PASS_ADD args=[priv-lvl=15 ...]     <- port49 grants 15
+//	AUTHOR REQUEST  priv_lvl=15 args=[service=shell cmd=terminal ...]
+//
+// The device raises the session to the level port49's own reply granted, and
+// every command after that arrives at 15. The login context's PrivLvl is still
+// the 1 the login START carried — nothing writes the granted level back — so
+// `req.PrivLvl > c.PrivLvl` denies every one of those commands
+// `privilege_exceeded`. That is an operator logged in successfully and then
+// unable to run anything, which is the 3am failure.
+//
+// The check is spec §5.3 as written, and the plan's Task 10 brief specifies it
+// verbatim, so it ships as specified. What is unresolved is which value is
+// "the session's granted level" (§5.7): ctx.privilege, as §5.3's pseudocode
+// says, or what the session authorization reply granted, which is what the
+// device believes and acts on. Resolving it means either the session
+// authorization writes the granted level into the context, or the check reads
+// ctx.max_privilege. Both are owner decisions with a lab test behind them.
+//
+// This test asserts today's behaviour so the break is discoverable rather than
+// latent. When the rule is settled, this test changes with a lab citation.
+func TestTheDevicePrivLvlRaisedByOurOwnSessionReply(t *testing.T) {
+	h, st, log := setup(t)
+	// The context as a login START at priv_lvl=1 leaves it.
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
+
+	// The session authorization the device sends, and the priv-lvl=15 it gets.
+	sess := req("alice", "vty4", "service=shell", "cmd=")
+	sess.PrivLvl = 1
+	resp := h.Handle(context.Background(), peer, sess)
+	if resp.Status != wire.AuthorStatusPassAdd || len(resp.Args) != 1 || string(resp.Args[0]) != "priv-lvl=15" {
+		t.Fatalf("the session authorization must still be permitted and grant priv-lvl=15: %+v", resp)
+	}
+
+	// The first command after it, at the level the device took from that reply.
+	cmd := req("alice", "vty4", "service=shell", "cmd=terminal", "cmd-arg=length", "cmd-arg=0", "cmd-arg=<cr>")
+	cmd.PrivLvl = 15
+	resp = h.Handle(context.Background(), peer, cmd)
+	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "privilege_exceeded" {
+		t.Fatalf("this test records a known break; if it now permits, the rule was settled "+
+			"and this test must be rewritten with the lab citation: %+v %v", resp, lastRecord(t, log))
+	}
+}
+
+type countingTouchStore struct {
+	store.Store
+	touches int
+}
+
+func (c *countingTouchStore) TouchContext(ctx context.Context, k store.ContextKey, ttl time.Duration) error {
+	c.touches++
+	return c.Store.TouchContext(ctx, k, ttl)
 }
