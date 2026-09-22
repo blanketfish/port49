@@ -495,8 +495,7 @@ func TestSetRevokedAtMarksOneFieldAndDoesNotExtend(t *testing.T) {
 // RefreshContext is the broker's setter. The window it recomputes is read
 // under this lock from the record's own pair, not from a copy the broker took,
 // and everything outside its closed list is left as whoever wrote it last left
-// it — including a revocation, which the refresh clears deliberately rather
-// than by accident.
+// it — a revocation mark included, which is why the seed carries one.
 func TestRefreshContextMovesTheWindowAndKeepsTheRest(t *testing.T) {
 	now := time.Unix(1000, 0)
 	s := New(func() time.Time { return now })
@@ -520,8 +519,8 @@ func TestRefreshContextMovesTheWindowAndKeepsTheRest(t *testing.T) {
 	if !got.SessionExpires.Equal(now.Add(8 * time.Hour)) {
 		t.Fatalf("the ceiling must move with auth_time and keep the window: %+v", got)
 	}
-	if !got.RevokedAt.IsZero() {
-		t.Fatalf("a fresh authentication event clears the revocation mark: %+v", got)
+	if got.RevokedAt.IsZero() {
+		t.Fatalf("RefreshContext must leave a revocation in place; only §5.6 row 6 reclaims it: %+v", got)
 	}
 	if got.CtxID != "c" || got.PrivLvl != 15 || got.AccountingState != store.AccountingStateOpen {
 		t.Fatalf("RefreshContext wrote a field that is not its own: %+v", got)
@@ -547,6 +546,106 @@ func TestRefreshContextMovesTheWindowAndKeepsTheRest(t *testing.T) {
 	now = now.Add(2 * time.Minute)
 	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now}, time.Minute); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("refreshing an expired context must say so, not resurrect it: %v", err)
+	}
+}
+
+// Design §12: an index entry carries the context's TTL. The dangerous
+// direction is a context outliving the entries that name it — an 8-to-16 hour
+// session kept alive by activity, whose revocation by principal or by
+// certificate then finds zero refs while the session is still authorizing.
+// Every writer that moves a context's expiry must move its index entries with
+// it.
+func TestExtendingAContextCarriesItsIndexEntries(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	ref := store.ContextRef{NAS: "n", Username: "u"}
+	certKey := store.CertKey("ca", "01")
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u",
+		AuthTime: now, SessionExpires: now.Add(8 * time.Hour)}, time.Minute)
+	if err := s.IndexContext(ctx, "user:alice", "s1", certKey, ref, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+
+	// Activity keeps the context alive well past the minute the indexes were
+	// given at login.
+	for i := 0; i < 4; i++ {
+		now = now.Add(30 * time.Second)
+		if err := s.TouchContext(ctx, k, time.Minute); err != nil {
+			t.Fatalf("touch %d: %v", i, err)
+		}
+	}
+	if _, err := s.GetContext(ctx, k); err != nil {
+		t.Fatalf("the context should still be live: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		get  func() ([]store.ContextRef, error)
+	}{
+		{"principal", func() ([]store.ContextRef, error) { return s.ContextsByPrincipal(ctx, "user:alice") }},
+		{"sid", func() ([]store.ContextRef, error) { return s.ContextsBySid(ctx, "s1") }},
+		{"cert", func() ([]store.ContextRef, error) { return s.ContextsByCert(ctx, certKey) }},
+	} {
+		refs, err := tc.get()
+		if err != nil || len(refs) != 1 {
+			t.Fatalf("%s index lost a live context: refs=%v err=%v", tc.name, refs, err)
+		}
+	}
+
+	// RefreshContext extends too, and so does a re-put of an indexed ref
+	// (spec §5.6 row 1's unconditional overwrite).
+	now = now.Add(45 * time.Second)
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(45 * time.Second)
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "c2", Username: "u"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(30 * time.Second)
+	if refs, _ := s.ContextsByPrincipal(ctx, "user:alice"); len(refs) != 1 {
+		t.Fatalf("RefreshContext or PutContext left the principal index behind: %v", refs)
+	}
+
+	// An extension must not resurrect an index entry that was removed, and
+	// the reverse record must not outlive what it points at.
+	if err := s.UnindexContext(ctx, "user:alice", "s1", certKey, ref); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(20 * time.Second)
+	if err := s.TouchContext(ctx, k, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if refs, _ := s.ContextsByPrincipal(ctx, "user:alice"); len(refs) != 0 {
+		t.Fatalf("an extension resurrected an unindexed ref: %v", refs)
+	}
+}
+
+// A rotated sid moves the reverse record with it, or the next extension
+// re-stamps the entry the rotation removed and lets the live one expire
+// underneath it.
+func TestExtendingFollowsARotatedSid(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	ref := store.ContextRef{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u"}, time.Minute)
+	if err := s.IndexContext(ctx, "user:alice", "s1", "", ref, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReindexSid(ctx, "s1", "s2", ref, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		now = now.Add(30 * time.Second)
+		if err := s.TouchContext(ctx, k, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if refs, _ := s.ContextsBySid(ctx, "s2"); len(refs) != 1 {
+		t.Fatalf("the rotated sid index expired under a live context: %v", refs)
 	}
 }
 

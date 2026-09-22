@@ -111,7 +111,13 @@ func TestRevokeByPrincipalAndByCert(t *testing.T) {
 	}
 }
 
-func TestRefreshClearsRevocation(t *testing.T) {
+// The scheduled refresh is a group re-resolution (spec §5.1.3), not a
+// credential re-verification, and it runs on every principal with a live
+// context every few minutes. A refresh that lifted the mark would un-revoke
+// every revoked principal within one interval — on the very path §5.1.3 names
+// as how a policy-driven revocation reaches live sessions. Spec §5.6 row 6,
+// the idle TTL, is the only thing that ends a revocation.
+func TestRefreshDoesNotClearRevocation(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	s := memory.New(func() time.Time { return now })
 	seed(t, s, now)
@@ -119,12 +125,17 @@ func TestRefreshClearsRevocation(t *testing.T) {
 	if _, err := m.RevokeByPrincipal(context.Background(), "user:alice@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Refresh(context.Background(), "user:alice@example.com", now, "", "s1", "s1"); err != nil {
+	if _, err := m.Refresh(context.Background(), "user:alice@example.com", now, "sha256:new", "s1", "s1"); err != nil {
 		t.Fatal(err)
 	}
 	c, _ := s.GetContext(context.Background(), key(ref))
-	if !c.RevokedAt.IsZero() {
-		t.Fatal("a fresh authentication event clears a prior revocation mark")
+	if c.RevokedAt.IsZero() {
+		t.Fatal("a scheduled refresh must not lift a revocation: spec §5.6 row 6 is what reclaims it")
+	}
+	// The rest of the refresh still lands: the mark is not a veto on
+	// re-resolving the policy blob, only on lifting the denial.
+	if c.BlobHash != "sha256:new" || !c.AuthTime.Equal(now) {
+		t.Fatalf("the refresh did not land: %+v", c)
 	}
 }
 
@@ -237,6 +248,42 @@ func TestRevocationDoesNotExtendTheContext(t *testing.T) {
 	now = now.Add(time.Hour + time.Second)
 	if _, err := s.GetContext(ctx, key(ref)); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("the mark restarted the idle TTL: %v", err)
+	}
+}
+
+// The 3am case behind design §12's rule that an index entry carries the
+// context's TTL: a shift-long session kept alive by activity, then revoked.
+// If the index entries aged out underneath it, RevokeByPrincipal would return
+// no refs on a context that is still live and still authorizing, and the
+// operator would read "0 touched" as "already gone".
+func TestRevokeFindsAContextKeptAliveByActivity(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	s := memory.New(func() time.Time { return now })
+	ctx := context.Background()
+	seed(t, s, now) // context and indexes both written with a one-hour TTL
+
+	// Eight hours of a working shift, a command every half hour.
+	for i := 0; i < 16; i++ {
+		now = now.Add(30 * time.Minute)
+		if err := s.TouchContext(ctx, key(ref), time.Hour); err != nil {
+			t.Fatalf("touch %d: %v", i, err)
+		}
+	}
+
+	m := New(s, func() time.Time { return now }, time.Hour, time.Hour)
+	refs, err := m.RevokeByPrincipal(ctx, "user:alice@example.com")
+	if err != nil || len(refs) != 1 {
+		t.Fatalf("revocation by principal missed a live context: refs=%v err=%v", refs, err)
+	}
+	if refs, err := m.RevokeByCert(ctx, "ca", "01"); err != nil || len(refs) != 1 {
+		t.Fatalf("revocation by certificate missed a live context: refs=%v err=%v", refs, err)
+	}
+	if refs, err := m.RevokeBySid(ctx, "s1"); err != nil || len(refs) != 1 {
+		t.Fatalf("revocation by sid missed a live context: refs=%v err=%v", refs, err)
+	}
+	c, err := s.GetContext(ctx, key(ref))
+	if err != nil || c.RevokedAt.IsZero() {
+		t.Fatalf("the context was live but unmarked: %+v %v", c, err)
 	}
 }
 

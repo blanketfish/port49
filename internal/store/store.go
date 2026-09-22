@@ -344,16 +344,23 @@ type Store interface {
 	// the enable path's privilege raise, and a revocation of a principal whose
 	// authorization was withdrawn one request after the broker refreshed it.
 	//
-	// It writes a closed list — AuthTime, SessionExpires, RefreshedAt,
-	// BlobHash when non-empty, and a zero RevokedAt — and, unlike
-	// AnnotateContext, it extends the expiry to now+ttl and stamps
-	// LastTouchedAt: a refresh is a fresh authentication event, which is
-	// activity for the idle TTL in a way an accounting record is not.
+	// It writes a closed list — AuthTime, SessionExpires, RefreshedAt and
+	// BlobHash when non-empty — and, unlike AnnotateContext, it extends the
+	// expiry to now+ttl and stamps LastTouchedAt: a refresh is activity for
+	// the idle TTL in a way an accounting record is not.
 	//
-	// Clearing RevokedAt is deliberate, not collateral: a fresh
-	// authentication event is what lifts a prior mark. The clearing happens
-	// under this lock, so a revocation racing a refresh is ordered against it
-	// rather than lost to a stale copy.
+	// It does NOT touch RevokedAt, and that absence is the point. A refresh
+	// is a directory re-resolution (spec §5.1.3) — the broker re-resolves a
+	// principal whose group membership changed and updates blob_hash — not a
+	// credential re-verification. The only thing that ends a revocation is
+	// §5.6 row 6 reclaiming the record on the idle TTL. A refresh that lifted
+	// the mark would un-revoke every revoked principal on the next scheduled
+	// pass, which is exactly how §5.1.3 says a policy-driven revocation
+	// reaches live sessions: within one refresh interval, the operator who
+	// was revoked is authorized again, with nothing in the log connecting the
+	// two. If a lift is ever genuinely wanted it belongs behind a separate
+	// setter that only a path which re-verified the credential may call, and
+	// the spec's §13 decision table has to say so first.
 	//
 	// SessionExpires is recomputed here rather than by the caller because the
 	// pair it is computed from is the pair about to be overwritten; see

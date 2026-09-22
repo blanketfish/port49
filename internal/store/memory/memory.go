@@ -32,7 +32,17 @@ type Store struct {
 	byPrincipal map[string]map[store.ContextRef]time.Time
 	bySid       map[string]map[store.ContextRef]time.Time
 	byCert      map[string]map[store.ContextRef]time.Time
-	idem        map[string]store.Idempotency
+	// indexedAs is the reverse of those three: the keys each ref was indexed
+	// under. It exists so an extension of a context can carry its index
+	// entries with it, which design §12 requires — an index entry "carries
+	// the context's TTL". Without it the dangerous direction opens up: a
+	// session kept alive by activity for 8 to 16 hours outlives the entries
+	// that name it, and then RevokeByPrincipal and RevokeByCert find zero
+	// refs on a context that is still live and still authorizing, while the
+	// operator is told "0 touched" — which reads as "already gone", not as "I
+	// could not find it".
+	indexedAs map[store.ContextRef]indexKeys
+	idem      map[string]store.Idempotency
 
 	writes int // incremented on every write; triggers sweep at sweepEvery
 }
@@ -40,6 +50,15 @@ type Store struct {
 type ctxEntry struct {
 	c   store.Context
 	exp time.Time
+}
+
+// indexKeys is the set of index keys one ref was written under. An empty
+// field means that index was never written for this ref — the same "" that
+// IndexContext reads as "skip this index".
+type indexKeys struct {
+	principal string
+	sid       string
+	certKey   string
 }
 
 type blobEntry struct {
@@ -58,6 +77,7 @@ func New(now func() time.Time) *Store {
 		byPrincipal:         make(map[string]map[store.ContextRef]time.Time),
 		bySid:               make(map[string]map[store.ContextRef]time.Time),
 		byCert:              make(map[string]map[store.ContextRef]time.Time),
+		indexedAs:           make(map[store.ContextRef]indexKeys),
 		idem:                make(map[string]store.Idempotency),
 	}
 }
@@ -166,6 +186,27 @@ func (s *Store) sweepLocked() {
 	sweepIndex(s.byPrincipal, now)
 	sweepIndex(s.bySid, now)
 	sweepIndex(s.byCert, now)
+
+	// Sweep the reverse record last, once the three indexes above have
+	// dropped what expired: a ref no index still names has nothing left to
+	// extend, so keeping its entry would be one map entry per ref the daemon
+	// ever saw.
+	for ref, rec := range s.indexedAs {
+		if !indexed(s.byPrincipal, rec.principal, ref) &&
+			!indexed(s.bySid, rec.sid, ref) &&
+			!indexed(s.byCert, rec.certKey, ref) {
+			delete(s.indexedAs, ref)
+		}
+	}
+}
+
+// indexed reports whether idx[key] still holds ref.
+func indexed(idx map[string]map[store.ContextRef]time.Time, key string, ref store.ContextRef) bool {
+	if key == "" {
+		return false
+	}
+	_, ok := idx[key][ref]
+	return ok
 }
 
 func sweepIndex(idx map[string]map[store.ContextRef]time.Time, now time.Time) {
@@ -327,7 +368,13 @@ func (s *Store) PutContext(_ context.Context, k store.ContextKey, c store.Contex
 	// half-TTL rule a zero on every freshly written context, and a rule that
 	// reads zero extends on every command — the write this exists to avoid.
 	c.LastTouchedAt = now
-	s.contexts[k] = ctxEntry{c: c, exp: now.Add(ttl)}
+	exp := now.Add(ttl)
+	s.contexts[k] = ctxEntry{c: c, exp: exp}
+	// A re-put is an extension too, so the index entries come with it
+	// (design §12). At login this is a no-op — the context is written before
+	// it is indexed — and it matters on spec §5.6 row 1, the unconditional
+	// overwrite by a second redemption on a device.
+	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, exp)
 	s.writes++
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()
@@ -363,6 +410,9 @@ func (s *Store) TouchContext(_ context.Context, k store.ContextKey, ttl time.Dur
 	e.exp = now.Add(ttl)
 	e.c.LastTouchedAt = now
 	s.contexts[k] = e
+	// The index entries go with the expiry, or a session kept alive by
+	// activity outlives the entries a revocation reads (extendIndexesLocked).
+	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, e.exp)
 	return nil
 }
 
@@ -450,15 +500,17 @@ func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.Co
 	}
 	e.c.AuthTime = r.AuthTime
 	e.c.RefreshedAt = r.RefreshedAt
-	// Deliberate, and the one field here that is cleared rather than written:
-	// a fresh authentication event lifts a prior revocation mark (store.Store).
-	e.c.RevokedAt = time.Time{}
+	// RevokedAt is deliberately absent from this list. A refresh is a
+	// directory re-resolution, not a credential re-verification, and the only
+	// thing that ends a revocation is spec §5.6 row 6 reclaiming the record
+	// (store.Store).
 	if r.BlobHash != "" {
 		e.c.BlobHash = r.BlobHash
 	}
 	e.exp = now.Add(ttl)
 	e.c.LastTouchedAt = now
 	s.contexts[k] = e
+	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, e.exp)
 	return nil
 }
 
@@ -565,6 +617,39 @@ func removeRef(idx map[string]map[store.ContextRef]time.Time, key string, ref st
 	}
 }
 
+// extendIndexesLocked re-stamps every index entry naming ref so it lives at
+// least as long as the context does (design §12). It is a no-op for a ref
+// that has not been indexed, which is the ordering at login: the caller writes
+// the context first and indexes it after.
+func (s *Store) extendIndexesLocked(ref store.ContextRef, exp time.Time) {
+	rec, ok := s.indexedAs[ref]
+	if !ok {
+		return
+	}
+	restamp(s.byPrincipal, rec.principal, ref, exp)
+	restamp(s.bySid, rec.sid, ref, exp)
+	restamp(s.byCert, rec.certKey, ref, exp)
+}
+
+// restamp pushes an existing entry's expiry out, and does two things it might
+// not look like it does. It never creates an entry: a ref the index no longer
+// holds was unindexed or swept, and an extension must not resurrect it. And it
+// never shortens one, matching PutBlob — a context written with a short TTL
+// must not pull in the reach of a revocation that the index was given longer
+// to answer.
+func restamp(idx map[string]map[store.ContextRef]time.Time, key string, ref store.ContextRef, exp time.Time) {
+	if key == "" {
+		return
+	}
+	set := idx[key]
+	if set == nil {
+		return
+	}
+	if existing, ok := set[ref]; ok && exp.After(existing) {
+		set[ref] = exp
+	}
+}
+
 // listRefs returns the live refs under idx[key], sorted on NAS+"\x00"+Username,
 // dropping expired entries as it walks.
 func listRefs(idx map[string]map[store.ContextRef]time.Time, key string, now time.Time) []store.ContextRef {
@@ -599,6 +684,22 @@ func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, 
 	addRef(s.byPrincipal, principal, ref, exp)
 	addRef(s.bySid, sid, ref, exp)
 	addRef(s.byCert, certKey, ref, exp)
+	// Record where this ref now answers from, so an extension of its context
+	// can carry these entries with it (extendIndexesLocked). A non-empty key
+	// replaces what was recorded and an empty one leaves it alone, matching
+	// the "" this method already reads as "skip this index": a second call
+	// that passes no sid must not lose the sid entry the first call wrote.
+	rec := s.indexedAs[ref]
+	if principal != "" {
+		rec.principal = principal
+	}
+	if sid != "" {
+		rec.sid = sid
+	}
+	if certKey != "" {
+		rec.certKey = certKey
+	}
+	s.indexedAs[ref] = rec
 	s.writes++
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()
@@ -614,6 +715,25 @@ func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string
 	removeRef(s.byPrincipal, principal, ref)
 	removeRef(s.bySid, sid, ref)
 	removeRef(s.byCert, certKey, ref)
+	// Forget only the keys this call actually removed. A ref unindexed from
+	// one index of three still answers from the others, and an extension has
+	// to keep reaching them.
+	if rec, ok := s.indexedAs[ref]; ok {
+		if rec.principal == principal {
+			rec.principal = ""
+		}
+		if rec.sid == sid {
+			rec.sid = ""
+		}
+		if rec.certKey == certKey {
+			rec.certKey = ""
+		}
+		if rec == (indexKeys{}) {
+			delete(s.indexedAs, ref)
+		} else {
+			s.indexedAs[ref] = rec
+		}
+	}
 	return nil
 }
 
@@ -646,6 +766,14 @@ func (s *Store) ReindexSid(_ context.Context, oldSid, newSid string, ref store.C
 	defer s.mu.Unlock()
 	removeRef(s.bySid, oldSid, ref)
 	addRef(s.bySid, newSid, ref, s.now().Add(ttl))
+	// The reverse record follows the move, or the next extension of this
+	// context would re-stamp the sid entry the rotation just removed and
+	// leave the live one to expire underneath it.
+	if newSid != "" {
+		rec := s.indexedAs[ref]
+		rec.sid = newSid
+		s.indexedAs[ref] = rec
+	}
 	s.writes++
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()

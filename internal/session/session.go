@@ -11,6 +11,15 @@
 // re-put of a copy read at the top of the request silently discards whichever
 // of them landed in between (store.Store's comment on TouchContext).
 //
+// What revocation here does NOT do: it does not delete the principal's
+// unredeemed tokens. Design §1182 puts that on the broker — "broker deletes on
+// revoke by principal, sid, or (device, username)" — and until the broker does
+// it, a revoked principal's unredeemed token still redeems, writing a fresh
+// context by spec §5.6 row 1's unconditional overwrite with no revoked_at on
+// it. The operator sees a revocation that marked every context and deleted
+// every receipt, and then a PERMIT on a device they thought they had closed,
+// with no log line connecting the two. Plan 7 owns closing this.
+//
 // Which of the refs returned here is unreachable at the device — a
 // session-only platform, spec §13 decision 21 — is the caller's question, not
 // this package's: it is answered with the adapter set from plan 5. Every ref
@@ -45,20 +54,35 @@ func New(s store.Store, now func() time.Time, contextIdleTTL, indexTTL time.Dura
 	return &Manager{store: s, now: now, contextIdleTTL: contextIdleTTL, indexTTL: indexTTL}
 }
 
-// Refresh carries a fresh authentication event into every live context of
-// principal: auth_time moves to authTime, the session ceiling moves with it
-// keeping the window it described, refreshed_at is stamped, a prior revocation
-// mark is cleared, and newBlobHash is installed when it is non-empty. It
-// returns how many contexts were touched.
+// Refresh carries a scheduled group re-resolution (spec §5.1.3) into every
+// live context of principal: auth_time moves to authTime, the session ceiling
+// moves with it keeping the window it described, refreshed_at is stamped, and
+// newBlobHash is installed when it is non-empty. It returns how many contexts
+// were touched.
+//
+// It does not clear a revocation. A refresh re-resolves a directory; it does
+// not re-verify a credential, and it runs on every principal with a live
+// context every few minutes — so lifting the mark here would un-revoke every
+// revoked principal within one interval, on the very path §5.1.3 names as how
+// a policy-driven revocation reaches live sessions. Spec §5.6 row 6 is what
+// ends a revocation. See store.Store's RefreshContext.
 //
 // A rotated sid (newSid different from oldSid, both non-empty in practice)
 // moves in the index, not on the record: Credential is sealed, so the sid is
 // the one thing a narrow setter cannot write (store.Store's RefreshContext).
 // Nothing reads the sid off a context to make a decision — revocation by sid
-// reads the index — so the index is the copy that has to be right.
+// reads the index — so the index is the copy that has to be right. For the
+// same reason oldSid must be the sid the caller's own session record holds,
+// never one read off a stored context: a context's recorded sid is not updated
+// by a rotation, so passing it on a second rotation removes nothing and leaves
+// the intermediate sid indexed against a live ref. That direction is
+// over-revocation, so it is safe, but it accumulates dangling entries.
 //
 // An index entry whose context is already gone is skipped rather than treated
-// as an error: the index has its own TTL and reclaims it.
+// as an error: the index has its own TTL and reclaims it. The other direction
+// — a context outliving the entries that name it — is the dangerous one and is
+// not this package's to police: every store writer that moves a context's
+// expiry moves its index entries with it (design §12).
 func (m *Manager) Refresh(ctx context.Context, principal string, authTime time.Time, newBlobHash, oldSid, newSid string) (int, error) {
 	refs, err := m.store.ContextsByPrincipal(ctx, principal)
 	if err != nil {
@@ -131,6 +155,17 @@ func (m *Manager) RevokeByCert(ctx context.Context, issuer, serial string) ([]st
 // decision 15). RevokeByPrincipal already knows whose receipts those are and
 // passes it as knownPrincipal; revocation by sid or by certificate does not,
 // and reads it off each context before marking.
+//
+// That deletion is deliberately over-broad on the by-sid and by-cert paths: a
+// back-channel logout for one sid deletes the principal's receipts everywhere,
+// including a concurrent session under another sid on another device, whose
+// device retry inside the receipt window then finds neither token nor receipt
+// and is denied though nobody revoked it. The store offers no finer cut — a
+// Receipt carries no sid and receipts_by_principal is the only index
+// (store.Receipt) — so this is a shape limit, and it errs toward denying a
+// session nobody revoked rather than permitting one somebody did.
+//
+// It does not delete tokens; see the package comment.
 //
 // That read is the only place this package needs a context's sealed body, and
 // it is deliberately not allowed to stop the marking. A record that will not
