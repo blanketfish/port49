@@ -134,9 +134,17 @@ not ignored:**
   rejected outright. Custom roles by name work (L16). `network-operator` cannot run bare
   `show interface` (prompts for sudo; `show interface *` works) and the cancelled sudo writes
   an accounting record under `admin` with `task_id=vsh.bin.$port`.
-- **vEOS**: does not apply `shell:roles` (role `<unknown>`) and **refuses the session** for a
-  mandatory `shell:roles=` or even an optional `cisco-av-pair*`; port49's per-command answer
-  is the only control (L16).
+- **vEOS**: send the **bare** `roles=<name>` **and** `priv-lvl=N` together — one role name, no
+  quotes. The bare attribute is applied under either flag; `shell:roles*` is ignored and a
+  mandatory `shell:roles=` or an optional `cisco-av-pair*` **refuses the session**. A role with
+  no `priv-lvl` beside it lands the operator at level 1, where they cannot even read their own
+  role — the opposite of the NX-OS rule, so the two platforms need different replies. The value
+  is taken literally: quotes are kept as part of the name, and an unknown role is echoed back
+  rather than degraded. An OPTIONAL `priv-lvl*N` **is** applied on 4.31.2F. Under
+  `aaa authorization commands ... local` the delivered role is real privilege (`network-operator`
+  is refused `configure`, `network-admin` is not, an unknown name is refused), so port49's
+  per-command answer is the only control **while port49 is in the command path** and the role is
+  the control when it is not (L16).
 - **IOS-XE**: kills the session on any unrecognised attribute, optional included; `priv-lvl`
   only (L3/L16 notes).
 - **Junos**: `platforms.juniper_junos.session_services` (default `[junos-exec]`; production

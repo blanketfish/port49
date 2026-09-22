@@ -3770,7 +3770,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
 | **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 2s**, which is the "answered with increasing delay" of design document §11. The ceiling was 5s until this row measured device reply timeouts; **2026-09-21 it was lowered to 2s**, which is under every timeout measured here, so a FAIL is always delivered inside it (`tests/lab/results/L13-*.md`). A ceiling above a device's timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX, vEOS, N9Kv and Catalyst 8000V: about 3s on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, which also retransmits, and above 12s on IOS-XE, which this sweep does not bound from above; past that timeout every platform that reached it takes the fall-through branch; other transports and the next-server case unmeasured; see below |
 | **L14** | Whether a NETCONF session over SSH authenticates through TACACS+ the way an interactive login does; whether any authorization request is sent for the session or for an `<edit-config>`, and with what `service`, `cmd` and `cmd-arg`; what `port` and `rem_addr` contain; what accounting arrives for a NETCONF session and for a commit. | Adapter coverage for automation traffic (§8); the login context key (§5.1.1); what reconciliation may conclude from accounting (§9) | Junos, NX-OS, EOS | open — measured 2026-09-20 on vEOS, vJunos-router and vSRX; on the N9Kv the AAA half is measured and the RPC half is not, because the channel closes before any RPC is answered; IOS-XE and key-based SSH unmeasured. **2026-09-21 (L17):** a Junos NETCONF session on port 830 is refused outright when port49 denies its session authorization and `tacplus-options strict-authorization` is committed, so the statement reaches automation traffic and not only interactive logins; see below |
-| **L16** | Role delivery over TACACS+ and its interaction with command authorization. Whether a custom role named in a reply attribute takes effect — verified by a command it forbids being refused, never by the device echoing the name back; whether the device still sends a per-command authorization request for a command its own role forbids; which wins when the device's role and port49 disagree, **in both directions**; two roles at once (NX-OS documents a union with permit winning); a role name the device does not have; no role attribute at all; the accepted spellings (`shell:roles=` / `shell:roles*`, bare or inside `cisco-av-pair`); and the `priv-lvl=N` to `priv-N` mapping under `feature privilege`. | The session-attribute model (§6) and adapter `privilege` blocks (§8) — a custom role is the NX-OS and EOS analogue of a Junos login class, which is what decision 22 projects into. Also what the decision log means (§5.7, §9): if a device can refuse a command port49 permitted, the log records a permit for a command that never ran. | EOS, NX-OS | open — added 2026-09-21. vEOS measured 2026-09-21: `shell:roles*<name>` **does not deliver a role** (the device reports the session's role as `<unknown>`), port49's per-command deny binds, and a `cisco-av-pair*` attribute sent as OPTIONAL is refused outright. NX-OS measured 2026-09-21 (delivery: all three spellings work, an unknown name degrades to `network-operator`, and a delivered role's own rules do not bind while `aaa authorization commands` points at TACACS+) and 2026-09-22 (precedence: **`shell:roles` decides the role and a `priv-lvl` beside it is inert, in both directions**, so an NX-OS adapter sends the role and never the privilege level; with command authorization pointed at `local` instead, the delivered role does bind). Open on EOS: whether a role's rules bind under local command authorization, the `cisco-av-pair` ambiguity, and whether any mechanism delivers a role there at all; see below |
+| **L16** | Role delivery over TACACS+ and its interaction with command authorization. Whether a custom role named in a reply attribute takes effect — verified by a command it forbids being refused, never by the device echoing the name back; whether the device still sends a per-command authorization request for a command its own role forbids; which wins when the device's role and port49 disagree, **in both directions**; two roles at once (NX-OS documents a union with permit winning); a role name the device does not have; no role attribute at all; the accepted spellings (`shell:roles=` / `shell:roles*`, bare or inside `cisco-av-pair`); and the `priv-lvl=N` to `priv-N` mapping under `feature privilege`. | The session-attribute model (§6) and adapter `privilege` blocks (§8) — a custom role is the NX-OS and EOS analogue of a Junos login class, which is what decision 22 projects into. Also what the decision log means (§5.7, §9): if a device can refuse a command port49 permitted, the log records a permit for a command that never ran. | EOS, NX-OS | open — added 2026-09-21. vEOS measured 2026-09-21 (`shell:roles*<name>` **does not deliver a role** — the device reports the session's role as `<unknown>` — port49's per-command deny binds, and a `cisco-av-pair*` attribute sent as OPTIONAL is refused outright) and **2026-09-22, which corrects the reading drawn from it**: EOS reads the **bare** attribute `roles=<name>`, which the first run never sent, under either argument flag; sent by its own name the role is applied, and under `aaa authorization commands ... local` it is the operator's real privilege. `priv-lvl` must be sent too — a reply with a role and no `priv-lvl` lands the session at level 1 — and an OPTIONAL `priv-lvl*N` **is** applied on this image. NX-OS measured 2026-09-21 (delivery: all three spellings work, an unknown name degrades to `network-operator`, and a delivered role's own rules do not bind while `aaa authorization commands` points at TACACS+) and 2026-09-22 (precedence: **`shell:roles` decides the role and a `priv-lvl` beside it is inert, in both directions**, so an NX-OS adapter sends the role and never the privilege level; with command authorization pointed at `local` instead, the delivered role does bind). Open on EOS: the `cisco-av-pair` ambiguity, and whether a role that permits everything carries a read-only one delivered beside it (the pair was measured, the permissive role alone was not); see below |
 | **L15** | How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and **what port49 then answers**. | Single-use tokens, and therefore whether reusable tokens are needed at all (§13, decision 15); the 30-character handle's blast radius (design §8) | EOS, NX-OS, Junos | open — measured 2026-09-20 on all four images: one exchange per API request and per NETCONF session, every time, and the repeat permitted out of the receipt rather than the store, which moves the question to `receipt_ttl`; IOS-XE, cookie sessions and kept-alive connections unmeasured. **2026-09-21: the real clients were driven and the count is the client's, not the transport's** — one authentication per ten-task job for every SSH client that holds its connection and for Ansible `cisco.nxos` over `httpapi`, against 28 for NAPALM `nxos` over the same NX-API; and the `receipt_ttl` boundary was crossed for the first time, half a NAPALM job refused `token_not_found` 38.8s into a 30s TTL; see below |
 | **L17** | Which `system tacplus-options` statements change what a port49 answer MEANS on Junos. Whether `strict-authorization` makes a DENIED session authorization refuse the login, on SSH and on NETCONF, and what it does to a local break-glass account while port49d is down. What AV pairs `enhanced-accounting` adds, to which record types, and whether any of them separates two concurrent sessions of one user or carries the client's source port. Which accounting records carry a user who is not the logged-in operator, and what port49 does with them. Whether `authorization-time-interval` re-authorizes a live session, and what a DENIED re-authorization does to one. | Whether port49 constrains a Junos session at all (L10 reading 3; L14) and what the reference AAA configuration in `tests/lab/configs/` must carry; the 3am break-glass argument (§5.6, L4); accounting attribution and what reconciliation may conclude (§5.8, §9); whether a revocation can reach a session that is already open (§5.6) | Junos (vSRX, vJunos-router) | open — added 2026-09-21 and measured the same day on **both** images, cell for cell: `tests/lab/results/L17-juniper_vsrx.md`, `L17-juniper_vjunos-router.md`. `strict-authorization` **does** make a port49 denial binding, on SSH and on NETCONF, and break-glass still gets in with port49d down under both authentication orders. `enhanced-accounting` adds `Port`, `Authentication-Type` and `User_Perms` to the `cmd=login` record only. No record named `root` under this lab's accounting event list. `authorization-time-interval` re-authorizes at exactly the configured interval and a DENIED re-authorization does **not** end the live session. Unmeasured: the other six `tacplus-options` leaves, a real `root` RPC record, production Junos 23.4R2-S8.7, and an interval other than the 15-minute minimum; see below |
 
@@ -4483,7 +4483,9 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   | `priv-lvl=15`, `shell:roles*p49-nosuchrole` | opened | ran | **refused** |
   | `priv-lvl=1` alone | opened | ran | **refused** |
 
-  **1. `shell:roles*<name>` does not deliver a role on vEOS.** The device was asked, in the
+  **1. `shell:roles*<name>` does not deliver a role on vEOS** — and that is a finding about the
+  attribute name, not about EOS. It was read as the latter until 2026-09-22; the block after this
+  one has the correction, and the bare `roles=<name>` is applied. The device was asked, in the
   session itself, and answered:
 
   ```
@@ -4499,6 +4501,10 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   sending to every platform since the N9Kv asked for it has never done anything on EOS**, and
   the comment in that file, which reasons only about whether EOS *ignores* it, has never been
   tested against whether the platform it was aimed at applies it either.
+
+  What this row then said, and said wrongly, was that *no* role reaches a vEOS session. Every
+  variant of that run spelled the attribute `shell:roles`; none of them sent the name Arista
+  reads. See the 2026-09-22 block below.
 
   **2. port49's per-command deny binds, and this is the reassuring half.** `show clock` was
   refused in every variant that opened a session, including the one where the device's own role
@@ -4527,6 +4533,93 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   **4. Two roles at once, an absent role, and `priv-lvl=1` all behave identically to no
   attribute at all** on this image, which follows from 1: nothing in the `shell:roles` family
   reaches the session, so there is nothing for a union rule or a missing name to change.
+
+  **vEOS re-measured 2026-09-22** (`tests/lab/results/L16-arista_eos.md`, the section "The bare
+  `roles` attribute, and `priv-lvl` mandatory against optional", `tests/lab/l16_eos_roles_test.go`),
+  eleven reply-attribute sets against one deploy and one token login each, then five of them again
+  with the device's command authorization pointed at its own role database.
+
+  **Why it was re-run.** The owner runs EOS in production against the bare attribute
+  `roles=network-operator` sent MANDATORY, and reports that EOS also needs `priv-lvl` mandatory
+  because an optional `priv-lvl*N` is ignored and level 1 assumed. The lab had never sent either.
+  CLAUDE.md's rule about where TACACS+ instincts come from says settle it in the lab; this is that.
+
+  | reply attributes | role the device reports | `show privilege` | prompt |
+  |---|---|---|---|
+  | `priv-lvl=15` alone (the control) | `<unknown>` | 15 | `leaf1#` |
+  | `priv-lvl=15`, `roles=network-operator` | **`network-operator`** | 15 | `leaf1#` |
+  | `priv-lvl=15`, `roles*network-operator` | **`network-operator`** | 15 | `leaf1#` |
+  | `roles=network-operator` alone | **not readable at this level** | **1** | **`leaf1>`** |
+  | `priv-lvl*2` alone | `<unknown>` | **2** | `leaf1#` |
+  | `priv-lvl=2` alone | `<unknown>` | **2** | `leaf1#` |
+  | `priv-lvl=15`, `roles=p49-noc` | **`p49-noc`** | 15 | `leaf1#` |
+  | `priv-lvl=15`, `roles="p49-noc network-operator"` | **`"p49-noc network-operator"`** | 15 | `leaf1#` |
+  | `priv-lvl=15`, `roles=p49-noc network-operator` | **`p49-noc network-operator`** | 15 | `leaf1#` |
+  | `priv-lvl=15`, `roles=p49-noc,network-operator` | **`p49-noc,network-operator`** | 15 | `leaf1#` |
+  | `priv-lvl=15`, `roles=p49-nosuchrole` | **`p49-nosuchrole`** | 15 | `leaf1#` |
+
+  **1. The bare `roles=<name>` is applied, under either argument flag.** `network-operator` against
+  `<unknown>` for the same reply with the attribute taken out, minutes apart on the same device.
+  Optional and mandatory name the same role, so the mandatory form the owner runs is a choice and
+  not a requirement here. **The 2026-09-21 conclusion was about the spelling `shell:roles` and was
+  generalised to the platform; it should not have been.**
+
+  **2. `priv-lvl` goes in the reply too, which is the opposite of the NX-OS rule.** A reply naming a
+  role and no privilege level opens a session at **level 1**, at the unprivileged `leaf1>` prompt,
+  where the device refuses `show users detail` outright — so the operator cannot read their own role
+  and neither can this test. Whether the role arrived and is merely unreadable is **not** separated
+  by that row; what is measured is that dropping `priv-lvl` costs the session its privilege level.
+  On NX-OS `priv-lvl` beside a role is inert and an adapter drops it. **One reply cannot serve both
+  platforms.**
+
+  **3. An OPTIONAL `priv-lvl*N` IS applied on this image.** `priv-lvl*2` and `priv-lvl=2` both reach
+  level 2. The owner's production reading — optional ignored, level 1 assumed — does not reproduce
+  on vEOS-lab 4.31.2F. It may still hold on the hardware and release they run; nothing here
+  contradicts that, and nothing here supports building an adapter rule on it.
+
+  **4. The role value is taken literally: no quote stripping, no separator parsing.**
+  `roles="p49-noc network-operator"` comes back **with the quotes inside the role name**, so a reply
+  copied from an NX-OS server definition names a role no device has. The unquoted pair comes back as
+  two space-separated names and the comma form as one comma-joined token. An adapter for EOS sends
+  one role name and no quotes.
+
+  **5. An unknown role name is not degraded — it is echoed back.** `roles=p49-nosuchrole` is what
+  `show users detail` reports, where NX-OS silently substitutes `network-operator`. port49 cannot
+  tell either way: the reply it sent and the record it wrote are identical to the working case.
+
+  **6. port49's per-command deny binds under every one of these replies**, all eleven sessions,
+  whatever role was named and whatever level was reported — as it did in the 2026-09-21 run.
+
+  **Phase B: with `aaa authorization commands all default local`, the delivered role is real
+  privilege.** `aaa authorization exec` stays pointed at port49 throughout, because a token operator
+  has no local account.
+
+  | reply attributes, command authorization LOCAL | role reported | `configure` |
+  |---|---|---|
+  | `priv-lvl=15`, `roles=network-admin` | `network-admin` | accepted |
+  | `priv-lvl=15`, `roles=network-operator` | `network-operator` | **`% Authorization denied for command 'configure'`** |
+  | `priv-lvl=15` alone | not readable | **`% Authorization denied for command 'configure': Unknown role`** |
+  | `priv-lvl=15`, `roles=p49-nosuchrole` | `p49-nosuchrole` | **`% Authorization denied for command 'configure'`** |
+  | `priv-lvl=15`, `roles=p49-noc network-operator` | `p49-noc network-operator` | **`% Authorization denied for command 'configure'`** |
+
+  Same device, same minute, one attribute value apart, opposite outcomes, and **no command
+  authorization reached port49 in any of them**. So the clause this row carried as unmeasured on EOS
+  is answered: a delivered role's rules **do** bind when `aaa authorization commands` is not pointed
+  at TACACS+ — which is the state a fleet is in before port49 is deployed, and the state it returns
+  to if port49 leaves the command path.
+
+  Two of those rows are worth reading twice. **The unknown role name is the 3am case and it lands on
+  the safe side**: the session opens, `show clock` runs, and the device refuses to let it configure
+  anything. And **the two-role reply was refused exactly as the read-only role alone was**, although
+  `p49-noc` permits every command — so on this image a permissive role delivered beside a
+  restrictive one did not carry the pair. *Not measured:* `p49-noc` alone under local command
+  authorization, so "EOS does not do a union with permit winning" rests on the pair's refusal and on
+  the role's own `20 permit command .*`, not on a measured contrast.
+
+  **The adapter rule this supports: on EOS send the bare `roles=<name>` and `priv-lvl=N` together,
+  one role name, no quotes.** Never `shell:roles` — it is ignored optional and ends the session
+  mandatory. This is a different reply from the NX-OS one in both halves, which is the concrete
+  argument for §8 adapters being per-platform rather than one attribute list with exceptions.
 
   **NX-OS measured 2026-09-21** (`tests/lab/results/L16-cisco_nxos.md`), Nexus 9300v 10.4(2)F,
   the same seven variants. **It answers the opposite way to vEOS on delivery and the same way
@@ -4646,11 +4739,21 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   privilege into the decision log that the device did not apply, and a reply carrying `priv-lvl`
   with no role is how a session silently lands on a role nobody named.
 
-  *Unmeasured:* the `cisco-av-pair` ambiguity in EOS finding 3; `feature privilege` and its
-  `priv-N` roles, which this image does not have at all (L3); whether a role delivered some other
-  way takes effect on vEOS; and, on **EOS**, whether a role's rules bind when `aaa authorization
-  commands` is not pointed at TACACS+ — on NX-OS that clause was measured 2026-09-22 and the
-  answer is that they do bind (precedence finding 4).
+  *Unmeasured:* the `cisco-av-pair` ambiguity in EOS finding 3 — whether EOS refuses the name or
+  the embedded quotes, and EOS finding 4 of 2026-09-22 (the quotes are kept, not stripped) makes
+  the quotes the likelier half without settling it; `feature privilege` and its `priv-N` roles,
+  which the N9Kv image does not have at all (L3); on **EOS**, `p49-noc` alone under local command
+  authorization, which is what would turn "two roles are not a union here" from an inference into
+  a measurement; and whether the owner's production EOS release ignores an OPTIONAL `priv-lvl*`
+  where vEOS-lab 4.31.2F applies it.
+
+  **A row's conclusion is only as wide as the variants behind it.** Both halves of this row have
+  now published a claim broader than what was measured: NX-OS twice read "the session reached
+  configuration mode" as a privilege probe while port49 was permitting every command, and EOS read
+  "`shell:roles` does nothing" as "no role reaches this platform" without ever sending the
+  attribute Arista documents. Neither was caught by a failing test — both tests passed and wrote
+  their notes. What caught them was reading the generated paragraph against its own table, and in
+  the EOS case an operator saying the lab disagreed with their fleet.
 
   **A note about the EOS image version, which this row is where it was caught.** Every EOS
   results note written before 2026-09-21, and every EOS row in this section, says
