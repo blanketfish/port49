@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/config"
 )
 
 // L15, the half nobody had driven: **what the clients an operator actually
@@ -153,10 +155,20 @@ type clientResult struct {
 	firstFresh, firstDenial time.Time
 }
 
-// labReceiptTTL is the receipt TTL in force for the lab. tests/lab/port49d-lab.yaml
-// sets no `receipt_ttl`, so this is internal/config's default, and
-// TestLabConfigSetsNoReceiptTTL keeps the two from drifting apart.
-const labReceiptTTL = 30 * time.Second
+// labReceiptIdleTTL and labReceiptMaxAge are the receipt bounds in force for
+// the lab. tests/lab/port49d-lab.yaml sets neither, so these are
+// internal/config's defaults, and TestLabReceiptBoundsMatchTheLabConfig keeps
+// them from drifting apart by loading the real config rather than by reading
+// the yaml for a key.
+//
+// They replaced a single `receipt_ttl` when the receipt became a sliding
+// window (spec §13, decision 15): the idle bound is pushed out by every
+// presentation the receipt answers, and the cap is measured from the first
+// redemption and never moves. Every client note below quotes both.
+const (
+	labReceiptIdleTTL = 15 * time.Minute
+	labReceiptMaxAge  = 2 * time.Hour
+)
 
 func (r clientResult) render() string {
 	var b strings.Builder
@@ -223,14 +235,14 @@ func countTasks(out string) (ok, failed int) {
 }
 
 // receiptWindow reports the gap between the token being spent and the first
-// call that was refused, which is the `receipt_ttl` boundary seen from the
-// client side. Decision 15 names that boundary as the thing it actually turns
-// on, and until this run no test had driven a job past it.
+// call that was refused, which is the receipt boundary seen from the client
+// side. Decision 15 names that boundary as the thing it actually turns on, and
+// until this run no test had driven a job past it.
 func (r clientResult) receiptWindow() string {
 	if r.firstDenial.IsZero() {
 		return fmt.Sprintf("No call in this job was refused, so it did not reach the receipt boundary. "+
-			"The job took %s against a `receipt_ttl` of %s.\n\n",
-			r.elapsed.Round(time.Millisecond), labReceiptTTL)
+			"The job took %s against a `receipt_idle_ttl` of %s and a `receipt_max_age` of %s.\n\n",
+			r.elapsed.Round(time.Millisecond), labReceiptIdleTTL, labReceiptMaxAge)
 	}
 	if r.firstFresh.IsZero() {
 		return "Calls were refused but no fresh redemption was recorded, so this job cannot be read as a " +
@@ -238,12 +250,13 @@ func (r clientResult) receiptWindow() string {
 	}
 	gap := r.firstDenial.Sub(r.firstFresh)
 	return fmt.Sprintf("**The receipt boundary, measured.** The token was spent at the first redemption "+
-		"and the first refusal came **%s later**, against a configured `receipt_ttl` of %s. Every call "+
+		"and the first refusal came **%s later**, against a configured `receipt_idle_ttl` of %s and a "+
+		"`receipt_max_age` of %s. Every call "+
 		"in between was served `receipt_replayed` out of the receipt rather than out of the store. "+
 		"Past it, the same credential in the same script against the same device is `token_not_found` "+
 		"— nothing in the operator's hand changed. This is the boundary spec §13 decision 15 says any "+
 		"argument about reusable tokens has to be made about.\n\n",
-		gap.Round(100*time.Millisecond), labReceiptTTL)
+		gap.Round(100*time.Millisecond), labReceiptIdleTTL, labReceiptMaxAge)
 }
 
 // clientWireInference is the sentence the note prints for the wire column. It
@@ -647,25 +660,69 @@ print(p.stdout[-4000:]); print(p.stderr[-2000:]); sys.exit(p.returncode)
 	},
 }
 
-// TestLabConfigSetsNoReceiptTTL keeps labReceiptTTL honest. The receipt
-// boundary the client notes quote is read from a constant here, and the
-// constant is only right while the lab config takes internal/config's default.
-// If someone sets `receipt_ttl` in port49d-lab.yaml, every one of those notes
-// quotes a number the daemon was not running with — which is the class of
-// error this whole harness exists to make impossible.
+// TestLabReceiptBoundsMatchTheLabConfig keeps labReceiptIdleTTL and
+// labReceiptMaxAge honest. The receipt boundary the client notes quote is read
+// from those constants, and they are only right while they equal what the
+// daemon actually runs with — which is either what port49d-lab.yaml sets or,
+// where it sets nothing, internal/config's default.
+//
+// It asserts against `config.Load` rather than scanning the yaml for a key,
+// which is the difference between a guard and a formality: the previous
+// version only checked that port49d-lab.yaml did not *set* `receipt_ttl`, so
+// when the default moved from 30s to 15m/2h underneath it, it stayed green
+// while every note quoting the old number went wrong. That is exactly the
+// class of error this harness exists to make impossible.
 //
 // It deploys nothing and needs no device.
-func TestLabConfigSetsNoReceiptTTL(t *testing.T) {
-	raw, err := os.ReadFile(labConfigPath())
+func TestLabReceiptBoundsMatchTheLabConfig(t *testing.T) {
+	c := loadLabConfig(t)
+	if c.ReceiptIdleTTL != labReceiptIdleTTL || c.ReceiptMaxAge != labReceiptMaxAge {
+		t.Fatalf("the daemon would run with receipt_idle_ttl=%s receipt_max_age=%s, but the notes quote "+
+			"%s/%s. Set the constants in clients_test.go to match what port49d-lab.yaml and "+
+			"internal/config's defaults produce, or every client note quoting them is wrong.",
+			c.ReceiptIdleTTL, c.ReceiptMaxAge, labReceiptIdleTTL, labReceiptMaxAge)
+	}
+}
+
+// loadLabConfig loads port49d-lab.yaml exactly as the daemon does, so a test
+// asserts against the real resolved config rather than against the yaml text.
+//
+// Three things stand between the file and config.Load. The repository root is
+// resolved here rather than read from the package's `root`, which is only set
+// once a platform has been brought up — this test deploys nothing and must run
+// without a device. `inventory_file` is relative to that root, because the
+// harness runs the daemon from there while `go test` runs from tests/lab;
+// rewriting that one line is less invasive than chdir'ing the test process.
+// And the shared key comes from the environment by name, so it has to be
+// present for the load to succeed — labKeyDefault is what the harness itself
+// falls back to.
+func loadLabConfig(t *testing.T) config.Config {
+	t.Helper()
+	root, err := repoRoot()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
+	raw, err := os.ReadFile(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(raw), "\n")
+	for i, line := range lines {
 		s := strings.TrimSpace(line)
-		if strings.HasPrefix(s, "receipt_ttl:") {
-			t.Fatalf("tests/lab/port49d-lab.yaml now sets %q, so labReceiptTTL (%s) is no longer the "+
-				"value the daemon runs with and every client note quoting it is wrong. Set the constant "+
-				"to match, or remove the key to go back to internal/config's default.", s, labReceiptTTL)
+		if rest, ok := strings.CutPrefix(s, "inventory_file:"); ok {
+			lines[i] = "inventory_file: " + filepath.Join(root, strings.TrimSpace(rest))
 		}
 	}
+	p := filepath.Join(t.TempDir(), "port49d-lab.yaml")
+	if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("PORT49_LAB_KEY") == "" {
+		t.Setenv("PORT49_LAB_KEY", labKeyDefault)
+	}
+	c, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("the lab config no longer loads: %v", err)
+	}
+	return c
 }

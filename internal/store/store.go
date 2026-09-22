@@ -69,9 +69,18 @@ type Token struct {
 // is what makes a byte-identical retransmission the only thing that replays,
 // while a genuinely new login by the same user finds nothing and redeems
 // normally (design §8; spec §13, decision 15).
+//
+// Kind is in the key for the same reason, and it is not cosmetic: a login
+// receipt and an enable receipt are different records, so an enable START
+// presenting the login token's secret misses and falls through to the
+// candidate search and its `token_kind_mismatch`, instead of being answered
+// PASS out of the login receipt and sliding it on every retry. Recording the
+// kind on the Receipt instead would leave the two sharing one key, where an
+// enable redemption overwrites a login receipt.
 type ReceiptKey struct {
 	NAS              string
 	Username         string // canonical form
+	Kind             string // KindLogin | KindEnable
 	CredentialSHA256 [32]byte
 }
 

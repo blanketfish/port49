@@ -491,16 +491,22 @@ func TestReceiptStopsAtTheAbsoluteCap(t *testing.T) {
 		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
 	f.h.NewSession(f.peer).Start(context.Background(), start)
 	// Present every 10 minutes for two hours: the idle bound never lapses, so
-	// only the cap can stop it.
-	var lastReason any
+	// only the cap can stop it. The iteration is asserted rather than just the
+	// final reason, so the test pins *when* the cap bites (t = 2h exactly, at
+	// i == 11) and not merely that it eventually does.
 	for i := 0; i < 13; i++ {
 		f.now = f.now.Add(10 * time.Minute)
-		f.h.NewSession(f.peer).Start(context.Background(), start)
+		reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
 		r := f.records(t)
-		lastReason = r[len(r)-1]["reason"]
-	}
-	if lastReason != "token_spent" {
-		t.Fatalf("a receipt slid past receipt_max_age: %v", lastReason)
+		gotStatus, gotReason := reply.Status, r[len(r)-1]["reason"]
+		wantStatus, wantReason := uint8(wire.AuthenStatusPass), any("receipt_replayed")
+		if elapsed := time.Duration(i+1) * 10 * time.Minute; elapsed >= 2*time.Hour {
+			wantStatus, wantReason = wire.AuthenStatusFail, "token_spent"
+		}
+		if gotStatus != wantStatus || gotReason != wantReason {
+			t.Fatalf("at t=%s (i=%d): got %d/%v, want %d/%v",
+				time.Duration(i+1)*10*time.Minute, i, gotStatus, gotReason, wantStatus, wantReason)
+		}
 	}
 	// And the token is not resurrected by the cap: it stays spent.
 	if c, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(c) != 0 {
@@ -546,8 +552,13 @@ func TestRevokedPrincipalsReceiptNoLongerReplays(t *testing.T) {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
-	if reply.Status != wire.AuthenStatusFail {
-		t.Fatalf("a revoked credential must not replay: %+v", reply)
+	r := f.records(t)
+	// token_not_found, not token_spent: revocation deleted the receipt, and the
+	// token behind it was consumed by the redemption above, so the presentation
+	// falls all the way through to an empty candidate set. Pinned so a change
+	// that makes revocation answer something else is noticed here.
+	if reply.Status != wire.AuthenStatusFail || r[len(r)-1]["reason"] != "token_not_found" {
+		t.Fatalf("a revoked credential must not replay: %+v %v", reply, r[len(r)-1])
 	}
 }
 
@@ -574,5 +585,62 @@ func TestExtendMissingTheReceiptDeniesRatherThanReplays(t *testing.T) {
 	r := f.records(t)
 	if reply.Status != wire.AuthenStatusFail || r[len(r)-1]["reason"] != "token_spent" {
 		t.Fatalf("%+v %v", reply, r[len(r)-1])
+	}
+}
+
+// extendCountingStore records every ExtendReceipt, so a test can assert that a
+// presentation the handler refused did not also slide the window on its way to
+// the refusal.
+type extendCountingStore struct {
+	*memory.Store
+	extends int
+}
+
+func (e *extendCountingStore) ExtendReceipt(ctx context.Context, rk store.ReceiptKey, idleExpiresAt time.Time) error {
+	e.extends++
+	return e.Store.ExtendReceipt(ctx, rk, idleExpiresAt)
+}
+
+// A receipt answers only presentations of the kind that earned it. Without the
+// kind in the receipt key, an enable START presenting the LOGIN token's secret
+// finds alice's login receipt, is answered PASS `receipt_replayed` carrying the
+// login ctx_id, and slides the window on every retry: privilege out of a
+// credential the cold path refuses, with no `escalate` record and no
+// `token_kind_mismatch` to alert on. The kind check at `Candidates` is not a
+// gate if a live receipt can be presented instead of passing through it.
+func TestLoginReceiptDoesNotAnswerAnEnableStart(t *testing.T) {
+	var counter *extendCountingStore
+	f := setupStore(t, func(st *memory.Store) store.Store {
+		counter = &extendCountingStore{Store: st}
+		return counter
+	})
+	login := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), login); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("first redemption: %+v", reply)
+	}
+
+	// The same credential, the same device, the same user, inside the window —
+	// but presented at enable, which is a different question.
+	enable := login
+	enable.Service = wire.AuthenServiceEnable
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), enable)
+	r := f.records(t)
+	// The login token was spent by the redemption above, so the enable START
+	// falls through to an empty candidate set: token_not_found, which is the
+	// cold answer. What matters is that it is a FAIL reached through the
+	// candidate search and never PASS out of the login receipt.
+	if reply.Status != wire.AuthenStatusFail || r[len(r)-1]["reason"] != "token_not_found" {
+		t.Fatalf("an enable START must not be answered from the login receipt: %+v %v", reply, r[len(r)-1])
+	}
+	if counter.extends != 0 {
+		t.Fatalf("a refused enable START slid the login receipt: %d extends", counter.extends)
+	}
+
+	// And the login receipt itself is untouched: the login credential still
+	// replays as it did, on its own key.
+	f.now = f.now.Add(time.Minute)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), login); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("the login receipt must survive the enable attempt: %+v", reply)
 	}
 }

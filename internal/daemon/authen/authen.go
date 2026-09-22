@@ -175,7 +175,16 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	}
 	port := string(s.start.Port)
 	remAddr := string(s.start.RemAddr)
-	rk := store.ReceiptKey{NAS: s.peer.NAS, Username: username, CredentialSHA256: credHash}
+
+	// The kind is settled before the receipt is looked up, not after: it is
+	// part of the receipt key, so a login receipt cannot answer an enable
+	// START (store.ReceiptKey). A login token for a login START, an enable
+	// token for an enable START.
+	kind := store.KindLogin
+	if s.start.Service == wire.AuthenServiceEnable {
+		kind = store.KindEnable
+	}
+	rk := store.ReceiptKey{NAS: s.peer.NAS, Username: username, Kind: kind, CredentialSHA256: credHash}
 
 	// 1. Receipt: a byte-identical retransmission replays. The credential hash
 	// is in the key, so a different credential misses here and goes on to
@@ -195,15 +204,21 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 			return s.fail(ctx, rec, decision.CredentialMismatch)
 		}
 		now := s.h.now()
-		cap := r.FirstRedeemedAt.Add(s.h.receiptMaxAge)
+		capAt := r.FirstRedeemedAt.Add(s.h.receiptMaxAge)
 		// Two bounds, one outcome. A job that keeps presenting the same
 		// credential slides the idle bound; nothing slides the cap.
-		if !now.Before(cap) || !now.Before(r.IdleExpiresAt) {
+		//
+		// The explicit cap check and the clamp below are deliberately
+		// redundant: the clamp alone suffices given config.Load refusing
+		// receipt_idle_ttl > receipt_max_age, but New is exported and takes
+		// raw durations, so a caller that never went through Load gets the
+		// bound from the check rather than from an invariant that did not run.
+		if !now.Before(capAt) || !now.Before(r.IdleExpiresAt) {
 			return s.fail(ctx, rec, decision.TokenSpent)
 		}
 		next := now.Add(s.h.receiptIdleTTL)
-		if next.After(cap) {
-			next = cap
+		if next.After(capAt) {
+			next = capAt
 		}
 		err = s.h.store.ExtendReceipt(ctx, rk, next)
 		s.h.metrics.StoreOps.WithLabelValues("extend_receipt", storeOutcome(err)).Inc()
@@ -229,13 +244,9 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		return s.storeError(rec)
 	}
 
-	// 2. Candidates under (nas, username), filtered by kind: a login token for a
-	// login START, an enable token for an enable START. A credential that matches
-	// a token of the other kind is a kind mismatch, not a missing token.
-	kind := store.KindLogin
-	if s.start.Service == wire.AuthenServiceEnable {
-		kind = store.KindEnable
-	}
+	// 2. Candidates under (nas, username), filtered by the kind settled above.
+	// A credential that matches a token of the other kind is a kind mismatch,
+	// not a missing token.
 	cands, err := s.h.store.Candidates(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username})
 	s.h.metrics.StoreOps.WithLabelValues("candidates", storeOutcome(err)).Inc()
 	if err != nil {
