@@ -358,7 +358,13 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// A zero MaxSessionAge is `max_session_age: never` and must stay
 	// expressible (spec §5.6): it leaves SessionExpires zero, which Task 10
 	// reads as no ceiling rather than as expired at the epoch.
-	if winner.MaxSessionAge > 0 && !winner.AuthTime.IsZero() {
+	//
+	// Nothing else is guarded here, and a token carrying a ceiling with no
+	// AuthTime to anchor it is deliberately left to compute a SessionExpires
+	// in the distant past. That denies, loudly and visibly, where dropping the
+	// ceiling instead would hand out an unbounded session that looks exactly
+	// like a legitimate `never` and that nothing logs.
+	if winner.MaxSessionAge > 0 {
 		newCtx.SessionExpires = winner.AuthTime.Add(winner.MaxSessionAge)
 	}
 	err = s.h.store.PutContext(ctx, ck, newCtx, s.h.contextTTL)

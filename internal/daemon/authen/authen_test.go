@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/daemon/limits"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -33,6 +34,9 @@ type fixture struct {
 	log  *bytes.Buffer
 	now  time.Time
 	peer Peer
+	// m is the handler's own metrics, kept so a test can read a counter the
+	// handler is expected to move.
+	m *metrics.Metrics
 }
 
 func setup(t *testing.T) *fixture {
@@ -54,7 +58,8 @@ func setupStore(t *testing.T, wrap func(*memory.Store) store.Store) *fixture {
 	f.st = memory.New(func() time.Time { return f.now })
 	ids := 0
 	l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return f.now })
-	f.h = New(wrap(f.st), decision.NewJSONLines(f.log), l, metrics.New(prometheus.NewRegistry()),
+	f.m = metrics.New(prometheus.NewRegistry())
+	f.h = New(wrap(f.st), decision.NewJSONLines(f.log), l, f.m,
 		func() time.Time { return f.now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
 		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
@@ -701,6 +706,13 @@ func TestMistypedPasswordIsNotFoundNotMismatch(t *testing.T) {
 
 // Under CHAP the daemon never sees the token, so the tag is invisible and a
 // wrong-device credential is token_not_found (design §8).
+//
+// The exclusion is by method, not by shape, and this test holds that gate: the
+// second half hands the CHAP path a blob that IS token-shaped and tagged for
+// another device. A digest is ppp_id ‖ challenge ‖ response and has no reason
+// to be Len bytes of base62 — but nothing stops it, and without the method gate
+// the tag check would fire on one and report a wrong device for a credential
+// the daemon never actually saw. Deleting `method != methodCHAP` must fail here.
 func TestCHAPNeverReportsDeviceMismatch(t *testing.T) {
 	f := setup(t)
 	wrong := token.Tag(labTagKey, "leaf-99") + "tok1tok1tok1tok1tok1tok1"
@@ -714,6 +726,21 @@ func TestCHAPNeverReportsDeviceMismatch(t *testing.T) {
 		Port: []byte("vty0"), Data: data})
 	if f.records(t)[0]["reason"] != "token_not_found" {
 		t.Fatalf("%v", f.records(t)[0])
+	}
+
+	// Long enough to pass verifyCHAP's length check (1 + challenge + 16) and
+	// token-shaped all the same, which is the coincidence the method gate
+	// exists for. It matches no token — the last 16 bytes are not a valid
+	// digest for anything — so the outcome must be the cold token_not_found.
+	shaped := []byte(token.Tag(labTagKey, "leaf-99") + "tok1tok1tok1tok1tok1tok1")
+	if _, ok := token.Parse(shaped); !ok {
+		t.Fatal("the fixture must be token-shaped or this test proves nothing")
+	}
+	f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypeCHAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("vty0"), Data: shaped})
+	if r := f.records(t)[1]; r["reason"] != "token_not_found" {
+		t.Fatalf("CHAP must never report a device: %v", r)
 	}
 }
 
@@ -736,6 +763,17 @@ func TestContextCarriesSessionFieldsAndIsIndexed(t *testing.T) {
 		c.MaxPrivilege != 15 || !c.SessionExpires.Equal(f.now.Add(8*time.Hour)) || !c.RefreshedAt.Equal(f.now) ||
 		c.Credential.Sid != "s1" || c.Port != "ssh" || c.RemAddr != "198.51.100.4" {
 		t.Fatalf("%+v %v", c, err)
+	}
+	// CreatedAt and LastTouchedAt are both stamped at the write. LastTouchedAt
+	// is what Task 10 reads to decide whether an extension is due, so a zero
+	// here would cost a store write per command.
+	if !c.CreatedAt.Equal(f.now) || !c.LastTouchedAt.Equal(f.now) {
+		t.Fatalf("created_at %v last_touched_at %v", c.CreatedAt, c.LastTouchedAt)
+	}
+	// The record carries the principal, which is the join from a redeem to
+	// everything the session does later.
+	if p := f.records(t)[0]["principal"]; p != "user:alice@example.com" {
+		t.Fatalf("principal on the record: %v", p)
 	}
 	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
 	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@example.com"); len(refs) != 1 || refs[0] != ref {
@@ -760,6 +798,76 @@ func TestNoMaxSessionAgeLeavesNoCeiling(t *testing.T) {
 	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
 	if !c.SessionExpires.IsZero() {
 		t.Fatalf("a token with no ceiling must not create one: %+v", c)
+	}
+}
+
+// The converse, and the direction that matters: a token that DOES carry a
+// ceiling must produce a bounded session. The dangerous failure is silent —
+// a dropped ceiling leaves SessionExpires zero, which Task 10 reads as
+// `max_session_age: never`, so an 8h token becomes an unbounded one that looks
+// exactly like a legitimate one. A ceiling with no AuthTime to anchor it is
+// therefore still computed: it lands in the distant past and denies, which is
+// wrong but loud, rather than permitting forever quietly.
+func TestACeilingIsNeverSilentlyDropped(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		authTime time.Time
+		want     time.Time
+	}{
+		{"anchored", time.Unix(1_757_041_495, 0), time.Unix(1_757_041_495, 0).Add(8 * time.Hour)},
+		{"no anchor", time.Time{}, time.Time{}.Add(8 * time.Hour)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setup(t)
+			secret := f.tag() + "ceilceilceilceilceil0123"
+			if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+				store.Token{ID: "ceiling", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+					Principal: "user:alice@example.com", MaxSessionAge: 8 * time.Hour, AuthTime: tc.authTime,
+					ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+				t.Fatal(err)
+			}
+			f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+				AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+				Port: []byte("vty0"), Data: []byte(secret)})
+			c, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.SessionExpires.IsZero() {
+				t.Fatalf("a ceiling became `never`: %+v", c)
+			}
+			if !c.SessionExpires.Equal(tc.want) {
+				t.Fatalf("session_expires %v, want %v", c.SessionExpires, tc.want)
+			}
+		})
+	}
+}
+
+// capturingStore keeps the Context the handler handed to PutContext, before
+// any store stamped anything on it.
+type capturingStore struct {
+	*memory.Store
+	got store.Context
+}
+
+func (c *capturingStore) PutContext(ctx context.Context, k store.ContextKey, v store.Context, ttl time.Duration) error {
+	c.got = v
+	return c.Store.PutContext(ctx, k, v, ttl)
+}
+
+// memory.PutContext stamps LastTouchedAt itself, so reading the context back
+// cannot tell whether the handler set it. Task 10 reads that field to decide
+// whether an extension is due, and a backend that does not stamp it would
+// leave a zero there and cost a store write per command — so the handler's own
+// stamp is asserted where the store cannot supply it.
+func TestTheHandlerStampsTheContextClocksItself(t *testing.T) {
+	var cs *capturingStore
+	f := setupStore(t, func(st *memory.Store) store.Store { cs = &capturingStore{Store: st}; return cs })
+	f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
+	if !cs.got.CreatedAt.Equal(f.now) || !cs.got.LastTouchedAt.Equal(f.now) || !cs.got.RefreshedAt.Equal(f.now) {
+		t.Fatalf("%+v", cs.got)
 	}
 }
 
@@ -789,5 +897,13 @@ func TestAnUnindexedContextSaysSoOnTheRecord(t *testing.T) {
 	}
 	if rec["index_error"] == nil {
 		t.Fatalf("the record must name the lost reach: %v", rec)
+	}
+	// The principal is the join: the metric says an index failed somewhere on
+	// the fleet, and only this field says whose session it was.
+	if rec["principal"] != "user:alice@example.com" {
+		t.Fatalf("the record must name the principal that lost its reach: %v", rec)
+	}
+	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("index_context", "error")); n != 1 {
+		t.Fatalf("store_operations_total{op=index_context,outcome=error} = %v, want 1", n)
 	}
 }

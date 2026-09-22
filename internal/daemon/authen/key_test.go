@@ -146,14 +146,42 @@ func TestReceiptIsScopedToNASUsernameAndCredential(t *testing.T) {
 		t.Fatalf("%+v %v", reply, f.records(t)[3])
 	}
 
-	// And the receipt key's own NAS scoping, still exercised now that the tag
-	// short-circuits the case above: a credential tagged for leaf-02 passes the
-	// device check there and finds no receipt of alice's, because hers is
-	// leaf-01's.
+	// A credential tagged for leaf-02, presented at leaf-02: it clears the
+	// device check and still finds nothing of alice's there. This says nothing
+	// about the receipt key's NAS leg — the credential differs from the one
+	// that earned her receipt, so it misses on the hash alone — it only shows
+	// that the tag is not what refuses this one.
 	tagged02 := token.Tag(labTagKey, "leaf-02") + "tok1tok1tok1tok1tok1tok1"
 	reply, _ = f.h.NewSession(other).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", tagged02))
 	if reply.Status != wire.AuthenStatusFail || f.records(t)[4]["reason"] != "token_not_found" {
 		t.Fatalf("%+v %v", reply, f.records(t)[4])
+	}
+
+	// The receipt key's own NAS leg, isolated. Isolating it needs the SAME
+	// credential hash presented on two devices, which no tagged token can do:
+	// the tag is the first six bytes, so one secret cannot carry two devices'
+	// tags. A credential that is not token-shaped skips the device check
+	// entirely, so the same bytes reach the receipt lookup on both devices and
+	// the NAS is the only leg left that can refuse the second one. Drop NAS
+	// from ReceiptKey and this replays as PASS at leaf-02.
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "carol"},
+		store.Token{ID: "tc", Secret: []byte("not-token-shaped"), Kind: store.KindLogin,
+			Principal: "user:carol@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	plain := papStart("carol", "ssh", "172.100.100.1", "not-token-shaped")
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), plain); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("carol's first redemption: %+v", reply)
+	}
+	// Her receipt is live — the same credential replays at leaf-01 — so the
+	// miss at leaf-02 below is the NAS leg refusing it and not a swept receipt.
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), plain); reply.Status != wire.AuthenStatusPass ||
+		f.records(t)[6]["reason"] != "receipt_replayed" {
+		t.Fatalf("carol's receipt must be live at leaf-01: %+v %v", reply, f.records(t)[6])
+	}
+	reply, _ = f.h.NewSession(other).Start(context.Background(), plain)
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[7]["reason"] != "token_not_found" {
+		t.Fatalf("a receipt must not cross a NAS: %+v %v", reply, f.records(t)[7])
 	}
 }
 
