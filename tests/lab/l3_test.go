@@ -124,12 +124,15 @@ func l3RejectedCommand(out string) bool {
 	return false
 }
 
-// l3EnablePassword is typed at the enable prompt in both phases, so that the
-// only difference between the denied attempt and the allowed one is whether
-// port49 holds a token under the username the device sent. It is a lab token of
-// the same shape as every other in port49d-lab.yaml and it is seeded at
-// runtime, not in the checked-in config, because until phase one runs nobody
-// knows which username to seed it under.
+// l3EnablePassword is typed at the enable prompt in phase one, where the
+// measurement is what the device sends and what port49 answers when it holds no
+// token for the username on the enable START.
+//
+// It is deliberately not a token: port49d mints every token itself and nothing
+// but the daemon knows one, so a phase-one string that redeemed would be a
+// coincidence rather than a test. Phase two types the enable token the daemon
+// minted for the seeded username instead (l3Allowed), which is the one thing
+// that differs between the denied attempt and the allowed one.
 const l3EnablePassword = "p49_labenable01"
 
 // l3LoginStagger is how long the second session waits before logging in. See
@@ -307,17 +310,25 @@ func (l *lab) l3CLI(user, password string) (*cliConn, error) {
 // l3EnableRecords picks the authentication records that are the enable rather
 // than the login.
 //
-// It cannot filter on `service`, because the decision log does not carry it —
-// that is what the capture is for. So it uses the two shapes an enable can
-// take, and the first version of this function only knew one of them:
+// An `escalate` record is unambiguously one: port49 names the event from the
+// authentication START's `service`, so `service=enable` is an escalate and
+// nothing else is (internal/daemon/authen/authen.go). Before plan 2 an enable
+// was logged as an ordinary `redeem` and this function knew only that shape,
+// which is why it kept looking for one: a device may put the enable on the
+// wire as a plain login under another username, and that arrives as a redeem.
+//
+// For those, it cannot filter on `service`, because a redeem record does not
+// carry it — that is what the capture is for. So it uses the two shapes such an
+// enable can take, and the first version of this function only knew one of
+// them:
 //
 //   - a *different* username. This is the `$enab{level}$` shape the whole row
 //     is named after, and the one the memo prices.
-//   - the **same** username, a second time. This is what vEOS 4.32.2F actually
-//     does, measured: the enable START carries `alice01`, the operator's own
-//     name. The first version excluded exactly those records and then failed
-//     the test for finding none — reporting a measurement it had made as a
-//     measurement it had not.
+//   - the **same** username, a second time. This is what vEOS-lab 4.31.2F (the
+//     image tagged 4.32.2F) actually does, measured: the enable START carries
+//     the operator's own name. The first version excluded exactly those
+//     records and then failed the test for finding none — reporting a
+//     measurement it had made as a measurement it had not.
 //
 // Records arrive in order, so the first redeem for a login username is that
 // login and every later one is an enable.
@@ -329,11 +340,15 @@ func l3EnableRecords(recs []map[string]any, loginUsers ...string) []map[string]a
 	seen := map[string]bool{}
 	var out []map[string]any
 	for _, r := range recs {
-		if str(r, "event") != "redeem" {
-			continue
-		}
 		s := sub(r, "session")
 		if s == nil {
+			continue
+		}
+		if str(r, "event") == "escalate" {
+			out = append(out, r)
+			continue
+		}
+		if str(r, "event") != "redeem" {
 			continue
 		}
 		u := str(s, "username")
@@ -449,12 +464,17 @@ func (l *lab) l3Allowed(t *testing.T, wireUser string, echoesOperator bool) stri
 	// the operator's own — which vEOS does — the name that will arrive is the
 	// name of whoever logs in for phase two, so the login has to be taken
 	// first and its username seeded instead.
-	user, secret := l.nextLogin(t)
+	//
+	// The pool slot is taken here and its token is thrown away: the restart
+	// below empties the in-memory store and mints a fresh pair for every seed,
+	// so the only credential that works afterwards is the one read back after
+	// the daemon is up. What is needed from here is the NAME.
+	user, _ := l.nextLogin(t)
 	seedUser := wireUser
 	if echoesOperator {
 		seedUser = user
 	}
-	cfg, err := l.writeSeedConfig(seedUser, l3EnablePassword)
+	cfg, err := l.writeSeedConfig(seedUser)
 	if err != nil {
 		return fmt.Sprintf("\n### When the enable is allowed\n\nNot measured: a daemon config seeding a token "+
 			"under `%s` could not be written (%v).\n", seedUser, err)
@@ -480,6 +500,18 @@ func (l *lab) l3Allowed(t *testing.T, wireUser string, echoesOperator bool) stri
 		}
 	}()
 
+	// Both credentials come from the daemon that is now running: this restart
+	// minted them, and the tokens from before it are gone with the store that
+	// held them.
+	secret, err := l.loginToken(user)
+	if err != nil {
+		return fmt.Sprintf("\n### When the enable is allowed\n\nNot measured: %v\n", err)
+	}
+	enablePassword, err := l.enableToken(seedUser)
+	if err != nil {
+		return fmt.Sprintf("\n### When the enable is allowed\n\nNot measured: %v\n", err)
+	}
+
 	off := l.mark()
 	said := "the CLI never opened"
 	c, err := l.l3CLI(user, secret)
@@ -487,7 +519,7 @@ func (l *lab) l3Allowed(t *testing.T, wireUser string, echoesOperator bool) stri
 		from := len(c.transcript())
 		if _, err := c.sendExpect("disable", 45*time.Second, ">"); err == nil {
 			if out, err := c.sendExpect("enable", 45*time.Second, "assword", "#"); err == nil && strings.Contains(out, "assword") {
-				_, _ = c.sendExpect(l3EnablePassword, 90*time.Second, "#", ">", "ailed", "enied")
+				_, _ = c.sendExpect(enablePassword, 90*time.Second, "#", ">", "ailed", "enied")
 				// One command at the raised privilege, so that whatever
 				// authorization the device sends for an enabled session is in
 				// this window too.
@@ -539,7 +571,7 @@ func (l *lab) l3Allowed(t *testing.T, wireUser string, echoesOperator bool) stri
 // indentation mistake away from a config that parses into something else
 // entirely, and a daemon that started on a config the test did not intend
 // would answer every later measurement wrongly with no symptom that says so.
-func (l *lab) writeSeedConfig(user, secret string) (string, error) {
+func (l *lab) writeSeedConfig(user string) (string, error) {
 	base, err := l.configPath()
 	if err != nil {
 		return "", err
@@ -556,14 +588,15 @@ func (l *lab) writeSeedConfig(user, secret string) (string, error) {
 	// Quote the username: the enable name a device sends is commonly `$enab15$`,
 	// and an unquoted `$` at the start of a YAML scalar is not something to rely
 	// on parsing the way it looks.
-	// `kind: enable`, not `kind: login`, and the first run is why the
-	// distinction is spelled out here. Seeded as a login token, the enable was
-	// refused `token_kind_mismatch` — port49 reads the authentication START's
-	// `service` and looks for a token of the matching kind
+	//
+	// `enable: true`, which is what asks the minter for an enable token beside
+	// the login one, and the first run is why the distinction is spelled out
+	// here. Given only a login token, the enable was refused
+	// `token_kind_mismatch` — port49 reads the authentication START's `service`
+	// and looks for a token of the matching kind
 	// (internal/daemon/authen/authen.go, internal/store). A note that reported
 	// that as device behavior would have been reporting a harness mistake.
-	out := string(raw) + fmt.Sprintf("    - {nas: %s, username: \"%s\", secret: %s, kind: enable}\n",
-		l.p.node, user, secret)
+	out := string(raw) + fmt.Sprintf("    - {nas: %s, username: \"%s\", enable: true}\n", l.p.node, user)
 	path := filepath.Join(root, "tests", "lab", "logs", "port49d-lab-enable-seed.yaml")
 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
 		return "", err

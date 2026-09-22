@@ -347,7 +347,10 @@ principal
                         AND whose `expires` has not passed
   → roles               union across matching grants
   → privilege           max over granted roles (no grant-level override)
-  → max_privilege       max over matching grants; absent means no escalation
+  → max_privilege       max over matching grants; absent (zero on the token) means
+                        NO CEILING, not a ceiling of zero — whether escalation is
+                        offered at all is `enable`'s job (unset → enable_refused);
+                        `store.Context.PrivilegeCeiling()` is the one reading of it
   → effective rules     resolved permit/deny/pipe sets
   → av_pairs            rendered for this device's platform
 ```
@@ -399,7 +402,13 @@ ctx:(nas, username)
   session_expires   1757070295           auth_time + max_session_age
   refreshed_at      1757041495           last broker refresh (5.1.3); the staleness clock
   revoked_at        —                    set by revocation (5.6); denies until idle TTL reclaims
-  task_id           42                   from exec accounting, once observed (5.8)
+  session_discriminators                 the platform's own per-session values, hashed, from
+    [sha256(31048)[:16], …]              exec accounting (5.8). A SET, capped at 8: one
+                                         context covers every concurrent session of one user
+                                         (§13, decision 15). Not task_id: that restarts at 1
+                                         per session on both Junos images, which sent
+                                         session_pid 31048 and 31050 for two of them
+                                         (§15, L17)
   accounting_state  open | closing       advisory (5.8); never authorizes or denies
 ```
 
@@ -609,6 +618,12 @@ normalize(request)
   → if now - ctx.refreshed_at
        > staleness_ceiling             → DENY (context_stale)
   → if request level > ctx.privilege   → DENY (privilege_exceeded)
+       (ctx.privilege is the level port49 last GRANTED: the login START's level, then
+        the `priv-lvl` a permitted session authorization carried, then an escalation;
+        the session-authorization permit records its granted level in place, same
+        ctx_id — measured on vEOS the session authorization arrives at priv_lvl 1,
+        port49 grants 15, and every later command arrives at 15;
+        tests/lab/results/L1-arista_eos.md, L3-arista_eos.md)
   → collect every matching rule, permit and deny alike
   → if no permit matches                 → DENY (no_rule_matched)
   → if no permit dominates every
@@ -1006,8 +1021,8 @@ did not generate and cannot verify MUST NOT delete state.
 does not distinguish an enable START from a login START, so it mints a fresh `ctx_id` and
 writes it over the login context. Under `(nas, username)` that lands on the operator's own
 login context on any platform that puts their real username on the enable START — which vEOS
-does, measured (`tests/lab/results/L3-arista_eos.md`). Measured on vEOS 2026-09-20, one
-operator's whole sequence:
+does, measured (`tests/lab/results/L3-arista_eos.md`). Measured on vEOS-lab 4.31.2F
+2026-09-22, one operator's whole sequence:
 
 ```
 redeem            permit token_redeemed   port=ssh   priv=1   ctx=QOZ6DYFB
@@ -1040,8 +1055,8 @@ unrelated in a log. The `(nas, username)` key removes the Bob-then-Alice version
 not this one, Bob reconnecting. Rather than patch it, accounting now sets
 `accounting_state: closing` and nothing
 more — it is reported, and it has **no effect on refresh, authorization, or teardown**; row 6
-reclaims the state. §5.8 specifies the annotation, including the `task_id` binding that makes
-it correct.
+reclaims the state. §5.8 specifies the annotation, including the session-discriminator binding
+that makes it correct.
 
 **Idle TTL is a backstop, not a control.** It SHOULD be extended by activity. A short TTL was
 previously doing security work it cannot do — it narrows a window without closing it, while
@@ -1269,6 +1284,12 @@ Device accounting shares this envelope as the seventh event, `account`, and is s
 which is the only place that attribution is recoverable.
 
 A `mint` record is the audit trail for *authority*, where the others are the trail for *use*:
+it therefore carries **no `credential_sha256`**. That field is the hash of what was presented
+on the wire, and at mint time nothing has been presented: the broker holds the subject's
+identity, not a secret, so any hash it could compute would join to nothing — and a blank one
+is worse than an absent one, because it is present on every mint record in the fleet and
+joins everything to everything. `token_sha256` is what a mint record carries instead, and it
+is what the redemption joins back to (see Correlation below).
 
 ```json
 {
@@ -1277,7 +1298,7 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
   "verdict": "permit",
   "reason": "grants_matched",
   "principal": "user:alice@example.com",
-  "auth": { "method": "oidc", "credential_sha256": "9f2c8b…" },
+  "auth": { "method": "oidc" },
   "policy": {
     "bundle": 2291,
     "subject": "network-operators",
@@ -1475,7 +1496,7 @@ and whether overflow blocks or discards oldest-first, are deployment settings. S
 drop count MUST be metrics — an accounting stream silently discarding records destroys the
 reconciliation report without failing anything visibly.
 
-#### Two wire details that break the join
+#### Three wire details that break the join
 
 **Strip the trailing `cmd-arg=<cr>`.** Several vendors terminate the argument list with a
 literal `<cr>`. It is not an argument, and left in place every reconciliation join misses by
@@ -1506,44 +1527,207 @@ Redaction is best-effort by nature and MUST NOT be presented otherwise: a patter
 leaks. It is strictly better than emitting verbatim, and the honest mitigation is that
 port49's own credentials are never typed at a device prompt in the first place.
 
+**Trim an accounting AV pair's key and value.** An accounting argument is not reliably
+`key=value` with no spaces. Measured, vSRX 21.4R3.15 and vJunos-router 23.4R2-S2.1 send
+
+```
+session_pid = 31050
+```
+
+with a space on each side of the `=`, while every other argument in the same record —
+`task_id=1`, `service=shell`, `cmd=login` — carries none
+(`tests/lab/results/L17-juniper_vsrx.md`, `L17-juniper_vjunos-router.md`,
+`L6-juniper_vsrx.md`, `L6-juniper_vjunos-router.md`). A reader that splits at the first
+separator and keeps both halves verbatim therefore stores the key `session_pid ` and the
+value ` 31050`, and a lookup for `session_pid` finds nothing. This is not cosmetic: on Junos
+`session_pid` is the *only* AV pair that separates two concurrent sessions of one operator
+(below), so the untrimmed reader silently binds nothing and every Junos session takes the
+"no discriminator" branch. An accounting reader MUST trim both halves. The lab harness's own
+first run of L17 published a table saying nothing distinguished two sessions, beside a record
+dump that plainly did, which is how this was found.
+
+The authorization path is deliberately left alone: no device in this lab has sent a spaced
+argument on an authorization request, and trimming there would change what a rule matches.
+
 #### Annotating login context
 
 Exec accounting annotates context and never deletes it (§5.6). The context is found by
 `(nas, username)` — the accounting record's own `user`, not its `port`, which is part of no
 key (§5.6):
 
+The context holds a **set** of session discriminators, not one, because under the
+`(nas, username)` key (§13, decision 15) one context covers every concurrent session of one
+operator on one device — measured, and recorded there as the accepted cost.
+
 ```
 exec START for (nas, username):
-    ctx has no session discriminator      →  bind it (our own session's START)
-    otherwise                             →  annotate foreign_session, alert
+    always  →  add this session's discriminator to the set; accounting_state = open
+               (a START is never foreign: port49 is watching this session begin)
 
-exec STOP for (nas, username):
-    discriminator set    →  accounting_state = closing, only on a discriminator match
-    discriminator unset  →  accounting_state = closing, on the username alone
+exec STOP or WATCHDOG for (nas, username):
+    set non-empty, discriminator in it      →  accounting_state = closing (STOP only)
+    set non-empty, discriminator not in it  →  annotate foreign, alert
+    set empty, or no discriminator sent     →  accounting_state = closing, on the username alone
 ```
+
+**`START|WATCHDOG` is a WATCHDOG here, not a START.** The flag combination `0x0a` is legal and
+Cisco IOS sends interim updates with it. It reports on a session already running, so it adds no
+discriminator, does not write `open`, and stays eligible for `foreign` — a device that set the
+START bit on every record would otherwise switch the alert off for itself, silently. The
+decision log already names these records `watchdog`, and the annotation must not disagree with
+the line describing it.
+
+This replaces a single-discriminator model in which a START bound the first value it saw and
+every later START was `foreign`. Under that model an operator opening a second window on one
+device pages somebody, which is the alert burying its own signal. **A START always adds**, so
+the question `foreign` now asks is the one worth asking: a record arrived for a session whose
+START port49 never saw, on a device where port49 *did* see other sessions of this user begin.
+That is the local fallback, the console login and the name collision, and nothing else.
+
+The set is **capped at 8**, oldest evicted first. Nine concurrent sessions of one user on one
+device therefore push the first session's discriminator out, and that session's STOP is then
+attributed `foreign` — a false alert, bounded and stated rather than discovered. Eight is well
+above the ten-concurrent-login measurement §13 decision 15 records as the accepted cost of the
+key, and the alternative — refusing to add past the cap — produces the same false alert and
+loses the *newest* session instead of the oldest, which is the one still running.
+
+**The set stores a hash, not the value.** Each entry is `sha256(discriminator)` truncated to
+its first 16 bytes and hex-encoded. Equality is all a binding needs, and it is all the set is
+ever asked for: nothing reads a discriminator back out, renders it, or joins on it — the
+accounting record carries `task_id` in the clear for reconciliation (§5.7), as it always has.
+Hashing is what lets the field be stored in the clear alongside the context's sealed identity
+fields, and that matters here: on NX-OS the discriminator is `task_id`, whose measured value is
+`172.100.100.1@pts/3` (`tests/lab/results/L1-cisco_nxos.md`), carrying the *client's source
+address*. `rem_addr` is sealed so that a store dump cannot enumerate who was logged into which
+device; storing that same address in the clear under another name would have undone it. A
+16-byte truncated hash of a device-local identifier carries neither an identity nor a
+credential, so it does not need the sealing layer — and not needing it is what makes a narrow,
+under-lock setter possible at all (below).
 
 **What the discriminator is, is per platform, and `task_id` is not it.** This section used to
 say `task_id` pairs a START with its STOP because "context is already keyed on `(nas, port)`,
 so device-local uniqueness suffices". Both halves are now wrong: the key no longer contains
 `port`, and `task_id` is measured **not** device-unique — on both Junos images it restarts at
 `1` per session, so two concurrent logins both sent `task_id=1`
-(`tests/lab/results/L1-juniper_vsrx.md`, `L1-juniper_vjunos-router.md`). What is measured to
-work: `session_pid` on Junos, unique and stable across the device's immediate reuse of an
-accounting `port`; `task_id` on EOS, device-unique and monotonic
-(`tests/lab/results/L1-arista_eos.md`). Choosing per platform is adapter work and is
-specified with the adapters, not here.
+(`tests/lab/results/L17-juniper_vsrx.md`, `L17-juniper_vjunos-router.md`; the per-session
+restart is visible on its own in `L6-juniper_vsrx.md`, `L6-juniper_vjunos-router.md`). What is
+measured to work: `session_pid` on Junos, which took two distinct values across two concurrent
+sessions on both images (`31048`/`31050` on vSRX, `17244`/`17246` on vJunos-router) and was
+stable from a session's START to its STOP; `task_id` on EOS (`27`/`28`), NX-OS
+(`172.100.100.1@pts/3` and `@pts/4`) and IOS-XE (`4033`/`4034`), each distinct across two
+concurrent sessions and stable start to stop (`tests/lab/results/L1-arista_eos.md`,
+`L1-cisco_nxos.md`, `L1-cisco_iosxe.md`).
 
-The unset branch covers `stop-only` accounting and a lost START. `closing` is reported and
-nothing else — it does not stop refresh (§5.1.3), because a STOP from a previous session on the
-same line under the same username would otherwise mark a live session closing and let the
-staleness ceiling deny it later, which is the demotion's own defect in slow motion. Any later
-authorization or START on the context clears it. The idle TTL reclaims the state. A record
+**Junos `session_pid` also survives the device's immediate reuse of an accounting `port`, and
+that is measured.** One millisecond after one session's logout on `port='0'`, the next login on
+`port='0'` carried a different `session_pid` — `14656` → `14695` on vJunos-router, with vSRX
+showing the same boundary within one millisecond
+(`docs/design/2026-09-20-login-context-key-options.md:108-111`, parsed from the committed
+`tests/lab/evidence/L1-juniper_vjunos-router.pcap`). This is the measurement that makes the
+discriminator worth binding at all: `port` is reused immediately and `session_pid` is not, so a
+STOP arriving late for a closed session cannot be confused with the session that took its line.
+The evidence is a design memo's parse of a committed capture rather than a
+`tests/lab/results/` note; promoting it to a lab-register row is CLAUDE.md rule 3 work and has
+not been done, so it is cited here as what it is.
+
+Still unmeasured: whether `session_pid` survives a reboot or a pid wrap, and the discriminator
+on every non-SSH transport. Both are tolerated rather than relied on — a discriminator that is
+not in the set leaves a STOP `foreign` and a START simply adds, so the failure is a false alert
+and never a wrong attribution. Choosing per platform is adapter work and is specified with the
+adapters, not here.
+
+**Which record is the exec record is also per platform.** On EOS, NX-OS and IOS-XE the exec
+START and STOP carry no `cmd` argument at all, so "no command" identifies them. On both Junos
+images they carry `cmd=login` and `cmd=logout`, alongside per-command records that carry the
+typed command (`tests/lab/results/L6-juniper_vsrx.md`, `L6-juniper_vjunos-router.md`,
+`L17-juniper_vsrx.md`, `L17-juniper_vjunos-router.md`). A reader that treats "no command" as
+the only exec form annotates nothing at all on Junos. Per-command records never annotate, on
+any platform.
+
+The empty-set branch covers `stop-only` accounting and a lost START, and it does more than
+decline to alert. **A record on an empty-set context is attributed `resolved`, so it is stamped
+with the operator's `principal` and `ctx_id`** — it is joined to the login, in the audit trail,
+on the strength of the username alone. That is the intended behaviour and it is the reason a
+deployment that sends no STARTs at all still gets attributed accounting rather than a stream of
+`unattributed`; but it is a weaker claim than the same record on a bound context, and a reader
+comparing the two should know which one it is looking at. The exposure is bounded by its own
+mechanism: one genuine exec START turns the check on for that context and everything after it
+is compared against the set.
+
+`closing` is
+reported and nothing else — it does not stop refresh (§5.1.3), because a STOP from a previous
+session on the same line under the same username would otherwise mark a live session closing and
+let the staleness ceiling deny it later, which is the demotion's own defect in slow motion. Any
+later START sets it back to `open`, which is what a reader checking for `closing` needs and is
+why a START writes a value rather than clearing the field. The idle TTL reclaims the state. A record
 that matches neither is logged as unattributable to that context and left alone.
 
-An exec START whose `user` does not match the bound username is a **session port49 did not
-authenticate** — a local fallback, a console login, or a name collision. That is precisely the
-condition §5.6 requires a warning for, and it is high-signal: it means either port49 was
-unreachable or a device-local account shares a principal's name.
+With more than one session bound, `closing` means **"at least one session of this user closed"**
+and not "this context is closing". That is all an advisory field nothing authorizes on needs to
+mean. A STOP does **not** remove its discriminator from the set: that would cost a second store
+write to narrow a field no decision reads, and it would turn a device's duplicate STOP into a
+`foreign` alert.
+
+An exec STOP or WATCHDOG whose discriminator is **not in a non-empty set** is a **session port49
+did not authenticate** and is attributed `foreign`. That is precisely the condition §5.6 requires
+a warning for, and it is high-signal: under one name port49 does authenticate, on a device where
+port49 watched this user's other sessions begin, a record arrived for a session whose START it
+never saw — so either port49 was unreachable and the device fell back locally, or someone reached
+a console, or a device-local account shares a principal's name.
+
+Two earlier readings of this paragraph are superseded. It first said "an exec START whose `user`
+does not match the bound username", which under the `(nas, username)` key (§13, decision 15) is
+unreachable: a START naming another user addresses another key, finds no context, and is
+`unattributed`. It then said a second exec START carrying a different discriminator — which made
+an operator's second window an alert. Neither is what the signal is worth firing on.
+
+**Accounting does not extend the idle TTL.** The annotation writes the discriminator set and
+`accounting_state` and touches neither the expiry nor `last_touched_at`, for the reason
+`set_privilege` does not either (§5.6; the half-TTL extension is authorization's, Task 10): a
+device that only ever sends accounting must not be able to hold a context open forever, and a
+STOP — a record saying a session *ended* — keeping that session's context alive is the plainest
+case of it. An operator working is extending the TTL through authorization; an operator who has
+stopped working should let the idle TTL reclaim.
+
+A record whose `user` is one the platform's adapter declares a **system user** — a device-local
+account the platform's own machinery writes accounting under, rather than a logged-in operator —
+is attributed `system` rather than `unattributed`: it is the device acting on its own behalf, not
+a session port49 failed to authenticate, and counting it as either buries the signal both exist
+for. The system-user list is per platform and is adapter data (§8). A platform adapter **MAY**
+name system users, and a platform that declares none produces no `system` records.
+
+**`juniper_junos` ships `root`, and that is measured.** The committed capture behind
+`tests/lab/results/L1-juniper_vsrx.md` — `tests/lab/evidence/L1-juniper_vsrx.pcap`, decodable
+with the published lab key — holds three accounting records under `user=root`, `port=non-tty`,
+carrying their own `session_pid = 28771`:
+
+```
+ACCT flags=start user="root" port="non-tty" args=[task_id=1 service=shell session_pid = 28771 cmd=login]
+ACCT flags=stop  user="root" port="non-tty" args=[task_id=2 service=shell session_pid = 28771 cmd=set alarm yellow alarm-id 0small-msg <cr>]
+ACCT flags=stop  user="root" port="non-tty" args=[task_id=1 service=shell session_pid = 28771 elapsed_time=0 cmd=logout]
+```
+
+**There is no authentication and no authorization exchange for `root` anywhere in that file** —
+`root` appears in accounting and nowhere else — and the run logged in only as `alice01`,
+`alice02` and `alice03`. The command is vSRX's own alarm machinery. That is the definition above,
+measured, on vSRX 21.4R3.15: the device acting on its own behalf, under a device-local account,
+for a session port49 was never asked to authenticate. Without the entry those three records are
+`unattributed`, and a stock vSRX with nothing wrong reports sessions port49 did not authenticate
+— which is exactly the signal-burying `system` exists to prevent.
+
+**Every other platform's list ships empty**, and vJunos-router is among them: the same decode of
+`tests/lab/evidence/L1-juniper_vjunos-router.pcap` shows no `root` records at all, so the
+behaviour is image-specific and unmeasured there. L17's narrower negative stands as written — under
+*that* run's accounting event list, with `enhanced-accounting` committed, every record named the
+logged-in operator (§15, L17) — and does not contradict this: it measured a different
+configuration on a different day. One production observation remains **unmeasured in this lab**,
+an NX-OS `admin` record carrying `task_id=vsh.bin.$port` after a cancelled `sudo`, and a
+`tests/lab/results/` note reproducing it is what would add `cisco_nxos`.
+
+`system` is reached only where `unattributed` would otherwise be — after `foreign` has already
+been decided, on a record that resolved to no context at all. A device acting on its own behalf
+is therefore never `foreign`, and the four attribution values `resolved`, `foreign`, `system`
+and `unattributed` partition every accounting record.
 
 #### Unresolvable records
 
@@ -1891,7 +2075,7 @@ builds; plan 1 does not do it.** Plan 1's `redeem` treats an enable START as an 
 redemption, so it writes a fresh `ctx_id` over the login context — measured on vEOS
 2026-09-20 (§5.6, teardown row 1; `tests/lab/results/L3-arista_eos.md`). The rules do not change: a role's permits and denies apply at
 every level, and what escalation changes is which commands the device *offers* and therefore
-submits. The recorded level feeds `privilege_exceeded` for a request above it. Accounting and
+submits. The recorded level feeds `privilege_exceeded` for a request above it; the same in-place update happens when a permitted **session authorization** grants a `priv-lvl` (§5.3), because on vEOS the login START carries level 1, port49's session reply grants 15, and every command after it arrives at 15 (`tests/lab/results/L1-arista_eos.md`, `L3-arista_eos.md`) — a context that still held the login level would deny every one of them. Accounting and
 the `escalate` record attribute the event to the **real principal** even though the wire said
 `$enab15$`.
 
@@ -1946,6 +2130,9 @@ attribute is complete in four lines:
 | `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |
 | `redact` | patterns whose argument values are removed before an accounting record is emitted (§5.8) | if the platform sends command accounting — session-only platforms included |
 | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
+| `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
+| `exec_commands` | the `cmd` values that mark an exec record rather than a per-command one; empty means "the exec record carries no `cmd` at all" (§5.8) | defaults per platform |
+| `system_users` | usernames this platform's own machinery writes accounting under, attributed `system` (§5.8); `juniper_junos` ships `root`, every other adapter ships empty | optional |
 | `port_pattern` | expected `port` shape, used only for drift detection | optional |
 
 ### `session_services`
@@ -3309,6 +3496,15 @@ next" stays open; its first item, L3 on IOS-XE, was measured on 2026-09-20 and a
 this platform does **not** send `$enab{level}$`, which removes the expected exposure rather than
 the requirement to handle it if some other train does.
 
+**Superseded 2026-09-22.** Plan 2 builds neither the index nor the reason code. `$enab{level}$`
+becomes an explicit `platforms.<name>.enable_username: enab` option that `config.Load`
+**refuses**, with an error naming what would lift the refusal: a `tests/lab/results/` note
+showing a device sending that username form. Until such a note exists, the `(nas, rem_addr)`
+secondary index, its ambiguity refusal and the §5.7 row that refusal would need are all
+**deferred** — §5.6's bound-attributes table and teardown row 4, and §7's "How an enable token is
+found", stay as the design of record for the day one arrives, describing a path no shipped
+configuration can reach.
+
 One thing plan 2 and plan 4 both gain from that run, and it is not about enable. **IOS-XE refuses
 an authorization reply carrying an attribute it does not recognise, even sent as OPTIONAL**: the
 session port49 permitted is ended by the device with `% Authorization failed.` (§15, L10;
@@ -3573,11 +3769,26 @@ Beyond those already listed in the design document's §14:
   gates an authorization reply on an accounting write.
 - **Accounting never deletes context**: the late-STOP sequence in §5.6 leaves the new
   occupant's context intact and authorizing.
-- **`task_id` binding**: an exec START binds `task_id`; a STOP bearing a different `task_id`
-  does not annotate; a STOP matching it sets `accounting_state: closing`; with no bound
-  `task_id`, a username match is required.
-- **Foreign session detection**: an exec START whose username differs from the bound one is
-  reported as a session port49 did not authenticate.
+- **Session-discriminator binding**: an exec START always adds the platform's session
+  discriminator (`session_pid` on Junos, `task_id` elsewhere — §5.8, §15 L17) to the context's
+  set, hashed; a second START of the same user adds a second entry rather than replacing the
+  first; a ninth evicts the oldest. A STOP whose discriminator is in the set sets
+  `accounting_state: closing`; with an empty set, a username match is required. A per-command
+  record never annotates, and which records are exec records is per platform: `cmd=login` and
+  `cmd=logout` on Junos, no `cmd` at all elsewhere.
+- **Spaced AV pairs are read**: an argument sent as `session_pid = 31050` binds the same value
+  as `session_pid=31050`, because Junos sends the former (§5.8, §15 L17). This holds for every
+  AV pair the accounting reader consumes, not only the discriminator.
+- **Foreign session detection**: an exec STOP or WATCHDOG whose discriminator is not in a
+  non-empty set is attributed `foreign`. A START is never `foreign`, and neither is any record
+  on a context whose set is empty. `START|WATCHDOG` (`0x0a`) counts as a WATCHDOG for every one
+  of these rules: it adds no discriminator and can be `foreign`.
+- **Accounting does not extend the idle TTL**: an annotation writes the discriminator set and
+  `accounting_state` and moves neither the expiry nor `last_touched_at`.
+- **System users**: a record naming a username the platform's adapter declares a system user is
+  attributed `system`, never `foreign` and never `unattributed`. `juniper_junos` declares `root`
+  (§5.8, measured in `tests/lab/evidence/L1-juniper_vsrx.pcap`); every other adapter declares
+  none.
 - **Unattributed records** are recorded rather than discarded, carry `ctx_id: null`, and are
   counted separately.
 
@@ -3758,7 +3969,7 @@ implemented against a guess. This section is the one place the distinction is ke
 |---|---|---|---|---|
 | **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE and the console unmeasured; see below |
 | **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below |
-| **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | closed — measured 2026-09-21; `tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`, `L3-nxos-cisco_nxos.md`. Scope: NX-OS 10.x has no enable exchange (`feature privilege` was removed in 10.x; the owner confirmed the same on production Nexus 9000 hardware running 10.3(5)); NX-OS 9.x and earlier are unmeasured and out of scope. No measured image sends `$enab{level}$`. History: closed in error 2026-09-20 on a note with no transcript, reopened 2026-09-21. Measured: vEOS 4.32.2F and IOS-XE 17.13.01a both send the operator's own username with `service=enable` and a bare-address `rem_addr` (`tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`). **NX-OS re-measured 2026-09-21 with the transcript it was missing** (`tests/lab/results/L3-nxos-cisco_nxos.md`): `disable`, `enable` and `enable 15` were each typed separately and each answered `% Invalid command at '^' marker.`, and `feature privilege` is itself refused by this image, so the conclusion the reopened note reached without evidence is confirmed with it |
+| **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | closed — measured 2026-09-21; `tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`, `L3-nxos-cisco_nxos.md`. Scope: NX-OS 10.x has no enable exchange (`feature privilege` was removed in 10.x; the owner confirmed the same on production Nexus 9000 hardware running 10.3(5)); NX-OS 9.x and earlier are unmeasured and out of scope. No measured image sends `$enab{level}$`. History: closed in error 2026-09-20 on a note with no transcript, reopened 2026-09-21. Measured: vEOS-lab 4.31.2F (image tagged 4.32.2F) and IOS-XE 17.13.01a both send the operator's own username with `service=enable` and a bare-address `rem_addr` (`tests/lab/results/L3-arista_eos.md`, re-measured 2026-09-22, which is where the image tag was found to overstate the running version; `L3-cisco_iosxe.md`). **NX-OS re-measured 2026-09-21 with the transcript it was missing** (`tests/lab/results/L3-nxos-cisco_nxos.md`): `disable`, `enable` and `enable 15` were each typed separately and each answered `% Invalid command at '^' marker.`, and `feature privilege` is itself refused by this image, so the conclusion the reopened note reached without evidence is confirmed with it |
 | **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS and the N9Kv over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS and the N9Kv never do; `deadtime`, IOS-XE, other transports and authorization fall-through unmeasured. **2026-09-21 (L17):** committing `tacplus-options strict-authorization` on both Junos images changes none of the unreachable-server cells — break-glass still logged in under both orders with port49d down — so making a port49 denial binding does not cost the fall-through this row measures; see below |
 | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | closed — measured 2026-09-20; `tests/lab/results/L5-arista_eos.md`, `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, `L5-cisco_nxos.md`, `L5-cisco_iosxe.md`. No image sends a WATCHDOG over a 2m30s idle interactive session under the lab's accounting config, which sets no periodic update; a device configured for periodic updates is outside what was measured |
 | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |

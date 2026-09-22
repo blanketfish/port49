@@ -25,7 +25,7 @@ Transport measured: **NX-API (HTTPS `ins_api`, `cli_show` and `cli_conf`)**. Eac
 
 **Yes.** The first request as `nxapi01` cost 1 authentication exchange(s) and the second, with the same token, cost 1 more. Every request is a fresh authentication over this transport.
 
-**And it was allowed anyway**: `verdict=permit reason=receipt_replayed`. The token was spent by the first call, and the second was answered out of the receipt port49 kept for `(nas, username, credential_sha256)` rather than out of the store — the same credential hashes to the same key, so a repeat finds its own receipt. So a script that makes forty calls with one token works — for as long as that receipt lives. What decision 15 rests on is therefore not "does it re-authenticate" but **`receipt_ttl`**: past it, the next call in the same script is the first denial, and nothing about the credential has changed.
+**And it was allowed anyway**: `verdict=permit reason=receipt_replayed`. The token was spent by the first call, and the second was answered out of the receipt port49 kept for `(nas, username, kind, credential_sha256)` rather than out of the store — the same credential hashes to the same key, so a repeat finds its own receipt. So a script that makes forty calls with one token works — for as long as that receipt lives. What decision 15 rests on is therefore not "does it re-authenticate" but **how long that receipt lives**: `receipt_idle_ttl` slides forward on every call the receipt answers, and `receipt_max_age` caps it from the first redemption and never slides. Past either, the next call in the same script is the first denial — `token_spent` — and nothing about the credential has changed (spec §13, decision 15).
 
 ### `port` and `rem_addr` over this transport
 

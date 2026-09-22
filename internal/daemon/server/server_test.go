@@ -33,6 +33,7 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 // syncBuffer is the record sink. The spool forwards records from its own
@@ -185,10 +186,14 @@ func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.A
 	go func() { defer close(spoolDone); sp.Run(spoolCtx) }()
 	var ids atomic.Int64
 	d := Deps{Admission: trie,
-		Keys:   map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), Retired: true}}}},
-		Authen: authen.New(st, em, lim, m, time.Now, func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) }, 30*time.Second, time.Hour),
-		Author: author.New(st, authz, em, m, time.Now, platform.Defaults()),
-		Acct:   acct.New(st, sp, m, time.Now),
+		Keys: map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), Retired: true}}}},
+		// The e2e credentials here are not token-shaped, so the tag check never
+		// fires; the key only has to be non-nil and stable.
+		Authen: authen.New(st, em, lim, m, time.Now, func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) },
+			15*time.Minute, 2*time.Hour, time.Hour, time.Hour,
+			token.NewTagWindow(token.TagKey([]byte("server_test")))),
+		Author: author.New(st, authz, em, m, time.Now, platform.Defaults(), time.Hour, 10*time.Minute, time.Hour),
+		Acct:   acct.New(st, sp, m, time.Now, platform.SystemUsers()),
 		Limits: lim, Metrics: m, Log: em, Now: time.Now, IdleTimeout: time.Second}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -205,7 +210,7 @@ func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store, 
 	t.Helper()
 	st = memory.New(time.Now)
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_e2e"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		store.Token{ID: "e2e", Secret: []byte("p49_e2e"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	ts := newTestServer(t, log, st, nil)
@@ -235,8 +240,16 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 		t.Fatalf("%+v %v seq=%d", reply, err, h.SeqNo)
 	}
 
+	// priv_lvl=1 on the session authorization, matching the login START above
+	// and what every device in the lab was measured sending: EOS asks
+	// `priv_lvl=1 args=[service=shell cmd*]` and only raises to 15 once this
+	// reply has granted `priv-lvl=15` (tests/lab/results/L1-arista_eos.md,
+	// L3-arista_eos.md). It used to say 15 here, which the §5.3 privilege check
+	// denies: the context holds the login START's 1 until this reply grants 15
+	// and the handler records it. See TestTheDevicePrivLvlRaisedByOurOwnSessionReply
+	// in internal/daemon/author for the whole sequence.
 	c = dial(t, addr, []byte("k2"))
-	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
+	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 1, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
 		User: []byte("alice"), Port: []byte("vty0"), Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
 	_, body = c.recv(t)
 	ar, _ := wire.DecodeAuthorResponse(body)
@@ -276,7 +289,7 @@ func TestTwoUsersAuthenticateAtOnePortAndAuthorizeAtAnother(t *testing.T) {
 	}
 	for _, u := range users {
 		if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: u.name},
-			store.Token{Secret: []byte(u.secret), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+			store.Token{ID: "t_" + u.name, Secret: []byte(u.secret), Kind: store.KindLogin, Principal: "user:" + u.name + "@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -537,7 +550,7 @@ func TestPanicInOneConnectionDoesNotStopTheDaemon(t *testing.T) {
 	log := &syncBuffer{}
 	st := memory.New(time.Now)
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_e2e"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		store.Token{ID: "e2e", Secret: []byte("p49_e2e"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	ts := newTestServer(t, log, st, panicAuthorizer{})
@@ -545,15 +558,18 @@ func TestPanicInOneConnectionDoesNotStopTheDaemon(t *testing.T) {
 	// A login first: authorization only reaches the authorizer once there is a
 	// context for the line.
 	c := dial(t, ts.addr, []byte("k2"))
-	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
 		User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_e2e")}.Encode(), 0)
 	if _, body := c.recv(t); func() bool { r, _ := wire.DecodeAuthenReply(body); return r.Status != wire.AuthenStatusPass }() {
 		t.Fatal("the login should have passed")
 	}
 	c.conn.Close() // release the per-source connection slot before the next dial
 
+	// Both levels are 1, as the lab measured them, so the request reaches the
+	// authorizer at all: a §5.3 privilege denial would answer before it and the
+	// panic under test would never be provoked.
 	c = dial(t, ts.addr, []byte("k2"))
-	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15, AuthenType: wire.AuthenTypeASCII,
+	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 1, AuthenType: wire.AuthenTypeASCII,
 		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"),
 		Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
 	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -579,7 +595,7 @@ func TestPanicInOneConnectionDoesNotStopTheDaemon(t *testing.T) {
 	// The daemon is still serving: a fresh connection completes an exchange
 	// that does not reach the authorizer.
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
-		store.Token{Secret: []byte("p49_after"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		store.Token{ID: "after", Secret: []byte("p49_after"), Kind: store.KindLogin, Principal: "user:bob@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	c = dial(t, ts.addr, []byte("k2"))
@@ -667,7 +683,7 @@ func TestSingleConnectServesTwoExchanges(t *testing.T) {
 	log := &syncBuffer{}
 	addr, st, _ := startServer(t, log)
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_second"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		store.Token{ID: "second", Secret: []byte("p49_second"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	c := dial(t, addr, []byte("k2"))

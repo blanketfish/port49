@@ -26,7 +26,7 @@ import (
 func TestAttributionIgnoresThePort(t *testing.T) {
 	for _, port := range []string{"vty0", "non-tty", "", "0", "vty4"} {
 		t.Run("port="+port, func(t *testing.T) {
-			h, out, stop := setup(t)
+			h, _, out, stop := setup(t)
 			h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", port,
 				"task_id=43", "service=shell", "cmd="))
 			stop()
@@ -76,7 +76,7 @@ func TestAStoreFaultDoesNotAttributeToAnotherPrincipal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { sp.Run(ctx); close(done) }()
-	h := New(wrongContextStore{Store: memory.New(time.Now)}, sp, m, time.Now)
+	h := New(wrongContextStore{Store: memory.New(time.Now)}, sp, m, time.Now, nil)
 
 	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=1", "service=shell", "cmd="))
 	cancel()

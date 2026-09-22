@@ -82,3 +82,150 @@ func Defaults() map[string][]string {
 	}
 	return out
 }
+
+// EnableUsername is what a platform's enable START carries in the `user`
+// field. Every platform measured carries the operator's own username:
+// vEOS 4.32.2F and Catalyst 8000V 17.13.01a, both with service=enable
+// (tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md), and NX-OS 10.x has
+// no enable exchange at all (L3-nxos-cisco_nxos.md). No device in this lab has
+// been observed sending $enab{level}$.
+//
+// EnableEnab exists so the shape has a name and a refusal rather than an
+// implementation nothing has ever exercised. config.Load refuses it.
+const (
+	EnablePrincipal = "principal"
+	EnableEnab      = "enab"
+)
+
+// EnableUsernames is the built-in table: every known platform, principal.
+func EnableUsernames() map[string]string {
+	out := make(map[string]string, len(sessionServices))
+	for name := range sessionServices {
+		out[name] = EnablePrincipal
+	}
+	return out
+}
+
+// KnownEnableUsername reports whether v is a value config.Load will accept
+// for `platforms.<name>.enable_username` — either the shipping default or the
+// refused-but-named `enab` — as opposed to a typo, which is a different error.
+func KnownEnableUsername(v string) bool { return v == EnablePrincipal || v == EnableEnab }
+
+// sessionDiscriminators names the AV pair whose value separates two sessions of
+// one user on one device, per platform (spec §5.8). Every entry is measured:
+//
+//   - juniper_junos: session_pid. NOT task_id — it restarts at 1 per session on
+//     both Junos images, so two concurrent logins both sent task_id=1 while
+//     session_pid was 31048/31050 on vSRX and 17244/17246 on vJunos-router
+//     (tests/lab/results/L17-juniper_vsrx.md, L17-juniper_vjunos-router.md).
+//   - arista_eos: task_id, 27 and 28 across two concurrent sessions and stable
+//     start to stop (tests/lab/results/L1-arista_eos.md).
+//   - cisco_nxos: task_id, which is `<addr>@pts/<n>` and differed across two
+//     concurrent sessions (tests/lab/results/L1-cisco_nxos.md).
+//   - cisco_iosxe: task_id, 4033 and 4034 across two concurrent sessions
+//     (tests/lab/results/L1-cisco_iosxe.md).
+//
+// Unmeasured: durability across a reboot or a pid wrap, behaviour under load,
+// and every non-SSH transport. A platform with no entry binds nothing and takes
+// §5.8's username-only branch, which is the safe direction.
+var sessionDiscriminators = map[string]string{
+	"arista_eos":    "task_id",
+	"cisco_iosxe":   "task_id",
+	"cisco_nxos":    "task_id",
+	"juniper_junos": "session_pid",
+}
+
+// SessionDiscriminator returns the AV pair whose value separates two sessions
+// of one user on one device, and whether this platform has one.
+func SessionDiscriminator(platformName string) (string, bool) {
+	av, ok := sessionDiscriminators[platformName]
+	return av, ok
+}
+
+// execCommands names the `cmd` values that mark a record as the session's own
+// exec record on platforms that put a command there at all. It is per platform
+// because the shape is:
+//
+//   - arista_eos, cisco_nxos, cisco_iosxe: the exec START and STOP carry no
+//     `cmd` argument, so "no command" identifies them
+//     (tests/lab/results/L6-arista_eos.md, L6-cisco_nxos.md, L6-cisco_iosxe.md,
+//     and the packet dumps in L1-*).
+//   - juniper_junos: they carry `cmd=login` and `cmd=logout`, alongside
+//     per-command records carrying the typed command
+//     (tests/lab/results/L6-juniper_vsrx.md, L6-juniper_vjunos-router.md:
+//     "an exec record is one that carries no command at all, as on EOS, or
+//     carries only `login` or `logout`, as on Junos").
+//
+// A reader that knows only the first shape annotates nothing whatsoever on
+// Junos, and does so silently — every Junos session takes the unset branch.
+var execCommands = map[string][]string{
+	"juniper_junos": {"login", "logout"},
+}
+
+// IsExecRecord reports whether an accounting record carrying this `cmd` is the
+// session's own exec record rather than a per-command one, on platformName.
+// Only exec records annotate login context (spec §5.8).
+//
+// An unmodeled platform gets the majority shape — no `cmd` at all — rather
+// than Junos's, because guessing the other way would treat a device that
+// really does send `cmd=login` as a command as an exec record and clear a
+// live session's accounting_state on it.
+func IsExecRecord(platformName, cmd string) bool {
+	if cmd == "" {
+		return true
+	}
+	for _, c := range execCommands[platformName] {
+		if c == cmd {
+			return true
+		}
+	}
+	return false
+}
+
+// systemUsers are the usernames a platform's own machinery writes accounting
+// under, attributed `system` rather than `unattributed` (spec §5.8).
+//
+// `juniper_junos: root` is measured. The committed capture behind
+// tests/lab/results/L1-juniper_vsrx.md — tests/lab/evidence/L1-juniper_vsrx.pcap,
+// decodable with the published lab key — holds three accounting records under
+// user=root, port=non-tty, carrying their own `session_pid = 28771`:
+// cmd=login, cmd=`set alarm yellow alarm-id 0small-msg`, cmd=logout. There is
+// NO authentication and NO authorization exchange for root anywhere in that
+// file, and the run logged in only as alice01/02/03: vSRX's own alarm
+// machinery writing accounting for a session port49 was never asked to
+// authenticate. Without this row those three records are `unattributed`, and a
+// stock vSRX with nothing wrong reports sessions port49 did not authenticate.
+//
+// Every other platform is empty, and that includes juniper_vjunos-router: the
+// same decode of L1-juniper_vjunos-router.pcap finds no root records, so the
+// behaviour is image-specific and unmeasured there. Since the platform table is
+// keyed by platform rather than by image, `root` is entered once for
+// juniper_junos and covers both — the safe direction, because the cost of a
+// name that never appears is nothing, while the cost of omitting one that does
+// is a permanent false alert.
+//
+// L17's negative is narrower and stands: under THAT run's accounting event
+// list, with enhanced-accounting committed, every record named the logged-in
+// operator (L17-juniper_vsrx.md, L17-juniper_vjunos-router.md). It measured a
+// different configuration and does not contradict the above.
+//
+// Still unmeasured, and therefore NOT entered: an NX-OS admin record with
+// task_id=vsh.bin.$port after a cancelled sudo. A tests/lab/results/ note is
+// what would add cisco_nxos.
+var systemUsers = map[string][]string{
+	"juniper_junos": {"root"},
+}
+
+// SystemUsers is the per-platform table of usernames a platform's own
+// machinery writes accounting under. It returns a copy.
+//
+// main.go hands it to acct.New; the handler never reads this package at
+// request time, so there is no global for a test to mutate and no lock to get
+// wrong under -race.
+func SystemUsers() map[string][]string {
+	out := make(map[string][]string, len(systemUsers))
+	for name, users := range systemUsers {
+		out[name] = append([]string(nil), users...)
+	}
+	return out
+}

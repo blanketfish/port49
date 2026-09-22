@@ -5,8 +5,9 @@ the standing brief for each plan: what it builds, which spec sections it impleme
 earlier plans hand it, what it must leave for later, and which lab register entries close in
 it. When writing plan N, start here, then read the cited sections, then the previous plan.
 
-Status: **1 merged 2026-09-21** (PR #2); **2 rewritten 2026-09-22** against the `(nas, username)`
-key and ready to execute; 3–12 not yet. Plan 3 waits for the lab work in PR #3.
+Status: **1 merged 2026-09-21** (PR #2); **2 executed 2026-09-22** on `feature/token-model`
+(fifteen tasks, reviewed per task and whole-branch, PR pending); 3–12 not yet. PR #3's lab
+stretch is merged, so plan 3 is unblocked and is the next plan to write.
 
 ---
 
@@ -18,7 +19,7 @@ binary, containerlab harness. Closes L1 (SSH transport only), L2, L5, L6, L8, L1
 
 ## Plan 2 — Token model (§19 step 2) — `2026-09-22-02-token-model.md`
 
-**Rewritten 2026-09-22 and ready to execute.** The 2026-09-06 draft assumed the `(nas, port)`
+**Rewritten 2026-09-22 and executed on `feature/token-model`.** The 2026-09-06 draft assumed the `(nas, port)`
 login-context key, which the lab showed breaks every measured vendor; the key is now
 `(nas, username)` (spec §13 decision 15). The rewrite is against the real tree on
 `feature/lab-l4-fallthrough` and carries every ruling in
@@ -45,11 +46,18 @@ committed before the code that reads it, and now also carries §13 decision 15's
   large fleet is the sizing case, L15). Decision 15's text is already replaced.
 - **Device-generated accounting under another user** (Junos root RPC in production, NX-OS
   `admin` with `task_id=vsh.bin.$port`) must not trip `foreign_session`: a per-platform rule
-  attributing them `system`, which needed a spec §5.8 sentence. **Neither observation has a
-  `tests/lab/results/` note in the tree** — the Junos lab measured the opposite under its own
-  accounting config (L17) — so the §5.8 sentence says a plan-5 adapter **MAY** name system users,
-  ships the list **empty**, and records both production observations as unmeasured in this lab.
-  Plan 2 builds the rule; plan 5 fills the list from a note.
+  attributing them `system`, which needed a spec §5.8 sentence. **Ruling R1 (Task 11) reversed
+  the "ships empty" plan on measured evidence, and spec §5.8 now carries the packet dump behind
+  it**: `juniper_junos` ships **`root`** (`internal/platform/platform.go:213-216`).
+  `tests/lab/evidence/L1-juniper_vsrx.pcap`, the committed capture behind
+  `tests/lab/results/L1-juniper_vsrx.md`, holds three accounting records under `user=root`,
+  `port=non-tty`, carrying their own `session_pid`, with no authentication and no authorization
+  exchange for root anywhere in the file — vSRX's own alarm machinery writing accounting for a
+  session port49 was never asked to authenticate. Without the row a stock vSRX with nothing
+  wrong reports sessions port49 did not authenticate. **Every other platform ships empty**,
+  including `juniper_vjunos-router` (the same decode of its capture finds no root records, so
+  the behaviour is image-specific) and `cisco_nxos` (the `vsh.bin` observation is
+  production-only and still has no note). Plan 5 fills the rest, from notes.
 - **Refuse at mint any username canonicalization would change**: `Canonical` folds U+0130 onto
   `i`, so two directory names could share one `(nas, username)` context — and it also strips
   `DOMAIN\` and truncates at `@`, which an ASCII-only guard would let through, minting a token
@@ -87,12 +95,55 @@ committed before the code that reads it, and now also carries §13 decision 15's
   daemon's highest-frequency path. It runs only when the remaining life is below half the TTL, so
   the common command costs no store write, and nothing is deferred to plan 7 for it.
 
-**Hands to plan 3:** `(*token.Minter).Mint(ctx, token.Request) (token.Result, error)` — the
-in-process mint the minimal broker wraps; `reusable` is gone and the kind is chosen by
-`WithEnable` plus the subject's mechanism — the encrypted store records, and
-`session.Manager`'s refresh and revocation entry points.
+**Hands to plan 3** (as executed, not as planned — each of these is built and tested with no
+caller, so plan 3's broker is a transport over an existing core rather than new mechanism):
+
+- **`session.Manager` is built and wired in `cmd/port49d/main.go:215` and nothing calls it.**
+  `Refresh`, `RevokeByPrincipal`, `RevokeBySid` and `RevokeByCert` are complete and tested, so
+  `/v1/refresh`, `/v1/logout` and `/v1/tokens/revoke` are HTTP over them.
+- **`(*token.Minter).Mint(ctx, token.Request) (token.Result, error)`** — the in-process mint
+  `POST /v1/tokens` wraps. `reusable` is gone, the kind is chosen by `WithEnable` plus the
+  subject's mechanism, and **idempotency is keyed `(principal, device, key)`**, not on the
+  header key alone (Task 12 C1: design §17 sends one key for a device *list*, and unscoped,
+  device two is handed device one's token, tagged for the wrong device and refused on every
+  attempt).
+- **Encryption at rest and its two-key read window**, with the
+  `port49_crypt_open_failures_total{record}` counter (`token`, `receipt`, `context`,
+  `idempotency`) already emitted.
+- **`session.staleness_ceiling` defaults to 0, so the `context_stale` check is dead in the
+  shipping binary** until something calls `Refresh` on a schedule (spec §5.1.3). That schedule
+  is plan 3's wiring, and **the default must be set in the same change** — a ceiling with no
+  refresher denies every context the moment it is set, and a refresher with no ceiling
+  refreshes for nothing.
+
 **Leaves for later:** the broker API and its authorization (plan 7); blobs' compiled content
 (plan 4, the engine produces them; plan 2 stores opaque bytes by hash).
+
+**Owed by plan 3 or plan 7 — each is documented in the code and now on the roadmap, because a
+package comment is not where the next plan looks:**
+
+- **Revocation does not delete the principal's unredeemed tokens** (`internal/session/session.go:14-21`;
+  design §1182 assigns it to the broker). A token minted before a revocation still redeems into
+  a fresh context with no `revoked_at` on it, by §5.6 row 1's unconditional overwrite. The
+  operator sees a revocation that marked every context and deleted every receipt, then a PERMIT
+  on a device they thought they had closed, with no log line joining the two. **This is the
+  largest remaining hole in revocation.** Plan 7.
+- **`crypt_open_failures_total{record="token"}` must become a key-rotation alarm before the
+  first rotation.** `Candidates` drops a token it cannot open with a nil error, so the metric is
+  the only witness that a rotation retired a key too early
+  (`internal/store/crypt/crypt.go:216-231`). Plan 7 with the rest of the alarms, or plan 6 with
+  key rotation reporting, whichever lands first.
+- **`foreign` has no metric and no rate limit of its own** (ledger, Task 11), so nothing can
+  alert on it safely yet: a device that legitimately produces them floods whatever is watching.
+  Plan 3 owns broker metrics; this one travels with them.
+- **Deferred from Task 13 and Task 9, all three settled and none of them work for plan 2:**
+  an `ErrPartial` sentinel and the `Refresh`/`mark` `firstErr` asymmetry — `mark` returns the
+  refs it touched *and* the first error, `Refresh` returns a count and an error, and plan 7
+  owns the broker's error contract, which is where the shape should be decided once
+  (`internal/session/session.go:176-220`). And **no compare-and-set on `PutContext` is
+  needed**: the lost-update window that asked for one was on `escalate`, and the final review's
+  C1 closed it with the narrow setters instead — `SetPrivilege` and `TouchContext`. Every
+  writer of a live context now writes through a setter that names its fields.
 **Lab:** none close here; L8 (password length) may need re-checking with the 30-character
 tagged token. Plan 2 does move the harness off written secrets — `lab.seed_tokens` loses
 `secret:`/`kind:`, the daemon mints the pairs and writes them to a `0600` `lab.seed_token_file`,
@@ -119,11 +170,13 @@ and `tests/lab/labcreds` reads that file — so the next lab deploy is the first
 **Inherits from the 2026-09-20/22 lab stretch (PR #3):** L3 is closed (no platform sends
 `$enab{level}$`; NX-OS 10.x has no enable), L4 and L7 are measured on every image and the
 `$enab15$` enable path is gone, so the lab list above is mostly done. What this plan still
-owns: the first end-to-end run with a real credential, and `receipt_ttl` **as a sliding
-window** (decision 15 replacement, once ruled): the agent minting a fresh token on each
-reconnect would remove most of the idle-gap problem the client matrix showed (L15), so the
-agent's reconnect behaviour is part of this plan's design. **Lab:** the API-transport half
-of L1 and the eAPI `/login` flow by hand.
+owns: the first end-to-end run with a real credential. The sliding receipt is no longer an
+open question — plan 2 shipped it as `receipt_idle_ttl` (15m) and `receipt_max_age` (2h), and
+`receipt_ttl` is refused by name at config load — but **the agent's reconnect behaviour is
+still part of this plan's design**: an agent minting a fresh token on each reconnect removes
+most of the idle-gap problem the client matrix showed (L15), and the bounds are the fallback
+rather than the answer. **Lab:** the API-transport half of L1 and the eAPI `/login` flow by
+hand.
 
 ## Plan 4 — Policy engine (§19 step 4)
 

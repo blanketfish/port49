@@ -1,0 +1,86 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/token"
+)
+
+// seedConfig is the smallest config mintSeeds reads: where the pairs go, and
+// who gets one.
+func seedConfig(path string) config.Config {
+	return config.Config{
+		ContextIdleTTL: time.Hour,
+		Session:        config.SessionConfig{MaxSessionAgeDefault: time.Hour},
+		Lab: &config.LabConfig{
+			SeedTokenFile: path,
+			SeedTokens:    []config.SeedToken{{NAS: "leaf-01", Username: "alice"}},
+		},
+	}
+}
+
+func seedMinter() *token.Minter {
+	return token.NewMinter(memory.New(time.Now), decision.NewJSONLines(io.Discard), rand.Reader,
+		token.TagKey([]byte("seed-test-key")), time.Now, 8)
+}
+
+// A symlink at the seed-token path is refused, and nothing is written through
+// it. The shipped lab config points this at /tmp, where anyone on the box can
+// place one; followed, the credentials land wherever it points and the Chmod
+// narrows a file whose owner can widen it again.
+func TestSeedTokenFileRefusesASymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "somewhere-else.jsonl")
+	link := filepath.Join(dir, "tokens.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := mintSeeds(context.Background(), seedConfig(link), seedMinter()); err == nil {
+		t.Fatal("a symlink at lab.seed_token_file must fail the start, before the listener opens")
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Fatalf("%s was created, so the credentials were written through the symlink after all", target)
+	}
+}
+
+// A file already at the path keeps its own mode through O_CREATE, so the write
+// has to narrow it. Without that, a seed file left at 0644 is filled with live
+// credentials and left world-readable.
+func TestSeedTokenFileIsNarrowedTo0600(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.jsonl")
+	if err := os.WriteFile(path, []byte("stale\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	logins, enables, err := mintSeeds(context.Background(), seedConfig(path), seedMinter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The seed did not ask for an enable token, so there is no pair: the count
+	// the daemon prints has to say so rather than calling every seed a pair.
+	if logins != 1 || enables != 0 {
+		t.Fatalf("minted %d login(s) and %d enable(s), want 1 and 0", logins, enables)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("seed-token file mode is %v, not 0600", info.Mode().Perm())
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) == 0 || string(b[:5]) == "stale" {
+		t.Fatalf("the file was not truncated before the pairs were written: %q", b)
+	}
+}

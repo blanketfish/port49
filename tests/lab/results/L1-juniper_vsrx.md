@@ -20,7 +20,7 @@ Two overlapping SSH sessions, each holding an interactive shell open, produced t
 | 1 | alice02 | `` |
 | 2 | alice03 | `` |
 
-**The two concurrent sessions reported the SAME `port` value.** The login context key `(nas, port)` therefore does not distinguish them: the second login overwrites the first login's context, and the receipt key `(nas, port, username)` collides for repeated logins by one user.
+**The two concurrent sessions reported the SAME `port` value.** The login context key `(nas, port)` that plan 1 shipped therefore does not distinguish them: the second login overwrites the first login's context, and the receipt key `(nas, port, username)` collides for repeated logins by one user. This measurement is why neither key survived. The context key is now `(nas, username)` and the receipt key `(nas, username, kind, credential_sha256)`, so a repeat of one credential finds its own receipt, a different credential misses it, and an enable cannot be answered out of a login receipt (spec §13, decision 15).
 
 All 2 `port` values seen in this test: ["" ""].
 

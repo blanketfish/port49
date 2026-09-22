@@ -47,7 +47,9 @@ func run() error {
 	in := flag.String("in", filepath.Join(root, "tests", "lab", "captures"), "directory of captures to read")
 	out := flag.String("out", filepath.Join(root, "tests", "lab", "evidence"), "directory to write redacted evidence to")
 	labYAML := flag.String("lab-config", filepath.Join(root, "tests", "lab", "port49d-lab.yaml"),
-		"the daemon config whose lab.seed_tokens are the credentials to verify against")
+		"the daemon config naming lab.seed_token_file, where the credentials to verify against were written")
+	seeds := flag.String("seed-tokens", "",
+		"the seed-token file port49d wrote for this run; defaults to the -lab-config's lab.seed_token_file")
 	// The default is the published lab key; PORT49_LAB_KEY overrides it the
 	// same way it overrides the harness's.
 	key := flag.String("key", envOr("PORT49_LAB_KEY", labcreds.Key), "TACACS+ shared secret the captures were taken under")
@@ -61,9 +63,20 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	secrets, err := labcreds.Secrets(*labYAML)
+	// The credentials are the ones the daemon minted for this run, so they come
+	// from the file it wrote rather than from the config. A run whose token
+	// file is gone cannot have its captures verified — redacting against
+	// another run's tokens would report every file clean.
+	seedPath := *seeds
+	if seedPath == "" {
+		if seedPath, err = labcreds.SeedTokenFile(*labYAML); err != nil {
+			return err
+		}
+	}
+	secrets, err := labcreds.Secrets(seedPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w; the captures and the seed-token file come from one `make lab` run, so "+
+			"redact them before the next run truncates it, or pass -seed-tokens", err)
 	}
 	opt := labpcap.Options{Key: *key, Secrets: secrets, Subnet: sn}
 

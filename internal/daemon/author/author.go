@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,10 +45,31 @@ type Handler struct {
 	// override; a nil map is legal and means every platform takes the
 	// fallback, which is `shell`.
 	services map[string][]string
+
+	// stalenessCeiling is how long a context may go without a policy refresh
+	// before authorization denies on it (spec §5.1.4, §5.3). It is measured
+	// from RefreshedAt; a context with no RefreshedAt is not subject to it.
+	// Zero or negative disables the check, which is what a daemon with nothing
+	// refreshing RefreshedAt must pass.
+	stalenessCeiling time.Duration
+	// graceWindow is how long past session_expires a context is retained so a
+	// late `port49 login` can resume the session (spec §5.6). It is a
+	// retention decision, not a denial one: this package denies at the ceiling
+	// and deletes nothing, so nothing here reads it. Plan 7's idle sweep is
+	// the reader.
+	graceWindow time.Duration
+	// contextIdleTTL is the idle lifetime a permitted request extends a
+	// context to. It is an idle clock, not a session clock — session_expires
+	// is the session clock — so activity slides it forward (spec §5.6).
+	contextIdleTTL time.Duration
 }
 
-func New(s store.Store, a Authorizer, e decision.Emitter, m *metrics.Metrics, now func() time.Time, services map[string][]string) *Handler {
-	return &Handler{store: s, authz: a, log: e, metrics: m, now: now, services: services}
+// New builds an authorization handler. stalenessCeiling, graceWindow and
+// contextIdleTTL are the three §5.6 durations; see the Handler fields.
+func New(s store.Store, a Authorizer, e decision.Emitter, m *metrics.Metrics, now func() time.Time,
+	services map[string][]string, stalenessCeiling, graceWindow, contextIdleTTL time.Duration) *Handler {
+	return &Handler{store: s, authz: a, log: e, metrics: m, now: now, services: services,
+		stalenessCeiling: stalenessCeiling, graceWindow: graceWindow, contextIdleTTL: contextIdleTTL}
 }
 
 // authorizes reports whether a session on this platform may arrive with this
@@ -97,6 +119,31 @@ func ParseArgs(args [][]byte) (kv map[string]string, cmd string, cmdArgs []strin
 		cmdArgs = cmdArgs[:n-1]
 	}
 	return kv, cmd, cmdArgs, raw
+}
+
+// grantedPrivLvl finds the level a session authorization reply grants, if it
+// grants one. The attribute is `priv-lvl`, in either the mandatory (`=`) or
+// optional (`*`) form, since a device reads both and so must the record of
+// what it was told.
+//
+// A value that is not a privilege level is no grant: ok is false and the
+// context keeps the level it had, rather than being moved to something the
+// reply did not say. The last occurrence wins, which is what a device reading
+// the arguments in order ends up applying.
+func grantedPrivLvl(attrs []string) (uint8, bool) {
+	level, ok := uint8(0), false
+	for _, a := range attrs {
+		i := strings.IndexAny(a, "=*")
+		if i < 0 || a[:i] != "priv-lvl" {
+			continue
+		}
+		n, err := strconv.ParseUint(a[i+1:], 10, 8)
+		if err != nil || n > 15 {
+			continue
+		}
+		level, ok = uint8(n), true
+	}
+	return level, ok
 }
 
 // Vector is the command vector authorization and accounting agree on: the
@@ -158,6 +205,30 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	}
 	rec.Session.CtxID = c.CtxID
 	rec.Principal = c.Principal
+
+	// Spec §5.3, in order. Each denial says what to do next rather than what
+	// went wrong inside: the person who typed the command is reading this.
+	now := h.now()
+	if !c.RevokedAt.IsZero() {
+		return h.deny(rec, decision.CredentialRevoked, "port49: this session was revoked - log in again")
+	}
+	if !c.SessionExpires.IsZero() && now.After(c.SessionExpires) {
+		// Denial at the ceiling is FAIL, not ERROR, and the context is
+		// retained: the grace window is plan 7's sweep, not a check here.
+		return h.deny(rec, decision.SessionExpired, "port49: session expired - run `port49 login` to resume")
+	}
+	// A non-positive ceiling is "no staleness check", the same shape as the
+	// zero SessionExpires four lines above. It is what a daemon with nothing
+	// refreshing `refreshed_at` must pass: a finite ceiling against a clock
+	// that only ever moves at login denies a steadily working operator "the
+	// broker is unreachable" at login + the ceiling, with no broker to reach.
+	if h.stalenessCeiling > 0 && !c.RefreshedAt.IsZero() && now.Sub(c.RefreshedAt) > h.stalenessCeiling {
+		return h.deny(rec, decision.ContextStale, "port49: policy has not been refreshed within the staleness ceiling - the broker is unreachable")
+	}
+	if req.PrivLvl > c.PrivLvl {
+		return h.deny(rec, decision.PrivilegeExceeded, "port49: request is above the session's privilege level")
+	}
+
 	// Which `service` values this platform's sessions arrive with is a platform
 	// fact and not the constant `shell`: L10 measured Junos sending
 	// `junos-exec`, and Junos renames it per device with `set system
@@ -181,6 +252,69 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	}
 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason
 	h.emit(rec)
+
+	// `ctx.privilege` is the level port49 last GRANTED, so a permitted session
+	// authorization whose reply carries `priv-lvl` records it (spec §5.3, §7).
+	// Measured on vEOS: the session authorization arrives at priv_lvl 1, this
+	// reply grants 15, and every command after it arrives at 15, so a context
+	// still holding the login START's level would deny all of them
+	// (tests/lab/results/L1-arista_eos.md, L3-arista_eos.md).
+	//
+	// Sessions only. A per-command reply is not a grant, and letting one move
+	// the level would hand the session's privilege to whatever the last
+	// command's attributes happened to say.
+	//
+	// SetPrivilege, never PutContext, and for the reason the extension below
+	// gives: `c` was read at the top of this request.
+	if cmd == "" {
+		if level, ok := grantedPrivLvl(d.Attributes); ok {
+			// Clamped to the ceiling the token was minted with, the same bound
+			// the enable path refuses above (`ceiling_exceeded`, spec §7).
+			// What is granted here comes from port49's own Authorizer, so
+			// today this cannot fire; it is here so the invariant lives next
+			// to the field it protects rather than only in the policy engine
+			// (plan 4). A grant above the ceiling records the ceiling rather
+			// than being dropped: the device was told the higher level either
+			// way, and recording the lower one is what makes the next command
+			// denied instead of permitted.
+			//
+			// A zero MaxPrivilege is a token minted with no ceiling, not a
+			// ceiling of zero — the same reading as a zero SessionExpires
+			// above. Clamping to it would record level 0 and deny every command
+			// of a session port49 had just granted level 15. The reading lives
+			// in store.Context.PrivilegeCeiling, which the enable path's refusal
+			// reads too, so the two cannot drift apart.
+			if ceiling, ok := c.PrivilegeCeiling(); ok && level > ceiling {
+				level = ceiling
+			}
+			err := h.store.SetPrivilege(ctx, store.ContextKey{NAS: peer.NAS, Username: user}, level)
+			h.metrics.StoreOps.WithLabelValues("set_privilege", storeOutcome(err)).Inc()
+		}
+	}
+
+	// Activity extends the idle TTL (spec §5.6): it is a backstop against
+	// abandoned state, not a session clock, and session_expires is the clock.
+	// Only a permit extends it — a denied loop must not keep a revoked context
+	// alive.
+	//
+	// TouchContext, never PutContext: `c` was read at the top of this request,
+	// and writing it back would discard a revocation, an accounting annotation
+	// or an escalation that landed since. It is the difference between a
+	// narrow race and a routine one.
+	//
+	// And only when the remaining life has fallen below half, which is what
+	// LastTouchedAt is for: a steady operator costs one store write per half
+	// TTL, not one per command.
+	if now.Sub(c.LastTouchedAt) >= h.contextIdleTTL/2 {
+		err := h.store.TouchContext(ctx, store.ContextKey{NAS: peer.NAS, Username: user}, h.contextIdleTTL)
+		// Counted on both outcomes, as every other store call site in this
+		// package is, or the "ok" label means nothing. ErrNotFound means the
+		// context was reclaimed or revoked out from under this request; the
+		// next one reads it for itself and is denied on its own terms, so
+		// there is nothing to do here but count it.
+		h.metrics.StoreOps.WithLabelValues("touch_context", storeOutcome(err)).Inc()
+	}
+
 	resp := wire.AuthorResponse{Status: wire.AuthorStatusPassAdd}
 	for _, a := range d.Attributes {
 		resp.Args = append(resp.Args, []byte(a))

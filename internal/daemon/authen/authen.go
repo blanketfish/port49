@@ -16,6 +16,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 // Authentication methods, as recorded in a redeem record's auth.method.
@@ -32,19 +33,43 @@ type Peer struct {
 }
 
 type Handler struct {
-	store      store.Store
-	log        decision.Emitter
-	limits     *limits.Limiter
-	metrics    *metrics.Metrics
-	now        func() time.Time
-	newCtxID   func() string
-	receiptTTL time.Duration
-	contextTTL time.Duration
+	store    store.Store
+	log      decision.Emitter
+	limits   *limits.Limiter
+	metrics  *metrics.Metrics
+	now      func() time.Time
+	newCtxID func() string
+	// receiptIdleTTL slides a receipt forward on every presentation it
+	// answers; receiptMaxAge caps it from the first redemption and never
+	// moves. Past either, the presentation is FAIL and `token_spent`
+	// (spec §5.7; §13, decision 15).
+	receiptIdleTTL time.Duration
+	receiptMaxAge  time.Duration
+	contextTTL     time.Duration
+	// indexTTL is how long a context stays findable by principal, sid, and
+	// certificate. It is the reach of revocation (spec §5.1.4), not the life
+	// of the context itself.
+	indexTTL time.Duration
+	// tags is the window of tag keys a presented token may be tagged under
+	// (internal/token). The daemon computes the tag for the peer and compares
+	// it before any store access, so a token cut for another device is
+	// recognized rather than merely absent (design §8). It is a window and not
+	// one key because the tag key is derived from an encryption key: a token
+	// must stay acceptable for as long as its store record opens, which is the
+	// whole of the crypt read window.
+	tags token.TagWindow
 }
 
+// New builds the authentication handler. tags are the keys the token tag may be
+// derived under (token.TagKey, one per encryption key in the read window); the
+// minter's key must be among them, or every token presented is a
+// device_mismatch.
 func New(s store.Store, e decision.Emitter, l *limits.Limiter, m *metrics.Metrics, now func() time.Time,
-	newCtxID func() string, receiptTTL, contextTTL time.Duration) *Handler {
-	return &Handler{store: s, log: e, limits: l, metrics: m, now: now, newCtxID: newCtxID, receiptTTL: receiptTTL, contextTTL: contextTTL}
+	newCtxID func() string, receiptIdleTTL, receiptMaxAge, contextTTL, indexTTL time.Duration,
+	tags token.TagWindow) *Handler {
+	return &Handler{store: s, log: e, limits: l, metrics: m, now: now, newCtxID: newCtxID,
+		receiptIdleTTL: receiptIdleTTL, receiptMaxAge: receiptMaxAge, contextTTL: contextTTL,
+		indexTTL: indexTTL, tags: tags}
 }
 
 // phase is a Session's place in a multi-round ASCII exchange. phaseDone is
@@ -167,9 +192,102 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// touching the store.
 		return s.fail(ctx, rec, decision.TokenNotFound)
 	}
+
+	// The device tag is compared before any store access (design §8): a token
+	// cut for another device is recognized rather than merely absent, and the
+	// event is high-signal because it does not fire during normal operation.
+	// A credential that is not token-shaped — a mistyped password — skips this
+	// and reaches token_not_found through the store.
+	//
+	// CHAP is excluded by method rather than by shape. `presented` there is
+	// ppp_id ‖ challenge ‖ response, and nothing stops that being Len bytes of
+	// base62 by accident; the daemon never sees the token under CHAP, so there
+	// is no tag to be wrong and the outcome must stay token_not_found.
+	if method != methodCHAP {
+		if tag, ok := token.Parse(presented); ok && !s.h.tags.Matches(tag, s.peer.NAS) {
+			return s.fail(ctx, rec, decision.DeviceMismatch)
+		}
+	}
+
 	port := string(s.start.Port)
 	remAddr := string(s.start.RemAddr)
-	rk := store.ReceiptKey{NAS: s.peer.NAS, Username: username, CredentialSHA256: credHash}
+
+	// An enable START is not a login, so its record is an `escalate`. The kind
+	// is settled here, before the receipt is looked up, not after: it is part
+	// of the receipt key, so a login receipt cannot answer an enable START
+	// (store.ReceiptKey). A login token for a login START, an enable token for
+	// an enable START.
+	enable := s.start.Service == wire.AuthenServiceEnable
+	kind := store.KindLogin
+	if enable {
+		kind = store.KindEnable
+		rec.Event = decision.EventEscalate
+	}
+	ck := store.ContextKey{NAS: s.peer.NAS, Username: username}
+
+	// An enable START is a second authentication under the same username on the
+	// same device (measured: tests/lab/results/L3-arista_eos.md,
+	// L3-cisco_iosxe.md). It therefore lands on this operator's own login
+	// context, and it must update privilege IN PLACE: plan 1 wrote a fresh
+	// ctx_id over it, which spec §5.6 row 1 and §7 both forbid.
+	//
+	// The gate is read before the receipt, so `auto` never consults a token and
+	// a context that has since lost its ceiling cannot be escalated out of a
+	// receipt written while it still had one.
+	var incumbent store.Context
+	if enable {
+		c, err := s.h.store.GetContext(ctx, ck)
+		s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			// There is nothing to escalate. An enable is never a way in.
+			return s.fail(ctx, rec, decision.ContextMissing)
+		case err != nil:
+			return s.storeError(rec)
+		}
+		incumbent = c
+		rec.Principal = c.Principal
+		rec.Session.CtxID = c.CtxID
+		// An empty Enable is a token minted before any enable mode was set, and
+		// it is read as `none`: the closed default denies rather than guesses.
+		if c.Enable == "none" || c.Enable == "" {
+			return s.fail(ctx, rec, decision.EnableRefused)
+		}
+		// The ceiling the token was minted with, read through the one helper
+		// the authorizer's clamp also uses: a zero MaxPrivilege is no ceiling,
+		// not a ceiling of zero (store.Context.PrivilegeCeiling).
+		if ceiling, ok := c.PrivilegeCeiling(); ok && s.start.PrivLvl > ceiling {
+			return s.fail(ctx, rec, decision.CeilingExceeded)
+		}
+		// Defense in depth, and a high-signal event worth alerting on
+		// (spec §5.6). rem_addr is a bare address on both platforms measured.
+		if c.RemAddr != "" && remAddr != "" && c.RemAddr != remAddr {
+			return s.fail(ctx, rec, decision.RemAddrMismatch)
+		}
+		// Revocation and the session ceiling are checked HERE, not left to the
+		// authorizer. `enable: auto` consults no token at all, so nothing else
+		// on this path would ever look: the context alone decides. On a
+		// per-command platform Task 10 would catch it on the next command, but
+		// a session-only platform asks once at login and never again (spec §13,
+		// decision 21; measured over 26 Junos sessions,
+		// tests/lab/results/L18-*.md), and there the enable exchange is the
+		// last decision port49 gets to make about this shell.
+		if !c.RevokedAt.IsZero() {
+			return s.fail(ctx, rec, decision.CredentialRevoked)
+		}
+		if !c.SessionExpires.IsZero() && s.h.now().After(c.SessionExpires) {
+			return s.fail(ctx, rec, decision.SessionExpired)
+		}
+		// `auto` PASSes on the context alone, any password accepted (spec §7).
+		// That is only safe because `enable_username: enab` cannot load
+		// (config.Load), so this context is always the operator's own and never
+		// a shared `$enab15$` pseudo-user's.
+		if c.Enable == "auto" {
+			return s.escalate(ctx, rec, ck, decision.EscalationGranted)
+		}
+	}
+
+	rk := store.ReceiptKey{NAS: s.peer.NAS, Username: username, Kind: kind, CredentialSHA256: credHash}
 
 	// 1. Receipt: a byte-identical retransmission replays. The credential hash
 	// is in the key, so a different credential misses here and goes on to
@@ -185,22 +303,66 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// that answers with a record it was not asked for is a store fault,
 		// and replaying it would hand out a decision made for another
 		// credential, so it fails rather than passes (spec §5.7).
-		if subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
-			rec.Session.CtxID = r.CtxID
-			return s.finish(rec, r.Status, decision.ReceiptReplayed)
+		if subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) != 1 {
+			return s.fail(ctx, rec, decision.CredentialMismatch)
 		}
-		return s.fail(ctx, rec, decision.CredentialMismatch)
+		now := s.h.now()
+		capAt := r.FirstRedeemedAt.Add(s.h.receiptMaxAge)
+		// Two bounds, one outcome. A job that keeps presenting the same
+		// credential slides the idle bound; nothing slides the cap.
+		//
+		// The explicit cap check and the clamp below are deliberately
+		// redundant: the clamp alone suffices given config.Load refusing
+		// receipt_idle_ttl > receipt_max_age, but New is exported and takes
+		// raw durations, so a caller that never went through Load gets the
+		// bound from the check rather than from an invariant that did not run.
+		if !now.Before(capAt) || !now.Before(r.IdleExpiresAt) {
+			return s.fail(ctx, rec, decision.TokenSpent)
+		}
+		next := now.Add(s.h.receiptIdleTTL)
+		if next.After(capAt) {
+			next = capAt
+		}
+		err = s.h.store.ExtendReceipt(ctx, rk, next)
+		s.h.metrics.StoreOps.WithLabelValues("extend_receipt", storeOutcome(err)).Inc()
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			// Not "it was swept": it cannot have been. RetainUntil is
+			// receipt_max_age + receipt_idle_ttl from the first redemption and
+			// both bounds passed two statements ago, so this receipt was inside
+			// its retention when it was read and is inside it now. The only
+			// other thing that deletes a receipt is DeleteReceiptsByPrincipal,
+			// which is revocation (spec §5.1.4; Task 13). So ErrNotFound here
+			// means exactly one thing — this principal was revoked between the
+			// read and the extend — and the answer to that is not a PASS.
+			return s.fail(ctx, rec, decision.TokenSpent)
+		case err != nil:
+			// Any other store error is ERROR, not a PASS: the receipt did not
+			// slide, so the next presentation would silently get a fresh window.
+			return s.storeError(rec)
+		}
+		// The receipt froze a ctx_id at the first escalation. The live context
+		// may be a different one by now (spec §15, L1: the key cannot tell two
+		// of this operator's shells apart), and the privilege may never have
+		// landed at all if that escalation's PutContext failed. Replay the
+		// escalation's EFFECT on the context that exists now, and log that
+		// context's id rather than the frozen one — otherwise a PASS goes out
+		// naming a context nothing else will ever mention, which is the thing
+		// this task exists to prevent. The gate above already re-checked the
+		// mechanism, the ceiling, revocation, expiry and rem_addr against the
+		// live context, so this grants nothing the cold path would not.
+		if enable && r.Status == wire.AuthenStatusPass {
+			return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
+		}
+		rec.Session.CtxID = r.CtxID
+		return s.finish(rec, r.Status, decision.ReceiptReplayed)
 	case !errors.Is(err, store.ErrNotFound):
 		return s.storeError(rec)
 	}
 
-	// 2. Candidates under (nas, username), filtered by kind: a login token for a
-	// login START, an enable token for an enable START. A credential that matches
-	// a token of the other kind is a kind mismatch, not a missing token.
-	kind := store.KindLogin
-	if s.start.Service == wire.AuthenServiceEnable {
-		kind = store.KindEnable
-	}
+	// 2. Candidates under (nas, username), filtered by the kind settled above.
+	// A credential that matches a token of the other kind is a kind mismatch,
+	// not a missing token.
 	cands, err := s.h.store.Candidates(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username})
 	s.h.metrics.StoreOps.WithLabelValues("candidates", storeOutcome(err)).Inc()
 	if err != nil {
@@ -223,21 +385,54 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	}
 
 	// 3. Atomic redemption; the loser of a race adopts the winner's receipt.
-	ctxID := s.h.newCtxID()
-	receipt := store.Receipt{CredentialSHA256: credHash, Status: wire.AuthenStatusPass, CtxID: ctxID, ExpiresAt: s.h.now().Add(s.h.receiptTTL)}
-	err = s.h.store.RedeemAndReceipt(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username}, winner.Secret, rk, receipt)
+	//
+	// An escalation keeps the context's id (spec §5.6 row 1, §7), and the
+	// receipt has to carry that id rather than a fresh one: the receipt is what
+	// answers a retransmitted enable, and a ctx_id minted here and stored
+	// nowhere would be replayed into the log naming a context that does not
+	// exist. `enable` is false on every login path, where this is plan 1's
+	// behaviour unchanged.
+	ctxID := incumbent.CtxID
+	if !enable {
+		ctxID = s.h.newCtxID()
+	}
+	// The retention is deliberately longer than both bounds: a presentation
+	// past a bound has to find the receipt in order to be answered
+	// `token_spent` rather than `token_not_found` (store.Receipt; spec §5.7).
+	now := s.h.now()
+	receipt := store.Receipt{CredentialSHA256: credHash, Status: wire.AuthenStatusPass, CtxID: ctxID,
+		FirstRedeemedAt: now, IdleExpiresAt: now.Add(s.h.receiptIdleTTL),
+		RetainUntil: now.Add(s.h.receiptMaxAge + s.h.receiptIdleTTL)}
+	w := store.ReceiptWrite{Key: rk, Receipt: receipt, Principal: winner.Principal,
+		IndexTTL: s.h.receiptMaxAge + s.h.receiptIdleTTL}
+	err = s.h.store.RedeemAndReceipt(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username}, winner.ID, w)
 	s.h.metrics.StoreOps.WithLabelValues("redeem", storeOutcome(err)).Inc()
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			r, rerr := s.h.store.GetReceipt(ctx, rk)
 			s.h.metrics.StoreOps.WithLabelValues("get_receipt", storeOutcome(rerr)).Inc()
 			if rerr == nil && subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
+				// The concurrent-escalation case, and it has the same shape as
+				// the retransmission above: the winner's receipt says PASS, but
+				// only replaying the effect puts the privilege on the context
+				// this session actually read.
+				if enable && r.Status == wire.AuthenStatusPass {
+					return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
+				}
 				rec.Session.CtxID = r.CtxID
 				return s.finish(rec, r.Status, decision.ReceiptReplayed)
 			}
 			return s.fail(ctx, rec, decision.TokenNotFound)
 		}
 		return s.storeError(rec)
+	}
+
+	// The enable token is spent and the receipt is written under this
+	// context's own ctx_id: all that is left is the new privilege. This
+	// returns above the `prev` read deliberately — an escalation displaces no
+	// context, so `replaced_ctx_id` must stay absent on its record.
+	if enable {
+		return s.escalate(ctx, rec, ck, decision.EscalationGranted)
 	}
 
 	// A context already under this key is this operator's own earlier login on
@@ -253,23 +448,103 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// the one case it cannot cover. Closing it needs a compare-and-set on
 	// PutContext, which the store interface does not have; plan 2 owns whether
 	// to add one.
-	ck := store.ContextKey{NAS: s.peer.NAS, Username: username}
 	prev, perr := s.h.store.GetContext(ctx, ck)
 	s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(perr)).Inc()
 	if perr == nil {
 		rec.Session.ReplacedCtxID = prev.CtxID
 	}
 
-	err = s.h.store.PutContext(ctx, ck,
-		store.Context{CtxID: ctxID, Username: username, Port: port, RemAddr: remAddr, PrivLvl: s.start.PrivLvl, CreatedAt: s.h.now()}, s.h.contextTTL)
+	// The context carries what the token was minted with, in its §5.1.1 shape:
+	// everything a later authorization has to answer from without reaching the
+	// broker again.
+	newCtx := store.Context{CtxID: ctxID, Principal: winner.Principal, Username: username,
+		Port: port, RemAddr: remAddr, PrivLvl: s.start.PrivLvl, BlobHash: winner.BlobHash,
+		Credential: winner.Credential, AuthTime: winner.AuthTime, RefreshedAt: s.h.now(),
+		LastTouchedAt: s.h.now(),
+		Enable:        winner.Enable, MaxPrivilege: winner.MaxPrivilege, CreatedAt: s.h.now()}
+	// A zero MaxSessionAge is `max_session_age: never` and must stay
+	// expressible (spec §5.6): it leaves SessionExpires zero, which Task 10
+	// reads as no ceiling rather than as expired at the epoch.
+	//
+	// Nothing else is guarded here, and a token carrying a ceiling with no
+	// AuthTime to anchor it is deliberately left to compute a SessionExpires
+	// in the distant past. That denies, loudly and visibly, where dropping the
+	// ceiling instead would hand out an unbounded session that looks exactly
+	// like a legitimate `never` and that nothing logs.
+	if winner.MaxSessionAge > 0 {
+		newCtx.SessionExpires = winner.AuthTime.Add(winner.MaxSessionAge)
+	}
+	err = s.h.store.PutContext(ctx, ck, newCtx, s.h.contextTTL)
 	s.h.metrics.StoreOps.WithLabelValues("put_context", storeOutcome(err)).Inc()
 	if err != nil {
 		// The token is already redeemed, but without a context a later authorization
 		// request has nothing to check against: ERROR, not a PASS we can't back up.
 		return s.storeError(rec)
 	}
+	err = s.h.store.IndexContext(ctx, winner.Principal, winner.Credential.Sid,
+		store.CertKey(winner.Credential.Issuer, winner.Credential.Serial),
+		store.ContextRef{NAS: s.peer.NAS, Username: username}, s.h.indexTTL)
+	s.h.metrics.StoreOps.WithLabelValues("index_context", storeOutcome(err)).Inc()
+	// An index write that fails does not fail the login: the operator is
+	// authenticated and the context exists. What is lost is reach — a later
+	// revocation will not find this context — so it is counted AND put on the
+	// record that is about to be emitted anyway. That record carries the ctx_id
+	// and the principal, which is the join an incident responder needs; the
+	// metric only says it happened somewhere on the fleet.
+	if err != nil {
+		rec.IndexError = "context not indexed; revocation by sid, principal or certificate will not reach it"
+	}
+	rec.Principal = winner.Principal
 	rec.Session.CtxID = ctxID
 	return s.finish(rec, wire.AuthenStatusPass, decision.TokenRedeemed)
+}
+
+// escalate records the new privilege on the incumbent context and keeps
+// everything else, ctx_id foremost: an escalation is not a new session, so the
+// log join across it must not depend on replaced_ctx_id (spec §5.6 row 1, §7).
+//
+// SetPrivilege and TouchContext, never PutContext, and deliberately WITHOUT the
+// store.Context this request read at the top of the enable. Writing that record
+// back is how a revocation landing mid-enable is erased: RevokeByPrincipal
+// stamps RevokedAt and deletes this principal's receipts, the re-put restores a
+// copy whose RevokedAt is zero, and nothing ever sets it again — the receipts
+// that would have re-marked it are already gone. The operator is told one
+// context was touched, the authorizer reads a zero RevokedAt, and the session
+// keeps authorizing for the rest of the idle TTL with nothing in the log
+// connecting the two. The same write would discard an accounting annotation, a
+// session discriminator and a broker refresh.
+//
+// The two narrow setters between them write exactly what an escalation is
+// entitled to change — the level, and the expiry this exchange's activity
+// extends — and they cannot erase a field they do not name (store.Store's
+// comment on TouchContext). Nothing is indexed here either: the context was
+// indexed when it was created, and the principal, sid and certificate it is
+// indexed under have not changed; TouchContext carries those entries forward.
+//
+// reason is a parameter because a replayed escalation re-applies this same
+// effect under ReceiptReplayed: the decision is replayed, and so is what it did.
+func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.ContextKey,
+	reason decision.Reason) (wire.AuthenReply, bool) {
+	err := s.h.store.SetPrivilege(ctx, ck, s.start.PrivLvl)
+	s.h.metrics.StoreOps.WithLabelValues("set_privilege", storeOutcome(err)).Inc()
+	if err != nil {
+		// On the token path the enable token is already spent, but without the
+		// new privilege on the context every later authorization would answer
+		// from the old one: ERROR, not a PASS the context cannot back up. The
+		// retransmission that follows replays through the receipt and lands the
+		// privilege then, because that path escalates rather than only
+		// reporting. ErrNotFound is one of these: the context is gone, and so
+		// is the escalation.
+		return s.storeError(rec)
+	}
+	// The extension is this exchange's activity, not the escalation itself. A
+	// context reclaimed or revoked between the two writes denies this session on
+	// its next authorization on its own terms, so the outcome is counted and the
+	// PASS stands on the privilege that did land — the same reading author.Handle
+	// gives its own TouchContext.
+	terr := s.h.store.TouchContext(ctx, ck, s.h.contextTTL)
+	s.h.metrics.StoreOps.WithLabelValues("touch_context", storeOutcome(terr)).Inc()
+	return s.finish(rec, wire.AuthenStatusPass, reason)
 }
 
 // storeOutcome maps a store error to the StoreOps metric's outcome label.

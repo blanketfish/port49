@@ -15,6 +15,8 @@ How many TACACS+ authentication exchanges a ten-task job costs for each client a
 
 Each client below runs a **ten-task job** against one device as one seeded user, with one single-use token. The counts come from port49's decision log, not from the client.
 
+**`receipt_ttl` below is the knob that was configured when this ran, and it no longer exists.** The receipt became a sliding window on 2026-09-22: `receipt_idle_ttl` (default 15m) slides forward on every presentation the receipt answers, `receipt_max_age` (default 2h) caps it from the first redemption and never slides, and `receipt_ttl` is now refused by name at config load (spec §13, decision 15). The measured counts and durations are unaffected — every job here finished far inside the 30s bound in force at the time — so the per-job sentences are left as they were measured.
+
 **What the client put on the wire is INFERRED, not measured.** The capture filter is `tcp port 49`, so the HTTPS and SSH bytes are not in evidence here. One authentication for ten tasks means the credential reached the device once — a cookie, a session, or one persistent connection; ten means it reached it ten times. That inference is from the authentication count and is labelled as an inference in every row.
 
 ### pyeapi (eAPI over HTTPS)

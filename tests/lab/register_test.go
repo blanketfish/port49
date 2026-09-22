@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
 // L1: what the `port` field contains per platform and per transport, and
@@ -364,7 +366,7 @@ func findDenial(recs []map[string]any, msg string) map[string]any {
 
 func measureTruncation(t *testing.T, l *lab) string {
 	t.Helper()
-	mustBeSeeded(t, longDenyPrefix)
+	mustBeInLabConfig(t, longDenyPrefix)
 	off := l.mark()
 	user, secret := l.nextLogin(t)
 	out, err := l.login(user, secret, longDenyPrefix)
@@ -644,105 +646,31 @@ func acctDump(acct []map[string]any) string {
 }
 
 // L8: the maximum password length the platform accepts at an interactive
-// prompt. A token of each length is seeded under its own username, so a device
-// that truncates yields token_not_found against that user rather than a silent
-// pass against a shorter token.
+// prompt.
+//
+// The method was a token of each length seeded under its own username, so that
+// a device which truncates yielded `token_not_found` against that user rather
+// than a silent pass against a shorter token. That method is gone: port49d
+// mints every token itself, at one length — 30 characters, design §8 — so a
+// seed can no longer ask for a 64- or 138-character secret and this test can no
+// longer put one on the wire. The `longpw*` users are still seeded and still
+// cost nothing; what is missing is a way to choose the secret's length.
+//
+// It skips rather than measuring what it can, because what it can measure is
+// the 30-character token every other test already logs in with, and publishing
+// that as L8 would replace a note about four lengths with a note about one. The
+// existing notes stand; the register row stays open (spec §15, L8).
+//
+// Reopening it needs a mechanism, not a harness change. The nearest one already
+// in the daemon is `credential_sha256` on the redeem record: type a password of
+// length N under a username with no token at all, and compare the hash port49
+// logged against the hash of what was typed. Equal means all N bytes arrived,
+// and no seeded secret is needed for it. That is a measurement design, and it
+// belongs to whoever next takes L8, not to the wiring that removed the old one.
 func TestL8PasswordLength(t *testing.T) {
-	eachPlatform(t, func(t *testing.T, l *lab) {
-		stop := l.capture(t, "L8")
-		defer stop()
-
-		var rows []l8Row
-		longestOK := 0
-
-		for _, n := range passwordLengths {
-			pw := passwordOfLength(n)
-			mustBeSeeded(t, pw)
-			user := fmt.Sprintf("longpw%d", n)
-			off := l.mark()
-			_, err := l.login(user, pw, "show version")
-			recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
-				return redeemFor(rs, user) != nil
-			})
-			r := l8Row{n: n, loginErr: err}
-			if rec := redeemFor(recs, user); rec != nil {
-				r.seen, r.verdict, r.reason = true, str(rec, "verdict"), str(rec, "reason")
-				if r.reason == "token_redeemed" && n > longestOK {
-					longestOK = n
-				}
-			}
-			rows = append(rows, r)
-		}
-
-		anySeen := false
-		for _, r := range rows {
-			anySeen = anySeen || r.seen
-		}
-		if !anySeen {
-			t.Fatalf("no redeem record arrived for any of the %d password lengths, so the device's maximum "+
-				"accepted password length could not be measured", len(rows))
-		}
-
-		var table strings.Builder
-		table.WriteString("| length | reached port49 | verdict | reason | SSH result |\n|---|---|---|---|---|\n")
-		for _, r := range rows {
-			reached, verdict, reason := "no", "—", "—"
-			if r.seen {
-				reached, verdict, reason = "yes", r.verdict, r.reason
-			}
-			ssh := "logged in"
-			if r.loginErr != nil {
-				ssh = "rejected"
-			}
-			fmt.Fprintf(&table, "| %d | %s | %s | `%s` | %s |\n", r.n, reached, verdict, reason, ssh)
-		}
-
-		longest := "**none of the lengths tested arrived intact.**"
-		if longestOK > 0 {
-			longest = fmt.Sprintf("**Longest password that arrived intact: %d characters.**", longestOK)
-		}
-		obs := fmt.Sprintf("A seeded token of each length, each under its own username, presented at the SSH "+
-			"password prompt:\n\n%s\n%s\n\n"+
-			"How to read this: `token_redeemed` means the full password reached port49 byte for byte. "+
-			"`token_not_found` means the device did send a password under this username and no seeded "+
-			"token matched it, so the device altered or truncated what was typed. Truncation cannot land "+
-			"anywhere else: the receipt key carries the credential hash (spec §13, decision 15), so a "+
-			"truncated password finds no receipt at all rather than colliding with one. No record at all "+
-			"means the device refused the password locally and sent nothing.\n\n"+
-			"The 30-character handle the design document depends on: %s.\n\n"+
-			"PAP is not measured here; this is the interactive SSH prompt only.",
-			table.String(), longest, handleVerdict(rows30(rows)))
-		l.result(t, "L8", "The maximum password length each platform accepts at an interactive prompt and via PAP.", obs)
-	})
-}
-
-// l8Row is one password length's outcome: whether the login succeeded over SSH,
-// and what port49 made of what actually arrived.
-type l8Row struct {
-	n        int
-	loginErr error
-	verdict  string
-	reason   string
-	seen     bool
-}
-
-func rows30(rows []l8Row) string {
-	for _, r := range rows {
-		if r.n == 30 {
-			return r.reason
-		}
-	}
-	return ""
-}
-
-func handleVerdict(reason string) string {
-	if reason == "token_redeemed" {
-		return "**accepted**"
-	}
-	if reason == "" {
-		return "**not measured** (no record for the 30-character login)"
-	}
-	return fmt.Sprintf("**not accepted** (`%s`)", reason)
+	t.Skipf("L8 needs a password of a chosen length and port49d now mints every token at %d characters "+
+		"(design §8), so the lengths under test (%v) can no longer be seeded; see spec §15 L8 and the "+
+		"comment on lab.seed_tokens in tests/lab/port49d-lab.yaml", labcreds.TokenLen, passwordLengths)
 }
 
 func redeemFor(recs []map[string]any, user string) map[string]any {

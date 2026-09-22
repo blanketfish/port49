@@ -8,9 +8,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/platform"
 )
 
-const sample = `
+// The sample config is assembled from three pieces rather than written twice,
+// because exactly one test has to load a config that names no encryption key
+// and every other test must load one that does. Splitting it also puts
+// `encryption:` ahead of `lab:`, so TestLoadRequiresLabBlock's truncation at
+// `lab:` removes the lab block and nothing else.
+const sampleHead = `
 listen: ":4949"
 inventory_file: %s
 keys:
@@ -19,11 +26,24 @@ keys:
     accept:  [{version: 2, secret_env: T_PROD_V2}]
     retired: [{version: 1, secret_env: T_PROD_V1}]
 limits: {per_nas_connections: 4}
-lab:
-  session_attributes: ["priv-lvl=15"]
-  seed_tokens:
-    - {nas: leaf-01, username: alice, secret: p49_lab, kind: login}
 `
+
+const sampleLab = `lab:
+  session_attributes: ["priv-lvl=15"]
+  seed_token_file: /tmp/p49-seeds.jsonl
+  seed_tokens:
+    - {nas: leaf-01, username: alice}
+`
+
+// sample is the standing config: a seed names who gets a token and carries no
+// secret, and encryption is named because Load now requires it.
+const sample = sampleHead + `encryption:
+  current: {id: v2, secret_env: PORT49_ENC_V2}
+` + sampleLab
+
+// sampleNoEncryption is sample without that block, for the one test whose
+// subject is a config that never names a key.
+const sampleNoEncryption = sampleHead + sampleLab
 
 const inv = `
 devices:
@@ -41,6 +61,9 @@ func write(t *testing.T, name, body string) string {
 	return p
 }
 
+// setSecrets sets the RFC 8907 shared secrets the `keys:` block names. It is
+// plan 1's helper and is left alone: the tests that call it directly are the
+// ones whose subject is a missing shared secret.
 func setSecrets(t *testing.T) {
 	t.Helper()
 	t.Setenv("T_PROD_V3", "three")
@@ -48,11 +71,22 @@ func setSecrets(t *testing.T) {
 	t.Setenv("T_PROD_V1", "one")
 }
 
+// setKeyEnv is setSecrets plus the encryption-at-rest secret `sample` names.
+// Every test that loads `sample` needs both, and wrapping rather than editing
+// setSecrets keeps the call sites whose subject is one or the other honest.
+// The value is 32 repeated characters, not a key: nothing in this repository
+// should carry bytes that would open a real record.
+func setKeyEnv(t *testing.T) {
+	t.Helper()
+	setSecrets(t)
+	t.Setenv("PORT49_ENC_V2", "22222222222222222222222222222222")
+}
+
 // TestLoadRefusesUnknownKeys covers the typo that costs the most: an ignored
 // `per_nas_conections` is not a missing limit, it is the default 32 silently
 // in force, and nothing in the log or the metrics ever says so.
 func TestLoadRefusesUnknownKeys(t *testing.T) {
-	setSecrets(t)
+	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	body := strings.Replace(fmt.Sprintf(sample, invPath), "per_nas_connections", "per_nas_conections", 1)
 	p := write(t, "port49d.yaml", body)
@@ -66,14 +100,14 @@ func TestLoadRefusesUnknownKeys(t *testing.T) {
 }
 
 func TestLoadAppliesDefaultsAndResolvesKeys(t *testing.T) {
-	setSecrets(t)
+	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c.Listen != ":4949" || c.MetricsListen != ":9049" || c.Limits.PerNASConnections != 4 ||
-		c.Limits.IdleTimeout == 0 || c.ReceiptTTL == 0 || c.ContextIdleTTL == 0 {
+		c.Limits.IdleTimeout == 0 || c.ReceiptIdleTTL == 0 || c.ReceiptMaxAge == 0 || c.ContextIdleTTL == 0 {
 		t.Fatalf("%+v", c)
 	}
 	// Both reset windows default to 10m when the key is absent: a zero window
@@ -118,7 +152,7 @@ func TestLoadAppliesDefaultsAndResolvesKeys(t *testing.T) {
 // is a device-behavior decision, and this test failing is where that has to be
 // argued.
 func TestAuthFailureDelayCeilingIsUnderEveryMeasuredDeviceTimeout(t *testing.T) {
-	setSecrets(t)
+	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
 	if err != nil {
@@ -149,7 +183,7 @@ func TestLoadRefusesMissingSecretAndUnknownKeyRef(t *testing.T) {
 	if _, err := Load(write(t, "a.yaml", fmt.Sprintf(sample, invPath))); err == nil {
 		t.Fatal("unset secret_env must fail")
 	}
-	setSecrets(t)
+	setKeyEnv(t)
 	bad := write(t, "inv2.yaml", "devices: []\nkey_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: nope}]\n")
 	if _, err := Load(write(t, "b.yaml", fmt.Sprintf(sample, bad))); err == nil {
 		t.Fatal("key_ref not in keys must fail")
@@ -157,7 +191,7 @@ func TestLoadRefusesMissingSecretAndUnknownKeyRef(t *testing.T) {
 }
 
 func TestLoadRefusesDeviceMatchingNoKeyGroup(t *testing.T) {
-	setSecrets(t)
+	setKeyEnv(t)
 	// orphan's address is outside every key group's CIDR, so admission.Build
 	// silently omits it from the table; Load must catch that at startup rather
 	// than letting the daemon run with a device every packet from it fails.
@@ -177,10 +211,10 @@ key_groups:
 }
 
 func TestLoadParsesDurationsAndBoundsWindows(t *testing.T) {
-	setSecrets(t)
+	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	body := fmt.Sprintf(sample, invPath) + `
-receipt_ttl: 45s
+receipt_idle_ttl: 45s
 context_idle_ttl: 8h
 metrics_listen: "127.0.0.1:19049"
 `
@@ -190,7 +224,7 @@ metrics_listen: "127.0.0.1:19049"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ReceiptTTL != 45*time.Second || c.ContextIdleTTL != 8*time.Hour ||
+	if c.ReceiptIdleTTL != 45*time.Second || c.ContextIdleTTL != 8*time.Hour ||
 		c.Limits.IdleTimeout != 15*time.Second || c.Limits.MalformedWindow != 2*time.Minute ||
 		c.Limits.AuthFailureWindow != 3*time.Minute || c.MetricsListen != "127.0.0.1:19049" {
 		t.Fatalf("%+v", c)
@@ -198,7 +232,7 @@ metrics_listen: "127.0.0.1:19049"
 }
 
 func TestLoadRefusesZeroOrNegativeWindows(t *testing.T) {
-	setSecrets(t)
+	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	for _, bad := range []string{
 		"  malformed_window: 0s\n",
@@ -219,7 +253,7 @@ func TestLoadRefusesZeroOrNegativeWindows(t *testing.T) {
 }
 
 func TestLoadRequiresLabBlock(t *testing.T) {
-	setSecrets(t)
+	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	body := fmt.Sprintf(sample, invPath)
 	body = body[:strings.Index(body, "lab:")]
@@ -232,24 +266,17 @@ func TestLoadRequiresLabBlock(t *testing.T) {
 	}
 }
 
-func TestLoadRefusesUnknownSeedTokenKind(t *testing.T) {
-	setSecrets(t)
-	invPath := write(t, "inventory.yaml", inv)
-	body := strings.Replace(fmt.Sprintf(sample, invPath), "kind: login}", "kind: root}", 1)
-	if _, err := Load(write(t, "kind.yaml", body)); err == nil {
-		t.Fatal("a seed token kind outside {login, enable} must fail")
-	}
-}
-
 func TestLoadSurfacesAdmissionBuildError(t *testing.T) {
 	t.Setenv("T_A", "a")
 	t.Setenv("T_B", "b")
+	t.Setenv("T_ENC", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 	cfg := `
 listen: ":4949"
 inventory_file: %s
 keys:
   a_key: {current: {version: 1, secret_env: T_A}}
   b_key: {current: {version: 1, secret_env: T_B}}
+encryption: {current: {id: v1, secret_env: T_ENC}}
 lab: {session_attributes: ["priv-lvl=15"]}
 `
 	bad := write(t, "inv3.yaml", `
@@ -268,7 +295,7 @@ key_groups:
 // in, which is how every test below varies one thing.
 func loadWithPlatforms(t *testing.T, platforms string) (Config, error) {
 	t.Helper()
-	setSecrets(t)
+	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	body := fmt.Sprintf(sample, invPath) + platforms
 	return Load(write(t, "port49d.yaml", body))
@@ -418,6 +445,31 @@ platforms:
 	}
 }
 
+// TestEnableUsernameEnabIsRefusedUntilTheLabShowsIt: `$enab{level}$` is not a
+// username form any measured platform sends on the enable START (vEOS and
+// Catalyst 8000V both send the operator's own username; NX-OS 10.x has no
+// enable exchange at all — tests/lab/results/L3-arista_eos.md,
+// L3-cisco_iosxe.md, L3-nxos-cisco_nxos.md), so the option exists to be
+// refused, not to be used, until a lab note says otherwise.
+func TestEnableUsernameEnabIsRefusedUntilTheLabShowsIt(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: enab}}\n"
+	_, err := Load(write(t, "c.yaml", body))
+	if err == nil || !strings.Contains(err.Error(), "tests/lab/results") {
+		t.Fatalf("enable_username: enab must be refused and say what would unlock it: %v", err)
+	}
+	body = fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: principal}}\n"
+	c, err := Load(write(t, "d.yaml", body))
+	if err != nil || c.EnableUsernames["cisco_iosxe"] != platform.EnablePrincipal {
+		t.Fatalf("%v %v", c.EnableUsernames, err)
+	}
+	body = fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: princpal}}\n"
+	if _, err := Load(write(t, "e.yaml", body)); err == nil {
+		t.Fatal("a mistyped enable_username must be a load error")
+	}
+}
+
 // TestLabCommandAttributesParse: `lab.command_attributes` is a declared key, so
 // it loads, and the strict decoder is what proves it is declared -- a key the
 // struct does not carry is refused outright (TestLoadRefusesUnknownKeys), so a
@@ -428,7 +480,7 @@ platforms:
 // one at a time: the same bad attribute on a session reply and on a per-command
 // reply are different questions, and a single list could not ask them apart.
 func TestLabCommandAttributesParse(t *testing.T) {
-	setSecrets(t)
+	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	body := strings.Replace(fmt.Sprintf(sample, invPath),
 		`  session_attributes: ["priv-lvl=15"]`,
@@ -449,7 +501,7 @@ func TestLabCommandAttributesParse(t *testing.T) {
 // predates the key must keep loading, and must load with the list empty rather
 // than with anything invented for it.
 func TestLabCommandAttributesAreOptional(t *testing.T) {
-	setSecrets(t)
+	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	cfg, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
 	if err != nil {
@@ -457,5 +509,296 @@ func TestLabCommandAttributesAreOptional(t *testing.T) {
 	}
 	if got := cfg.Lab.CommandAttributes; len(got) != 0 {
 		t.Fatalf("a config that does not mention command_attributes should carry none, got %q", got)
+	}
+}
+
+func TestReceiptBoundsDefaultAndTheOldKeyIsRefusedByName(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	c, err := Load(write(t, "c.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ReceiptIdleTTL != 15*time.Minute || c.ReceiptMaxAge != 2*time.Hour {
+		t.Fatalf("%s %s", c.ReceiptIdleTTL, c.ReceiptMaxAge)
+	}
+	body := fmt.Sprintf(sample, invPath) + "\nreceipt_ttl: 30s\n"
+	_, err = Load(write(t, "d.yaml", body))
+	if err == nil || !strings.Contains(err.Error(), "receipt_idle_ttl") || !strings.Contains(err.Error(), "receipt_max_age") {
+		t.Fatalf("the removed key must name its replacements: %v", err)
+	}
+	body = fmt.Sprintf(sample, invPath) + "\nreceipt_idle_ttl: 3h\nreceipt_max_age: 2h\n"
+	if _, err := Load(write(t, "e.yaml", body)); err == nil {
+		t.Fatal("an idle TTL longer than the cap is a window that can never slide; refuse it")
+	}
+}
+
+func TestEncryptionKeysAndSessionDefaults(t *testing.T) {
+	setKeyEnv(t) // sets PORT49_ENC_V2; the previous key is this test's own
+	t.Setenv("PORT49_ENC_V1", "11111111111111111111111111111111")
+	invPath := write(t, "inventory.yaml", inv)
+	body := fmt.Sprintf(sampleNoEncryption, invPath) + `
+encryption:
+  current:  {id: v2, secret_env: PORT49_ENC_V2}
+  previous: {id: v1, secret_env: PORT49_ENC_V1}
+session: {staleness_ceiling: 5m}
+token: {candidate_cap: 4}
+`
+	c, err := Load(write(t, "c.yaml", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := c.EncryptionKeys()
+	if err != nil || k.Current.ID != "v2" || k.Previous == nil || k.Previous.ID != "v1" || k.Current.Bytes[0] != '2' {
+		t.Fatalf("%+v %v", k, err)
+	}
+	if k.Previous.Bytes[0] != '1' {
+		t.Fatalf("the previous key must be its own bytes, not a second copy of the current one: %+v", k.Previous)
+	}
+	if c.Session.StalenessCeiling != 5*time.Minute || c.Session.GraceWindow != 10*time.Minute ||
+		c.Session.IndexTTL != 12*time.Hour || c.Session.MaxSessionAgeDefault != 12*time.Hour || c.Token.CandidateCap != 4 {
+		t.Fatalf("%+v %+v", c.Session, c.Token)
+	}
+}
+
+// TestPreviousEncryptionKeyIsOptional: a deployment that has never rotated names
+// one key, and `Previous == nil` is how crypt.Keys says "nothing is being
+// retired". A zero-valued Previous would be an all-zero AES-256 key that every
+// read tries second.
+func TestPreviousEncryptionKeyIsOptional(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	c, err := Load(write(t, "c.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := c.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.Previous != nil {
+		t.Fatalf("a config naming no previous key must produce none, got %+v", k.Previous)
+	}
+	if k.Current.ID != "v2" || k.Current.Bytes != [32]byte([]byte("22222222222222222222222222222222")) {
+		t.Fatalf("%+v", k.Current)
+	}
+}
+
+func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
+	setSecrets(t)
+	invPath := write(t, "inventory.yaml", inv)
+	if _, err := Load(write(t, "a.yaml", fmt.Sprintf(sampleNoEncryption, invPath))); err == nil {
+		t.Fatal("a missing encryption block must fail at load, not at the first CHAP packet")
+	}
+	body := fmt.Sprintf(sampleNoEncryption, invPath) + "\nencryption: {current: {id: v2, secret_env: PORT49_ENC_V2}}\n"
+	// Unset, not merely short. This is the hole: a missing entry yields "",
+	// copy() into a zeroed [32]byte writes nothing, and the daemon starts and
+	// seals every token, receipt and context under an all-zero AES-256 key that
+	// an attacker also knows — with no error and no panic.
+	//
+	// The assertions are this specific because the length check below ALSO
+	// refuses an unset variable ("" is not 32 bytes) and also names it: without
+	// pinning "is not set", deleting the unset branch entirely leaves this test
+	// green and only degrades the message to "must be exactly 32 bytes … got 0".
+	// An operator told their key is the wrong size goes and edits the secret;
+	// what actually happened is that the unit never exported it.
+	_, err := Load(write(t, "b.yaml", body))
+	if err == nil {
+		t.Fatal("an unset encryption secret must be refused")
+	}
+	for _, want := range []string{"PORT49_ENC_V2", `"v2"`, "encryption.current", "is not set"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("an unset encryption secret must be refused by name: the error must contain %q, got %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "32 bytes") {
+		t.Errorf("an unset variable was reported as a length problem, which sends the operator to the wrong "+
+			"file: %v", err)
+	}
+	t.Setenv("PORT49_ENC_V2", "too-short")
+	_, err = Load(write(t, "c.yaml", body))
+	if err == nil {
+		t.Fatal("a non-32-byte key must be refused")
+	}
+	for _, want := range []string{"PORT49_ENC_V2", `"v2"`, "32 bytes", "got 9"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("a short key must be refused by name and length: the error must contain %q, got %v", want, err)
+		}
+	}
+	// A previous key is optional, but one that is named and unset is the same
+	// hole: every read would try an all-zero key as its second guess.
+	t.Setenv("PORT49_ENC_V2", "22222222222222222222222222222222")
+	body = fmt.Sprintf(sampleNoEncryption, invPath) +
+		"\nencryption:\n  current:  {id: v2, secret_env: PORT49_ENC_V2}\n  previous: {id: v1, secret_env: PORT49_ENC_V1}\n"
+	if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "PORT49_ENC_V1") {
+		t.Fatalf("a named-but-unset previous key must be refused by name: %v", err)
+	}
+}
+
+// TestEncryptionKeyIDIsRequired: the id is written into every sealed record and
+// is its AAD (internal/store/crypt). An empty one seals nothing — crypt.Seal
+// refuses a zero-length id — so the daemon would start and fail the first write.
+func TestEncryptionKeyIDIsRequired(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := strings.Replace(fmt.Sprintf(sample, invPath), "{id: v2, secret_env: PORT49_ENC_V2}",
+		"{secret_env: PORT49_ENC_V2}", 1)
+	if _, err := Load(write(t, "c.yaml", body)); err == nil || !strings.Contains(err.Error(), "encryption.current") {
+		t.Fatalf("an encryption key with no id must be refused at load: %v", err)
+	}
+}
+
+// TestEncryptionRotationMustChangeTheKeyID and the half-configured previous key
+// are the two ways a config can read as a rotation in progress and not be one.
+// Both are silent at run time and both cost every record written under the old
+// secret, which is the whole store.
+func TestEncryptionRotationMustChangeTheKeyID(t *testing.T) {
+	setKeyEnv(t)
+	t.Setenv("PORT49_ENC_V1", "11111111111111111111111111111111")
+	invPath := write(t, "inventory.yaml", inv)
+	body := fmt.Sprintf(sampleNoEncryption, invPath) +
+		"\nencryption:\n  current:  {id: v2, secret_env: PORT49_ENC_V2}\n  previous: {id: v2, secret_env: PORT49_ENC_V1}\n"
+	if _, err := Load(write(t, "c.yaml", body)); err == nil || !strings.Contains(err.Error(), "id") {
+		t.Fatalf("two keys sharing one id must be refused: the previous key would never be tried: %v", err)
+	}
+	// A previous key named with no secret_env reads as a rotation and loads no
+	// key at all.
+	body = fmt.Sprintf(sampleNoEncryption, invPath) +
+		"\nencryption:\n  current:  {id: v2, secret_env: PORT49_ENC_V2}\n  previous: {id: v1}\n"
+	if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "secret_env") {
+		t.Fatalf("a previous key with an id and no secret_env must be refused by name: %v", err)
+	}
+}
+
+// TestKey32RefusesAShortSecretRatherThanZeroPadding is the backstop behind
+// Load's length check, and it is a separate test because Load makes the case
+// unreachable through the config: copy() into a zeroed array is silent, so the
+// only way to prove the padding cannot happen by some other route is to call
+// the thing that would do it.
+func TestKey32RefusesAShortSecretRatherThanZeroPadding(t *testing.T) {
+	if _, err := key32("v2", "short"); err == nil {
+		t.Fatal("a short secret must be an error, never a zero-padded AES-256 key")
+	}
+	if _, err := key32("v2", strings.Repeat("x", 33)); err == nil {
+		t.Fatal("an over-long secret must be an error, never a silent truncation")
+	}
+	k, err := key32("v2", strings.Repeat("x", 32))
+	if err != nil || k.ID != "v2" || k.Bytes[31] != 'x' {
+		t.Fatalf("%+v %v", k, err)
+	}
+}
+
+// TestStalenessCeilingDefaultsToDisabled pins the default at 0, which means no
+// staleness check at all, and that is a wiring fact rather than a taste: until
+// plan 3/7's broker refreshes a context, `refreshed_at` is stamped once at login
+// and nothing moves it. Any finite ceiling before then denies a steadily working
+// operator `context_stale` — "the broker is unreachable" — at login plus the
+// ceiling, with no broker to reach. Whoever wires the broker sets this key and
+// changes this test with it.
+func TestStalenessCeilingDefaultsToDisabled(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	c, err := Load(write(t, "c.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Session.StalenessCeiling != 0 {
+		t.Fatalf("session.staleness_ceiling must default to 0 (disabled), got %s", c.Session.StalenessCeiling)
+	}
+	if c.Token.CandidateCap != 8 {
+		t.Fatalf("token.candidate_cap must default to 8, got %d", c.Token.CandidateCap)
+	}
+	// Set, it has to be long enough to outlast a refresh interval; a sub-minute
+	// ceiling is a config that denies everyone as fast as the broker can retry.
+	body := fmt.Sprintf(sample, invPath) + "\nsession: {staleness_ceiling: 30s}\n"
+	if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "staleness_ceiling") {
+		t.Fatalf("a positive staleness_ceiling under a minute must be refused by name: %v", err)
+	}
+	body = fmt.Sprintf(sample, invPath) + "\nsession: {staleness_ceiling: -1m}\n"
+	if _, err := Load(write(t, "e.yaml", body)); err == nil {
+		t.Fatal("a negative staleness_ceiling must be refused")
+	}
+}
+
+func TestSessionAndTokenValuesAreRefusedWhenNotPositive(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	for _, bad := range []string{
+		"\nsession: {grace_window: -1m}\n",
+		"\nsession: {index_ttl: -1h}\n",
+		"\nsession: {max_session_age_default: -1h}\n",
+		"\ntoken: {candidate_cap: -1}\n",
+	} {
+		if _, err := Load(write(t, "b.yaml", fmt.Sprintf(sample, invPath)+bad)); err == nil {
+			t.Fatalf("%q must be refused", strings.TrimSpace(bad))
+		}
+	}
+}
+
+// The behaviour change this test is named for is that a seed no longer carries
+// a secret. Asserting that the parsed entries have a nas and a username would
+// pass whether or not that happened — and would assert nothing at all if the
+// sample carried no seeds.
+func TestSeedTokensAreMintedNotWritten(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	for _, stale := range []string{
+		"    - {nas: leaf-01, username: alice, secret: p49_lab}\n",
+		"    - {nas: leaf-01, username: alice, kind: login}\n",
+	} {
+		body := strings.Replace(fmt.Sprintf(sample, invPath),
+			"    - {nas: leaf-01, username: alice}\n", stale, 1)
+		_, err := Load(write(t, "stale.yaml", body))
+		if err == nil || !strings.Contains(err.Error(), "minted") {
+			t.Fatalf("a seed carrying %q must be refused and name the minter as its replacement: %v", stale, err)
+		}
+	}
+	body := strings.Replace(fmt.Sprintf(sample, invPath),
+		"    - {nas: leaf-01, username: alice}\n", "    - {nas: leaf-01, username: alice, enable: true}\n", 1)
+	c, err := Load(write(t, "c.yaml", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Lab.SeedTokens) != 1 || !c.Lab.SeedTokens[0].Enable || c.Lab.SeedTokens[0].NAS != "leaf-01" {
+		t.Fatalf("%+v", c.Lab.SeedTokens)
+	}
+	// The yaml tags are the assertion here: without them the decoder matches
+	// case-insensitively on the field name, `NAS:` loads, and the snake_case
+	// rule is enforced nowhere.
+	body = strings.Replace(fmt.Sprintf(sample, invPath),
+		"    - {nas: leaf-01, username: alice}\n", "    - {NAS: leaf-01, Username: alice}\n", 1)
+	if _, err := Load(write(t, "d.yaml", body)); err == nil {
+		t.Fatal("a seed key in the wrong case must be refused; keys are snake_case")
+	}
+}
+
+func TestSeedTokensRequireAFileToWriteThemTo(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := strings.Replace(fmt.Sprintf(sample, invPath), "  seed_token_file: /tmp/p49-seeds.jsonl\n", "", 1)
+	if _, err := Load(write(t, "c.yaml", body)); err == nil || !strings.Contains(err.Error(), "seed_token_file") {
+		t.Fatalf("seeding credentials with nowhere to put them must be a load error: %v", err)
+	}
+	// A config that seeds nothing needs no file: the key exists for the seeds,
+	// not for its own sake.
+	body = strings.Replace(strings.Replace(fmt.Sprintf(sample, invPath),
+		"  seed_token_file: /tmp/p49-seeds.jsonl\n", "", 1),
+		"  seed_tokens:\n    - {nas: leaf-01, username: alice}\n", "", 1)
+	if _, err := Load(write(t, "d.yaml", body)); err != nil {
+		t.Fatalf("no seeds and no file is a valid config: %v", err)
+	}
+}
+
+func TestSeedTokensRequireANASAndAUsername(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	for _, bad := range []string{
+		"    - {nas: leaf-01}\n",
+		"    - {username: alice}\n",
+	} {
+		body := strings.Replace(fmt.Sprintf(sample, invPath), "    - {nas: leaf-01, username: alice}\n", bad, 1)
+		if _, err := Load(write(t, "c.yaml", body)); err == nil {
+			t.Fatalf("%q must be refused", strings.TrimSpace(bad))
+		}
 	}
 }

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/rhwendt/port49/internal/admission"
@@ -23,6 +24,7 @@ func TestCheckedInYAMLLoadsUnderStrictMode(t *testing.T) {
 	}
 	t.Cleanup(func() { os.Chdir(wd) })
 	t.Setenv("PORT49_LAB_KEY", "labkey")
+	t.Setenv("PORT49_LAB_ENC_KEY", strings.Repeat("k", 32))
 	if _, err := Load("tests/lab/port49d-lab.yaml"); err != nil {
 		t.Fatalf("tests/lab/port49d-lab.yaml: %v", err)
 	}

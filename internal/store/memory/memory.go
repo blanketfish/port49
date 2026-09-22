@@ -5,7 +5,7 @@ package memory
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
+	"sort"
 	"sync"
 	"time"
 
@@ -17,8 +17,34 @@ type Store struct {
 	mu       sync.Mutex
 	tokens   map[store.TokenKey][]store.Token
 	receipts map[store.ReceiptKey]store.Receipt
-	contexts map[store.ContextKey]ctxEntry
-	writes   int // incremented on every write; triggers sweep at sweepEvery
+	// receiptsByPrincipal is the revocation index: principal to the receipt
+	// keys written under it, each with its own expiry so the sweep can reclaim
+	// an index entry whose record is already gone. It is plaintext by design —
+	// the records it points at are sealed, the index is not (store.ReceiptWrite).
+	receiptsByPrincipal map[string]map[store.ReceiptKey]time.Time
+	contexts            map[store.ContextKey]ctxEntry
+	blobs               map[string]blobEntry
+
+	// byPrincipal, bySid, and byCert are the context indexes (design §12):
+	// each maps its key to the set of ContextRefs live under it, with each
+	// ref's own expiry so the sweep can reclaim an index entry whose context
+	// is already gone.
+	byPrincipal map[string]map[store.ContextRef]time.Time
+	bySid       map[string]map[store.ContextRef]time.Time
+	byCert      map[string]map[store.ContextRef]time.Time
+	// indexedAs is the reverse of those three: the keys each ref was indexed
+	// under. It exists so an extension of a context can carry its index
+	// entries with it, which design §12 requires — an index entry "carries
+	// the context's TTL". Without it the dangerous direction opens up: a
+	// session kept alive by activity for 8 to 16 hours outlives the entries
+	// that name it, and then RevokeByPrincipal and RevokeByCert find zero
+	// refs on a context that is still live and still authorizing, while the
+	// operator is told "0 touched" — which reads as "already gone", not as "I
+	// could not find it".
+	indexedAs map[store.ContextRef]indexKeys
+	idem      map[string]store.Idempotency
+
+	writes int // incremented on every write; triggers sweep at sweepEvery
 }
 
 type ctxEntry struct {
@@ -26,12 +52,33 @@ type ctxEntry struct {
 	exp time.Time
 }
 
+// indexKeys is the set of index keys one ref was written under. An empty
+// field means that index was never written for this ref — the same "" that
+// IndexContext reads as "skip this index".
+type indexKeys struct {
+	principal string
+	sid       string
+	certKey   string
+}
+
+type blobEntry struct {
+	body []byte
+	exp  time.Time
+}
+
 func New(now func() time.Time) *Store {
 	return &Store{
-		now:      now,
-		tokens:   make(map[store.TokenKey][]store.Token),
-		receipts: make(map[store.ReceiptKey]store.Receipt),
-		contexts: make(map[store.ContextKey]ctxEntry),
+		now:                 now,
+		tokens:              make(map[store.TokenKey][]store.Token),
+		receipts:            make(map[store.ReceiptKey]store.Receipt),
+		receiptsByPrincipal: make(map[string]map[store.ReceiptKey]time.Time),
+		contexts:            make(map[store.ContextKey]ctxEntry),
+		blobs:               make(map[string]blobEntry),
+		byPrincipal:         make(map[string]map[store.ContextRef]time.Time),
+		bySid:               make(map[string]map[store.ContextRef]time.Time),
+		byCert:              make(map[string]map[store.ContextRef]time.Time),
+		indexedAs:           make(map[store.ContextRef]indexKeys),
+		idem:                make(map[string]store.Idempotency),
 	}
 }
 
@@ -89,10 +136,26 @@ func (s *Store) sweepLocked() {
 		}
 	}
 
-	// Sweep receipts: delete expired receipts
+	// Sweep receipts: delete receipts past their retention. RetainUntil, not
+	// IdleExpiresAt: a receipt whose sliding bound has passed is still the
+	// difference between `token_spent` and `token_not_found` (store.Receipt).
 	for k, r := range s.receipts {
-		if !r.ExpiresAt.After(now) {
+		if !r.RetainUntil.After(now) {
 			delete(s.receipts, k)
+		}
+	}
+
+	// Sweep the revocation index. Its entries expire on their own IndexTTL and
+	// a principal whose last entry is gone drops out entirely, so a daemon that
+	// runs for weeks does not keep one map entry per principal it ever saw.
+	for p, set := range s.receiptsByPrincipal {
+		for k, exp := range set {
+			if !exp.After(now) {
+				delete(set, k)
+			}
+		}
+		if len(set) == 0 {
+			delete(s.receiptsByPrincipal, p)
 		}
 	}
 
@@ -100,6 +163,61 @@ func (s *Store) sweepLocked() {
 	for k, e := range s.contexts {
 		if !e.exp.After(now) {
 			delete(s.contexts, k)
+		}
+	}
+
+	// Sweep blobs: delete blobs past their expiry.
+	for h, b := range s.blobs {
+		if !b.exp.After(now) {
+			delete(s.blobs, h)
+		}
+	}
+
+	// Sweep idempotency records: delete past ExpiresAt.
+	for k, r := range s.idem {
+		if !r.ExpiresAt.After(now) {
+			delete(s.idem, k)
+		}
+	}
+
+	// Sweep the context indexes: an entry expires on its own TTL, and a key
+	// whose last entry is gone drops out entirely — the same shape as
+	// receiptsByPrincipal, and for the same reason.
+	sweepIndex(s.byPrincipal, now)
+	sweepIndex(s.bySid, now)
+	sweepIndex(s.byCert, now)
+
+	// Sweep the reverse record last, once the three indexes above have
+	// dropped what expired: a ref no index still names has nothing left to
+	// extend, so keeping its entry would be one map entry per ref the daemon
+	// ever saw.
+	for ref, rec := range s.indexedAs {
+		if !indexed(s.byPrincipal, rec.principal, ref) &&
+			!indexed(s.bySid, rec.sid, ref) &&
+			!indexed(s.byCert, rec.certKey, ref) {
+			delete(s.indexedAs, ref)
+		}
+	}
+}
+
+// indexed reports whether idx[key] still holds ref.
+func indexed(idx map[string]map[store.ContextRef]time.Time, key string, ref store.ContextRef) bool {
+	if key == "" {
+		return false
+	}
+	_, ok := idx[key][ref]
+	return ok
+}
+
+func sweepIndex(idx map[string]map[store.ContextRef]time.Time, now time.Time) {
+	for k, set := range idx {
+		for ref, exp := range set {
+			if !exp.After(now) {
+				delete(set, ref)
+			}
+		}
+		if len(set) == 0 {
+			delete(idx, k)
 		}
 	}
 }
@@ -131,44 +249,132 @@ func (s *Store) Candidates(_ context.Context, k store.TokenKey) ([]store.Token, 
 	return result, nil
 }
 
-func (s *Store) RedeemAndReceipt(_ context.Context, k store.TokenKey, secret []byte, rk store.ReceiptKey, r store.Receipt) error {
+func (s *Store) RedeemAndReceipt(_ context.Context, k store.TokenKey, tokenID string, w store.ReceiptWrite) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.now()
 	set := s.live(k)
 	for i, t := range set {
-		if subtle.ConstantTimeCompare(t.Secret, secret) == 1 {
-			if !t.Reusable {
-				s.tokens[k] = append(set[:i:i], set[i+1:]...)
-				if len(s.tokens[k]) == 0 {
-					delete(s.tokens, k)
-				}
-			}
-			s.receipts[rk] = r
-			s.writes++
-			if s.writes%sweepEvery == 0 {
-				s.sweepLocked()
-			}
-			return nil
+		// `==`, not crypto/subtle: the ID is a handle the daemon chose for
+		// itself and never puts on the wire, so nothing an attacker can
+		// influence reaches this comparison (store.Token).
+		if t.ID != tokenID {
+			continue
 		}
+		s.tokens[k] = append(set[:i:i], set[i+1:]...)
+		// The append clips the capacity to i, so when the spent token is the
+		// last member nothing reallocates and its entry — Secret pointer
+		// included — stays reachable from the allocation the map still holds.
+		// clearTail zeroes the entries past i in the old array and never the
+		// secret bytes they point at, so the tokens copied down into the new
+		// array in the reallocating case keep their secrets (clearTail).
+		clearTail(set, i)
+		if len(s.tokens[k]) == 0 {
+			delete(s.tokens, k)
+		}
+		// Receipt and index in the same critical section as the removal: that
+		// is what makes this the atomic remove-and-write of design §12, and
+		// what lets exactly one racing redeemer win.
+		s.receipts[w.Key] = w.Receipt
+		if w.Principal != "" {
+			byP := s.receiptsByPrincipal[w.Principal]
+			if byP == nil {
+				byP = make(map[store.ReceiptKey]time.Time)
+				s.receiptsByPrincipal[w.Principal] = byP
+			}
+			byP[w.Key] = now.Add(w.IndexTTL)
+		}
+		s.writes++
+		if s.writes%sweepEvery == 0 {
+			s.sweepLocked()
+		}
+		return nil
 	}
 	return store.ErrNotFound
+}
+
+// DeleteTokens drops every token under this key, spent or not. Revocation and
+// the §5.6 teardown rows both need it: a principal whose authorization was
+// withdrawn must not be able to redeem a token minted before the withdrawal.
+func (s *Store) DeleteTokens(_ context.Context, k store.TokenKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if set, ok := s.tokens[k]; ok {
+		clearTail(set, 0)
+		delete(s.tokens, k)
+	}
+	return nil
 }
 
 func (s *Store) GetReceipt(_ context.Context, rk store.ReceiptKey) (store.Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.receipts[rk]
-	if !ok || !r.ExpiresAt.After(s.now()) {
+	// RetainUntil, not IdleExpiresAt: a presentation past the sliding bound has
+	// to find this record in order to be answered `token_spent` rather than
+	// `token_not_found` (store.Receipt). Deciding which of the two bounds a
+	// found receipt has passed is the caller's job, not the store's.
+	if !ok || !r.RetainUntil.After(s.now()) {
 		delete(s.receipts, rk)
 		return store.Receipt{}, store.ErrNotFound
 	}
 	return r, nil
 }
 
+// ExtendReceipt pushes IdleExpiresAt out and touches nothing else, so neither
+// FirstRedeemedAt's absolute anchor nor the store's own retention can be slid.
+func (s *Store) ExtendReceipt(_ context.Context, rk store.ReceiptKey, idleExpiresAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.receipts[rk]
+	if !ok || !r.RetainUntil.After(s.now()) {
+		delete(s.receipts, rk)
+		return store.ErrNotFound
+	}
+	r.IdleExpiresAt = idleExpiresAt
+	s.receipts[rk] = r
+	return nil
+}
+
+// DeleteReceiptsByPrincipal removes every live receipt this principal wrote and
+// reports how many. It is the half of revocation that closes the replay window:
+// deleting the tokens alone leaves a spent token's receipt answering a replay
+// with the decision made before the principal lost its authorization.
+//
+// The count is of records actually deleted, so an index entry whose receipt has
+// already aged out does not inflate what the operator is told.
+func (s *Store) DeleteReceiptsByPrincipal(_ context.Context, principal string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	n := 0
+	for rk := range s.receiptsByPrincipal[principal] {
+		r, ok := s.receipts[rk]
+		if ok && r.RetainUntil.After(now) {
+			n++
+		}
+		delete(s.receipts, rk)
+	}
+	delete(s.receiptsByPrincipal, principal)
+	return n, nil
+}
+
 func (s *Store) PutContext(_ context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.contexts[k] = ctxEntry{c: c, exp: s.now().Add(ttl)}
+	now := s.now()
+	// The write is an extension too, so it stamps the same clock TouchContext
+	// does (store.Context). Leaving it to the caller would hand Task 10's
+	// half-TTL rule a zero on every freshly written context, and a rule that
+	// reads zero extends on every command — the write this exists to avoid.
+	c.LastTouchedAt = now
+	exp := now.Add(ttl)
+	s.contexts[k] = ctxEntry{c: c, exp: exp}
+	// A re-put is an extension too, so the index entries come with it
+	// (design §12). At login this is a no-op — the context is written before
+	// it is indexed — and it matters on spec §5.6 row 1, the unconditional
+	// overwrite by a second redemption on a device.
+	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, exp)
 	s.writes++
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()
@@ -187,11 +393,452 @@ func (s *Store) GetContext(_ context.Context, k store.ContextKey) (store.Context
 	return e.c, nil
 }
 
+// TouchContext is the read-modify-write inside the lock that the handler cannot
+// do for itself; store.Store's comment on it is the argument for why.
+func (s *Store) TouchContext(_ context.Context, k store.ContextKey, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(now) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	// Only the expiry and its own stamp. Every other field is left exactly
+	// as whoever wrote it last left it, which is the property the caller
+	// cannot get by re-putting a record it read a moment ago.
+	e.exp = now.Add(ttl)
+	e.c.LastTouchedAt = now
+	s.contexts[k] = e
+	// The index entries go with the expiry, or a session kept alive by
+	// activity outlives the entries a revocation reads (extendIndexesLocked).
+	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, e.exp)
+	return nil
+}
+
+func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(s.now()) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	// Only the level. The expiry and its stamp belong to TouchContext, and
+	// every other field is left exactly as whoever wrote it last left it --
+	// which is the property the caller cannot get by re-putting a record it
+	// read a moment ago (store.Store).
+	e.c.PrivLvl = level
+	s.contexts[k] = e
+	return nil
+}
+
+// AnnotateContext is the accounting path's setter, and it is TouchContext's
+// and SetPrivilege's sibling: the read-modify-write happens inside this lock
+// so that a revocation racing it is not overwritten by a copy of the record
+// accounting read at the top of its request (store.Store).
+//
+// It writes at most two fields and deliberately moves neither the expiry nor
+// LastTouchedAt: accounting is not activity for the idle TTL (spec §5.8).
+func (s *Store) AnnotateContext(_ context.Context, k store.ContextKey, discHash, state string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(s.now()) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	if discHash != "" {
+		e.c.SessionDiscriminators = addDiscriminator(e.c.SessionDiscriminators, discHash)
+	}
+	if state != "" {
+		e.c.AccountingState = state
+	}
+	s.contexts[k] = e
+	return nil
+}
+
+// addDiscriminator appends h if it is not already present, evicting from the
+// front once the set is full. The copy is not an accident: the slice header in
+// the map may share its array with one a caller read out through GetContext,
+// and appending in place would edit that caller's copy under it.
+func addDiscriminator(set []string, h string) []string {
+	for _, existing := range set {
+		if existing == h {
+			return set
+		}
+	}
+	out := make([]string, 0, store.MaxSessionDiscriminators)
+	if len(set) >= store.MaxSessionDiscriminators {
+		set = set[len(set)-store.MaxSessionDiscriminators+1:]
+	}
+	out = append(out, set...)
+	return append(out, h)
+}
+
+// RefreshContext is the broker's setter, and the fourth of the siblings: the
+// read-modify-write happens inside this lock so that the annotation, the
+// privilege raise, or the revocation that landed since the broker read the
+// record is not carried away by a copy of it (store.Store).
+//
+// Unlike AnnotateContext it does extend the expiry and stamp LastTouchedAt. A
+// refresh is a fresh authentication event; an accounting record is not.
+func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.ContextRefresh, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(now) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	// The window is read here, under the lock, from the pair this call is
+	// about to overwrite. A caller computing it from a copy it read earlier
+	// would compute it from a pair another refresh may already have moved.
+	if e.c.HasCeiling() {
+		e.c.SessionExpires = r.AuthTime.Add(e.c.SessionExpires.Sub(e.c.AuthTime))
+	}
+	e.c.AuthTime = r.AuthTime
+	e.c.RefreshedAt = r.RefreshedAt
+	// RevokedAt is deliberately absent from this list. A refresh is a
+	// directory re-resolution, not a credential re-verification, and the only
+	// thing that ends a revocation is spec §5.6 row 6 reclaiming the record
+	// (store.Store).
+	if r.BlobHash != "" {
+		e.c.BlobHash = r.BlobHash
+	}
+	e.exp = now.Add(ttl)
+	e.c.LastTouchedAt = now
+	s.contexts[k] = e
+	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, e.exp)
+	return nil
+}
+
+// SetRevokedAt marks and never deletes, so the next command is denied
+// `credential_revoked` rather than answered as a session port49 never saw
+// (store.Store; spec §5.6 row 2). It moves neither the expiry nor
+// LastTouchedAt: row 6 reclaims the record on the idle TTL it was already on.
+func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(s.now()) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	e.c.RevokedAt = at
+	s.contexts[k] = e
+	return nil
+}
+
 func (s *Store) DeleteContext(_ context.Context, k store.ContextKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.contexts, k)
 	return nil
+}
+
+// PutBlob writes body under hash, keeping the later of the existing and the
+// new expiry: a re-put must not shorten a blob another context still
+// references.
+func (s *Store) PutBlob(_ context.Context, hash string, body []byte, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exp := s.now().Add(ttl)
+	if existing, ok := s.blobs[hash]; ok && existing.exp.After(exp) {
+		exp = existing.exp
+	}
+	s.blobs[hash] = blobEntry{body: bytes.Clone(body), exp: exp}
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
+	return nil
+}
+
+// GetBlob returns a copy of the blob's body, or ErrNotFound if it is absent
+// or has expired.
+func (s *Store) GetBlob(_ context.Context, hash string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.blobs[hash]
+	if !ok || !b.exp.After(s.now()) {
+		delete(s.blobs, hash)
+		return nil, store.ErrNotFound
+	}
+	return bytes.Clone(b.body), nil
+}
+
+// BumpBlob extends a blob to at least now+ttl and never shortens it.
+func (s *Store) BumpBlob(_ context.Context, hash string, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.blobs[hash]
+	if !ok || !b.exp.After(s.now()) {
+		delete(s.blobs, hash)
+		return store.ErrNotFound
+	}
+	if newExp := s.now().Add(ttl); newExp.After(b.exp) {
+		b.exp = newExp
+		s.blobs[hash] = b
+	}
+	return nil
+}
+
+// addRef adds ref to idx[key] with the given expiry. An empty key is a
+// caller opting out of that index — IndexContext passes "" for a sid or cert
+// it does not have — and is a no-op rather than an entry under the empty
+// string.
+func addRef(idx map[string]map[store.ContextRef]time.Time, key string, ref store.ContextRef, exp time.Time) {
+	if key == "" {
+		return
+	}
+	set := idx[key]
+	if set == nil {
+		set = make(map[store.ContextRef]time.Time)
+		idx[key] = set
+	}
+	set[ref] = exp
+}
+
+// removeRef removes ref from idx[key] and drops the key entirely once its
+// last ref is gone, the same shape as receiptsByPrincipal.
+func removeRef(idx map[string]map[store.ContextRef]time.Time, key string, ref store.ContextRef) {
+	if key == "" {
+		return
+	}
+	set := idx[key]
+	if set == nil {
+		return
+	}
+	delete(set, ref)
+	if len(set) == 0 {
+		delete(idx, key)
+	}
+}
+
+// extendIndexesLocked re-stamps every index entry naming ref so it lives at
+// least as long as the context does (design §12). It is a no-op for a ref
+// that has not been indexed, which is the ordering at login: the caller writes
+// the context first and indexes it after.
+func (s *Store) extendIndexesLocked(ref store.ContextRef, exp time.Time) {
+	rec, ok := s.indexedAs[ref]
+	if !ok {
+		return
+	}
+	restamp(s.byPrincipal, rec.principal, ref, exp)
+	restamp(s.bySid, rec.sid, ref, exp)
+	restamp(s.byCert, rec.certKey, ref, exp)
+}
+
+// restamp pushes an existing entry's expiry out, and does two things it might
+// not look like it does. It never creates an entry: a ref the index no longer
+// holds was unindexed or swept, and an extension must not resurrect it. And it
+// never shortens one, matching PutBlob — a context written with a short TTL
+// must not pull in the reach of a revocation that the index was given longer
+// to answer.
+func restamp(idx map[string]map[store.ContextRef]time.Time, key string, ref store.ContextRef, exp time.Time) {
+	if key == "" {
+		return
+	}
+	set := idx[key]
+	if set == nil {
+		return
+	}
+	if existing, ok := set[ref]; ok && exp.After(existing) {
+		set[ref] = exp
+	}
+}
+
+// listRefs returns the live refs under idx[key], sorted on NAS+"\x00"+Username,
+// dropping expired entries as it walks.
+func listRefs(idx map[string]map[store.ContextRef]time.Time, key string, now time.Time) []store.ContextRef {
+	set := idx[key]
+	if set == nil {
+		return nil
+	}
+	out := make([]store.ContextRef, 0, len(set))
+	for ref, exp := range set {
+		if exp.After(now) {
+			out = append(out, ref)
+		} else {
+			delete(set, ref)
+		}
+	}
+	if len(set) == 0 {
+		delete(idx, key)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].NAS+"\x00"+out[i].Username < out[j].NAS+"\x00"+out[j].Username
+	})
+	return out
+}
+
+// IndexContext adds ref to each non-empty index — principal, sid, and cert —
+// sharing the one ttl. A caller with no sid or cert passes "" to skip that
+// index (store.ContextRef alone is not enough to reconstruct the context).
+func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exp := s.now().Add(ttl)
+	addRef(s.byPrincipal, principal, ref, exp)
+	addRef(s.bySid, sid, ref, exp)
+	addRef(s.byCert, certKey, ref, exp)
+	// Record where this ref now answers from, so an extension of its context
+	// can carry these entries with it (extendIndexesLocked). A non-empty key
+	// replaces what was recorded and an empty one leaves it alone, matching
+	// the "" this method already reads as "skip this index": a second call
+	// that passes no sid must not lose the sid entry the first call wrote.
+	rec := s.indexedAs[ref]
+	if principal != "" {
+		rec.principal = principal
+	}
+	if sid != "" {
+		rec.sid = sid
+	}
+	if certKey != "" {
+		rec.certKey = certKey
+	}
+	s.indexedAs[ref] = rec
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
+	return nil
+}
+
+// UnindexContext removes ref from each of the three indexes it was written
+// under.
+func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removeRef(s.byPrincipal, principal, ref)
+	removeRef(s.bySid, sid, ref)
+	removeRef(s.byCert, certKey, ref)
+	// Forget only the keys this call actually removed. A ref unindexed from
+	// one index of three still answers from the others, and an extension has
+	// to keep reaching them.
+	if rec, ok := s.indexedAs[ref]; ok {
+		if rec.principal == principal {
+			rec.principal = ""
+		}
+		if rec.sid == sid {
+			rec.sid = ""
+		}
+		if rec.certKey == certKey {
+			rec.certKey = ""
+		}
+		if rec == (indexKeys{}) {
+			delete(s.indexedAs, ref)
+		} else {
+			s.indexedAs[ref] = rec
+		}
+	}
+	return nil
+}
+
+// ContextsByPrincipal returns the live context refs indexed under principal.
+func (s *Store) ContextsByPrincipal(_ context.Context, principal string) ([]store.ContextRef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return listRefs(s.byPrincipal, principal, s.now()), nil
+}
+
+// ContextsBySid returns the live context refs indexed under sid.
+func (s *Store) ContextsBySid(_ context.Context, sid string) ([]store.ContextRef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return listRefs(s.bySid, sid, s.now()), nil
+}
+
+// ContextsByCert returns the live context refs indexed under certKey.
+func (s *Store) ContextsByCert(_ context.Context, certKey string) ([]store.ContextRef, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return listRefs(s.byCert, certKey, s.now()), nil
+}
+
+// ReindexSid moves ref from oldSid's index entry to newSid's, re-stamping its
+// expiry from ttl. A session ID that changes mid-session (spec §5.8) must not
+// leave the ref answering lookups under a sid the device no longer uses.
+func (s *Store) ReindexSid(_ context.Context, oldSid, newSid string, ref store.ContextRef, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removeRef(s.bySid, oldSid, ref)
+	addRef(s.bySid, newSid, ref, s.now().Add(ttl))
+	// The reverse record follows the move, or the next extension of this
+	// context would re-stamp the sid entry the rotation just removed and
+	// leave the live one to expire underneath it.
+	if newSid != "" {
+		rec := s.indexedAs[ref]
+		rec.sid = newSid
+		s.indexedAs[ref] = rec
+	}
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
+	return nil
+}
+
+// ActivePrincipals returns, sorted, every principal with at least one live
+// context ref, dropping expired refs as it walks.
+func (s *Store) ActivePrincipals(_ context.Context) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	var out []string
+	for p, set := range s.byPrincipal {
+		live := false
+		for ref, exp := range set {
+			if exp.After(now) {
+				live = true
+			} else {
+				delete(set, ref)
+			}
+		}
+		if len(set) == 0 {
+			delete(s.byPrincipal, p)
+		}
+		if live {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// idemKey joins principal and key so idempotency is scoped per principal:
+// one principal's replay must not answer another's request.
+func idemKey(principal, key string) string {
+	return principal + "\x00" + key
+}
+
+// PutIdempotency records rec under (principal, key), expiring on rec.ExpiresAt.
+func (s *Store) PutIdempotency(_ context.Context, principal, key string, rec store.Idempotency) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.idem[idemKey(principal, key)] = rec
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
+	return nil
+}
+
+// GetIdempotency returns the record written under (principal, key), or
+// ErrNotFound if it is absent, expired, or was written under a different
+// principal.
+func (s *Store) GetIdempotency(_ context.Context, principal, key string) (store.Idempotency, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := idemKey(principal, key)
+	r, ok := s.idem[k]
+	if !ok || !r.ExpiresAt.After(s.now()) {
+		delete(s.idem, k)
+		return store.Idempotency{}, store.ErrNotFound
+	}
+	return r, nil
 }
 
 var _ store.Store = (*Store)(nil)

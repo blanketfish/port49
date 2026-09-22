@@ -26,13 +26,26 @@ type Record struct {
 	Attribution string       `json:"attribution,omitempty"`
 	TaskID      string       `json:"task_id,omitempty"`
 	AcctRecord  *AcctRecord  `json:"record,omitempty"`
+	Mint        *Mint        `json:"mint,omitempty"`
 	Unvalidated *Unvalidated `json:"unvalidated,omitempty"`
 	ServerMsg   string       `json:"server_msg,omitempty"`
+	// IndexError names what a failed index write cost, on the record for the
+	// session that lost it. Revocation must report the contexts it could not
+	// reach (spec §5.6), and this is the only place that says which they are.
+	IndexError string `json:"index_error,omitempty"`
 }
 
 type Auth struct {
-	Method           string `json:"method"`
-	CredentialSHA256 string `json:"credential_sha256"`
+	Method string `json:"method"`
+	// CredentialSHA256 is omitempty because a mint record has no value for it.
+	// §5.7 makes it "the same hash the receipt binds" — the hash of what was
+	// presented on the wire — and says a mint record carries token_sha256 per
+	// minted token *instead*, since no context and no presentation exist yet.
+	// The minter is handed store.Credential, which is identity and not a
+	// secret, so any hash it could compute would join to nothing. A blank join
+	// key is worse than an absent one: it is present on every mint record in
+	// the fleet and therefore joins everything to everything.
+	CredentialSHA256 string `json:"credential_sha256,omitempty"`
 }
 
 type Device struct {
@@ -78,6 +91,14 @@ type AcctRecord struct {
 	StartTime   int64    `json:"start_time,omitempty"`
 	StopTime    int64    `json:"stop_time,omitempty"`
 	ElapsedTime int64    `json:"elapsed_time,omitempty"`
+}
+
+// Mint is the audit trail for authority (spec §5.7): which tokens were issued,
+// identified by hash only. The token itself never appears in the log.
+type Mint struct {
+	TokenSHA256 []string `json:"token_sha256"`
+	TTLSeconds  int      `json:"ttl_seconds"`
+	BlobHash    string   `json:"blob,omitempty"`
 }
 
 // Unvalidated is what is recorded for a packet no key validated: cleartext header

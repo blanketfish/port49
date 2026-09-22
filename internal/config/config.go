@@ -24,7 +24,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/limits"
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 )
 
 type KeyVersion struct {
@@ -45,11 +45,18 @@ type AccountingConfig struct {
 	SpoolPath     string `yaml:"spool_path"`
 }
 
+// SeedToken names one lab operator who gets a token pair at start, and nothing
+// else: port49d mints the secret and writes it to LabConfig.SeedTokenFile, so a
+// credential is never written down in a configuration file or re-emitted on a
+// stream. `enable: true` asks for an enable token beside the login one.
+//
+// The yaml tags are not decoration — without them the decoder matches
+// case-insensitively on the field name and would accept `NAS:` and `Username:`,
+// against the snake_case rule and against what KnownFields(true) is for.
 type SeedToken struct {
 	NAS      string `yaml:"nas"`
 	Username string `yaml:"username"`
-	Secret   string `yaml:"secret"`
-	Kind     string `yaml:"kind"`
+	Enable   bool   `yaml:"enable"`
 }
 
 // LabConfig is the stand-in authorizer's configuration. It is required until
@@ -61,9 +68,66 @@ type LabConfig struct {
 	// reply, as SessionAttributes are to a session one. It is a separate list
 	// because register entry L18 asks the same question of each reply
 	// separately; see author.Lab.
-	CommandAttributes []string    `yaml:"command_attributes"`
-	DenyPrefixes      []string    `yaml:"deny_prefixes"`
-	SeedTokens        []SeedToken `yaml:"seed_tokens"`
+	CommandAttributes []string `yaml:"command_attributes"`
+	DenyPrefixes      []string `yaml:"deny_prefixes"`
+
+	// SeedTokenFile is where port49d writes the pairs it mints for SeedTokens,
+	// one JSON object per line, mode 0600. It is required when SeedTokens is
+	// non-empty: the daemon mints the secret, so it is the daemon that must not
+	// publish it, and a seed with nowhere to go is a daemon that either loses
+	// the credential or prints it into the journal the decision log ships to.
+	SeedTokenFile string      `yaml:"seed_token_file"`
+	SeedTokens    []SeedToken `yaml:"seed_tokens"`
+}
+
+// SessionConfig is the set of clocks a context lives by (spec §5.6).
+type SessionConfig struct {
+	// StalenessCeiling denies a context whose `refreshed_at` is older than
+	// this, `context_stale`. It defaults to 0, which disables the check, and
+	// that default is a wiring fact rather than a taste: nothing moves
+	// `refreshed_at` until the broker refreshes contexts (plans 3 and 7), so
+	// `refreshed_at` is stamped once at login. Any finite ceiling before then
+	// denies a steadily working operator "the broker is unreachable" at login
+	// plus the ceiling, with no broker to reach. Whoever wires the broker sets
+	// this key; set, it must be at least a minute.
+	StalenessCeiling time.Duration `yaml:"staleness_ceiling"`
+
+	// GraceWindow is how long past `session_expires` a context is kept for
+	// diagnosis before plan 7's sweep reclaims it. Nothing reads it today.
+	GraceWindow time.Duration `yaml:"grace_window"`
+
+	// IndexTTL is how long the context indexes (principal, sid, cert) outlive
+	// a write. They exist so revocation can reach a live context, so they are
+	// given a TTL of their own rather than the context's.
+	IndexTTL time.Duration `yaml:"index_ttl"`
+
+	// MaxSessionAgeDefault is the `max_session_age` a mint uses when policy
+	// names none; `session_expires = auth_time + max_session_age`.
+	MaxSessionAgeDefault time.Duration `yaml:"max_session_age_default"`
+}
+
+// TokenConfig is the minter's bounds.
+type TokenConfig struct {
+	// CandidateCap is how many unspent tokens may stand for one
+	// (device, username) at once. Past it the mint is refused with the count,
+	// so a client stuck in a loop is told so rather than filling the store.
+	CandidateCap int `yaml:"candidate_cap"`
+}
+
+// encKeyYAML names one encryption-at-rest key: the id that travels with every
+// record it seals, and the environment variable holding its 32 bytes. The
+// secret is never inline, for the same reason no shared secret in this file is.
+type encKeyYAML struct {
+	ID        string `yaml:"id"`
+	SecretEnv string `yaml:"secret_env"`
+}
+
+// encryptionYAML is the two-key rotation window of design §8: writes use
+// `current`, reads accept `previous` as well. `previous` is optional and is
+// read-only — retiring it is a config change, never code.
+type encryptionYAML struct {
+	Current  encKeyYAML `yaml:"current"`
+	Previous encKeyYAML `yaml:"previous"`
 }
 
 // PlatformConfig is an operator's override of one built-in platform adapter
@@ -77,6 +141,11 @@ type PlatformConfig struct {
 	// is a default and not a constant. Setting it replaces the built-in — a
 	// fleet part-way through a rename lists both names.
 	SessionServices []string `yaml:"session_services"`
+
+	// EnableUsername selects what username an enable START is expected to
+	// carry: `principal` (the default, and the only value config.Load
+	// accepts) or `enab`, which is refused — see resolveEnableUsernames.
+	EnableUsername string `yaml:"enable_username"`
 }
 
 // limitsYAML mirrors the limits block. The two reset windows are pointers so
@@ -94,27 +163,43 @@ type limitsYAML struct {
 }
 
 type fileConfig struct {
-	Listen         string                    `yaml:"listen"`
-	MetricsListen  string                    `yaml:"metrics_listen"`
-	InventoryFile  string                    `yaml:"inventory_file"`
-	Keys           map[string]KeySet         `yaml:"keys"`
-	Limits         limitsYAML                `yaml:"limits"`
+	Listen        string            `yaml:"listen"`
+	MetricsListen string            `yaml:"metrics_listen"`
+	InventoryFile string            `yaml:"inventory_file"`
+	Keys          map[string]KeySet `yaml:"keys"`
+	Limits        limitsYAML        `yaml:"limits"`
+	// ReceiptTTL is kept only so Load can refuse the key by name: it was
+	// replaced by the two bounds below, and a daemon that starts on a stale
+	// config is a daemon whose receipt window is not what the operator
+	// believes (spec §13, decision 15).
 	ReceiptTTL     time.Duration             `yaml:"receipt_ttl"`
+	ReceiptIdleTTL time.Duration             `yaml:"receipt_idle_ttl"`
+	ReceiptMaxAge  time.Duration             `yaml:"receipt_max_age"`
 	ContextIdleTTL time.Duration             `yaml:"context_idle_ttl"`
 	Accounting     AccountingConfig          `yaml:"accounting"`
 	Platforms      map[string]PlatformConfig `yaml:"platforms"`
+	Encryption     encryptionYAML            `yaml:"encryption"`
+	Session        SessionConfig             `yaml:"session"`
+	Token          TokenConfig               `yaml:"token"`
 	Lab            *LabConfig                `yaml:"lab"`
 }
 
 type Config struct {
-	Listen         string
-	MetricsListen  string
-	InventoryFile  string
-	Keys           map[string]KeySet
-	Limits         limits.Config
-	ReceiptTTL     time.Duration
+	Listen        string
+	MetricsListen string
+	InventoryFile string
+	Keys          map[string]KeySet
+	Limits        limits.Config
+	// ReceiptIdleTTL slides a receipt forward on every presentation it
+	// answers; ReceiptMaxAge caps it from the first redemption and never
+	// moves. A presentation past either is FAIL on the wire and `token_spent`
+	// in the log (spec §5.7; §13, decision 15).
+	ReceiptIdleTTL time.Duration
+	ReceiptMaxAge  time.Duration
 	ContextIdleTTL time.Duration
 	Accounting     AccountingConfig
+	Session        SessionConfig
+	Token          TokenConfig
 	Lab            *LabConfig
 
 	// SessionServices is the resolved authorization-`service` table: every
@@ -124,10 +209,21 @@ type Config struct {
 	// error rather than a platform silently on its default (spec §5.2, §8).
 	SessionServices map[string][]string
 
+	// EnableUsernames is the resolved enable-username table: every built-in
+	// platform mapped to platform.EnablePrincipal, the only value config.Load
+	// accepts today (see resolveEnableUsernames).
+	EnableUsernames map[string]string
+
 	// Inventory and Admission are read and built once, here, so the daemon
 	// never re-reads the file and the two can never disagree.
 	Inventory admission.Inventory
 	Admission *admission.Trie
+
+	// encCurrent and encPrevious are the key references, not the keys: the
+	// bytes live in secrets, which Load fills from the environment, so a
+	// Config that is printed or logged carries no key material.
+	encCurrent, encPrevious encKeyYAML
+	hasPrevious             bool
 
 	secrets map[string]string
 }
@@ -137,6 +233,13 @@ const defaultWindow = 10 * time.Minute
 func Load(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
+		return Config{}, err
+	}
+	// Before the strict decode, because KnownFields(true) refuses `secret:` and
+	// `kind:` under a seed with "field secret not found in type
+	// config.SeedToken" — true, and no help at all to an operator whose lab
+	// logins stopped working. staleSeedKeys names the replacement instead.
+	if err := staleSeedKeys(raw); err != nil {
 		return Config{}, err
 	}
 	// KnownFields: this file is read once, at start, and every key in it
@@ -159,16 +262,35 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 
+	if f.ReceiptTTL != 0 {
+		return Config{}, fmt.Errorf("config: receipt_ttl was replaced by receipt_idle_ttl (default 15m) " +
+			"and receipt_max_age (default 2h) when the receipt became a sliding window (spec §13, decision 15); " +
+			"remove the key and set those")
+	}
+
 	c := Config{
 		Listen:         or(f.Listen, ":49"),
 		MetricsListen:  or(f.MetricsListen, ":9049"),
 		InventoryFile:  f.InventoryFile,
 		Keys:           f.Keys,
-		ReceiptTTL:     orD(f.ReceiptTTL, 30*time.Second),
+		ReceiptIdleTTL: orD(f.ReceiptIdleTTL, 15*time.Minute),
+		ReceiptMaxAge:  orD(f.ReceiptMaxAge, 2*time.Hour),
 		ContextIdleTTL: orD(f.ContextIdleTTL, 12*time.Hour),
 		Accounting:     f.Accounting,
 		Lab:            f.Lab,
-		secrets:        map[string]string{},
+		// staleness_ceiling has no default: 0 means the check is off, which is
+		// what SessionConfig.StalenessCeiling argues for.
+		Session: SessionConfig{
+			StalenessCeiling:     f.Session.StalenessCeiling,
+			GraceWindow:          orD(f.Session.GraceWindow, 10*time.Minute),
+			IndexTTL:             orD(f.Session.IndexTTL, 12*time.Hour),
+			MaxSessionAgeDefault: orD(f.Session.MaxSessionAgeDefault, 12*time.Hour),
+		},
+		Token:       TokenConfig{CandidateCap: orI(f.Token.CandidateCap, 8)},
+		encCurrent:  f.Encryption.Current,
+		encPrevious: f.Encryption.Previous,
+		hasPrevious: f.Encryption.Previous.SecretEnv != "",
+		secrets:     map[string]string{},
 		Limits: limits.Config{
 			PerNASConnections:    orI(f.Limits.PerNASConnections, 32),
 			IdleTimeout:          orD(f.Limits.IdleTimeout, 30*time.Second),
@@ -203,18 +325,21 @@ func Load(path string) (Config, error) {
 	if err := resolveSessionServices(&c, f.Platforms); err != nil {
 		return Config{}, err
 	}
+	if err := resolveEnableUsernames(&c, f.Platforms); err != nil {
+		return Config{}, err
+	}
 	if c.Lab == nil {
 		return Config{}, fmt.Errorf("config: lab: block is required until the policy engine lands (plan 4)")
 	}
 	for i, t := range c.Lab.SeedTokens {
-		switch t.Kind {
-		case store.KindLogin, store.KindEnable:
-		default:
-			return Config{}, fmt.Errorf("config: lab.seed_tokens[%d]: kind %q must be %q or %q", i, t.Kind, store.KindLogin, store.KindEnable)
+		if t.NAS == "" || t.Username == "" {
+			return Config{}, fmt.Errorf("config: lab.seed_tokens[%d]: nas and username are both required", i)
 		}
-		if t.NAS == "" || t.Username == "" || t.Secret == "" {
-			return Config{}, fmt.Errorf("config: lab.seed_tokens[%d]: nas, username, and secret are all required", i)
-		}
+	}
+	if len(c.Lab.SeedTokens) > 0 && c.Lab.SeedTokenFile == "" {
+		return Config{}, fmt.Errorf("config: lab.seed_token_file is required when lab.seed_tokens is non-empty: " +
+			"port49d mints each seed's secret at start and has to put it somewhere an operator can read " +
+			"and nothing else can — a 0600 file, never a stream")
 	}
 
 	for ref, ks := range c.Keys {
@@ -236,6 +361,66 @@ func Load(path string) (Config, error) {
 			}
 			c.secrets[v.SecretEnv] = s
 		}
+	}
+
+	// The encryption keys go into c.secrets alongside the shared secrets,
+	// because that map is the one place a secret is held and EncryptionKeys
+	// reads it. Without this the map is empty for those names, key32 is handed
+	// "", and — were it to zero-pad rather than refuse — every token, receipt
+	// and context in the store would be sealed under an all-zero AES-256 key,
+	// with no error and no panic.
+	if f.Encryption.Current.SecretEnv == "" {
+		return Config{}, fmt.Errorf("config: encryption.current is required: it is the key every token, receipt " +
+			"and context is sealed under at rest (design §8); name an id and the environment variable holding " +
+			"its 32 bytes")
+	}
+	for _, k := range []struct {
+		what string
+		ref  encKeyYAML
+	}{
+		{"encryption.current", f.Encryption.Current}, {"encryption.previous", f.Encryption.Previous},
+	} {
+		if k.ref.SecretEnv == "" {
+			// previous is optional; current's absence was refused above. But a
+			// previous key that names an id and no variable is not "absent" to
+			// the operator who wrote it — it reads as a rotation in progress
+			// while every record still sealed under that id fails to open.
+			if k.ref.ID != "" {
+				return Config{}, fmt.Errorf("config: %s: id %q is named with no secret_env, so the key is not "+
+					"loaded and every record sealed under it fails to open; give it a secret_env or remove the block",
+					k.what, k.ref.ID)
+			}
+			continue
+		}
+		if k.ref.ID == "" {
+			return Config{}, fmt.Errorf("config: %s: id is required: it is written into every record the key "+
+				"seals and is its authenticated data, so a record cannot be opened without it", k.what)
+		}
+		// Unset and wrong-length are separate errors on purpose, and each names
+		// the id as well as the variable. The length check below would absorb
+		// an unset one — "" is not 32 bytes — and the operator would be told
+		// their key is the wrong size when what happened is that the unit never
+		// exported it. That is the difference between editing a secret and
+		// editing a systemd file at 3am.
+		s, ok := os.LookupEnv(k.ref.SecretEnv)
+		if !ok || s == "" {
+			return Config{}, fmt.Errorf("config: %s (id %q): environment variable %s is not set",
+				k.what, k.ref.ID, k.ref.SecretEnv)
+		}
+		if len(s) != 32 {
+			return Config{}, fmt.Errorf("config: %s (id %q): %s must be exactly 32 bytes for AES-256, got %d",
+				k.what, k.ref.ID, k.ref.SecretEnv, len(s))
+		}
+		c.secrets[k.ref.SecretEnv] = s
+	}
+	// The id is what a sealed record is labelled with, so two keys under one id
+	// is not a rotation: Open matches the label on Current every time, Previous
+	// is never tried, and every record written before the secret changed is
+	// unopenable — from a config that looks exactly like a correct rotation.
+	if c.hasPrevious && f.Encryption.Previous.ID == f.Encryption.Current.ID {
+		return Config{}, fmt.Errorf("config: encryption.previous.id is %q, the same as encryption.current.id: "+
+			"the id labels every record the key sealed, so a rotation has to change it or the previous key is "+
+			"never tried", f.Encryption.Current.ID)
 	}
 
 	inv, err := admission.LoadFile(c.InventoryFile)
@@ -276,6 +461,70 @@ func Load(path string) (Config, error) {
 	}
 	c.Inventory, c.Admission = inv, trie
 	return c, nil
+}
+
+// EncryptionKeys is the two-key window: writes use Current, reads try Current
+// then Previous. Retiring Previous is a config change, never code (design §8).
+func (c Config) EncryptionKeys() (crypt.Keys, error) {
+	cur, err := key32(c.encCurrent.ID, c.secrets[c.encCurrent.SecretEnv])
+	if err != nil {
+		return crypt.Keys{}, err
+	}
+	keys := crypt.Keys{Current: cur}
+	if c.hasPrevious {
+		p, err := key32(c.encPrevious.ID, c.secrets[c.encPrevious.SecretEnv])
+		if err != nil {
+			return crypt.Keys{}, err
+		}
+		keys.Previous = &p
+	}
+	return keys, nil
+}
+
+// key32 returns an error rather than a short key silently zero-padded. Load
+// already refuses anything but 32 bytes, so this is the backstop that makes the
+// silent case impossible to reach by another route — and it is what the error
+// return in EncryptionKeys's signature is for.
+func key32(id, secret string) (crypt.Key, error) {
+	if len(secret) != 32 {
+		return crypt.Key{}, fmt.Errorf("config: encryption key %q: secret must be exactly 32 bytes, got %d", id, len(secret))
+	}
+	var k crypt.Key
+	k.ID = id
+	copy(k.Bytes[:], secret)
+	return k, nil
+}
+
+// staleSeedKeys refuses a `secret:` or `kind:` under lab.seed_tokens and names
+// the minter as what replaced it. Both are unknown fields now, so the strict
+// decode would refuse them anyway — but its message says the key does not
+// exist, not that port49d mints the secret itself and writes it to
+// lab.seed_token_file, and an operator whose seeds silently stopped being used
+// has nothing else to read. (The same discipline receipt_ttl gets, for the same
+// reason.)
+//
+// A decode error here is ignored on purpose: the strict decode below reports a
+// malformed file properly, naming the path.
+func staleSeedKeys(raw []byte) error {
+	var loose struct {
+		Lab struct {
+			SeedTokens []map[string]any `yaml:"seed_tokens"`
+		} `yaml:"lab"`
+	}
+	if err := yaml.Unmarshal(raw, &loose); err != nil {
+		return nil
+	}
+	for i, t := range loose.Lab.SeedTokens {
+		for _, k := range []string{"secret", "kind"} {
+			if _, ok := t[k]; !ok {
+				continue
+			}
+			return fmt.Errorf("config: lab.seed_tokens[%d]: %q was removed: the pair is minted by port49d at "+
+				"start and written to lab.seed_token_file, so a seed names who gets one and nothing else; "+
+				"drop the key (an enable token is `enable: true`)", i, k)
+		}
+	}
+	return nil
 }
 
 // Keyring resolves every key set to its secrets, ordered current, accept, retired.
@@ -345,6 +594,44 @@ func resolveSessionServices(c *Config, overrides map[string]PlatformConfig) erro
 	return nil
 }
 
+// resolveEnableUsernames applies any platforms.<name>.enable_username override
+// to the built-in table, and refuses `enab`.
+//
+// The $enab{level}$ enable path is unbuilt on purpose: it would need a
+// (nas, rem_addr) secondary index, and rem_addr is measured identical for two
+// concurrent sessions behind one bastion, so that index would have to refuse
+// rather than guess — and its refusal needs a reason code spec §5.7 does not
+// carry. None of that is worth building for a username form no device in this
+// lab has ever sent.
+func resolveEnableUsernames(c *Config, overrides map[string]PlatformConfig) error {
+	c.EnableUsernames = platform.EnableUsernames()
+	names := make([]string, 0, len(overrides))
+	for name := range overrides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		v := overrides[name].EnableUsername
+		if v == "" {
+			continue
+		}
+		if !platform.KnownEnableUsername(v) {
+			return fmt.Errorf("config: platforms.%s.enable_username is %q; it must be %q or %q",
+				name, v, platform.EnablePrincipal, platform.EnableEnab)
+		}
+		if v == platform.EnableEnab {
+			return fmt.Errorf("config: platforms.%s.enable_username: %q is refused: no platform in the lab has been "+
+				"measured sending that username form, and port49 does not ship an unexercised enable path for it. "+
+				"Every platform with an enable exchange sends the operator's own username "+
+				"(tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md). To enable it, add a "+
+				"tests/lab/results/ note showing a device sending it and lift this refusal with the code that reads it",
+				name, platform.EnableEnab)
+		}
+		c.EnableUsernames[name] = v
+	}
+	return nil
+}
+
 // window applies the 10m default for an absent key and refuses an explicit zero
 // or negative one: the limiter reads a zero window as "never reset", so a
 // source's strike count would only ever grow.
@@ -370,12 +657,36 @@ func checkPositive(c Config) error {
 		{"limits.malformed_backoff_max", c.Limits.MalformedBackoffMax},
 		{"limits.auth_failure_delay_base", c.Limits.AuthFailureDelayBase},
 		{"limits.auth_failure_delay_max", c.Limits.AuthFailureDelayMax},
-		{"receipt_ttl", c.ReceiptTTL},
+		{"receipt_idle_ttl", c.ReceiptIdleTTL},
+		{"receipt_max_age", c.ReceiptMaxAge},
 		{"context_idle_ttl", c.ContextIdleTTL},
+		{"session.grace_window", c.Session.GraceWindow},
+		{"session.index_ttl", c.Session.IndexTTL},
+		{"session.max_session_age_default", c.Session.MaxSessionAgeDefault},
 	} {
 		if f.d <= 0 {
 			return fmt.Errorf("config: %s must be greater than zero; got %s", f.name, f.d)
 		}
+	}
+	// staleness_ceiling is the one duration here whose zero is meaningful: it
+	// is the default and it means the check is off. A positive one still has to
+	// outlast a refresh interval — under a minute it denies everyone
+	// `context_stale` about as fast as the broker can refresh them.
+	if c.Session.StalenessCeiling < 0 {
+		return fmt.Errorf("config: session.staleness_ceiling must not be negative; got %s (omit the key to disable the check)",
+			c.Session.StalenessCeiling)
+	}
+	if c.Session.StalenessCeiling > 0 && c.Session.StalenessCeiling < time.Minute {
+		return fmt.Errorf("config: session.staleness_ceiling is %s: set it to at least 1m, or omit it to disable "+
+			"the staleness check; a ceiling shorter than a refresh interval denies every live context context_stale",
+			c.Session.StalenessCeiling)
+	}
+	if c.Token.CandidateCap < 1 {
+		return fmt.Errorf("config: token.candidate_cap must be at least 1; got %d", c.Token.CandidateCap)
+	}
+	if c.ReceiptIdleTTL > c.ReceiptMaxAge {
+		return fmt.Errorf("config: receipt_idle_ttl (%s) is longer than receipt_max_age (%s): "+
+			"the window can never slide, so the idle bound does nothing", c.ReceiptIdleTTL, c.ReceiptMaxAge)
 	}
 	if c.Limits.PerNASConnections < 1 {
 		return fmt.Errorf("config: limits.per_nas_connections must be at least 1; got %d", c.Limits.PerNASConnections)

@@ -12,8 +12,13 @@ const (
 	TrustDomainUnresolved Reason = "trust_domain_unresolved"
 
 	// redeem
-	TokenRedeemed      Reason = "token_redeemed"
-	TokenNotFound      Reason = "token_not_found"
+	TokenRedeemed Reason = "token_redeemed"
+	TokenNotFound Reason = "token_not_found"
+	// TokenSpent: the credential matched a receipt whose sliding window
+	// (receipt_idle_ttl) or absolute cap (receipt_max_age) had passed. FAIL on
+	// the wire, exactly as a wrong password is; the log is the only place the
+	// two differ (spec §5.7; §13, decision 15).
+	TokenSpent         Reason = "token_spent"
 	DeviceMismatch     Reason = "device_mismatch"
 	CredentialMismatch Reason = "credential_mismatch"
 	ReceiptReplayed    Reason = "receipt_replayed"

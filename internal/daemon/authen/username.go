@@ -1,16 +1,9 @@
 package authen
 
-import "strings"
+import "github.com/rhwendt/port49/internal/username"
 
-// Canonical is the form the broker writes tokens under and the daemon looks
-// them up by: lower-cased, with a DOMAIN\ prefix or an @suffix removed (spec §2).
-func Canonical(username string) string {
-	u := strings.ToLower(strings.TrimSpace(username))
-	if i := strings.LastIndex(u, `\`); i >= 0 {
-		u = u[i+1:]
-	}
-	if i := strings.Index(u, "@"); i >= 0 {
-		u = u[:i]
-	}
-	return u
-}
+// Canonical is username.Canonical. The name stays exported here because plan 1's
+// handler, its tests and package author all call it by this name; the body moved
+// so internal/token can enforce the same rule at mint without importing this
+// package, which from Task 7 on imports internal/token itself.
+func Canonical(u string) string { return username.Canonical(u) }

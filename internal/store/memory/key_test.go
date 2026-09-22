@@ -45,20 +45,23 @@ func TestContextKeySeparatesUsersAndDevices(t *testing.T) {
 	}
 }
 
-// The receipt key carries the credential hash, so a different credential is a
-// miss rather than a collision.
+// The receipt key carries the credential hash and the token kind, so a
+// different credential is a miss rather than a collision — and so is the same
+// credential presented at enable, which is a different question than the login
+// this receipt answered.
 func TestReceiptKeyCarriesTheCredentialHash(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	s := New(func() time.Time { return now })
 	ctx := context.Background()
 
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
-	if _, err := s.PutToken(ctx, k, store.Token{Secret: []byte("p49_tok1"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute)}); err != nil {
+	if _, err := s.PutToken(ctx, k, store.Token{ID: "t1", Secret: []byte("p49_tok1"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	h1 := sha256.Sum256([]byte("p49_tok1"))
-	rk := store.ReceiptKey{NAS: "leaf-01", Username: "alice", CredentialSHA256: h1}
-	if err := s.RedeemAndReceipt(ctx, k, []byte("p49_tok1"), rk, store.Receipt{CredentialSHA256: h1, CtxID: "ctx1", ExpiresAt: now.Add(time.Minute)}); err != nil {
+	rk := store.ReceiptKey{NAS: "leaf-01", Username: "alice", Kind: store.KindLogin, CredentialSHA256: h1}
+	r := store.Receipt{CredentialSHA256: h1, CtxID: "ctx1", FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Minute)}
+	if err := s.RedeemAndReceipt(ctx, k, "t1", rw(rk, r, "user:alice@example.com")); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.GetReceipt(ctx, rk); err != nil || got.CtxID != "ctx1" {
@@ -66,9 +69,11 @@ func TestReceiptKeyCarriesTheCredentialHash(t *testing.T) {
 	}
 	h2 := sha256.Sum256([]byte("p49_tok2"))
 	for _, miss := range []store.ReceiptKey{
-		{NAS: "leaf-01", Username: "alice", CredentialSHA256: h2},
-		{NAS: "leaf-01", Username: "bob", CredentialSHA256: h1},
-		{NAS: "leaf-02", Username: "alice", CredentialSHA256: h1},
+		{NAS: "leaf-01", Username: "alice", Kind: store.KindLogin, CredentialSHA256: h2},
+		{NAS: "leaf-01", Username: "bob", Kind: store.KindLogin, CredentialSHA256: h1},
+		{NAS: "leaf-02", Username: "alice", Kind: store.KindLogin, CredentialSHA256: h1},
+		// The same credential on the same device, asked as an enable question.
+		{NAS: "leaf-01", Username: "alice", Kind: store.KindEnable, CredentialSHA256: h1},
 	} {
 		if _, err := s.GetReceipt(ctx, miss); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("%+v resolved to a receipt: %v", miss, err)

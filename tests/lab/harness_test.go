@@ -128,6 +128,13 @@ const (
 	labKeyDefault  = labcreds.Key            // `tacacs-server host ... key`, `tacplus-server ... secret`
 	breakglassUser = labcreds.BreakglassUser // the local account both startup configs define
 
+	// labEncKeyDefault is the encryption-at-rest key for a lab run, 32 bytes as
+	// AES-256 requires. Unlike the constants around it this one is NOT a
+	// credential anything authenticates with: the lab store is in memory, so it
+	// seals nothing that survives the daemon, and no capture or evidence file
+	// ever contains it. PORT49_LAB_ENC_KEY overrides it.
+	labEncKeyDefault = "port49-lab-encryption-key-32byte"
+
 	// breakglassPassword is that account's password. The EOS config carries it
 	// verbatim; the Junos config carries a SHA-512 crypt hash of it under
 	// `encrypted-password`, because the plain-text form does not produce a
@@ -188,6 +195,19 @@ var (
 	labsMu sync.Mutex
 	labs   = map[string]*lab{}
 	active *lab // the one platform currently deployed; see bringUp
+
+	// runSeeds is every pair every daemon of this run minted, in the order the
+	// files were read. It is a run-scoped union and not the last file on disk
+	// because port49d truncates the seed-token file at each start: the file at
+	// the end of a run names the LAST daemon's tokens, while the captures hold
+	// every daemon's. Verifying the evidence against the file alone therefore
+	// checks the exact tokens of the daemon that ran last — which, after an
+	// L3-style restart-and-restore, is one that put nothing on the wire. That
+	// reports "auditing against N exact secrets" while checking none of the
+	// run's real ones, which is the failure labcreds.Secrets refuses for an
+	// empty list, dressed up.
+	runSeedsMu sync.Mutex
+	runSeeds   []labcreds.SeedToken
 )
 
 type lab struct {
@@ -217,8 +237,14 @@ type lab struct {
 	// see, and any note written in that state carries this as a caveat.
 	configWarn string
 
-	mu           sync.Mutex
-	tokenN       int
+	mu     sync.Mutex
+	tokenN int
+	// seeds is what port49d minted for this platform's NAS on its current run,
+	// keyed by username. It is reloaded from the seed-token file every time the
+	// daemon starts, because the daemon truncates that file and mints a fresh
+	// pair for every seed: a token from before a restart is not in the store any
+	// more, and presenting one would be measured as token_not_found.
+	seeds        map[string]labcreds.SeedToken
 	capAbs       string // absolute path of the raw capture, which is git-ignored
 	evidencePath string // repo-relative, committed, redacted: what a note points at
 }
@@ -277,9 +303,32 @@ func writeEvidence() error {
 	if key == "" {
 		key = labKeyDefault
 	}
-	secrets, err := labcreds.Secrets(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
-	if err != nil {
-		return fmt.Errorf("evidence: %w", err)
+	// The credentials are the pairs port49d minted for this run. The config no
+	// longer knows them: a seed names who gets a token and the daemon chooses
+	// the secret.
+	//
+	// They come from the union the harness built as each daemon wrote its file
+	// (runSeeds), not from the file on disk, because the file is truncated at
+	// every start and a run that restarted the daemon has captures from
+	// daemons whose tokens are no longer in it. The file is the fallback for a
+	// run that never loaded one.
+	runSeedsMu.Lock()
+	seeds := append([]labcreds.SeedToken(nil), runSeeds...)
+	runSeedsMu.Unlock()
+	var secrets []string
+	if len(seeds) > 0 {
+		var err error
+		if secrets, err = labcreds.SecretsOf(seeds); err != nil {
+			return fmt.Errorf("evidence: the pairs this run's daemons minted: %w", err)
+		}
+	} else {
+		seedPath, err := labcreds.SeedTokenFile(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
+		if err != nil {
+			return fmt.Errorf("evidence: %w", err)
+		}
+		if secrets, err = labcreds.Secrets(seedPath); err != nil {
+			return fmt.Errorf("evidence: %w", err)
+		}
 	}
 	_, subnet, err := net.ParseCIDR(labSubnet)
 	if err != nil {
@@ -362,6 +411,7 @@ func (l *lab) resetForRedeploy() {
 	l.err = nil
 	l.mu.Lock()
 	l.tokenN = 0
+	l.seeds = nil
 	l.mu.Unlock()
 }
 
@@ -819,10 +869,21 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	l.daemon.Dir = root
 	l.daemon.Stdout = l.logFile
 	l.daemon.Stderr = io.MultiWriter(l.errFile, os.Stderr)
-	l.daemon.Env = append(os.Environ(), "PORT49_LAB_KEY="+key)
+	// The encryption-at-rest key is required (design §8) and has no default in
+	// the config, so the harness supplies one. The lab store is in memory and
+	// dies with the daemon, so this key protects nothing that outlives the run;
+	// it is set so the lab exercises the same sealed path production does.
+	encKey := os.Getenv("PORT49_LAB_ENC_KEY")
+	if encKey == "" {
+		encKey = labEncKeyDefault
+	}
+	l.daemon.Env = append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_LAB_ENC_KEY="+encKey)
 	if err := l.daemon.Start(); err != nil {
 		return fmt.Errorf("start port49d: %w", err)
 	}
+	// Taken here so loadSeeds can tell this daemon's seed-token file from the
+	// one the previous daemon left at the same path.
+	started := time.Now()
 
 	// One Wait goroutine for the daemon's whole life, because Cmd.Wait may be
 	// called only once and both startup and shutdown need to know it exited.
@@ -842,7 +903,7 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		if daemonHealthy() {
-			return nil
+			return l.loadSeeds(cfgPath, started)
 		}
 		select {
 		case <-l.daemonDone:
@@ -857,6 +918,112 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	}
 	stderr, _ := os.ReadFile(l.errPath)
 	return fmt.Errorf("port49d did not come up within 30s; its stderr was:\n%s", stderr)
+}
+
+// loadSeeds reads the pairs port49d minted for this platform's NAS out of the
+// seed-token file named by cfgPath, and is called on every daemon start.
+//
+// It exists because nothing in this repository knows a lab credential any more:
+// a seed names who gets a token and the daemon chooses the secret (design §8).
+// The harness therefore cannot compute a token the way it used to — it has to
+// read the one this daemon just minted, which is also why the daemon has to be
+// up before any test asks for a login.
+//
+// startedAt is when the daemon was started, and the file's modification time is
+// checked against it. The check is the whole point of passing it: the file is
+// truncated and rewritten at every start, so a file older than this process is
+// the *previous* run's credentials, and every one of them is a token the store
+// no longer holds. Reading them would produce a run in which every login is
+// denied `token_not_found`, which is exactly what a device that mangles
+// passwords looks like.
+func (l *lab) loadSeeds(cfgPath string, startedAt time.Time) error {
+	path, err := labcreds.SeedTokenFile(cfgPath)
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		seeds, all, err := l.readSeeds(path, startedAt)
+		if err == nil {
+			l.mu.Lock()
+			l.seeds = seeds
+			l.mu.Unlock()
+			// Every pair this daemon minted joins the run's union, not just
+			// this platform's: the evidence verifier searches the captures for
+			// strings, and a string that is not in them costs nothing.
+			runSeedsMu.Lock()
+			runSeeds = append(runSeeds, all...)
+			runSeedsMu.Unlock()
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("the tokens port49d minted for NAS %q could not be read: %w", l.p.node, err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// readSeeds is one attempt at loadSeeds's read: the file has to exist, to have
+// been written by this daemon, and to carry at least one pair for this NAS.
+// It returns this platform's pairs keyed by username, and every pair in the
+// file for the run-scoped union.
+func (l *lab) readSeeds(path string, startedAt time.Time) (map[string]labcreds.SeedToken, []labcreds.SeedToken, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if info.ModTime().Before(startedAt.Add(-time.Second)) {
+		return nil, nil, fmt.Errorf("%s was last written %v, before this port49d started at %v, so it holds the "+
+			"previous run's spent tokens", path, info.ModTime().Format(time.RFC3339), startedAt.Format(time.RFC3339))
+	}
+	all, err := labcreds.SeedTokens(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	seeds := map[string]labcreds.SeedToken{}
+	for _, s := range all {
+		if s.NAS == l.p.node {
+			seeds[s.Username] = s
+		}
+	}
+	if len(seeds) == 0 {
+		return nil, nil, fmt.Errorf("%s holds %d minted pair(s), none of them for NAS %q; check lab.seed_tokens in "+
+			"the config this daemon was started with", path, len(all), l.p.node)
+	}
+	return seeds, all, nil
+}
+
+// loginToken is the login token port49d minted for user on this platform's NAS.
+func (l *lab) loginToken(user string) (string, error) {
+	l.mu.Lock()
+	s, ok := l.seeds[user]
+	n := len(l.seeds)
+	l.mu.Unlock()
+	if !ok {
+		return "", fmt.Errorf("port49d minted no token for %q on NAS %q (it minted %d for this NAS); "+
+			"seed one in tests/lab/port49d-lab.yaml, or the harness and the config have drifted apart",
+			user, l.p.node, n)
+	}
+	if s.Login == "" {
+		return "", fmt.Errorf("the pair port49d minted for %q on NAS %q carries no login token", user, l.p.node)
+	}
+	return s.Login, nil
+}
+
+// enableToken is the enable token minted for user, which exists only where the
+// seed asked for one with `enable: true`.
+func (l *lab) enableToken(user string) (string, error) {
+	l.mu.Lock()
+	s, ok := l.seeds[user]
+	l.mu.Unlock()
+	if !ok {
+		return "", fmt.Errorf("port49d minted no token at all for %q on NAS %q", user, l.p.node)
+	}
+	if s.Enable == "" {
+		return "", fmt.Errorf("the seed for %q on NAS %q did not ask for an enable token (`enable: true`), "+
+			"so there is no enable credential to type", user, l.p.node)
+	}
+	return s.Enable, nil
 }
 
 // writeDelayConfig copies the lab daemon config with both failure-delay knobs
@@ -1117,8 +1284,13 @@ func eachPlatform(t *testing.T, fn func(t *testing.T, l *lab)) {
 // ---------------------------------------------------------------------------
 
 // nextLogin hands out the next unspent seeded login: a username and the token
-// seeded under it. Redemption deletes the token, so every login in a run spends
-// one.
+// port49d minted under it for this platform's NAS. Redemption deletes the
+// token, so every login in a run spends one.
+//
+// The token is read from the seed-token file rather than computed, because
+// nothing but the daemon knows it: a seed names who gets a token and port49d
+// chooses the secret (design §8). That is why the daemon has to be up before
+// the first login — see loadSeeds, which is called from startDaemonWith.
 //
 // A username per login is also what makes the decision log readable as a set of
 // sessions: the username is written on every record whether or not a context
@@ -1129,8 +1301,8 @@ func eachPlatform(t *testing.T, fn func(t *testing.T, l *lab)) {
 // It used to be load-bearing for a second reason that has expired. The receipt
 // key was `(nas, port, username)`, and EOS reports `port` as the constant
 // string "ssh" at authentication (L1), so every SSH login by one user shared a
-// receipt: a second login inside receipt_ttl presented a fresh token against
-// the first login's receipt and was refused `credential_mismatch`. The receipt
+// receipt: a second login inside the receipt window presented a fresh token
+// against the first login's receipt and was refused `credential_mismatch`. The receipt
 // key now carries the credential hash (spec §13, decision 15), so a fresh token
 // finds no receipt and redeems normally. Repeating a username is no longer a
 // collision; it is just harder to read.
@@ -1143,10 +1315,10 @@ func (l *lab) nextLogin(t *testing.T) (user, secret string) {
 	if n > tokenPoolSize {
 		t.Fatalf("%s: the seeded login pool of %d is exhausted; seed more in tests/lab/port49d-lab.yaml", l.p.name, tokenPoolSize)
 	}
-	user, secret = fmt.Sprintf("alice%02d", n), fmt.Sprintf("p49_labtoken%02d", n)
-	mustBeSeeded(t, secret)
-	if !strings.Contains(labYAML, "username: "+user+",") {
-		t.Fatalf("tests/lab/port49d-lab.yaml seeds no login for %q; the harness and the config have drifted apart", user)
+	user = fmt.Sprintf("alice%02d", n)
+	secret, err := l.loginToken(user)
+	if err != nil {
+		t.Fatalf("%s: %v", l.p.name, err)
 	}
 	return user, secret
 }
@@ -1163,27 +1335,35 @@ func (l *lab) nextLoginOrErr() (user, secret string, err error) {
 		return "", "", fmt.Errorf("%s: the seeded login pool of %d is exhausted; seed more in "+
 			"tests/lab/port49d-lab.yaml", l.p.name, tokenPoolSize)
 	}
-	user, secret = fmt.Sprintf("alice%02d", n), fmt.Sprintf("p49_labtoken%02d", n)
-	if !strings.Contains(labYAML, "username: "+user+",") {
-		return "", "", fmt.Errorf("tests/lab/port49d-lab.yaml seeds no login for %q; the harness and the "+
-			"config have drifted apart", user)
+	user = fmt.Sprintf("alice%02d", n)
+	secret, err = l.loginToken(user)
+	if err != nil {
+		return "", "", err
 	}
 	return user, secret, nil
 }
 
-// passwordOfLength is the seeded secret for user longpw<n>. The test computes
-// it rather than copying it, and mustBeSeeded proves the YAML agrees.
-func passwordOfLength(n int) string {
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-	s := "p49_" + strings.Repeat(alphabet, 4)
-	return s[:n]
+// mustLogin is nextLogin for a caller that already knows which username it
+// needs — a pool of its own, like the transport and Junos-options tests.
+func (l *lab) mustLogin(t *testing.T, user string) string {
+	t.Helper()
+	secret, err := l.loginToken(user)
+	if err != nil {
+		t.Fatalf("%s: %v", l.p.name, err)
+	}
+	return secret
 }
 
-func mustBeSeeded(t *testing.T, secret string) {
+// mustBeInLabConfig fails the test unless port49d-lab.yaml contains s verbatim.
+//
+// It used to guard seeded secrets, which no longer exist in that file: port49d
+// mints them (see nextLogin). What is left to guard is the text the config and
+// a test have to agree on literally, which today is the deny prefixes L2 types.
+func mustBeInLabConfig(t *testing.T, s string) {
 	t.Helper()
-	if !strings.Contains(labYAML, secret) {
-		t.Fatalf("tests/lab/port49d-lab.yaml does not seed the secret this test uses (%d characters, starting %q); the two have drifted apart",
-			len(secret), secret[:min(16, len(secret))])
+	if !strings.Contains(labYAML, s) {
+		t.Fatalf("tests/lab/port49d-lab.yaml does not contain the string this test depends on (%d characters, starting %q); the two have drifted apart",
+			len(s), s[:min(16, len(s))])
 	}
 }
 
