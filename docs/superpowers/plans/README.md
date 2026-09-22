@@ -5,8 +5,8 @@ the standing brief for each plan: what it builds, which spec sections it impleme
 earlier plans hand it, what it must leave for later, and which lab register entries close in
 it. When writing plan N, start here, then read the cited sections, then the previous plan.
 
-Status: **1 merged 2026-09-21** (PR #2); **2 executed 2026-09-22** on `feature/token-model`
-(fifteen tasks, reviewed per task and whole-branch, PR pending); 3–12 not yet. PR #3's lab
+Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
+fifteen tasks, reviewed per task and whole-branch); 3–12 not yet. PR #3's lab
 stretch is merged, so plan 3 is unblocked and is the next plan to write.
 
 ---
