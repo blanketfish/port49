@@ -229,6 +229,28 @@ func HashDiscriminator(v string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
+// ContextRefresh is what a broker refresh writes into a live context. It is a
+// struct rather than a list of parameters because RefreshContext is a narrow
+// setter: what it may write is a closed list, and naming that list in one type
+// is what keeps it closed.
+type ContextRefresh struct {
+	// AuthTime is the new authentication time. SessionExpires is recomputed
+	// from it inside the store's lock, keeping the window the record's own
+	// (AuthTime, SessionExpires) pair described: a ceiling moves forward by
+	// the same span, and a context without one (HasCeiling false) does not
+	// gain one. The caller cannot compute it, because the pair it would read
+	// is the pair the write is about to replace.
+	AuthTime time.Time
+	// RefreshedAt is the staleness clock (spec §5.1.1). It is the broker's
+	// clock, not the store's: the refresh happened when the broker said it
+	// did.
+	RefreshedAt time.Time
+	// BlobHash, when non-empty, replaces the context's policy blob hash.
+	// Empty leaves it alone — a refresh that did not recompute policy must
+	// not erase the hash the authorizer reads.
+	BlobHash string
+}
+
 // ContextRef is what the indexes hold: the context key, nothing more.
 type ContextRef struct {
 	NAS      string
@@ -314,6 +336,51 @@ type Store interface {
 	//
 	// ErrNotFound if the key is absent or already expired.
 	AnnotateContext(ctx context.Context, k ContextKey, discHash, state string) error
+	// RefreshContext applies a broker refresh to this context in place and
+	// under the store's own lock (spec §5.1.3, §5.6). It is the fourth of the
+	// narrow setters and exists for the reason TouchContext's comment gives:
+	// the broker must not write back a Context it read at the top of the
+	// request, because the writers it would race are accounting's annotation,
+	// the enable path's privilege raise, and a revocation of a principal whose
+	// authorization was withdrawn one request after the broker refreshed it.
+	//
+	// It writes a closed list — AuthTime, SessionExpires, RefreshedAt,
+	// BlobHash when non-empty, and a zero RevokedAt — and, unlike
+	// AnnotateContext, it extends the expiry to now+ttl and stamps
+	// LastTouchedAt: a refresh is a fresh authentication event, which is
+	// activity for the idle TTL in a way an accounting record is not.
+	//
+	// Clearing RevokedAt is deliberate, not collateral: a fresh
+	// authentication event is what lifts a prior mark. The clearing happens
+	// under this lock, so a revocation racing a refresh is ordered against it
+	// rather than lost to a stale copy.
+	//
+	// SessionExpires is recomputed here rather than by the caller because the
+	// pair it is computed from is the pair about to be overwritten; see
+	// ContextRefresh.AuthTime.
+	//
+	// It deliberately does NOT write the credential's sid. Sid lives inside
+	// Credential, which is sealed, and a narrow setter cannot write one field
+	// of a record the sealing layer cannot read (crypt's AnnotateContext
+	// comment). A rotated sid moves in the index instead, with ReindexSid,
+	// which is what revocation by sid reads.
+	//
+	// ErrNotFound if the key is absent or already expired.
+	RefreshContext(ctx context.Context, k ContextKey, r ContextRefresh, ttl time.Duration) error
+	// SetRevokedAt marks this context revoked, in place and under the store's
+	// own lock. It writes exactly one field, RevokedAt, and it is the write
+	// every other setter's comment names as the one that must not be raced
+	// away — so it is held to the same rule itself.
+	//
+	// Marking, never deleting: spec §5.6 row 2 wants the next command denied
+	// `credential_revoked` with a server_msg saying so, which a deleted
+	// context cannot do — an absent context is indistinguishable from a
+	// session port49 never saw. Row 6 reclaims the record on the idle TTL,
+	// which is why this moves neither the expiry nor LastTouchedAt: a revoked
+	// context ages out on the clock it was already on.
+	//
+	// ErrNotFound if the key is absent or already expired.
+	SetRevokedAt(ctx context.Context, k ContextKey, at time.Time) error
 	// DeleteContext has no production caller today: the caller it had was
 	// author's `username_mismatch` branch, which under the old `(nas, port)`
 	// key could delete a live operator's context on an uncredentialed request.

@@ -456,6 +456,116 @@ func TestAnnotateContextKeepsARacingRevocation(t *testing.T) {
 	}
 }
 
+// SetRevokedAt is the write every other setter's doc comment names as the one
+// that must not be raced away, so it is held to the same rule itself: one
+// field, no extension. Row 6 of spec §5.6 reclaims a revoked context on the
+// idle TTL it was already on.
+func TestSetRevokedAtMarksOneFieldAndDoesNotExtend(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", PrivLvl: 15,
+		AccountingState: store.AccountingStateOpen}, time.Minute)
+
+	stamped := now
+	now = now.Add(30 * time.Second)
+	if err := s.SetRevokedAt(ctx, k, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetContext(ctx, k)
+	if err != nil || !got.RevokedAt.Equal(now) {
+		t.Fatalf("the mark did not land: %+v %v", got, err)
+	}
+	if got.CtxID != "c" || got.PrivLvl != 15 || got.AccountingState != store.AccountingStateOpen {
+		t.Fatalf("SetRevokedAt wrote a field that is not its own: %+v", got)
+	}
+	if !got.LastTouchedAt.Equal(stamped) {
+		t.Fatalf("SetRevokedAt must not stamp LastTouchedAt: %+v", got)
+	}
+	now = now.Add(31 * time.Second) // past the original expiry
+	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("SetRevokedAt extended the expiry; a revoked context must age out on its own clock")
+	}
+	if err := s.SetRevokedAt(ctx, k, now); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("revoking an expired context must say so, not resurrect it: %v", err)
+	}
+}
+
+// RefreshContext is the broker's setter. The window it recomputes is read
+// under this lock from the record's own pair, not from a copy the broker took,
+// and everything outside its closed list is left as whoever wrote it last left
+// it — including a revocation, which the refresh clears deliberately rather
+// than by accident.
+func TestRefreshContextMovesTheWindowAndKeepsTheRest(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", PrivLvl: 15, BlobHash: "sha256:old",
+		AuthTime: now.Add(-time.Hour), SessionExpires: now.Add(7 * time.Hour),
+		RevokedAt: now, AccountingState: store.AccountingStateOpen}, time.Minute)
+
+	now = now.Add(30 * time.Second)
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now, BlobHash: "sha256:new"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.AuthTime.Equal(now) || !got.RefreshedAt.Equal(now) || got.BlobHash != "sha256:new" {
+		t.Fatalf("the refresh did not land: %+v", got)
+	}
+	if !got.SessionExpires.Equal(now.Add(8 * time.Hour)) {
+		t.Fatalf("the ceiling must move with auth_time and keep the window: %+v", got)
+	}
+	if !got.RevokedAt.IsZero() {
+		t.Fatalf("a fresh authentication event clears the revocation mark: %+v", got)
+	}
+	if got.CtxID != "c" || got.PrivLvl != 15 || got.AccountingState != store.AccountingStateOpen {
+		t.Fatalf("RefreshContext wrote a field that is not its own: %+v", got)
+	}
+	// A refresh is activity: unlike the annotation, it extends.
+	if !got.LastTouchedAt.Equal(now) {
+		t.Fatalf("RefreshContext must stamp LastTouchedAt: %+v", got)
+	}
+	now = now.Add(45 * time.Second) // past the original expiry, inside the extended one
+	if _, err := s.GetContext(ctx, k); err != nil {
+		t.Fatal("RefreshContext did not extend the expiry")
+	}
+
+	// An empty blob hash leaves the hash alone: a refresh that did not
+	// recompute policy must not erase what the authorizer reads.
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetContext(ctx, k); got.BlobHash != "sha256:new" {
+		t.Fatalf("an empty blob hash must leave the hash alone: %+v", got)
+	}
+
+	now = now.Add(2 * time.Minute)
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now}, time.Minute); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("refreshing an expired context must say so, not resurrect it: %v", err)
+	}
+}
+
+// A context with no ceiling must not gain one: HasCeiling is false when either
+// half of the pair is zero, and the refresh leaves SessionExpires alone.
+func TestRefreshContextWithoutCeilingLeavesNoCeiling(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u"}, time.Minute)
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetContext(ctx, k); !got.SessionExpires.IsZero() {
+		t.Fatalf("a context with no ceiling must not gain one: %+v", got)
+	}
+}
+
 // The set's two rules: an empty argument writes nothing, a repeat adds
 // nothing, and the ninth entry evicts the oldest rather than the newest — the
 // newest is the session still running (store.MaxSessionDiscriminators).

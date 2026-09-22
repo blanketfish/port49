@@ -426,6 +426,59 @@ func addDiscriminator(set []string, h string) []string {
 	return append(out, h)
 }
 
+// RefreshContext is the broker's setter, and the fourth of the siblings: the
+// read-modify-write happens inside this lock so that the annotation, the
+// privilege raise, or the revocation that landed since the broker read the
+// record is not carried away by a copy of it (store.Store).
+//
+// Unlike AnnotateContext it does extend the expiry and stamp LastTouchedAt. A
+// refresh is a fresh authentication event; an accounting record is not.
+func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.ContextRefresh, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(now) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	// The window is read here, under the lock, from the pair this call is
+	// about to overwrite. A caller computing it from a copy it read earlier
+	// would compute it from a pair another refresh may already have moved.
+	if e.c.HasCeiling() {
+		e.c.SessionExpires = r.AuthTime.Add(e.c.SessionExpires.Sub(e.c.AuthTime))
+	}
+	e.c.AuthTime = r.AuthTime
+	e.c.RefreshedAt = r.RefreshedAt
+	// Deliberate, and the one field here that is cleared rather than written:
+	// a fresh authentication event lifts a prior revocation mark (store.Store).
+	e.c.RevokedAt = time.Time{}
+	if r.BlobHash != "" {
+		e.c.BlobHash = r.BlobHash
+	}
+	e.exp = now.Add(ttl)
+	e.c.LastTouchedAt = now
+	s.contexts[k] = e
+	return nil
+}
+
+// SetRevokedAt marks and never deletes, so the next command is denied
+// `credential_revoked` rather than answered as a session port49 never saw
+// (store.Store; spec §5.6 row 2). It moves neither the expiry nor
+// LastTouchedAt: row 6 reclaims the record on the idle TTL it was already on.
+func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(s.now()) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	e.c.RevokedAt = at
+	s.contexts[k] = e
+	return nil
+}
+
 func (s *Store) DeleteContext(_ context.Context, k store.ContextKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

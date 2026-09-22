@@ -437,6 +437,14 @@ func (noStore) AnnotateContext(context.Context, store.ContextKey, string, string
 	panic("store called")
 }
 
+func (noStore) RefreshContext(context.Context, store.ContextKey, store.ContextRefresh, time.Duration) error {
+	panic("store called")
+}
+
+func (noStore) SetRevokedAt(context.Context, store.ContextKey, time.Time) error {
+	panic("store called")
+}
+
 var _ store.Store = noStore{}
 
 func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {
