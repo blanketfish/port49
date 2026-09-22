@@ -135,7 +135,14 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 	s := New(func() time.Time { return now })
 	ctx := context.Background()
 
-	// Write tokens, receipts, contexts under distinct keys with short TTLs
+	// Write tokens, receipts, contexts, blobs, idempotency records, and
+	// context-index entries under distinct keys with short TTLs. These are
+	// written straight into the maps, as the receipt index above already
+	// does, because every getter (GetBlob, GetIdempotency, the Contexts*
+	// readers) self-checks expiry and so cannot tell a swept map from an
+	// unswept one whose entry it happens to skip: only reaching the map
+	// directly, after sweepLocked, catches a sweep branch that was never
+	// wired up.
 	for i := 0; i < 3; i++ {
 		tk := store.TokenKey{NAS: "n", Username: "u" + string(rune(i))}
 		s.PutToken(ctx, tk, store.Token{ID: "t", Secret: []byte("s"), ExpiresAt: now.Add(time.Second)})
@@ -146,12 +153,23 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 
 		ck := store.ContextKey{NAS: "n", Username: "u" + string(rune(i))}
 		s.contexts[ck] = ctxEntry{c: store.Context{CtxID: "c"}, exp: now.Add(time.Second)}
+
+		s.blobs["sha256:"+string(rune(i))] = blobEntry{body: []byte("b"), exp: now.Add(time.Second)}
+		s.idem[idemKey("user:u"+string(rune(i)), "k")] = store.Idempotency{ExpiresAt: now.Add(time.Second)}
+
+		ref := store.ContextRef{NAS: "n", Username: "u" + string(rune(i))}
+		exp := now.Add(time.Second)
+		s.byPrincipal["user:u"+string(rune(i))] = map[store.ContextRef]time.Time{ref: exp}
+		s.bySid["sid"+string(rune(i))] = map[store.ContextRef]time.Time{ref: exp}
+		s.byCert["cert"+string(rune(i))] = map[store.ContextRef]time.Time{ref: exp}
 	}
 
 	// Verify entries exist
-	if len(s.tokens) != 3 || len(s.receipts) != 3 || len(s.contexts) != 3 || len(s.receiptsByPrincipal) != 3 {
-		t.Fatalf("setup failed: tokens=%d receipts=%d contexts=%d index=%d",
-			len(s.tokens), len(s.receipts), len(s.contexts), len(s.receiptsByPrincipal))
+	if len(s.tokens) != 3 || len(s.receipts) != 3 || len(s.contexts) != 3 || len(s.receiptsByPrincipal) != 3 ||
+		len(s.blobs) != 3 || len(s.idem) != 3 || len(s.byPrincipal) != 3 || len(s.bySid) != 3 || len(s.byCert) != 3 {
+		t.Fatalf("setup failed: tokens=%d receipts=%d contexts=%d index=%d blobs=%d idem=%d byPrincipal=%d bySid=%d byCert=%d",
+			len(s.tokens), len(s.receipts), len(s.contexts), len(s.receiptsByPrincipal),
+			len(s.blobs), len(s.idem), len(s.byPrincipal), len(s.bySid), len(s.byCert))
 	}
 
 	// Advance time past expiry
@@ -164,10 +182,13 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 
 	// Verify all expired entries are gone. The principal index matters as much
 	// as the records: a daemon that sweeps records but keeps their index
-	// entries grows one map entry per login for as long as it runs.
-	if len(s.tokens) != 0 || len(s.receipts) != 0 || len(s.contexts) != 0 || len(s.receiptsByPrincipal) != 0 {
-		t.Fatalf("sweep failed: tokens=%d receipts=%d contexts=%d index=%d",
-			len(s.tokens), len(s.receipts), len(s.contexts), len(s.receiptsByPrincipal))
+	// entries grows one map entry per login for as long as it runs. Same for
+	// the blob, idempotency, and context-index maps Task 3 added.
+	if len(s.tokens) != 0 || len(s.receipts) != 0 || len(s.contexts) != 0 || len(s.receiptsByPrincipal) != 0 ||
+		len(s.blobs) != 0 || len(s.idem) != 0 || len(s.byPrincipal) != 0 || len(s.bySid) != 0 || len(s.byCert) != 0 {
+		t.Fatalf("sweep failed: tokens=%d receipts=%d contexts=%d index=%d blobs=%d idem=%d byPrincipal=%d bySid=%d byCert=%d",
+			len(s.tokens), len(s.receipts), len(s.contexts), len(s.receiptsByPrincipal),
+			len(s.blobs), len(s.idem), len(s.byPrincipal), len(s.bySid), len(s.byCert))
 	}
 }
 
