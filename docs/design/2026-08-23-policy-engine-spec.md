@@ -374,7 +374,7 @@ referenced by the token:
 ```
 blob:<sha256>            the fully compiled decision — see 5.1.2
 token:(nas, username)    { handle, kind, blob_hash, principal, username,
-                           max_session_age, reusable, expires, ... }
+                           max_session_age, expires, ... }
 ```
 
 `max_session_age` rides in the token record because the daemon computes `session_expires`
@@ -1306,6 +1306,7 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
 | `store_unavailable` | any event: the store did not answer or returned an error; the reply is `ERROR` so the device falls through to its next method (design document §12) — the log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
+| `token_spent` | `redeem`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed; FAIL on the wire, distinguishable only in the log |
 | `device_mismatch` | `redeem`: the presented token's device tag is not this device's (design document §8) — PAP and ASCII only; under CHAP the tag is not visible and the outcome is `token_not_found` |
 | `credential_mismatch` | `redeem`: the receipt the store returned does not carry the credential hash the lookup asked for. Since 2026-09-20 the hash is *in* the receipt key (§13, decision 15), so a differing credential finds no receipt and redeems normally instead; this reason now covers only a store that answered with a record it was not asked for, which is a store fault and never a normal outcome |
 | `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision |
@@ -3315,36 +3316,50 @@ session port49 permitted is ended by the device with `% Authorization failed.` (
 has to be a set the image accepts, and when it is not, port49's own log says `permit` while the
 operator is locked out — there is no diagnostic on this side at all.
 
-*Reusable tokens for API transports — provisional, gated on L7.* eAPI and
-NX-API with basic authentication present the credential on every HTTP request, and the device
-runs AAA per request, so a single-use token serves one API call. Those transports carry a large
-share of real automation and cannot be designed around. A subject MAY therefore be granted
-`reusable: true`, in which case its tokens are valid until TTL rather than for one redemption:
-the store operation is match-without-delete, the receipt is unnecessary because a retry is
-simply another use, and device binding and username binding are unchanged.
+*API transports: a sliding receipt, not a `reusable` flag. Ruled 2026-09-22.* The receipt is
+the retry tolerance of §5.1.1: a spent token presented again within the receipt's life is
+answered from the stored decision, `receipt_replayed`. It was a fixed window (`receipt_ttl`,
+30 s). It is now a **sliding** one. Every re-presentation of the same
+`(nas, username, credential_sha256)` that is answered from the receipt extends the receipt by
+`receipt_idle_ttl` (default **15m**), up to `receipt_max_age` (default **2h**) measured from
+the first redemption. A presentation past either bound is FAIL on the wire, exactly as a
+wrong password is, and `token_spent` in the log (§5.7). Revoking a principal deletes their
+receipts as well as their contexts, so receipts are indexed by principal (plan 2). Interactive
+logins present the token once and never slide; only a client that re-presents the credential
+does, and it needs no flag to do so.
 
-There is no use counter. TTL already bounds exposure, and a counter would add store semantics
-for a bound nobody would tune. `reusable` is reported by CI beside `token_ttl`, since a captured
-reusable token replays for its remaining TTL from the bound device — an exposure widening of the
-same kind as a long TTL, and visible in review for the same reason.
+*Why not a flag.* The owner's rule: an operator running automation should not need to know
+whether their client library keeps a session. The lab measured that the authentication count
+for a job belongs to the **client**, not the transport — for ten tasks, pyeapi 10, NAPALM
+`eos` 11, Ansible `eos` over `httpapi` 13, NAPALM `nxos` 28, and 1 for anything over one SSH
+session or for Ansible `nxos` over `httpapi`, which keeps the `nxapi_auth` cookie (L15,
+`tests/lab/results/L7-*.md`). NAPALM `nxos` crossed the fixed 30 s window at 38.8 s and
+tasks 5–9 failed `token_not_found` with nothing changed in the operator's hand. A `reusable`
+flag would have pushed that fact about a library into policy.
 
-This paragraph used to ask how login context behaves when `port` is constant across API
-sessions, and proposed keying API contexts on `(nas, port, rem_addr)`. Both are answered and
-the proposal is withdrawn: `port` is constant or empty across *SSH* sessions too, and
-`rem_addr` is measured identical for two concurrent sessions, so the candidate discriminated
-nothing. Under `(nas, username)` an API transport needs no separate context key at all.
+*Why 15 minutes and 2 hours.* No single device operation sets the idle window; the gap
+between two presentations on **one device** does. Ansible's linear strategy finishes each
+task on every host before any host starts the next, so with a large fleet a device sits idle
+for the whole fleet's pass between its own tasks, and Ansible's persistent connection closes
+after 30 s of idle regardless. An image copy followed by a verify, or `reload` then
+`wait_for_connection`, leave a device quiet for five to ten minutes. The cap stops a looping
+script, or an attacker, from keeping a captured token alive indefinitely. Both are
+configurable; neither is per subject.
 
-What is still not decided is `receipt_ttl`. Measured on all four images (L15), a client that
-presents Basic credentials on a fresh connection each call costs one authentication per unit
-of work, and the repeat is permitted out of the **receipt**, not the store — so a script
-making forty calls with one single-use token works
-until the receipt expires, and the first call after that is a denial with nothing having
-changed in the operator's hand. Any argument for or against reusable tokens has to be made
-about that boundary. Two things that bound how much the exchange count itself is worth
-arguing about are still open: the eAPI `/login` cookie flow and the NX-API `nxapi_auth`
-cookie, which are how a real client avoids re-presenting the credential at all, and HTTP
-keep-alive (L7, L15 — the per-request figure is an upper bound for the worst-shaped client,
-corrected 2026-09-21). (§5.1.1, §15)
+*Cost.* A captured token works against one device, under one username, while the job that
+spent it is active plus `receipt_idle_ttl`, never past `receipt_max_age`. That is wider than
+the fixed 30 s and far narrower than a token valid for its whole TTL. The mitigation that
+removes most of the exposure belongs to plan 3: an agent that mints a fresh token on every
+reconnect makes the sliding window rarely reached.
+
+*Withdrawn.* `reusable: true`, match-without-delete redemption, and the use-counter
+discussion. The earlier proposal to key API contexts on `(nas, port, rem_addr)` was already
+withdrawn: `port` is constant or empty across SSH sessions too, and `rem_addr` is identical
+for two concurrent sessions behind one bastion, so under `(nas, username)` an API transport
+needs no separate context key at all. Still unmeasured: the eAPI `/login` cookie flow by
+hand, HTTP keep-alive on its own, and a linear-strategy playbook run against the lab with a
+deliberate gap, which is the measurement the 15-minute default should be checked against
+(L7, L15).
 
 **16. Trust domain is assigned by the verifier, never inferred from the credential.** The
 design requires humans and machines to be unforgeably distinct, and nothing previously said
@@ -4352,7 +4367,8 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   **The question is not whether the transport re-authenticates. It is `receipt_ttl`.** For as long as the
   receipt lives, the repeat is served; past it, the next call in the same script is the first denial, with
   nothing about the credential having changed and nothing in the operator's hand having changed either. Any
-  argument for or against reusable tokens has to be made about that boundary, not about the exchange count.
+  argument about that boundary is settled by decision 15's sliding receipt (`receipt_idle_ttl`, `receipt_max_age`),
+  not by the exchange count; the linear-strategy gap that sizes the idle default is still unmeasured here.
 
   Note what the receipt key no longer contains: `port`. Under the old key, on vEOS `port` was
   `command-api` for eAPI and `ssh` for a login, so the two did not share a receipt, while on the N9Kv both
