@@ -23,8 +23,10 @@ login-context key, which the lab showed breaks every measured vendor; the key is
 `(nas, username)` (spec §13 decision 15). The rewrite is against the real tree on
 `feature/lab-l4-fallthrough` and carries every ruling in
 `2026-09-20-plan-2-revision-notes.md`, the owner's 2026-09-21 ones included
-(`contexts_by_principal` stays unencrypted, and why). Eleven TDD tasks, twelve commits; the
-spec §5.8 edit for `system` attribution is the first of them, because the spec comes first.
+(`contexts_by_principal` stays unencrypted, and why). **Fix round 1 applied 2026-09-22** after
+review: **fifteen TDD tasks, sixteen commits**. The spec §5.8 edit for `system` attribution is
+committed before the code that reads it, and now also carries §13 decision 15's record that the
+`(nas, rem_addr)` enable index is deferred while `enable_username: enab` is refused at load.
 
 **Builds:** the full token semantics on top of plan 1's store interface and handlers.
 
@@ -45,10 +47,14 @@ spec §5.8 edit for `system` attribution is the first of them, because the spec 
   `admin` with `task_id=vsh.bin.$port`) must not trip `foreign_session`: a per-platform rule
   attributing them `system`, which needed a spec §5.8 sentence. **Neither observation has a
   `tests/lab/results/` note in the tree** — the Junos lab measured the opposite under its own
-  accounting config (L17) — so plan 2 builds the rule and ships the system-user list empty;
-  plan 5 fills it from a note.
-- **Refuse non-ASCII usernames at mint**: `Canonical` folds U+0130 onto `i`, so two directory
-  names could share one `(nas, username)` context.
+  accounting config (L17) — so the §5.8 sentence says a plan-5 adapter **MAY** name system users,
+  ships the list **empty**, and records both production observations as unmeasured in this lab.
+  Plan 2 builds the rule; plan 5 fills the list from a note.
+- **Refuse at mint any username canonicalization would change**: `Canonical` folds U+0130 onto
+  `i`, so two directory names could share one `(nas, username)` context — and it also strips
+  `DOMAIN\` and truncates at `@`, which an ASCII-only guard would let through, minting a token
+  under a key no redemption can address. `Canonical` moves to `internal/username` so the minter
+  can enforce it without importing the daemon that imports the minter.
 - **Enable tokens**: mint pair with `kind`. No measured platform sends `$enab{level}$` (L3
   closed): vEOS and IOS-XE send the operator's own username with `service=enable`, NX-OS 10.x
   has no enable. The lookup is therefore the ordinary `(nas, username)` context; an enable
@@ -73,9 +79,13 @@ spec §5.8 edit for `system` attribution is the first of them, because the spec 
 - A **mint function** callable in-process (no broker yet) that plan 3's minimal broker wraps.
 - **`context_idle_ttl` is absolute, not idle.** Plan 1 sets it at `PutContext` and never
   extends it; `GetContext` does not touch it. Spec §5.6 says activity SHOULD extend it.
-  **Ruled in the rewrite: it becomes a true idle TTL and keeps its name** — every permitted
-  authorization re-puts the context, `session_expires` stays the absolute clock, and the cost
-  (one store write per authorized command) is named for plan 7 to bound with a real backend.
+  **Ruled in the rewrite: it becomes a true idle TTL and keeps its name** — a key named
+  `context_idle_ttl` that measures absolute age lies in its own name, and `session_expires` is
+  already the absolute clock. The extension goes through a new TTL-only store method,
+  `TouchContext(ctx, key, ttl)`, which writes the expiry and nothing else: re-`PutContext`ing the
+  record read at the top of the request would discard a concurrent revocation permanently, on the
+  daemon's highest-frequency path. It runs only when the remaining life is below half the TTL, so
+  the common command costs no store write, and nothing is deferred to plan 7 for it.
 
 **Hands to plan 3:** `(*token.Minter).Mint(ctx, token.Request) (token.Result, error)` — the
 in-process mint the minimal broker wraps; `reusable` is gone and the kind is chosen by
@@ -84,7 +94,9 @@ in-process mint the minimal broker wraps; `reusable` is gone and the kind is cho
 **Leaves for later:** the broker API and its authorization (plan 7); blobs' compiled content
 (plan 4, the engine produces them; plan 2 stores opaque bytes by hash).
 **Lab:** none close here; L8 (password length) may need re-checking with the 30-character
-tagged token.
+tagged token. Plan 2 does move the harness off written secrets — `lab.seed_tokens` loses
+`secret:`/`kind:`, the daemon mints the pairs and writes them to a `0600` `lab.seed_token_file`,
+and `tests/lab/labcreds` reads that file — so the next lab deploy is the first on minted tokens.
 
 ## Plan 3 — Vertical slice (§19 step 3)
 
