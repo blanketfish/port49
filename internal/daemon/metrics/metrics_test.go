@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestNewRegistersEveryMetric(t *testing.T) {
@@ -25,6 +26,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.SpoolQuarantines.Inc()
 	m.StoreOps.WithLabelValues("put", "ok").Inc()
 	m.DecisionLogWriteFailures.Inc()
+	m.CryptOpenFailures.WithLabelValues("context").Inc()
 
 	// Gather all metrics from registry.
 	families, err := reg.Gather()
@@ -46,6 +48,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_accounting_spool_drops_total":      false,
 		"port49_store_operations_total":            false,
 		"port49_decision_log_write_failures_total": false,
+		"port49_crypt_open_failures_total":         false,
 	}
 
 	// Check that all expected metrics are present and all gathered metrics are snake_case.
@@ -73,6 +76,25 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		if !gatheredNames[name] {
 			t.Errorf("expected metric not found: %s", name)
 		}
+	}
+}
+
+// A counter that is constructed but never registered increments happily in
+// process and never appears on /metrics, so the one signal that names a key
+// rotation problem is silently absent exactly when it is needed. Gather from
+// the registry, not from the collector: collecting the vector directly would
+// pass whether or not New registered it.
+func TestCryptOpenFailuresReachesTheRegistry(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	m.CryptOpenFailures.WithLabelValues("token").Inc()
+
+	n, err := testutil.GatherAndCount(reg, "port49_crypt_open_failures_total")
+	if err != nil {
+		t.Fatalf("GatherAndCount failed: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("port49_crypt_open_failures_total series in the registry = %d, want 1", n)
 	}
 }
 

@@ -33,6 +33,11 @@ type Metrics struct {
 	SpoolQuarantines         prometheus.Counter
 	StoreOps                 *prometheus.CounterVec
 	DecisionLogWriteFailures prometheus.Counter // port49_decision_log_write_failures_total
+	// port49_crypt_open_failures_total{record}. A record that will not open is a
+	// key problem, not a missing record, and it is the one failure mode of the
+	// rotation window that has no other symptom. Labels are the record kind only —
+	// "token", "receipt", "context", "idempotency" — never a device or a user.
+	CryptOpenFailures *prometheus.CounterVec
 }
 
 func New(reg prometheus.Registerer) *Metrics {
@@ -66,9 +71,11 @@ func New(reg prometheus.Registerer) *Metrics {
 		// silently short and nothing says so (design §11).
 		DecisionLogWriteFailures: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_decision_log_write_failures_total",
 			Help: "Decision records the log sink refused to write."}),
+		CryptOpenFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_crypt_open_failures_total",
+			Help: "Stored records that would not decrypt, by record kind."}, []string{"record"}),
 	}
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.DecisionLogWriteFailures)
+		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures)
 	return m
 }
