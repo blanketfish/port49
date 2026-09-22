@@ -4,7 +4,7 @@
 - **Platform:** cisco_nxos (containerlab node `nx1`, 172.100.100.31)
 - **Image version:** Nexus 9300v 10.4(2)F (`vrnetlab/cisco_n9kv:9300v64-10.4.2.F`)
 - **Topology:** `tests/lab/topologies/nxos.clab.yml`
-- **Capture:** `tests/lab/evidence/L18-cisco_nxos.pcap` — 1880 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L18-cisco_nxos.pcap` — 1881 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -15,7 +15,7 @@ How each platform treats a reply attribute it did not ask for -- one it does not
 
 - **Date measured:** 2026-09-22
 - **Image version:** Nexus 9300v 10.4(2)F (`vrnetlab/cisco_n9kv:9300v64-10.4.2.F`)
-- **Capture:** `tests/lab/evidence/L18-cisco_nxos.pcap` — 1880 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L18-cisco_nxos.pcap` — 1881 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 
 Each variant below is one set of reply attributes on the session authorization, one daemon restart and one token login. Per variant: whether the session opened and what the device said if it did not; `show user-account %s` for what the session was given; and one `show version`, typed only to see whether the device sends per-command authorization under this reply at all.
 
@@ -72,8 +72,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -146,8 +146,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -220,8 +220,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -294,8 +294,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -368,8 +368,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -442,8 +442,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -516,8 +516,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -590,8 +590,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -670,8 +670,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -750,8 +750,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -830,8 +830,8 @@ Software
 
 Hardware
   cisco Nexus9000 C9300v Chassis 
-   with 10187692 kB of memory.
-  Processor Board ID 92HBGN1962V
+   with 10187700 kB of memory.
+  Processor Board ID 9PSFH30TNGM
   Device name: nx1
   bootflash:    4495360 kB
 
@@ -909,7 +909,7 @@ Local login not possible
 
 **4. A known attribute with an unusable value is taken somehow.** `["priv-lvl=99"]` left the session on `network-operator`, against `vdc-operator` for the empty control. What the device did with the value is in the transcript above; this run does not name a rule for it.
 
-**5. Every session that opened went on to per-command authorization**, 11 of 11, whatever the reply carried. So a bad attribute on this platform either ends the session outright or leaves the command path exactly as it was: there is no middle state where the session survives and the device stops asking.
+**5. Every session that opened went on to per-command authorization**, 8 of 8, whatever the SESSION reply carried. So an attribute on the session reply either ends the session outright or leaves the device still asking about commands: there is no middle state where the session survives and the device stops asking. Whether the commands then RUN is a different question, and it is 5b -- these 8 variants put nothing on the command reply.
 
 **5b. The same question asked of a PER-COMMAND reply, in 3 shapes.** Each one sends the control's session attributes (`["priv-lvl=15"]`) and differs from the control only in what a PERMITTED command authorization carries, so whatever the device does below it is doing about the command reply. The control itself answered 3 command authorization(s) and ran every command typed in it.
 
@@ -927,7 +927,7 @@ Local login not possible
 | `["p49-nonsense=1"]` | ignored | ignored |
 | `["roles*network-operator"]` | ignored | ignored |
 
-**The two paths agree on all 3.** An adapter that knows what an attribute does to a session here knows what it does to a command, and one rule covers both replies on this platform.
+**The two paths agree on all 3.** An adapter that knows what an attribute does to a session here knows what it does to a command: one rule covers both replies on this platform.
 
 **6. Every login in this run reached the device's AAA.** No SSH connection was refused before the device asked port49, so nothing here says a run of refused authorizations costs anything beyond the sessions refused.
 
