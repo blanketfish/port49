@@ -22,13 +22,23 @@ import (
 // is not the "a test that measured nothing must fail" rule bending: it audits
 // files against an input only the machine that ran the lab has.
 //
-// Two kinds of assertion run over every pair, and the difference matters. The
-// secret list is exact but perishable — it can only ever audit the run that
-// produced it. The SHAPE rules are weaker per file and never expire: every
-// credential-carrying field in the evidence is entirely Fill, and no
-// token-shaped string appears in any decoded body. The shape half is what will
-// keep this audit alive once the daemon mints the seeds and the only copy of a
-// run's tokens is a file in /tmp.
+// What it does NOT depend on is the secret list. port49d mints every seeded
+// pair now, and writes it to a file in /tmp that the next run truncates and a
+// reboot removes — so a verifier built on "search for these exact strings"
+// could only ever audit the machine and the hour that produced the evidence,
+// and would go quiet everywhere else. So the audit is stated as the invariant
+// the redactor enforces instead of as a lookup:
+//
+//   - every credential-carrying field in the evidence is entirely Fill;
+//   - no token-shaped string, and no surviving lab token prefix, appears in any
+//     decoded body;
+//   - the evidence differs from its capture in credential bytes and nothing
+//     else.
+//
+// None of those expire, so this runs against evidence committed by any run.
+// When the seed-token file of THIS run does happen to be present, the exact
+// secrets are checked too — Verify's stronger form — but their absence costs
+// coverage of nothing above.
 func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 	root, err := repoRootForTest()
 	if err != nil {
@@ -38,11 +48,27 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 	if len(names) == 0 {
 		t.Skip("no capture in tests/lab/captures; captures are git-ignored, so a checkout that has not run the lab has none")
 	}
-	secrets, err := labcreds.Secrets(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
-	if err != nil {
-		t.Fatal(err)
+	opt := Options{Key: labcreds.Key}
+	// The exact tokens, when this machine still has the run that made them.
+	// Neither "the config names no seed-token file" nor "the file is gone" is
+	// an error here: both mean only that the perishable half is unavailable,
+	// and the shape rules below are not.
+	switch seedPath, err := labcreds.SeedTokenFile(filepath.Join(root, "tests", "lab", "port49d-lab.yaml")); {
+	case err != nil:
+		t.Logf("no seed-token file is configured (%v): auditing by the shape rules alone", err)
+	default:
+		if _, err := os.Stat(seedPath); err != nil {
+			t.Logf("no seed-token file at %s, so the run that produced these captures is gone: auditing by "+
+				"the shape rules alone (every credential field all %q, no token-shaped string in any body)",
+				seedPath, string(rune(Fill)))
+			break
+		}
+		if opt.Secrets, err = labcreds.Secrets(seedPath); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("seed-token file %s is present: auditing against %d exact secret(s) as well as the shape rules",
+			seedPath, len(opt.Secrets))
 	}
-	opt := Options{Key: labcreds.Key, Secrets: secrets}
 
 	var pairs, diff, credBytes, alreadyFill, shapeTripped, prefixTripped int
 	for _, cp := range names {
@@ -105,7 +131,8 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 		}
 
 		// The shape rules, read off the EVIDENCE rather than the capture. This
-		// is the half that needs no secret list.
+		// is the half that needs no secret list, so it is what audits a file
+		// whose run is long gone.
 		outF, err := Parse(out)
 		if err != nil {
 			t.Errorf("%s: evidence does not parse: %v", base, err)
@@ -149,6 +176,7 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 				prefixTripped++
 			}
 		}
+
 		// Every body, not only the fields marked Credential: a token that
 		// turned up where the protocol does not put passwords — an AV pair, a
 		// server message — is exactly what the field list would miss, and is
@@ -160,8 +188,8 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 					base, i, p.Kind(), len(tok))
 			}
 			if bytes.Contains(p.Body, []byte(labcreds.TokenPrefix)) {
-				t.Errorf("%s: packet %d (%s) holds %q, the prefix every seeded token carries; a surviving "+
-					"one means this evidence was redacted against the wrong secrets",
+				t.Errorf("%s: packet %d (%s) holds %q, the prefix every token carried before they were minted; "+
+					"a surviving one means this evidence was redacted against the wrong secrets",
 					base, i, p.Kind(), labcreds.TokenPrefix)
 			}
 		}

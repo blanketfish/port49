@@ -277,7 +277,14 @@ func writeEvidence() error {
 	if key == "" {
 		key = labKeyDefault
 	}
-	secrets, err := labcreds.Secrets(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
+	// The credentials are the pairs port49d minted for this run, read from the
+	// file it wrote. The config no longer knows them: a seed names who gets a
+	// token and the daemon chooses the secret.
+	seedPath, err := labcreds.SeedTokenFile(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
+	if err != nil {
+		return fmt.Errorf("evidence: %w", err)
+	}
+	secrets, err := labcreds.Secrets(seedPath)
 	if err != nil {
 		return fmt.Errorf("evidence: %w", err)
 	}

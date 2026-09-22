@@ -9,57 +9,68 @@ import (
 
 func write(t *testing.T, body string) string {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "port49d-lab.yaml")
+	p := filepath.Join(t.TempDir(), "lab-tokens.jsonl")
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 
-// TestSecretsReadsTheSeededTokens: the redactor verifies against this list, so
-// it has to hold every token the config seeds plus the breakglass password.
-func TestSecretsReadsTheSeededTokens(t *testing.T) {
-	got, err := Secrets(write(t, `
-lab:
-  seed_tokens:
-    - {nas: leaf1, username: alice01, secret: p49_labtoken01, kind: login}
-    - {nas: srx1, username: alice01, secret: p49_labtoken01, kind: login}
-    - {nas: leaf1, username: alice02, secret: p49_labtoken02, kind: login}
+// TestSecretsReadsTheMintedTokens: the redactor verifies against this list, so
+// it has to hold every token the daemon minted — the enable half as well as the
+// login one — plus the breakglass password.
+func TestSecretsReadsTheMintedTokens(t *testing.T) {
+	got, err := Secrets(write(t, `{"nas":"leaf1","username":"alice01","login":"AbCdEflogin01","enable":"AbCdEfenable01","expires_at":"2026-09-22T10:00:00Z"}
+{"nas":"srx1","username":"alice01","login":"XyZwVulogin02","enable":"","expires_at":"2026-09-22T10:00:00Z"}
+
+{"nas":"leaf1","username":"alice02","login":"AbCdEflogin01","enable":"","expires_at":"2026-09-22T10:00:00Z"}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Two distinct tokens, deduplicated across NASes, plus the password and
-	// the prefix.
-	want := []string{"p49_labtoken01", "p49_labtoken02", BreakglassPassword, TokenPrefix}
+	// Three distinct secrets: the first pair's two halves and the second
+	// entry's login. The third line repeats the first login and must not
+	// appear twice. Then the breakglass password — and NOT TokenPrefix, which
+	// a minted token no longer starts with.
+	want := []string{"AbCdEflogin01", "AbCdEfenable01", "XyZwVulogin02", BreakglassPassword}
 	if len(got) != len(want) {
-		t.Fatalf("got %d secrets, want %d", len(got), len(want))
+		t.Fatalf("got %d secrets (%v), want %d", len(got), got, len(want))
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("secret %d differs from the expected one", i)
 		}
 	}
+	for _, s := range got {
+		if s == TokenPrefix {
+			t.Error("TokenPrefix is in the live secret list; a minted token starts with the device tag, " +
+				"so it matches nothing and reads as coverage that is not there")
+		}
+	}
 }
 
-// TestSecretsRefusesAnEmptyList is the one that matters at 3am. A config the
+// TestSecretsRefusesAnEmptyList is the one that matters at 3am. A file the
 // parser cannot find tokens in would hand the redactor nothing to search for,
 // and it would report a clean file every time.
 func TestSecretsRefusesAnEmptyList(t *testing.T) {
 	for _, body := range []string{
-		"lab:\n  seed_tokens: []\n",
-		"lab: {}\n",
-		"# nothing at all\n",
-		"lab:\n  seed_tokens:\n    - {nas: leaf1, username: alice01, kind: login}\n", // no secret
+		"",
+		"\n\n",
+		`{"nas":"leaf1","username":"alice01","login":"","enable":""}` + "\n", // minted nothing
 	} {
 		if _, err := Secrets(write(t, body)); err == nil {
-			t.Errorf("a config seeding no token must be refused, not verified against")
+			t.Errorf("a seed-token file holding no token must be refused, not verified against")
 		} else if !strings.Contains(err.Error(), "empty secret list") {
 			t.Errorf("the error must say why it refused, got: %v", err)
 		}
 	}
-	if _, err := Secrets(filepath.Join(t.TempDir(), "absent.yaml")); err == nil {
-		t.Error("a missing config must be refused")
+	// A missing file is the case that would otherwise pass quietly: the daemon
+	// writes it at start, so its absence means no run produced these captures.
+	if _, err := Secrets(filepath.Join(t.TempDir(), "absent.jsonl")); err == nil {
+		t.Error("a missing seed-token file must be refused")
+	}
+	if _, err := Secrets(write(t, "not json\n")); err == nil {
+		t.Error("a malformed seed-token line must be refused, not skipped")
 	}
 }
 
