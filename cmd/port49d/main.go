@@ -78,6 +78,13 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) err
 		return err
 	}
 	defer f.Close()
+	// O_CREATE's mode applies only to a file this call creates. A file already
+	// at the path keeps whatever mode it has, so the lab's /tmp path left 0644
+	// by an earlier build would be truncated, filled with credentials, and left
+	// world-readable. Narrow it before the first token is written.
+	if err := f.Chmod(0o600); err != nil {
+		return err
+	}
 	for _, t := range cfg.Lab.SeedTokens {
 		// Canonicalizing here is belt and braces, not a fix: the mint refuses
 		// any name canonicalization would change. It is written this way so
