@@ -122,13 +122,19 @@ func l18Assert(t *testing.T, d l18Driver, rs []l18Result) {
 		t.Errorf("the empty-attribute control never opened a session, so no cell in this run can say "+
 			"whether an attribute changed anything: %s", oneLine(c.loginErr))
 	}
+	// A refusal the device ANSWERED must carry its words: that is the
+	// L3-cisco_nxos rule. A connection the device never ran AAA for is a
+	// different outcome and is reported as one (see neverAsked), so it is not
+	// held to the same test -- its evidence is the absence of any record for
+	// that login in port49's own log, which the note states and the log backs.
 	for _, r := range rs {
-		if r.opened || strings.TrimSpace(r.deviceSaid) != "" {
+		if r.opened || r.neverAsked() || strings.TrimSpace(r.deviceSaid) != "" {
 			continue
 		}
-		t.Errorf("the %q variant did not open a session and the device said nothing this run could "+
-			"quote, so `refused` would be a claim with no transcript behind it (the L3-cisco_nxos "+
-			"defect, see negativeFinding). The harness reported: %s", r.v.name, oneLine(r.loginErr))
+		t.Errorf("the %q variant did not open a session, port49 DID answer its session authorization "+
+			"(%s), and the device said nothing this run could quote -- so `refused` would be a claim "+
+			"with no transcript behind it (the L3-cisco_nxos defect, see negativeFinding). The harness "+
+			"reported: %s", r.v.name, r.sessionVerdict, oneLine(r.loginErr))
 	}
 	// The control for the whole row: the reply that carries only what this
 	// platform is known to accept. If it cannot open a session, the platform is
@@ -347,6 +353,22 @@ type l18Driver struct {
 	// nothing on the device and no platform's policy denies it.
 	probe string
 
+	// attempts and retryPause are how many times an SSH connection that never
+	// reached the device's CLI is retried, and how long to wait between tries.
+	//
+	// They exist because of what the first IOS-XE run measured. After five
+	// consecutive refused authorizations the Catalyst 8000V stopped answering
+	// SSH at all -- three connections over 50 seconds, every one refused at the
+	// authentication layer, and **not one TACACS+ packet for any of them** in
+	// port49's decision log. The variant after them succeeded. That reads as the
+	// vty pool being consumed by the refused sessions and recovering on its own,
+	// and it is a finding rather than flakiness: on this platform a bad reply
+	// attribute does not only cost one operator one session, it eventually stops
+	// the device answering anyone. A patient retry is what makes the variant
+	// measurable AND what measures the recovery, so the count is reported.
+	attempts   int
+	retryPause time.Duration
+
 	// refusalMarkers are what this platform says when it refuses a session it
 	// has already authenticated. They are waited for alongside the prompts, so
 	// a refusal ends the wait the moment the device says it rather than after
@@ -443,6 +465,11 @@ var l18Drivers = map[string]l18Driver{
 		// authenticating answers `% Authorization failed.` and the SSH session
 		// is closed (results/L10-cisco_iosxe.md).
 		refusalMarkers: []string{"% Authorization failed", "Authorization failed", "% Authorization"},
+		// See the `attempts` comment: five refusals in a row take this device's
+		// SSH server out for the best part of a minute. Four attempts 20s apart
+		// clears what the first run measured, with room over it.
+		attempts:   4,
+		retryPause: l18IOSXEPause,
 		// IOS-XE gets BOTH foreign spellings. It reads neither, so the pair
 		// separates "this image dislikes that name" from "this image refuses
 		// anything unfamiliar" without leaning on the invented variant alone.
@@ -638,6 +665,13 @@ type l18Result struct {
 
 	shows []l18Show
 
+	// attempts is how many SSH connections this variant took, and attemptErrs
+	// is what each one that failed said. More than one is reported in the note:
+	// a device that refused three connections and answered the fourth is saying
+	// something about itself that a bare "opened" cell would hide.
+	attempts    int
+	attemptErrs []string
+
 	// probeCmd is the command typed to see whether per-command authorization
 	// happens; probeOut is the device's exact reply.
 	probeCmd string
@@ -653,6 +687,20 @@ type l18Show struct {
 }
 
 func (r l18Result) name() string { return r.v.name }
+
+// neverAsked reports that this variant produced no session AND no TACACS+
+// exchange at all: the device refused the SSH connection without consulting
+// port49.
+//
+// It is a different outcome from a refusal and has to be kept apart from one.
+// A refusal is the device answering a reply port49 sent; this is the device
+// not asking, so the reply under test never reached it and the variant
+// measures nothing about that reply. The evidence for it is positive rather
+// than absent -- port49's decision log holds no record for this login, and the
+// note says so and shows what the SSH layer returned.
+func (r l18Result) neverAsked() bool {
+	return !r.opened && r.sessionVerdict == "" && strings.TrimSpace(r.deviceSaid) == ""
+}
 
 // show returns the verbatim output of one of this variant's role commands.
 func (r *l18Result) show(cmd string) string {
@@ -685,8 +733,8 @@ func (l *lab) l18Run(t *testing.T, d l18Driver, v l18Variant) l18Result {
 	user, secret := l.nextLogin(t)
 	r.user = user
 
-	c, said, err := l.l18CLI(d, user, secret)
-	r.deviceSaid = said
+	c, said, attempts, attemptErrs, err := l.l18CLI(d, user, secret)
+	r.deviceSaid, r.attempts, r.attemptErrs = said, attempts, attemptErrs
 	if err != nil {
 		r.loginErr = err.Error()
 		l.collectL18(&r, l.drainRecords(off, 10*time.Second))
@@ -740,38 +788,39 @@ func l18Attrs(attrs string) string {
 // TACACS+ packet for the refused one anywhere in the capture (see
 // iosxeTokenCLI). A retry at the SSH layer only -- never after the device has
 // said something -- stops that flake from being written down as a refusal.
-func (l *lab) l18CLI(d l18Driver, user, password string) (*cliConn, string, error) {
-	attempts := 1
-	if l.p.name == "cisco_iosxe" {
-		attempts = 3
+func (l *lab) l18CLI(d l18Driver, user, password string) (c *cliConn, said string, attempts int, errs []string, err error) {
+	tries := d.attempts
+	if tries < 1 {
+		tries = 1
 	}
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		c, err := l.sshCLI(user, password)
+	for attempts = 1; attempts <= tries; attempts++ {
+		c, err = l.sshCLI(user, password)
 		if err != nil {
 			// The device never ran a shell for this login, so it said nothing
-			// this test can quote. On IOS-XE that is the known flake; anywhere
-			// else it is a finding the caller reports as "no session, and the
-			// device said nothing".
-			lastErr = err
-			time.Sleep(3 * time.Second)
+			// this test can quote. Whether it even ASKED port49 is the thing
+			// that tells this apart from a refusal, and the caller reads that
+			// off the decision log rather than guessing here.
+			errs = append(errs, err.Error())
+			if attempts < tries {
+				time.Sleep(d.retryPause)
+			}
 			continue
 		}
 		// The refusal markers are waited for beside the prompts, so a device
 		// that has decided to refuse is not waited out in full. Whichever
 		// appeared is then checked: a prompt means the session opened, and
 		// anything else means the device answered and did not give one.
-		out, err := c.expect(90*time.Second, append(d.prompts(l), d.refusalMarkers...)...)
-		if err != nil {
-			said := c.transcript()
+		out, werr := c.expect(90*time.Second, append(d.prompts(l), d.refusalMarkers...)...)
+		if werr != nil {
+			said = c.transcript()
 			c.Close()
-			return nil, said, err
+			return nil, said, attempts, errs, werr
 		}
 		if !containsAny(out, d.prompts(l)) {
-			said := c.transcript()
+			said = c.transcript()
 			c.Close()
-			return nil, said, fmt.Errorf("the device refused the session after authenticating it; "+
-				"it said: %s", oneLine(said))
+			return nil, said, attempts, errs, fmt.Errorf("the device refused the session after "+
+				"authenticating it; it said: %s", oneLine(said))
 		}
 		// Only where `<node>#` is really this platform's prompt. On Junos it is
 		// the CONFIGURATION prompt, and a cliConn carrying it would send any
@@ -781,14 +830,14 @@ func (l *lab) l18CLI(d l18Driver, user, password string) (*cliConn, string, erro
 		if l.p.name != "juniper_vsrx" && l.p.name != "juniper_vjunos-router" {
 			c.prompt = l.p.node + "#"
 		}
-		if _, err := c.sendExpect(d.pagingOff, 45*time.Second, d.prompts(l)...); err != nil {
-			said := c.transcript()
+		if _, perr := c.sendExpect(d.pagingOff, 45*time.Second, d.prompts(l)...); perr != nil {
+			said = c.transcript()
 			c.Close()
-			return nil, said, fmt.Errorf("turning paging off with %q: %w", d.pagingOff, err)
+			return nil, said, attempts, errs, fmt.Errorf("turning paging off with %q: %w", d.pagingOff, perr)
 		}
-		return c, c.transcript(), nil
+		return c, c.transcript(), attempts, errs, nil
 	}
-	return nil, "", lastErr
+	return nil, "", tries, errs, err
 }
 
 // containsAny reports whether s holds any of want.
@@ -906,7 +955,21 @@ func (r l18Result) render(d l18Driver) string {
 		b.WriteString("**No `authorize_session` record reached port49's decision log for this variant**, " +
 			"so nothing here is attributable to the reply it would have carried.\n\n")
 	}
+	if r.neverAsked() {
+		fmt.Fprintf(&b, "**No session, and the device never asked port49.** %d SSH connection(s) were "+
+			"refused at the authentication layer, and port49's decision log holds no record at all for "+
+			"this login -- no redeem, no session authorization. So the reply under test never reached "+
+			"the device, and this variant measures nothing about that reply. It measures the device: "+
+			"something about its SSH server, not its authorization, refused the connection. What each "+
+			"attempt returned:\n\n```\n%s\n```\n\n", r.attempts, strings.Join(r.attemptErrs, "\n"))
+		return b.String()
+	}
 	if !r.opened {
+		if r.attempts > 1 {
+			fmt.Fprintf(&b, "This variant took %d SSH connection(s); the earlier ones were refused before "+
+				"the device ran AAA:\n\n```\n%s\n```\n\n",
+				r.attempts, strings.Join(r.attemptErrs, "\n"))
+		}
 		fmt.Fprintf(&b, "**The session did not open.** What the device said on the channel, verbatim:\n\n"+
 			"```\n%s\n```\n\nWhat the harness reported:\n\n```\n%s\n```\n\n",
 			strings.TrimRight(precReply(r.deviceSaid), "\n"), strings.TrimRight(r.loginErr, "\n"))
@@ -916,7 +979,13 @@ func (r l18Result) render(d l18Driver) string {
 		}
 		return b.String()
 	}
-	b.WriteString("**The session opened.**\n\n")
+	if r.attempts > 1 {
+		fmt.Fprintf(&b, "**The session opened on attempt %d.** The earlier attempts were refused at the "+
+			"SSH authentication layer, before the device ran AAA:\n\n```\n%s\n```\n\n",
+			r.attempts, strings.Join(r.attemptErrs, "\n"))
+	} else {
+		b.WriteString("**The session opened.**\n\n")
+	}
 	for _, s := range r.shows {
 		fmt.Fprintf(&b, "`%s`:\n\n```\n%s\n```\n\n", s.cmd, strings.TrimRight(s.out, "\n"))
 	}
@@ -949,6 +1018,9 @@ func (r l18Result) render(d l18Driver) string {
 // baseline was unreadable would be asserting the strongest claim in the row from
 // the weakest evidence.
 func l18Cell(d l18Driver, r l18Result, rs []l18Result) string {
+	if r.neverAsked() {
+		return "**no session, and port49 was never asked**"
+	}
 	if !r.opened {
 		return "**session refused**"
 	}
@@ -1158,7 +1230,12 @@ func l18Reading(t *testing.T, l *lab, d l18Driver, rs []l18Result) string {
 	// attribute still reach the command path?
 	b.WriteString(l18CommandReading(rs))
 
-	// 6. Junos only: the two attributes decision 22 will use.
+	// 6. What a run of refusals does to the device's SSH server, which is the
+	// question an operator actually meets: not "is my session refused" but "is
+	// the device still answering".
+	b.WriteString(l18SSHReading(t, l, rs))
+
+	// 7. Junos only: the two attributes decision 22 will use.
 	b.WriteString(l18JunosReading(t, d, rs, control))
 	return b.String()
 }
@@ -1197,6 +1274,9 @@ func l18Partition(d l18Driver, rs, all []l18Result) (refused, ignored, applied [
 		}
 		base := l18ByName(all, r.v.baseline)
 		switch {
+		case r.neverAsked():
+			// The reply never reached the device, so this variant says nothing
+			// about the attribute. It is reported on its own, not as a refusal.
 		case !r.opened:
 			refused = append(refused, r)
 		case base.v.name == "" || !base.opened || d.signal(&base) == "" || d.signal(&r) == "":
@@ -1410,3 +1490,91 @@ func l18SensitivityReading(d l18Driver, rs []l18Result) string {
 		"control despite being sent something extra -- a comparison, not an assumption.\n\n",
 		ctrl.attrs, cs, empty.attrs, es)
 }
+
+// l18SSHReading reports what a run of refused authorizations did to the
+// device's SSH server, and says nothing on a platform where nothing happened.
+//
+// This exists because the first IOS-XE run found it by failing. Five variants
+// in a row were refused, and the sixth could not get an SSH connection at all:
+// three attempts over 50 seconds, every one refused at the authentication
+// layer, with **no TACACS+ packet for any of them** in port49's decision log.
+// The variant after it connected normally. So the device recovered on its own,
+// and for that window it was refusing everyone -- break-glass included, since
+// break-glass reaches the same SSH server.
+//
+// That is the operational half of this row. "A bad attribute costs one operator
+// one session" is the polite version; what a fleet meets is a device that stops
+// answering after a handful of them, with nothing in the TACACS+ log to say so,
+// because the refusals never reach the TACACS+ server.
+func l18SSHReading(t *testing.T, l *lab, rs []l18Result) string {
+	t.Helper()
+	var never, retried []l18Result
+	for _, r := range rs {
+		switch {
+		case r.neverAsked():
+			never = append(never, r)
+		case r.attempts > 1:
+			retried = append(retried, r)
+		}
+	}
+	if len(never) == 0 && len(retried) == 0 {
+		return "**6. Every login in this run reached the device's AAA.** No SSH connection was refused " +
+			"before the device asked port49, so nothing here says a run of refused authorizations " +
+			"costs anything beyond the sessions refused.\n\n"
+	}
+	var b strings.Builder
+
+	// The heading is the strongest thing this run's own evidence supports and
+	// no stronger. A variant the device never answered at all is an outage; a
+	// variant that needed a second or third connection and then got one is the
+	// same mechanism caught recovering, and calling that an outage would be a
+	// paragraph contradicting the table above it.
+	if len(never) > 0 {
+		r := never[0]
+		b.WriteString("**6. A run of refused authorizations stops the device answering SSH at all.** " +
+			negativeFinding{
+				Claim: fmt.Sprintf("on %s, after the refusals above, %d variant(s) could not get an SSH "+
+					"connection at all -- and port49 was never asked. Its decision log holds no redeem "+
+					"and no session authorization for those logins, so the device refused them without "+
+					"consulting the TACACS+ server. The reply under test never reached it.",
+					l.p.version, len(never)),
+				Sent: "reply attributes " + r.attrs + "\n(then " + fmt.Sprint(r.attempts) +
+					" SSH connections as a token operator, " + fmt.Sprint(int(l18IOSXEPause.Seconds())) +
+					"s apart)",
+				Got:      strings.Join(r.attemptErrs, "\n"),
+				Inferred: true,
+				Why: "the device said nothing: it refused the SSH authentication before any banner. " +
+					"What is measured is the ABSENCE of any record for these logins in port49's own " +
+					"decision log, beside records for the logins either side of them, which is what " +
+					"says the device did not ask rather than that port49 did not answer.",
+			}.render(t) + "\n")
+	} else {
+		r := retried[0]
+		fmt.Fprintf(&b, "**6. A refused authorization costs the NEXT connection too, and the device "+
+			"recovers on its own.** %s took %d SSH connections: the first %d were refused at the "+
+			"authentication layer, before the device ran AAA at all, and the last one got through to "+
+			"the device's own answer. What the refused connections returned:\n\n```\n%s\n```\n\n"+
+			"Nothing was lost to it here -- every variant was measured -- so this run does not show an "+
+			"outage, it shows the mechanism that produces one. An earlier run of this same test on this "+
+			"same image did lose one: three connections over 50 seconds, every one refused this way, "+
+			"with no TACACS+ packet for any of them, and the variant after them connected normally.\n\n",
+			l18Names([]l18Result{r}), r.attempts, r.attempts-1, strings.Join(r.attemptErrs, "\n"))
+		if len(retried) > 1 {
+			fmt.Fprintf(&b, "%d variants in this run needed more than one connection; each one's "+
+				"section says how many it took.\n\n", len(retried))
+		}
+	}
+
+	b.WriteString("**What that means at 3am, and it is the operational half of this row.** These " +
+		"refusals do not reach port49, so its log says nothing about them: the last thing in it is a " +
+		"`permit`. The operator sees an SSH server refusing their password, which looks like a " +
+		"credential problem and is not one. Break-glass reaches the same SSH server, so for as long " +
+		"as the condition lasts it is refused too. The trigger is a reply attribute -- one line in a " +
+		"server definition -- and the blast radius is the device rather than the session.\n\n")
+	return b.String()
+}
+
+// l18IOSXEPause is the gap between retried SSH connections on IOS-XE. It is a
+// package-level constant so the note can quote the number it actually used
+// rather than a number written beside it.
+const l18IOSXEPause = 20 * time.Second
