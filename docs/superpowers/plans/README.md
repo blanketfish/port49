@@ -133,7 +133,12 @@ not ignored:**
   silently becomes `network-operator`; two roles are a union; a misnamed attribute is
   rejected outright. Custom roles by name work (L16). `network-operator` cannot run bare
   `show interface` (prompts for sudo; `show interface *` works) and the cancelled sudo writes
-  an accounting record under `admin` with `task_id=vsh.bin.$port`.
+  an accounting record under `admin` with `task_id=vsh.bin.$port`. **Nothing port49 sends ends
+  a session here**: an attribute this device does not understand is ignored under EITHER flag,
+  mandatory included, so a wrong attribute is invisible rather than fatal and the RFC 8907 §8.2
+  flag buys an adapter no signal at all. Two more entries in the privilege-to-role table, both
+  reached with no role in the reply: no attributes at all gives `vdc-operator`, and an
+  out-of-range `priv-lvl=99` gives `network-operator` (L18).
 - **vEOS**: send the **bare** `roles=<name>` **and** `priv-lvl=N` together — one role name, no
   quotes. The bare attribute is applied under either flag; `shell:roles*` is ignored and a
   mandatory `shell:roles=` or an optional `cisco-av-pair*` **refuses the session**. A role with
@@ -144,9 +149,20 @@ not ignored:**
   `aaa authorization commands ... local` the delivered role is real privilege (`network-operator`
   is refused `configure`, `network-admin` is not, an unknown name is refused), so port49's
   per-command answer is the only control **while port49 is in the command path** and the role is
-  the control when it is not (L16).
+  the control when it is not (L16). **On the §8.2 question vEOS is the conformant one**: an
+  OPTIONAL attribute it does not read is ignored and a MANDATORY one ends the session, whatever
+  the name — an invented attribute does both — so the flag is a working switch here and
+  `cisco-av-pair*` is an exception to that rule rather than the rule. A `priv-lvl` value the
+  device cannot use is DROPPED rather than clamped: `priv-lvl=99` lands the operator at level 1,
+  the same as sending nothing (L18).
 - **IOS-XE**: kills the session on any unrecognised attribute, optional included; `priv-lvl`
-  only (L3/L16 notes).
+  only (L3/L16 notes). L18 extends that to a second foreign spelling, an invented attribute and
+  an out-of-range `priv-lvl=99` — seven of ten variants refused, all `% Authorization failed.`
+  **And the cost is the device, not the session:** after a run of refused authorizations this
+  image stops answering SSH for about a minute, refusing connections at the authentication
+  layer **without sending port49 a packet**, so nothing in the decision log says it happened and
+  break-glass is refused with everyone else. An adapter for this platform must send exactly what
+  the device reads and nothing else; there is no cheap mistake here.
 - **Junos**: `platforms.juniper_junos.session_services` (default `[junos-exec]`; production
   fleets use `tacplus-options service-name`, e.g. `junos-exec-fw`; the name never selects
   policy). The emitted reference config MUST include `tacplus-options strict-authorization`:
@@ -155,7 +171,17 @@ not ignored:**
   (L17). `authorization-time-interval` (min 15 min) re-authorizes but a denial does not end
   the session: revocation cannot reach a live Junos session. `enhanced-accounting` adds the
   client source `Port` to the login record. Accounting `service` stays `shell` whatever the
-  session service is; `session_pid` is the per-session discriminator.
+  session service is; `session_pid` is the per-session discriminator. **Attributes, measured on
+  both images and agreeing cell for cell (L18):** `local-user-name=<template>` **is applied**
+  under either flag — the session leaves the `remote` template for the class the reply names —
+  and **`user-permissions` does nothing at all**, mandatory, optional, or sent beside
+  `local-user-name`. So decision 22's projection has one working attribute and one inert one on
+  these releases, and the shape it would send is indistinguishable from `local-user-name` alone;
+  L12 still has to close on the rest. A template name the device does not have degrades silently
+  to the default `remote` template. Everything Junos does not understand is ignored under either
+  flag, so nothing port49 sends can end a Junos session by attribute. No variant produced a
+  per-command authorization request, on either image, in any of 26 sessions — decision 21's
+  shape, confirmed.
 - Device-generated accounting under another user (Junos root RPC in production, NX-OS
   `admin`/`vsh.bin`) is real and must not be treated as a foreign session (plan 2 rule).
 
