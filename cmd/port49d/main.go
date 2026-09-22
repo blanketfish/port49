@@ -32,7 +32,6 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/server"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/platform"
-	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/token"
 )
@@ -111,17 +110,16 @@ func run(cfgPath string) error {
 		CommandAttributes: cfg.Lab.CommandAttributes,
 		DenyPrefixes:      cfg.Lab.DenyPrefixes,
 	}
-	for _, t := range cfg.Lab.SeedTokens {
-		if _, err := st.PutToken(ctx, store.TokenKey{NAS: t.NAS, Username: authen.Canonical(t.Username)},
-			// ID: t.Secret is the lab seed's stand-in for a minted handle. It
-			// is what makes the seeded token addressable for redemption at
-			// all; Task 15 replaces this loop with the Minter, which chooses
-			// an ID that is not the secret.
-			store.Token{ID: t.Secret, Secret: []byte(t.Secret), Kind: t.Kind, ExpiresAt: time.Now().Add(cfg.ContextIdleTTL)}); err != nil {
-			stopSpool()
-			<-spoolDone
-			return err
-		}
+	// A lab seed no longer carries a secret: it names who gets a token and the
+	// daemon mints the pair, which needs the Minter that Task 15 wires in here
+	// along with the file the pair is written to. Until then a config that asks
+	// for seeds is refused rather than started with none — an operator whose lab
+	// logins had quietly stopped working would have nothing at all to read.
+	if n := len(cfg.Lab.SeedTokens); n > 0 {
+		stopSpool()
+		<-spoolDone
+		return fmt.Errorf("port49d: lab.seed_tokens names %d seed(s), but the minter that cuts their "+
+			"credentials is not wired in yet; remove the seeds or run a build that has it", n)
 	}
 
 	deps := server.Deps{Admission: cfg.Admission, Keys: cfg.Keyring(),

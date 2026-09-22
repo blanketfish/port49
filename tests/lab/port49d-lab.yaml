@@ -14,6 +14,13 @@ keys:
   lab_key:
     current: {version: 1, secret_env: PORT49_LAB_KEY}
 
+# Encryption at rest (design §8). The lab store is in memory and dies with the
+# daemon, so this key protects nothing that outlives a run — but port49d refuses
+# to start without one, deliberately, so the lab exercises the same path
+# production does. The harness sets PORT49_LAB_ENC_KEY; see tests/lab/README.md.
+encryption:
+  current: {id: lab1, secret_env: PORT49_LAB_ENC_KEY}
+
 limits:
   # Longer than the product default (30s) on purpose: a device that holds one
   # TACACS connection open across an idle exec session should not have it closed
@@ -76,6 +83,11 @@ lab:
     - "reload"
     - "request system reboot"
     - "show clock"
+  # Where port49d writes the pairs it mints for the seeds below: one JSON object
+  # per line, mode 0600, truncated at every start. It is how the harness and the
+  # redactor learn the credentials, because nothing else knows them — a seed
+  # names who gets a token and the daemon chooses the secret.
+  seed_token_file: /tmp/port49-lab-tokens.jsonl
   # Redemption deletes the token, so every login in a run spends one. The pool
   # is larger than the run needs; lab.nextLogin() hands them out in order.
   #
@@ -86,91 +98,94 @@ lab:
   # login's receipt and is refused as credential_mismatch. Distinct usernames
   # give each login its own receipt key. See tests/lab/results/L1-arista_eos.md.
   seed_tokens:
-    - {nas: leaf1, username: alice01, secret: p49_labtoken01, kind: login}
-    - {nas: leaf1, username: alice02, secret: p49_labtoken02, kind: login}
-    - {nas: leaf1, username: alice03, secret: p49_labtoken03, kind: login}
-    - {nas: leaf1, username: alice04, secret: p49_labtoken04, kind: login}
-    - {nas: leaf1, username: alice05, secret: p49_labtoken05, kind: login}
-    - {nas: leaf1, username: alice06, secret: p49_labtoken06, kind: login}
-    - {nas: leaf1, username: alice07, secret: p49_labtoken07, kind: login}
-    - {nas: leaf1, username: alice08, secret: p49_labtoken08, kind: login}
-    - {nas: leaf1, username: alice09, secret: p49_labtoken09, kind: login}
-    - {nas: leaf1, username: alice10, secret: p49_labtoken10, kind: login}
-    - {nas: leaf1, username: alice11, secret: p49_labtoken11, kind: login}
-    - {nas: leaf1, username: alice12, secret: p49_labtoken12, kind: login}
-    - {nas: leaf1, username: alice13, secret: p49_labtoken13, kind: login}
-    - {nas: leaf1, username: alice14, secret: p49_labtoken14, kind: login}
-    - {nas: leaf1, username: alice15, secret: p49_labtoken15, kind: login}
-    - {nas: leaf1, username: alice16, secret: p49_labtoken16, kind: login}
-    - {nas: srx1, username: alice01, secret: p49_labtoken01, kind: login}
-    - {nas: srx1, username: alice02, secret: p49_labtoken02, kind: login}
-    - {nas: srx1, username: alice03, secret: p49_labtoken03, kind: login}
-    - {nas: srx1, username: alice04, secret: p49_labtoken04, kind: login}
-    - {nas: srx1, username: alice05, secret: p49_labtoken05, kind: login}
-    - {nas: srx1, username: alice06, secret: p49_labtoken06, kind: login}
-    - {nas: srx1, username: alice07, secret: p49_labtoken07, kind: login}
-    - {nas: srx1, username: alice08, secret: p49_labtoken08, kind: login}
-    - {nas: srx1, username: alice09, secret: p49_labtoken09, kind: login}
-    - {nas: srx1, username: alice10, secret: p49_labtoken10, kind: login}
-    - {nas: srx1, username: alice11, secret: p49_labtoken11, kind: login}
-    - {nas: srx1, username: alice12, secret: p49_labtoken12, kind: login}
-    - {nas: srx1, username: alice13, secret: p49_labtoken13, kind: login}
-    - {nas: srx1, username: alice14, secret: p49_labtoken14, kind: login}
-    - {nas: srx1, username: alice15, secret: p49_labtoken15, kind: login}
-    - {nas: srx1, username: alice16, secret: p49_labtoken16, kind: login}
-    - {nas: vsrx1, username: alice01, secret: p49_labtoken01, kind: login}
-    - {nas: vsrx1, username: alice02, secret: p49_labtoken02, kind: login}
-    - {nas: vsrx1, username: alice03, secret: p49_labtoken03, kind: login}
-    - {nas: vsrx1, username: alice04, secret: p49_labtoken04, kind: login}
-    - {nas: vsrx1, username: alice05, secret: p49_labtoken05, kind: login}
-    - {nas: vsrx1, username: alice06, secret: p49_labtoken06, kind: login}
-    - {nas: vsrx1, username: alice07, secret: p49_labtoken07, kind: login}
-    - {nas: vsrx1, username: alice08, secret: p49_labtoken08, kind: login}
-    - {nas: vsrx1, username: alice09, secret: p49_labtoken09, kind: login}
-    - {nas: vsrx1, username: alice10, secret: p49_labtoken10, kind: login}
-    - {nas: vsrx1, username: alice11, secret: p49_labtoken11, kind: login}
-    - {nas: vsrx1, username: alice12, secret: p49_labtoken12, kind: login}
-    - {nas: vsrx1, username: alice13, secret: p49_labtoken13, kind: login}
-    - {nas: vsrx1, username: alice14, secret: p49_labtoken14, kind: login}
-    - {nas: vsrx1, username: alice15, secret: p49_labtoken15, kind: login}
-    - {nas: vsrx1, username: alice16, secret: p49_labtoken16, kind: login}
-    # L8: one token per password length under test, each under its own username,
-    # so a device that truncates produces credential_mismatch against that user
-    # rather than a silent pass against a shorter token.
-    - {nas: leaf1, username: longpw30, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZ", kind: login}
-    - {nas: srx1, username: longpw30, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZ", kind: login}
-    - {nas: vsrx1, username: longpw30, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZ", kind: login}
-    - {nas: leaf1, username: longpw64, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567", kind: login}
-    - {nas: srx1, username: longpw64, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567", kind: login}
-    - {nas: vsrx1, username: longpw64, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567", kind: login}
-    - {nas: leaf1, username: longpw128, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", kind: login}
-    - {nas: srx1, username: longpw128, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", kind: login}
-    - {nas: vsrx1, username: longpw128, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", kind: login}
-    - {nas: leaf1, username: longpw138, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ", kind: login}
-    - {nas: srx1, username: longpw138, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ", kind: login}
-    - {nas: vsrx1, username: longpw138, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ", kind: login}
+    - {nas: leaf1, username: alice01}
+    - {nas: leaf1, username: alice02}
+    - {nas: leaf1, username: alice03}
+    - {nas: leaf1, username: alice04}
+    - {nas: leaf1, username: alice05}
+    - {nas: leaf1, username: alice06}
+    - {nas: leaf1, username: alice07}
+    - {nas: leaf1, username: alice08}
+    - {nas: leaf1, username: alice09}
+    - {nas: leaf1, username: alice10}
+    - {nas: leaf1, username: alice11}
+    - {nas: leaf1, username: alice12}
+    - {nas: leaf1, username: alice13}
+    - {nas: leaf1, username: alice14}
+    - {nas: leaf1, username: alice15}
+    - {nas: leaf1, username: alice16}
+    - {nas: srx1, username: alice01}
+    - {nas: srx1, username: alice02}
+    - {nas: srx1, username: alice03}
+    - {nas: srx1, username: alice04}
+    - {nas: srx1, username: alice05}
+    - {nas: srx1, username: alice06}
+    - {nas: srx1, username: alice07}
+    - {nas: srx1, username: alice08}
+    - {nas: srx1, username: alice09}
+    - {nas: srx1, username: alice10}
+    - {nas: srx1, username: alice11}
+    - {nas: srx1, username: alice12}
+    - {nas: srx1, username: alice13}
+    - {nas: srx1, username: alice14}
+    - {nas: srx1, username: alice15}
+    - {nas: srx1, username: alice16}
+    - {nas: vsrx1, username: alice01}
+    - {nas: vsrx1, username: alice02}
+    - {nas: vsrx1, username: alice03}
+    - {nas: vsrx1, username: alice04}
+    - {nas: vsrx1, username: alice05}
+    - {nas: vsrx1, username: alice06}
+    - {nas: vsrx1, username: alice07}
+    - {nas: vsrx1, username: alice08}
+    - {nas: vsrx1, username: alice09}
+    - {nas: vsrx1, username: alice10}
+    - {nas: vsrx1, username: alice11}
+    - {nas: vsrx1, username: alice12}
+    - {nas: vsrx1, username: alice13}
+    - {nas: vsrx1, username: alice14}
+    - {nas: vsrx1, username: alice15}
+    - {nas: vsrx1, username: alice16}
+    # L8: one user per password length that WAS under test. The lengths are no
+    # longer expressible here: port49d mints every token at one length (30
+    # characters, design §8), so a seed can no longer ask for a 64- or
+    # 138-character secret. The names are kept because the register entry is
+    # open and the users cost nothing; the measurement itself needs a mechanism
+    # that does not exist yet. See tests/lab/README.md and spec §15, L8.
+    - {nas: leaf1, username: longpw30}
+    - {nas: srx1, username: longpw30}
+    - {nas: vsrx1, username: longpw30}
+    - {nas: leaf1, username: longpw64}
+    - {nas: srx1, username: longpw64}
+    - {nas: vsrx1, username: longpw64}
+    - {nas: leaf1, username: longpw128}
+    - {nas: srx1, username: longpw128}
+    - {nas: vsrx1, username: longpw128}
+    - {nas: leaf1, username: longpw138}
+    - {nas: srx1, username: longpw138}
+    - {nas: vsrx1, username: longpw138}
     # NX-OS. Same pool shape as the platforms above: nextLogin hands out
-    # alice01..alice16 per NAS, and L8 needs one token per password length.
-    - {nas: nx1, username: alice01, secret: p49_labtoken01, kind: login}
-    - {nas: nx1, username: alice02, secret: p49_labtoken02, kind: login}
-    - {nas: nx1, username: alice03, secret: p49_labtoken03, kind: login}
-    - {nas: nx1, username: alice04, secret: p49_labtoken04, kind: login}
-    - {nas: nx1, username: alice05, secret: p49_labtoken05, kind: login}
-    - {nas: nx1, username: alice06, secret: p49_labtoken06, kind: login}
-    - {nas: nx1, username: alice07, secret: p49_labtoken07, kind: login}
-    - {nas: nx1, username: alice08, secret: p49_labtoken08, kind: login}
-    - {nas: nx1, username: alice09, secret: p49_labtoken09, kind: login}
-    - {nas: nx1, username: alice10, secret: p49_labtoken10, kind: login}
-    - {nas: nx1, username: alice11, secret: p49_labtoken11, kind: login}
-    - {nas: nx1, username: alice12, secret: p49_labtoken12, kind: login}
-    - {nas: nx1, username: alice13, secret: p49_labtoken13, kind: login}
-    - {nas: nx1, username: alice14, secret: p49_labtoken14, kind: login}
-    - {nas: nx1, username: alice15, secret: p49_labtoken15, kind: login}
-    - {nas: nx1, username: alice16, secret: p49_labtoken16, kind: login}
-    - {nas: nx1, username: longpw30, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZ", kind: login}
-    - {nas: nx1, username: longpw64, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567", kind: login}
-    - {nas: nx1, username: longpw128, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", kind: login}
-    - {nas: nx1, username: longpw138, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ", kind: login}
+    # alice01..alice16 per NAS, and L8 needs one user per password length.
+    - {nas: nx1, username: alice01}
+    - {nas: nx1, username: alice02}
+    - {nas: nx1, username: alice03}
+    - {nas: nx1, username: alice04}
+    - {nas: nx1, username: alice05}
+    - {nas: nx1, username: alice06}
+    - {nas: nx1, username: alice07}
+    - {nas: nx1, username: alice08}
+    - {nas: nx1, username: alice09}
+    - {nas: nx1, username: alice10}
+    - {nas: nx1, username: alice11}
+    - {nas: nx1, username: alice12}
+    - {nas: nx1, username: alice13}
+    - {nas: nx1, username: alice14}
+    - {nas: nx1, username: alice15}
+    - {nas: nx1, username: alice16}
+    - {nas: nx1, username: longpw30}
+    - {nas: nx1, username: longpw64}
+    - {nas: nx1, username: longpw128}
+    - {nas: nx1, username: longpw138}
     # The API and NETCONF transports (tests/lab/transport_test.go, register
     # entry L7). These are a pool of their own rather than more alice names, and
     # the reason is the measurement itself: L7 asks how many authentication
@@ -184,18 +199,18 @@ lab:
     # user carries a FRESH token for the config-changing request, so a spent
     # `01` token cannot block the half of the test that asks whether the device
     # sends an authorization request for a configuration command at all.
-    - {nas: leaf1, username: eapi01, secret: p49_labeapi01, kind: login}
-    - {nas: leaf1, username: eapi02, secret: p49_labeapi02, kind: login}
-    - {nas: leaf1, username: netconf01, secret: p49_labnetconf01, kind: login}
-    - {nas: leaf1, username: netconf02, secret: p49_labnetconf02, kind: login}
-    - {nas: nx1, username: nxapi01, secret: p49_labnxapi01, kind: login}
-    - {nas: nx1, username: nxapi02, secret: p49_labnxapi02, kind: login}
-    - {nas: nx1, username: netconf01, secret: p49_labnetconf01, kind: login}
-    - {nas: nx1, username: netconf02, secret: p49_labnetconf02, kind: login}
-    - {nas: srx1, username: netconf01, secret: p49_labnetconf01, kind: login}
-    - {nas: srx1, username: netconf02, secret: p49_labnetconf02, kind: login}
-    - {nas: vsrx1, username: netconf01, secret: p49_labnetconf01, kind: login}
-    - {nas: vsrx1, username: netconf02, secret: p49_labnetconf02, kind: login}
+    - {nas: leaf1, username: eapi01}
+    - {nas: leaf1, username: eapi02}
+    - {nas: leaf1, username: netconf01}
+    - {nas: leaf1, username: netconf02}
+    - {nas: nx1, username: nxapi01}
+    - {nas: nx1, username: nxapi02}
+    - {nas: nx1, username: netconf01}
+    - {nas: nx1, username: netconf02}
+    - {nas: srx1, username: netconf01}
+    - {nas: srx1, username: netconf02}
+    - {nas: vsrx1, username: netconf01}
+    - {nas: vsrx1, username: netconf02}
     # Junos `tacplus-options` (register entry L17, tests/lab/junos_opts_test.go).
     # A pool of its own rather than more alice names, for the reason the eapi and
     # netconf pools have one: that test spends a dozen logins across five items
@@ -208,63 +223,63 @@ lab:
     # two live sessions of one user apart, and on a single-use token a second
     # concurrent login by the same user is the receipt path (§13, decision 15),
     # not a second token.
-    - {nas: srx1, username: jopt01, secret: p49_labjopt01, kind: login}
-    - {nas: srx1, username: jopt02, secret: p49_labjopt02, kind: login}
-    - {nas: srx1, username: jopt03, secret: p49_labjopt03, kind: login}
-    - {nas: srx1, username: jopt04, secret: p49_labjopt04, kind: login}
-    - {nas: srx1, username: jopt05, secret: p49_labjopt05, kind: login}
-    - {nas: srx1, username: jopt06, secret: p49_labjopt06, kind: login}
-    - {nas: srx1, username: jopt07, secret: p49_labjopt07, kind: login}
-    - {nas: srx1, username: jopt08, secret: p49_labjopt08, kind: login}
-    - {nas: srx1, username: jopt09, secret: p49_labjopt09, kind: login}
-    - {nas: srx1, username: jopt10, secret: p49_labjopt10, kind: login}
-    - {nas: srx1, username: jopt11, secret: p49_labjopt11, kind: login}
-    - {nas: srx1, username: jopt12, secret: p49_labjopt12, kind: login}
-    - {nas: srx1, username: jopt13, secret: p49_labjopt13, kind: login}
-    - {nas: srx1, username: jopt14, secret: p49_labjopt14, kind: login}
-    - {nas: srx1, username: jopt15, secret: p49_labjopt15, kind: login}
-    - {nas: srx1, username: jopt16, secret: p49_labjopt16, kind: login}
-    - {nas: srx1, username: jopt17, secret: p49_labjopt17, kind: login}
-    - {nas: srx1, username: jopt18, secret: p49_labjopt18, kind: login}
-    - {nas: srx1, username: jopt19, secret: p49_labjopt19, kind: login}
-    - {nas: srx1, username: jopt20, secret: p49_labjopt20, kind: login}
-    - {nas: vsrx1, username: jopt01, secret: p49_labjopt01, kind: login}
-    - {nas: vsrx1, username: jopt02, secret: p49_labjopt02, kind: login}
-    - {nas: vsrx1, username: jopt03, secret: p49_labjopt03, kind: login}
-    - {nas: vsrx1, username: jopt04, secret: p49_labjopt04, kind: login}
-    - {nas: vsrx1, username: jopt05, secret: p49_labjopt05, kind: login}
-    - {nas: vsrx1, username: jopt06, secret: p49_labjopt06, kind: login}
-    - {nas: vsrx1, username: jopt07, secret: p49_labjopt07, kind: login}
-    - {nas: vsrx1, username: jopt08, secret: p49_labjopt08, kind: login}
-    - {nas: vsrx1, username: jopt09, secret: p49_labjopt09, kind: login}
-    - {nas: vsrx1, username: jopt10, secret: p49_labjopt10, kind: login}
-    - {nas: vsrx1, username: jopt11, secret: p49_labjopt11, kind: login}
-    - {nas: vsrx1, username: jopt12, secret: p49_labjopt12, kind: login}
-    - {nas: vsrx1, username: jopt13, secret: p49_labjopt13, kind: login}
-    - {nas: vsrx1, username: jopt14, secret: p49_labjopt14, kind: login}
-    - {nas: vsrx1, username: jopt15, secret: p49_labjopt15, kind: login}
-    - {nas: vsrx1, username: jopt16, secret: p49_labjopt16, kind: login}
-    - {nas: vsrx1, username: jopt17, secret: p49_labjopt17, kind: login}
-    - {nas: vsrx1, username: jopt18, secret: p49_labjopt18, kind: login}
-    - {nas: vsrx1, username: jopt19, secret: p49_labjopt19, kind: login}
-    - {nas: vsrx1, username: jopt20, secret: p49_labjopt20, kind: login}
-    - {nas: xe1, username: alice01, secret: p49_labtoken01, kind: login}
-    - {nas: xe1, username: alice02, secret: p49_labtoken02, kind: login}
-    - {nas: xe1, username: alice03, secret: p49_labtoken03, kind: login}
-    - {nas: xe1, username: alice04, secret: p49_labtoken04, kind: login}
-    - {nas: xe1, username: alice05, secret: p49_labtoken05, kind: login}
-    - {nas: xe1, username: alice06, secret: p49_labtoken06, kind: login}
-    - {nas: xe1, username: alice07, secret: p49_labtoken07, kind: login}
-    - {nas: xe1, username: alice08, secret: p49_labtoken08, kind: login}
-    - {nas: xe1, username: alice09, secret: p49_labtoken09, kind: login}
-    - {nas: xe1, username: alice10, secret: p49_labtoken10, kind: login}
-    - {nas: xe1, username: alice11, secret: p49_labtoken11, kind: login}
-    - {nas: xe1, username: alice12, secret: p49_labtoken12, kind: login}
-    - {nas: xe1, username: alice13, secret: p49_labtoken13, kind: login}
-    - {nas: xe1, username: alice14, secret: p49_labtoken14, kind: login}
-    - {nas: xe1, username: alice15, secret: p49_labtoken15, kind: login}
-    - {nas: xe1, username: alice16, secret: p49_labtoken16, kind: login}
-    - {nas: xe1, username: longpw30, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZ", kind: login}
-    - {nas: xe1, username: longpw64, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567", kind: login}
-    - {nas: xe1, username: longpw128, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", kind: login}
-    - {nas: xe1, username: longpw138, secret: "p49_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ", kind: login}
+    - {nas: srx1, username: jopt01}
+    - {nas: srx1, username: jopt02}
+    - {nas: srx1, username: jopt03}
+    - {nas: srx1, username: jopt04}
+    - {nas: srx1, username: jopt05}
+    - {nas: srx1, username: jopt06}
+    - {nas: srx1, username: jopt07}
+    - {nas: srx1, username: jopt08}
+    - {nas: srx1, username: jopt09}
+    - {nas: srx1, username: jopt10}
+    - {nas: srx1, username: jopt11}
+    - {nas: srx1, username: jopt12}
+    - {nas: srx1, username: jopt13}
+    - {nas: srx1, username: jopt14}
+    - {nas: srx1, username: jopt15}
+    - {nas: srx1, username: jopt16}
+    - {nas: srx1, username: jopt17}
+    - {nas: srx1, username: jopt18}
+    - {nas: srx1, username: jopt19}
+    - {nas: srx1, username: jopt20}
+    - {nas: vsrx1, username: jopt01}
+    - {nas: vsrx1, username: jopt02}
+    - {nas: vsrx1, username: jopt03}
+    - {nas: vsrx1, username: jopt04}
+    - {nas: vsrx1, username: jopt05}
+    - {nas: vsrx1, username: jopt06}
+    - {nas: vsrx1, username: jopt07}
+    - {nas: vsrx1, username: jopt08}
+    - {nas: vsrx1, username: jopt09}
+    - {nas: vsrx1, username: jopt10}
+    - {nas: vsrx1, username: jopt11}
+    - {nas: vsrx1, username: jopt12}
+    - {nas: vsrx1, username: jopt13}
+    - {nas: vsrx1, username: jopt14}
+    - {nas: vsrx1, username: jopt15}
+    - {nas: vsrx1, username: jopt16}
+    - {nas: vsrx1, username: jopt17}
+    - {nas: vsrx1, username: jopt18}
+    - {nas: vsrx1, username: jopt19}
+    - {nas: vsrx1, username: jopt20}
+    - {nas: xe1, username: alice01}
+    - {nas: xe1, username: alice02}
+    - {nas: xe1, username: alice03}
+    - {nas: xe1, username: alice04}
+    - {nas: xe1, username: alice05}
+    - {nas: xe1, username: alice06}
+    - {nas: xe1, username: alice07}
+    - {nas: xe1, username: alice08}
+    - {nas: xe1, username: alice09}
+    - {nas: xe1, username: alice10}
+    - {nas: xe1, username: alice11}
+    - {nas: xe1, username: alice12}
+    - {nas: xe1, username: alice13}
+    - {nas: xe1, username: alice14}
+    - {nas: xe1, username: alice15}
+    - {nas: xe1, username: alice16}
+    - {nas: xe1, username: longpw30}
+    - {nas: xe1, username: longpw64}
+    - {nas: xe1, username: longpw128}
+    - {nas: xe1, username: longpw138}

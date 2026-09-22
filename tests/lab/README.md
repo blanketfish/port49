@@ -67,6 +67,10 @@ entries (policy engine spec §15). Nothing here runs under `go test ./...`; it n
 4. `export PORT49_LAB_KEY=labsecret`
 5. `make build && make lab`
 
+`PORT49_LAB_ENC_KEY` is the encryption-at-rest key (design §8). port49d refuses to start
+without one and it must be exactly 32 bytes; the harness supplies a default, so export it
+only to override. The lab store is in memory, so it seals nothing that outlives a run.
+
 ## Why this needs bare metal
 
 The Junos platforms need a host where KVM is not itself inside a VM. This is not a
@@ -185,9 +189,17 @@ carries that difference, so change the two together.
 in a run consumes one. The pool is deliberately larger than the run needs. `lab.nextToken()`
 hands them out in order, so a test never reuses a spent one.
 
-`longpw<N>` users each hold one token whose secret is exactly `N` characters. L8 logs in as
-each and reads the outcome, so a device that truncates the password produces
-`credential_mismatch` against that user rather than a silent pass against a shorter token.
+A seed no longer carries its secret. It names who gets a token pair, and port49d mints the
+pair at start and writes it to `lab.seed_token_file` (`/tmp/port49-lab-tokens.jsonl`), one
+JSON object per line at mode 0600, truncated on every start. So the credentials of a run
+exist only on the machine that ran it, and only until the next run: **redact the captures
+before running the lab again**, or `make evidence` has nothing to verify them against. That
+file is also why `labcreds.Secrets` reads it rather than this config.
+
+`longpw<N>` users are kept, but L8 cannot be measured through them any more. A seed cannot ask
+for a secret of a chosen length now that the daemon mints it — every token is 30 characters
+(design §8) — so the password-length question needs a mechanism that does not exist yet. The
+register entry stays open; see spec §15, L8.
 
 ## Captures
 

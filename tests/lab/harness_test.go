@@ -128,6 +128,13 @@ const (
 	labKeyDefault  = labcreds.Key            // `tacacs-server host ... key`, `tacplus-server ... secret`
 	breakglassUser = labcreds.BreakglassUser // the local account both startup configs define
 
+	// labEncKeyDefault is the encryption-at-rest key for a lab run, 32 bytes as
+	// AES-256 requires. Unlike the constants around it this one is NOT a
+	// credential anything authenticates with: the lab store is in memory, so it
+	// seals nothing that survives the daemon, and no capture or evidence file
+	// ever contains it. PORT49_LAB_ENC_KEY overrides it.
+	labEncKeyDefault = "port49-lab-encryption-key-32byte"
+
 	// breakglassPassword is that account's password. The EOS config carries it
 	// verbatim; the Junos config carries a SHA-512 crypt hash of it under
 	// `encrypted-password`, because the plain-text form does not produce a
@@ -826,7 +833,15 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	l.daemon.Dir = root
 	l.daemon.Stdout = l.logFile
 	l.daemon.Stderr = io.MultiWriter(l.errFile, os.Stderr)
-	l.daemon.Env = append(os.Environ(), "PORT49_LAB_KEY="+key)
+	// The encryption-at-rest key is required (design §8) and has no default in
+	// the config, so the harness supplies one. The lab store is in memory and
+	// dies with the daemon, so this key protects nothing that outlives the run;
+	// it is set so the lab exercises the same sealed path production does.
+	encKey := os.Getenv("PORT49_LAB_ENC_KEY")
+	if encKey == "" {
+		encKey = labEncKeyDefault
+	}
+	l.daemon.Env = append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_LAB_ENC_KEY="+encKey)
 	if err := l.daemon.Start(); err != nil {
 		return fmt.Errorf("start port49d: %w", err)
 	}
