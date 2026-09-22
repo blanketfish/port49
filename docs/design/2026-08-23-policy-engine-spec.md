@@ -609,6 +609,12 @@ normalize(request)
   → if now - ctx.refreshed_at
        > staleness_ceiling             → DENY (context_stale)
   → if request level > ctx.privilege   → DENY (privilege_exceeded)
+       (ctx.privilege is the level port49 last GRANTED: the login START's level, then
+        the `priv-lvl` a permitted session authorization carried, then an escalation;
+        the session-authorization permit records its granted level in place, same
+        ctx_id — measured on vEOS the session authorization arrives at priv_lvl 1,
+        port49 grants 15, and every later command arrives at 15;
+        tests/lab/results/L1-arista_eos.md, L3-arista_eos.md)
   → collect every matching rule, permit and deny alike
   → if no permit matches                 → DENY (no_rule_matched)
   → if no permit dominates every
@@ -1891,7 +1897,7 @@ builds; plan 1 does not do it.** Plan 1's `redeem` treats an enable START as an 
 redemption, so it writes a fresh `ctx_id` over the login context — measured on vEOS
 2026-09-20 (§5.6, teardown row 1; `tests/lab/results/L3-arista_eos.md`). The rules do not change: a role's permits and denies apply at
 every level, and what escalation changes is which commands the device *offers* and therefore
-submits. The recorded level feeds `privilege_exceeded` for a request above it. Accounting and
+submits. The recorded level feeds `privilege_exceeded` for a request above it; the same in-place update happens when a permitted **session authorization** grants a `priv-lvl` (§5.3), because on vEOS the login START carries level 1, port49's session reply grants 15, and every command after it arrives at 15 (`tests/lab/results/L1-arista_eos.md`, `L3-arista_eos.md`) — a context that still held the login level would deny every one of them. Accounting and
 the `escalate` record attribute the event to the **real principal** even though the wire said
 `$enab15$`.
 
