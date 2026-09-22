@@ -1281,6 +1281,12 @@ Device accounting shares this envelope as the seventh event, `account`, and is s
 which is the only place that attribution is recoverable.
 
 A `mint` record is the audit trail for *authority*, where the others are the trail for *use*:
+it therefore carries **no `credential_sha256`**. That field is the hash of what was presented
+on the wire, and at mint time nothing has been presented: the broker holds the subject's
+identity, not a secret, so any hash it could compute would join to nothing — and a blank one
+is worse than an absent one, because it is present on every mint record in the fleet and
+joins everything to everything. `token_sha256` is what a mint record carries instead, and it
+is what the redemption joins back to (see Correlation below).
 
 ```json
 {
@@ -1289,7 +1295,7 @@ A `mint` record is the audit trail for *authority*, where the others are the tra
   "verdict": "permit",
   "reason": "grants_matched",
   "principal": "user:alice@example.com",
-  "auth": { "method": "oidc", "credential_sha256": "9f2c8b…" },
+  "auth": { "method": "oidc" },
   "policy": {
     "bundle": 2291,
     "subject": "network-operators",
