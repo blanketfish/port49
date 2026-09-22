@@ -258,12 +258,26 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		if c.RemAddr != "" && remAddr != "" && c.RemAddr != remAddr {
 			return s.fail(ctx, rec, decision.RemAddrMismatch)
 		}
+		// Revocation and the session ceiling are checked HERE, not left to the
+		// authorizer. `enable: auto` consults no token at all, so nothing else
+		// on this path would ever look: the context alone decides. On a
+		// per-command platform Task 10 would catch it on the next command, but
+		// a session-only platform asks once at login and never again (spec §13,
+		// decision 21; measured over 26 Junos sessions,
+		// tests/lab/results/L18-*.md), and there the enable exchange is the
+		// last decision port49 gets to make about this shell.
+		if !c.RevokedAt.IsZero() {
+			return s.fail(ctx, rec, decision.CredentialRevoked)
+		}
+		if !c.SessionExpires.IsZero() && s.h.now().After(c.SessionExpires) {
+			return s.fail(ctx, rec, decision.SessionExpired)
+		}
 		// `auto` PASSes on the context alone, any password accepted (spec §7).
 		// That is only safe because `enable_username: enab` cannot load
 		// (config.Load), so this context is always the operator's own and never
 		// a shared `$enab15$` pseudo-user's.
 		if c.Enable == "auto" {
-			return s.escalate(ctx, rec, ck, incumbent)
+			return s.escalate(ctx, rec, ck, incumbent, decision.EscalationGranted)
 		}
 	}
 
@@ -320,6 +334,19 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 			// Any other store error is ERROR, not a PASS: the receipt did not
 			// slide, so the next presentation would silently get a fresh window.
 			return s.storeError(rec)
+		}
+		// The receipt froze a ctx_id at the first escalation. The live context
+		// may be a different one by now (spec §15, L1: the key cannot tell two
+		// of this operator's shells apart), and the privilege may never have
+		// landed at all if that escalation's PutContext failed. Replay the
+		// escalation's EFFECT on the context that exists now, and log that
+		// context's id rather than the frozen one — otherwise a PASS goes out
+		// naming a context nothing else will ever mention, which is the thing
+		// this task exists to prevent. The gate above already re-checked the
+		// mechanism, the ceiling, revocation, expiry and rem_addr against the
+		// live context, so this grants nothing the cold path would not.
+		if enable && r.Status == wire.AuthenStatusPass {
+			return s.escalate(ctx, rec, ck, incumbent, decision.ReceiptReplayed)
 		}
 		rec.Session.CtxID = r.CtxID
 		return s.finish(rec, r.Status, decision.ReceiptReplayed)
@@ -379,6 +406,13 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 			r, rerr := s.h.store.GetReceipt(ctx, rk)
 			s.h.metrics.StoreOps.WithLabelValues("get_receipt", storeOutcome(rerr)).Inc()
 			if rerr == nil && subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
+				// The concurrent-escalation case, and it has the same shape as
+				// the retransmission above: the winner's receipt says PASS, but
+				// only replaying the effect puts the privilege on the context
+				// this session actually read.
+				if enable && r.Status == wire.AuthenStatusPass {
+					return s.escalate(ctx, rec, ck, incumbent, decision.ReceiptReplayed)
+				}
 				rec.Session.CtxID = r.CtxID
 				return s.finish(rec, r.Status, decision.ReceiptReplayed)
 			}
@@ -392,7 +426,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// returns above the `prev` read deliberately — an escalation displaces no
 	// context, so `replaced_ctx_id` must stay absent on its record.
 	if enable {
-		return s.escalate(ctx, rec, ck, incumbent)
+		return s.escalate(ctx, rec, ck, incumbent, decision.EscalationGranted)
 	}
 
 	// A context already under this key is this operator's own earlier login on
@@ -462,9 +496,17 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 // escalate records the new privilege on the incumbent context and keeps
 // everything else, ctx_id foremost: an escalation is not a new session, so the
 // log join across it must not depend on replaced_ctx_id (spec §5.6 row 1, §7).
-// Nothing is indexed here either — the context was indexed when it was created,
-// and the principal, sid and certificate it is indexed under have not changed.
-func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.ContextKey, c store.Context) (wire.AuthenReply, bool) {
+// c is written back whole, so Credential, AuthTime, SessionExpires, RefreshedAt
+// and RevokedAt survive — dropping any of them would cost revocation its reach,
+// remove the session ceiling, defeat the staleness clock, or resurrect a
+// revoked session (spec §5.1.4). Nothing is indexed here either: the context was
+// indexed when it was created, and the principal, sid and certificate it is
+// indexed under have not changed.
+//
+// reason is a parameter because a replayed escalation re-applies this same
+// effect under ReceiptReplayed: the decision is replayed, and so is what it did.
+func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.ContextKey, c store.Context,
+	reason decision.Reason) (wire.AuthenReply, bool) {
 	c.PrivLvl = s.start.PrivLvl
 	c.LastTouchedAt = s.h.now()
 	err := s.h.store.PutContext(ctx, ck, c, s.h.contextTTL)
@@ -472,10 +514,13 @@ func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.Co
 	if err != nil {
 		// On the token path the enable token is already spent, but without the
 		// new privilege on the context every later authorization would answer
-		// from the old one: ERROR, not a PASS the context cannot back up.
+		// from the old one: ERROR, not a PASS the context cannot back up. The
+		// retransmission that follows replays through the receipt and lands the
+		// privilege then, because that path escalates rather than only
+		// reporting.
 		return s.storeError(rec)
 	}
-	return s.finish(rec, wire.AuthenStatusPass, decision.EscalationGranted)
+	return s.finish(rec, wire.AuthenStatusPass, reason)
 }
 
 // storeOutcome maps a store error to the StoreOps metric's outcome label.

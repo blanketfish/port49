@@ -916,12 +916,31 @@ func TestAnUnindexedContextSaysSoOnTheRecord(t *testing.T) {
 	}
 }
 
+// seedLogin writes the login context an enable START escalates. Every field an
+// escalation must preserve is non-zero, so a rebuild in `escalate` that drops
+// one is visible: a lost Credential costs revocation its reach by sid and
+// certificate, a lost SessionExpires removes the absolute ceiling, a lost
+// RefreshedAt defeats the staleness clock (spec §5.1.4).
 func (f *fixture) seedLogin(t *testing.T, enable string, maxPriv uint8) {
 	t.Helper()
-	f.st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
-		store.Context{CtxID: "ctxL", Username: "alice", Principal: "user:alice@example.com",
-			Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 1, MaxPrivilege: maxPriv, Enable: enable,
-			BlobHash: "sha256:b", CreatedAt: f.now}, time.Hour)
+	f.seedLoginWith(t, enable, maxPriv, nil)
+}
+
+// seedLoginWith is seedLogin with one adjustment applied before the write, for
+// the gate states seedLogin never produces: a revoked context, an expired one.
+func (f *fixture) seedLoginWith(t *testing.T, enable string, maxPriv uint8, adjust func(*store.Context)) {
+	t.Helper()
+	c := store.Context{CtxID: "ctxL", Username: "alice", Principal: "user:alice@example.com",
+		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 1, MaxPrivilege: maxPriv, Enable: enable,
+		BlobHash: "sha256:b", CreatedAt: f.now,
+		Credential:     store.Credential{Method: "oidc", Sid: "sid-1", Issuer: "ca", Serial: "01"},
+		AuthTime:       f.now,
+		SessionExpires: f.now.Add(8 * time.Hour),
+		RefreshedAt:    f.now}
+	if adjust != nil {
+		adjust(&c)
+	}
+	f.st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}, c, time.Hour)
 }
 
 func (f *fixture) enableStart(user string) wire.AuthenStart {
@@ -951,9 +970,22 @@ func TestEnableUpdatesPrivilegeInPlaceAndKeepsCtxID(t *testing.T) {
 	if c.CtxID != "ctxL" || c.PrivLvl != 15 || c.Principal != "user:alice@example.com" || c.BlobHash != "sha256:b" {
 		t.Fatalf("escalation must update privilege in place and keep ctx_id: %+v", c)
 	}
+	// An escalation changes the privilege and nothing else. Each of these has
+	// teeth downstream (spec §5.1.4): Credential is revocation's reach by sid
+	// and certificate, SessionExpires the absolute ceiling, RefreshedAt the
+	// staleness clock.
+	if !c.AuthTime.Equal(f.now) || !c.SessionExpires.Equal(f.now.Add(8*time.Hour)) ||
+		!c.RefreshedAt.Equal(f.now) || c.Credential.Sid != "sid-1" || c.Credential.Serial != "01" {
+		t.Fatalf("an escalation changes the privilege and nothing else: %+v", c)
+	}
 	last := f.records(t)[len(f.records(t))-1]
 	if last["event"] != "escalate" || last["reason"] != "escalation_granted" || last["principal"] != "user:alice@example.com" {
 		t.Fatalf("%v", last)
+	}
+	// The escalation's OWN record must name the context it raised: that id is
+	// the join from the login through the escalation to every later command.
+	if last["session"].(map[string]any)["ctx_id"] != "ctxL" {
+		t.Fatalf("the escalation's own record must name the context it raised: %v", last)
 	}
 	if last["session"].(map[string]any)["replaced_ctx_id"] != nil {
 		t.Fatal("an escalation replaces nothing")
@@ -1019,6 +1051,11 @@ func TestEnableFromAnotherAddressIsRefused(t *testing.T) {
 func TestEnableAutoNeedsNoToken(t *testing.T) {
 	f := setup(t)
 	f.seedLogin(t, "auto", 15)
+	// An enable token alice could have spent, so "needs no token" is a claim
+	// about behaviour rather than about an empty store.
+	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "en", Secret: []byte(f.tag() + "enabenabenabenabenab0123"), Kind: store.KindEnable,
+			Username: "alice", Principal: "user:alice@example.com", ExpiresAt: f.now.Add(time.Minute)})
 	sess := f.h.NewSession(f.peer)
 	sess.Start(context.Background(), f.enableStart("alice"))
 	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything at all")})
@@ -1028,6 +1065,210 @@ func TestEnableAutoNeedsNoToken(t *testing.T) {
 	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
 	if c.CtxID != "ctxL" || c.PrivLvl != 15 {
 		t.Fatalf("%+v", c)
+	}
+	// The token is still there: `auto` decided on the context alone.
+	cands, err := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, tok := range cands {
+		found = found || tok.ID == "en"
+	}
+	if !found {
+		t.Fatalf("`auto` consulted and spent the enable token: %+v", cands)
+	}
+}
+
+// A revoked context does not escalate. `auto` consults no token, so nothing
+// else on that path would ever look, and on a session-only platform (spec §13,
+// decision 21; tests/lab/results/L18-*.md) the enable exchange is the last
+// decision port49 makes about the shell — Task 10's per-command check never
+// runs there.
+func TestEnableOnRevokedContextIsRefused(t *testing.T) {
+	for _, enable := range []string{"auto", "token"} {
+		t.Run(enable, func(t *testing.T) {
+			f := setup(t)
+			f.seedLoginWith(t, enable, 15, func(c *store.Context) { c.RevokedAt = f.now.Add(-time.Minute) })
+			sess := f.h.NewSession(f.peer)
+			sess.Start(context.Background(), f.enableStart("alice"))
+			reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything")})
+			if reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "credential_revoked" {
+				t.Fatalf("%+v %v", reply, f.records(t))
+			}
+			c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+			if c.PrivLvl != 1 {
+				t.Fatalf("a revoked context must not be raised: %+v", c)
+			}
+		})
+	}
+}
+
+// Past max_session_age the enable prompt is the last chance to refuse on a
+// session-only platform. A zero SessionExpires is `max_session_age: never` and
+// must stay expressible (spec §5.6), so it is not read as expired at the epoch.
+func TestEnableOnExpiredContextIsRefused(t *testing.T) {
+	f := setup(t)
+	f.seedLoginWith(t, "auto", 15, func(c *store.Context) { c.SessionExpires = f.now.Add(-time.Second) })
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything")})
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "session_expired" {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+
+	// `max_session_age: never` still escalates.
+	f2 := setup(t)
+	f2.seedLoginWith(t, "auto", 15, func(c *store.Context) { c.SessionExpires = time.Time{} })
+	sess2 := f2.h.NewSession(f2.peer)
+	sess2.Start(context.Background(), f2.enableStart("alice"))
+	reply, _ = sess2.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything")})
+	if reply.Status != wire.AuthenStatusPass || f2.records(t)[0]["reason"] != "escalation_granted" {
+		t.Fatalf("a zero SessionExpires is `never`, not expired at the epoch: %+v %v", reply, f2.records(t))
+	}
+}
+
+// putContextFailsOnce fails the first PutContext and is healthy afterwards, to
+// drive an escalation whose privilege never landed. seedLogin writes through
+// f.st directly, so the first failure this sees is the escalation's own.
+type putContextFailsOnce struct {
+	store.Store
+	failed bool
+}
+
+func (p *putContextFailsOnce) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
+	if !p.failed {
+		p.failed = true
+		return errors.New("store: put_context failed")
+	}
+	return p.Store.PutContext(ctx, k, c, ttl)
+}
+
+// A replayed enable must replay the escalation's EFFECT, not just its verdict.
+// Here the first escalation's PutContext fails after the token is already
+// spent: at 3am the operator sees an error, types `enable` again, gets a prompt
+// that accepts and a `#` — and the device now believes they are level 15. If
+// the retry only replayed the receipt, every command they typed would be denied
+// at their login privilege.
+func TestReplayedEnableReAppliesThePrivilege(t *testing.T) {
+	var fake *putContextFailsOnce
+	f := setupStore(t, func(st *memory.Store) store.Store {
+		fake = &putContextFailsOnce{Store: st}
+		return fake
+	})
+	f.seedLogin(t, "token", 15)
+	secret := f.tag() + "enabenabenabenabenab0123"
+	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "en", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
+			Principal: "user:alice@example.com", ExpiresAt: f.now.Add(time.Minute)})
+
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	if reply.Status != wire.AuthenStatusError || f.records(t)[0]["reason"] != "store_unavailable" {
+		t.Fatalf("a failed PutContext must be ERROR, not a PASS the context cannot back up: %+v %v", reply, f.records(t))
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.PrivLvl != 1 {
+		t.Fatalf("the privilege must not have landed: %+v", c)
+	}
+
+	sess2 := f.h.NewSession(f.peer)
+	sess2.Start(context.Background(), f.enableStart("alice"))
+	reply, _ = sess2.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	last := f.records(t)[len(f.records(t))-1]
+	if reply.Status != wire.AuthenStatusPass || last["reason"] != "receipt_replayed" {
+		t.Fatalf("%+v %v", reply, last)
+	}
+	c, _ = f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.CtxID != "ctxL" || c.PrivLvl != 15 {
+		t.Fatalf("the retry must leave the live context at the enable privilege: %+v", c)
+	}
+}
+
+// raceLoserStore makes every RedeemAndReceipt look like the losing half of a
+// concurrent escalation: the work lands (the token is spent, the receipt is
+// written), and the caller is told ErrNotFound — exactly what the loser of a
+// real race sees when the winner got there first.
+type raceLoserStore struct {
+	store.Store
+}
+
+func (r raceLoserStore) RedeemAndReceipt(ctx context.Context, k store.TokenKey, tokenID string, w store.ReceiptWrite) error {
+	if err := r.Store.RedeemAndReceipt(ctx, k, tokenID, w); err != nil {
+		return err
+	}
+	return store.ErrNotFound
+}
+
+// The race loser adopts the winner's receipt, and it has the same obligation as
+// the retransmission: replay the effect, not just the verdict. Two shells
+// enabling at once must not leave one of them PASSed at login privilege.
+func TestRaceLosingEnableStillRaisesTheContext(t *testing.T) {
+	f := setupStore(t, func(st *memory.Store) store.Store { return raceLoserStore{st} })
+	f.seedLogin(t, "token", 15)
+	secret := f.tag() + "enabenabenabenabenab0123"
+	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "en", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
+			Principal: "user:alice@example.com", ExpiresAt: f.now.Add(time.Minute)})
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	last := f.records(t)[len(f.records(t))-1]
+	if reply.Status != wire.AuthenStatusPass || last["reason"] != "receipt_replayed" ||
+		last["session"].(map[string]any)["ctx_id"] != "ctxL" {
+		t.Fatalf("%+v %v", reply, last)
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.CtxID != "ctxL" || c.PrivLvl != 15 {
+		t.Fatalf("the race loser must leave the context at the enable privilege: %+v", c)
+	}
+}
+
+// And when the context was replaced between the escalation and the
+// retransmission, the replay must name the context that exists now. The receipt
+// froze ctxL; alice's second shell replaced it with ctx1 (spec §15, L1: the key
+// cannot tell two of her shells apart). Logging the frozen id would put a
+// ctx_id in the decision log that no context, no authorize_* record and no
+// accounting record ever held — the thing brief item 8 exists to prevent,
+// arriving through the replay door.
+func TestReplayedEnableNamesTheLiveContext(t *testing.T) {
+	f := setup(t)
+	f.seedLogin(t, "token", 15)
+	secret := f.tag() + "enabenabenabenabenab0123"
+	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "en", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
+			Principal: "user:alice@example.com", ExpiresAt: f.now.Add(time.Minute)})
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	if reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)}); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("first escalation: %+v", reply)
+	}
+
+	// A second login on the same (nas, username): ctxL is replaced by ctx1, at
+	// login privilege.
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("ssh"), RemAddr: []byte("198.51.100.4"),
+		Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("relogin: %+v", reply)
+	}
+	if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); c.CtxID != "ctx1" {
+		t.Fatalf("the relogin must have replaced the context: %+v", c)
+	}
+
+	// The device retransmits the enable, inside the receipt window.
+	sess2 := f.h.NewSession(f.peer)
+	sess2.Start(context.Background(), f.enableStart("alice"))
+	reply, _ := sess2.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	last := f.records(t)[len(f.records(t))-1]
+	if reply.Status != wire.AuthenStatusPass || last["reason"] != "receipt_replayed" ||
+		last["session"].(map[string]any)["ctx_id"] != "ctx1" {
+		t.Fatalf("the replay must name the live context, not the frozen one: %+v %v", reply, last)
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.CtxID != "ctx1" || c.PrivLvl != 15 {
+		t.Fatalf("the replay must raise the context that exists now: %+v", c)
 	}
 }
 
