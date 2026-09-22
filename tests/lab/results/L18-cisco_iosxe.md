@@ -4,7 +4,7 @@
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
-- **Capture:** `tests/lab/evidence/L18-cisco_iosxe.pcap` — 1068 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L18-cisco_iosxe.pcap` — 1549 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -15,7 +15,7 @@ How each platform treats a reply attribute it did not ask for -- one it does not
 
 - **Date measured:** 2026-09-22
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
-- **Capture:** `tests/lab/evidence/L18-cisco_iosxe.pcap` — 1068 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L18-cisco_iosxe.pcap` — 1549 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 
 Each variant below is one set of reply attributes on the session authorization, one daemon restart and one token login. Per variant: whether the session opened and what the device said if it did not; `show privilege` for what the session was given; and one `show version`, typed only to see whether the device sends per-command authorization under this reply at all.
 
@@ -23,7 +23,9 @@ Each variant below is one set of reply attributes on the session authorization, 
 
 **Which baseline, and why it is not one fixed row.** Variants 3 to 6 send the known attribute AND the attribute under test, so that the session has something to be given and the bad attribute is the only variable; they are read against the control, which is the known attribute alone. Variants that REPLACE the whole reply -- the bad value, and on Junos the decision-22 attributes -- are read against variant 8. no attributes at all (the control for `ignored`). Reading everything against that instead would mark every row carrying the known attribute `applied`, because the known attribute was applied, and the table would then contradict the transcripts printed above it.
 
-**What is not measured here.** The same question asked on a per-command authorization REPLY. The lab authorizer returns no attributes on that path (`Lab.Command` in `internal/daemon/author/lab.go`) and the `lab:` config block has no key for them, so there is no reply to put a bad attribute in. The wire side is not the obstacle -- `author.Handler` copies a decision's attributes onto the response for commands and sessions alike -- so this is a missing configuration key, and adding one is a daemon change this measurement was not scoped to make. Every variant below still records whether per-command authorization happened, which answers the neighbouring question of whether a device under this reply reaches that path at all.
+**The per-command reply is asked too, in three shapes.** `lab.command_attributes` puts attributes on a PERMITTED per-command authorization the way `lab.session_attributes` does on a session one, so variants 9. OPTIONAL invented attribute on a PER-COMMAND reply, 10. MANDATORY invented attribute on a PER-COMMAND reply and 11. OPTIONAL foreign-vendor attribute on a PER-COMMAND reply hold the session reply constant at the control's and vary only what the command reply carries.
+
+**Their cells are derived differently from the rest, and have to be.** Their sessions are the control's by construction, so comparing sessions would read `ignored` however the device reacted to the command reply. The cell is read off the COMMANDS instead, in this order: the session lost after a prompt was reached, or the device asking for no command authorization at all, or a command whose reply is one of this platform's refusal markers (`% Authorization failed`, `Authorization failed`, `% Authorization`, `Command authorization failed`, `authorization failed`), or -- the only way to `ran` -- a reply whose first line is the one the control's `show version` produced on the same device. A command that neither matched a refusal marker nor came back looking like the control's output is reported as neither, with its words printed, rather than being counted as having run.
 
 ### 1. mandatory KNOWN attribute (the control)
 
@@ -105,7 +107,7 @@ Processor board ID 94EHBYZD7PG
 Router operating mode: Autonomous
 1 Gigabit Ethernet interface
 32768K bytes of non-volatile configuration memory.
-3960704K bytes of physical memory.
+3960696K bytes of physical memory.
 5234688K bytes of virtual hard disk at bootflash:.
 
 Configuration register is 0x2102
@@ -202,7 +204,7 @@ Processor board ID 94EHBYZD7PG
 Router operating mode: Autonomous
 1 Gigabit Ethernet interface
 32768K bytes of non-volatile configuration memory.
-3960704K bytes of physical memory.
+3960696K bytes of physical memory.
 5234688K bytes of virtual hard disk at bootflash:.
 
 Configuration register is 0x2102
@@ -453,12 +455,141 @@ Processor board ID 94EHBYZD7PG
 Router operating mode: Autonomous
 1 Gigabit Ethernet interface
 32768K bytes of non-volatile configuration memory.
-3960704K bytes of physical memory.
+3960696K bytes of physical memory.
 5234688K bytes of virtual hard disk at bootflash:.
 
 Configuration register is 0x2102
 
 xe1>
+```
+
+Every command authorization port49 answered in this session, as it arrived:
+
+```
+terminal length 0 -> permit permit_dominates
+show privilege -> permit permit_dominates
+show version -> permit permit_dominates
+```
+
+
+### 9. OPTIONAL invented attribute on a PER-COMMAND reply
+
+the same question asked of a PER-COMMAND authorization reply instead of a session one. The session reply is the control's, so the only difference from the control is what the command reply carries. Three of the five platforms in this row end the SESSION over an attribute like this; what it costs on the command path is a separate question, and it decides whether a per-command adapter may carry anything at all. The commands typed below are the measurement: if they run, the device tolerated the attribute; if the device refuses one, a policy permit became a refusal; if the session goes away, one attribute cost the operator every command and not just this one. Here it is an OPTIONAL attribute no vendor has -- the shape RFC 8907 §8.2 says a device SHOULD ignore, and the mildest thing that can be wrong in a reply.
+
+Reply attributes: `["priv-lvl=15"]`
+
+port49 answered the session authorization **permit context_matched**, so everything below is the DEVICE's answer to a session port49 permitted.
+
+**The session opened.**
+
+`terminal length 0` — the FIRST command in the session, and so the first authorization reply to carry `["p49-nonsense*1"]`. The device said:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+`show privilege`:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+`show version` — typed to see whether per-command authorization follows. The device said:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+Every command authorization port49 answered in this session, as it arrived:
+
+```
+terminal length 0 -> permit permit_dominates
+show privilege -> permit permit_dominates
+show version -> permit permit_dominates
+```
+
+
+### 10. MANDATORY invented attribute on a PER-COMMAND reply
+
+the same question asked of a PER-COMMAND authorization reply instead of a session one. The session reply is the control's, so the only difference from the control is what the command reply carries. Three of the five platforms in this row end the SESSION over an attribute like this; what it costs on the command path is a separate question, and it decides whether a per-command adapter may carry anything at all. The commands typed below are the measurement: if they run, the device tolerated the attribute; if the device refuses one, a policy permit became a refusal; if the session goes away, one attribute cost the operator every command and not just this one. Here it is the same invented attribute sent MANDATORY, which is where §8.2 stops being a SHOULD: a device that does not understand it MUST fail the authorization. It is also the only shape that could tell an adapter its attribute did not land, so what this platform does with it decides whether the flag is worth anything on the command path.
+
+Reply attributes: `["priv-lvl=15"]`
+
+port49 answered the session authorization **permit context_matched**, so everything below is the DEVICE's answer to a session port49 permitted.
+
+**The session opened.**
+
+`terminal length 0` — the FIRST command in the session, and so the first authorization reply to carry `["p49-nonsense=1"]`. The device said:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+`show privilege`:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+`show version` — typed to see whether per-command authorization follows. The device said:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+Every command authorization port49 answered in this session, as it arrived:
+
+```
+terminal length 0 -> permit permit_dominates
+show privilege -> permit permit_dominates
+show version -> permit permit_dominates
+```
+
+
+### 11. OPTIONAL foreign-vendor attribute on a PER-COMMAND reply
+
+the same question asked of a PER-COMMAND authorization reply instead of a session one. The session reply is the control's, so the only difference from the control is what the command reply carries. Three of the five platforms in this row end the SESSION over an attribute like this; what it costs on the command path is a separate question, and it decides whether a per-command adapter may carry anything at all. The commands typed below are the measurement: if they run, the device tolerated the attribute; if the device refuses one, a policy permit became a refusal; if the session goes away, one attribute cost the operator every command and not just this one. Here it is another vendor's attribute, OPTIONAL: `shell:roles`. NX-OS reads this one and applies the role named in it (results/L16-cisco_nxos.md), and vEOS does not (results/L16-arista_eos.md). This is the reply an operator gets when one server definition serves a mixed fleet, and it separates "this device dislikes anything unfamiliar" from "this device dislikes that particular name" without leaning on the invented one alone.
+
+Reply attributes: `["priv-lvl=15"]`
+
+port49 answered the session authorization **permit context_matched**, so everything below is the DEVICE's answer to a session port49 permitted.
+
+**The session opened.**
+
+`terminal length 0` — the FIRST command in the session, and so the first authorization reply to carry `["shell:roles*network-operator"]`. The device said:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+`show privilege`:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+`show version` — typed to see whether per-command authorization follows. The device said:
+
+```
+Command authorization failed.
+
+xe1#
 ```
 
 Every command authorization port49 answered in this session, as it arrived:
@@ -484,8 +615,11 @@ show version -> permit permit_dominates
 | 6. MANDATORY invented attribute | `["priv-lvl=15", "p49-nonsense=1"]` | **session refused** | — | the control (same reply, minus this attribute) | **none** |
 | 7. known attribute, a value the device cannot use | `["priv-lvl=99"]` | **session refused** | — | no attributes at all | **none** |
 | 8. no attributes at all (the control for `ignored`) | `[]` | opened (this is the baseline) | 1 | — | 3 request(s) |
+| 9. OPTIONAL invented attribute on a PER-COMMAND reply | session `["priv-lvl=15"]`<br>**command `["p49-nonsense*1"]`** | **command refused** | — | the control's `["priv-lvl=15"]` session; the cell reads the commands | 3 request(s) |
+| 10. MANDATORY invented attribute on a PER-COMMAND reply | session `["priv-lvl=15"]`<br>**command `["p49-nonsense=1"]`** | **command refused** | — | the control's `["priv-lvl=15"]` session; the cell reads the commands | 3 request(s) |
+| 11. OPTIONAL foreign-vendor attribute on a PER-COMMAND reply | session `["priv-lvl=15"]`<br>**command `["shell:roles*network-operator"]`** | **command refused** | — | the control's `["priv-lvl=15"]` session; the cell reads the commands | 3 request(s) |
 
-The `what the session got` column is the verbatim `show` output above reduced to the one value the cell is derived from, and `read against` names the row it was compared with. The transcripts both come from are in each variant's section, and a cell that disagrees with the transcript above it is a defect in this generator rather than a finding about the device.
+The `what the session got` column is the verbatim `show` output above reduced to the one value the cell is derived from, and `read against` names the row it was compared with. The transcripts both come from are in each variant's section, and a cell that disagrees with the transcript above it is a defect in this generator rather than a finding about the device. The rows whose `reply attributes` name a **command** list send the control's session reply and differ from it only there, so their `what the session got` column is the control's by construction and their outcome is read off the commands.
 
 ## What this answers
 
@@ -527,7 +661,79 @@ The device replied:
 % Authorization failed.
 ```
 
-**5. Every session that opened went on to per-command authorization**, 3 of 3, whatever the reply carried. So a bad attribute on this platform either ends the session outright or leaves the command path exactly as it was: there is no middle state where the session survives and the device stops asking.
+**5. Every session that opened went on to per-command authorization**, 3 of 3, whatever the SESSION reply carried. So an attribute on the session reply either ends the session outright or leaves the device still asking about commands: there is no middle state where the session survives and the device stops asking. Whether the commands then RUN is a different question, and it is 5b -- these 3 variants put nothing on the command reply.
+
+**5b. The same question asked of a PER-COMMAND reply, in 3 shapes.** Each one sends the control's session attributes (`["priv-lvl=15"]`) and differs from the control only in what a PERMITTED command authorization carries, so whatever the device does below it is doing about the command reply. The control itself answered 3 command authorization(s) and ran every command typed in it.
+
+`["p49-nonsense*1"]` on every permitted command — **a permit became a refusal.** Measured: port49 PERMITTED `terminal length 0` -- 3 command authorization(s) reached it in this session and its log records what it answered -- and the device refused the command anyway. The same command under the control reply, which differs only in that the command reply carries nothing, ran.
+
+Sent:
+
+```
+lab.command_attributes ["p49-nonsense*1"]
+then, in the session:
+terminal length 0
+```
+
+The device replied:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+So on Catalyst 8000V 17.13.01a a per-command reply may carry nothing the device does not read: the decision log records a permit for a command that never ran, and an operator reading it sees an authorization that succeeded.
+
+`["p49-nonsense=1"]` on every permitted command — **a permit became a refusal.** Measured: port49 PERMITTED `terminal length 0` -- 3 command authorization(s) reached it in this session and its log records what it answered -- and the device refused the command anyway. The same command under the control reply, which differs only in that the command reply carries nothing, ran.
+
+Sent:
+
+```
+lab.command_attributes ["p49-nonsense=1"]
+then, in the session:
+terminal length 0
+```
+
+The device replied:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+So on Catalyst 8000V 17.13.01a a per-command reply may carry nothing the device does not read: the decision log records a permit for a command that never ran, and an operator reading it sees an authorization that succeeded.
+
+`["shell:roles*network-operator"]` on every permitted command — **a permit became a refusal.** Measured: port49 PERMITTED `terminal length 0` -- 3 command authorization(s) reached it in this session and its log records what it answered -- and the device refused the command anyway. The same command under the control reply, which differs only in that the command reply carries nothing, ran.
+
+Sent:
+
+```
+lab.command_attributes ["shell:roles*network-operator"]
+then, in the session:
+terminal length 0
+```
+
+The device replied:
+
+```
+Command authorization failed.
+
+xe1#
+```
+
+So on Catalyst 8000V 17.13.01a a per-command reply may carry nothing the device does not read: the decision log records a permit for a command that never ran, and an operator reading it sees an authorization that succeeded.
+
+**The two paths, attribute by attribute.** The same attribute in the same spelling, once on the session reply and once on a command reply. Both columns are the cells from the table above, with one word changed so they can be compared: a command reply whose commands ran is written `ignored` here, which is what the session column already calls a reply that changed nothing.
+
+| attribute | on the SESSION reply | on a COMMAND reply |
+|---|---|---|
+| `["p49-nonsense*1"]` | **the session was refused** | **command refused** |
+| `["p49-nonsense=1"]` | **the session was refused** | **command refused** |
+| `["shell:roles*network-operator"]` | **the session was refused** | **command refused** |
+
+**The two paths agree on all 3, and on 3 of them the cost is not the same size.** The device objects to the same attributes in both replies -- so one rule predicts both -- but objecting on the session reply costs the operator the login, and objecting on a command reply leaves them logged in and unable to run anything. Same rule, different blast radius, and the second is the one an operator will call in about.
 
 **6. A refused authorization costs the NEXT connection too, and the device recovers on its own.** `["priv-lvl=15", "p49-nonsense=1"]` took 3 SSH connections: the first 2 were refused at the authentication layer, before the device ran AAA at all, and the last one got through to the device's own answer. What the refused connections returned:
 
