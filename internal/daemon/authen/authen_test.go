@@ -63,8 +63,12 @@ func setupStore(t *testing.T, wrap func(*memory.Store) store.Store) *fixture {
 		func() time.Time { return f.now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
 		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		// Enable and MaxPrivilege are the shape a real mint produces (spec
+		// §5.1.1): the login context they land on is escalatable, so a test
+		// about the enable path reaches the enable path.
 		store.Token{ID: "t1", Secret: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1"), Kind: store.KindLogin,
-			Username: "alice", Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+			Username: "alice", Principal: "user:alice@example.com", Enable: "token", MaxPrivilege: 15,
+			ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -236,6 +240,10 @@ func TestLoginTokenLaterInSetIsFound(t *testing.T) {
 
 func TestEnableStartWithLoginTokenIsKindMismatch(t *testing.T) {
 	f := setup(t)
+	// The enable gate is open — alice is logged in, with an `enable: token`
+	// context under her ceiling — so what this test asks about is the kind of
+	// the credential and nothing else.
+	f.seedLogin(t, "token", 15)
 	// alice has only a login token (from setup). Presenting it at enable is a
 	// kind mismatch, not a missing token.
 	reply, done := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
@@ -905,5 +913,133 @@ func TestAnUnindexedContextSaysSoOnTheRecord(t *testing.T) {
 	}
 	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("index_context", "error")); n != 1 {
 		t.Fatalf("store_operations_total{op=index_context,outcome=error} = %v, want 1", n)
+	}
+}
+
+func (f *fixture) seedLogin(t *testing.T, enable string, maxPriv uint8) {
+	t.Helper()
+	f.st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "ctxL", Username: "alice", Principal: "user:alice@example.com",
+			Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 1, MaxPrivilege: maxPriv, Enable: enable,
+			BlobHash: "sha256:b", CreatedAt: f.now}, time.Hour)
+}
+
+func (f *fixture) enableStart(user string) wire.AuthenStart {
+	return wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 15, AuthenType: wire.AuthenTypeASCII,
+		Service: wire.AuthenServiceEnable, User: []byte(user), Port: []byte("vty4"), RemAddr: []byte("198.51.100.4")}
+}
+
+// The measured shape: the enable START carries the operator's own username
+// (tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md), so it resolves
+// through the ordinary (nas, username) context.
+func TestEnableUpdatesPrivilegeInPlaceAndKeepsCtxID(t *testing.T) {
+	f := setup(t)
+	f.seedLogin(t, "token", 15)
+	secret := f.tag() + "enabenabenabenabenab0123"
+	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "en", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
+			Principal: "user:alice@example.com", ExpiresAt: f.now.Add(time.Minute)})
+	sess := f.h.NewSession(f.peer)
+	if reply, done := sess.Start(context.Background(), f.enableStart("alice")); done || reply.Status != wire.AuthenStatusGetPass {
+		t.Fatalf("enable START must prompt: %+v %v", reply, done)
+	}
+	reply, done := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	if !done || reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("%+v", reply)
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.CtxID != "ctxL" || c.PrivLvl != 15 || c.Principal != "user:alice@example.com" || c.BlobHash != "sha256:b" {
+		t.Fatalf("escalation must update privilege in place and keep ctx_id: %+v", c)
+	}
+	last := f.records(t)[len(f.records(t))-1]
+	if last["event"] != "escalate" || last["reason"] != "escalation_granted" || last["principal"] != "user:alice@example.com" {
+		t.Fatalf("%v", last)
+	}
+	if last["session"].(map[string]any)["replaced_ctx_id"] != nil {
+		t.Fatal("an escalation replaces nothing")
+	}
+	// The retransmission is what the receipt is for, and it must replay the
+	// ctx_id the escalation kept — not a fresh one minted beside it that no
+	// context, no authorize_* record and no accounting record ever held.
+	sess2 := f.h.NewSession(f.peer)
+	sess2.Start(context.Background(), f.enableStart("alice"))
+	reply, _ = sess2.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	last = f.records(t)[len(f.records(t))-1]
+	if reply.Status != wire.AuthenStatusPass || last["reason"] != "receipt_replayed" ||
+		last["session"].(map[string]any)["ctx_id"] != "ctxL" {
+		t.Fatalf("the replayed enable must carry the context's own ctx_id: %+v %v", reply, last)
+	}
+}
+
+func TestEnableWithoutContextIsContextMissing(t *testing.T) {
+	f := setup(t)
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("nobody"))
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything")})
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "context_missing" {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+}
+
+func TestEnableAboveCeilingIsRefused(t *testing.T) {
+	f := setup(t)
+	f.seedLogin(t, "token", 7)
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything")})
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "ceiling_exceeded" {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+}
+
+func TestEnableNoneIsRefused(t *testing.T) {
+	f := setup(t)
+	f.seedLogin(t, "none", 15)
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything")})
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "enable_refused" {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+}
+
+func TestEnableFromAnotherAddressIsRefused(t *testing.T) {
+	f := setup(t)
+	f.seedLogin(t, "token", 15)
+	start := f.enableStart("alice")
+	start.RemAddr = []byte("203.0.113.9")
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), start)
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything")})
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "rem_addr_mismatch" {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+}
+
+func TestEnableAutoNeedsNoToken(t *testing.T) {
+	f := setup(t)
+	f.seedLogin(t, "auto", 15)
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything at all")})
+	if reply.Status != wire.AuthenStatusPass || f.records(t)[0]["reason"] != "escalation_granted" {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.CtxID != "ctxL" || c.PrivLvl != 15 {
+		t.Fatalf("%+v", c)
+	}
+}
+
+// A login token presented at the enable prompt is token_kind_mismatch, so the
+// redeem and escalate records can never disagree with the wire (spec §7).
+func TestLoginTokenAtEnableIsKindMismatch(t *testing.T) {
+	f := setup(t)
+	f.seedLogin(t, "token", 15)
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "token_kind_mismatch" {
+		t.Fatalf("%+v %v", reply, f.records(t))
 	}
 }

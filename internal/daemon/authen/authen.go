@@ -209,14 +209,64 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	port := string(s.start.Port)
 	remAddr := string(s.start.RemAddr)
 
-	// The kind is settled before the receipt is looked up, not after: it is
-	// part of the receipt key, so a login receipt cannot answer an enable
-	// START (store.ReceiptKey). A login token for a login START, an enable
-	// token for an enable START.
+	// An enable START is not a login, so its record is an `escalate`. The kind
+	// is settled here, before the receipt is looked up, not after: it is part
+	// of the receipt key, so a login receipt cannot answer an enable START
+	// (store.ReceiptKey). A login token for a login START, an enable token for
+	// an enable START.
+	enable := s.start.Service == wire.AuthenServiceEnable
 	kind := store.KindLogin
-	if s.start.Service == wire.AuthenServiceEnable {
+	if enable {
 		kind = store.KindEnable
+		rec.Event = decision.EventEscalate
 	}
+	ck := store.ContextKey{NAS: s.peer.NAS, Username: username}
+
+	// An enable START is a second authentication under the same username on the
+	// same device (measured: tests/lab/results/L3-arista_eos.md,
+	// L3-cisco_iosxe.md). It therefore lands on this operator's own login
+	// context, and it must update privilege IN PLACE: plan 1 wrote a fresh
+	// ctx_id over it, which spec §5.6 row 1 and §7 both forbid.
+	//
+	// The gate is read before the receipt, so `auto` never consults a token and
+	// a context that has since lost its ceiling cannot be escalated out of a
+	// receipt written while it still had one.
+	var incumbent store.Context
+	if enable {
+		c, err := s.h.store.GetContext(ctx, ck)
+		s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			// There is nothing to escalate. An enable is never a way in.
+			return s.fail(ctx, rec, decision.ContextMissing)
+		case err != nil:
+			return s.storeError(rec)
+		}
+		incumbent = c
+		rec.Principal = c.Principal
+		rec.Session.CtxID = c.CtxID
+		// An empty Enable is a token minted before any enable mode was set, and
+		// it is read as `none`: the closed default denies rather than guesses.
+		if c.Enable == "none" || c.Enable == "" {
+			return s.fail(ctx, rec, decision.EnableRefused)
+		}
+		if s.start.PrivLvl > c.MaxPrivilege {
+			return s.fail(ctx, rec, decision.CeilingExceeded)
+		}
+		// Defense in depth, and a high-signal event worth alerting on
+		// (spec §5.6). rem_addr is a bare address on both platforms measured.
+		if c.RemAddr != "" && remAddr != "" && c.RemAddr != remAddr {
+			return s.fail(ctx, rec, decision.RemAddrMismatch)
+		}
+		// `auto` PASSes on the context alone, any password accepted (spec §7).
+		// That is only safe because `enable_username: enab` cannot load
+		// (config.Load), so this context is always the operator's own and never
+		// a shared `$enab15$` pseudo-user's.
+		if c.Enable == "auto" {
+			return s.escalate(ctx, rec, ck, incumbent)
+		}
+	}
+
 	rk := store.ReceiptKey{NAS: s.peer.NAS, Username: username, Kind: kind, CredentialSHA256: credHash}
 
 	// 1. Receipt: a byte-identical retransmission replays. The credential hash
@@ -302,7 +352,17 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	}
 
 	// 3. Atomic redemption; the loser of a race adopts the winner's receipt.
-	ctxID := s.h.newCtxID()
+	//
+	// An escalation keeps the context's id (spec §5.6 row 1, §7), and the
+	// receipt has to carry that id rather than a fresh one: the receipt is what
+	// answers a retransmitted enable, and a ctx_id minted here and stored
+	// nowhere would be replayed into the log naming a context that does not
+	// exist. `enable` is false on every login path, where this is plan 1's
+	// behaviour unchanged.
+	ctxID := incumbent.CtxID
+	if !enable {
+		ctxID = s.h.newCtxID()
+	}
 	// The retention is deliberately longer than both bounds: a presentation
 	// past a bound has to find the receipt in order to be answered
 	// `token_spent` rather than `token_not_found` (store.Receipt; spec §5.7).
@@ -327,6 +387,14 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		return s.storeError(rec)
 	}
 
+	// The enable token is spent and the receipt is written under this
+	// context's own ctx_id: all that is left is the new privilege. This
+	// returns above the `prev` read deliberately — an escalation displaces no
+	// context, so `replaced_ctx_id` must stay absent on its record.
+	if enable {
+		return s.escalate(ctx, rec, ck, incumbent)
+	}
+
 	// A context already under this key is this operator's own earlier login on
 	// this device: the key cannot tell two of their shells apart, and no wire
 	// field can either (spec §15, L1). The overwrite is benign — same
@@ -340,7 +408,6 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// the one case it cannot cover. Closing it needs a compare-and-set on
 	// PutContext, which the store interface does not have; plan 2 owns whether
 	// to add one.
-	ck := store.ContextKey{NAS: s.peer.NAS, Username: username}
 	prev, perr := s.h.store.GetContext(ctx, ck)
 	s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(perr)).Inc()
 	if perr == nil {
@@ -390,6 +457,25 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	rec.Principal = winner.Principal
 	rec.Session.CtxID = ctxID
 	return s.finish(rec, wire.AuthenStatusPass, decision.TokenRedeemed)
+}
+
+// escalate records the new privilege on the incumbent context and keeps
+// everything else, ctx_id foremost: an escalation is not a new session, so the
+// log join across it must not depend on replaced_ctx_id (spec §5.6 row 1, §7).
+// Nothing is indexed here either — the context was indexed when it was created,
+// and the principal, sid and certificate it is indexed under have not changed.
+func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.ContextKey, c store.Context) (wire.AuthenReply, bool) {
+	c.PrivLvl = s.start.PrivLvl
+	c.LastTouchedAt = s.h.now()
+	err := s.h.store.PutContext(ctx, ck, c, s.h.contextTTL)
+	s.h.metrics.StoreOps.WithLabelValues("put_context", storeOutcome(err)).Inc()
+	if err != nil {
+		// On the token path the enable token is already spent, but without the
+		// new privilege on the context every later authorization would answer
+		// from the old one: ERROR, not a PASS the context cannot back up.
+		return s.storeError(rec)
+	}
+	return s.finish(rec, wire.AuthenStatusPass, decision.EscalationGranted)
 }
 
 // storeOutcome maps a store error to the StoreOps metric's outcome label.
