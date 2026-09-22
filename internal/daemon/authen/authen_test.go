@@ -19,7 +19,13 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/internal/token"
 )
+
+// labTagKey is the fixture's tag key. No token literal is written down: every
+// secret in these tests is the device's own tag followed by filler, so a change
+// to the tag derivation fails the tests rather than passing on a stale string.
+var labTagKey = token.TagKey([]byte("labkey"))
 
 type fixture struct {
 	h    *Handler
@@ -34,6 +40,10 @@ func setup(t *testing.T) *fixture {
 	return setupStore(t, func(st *memory.Store) store.Store { return st })
 }
 
+// tag is the device tag every token in this fixture carries: the peer is
+// leaf-01, so a credential tagged for anything else is a device_mismatch.
+func (f *fixture) tag() string { return token.Tag(labTagKey, "leaf-01") }
+
 // setupStore is setup with a decorator hook: it builds and seeds the memory
 // store exactly as setup does, then hands wrap(st) to New, so a test can drive
 // a store fault without duplicating the fixture. f.st stays the memory store,
@@ -46,9 +56,10 @@ func setupStore(t *testing.T, wrap func(*memory.Store) store.Store) *fixture {
 	l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return f.now })
 	f.h = New(wrap(f.st), decision.NewJSONLines(f.log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return f.now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
-		15*time.Minute, 2*time.Hour, time.Hour)
+		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{ID: "t1", Secret: []byte("p49_tok1"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "t1", Secret: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1"), Kind: store.KindLogin,
+			Username: "alice", Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -75,7 +86,7 @@ func TestPAPRedeemsAndCreatesContext(t *testing.T) {
 	s := f.h.NewSession(f.peer)
 	reply, done := s.Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1,
 		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
-		User: []byte("Alice"), Port: []byte("vty0"), RemAddr: []byte("198.51.100.4"), Data: []byte("p49_tok1")})
+		User: []byte("Alice"), Port: []byte("vty0"), RemAddr: []byte("198.51.100.4"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
 	if !done || reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("reply %+v done %v", reply, done)
 	}
@@ -93,7 +104,7 @@ func TestPAPRedeemsAndCreatesContext(t *testing.T) {
 	if r[0]["session"].(map[string]any)["username"] != "alice" {
 		t.Fatalf("session.username: %v", r[0]["session"])
 	}
-	if strings.Contains(f.log.String(), "p49_tok1") {
+	if strings.Contains(f.log.String(), f.tag()+"tok1tok1tok1tok1tok1tok1") {
 		t.Fatal("token leaked into the log")
 	}
 }
@@ -101,7 +112,7 @@ func TestPAPRedeemsAndCreatesContext(t *testing.T) {
 func TestRetransmissionReplaysReceipt(t *testing.T) {
 	f := setup(t)
 	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
-		User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+		User: []byte("alice"), Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}
 	f.h.NewSession(f.peer).Start(context.Background(), start)
 	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
 	if reply.Status != wire.AuthenStatusPass {
@@ -145,11 +156,11 @@ func TestASCIIMultiRound(t *testing.T) {
 	if done || r2.Status != wire.AuthenStatusGetPass || r2.Flags&wire.AuthenReplyFlagNoEcho == 0 {
 		t.Fatalf("%+v", r2)
 	}
-	r3, done := s.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("p49_tok1")})
+	r3, done := s.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
 	if !done || r3.Status != wire.AuthenStatusPass {
 		t.Fatalf("%+v", r3)
 	}
-	if strings.Contains(f.log.String(), "p49_tok1") {
+	if strings.Contains(f.log.String(), f.tag()+"tok1tok1tok1tok1tok1tok1") {
 		t.Fatal("password leaked into the log")
 	}
 }
@@ -167,7 +178,7 @@ func TestASCIIAbort(t *testing.T) {
 func TestCHAP(t *testing.T) {
 	f := setup(t)
 	challenge := []byte("0123456789abcdef")
-	sum := md5.Sum(append(append([]byte{0x2a}, []byte("p49_tok1")...), challenge...))
+	sum := md5.Sum(append(append([]byte{0x2a}, []byte(f.tag()+"tok1tok1tok1tok1tok1tok1")...), challenge...))
 	data := append(append([]byte{0x2a}, challenge...), sum[:]...)
 	reply, done := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
 		AuthenType: wire.AuthenTypeCHAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: data})
@@ -175,7 +186,7 @@ func TestCHAP(t *testing.T) {
 		t.Fatalf("%+v", reply)
 	}
 	// A re-prompt with a fresh challenge does not match the receipt and fails (design §8).
-	sum2 := md5.Sum(append(append([]byte{0x2b}, []byte("p49_tok1")...), []byte("fedcba9876543210")...))
+	sum2 := md5.Sum(append(append([]byte{0x2b}, []byte(f.tag()+"tok1tok1tok1tok1tok1tok1")...), []byte("fedcba9876543210")...))
 	data2 := append(append([]byte{0x2b}, []byte("fedcba9876543210")...), sum2[:]...)
 	reply, _ = f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
 		AuthenType: wire.AuthenTypeCHAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: data2})
@@ -223,7 +234,7 @@ func TestEnableStartWithLoginTokenIsKindMismatch(t *testing.T) {
 	// alice has only a login token (from setup). Presenting it at enable is a
 	// kind mismatch, not a missing token.
 	reply, done := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
-		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceEnable, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")})
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceEnable, User: []byte("alice"), Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
 	if !done || reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "token_kind_mismatch" {
 		t.Fatalf("%+v %v", reply, f.records(t))
 	}
@@ -269,11 +280,12 @@ func TestStoreErrorIsErrorWithRecord(t *testing.T) {
 	ids := 0
 	h := New(st, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
-		15*time.Minute, 2*time.Hour, time.Hour)
+		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
 
+	tok := token.Tag(labTagKey, "leaf-01") + "tok1tok1tok1tok1tok1tok1"
 	reply, done := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}).Start(context.Background(),
 		wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
-			User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")})
+			User: []byte("alice"), Port: []byte("vty0"), Data: []byte(tok)})
 	if !done || reply.Status != wire.AuthenStatusError {
 		t.Fatalf("%+v", reply)
 	}
@@ -289,7 +301,7 @@ func TestStoreErrorIsErrorWithRecord(t *testing.T) {
 	if m["event"] != "redeem" || m["verdict"] != "deny" || m["reason"] != "store_unavailable" {
 		t.Fatalf("%v", m)
 	}
-	if strings.Contains(log.String(), "p49_tok1") {
+	if strings.Contains(log.String(), tok) {
 		t.Fatal("token leaked into the log")
 	}
 }
@@ -315,13 +327,13 @@ func TestSessionIsTerminalAfterFinish(t *testing.T) {
 	f := setup(t)
 	s := f.h.NewSession(f.peer)
 	reply, done := s.Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
-		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")})
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
 	if !done || reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("%+v", reply)
 	}
 	// A second Start on the same finished session must not resume the exchange.
 	reply, done = s.Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
-		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")})
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
 	if !done || reply.Status != wire.AuthenStatusError {
 		t.Fatalf("%+v", reply)
 	}
@@ -414,7 +426,7 @@ func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {
 	ids := 0
 	h := New(noStore{}, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
-		15*time.Minute, 2*time.Hour, time.Hour)
+		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
 
 	// "@corp.example.com" canonicalizes to "" (spec §2): everything before the
 	// first "@" is stripped, leaving nothing.
@@ -460,7 +472,7 @@ func TestFailDelayIsCancellable(t *testing.T) {
 func TestReceiptSlidesThenExpiresOnIdle(t *testing.T) {
 	f := setup(t)
 	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
-		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}
 	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("first redemption: %+v", reply)
 	}
@@ -488,7 +500,7 @@ func TestReceiptSlidesThenExpiresOnIdle(t *testing.T) {
 func TestReceiptStopsAtTheAbsoluteCap(t *testing.T) {
 	f := setup(t)
 	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
-		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}
 	f.h.NewSession(f.peer).Start(context.Background(), start)
 	// Present every 10 minutes for two hours: the idle bound never lapses, so
 	// only the cap can stop it. The iteration is asserted rather than just the
@@ -519,7 +531,7 @@ func TestReceiptStopsAtTheAbsoluteCap(t *testing.T) {
 func TestTokenSpentIsIndistinguishableOnTheWire(t *testing.T) {
 	f := setup(t)
 	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
-		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}
 	f.h.NewSession(f.peer).Start(context.Background(), start)
 	// Past the cap (2h) and inside retention (RetainUntil is 2h15m), so the
 	// receipt is still FOUND and the path under test is token_spent. At 3h the
@@ -544,7 +556,7 @@ func TestTokenSpentIsIndistinguishableOnTheWire(t *testing.T) {
 func TestRevokedPrincipalsReceiptNoLongerReplays(t *testing.T) {
 	f := setup(t)
 	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
-		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}
 	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("%+v", reply)
 	}
@@ -579,7 +591,7 @@ func (gonePastTheReadStore) ExtendReceipt(context.Context, store.ReceiptKey, tim
 func TestExtendMissingTheReceiptDeniesRatherThanReplays(t *testing.T) {
 	f := setupStore(t, func(st *memory.Store) store.Store { return gonePastTheReadStore{st} })
 	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
-		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}
 	f.h.NewSession(f.peer).Start(context.Background(), start)
 	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
 	r := f.records(t)
@@ -615,7 +627,7 @@ func TestLoginReceiptDoesNotAnswerAnEnableStart(t *testing.T) {
 		return counter
 	})
 	login := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
-		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}
 	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), login); reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("first redemption: %+v", reply)
 	}
@@ -642,5 +654,140 @@ func TestLoginReceiptDoesNotAnswerAnEnableStart(t *testing.T) {
 	f.now = f.now.Add(time.Minute)
 	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), login); reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("the login receipt must survive the enable attempt: %+v", reply)
+	}
+}
+
+func TestDeviceMismatchByTag(t *testing.T) {
+	f := setup(t)
+	wrong := token.Tag(labTagKey, "leaf-99") + "tok1tok1tok1tok1tok1tok1"
+	reply, done := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("vty0"), Data: []byte(wrong)})
+	if !done || reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "device_mismatch" {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+}
+
+// The tag is compared before any store access at all (design §8), so a token
+// cut for another device never reaches the receipt lookup or the candidate
+// search: noStore panics if it does.
+func TestDeviceMismatchTouchesNoStore(t *testing.T) {
+	log := &bytes.Buffer{}
+	now := time.Unix(1_757_041_495, 0)
+	l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return now })
+	h := New(noStore{}, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
+		func() time.Time { return now }, func() string { return "ctx1" },
+		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
+	reply, done := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}).Start(context.Background(),
+		wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+			User: []byte("alice"), Port: []byte("vty0"), Data: []byte(token.Tag(labTagKey, "leaf-99") + "tok1tok1tok1tok1tok1tok1")})
+	if !done || reply.Status != wire.AuthenStatusFail {
+		t.Fatalf("%+v", reply)
+	}
+	if !strings.Contains(log.String(), `"reason":"device_mismatch"`) {
+		t.Fatalf("%s", log.String())
+	}
+}
+
+func TestMistypedPasswordIsNotFoundNotMismatch(t *testing.T) {
+	f := setup(t)
+	f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("vty0"), Data: []byte("hunter2")})
+	if f.records(t)[0]["reason"] != "token_not_found" {
+		t.Fatalf("%v", f.records(t)[0])
+	}
+}
+
+// Under CHAP the daemon never sees the token, so the tag is invisible and a
+// wrong-device credential is token_not_found (design §8).
+func TestCHAPNeverReportsDeviceMismatch(t *testing.T) {
+	f := setup(t)
+	wrong := token.Tag(labTagKey, "leaf-99") + "tok1tok1tok1tok1tok1tok1"
+	m := md5.New()
+	m.Write([]byte{7})
+	m.Write([]byte(wrong))
+	m.Write([]byte("challenge"))
+	data := append([]byte{7}, append([]byte("challenge"), m.Sum(nil)...)...)
+	f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypeCHAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("vty0"), Data: data})
+	if f.records(t)[0]["reason"] != "token_not_found" {
+		t.Fatalf("%v", f.records(t)[0])
+	}
+}
+
+func TestContextCarriesSessionFieldsAndIsIndexed(t *testing.T) {
+	f := setup(t)
+	secret := f.tag() + "fullfullfullfullfull0123"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "full", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@example.com", BlobHash: "sha256:b", MaxSessionAge: 8 * time.Hour,
+			AuthTime: f.now, Enable: "token", MaxPrivilege: 15,
+			Credential: store.Credential{Method: "oidc", Sid: "s1", Sub: "a7f3", Issuer: "ca", Serial: "01"},
+			ExpiresAt:  f.now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("ssh"), RemAddr: []byte("198.51.100.4"), Data: []byte(secret)})
+	c, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if err != nil || c.Principal != "user:alice@example.com" || c.BlobHash != "sha256:b" || c.Enable != "token" ||
+		c.MaxPrivilege != 15 || !c.SessionExpires.Equal(f.now.Add(8*time.Hour)) || !c.RefreshedAt.Equal(f.now) ||
+		c.Credential.Sid != "s1" || c.Port != "ssh" || c.RemAddr != "198.51.100.4" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@example.com"); len(refs) != 1 || refs[0] != ref {
+		t.Fatalf("principal index: %v", refs)
+	}
+	if refs, _ := f.st.ContextsBySid(context.Background(), "s1"); len(refs) != 1 {
+		t.Fatalf("sid index: %v", refs)
+	}
+	if refs, _ := f.st.ContextsByCert(context.Background(), store.CertKey("ca", "01")); len(refs) != 1 {
+		t.Fatalf("cert index: %v", refs)
+	}
+}
+
+// max_session_age: never must be expressible (spec §5.6): a zero
+// MaxSessionAge leaves SessionExpires zero, and Task 10 reads that as no
+// ceiling rather than as "expired at the epoch".
+func TestNoMaxSessionAgeLeavesNoCeiling(t *testing.T) {
+	f := setup(t)
+	f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if !c.SessionExpires.IsZero() {
+		t.Fatalf("a token with no ceiling must not create one: %+v", c)
+	}
+}
+
+// indexFailsStore answers everything normally but never indexes a context,
+// which is what a store that is up but refusing the index write looks like
+// from inside redeem.
+type indexFailsStore struct{ *memory.Store }
+
+func (indexFailsStore) IndexContext(context.Context, string, string, string, store.ContextRef, time.Duration) error {
+	return errors.New("index unavailable")
+}
+
+// An index write that fails does not fail the login — the operator is
+// authenticated and the context exists — but what is lost is reach: a later
+// revocation by sid, principal or certificate will not find this context. A
+// metric with outcome="error" says that happened somewhere on the fleet; only
+// the record says WHICH session is now unrevocable, and §5.6 already requires
+// revocation to report the contexts it could not reach.
+func TestAnUnindexedContextSaysSoOnTheRecord(t *testing.T) {
+	f := setupStore(t, func(st *memory.Store) store.Store { return indexFailsStore{st} })
+	f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
+	rec := f.records(t)[0]
+	if rec["reason"] != "token_redeemed" {
+		t.Fatalf("an index failure must not fail the login: %v", rec)
+	}
+	if rec["index_error"] == nil {
+		t.Fatalf("the record must name the lost reach: %v", rec)
 	}
 }

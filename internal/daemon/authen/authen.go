@@ -16,6 +16,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 // Authentication methods, as recorded in a redeem record's auth.method.
@@ -45,12 +46,26 @@ type Handler struct {
 	receiptIdleTTL time.Duration
 	receiptMaxAge  time.Duration
 	contextTTL     time.Duration
+	// indexTTL is how long a context stays findable by principal, sid, and
+	// certificate. It is the reach of revocation (spec §5.1.4), not the life
+	// of the context itself.
+	indexTTL time.Duration
+	// tagKey derives the device tag every minted token carries (internal/token).
+	// The daemon computes the tag for the peer and compares it before any
+	// store access, so a token cut for another device is recognized rather
+	// than merely absent (design §8).
+	tagKey []byte
 }
 
+// New builds the authentication handler. tagKey is the key the token tag is
+// derived under (token.TagKey); it must be the same one the minter uses, or
+// every token presented is a device_mismatch.
 func New(s store.Store, e decision.Emitter, l *limits.Limiter, m *metrics.Metrics, now func() time.Time,
-	newCtxID func() string, receiptIdleTTL, receiptMaxAge, contextTTL time.Duration) *Handler {
+	newCtxID func() string, receiptIdleTTL, receiptMaxAge, contextTTL, indexTTL time.Duration,
+	tagKey []byte) *Handler {
 	return &Handler{store: s, log: e, limits: l, metrics: m, now: now, newCtxID: newCtxID,
-		receiptIdleTTL: receiptIdleTTL, receiptMaxAge: receiptMaxAge, contextTTL: contextTTL}
+		receiptIdleTTL: receiptIdleTTL, receiptMaxAge: receiptMaxAge, contextTTL: contextTTL,
+		indexTTL: indexTTL, tagKey: tagKey}
 }
 
 // phase is a Session's place in a multi-round ASCII exchange. phaseDone is
@@ -173,6 +188,24 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// touching the store.
 		return s.fail(ctx, rec, decision.TokenNotFound)
 	}
+
+	// The device tag is compared before any store access (design §8): a token
+	// cut for another device is recognized rather than merely absent, and the
+	// event is high-signal because it does not fire during normal operation.
+	// A credential that is not token-shaped — a mistyped password — skips this
+	// and reaches token_not_found through the store.
+	//
+	// CHAP is excluded by method rather than by shape. `presented` there is
+	// ppp_id ‖ challenge ‖ response, and nothing stops that being Len bytes of
+	// base62 by accident; the daemon never sees the token under CHAP, so there
+	// is no tag to be wrong and the outcome must stay token_not_found.
+	if method != methodCHAP {
+		if tag, ok := token.Parse(presented); ok &&
+			subtle.ConstantTimeCompare([]byte(tag), []byte(token.Tag(s.h.tagKey, s.peer.NAS))) != 1 {
+			return s.fail(ctx, rec, decision.DeviceMismatch)
+		}
+	}
+
 	port := string(s.start.Port)
 	remAddr := string(s.start.RemAddr)
 
@@ -314,14 +347,41 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		rec.Session.ReplacedCtxID = prev.CtxID
 	}
 
-	err = s.h.store.PutContext(ctx, ck,
-		store.Context{CtxID: ctxID, Username: username, Port: port, RemAddr: remAddr, PrivLvl: s.start.PrivLvl, CreatedAt: s.h.now()}, s.h.contextTTL)
+	// The context carries what the token was minted with, in its §5.1.1 shape:
+	// everything a later authorization has to answer from without reaching the
+	// broker again.
+	newCtx := store.Context{CtxID: ctxID, Principal: winner.Principal, Username: username,
+		Port: port, RemAddr: remAddr, PrivLvl: s.start.PrivLvl, BlobHash: winner.BlobHash,
+		Credential: winner.Credential, AuthTime: winner.AuthTime, RefreshedAt: s.h.now(),
+		LastTouchedAt: s.h.now(),
+		Enable:        winner.Enable, MaxPrivilege: winner.MaxPrivilege, CreatedAt: s.h.now()}
+	// A zero MaxSessionAge is `max_session_age: never` and must stay
+	// expressible (spec §5.6): it leaves SessionExpires zero, which Task 10
+	// reads as no ceiling rather than as expired at the epoch.
+	if winner.MaxSessionAge > 0 && !winner.AuthTime.IsZero() {
+		newCtx.SessionExpires = winner.AuthTime.Add(winner.MaxSessionAge)
+	}
+	err = s.h.store.PutContext(ctx, ck, newCtx, s.h.contextTTL)
 	s.h.metrics.StoreOps.WithLabelValues("put_context", storeOutcome(err)).Inc()
 	if err != nil {
 		// The token is already redeemed, but without a context a later authorization
 		// request has nothing to check against: ERROR, not a PASS we can't back up.
 		return s.storeError(rec)
 	}
+	err = s.h.store.IndexContext(ctx, winner.Principal, winner.Credential.Sid,
+		store.CertKey(winner.Credential.Issuer, winner.Credential.Serial),
+		store.ContextRef{NAS: s.peer.NAS, Username: username}, s.h.indexTTL)
+	s.h.metrics.StoreOps.WithLabelValues("index_context", storeOutcome(err)).Inc()
+	// An index write that fails does not fail the login: the operator is
+	// authenticated and the context exists. What is lost is reach — a later
+	// revocation will not find this context — so it is counted AND put on the
+	// record that is about to be emitted anyway. That record carries the ctx_id
+	// and the principal, which is the join an incident responder needs; the
+	// metric only says it happened somewhere on the fleet.
+	if err != nil {
+		rec.IndexError = "context not indexed; revocation by sid, principal or certificate will not reach it"
+	}
+	rec.Principal = winner.Principal
 	rec.Session.CtxID = ctxID
 	return s.finish(rec, wire.AuthenStatusPass, decision.TokenRedeemed)
 }

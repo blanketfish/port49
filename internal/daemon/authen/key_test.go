@@ -14,6 +14,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 // The ruled key (spec §13, decision 15): login context on (nas, username),
@@ -30,7 +31,7 @@ func papStart(user, port, remAddr, cred string) wire.AuthenStart {
 // where the context is written: the key must not mention the port at all.
 func TestContextIsKeyedOnUsernameNotPort(t *testing.T) {
 	f := setup(t)
-	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "p49_tok1"))
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", f.tag()+"tok1tok1tok1tok1tok1tok1"))
 	if reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("%+v", reply)
 	}
@@ -52,14 +53,14 @@ func TestContextIsKeyedOnUsernameNotPort(t *testing.T) {
 func TestTwoUsersOnOneDeviceDoNotShareASlot(t *testing.T) {
 	f := setup(t)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
-		store.Token{ID: "t2", Secret: []byte("p49_tok2"), Kind: store.KindLogin, Principal: "user:bob@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "t2", Secret: []byte(f.tag() + "tok2tok2tok2tok2tok2tok2"), Kind: store.KindLogin, Principal: "user:bob@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	// Both sessions report the same port, as vEOS and the N9Kv do.
-	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "vty4", "172.100.100.1", "p49_tok1")); reply.Status != wire.AuthenStatusPass {
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "vty4", "172.100.100.1", f.tag()+"tok1tok1tok1tok1tok1tok1")); reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("alice: %+v", reply)
 	}
-	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("bob", "vty4", "172.100.100.1", "p49_tok2")); reply.Status != wire.AuthenStatusPass {
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("bob", "vty4", "172.100.100.1", f.tag()+"tok2tok2tok2tok2tok2tok2")); reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("bob: %+v", reply)
 	}
 	a, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
@@ -78,13 +79,13 @@ func TestTwoUsersOnOneDeviceDoNotShareASlot(t *testing.T) {
 func TestSecondLoginReplacesContextAndLogsIt(t *testing.T) {
 	f := setup(t)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{ID: "t2", Secret: []byte("p49_tok2"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "t2", Secret: []byte(f.tag() + "tok2tok2tok2tok2tok2tok2"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "p49_tok1")); reply.Status != wire.AuthenStatusPass {
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", f.tag()+"tok1tok1tok1tok1tok1tok1")); reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("first login: %+v", reply)
 	}
-	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "p49_tok2")); reply.Status != wire.AuthenStatusPass {
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", f.tag()+"tok2tok2tok2tok2tok2tok2")); reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("second login: %+v", reply)
 	}
 	r := f.records(t)
@@ -113,16 +114,16 @@ func TestReceiptIsScopedToNASUsernameAndCredential(t *testing.T) {
 	// bob holds a token of his own, so a miss here is a receipt miss and not
 	// merely an empty candidate set.
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
-		store.Token{ID: "tb", Secret: []byte("p49_bob"), Kind: store.KindLogin, Principal: "user:bob@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "tb", Secret: []byte(f.tag() + "bobbbobbbobbbobbbobbbobb"), Kind: store.KindLogin, Principal: "user:bob@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	start := papStart("alice", "ssh", "172.100.100.1", "p49_tok1")
+	start := papStart("alice", "ssh", "172.100.100.1", f.tag()+"tok1tok1tok1tok1tok1tok1")
 	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("%+v", reply)
 	}
 
 	// Same triple, and the port has moved on: the spent token still replays.
-	replay := papStart("alice", "vty4", "172.100.100.1", "p49_tok1")
+	replay := papStart("alice", "vty4", "172.100.100.1", f.tag()+"tok1tok1tok1tok1tok1tok1")
 	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), replay)
 	if reply.Status != wire.AuthenStatusPass || f.records(t)[1]["reason"] != "receipt_replayed" {
 		t.Fatalf("%+v %v", reply, f.records(t)[1])
@@ -130,16 +131,29 @@ func TestReceiptIsScopedToNASUsernameAndCredential(t *testing.T) {
 
 	// A different username presenting alice's spent token: no receipt of his,
 	// and no token of his matches, so it is a plain miss.
-	reply, _ = f.h.NewSession(f.peer).Start(context.Background(), papStart("bob", "ssh", "172.100.100.1", "p49_tok1"))
+	reply, _ = f.h.NewSession(f.peer).Start(context.Background(), papStart("bob", "ssh", "172.100.100.1", f.tag()+"tok1tok1tok1tok1tok1tok1"))
 	if reply.Status != wire.AuthenStatusFail || f.records(t)[2]["reason"] != "token_not_found" {
 		t.Fatalf("%+v %v", reply, f.records(t)[2])
 	}
 
-	// The same username on a different device: receipts do not cross a NAS.
+	// The same username on a different device. Alice's token carries leaf-01's
+	// tag, so the device check now catches this before the receipt is ever
+	// looked up: device_mismatch, not the token_not_found this asserted before
+	// tokens were device-tagged (design §8). The deny is the same one.
 	other := Peer{NAS: "leaf-02", NASAddr: "10.20.0.8", Platform: "arista_eos"}
 	reply, _ = f.h.NewSession(other).Start(context.Background(), start)
-	if reply.Status != wire.AuthenStatusFail || f.records(t)[3]["reason"] != "token_not_found" {
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[3]["reason"] != "device_mismatch" {
 		t.Fatalf("%+v %v", reply, f.records(t)[3])
+	}
+
+	// And the receipt key's own NAS scoping, still exercised now that the tag
+	// short-circuits the case above: a credential tagged for leaf-02 passes the
+	// device check there and finds no receipt of alice's, because hers is
+	// leaf-01's.
+	tagged02 := token.Tag(labTagKey, "leaf-02") + "tok1tok1tok1tok1tok1tok1"
+	reply, _ = f.h.NewSession(other).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", tagged02))
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[4]["reason"] != "token_not_found" {
+		t.Fatalf("%+v %v", reply, f.records(t)[4])
 	}
 }
 
@@ -149,11 +163,11 @@ func TestReceiptIsScopedToNASUsernameAndCredential(t *testing.T) {
 func TestSecondLoginWithAFreshTokenIsNotCredentialMismatch(t *testing.T) {
 	f := setup(t)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{ID: "t2", Secret: []byte("p49_tok2"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "t2", Secret: []byte(f.tag() + "tok2tok2tok2tok2tok2tok2"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "p49_tok1"))
-	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "p49_tok2"))
+	f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", f.tag()+"tok1tok1tok1tok1tok1tok1"))
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", f.tag()+"tok2tok2tok2tok2tok2tok2"))
 	if reply.Status != wire.AuthenStatusPass || f.records(t)[1]["reason"] != "token_redeemed" {
 		t.Fatalf("a fresh token must redeem, not collide with the earlier receipt: %+v %v", reply, f.records(t)[1])
 	}
@@ -179,10 +193,11 @@ func TestReceiptCarryingAnotherCredentialIsRefused(t *testing.T) {
 	now := time.Unix(1_757_041_495, 0)
 	l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return now })
 	h := New(wrongReceiptStore{}, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
-		func() time.Time { return now }, func() string { return "ctx1" }, 15*time.Minute, 2*time.Hour, time.Hour)
+		func() time.Time { return now }, func() string { return "ctx1" },
+		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
 
 	reply, done := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}).
-		Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "p49_tok1"))
+		Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "not-a-token"))
 	if !done || reply.Status != wire.AuthenStatusFail {
 		t.Fatalf("%+v", reply)
 	}
@@ -264,7 +279,7 @@ func TestCanonicalIsTheWholeKeyDiscriminator(t *testing.T) {
 // the fields leave the key but stay in the record.
 func TestRedeemRecordCarriesPortAndRemAddr(t *testing.T) {
 	f := setup(t)
-	f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "p49_tok1"))
+	f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", f.tag()+"tok1tok1tok1tok1tok1tok1"))
 	s := f.records(t)[0]["session"].(map[string]any)
 	if s["port"] != "ssh" || s["rem_addr"] != "172.100.100.1" {
 		t.Fatalf("%v", s)

@@ -33,6 +33,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 func main() {
@@ -72,6 +73,20 @@ func run(cfgPath string) error {
 	st := memory.New(time.Now)
 	lim := limits.New(cfg.Limits, time.Now)
 
+	// The tag key binds a token to the device it was minted for (design §8).
+	// Nothing mints tokens yet — Task 15 wires the Minter and derives this
+	// from the encryption-at-rest key, the same place the RFC 8907 shared keys
+	// live — so until then it is process-local, which is exactly as long as
+	// the in-memory token set it tags survives a restart. Random rather than
+	// constant: a constant here would be a published key that lets anyone
+	// compute any device's tag. Lab seed tokens are not token-shaped, so the
+	// tag check never fires on them.
+	var tagSeed [32]byte
+	if _, err := rand.Read(tagSeed[:]); err != nil {
+		return fmt.Errorf("port49d: crypto/rand is unavailable: %w", err)
+	}
+	tagKey := token.TagKey(tagSeed[:])
+
 	spool, err := acct.NewSpool(cfg.Accounting.SpoolCapacity, cfg.Accounting.SpoolPath, log, m)
 	if err != nil {
 		return err
@@ -109,7 +124,11 @@ func run(cfgPath string) error {
 	}
 
 	deps := server.Deps{Admission: cfg.Admission, Keys: cfg.Keyring(),
-		Authen: authen.New(st, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge, cfg.ContextIdleTTL),
+		// The context indexes are given the context's own idle TTL: they exist
+		// to let revocation reach a live context, so they need to outlast
+		// nothing the context does not.
+		Authen: authen.New(st, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
+			cfg.ContextIdleTTL, cfg.ContextIdleTTL, tagKey),
 		Author: author.New(st, authz, log, m, time.Now, cfg.SessionServices),
 		Acct:   acct.New(st, spool, m, time.Now),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}

@@ -33,6 +33,7 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 // syncBuffer is the record sink. The spool forwards records from its own
@@ -185,8 +186,11 @@ func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.A
 	go func() { defer close(spoolDone); sp.Run(spoolCtx) }()
 	var ids atomic.Int64
 	d := Deps{Admission: trie,
-		Keys:   map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), Retired: true}}}},
-		Authen: authen.New(st, em, lim, m, time.Now, func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) }, 15*time.Minute, 2*time.Hour, time.Hour),
+		Keys: map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), Retired: true}}}},
+		// The e2e credentials here are not token-shaped, so the tag check never
+		// fires; the key only has to be non-nil and stable.
+		Authen: authen.New(st, em, lim, m, time.Now, func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) },
+			15*time.Minute, 2*time.Hour, time.Hour, time.Hour, token.TagKey([]byte("server_test"))),
 		Author: author.New(st, authz, em, m, time.Now, platform.Defaults()),
 		Acct:   acct.New(st, sp, m, time.Now),
 		Limits: lim, Metrics: m, Log: em, Now: time.Now, IdleTimeout: time.Second}

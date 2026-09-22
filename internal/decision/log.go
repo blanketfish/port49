@@ -28,6 +28,10 @@ type Record struct {
 	AcctRecord  *AcctRecord  `json:"record,omitempty"`
 	Unvalidated *Unvalidated `json:"unvalidated,omitempty"`
 	ServerMsg   string       `json:"server_msg,omitempty"`
+	// IndexError names what a failed index write cost, on the record for the
+	// session that lost it. Revocation must report the contexts it could not
+	// reach (spec §5.6), and this is the only place that says which they are.
+	IndexError string `json:"index_error,omitempty"`
 }
 
 type Auth struct {
