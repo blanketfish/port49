@@ -183,6 +183,58 @@ lab:
     - {nas: srx1, username: netconf02, secret: p49_labnetconf02, kind: login}
     - {nas: vsrx1, username: netconf01, secret: p49_labnetconf01, kind: login}
     - {nas: vsrx1, username: netconf02, secret: p49_labnetconf02, kind: login}
+    # Junos `tacplus-options` (register entry L17, tests/lab/junos_opts_test.go).
+    # A pool of its own rather than more alice names, for the reason the eapi and
+    # netconf pools have one: that test spends a dozen logins across five items
+    # against one deploy, and sharing alice01..alice16 would make it run the
+    # pool dry half-way through and report "the pool is exhausted" where the
+    # measurement belongs.
+    #
+    # One of these names is presented TWICE with the SAME token, concurrently:
+    # item 2 asks whether any accounting field enhanced-accounting adds tells
+    # two live sessions of one user apart, and on a single-use token a second
+    # concurrent login by the same user is the receipt path (§13, decision 15),
+    # not a second token.
+    - {nas: srx1, username: jopt01, secret: p49_labjopt01, kind: login}
+    - {nas: srx1, username: jopt02, secret: p49_labjopt02, kind: login}
+    - {nas: srx1, username: jopt03, secret: p49_labjopt03, kind: login}
+    - {nas: srx1, username: jopt04, secret: p49_labjopt04, kind: login}
+    - {nas: srx1, username: jopt05, secret: p49_labjopt05, kind: login}
+    - {nas: srx1, username: jopt06, secret: p49_labjopt06, kind: login}
+    - {nas: srx1, username: jopt07, secret: p49_labjopt07, kind: login}
+    - {nas: srx1, username: jopt08, secret: p49_labjopt08, kind: login}
+    - {nas: srx1, username: jopt09, secret: p49_labjopt09, kind: login}
+    - {nas: srx1, username: jopt10, secret: p49_labjopt10, kind: login}
+    - {nas: srx1, username: jopt11, secret: p49_labjopt11, kind: login}
+    - {nas: srx1, username: jopt12, secret: p49_labjopt12, kind: login}
+    - {nas: srx1, username: jopt13, secret: p49_labjopt13, kind: login}
+    - {nas: srx1, username: jopt14, secret: p49_labjopt14, kind: login}
+    - {nas: srx1, username: jopt15, secret: p49_labjopt15, kind: login}
+    - {nas: srx1, username: jopt16, secret: p49_labjopt16, kind: login}
+    - {nas: srx1, username: jopt17, secret: p49_labjopt17, kind: login}
+    - {nas: srx1, username: jopt18, secret: p49_labjopt18, kind: login}
+    - {nas: srx1, username: jopt19, secret: p49_labjopt19, kind: login}
+    - {nas: srx1, username: jopt20, secret: p49_labjopt20, kind: login}
+    - {nas: vsrx1, username: jopt01, secret: p49_labjopt01, kind: login}
+    - {nas: vsrx1, username: jopt02, secret: p49_labjopt02, kind: login}
+    - {nas: vsrx1, username: jopt03, secret: p49_labjopt03, kind: login}
+    - {nas: vsrx1, username: jopt04, secret: p49_labjopt04, kind: login}
+    - {nas: vsrx1, username: jopt05, secret: p49_labjopt05, kind: login}
+    - {nas: vsrx1, username: jopt06, secret: p49_labjopt06, kind: login}
+    - {nas: vsrx1, username: jopt07, secret: p49_labjopt07, kind: login}
+    - {nas: vsrx1, username: jopt08, secret: p49_labjopt08, kind: login}
+    - {nas: vsrx1, username: jopt09, secret: p49_labjopt09, kind: login}
+    - {nas: vsrx1, username: jopt10, secret: p49_labjopt10, kind: login}
+    - {nas: vsrx1, username: jopt11, secret: p49_labjopt11, kind: login}
+    - {nas: vsrx1, username: jopt12, secret: p49_labjopt12, kind: login}
+    - {nas: vsrx1, username: jopt13, secret: p49_labjopt13, kind: login}
+    - {nas: vsrx1, username: jopt14, secret: p49_labjopt14, kind: login}
+    - {nas: vsrx1, username: jopt15, secret: p49_labjopt15, kind: login}
+    - {nas: vsrx1, username: jopt16, secret: p49_labjopt16, kind: login}
+    - {nas: vsrx1, username: jopt17, secret: p49_labjopt17, kind: login}
+    - {nas: vsrx1, username: jopt18, secret: p49_labjopt18, kind: login}
+    - {nas: vsrx1, username: jopt19, secret: p49_labjopt19, kind: login}
+    - {nas: vsrx1, username: jopt20, secret: p49_labjopt20, kind: login}
     - {nas: xe1, username: alice01, secret: p49_labtoken01, kind: login}
     - {nas: xe1, username: alice02, secret: p49_labtoken02, kind: login}
     - {nas: xe1, username: alice03, secret: p49_labtoken03, kind: login}
