@@ -114,12 +114,8 @@ func (l *lab) nextOptsLogin(t *testing.T) (user, secret string) {
 		t.Fatalf("%s: this test's seeded login pool of %d is exhausted; seed more `jopt` logins in "+
 			"tests/lab/port49d-lab.yaml", l.p.name, junosOptsPoolSize)
 	}
-	user, secret = fmt.Sprintf("jopt%02d", n), fmt.Sprintf("p49_labjopt%02d", n)
-	mustBeSeeded(t, secret)
-	if !strings.Contains(labYAML, "username: "+user+",") {
-		t.Fatalf("tests/lab/port49d-lab.yaml seeds no login for %q; the harness and the config have drifted apart", user)
-	}
-	return user, secret
+	user = fmt.Sprintf("jopt%02d", n)
+	return user, l.mustLogin(t, user)
 }
 
 // ---------------------------------------------------------------------------

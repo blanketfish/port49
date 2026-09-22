@@ -31,9 +31,10 @@ import (
 //     inference.
 //  2. **whether a single-use token survives the job.** A token is spent by its
 //     first redemption; every later call is answered out of the receipt
-//     (`receipt_replayed`) until `receipt_ttl` expires. So "survives" means
-//     the job completed, and the note reports the mix of `token_redeemed` and
-//     `receipt_replayed` that carried it — which is the `receipt_ttl` question
+//     (`receipt_replayed`) until the receipt's sliding `receipt_idle_ttl` runs
+//     out or its `receipt_max_age` cap is reached. So "survives" means the job
+//     completed, and the note reports the mix of `token_redeemed` and
+//     `receipt_replayed` that carried it — which is the receipt-window question
 //     decision 15 turns on, arriving from the client side.
 //  3. **what the client puts on the wire.** This one is *inferred*, and the
 //     note says so in those words: the capture filter is `tcp port 49`, so the

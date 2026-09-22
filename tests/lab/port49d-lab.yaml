@@ -91,12 +91,15 @@ lab:
   # Redemption deletes the token, so every login in a run spends one. The pool
   # is larger than the run needs; lab.nextLogin() hands them out in order.
   #
-  # Each login gets its OWN username, and that is a measurement, not a style
-  # choice. EOS reports `port` as the constant string "ssh" (L1), so the receipt
-  # key (nas, port, username) is identical for every SSH login by one user: a
-  # second login inside receipt_ttl presents a different token against the first
-  # login's receipt and is refused as credential_mismatch. Distinct usernames
-  # give each login its own receipt key. See tests/lab/results/L1-arista_eos.md.
+  # Each login gets its own username. That was once load-bearing for the receipt
+  # key, which was (nas, port, username): EOS reports `port` as the constant
+  # string "ssh" (L1), so every SSH login by one user shared a receipt and a
+  # second login presenting a fresh token against the first one's receipt was
+  # refused credential_mismatch. The receipt key now carries the credential hash
+  # instead — (nas, username, credential_sha256), spec §13 decision 15 — so a
+  # fresh token finds no receipt and redeems normally. What a username per login
+  # still buys is a readable log: the username is on every record whether or not
+  # a context lookup found anything. See tests/lab/results/L1-arista_eos.md.
   seed_tokens:
     - {nas: leaf1, username: alice01}
     - {nas: leaf1, username: alice02}

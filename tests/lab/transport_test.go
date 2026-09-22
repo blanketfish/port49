@@ -58,7 +58,8 @@ import (
 // Logins
 // ---------------------------------------------------------------------------
 
-// transportLogin is a seeded (username, token) pair from port49d-lab.yaml.
+// transportLogin is a seeded login: the username from port49d-lab.yaml, and
+// the token port49d minted under it, which check fills in.
 //
 // These are a pool of their own rather than more alice names from nextLogin,
 // and the reason is the measurement. nextLogin hands out a fresh username per
@@ -74,29 +75,26 @@ type transportLogin struct {
 var (
 	// The `01` login is presented twice with the same token. That repeat is the
 	// re-authentication measurement of question 3 above.
-	eapiRead    = transportLogin{"eapi01", "p49_labeapi01"}
-	nxapiRead   = transportLogin{"nxapi01", "p49_labnxapi01"}
-	netconfRead = transportLogin{"netconf01", "p49_labnetconf01"}
+	eapiRead    = transportLogin{user: "eapi01"}
+	nxapiRead   = transportLogin{user: "nxapi01"}
+	netconfRead = transportLogin{user: "netconf01"}
 
 	// The `02` login carries a fresh token for the configuration request, so a
 	// spent `01` token cannot block the half of each test that asks whether a
 	// configuration change produces an authorization request at all.
-	eapiConfig    = transportLogin{"eapi02", "p49_labeapi02"}
-	nxapiConfig   = transportLogin{"nxapi02", "p49_labnxapi02"}
-	netconfConfig = transportLogin{"netconf02", "p49_labnetconf02"}
+	eapiConfig    = transportLogin{user: "eapi02"}
+	nxapiConfig   = transportLogin{user: "nxapi02"}
+	netconfConfig = transportLogin{user: "netconf02"}
 )
 
-// check fails the test if port49d-lab.yaml does not seed this login for this
-// platform's NAS. The same drift trap nextLogin guards: a test whose token is
-// not in the config measures a denial and reports it as device behavior.
+// check resolves this login's token out of what port49d minted for the platform
+// under test, and fails the test if the daemon minted none — which is what a
+// missing `{nas: <node>, username: <user>}` seed in port49d-lab.yaml looks like
+// from here. The same drift trap nextLogin guards: a test whose token is not
+// seeded measures a denial and reports it as device behavior.
 func (tl transportLogin) check(t *testing.T, l *lab) transportLogin {
 	t.Helper()
-	mustBeSeeded(t, tl.secret)
-	want := fmt.Sprintf("{nas: %s, username: %s,", l.p.node, tl.user)
-	if !strings.Contains(labYAML, want) {
-		t.Fatalf("tests/lab/port49d-lab.yaml seeds no `%s` login for NAS %q; the harness and the config have drifted apart",
-			tl.user, l.p.node)
-	}
+	tl.secret = l.mustLogin(t, tl.user)
 	return tl
 }
 
@@ -405,8 +403,10 @@ func transportReauthVerdict(steps []transportStep) string {
 					"`(nas, username, credential_sha256)` rather than out of the store — the same credential "+
 					"hashes to the same key, so a repeat finds its own receipt. So a script that makes forty calls "+
 					"with one token works — for as long as that receipt lives. What decision 15 rests on is "+
-					"therefore not \"does it re-authenticate\" but **`receipt_ttl`**: past it, the next call in "+
-					"the same script is the first denial, and nothing about the credential has changed.\n", verdict, reason)
+					"therefore not \"does it re-authenticate\" but **the receipt's two bounds**: the sliding "+
+					"`receipt_idle_ttl`, which every answered call pushes out, and `receipt_max_age`, which is "+
+					"measured from the first redemption and never moves. Past either, the next call in the same "+
+					"script is the first denial, and nothing about the credential has changed.\n", verdict, reason)
 			case verdict == "":
 				out += "The repeat produced no redeem record, which contradicts the count above and should be " +
 					"investigated before this note is trusted.\n"
