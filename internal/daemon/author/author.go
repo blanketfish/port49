@@ -49,6 +49,8 @@ type Handler struct {
 	// stalenessCeiling is how long a context may go without a policy refresh
 	// before authorization denies on it (spec §5.1.4, §5.3). It is measured
 	// from RefreshedAt; a context with no RefreshedAt is not subject to it.
+	// Zero or negative disables the check, which is what a daemon with nothing
+	// refreshing RefreshedAt must pass.
 	stalenessCeiling time.Duration
 	// graceWindow is how long past session_expires a context is retained so a
 	// late `port49 login` can resume the session (spec §5.6). It is a
@@ -215,7 +217,12 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		// retained: the grace window is plan 7's sweep, not a check here.
 		return h.deny(rec, decision.SessionExpired, "port49: session expired - run `port49 login` to resume")
 	}
-	if !c.RefreshedAt.IsZero() && now.Sub(c.RefreshedAt) > h.stalenessCeiling {
+	// A non-positive ceiling is "no staleness check", the same shape as the
+	// zero SessionExpires four lines above. It is what a daemon with nothing
+	// refreshing `refreshed_at` must pass: a finite ceiling against a clock
+	// that only ever moves at login denies a steadily working operator "the
+	// broker is unreachable" at login + the ceiling, with no broker to reach.
+	if h.stalenessCeiling > 0 && !c.RefreshedAt.IsZero() && now.Sub(c.RefreshedAt) > h.stalenessCeiling {
 		return h.deny(rec, decision.ContextStale, "port49: policy has not been refreshed within the staleness ceiling - the broker is unreachable")
 	}
 	if req.PrivLvl > c.PrivLvl {
@@ -261,6 +268,24 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	// gives: `c` was read at the top of this request.
 	if cmd == "" {
 		if level, ok := grantedPrivLvl(d.Attributes); ok {
+			// Clamped to the ceiling the token was minted with, the same bound
+			// the enable path refuses above (`ceiling_exceeded`, spec §7).
+			// What is granted here comes from port49's own Authorizer, so
+			// today this cannot fire; it is here so the invariant lives next
+			// to the field it protects rather than only in the policy engine
+			// (plan 4). A grant above the ceiling records the ceiling rather
+			// than being dropped: the device was told the higher level either
+			// way, and recording the lower one is what makes the next command
+			// denied instead of permitted.
+			//
+			// A zero MaxPrivilege is a token minted with no ceiling, not a
+			// ceiling of zero — the same reading as a zero SessionExpires
+			// above, and what every lab seed token carries today. Clamping to
+			// it would record level 0 and deny every command of a session
+			// port49 had just granted level 15.
+			if c.MaxPrivilege > 0 && level > c.MaxPrivilege {
+				level = c.MaxPrivilege
+			}
 			err := h.store.SetPrivilege(ctx, store.ContextKey{NAS: peer.NAS, Username: user}, level)
 			h.metrics.StoreOps.WithLabelValues("set_privilege", storeOutcome(err)).Inc()
 		}

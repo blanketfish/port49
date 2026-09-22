@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -776,6 +777,155 @@ func TestACommandReplyDoesNotRecordALevel(t *testing.T) {
 	if c, _ := st.GetContext(context.Background(), key); c.PrivLvl != 1 {
 		t.Fatalf("a command reply must not move the recorded level: %+v", c)
 	}
+}
+
+// A non-positive staleness ceiling means no staleness check. It is what the
+// daemon passes until something refreshes `refreshed_at` (plan 2's broker-side
+// Refresh, task 13): with a finite ceiling and a clock that only ever moves at
+// login, an operator working steadily is denied "the broker is unreachable" at
+// login plus the ceiling, with no broker to reach — the same failure the idle
+// TTL was made extendable to avoid, wearing a worse message.
+func TestAZeroStalenessCeilingDisablesTheCheck(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	clock := func() time.Time { return now }
+	for _, tt := range []struct {
+		name    string
+		ceiling time.Duration
+		want    uint8
+	}{
+		{"zero", 0, wire.AuthorStatusPassAdd},
+		{"negative", -time.Hour, wire.AuthorStatusPassAdd},
+		{"positive", 12 * time.Hour, wire.AuthorStatusFail},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now = time.Unix(1_000_000, 0)
+			h, st, log := setupClock(t, clock, tt.ceiling, time.Minute, 30*time.Minute)
+			key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+			st.PutContext(context.Background(), key,
+				store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, RefreshedAt: now}, 30*time.Minute)
+
+			// A week of steady work: one command every ten minutes, which the
+			// idle TTL keeps alive and no refresh ever touches.
+			var resp wire.AuthorResponse
+			for i := 0; i < 7*24*6; i++ {
+				now = now.Add(10 * time.Minute)
+				resp = h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+				if resp.Status != wire.AuthorStatusPassAdd {
+					break
+				}
+			}
+			if resp.Status != tt.want {
+				t.Fatalf("ceiling %s: status %v, want %v (%v)", tt.ceiling, resp.Status, tt.want, lastRecord(t, log))
+			}
+			if tt.want == wire.AuthorStatusFail && lastRecord(t, log)["reason"] != "context_stale" {
+				t.Fatalf("a positive ceiling must still deny context_stale: %v", lastRecord(t, log))
+			}
+		})
+	}
+}
+
+// The granted level never exceeds the ceiling the token was minted with, which
+// is the bound the enable path refuses above (`ceiling_exceeded`, spec §7).
+func TestTheGrantedLevelIsClampedToMaxPrivilege(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		max   uint8
+		grant string
+		want  uint8
+	}{
+		{"above the ceiling records the ceiling", 7, "priv-lvl=15", 7},
+		{"at the ceiling", 15, "priv-lvl=15", 15},
+		{"below the ceiling is untouched", 15, "priv-lvl=1", 1},
+		// A token minted with no ceiling, which is what every lab seed token
+		// carries. Zero is "no ceiling", not "level 0 only": clamping to it
+		// would record 0 and deny every command of a session just granted 15.
+		{"no ceiling minted", 0, "priv-lvl=15", 15},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			st := memory.New(time.Now)
+			key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+			st.PutContext(context.Background(), key,
+				store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, MaxPrivilege: tt.max, RefreshedAt: time.Now()}, time.Hour)
+			h := New(st, &Lab{SessionAttributes: []string{tt.grant}}, decision.NewJSONLines(&bytes.Buffer{}),
+				metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
+
+			sess := req("alice", "vty4", "service=shell", "cmd=")
+			sess.PrivLvl = 1
+			if resp := h.Handle(context.Background(), peer, sess); resp.Status != wire.AuthorStatusPassAdd {
+				t.Fatalf("%+v", resp)
+			}
+			if c, _ := st.GetContext(context.Background(), key); c.PrivLvl != tt.want {
+				t.Fatalf("recorded level %d, want %d", c.PrivLvl, tt.want)
+			}
+		})
+	}
+}
+
+// Both store writes on the permit path swallow their error and count it
+// instead, so store_ops is the only place an operator sees a lost race. If
+// nothing asserts the counter, the swallow is silent.
+func TestTheSwallowedStoreWritesAreCounted(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	clock := func() time.Time { return now }
+	inner := memory.New(clock)
+	st := &vanishingContextStore{Store: inner}
+	m := metrics.New(prometheus.NewRegistry())
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	h := New(st, &Lab{SessionAttributes: []string{"priv-lvl=15"}}, decision.NewJSONLines(&bytes.Buffer{}),
+		m, clock, platform.Defaults(), time.Hour, time.Minute, 30*time.Minute)
+
+	// A session authorization that both grants a level and is due an
+	// extension: LastTouchedAt is a full TTL old, so the half-TTL rule fires.
+	inner.PutContext(context.Background(), key,
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, RefreshedAt: now}, 30*time.Minute)
+	now = now.Add(20 * time.Minute)
+	sess := req("alice", "vty4", "service=shell", "cmd=")
+	sess.PrivLvl = 1
+	if resp := h.Handle(context.Background(), peer, sess); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("%+v", resp)
+	}
+	for _, op := range []string{"set_privilege", "touch_context"} {
+		if got := testutil.ToFloat64(m.StoreOps.WithLabelValues(op, "ok")); got != 1 {
+			t.Fatalf("store_ops{op=%q,outcome=ok} = %v, want 1", op, got)
+		}
+	}
+
+	// Now the context vanishes between the read and the writes, which is the
+	// revocation or reclaim race both call sites deliberately swallow. The
+	// reply is unchanged -- the next request is denied on its own terms -- so
+	// the counter is the only signal there is.
+	st.vanish = true
+	now = now.Add(20 * time.Minute)
+	if resp := h.Handle(context.Background(), peer, sess); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("a lost race must not change the reply: %+v", resp)
+	}
+	for _, op := range []string{"set_privilege", "touch_context"} {
+		if got := testutil.ToFloat64(m.StoreOps.WithLabelValues(op, "not_found")); got != 1 {
+			t.Fatalf("store_ops{op=%q,outcome=not_found} = %v, want 1", op, got)
+		}
+	}
+}
+
+// vanishingContextStore serves the context to GetContext and then loses it, so
+// the writes that follow the read find nothing -- the shape of a revocation or
+// an idle reclaim landing mid-request.
+type vanishingContextStore struct {
+	store.Store
+	vanish bool
+}
+
+func (v *vanishingContextStore) SetPrivilege(ctx context.Context, k store.ContextKey, level uint8) error {
+	if v.vanish {
+		return store.ErrNotFound
+	}
+	return v.Store.SetPrivilege(ctx, k, level)
+}
+
+func (v *vanishingContextStore) TouchContext(ctx context.Context, k store.ContextKey, ttl time.Duration) error {
+	if v.vanish {
+		return store.ErrNotFound
+	}
+	return v.Store.TouchContext(ctx, k, ttl)
 }
 
 func TestGrantedPrivLvl(t *testing.T) {

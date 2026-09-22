@@ -129,15 +129,19 @@ func run(cfgPath string) error {
 		// nothing the context does not.
 		Authen: authen.New(st, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
 			cfg.ContextIdleTTL, cfg.ContextIdleTTL, tagKey),
-		// The staleness ceiling and grace window become `session.staleness_ceiling`
-		// and `session.grace_window` in Task 12; until then they are wired here.
-		// The ceiling is the context's own idle TTL rather than the 15m the
-		// config will default to, because nothing refreshes `refreshed_at` yet:
-		// a shorter one would deny a working operator `context_stale` — "the
-		// broker is unreachable" — when port49 has no broker to reach. At the
-		// idle TTL it denies no session that would otherwise still be served.
+		// The staleness ceiling is 0 — no staleness check — until there is a
+		// refresh to be stale relative to. `refreshed_at` is stamped once at
+		// login and nothing moves it until plan 2's broker-side Refresh (task
+		// 13); `session.staleness_ceiling` arrives with the config in task 14
+		// and is wired here in task 15. Any finite ceiling before then denies
+		// a steadily working operator `context_stale` — "the broker is
+		// unreachable" — at login plus the ceiling, with no broker to reach,
+		// which is the failure the idle TTL was just made extendable to avoid.
+		//
+		// The grace window is carried for plan 7's sweep and read by nothing
+		// today.
 		Author: author.New(st, authz, log, m, time.Now, cfg.SessionServices,
-			cfg.ContextIdleTTL, 10*time.Minute, cfg.ContextIdleTTL),
+			0, 10*time.Minute, cfg.ContextIdleTTL),
 		Acct:   acct.New(st, spool, m, time.Now),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}
 
