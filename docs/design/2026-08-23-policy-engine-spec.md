@@ -1556,10 +1556,17 @@ exec START for (nas, username):
                (a START is never foreign: port49 is watching this session begin)
 
 exec STOP or WATCHDOG for (nas, username):
-    set non-empty, discriminator in it      →  accounting_state = closing
+    set non-empty, discriminator in it      →  accounting_state = closing (STOP only)
     set non-empty, discriminator not in it  →  annotate foreign, alert
     set empty, or no discriminator sent     →  accounting_state = closing, on the username alone
 ```
+
+**`START|WATCHDOG` is a WATCHDOG here, not a START.** The flag combination `0x0a` is legal and
+Cisco IOS sends interim updates with it. It reports on a session already running, so it adds no
+discriminator, does not write `open`, and stays eligible for `foreign` — a device that set the
+START bit on every record would otherwise switch the alert off for itself, silently. The
+decision log already names these records `watchdog`, and the annotation must not disagree with
+the line describing it.
 
 This replaces a single-discriminator model in which a START bound the first value it saw and
 every later START was `foreign`. Under that model an operator opening a second window on one
@@ -1628,8 +1635,17 @@ typed command (`tests/lab/results/L6-juniper_vsrx.md`, `L6-juniper_vjunos-router
 the only exec form annotates nothing at all on Junos. Per-command records never annotate, on
 any platform.
 
-The empty-set branch covers `stop-only` accounting and a lost START, and it is deliberately not
-`foreign`: a deployment that sends no STARTs at all must not page on every STOP. `closing` is
+The empty-set branch covers `stop-only` accounting and a lost START, and it does more than
+decline to alert. **A record on an empty-set context is attributed `resolved`, so it is stamped
+with the operator's `principal` and `ctx_id`** — it is joined to the login, in the audit trail,
+on the strength of the username alone. That is the intended behaviour and it is the reason a
+deployment that sends no STARTs at all still gets attributed accounting rather than a stream of
+`unattributed`; but it is a weaker claim than the same record on a bound context, and a reader
+comparing the two should know which one it is looking at. The exposure is bounded by its own
+mechanism: one genuine exec START turns the check on for that context and everything after it
+is compared against the set.
+
+`closing` is
 reported and nothing else — it does not stop refresh (§5.1.3), because a STOP from a previous
 session on the same line under the same username would otherwise mark a live session closing and
 let the staleness ceiling deny it later, which is the demotion's own defect in slow motion. Any
@@ -3756,7 +3772,8 @@ Beyond those already listed in the design document's §14:
   AV pair the accounting reader consumes, not only the discriminator.
 - **Foreign session detection**: an exec STOP or WATCHDOG whose discriminator is not in a
   non-empty set is attributed `foreign`. A START is never `foreign`, and neither is any record
-  on a context whose set is empty.
+  on a context whose set is empty. `START|WATCHDOG` (`0x0a`) counts as a WATCHDOG for every one
+  of these rules: it adds no discriminator and can be `foreign`.
 - **Accounting does not extend the idle TTL**: an annotation writes the discriminator set and
   `accounting_state` and moves neither the expiry nor `last_touched_at`.
 - **System users**: a record naming a username the platform's adapter declares a system user is

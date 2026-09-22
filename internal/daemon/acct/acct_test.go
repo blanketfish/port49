@@ -359,25 +359,65 @@ func TestExecStopOutsideANonEmptySetIsForeign(t *testing.T) {
 // A keepalive for a session port49 never saw begin is the same signal as its
 // STOP, so a WATCHDOG can be foreign. It still annotates nothing: it neither
 // adds a discriminator — it is not a START — nor says a session closed.
+//
+// The subtests run both encodings a device may use. `START|WATCHDOG` (0x0a) is
+// a legal combination that wire.DecodeAcctRequest accepts and Cisco IOS sends
+// for interim updates; treating it as a START would let a device that sets the
+// START bit on every record switch `foreign` off for itself, while its own log
+// lines still said `watchdog`.
 func TestAWatchdogCanBeForeignAndAnnotatesNothing(t *testing.T) {
-	h, st, out, stop := setup(t)
-	putCtx(t, st, store.Context{CtxID: "ctx1", SessionDiscriminators: []string{store.HashDiscriminator("42")}})
-	h.Handle(context.Background(), peer, acct(wire.AcctFlagWatchdog, "alice", "vty0", "task_id=99", "service=shell", "cmd="))
-	h.Handle(context.Background(), peer, acct(wire.AcctFlagWatchdog, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
-	stop()
-	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("want 2 records, got %d: %s", len(lines), out.String())
+	for _, tt := range []struct {
+		name  string
+		flags uint8
+	}{
+		{"watchdog", wire.AcctFlagWatchdog},
+		{"start_watchdog", wire.AcctFlagStart | wire.AcctFlagWatchdog},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h, st, out, stop := setup(t)
+			putCtx(t, st, store.Context{CtxID: "ctx1", SessionDiscriminators: []string{store.HashDiscriminator("42")}})
+			h.Handle(context.Background(), peer, acct(tt.flags, "alice", "vty0", "task_id=99", "service=shell", "cmd="))
+			h.Handle(context.Background(), peer, acct(tt.flags, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
+			stop()
+			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+			if len(lines) != 2 {
+				t.Fatalf("want 2 records, got %d: %s", len(lines), out.String())
+			}
+			if !strings.Contains(lines[0], `"attribution":"foreign"`) {
+				t.Fatalf("a keepalive for a session port49 never saw begin is the same signal as its STOP: %s", lines[0])
+			}
+			if !strings.Contains(lines[1], `"attribution":"resolved"`) {
+				t.Fatalf("a keepalive for a bound session is resolved: %s", lines[1])
+			}
+			// The log calls both of these `watchdog`, so the annotation must
+			// agree: nothing added, nothing closed, nothing opened.
+			for _, line := range lines {
+				if !strings.Contains(line, `"flags":"watchdog"`) {
+					t.Fatalf("flagsName and the annotation disagree about what this record is: %s", line)
+				}
+			}
+			c := ctxOf(t, st)
+			if c.AccountingState != "" || len(c.SessionDiscriminators) != 1 {
+				t.Fatalf("a watchdog is a keepalive, not a session beginning or ending: %+v", c)
+			}
+			if hasDisc(c, "99") {
+				t.Fatalf("an interim update added a discriminator: %v", discs(t, c, "42", "99"))
+			}
+		})
 	}
-	if !strings.Contains(lines[0], `"attribution":"foreign"`) {
-		t.Fatalf("a keepalive for a session port49 never saw begin is the same signal as its STOP: %s", lines[0])
+}
+
+// The wire decoder accepts START|WATCHDOG, which is what makes the handler's
+// own test above meaningful: if this combination were rejected at decode, the
+// case could not reach the annotation at all.
+func TestStartWatchdogIsALegalFlagCombinationOnTheWire(t *testing.T) {
+	b := acct(wire.AcctFlagStart|wire.AcctFlagWatchdog, "alice", "vty0", "task_id=1", "service=shell", "cmd=").Encode()
+	got, err := wire.DecodeAcctRequest(b)
+	if err != nil {
+		t.Fatalf("0x0a must decode: %v", err)
 	}
-	if !strings.Contains(lines[1], `"attribution":"resolved"`) {
-		t.Fatalf("a keepalive for a bound session is resolved: %s", lines[1])
-	}
-	c := ctxOf(t, st)
-	if c.AccountingState != "" || len(c.SessionDiscriminators) != 1 {
-		t.Fatalf("a watchdog is a keepalive, not a session beginning or ending: %+v", c)
+	if got.Flags != wire.AcctFlagStart|wire.AcctFlagWatchdog {
+		t.Fatalf("flags = %#x", got.Flags)
 	}
 }
 

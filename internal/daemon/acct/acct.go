@@ -98,7 +98,16 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 		seen = avOf(raw, disc)
 	}
 	exec := platform.IsExecRecord(peer.Platform, avOf(raw, "cmd"))
-	start := req.Flags&wire.AcctFlagStart != 0
+	// START|WATCHDOG (0x0a) is a legal flag combination and the wire decoder
+	// accepts it — Cisco IOS sends interim updates that way. It is an update
+	// about a session already running, not a session beginning, so it must not
+	// add a discriminator, must not say `open`, and must stay eligible for
+	// `foreign`: the alert exists for records of a session port49 never saw
+	// begin, and a device that sends every record with the START bit set would
+	// otherwise switch it off entirely. flagsName already reports these as
+	// `watchdog`, so treating them as a START here would also have the log line
+	// and the annotation disagree about what the record was.
+	start := req.Flags&wire.AcctFlagStart != 0 && req.Flags&wire.AcctFlagWatchdog == 0
 
 	attribution := "unattributed"
 	switch {
@@ -181,13 +190,31 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 // annotate is the one store write on the accounting path.
 //
 // There is no second read and no re-put, so there is no read-modify-write to
-// lose a revocation to. What remains is a narrow benign window: between this
-// request's GetContext and this write the operator could log out and back in,
-// and the new context would then carry one discriminator from the old session.
-// That can only ever suppress a `foreign` alert, never cause one — and it
-// cannot even do that, because a device does not reuse a discriminator across
-// that boundary (measured: `session_pid` 14656 → 14695 one millisecond after a
-// logout on the same port, spec §5.8). The cost is one of the eight slots.
+// lose a revocation to. What remains is a narrow window: between this request's
+// GetContext and this write the operator can log out and log back in, and this
+// write then lands on the NEW context — adding the old session's discriminator
+// to it, or stamping it `closing` for a session that is not this one.
+//
+// Two consequences, and only the first is benign:
+//
+//   - A stale entry in the set suppresses nothing real. A device does not reuse
+//     a discriminator across a logout (measured: `session_pid` 14656 → 14695
+//     one millisecond after a logout on the same port, spec §5.8), so the entry
+//     matches no later record. It costs one of the eight slots.
+//   - A `foreign` can be CAUSED, not only suppressed, and this is the case the
+//     comment here used to deny. If the old session's STOP wins this race, the
+//     new context is created with an empty set and then annotated `closing`
+//     with nothing added — and if a non-START exec record of the new session
+//     (its STOP, or a WATCHDOG) is then processed before its own START, it
+//     finds a set that is still empty and takes the username branch, not
+//     `foreign`. The set has to be non-empty for `foreign`, so causing one
+//     needs the new session's START to have landed AND a third session's
+//     record to arrive reordered. That is narrow rather than impossible.
+//
+// Closing it needs the annotation to name the ctx_id it was attributed to, so
+// the store can refuse a write aimed at a context that has since been replaced.
+// That is an AnnotateContext signature change and is recorded in this plan's
+// report rather than taken here.
 func (h *Handler) annotate(ctx context.Context, key store.ContextKey, discHash, state string) {
 	err := h.store.AnnotateContext(ctx, key, discHash, state)
 	h.metrics.StoreOps.WithLabelValues("annotate_context", storeOutcome(err)).Inc()
