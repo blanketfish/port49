@@ -90,7 +90,11 @@ func run(cfgPath string) error {
 	// The lab authorizer is the only authorizer until the policy engine lands
 	// (plan 4); config.Load refuses a config without it, so it is never nil and
 	// port49 never falls back to permitting everything.
-	authz := &author.Lab{SessionAttributes: cfg.Lab.SessionAttributes, DenyPrefixes: cfg.Lab.DenyPrefixes}
+	authz := &author.Lab{
+		SessionAttributes: cfg.Lab.SessionAttributes,
+		CommandAttributes: cfg.Lab.CommandAttributes,
+		DenyPrefixes:      cfg.Lab.DenyPrefixes,
+	}
 	for _, t := range cfg.Lab.SeedTokens {
 		if _, err := st.PutToken(ctx, store.TokenKey{NAS: t.NAS, Username: authen.Canonical(t.Username)},
 			store.Token{Secret: []byte(t.Secret), Kind: t.Kind, ExpiresAt: time.Now().Add(cfg.ContextIdleTTL)}); err != nil {

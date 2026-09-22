@@ -417,3 +417,45 @@ platforms:
 		t.Fatalf("an empty platform block must leave the default in force, got %v", got)
 	}
 }
+
+// TestLabCommandAttributesParse: `lab.command_attributes` is a declared key, so
+// it loads, and the strict decoder is what proves it is declared -- a key the
+// struct does not carry is refused outright (TestLoadRefusesUnknownKeys), so a
+// test that only asserted the value could not tell "parsed" from "silently
+// ignored".
+//
+// It is separate from `session_attributes` because register entry L18 varies
+// one at a time: the same bad attribute on a session reply and on a per-command
+// reply are different questions, and a single list could not ask them apart.
+func TestLabCommandAttributesParse(t *testing.T) {
+	setSecrets(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := strings.Replace(fmt.Sprintf(sample, invPath),
+		`  session_attributes: ["priv-lvl=15"]`,
+		`  session_attributes: ["priv-lvl=15"]`+"\n"+`  command_attributes: ["p49-nonsense*1"]`, 1)
+	cfg, err := Load(write(t, "port49d.yaml", body))
+	if err != nil {
+		t.Fatalf("a config carrying lab.command_attributes did not load: %v", err)
+	}
+	if got := cfg.Lab.CommandAttributes; len(got) != 1 || got[0] != "p49-nonsense*1" {
+		t.Fatalf("lab.command_attributes did not reach the config: %q", got)
+	}
+	if got := cfg.Lab.SessionAttributes; len(got) != 1 || got[0] != "priv-lvl=15" {
+		t.Fatalf("lab.command_attributes disturbed session_attributes: %q", got)
+	}
+}
+
+// TestLabCommandAttributesAreOptional: every config in this repository that
+// predates the key must keep loading, and must load with the list empty rather
+// than with anything invented for it.
+func TestLabCommandAttributesAreOptional(t *testing.T) {
+	setSecrets(t)
+	invPath := write(t, "inventory.yaml", inv)
+	cfg, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Lab.CommandAttributes; len(got) != 0 {
+		t.Fatalf("a config that does not mention command_attributes should carry none, got %q", got)
+	}
+}

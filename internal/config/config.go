@@ -56,7 +56,12 @@ type SeedToken struct {
 // the policy engine lands (plan 4): without it there is no authorizer at all,
 // and port49 never falls back to permitting everything.
 type LabConfig struct {
-	SessionAttributes []string    `yaml:"session_attributes"`
+	SessionAttributes []string `yaml:"session_attributes"`
+	// CommandAttributes are attached to a PERMITTED per-command authorization
+	// reply, as SessionAttributes are to a session one. It is a separate list
+	// because register entry L18 asks the same question of each reply
+	// separately; see author.Lab.
+	CommandAttributes []string    `yaml:"command_attributes"`
 	DenyPrefixes      []string    `yaml:"deny_prefixes"`
 	SeedTokens        []SeedToken `yaml:"seed_tokens"`
 }

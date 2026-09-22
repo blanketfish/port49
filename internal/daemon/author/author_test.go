@@ -411,3 +411,53 @@ func TestRecordedServiceIsNeverConsultedForPolicy(t *testing.T) {
 		}
 	}
 }
+
+// TestLabCommandAttributes: the lab authorizer carries a second attribute list
+// for the COMMAND path, so a reply to a per-command authorization can be given
+// attributes the way a session reply can.
+//
+// It exists for register entry L18. That row asks what a device does with a
+// reply attribute it did not ask for, and it could only ask the question of
+// session authorizations: `Lab.Command` returned a bare permit, so there was no
+// command reply to put a bad attribute in. The wire side was never the
+// obstacle -- Handler copies a decision's attributes onto the response for
+// commands and sessions alike (TestHandlerInventsNoAttributeOfItsOwn) -- it was
+// that the lab authorizer had nothing to hand it.
+//
+// A DENY carries none of them. The attributes are a reply-shaping knob for the
+// permit path; a denial's payload is its server_msg, and attaching arguments to
+// a FAIL would be inventing protocol behaviour to measure protocol behaviour.
+func TestLabCommandAttributes(t *testing.T) {
+	l := &Lab{
+		SessionAttributes: []string{"priv-lvl=15"},
+		CommandAttributes: []string{"p49-nonsense*1"},
+		DenyPrefixes:      []string{"reload"},
+	}
+
+	d := l.Command(context.Background(), store.Context{}, []string{"show", "version"}, nil)
+	if !d.Permit {
+		t.Fatalf("expected a permit for \"show version\": %+v", d)
+	}
+	if len(d.Attributes) != 1 || d.Attributes[0] != "p49-nonsense*1" {
+		t.Fatalf("a permitted command reply should carry the configured command attributes, got %q", d.Attributes)
+	}
+
+	if d := l.Command(context.Background(), store.Context{}, []string{"reload"}, nil); d.Permit {
+		t.Fatalf("expected \"reload\" to be denied: %+v", d)
+	} else if len(d.Attributes) != 0 {
+		t.Fatalf("a DENIED command reply must carry no attributes, got %q", d.Attributes)
+	}
+
+	// The two lists are separate: a session reply does not pick up command
+	// attributes, which is what makes L18 able to vary one at a time.
+	s := l.Session(context.Background(), store.Context{}, nil)
+	if len(s.Attributes) != 1 || s.Attributes[0] != "priv-lvl=15" {
+		t.Fatalf("the session reply should carry only the session attributes, got %q", s.Attributes)
+	}
+
+	// Unset is the shipped shape and must stay a bare permit.
+	bare := &Lab{DenyPrefixes: []string{"reload"}}
+	if d := bare.Command(context.Background(), store.Context{}, []string{"show", "version"}, nil); len(d.Attributes) != 0 {
+		t.Fatalf("with no command_attributes configured the reply must carry none, got %q", d.Attributes)
+	}
+}
