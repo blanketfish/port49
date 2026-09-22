@@ -3773,7 +3773,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L16** | Role delivery over TACACS+ and its interaction with command authorization. Whether a custom role named in a reply attribute takes effect — verified by a command it forbids being refused, never by the device echoing the name back; whether the device still sends a per-command authorization request for a command its own role forbids; which wins when the device's role and port49 disagree, **in both directions**; two roles at once (NX-OS documents a union with permit winning); a role name the device does not have; no role attribute at all; the accepted spellings (`shell:roles=` / `shell:roles*`, bare or inside `cisco-av-pair`); and the `priv-lvl=N` to `priv-N` mapping under `feature privilege`. | The session-attribute model (§6) and adapter `privilege` blocks (§8) — a custom role is the NX-OS and EOS analogue of a Junos login class, which is what decision 22 projects into. Also what the decision log means (§5.7, §9): if a device can refuse a command port49 permitted, the log records a permit for a command that never ran. | EOS, NX-OS | open — added 2026-09-21. vEOS measured 2026-09-21 (`shell:roles*<name>` **does not deliver a role** — the device reports the session's role as `<unknown>` — port49's per-command deny binds, and a `cisco-av-pair*` attribute sent as OPTIONAL is refused outright) and **2026-09-22, which corrects the reading drawn from it**: EOS reads the **bare** attribute `roles=<name>`, which the first run never sent, under either argument flag; sent by its own name the role is applied, and under `aaa authorization commands ... local` it is the operator's real privilege. `priv-lvl` must be sent too — a reply with a role and no `priv-lvl` lands the session at level 1 — and an OPTIONAL `priv-lvl*N` **is** applied on this image. NX-OS measured 2026-09-21 (delivery: all three spellings work, an unknown name degrades to `network-operator`, and a delivered role's own rules do not bind while `aaa authorization commands` points at TACACS+) and 2026-09-22 (precedence: **`shell:roles` decides the role and a `priv-lvl` beside it is inert, in both directions**, so an NX-OS adapter sends the role and never the privilege level; with command authorization pointed at `local` instead, the delivered role does bind). Open on EOS: the `cisco-av-pair` ambiguity, and whether a role that permits everything carries a read-only one delivered beside it (the pair was measured, the permissive role alone was not); see below |
 | **L15** | How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and **what port49 then answers**. | Single-use tokens, and therefore whether reusable tokens are needed at all (§13, decision 15); the 30-character handle's blast radius (design §8) | EOS, NX-OS, Junos | open — measured 2026-09-20 on all four images: one exchange per API request and per NETCONF session, every time, and the repeat permitted out of the receipt rather than the store, which moves the question to `receipt_ttl`; IOS-XE, cookie sessions and kept-alive connections unmeasured. **2026-09-21: the real clients were driven and the count is the client's, not the transport's** — one authentication per ten-task job for every SSH client that holds its connection and for Ansible `cisco.nxos` over `httpapi`, against 28 for NAPALM `nxos` over the same NX-API; and the `receipt_ttl` boundary was crossed for the first time, half a NAPALM job refused `token_not_found` 38.8s into a 30s TTL; see below |
 | **L17** | Which `system tacplus-options` statements change what a port49 answer MEANS on Junos. Whether `strict-authorization` makes a DENIED session authorization refuse the login, on SSH and on NETCONF, and what it does to a local break-glass account while port49d is down. What AV pairs `enhanced-accounting` adds, to which record types, and whether any of them separates two concurrent sessions of one user or carries the client's source port. Which accounting records carry a user who is not the logged-in operator, and what port49 does with them. Whether `authorization-time-interval` re-authorizes a live session, and what a DENIED re-authorization does to one. | Whether port49 constrains a Junos session at all (L10 reading 3; L14) and what the reference AAA configuration in `tests/lab/configs/` must carry; the 3am break-glass argument (§5.6, L4); accounting attribution and what reconciliation may conclude (§5.8, §9); whether a revocation can reach a session that is already open (§5.6) | Junos (vSRX, vJunos-router) | open — added 2026-09-21 and measured the same day on **both** images, cell for cell: `tests/lab/results/L17-juniper_vsrx.md`, `L17-juniper_vjunos-router.md`. `strict-authorization` **does** make a port49 denial binding, on SSH and on NETCONF, and break-glass still gets in with port49d down under both authentication orders. `enhanced-accounting` adds `Port`, `Authentication-Type` and `User_Perms` to the `cmd=login` record only. No record named `root` under this lab's accounting event list. `authorization-time-interval` re-authorizes at exactly the configured interval and a DENIED re-authorization does **not** end the live session. Unmeasured: the other six `tacplus-options` leaves, a real `root` RPC record, production Junos 23.4R2-S8.7, and an interval other than the 15-minute minimum; see below |
-| **L18** | How each platform treats a reply attribute it did not ask for: applied, ignored, or the session killed. Another vendor's attribute, an invented one, and a known attribute carrying a value the device cannot use, each in the OPTIONAL and the MANDATORY spelling. Per variant: whether the session opens and, when it does not, what the device says verbatim; what role or privilege the session ends up with; and whether the device still sends per-command authorization. | Whether an adapter may send one attribute list to a mixed fleet at all (§8). RFC 8907 §8.2 says an OPTIONAL argument a device does not understand SHOULD be ignored and a MANDATORY one MUST fail the authorization; `lab.session_attributes` in `tests/lab/port49d-lab.yaml` rested on the first half until IOS-XE disproved it (L10), and what an operator's typo costs (§6) rests on the same answer. Also decision 22's two Junos attributes (§13, gated on L12). | EOS, NX-OS, IOS-XE, Junos | open — added and measured 2026-09-22 on all five images, `tests/lab/l18_test.go`. **Three vendors answer three different ways, so §8 cannot have one rule.** vEOS follows §8.2 in both directions. The N9Kv and both Junos images honour neither half and ignore everything, mandatory included. IOS-XE refuses the session for anything it does not recognise under either flag — and a run of those refusals stops it answering SSH at all for about a minute, without sending port49 a packet. On Junos `local-user-name` is applied under either flag and **`user-permissions` does nothing**, which is decision 22's second attribute measured for the first time. Open: the same question on a per-command authorization reply; see below |
+| **L18** | How each platform treats a reply attribute it did not ask for: applied, ignored, or the session killed. Another vendor's attribute, an invented one, and a known attribute carrying a value the device cannot use, each in the OPTIONAL and the MANDATORY spelling. Per variant: whether the session opens and, when it does not, what the device says verbatim; what role or privilege the session ends up with; and whether the device still sends per-command authorization. | Whether an adapter may send one attribute list to a mixed fleet at all (§8). RFC 8907 §8.2 says an OPTIONAL argument a device does not understand SHOULD be ignored and a MANDATORY one MUST fail the authorization; `lab.session_attributes` in `tests/lab/port49d-lab.yaml` rested on the first half until IOS-XE disproved it (L10), and what an operator's typo costs (§6) rests on the same answer. Also decision 22's two Junos attributes (§13, gated on L12). | EOS, NX-OS, IOS-XE, Junos | open — added and measured 2026-09-22 on all five images, `tests/lab/l18_test.go`. **Three vendors answer three different ways, so §8 cannot have one rule.** vEOS follows §8.2 in both directions. The N9Kv and both Junos images honour neither half and ignore everything, mandatory included. IOS-XE refuses the session for anything it does not recognise under either flag — and a run of those refusals stops it answering SSH at all for about a minute, without sending port49 a packet. On Junos `local-user-name` is applied under either flag and **`user-permissions` does nothing**, which is decision 22's second attribute measured for the first time. **The per-command reply is measured too, 2026-09-22, and it does not follow the session reply:** the C8000V refuses EVERY command in the session — `Command authorization failed.` — for any of the three attributes under either flag, on authorizations port49 answered `permit`; vEOS ignores an optional unknown there and refuses every command on a MANDATORY one; the N9Kv ignores all of them. Junos has no per-command reply to ask it of (L10, L14; decision 21). Open: every non-SSH transport, and whether IOS-XE's SSH condition is the vty pool; see below |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -4919,6 +4919,45 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   `p49-nonsense`, spelled with this project's prefix so that a device which happened to know it
   would be a finding rather than a collision.
 
+  **The same three questions on a PER-COMMAND authorization reply, measured 2026-09-22.** Until
+  this row asked them they could not be asked: `Lab.Command` returned a bare permit, so there
+  was no per-command reply to put an attribute in. `lab.command_attributes` now puts attributes
+  on a PERMITTED command reply the way `lab.session_attributes` does on a session one — a lab
+  stub, not a policy projection — and `author.Handler` already copied a decision's attributes
+  onto the response for both paths, so nothing on the wire changed. Each variant sends the
+  control's session reply byte for byte and differs from it only in what a permitted command
+  authorization carries.
+
+  | attribute on a permitted COMMAND reply | vEOS 4.31.2F | N9Kv 10.4(2)F | C8000V 17.13.01a | vSRX 21.4R3.15 | vJunos-router 23.4R2-S2.1 |
+  |---|---|---|---|---|---|
+  | invented, OPTIONAL (`p49-nonsense*1`) | ignored, commands ran | ignored, commands ran | **every command refused** | n/a | n/a |
+  | invented, MANDATORY (`p49-nonsense=1`) | **every command refused** | ignored, commands ran | **every command refused** | n/a | n/a |
+  | another vendor's, OPTIONAL | ignored, commands ran | ignored, commands ran | **every command refused** | n/a | n/a |
+
+  The Junos cells are `n/a` and not `unmeasured`: no Junos session in this lab has ever produced
+  a per-command authorization request at all (L10, L14; decision 21 is written on it), so there
+  is no per-command reply to attach an attribute to. The question does not arise there rather
+  than going unanswered, and every Junos variant records the request count that says so.
+
+  **Every refusal in that table is a command port49 PERMITTED.** The decision log for those
+  sessions holds `permit permit_dominates` for `terminal length 0`, `show privilege` and `show
+  version`, and the operator got `Command authorization failed.` on the C8000V and `%
+  Authorization denied for command 'terminal length 0'` on vEOS for the same three. **The
+  session stays open and nothing runs in it** — the refusal begins at the paging command, which
+  is the first reply to carry the attribute, so it is already in force before anything worth
+  typing. That is a worse shape at 3am than the session refusals above it: a refused login says
+  plainly that something is wrong, while here the login works, the server's own log says every
+  authorization succeeded, and the operator is the only party who can see that it did not.
+
+  **The session reply does not predict the command reply.** IOS-XE refuses the SESSION for any
+  attribute it does not recognise, so a bad session reply never reaches the command path at all;
+  give it a clean session reply and the same attribute on the COMMAND reply, and the session
+  opens and every command is refused instead. vEOS applies one rule at two blast radii — an
+  optional unknown costs nothing on either reply, a mandatory unknown costs the whole session on
+  one and every command on the other. The N9Kv ignores all six, mandatory included, exactly as
+  it ignores them on the session path. So §8's per-platform table has two halves, and measuring
+  one says nothing about the other.
+
   **Three behaviours across three vendors, and no two agree, which is the whole answer to
   "may an adapter send one attribute list to a mixed fleet".** It may not. vEOS does what §8.2
   says in both directions, so the argument flag is a working switch there: an adapter that
@@ -4968,13 +5007,14 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   optional flag, and the remaining hypothesis is the quotes in its value. One variant settles
   it and there was no deploy left to spend on it.
 
-  *Unmeasured:* the same question on a per-command authorization REPLY, on the three platforms
-  that send one. The lab authorizer returns no attributes on that path (`Lab.Command` in
-  `internal/daemon/author/lab.go`) and the `lab:` config block has no key for them, so there is
-  no reply to put a bad attribute in; `author.Handler` already copies a decision's attributes
-  onto the response for commands and sessions alike, so this is a missing configuration key
-  rather than a protocol limit. Also unmeasured: whether IOS-XE's SSH condition is the vty
-  pool, how long it lasts under load, and every non-SSH transport on every platform.
+  *Unmeasured:* whether IOS-XE's SSH condition is the vty pool and how long it lasts under
+  load; every non-SSH transport on every platform; and, on the per-command half, any attribute
+  a device DOES read on that path — all six variants above carry something no vendor reads
+  there, so nothing here says what a per-command reply can usefully deliver, only what it costs
+  to get one wrong. The Junos notes for this row still carry a paragraph saying the per-command
+  question cannot be asked because the config key does not exist; the key exists as of
+  2026-09-22 and those two notes regenerate on the next Junos run, which this row did not spend
+  a deploy on because the answer there is `n/a` either way.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
