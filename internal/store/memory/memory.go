@@ -165,6 +165,13 @@ func (s *Store) RedeemAndReceipt(_ context.Context, k store.TokenKey, tokenID st
 			continue
 		}
 		s.tokens[k] = append(set[:i:i], set[i+1:]...)
+		// The append clips the capacity to i, so when the spent token is the
+		// last member nothing reallocates and its entry — Secret pointer
+		// included — stays reachable from the allocation the map still holds.
+		// clearTail zeroes the entries past i in the old array and never the
+		// secret bytes they point at, so the tokens copied down into the new
+		// array in the reallocating case keep their secrets (clearTail).
+		clearTail(set, i)
 		if len(s.tokens[k]) == 0 {
 			delete(s.tokens, k)
 		}

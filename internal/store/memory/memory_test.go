@@ -289,8 +289,12 @@ func TestReceiptRetainedPastItsSlidingBound(t *testing.T) {
 	if err := s.ExtendReceipt(ctx, rk, now.Add(10*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.GetReceipt(ctx, rk); !got.IdleExpiresAt.Equal(now.Add(10*time.Minute)) || !got.FirstRedeemedAt.Equal(time.Unix(1000, 0)) {
-		t.Fatalf("extend moved the anchor or missed the bound: %+v", got)
+	// Both anchors, not just one: sliding RetainUntil on every re-presentation
+	// would let a spent token's receipt answer replays indefinitely, which is
+	// the unbounded window the three timestamps exist to remove.
+	if got, _ := s.GetReceipt(ctx, rk); !got.IdleExpiresAt.Equal(now.Add(10*time.Minute)) ||
+		!got.FirstRedeemedAt.Equal(time.Unix(1000, 0)) || !got.RetainUntil.Equal(time.Unix(1000, 0).Add(time.Hour)) {
+		t.Fatalf("extend moved an anchor or missed the bound: %+v", got)
 	}
 	now = now.Add(2 * time.Hour) // past retention
 	if _, err := s.GetReceipt(ctx, rk); !errors.Is(err, store.ErrNotFound) {
@@ -340,7 +344,14 @@ func TestTouchContextExtendsWithoutClobbering(t *testing.T) {
 	s := New(func() time.Time { return now })
 	ctx := context.Background()
 	k := store.ContextKey{NAS: "n", Username: "u"}
-	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", LastTouchedAt: now}, time.Minute)
+	// The seeded stamp is stale on purpose: the write is an extension too, so
+	// PutContext stamps the clock rather than storing what the caller passed.
+	// A zero or stale value here is what makes Task 10's half-TTL rule extend
+	// on every command, which is the store write that rule exists to avoid.
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", LastTouchedAt: time.Unix(1, 0)}, time.Minute)
+	if got, _ := s.GetContext(ctx, k); !got.LastTouchedAt.Equal(now) {
+		t.Fatalf("PutContext must stamp LastTouchedAt, or Task 10's half-TTL rule reads a stale clock: %+v", got)
+	}
 
 	// A revocation lands after the reader took its copy.
 	c, _ := s.GetContext(ctx, k)
@@ -365,5 +376,49 @@ func TestTouchContextExtendsWithoutClobbering(t *testing.T) {
 	now = now.Add(2 * time.Minute)
 	if err := s.TouchContext(ctx, k, time.Minute); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("touching an expired context must say so, not resurrect it: %v", err)
+	}
+}
+
+// A redeemed token's Secret must not survive in the backing array. The removal
+// in RedeemAndReceipt clips the capacity to the spent token's index, so when it
+// is the last member of the set nothing reallocates and its entry stays
+// reachable from the very allocation the map still holds -- invisible through
+// s.tokens[k], whose cap is clipped, but alive for as long as the key is.
+// TestCompactionZeroesTheTail cannot see this one for exactly that reason.
+func TestRedeemZeroesTheSpentToken(t *testing.T) {
+	now := time.Now()
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "n", Username: "u"}
+	// The spent token is last, so the removal takes the non-reallocating path.
+	s.PutToken(ctx, k, store.Token{ID: "keep", Secret: []byte("p49_keeps"), ExpiresAt: now.Add(time.Hour)})
+	s.PutToken(ctx, k, store.Token{ID: "spend", Secret: []byte("p49_spent"), ExpiresAt: now.Add(time.Hour)})
+
+	// Taken before the redemption, this aliases the same array the map holds,
+	// over its full capacity rather than the clipped length left behind.
+	s.mu.Lock()
+	arr := s.tokens[k][:cap(s.tokens[k])]
+	s.mu.Unlock()
+
+	rk := store.ReceiptKey{NAS: "n", Username: "u"}
+	r := store.Receipt{FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Hour)}
+	if err := s.RedeemAndReceipt(ctx, k, "spend", rw(rk, r, "user:u")); err != nil {
+		t.Fatal(err)
+	}
+
+	s.mu.Lock()
+	for i, tok := range arr {
+		if tok.ID == "spend" || bytes.Equal(tok.Secret, []byte("p49_spent")) {
+			s.mu.Unlock()
+			t.Fatalf("backing array entry %d still holds the spent token: id=%q secret=%q", i, tok.ID, tok.Secret)
+		}
+	}
+	s.mu.Unlock()
+
+	// And the survivor came through the zeroing intact: clearTail clears the
+	// entries, never the secret bytes a surviving token still points at.
+	c, _ := s.Candidates(ctx, k)
+	if len(c) != 1 || c[0].ID != "keep" || !bytes.Equal(c[0].Secret, []byte("p49_keeps")) {
+		t.Fatalf("the surviving token was damaged: %+v", c)
 	}
 }
