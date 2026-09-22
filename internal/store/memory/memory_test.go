@@ -622,6 +622,65 @@ func TestExtendingAContextCarriesItsIndexEntries(t *testing.T) {
 	}
 }
 
+// restamp's two guards are the whole of what an extension may not do to the
+// index (memory.go), and neither is reachable down the everyday path: a ref
+// that was fully unindexed is stopped by indexedAs before restamp is asked at
+// all, which is what TestExtendingAContextCarriesItsIndexEntries exercises. So
+// the guards need the two states that do reach them, or a future reader
+// simplifying restamp has nothing to stop them. Both are about revocation's
+// reach, which is what indexedAs was added for.
+func TestExtendingNeverShortensOrCreatesAnIndexEntry(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+
+	// Never shortens, matching PutBlob. The index was given an hour of reach;
+	// the context lives and is extended in minutes. An extension that wrote its
+	// own shorter expiry over the entry would pull revocation's reach in to the
+	// context's TTL, and a revocation of alice a quarter of an hour later would
+	// report zero contexts touched on a session that is still authorizing.
+	kA := store.ContextKey{NAS: "n1", Username: "u"}
+	refA := store.ContextRef{NAS: "n1", Username: "u"}
+	s.PutContext(ctx, kA, store.Context{CtxID: "a", Username: "u"}, time.Minute)
+	if err := s.IndexContext(ctx, "user:alice", "", "", refA, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchContext(ctx, kA, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(15 * time.Minute)
+	if refs, _ := s.ContextsByPrincipal(ctx, "user:alice"); len(refs) != 1 || refs[0] != refA {
+		t.Fatalf("the extension shortened the index entry to the context's TTL: %v", refs)
+	}
+
+	// Never creates. bob holds two devices; the short entry expires and is
+	// dropped on the next read, leaving the principal's set alive under the
+	// other one — so restamp is asked for a key it still has and a ref it no
+	// longer holds, which is the state the indexedAs check cannot catch. An
+	// extension that recreated the entry would put a swept ref back in front of
+	// revocation, naming a context the index was done with.
+	kShort := store.ContextKey{NAS: "n2", Username: "u"}
+	refShort := store.ContextRef{NAS: "n2", Username: "u"}
+	refLong := store.ContextRef{NAS: "n3", Username: "u"}
+	s.PutContext(ctx, kShort, store.Context{CtxID: "s", Username: "u"}, time.Hour)
+	if err := s.IndexContext(ctx, "user:bob", "", "", refShort, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "user:bob", "", "", refLong, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute)
+	if refs, _ := s.ContextsByPrincipal(ctx, "user:bob"); len(refs) != 1 || refs[0] != refLong {
+		t.Fatalf("the short entry should have aged out, leaving the long one: %v", refs)
+	}
+	if err := s.TouchContext(ctx, kShort, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if refs, _ := s.ContextsByPrincipal(ctx, "user:bob"); len(refs) != 1 || refs[0] != refLong {
+		t.Fatalf("the extension resurrected a swept index entry: %v", refs)
+	}
+}
+
 // A rotated sid moves the reverse record with it, or the next extension
 // re-stamps the entry the rotation removed and lets the live one expire
 // underneath it.
