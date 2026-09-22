@@ -399,9 +399,12 @@ ctx:(nas, username)
   session_expires   1757070295           auth_time + max_session_age
   refreshed_at      1757041495           last broker refresh (5.1.3); the staleness clock
   revoked_at        —                    set by revocation (5.6); denies until idle TTL reclaims
-  session_discriminator  14656           the platform's own per-session value, from exec
-                                         accounting, once observed (5.8). Not task_id: that
-                                         restarts at 1 per session on both Junos images
+  session_discriminators                 the platform's own per-session values, hashed, from
+    [sha256(31048)[:16], …]              exec accounting (5.8). A SET, capped at 8: one
+                                         context covers every concurrent session of one user
+                                         (§13, decision 15). Not task_id: that restarts at 1
+                                         per session on both Junos images, which sent
+                                         session_pid 31048 and 31050 for two of them
                                          (§15, L17)
   accounting_state  open | closing       advisory (5.8); never authorizes or denies
 ```
@@ -1543,21 +1546,47 @@ Exec accounting annotates context and never deletes it (§5.6). The context is f
 `(nas, username)` — the accounting record's own `user`, not its `port`, which is part of no
 key (§5.6):
 
+The context holds a **set** of session discriminators, not one, because under the
+`(nas, username)` key (§13, decision 15) one context covers every concurrent session of one
+operator on one device — measured, and recorded there as the accepted cost.
+
 ```
 exec START for (nas, username):
-    ctx has no session discriminator      →  bind it (our own session's START)
-    discriminator set and equal           →  our own session again; clear accounting_state
-    discriminator set and different       →  annotate foreign, alert
+    always  →  add this session's discriminator to the set; clear accounting_state
+               (a START is never foreign: port49 is watching this session begin)
 
-exec STOP for (nas, username):
-    discriminator set    →  accounting_state = closing, only on a discriminator match
-    discriminator unset  →  accounting_state = closing, on the username alone
+exec STOP or WATCHDOG for (nas, username):
+    set non-empty, discriminator in it      →  accounting_state = closing
+    set non-empty, discriminator not in it  →  annotate foreign, alert
+    set empty, or no discriminator sent     →  accounting_state = closing, on the username alone
 ```
 
-The middle START branch used to read "otherwise → foreign". That made a device's retransmission
-of an exec START, and any second START carrying the discriminator already bound, indistinguishable
-from a login port49 never authenticated — the one condition `foreign` exists to make alertable.
-Equality is the cheap discrimination, so it is made.
+This replaces a single-discriminator model in which a START bound the first value it saw and
+every later START was `foreign`. Under that model an operator opening a second window on one
+device pages somebody, which is the alert burying its own signal. **A START always adds**, so
+the question `foreign` now asks is the one worth asking: a record arrived for a session whose
+START port49 never saw, on a device where port49 *did* see other sessions of this user begin.
+That is the local fallback, the console login and the name collision, and nothing else.
+
+The set is **capped at 8**, oldest evicted first. Nine concurrent sessions of one user on one
+device therefore push the first session's discriminator out, and that session's STOP is then
+attributed `foreign` — a false alert, bounded and stated rather than discovered. Eight is well
+above the ten-concurrent-login measurement §13 decision 15 records as the accepted cost of the
+key, and the alternative — refusing to add past the cap — produces the same false alert and
+loses the *newest* session instead of the oldest, which is the one still running.
+
+**The set stores a hash, not the value.** Each entry is `sha256(discriminator)` truncated to
+its first 16 bytes and hex-encoded. Equality is all a binding needs, and it is all the set is
+ever asked for: nothing reads a discriminator back out, renders it, or joins on it — the
+accounting record carries `task_id` in the clear for reconciliation (§5.7), as it always has.
+Hashing is what lets the field be stored in the clear alongside the context's sealed identity
+fields, and that matters here: on NX-OS the discriminator is `task_id`, whose measured value is
+`172.100.100.1@pts/3` (`tests/lab/results/L1-cisco_nxos.md`), carrying the *client's source
+address*. `rem_addr` is sealed so that a store dump cannot enumerate who was logged into which
+device; storing that same address in the clear under another name would have undone it. A
+16-byte truncated hash of a device-local identifier carries neither an identity nor a
+credential, so it does not need the sealing layer — and not needing it is what makes a narrow,
+under-lock setter possible at all (below).
 
 **What the discriminator is, is per platform, and `task_id` is not it.** This section used to
 say `task_id` pairs a START with its STOP because "context is already keyed on `(nas, port)`,
@@ -1571,13 +1600,25 @@ sessions on both images (`31048`/`31050` on vSRX, `17244`/`17246` on vJunos-rout
 stable from a session's START to its STOP; `task_id` on EOS (`27`/`28`), NX-OS
 (`172.100.100.1@pts/3` and `@pts/4`) and IOS-XE (`4033`/`4034`), each distinct across two
 concurrent sessions and stable start to stop (`tests/lab/results/L1-arista_eos.md`,
-`L1-cisco_nxos.md`, `L1-cisco_iosxe.md`). This section previously asserted that Junos
-`session_pid` is "stable across the device's immediate reuse of an accounting `port`"; nothing
-in this lab measured that, and the claim is withdrawn. Also unmeasured: whether `session_pid`
-survives a reboot or a pid wrap, and the discriminator on every non-SSH transport. All three
-are tolerated rather than relied on — a discriminator that does not match leaves the context
-unannotated, which is the unset branch above. Choosing per platform is adapter work and is
-specified with the adapters, not here.
+`L1-cisco_nxos.md`, `L1-cisco_iosxe.md`).
+
+**Junos `session_pid` also survives the device's immediate reuse of an accounting `port`, and
+that is measured.** One millisecond after one session's logout on `port='0'`, the next login on
+`port='0'` carried a different `session_pid` — `14656` → `14695` on vJunos-router, with vSRX
+showing the same boundary within one millisecond
+(`docs/design/2026-09-20-login-context-key-options.md:108-111`, parsed from the committed
+`tests/lab/evidence/L1-juniper_vjunos-router.pcap`). This is the measurement that makes the
+discriminator worth binding at all: `port` is reused immediately and `session_pid` is not, so a
+STOP arriving late for a closed session cannot be confused with the session that took its line.
+The evidence is a design memo's parse of a committed capture rather than a
+`tests/lab/results/` note; promoting it to a lab-register row is CLAUDE.md rule 3 work and has
+not been done, so it is cited here as what it is.
+
+Still unmeasured: whether `session_pid` survives a reboot or a pid wrap, and the discriminator
+on every non-SSH transport. Both are tolerated rather than relied on — a discriminator that is
+not in the set leaves a STOP `foreign` and a START simply adds, so the failure is a false alert
+and never a wrong attribution. Choosing per platform is adapter work and is specified with the
+adapters, not here.
 
 **Which record is the exec record is also per platform.** On EOS, NX-OS and IOS-XE the exec
 START and STOP carry no `cmd` argument at all, so "no command" identifies them. On both Junos
@@ -1587,37 +1628,75 @@ typed command (`tests/lab/results/L6-juniper_vsrx.md`, `L6-juniper_vjunos-router
 the only exec form annotates nothing at all on Junos. Per-command records never annotate, on
 any platform.
 
-The unset branch covers `stop-only` accounting and a lost START. `closing` is reported and
-nothing else — it does not stop refresh (§5.1.3), because a STOP from a previous session on the
-same line under the same username would otherwise mark a live session closing and let the
-staleness ceiling deny it later, which is the demotion's own defect in slow motion. Any later
-authorization or START on the context clears it. The idle TTL reclaims the state. A record
+The empty-set branch covers `stop-only` accounting and a lost START, and it is deliberately not
+`foreign`: a deployment that sends no STARTs at all must not page on every STOP. `closing` is
+reported and nothing else — it does not stop refresh (§5.1.3), because a STOP from a previous
+session on the same line under the same username would otherwise mark a live session closing and
+let the staleness ceiling deny it later, which is the demotion's own defect in slow motion. Any
+later authorization or START on the context clears it. The idle TTL reclaims the state. A record
 that matches neither is logged as unattributable to that context and left alone.
 
-A second exec START on a context already bound to another session — same `user`, a different
-session discriminator — is a **session port49 did not authenticate** and is attributed
-`foreign`. That is precisely the condition §5.6 requires a warning for, and it is high-signal:
-under one name port49 does authenticate, a login arrived that port49 never saw, so either
-port49 was unreachable and the device fell back locally, or someone reached a console, or a
-device-local account shares a principal's name.
+With more than one session bound, `closing` means **"at least one session of this user closed"**
+and not "this context is closing". That is all an advisory field nothing authorizes on needs to
+mean. A STOP does **not** remove its discriminator from the set: that would cost a second store
+write to narrow a field no decision reads, and it would turn a device's duplicate STOP into a
+`foreign` alert.
 
-This used to read "an exec START whose `user` does not match the bound username". Under the
-`(nas, username)` key (§13, decision 15) that condition is unreachable: a START naming another
-user addresses another key and finds no context there, so it is `unattributed`, which is the
-§5.8 signal it belongs in. The discriminator is what carries the distinction now.
+An exec STOP or WATCHDOG whose discriminator is **not in a non-empty set** is a **session port49
+did not authenticate** and is attributed `foreign`. That is precisely the condition §5.6 requires
+a warning for, and it is high-signal: under one name port49 does authenticate, on a device where
+port49 watched this user's other sessions begin, a record arrived for a session whose START it
+never saw — so either port49 was unreachable and the device fell back locally, or someone reached
+a console, or a device-local account shares a principal's name.
+
+Two earlier readings of this paragraph are superseded. It first said "an exec START whose `user`
+does not match the bound username", which under the `(nas, username)` key (§13, decision 15) is
+unreachable: a START naming another user addresses another key, finds no context, and is
+`unattributed`. It then said a second exec START carrying a different discriminator — which made
+an operator's second window an alert. Neither is what the signal is worth firing on.
+
+**Accounting does not extend the idle TTL.** The annotation writes the discriminator set and
+`accounting_state` and touches neither the expiry nor `last_touched_at`, for the reason
+`set_privilege` does not either (§5.6; the half-TTL extension is authorization's, Task 10): a
+device that only ever sends accounting must not be able to hold a context open forever, and a
+STOP — a record saying a session *ended* — keeping that session's context alive is the plainest
+case of it. An operator working is extending the TTL through authorization; an operator who has
+stopped working should let the idle TTL reclaim.
 
 A record whose `user` is one the platform's adapter declares a **system user** — a device-local
 account the platform's own machinery writes accounting under, rather than a logged-in operator —
 is attributed `system` rather than `unattributed`: it is the device acting on its own behalf, not
 a session port49 failed to authenticate, and counting it as either buries the signal both exist
-for. The system-user list is per platform and is adapter data (§8). A platform adapter (plan 5)
-**MAY** name system users; **the list ships empty for every adapter**, and a platform that
-declares none produces no `system` records. **No device in this lab has been measured writing
-such a record.** The Junos measurement went the other way: under this lab's accounting event
-list, every record named the logged-in operator and none named `root` (§15, L17). Two production
-observations are on record as **unmeasured in this lab** — a Junos RPC-driven `show` running as
-`root`, and an NX-OS `admin` record carrying `task_id=vsh.bin.$port` after a cancelled `sudo` —
-and a `tests/lab/results/` note reproducing either is what would fill a list.
+for. The system-user list is per platform and is adapter data (§8). A platform adapter **MAY**
+name system users, and a platform that declares none produces no `system` records.
+
+**`juniper_junos` ships `root`, and that is measured.** The committed capture behind
+`tests/lab/results/L1-juniper_vsrx.md` — `tests/lab/evidence/L1-juniper_vsrx.pcap`, decodable
+with the published lab key — holds three accounting records under `user=root`, `port=non-tty`,
+carrying their own `session_pid = 28771`:
+
+```
+ACCT flags=start user="root" port="non-tty" args=[task_id=1 service=shell session_pid = 28771 cmd=login]
+ACCT flags=stop  user="root" port="non-tty" args=[task_id=2 service=shell session_pid = 28771 cmd=set alarm yellow alarm-id 0small-msg <cr>]
+ACCT flags=stop  user="root" port="non-tty" args=[task_id=1 service=shell session_pid = 28771 elapsed_time=0 cmd=logout]
+```
+
+**There is no authentication and no authorization exchange for `root` anywhere in that file** —
+`root` appears in accounting and nowhere else — and the run logged in only as `alice01`,
+`alice02` and `alice03`. The command is vSRX's own alarm machinery. That is the definition above,
+measured, on vSRX 21.4R3.15: the device acting on its own behalf, under a device-local account,
+for a session port49 was never asked to authenticate. Without the entry those three records are
+`unattributed`, and a stock vSRX with nothing wrong reports sessions port49 did not authenticate
+— which is exactly the signal-burying `system` exists to prevent.
+
+**Every other platform's list ships empty**, and vJunos-router is among them: the same decode of
+`tests/lab/evidence/L1-juniper_vjunos-router.pcap` shows no `root` records at all, so the
+behaviour is image-specific and unmeasured there. L17's narrower negative stands as written — under
+*that* run's accounting event list, with `enhanced-accounting` committed, every record named the
+logged-in operator (§15, L17) — and does not contradict this: it measured a different
+configuration on a different day. One production observation remains **unmeasured in this lab**,
+an NX-OS `admin` record carrying `task_id=vsh.bin.$port` after a cancelled `sudo`, and a
+`tests/lab/results/` note reproducing it is what would add `cisco_nxos`.
 
 `system` is reached only where `unattributed` would otherwise be — after `foreign` has already
 been decided, on a record that resolved to no context at all. A device acting on its own behalf
@@ -2027,7 +2106,7 @@ attribute is complete in four lines:
 | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
 | `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
 | `exec_commands` | the `cmd` values that mark an exec record rather than a per-command one; empty means "the exec record carries no `cmd` at all" (§5.8) | defaults per platform |
-| `system_users` | usernames this platform's own machinery writes accounting under, attributed `system` (§5.8); **ships empty for every adapter** | optional |
+| `system_users` | usernames this platform's own machinery writes accounting under, attributed `system` (§5.8); `juniper_junos` ships `root`, every other adapter ships empty | optional |
 | `port_pattern` | expected `port` shape, used only for drift detection | optional |
 
 ### `session_services`
@@ -3664,19 +3743,25 @@ Beyond those already listed in the design document's §14:
   gates an authorization reply on an accounting write.
 - **Accounting never deletes context**: the late-STOP sequence in §5.6 leaves the new
   occupant's context intact and authorizing.
-- **Session-discriminator binding**: an exec START binds the platform's session discriminator
-  (`session_pid` on Junos, `task_id` elsewhere — §5.8, §15 L17); a STOP bearing a different
-  value does not annotate; a STOP matching it sets `accounting_state: closing`; with no bound
-  discriminator, a username match is required. A per-command record never annotates, and which
-  records are exec records is per platform: `cmd=login` and `cmd=logout` on Junos, no `cmd` at
-  all elsewhere.
+- **Session-discriminator binding**: an exec START always adds the platform's session
+  discriminator (`session_pid` on Junos, `task_id` elsewhere — §5.8, §15 L17) to the context's
+  set, hashed; a second START of the same user adds a second entry rather than replacing the
+  first; a ninth evicts the oldest. A STOP whose discriminator is in the set sets
+  `accounting_state: closing`; with an empty set, a username match is required. A per-command
+  record never annotates, and which records are exec records is per platform: `cmd=login` and
+  `cmd=logout` on Junos, no `cmd` at all elsewhere.
 - **Spaced AV pairs are read**: an argument sent as `session_pid = 31050` binds the same value
-  as `session_pid=31050`, because Junos sends the former (§5.8, §15 L17).
-- **Foreign session detection**: an exec START carrying a discriminator other than the one
-  bound is attributed `foreign`; one carrying the bound value is not.
+  as `session_pid=31050`, because Junos sends the former (§5.8, §15 L17). This holds for every
+  AV pair the accounting reader consumes, not only the discriminator.
+- **Foreign session detection**: an exec STOP or WATCHDOG whose discriminator is not in a
+  non-empty set is attributed `foreign`. A START is never `foreign`, and neither is any record
+  on a context whose set is empty.
+- **Accounting does not extend the idle TTL**: an annotation writes the discriminator set and
+  `accounting_state` and moves neither the expiry nor `last_touched_at`.
 - **System users**: a record naming a username the platform's adapter declares a system user is
-  attributed `system`, never `foreign` and never `unattributed`; every shipped adapter declares
-  none, so nothing today produces one.
+  attributed `system`, never `foreign` and never `unattributed`. `juniper_junos` declares `root`
+  (§5.8, measured in `tests/lab/evidence/L1-juniper_vsrx.pcap`); every other adapter declares
+  none.
 - **Unattributed records** are recorded rather than discarded, carry `ctx_id: null`, and are
   counted separately.
 
