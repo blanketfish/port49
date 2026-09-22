@@ -48,6 +48,37 @@ func TestSealOpenRoundTripAndRotation(t *testing.T) {
 	if _, err := k.Open(sealed); err == nil {
 		t.Fatal("tampered ciphertext opened")
 	}
+
+	// A fresh nonce on every seal, so identical plaintext never produces
+	// identical bytes. Without this assertion a refactor that derived the nonce
+	// from the plaintext — reusing it across every record holding the same
+	// secret, which is the one thing GCM must never do — passes every other
+	// check in this file.
+	n1, err := k.Seal([]byte("same"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n2, err := k.Seal([]byte("same"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(n1, n2) {
+		t.Fatal("identical ciphertext for identical plaintext: the nonce is not fresh")
+	}
+
+	// The key id is the AAD, so a record cannot be re-labelled into another
+	// key's generation. Both ids here carry the same key bytes deliberately:
+	// the bytes cannot be what rejects the re-labelled record, so only the AAD
+	// can, and dropping the AAD argument fails this and nothing else.
+	twin := Keys{Current: Key{ID: "v2", Bytes: k.Current.Bytes}, Previous: &Key{ID: "v1", Bytes: k.Current.Bytes}}
+	relabel, err := Keys{Current: *twin.Previous}.Seal([]byte("v1 payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	relabel[1], relabel[2] = 'v', '2' // "v1" -> "v2", same length, same key bytes
+	if _, err := twin.Open(relabel); err == nil {
+		t.Fatal("a record re-labelled with another key's id opened: the id is not bound as AAD")
+	}
 }
 
 func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
@@ -97,8 +128,10 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	}
 
 	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
-	s.PutContext(ctx, ck, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com", Username: "alice",
-		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 15, SessionDiscriminator: "14656"}, time.Hour)
+	if err := s.PutContext(ctx, ck, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com", Username: "alice",
+		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 15, SessionDiscriminator: "14656"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
 	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.SessionDiscriminator != "" || c.PrivLvl != 15 {
 		t.Fatalf("context plaintext: %+v", c)
 	}
@@ -106,7 +139,9 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 		t.Fatalf("context read: %+v", c)
 	}
 
-	s.PutIdempotency(ctx, "user:alice", "k", store.Idempotency{BodyHash: "b", Response: []byte(`{"login":"p49_x"}`), ExpiresAt: time.Now().Add(time.Minute)})
+	if err := s.PutIdempotency(ctx, "user:alice", "k", store.Idempotency{BodyHash: "b", Response: []byte(`{"login":"p49_x"}`), ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
 	if r, _ := inner.GetIdempotency(ctx, "user:alice", "k"); r.Response != nil || r.BodyHash != "b" {
 		t.Fatalf("idempotency plaintext: %+v", r)
 	}
@@ -114,7 +149,9 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 		t.Fatalf("idempotency read: %+v", r)
 	}
 
-	s.PutBlob(ctx, "sha256:x", []byte("blob"), time.Minute)
+	if err := s.PutBlob(ctx, "sha256:x", []byte("blob"), time.Minute); err != nil {
+		t.Fatal(err)
+	}
 	if b, _ := inner.GetBlob(ctx, "sha256:x"); string(b) != "blob" {
 		t.Fatal("blobs are not encrypted; they hold no identity")
 	}
@@ -130,9 +167,26 @@ func TestTokenUnderRetiredKeyIsDroppedNotReturned(t *testing.T) {
 	retired := Wrap(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, nil)
 	ctx := context.Background()
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
-	retired.PutToken(ctx, k, store.Token{ID: "t", Secret: []byte("s"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)})
-	if got, err := Wrap(inner, keys(), nil).Candidates(ctx, k); err != nil || len(got) != 0 {
+	if _, err := retired.PutToken(ctx, k, store.Token{ID: "t", Secret: []byte("s"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	// Without this the test passes vacuously: a write that failed leaves an
+	// empty inner store, and an empty candidate set is what the assertion
+	// below is looking for.
+	if raw, err := inner.Candidates(ctx, k); err != nil || len(raw) != 1 {
+		t.Fatalf("the inner store must hold the sealed token: %+v %v", raw, err)
+	}
+
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+	got, err := Wrap(inner, keys(), failures).Candidates(ctx, k)
+	if err != nil || len(got) != 0 {
 		t.Fatalf("%+v %v", got, err)
+	}
+	// The dropped token is invisible in the return value — this is the one read
+	// that deliberately does not fail the call — so the counter is the only
+	// signal an operator gets that a key, not an expiry, emptied this set.
+	if n := testutil.ToFloat64(failures.WithLabelValues("token")); n != 1 {
+		t.Fatalf(`crypt_open_failures_total{record="token"} = %v, want 1`, n)
 	}
 }
 
