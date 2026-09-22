@@ -84,13 +84,24 @@ type Subject struct {
 // than the subject's, and an optional idempotency key with the hash of the
 // body it was sent with.
 type Request struct {
-	Subject                  Subject
-	Device, Platform         string
-	BlobHash                 string
-	WithEnable               bool
-	TTL                      time.Duration
+	Subject          Subject
+	Device, Platform string
+	BlobHash         string
+	WithEnable       bool
+	TTL              time.Duration
+	// IdempotencyKey is scoped per device, not per key alone — see idemScope.
+	// A caller may send one key for a whole batch, which is what design §17's
+	// POST /v1/tokens does, and each device still gets its own record.
 	IdempotencyKey, BodyHash string
 }
+
+// idemScope puts the device in the idempotency key. §17's key is one header
+// for a whole batch of devices, and the record this minter writes is one
+// device's Result: unscoped, device two in a batch replays device one's
+// tokens and is handed a credential tagged for the wrong device, which that
+// device refuses on every attempt. The separator matches the store's own
+// convention (internal/store/memory/memory.go, idemKey).
+func idemScope(key, device string) string { return key + "\x00" + device }
 
 // Result is the minted pair and what the caller must tell the operator:
 // Enable is empty unless the subject's mechanism is `token`, and Username is
@@ -128,15 +139,32 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	if !canonicalUsername(r.Subject.Username) {
 		return Result{}, ErrUsernameNotCanonical
 	}
+	// idemErr names what a lost idempotency record cost, carried onto the mint
+	// record that is emitted anyway. It is Record.IndexError's idiom: the
+	// failure does not fail the mint, so the only place it can be said is the
+	// record for the mint that lost it.
+	var idemErr string
 	if r.IdempotencyKey != "" {
-		if rec, err := m.store.GetIdempotency(ctx, r.Subject.Principal, r.IdempotencyKey); err == nil {
+		rec, err := m.store.GetIdempotency(ctx, r.Subject.Principal, idemScope(r.IdempotencyKey, r.Device))
+		switch {
+		case err == nil:
 			if rec.BodyHash != r.BodyHash {
 				return Result{}, ErrIdempotencyConflict
 			}
 			var res Result
-			if err := json.Unmarshal(rec.Response, &res); err == nil {
+			if uerr := json.Unmarshal(rec.Response, &res); uerr == nil {
 				return res, nil
 			}
+			// A record that will not decode is a mint that cannot be replayed.
+			// Fall through and mint — the caller gets working tokens — but the
+			// record must say the replay was abandoned, or this is silent.
+			idemErr = "idempotency record did not decode; minted again rather than replayed"
+		case !errors.Is(err, store.ErrNotFound):
+			// Not a miss: the store failed. Minting here is the one thing §17
+			// forbids, because the caller cannot tell a retry from a first try
+			// and a retried batch burns a pair per device it never learns
+			// about. The cap would eventually fire and blame the client.
+			return Result{}, fmt.Errorf("token: reading the idempotency record: %w", err)
 		}
 	}
 
@@ -152,6 +180,9 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	if len(cands) >= m.cap {
 		// The cap refuses the mint, never the redemption: a runaway client is
 		// told to stop while every token already issued stays usable (design §8).
+		// The check is per mint, not per token, so a pair mint from cap-1 lands
+		// cap+1. That is the bound, not a ratchet — the next mint is refused —
+		// and §8 wants a backstop, not an exact ceiling.
 		return Result{}, &ErrTooManyOutstanding{Device: r.Device, Username: r.Subject.Username, Count: len(cands), Cap: m.cap}
 	}
 
@@ -192,14 +223,20 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 
 	if r.IdempotencyKey != "" {
 		body, _ := json.Marshal(res)
-		_ = m.store.PutIdempotency(ctx, r.Subject.Principal, r.IdempotencyKey,
-			store.Idempotency{BodyHash: r.BodyHash, Response: body, ExpiresAt: expires})
+		// The tokens are minted and about to be returned, so this cannot become
+		// a refusal. It is the moment the caller's next retry stops being safe,
+		// and the only moment anything knows.
+		if perr := m.store.PutIdempotency(ctx, r.Subject.Principal, idemScope(r.IdempotencyKey, r.Device),
+			store.Idempotency{BodyHash: r.BodyHash, Response: body, ExpiresAt: expires}); perr != nil {
+			idemErr = "idempotency record not written; a retry on this key will mint again"
+		}
 	}
 
 	m.log.Emit(decision.Record{TS: m.now(), Event: decision.EventMint, Verdict: decision.VerdictPermit,
 		Reason: decision.GrantsMatched, Principal: r.Subject.Principal,
-		Auth:   &decision.Auth{Method: r.Subject.Credential.Method},
-		Device: &decision.Device{Name: r.Device, Platform: r.Platform},
-		Mint:   &decision.Mint{TokenSHA256: hashes, TTLSeconds: int(ttl.Seconds()), BlobHash: r.BlobHash}})
+		Auth:       &decision.Auth{Method: r.Subject.Credential.Method},
+		Device:     &decision.Device{Name: r.Device, Platform: r.Platform},
+		Mint:       &decision.Mint{TokenSHA256: hashes, TTLSeconds: int(ttl.Seconds()), BlobHash: r.BlobHash},
+		IndexError: idemErr})
 	return res, nil
 }

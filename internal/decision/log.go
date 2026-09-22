@@ -36,8 +36,16 @@ type Record struct {
 }
 
 type Auth struct {
-	Method           string `json:"method"`
-	CredentialSHA256 string `json:"credential_sha256"`
+	Method string `json:"method"`
+	// CredentialSHA256 is omitempty because a mint record has no value for it.
+	// §5.7 makes it "the same hash the receipt binds" — the hash of what was
+	// presented on the wire — and says a mint record carries token_sha256 per
+	// minted token *instead*, since no context and no presentation exist yet.
+	// The minter is handed store.Credential, which is identity and not a
+	// secret, so any hash it could compute would join to nothing. A blank join
+	// key is worse than an absent one: it is present on every mint record in
+	// the fleet and therefore joins everything to everything.
+	CredentialSHA256 string `json:"credential_sha256,omitempty"`
 }
 
 type Device struct {

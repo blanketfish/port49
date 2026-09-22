@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -61,11 +62,23 @@ func TestMintPairAndClamp(t *testing.T) {
 	}
 	c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"})
 	if len(c) != 2 || c[0].Kind != store.KindLogin || c[1].Kind != store.KindEnable ||
-		c[0].Principal != "user:alice@example.com" || c[0].MaxSessionAge != 8*time.Hour || c[0].Credential.Sid != "s1" {
+		c[0].Principal != "user:alice@example.com" || c[0].MaxSessionAge != 8*time.Hour ||
+		c[0].Credential.Sid != "s1" ||
+		// Enable and MaxPrivilege ride the token into the login context
+		// (store.Context.Enable: "copied from the token") and are what §7
+		// escalation and every authorization read. Dropped, the operator
+		// redeems a good token and then cannot enable, or is denied at every
+		// command, with the token path looking healthy throughout. BlobHash is
+		// the policy version the context is explained against.
+		c[0].Enable != "token" || c[0].MaxPrivilege != 15 || c[0].BlobHash != "sha256:b" {
 		t.Fatalf("%+v", c)
 	}
 	if strings.Contains(log.String(), res.Login) || strings.Contains(log.String(), res.Enable) ||
-		!strings.Contains(log.String(), `"event":"mint"`) || !strings.Contains(log.String(), "token_sha256") {
+		!strings.Contains(log.String(), `"event":"mint"`) || !strings.Contains(log.String(), "token_sha256") ||
+		// A mint record has no credential hash to carry (§5.7: it carries
+		// token_sha256 instead). Blank, the field is present on every mint
+		// record in the fleet and joins everything to everything.
+		strings.Contains(log.String(), "credential_sha256") {
 		t.Fatalf("log: %s", log.String())
 	}
 }
@@ -116,6 +129,162 @@ func TestIdempotentReplay(t *testing.T) {
 	req.BodyHash = "h2"
 	if _, err := m.Mint(context.Background(), req); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("%v", err)
+	}
+}
+
+// §17 sends one Idempotency-Key for a batch of devices, so the record must be
+// scoped by device: unscoped, device two finds device one's record, the body
+// hashes match, and it replays — handing the operator a valid 30-character
+// token tagged for a device that is not the one they asked for.
+func TestOneIdempotencyKeyAcrossDevicesDoesNotCross(t *testing.T) {
+	m, st, _ := minter(t)
+	req := Request{Subject: subject(), TTL: time.Minute, IdempotencyKey: "01J9F4B2QK7X", BodyHash: "body"}
+	req.Device = "core-sw01"
+	a, err := m.Mint(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Device = "leaf-04"
+	b, err := m.Mint(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Login == b.Login || !strings.HasPrefix(b.Login, Tag(TagKey([]byte("k")), "leaf-04")) {
+		t.Fatalf("leaf-04 was handed core-sw01's token: %q %q", a.Login, b.Login)
+	}
+	for _, d := range []string{"core-sw01", "leaf-04"} {
+		if c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: d, Username: "alice"}); len(c) != 1 {
+			t.Fatalf("%s has %d tokens", d, len(c))
+		}
+	}
+	// And the scoping must not cost the replay: the same key on the same
+	// device still replays rather than minting again.
+	req.Device = "core-sw01"
+	again, err := m.Mint(context.Background(), req)
+	if err != nil || !sameResult(a, again) {
+		t.Fatalf("same key, same device must replay: %+v %+v %v", a, again, err)
+	}
+}
+
+// failingStore is memory with one idempotency method made to fail, so the
+// difference between a miss and a store that is down can be tested. Every
+// other method is the embedded store's.
+type failingStore struct {
+	*memory.Store
+	getErr, putErr error
+}
+
+func (f *failingStore) GetIdempotency(ctx context.Context, principal, key string) (store.Idempotency, error) {
+	if f.getErr != nil {
+		return store.Idempotency{}, f.getErr
+	}
+	return f.Store.GetIdempotency(ctx, principal, key)
+}
+
+func (f *failingStore) PutIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) error {
+	if f.putErr != nil {
+		return f.putErr
+	}
+	return f.Store.PutIdempotency(ctx, principal, key, rec)
+}
+
+func failingMinter(t *testing.T, get, put error) (*Minter, *failingStore, *bytes.Buffer) {
+	t.Helper()
+	st := &failingStore{Store: memory.New(time.Now), getErr: get, putErr: put}
+	log := &bytes.Buffer{}
+	return NewMinter(st, decision.NewJSONLines(log), rand.Reader, TagKey([]byte("k")), time.Now, 3), st, log
+}
+
+// A store that fails is not a store that missed. §17 exists so a batch mint
+// that times out mid-flight can be retried safely; if a timed-out
+// GetIdempotency reads as "no record", every retry mints again and the
+// operator is eventually told by the cap that their client is looping, while
+// the real fault is the store.
+func TestIdempotencyStoreFailureIsNotAMiss(t *testing.T) {
+	m, st, log := failingMinter(t, errors.New("dial tcp 10.0.0.9:6379: i/o timeout"), nil)
+	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"}
+	_, err := m.Mint(context.Background(), req)
+	if err == nil || errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a failing store must be returned, not swallowed: %v", err)
+	}
+	if c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(c) != 0 {
+		t.Fatalf("a store failure minted %d tokens the caller cannot know about", len(c))
+	}
+	if log.Len() != 0 {
+		t.Fatalf("nothing was minted, so no mint record: %s", log.String())
+	}
+	// The miss itself still mints: ErrNotFound is the normal path.
+	st.getErr = nil
+	if _, err := m.Mint(context.Background(), req); err != nil {
+		t.Fatalf("a miss must mint: %v", err)
+	}
+}
+
+// mintRecord decodes the single record the minter emitted.
+func mintRecord(t *testing.T, log *bytes.Buffer) decision.Record {
+	t.Helper()
+	lines := strings.Split(strings.TrimSpace(log.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("want one record, got %d: %s", len(lines), log.String())
+	}
+	var rec decision.Record
+	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
+		t.Fatalf("decoding the mint record: %v", err)
+	}
+	return rec
+}
+
+// A lost idempotency record cannot fail the mint — the tokens exist and are
+// about to be returned — so the record for that mint is the only place it can
+// be said. Without it the operator who retried a timed-out call holds two
+// pairs for one device, the first unspent and recoverable in the store for its
+// whole TTL, and the log shows two mints with no hint the second was meant to
+// be a replay.
+func TestUnwrittenIdempotencyRecordIsNamedOnTheMintRecord(t *testing.T) {
+	m, _, log := failingMinter(t, nil, errors.New("write: no space left on device"))
+	res, err := m.Mint(context.Background(), Request{Subject: subject(), Device: "leaf-01",
+		TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"})
+	if err != nil || len(res.Login) != Len {
+		t.Fatalf("the tokens are already minted; the write failure must not refuse them: %+v %v", res, err)
+	}
+	rec := mintRecord(t, log)
+	if !strings.Contains(rec.IndexError, "mint again") {
+		t.Fatalf("index_error does not name what the failure cost: %q", rec.IndexError)
+	}
+	if strings.Contains(log.String(), res.Login) {
+		t.Fatalf("log: %s", log.String())
+	}
+}
+
+// A record that will not decode is a replay that cannot happen. The caller
+// gets working tokens, and the mint record says the replay was abandoned.
+func TestUndecodableIdempotencyRecordIsNamedOnTheMintRecord(t *testing.T) {
+	m, st, log := failingMinter(t, nil, nil)
+	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"}
+	if err := st.Store.PutIdempotency(context.Background(), req.Subject.Principal,
+		idemScope(req.IdempotencyKey, req.Device),
+		store.Idempotency{BodyHash: "h1", Response: []byte("{not json"), ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Mint(context.Background(), req)
+	if err != nil || len(res.Login) != Len {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if rec := mintRecord(t, log); !strings.Contains(rec.IndexError, "did not decode") {
+		t.Fatalf("index_error does not say the replay was abandoned: %q", rec.IndexError)
+	}
+}
+
+// A mint that loses nothing says nothing: index_error is omitempty, so it must
+// be absent rather than present and blank on the ordinary path.
+func TestAHealthyMintCarriesNoIndexError(t *testing.T) {
+	m, _, log := minter(t)
+	if _, err := m.Mint(context.Background(), Request{Subject: subject(), Device: "leaf-01",
+		TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(log.String(), "index_error") {
+		t.Fatalf("log: %s", log.String())
 	}
 }
 
