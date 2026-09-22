@@ -5,8 +5,8 @@ the standing brief for each plan: what it builds, which spec sections it impleme
 earlier plans hand it, what it must leave for later, and which lab register entries close in
 it. When writing plan N, start here, then read the cited sections, then the previous plan.
 
-Status: **1 merged 2026-09-21** (PR #2); **2 written but not executable** until rewritten for
-the `(nas, username)` key (see its entry); 3–12 not yet. Plan 3 waits for the lab work in PR #3.
+Status: **1 merged 2026-09-21** (PR #2); **2 rewritten 2026-09-22** against the `(nas, username)`
+key and ready to execute; 3–12 not yet. Plan 3 waits for the lab work in PR #3.
 
 ---
 
@@ -16,12 +16,15 @@ RFC 8907 wire, key trial, admission from a file inventory, per-source limits, in
 store, authentication/authorization/accounting handlers, decision log, config, `port49d`
 binary, containerlab harness. Closes L1 (SSH transport only), L2, L5, L6, L8, L10.
 
-## Plan 2 — Token model (§19 step 2) — `2026-09-06-02-token-model.md`
+## Plan 2 — Token model (§19 step 2) — `2026-09-22-02-token-model.md`
 
-**Not executable as written.** It assumes the `(nas, port)` login-context key, which the lab
-showed breaks every measured vendor; the key is now `(nas, username)` (spec §13 decision 15).
-Rewrite it against `2026-09-20-plan-2-revision-notes.md` first; that file also carries the
-owner's 2026-09-21 rulings (`contexts_by_principal` stays unencrypted, and why).
+**Rewritten 2026-09-22 and ready to execute.** The 2026-09-06 draft assumed the `(nas, port)`
+login-context key, which the lab showed breaks every measured vendor; the key is now
+`(nas, username)` (spec §13 decision 15). The rewrite is against the real tree on
+`feature/lab-l4-fallthrough` and carries every ruling in
+`2026-09-20-plan-2-revision-notes.md`, the owner's 2026-09-21 ones included
+(`contexts_by_principal` stays unencrypted, and why). Eleven TDD tasks, twelve commits; the
+spec §5.8 edit for `system` attribution is the first of them, because the spec comes first.
 
 **Builds:** the full token semantics on top of plan 1's store interface and handlers.
 
@@ -33,39 +36,51 @@ owner's 2026-09-21 rulings (`contexts_by_principal` stays unencrypted, and why).
 - **Sliding receipt, not a `reusable` flag** (owner, 2026-09-21: "Bob shouldn't need to
   know"). Each re-presentation of the same `(nas, username, credential_sha256)` extends the
   receipt by `receipt_idle_ttl`, up to an absolute `receipt_max_age` from first redemption;
-  a presentation past either is FAIL on the wire and `token_spent` in the log (new §5.7
-  reason, spec table first); revocation deletes the principal's receipts, so receipts are
-  indexed by principal. Defaults proposed 15 min / 2 h (Ansible linear strategy over a large
-  fleet is the sizing case, L15); numbers await the owner. Replaces decision 15's text.
+  a presentation past either is FAIL on the wire and `token_spent` in the log (the §5.7 row
+  landed with decision 15's rewrite on 2026-09-22; the plan adds only the Go constant);
+  revocation deletes the principal's receipts, so receipts are indexed by principal.
+  **Defaults ruled 2026-09-22: 15 min idle, 2 h absolute** (Ansible linear strategy over a
+  large fleet is the sizing case, L15). Decision 15's text is already replaced.
 - **Device-generated accounting under another user** (Junos root RPC in production, NX-OS
   `admin` with `task_id=vsh.bin.$port`) must not trip `foreign_session`: a per-platform rule
-  for system-user and `non-tty` records.
+  attributing them `system`, which needed a spec §5.8 sentence. **Neither observation has a
+  `tests/lab/results/` note in the tree** — the Junos lab measured the opposite under its own
+  accounting config (L17) — so plan 2 builds the rule and ships the system-user list empty;
+  plan 5 fills it from a note.
 - **Refuse non-ASCII usernames at mint**: `Canonical` folds U+0130 onto `i`, so two directory
   names could share one `(nas, username)` context.
 - **Enable tokens**: mint pair with `kind`. No measured platform sends `$enab{level}$` (L3
   closed): vEOS and IOS-XE send the operator's own username with `service=enable`, NX-OS 10.x
   has no enable. The lookup is therefore the ordinary `(nas, username)` context; an enable
   START must update `privilege` in place and keep `ctx_id` (plan 1 replaces it, measured);
-  candidate set filtered to `kind: enable`;
-  `token_kind_mismatch`; `enable: none | auto | token`; `enable: auto` refused at load where
-  `enable_username` is not `principal`; `rem_addr` binding on enable. Spec §7, §5.6.
+  candidate set filtered to `kind: enable`; `token_kind_mismatch`;
+  `enable: none | auto | token`; `rem_addr` binding on enable. `$enab{level}$` becomes an
+  explicit `platforms.<name>.enable_username: enab` option **refused at load** until a
+  `tests/lab/results/` note shows a device sending it, which is also what keeps
+  `enable: auto` inside §5.6's restriction. No `(nas, rem_addr)` index is built, so no new
+  reason code is minted for it. Spec §7, §5.6.
 - **Candidate-set cap** (order of eight) refusing the mint, never the redemption. Design §8.
 - **Full store record set**: `blob`, `contexts_by_principal`, `contexts_by_sid`,
   `contexts_by_cert`, `active_principals`, idempotency record, failure counters; atomic
   remove-and-write-receipt; the race loser reads the receipt and answers PASS. Design §12.
 - **Login context in full**: the §5.1.1 shape (`refreshed_at`, `revoked_at`, `auth_time`,
-  `session_expires`, `task_id`, `accounting_state`), teardown rows 1–7 including 3a
-  (staleness) and the checks in the §5.3 pseudocode (username, revoked, expired, stale,
-  privilege). Accounting annotation: `task_id` binding, `closing`, `foreign_session`. Spec
-  §5.1.1, §5.3, §5.6, §5.8.
+  `session_expires`, `session_discriminator`, `accounting_state`), the teardown rows that
+  still have content — 1, 2, 3, 3a, 6, 7; **row 5 is withdrawn and row 4 has no path without
+  the `(nas, rem_addr)` index** — and the checks in the §5.3 pseudocode (username, revoked,
+  expired, stale, privilege). Accounting annotation binds the **platform's own** session
+  discriminator (`session_pid` on Junos, `task_id` elsewhere — `task_id` restarts at 1 per
+  session on Junos, L1), sets `closing`, and flags `foreign`. Spec §5.1.1, §5.3, §5.6, §5.8.
 - A **mint function** callable in-process (no broker yet) that plan 3's minimal broker wraps.
 - **`context_idle_ttl` is absolute, not idle.** Plan 1 sets it at `PutContext` and never
-  extends it; `GetContext` does not touch it. Spec §5.6 says activity SHOULD extend it, so
-  either the refresh happens here or the key is renamed to say what it does. Plan 2 owns the
-  context shape, so it is named here.
+  extends it; `GetContext` does not touch it. Spec §5.6 says activity SHOULD extend it.
+  **Ruled in the rewrite: it becomes a true idle TTL and keeps its name** — every permitted
+  authorization re-puts the context, `session_expires` stays the absolute clock, and the cost
+  (one store write per authorized command) is named for plan 7 to bound with a real backend.
 
-**Hands to plan 3:** `token.Mint(device, username, kind, ttl, reusable)`, the encrypted store
-records, the context refresh entry points.
+**Hands to plan 3:** `(*token.Minter).Mint(ctx, token.Request) (token.Result, error)` — the
+in-process mint the minimal broker wraps; `reusable` is gone and the kind is chosen by
+`WithEnable` plus the subject's mechanism — the encrypted store records, and
+`session.Manager`'s refresh and revocation entry points.
 **Leaves for later:** the broker API and its authorization (plan 7); blobs' compiled content
 (plan 4, the engine produces them; plan 2 stores opaque bytes by hash).
 **Lab:** none close here; L8 (password length) may need re-checking with the 30-character
