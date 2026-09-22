@@ -82,3 +82,31 @@ func Defaults() map[string][]string {
 	}
 	return out
 }
+
+// EnableUsername is what a platform's enable START carries in the `user`
+// field. Every platform measured carries the operator's own username:
+// vEOS 4.32.2F and Catalyst 8000V 17.13.01a, both with service=enable
+// (tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md), and NX-OS 10.x has
+// no enable exchange at all (L3-nxos-cisco_nxos.md). No device in this lab has
+// been observed sending $enab{level}$.
+//
+// EnableEnab exists so the shape has a name and a refusal rather than an
+// implementation nothing has ever exercised. config.Load refuses it.
+const (
+	EnablePrincipal = "principal"
+	EnableEnab      = "enab"
+)
+
+// EnableUsernames is the built-in table: every known platform, principal.
+func EnableUsernames() map[string]string {
+	out := make(map[string]string, len(sessionServices))
+	for name := range sessionServices {
+		out[name] = EnablePrincipal
+	}
+	return out
+}
+
+// KnownEnableUsername reports whether v is a value config.Load will accept
+// for `platforms.<name>.enable_username` — either the shipping default or the
+// refused-but-named `enab` — as opposed to a typo, which is a different error.
+func KnownEnableUsername(v string) bool { return v == EnablePrincipal || v == EnableEnab }

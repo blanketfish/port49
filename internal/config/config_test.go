@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 const sample = `
@@ -415,6 +417,31 @@ platforms:
 	}
 	if got := c.SessionServices["juniper_junos"]; len(got) != 1 || got[0] != "junos-exec" {
 		t.Fatalf("an empty platform block must leave the default in force, got %v", got)
+	}
+}
+
+// TestEnableUsernameEnabIsRefusedUntilTheLabShowsIt: `$enab{level}$` is not a
+// username form any measured platform sends on the enable START (vEOS and
+// Catalyst 8000V both send the operator's own username; NX-OS 10.x has no
+// enable exchange at all — tests/lab/results/L3-arista_eos.md,
+// L3-cisco_iosxe.md, L3-nxos-cisco_nxos.md), so the option exists to be
+// refused, not to be used, until a lab note says otherwise.
+func TestEnableUsernameEnabIsRefusedUntilTheLabShowsIt(t *testing.T) {
+	setSecrets(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: enab}}\n"
+	_, err := Load(write(t, "c.yaml", body))
+	if err == nil || !strings.Contains(err.Error(), "tests/lab/results") {
+		t.Fatalf("enable_username: enab must be refused and say what would unlock it: %v", err)
+	}
+	body = fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: principal}}\n"
+	c, err := Load(write(t, "d.yaml", body))
+	if err != nil || c.EnableUsernames["cisco_iosxe"] != platform.EnablePrincipal {
+		t.Fatalf("%v %v", c.EnableUsernames, err)
+	}
+	body = fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: princpal}}\n"
+	if _, err := Load(write(t, "e.yaml", body)); err == nil {
+		t.Fatal("a mistyped enable_username must be a load error")
 	}
 }
 

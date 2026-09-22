@@ -54,6 +54,23 @@ func TestNamesIsSortedAndComplete(t *testing.T) {
 	}
 }
 
+// TestEnableUsernamesNamesEveryKnownPlatformAsPrincipal pins the built-in
+// enable-username table: every platform this package knows, mapped to
+// EnablePrincipal, because no platform in the lab has been measured sending
+// anything else (tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md,
+// L3-nxos-cisco_nxos.md).
+func TestEnableUsernamesNamesEveryKnownPlatformAsPrincipal(t *testing.T) {
+	got := EnableUsernames()
+	for _, name := range Names() {
+		if got[name] != EnablePrincipal {
+			t.Errorf("%s: enable username is %q, want %q", name, got[name], EnablePrincipal)
+		}
+	}
+	if len(got) != len(Names()) {
+		t.Fatalf("EnableUsernames() has %d entries, want %d", len(got), len(Names()))
+	}
+}
+
 // TestCallersCannotEditTheTable. SessionServices and Defaults hand out copies;
 // a caller that appends to what it got — a config override building on a
 // default, say — must not change what the next caller reads.

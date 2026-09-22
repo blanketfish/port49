@@ -77,6 +77,11 @@ type PlatformConfig struct {
 	// is a default and not a constant. Setting it replaces the built-in — a
 	// fleet part-way through a rename lists both names.
 	SessionServices []string `yaml:"session_services"`
+
+	// EnableUsername selects what username an enable START is expected to
+	// carry: `principal` (the default, and the only value config.Load
+	// accepts) or `enab`, which is refused — see resolveEnableUsernames.
+	EnableUsername string `yaml:"enable_username"`
 }
 
 // limitsYAML mirrors the limits block. The two reset windows are pointers so
@@ -134,6 +139,11 @@ type Config struct {
 	// consults two sources, and so a name the operator mistyped is a startup
 	// error rather than a platform silently on its default (spec §5.2, §8).
 	SessionServices map[string][]string
+
+	// EnableUsernames is the resolved enable-username table: every built-in
+	// platform mapped to platform.EnablePrincipal, the only value config.Load
+	// accepts today (see resolveEnableUsernames).
+	EnableUsernames map[string]string
 
 	// Inventory and Admission are read and built once, here, so the daemon
 	// never re-reads the file and the two can never disagree.
@@ -219,6 +229,9 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	if err := resolveSessionServices(&c, f.Platforms); err != nil {
+		return Config{}, err
+	}
+	if err := resolveEnableUsernames(&c, f.Platforms); err != nil {
 		return Config{}, err
 	}
 	if c.Lab == nil {
@@ -359,6 +372,44 @@ func resolveSessionServices(c *Config, overrides map[string]PlatformConfig) erro
 			}
 		}
 		c.SessionServices[name] = append([]string(nil), svc...)
+	}
+	return nil
+}
+
+// resolveEnableUsernames applies any platforms.<name>.enable_username override
+// to the built-in table, and refuses `enab`.
+//
+// The $enab{level}$ enable path is unbuilt on purpose: it would need a
+// (nas, rem_addr) secondary index, and rem_addr is measured identical for two
+// concurrent sessions behind one bastion, so that index would have to refuse
+// rather than guess — and its refusal needs a reason code spec §5.7 does not
+// carry. None of that is worth building for a username form no device in this
+// lab has ever sent.
+func resolveEnableUsernames(c *Config, overrides map[string]PlatformConfig) error {
+	c.EnableUsernames = platform.EnableUsernames()
+	names := make([]string, 0, len(overrides))
+	for name := range overrides {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		v := overrides[name].EnableUsername
+		if v == "" {
+			continue
+		}
+		if !platform.KnownEnableUsername(v) {
+			return fmt.Errorf("config: platforms.%s.enable_username is %q; it must be %q or %q",
+				name, v, platform.EnablePrincipal, platform.EnableEnab)
+		}
+		if v == platform.EnableEnab {
+			return fmt.Errorf("config: platforms.%s.enable_username: %q is refused: no platform in the lab has been "+
+				"measured sending that username form, and port49 does not ship an unexercised enable path for it. "+
+				"Every platform with an enable exchange sends the operator's own username "+
+				"(tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md). To enable it, add a "+
+				"tests/lab/results/ note showing a device sending it and lift this refusal with the code that reads it",
+				name, platform.EnableEnab)
+		}
+		c.EnableUsernames[name] = v
 	}
 	return nil
 }
