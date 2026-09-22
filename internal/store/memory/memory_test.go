@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -397,6 +398,133 @@ func TestTouchContextExtendsWithoutClobbering(t *testing.T) {
 	now = now.Add(2 * time.Minute)
 	if err := s.TouchContext(ctx, k, time.Minute); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("touching an expired context must say so, not resurrect it: %v", err)
+	}
+}
+
+// AnnotateContext is the third of the narrow setters, and store.Store's
+// comment on TouchContext names accounting's annotation as one of the three
+// writers that lose a revocation by re-putting a record they read earlier in
+// the request. This is that scenario run: the revocation lands after
+// accounting took its copy, and the annotation must not carry it away.
+func TestAnnotateContextKeepsARacingRevocation(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", PrivLvl: 15}, time.Minute)
+
+	// Accounting reads the context at the top of its request. It will not use
+	// this copy to write, and that is the whole point of the setter.
+	accountingsCopy, _ := s.GetContext(ctx, k)
+
+	// A revocation lands while the accounting record is being spooled.
+	c, _ := s.GetContext(ctx, k)
+	c.RevokedAt = now
+	s.PutContext(ctx, k, c, time.Minute)
+
+	stamped := now
+	now = now.Add(30 * time.Second)
+	hash := store.HashDiscriminator("31050")
+	if err := s.AnnotateContext(ctx, k, hash, store.AccountingStateOpen); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RevokedAt.IsZero() {
+		t.Fatalf("the annotation discarded the revocation — a re-put of %+v would: %+v", accountingsCopy, got)
+	}
+	if len(got.SessionDiscriminators) != 1 || got.SessionDiscriminators[0] != hash ||
+		got.AccountingState != store.AccountingStateOpen {
+		t.Fatalf("the annotation did not land: %+v", got)
+	}
+	if got.CtxID != "c" || got.PrivLvl != 15 {
+		t.Fatalf("AnnotateContext wrote a field that is not its own: %+v", got)
+	}
+	// Accounting is not activity for the idle TTL: a device sending only STOPs
+	// must not be able to hold a context open (spec §5.8).
+	if !got.LastTouchedAt.Equal(stamped) {
+		t.Fatalf("AnnotateContext must not stamp LastTouchedAt: %+v", got)
+	}
+	now = now.Add(31 * time.Second) // past the original expiry
+	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("AnnotateContext extended the expiry; only TouchContext may")
+	}
+	if err := s.AnnotateContext(ctx, k, hash, ""); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("annotating an expired context must say so, not resurrect it: %v", err)
+	}
+}
+
+// The set's two rules: an empty argument writes nothing, a repeat adds
+// nothing, and the ninth entry evicts the oldest rather than the newest — the
+// newest is the session still running (store.MaxSessionDiscriminators).
+func TestAnnotateContextSetRules(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u",
+		AccountingState: store.AccountingStateClosing}, time.Minute)
+
+	// An empty discriminator adds nothing; an empty state leaves the field
+	// alone, which is how a STOP annotates without touching the set.
+	if err := s.AnnotateContext(ctx, k, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetContext(ctx, k); len(got.SessionDiscriminators) != 0 ||
+		got.AccountingState != store.AccountingStateClosing {
+		t.Fatalf("empty arguments must write nothing: %+v", got)
+	}
+
+	first := store.HashDiscriminator("s0")
+	for i := 0; i < store.MaxSessionDiscriminators; i++ {
+		if err := s.AnnotateContext(ctx, k, store.HashDiscriminator(fmt.Sprintf("s%d", i)), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A device retransmitting a START must not consume a slot.
+	if err := s.AnnotateContext(ctx, k, first, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.GetContext(ctx, k)
+	if len(got.SessionDiscriminators) != store.MaxSessionDiscriminators {
+		t.Fatalf("a repeat added a duplicate: %+v", got.SessionDiscriminators)
+	}
+	if got.SessionDiscriminators[0] != first {
+		t.Fatalf("a repeat reordered the set: %+v", got.SessionDiscriminators)
+	}
+
+	ninth := store.HashDiscriminator("s8")
+	if err := s.AnnotateContext(ctx, k, ninth, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetContext(ctx, k)
+	if len(got.SessionDiscriminators) != store.MaxSessionDiscriminators {
+		t.Fatalf("the cap did not hold: %d entries", len(got.SessionDiscriminators))
+	}
+	if got.SessionDiscriminators[0] == first {
+		t.Fatalf("the cap evicted nothing: %+v", got.SessionDiscriminators)
+	}
+	if got.SessionDiscriminators[store.MaxSessionDiscriminators-1] != ninth {
+		t.Fatalf("the cap evicted the newest instead of the oldest: %+v", got.SessionDiscriminators)
+	}
+}
+
+// A caller that read the context before an annotation must not see its own
+// slice change underneath it: the set is rewritten, never appended in place.
+func TestAnnotateContextDoesNotEditAReadersSlice(t *testing.T) {
+	s := New(time.Now)
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u",
+		SessionDiscriminators: []string{store.HashDiscriminator("a")}}, time.Minute)
+	before, _ := s.GetContext(ctx, k)
+	if err := s.AnnotateContext(ctx, k, store.HashDiscriminator("b"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(before.SessionDiscriminators) != 1 {
+		t.Fatalf("the annotation grew a slice a caller was already holding: %+v", before.SessionDiscriminators)
 	}
 }
 

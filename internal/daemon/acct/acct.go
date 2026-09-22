@@ -27,10 +27,6 @@ type Handler struct {
 	spool   *Spool
 	metrics *metrics.Metrics
 	now     func() time.Time
-	// contextIdleTTL is the TTL an annotation re-puts the context under. An
-	// annotation is activity, so it extends the idle TTL exactly as the
-	// authorizer's extension does (spec §5.6; Task 10).
-	contextIdleTTL time.Duration
 	// systemUsers is the table main.go handed this handler at construction,
 	// from platform.SystemUsers(). It is read-only from here on, which is why
 	// there is no lock and no package global: a global would be a mutator of
@@ -39,10 +35,16 @@ type Handler struct {
 	systemUsers map[string][]string
 }
 
+// New builds the accounting handler.
+//
+// It takes no idle TTL, deliberately. An annotation writes through
+// store.AnnotateContext, which moves neither the expiry nor LastTouchedAt:
+// accounting is not activity for the idle TTL, or a device sending only STOPs
+// — records saying a session ended — could hold a context open forever. The
+// half-TTL extension belongs to authorization (spec §5.8; §5.6, Task 10).
 func New(s store.Store, sp *Spool, m *metrics.Metrics, now func() time.Time,
-	contextIdleTTL time.Duration, systemUsers map[string][]string) *Handler {
-	return &Handler{store: s, spool: sp, metrics: m, now: now,
-		contextIdleTTL: contextIdleTTL, systemUsers: systemUsers}
+	systemUsers map[string][]string) *Handler {
+	return &Handler{store: s, spool: sp, metrics: m, now: now, systemUsers: systemUsers}
 }
 
 func flagsName(f uint8) string {
@@ -58,8 +60,13 @@ func flagsName(f uint8) string {
 }
 
 func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctRequest) wire.AcctReply {
-	kv, cmd, cmdArgs, raw := author.ParseArgs(req.Args)
+	_, cmd, cmdArgs, raw := author.ParseArgs(req.Args)
 	port := string(req.Port)
+	// The vector keeps ParseArgs' untrimmed command and arguments: it is the
+	// normalized command §3 owns and §9 joins on, and trimming a typed
+	// argument would change what reconciliation compares. Every AV pair this
+	// handler reads for itself goes through avOf instead (spec §5.8, "Three
+	// wire details that break the join").
 	vector := author.Vector(cmd, cmdArgs)
 	canonical := authen.Canonical(string(req.User))
 
@@ -90,17 +97,19 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 	if hasDisc {
 		seen = avOf(raw, disc)
 	}
-	exec := platform.IsExecRecord(peer.Platform, cmd)
+	exec := platform.IsExecRecord(peer.Platform, avOf(raw, "cmd"))
 	start := req.Flags&wire.AcctFlagStart != 0
 
 	attribution := "unattributed"
 	switch {
-	case resolved && exec && start && c.SessionDiscriminator != "" && seen != "" && c.SessionDiscriminator != seen:
-		// A second exec START on a context already bound to another session of
-		// this user: port49 did not authenticate this one. Local fallback, a
-		// console login, or a device-local account sharing the name (§5.6).
-		// A START carrying the bound value is this session again — a
-		// retransmission — and is deliberately not alertable.
+	case resolved && exec && !start && seen != "" && len(c.SessionDiscriminators) > 0 &&
+		!contains(c.SessionDiscriminators, store.HashDiscriminator(seen)):
+		// A record for a session whose START port49 never saw, on a device
+		// where it did watch this user's other sessions begin: a local
+		// fallback, a console login, or a device-local account sharing the
+		// name (§5.6). A START is never foreign — it is port49 watching a
+		// session begin, and it simply adds. An empty set is never foreign
+		// either, or stop-only accounting would page on every record.
 		attribution = "foreign"
 	case resolved:
 		attribution = "resolved"
@@ -111,14 +120,16 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 	}
 
 	rec := decision.Record{TS: h.now(), Event: decision.EventAccount, Flags: flagsName(req.Flags),
-		Attribution: attribution, TaskID: kv["task_id"],
+		Attribution: attribution, TaskID: avOf(raw, "task_id"),
 		Device:  &decision.Device{NAS: peer.NASAddr, Name: peer.NAS, Platform: peer.Platform},
 		Session: &decision.Session{Username: canonical, Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
 		AcctRecord: &decision.AcctRecord{Raw: raw, Vector: vector, PrivLvl: req.PrivLvl,
-			StartTime: num(kv["start_time"]), StopTime: num(kv["stop_time"]), ElapsedTime: num(kv["elapsed_time"])}}
+			StartTime: num(avOf(raw, "start_time")), StopTime: num(avOf(raw, "stop_time")),
+			ElapsedTime: num(avOf(raw, "elapsed_time"))}}
 	// TaskID stays `task_id` even where the discriminator is not: it is the
 	// field the log has always carried and reconciliation joins on, and on
-	// Junos it is the only per-record counter there is.
+	// Junos it is the only per-record counter there is. It is the value in the
+	// clear; only the stored discriminator set is hashed.
 	if attribution == "resolved" {
 		rec.Principal = c.Principal
 		rec.Session.CtxID = c.CtxID
@@ -134,59 +145,75 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 	// (spec §5.6 row 7, §5.8). The record is already durable at this point:
 	// the annotation is advisory, so it must not stand between a device and
 	// its reply.
+	//
+	// Every write goes through AnnotateContext, which writes at most two
+	// fields under the store's own lock. The accounting path never calls
+	// PutContext: a re-put of the Context read at the top of this request
+	// would put back a RevokedAt of zero over a revocation that landed in
+	// between, which is the race store.Store's comment on TouchContext names
+	// accounting's annotation for by hand.
 	if exec && attribution == "resolved" {
-		h.annotate(ctx, key, c.CtxID, canonical, seen, start, req.Flags&wire.AcctFlagStop != 0)
+		switch {
+		case start:
+			// A START always adds — it is port49 watching a session begin —
+			// and says the context is open, which is what clears a `closing`
+			// left by an earlier session's STOP (§5.8).
+			h.annotate(ctx, key, hashOf(seen), store.AccountingStateOpen)
+		case req.Flags&wire.AcctFlagStop != 0:
+			// Reaching here means the discriminator was in the set or the set
+			// was empty; a STOP outside a non-empty set was attributed
+			// `foreign` above and annotates nothing. `closing` is reported and
+			// nothing else: it does not stop refresh, does not authorize, does
+			// not deny, and §5.6 row 6 reclaims the state. The discriminator
+			// is deliberately NOT removed — that would cost a second write to
+			// narrow a field no decision reads, and would turn a device's
+			// duplicate STOP into a `foreign` alert.
+			h.annotate(ctx, key, "", store.AccountingStateClosing)
+		}
+		// A WATCHDOG is neither: it is a keepalive, so it neither adds a
+		// discriminator nor says a session closed. It can still be `foreign`
+		// above, which is the point — a keepalive for a session port49 never
+		// saw begin is the same signal as its STOP.
 	}
 	return wire.AcctReply{Status: wire.AcctStatusSuccess}
 }
 
-// annotate writes the exec record's conclusion onto the login context.
+// annotate is the one store write on the accounting path.
 //
-// It re-reads the context rather than writing back the copy the record was
-// built from, and the reason is the one store.Store's comment on TouchContext
-// names accounting's annotation for: a read-modify-write discards everything
-// written between the read and the write, and one of those writers is
-// revocation. Re-reading here does not close that window — the store offers no
-// in-place setter for these two fields, because SessionDiscriminator is sealed
-// and the sealing layer cannot write one field of a record it cannot read — but
-// it narrows the window from "across the durable spool write" to a few
-// instructions, and it costs one store read on exec records only, which are two
-// per session rather than one per command. The residual race is recorded in
-// this plan's report; closing it needs a sealed-field setter, which is a §12
-// change.
-//
-// ctxID is what the record was attributed to. If the re-read finds a different
-// context — the operator logged out and back in across the spool write — the
-// annotation belongs to a session that is gone and is dropped rather than
-// applied to a stranger's.
-func (h *Handler) annotate(ctx context.Context, key store.ContextKey, ctxID, canonical, seen string, start, stop bool) {
-	c, err := h.store.GetContext(ctx, key)
-	h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
-	if err != nil || subtle.ConstantTimeCompare([]byte(c.Username), []byte(canonical)) != 1 || c.CtxID != ctxID {
-		return
+// There is no second read and no re-put, so there is no read-modify-write to
+// lose a revocation to. What remains is a narrow benign window: between this
+// request's GetContext and this write the operator could log out and back in,
+// and the new context would then carry one discriminator from the old session.
+// That can only ever suppress a `foreign` alert, never cause one — and it
+// cannot even do that, because a device does not reuse a discriminator across
+// that boundary (measured: `session_pid` 14656 → 14695 one millisecond after a
+// logout on the same port, spec §5.8). The cost is one of the eight slots.
+func (h *Handler) annotate(ctx context.Context, key store.ContextKey, discHash, state string) {
+	err := h.store.AnnotateContext(ctx, key, discHash, state)
+	h.metrics.StoreOps.WithLabelValues("annotate_context", storeOutcome(err)).Inc()
+}
+
+// hashOf renders a discriminator for the store, and maps "no discriminator" to
+// "nothing to add" rather than to the hash of the empty string — a platform
+// with no discriminator, or a record that did not carry one, must add no entry
+// at all (spec §5.8).
+func hashOf(seen string) string {
+	if seen == "" {
+		return ""
 	}
-	switch {
-	case start:
-		if c.SessionDiscriminator == "" && seen != "" {
-			c.SessionDiscriminator = seen
+	return store.HashDiscriminator(seen)
+}
+
+// contains reports whether hash is already in the set. A plain loop over at
+// most MaxSessionDiscriminators entries; nothing an attacker influences
+// reaches it, and the values compared are hashes rather than secrets.
+func contains(set []string, hash string) bool {
+	for _, h := range set {
+		if h == hash {
+			return true
 		}
-		c.AccountingState = ""
-	case stop:
-		// closing is reported and nothing else: it does not stop refresh,
-		// does not authorize, does not deny, and row 6 reclaims the state.
-		if c.SessionDiscriminator != "" && c.SessionDiscriminator != seen {
-			return
-		}
-		c.AccountingState = "closing"
-	default:
-		// A WATCHDOG is neither, and annotates nothing.
-		return
 	}
-	// PutContext stamps LastTouchedAt from the store's own clock, so the
-	// authorizer's half-TTL rule measures from this extension whoever made it
-	// (store.Context; Task 10).
-	err = h.store.PutContext(ctx, key, c, h.contextIdleTTL)
-	h.metrics.StoreOps.WithLabelValues("put_context", storeOutcome(err)).Inc()
+	return false
 }
 
 // isSystemUser reports whether this platform's adapter declares user as one of

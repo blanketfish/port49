@@ -1552,7 +1552,7 @@ operator on one device — measured, and recorded there as the accepted cost.
 
 ```
 exec START for (nas, username):
-    always  →  add this session's discriminator to the set; clear accounting_state
+    always  →  add this session's discriminator to the set; accounting_state = open
                (a START is never foreign: port49 is watching this session begin)
 
 exec STOP or WATCHDOG for (nas, username):
@@ -1633,7 +1633,8 @@ The empty-set branch covers `stop-only` accounting and a lost START, and it is d
 reported and nothing else — it does not stop refresh (§5.1.3), because a STOP from a previous
 session on the same line under the same username would otherwise mark a live session closing and
 let the staleness ceiling deny it later, which is the demotion's own defect in slow motion. Any
-later authorization or START on the context clears it. The idle TTL reclaims the state. A record
+later START sets it back to `open`, which is what a reader checking for `closing` needs and is
+why a START writes a value rather than clearing the field. The idle TTL reclaims the state. A record
 that matches neither is logged as unattributable to that context and left alone.
 
 With more than one session bound, `closing` means **"at least one session of this user closed"**

@@ -183,20 +183,41 @@ func IsExecRecord(platformName, cmd string) bool {
 }
 
 // systemUsers are the usernames a platform's own machinery writes accounting
-// under. It is EMPTY for every shipped platform and stays that way until a
-// tests/lab/results/ note measures one: the Junos lab measured the opposite,
-// every record naming the logged-in operator and none naming root under this
-// lab's accounting event list (L17-juniper_vsrx.md, L17-juniper_vjunos-router.md).
-// Two production observations — a Junos RPC-driven `show` as root, and an NX-OS
-// admin record with task_id=vsh.bin.$port after a cancelled sudo — are
-// unmeasured in this lab and are recorded as such in spec §5.8; neither is
-// entered here. Plan 5's adapters own the list; the rule that reads it is
-// plan 2's.
-var systemUsers = map[string][]string{}
+// under, attributed `system` rather than `unattributed` (spec §5.8).
+//
+// `juniper_junos: root` is measured. The committed capture behind
+// tests/lab/results/L1-juniper_vsrx.md — tests/lab/evidence/L1-juniper_vsrx.pcap,
+// decodable with the published lab key — holds three accounting records under
+// user=root, port=non-tty, carrying their own `session_pid = 28771`:
+// cmd=login, cmd=`set alarm yellow alarm-id 0small-msg`, cmd=logout. There is
+// NO authentication and NO authorization exchange for root anywhere in that
+// file, and the run logged in only as alice01/02/03: vSRX's own alarm
+// machinery writing accounting for a session port49 was never asked to
+// authenticate. Without this row those three records are `unattributed`, and a
+// stock vSRX with nothing wrong reports sessions port49 did not authenticate.
+//
+// Every other platform is empty, and that includes juniper_vjunos-router: the
+// same decode of L1-juniper_vjunos-router.pcap finds no root records, so the
+// behaviour is image-specific and unmeasured there. Since the platform table is
+// keyed by platform rather than by image, `root` is entered once for
+// juniper_junos and covers both — the safe direction, because the cost of a
+// name that never appears is nothing, while the cost of omitting one that does
+// is a permanent false alert.
+//
+// L17's negative is narrower and stands: under THAT run's accounting event
+// list, with enhanced-accounting committed, every record named the logged-in
+// operator (L17-juniper_vsrx.md, L17-juniper_vjunos-router.md). It measured a
+// different configuration and does not contradict the above.
+//
+// Still unmeasured, and therefore NOT entered: an NX-OS admin record with
+// task_id=vsh.bin.$port after a cancelled sudo. A tests/lab/results/ note is
+// what would add cisco_nxos.
+var systemUsers = map[string][]string{
+	"juniper_junos": {"root"},
+}
 
 // SystemUsers is the per-platform table of usernames a platform's own
-// machinery writes accounting under. It returns a copy, and every shipped
-// platform's entry is empty.
+// machinery writes accounting under. It returns a copy.
 //
 // main.go hands it to acct.New; the handler never reads this package at
 // request time, so there is no global for a test to mutate and no lock to get

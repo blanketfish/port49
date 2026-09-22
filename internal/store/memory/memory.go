@@ -383,6 +383,49 @@ func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8)
 	return nil
 }
 
+// AnnotateContext is the accounting path's setter, and it is TouchContext's
+// and SetPrivilege's sibling: the read-modify-write happens inside this lock
+// so that a revocation racing it is not overwritten by a copy of the record
+// accounting read at the top of its request (store.Store).
+//
+// It writes at most two fields and deliberately moves neither the expiry nor
+// LastTouchedAt: accounting is not activity for the idle TTL (spec §5.8).
+func (s *Store) AnnotateContext(_ context.Context, k store.ContextKey, discHash, state string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(s.now()) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	if discHash != "" {
+		e.c.SessionDiscriminators = addDiscriminator(e.c.SessionDiscriminators, discHash)
+	}
+	if state != "" {
+		e.c.AccountingState = state
+	}
+	s.contexts[k] = e
+	return nil
+}
+
+// addDiscriminator appends h if it is not already present, evicting from the
+// front once the set is full. The copy is not an accident: the slice header in
+// the map may share its array with one a caller read out through GetContext,
+// and appending in place would edit that caller's copy under it.
+func addDiscriminator(set []string, h string) []string {
+	for _, existing := range set {
+		if existing == h {
+			return set
+		}
+	}
+	out := make([]string, 0, store.MaxSessionDiscriminators)
+	if len(set) >= store.MaxSessionDiscriminators {
+		set = set[len(set)-store.MaxSessionDiscriminators+1:]
+	}
+	out = append(out, set...)
+	return append(out, h)
+}
+
 func (s *Store) DeleteContext(_ context.Context, k store.ContextKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

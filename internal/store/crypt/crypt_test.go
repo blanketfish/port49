@@ -129,29 +129,49 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 
 	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	if err := s.PutContext(ctx, ck, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com", Username: "alice",
-		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 15, SessionDiscriminator: "14656"}, time.Hour); err != nil {
+		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 15}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.SessionDiscriminator != "" || c.PrivLvl != 15 {
+	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.PrivLvl != 15 {
 		t.Fatalf("context plaintext: %+v", c)
 	}
-	if c, _ := s.GetContext(ctx, ck); c.Principal != "user:alice@example.com" || c.RemAddr != "198.51.100.4" || c.SessionDiscriminator != "14656" {
+	if c, _ := s.GetContext(ctx, ck); c.Principal != "user:alice@example.com" || c.RemAddr != "198.51.100.4" {
 		t.Fatalf("context read: %+v", c)
 	}
 
-	// SetPrivilege and TouchContext pass straight through: both write only
-	// plaintext bookkeeping, so the inner store changes a record it cannot
-	// read, and the sealed fields it never touched still open afterwards.
+	// SetPrivilege, TouchContext and AnnotateContext pass straight through:
+	// all three write only plaintext bookkeeping, so the inner store changes a
+	// record it cannot read, and the sealed fields it never touched still open
+	// afterwards.
 	if err := s.SetPrivilege(ctx, ck, 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.TouchContext(ctx, ck, time.Hour); err != nil {
 		t.Fatal(err)
 	}
+	hash := store.HashDiscriminator("31050")
+	if err := s.AnnotateContext(ctx, ck, hash, store.AccountingStateClosing); err != nil {
+		t.Fatal(err)
+	}
 	if c, _ := inner.GetContext(ctx, ck); c.PrivLvl != 1 {
 		t.Fatalf("SetPrivilege must reach the inner store in the clear: %+v", c)
 	}
-	if c, _ := s.GetContext(ctx, ck); c.PrivLvl != 1 || c.Principal != "user:alice@example.com" || c.SessionDiscriminator != "14656" {
+	// The discriminator set is the point of the hashing: the INNER store, which
+	// cannot open a sealed field, can both write and read it. Were it sealed,
+	// AnnotateContext could only be a read-unseal-modify-reseal-write, which is
+	// the read-modify-write the setter exists to avoid (spec §5.8).
+	if c, _ := inner.GetContext(ctx, ck); len(c.SessionDiscriminators) != 1 || c.SessionDiscriminators[0] != hash ||
+		c.AccountingState != store.AccountingStateClosing {
+		t.Fatalf("AnnotateContext must reach the inner store in the clear: %+v", c)
+	}
+	// And the value itself is not in the store: a store dump must not be able
+	// to enumerate `172.100.100.1@pts/3`-shaped discriminators, which carry the
+	// client's source address (store.Context.SessionDiscriminators).
+	if c, _ := inner.GetContext(ctx, ck); c.SessionDiscriminators[0] == "31050" {
+		t.Fatal("the discriminator is stored in the clear, not hashed")
+	}
+	if c, _ := s.GetContext(ctx, ck); c.PrivLvl != 1 || c.Principal != "user:alice@example.com" ||
+		len(c.SessionDiscriminators) != 1 || c.SessionDiscriminators[0] != hash {
 		t.Fatalf("a narrow write must leave the sealed fields readable: %+v", c)
 	}
 

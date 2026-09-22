@@ -138,23 +138,32 @@ func TestExecRecordDetectionIsPerPlatform(t *testing.T) {
 	}
 }
 
-// TestSystemUsersShipEmptyForEveryPlatform is what keeps the "empty until a
-// lab note fills it" promise honest. Two production observations are on record
-// — a Junos RPC-driven `show` running as root, and an NX-OS admin record with
-// task_id=vsh.bin.$port after a cancelled sudo — and neither has a
-// tests/lab/results/ note in this tree. The Junos lab measured the opposite
-// (L17-juniper_vsrx.md, L17-juniper_vjunos-router.md). A row added here
-// without a note is a row that silently stops attributing a real operator's
-// records as foreign.
-func TestSystemUsersShipEmptyForEveryPlatform(t *testing.T) {
+// TestSystemUsersIsMeasuredPerPlatform pins the one row that exists and the
+// emptiness of every other. Both halves are a measurement.
+//
+// juniper_junos: root, from tests/lab/evidence/L1-juniper_vsrx.pcap — three
+// accounting records under user=root, port=non-tty, session_pid = 28771, with
+// no AUTHEN and no AUTHOR for root anywhere in the file. Deleting this row
+// makes a healthy vSRX report sessions port49 did not authenticate.
+//
+// Everything else: empty, because nothing has measured one. A row added here
+// without a tests/lab/results/ or evidence citation is a row that silently
+// stops attributing a real operator's records as `foreign` — the alert exists
+// to catch a login port49 never saw, and a username on this list is a username
+// that can never raise it.
+func TestSystemUsersIsMeasuredPerPlatform(t *testing.T) {
+	want := map[string][]string{"juniper_junos": {"root"}}
 	got := SystemUsers()
-	for _, name := range Names() {
-		if users := got[name]; len(users) != 0 {
-			t.Errorf("%s declares system users %v; the shipped list must be empty until a tests/lab/results/ note measures one", name, users)
-		}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SystemUsers() = %v, want %v — every row needs a capture or a tests/lab/results/ note", got, want)
 	}
-	if len(got) != 0 {
-		t.Fatalf("SystemUsers() = %v, want an empty table", got)
+	for _, name := range Names() {
+		if name == "juniper_junos" {
+			continue
+		}
+		if users := got[name]; len(users) != 0 {
+			t.Errorf("%s declares system users %v with nothing measuring them", name, users)
+		}
 	}
 }
 
@@ -163,9 +172,13 @@ func TestSystemUsersShipEmptyForEveryPlatform(t *testing.T) {
 // through it would be editing a security rule at run time.
 func TestSystemUsersReturnsACopy(t *testing.T) {
 	got := SystemUsers()
-	got["juniper_junos"] = []string{"root"}
-	if users := SystemUsers()["juniper_junos"]; len(users) != 0 {
+	got["arista_eos"] = []string{"admin"}
+	got["juniper_junos"][0] = "tampered"
+	if users := SystemUsers()["arista_eos"]; len(users) != 0 {
 		t.Fatalf("SystemUsers handed out the table itself: %v", users)
+	}
+	if users := SystemUsers()["juniper_junos"]; users[0] != "root" {
+		t.Fatalf("SystemUsers handed out the table's own slices: %v", users)
 	}
 }
 

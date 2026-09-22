@@ -124,13 +124,12 @@ type receiptSecret struct {
 }
 
 type contextSecret struct {
-	CtxID                string           `json:"ctx_id"`
-	Principal            string           `json:"principal"`
-	Username             string           `json:"username"`
-	Port                 string           `json:"port"`
-	RemAddr              string           `json:"rem_addr"`
-	Credential           store.Credential `json:"credential"`
-	SessionDiscriminator string           `json:"session_discriminator"`
+	CtxID      string           `json:"ctx_id"`
+	Principal  string           `json:"principal"`
+	Username   string           `json:"username"`
+	Port       string           `json:"port"`
+	RemAddr    string           `json:"rem_addr"`
+	Credential store.Credential `json:"credential"`
 }
 
 type wrapped struct {
@@ -273,12 +272,12 @@ func (w *wrapped) DeleteReceiptsByPrincipal(ctx context.Context, principal strin
 
 func (w *wrapped) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
 	s, err := w.sealJSON(contextSecret{CtxID: c.CtxID, Principal: c.Principal, Username: c.Username,
-		Port: c.Port, RemAddr: c.RemAddr, Credential: c.Credential, SessionDiscriminator: c.SessionDiscriminator})
+		Port: c.Port, RemAddr: c.RemAddr, Credential: c.Credential})
 	if err != nil {
 		return err
 	}
-	c.CtxID, c.Principal, c.Username, c.Port, c.RemAddr, c.Credential, c.SessionDiscriminator, c.Sealed =
-		"", "", "", "", "", store.Credential{}, "", s
+	c.CtxID, c.Principal, c.Username, c.Port, c.RemAddr, c.Credential, c.Sealed =
+		"", "", "", "", "", store.Credential{}, s
 	return w.inner.PutContext(ctx, k, c, ttl)
 }
 
@@ -291,8 +290,8 @@ func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Con
 	if err := w.openJSON(c.Sealed, &cs); err != nil {
 		return store.Context{}, w.openErr("context", err)
 	}
-	c.CtxID, c.Principal, c.Username, c.Port, c.RemAddr, c.Credential, c.SessionDiscriminator, c.Sealed =
-		cs.CtxID, cs.Principal, cs.Username, cs.Port, cs.RemAddr, cs.Credential, cs.SessionDiscriminator, nil
+	c.CtxID, c.Principal, c.Username, c.Port, c.RemAddr, c.Credential, c.Sealed =
+		cs.CtxID, cs.Principal, cs.Username, cs.Port, cs.RemAddr, cs.Credential, nil
 	return c, nil
 }
 
@@ -310,6 +309,18 @@ func (w *wrapped) TouchContext(ctx context.Context, k store.ContextKey, ttl time
 // record whose sealed fields it cannot read.
 func (w *wrapped) SetPrivilege(ctx context.Context, k store.ContextKey, level uint8) error {
 	return w.inner.SetPrivilege(ctx, k, level)
+}
+
+// AnnotateContext passes through for the same reason, and that is the whole
+// argument for hashing the discriminator: SessionDiscriminators and
+// AccountingState are both plaintext -- a truncated hash of a device-local
+// identifier and an advisory string -- so the inner store can record what
+// accounting concluded on a record whose sealed fields it cannot read. Were
+// the discriminator sealed, this could only be a read-unseal-modify-reseal-
+// write, which is the read-modify-write the setter exists to avoid
+// (store.Store; spec §5.8).
+func (w *wrapped) AnnotateContext(ctx context.Context, k store.ContextKey, discHash, state string) error {
+	return w.inner.AnnotateContext(ctx, k, discHash, state)
 }
 
 // DeleteContext is addressed by key alone.

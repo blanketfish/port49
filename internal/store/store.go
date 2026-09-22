@@ -5,6 +5,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 )
@@ -160,19 +162,71 @@ type Context struct {
 	// plaintext, because it is a clock and not an identity.
 	LastTouchedAt time.Time
 
-	// SessionDiscriminator is the value of whatever AV pair separates two
-	// sessions of one user on one device, per platform (spec §5.8). It is
-	// §5.1.1's `task_id` slot under the name the lab forced: `task_id` restarts
-	// at 1 per session on both Junos images
-	// (tests/lab/results/L1-juniper_vsrx.md, L1-juniper_vjunos-router.md).
-	SessionDiscriminator string // sealed
-	AccountingState      string // "" | "open" | "closing"; advisory, never authorizes
+	// SessionDiscriminators holds one entry per session of this user that
+	// accounting has watched begin on this device, as HashDiscriminator
+	// renders it (spec §5.8). It is §5.1.1's `task_id` slot under the name the
+	// lab forced: `task_id` restarts at 1 per session on both Junos images, so
+	// two concurrent logins both sent `task_id=1` while `session_pid` was
+	// 31048 and 31050 (tests/lab/results/L17-juniper_vsrx.md:454,
+	// L17-juniper_vjunos-router.md:458).
+	//
+	// A set rather than a value because the key is (nas, username): one
+	// context covers every concurrent session of one operator (§13, decision
+	// 15), so binding a single value made an operator's second window a
+	// `foreign` alert. Capped at MaxSessionDiscriminators, oldest evicted.
+	//
+	// Plaintext, and hashed for exactly that reason: equality is all a binding
+	// needs, nothing ever reads a value back out, and on cisco_nxos the
+	// discriminator is `task_id`, measured as `172.100.100.1@pts/3`
+	// (tests/lab/results/L1-cisco_nxos.md:60) — the client's source address.
+	// RemAddr above is sealed so a store dump cannot enumerate who was logged
+	// into which device; storing that address in the clear under another name
+	// would have undone it. A truncated hash of a device-local identifier
+	// carries neither identity nor credential, so it does not need the sealing
+	// layer — and not needing it is what lets AnnotateContext be a narrow
+	// under-lock setter, since the sealing layer cannot write one field of a
+	// record it cannot read.
+	SessionDiscriminators []string
+	AccountingState       string // "" | AccountingStateOpen | AccountingStateClosing
 
 	Enable       string // copied from the token: none | auto | token
 	MaxPrivilege uint8
 	CreatedAt    time.Time
 
 	Sealed []byte
+}
+
+// The advisory accounting states (spec §5.8). Both are reported and neither
+// authorizes, denies, or stops a refresh; the idle TTL reclaims the field with
+// the context. A context that has never been annotated holds the empty string,
+// which is why AnnotateContext treats "" as "leave it alone" and a START says
+// AccountingStateOpen rather than clearing.
+const (
+	AccountingStateOpen    = "open"
+	AccountingStateClosing = "closing"
+)
+
+// MaxSessionDiscriminators caps Context.SessionDiscriminators. Eight is well
+// above the ten-concurrent-login cost §13 decision 15 accepts for the
+// (nas, username) key, and the overflow is an eviction of the oldest rather
+// than a refusal to add: both produce a spurious `foreign` on the evicted
+// session's STOP, and refusing would lose the newest session, which is the one
+// still running (spec §5.8).
+const MaxSessionDiscriminators = 8
+
+// HashDiscriminator renders a device's session discriminator for storage:
+// sha256, truncated to 16 bytes, hex. Equality is all a binding needs, and the
+// truncation is what keeps a client source address — the measured NX-OS
+// `task_id` is `172.100.100.1@pts/3` — out of the store in the clear. See
+// Context.SessionDiscriminators.
+//
+// It is not a security boundary against a chosen-plaintext guess: a
+// discriminator's value space is small, so someone holding a store dump and a
+// suspected address can confirm it. It is a defence against a dump ENUMERATING
+// addresses, which is what sealing RemAddr buys and what this preserves.
+func HashDiscriminator(v string) string {
+	sum := sha256.Sum256([]byte(v))
+	return hex.EncodeToString(sum[:16])
 }
 
 // ContextRef is what the indexes hold: the context key, nothing more.
@@ -239,6 +293,27 @@ type Store interface {
 	//
 	// ErrNotFound if the key is absent or already expired.
 	SetPrivilege(ctx context.Context, k ContextKey, level uint8) error
+	// AnnotateContext records what an exec accounting record concluded about
+	// this session, in place and under the store's own lock (spec §5.8). It is
+	// TouchContext's and SetPrivilege's sibling and exists for the same
+	// reason, which store.Store's comment on TouchContext names by hand:
+	// accounting must not write back a whole Context it read at the top of the
+	// request, because the writer it would race is revocation, and the
+	// re-put's RevokedAt is zero.
+	//
+	// discHash, when non-empty, is added to SessionDiscriminators if it is not
+	// already there; past MaxSessionDiscriminators the oldest is evicted. It
+	// is the output of HashDiscriminator, never a raw device value.
+	// state, when non-empty, replaces AccountingState; the empty string leaves
+	// it alone, so a START that clears it passes AccountingStateOpen rather
+	// than "".
+	//
+	// It writes nothing else. In particular it does NOT extend the expiry or
+	// stamp LastTouchedAt: accounting is not activity for the idle TTL (spec
+	// §5.8), or a device sending only STOPs could hold a context open forever.
+	//
+	// ErrNotFound if the key is absent or already expired.
+	AnnotateContext(ctx context.Context, k ContextKey, discHash, state string) error
 	// DeleteContext has no production caller today: the caller it had was
 	// author's `username_mismatch` branch, which under the old `(nas, port)`
 	// key could delete a live operator's context on an uncredentialed request.

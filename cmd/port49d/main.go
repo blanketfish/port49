@@ -145,10 +145,10 @@ func run(cfgPath string) error {
 			0, 10*time.Minute, cfg.ContextIdleTTL),
 		// The system-user table is injected rather than looked up through a
 		// package global, so nothing can mutate a security rule at run time.
-		// Every shipped platform's list is empty (internal/platform), so no
-		// record is attributed `system` until plan 5's adapters fill one from
-		// a tests/lab/results/ note.
-		Acct:   acct.New(st, spool, m, time.Now, cfg.ContextIdleTTL, platform.SystemUsers()),
+		// It carries `root` for juniper_junos and nothing else
+		// (internal/platform). No idle TTL: accounting does not extend one
+		// (spec §5.8).
+		Acct:   acct.New(st, spool, m, time.Now, platform.SystemUsers()),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}
 
 	// A dead metrics listener is not a detail: without it nobody can see the

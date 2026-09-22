@@ -638,9 +638,10 @@ func TestTheIdleTTLIsExtendedAtMostOncePerHalfTTL(t *testing.T) {
 	// against — a revocation would be denied before the extension is reached,
 	// which is why the store-level proof lives in Task 2's
 	// TestTouchContextExtendsWithoutClobbering.
-	c, _ := inner.GetContext(context.Background(), key)
-	c.SessionDiscriminator = "14656"
-	inner.PutContext(context.Background(), key, c, 30*time.Minute)
+	if err := inner.AnnotateContext(context.Background(), key,
+		store.HashDiscriminator("14656"), store.AccountingStateOpen); err != nil {
+		t.Fatal(err)
+	}
 	now = now.Add(20 * time.Minute)
 	if resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show")); resp.Status != wire.AuthorStatusPassAdd {
 		t.Fatalf("the command that must extend the TTL was denied: %+v", resp)
@@ -648,7 +649,8 @@ func TestTheIdleTTLIsExtendedAtMostOncePerHalfTTL(t *testing.T) {
 	if st.touches != 5 {
 		t.Fatalf("the extension did not run, so the assertion below proves nothing: %d touches", st.touches)
 	}
-	if got, _ := inner.GetContext(context.Background(), key); got.SessionDiscriminator != "14656" {
+	got, _ := inner.GetContext(context.Background(), key)
+	if len(got.SessionDiscriminators) != 1 || got.SessionDiscriminators[0] != store.HashDiscriminator("14656") {
 		t.Fatalf("the extension discarded the accounting annotation: %+v", got)
 	}
 }

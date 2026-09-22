@@ -76,7 +76,7 @@ func TestAStoreFaultDoesNotAttributeToAnotherPrincipal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { sp.Run(ctx); close(done) }()
-	h := New(wrongContextStore{Store: memory.New(time.Now)}, sp, m, time.Now, time.Hour, nil)
+	h := New(wrongContextStore{Store: memory.New(time.Now)}, sp, m, time.Now, nil)
 
 	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=1", "service=shell", "cmd="))
 	cancel()

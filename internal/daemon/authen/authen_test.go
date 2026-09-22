@@ -433,6 +433,10 @@ func (noStore) GetIdempotency(context.Context, string, string) (store.Idempotenc
 	panic("store called")
 }
 
+func (noStore) AnnotateContext(context.Context, store.ContextKey, string, string) error {
+	panic("store called")
+}
+
 var _ store.Store = noStore{}
 
 func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {
