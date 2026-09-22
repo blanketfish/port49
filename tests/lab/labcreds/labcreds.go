@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/internal/token"
 )
 
 const (
@@ -88,6 +90,79 @@ func Secrets(labYAMLPath string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// TokenLen is how long a minted token is: the device tag plus the secret, in
+// base62, with no separator and no prefix (design §8). It is taken from the
+// minter's own constant so the shape rule below tracks the format rather than a
+// copy of it.
+const TokenLen = token.Len
+
+func isBase62(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+}
+
+// MinDistinct is how many different characters a TokenLen window must hold
+// before it is called token-shaped. A minted token is 30 characters drawn
+// uniformly from 62, which averages about 24 distinct and is never remotely
+// near 12; what a lab capture legitimately carries in a long base62 run is
+// repetitive by comparison — a redacted field is one character repeated, the
+// deny prefix L2 types is 140 of them, and hostnames and ids reuse a small
+// alphabet. 12 sits in the empty space between the two.
+const MinDistinct = 12
+
+// distinctBytes counts the different byte values in w.
+func distinctBytes(w []byte) int {
+	var seen [256]bool
+	n := 0
+	for _, c := range w {
+		if !seen[c] {
+			seen[c] = true
+			n++
+		}
+	}
+	return n
+}
+
+// TokenShaped returns the first token-shaped window in b, or "".
+//
+// It is the secret-list check stated as an invariant instead of as a lookup: a
+// verifier that searches for the exact tokens of a run can only audit the
+// machine and the moment that produced them, and the tokens live in /tmp. What
+// a token LOOKS like does not expire, so this audits evidence committed by any
+// run, including runs whose credentials are long gone.
+//
+// It slides a TokenLen window over every base62 run rather than asking for a
+// run of exactly TokenLen, and that is a correctness requirement, not a
+// refinement: a token is not delimited on the wire. NX-OS puts the PAP password
+// straight after rem_addr in the AuthenStart body, so a real token arrives as
+// the tail of `…100.1<token>` — a single run of 31 base62 bytes that an
+// exact-length rule does not look at at all. `tests/lab/evidence/
+// L8-cisco_nxos.pcap` packet 0 shows the redacted form of exactly that layout.
+//
+// What keeps it from crying wolf is the character count, not the run length: a
+// window must hold at least MinDistinct different characters. That is what
+// separates a random secret from the things that legitimately produce long
+// base62 runs — 140 repeated 'A's, a redacted field of 30 'x's, or either of
+// those with one stray character welded on.
+func TokenShaped(b []byte) string {
+	for i := 0; i < len(b); {
+		if !isBase62(b[i]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(b) && isBase62(b[j]) {
+			j++
+		}
+		for k := i; k+TokenLen <= j; k++ {
+			if w := b[k : k+TokenLen]; distinctBytes(w) >= MinDistinct {
+				return string(w)
+			}
+		}
+		i = j
+	}
+	return ""
 }
 
 // Redacted reports whether b is the redactor's output for a credential field:
