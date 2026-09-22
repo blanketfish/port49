@@ -77,3 +77,34 @@ func TestBase62(t *testing.T) {
 		t.Fatal("not base62")
 	}
 }
+
+// The window is what a daemon ACCEPTS: one tag key per encryption key in the
+// store's read window. A token tagged under either is this device's; one tagged
+// under a key that has left the window, or under any key for another device, is
+// not.
+func TestTagWindowAcceptsEveryKeyInIt(t *testing.T) {
+	cur, prev, gone := TagKey([]byte("v2")), TagKey([]byte("v1")), TagKey([]byte("v0"))
+	w := NewTagWindow(cur, prev)
+	for _, k := range [][]byte{cur, prev} {
+		if !w.Matches(Tag(k, "leaf-01"), "leaf-01") {
+			t.Fatal("a tag under a key in the window must be accepted")
+		}
+	}
+	if w.Matches(Tag(gone, "leaf-01"), "leaf-01") {
+		t.Fatal("a tag under a key that has left the window must be refused")
+	}
+	// Device binding still holds under every key in the window; a window is
+	// not a way for one device's token to work at another.
+	for _, k := range [][]byte{cur, prev} {
+		if w.Matches(Tag(k, "leaf-99"), "leaf-01") {
+			t.Fatal("another device's tag must be refused under every key in the window")
+		}
+	}
+	// A window with no keys accepts nothing: it fails closed, never open.
+	if (TagWindow{}).Matches(Tag(cur, "leaf-01"), "leaf-01") {
+		t.Fatal("an empty window must accept no tag at all")
+	}
+	if NewTagWindow(nil, []byte{}).Matches(Tag(cur, "leaf-01"), "leaf-01") {
+		t.Fatal("an empty key is not a key")
+	}
+}

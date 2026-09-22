@@ -195,6 +195,19 @@ var (
 	labsMu sync.Mutex
 	labs   = map[string]*lab{}
 	active *lab // the one platform currently deployed; see bringUp
+
+	// runSeeds is every pair every daemon of this run minted, in the order the
+	// files were read. It is a run-scoped union and not the last file on disk
+	// because port49d truncates the seed-token file at each start: the file at
+	// the end of a run names the LAST daemon's tokens, while the captures hold
+	// every daemon's. Verifying the evidence against the file alone therefore
+	// checks the exact tokens of the daemon that ran last — which, after an
+	// L3-style restart-and-restore, is one that put nothing on the wire. That
+	// reports "auditing against N exact secrets" while checking none of the
+	// run's real ones, which is the failure labcreds.Secrets refuses for an
+	// empty list, dressed up.
+	runSeedsMu sync.Mutex
+	runSeeds   []labcreds.SeedToken
 )
 
 type lab struct {
@@ -290,16 +303,32 @@ func writeEvidence() error {
 	if key == "" {
 		key = labKeyDefault
 	}
-	// The credentials are the pairs port49d minted for this run, read from the
-	// file it wrote. The config no longer knows them: a seed names who gets a
-	// token and the daemon chooses the secret.
-	seedPath, err := labcreds.SeedTokenFile(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
-	if err != nil {
-		return fmt.Errorf("evidence: %w", err)
-	}
-	secrets, err := labcreds.Secrets(seedPath)
-	if err != nil {
-		return fmt.Errorf("evidence: %w", err)
+	// The credentials are the pairs port49d minted for this run. The config no
+	// longer knows them: a seed names who gets a token and the daemon chooses
+	// the secret.
+	//
+	// They come from the union the harness built as each daemon wrote its file
+	// (runSeeds), not from the file on disk, because the file is truncated at
+	// every start and a run that restarted the daemon has captures from
+	// daemons whose tokens are no longer in it. The file is the fallback for a
+	// run that never loaded one.
+	runSeedsMu.Lock()
+	seeds := append([]labcreds.SeedToken(nil), runSeeds...)
+	runSeedsMu.Unlock()
+	var secrets []string
+	if len(seeds) > 0 {
+		var err error
+		if secrets, err = labcreds.SecretsOf(seeds); err != nil {
+			return fmt.Errorf("evidence: the pairs this run's daemons minted: %w", err)
+		}
+	} else {
+		seedPath, err := labcreds.SeedTokenFile(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
+		if err != nil {
+			return fmt.Errorf("evidence: %w", err)
+		}
+		if secrets, err = labcreds.Secrets(seedPath); err != nil {
+			return fmt.Errorf("evidence: %w", err)
+		}
 	}
 	_, subnet, err := net.ParseCIDR(labSubnet)
 	if err != nil {
@@ -914,11 +943,17 @@ func (l *lab) loadSeeds(cfgPath string, startedAt time.Time) error {
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		seeds, err := l.readSeeds(path, startedAt)
+		seeds, all, err := l.readSeeds(path, startedAt)
 		if err == nil {
 			l.mu.Lock()
 			l.seeds = seeds
 			l.mu.Unlock()
+			// Every pair this daemon minted joins the run's union, not just
+			// this platform's: the evidence verifier searches the captures for
+			// strings, and a string that is not in them costs nothing.
+			runSeedsMu.Lock()
+			runSeeds = append(runSeeds, all...)
+			runSeedsMu.Unlock()
 			return nil
 		}
 		if !time.Now().Before(deadline) {
@@ -930,18 +965,20 @@ func (l *lab) loadSeeds(cfgPath string, startedAt time.Time) error {
 
 // readSeeds is one attempt at loadSeeds's read: the file has to exist, to have
 // been written by this daemon, and to carry at least one pair for this NAS.
-func (l *lab) readSeeds(path string, startedAt time.Time) (map[string]labcreds.SeedToken, error) {
+// It returns this platform's pairs keyed by username, and every pair in the
+// file for the run-scoped union.
+func (l *lab) readSeeds(path string, startedAt time.Time) (map[string]labcreds.SeedToken, []labcreds.SeedToken, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if info.ModTime().Before(startedAt.Add(-time.Second)) {
-		return nil, fmt.Errorf("%s was last written %v, before this port49d started at %v, so it holds the "+
+		return nil, nil, fmt.Errorf("%s was last written %v, before this port49d started at %v, so it holds the "+
 			"previous run's spent tokens", path, info.ModTime().Format(time.RFC3339), startedAt.Format(time.RFC3339))
 	}
 	all, err := labcreds.SeedTokens(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	seeds := map[string]labcreds.SeedToken{}
 	for _, s := range all {
@@ -950,10 +987,10 @@ func (l *lab) readSeeds(path string, startedAt time.Time) (map[string]labcreds.S
 		}
 	}
 	if len(seeds) == 0 {
-		return nil, fmt.Errorf("%s holds %d minted pair(s), none of them for NAS %q; check lab.seed_tokens in "+
+		return nil, nil, fmt.Errorf("%s holds %d minted pair(s), none of them for NAS %q; check lab.seed_tokens in "+
 			"the config this daemon was started with", path, len(all), l.p.node)
 	}
-	return seeds, nil
+	return seeds, all, nil
 }
 
 // loginToken is the login token port49d minted for user on this platform's NAS.

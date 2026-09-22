@@ -70,12 +70,25 @@ func newCtxID() string {
 // — a file still naming them would hand a harness a credential that redeems as
 // `token_not_found`, which reads as a device fault.
 //
+// O_NOFOLLOW is the third of those, and the lab config is why: it points this
+// at a path in /tmp, which anyone on the box can place a symlink at. Followed,
+// the pairs land wherever it points and the Chmod below narrows someone else's
+// file, which they can widen again. Refused, the daemon fails before the
+// listener opens and says which path it would not write through. Nothing
+// legitimate needs the symlink: an operator who wants the file elsewhere names
+// it elsewhere.
+//
+// It returns how many of each kind it wrote, because they are not the same
+// number: an enable token exists only where the seed asked for one, so a config
+// of plain seeds produces logins and no pair at all.
+//
 // It is the caller's job to unwind the spool on an error, the way every other
 // startup failure in run does.
-func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) error {
-	f, err := os.OpenFile(cfg.Lab.SeedTokenFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (logins, enables int, err error) {
+	f, err := os.OpenFile(cfg.Lab.SeedTokenFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return err
+		return 0, 0, fmt.Errorf("port49d: opening lab.seed_token_file %s (a symlink at that path is refused, "+
+			"deliberately: the credentials would land wherever it points): %w", cfg.Lab.SeedTokenFile, err)
 	}
 	defer f.Close()
 	// O_CREATE's mode applies only to a file this call creates. A file already
@@ -83,7 +96,7 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) err
 	// by an earlier build would be truncated, filled with credentials, and left
 	// world-readable. Narrow it before the first token is written.
 	if err := f.Chmod(0o600); err != nil {
-		return err
+		return 0, 0, err
 	}
 	for _, t := range cfg.Lab.SeedTokens {
 		// Canonicalizing here is belt and braces, not a fix: the mint refuses
@@ -93,7 +106,9 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) err
 		user := username.Canonical(t.Username)
 		res, err := minter.Mint(ctx, token.Request{
 			Subject: token.Subject{
-				Principal:     "user:" + t.Username + "@lab",
+				// The canonical name on both, or the mint record and the
+				// context it lands on carry two spellings of one identity.
+				Principal:     "user:" + user + "@lab",
 				Username:      user,
 				TokenTTL:      cfg.ContextIdleTTL,
 				Enable:        "token",
@@ -104,18 +119,22 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) err
 			},
 			Device: t.NAS, Platform: "lab", WithEnable: t.Enable, TTL: cfg.ContextIdleTTL})
 		if err != nil {
-			return fmt.Errorf("port49d: minting the lab seed for %s on %s: %w", user, t.NAS, err)
+			return logins, enables, fmt.Errorf("port49d: minting the lab seed for %s on %s: %w", user, t.NAS, err)
 		}
 		line, err := json.Marshal(map[string]string{"nas": t.NAS, "username": user,
 			"login": res.Login, "enable": res.Enable, "expires_at": res.ExpiresAt.Format(time.RFC3339)})
 		if err != nil {
-			return err
+			return logins, enables, err
 		}
 		if _, err := f.Write(append(line, '\n')); err != nil {
-			return err
+			return logins, enables, err
+		}
+		logins++
+		if res.Enable != "" {
+			enables++
 		}
 	}
-	return nil
+	return logins, enables, nil
 }
 
 func run(cfgPath string) error {
@@ -143,13 +162,27 @@ func run(cfgPath string) error {
 		return err
 	}
 	// The tag key binds a token to the device it was minted for (design §8),
-	// and it is derived from the current encryption key rather than generated
-	// per process: a process-local key would make every token minted by one
-	// daemon a device_mismatch at the next, which is a fleet-wide denial that
-	// nothing in the log would attribute to a restart. Derived, the tag is a
-	// function of configuration, so two daemons on one key agree and retiring
-	// that key retires the tags with the records it sealed.
+	// and it is derived from an encryption key rather than generated per
+	// process: a process-local key would make every token minted by one daemon
+	// a device_mismatch at the next, which is a fleet-wide denial that nothing
+	// in the log would attribute to a restart. Derived, the tag is a function
+	// of configuration, so two daemons on one key agree.
+	//
+	// A mint uses the current key. What is ACCEPTED is the whole read window,
+	// current and previous, because the tag key is derived from a key that
+	// rotates: deriving the accepted tag from `current` alone would mean the
+	// instant an operator rotated, every outstanding token answered
+	// device_mismatch — "this token was minted for another device" — to every
+	// operator on every device, while its store record still opened perfectly
+	// under `previous`. That is the same fleet-wide, unattributed denial the
+	// derivation avoids on restart, triggered by a rotation instead. With the
+	// window, a tag retires when its key leaves the window, and not before —
+	// one rule for the record and for the tag on it.
 	tagKey := token.TagKey(keys.Current.Bytes[:])
+	tags := token.NewTagWindow(tagKey)
+	if keys.Previous != nil {
+		tags = token.NewTagWindow(tagKey, token.TagKey(keys.Previous.Bytes[:]))
+	}
 	st := crypt.Wrap(memory.New(time.Now), keys, m.CryptOpenFailures)
 
 	spool, err := acct.NewSpool(cfg.Accounting.SpoolCapacity, cfg.Accounting.SpoolPath, log, m)
@@ -194,13 +227,14 @@ func run(cfgPath string) error {
 	// One line per seed, JSON, written before the listener opens; the file is
 	// truncated at start so a restart cannot leave a spent token behind.
 	if len(cfg.Lab.SeedTokens) > 0 {
-		if err := mintSeeds(ctx, cfg, minter); err != nil {
+		logins, enables, err := mintSeeds(ctx, cfg, minter)
+		if err != nil {
 			stopSpool()
 			<-spoolDone
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "port49d lab: %d token pair(s) minted, credentials written to %s\n",
-			len(cfg.Lab.SeedTokens), cfg.Lab.SeedTokenFile)
+		fmt.Fprintf(os.Stderr, "port49d lab: %d login token(s) and %d enable token(s) minted, "+
+			"credentials written to %s\n", logins, enables, cfg.Lab.SeedTokenFile)
 	}
 
 	deps := server.Deps{Admission: cfg.Admission, Keys: cfg.Keyring(),
@@ -208,7 +242,7 @@ func run(cfgPath string) error {
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
 		Authen: authen.New(st, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
-			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tagKey),
+			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags),
 		// `session.staleness_ceiling` defaults to 0 — no staleness check — and
 		// that default is the operational one, not an unfinished wiring: a
 		// finite ceiling denies a steadily working operator `context_stale`,

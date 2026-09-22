@@ -18,6 +18,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/token"
@@ -27,6 +28,10 @@ import (
 // secret in these tests is the device's own tag followed by filler, so a change
 // to the tag derivation fails the tests rather than passing on a stale string.
 var labTagKey = token.TagKey([]byte("labkey"))
+
+// labTags is the window the fixture's handler accepts. One key: a second one is
+// what TestRotatedEncryptionKeyKeepsItsTags is for.
+var labTags = token.NewTagWindow(labTagKey)
 
 type fixture struct {
 	h    *Handler
@@ -61,7 +66,7 @@ func setupStore(t *testing.T, wrap func(*memory.Store) store.Store) *fixture {
 	f.m = metrics.New(prometheus.NewRegistry())
 	f.h = New(wrap(f.st), decision.NewJSONLines(f.log), l, f.m,
 		func() time.Time { return f.now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
-		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
+		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTags)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
 		// Enable and MaxPrivilege are the shape a real mint produces (spec
 		// §5.1.1): the login context they land on is escalatable, so a test
@@ -293,7 +298,7 @@ func TestStoreErrorIsErrorWithRecord(t *testing.T) {
 	ids := 0
 	h := New(st, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
-		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
+		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTags)
 
 	tok := token.Tag(labTagKey, "leaf-01") + "tok1tok1tok1tok1tok1tok1"
 	reply, done := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}).Start(context.Background(),
@@ -454,7 +459,7 @@ func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {
 	ids := 0
 	h := New(noStore{}, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
-		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
+		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTags)
 
 	// "@corp.example.com" canonicalizes to "" (spec §2): everything before the
 	// first "@" is stripped, leaving nothing.
@@ -705,7 +710,7 @@ func TestDeviceMismatchTouchesNoStore(t *testing.T) {
 	l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return now })
 	h := New(noStore{}, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return now }, func() string { return "ctx1" },
-		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
+		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTags)
 	reply, done := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}).Start(context.Background(),
 		wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
 			User: []byte("alice"), Port: []byte("vty0"), Data: []byte(token.Tag(labTagKey, "leaf-99") + "tok1tok1tok1tok1tok1tok1")})
@@ -1297,5 +1302,72 @@ func TestLoginTokenAtEnableIsKindMismatch(t *testing.T) {
 	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
 	if reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "token_kind_mismatch" {
 		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+}
+
+// A rotation must not deny the fleet. The tag key is derived from an encryption
+// key, and the store keeps a two-key read window, so a token sealed under the
+// key that is now `previous` still opens — and its tag must still be accepted,
+// or the instant an operator rotates, every outstanding token answers
+// device_mismatch ("this token was minted for another device") to every
+// operator on every device at once, with nothing in the log naming the
+// rotation.
+//
+// The rotation is performed the way a real one is: the token is written through
+// a store sealed under v1, and then read through the same store sealed under v2
+// with v1 as previous. What changes between the two halves is only which tag
+// keys the handler accepts.
+func TestRotatedEncryptionKeyKeepsItsTagUntilItLeavesTheWindow(t *testing.T) {
+	var v1, v2 crypt.Key
+	v1.ID, v2.ID = "v1", "v2"
+	copy(v1.Bytes[:], "rotation-test-key-one-32-bytes!!")
+	copy(v2.Bytes[:], "rotation-test-key-two-32-bytes!!")
+	tagV1, tagV2 := token.TagKey(v1.Bytes[:]), token.TagKey(v2.Bytes[:])
+	secret := token.Tag(tagV1, "leaf-01") + "tok1tok1tok1tok1tok1tok1"
+
+	// One store, two views of it: v1 current at mint, v2 current with v1
+	// previous afterwards. Sealed under v1, readable under both.
+	now := time.Unix(1_757_041_495, 0)
+	st := memory.New(func() time.Time { return now })
+	atMint := crypt.Wrap(st, crypt.Keys{Current: v1}, nil)
+	afterRotation := crypt.Wrap(st, crypt.Keys{Current: v2, Previous: &v1}, nil)
+
+	redeem := func(t *testing.T, s store.Store, tags token.TagWindow) (wire.AuthenReply, map[string]any) {
+		t.Helper()
+		if _, err := atMint.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+			store.Token{ID: "rot", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+				Principal: "user:alice@example.com", ExpiresAt: now.Add(15 * time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+		log := &bytes.Buffer{}
+		l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond,
+			AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return now })
+		h := New(s, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
+			func() time.Time { return now }, func() string { return "ctx1" },
+			15*time.Minute, 2*time.Hour, time.Hour, time.Hour, tags)
+		sess := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"})
+		reply, _ := sess.Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1,
+			AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
+			User: []byte("alice"), Port: []byte("vty0"), RemAddr: []byte("198.51.100.4"), Data: []byte(secret)})
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(log.String())), &rec); err != nil {
+			t.Fatal(err)
+		}
+		return reply, rec
+	}
+
+	// v1 is still in the window: the token authenticates.
+	reply, rec := redeem(t, afterRotation, token.NewTagWindow(tagV2, tagV1))
+	if reply.Status != wire.AuthenStatusPass || rec["reason"] != "token_redeemed" {
+		t.Fatalf("a token minted before the rotation must still authenticate while its key is in the "+
+			"window: %v", rec)
+	}
+
+	// v1 has been dropped from the config: now, and only now, the tag is a
+	// device_mismatch. The record it was sealed under is unreadable too, so
+	// there is nothing left to redeem either way.
+	reply, rec = redeem(t, crypt.Wrap(st, crypt.Keys{Current: v2}, nil), token.NewTagWindow(tagV2))
+	if reply.Status != wire.AuthenStatusFail || rec["reason"] != "device_mismatch" {
+		t.Fatalf("once the minting key has left the window its tags must be refused: %v", rec)
 	}
 }

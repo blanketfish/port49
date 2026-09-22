@@ -5,6 +5,7 @@ package token
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"io"
 	"math/big"
 )
@@ -27,6 +28,54 @@ func TagKey(currentEncryptionKey []byte) []byte {
 	m := hmac.New(sha256.New, currentEncryptionKey)
 	m.Write([]byte("port49/tag"))
 	return m.Sum(nil)
+}
+
+// TagWindow is the set of tag keys a daemon accepts a token under: one per
+// encryption key in the store's read window, newest first.
+//
+// It exists because the tag key is derived from an encryption key and the
+// encryption keys rotate. A daemon that computed the tag from `current` alone
+// would, the instant an operator rotated, answer `device_mismatch` — "this
+// token was minted for another device" — to every operator on every device at
+// once, while every one of those tokens' store records still opened perfectly
+// under `previous`. Mirroring the crypt window means a tag stops being accepted
+// when its key leaves that window and not one moment before, which is the same
+// rule, said once, for the record and for the tag on it.
+//
+// Mints use the current key alone (Minter): the window is what a daemon
+// accepts, never what it issues.
+type TagWindow struct {
+	keys [][]byte
+}
+
+// NewTagWindow builds the window from tag keys already derived with TagKey,
+// current first. A window with no keys accepts no tag at all, which is the
+// failure a daemon started without an encryption key would deserve; config.Load
+// refuses that config, so it is unreachable rather than tolerated.
+func NewTagWindow(tagKeys ...[]byte) TagWindow {
+	w := TagWindow{}
+	for _, k := range tagKeys {
+		if len(k) > 0 {
+			w.keys = append(w.keys, k)
+		}
+	}
+	return w
+}
+
+// Matches reports whether tag is the tag of deviceName under any key in the
+// window.
+//
+// Every key is compared and none is skipped: returning early on the first
+// match would make "matched the current key" and "matched the previous key"
+// take measurably different times, which is a free oracle for which key a
+// device's tokens were minted under. The comparison itself is constant-time
+// for the same reason the tag is compared with subtle at all.
+func (w TagWindow) Matches(tag, deviceName string) bool {
+	got := 0
+	for _, k := range w.keys {
+		got |= subtle.ConstantTimeCompare([]byte(tag), []byte(Tag(k, deviceName)))
+	}
+	return got == 1
 }
 
 // Tag is the first six characters of every token minted for deviceName. A

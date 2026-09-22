@@ -50,22 +50,26 @@ type Handler struct {
 	// certificate. It is the reach of revocation (spec §5.1.4), not the life
 	// of the context itself.
 	indexTTL time.Duration
-	// tagKey derives the device tag every minted token carries (internal/token).
-	// The daemon computes the tag for the peer and compares it before any
-	// store access, so a token cut for another device is recognized rather
-	// than merely absent (design §8).
-	tagKey []byte
+	// tags is the window of tag keys a presented token may be tagged under
+	// (internal/token). The daemon computes the tag for the peer and compares
+	// it before any store access, so a token cut for another device is
+	// recognized rather than merely absent (design §8). It is a window and not
+	// one key because the tag key is derived from an encryption key: a token
+	// must stay acceptable for as long as its store record opens, which is the
+	// whole of the crypt read window.
+	tags token.TagWindow
 }
 
-// New builds the authentication handler. tagKey is the key the token tag is
-// derived under (token.TagKey); it must be the same one the minter uses, or
-// every token presented is a device_mismatch.
+// New builds the authentication handler. tags are the keys the token tag may be
+// derived under (token.TagKey, one per encryption key in the read window); the
+// minter's key must be among them, or every token presented is a
+// device_mismatch.
 func New(s store.Store, e decision.Emitter, l *limits.Limiter, m *metrics.Metrics, now func() time.Time,
 	newCtxID func() string, receiptIdleTTL, receiptMaxAge, contextTTL, indexTTL time.Duration,
-	tagKey []byte) *Handler {
+	tags token.TagWindow) *Handler {
 	return &Handler{store: s, log: e, limits: l, metrics: m, now: now, newCtxID: newCtxID,
 		receiptIdleTTL: receiptIdleTTL, receiptMaxAge: receiptMaxAge, contextTTL: contextTTL,
-		indexTTL: indexTTL, tagKey: tagKey}
+		indexTTL: indexTTL, tags: tags}
 }
 
 // phase is a Session's place in a multi-round ASCII exchange. phaseDone is
@@ -200,8 +204,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// base62 by accident; the daemon never sees the token under CHAP, so there
 	// is no tag to be wrong and the outcome must stay token_not_found.
 	if method != methodCHAP {
-		if tag, ok := token.Parse(presented); ok &&
-			subtle.ConstantTimeCompare([]byte(tag), []byte(token.Tag(s.h.tagKey, s.peer.NAS))) != 1 {
+		if tag, ok := token.Parse(presented); ok && !s.h.tags.Matches(tag, s.peer.NAS) {
 			return s.fail(ctx, rec, decision.DeviceMismatch)
 		}
 	}

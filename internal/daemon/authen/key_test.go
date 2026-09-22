@@ -222,7 +222,7 @@ func TestReceiptCarryingAnotherCredentialIsRefused(t *testing.T) {
 	l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return now })
 	h := New(wrongReceiptStore{}, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return now }, func() string { return "ctx1" },
-		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTagKey)
+		15*time.Minute, 2*time.Hour, time.Hour, time.Hour, labTags)
 
 	reply, done := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}).
 		Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "not-a-token"))

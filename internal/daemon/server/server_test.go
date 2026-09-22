@@ -190,7 +190,8 @@ func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.A
 		// The e2e credentials here are not token-shaped, so the tag check never
 		// fires; the key only has to be non-nil and stable.
 		Authen: authen.New(st, em, lim, m, time.Now, func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) },
-			15*time.Minute, 2*time.Hour, time.Hour, time.Hour, token.TagKey([]byte("server_test"))),
+			15*time.Minute, 2*time.Hour, time.Hour, time.Hour,
+			token.NewTagWindow(token.TagKey([]byte("server_test")))),
 		Author: author.New(st, authz, em, m, time.Now, platform.Defaults(), time.Hour, 10*time.Minute, time.Hour),
 		Acct:   acct.New(st, sp, m, time.Now, platform.SystemUsers()),
 		Limits: lim, Metrics: m, Log: em, Now: time.Now, IdleTimeout: time.Second}

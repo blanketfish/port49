@@ -324,11 +324,11 @@ func (l *lab) l3CLI(user, password string) (*cliConn, error) {
 //
 //   - a *different* username. This is the `$enab{level}$` shape the whole row
 //     is named after, and the one the memo prices.
-//   - the **same** username, a second time. This is what vEOS 4.32.2F actually
-//     does, measured: the enable START carries `alice01`, the operator's own
-//     name. The first version excluded exactly those records and then failed
-//     the test for finding none — reporting a measurement it had made as a
-//     measurement it had not.
+//   - the **same** username, a second time. This is what vEOS-lab 4.31.2F (the
+//     image tagged 4.32.2F) actually does, measured: the enable START carries
+//     the operator's own name. The first version excluded exactly those
+//     records and then failed the test for finding none — reporting a
+//     measurement it had made as a measurement it had not.
 //
 // Records arrive in order, so the first redeem for a login username is that
 // login and every later one is an enable.

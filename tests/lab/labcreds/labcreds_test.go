@@ -158,3 +158,32 @@ func TestContains(t *testing.T) {
 		t.Errorf("an empty secret matched, which would make every field a hit")
 	}
 }
+
+// SecretsOf is what a run with a daemon restart in it verifies against: the
+// union of every seed file its daemons wrote, deduplicated, rather than the one
+// file left on disk. A restart truncates that file, so the last one names only
+// the tokens of the daemon that ran last — which, after a restart-and-restore,
+// is a daemon that put nothing on the wire.
+func TestSecretsOfTakesTheUnionAcrossDaemonStarts(t *testing.T) {
+	first := []SeedToken{{NAS: "leaf1", Username: "alice01", Login: "AbCdEflogin01"}}
+	second := []SeedToken{
+		{NAS: "leaf1", Username: "alice01", Login: "AbCdEflogin09", Enable: "AbCdEfenable09"},
+		{NAS: "leaf1", Username: "alice02", Login: "AbCdEflogin01"}, // the same token twice over the run
+	}
+	got, err := SecretsOf(append(append([]SeedToken{}, first...), second...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"AbCdEflogin01", "AbCdEflogin09", "AbCdEfenable09", BreakglassPassword}
+	if len(got) != len(want) {
+		t.Fatalf("got %d secrets (%v), want %d", len(got), got, len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("secret %d differs from the expected one", i)
+		}
+	}
+	if _, err := SecretsOf(nil); err == nil {
+		t.Error("no pair at all must be refused, exactly as an empty file is")
+	}
+}

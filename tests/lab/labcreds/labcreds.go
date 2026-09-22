@@ -144,6 +144,20 @@ func Secrets(seedTokenPath string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	out, err := SecretsOf(tokens)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", seedTokenPath, err)
+	}
+	return out, nil
+}
+
+// SecretsOf is Secrets over pairs already read, and it exists for the run with
+// a restart in it. The daemon truncates the seed-token file at every start, so
+// the file at the end of a run names only the last daemon's tokens — while the
+// captures hold every daemon's. A caller that watched each file as it was
+// written passes the union here, and the exact-secret half of the verification
+// covers the whole run rather than its last few minutes.
+func SecretsOf(tokens []SeedToken) ([]string, error) {
 	seen := map[string]bool{}
 	var out []string
 	for _, t := range tokens {
@@ -155,7 +169,7 @@ func Secrets(seedTokenPath string) ([]string, error) {
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("%s holds no minted token; refusing to verify against an empty secret list", seedTokenPath)
+		return nil, fmt.Errorf("holds no minted token; refusing to verify against an empty secret list")
 	}
 	if !seen[BreakglassPassword] {
 		out = append(out, BreakglassPassword)
