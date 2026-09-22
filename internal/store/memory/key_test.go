@@ -53,12 +53,13 @@ func TestReceiptKeyCarriesTheCredentialHash(t *testing.T) {
 	ctx := context.Background()
 
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
-	if _, err := s.PutToken(ctx, k, store.Token{Secret: []byte("p49_tok1"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute)}); err != nil {
+	if _, err := s.PutToken(ctx, k, store.Token{ID: "t1", Secret: []byte("p49_tok1"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	h1 := sha256.Sum256([]byte("p49_tok1"))
 	rk := store.ReceiptKey{NAS: "leaf-01", Username: "alice", CredentialSHA256: h1}
-	if err := s.RedeemAndReceipt(ctx, k, []byte("p49_tok1"), rk, store.Receipt{CredentialSHA256: h1, CtxID: "ctx1", ExpiresAt: now.Add(time.Minute)}); err != nil {
+	r := store.Receipt{CredentialSHA256: h1, CtxID: "ctx1", FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Minute)}
+	if err := s.RedeemAndReceipt(ctx, k, "t1", rw(rk, r, "user:alice@example.com")); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.GetReceipt(ctx, rk); err != nil || got.CtxID != "ctx1" {

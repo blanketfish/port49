@@ -205,7 +205,7 @@ func startServer(t *testing.T, log *syncBuffer) (addr string, st *memory.Store, 
 	t.Helper()
 	st = memory.New(time.Now)
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_e2e"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		store.Token{ID: "e2e", Secret: []byte("p49_e2e"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	ts := newTestServer(t, log, st, nil)
@@ -276,7 +276,7 @@ func TestTwoUsersAuthenticateAtOnePortAndAuthorizeAtAnother(t *testing.T) {
 	}
 	for _, u := range users {
 		if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: u.name},
-			store.Token{Secret: []byte(u.secret), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+			store.Token{ID: "t_" + u.name, Secret: []byte(u.secret), Kind: store.KindLogin, Principal: "user:" + u.name + "@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -537,7 +537,7 @@ func TestPanicInOneConnectionDoesNotStopTheDaemon(t *testing.T) {
 	log := &syncBuffer{}
 	st := memory.New(time.Now)
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_e2e"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		store.Token{ID: "e2e", Secret: []byte("p49_e2e"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	ts := newTestServer(t, log, st, panicAuthorizer{})
@@ -579,7 +579,7 @@ func TestPanicInOneConnectionDoesNotStopTheDaemon(t *testing.T) {
 	// The daemon is still serving: a fresh connection completes an exchange
 	// that does not reach the authorizer.
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
-		store.Token{Secret: []byte("p49_after"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		store.Token{ID: "after", Secret: []byte("p49_after"), Kind: store.KindLogin, Principal: "user:bob@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	c = dial(t, ts.addr, []byte("k2"))
@@ -667,7 +667,7 @@ func TestSingleConnectServesTwoExchanges(t *testing.T) {
 	log := &syncBuffer{}
 	addr, st, _ := startServer(t, log)
 	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_second"), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		store.Token{ID: "second", Secret: []byte("p49_second"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	c := dial(t, addr, []byte("k2"))

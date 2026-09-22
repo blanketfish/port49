@@ -224,8 +224,14 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 
 	// 3. Atomic redemption; the loser of a race adopts the winner's receipt.
 	ctxID := s.h.newCtxID()
-	receipt := store.Receipt{CredentialSHA256: credHash, Status: wire.AuthenStatusPass, CtxID: ctxID, ExpiresAt: s.h.now().Add(s.h.receiptTTL)}
-	err = s.h.store.RedeemAndReceipt(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username}, winner.Secret, rk, receipt)
+	// The three bounds are all receipt_ttl for now, which reproduces plan 1's
+	// single-expiry behaviour exactly: GetReceipt gates on RetainUntil, and
+	// nothing here reads the sliding bound yet. Task 6 is what separates them.
+	now := s.h.now()
+	receipt := store.Receipt{CredentialSHA256: credHash, Status: wire.AuthenStatusPass, CtxID: ctxID,
+		FirstRedeemedAt: now, IdleExpiresAt: now.Add(s.h.receiptTTL), RetainUntil: now.Add(s.h.receiptTTL)}
+	err = s.h.store.RedeemAndReceipt(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username}, winner.ID,
+		store.ReceiptWrite{Key: rk, Receipt: receipt, Principal: winner.Principal, IndexTTL: s.h.receiptTTL})
 	s.h.metrics.StoreOps.WithLabelValues("redeem", storeOutcome(err)).Inc()
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

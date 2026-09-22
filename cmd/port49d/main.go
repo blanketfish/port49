@@ -97,7 +97,11 @@ func run(cfgPath string) error {
 	}
 	for _, t := range cfg.Lab.SeedTokens {
 		if _, err := st.PutToken(ctx, store.TokenKey{NAS: t.NAS, Username: authen.Canonical(t.Username)},
-			store.Token{Secret: []byte(t.Secret), Kind: t.Kind, ExpiresAt: time.Now().Add(cfg.ContextIdleTTL)}); err != nil {
+			// ID: t.Secret is the lab seed's stand-in for a minted handle. It
+			// is what makes the seeded token addressable for redemption at
+			// all; Task 15 replaces this loop with the Minter, which chooses
+			// an ID that is not the secret.
+			store.Token{ID: t.Secret, Secret: []byte(t.Secret), Kind: t.Kind, ExpiresAt: time.Now().Add(cfg.ContextIdleTTL)}); err != nil {
 			stopSpool()
 			<-spoolDone
 			return err

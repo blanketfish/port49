@@ -39,7 +39,7 @@ func setup(t *testing.T) *fixture {
 		func() time.Time { return f.now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
 		30*time.Second, time.Hour)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_tok1"), Kind: store.KindLogin, ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "t1", Secret: []byte("p49_tok1"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -194,11 +194,11 @@ func TestCHAP(t *testing.T) {
 func TestLoginTokenLaterInSetIsFound(t *testing.T) {
 	f := setup(t)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
-		store.Token{Secret: []byte("bob_enable_tok"), Kind: store.KindEnable, ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "bob_enable", Secret: []byte("bob_enable_tok"), Kind: store.KindEnable, Principal: "user:bob@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
-		store.Token{Secret: []byte("bob_login_tok"), Kind: store.KindLogin, ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "bob_login", Secret: []byte("bob_login_tok"), Kind: store.KindLogin, Principal: "user:bob@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -332,16 +332,28 @@ func (noStore) PutToken(context.Context, store.TokenKey, store.Token) (int, erro
 func (noStore) Candidates(context.Context, store.TokenKey) ([]store.Token, error) {
 	panic("store called")
 }
-func (noStore) RedeemAndReceipt(context.Context, store.TokenKey, []byte, store.ReceiptKey, store.Receipt) error {
+func (noStore) RedeemAndReceipt(context.Context, store.TokenKey, string, store.ReceiptWrite) error {
+	panic("store called")
+}
+func (noStore) DeleteTokens(context.Context, store.TokenKey) error {
 	panic("store called")
 }
 func (noStore) GetReceipt(context.Context, store.ReceiptKey) (store.Receipt, error) {
+	panic("store called")
+}
+func (noStore) ExtendReceipt(context.Context, store.ReceiptKey, time.Time) error {
+	panic("store called")
+}
+func (noStore) DeleteReceiptsByPrincipal(context.Context, string) (int, error) {
 	panic("store called")
 }
 func (noStore) PutContext(context.Context, store.ContextKey, store.Context, time.Duration) error {
 	panic("store called")
 }
 func (noStore) GetContext(context.Context, store.ContextKey) (store.Context, error) {
+	panic("store called")
+}
+func (noStore) TouchContext(context.Context, store.ContextKey, time.Duration) error {
 	panic("store called")
 }
 func (noStore) DeleteContext(context.Context, store.ContextKey) error {

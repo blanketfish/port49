@@ -52,7 +52,7 @@ func TestContextIsKeyedOnUsernameNotPort(t *testing.T) {
 func TestTwoUsersOnOneDeviceDoNotShareASlot(t *testing.T) {
 	f := setup(t)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
-		store.Token{Secret: []byte("p49_tok2"), Kind: store.KindLogin, ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "t2", Secret: []byte("p49_tok2"), Kind: store.KindLogin, Principal: "user:bob@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	// Both sessions report the same port, as vEOS and the N9Kv do.
@@ -78,7 +78,7 @@ func TestTwoUsersOnOneDeviceDoNotShareASlot(t *testing.T) {
 func TestSecondLoginReplacesContextAndLogsIt(t *testing.T) {
 	f := setup(t)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_tok2"), Kind: store.KindLogin, ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "t2", Secret: []byte("p49_tok2"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "p49_tok1")); reply.Status != wire.AuthenStatusPass {
@@ -113,7 +113,7 @@ func TestReceiptIsScopedToNASUsernameAndCredential(t *testing.T) {
 	// bob holds a token of his own, so a miss here is a receipt miss and not
 	// merely an empty candidate set.
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
-		store.Token{Secret: []byte("p49_bob"), Kind: store.KindLogin, ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "tb", Secret: []byte("p49_bob"), Kind: store.KindLogin, Principal: "user:bob@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	start := papStart("alice", "ssh", "172.100.100.1", "p49_tok1")
@@ -149,7 +149,7 @@ func TestReceiptIsScopedToNASUsernameAndCredential(t *testing.T) {
 func TestSecondLoginWithAFreshTokenIsNotCredentialMismatch(t *testing.T) {
 	f := setup(t)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{Secret: []byte("p49_tok2"), Kind: store.KindLogin, ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
+		store.Token{ID: "t2", Secret: []byte("p49_tok2"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "p49_tok1"))
@@ -168,8 +168,10 @@ type wrongReceiptStore struct {
 }
 
 func (wrongReceiptStore) GetReceipt(context.Context, store.ReceiptKey) (store.Receipt, error) {
+	now := time.Unix(1_757_041_495, 0)
 	return store.Receipt{CredentialSHA256: sha256.Sum256([]byte("a different credential")),
-		Status: wire.AuthenStatusPass, CtxID: "ctxX", ExpiresAt: time.Unix(1_757_041_495, 0).Add(time.Hour)}, nil
+		Status: wire.AuthenStatusPass, CtxID: "ctxX",
+		FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Hour), RetainUntil: now.Add(time.Hour)}, nil
 }
 
 func TestReceiptCarryingAnotherCredentialIsRefused(t *testing.T) {

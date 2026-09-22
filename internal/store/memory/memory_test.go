@@ -18,11 +18,11 @@ func TestTokenLifecycle(t *testing.T) {
 	ctx := context.Background()
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
 
-	n, err := s.PutToken(ctx, k, store.Token{Secret: []byte("t1"), Kind: "login", ExpiresAt: now.Add(time.Minute)})
+	n, err := s.PutToken(ctx, k, store.Token{ID: "t1", Secret: []byte("t1"), Kind: "login", ExpiresAt: now.Add(time.Minute)})
 	if err != nil || n != 1 {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
-	n, _ = s.PutToken(ctx, k, store.Token{Secret: []byte("t2"), Kind: "login", ExpiresAt: now.Add(time.Second)})
+	n, _ = s.PutToken(ctx, k, store.Token{ID: "t2", Secret: []byte("t2"), Kind: "login", ExpiresAt: now.Add(time.Second)})
 	if n != 2 {
 		t.Fatalf("second put count %d", n)
 	}
@@ -38,11 +38,11 @@ func TestTokenLifecycle(t *testing.T) {
 	}
 
 	rk := store.ReceiptKey{NAS: "leaf-01", Username: "alice", CredentialSHA256: sha256.Sum256([]byte("t1"))}
-	r := store.Receipt{Status: 1, CtxID: "01J", ExpiresAt: now.Add(30 * time.Second)}
-	if err := s.RedeemAndReceipt(ctx, k, []byte("t1"), rk, r); err != nil {
+	r := store.Receipt{Status: 1, CtxID: "01J", FirstRedeemedAt: now, IdleExpiresAt: now.Add(30 * time.Second), RetainUntil: now.Add(30 * time.Second)}
+	if err := s.RedeemAndReceipt(ctx, k, "t1", rw(rk, r, "user:alice")); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RedeemAndReceipt(ctx, k, []byte("t1"), rk, r); !errors.Is(err, store.ErrNotFound) {
+	if err := s.RedeemAndReceipt(ctx, k, "t1", rw(rk, r, "user:alice")); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("second redeem must lose: %v", err)
 	}
 	got, err := s.GetReceipt(ctx, rk)
@@ -58,7 +58,7 @@ func TestRedeemIsAtomicUnderRace(t *testing.T) {
 	s := New(time.Now)
 	ctx := context.Background()
 	k := store.TokenKey{NAS: "n", Username: "u"}
-	s.PutToken(ctx, k, store.Token{Secret: []byte("x"), ExpiresAt: time.Now().Add(time.Minute)})
+	s.PutToken(ctx, k, store.Token{ID: "x", Secret: []byte("x"), ExpiresAt: time.Now().Add(time.Minute)})
 	rk := store.ReceiptKey{NAS: "n", Username: "u", CredentialSHA256: sha256.Sum256([]byte("x"))}
 	var wg sync.WaitGroup
 	wins := 0
@@ -67,7 +67,8 @@ func TestRedeemIsAtomicUnderRace(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := s.RedeemAndReceipt(ctx, k, []byte("x"), rk, store.Receipt{ExpiresAt: time.Now().Add(time.Minute)}); err == nil {
+			r := store.Receipt{FirstRedeemedAt: time.Now(), IdleExpiresAt: time.Now().Add(time.Minute), RetainUntil: time.Now().Add(time.Minute)}
+			if err := s.RedeemAndReceipt(ctx, k, "x", rw(rk, r, "user:u")); err == nil {
 				mu.Lock()
 				wins++
 				mu.Unlock()
@@ -105,7 +106,7 @@ func TestSecretsAreNotAliased(t *testing.T) {
 
 	// Put a token with a mutable secret
 	secret := []byte("mysecret")
-	_, err := s.PutToken(ctx, k, store.Token{Secret: secret, Kind: "login", ExpiresAt: now.Add(time.Minute)})
+	_, err := s.PutToken(ctx, k, store.Token{ID: "t1", Secret: secret, Kind: "login", ExpiresAt: now.Add(time.Minute)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,18 +138,20 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 	// Write tokens, receipts, contexts under distinct keys with short TTLs
 	for i := 0; i < 3; i++ {
 		tk := store.TokenKey{NAS: "n", Username: "u" + string(rune(i))}
-		s.PutToken(ctx, tk, store.Token{Secret: []byte("s"), ExpiresAt: now.Add(time.Second)})
+		s.PutToken(ctx, tk, store.Token{ID: "t", Secret: []byte("s"), ExpiresAt: now.Add(time.Second)})
 
 		rk := store.ReceiptKey{NAS: "n", Username: "u" + string(rune(i))}
-		s.receipts[rk] = store.Receipt{ExpiresAt: now.Add(time.Second)}
+		s.receipts[rk] = store.Receipt{RetainUntil: now.Add(time.Second)}
+		s.receiptsByPrincipal["user:u"+string(rune(i))] = map[store.ReceiptKey]time.Time{rk: now.Add(time.Second)}
 
 		ck := store.ContextKey{NAS: "n", Username: "u" + string(rune(i))}
 		s.contexts[ck] = ctxEntry{c: store.Context{CtxID: "c"}, exp: now.Add(time.Second)}
 	}
 
 	// Verify entries exist
-	if len(s.tokens) != 3 || len(s.receipts) != 3 || len(s.contexts) != 3 {
-		t.Fatalf("setup failed: tokens=%d receipts=%d contexts=%d", len(s.tokens), len(s.receipts), len(s.contexts))
+	if len(s.tokens) != 3 || len(s.receipts) != 3 || len(s.contexts) != 3 || len(s.receiptsByPrincipal) != 3 {
+		t.Fatalf("setup failed: tokens=%d receipts=%d contexts=%d index=%d",
+			len(s.tokens), len(s.receipts), len(s.contexts), len(s.receiptsByPrincipal))
 	}
 
 	// Advance time past expiry
@@ -159,58 +162,12 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 	s.sweepLocked()
 	s.mu.Unlock()
 
-	// Verify all expired entries are gone
-	if len(s.tokens) != 0 || len(s.receipts) != 0 || len(s.contexts) != 0 {
-		t.Fatalf("sweep failed: tokens=%d receipts=%d contexts=%d", len(s.tokens), len(s.receipts), len(s.contexts))
-	}
-}
-
-func TestReusableTokenRedeem(t *testing.T) {
-	now := time.Unix(1_000, 0)
-	s := New(func() time.Time { return now })
-	ctx := context.Background()
-	k := store.TokenKey{NAS: "n", Username: "u"}
-
-	// Put a reusable token
-	_, err := s.PutToken(ctx, k, store.Token{
-		Secret:    []byte("reusable_secret"),
-		Kind:      "login",
-		Reusable:  true,
-		ExpiresAt: now.Add(time.Minute),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// First redeem: should succeed and write receipt
-	rk := store.ReceiptKey{NAS: "n", Username: "u", CredentialSHA256: sha256.Sum256([]byte("reusable_secret"))}
-	r1 := store.Receipt{Status: 1, CtxID: "ctx1", ExpiresAt: now.Add(time.Minute)}
-	if err := s.RedeemAndReceipt(ctx, k, []byte("reusable_secret"), rk, r1); err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify receipt was written
-	got, err := s.GetReceipt(ctx, rk)
-	if err != nil || got.CtxID != "ctx1" {
-		t.Fatalf("receipt not written: %+v %v", got, err)
-	}
-
-	// Verify token still present (Reusable: true)
-	c, _ := s.Candidates(ctx, k)
-	if len(c) != 1 {
-		t.Fatalf("token was removed but Reusable: true, have %d tokens", len(c))
-	}
-
-	// Second redeem with same secret: should succeed again
-	r2 := store.Receipt{Status: 1, CtxID: "ctx2", ExpiresAt: now.Add(time.Minute)}
-	if err := s.RedeemAndReceipt(ctx, k, []byte("reusable_secret"), rk, r2); err != nil {
-		t.Fatalf("second redeem of reusable token failed: %v", err)
-	}
-
-	// Verify receipt was updated
-	got, err = s.GetReceipt(ctx, rk)
-	if err != nil || got.CtxID != "ctx2" {
-		t.Fatalf("receipt not updated: %+v %v", got, err)
+	// Verify all expired entries are gone. The principal index matters as much
+	// as the records: a daemon that sweeps records but keeps their index
+	// entries grows one map entry per login for as long as it runs.
+	if len(s.tokens) != 0 || len(s.receipts) != 0 || len(s.contexts) != 0 || len(s.receiptsByPrincipal) != 0 {
+		t.Fatalf("sweep failed: tokens=%d receipts=%d contexts=%d index=%d",
+			len(s.tokens), len(s.receipts), len(s.contexts), len(s.receiptsByPrincipal))
 	}
 }
 
@@ -257,12 +214,12 @@ func TestCompactionZeroesTheTail(t *testing.T) {
 	now := time.Now()
 	s := New(func() time.Time { return now })
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
-	if _, err := s.PutToken(context.Background(), k, store.Token{Secret: []byte("p49_stays"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Hour)}); err != nil {
+	if _, err := s.PutToken(context.Background(), k, store.Token{ID: "stays", Secret: []byte("p49_stays"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	// The expiring token is last, so compaction drops it from the tail rather
 	// than overwriting it with a live one.
-	if _, err := s.PutToken(context.Background(), k, store.Token{Secret: []byte("p49_expires"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute)}); err != nil {
+	if _, err := s.PutToken(context.Background(), k, store.Token{ID: "expires", Secret: []byte("p49_expires"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -278,5 +235,135 @@ func TestCompactionZeroesTheTail(t *testing.T) {
 		if tok.Secret != nil {
 			t.Fatalf("tail entry %d still holds an evicted token's secret: %q", i, tok.Secret)
 		}
+	}
+}
+
+func rw(rk store.ReceiptKey, r store.Receipt, principal string) store.ReceiptWrite {
+	return store.ReceiptWrite{Key: rk, Receipt: r, Principal: principal, IndexTTL: time.Hour}
+}
+
+func TestRedeemByID(t *testing.T) {
+	s := New(time.Now)
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "n", Username: "u"}
+	s.PutToken(ctx, k, store.Token{ID: "t1", Secret: []byte("same"), ExpiresAt: time.Now().Add(time.Minute)})
+	s.PutToken(ctx, k, store.Token{ID: "t2", Secret: []byte("same"), ExpiresAt: time.Now().Add(time.Minute)})
+	rk := store.ReceiptKey{NAS: "n", Username: "u"}
+	r := store.Receipt{FirstRedeemedAt: time.Now(), IdleExpiresAt: time.Now().Add(time.Minute), RetainUntil: time.Now().Add(time.Hour)}
+	if err := s.RedeemAndReceipt(ctx, k, "t2", rw(rk, r, "user:u")); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := s.Candidates(ctx, k)
+	if len(c) != 1 || c[0].ID != "t1" {
+		t.Fatalf("%+v", c)
+	}
+	if err := s.RedeemAndReceipt(ctx, k, "gone", rw(rk, r, "user:u")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("redeeming an unknown id: %v", err)
+	}
+	if err := s.DeleteTokens(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := s.Candidates(ctx, k); len(c) != 0 {
+		t.Fatal("DeleteTokens left members")
+	}
+}
+
+func TestReceiptRetainedPastItsSlidingBound(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "n", Username: "u"}
+	rk := store.ReceiptKey{NAS: "n", Username: "u"}
+	s.PutToken(ctx, k, store.Token{ID: "t", Secret: []byte("s"), ExpiresAt: now.Add(time.Hour)})
+	s.RedeemAndReceipt(ctx, k, "t", rw(rk, store.Receipt{
+		FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Hour)}, "user:u"))
+
+	now = now.Add(2 * time.Minute) // past the sliding bound, inside retention
+	got, err := s.GetReceipt(ctx, rk)
+	if err != nil {
+		t.Fatal("a receipt past its sliding bound must still be found, or a late presentation reads as token_not_found")
+	}
+	if !got.IdleExpiresAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("%+v", got)
+	}
+	if err := s.ExtendReceipt(ctx, rk, now.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetReceipt(ctx, rk); !got.IdleExpiresAt.Equal(now.Add(10*time.Minute)) || !got.FirstRedeemedAt.Equal(time.Unix(1000, 0)) {
+		t.Fatalf("extend moved the anchor or missed the bound: %+v", got)
+	}
+	now = now.Add(2 * time.Hour) // past retention
+	if _, err := s.GetReceipt(ctx, rk); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("receipt outlived RetainUntil")
+	}
+	if err := s.ExtendReceipt(ctx, rk, now.Add(time.Minute)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("extending a reclaimed receipt: %v", err)
+	}
+}
+
+func TestDeleteReceiptsByPrincipal(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "n", Username: "u"}
+	r := store.Receipt{FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Hour)}
+	for i, id := range []string{"a", "b"} {
+		s.PutToken(ctx, k, store.Token{ID: id, Secret: []byte(id), ExpiresAt: now.Add(time.Hour)})
+		var h [32]byte
+		h[0] = byte(i)
+		s.RedeemAndReceipt(ctx, k, id, rw(store.ReceiptKey{NAS: "n", Username: "u", CredentialSHA256: h}, r, "user:alice"))
+	}
+	s.PutToken(ctx, k, store.Token{ID: "c", Secret: []byte("c"), ExpiresAt: now.Add(time.Hour)})
+	var other [32]byte
+	other[0] = 9
+	s.RedeemAndReceipt(ctx, k, "c", rw(store.ReceiptKey{NAS: "n", Username: "u", CredentialSHA256: other}, r, "user:bob"))
+
+	n, err := s.DeleteReceiptsByPrincipal(ctx, "user:alice")
+	if err != nil || n != 2 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	var h0 [32]byte
+	if _, err := s.GetReceipt(ctx, store.ReceiptKey{NAS: "n", Username: "u", CredentialSHA256: h0}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("revocation must delete the principal's receipts")
+	}
+	if _, err := s.GetReceipt(ctx, store.ReceiptKey{NAS: "n", Username: "u", CredentialSHA256: other}); err != nil {
+		t.Fatal("another principal's receipt must survive")
+	}
+}
+
+// The shape TouchContext exists for: extending a TTL must not discard a write
+// that landed since the record was read. Revocation is the write that matters —
+// an extension that clobbered RevokedAt would un-revoke the session
+// permanently, because the receipts are already gone and nothing sets it again.
+func TestTouchContextExtendsWithoutClobbering(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", LastTouchedAt: now}, time.Minute)
+
+	// A revocation lands after the reader took its copy.
+	c, _ := s.GetContext(ctx, k)
+	c.RevokedAt = now
+	s.PutContext(ctx, k, c, time.Minute)
+
+	now = now.Add(30 * time.Second)
+	if err := s.TouchContext(ctx, k, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetContext(ctx, k)
+	if err != nil || got.RevokedAt.IsZero() {
+		t.Fatalf("the extension discarded the revocation: %+v %v", got, err)
+	}
+	if !got.LastTouchedAt.Equal(now) {
+		t.Fatalf("TouchContext must stamp LastTouchedAt, or the half-TTL rule never skips: %+v", got)
+	}
+	now = now.Add(45 * time.Second) // past the original expiry, inside the extended one
+	if _, err := s.GetContext(ctx, k); err != nil {
+		t.Fatal("TouchContext did not extend the expiry")
+	}
+	now = now.Add(2 * time.Minute)
+	if err := s.TouchContext(ctx, k, time.Minute); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("touching an expired context must say so, not resurrect it: %v", err)
 	}
 }
