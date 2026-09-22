@@ -26,6 +26,7 @@ type Record struct {
 	Attribution string       `json:"attribution,omitempty"`
 	TaskID      string       `json:"task_id,omitempty"`
 	AcctRecord  *AcctRecord  `json:"record,omitempty"`
+	Mint        *Mint        `json:"mint,omitempty"`
 	Unvalidated *Unvalidated `json:"unvalidated,omitempty"`
 	ServerMsg   string       `json:"server_msg,omitempty"`
 	// IndexError names what a failed index write cost, on the record for the
@@ -82,6 +83,14 @@ type AcctRecord struct {
 	StartTime   int64    `json:"start_time,omitempty"`
 	StopTime    int64    `json:"stop_time,omitempty"`
 	ElapsedTime int64    `json:"elapsed_time,omitempty"`
+}
+
+// Mint is the audit trail for authority (spec §5.7): which tokens were issued,
+// identified by hash only. The token itself never appears in the log.
+type Mint struct {
+	TokenSHA256 []string `json:"token_sha256"`
+	TTLSeconds  int      `json:"ttl_seconds"`
+	BlobHash    string   `json:"blob,omitempty"`
 }
 
 // Unvalidated is what is recorded for a packet no key validated: cleartext header
