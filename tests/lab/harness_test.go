@@ -35,6 +35,9 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
+	"github.com/rhwendt/port49/tests/lab/labpcap"
 )
 
 type platform struct {
@@ -74,12 +77,37 @@ type platform struct {
 }
 
 var platforms = []platform{
+	// The version string is what the DEVICE reports, not what the image is
+	// tagged. `show version` on this image says `Software image version:
+	// 4.31.2F` and `Internal build version: 4.31.2F-35442176.4312F`, three
+	// times over in tests/lab/results/L16-arista_eos.md, while the docker tag
+	// and the vmdk filename both say 4.32.2F -- the file was named for a
+	// release it does not contain. Every EOS results note written before
+	// 2026-09-21 carries `vEOS-lab 4.32.2F` in its header and is wrong about
+	// the release; the observations in them stand, the label does not.
+	// CLAUDE.md rule 4: the device is right and the docs are wrong.
 	{"eos", "arista_eos", "topologies/eos.clab.yml", "172.100.100.11", "leaf1",
-		"vrnetlab/arista_veos:4.32.2F", "vEOS-lab 4.32.2F", 6 * time.Minute},
+		"vrnetlab/arista_veos:4.32.2F", "vEOS-lab 4.31.2F (image tagged 4.32.2F)", 6 * time.Minute},
 	{"vjunos", "juniper_vjunos-router", "topologies/vjunos.clab.yml", "172.100.100.21", "srx1",
 		"vrnetlab/juniper_vjunos-router:23.4R2-S2.1", "vJunos-router 23.4R2-S2.1", 8 * time.Minute},
 	{"vsrx", "juniper_vsrx", "topologies/vsrx.clab.yml", "172.100.100.22", "vsrx1",
 		"vrnetlab/juniper_vsrx:21.4R3.15", "vSRX3 21.4R3.15", 6 * time.Minute},
+	// N9Kv's budget is a placeholder, not a measurement: nothing on this host has
+	// ever booted this image. 15 minutes is a starting figure chosen because the
+	// vrnetlab launcher gives the VM 10 GB of RAM and 4 vCPUs and then drives a
+	// POAP-prompt dialogue over the serial console before it applies any
+	// configuration at all. Measure the first successful deploy and replace this
+	// number with what was measured, the way the three platforms above were.
+	{"nxos", "cisco_nxos", "topologies/nxos.clab.yml", "172.100.100.31", "nx1",
+		"vrnetlab/cisco_n9kv:9300v64-10.4.2.F", "Nexus 9300v 10.4(2)F", 15 * time.Minute},
+	// The c8000v is the fastest platform in this lab and the only one where
+	// "booted" and "configured" are the same event: the launcher waits for
+	// `CVAC-4-CONFIG_DONE` on the serial console, which is the device saying it
+	// has applied the startup configuration, and reports `Startup complete in:
+	// 0:01:21` — measured on this host on 2026-09-20. Six minutes is several
+	// times that, which is what a budget is for.
+	{"iosxe", "cisco_iosxe", "topologies/iosxe.clab.yml", "172.100.100.41", "xe1",
+		"vrnetlab/cisco_c8000v:17.13.01a", "Catalyst 8000V 17.13.01a", 6 * time.Minute},
 }
 
 const (
@@ -90,9 +118,30 @@ const (
 	// every device packet fails key trial — with no build error and no obvious
 	// cause. They are named here so the coupling has somewhere to be documented,
 	// and each config carries a comment pointing back at these names.
-	labKeyDefault      = "labsecret"       // `tacacs-server host ... key`, `tacplus-server ... secret`
-	breakglassUser     = "breakglass"      // the local account both startup configs define
-	breakglassPassword = "breakglass-only" // that account's password, in both configs
+	//
+	// The values themselves live in tests/lab/labcreds, which is an ordinary
+	// package rather than a test file, because `tests/lab/cmd/redact-pcap`
+	// needs them too: it proves that no committed evidence file holds a lab
+	// credential by searching for these exact strings, and a redactor
+	// searching for a stale copy of the password would pass while the real one
+	// sat in the file. One definition, three readers.
+	labKeyDefault  = labcreds.Key            // `tacacs-server host ... key`, `tacplus-server ... secret`
+	breakglassUser = labcreds.BreakglassUser // the local account both startup configs define
+
+	// breakglassPassword is that account's password. The EOS config carries it
+	// verbatim; the Junos config carries a SHA-512 crypt hash of it under
+	// `encrypted-password`, because the plain-text form does not produce a
+	// usable password on vSRX 21.4R3.15. Regenerate that hash with
+	// `openssl passwd -6 -salt p49labsalt` over this value if it changes.
+	breakglassPassword = labcreds.BreakglassPassword
+
+	// enableSecret is what `aaa authentication enable default group port49
+	// enable` falls back to on IOS-XE, and it is deliberately the same
+	// published lab constant as breakglassPassword: one value to keep in step
+	// with configs/iosxe-startup.cfg rather than two. No other platform in this
+	// lab has an enable secret -- EOS's enable takes the operator's own
+	// credential, and NX-OS has no enable command without `feature privilege`.
+	enableSecret = breakglassPassword
 
 	spoolPath     = "/tmp/port49-lab-acct.jsonl"
 	metricsAddr   = "127.0.0.1:9049"
@@ -168,10 +217,10 @@ type lab struct {
 	// see, and any note written in that state carries this as a caveat.
 	configWarn string
 
-	mu      sync.Mutex
-	tokenN  int
-	capPath string // repo-relative, for the results note
-	capAbs  string // absolute, for reading the capture back
+	mu           sync.Mutex
+	tokenN       int
+	capAbs       string // absolute path of the raw capture, which is git-ignored
+	evidencePath string // repo-relative, committed, redacted: what a note points at
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +247,62 @@ func TestMain(m *testing.M) {
 	}()
 	code := m.Run()
 	teardown()
+	if err := writeEvidence(); err != nil {
+		fmt.Fprintf(os.Stderr, "lab: %v\n", err)
+		code = 1
+	}
 	os.Exit(code)
+}
+
+// writeEvidence redacts this run's captures into tests/lab/evidence.
+//
+// It runs after teardown, which is the only point at which every tcpdump has
+// been stopped and every capture file is complete. Before that the redactor
+// would read a file still being written and refuse it as a partial record —
+// correctly, and uselessly.
+//
+// Every results note this run wrote points at tests/lab/evidence, because
+// tests/lab/captures is git-ignored and a pointer into it is a pointer to
+// nothing for everyone but this machine. So a run that fails to produce the
+// evidence has produced notes that cite files which do not exist, and that
+// fails the run: `code = 1` above. The alternative — notes pointing at absent
+// evidence — is the failure this whole mechanism exists to prevent.
+func writeEvidence() error {
+	if root == "" {
+		return nil // no platform was ever brought up, so nothing captured
+	}
+	in := filepath.Join(root, "tests", "lab", "captures")
+	out := filepath.Join(root, "tests", "lab", "evidence")
+	key := os.Getenv("PORT49_LAB_KEY")
+	if key == "" {
+		key = labKeyDefault
+	}
+	secrets, err := labcreds.Secrets(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
+	if err != nil {
+		return fmt.Errorf("evidence: %w", err)
+	}
+	_, subnet, err := net.ParseCIDR(labSubnet)
+	if err != nil {
+		return err
+	}
+	res, err := labpcap.RedactDir(in, out, labpcap.Options{Key: key, Secrets: secrets, Subnet: subnet})
+	if err != nil {
+		return fmt.Errorf("evidence: %w", err)
+	}
+	var failed int
+	for _, r := range res {
+		if r.Err != nil {
+			failed++
+			fmt.Fprintf(os.Stderr, "lab: evidence for %s: %v\n", r.Name, r.Err)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "lab: evidence %s: %s\n", r.Name, r.Stats)
+	}
+	if failed > 0 {
+		return fmt.Errorf("evidence: %d of %d capture(s) produced no evidence file; the results notes from this "+
+			"run point at files that do not exist", failed, len(res))
+	}
+	return nil
 }
 
 // initGlobal does the once-per-run work that every platform needs: find the
@@ -379,7 +483,73 @@ func (l *lab) topoPath() string { return filepath.Join(root, "tests", "lab", l.p
 // does not exist until the deploy creates the network; and a device whose AAA
 // points at a port49 that is already answering would have no local fallback
 // while it is still booting.
+// startupConfigPath is the config file this platform's topology deploys, read
+// out of the topology rather than assumed, so the check below cannot drift from
+// what containerlab actually sends.
+func (l *lab) startupConfigPath() (string, error) {
+	raw, err := os.ReadFile(l.topoPath())
+	if err != nil {
+		return "", err
+	}
+	for _, ln := range strings.Split(string(raw), "\n") {
+		ln = strings.TrimSpace(ln)
+		rest, ok := strings.CutPrefix(ln, "startup-config:")
+		if !ok {
+			continue
+		}
+		p := strings.Trim(strings.TrimSpace(rest), `"'`)
+		return filepath.Clean(filepath.Join(filepath.Dir(l.topoPath()), p)), nil
+	}
+	return "", fmt.Errorf("%s names no startup-config", l.topoPath())
+}
+
+// checkStartupConfigASCII refuses to deploy a startup config that is not pure
+// ASCII, and this is not fastidiousness about character sets.
+//
+// The N9Kv launcher applies its config by typing it into the serial console one
+// line at a time. On the first NX-OS deploy, `tests/lab/configs/nxos-startup.cfg`
+// line 8 read:
+//
+//	! device line by line inside configuration mode — see `apply_config` in
+//
+// The em dash stopped the whole thing dead. Every line after it — the
+// break-glass account, `feature tacacs+`, the server, the group, the method
+// lists — was never sent. The device then came up perfectly: SSH serving,
+// authentication answering, healthy in `containerlab inspect`, and with no AAA
+// configuration at all. It cost a ten-minute boot to find out, and it would
+// have cost nothing at all to notice before the deploy.
+//
+// The check runs for every platform even though only NX-OS is known to be
+// vulnerable. The alternative is knowing which launchers type their config and
+// which copy it, per image and per vrnetlab version, and being wrong once.
+func (l *lab) checkStartupConfigASCII() error {
+	path, err := l.startupConfigPath()
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	for i, ln := range strings.Split(string(raw), "\n") {
+		for _, b := range []byte(ln) {
+			if b > 0x7e || (b < 0x20 && b != '\t' && b != '\r') {
+				return fmt.Errorf("%s line %d holds a byte outside ASCII (%#02x):\n  %s\n"+
+					"Startup configs must be pure ASCII, comments included. The N9Kv launcher types this file "+
+					"into the serial console line by line, and one em dash in a comment stopped it there and "+
+					"silently dropped every line after it — leaving a device that serves SSH and has no AAA. "+
+					"Replace the character (an em dash is `--`, a curly quote is `'`) and redeploy",
+					path, i+1, b, ln)
+			}
+		}
+	}
+	return nil
+}
+
 func (l *lab) up() error {
+	if err := l.checkStartupConfigASCII(); err != nil {
+		return err
+	}
 	topo := l.topoPath()
 	out, err := exec.Command("sudo", "-n", "containerlab", "deploy", "--reconfigure", "-t", topo).CombinedOutput()
 	if err != nil {
@@ -424,10 +594,192 @@ func (l *lab) up() error {
 	os.Remove(spoolPath)
 	os.Remove(spoolPath + ".draining")
 
-	return l.startDaemon()
+	if err := l.startDaemon(); err != nil {
+		return err
+	}
+	// The gate that actually decides. See waitTACACSReady: everything above
+	// proves sshd is serving, and nothing above proves the device is using
+	// TACACS+ yet.
+	return l.waitTACACSReady(tacacsReadyBudget)
+}
+
+// tacacsReadyBudget is how long a device is given, after its SSH authentication
+// is serving, to be seen sending port49d a packet. It is separate from the boot
+// budget because it measures a different thing: the boot budget ends a VM that
+// is not going to come up, and this one ends a device that came up without the
+// startup configuration this lab depends on. Eight minutes is what L4 and L13
+// used for the same gate before it was shared.
+const tacacsReadyBudget = 8 * time.Minute
+
+// waitTACACSReady blocks until the device has been seen speaking TACACS+ to
+// port49d, and exists because the run without it produced a measurement that
+// was simply false.
+//
+// waitDeviceReady passes as soon as the device runs SSH authentication through
+// to a rejection, and the long comment there says why that is the right gate
+// for "is sshd serving". On vJunos-router it passed **11 seconds** after
+// deploy, minutes before Junos had committed the startup configuration. L4's
+// first cell therefore asked a device with no `breakglass` account and no
+// `tacplus-server` whether it falls through to a local password, got "refused"
+// in 10ms, and recorded a false negative that the same run's third cell
+// contradicted.
+//
+// L4 and L13 grew this gate for themselves and the rest of the register tests
+// did not have it. Their notes were written on runs that happened to be slower;
+// nothing guaranteed the next one would be. So it is now part of bring-up, and
+// a platform that never speaks TACACS+ fails every test on it rather than
+// producing notes about a device that was not yet configured.
+//
+// What makes it a stronger gate is what the probe is: a login attempt that
+// makes the device send port49 a packet. Only a device that has committed its
+// `tacacs-server` / `tacplus-server` statement does that. The attempt is a
+// login port49 will deny — the break-glass account has no token — so the gate
+// assumes nothing about fall-through, which is the property L4 measures and
+// must not be baked into the gate that L4 runs behind.
+func (l *lab) waitTACACSReady(within time.Duration) error {
+	deadline := time.Now().Add(within)
+	for attempt := 1; ; attempt++ {
+		off := l.mark()
+		if c, err := l.dial(breakglassUser, breakglassPassword, 60*time.Second); err == nil {
+			c.Close()
+		}
+		recs := l.waitForRecords(off, 20*time.Second, func(rs []map[string]any) bool {
+			return redeemFor(rs, breakglassUser) != nil
+		})
+		if redeemFor(recs, breakglassUser) != nil {
+			fmt.Fprintf(os.Stderr, "lab: %s: ready: the device sent port49d a packet after %d login attempt(s), "+
+				"so its startup configuration is applied\n", l.p.name, attempt)
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("the device never sent port49d a packet within %v, so its startup configuration was "+
+				"never seen to apply and nothing measured against it would be about the configuration under test",
+				within)
+		}
+		time.Sleep(10 * time.Second)
+	}
 }
 
 func (l *lab) startDaemon() error {
+	cfg, err := l.configPath()
+	if err != nil {
+		return err
+	}
+	return l.startDaemonWith(cfg, false)
+}
+
+func labConfigPath() string { return filepath.Join(root, "tests", "lab", "port49d-lab.yaml") }
+
+// platformSessionAttributes overrides `lab.session_attributes` for the
+// platforms where the checked-in list is wrong, keyed on the lab platform
+// name. A platform absent from this map runs the checked-in file byte for
+// byte. Each entry is a measurement, not a preference:
+//
+// **cisco_iosxe — `priv-lvl=15` alone.** The comment on
+// `lab.session_attributes` in port49d-lab.yaml claims
+// `shell:roles*network-admin` is safe to send everywhere, because an OPTIONAL
+// argument a device does not understand is ignored (RFC 8907 §8.2). EOS and
+// Junos do ignore it. **IOS-XE 17.13.01a does not.** With it in the reply, a
+// session port49 permitted `context_matched` is refused by the device with
+//
+//	% Authorization failed.
+//
+// and the SSH session is closed, so no token operator reaches a prompt and L2,
+// L3 and L10 measure nothing. An invented optional attribute fails the same
+// way, so this is "IOS-XE fails an EXEC authorization carrying any attribute
+// it does not recognise", not "IOS-XE dislikes NX-OS's roles attribute".
+// Measured 2026-09-20; tests/lab/results/L10-cisco_iosxe.md.
+//
+// **The Junos platforms — no attributes at all.** port49 answered every Junos
+// session authorization `service_unsupported` until 2026-09-21, so no
+// attribute it sent has ever reached a Junos device and none of them is
+// measured there. Now that `junos-exec` is authorized, the reply would carry
+// `priv-lvl=15` and `shell:roles*network-admin` on a platform where IOS-XE has
+// already shown what an unrecognised attribute can cost, and where the real
+// answer — class, `local-user-name`, `user-permissions`, the allow/deny
+// regexes — is the session-only projection of decision 22, gated on L12 and
+// owned by plan 5. An empty list is the only shape that measures the thing
+// this session is measuring: does a Junos login now get a permit.
+var platformSessionAttributes = map[string]string{
+	"cisco_iosxe":           `["priv-lvl=15"]`,
+	"juniper_vjunos-router": `[]`,
+	"juniper_vsrx":          `[]`,
+}
+
+// configPath is the daemon config this platform runs against: the checked-in
+// one unless platformSessionAttributes has something to say about it.
+func (l *lab) configPath() (string, error) {
+	return l.derivedConfig("", platformSessionAttributes[l.p.name], "")
+}
+
+// derivedConfig writes a copy of port49d-lab.yaml for this platform with
+// `lab.session_attributes` replaced by attrs (a YAML flow sequence, e.g.
+// `["priv-lvl=15"]`) when attrs is non-empty, and extra appended to the end of
+// the file — a `platforms:` block, say, for a test that renames a platform's
+// session service. With neither, it returns the checked-in file itself, so a
+// platform that needs no derivation reads exactly what is committed.
+//
+// suffix names the derivation when one platform needs more than one in a run;
+// "" is the platform's standing config.
+func (l *lab) derivedConfig(suffix, attrs, extra string) (string, error) {
+	return l.derivedConfigCmd(suffix, attrs, "", extra)
+}
+
+// derivedConfigCmd is derivedConfig with `lab.command_attributes` substitutable
+// too. Register entry L18 is the only caller that sets it: it asks the same
+// question of a session reply and of a per-command reply, and the two lists
+// have to move independently or the variants cannot be told apart.
+func (l *lab) derivedConfigCmd(suffix, attrs, cmdAttrs, extra string) (string, error) {
+	if attrs == "" && cmdAttrs == "" && extra == "" {
+		return labConfigPath(), nil
+	}
+	raw, err := os.ReadFile(labConfigPath())
+	if err != nil {
+		return "", err
+	}
+	out := string(raw)
+	for _, sub := range []struct{ anchor, value string }{
+		{"  session_attributes: ", attrs},
+		{"  command_attributes: ", cmdAttrs},
+	} {
+		if sub.value == "" {
+			continue
+		}
+		i := strings.Index(out, sub.anchor)
+		if i < 0 {
+			return "", fmt.Errorf("tests/lab/port49d-lab.yaml has no `%s` line, so the attribute set this platform "+
+				"needs cannot be substituted and the run would measure the wrong reply", strings.TrimSpace(sub.anchor))
+		}
+		j := strings.Index(out[i:], "\n")
+		if j < 0 {
+			return "", fmt.Errorf("tests/lab/port49d-lab.yaml ends inside its %s line", strings.TrimSpace(sub.anchor))
+		}
+		out = out[:i] + sub.anchor + sub.value + out[i+j:]
+	}
+	if extra != "" {
+		out += "\n" + extra
+	}
+	dir := filepath.Join(root, "tests", "lab", "logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	name := "port49d-lab-" + l.p.name
+	if suffix != "" {
+		name += "-" + suffix
+	}
+	path := filepath.Join(dir, name+".yaml")
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// startDaemonWith starts port49d against cfgPath. resume appends to this
+// platform's log files instead of truncating them, which is what a test that
+// stops and restarts the daemon mid-run needs: a truncated decision log would
+// invalidate every offset an earlier mark() handed out, and the records the
+// run has already measured against would simply vanish.
+func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	// Refuse to run beside a daemon this run does not own. A leftover port49d
 	// still holds its socket on the bridge address even across a destroy and
 	// redeploy, and it would answer this device's AAA with its own spent
@@ -445,11 +797,17 @@ func (l *lab) startDaemon() error {
 	}
 	l.logPath = filepath.Join(dir, "decisions-"+l.p.name+".jsonl")
 	l.errPath = filepath.Join(dir, "port49d-"+l.p.name+".log")
+	open := os.Create
+	if resume {
+		open = func(p string) (*os.File, error) {
+			return os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		}
+	}
 	var err error
-	if l.logFile, err = os.Create(l.logPath); err != nil {
+	if l.logFile, err = open(l.logPath); err != nil {
 		return err
 	}
-	if l.errFile, err = os.Create(l.errPath); err != nil {
+	if l.errFile, err = open(l.errPath); err != nil {
 		return err
 	}
 
@@ -457,8 +815,7 @@ func (l *lab) startDaemon() error {
 	if key == "" {
 		key = labKeyDefault
 	}
-	l.daemon = exec.Command(filepath.Join(root, "bin", "port49d"),
-		"-config", filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
+	l.daemon = exec.Command(filepath.Join(root, "bin", "port49d"), "-config", cfgPath)
 	l.daemon.Dir = root
 	l.daemon.Stdout = l.logFile
 	l.daemon.Stderr = io.MultiWriter(l.errFile, os.Stderr)
@@ -500,6 +857,33 @@ func (l *lab) startDaemon() error {
 	}
 	stderr, _ := os.ReadFile(l.errPath)
 	return fmt.Errorf("port49d did not come up within 30s; its stderr was:\n%s", stderr)
+}
+
+// writeDelayConfig copies the lab daemon config with both failure-delay knobs
+// set to d, and returns the new path. Both are set, not just the ceiling,
+// because the base alone would take several failures to reach d and the
+// measurement would then be of a different attempt than the one being timed.
+func (l *lab) writeDelayConfig(t *testing.T, d time.Duration) string {
+	t.Helper()
+	base, err := l.configPath()
+	if err != nil {
+		t.Fatalf("derive this platform's daemon config: %v", err)
+	}
+	raw, err := os.ReadFile(base)
+	if err != nil {
+		t.Fatalf("read the lab daemon config: %v", err)
+	}
+	const anchor = "limits:\n"
+	if !strings.Contains(string(raw), anchor) {
+		t.Fatalf("tests/lab/port49d-lab.yaml has no `limits:` block to set a failure delay under")
+	}
+	inject := fmt.Sprintf("limits:\n  auth_failure_delay_base: %s\n  auth_failure_delay_max: %s\n", d, d)
+	out := strings.Replace(string(raw), anchor, inject, 1)
+	path := filepath.Join(root, "tests", "lab", "logs", fmt.Sprintf("port49d-lab-delay-%s.yaml", d))
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
 }
 
 func daemonHealthy() bool {
@@ -643,7 +1027,12 @@ func teardown() {
 	}
 }
 
-func (l *lab) down() {
+// stopDaemon stops port49d and leaves the topology running, so a test can
+// measure the device against a TACACS+ server that is not listening. It returns
+// once the listening socket is gone: startDaemonWith refuses to start beside
+// anything still bound to it, and a device that reached a socket in TIME_WAIT
+// from the previous daemon would be measured against the wrong condition.
+func (l *lab) stopDaemon() error {
 	if l.daemon != nil && l.daemon.Process != nil {
 		// SIGINT, not Kill: port49d installs signal.NotifyContext for SIGINT and
 		// SIGTERM (cmd/port49d), and on either it stops the listener and drains
@@ -666,6 +1055,20 @@ func (l *lab) down() {
 		l.errFile.Close()
 		l.errFile = nil
 	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp", tacacsAddr, 2*time.Second)
+		if err != nil {
+			return nil
+		}
+		c.Close()
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("port49d was stopped but something is still listening on %s after 30s", tacacsAddr)
+}
+
+func (l *lab) down() {
+	_ = l.stopDaemon()
 	if l.deployed {
 		out, err := exec.Command("sudo", "-n", "containerlab", "destroy", "-t", l.topoPath(), "--cleanup").CombinedOutput()
 		if err != nil {
@@ -714,15 +1117,23 @@ func eachPlatform(t *testing.T, fn func(t *testing.T, l *lab)) {
 // ---------------------------------------------------------------------------
 
 // nextLogin hands out the next unspent seeded login: a username and the token
-// seeded under it. Two things make each login need its own username.
+// seeded under it. Redemption deletes the token, so every login in a run spends
+// one.
 //
-// Redemption deletes the token, so every login in a run spends one. And EOS
-// reports `port` as the constant string "ssh" (L1), which makes the receipt key
-// (nas, port, username) identical for every SSH login by one user: a second
-// login inside receipt_ttl presents a different token against the first login's
-// receipt and is refused as credential_mismatch. A username per login gives
-// each its own receipt key, so the harness measures the device rather than that
-// collision.
+// A username per login is also what makes the decision log readable as a set of
+// sessions: the username is written on every record whether or not a context
+// lookup found anything, so it is the only session key the log always carries
+// (see portStability in register_test.go, which was measuring the wrong set
+// until it grouped by this).
+//
+// It used to be load-bearing for a second reason that has expired. The receipt
+// key was `(nas, port, username)`, and EOS reports `port` as the constant
+// string "ssh" at authentication (L1), so every SSH login by one user shared a
+// receipt: a second login inside receipt_ttl presented a fresh token against
+// the first login's receipt and was refused `credential_mismatch`. The receipt
+// key now carries the credential hash (spec §13, decision 15), so a fresh token
+// finds no receipt and redeems normally. Repeating a username is no longer a
+// collision; it is just harder to read.
 func (l *lab) nextLogin(t *testing.T) (user, secret string) {
 	t.Helper()
 	l.mu.Lock()
@@ -738,6 +1149,26 @@ func (l *lab) nextLogin(t *testing.T) (user, secret string) {
 		t.Fatalf("tests/lab/port49d-lab.yaml seeds no login for %q; the harness and the config have drifted apart", user)
 	}
 	return user, secret
+}
+
+// nextLoginOrErr is nextLogin for a caller that cannot fail the test — a
+// closure a driver hands to shared code, where a t.Fatal would fire on the
+// wrong goroutine or abandon a device mid-restore. Same pool, same counter.
+func (l *lab) nextLoginOrErr() (user, secret string, err error) {
+	l.mu.Lock()
+	n := l.tokenN + 1
+	l.tokenN = n
+	l.mu.Unlock()
+	if n > tokenPoolSize {
+		return "", "", fmt.Errorf("%s: the seeded login pool of %d is exhausted; seed more in "+
+			"tests/lab/port49d-lab.yaml", l.p.name, tokenPoolSize)
+	}
+	user, secret = fmt.Sprintf("alice%02d", n), fmt.Sprintf("p49_labtoken%02d", n)
+	if !strings.Contains(labYAML, "username: "+user+",") {
+		return "", "", fmt.Errorf("tests/lab/port49d-lab.yaml seeds no login for %q; the harness and the "+
+			"config have drifted apart", user)
+	}
+	return user, secret, nil
 }
 
 // passwordOfLength is the seeded secret for user longpw<n>. The test computes
@@ -764,7 +1195,16 @@ func mustBeSeeded(t *testing.T, secret string) {
 // these are shipping network OS images, some of them years old, and a handshake
 // this client refuses would look exactly like a device that failed to boot.
 func (l *lab) dial(user, password string, timeout time.Duration) (*ssh.Client, error) {
-	nc, err := net.DialTimeout("tcp", l.p.addr+":22", timeout)
+	return l.dialHostPort(user, password, l.p.addr+":22", timeout)
+}
+
+// dialHostPort is dial against an explicit host:port. NETCONF is why it exists:
+// the transport tests reach it on 830 on Junos and NX-OS and on 22 on EOS, and
+// they need the same deliberately wide algorithm lists — a handshake refused
+// for want of a 2016 cipher would look exactly like a device that has not
+// enabled NETCONF at all.
+func (l *lab) dialHostPort(user, password, hostport string, timeout time.Duration) (*ssh.Client, error) {
+	nc, err := net.DialTimeout("tcp", hostport, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -810,7 +1250,7 @@ func (l *lab) dial(user, password string, timeout time.Duration) (*ssh.Client, e
 			},
 		},
 	}
-	c, chans, reqs, err := ssh.NewClientConn(nc, l.p.addr+":22", cfg)
+	c, chans, reqs, err := ssh.NewClientConn(nc, hostport, cfg)
 	if err != nil {
 		nc.Close()
 		return nil, err
@@ -986,27 +1426,30 @@ func summarize(recs []map[string]any) string {
 // Results notes
 // ---------------------------------------------------------------------------
 
-// result writes tests/lab/results/L<N>-<platform>.md in the form spec §15 rule
-// 3 requires: platform, image version, observation, and a pointer to the
-// capture.
+// captureLine is the "Capture:" line of a results note, and the reason spec §15
+// rule 3 can be satisfied at all: a pointer to evidence anyone can open.
 //
-// The capture line reports how many packets the file actually holds between the
-// device and port49d, read back from the file at the moment the note is
-// written. A note whose capture holds none of them cannot close a register row,
-// and says so in place of a pointer that would imply evidence it does not have.
-func (l *lab) result(t *testing.T, entry, claim, observation string) {
+// It reports how many packets the file actually holds between the device and
+// port49d, read back from the capture at the moment the note is written. A note
+// whose capture holds none of them cannot close a register row, and says so in
+// place of a pointer that would imply evidence it does not have.
+//
+// The pointer names the evidence file, not the capture. tests/lab/captures is
+// git-ignored — the lab tokens and the breakglass password are in it, readable
+// by anyone with the published key — so a note citing it cites nothing anyone
+// else can check. The redacted copy written at the end of the run holds the
+// same packets, and the count quoted here is therefore its count too: the
+// redactor keeps every TACACS+ packet and refuses outright to drop one to or
+// from the lab subnet.
+func (l *lab) captureLine(t *testing.T) string {
 	t.Helper()
-	dir := filepath.Join(root, "tests", "lab", "results")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("results directory: %v", err)
-	}
 	l.flushCapture(t)
-	capLine := fmt.Sprintf("`%s`", l.capPath)
+	line := fmt.Sprintf("`%s`", l.evidencePath)
 	if total, device, err := pcapCounts(l.capAbs); err != nil {
-		capLine += fmt.Sprintf(" — **could not be read back** (%v), so this note quotes the decision log only", err)
+		line += fmt.Sprintf(" — **could not be read back** (%v), so this note quotes the decision log only.", err)
 		t.Errorf("the capture %s could not be read back: %v", l.capAbs, err)
 	} else if device == 0 {
-		capLine += fmt.Sprintf(" — **empty of device traffic**: %d packets, none of them to or from %s. "+
+		line += fmt.Sprintf(" — **empty of device traffic**: %d packets, none of them to or from %s. "+
 			"This note's observation rests on the decision log alone and cannot close a register row.", total, labSubnet)
 		t.Errorf("the capture %s holds no packet to or from %s, so this measurement has no capture to point at",
 			l.capAbs, labSubnet)
@@ -1015,11 +1458,149 @@ func (l *lab) result(t *testing.T, entry, claim, observation string) {
 		// every capture with loopback probes and adds one more pair when it
 		// stops the capture, after this note is written. Counting only what
 		// crossed the bridge gives a number the reader can reproduce.
-		capLine += fmt.Sprintf(" — %d packets to or from the device, countable with "+
-			"`tcpdump -r %s -n 'net %s' | wc -l`", device, l.capPath, labSubnet)
+		line += fmt.Sprintf(" — %d packets to or from the device, countable with "+
+			"`tcpdump -r %s -n 'net %s' | wc -l`.", device, l.evidencePath, labSubnet)
 	}
+	return line + " A redacted copy of this run's capture: credential bytes overwritten with `x`, " +
+		"everything else byte-identical, decodable with the lab key (`tests/lab/README.md`)."
+}
 
+// withAdminCLI runs fn against a break-glass CLI with port49d **stopped**, and
+// restarts the daemon on this platform's standing config afterwards.
+//
+// Stopping it is not housekeeping, and L4 paid for the lesson first
+// (l4_test.go, and tests/lab/results/L4-*.md): under
+// `aaa authentication login default group port49 local` the device asks port49
+// about `breakglass`, port49 answers FAIL because it holds no token for that
+// name, and **on EOS, NX-OS and IOS-XE a FAIL is final** — the device never
+// tries the local password. So a test that opens an admin CLI with the daemon
+// running is refused by the device, and the refusal looks like a broken
+// break-glass account rather than the measured behaviour it is. The first
+// NX-OS run of TestL16Roles failed exactly this way:
+//
+//	no admin CLI to define the role on: the console did not reach "nx1#"
+//	for breakglass; it said: Login incorrect User Access Verification login:
+//
+// With the daemon down the device treats the server as unreachable, which is
+// the one condition where the local password is taken (L4, reading 3).
+func (l *lab) withAdminCLI(t *testing.T, open func(*lab) (*cliConn, error), fn func(*cliConn) error) {
+	t.Helper()
+	if err := l.stopDaemon(); err != nil {
+		t.Fatalf("could not stop port49d before opening an admin CLI: %v", err)
+	}
+	restart := func() {
+		base, err := l.configPath()
+		if err != nil {
+			t.Fatalf("recovering this platform's standing config: %v", err)
+		}
+		if err := l.startDaemonWith(base, true); err != nil {
+			t.Fatalf("restarting port49d after the admin CLI: %v", err)
+		}
+	}
+	c, err := open(l)
+	if err != nil {
+		restart()
+		t.Fatalf("no admin CLI (port49d was stopped for this, so the device should have taken the "+
+			"local password): %v", err)
+	}
+	fnErr := fn(c)
+	c.Close()
+	restart()
+	if fnErr != nil {
+		t.Fatalf("configuring the device over the admin CLI: %v", fnErr)
+	}
+}
+
+// negativeFinding is a claim of the form "this platform does not / cannot X".
+// It exists because of an error made on 2026-09-20 and caught on 2026-09-21:
+// `tests/lab/results/L3-cisco_nxos.md` asserted "the N9Kv has no enable
+// exchange at all" and showed no transcript. The test types `disable` first,
+// so the `% Invalid command at '^' marker.` it quoted was probably the
+// device's answer to `disable` and `enable` was very likely never typed. A
+// register row was closed on it and had to be reopened.
+//
+// The rule that came out of it: a negative is not a finding until the note
+// shows **the exact thing sent and the exact thing the device said back**. A
+// reader must be able to see, without trusting the test, that the command
+// whose absence is being claimed is the command that was actually rejected.
+//
+// So this type cannot be rendered without both, and render() fails the test
+// rather than writing a note without them — a negative without its transcript
+// measures nothing, and a test that measured nothing must fail.
+type negativeFinding struct {
+	// Claim is the negative itself, e.g. "NX-OS has no `enable` command
+	// without `feature privilege`".
+	Claim string
+	// Sent is the exact command typed or request put on the wire. Not a
+	// paraphrase and not the test's name for it: the bytes.
+	Sent string
+	// Got is the device's exact reply, verbatim, including its punctuation and
+	// its marker lines. An empty reply is itself a finding and must be written
+	// as such in Got (see emptyDeviceReply), never left blank.
+	Got string
+	// Inferred marks a claim reached from side effects rather than from the
+	// device saying so. The brief's distinction: an inferred claim is written
+	// down as inferred and never as measured.
+	Inferred bool
+	// Why explains an inferred claim: which side effect, and why it implies
+	// the claim. Required when Inferred is set.
+	Why string
+}
+
+// emptyDeviceReply is what Got holds when the device answered with nothing at
+// all. It is a sentence rather than an empty string so a note never renders a
+// blank fenced block, which reads as "the device said nothing" whether that
+// was measured or whether the transcript was simply never captured.
+const emptyDeviceReply = "(the device returned no output at all: zero bytes on the channel)"
+
+// render returns the markdown for a negative finding, or fails the test. Every
+// branch that fails here is a note that would have asserted a negative with
+// nothing behind it.
+func (f negativeFinding) render(t *testing.T) string {
+	t.Helper()
+	if strings.TrimSpace(f.Claim) == "" {
+		t.Fatal("a negativeFinding with no Claim: nothing is being asserted")
+	}
+	if strings.TrimSpace(f.Sent) == "" {
+		t.Fatalf("negative finding %q has no Sent: a claim that a platform cannot do something "+
+			"is not a measurement until the note shows the exact command or request that was sent. "+
+			"This is the L3-cisco_nxos defect (see negativeFinding's comment); the test fails rather "+
+			"than writing the note.", f.Claim)
+	}
+	if strings.TrimSpace(f.Got) == "" {
+		t.Fatalf("negative finding %q has no Got: the device's exact reply is what makes the claim "+
+			"checkable by a reader. If the device really answered nothing, set Got to emptyDeviceReply "+
+			"and say so; do not leave it blank.", f.Claim)
+	}
+	if f.Inferred && strings.TrimSpace(f.Why) == "" {
+		t.Fatalf("negative finding %q is marked Inferred with no Why: an inference has to name the "+
+			"side effect it rests on, or a reader cannot tell it from a measurement.", f.Claim)
+	}
+	kind := "Measured"
+	if f.Inferred {
+		kind = "**Inferred, not measured**"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: %s\n\n", kind, f.Claim)
+	fmt.Fprintf(&b, "Sent:\n\n```\n%s\n```\n\n", strings.TrimRight(f.Sent, "\n"))
+	fmt.Fprintf(&b, "The device replied:\n\n```\n%s\n```\n", strings.TrimRight(f.Got, "\n"))
+	if f.Inferred {
+		fmt.Fprintf(&b, "\nThis is an inference from a side effect, not the device stating it: %s\n", f.Why)
+	}
+	return b.String()
+}
+
+// result writes tests/lab/results/L<N>-<platform>.md in the form spec §15 rule
+// 3 requires: platform, image version, observation, and a pointer to the
+// evidence.
+func (l *lab) result(t *testing.T, entry, claim, observation string) {
+	t.Helper()
+	dir := filepath.Join(root, "tests", "lab", "results")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("results directory: %v", err)
+	}
 	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", entry, l.p.name))
+	capLine := l.captureLine(t)
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s — %s\n\n", entry, l.p.name)
 	fmt.Fprintf(&b, "- **Date measured:** %s\n", time.Now().UTC().Format("2006-01-02"))

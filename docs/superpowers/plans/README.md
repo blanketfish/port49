@@ -5,7 +5,8 @@ the standing brief for each plan: what it builds, which spec sections it impleme
 earlier plans hand it, what it must leave for later, and which lab register entries close in
 it. When writing plan N, start here, then read the cited sections, then the previous plan.
 
-Status: **1 and 2 written**; 3–12 not yet. Plan 3 waits for plan 1's lab results.
+Status: **1 merged 2026-09-21** (PR #2); **2 rewritten 2026-09-22** against the `(nas, username)`
+key and ready to execute; 3–12 not yet. Plan 3 waits for the lab work in PR #3.
 
 ---
 
@@ -15,7 +16,17 @@ RFC 8907 wire, key trial, admission from a file inventory, per-source limits, in
 store, authentication/authorization/accounting handlers, decision log, config, `port49d`
 binary, containerlab harness. Closes L1 (SSH transport only), L2, L5, L6, L8, L10.
 
-## Plan 2 — Token model (§19 step 2) — `2026-09-06-02-token-model.md`
+## Plan 2 — Token model (§19 step 2) — `2026-09-22-02-token-model.md`
+
+**Rewritten 2026-09-22 and ready to execute.** The 2026-09-06 draft assumed the `(nas, port)`
+login-context key, which the lab showed breaks every measured vendor; the key is now
+`(nas, username)` (spec §13 decision 15). The rewrite is against the real tree on
+`feature/lab-l4-fallthrough` and carries every ruling in
+`2026-09-20-plan-2-revision-notes.md`, the owner's 2026-09-21 ones included
+(`contexts_by_principal` stays unencrypted, and why). **Fix round 1 applied 2026-09-22** after
+review: **fifteen TDD tasks, sixteen commits**. The spec §5.8 edit for `system` attribution is
+committed before the code that reads it, and now also carries §13 decision 15's record that the
+`(nas, rem_addr)` enable index is deferred while `enable_username: enab` is refused at load.
 
 **Builds:** the full token semantics on top of plan 1's store interface and handlers.
 
@@ -24,33 +35,68 @@ binary, containerlab harness. Closes L1 (SSH transport only), L2, L5, L6, L8, L1
   under PAP/ASCII/HTTP, `token_not_found` under CHAP. Design §8 "Device binding".
 - **Encryption at rest** for tokens, receipts, login context, and the idempotency record,
   with a key shared by broker and daemon and a two-key rotation window. Design §8.
-- **Reusable tokens**: `reusable: true` on the subject, match-only redemption, no receipt,
-  valid until TTL. Spec §13 decision 15 (provisional on L1, L7).
-- **Enable tokens**: mint pair with `kind`, lookup on `$enab{level}$` platforms through
-  `(nas, port)` → context → bound username → candidate set filtered to `kind: enable`;
-  `token_kind_mismatch`; `enable: none | auto | token`; `enable: auto` refused at load where
-  `enable_username` is not `principal`; `rem_addr` binding on enable. Spec §7, §5.6.
+- **Sliding receipt, not a `reusable` flag** (owner, 2026-09-21: "Bob shouldn't need to
+  know"). Each re-presentation of the same `(nas, username, credential_sha256)` extends the
+  receipt by `receipt_idle_ttl`, up to an absolute `receipt_max_age` from first redemption;
+  a presentation past either is FAIL on the wire and `token_spent` in the log (the §5.7 row
+  landed with decision 15's rewrite on 2026-09-22; the plan adds only the Go constant);
+  revocation deletes the principal's receipts, so receipts are indexed by principal.
+  **Defaults ruled 2026-09-22: 15 min idle, 2 h absolute** (Ansible linear strategy over a
+  large fleet is the sizing case, L15). Decision 15's text is already replaced.
+- **Device-generated accounting under another user** (Junos root RPC in production, NX-OS
+  `admin` with `task_id=vsh.bin.$port`) must not trip `foreign_session`: a per-platform rule
+  attributing them `system`, which needed a spec §5.8 sentence. **Neither observation has a
+  `tests/lab/results/` note in the tree** — the Junos lab measured the opposite under its own
+  accounting config (L17) — so the §5.8 sentence says a plan-5 adapter **MAY** name system users,
+  ships the list **empty**, and records both production observations as unmeasured in this lab.
+  Plan 2 builds the rule; plan 5 fills the list from a note.
+- **Refuse at mint any username canonicalization would change**: `Canonical` folds U+0130 onto
+  `i`, so two directory names could share one `(nas, username)` context — and it also strips
+  `DOMAIN\` and truncates at `@`, which an ASCII-only guard would let through, minting a token
+  under a key no redemption can address. `Canonical` moves to `internal/username` so the minter
+  can enforce it without importing the daemon that imports the minter.
+- **Enable tokens**: mint pair with `kind`. No measured platform sends `$enab{level}$` (L3
+  closed): vEOS and IOS-XE send the operator's own username with `service=enable`, NX-OS 10.x
+  has no enable. The lookup is therefore the ordinary `(nas, username)` context; an enable
+  START must update `privilege` in place and keep `ctx_id` (plan 1 replaces it, measured);
+  candidate set filtered to `kind: enable`; `token_kind_mismatch`;
+  `enable: none | auto | token`; `rem_addr` binding on enable. `$enab{level}$` becomes an
+  explicit `platforms.<name>.enable_username: enab` option **refused at load** until a
+  `tests/lab/results/` note shows a device sending it, which is also what keeps
+  `enable: auto` inside §5.6's restriction. No `(nas, rem_addr)` index is built, so no new
+  reason code is minted for it. Spec §7, §5.6.
 - **Candidate-set cap** (order of eight) refusing the mint, never the redemption. Design §8.
 - **Full store record set**: `blob`, `contexts_by_principal`, `contexts_by_sid`,
   `contexts_by_cert`, `active_principals`, idempotency record, failure counters; atomic
   remove-and-write-receipt; the race loser reads the receipt and answers PASS. Design §12.
 - **Login context in full**: the §5.1.1 shape (`refreshed_at`, `revoked_at`, `auth_time`,
-  `session_expires`, `task_id`, `accounting_state`), teardown rows 1–7 including 3a
-  (staleness) and the checks in the §5.3 pseudocode (username, revoked, expired, stale,
-  privilege). Accounting annotation: `task_id` binding, `closing`, `foreign_session`. Spec
-  §5.1.1, §5.3, §5.6, §5.8.
+  `session_expires`, `session_discriminator`, `accounting_state`), the teardown rows that
+  still have content — 1, 2, 3, 3a, 6, 7; **row 5 is withdrawn and row 4 has no path without
+  the `(nas, rem_addr)` index** — and the checks in the §5.3 pseudocode (username, revoked,
+  expired, stale, privilege). Accounting annotation binds the **platform's own** session
+  discriminator (`session_pid` on Junos, `task_id` elsewhere — `task_id` restarts at 1 per
+  session on Junos, L1), sets `closing`, and flags `foreign`. Spec §5.1.1, §5.3, §5.6, §5.8.
 - A **mint function** callable in-process (no broker yet) that plan 3's minimal broker wraps.
 - **`context_idle_ttl` is absolute, not idle.** Plan 1 sets it at `PutContext` and never
-  extends it; `GetContext` does not touch it. Spec §5.6 says activity SHOULD extend it, so
-  either the refresh happens here or the key is renamed to say what it does. Plan 2 owns the
-  context shape, so it is named here.
+  extends it; `GetContext` does not touch it. Spec §5.6 says activity SHOULD extend it.
+  **Ruled in the rewrite: it becomes a true idle TTL and keeps its name** — a key named
+  `context_idle_ttl` that measures absolute age lies in its own name, and `session_expires` is
+  already the absolute clock. The extension goes through a new TTL-only store method,
+  `TouchContext(ctx, key, ttl)`, which writes the expiry and nothing else: re-`PutContext`ing the
+  record read at the top of the request would discard a concurrent revocation permanently, on the
+  daemon's highest-frequency path. It runs only when the remaining life is below half the TTL, so
+  the common command costs no store write, and nothing is deferred to plan 7 for it.
 
-**Hands to plan 3:** `token.Mint(device, username, kind, ttl, reusable)`, the encrypted store
-records, the context refresh entry points.
+**Hands to plan 3:** `(*token.Minter).Mint(ctx, token.Request) (token.Result, error)` — the
+in-process mint the minimal broker wraps; `reusable` is gone and the kind is chosen by
+`WithEnable` plus the subject's mechanism — the encrypted store records, and
+`session.Manager`'s refresh and revocation entry points.
 **Leaves for later:** the broker API and its authorization (plan 7); blobs' compiled content
 (plan 4, the engine produces them; plan 2 stores opaque bytes by hash).
 **Lab:** none close here; L8 (password length) may need re-checking with the 30-character
-tagged token.
+tagged token. Plan 2 does move the harness off written secrets — `lab.seed_tokens` loses
+`secret:`/`kind:`, the daemon mints the pairs and writes them to a `0600` `lab.seed_token_file`,
+and `tests/lab/labcreds` reads that file — so the next lab deploy is the first on minted tokens.
 
 ## Plan 3 — Vertical slice (§19 step 3)
 
@@ -70,10 +116,14 @@ tagged token.
   9300v 10.4(2)F for NX-API and the L7 question; Catalyst 9000v 17.12 and C8000v 17.13 for
   IOS-XE, where the `$enab15$` enable path (L3) lives; vEOS 4.32.2F for eAPI.
 
-**Lab:** closes L3 (enable `rem_addr`), L4 (fall-through on FAIL per platform, Junos
-`authentication-order`), L7 (eAPI/NX-API per-request AAA), and the API-transport half of L1.
-Decision 15 stops being provisional here. **Do not write this plan before plan 1's lab
-results exist.**
+**Inherits from the 2026-09-20/22 lab stretch (PR #3):** L3 is closed (no platform sends
+`$enab{level}$`; NX-OS 10.x has no enable), L4 and L7 are measured on every image and the
+`$enab15$` enable path is gone, so the lab list above is mostly done. What this plan still
+owns: the first end-to-end run with a real credential, and `receipt_ttl` **as a sliding
+window** (decision 15 replacement, once ruled): the agent minting a fresh token on each
+reconnect would remove most of the idle-gap problem the client matrix showed (L15), so the
+agent's reconnect behaviour is part of this plan's design. **Lab:** the API-transport half
+of L1 and the eAPI `/login` flow by hand.
 
 ## Plan 4 — Policy engine (§19 step 4)
 
@@ -102,11 +152,76 @@ here), `capability`/`bits`/`bit_delivery`, the **Junos projection** under decisi
 `port49 platform export`. Spec §9 capability inference. **Lab:** L9, L11 (closed), L12; the
 projection generator is not final until L12 closes.
 
-**Inherits from plan 1:** every Junos login is answered `service_unsupported` on its session
-authorization. `author.Handle` requires `service=shell` and L10 measured Junos sending
-`service=junos-exec`, so plan 1 denies it by design — logins still work (the L10 notes show
-it), but the decision log carries an `authorize_session` deny for each one. The adapter that
-maps `junos-exec` is this plan; until it lands, that deny is expected and is not a finding.
+**Inherits from the lab (PR #3), per platform — a wrong or extra reply attribute is fatal,
+not ignored:**
+- **NX-OS**: send `shell:roles`, never `priv-lvl`. The role wins over `priv-lvl` in both
+  directions, the role alone suffices, and `priv-lvl` with no role silently picks a role by a
+  per-release mapping (0/1/6 → `vdc-operator`, 15 → `network-admin`). An unknown role name
+  silently becomes `network-operator`; two roles are a union; a misnamed attribute is
+  rejected outright. Custom roles by name work (L16). `network-operator` cannot run bare
+  `show interface` (prompts for sudo; `show interface *` works) and the cancelled sudo writes
+  an accounting record under `admin` with `task_id=vsh.bin.$port`. **Nothing port49 sends ends
+  a session here**: an attribute this device does not understand is ignored under EITHER flag,
+  mandatory included, so a wrong attribute is invisible rather than fatal and the RFC 8907 §8.2
+  flag buys an adapter no signal at all. Two more entries in the privilege-to-role table, both
+  reached with no role in the reply: no attributes at all gives `vdc-operator`, and an
+  out-of-range `priv-lvl=99` gives `network-operator` (L18).
+- **vEOS**: send the **bare** `roles=<name>` **and** `priv-lvl=N` together — one role name, no
+  quotes. The bare attribute is applied under either flag; `shell:roles*` is ignored and a
+  mandatory `shell:roles=` or an optional `cisco-av-pair*` **refuses the session**. A role with
+  no `priv-lvl` beside it lands the operator at level 1, where they cannot even read their own
+  role — the opposite of the NX-OS rule, so the two platforms need different replies. The value
+  is taken literally: quotes are kept as part of the name, and an unknown role is echoed back
+  rather than degraded. An OPTIONAL `priv-lvl*N` **is** applied on 4.31.2F. Under
+  `aaa authorization commands ... local` the delivered role is real privilege (`network-operator`
+  is refused `configure`, `network-admin` is not, an unknown name is refused), so port49's
+  per-command answer is the only control **while port49 is in the command path** and the role is
+  the control when it is not (L16). **On the §8.2 question vEOS is the conformant one**: an
+  OPTIONAL attribute it does not read is ignored and a MANDATORY one ends the session, whatever
+  the name — an invented attribute does both — so the flag is a working switch here and
+  `cisco-av-pair*` is an exception to that rule rather than the rule. A `priv-lvl` value the
+  device cannot use is DROPPED rather than clamped: `priv-lvl=99` lands the operator at level 1,
+  the same as sending nothing (L18).
+- **IOS-XE**: kills the session on any unrecognised attribute, optional included; `priv-lvl`
+  only (L3/L16 notes). L18 extends that to a second foreign spelling, an invented attribute and
+  an out-of-range `priv-lvl=99` — seven of ten variants refused, all `% Authorization failed.`
+  **And the cost is the device, not the session:** after a run of refused authorizations this
+  image stops answering SSH for about a minute, refusing connections at the authentication
+  layer **without sending port49 a packet**, so nothing in the decision log says it happened and
+  break-glass is refused with everyone else. An adapter for this platform must send exactly what
+  the device reads and nothing else; there is no cheap mistake here.
+- **Junos**: `platforms.juniper_junos.session_services` (default `[junos-exec]`; production
+  fleets use `tacplus-options service-name`, e.g. `junos-exec-fw`; the name never selects
+  policy). The emitted reference config MUST include `tacplus-options strict-authorization`:
+  without it a port49 denial is advisory (login completes, class from the `remote` template);
+  with it the denial refuses SSH and NETCONF while break-glass still gets in with port49 down
+  (L17). `authorization-time-interval` (min 15 min) re-authorizes but a denial does not end
+  the session: revocation cannot reach a live Junos session. `enhanced-accounting` adds the
+  client source `Port` to the login record. Accounting `service` stays `shell` whatever the
+  session service is; `session_pid` is the per-session discriminator. **Attributes, measured on
+  both images and agreeing cell for cell (L18):** `local-user-name=<template>` **is applied**
+  under either flag — the session leaves the `remote` template for the class the reply names —
+  and **`user-permissions` does nothing at all**, mandatory, optional, or sent beside
+  `local-user-name`. So decision 22's projection has one working attribute and one inert one on
+  these releases, and the shape it would send is indistinguishable from `local-user-name` alone;
+  L12 still has to close on the rest. A template name the device does not have degrades silently
+  to the default `remote` template. Everything Junos does not understand is ignored under either
+  flag, so nothing port49 sends can end a Junos session by attribute. No variant produced a
+  per-command authorization request, on either image, in any of 26 sessions — decision 21's
+  shape, confirmed.
+- Device-generated accounting under another user (Junos root RPC in production, NX-OS
+  `admin`/`vsh.bin`) is real and must not be treated as a foreign session (plan 2 rule).
+
+**Inherits from plan 1:** a Junos session authorization is **permitted and carries no
+attributes**. Plan 1 answered every one of them `service_unsupported` until 2026-09-21,
+because `author.Handle` required `service=shell` while L10 measured Junos sending
+`service=junos-exec`; it now reads the platform's `session_services` list (spec §5.2, §8),
+which defaults to `[junos-exec]` for `juniper_junos` and is settable for a fleet that has run
+`set system tacplus-options service-name`. So the envelope is recognised and the decision log
+shows `permit context_matched` for Junos. **The attributes are this plan's whole remaining
+job there**: the session-only projection — class, `local-user-name`, `user-permissions`, the
+`allow-commands` / `deny-commands` regexes — is decision 22, gated on L12, and plan 1 sends
+none of it.
 
 ## Plan 6 — Inventory service (§19 step 6)
 

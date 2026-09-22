@@ -1,4 +1,4 @@
-.PHONY: test vet fuzz lab build
+.PHONY: test vet fuzz lab build evidence
 
 build:
 	go build -o bin/port49d ./cmd/port49d
@@ -25,6 +25,18 @@ fuzz:
 	  done; \
 	done
 
+# tests/lab/captures is git-ignored: a capture holds the lab tokens and the
+# breakglass password, readable by anyone with the key this repository
+# publishes. This rewrites each one into tests/lab/evidence with the credential
+# bytes overwritten and everything else byte-identical, which is what the
+# results notes point at and what gets committed.
+#
+# `make lab` runs this for itself at the end of a run, so a note never cites
+# evidence that does not exist. Run it by hand after editing the redactor, or to
+# regenerate the evidence from captures already on disk.
+evidence:
+	go run ./tests/lab/cmd/redact-pcap
+
 # Requires containerlab and device images; see tests/lab/README.md.
 #
 # One `go test` per platform, because only one can be up at a time: they share
@@ -38,7 +50,11 @@ fuzz:
 # Override the set with either spelling:
 #   PORT49_LAB_PLATFORMS=eos,vsrx make lab
 #   make lab LAB_PLATFORMS="eos vsrx"
-LAB_PLATFORMS ?= eos vjunos vsrx
+# `iosxe` is last for the reason `nxos` used to be: it is the platform here
+# whose boot has never been measured on this host, so it sits behind the four
+# that are known to work and a `make lab` with no selector gets through them
+# first.
+LAB_PLATFORMS ?= eos vjunos vsrx nxos iosxe
 
 # A platform that does not measure stops the loop, and the `if` is how. `set -e`
 # alone was not enough, and the reason is not the shell: it fires on a non-zero

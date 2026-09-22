@@ -1,10 +1,10 @@
 # L6 — arista_eos
 
-- **Date measured:** 2026-09-17
+- **Date measured:** 2026-09-20
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
-- **Capture:** `tests/lab/captures/L6-arista_eos.pcap` — 124 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L6-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/evidence/L6-arista_eos.pcap` — 124 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L6-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -13,29 +13,19 @@ How reliably and how late exec accounting START and STOP arrive, and whether a d
 
 ## Observation
 
-One SSH login that ran `show version` and disconnected. Login began 2026-09-17T04:16:39.080514473Z UTC; the connection closed 2026-09-17T04:16:39.377229246Z UTC.
+One SSH login that ran `show version` and disconnected. Login began 2026-09-20T18:12:59.512653486Z UTC; the connection closed 2026-09-20T18:12:59.801301795Z UTC.
 
-- Exec **START**: arrived 187ms after the login began.
-- Exec **STOP**: arrived 15ms after the session closed.
+- Exec **START**: arrived 191ms after the login began.
+- Exec **STOP**: arrived 3ms after the session closed.
 
-Accounting records in the window: start=1, stop=2 (an exec record is one whose command vector is null; a per-command record carries one).
+Accounting records in the window: start=1, stop=2 (an exec record is one that carries no command at all, as on EOS, or carries only `login` or `logout`, as on Junos; anything else is a per-command record).
 
 All accounting AV pairs, in arrival order:
 
 ```
-2026-09-17T04:16:39.268Z flags=start attribution=resolved raw=[task_id=15 service=shell start_time=1789618599 timezone=UTC]
-2026-09-17T04:16:39.362Z flags=stop attribution=resolved raw=[task_id=16 service=shell priv-lvl=15 start_time=1789618599 timezone=UTC cmd=show version <cr>]
-2026-09-17T04:16:39.392Z flags=stop attribution=resolved raw=[task_id=15 service=shell start_time=1789618599 timezone=UTC elapsed_time=1]
+2026-09-20T18:12:59.704Z flags=start attribution=resolved raw=[task_id=32 service=shell start_time=1789927979 timezone=UTC]
+2026-09-20T18:12:59.785Z flags=stop attribution=resolved raw=[task_id=33 service=shell priv-lvl=15 start_time=1789927979 timezone=UTC cmd=show version <cr>]
+2026-09-20T18:12:59.804Z flags=stop attribution=resolved raw=[task_id=32 service=shell start_time=1789927979 timezone=UTC elapsed_time=1]
 ```
 
 Retry-to-the-next-server behavior is not measured here: this lab has a single TACACS+ server, so nothing in this run shows what the device does when one is unreachable.
-
----
-
-*Footnote, added 2026-09-20 without re-running the measurement.* The parenthesis above defines
-an exec record as one whose command vector is null. The Junos notes in this directory define it
-as one carrying no command at all **or** carrying only `login` or `logout`, because Junos sends
-its session records as `cmd=login` and `cmd=logout`. The rule was widened after this note was
-written. It does not change this measurement: every EOS record above carries no command vector,
-so both definitions classify all three identically. The widened rule is also now confined to the
-`juniper_` platforms, since `logout` is a command an EOS operator can type.

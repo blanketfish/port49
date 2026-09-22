@@ -38,72 +38,199 @@ func TestL1PortField(t *testing.T) {
 			}
 		}
 
-		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
-			return len(redeemPorts(rs)) >= 2
+		// Wait for the authorizations too, not only the two redeems, and then
+		// drain further for the accounting. The stability half of the claim is a
+		// comparison between the `port` on the authentication and the `port` on
+		// every later record for the same session, so a window that closes at the
+		// second redeem has nothing to compare and would report "stable" for a
+		// device whose value moves a moment later.
+		recs := l.waitForRecords(off, 60*time.Second, func(rs []map[string]any) bool {
+			return len(redeemPorts(rs)) >= 2 && len(recordsOfEvent(rs, "authorize_session")) >= 2
 		})
+		recs = l.drainRecords(off, 15*time.Second)
 		ports := redeemPorts(recs)
 		if len(ports) < 2 {
 			t.Fatalf("expected a port value from each of two concurrent logins, got %d (%q):%s", len(ports), ports, summarize(recs))
 		}
 
 		unique := ports[0] != ports[1]
-		uniqueNote := "**The two concurrent sessions reported the SAME `port` value.** The login context key " +
-			"`(nas, port)` therefore does not distinguish them: the second login overwrites the first login's " +
-			"context, and the receipt key `(nas, port, username)` collides for repeated logins by one user."
+		uniqueNote := "**The two concurrent sessions reported the SAME `port` value**, so `port` does not tell " +
+			"two simultaneous operators apart on this platform. That is now a fact about the device rather " +
+			"than a fact about port49: since 2026-09-20 the login context is keyed `(nas, username)` and the " +
+			"receipt `(nas, username, credential_sha256)`, so neither collides here (spec §13, decision 15). " +
+			"It is recorded because it is what a `port`-based key would have cost."
 		if unique {
-			uniqueNote = "**The two concurrent sessions reported DIFFERENT `port` values**, so the login context " +
-				"key `(nas, port)` distinguishes them."
+			uniqueNote = "**The two concurrent sessions reported DIFFERENT `port` values** on this run. " +
+				"Nothing rests on that either way: the login context is keyed `(nas, username)` " +
+				"(spec §13, decision 15). Recorded because the value is what L1 asks for."
 		}
 		obs := fmt.Sprintf("Two overlapping SSH sessions, each holding an interactive shell open, produced these "+
 			"`port` values on the authentication START:\n\n"+
 			"| session | user | `port` |\n|---|---|---|\n| 1 | %s | `%s` |\n| 2 | %s | `%s` |\n\n%s\n\n"+
-			"All %d `port` values seen in this test: %q.\n\n"+
-			"Stability for the life of a session: %s\n\n"+
-			"Transport measured: SSH only. Console, eAPI, NX-API and NETCONF are not measured here "+
-			"(eAPI and NX-API are plan 3), so L1 is not answered for those transports.",
-			u1, ports[0], u2, ports[1], uniqueNote, len(ports), ports, portStability(recs))
+			"All %d `port` values seen at a `redeem` in this test: %q.\n\n"+
+			"### Stability for the life of a session\n\n%s\n\n"+
+			"### What the two sessions were actually told\n\n%s\n"+
+			"### What the header carried\n\n%s\n"+
+			"Transport measured: SSH only. Console, eAPI, NX-API and NETCONF are not measured here, so L1 is not "+
+			"answered for those transports.",
+			u1, ports[0], u2, ports[1], uniqueNote, len(ports), ports,
+			portStability(recs, u1, u2), sessionAuthzOutcomes(recs, u1, u2), l.tacacsHeaderFacts())
 		l.result(t, "L1", "What the `port` field contains, per platform and per transport — SSH, console, eAPI, "+
-			"NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life.", obs)
+			"NX-API, NETCONF. Whether it is unique per concurrent session, stable for its life, and **the same "+
+			"value at authentication and at authorization time**.", obs)
 	})
 }
 
-// portStability answers the second half of L1 from the records rather than
-// asserting it: every record carrying a ctx_id belongs to one session, so if a
-// session's `port` ever changed, that ctx_id would show two values.
-func portStability(recs []map[string]any) string {
-	byCtx := map[string]map[string]bool{}
-	records := 0
+// portStability answers the second half of L1 from the records, and it does it
+// by username because the obvious key gave a false answer.
+//
+// It used to group by `ctx_id`, on the reasoning that every record carrying one
+// belongs to one session. That is true and it is the wrong set. A `ctx_id` is
+// written on a record whose context lookup *succeeded*, so grouping by it
+// selects exactly the sessions whose `port` did not move — and the note went on
+// to report "stable" for a run in which three of twelve vEOS sessions reported
+// `ssh` at authentication and `vty4` at authorization, and in which exactly
+// those three were denied `context_missing`. The test could not see the
+// instability it existed to measure.
+//
+// The harness gives every login its own username (nextLogin, and the comment
+// there says why), so the username is a session key that is written on every
+// record whether or not the lookup found anything. That is what this groups by
+// now, and it reports the sequence rather than a set: the order in which the
+// values changed is what tells an authorization that arrived under a new `port`
+// from one that never had a `port` at all.
+func portStability(recs []map[string]any, users ...string) string {
+	type seen struct {
+		port  string
+		event string
+	}
+	trail := map[string][]seen{}
+	want := map[string]bool{}
+	for _, u := range users {
+		want[u] = true
+	}
 	for _, r := range recs {
 		s := sub(r, "session")
 		if s == nil {
 			continue
 		}
-		ctx := str(s, "ctx_id")
-		if ctx == "" {
+		u := str(s, "username")
+		if !want[u] {
 			continue
 		}
-		records++
-		if byCtx[ctx] == nil {
-			byCtx[ctx] = map[string]bool{}
-		}
-		byCtx[ctx][str(s, "port")] = true
+		trail[u] = append(trail[u], seen{port: str(s, "port"), event: str(r, "event")})
 	}
-	if len(byCtx) == 0 {
-		return "not measured: no record in this window carried a ctx_id."
+	if len(trail) == 0 {
+		return "Not measured: no record in this window named either of the two logins."
 	}
+
+	var b strings.Builder
+	b.WriteString("Every record naming either login, in arrival order, with the `port` it carried. " +
+		"Grouped by username rather than by `ctx_id`: a `ctx_id` is only written when the context lookup " +
+		"succeeded, so grouping by it hides exactly the sessions whose `port` moved.\n\n")
+	b.WriteString("| user | records, `event`=`port` |\n|---|---|\n")
 	var unstable []string
-	for ctx, ports := range byCtx {
-		if len(ports) > 1 {
-			unstable = append(unstable, ctx)
+	for _, u := range users {
+		ss := trail[u]
+		if len(ss) == 0 {
+			fmt.Fprintf(&b, "| `%s` | (no record) |\n", u)
+			continue
 		}
+		var parts []string
+		distinct := map[string]bool{}
+		for _, s := range ss {
+			p := s.port
+			if p == "" {
+				p = "(empty string)"
+			}
+			parts = append(parts, fmt.Sprintf("`%s`=%s", s.event, p))
+			distinct[s.port] = true
+		}
+		if len(distinct) > 1 {
+			unstable = append(unstable, u)
+		}
+		fmt.Fprintf(&b, "| `%s` | %s |\n", u, strings.Join(parts, ", "))
 	}
+
 	if len(unstable) == 0 {
-		return fmt.Sprintf("stable. Across %d sessions and %d records carrying a ctx_id, every record for a "+
-			"session reported the same `port` as that session's authentication START.", len(byCtx), records)
+		fmt.Fprintf(&b, "\n**Stable.** Across %d session(s), every record for a session reported the same `port` "+
+			"as that session's authentication START.\n", len(trail))
+		return b.String()
 	}
 	sort.Strings(unstable)
-	return fmt.Sprintf("**NOT stable**: %d of %d sessions reported more than one `port` value over their life (%s).",
-		len(unstable), len(byCtx), strings.Join(unstable, ", "))
+	fmt.Fprintf(&b, "\n**NOT stable**: %d of %d session(s) reported more than one `port` value over their life "+
+		"(%s). This is the measurement that re-cut the login-context key (spec §13, decision 15): a context "+
+		"keyed on `(nas, port)` is written under one value and looked up under another, so the authorization "+
+		"missed and the session was denied for a reason that had nothing to do with policy. Under "+
+		"`(nas, username)` the lookup does not read this field at all — the section below is that claim "+
+		"measured rather than asserted.\n",
+		len(unstable), len(trail), strings.Join(unstable, ", "))
+	return b.String()
+}
+
+// sessionAuthzOutcomes reports what each of the two concurrent logins was
+// actually told at its session authorization.
+//
+// It exists because every other section of this note measures a field and then
+// reasons about what the key does with it. This one measures the outcome. Under
+// the `(nas, port)` key the answer on vEOS was `deny context_missing` for every
+// session that got a vty allocated, and the device killed the session with
+// "Authorization denied: port49: this session was not authenticated by port49";
+// under `(nas, username)` it should be `permit context_matched` for both,
+// whatever the two sessions' `port` values did in between.
+func sessionAuthzOutcomes(recs []map[string]any, users ...string) string {
+	want := map[string]bool{}
+	for _, u := range users {
+		want[u] = true
+	}
+	type outcome struct{ verdict, reason, port, ctxID string }
+	got := map[string][]outcome{}
+	for _, r := range recordsOfEvent(recs, "authorize_session") {
+		s := sub(r, "session")
+		if s == nil || !want[str(s, "username")] {
+			continue
+		}
+		got[str(s, "username")] = append(got[str(s, "username")], outcome{
+			verdict: str(r, "verdict"), reason: str(r, "reason"),
+			port: str(s, "port"), ctxID: str(s, "ctx_id")})
+	}
+	if len(got) == 0 {
+		return "Not measured: neither login produced a session-authorization record in this window.\n"
+	}
+
+	var b strings.Builder
+	b.WriteString("What each login was told when the device asked to authorize its session, and the `port` the " +
+		"device put on that request — which is not the `port` it authenticated under.\n\n")
+	b.WriteString("| user | `port` at authorization | verdict | reason | `ctx_id` |\n|---|---|---|---|---|\n")
+	denied, permitted, ctxIDs := 0, 0, map[string]bool{}
+	for _, u := range users {
+		if len(got[u]) == 0 {
+			fmt.Fprintf(&b, "| `%s` | — | (no record) | | |\n", u)
+			continue
+		}
+		for _, o := range got[u] {
+			p := o.port
+			if p == "" {
+				p = "(empty string)"
+			}
+			fmt.Fprintf(&b, "| `%s` | `%s` | %s | `%s` | `%s` |\n", u, p, o.verdict, o.reason, o.ctxID)
+			if o.verdict == "permit" {
+				permitted++
+			} else {
+				denied++
+			}
+			ctxIDs[o.ctxID] = true
+		}
+	}
+	fmt.Fprintf(&b, "\n%d permitted, %d denied. ", permitted, denied)
+	if denied == 0 && permitted > 0 {
+		fmt.Fprintf(&b, "**Both concurrent sessions matched their own context and were authorized**, across "+
+			"%d distinct `ctx_id`(s) — neither login disturbed the other, and the `port` changing between "+
+			"the authentication and this request did not cost either of them anything.\n", len(ctxIDs))
+	} else {
+		b.WriteString("A denial here is the finding: the reason column says which lookup failed.\n")
+	}
+	return b.String()
 }
 
 func redeemPorts(recs []map[string]any) []string {
@@ -130,13 +257,55 @@ func TestL2ServerMsgDisplayed(t *testing.T) {
 		defer stop()
 		off := l.mark()
 
-		user, secret := l.nextLogin(t)
-		out, err := l.login(user, secret, shortDenyPrefix)
-		if err != nil {
-			t.Fatalf("SSH login failed, so no denial could be shown: %v", err)
+		// Up to three logins, and the reason is a false measurement this test
+		// published once. On the 2026-09-20 run the first login came back with
+		// an EMPTY transcript while its own decision records showed the command
+		// reaching port49 and being denied — and the second login, in the same
+		// run and against the same device, printed the denial in full. An empty
+		// transcript is indistinguishable from "the device displayed nothing",
+		// which is exactly the thing this test reports, so the note announced
+		// "NOT displayed" for a device that displays it.
+		//
+		// Nothing here averages the flake away: the note says how many attempts
+		// it took, so a reader can see the difference between a device that
+		// stayed silent three times and a channel that dropped one transcript.
+		var out []string
+		var err error
+		user, attempts, channel := "", 0, "SSH exec channel"
+		for attempts = 1; attempts <= 3; attempts++ {
+			var secret string
+			user, secret = l.nextLogin(t)
+			out, err = l.login(user, secret, shortDenyPrefix)
+			if err != nil {
+				t.Fatalf("SSH login failed, so no denial could be shown: %v", err)
+			}
+			if len(out) > 0 && strings.TrimSpace(out[0]) != "" {
+				break
+			}
 		}
-		if len(out) == 0 {
-			t.Fatal("the device returned no output for the denied command, so nothing could be observed")
+
+		// If three exec channels all came back empty, try the channel an
+		// operator actually uses. IOS-XE is why: on the 2026-09-20 run every
+		// exec channel returned nothing while an interactive session on the
+		// same device, in the same condition, printed the denial in full. The
+		// note said "NOT displayed" about a device that displays it, which is
+		// the exact false measurement the retry above was added to prevent —
+		// the retry fixed the flake and not the case where the channel is
+		// simply the wrong one.
+		if len(out) == 0 || strings.TrimSpace(out[0]) == "" {
+			user2, secret2 := l.nextLogin(t)
+			if c, cerr := l.l3CLI(user2, secret2); cerr == nil {
+				said, _ := c.sendExpect(shortDenyPrefix, 60*time.Second, c.prompt, l.p.node+">")
+				c.Close()
+				if strings.TrimSpace(stripPrompt(said)) != "" {
+					out, user, channel = []string{stripPrompt(said)}, user2, "interactive SSH CLI"
+				}
+			}
+		}
+		if len(out) == 0 || strings.TrimSpace(out[0]) == "" {
+			t.Fatalf("every channel returned an empty transcript for %q, so whether the device displays a "+
+				"server_msg was not measured. An empty transcript is not a device that printed nothing.",
+				shortDenyPrefix)
 		}
 		shortMsg := denialMessage(shortDenyPrefix)
 
@@ -161,10 +330,18 @@ func TestL2ServerMsgDisplayed(t *testing.T) {
 		// this test guarantees.
 		longNote := measureTruncation(t, l)
 
+		attemptNote := ""
+		if attempts > 1 {
+			attemptNote = fmt.Sprintf("\n\nThis took **%d login attempts**: the earlier one(s) returned an empty "+
+				"transcript even though the decision log showed the command reaching port49 and being denied. "+
+				"An empty transcript cannot be told from a device that printed nothing, which is the very thing "+
+				"this test reports, so the attempt is retried rather than recorded.", attempts)
+		}
 		obs := fmt.Sprintf("Command `%s` was denied by the lab authorizer with a %d-character `server_msg`:\n\n"+
-			"```\n%s\n```\n\n**The operator saw it: %s.**\n\nWhat the device printed for the denied command:\n\n"+
-			"```\n%s\n```\n\n### Truncation length\n\n%s\n",
-			shortDenyPrefix, len(shortMsg), shortMsg, verdict, strings.TrimRight(out[0], "\n"), longNote)
+			"```\n%s\n```\n\n**The operator saw it: %s.**%s\n\nRead over the **%s**. What the device printed "+
+			"for the denied command (login as `%s`):\n\n```\n%s\n```\n\n### Truncation length\n\n%s\n",
+			shortDenyPrefix, len(shortMsg), shortMsg, verdict, attemptNote, channel, user,
+			strings.TrimRight(out[0], "\n"), longNote)
 		l.result(t, "L2", "Whether `server_msg` on an authorization REPLY is displayed to the operator, and at "+
 			"what length it truncates.", obs)
 	})
@@ -468,8 +645,8 @@ func acctDump(acct []map[string]any) string {
 
 // L8: the maximum password length the platform accepts at an interactive
 // prompt. A token of each length is seeded under its own username, so a device
-// that truncates yields credential_mismatch against that user rather than a
-// silent pass against a shorter token.
+// that truncates yields token_not_found against that user rather than a silent
+// pass against a shorter token.
 func TestL8PasswordLength(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		stop := l.capture(t, "L8")
@@ -528,11 +705,10 @@ func TestL8PasswordLength(t *testing.T) {
 			"password prompt:\n\n%s\n%s\n\n"+
 			"How to read this: `token_redeemed` means the full password reached port49 byte for byte. "+
 			"`token_not_found` means the device did send a password under this username and no seeded "+
-			"token matched it, so the device altered or truncated what was typed -- each length has its "+
-			"own username, so there is no earlier receipt to compare against and truncation lands here, "+
-			"not on `credential_mismatch`. `credential_mismatch` would mean a second attempt under a "+
-			"username that already had a receipt, which this test does not do. No record at all means the "+
-			"device refused the password locally and sent nothing.\n\n"+
+			"token matched it, so the device altered or truncated what was typed. Truncation cannot land "+
+			"anywhere else: the receipt key carries the credential hash (spec §13, decision 15), so a "+
+			"truncated password finds no receipt at all rather than colliding with one. No record at all "+
+			"means the device refused the password locally and sent nothing.\n\n"+
 			"The 30-character handle the design document depends on: %s.\n\n"+
 			"PAP is not measured here; this is the interactive SSH prompt only.",
 			table.String(), longest, handleVerdict(rows30(rows)))

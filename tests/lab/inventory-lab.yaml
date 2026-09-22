@@ -2,5 +2,7 @@ devices:
   - {name: leaf1, platform: arista_eos,    addresses: [172.100.100.11]}
   - {name: srx1,  platform: juniper_junos, addresses: [172.100.100.21]}
   - {name: vsrx1, platform: juniper_junos, addresses: [172.100.100.22]}
+  - {name: nx1,   platform: cisco_nxos,    addresses: [172.100.100.31]}
+  - {name: xe1,   platform: cisco_iosxe,   addresses: [172.100.100.41]}
 key_groups:
   - {match: {cidr: 172.100.100.0/24}, key_ref: lab_key}

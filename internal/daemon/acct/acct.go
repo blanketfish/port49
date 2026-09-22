@@ -7,6 +7,7 @@ package acct
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"strconv"
 	"time"
@@ -55,15 +56,25 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 		AcctRecord: &decision.AcctRecord{Raw: raw, Vector: vector, PrivLvl: req.PrivLvl,
 			StartTime: num(kv["start_time"]), StopTime: num(kv["stop_time"]), ElapsedTime: num(kv["elapsed_time"])}}
 
-	c, err := h.store.GetContext(ctx, store.ContextKey{NAS: peer.NAS, Port: port})
+	// (nas, username), not (nas, port): the accounting port is a third value
+	// again on most platforms — `0`, `1` or `non-tty` on Junos where the
+	// authentication carried the empty string — so attributing on it resolved
+	// almost nothing (spec §5.8; §13, decision 15). The port stays on the
+	// record.
+	c, err := h.store.GetContext(ctx, store.ContextKey{NAS: peer.NAS, Username: canonical})
 	h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
 	// A store error other than ErrNotFound is not a reason to refuse
 	// accounting (spec §5.8: accounting never enforces): treat it the same
 	// as no context and still spool the record as unattributed.
-	if err == nil && c.Username == canonical {
+	//
+	// The key already selects on the username; this re-checks what came back,
+	// for the same reason package authen re-checks the receipt hash after its
+	// lookup. A store answering with a record it was not asked for would
+	// otherwise have this record name another principal, silently and in the
+	// audit trail, which is the one thing accounting exists to get right.
+	if err == nil && subtle.ConstantTimeCompare([]byte(c.Username), []byte(canonical)) == 1 {
 		rec.Attribution = "resolved"
 		rec.Principal = c.Principal
-		rec.Session.Username = c.Username
 		rec.Session.CtxID = c.CtxID
 	}
 

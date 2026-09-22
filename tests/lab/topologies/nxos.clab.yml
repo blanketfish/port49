@@ -1,0 +1,11 @@
+name: port49-nxos
+topology:
+  nodes:
+    nx1:
+      kind: cisco_n9kv
+      image: vrnetlab/cisco_n9kv:9300v64-10.4.2.F
+      startup-config: ../configs/nxos-startup.cfg
+      mgmt-ipv4: 172.100.100.31
+mgmt:
+  network: port49-lab
+  ipv4-subnet: 172.100.100.0/24

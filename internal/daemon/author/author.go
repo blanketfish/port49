@@ -4,6 +4,7 @@ package author
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
@@ -35,10 +37,39 @@ type Handler struct {
 	log     decision.Emitter
 	metrics *metrics.Metrics
 	now     func() time.Time
+
+	// services is the resolved authorization-`service` table, platform name to
+	// the values that platform's sessions may arrive with (spec §5.2, §8).
+	// config.Load builds it from the built-in table plus any operator
+	// override; a nil map is legal and means every platform takes the
+	// fallback, which is `shell`.
+	services map[string][]string
 }
 
-func New(s store.Store, a Authorizer, e decision.Emitter, m *metrics.Metrics, now func() time.Time) *Handler {
-	return &Handler{store: s, authz: a, log: e, metrics: m, now: now}
+func New(s store.Store, a Authorizer, e decision.Emitter, m *metrics.Metrics, now func() time.Time, services map[string][]string) *Handler {
+	return &Handler{store: s, authz: a, log: e, metrics: m, now: now, services: services}
+}
+
+// authorizes reports whether a session on this platform may arrive with this
+// `service`. A platform with no entry falls back to the built-in table's
+// fallback, `shell` — what port49 required of every platform before the table
+// existed, so an unmodeled device keeps reaching a prompt (spec §8, "Unknown
+// platforms").
+//
+// The list is short — one or two entries — so this is a scan rather than a
+// set. It is the only thing the `service` value is ever compared against: it
+// selects no policy, no privilege and no rule (spec §5.2).
+func (h *Handler) authorizes(platformName, service string) bool {
+	list, ok := h.services[platformName]
+	if !ok {
+		list = platform.SessionServices(platformName)
+	}
+	for _, s := range list {
+		if s == service {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseArgs splits RFC 8907 AV pairs. A trailing cmd-arg of "<cr>" is dropped
@@ -84,37 +115,58 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	rec := decision.Record{TS: h.now(), Event: decision.EventAuthorizeCommand,
 		Device:  &decision.Device{NAS: peer.NASAddr, Name: peer.NAS, Platform: peer.Platform},
 		Session: &decision.Session{Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
-		Request: &decision.Request{Raw: raw, Vector: vector}}
+		Request: &decision.Request{Service: kv["service"], Raw: raw, Vector: vector}}
 	if cmd == "" {
 		rec.Event = decision.EventAuthorizeSession
 	}
 
-	c, err := h.store.GetContext(ctx, store.ContextKey{NAS: peer.NAS, Port: port})
+	// The lookup is (nas, username): the request's own name, never its port.
+	// The port on an authorization request is not the port the authentication
+	// carried on any platform measured — vEOS says `ssh` then `vty4`, the N9Kv
+	// sends it empty on every command — so keying on it denied sessions port49
+	// had just authenticated (spec §13, decision 15; §15, L1).
+	//
+	// Because the username is the key, a request under a name port49 did not
+	// authenticate finds no context and is `context_missing`. It cannot land
+	// on someone else's context, so there is nothing here to invalidate — the
+	// deletion this path used to perform is gone with the old key.
+	user := authen.Canonical(string(req.User))
+	rec.Session.Username = user
+	c, err := h.store.GetContext(ctx, store.ContextKey{NAS: peer.NAS, Username: user})
 	h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
 	if errors.Is(err, store.ErrNotFound) {
-		rec.Session.Username = authen.Canonical(string(req.User))
 		return h.deny(rec, decision.ContextMissing, "port49: this session was not authenticated by port49")
 	}
 	if err != nil {
-		rec.Session.Username = authen.Canonical(string(req.User))
 		return h.deny(rec, decision.StoreUnavailable, "port49: authorization store unavailable")
 	}
-	rec.Session.CtxID = c.CtxID
-	rec.Session.Username = c.Username
-	rec.Principal = c.Principal
-	if user := authen.Canonical(string(req.User)); user != c.Username {
-		// The record names whoever sent the request, not whoever owns the
-		// context it landed on: logging the context's username accuses the
-		// wrong person and leaves the sender out of the record entirely.
-		// ctx_id already says which context this collided with.
-		rec.Session.Username = user
-		derr := h.store.DeleteContext(ctx, store.ContextKey{NAS: peer.NAS, Port: port})
-		h.metrics.StoreOps.WithLabelValues("delete_context", storeOutcome(derr)).Inc()
+	// The key already selected on the username; this re-checks what came back,
+	// for the same reason package authen re-checks the receipt hash after its
+	// lookup. A correct store cannot fail it. A store that answers with a
+	// record it was not asked for would otherwise get a permit evaluated
+	// against another principal's context — their privilege, their blob — and
+	// a record asserting this username belongs to that principal. `subtle`
+	// because this is the same class of compare as the receipt's and one rule
+	// is easier to audit than an exception.
+	//
+	// The record keeps the sender's username and drops the principal: it is
+	// this request being denied, not the context's owner, and ctx_id already
+	// says which context it collided with.
+	if subtle.ConstantTimeCompare([]byte(c.Username), []byte(user)) != 1 {
+		rec.Session.CtxID = c.CtxID
 		return h.deny(rec, decision.UsernameMismatch, "port49: username does not match the authenticated session")
 	}
-	if kv["service"] != "shell" {
+	rec.Session.CtxID = c.CtxID
+	rec.Principal = c.Principal
+	// Which `service` values this platform's sessions arrive with is a platform
+	// fact and not the constant `shell`: L10 measured Junos sending
+	// `junos-exec`, and Junos renames it per device with `set system
+	// tacplus-options service-name`, so the list is configurable too
+	// (spec §5.2, §8; §15, L10).
+	if !h.authorizes(peer.Platform, kv["service"]) {
 		// server_msg is never built from device-supplied bytes; the service
-		// value the NAS sent is already recorded in request.raw on this record.
+		// value the NAS sent is already recorded in request.service and
+		// request.raw on this record.
 		return h.deny(rec, decision.ServiceUnsupported, "port49: service not authorized by port49")
 	}
 

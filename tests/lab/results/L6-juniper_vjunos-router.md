@@ -4,7 +4,7 @@
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/captures/L6-juniper_vjunos-router.pcap` — 104 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L6-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/evidence/L6-juniper_vjunos-router.pcap` — 104 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L6-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim

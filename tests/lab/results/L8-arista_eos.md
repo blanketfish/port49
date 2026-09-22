@@ -1,10 +1,10 @@
 # L8 — arista_eos
 
-- **Date measured:** 2026-09-17
+- **Date measured:** 2026-09-20
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
-- **Capture:** `tests/lab/captures/L8-arista_eos.pcap` — 496 packets to or from the device, countable with `tcpdump -r tests/lab/captures/L8-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`
+- **Capture:** `tests/lab/evidence/L8-arista_eos.pcap` — 496 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L8-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -24,7 +24,7 @@ A seeded token of each length, each under its own username, presented at the SSH
 
 **Longest password that arrived intact: 138 characters.**
 
-How to read this: `token_redeemed` means the full password reached port49 byte for byte. `credential_mismatch` means the username arrived but the password did not match what was seeded, so the device altered or truncated it. `token_not_found` or no record at all means the device refused the password before sending anything.
+How to read this: `token_redeemed` means the full password reached port49 byte for byte. `token_not_found` means the device did send a password under this username and no seeded token matched it, so the device altered or truncated what was typed. Truncation cannot land anywhere else: the receipt key carries the credential hash (spec §13, decision 15), so a truncated password finds no receipt at all rather than colliding with one. No record at all means the device refused the password locally and sent nothing.
 
 The 30-character handle the design document depends on: **accepted**.
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	stdlog "log"
@@ -11,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,6 +29,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
@@ -55,6 +58,25 @@ func (s *syncBuffer) contains(sub string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return bytes.Contains(s.b.Bytes(), []byte(sub))
+}
+
+// records decodes every record written so far, one map per line. A test that
+// has to join two records — a redeem to the authorization that found its
+// context — needs the fields rather than a substring.
+func (s *syncBuffer) records(t *testing.T) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(s.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("record %q: %v", line, err)
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // waitFor polls until cond holds or the deadline passes, so a test never
@@ -165,7 +187,7 @@ func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.A
 	d := Deps{Admission: trie,
 		Keys:   map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), Retired: true}}}},
 		Authen: authen.New(st, em, lim, m, time.Now, func() string { return "ctx" + strconv.FormatInt(ids.Add(1), 10) }, 30*time.Second, time.Hour),
-		Author: author.New(st, authz, em, m, time.Now),
+		Author: author.New(st, authz, em, m, time.Now, platform.Defaults()),
 		Acct:   acct.New(st, sp, m, time.Now),
 		Limits: lim, Metrics: m, Log: em, Now: time.Now, IdleTimeout: time.Second}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -234,6 +256,117 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 	}
 	if log.contains("p49_e2e") {
 		t.Fatalf("the credential must never reach the log: %s", log.String())
+	}
+}
+
+// TestTwoUsersAuthenticateAtOnePortAndAuthorizeAtAnother drives the round trip
+// the ruled key exists for, end to end through this package rather than
+// against a pre-seeded context: vEOS reports port=ssh while it authenticates a
+// login and port=vty<n> when it authorizes the shell that login opened
+// (tests/lab/results/L1-arista_eos.md), and under the old (nas, port) key the
+// authorization missed and the device killed the session. Two operators do it
+// at once, because the other half of the ruling is that neither login may
+// displace the other's context.
+func TestTwoUsersAuthenticateAtOnePortAndAuthorizeAtAnother(t *testing.T) {
+	log := &syncBuffer{}
+	st := memory.New(time.Now)
+	users := []struct{ name, secret, authenPort, authorPort string }{
+		{"alice", "p49_alice_tok", "ssh", "vty4"},
+		{"bob", "p49_bob_tok", "ssh", "vty5"},
+	}
+	for _, u := range users {
+		if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: u.name},
+			store.Token{Secret: []byte(u.secret), Kind: store.KindLogin, ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ts := newTestServer(t, log, st, nil)
+
+	// Both logins are in flight before either reply is read, so two sessions
+	// are live on the daemon at the same time. The per-NAS connection cap is
+	// 2, which is exactly what that costs.
+	conns := make([]*client, len(users))
+	for i, u := range users {
+		conns[i] = dial(t, ts.addr, []byte("k2"))
+		conns[i].send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1,
+			AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte(u.name),
+			Port: []byte(u.authenPort), RemAddr: []byte("172.100.100.1"), Data: []byte(u.secret)}.Encode(), 0)
+	}
+	for i, u := range users {
+		_, body := conns[i].recv(t)
+		reply, err := wire.DecodeAuthenReply(body)
+		if err != nil || reply.Status != wire.AuthenStatusPass {
+			t.Fatalf("%s: %+v %v", u.name, reply, err)
+		}
+		conns[i].conn.Close()
+	}
+
+	// The daemon closes a connection once its exchange is done; waiting for
+	// the gauge keeps the authorizations from being refused on the cap.
+	if !waitFor(t, func() bool { return testutil.ToFloat64(ts.metrics.Connections.WithLabelValues("open")) == 0 }) {
+		t.Fatalf("open connections gauge: %v", testutil.ToFloat64(ts.metrics.Connections.WithLabelValues("open")))
+	}
+
+	// Each shell now authorizes from a different port than its login reported,
+	// and from a port the other operator does not share.
+	for i, u := range users {
+		conns[i] = dial(t, ts.addr, []byte("k2"))
+		conns[i].send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 1,
+			AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin, User: []byte(u.name),
+			Port: []byte(u.authorPort), RemAddr: []byte("172.100.100.1"),
+			Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
+	}
+	for i, u := range users {
+		_, body := conns[i].recv(t)
+		ar, err := wire.DecodeAuthorResponse(body)
+		if err != nil || ar.Status != wire.AuthorStatusPassAdd {
+			t.Fatalf("%s authorized at %s: %+v %v", u.name, u.authorPort, ar, err)
+		}
+	}
+
+	// Join each authorization to its own login through ctx_id. Asserting the
+	// reason alone would pass if both users shared one context.
+	redeemed := map[string]string{}   // username -> ctx_id written at authentication
+	authorized := map[string]string{} // username -> ctx_id the authorization found
+	for _, r := range log.records(t) {
+		s, ok := r["session"].(map[string]any)
+		if !ok {
+			continue
+		}
+		user, _ := s["username"].(string)
+		ctxID, _ := s["ctx_id"].(string)
+		switch r["event"] {
+		case "redeem":
+			if r["reason"] != "token_redeemed" {
+				t.Fatalf("%s: %v", user, r)
+			}
+			if s["replaced_ctx_id"] != nil {
+				t.Fatalf("%s displaced a context that belonged to someone else: %v", user, s)
+			}
+			if s["port"] != "ssh" {
+				t.Fatalf("%s authenticated at %v, not ssh: %v", user, s["port"], s)
+			}
+			redeemed[user] = ctxID
+		case "authorize_session":
+			if r["reason"] != "context_matched" {
+				t.Fatalf("%s authorizing at %v: %v", user, s["port"], r)
+			}
+			authorized[user] = ctxID
+		}
+	}
+	for _, u := range users {
+		if redeemed[u.name] == "" || authorized[u.name] != redeemed[u.name] {
+			t.Fatalf("%s authorized against ctx_id %q, its login wrote %q: %s",
+				u.name, authorized[u.name], redeemed[u.name], log.String())
+		}
+	}
+	if redeemed["alice"] == redeemed["bob"] {
+		t.Fatalf("two operators on one device shared one context: %s", log.String())
+	}
+	for _, u := range users {
+		if log.contains(u.secret) {
+			t.Fatalf("the credential must never reach the log: %s", log.String())
+		}
 	}
 }
 
@@ -774,7 +907,9 @@ func TestAcceptErrorIsCountedAndTheListenerKeepsGoing(t *testing.T) {
 	if !waitFor(t, func() bool { return testutil.ToFloat64(m.ConnectionEvents.WithLabelValues("accept_error")) >= 1 }) {
 		t.Fatal("connection_events_total{accept_error} was not incremented")
 	}
-	if !logged.contains("accept failed") {
+	// The counter moves before the line is written, so the line is waited
+	// for too rather than read once.
+	if !waitFor(t, func() bool { return logged.contains("accept failed") }) {
 		t.Fatalf("an accept failure must say so: %q", logged.String())
 	}
 	// And the listener is still live: the transient error did not end Serve.

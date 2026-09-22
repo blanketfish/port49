@@ -70,7 +70,7 @@ func TestPAPRedeemsAndCreatesContext(t *testing.T) {
 	if !done || reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("reply %+v done %v", reply, done)
 	}
-	c, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Port: "vty0"})
+	c, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
 	if err != nil || c.Username != "alice" || c.RemAddr != "198.51.100.4" || c.CtxID != "ctx1" {
 		t.Fatalf("context %+v err %v", c, err)
 	}
@@ -102,10 +102,15 @@ func TestRetransmissionReplaysReceipt(t *testing.T) {
 	if r[1]["reason"] != "receipt_replayed" || r[1]["session"].(map[string]any)["ctx_id"] != "ctx1" {
 		t.Fatalf("%v", r[1])
 	}
-	// Same line and username, different credential: the receipt must not stand in for the check.
+	// Same device and username, different credential: the receipt must not
+	// stand in for the check. Since the hash is in the receipt key (spec §13,
+	// decision 15) this no longer collides with alice's receipt at all — it
+	// misses, looks for a token of its own, and finds none. Before the re-key
+	// the reason here was credential_mismatch; the deny is the same, and so is
+	// the property being guarded.
 	start.Data = []byte("something-else")
 	reply, _ = f.h.NewSession(f.peer).Start(context.Background(), start)
-	if reply.Status != wire.AuthenStatusFail || f.records(t)[2]["reason"] != "credential_mismatch" {
+	if reply.Status != wire.AuthenStatusFail || f.records(t)[2]["reason"] != "token_not_found" {
 		t.Fatalf("%+v %v", reply, f.records(t)[2])
 	}
 }

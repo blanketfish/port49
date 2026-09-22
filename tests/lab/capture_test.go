@@ -4,7 +4,6 @@ package lab
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/tests/lab/labpcap"
 )
 
 // ---------------------------------------------------------------------------
@@ -45,8 +46,13 @@ func (l *lab) capture(t *testing.T, name string) func() {
 		t.Fatalf("captures directory: %v", err)
 	}
 	abs := filepath.Join(dir, fmt.Sprintf("%s-%s.pcap", name, l.p.name))
-	l.capPath = filepath.Join("tests/lab/captures", filepath.Base(abs))
 	l.capAbs = abs
+	// What a results note points at. tests/lab/captures is git-ignored — it
+	// holds the lab tokens in the clear once the published key is applied — so
+	// a note that cited it would cite a file nobody but this machine has. The
+	// redacted copy written at the end of the run (writeEvidence) is committed,
+	// holds the same packets, and decodes under the same key.
+	l.evidencePath = filepath.Join("tests/lab/evidence", filepath.Base(abs))
 
 	// tcpdump runs as root under sudo and drops privileges to its own user, so
 	// it cannot be signalled directly and its pid is not the pid of sudo. The
@@ -181,92 +187,34 @@ func pcapSize(path string) int64 {
 // the one a results note may rest on: it excludes the harness's own loopback
 // liveness probes, so a note that quotes a capture is quoting device traffic.
 //
-// The parser handles only what this harness produces — a little-endian pcap of
-// `-i any`, which on Linux is LINUX_SLL2 — and reports what it cannot read
-// rather than guessing.
+// The file parsing lives in tests/lab/labpcap, which the redactor shares: the
+// count a note quotes and the evidence file the note points at are then taken
+// by the same reader, and cannot disagree about what the capture holds.
+//
+// A short tail is not corruption, it is a snapshot. Notes are written while
+// tcpdump is still running, so a read can land between a record header and its
+// bytes; labpcap.Parse returns every whole record before that point, which is
+// what is counted here.
 func pcapCounts(path string) (total, device int, err error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return 0, 0, err
 	}
-	if len(raw) < pcapHeaderSize {
-		return 0, 0, fmt.Errorf("%s is %d bytes, shorter than a pcap file header", path, len(raw))
+	f, err := labpcap.Parse(raw)
+	if err != nil {
+		return 0, 0, fmt.Errorf("%s: %w", path, err)
 	}
-	magic := binary.LittleEndian.Uint32(raw[0:4])
-	if magic != 0xa1b2c3d4 && magic != 0xa1b23c4d {
-		return 0, 0, fmt.Errorf("%s: unexpected pcap magic %#x; this parser reads only little-endian pcap", path, magic)
-	}
-	link := binary.LittleEndian.Uint32(raw[20:24])
-	// snaplen bounds every record's inclLen by construction: tcpdump never
-	// stores more of a packet than it captured. A larger value is corruption
-	// in the middle of the file, not the truncated tail handled below, and a
-	// results note must not quote a count taken from a corrupt capture.
-	snaplen := int(binary.LittleEndian.Uint32(raw[16:20]))
-
 	_, subnet, err := net.ParseCIDR(labSubnet)
 	if err != nil {
 		return 0, 0, err
 	}
-
-	for off := pcapHeaderSize; off+16 <= len(raw); {
-		inclLen := int(binary.LittleEndian.Uint32(raw[off+8 : off+12]))
-		off += 16
-		if snaplen > 0 && inclLen > snaplen {
-			return 0, 0, fmt.Errorf("%s: record at offset %d claims %d bytes, more than the file's snaplen of %d; the capture is corrupt",
-				path, off-16, inclLen, snaplen)
-		}
-		if off+inclLen > len(raw) {
-			// A short tail is not corruption, it is a snapshot. Notes are written
-			// while tcpdump is still running, so a read can land between the
-			// record header and its bytes. Erroring here turned that race into a
-			// red test on a run where the device behaved perfectly. Every whole
-			// record before this point is counted and returned; the partial one
-			// is simply not one of them.
-			return total, device, nil
-		}
+	for _, r := range f.Records {
 		total++
-		if src, dst, ok := ipv4Of(link, raw[off:off+inclLen]); ok && (subnet.Contains(src) || subnet.Contains(dst)) {
+		if src, dst, ok := labpcap.IPv4Of(f.Link, f.Bytes(r)); ok && (subnet.Contains(src) || subnet.Contains(dst)) {
 			device++
 		}
-		off += inclLen
 	}
 	return total, device, nil
-}
-
-// ipv4Of pulls the source and destination address out of one captured packet.
-func ipv4Of(link uint32, b []byte) (src, dst net.IP, ok bool) {
-	var hdr int
-	var proto uint16
-	switch link {
-	case 276: // LINUX_SLL2, what `-i any` produces on Linux
-		hdr, proto = 20, 0
-		if len(b) < hdr {
-			return nil, nil, false
-		}
-		proto = binary.BigEndian.Uint16(b[0:2])
-	case 113: // LINUX_SLL
-		hdr = 16
-		if len(b) < hdr {
-			return nil, nil, false
-		}
-		proto = binary.BigEndian.Uint16(b[14:16])
-	case 1: // Ethernet
-		hdr = 14
-		if len(b) < hdr {
-			return nil, nil, false
-		}
-		proto = binary.BigEndian.Uint16(b[12:14])
-	default:
-		return nil, nil, false
-	}
-	if proto != 0x0800 || len(b) < hdr+20 {
-		return nil, nil, false
-	}
-	ip := b[hdr:]
-	if ip[0]>>4 != 4 {
-		return nil, nil, false
-	}
-	return net.IP(ip[12:16]), net.IP(ip[16:20]), true
 }
 
 func signalCapture(pidPath, sig string) {

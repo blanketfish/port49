@@ -169,16 +169,22 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	}
 	port := string(s.start.Port)
 	remAddr := string(s.start.RemAddr)
-	rk := store.ReceiptKey{NAS: s.peer.NAS, Port: port, Username: username}
+	rk := store.ReceiptKey{NAS: s.peer.NAS, Username: username, CredentialSHA256: credHash}
 
-	// 1. Receipt: a retransmission replays; a different credential on the same line fails.
+	// 1. Receipt: a byte-identical retransmission replays. The credential hash
+	// is in the key, so a different credential misses here and goes on to
+	// redeem a token of its own rather than colliding with this receipt.
 	r, err := s.h.store.GetReceipt(ctx, rk)
 	s.h.metrics.StoreOps.WithLabelValues("get_receipt", storeOutcome(err)).Inc()
 	switch {
 	case err == nil:
+		// The key already selected on the hash; this re-checks what came back.
 		// subtle, not ==, for the same reason every other credential
 		// comparison in this package uses it: these are attacker-influenced
-		// values, and one rule is easier to audit than an exception.
+		// values, and one rule is easier to audit than an exception. A store
+		// that answers with a record it was not asked for is a store fault,
+		// and replaying it would hand out a decision made for another
+		// credential, so it fails rather than passes (spec §5.7).
 		if subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
 			rec.Session.CtxID = r.CtxID
 			return s.finish(rec, r.Status, decision.ReceiptReplayed)
@@ -234,8 +240,28 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		return s.storeError(rec)
 	}
 
-	err = s.h.store.PutContext(ctx, store.ContextKey{NAS: s.peer.NAS, Port: port},
-		store.Context{CtxID: ctxID, Username: username, RemAddr: remAddr, PrivLvl: s.start.PrivLvl, CreatedAt: s.h.now()}, s.h.contextTTL)
+	// A context already under this key is this operator's own earlier login on
+	// this device: the key cannot tell two of their shells apart, and no wire
+	// field can either (spec §15, L1). The overwrite is benign — same
+	// principal, same privilege, same blob — but it must not be silent, so the
+	// record names the ctx_id it displaces (spec §5.6).
+	//
+	// This read and the write below are not atomic. Two simultaneous
+	// redemptions by one user on one device can both read the same `prev` and
+	// both report it, and then one of the two new contexts is overwritten with
+	// nothing naming it — the silence `replaced_ctx_id` exists to prevent, in
+	// the one case it cannot cover. Closing it needs a compare-and-set on
+	// PutContext, which the store interface does not have; plan 2 owns whether
+	// to add one.
+	ck := store.ContextKey{NAS: s.peer.NAS, Username: username}
+	prev, perr := s.h.store.GetContext(ctx, ck)
+	s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(perr)).Inc()
+	if perr == nil {
+		rec.Session.ReplacedCtxID = prev.CtxID
+	}
+
+	err = s.h.store.PutContext(ctx, ck,
+		store.Context{CtxID: ctxID, Username: username, Port: port, RemAddr: remAddr, PrivLvl: s.start.PrivLvl, CreatedAt: s.h.now()}, s.h.contextTTL)
 	s.h.metrics.StoreOps.WithLabelValues("put_context", storeOutcome(err)).Inc()
 	if err != nil {
 		// The token is already redeemed, but without a context a later authorization
@@ -277,9 +303,15 @@ func (s *Session) finish(rec decision.Record, status uint8, reason decision.Reas
 // that hangs up mid-delay does not shorten it, and only shutdown does. The
 // delay therefore holds the connection's single read goroutine for its
 // duration, which on a single-connect connection is head-of-line blocking for
-// every other session on it. That cost, and whether the default ceiling of
-// auth_failure_delay_max belongs under the shortest device TACACS+ timeout,
-// are open questions for the project owner; device timeouts are unmeasured.
+// every other session on it. That cost is still an open question for the
+// project owner.
+//
+// The ceiling is no longer one. L13 measured device reply timeouts — about 3s
+// on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, above 12s on
+// IOS-XE — and auth_failure_delay_max now defaults to 2s so that a FAIL is
+// delivered while every one of them is still waiting for it (spec §15, L13).
+// Past a device's timeout a delayed FAIL is indistinguishable from an
+// unreachable server, and the device falls through to the local password.
 func (s *Session) fail(ctx context.Context, rec decision.Record, reason decision.Reason) (wire.AuthenReply, bool) {
 	delay := s.h.limits.AuthFailure(s.peer.NAS, Canonical(s.user))
 	s.h.metrics.AuthFailures.Inc()
