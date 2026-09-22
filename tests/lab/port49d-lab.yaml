@@ -55,6 +55,19 @@ lab:
   # Editing the line below changes four platforms; the fifth follows it only in
   # its first element.
   session_attributes: ["priv-lvl=15", "shell:roles*network-admin"]
+  # Attributes on a PERMITTED per-command authorization reply. Empty is the
+  # standing shape and means a bare permit, which is what every test but L18
+  # measures against.
+  #
+  # Register entry L18 is why the key exists. That row asks what a device does
+  # with a reply attribute it did not ask for, and three of the five platforms
+  # here answer the SESSION form of that question by refusing the session
+  # outright. Whether the same attribute on a per-command reply costs the
+  # command, the session, or nothing is a separate question, and it was
+  # unaskable while this list did not exist: the lab authorizer returned a bare
+  # permit and there was no reply to put an attribute in. `(*lab).derivedConfigCmd`
+  # substitutes this line per variant.
+  command_attributes: []
   # The long prefix is first: Lab.Command returns on the first prefix that
   # matches, and "show clock" would otherwise shadow it. L2 types this exact
   # line to see how long a server_msg the device will display.

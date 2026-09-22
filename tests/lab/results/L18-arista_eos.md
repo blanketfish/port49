@@ -4,7 +4,7 @@
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.31.2F (image tagged 4.32.2F) (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
-- **Capture:** `tests/lab/evidence/L18-arista_eos.pcap` — 1642 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L18-arista_eos.pcap` — 2325 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -15,15 +15,17 @@ How each platform treats a reply attribute it did not ask for -- one it does not
 
 - **Date measured:** 2026-09-22
 - **Image version:** vEOS-lab 4.31.2F (image tagged 4.32.2F) (`vrnetlab/arista_veos:4.32.2F`)
-- **Capture:** `tests/lab/evidence/L18-arista_eos.pcap` — 1642 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L18-arista_eos.pcap` — 2325 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L18-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 
 Each variant below is one set of reply attributes on the session authorization, one daemon restart and one token login. Per variant: whether the session opened and what the device said if it did not; `show privilege`, `show users detail` for what the session was given; and one `show version`, typed only to see whether the device sends per-command authorization under this reply at all.
 
 **How the summary table's cell is derived.** It is not written by hand and it is not a reading of the attribute's name. A variant whose session never opened is `session refused`. Otherwise the variant is compared with the one named in its `read against` column, on a single value: privilege level and role, as `show privilege` and `show users detail` report them. Identical is `ignored`, different is `applied`. So `ignored` means the session came out indistinguishable from the one that differs only by the attribute under test, which is the only thing a lab can observe about an attribute a device chose to drop.
 
-**Which baseline, and why it is not one fixed row.** Variants 3 to 6 send the known attribute AND the attribute under test, so that the session has something to be given and the bad attribute is the only variable; they are read against the control, which is the known attribute alone. Variants that REPLACE the whole reply -- the bad value, and on Junos the decision-22 attributes -- are read against `8. no attributes at all (the control for `ignored`)`. Reading everything against `8. no attributes at all (the control for `ignored`)` instead would mark every row carrying the known attribute `applied`, because the known attribute was applied, and the table would then contradict the transcripts printed above it.
+**Which baseline, and why it is not one fixed row.** Variants 3 to 6 send the known attribute AND the attribute under test, so that the session has something to be given and the bad attribute is the only variable; they are read against the control, which is the known attribute alone. Variants that REPLACE the whole reply -- the bad value, and on Junos the decision-22 attributes -- are read against variant 8. no attributes at all (the control for `ignored`). Reading everything against that instead would mark every row carrying the known attribute `applied`, because the known attribute was applied, and the table would then contradict the transcripts printed above it.
 
-**What is not measured here.** The same question asked on a per-command authorization REPLY. The lab authorizer returns no attributes on that path (`Lab.Command` in `internal/daemon/author/lab.go`) and the `lab:` config block has no key for them, so there is no reply to put a bad attribute in. The wire side is not the obstacle -- `author.Handler` copies a decision's attributes onto the response for commands and sessions alike -- so this is a missing configuration key, and adding one is a daemon change this measurement was not scoped to make. Every variant below still records whether per-command authorization happened, which answers the neighbouring question of whether a device under this reply reaches that path at all.
+**The per-command reply is asked too, in three shapes.** `lab.command_attributes` puts attributes on a PERMITTED per-command authorization the way `lab.session_attributes` does on a session one, so variants 9. OPTIONAL invented attribute on a PER-COMMAND reply, 10. MANDATORY invented attribute on a PER-COMMAND reply and 11. OPTIONAL foreign-vendor attribute on a PER-COMMAND reply hold the session reply constant at the control's and vary only what the command reply carries.
+
+**Their cells are derived differently from the rest, and have to be.** Their sessions are the control's by construction, so comparing sessions would read `ignored` however the device reacted to the command reply. The cell is read off the COMMANDS instead, in this order: the session lost after a prompt was reached, or the device asking for no command authorization at all, or a command whose reply is one of this platform's refusal markers (`Authorization denied`, `% Authorization`, `Authorization denied for command`), or -- the only way to `ran` -- a reply whose first line is the one the control's `show version` produced on the same device. A command that neither matched a refusal marker nor came back looking like the control's output is reported as neither, with its words printed, rather than being counted as having run.
 
 ### 1. mandatory KNOWN attribute (the control)
 
@@ -47,7 +49,7 @@ leaf1#
 ```
 Session       Username       Roles               TTY        State       Duration       Auth               Remote Host  
 ------------- -------------- ------------------- ---------- ----------- -------------- ------------------ -------------
-1             admin          network-admin       con0       E           0:00:08        local                           
+1             admin          network-admin       con0       E           0:00:10        local                           
 4             alice01        <unknown>           vty4       E           0:00:00        group port49       172.100.100.1
 leaf1#
 ```
@@ -58,8 +60,8 @@ leaf1#
 Arista vEOS-lab
 Hardware version: 
 Serial number: 
-Hardware MAC address: 0c00.aa15.c2d1
-System MAC address: 0c00.aa15.c2d1
+Hardware MAC address: 0c00.5c49.9e04
+System MAC address: 0c00.5c49.9e04
 
 Software image version: 4.31.2F
 Architecture: x86_64
@@ -70,7 +72,7 @@ Image optimization: None
 
 Uptime: 0 minutes
 Total memory: 1979668 kB
-Free memory: 621336 kB
+Free memory: 622108 kB
 
 leaf1#
 ```
@@ -107,7 +109,7 @@ leaf1#
 ```
 Session       Username       Roles               TTY        State       Duration       Auth               Remote Host  
 ------------- -------------- ------------------- ---------- ----------- -------------- ------------------ -------------
-1             admin          network-admin       con0       E           0:00:20        local                           
+1             admin          network-admin       con0       E           0:00:22        local                           
 5             alice02        <unknown>           vty4       E           0:00:01        group port49       172.100.100.1
 leaf1#
 ```
@@ -118,8 +120,8 @@ leaf1#
 Arista vEOS-lab
 Hardware version: 
 Serial number: 
-Hardware MAC address: 0c00.aa15.c2d1
-System MAC address: 0c00.aa15.c2d1
+Hardware MAC address: 0c00.5c49.9e04
+System MAC address: 0c00.5c49.9e04
 
 Software image version: 4.31.2F
 Architecture: x86_64
@@ -128,9 +130,9 @@ Internal build ID: 48bb2b78-5325-4a32-b124-dcd4e37fd3bc
 Image format version: 1.0
 Image optimization: None
 
-Uptime: 0 minutes
+Uptime: 1 minute
 Total memory: 1979668 kB
-Free memory: 623264 kB
+Free memory: 624200 kB
 
 leaf1#
 ```
@@ -167,7 +169,7 @@ leaf1#
 ```
 Session       Username       Roles               TTY        State       Duration       Auth               Remote Host  
 ------------- -------------- ------------------- ---------- ----------- -------------- ------------------ -------------
-1             admin          network-admin       con0       E           0:00:32        local                           
+1             admin          network-admin       con0       E           0:00:34        local                           
 6             alice03        <unknown>           vty4       E           0:00:01        group port49       172.100.100.1
 leaf1#
 ```
@@ -178,8 +180,8 @@ leaf1#
 Arista vEOS-lab
 Hardware version: 
 Serial number: 
-Hardware MAC address: 0c00.aa15.c2d1
-System MAC address: 0c00.aa15.c2d1
+Hardware MAC address: 0c00.5c49.9e04
+System MAC address: 0c00.5c49.9e04
 
 Software image version: 4.31.2F
 Architecture: x86_64
@@ -190,7 +192,7 @@ Image optimization: None
 
 Uptime: 1 minute
 Total memory: 1979668 kB
-Free memory: 628460 kB
+Free memory: 629436 kB
 
 leaf1#
 ```
@@ -248,8 +250,8 @@ leaf1#
 ```
 Session       Username       Roles               TTY        State       Duration       Auth               Remote Host  
 ------------- -------------- ------------------- ---------- ----------- -------------- ------------------ -------------
-1             admin          network-admin       con0       E           0:00:54        local                           
-8             alice05        <unknown>           vty4       E           0:00:00        group port49       172.100.100.1
+1             admin          network-admin       con0       E           0:00:56        local                           
+8             alice05        <unknown>           vty4       E           0:00:01        group port49       172.100.100.1
 leaf1#
 ```
 
@@ -259,8 +261,8 @@ leaf1#
 Arista vEOS-lab
 Hardware version: 
 Serial number: 
-Hardware MAC address: 0c00.aa15.c2d1
-System MAC address: 0c00.aa15.c2d1
+Hardware MAC address: 0c00.5c49.9e04
+System MAC address: 0c00.5c49.9e04
 
 Software image version: 4.31.2F
 Architecture: x86_64
@@ -271,7 +273,7 @@ Image optimization: None
 
 Uptime: 1 minute
 Total memory: 1979668 kB
-Free memory: 626104 kB
+Free memory: 627064 kB
 
 leaf1#
 ```
@@ -337,8 +339,8 @@ leaf1>
 Arista vEOS-lab
 Hardware version: 
 Serial number: 
-Hardware MAC address: 0c00.aa15.c2d1
-System MAC address: 0c00.aa15.c2d1
+Hardware MAC address: 0c00.5c49.9e04
+System MAC address: 0c00.5c49.9e04
 
 Software image version: 4.31.2F
 Architecture: x86_64
@@ -347,9 +349,9 @@ Internal build ID: 48bb2b78-5325-4a32-b124-dcd4e37fd3bc
 Image format version: 1.0
 Image optimization: None
 
-Uptime: 1 minute
+Uptime: 2 minutes
 Total memory: 1979668 kB
-Free memory: 665848 kB
+Free memory: 668724 kB
 
 leaf1>
 ```
@@ -393,8 +395,8 @@ leaf1>
 Arista vEOS-lab
 Hardware version: 
 Serial number: 
-Hardware MAC address: 0c00.aa15.c2d1
-System MAC address: 0c00.aa15.c2d1
+Hardware MAC address: 0c00.5c49.9e04
+System MAC address: 0c00.5c49.9e04
 
 Software image version: 4.31.2F
 Architecture: x86_64
@@ -405,7 +407,7 @@ Image optimization: None
 
 Uptime: 2 minutes
 Total memory: 1979668 kB
-Free memory: 667412 kB
+Free memory: 667976 kB
 
 leaf1>
 ```
@@ -415,6 +417,188 @@ Every command authorization port49 answered in this session, as it arrived:
 ```
 terminal length 0 -> permit permit_dominates
 show privilege -> permit permit_dominates
+show version -> permit permit_dominates
+```
+
+
+### 9. OPTIONAL invented attribute on a PER-COMMAND reply
+
+the same question asked of a PER-COMMAND authorization reply instead of a session one. The session reply is the control's, so the only difference from the control is what the command reply carries. Three of the five platforms in this row end the SESSION over an attribute like this; what it costs on the command path is a separate question, and it decides whether a per-command adapter may carry anything at all. The commands typed below are the measurement: if they run, the device tolerated the attribute; if the device refuses one, a policy permit became a refusal; if the session goes away, one attribute cost the operator every command and not just this one. Here it is an OPTIONAL attribute no vendor has -- the shape RFC 8907 §8.2 says a device SHOULD ignore, and the mildest thing that can be wrong in a reply.
+
+Reply attributes: `["priv-lvl=15"]`
+
+port49 answered the session authorization **permit context_matched**, so everything below is the DEVICE's answer to a session port49 permitted.
+
+**The session opened.**
+
+`terminal length 0` — the FIRST command in the session, and so the first authorization reply to carry `["p49-nonsense*1"]`. The device said:
+
+```
+Pagination disabled.
+leaf1#
+```
+
+`show privilege`:
+
+```
+Current privilege level is 15
+leaf1#
+```
+
+`show users detail`:
+
+```
+Session       Username       Roles               TTY        State       Duration       Auth               Remote Host  
+------------- -------------- ------------------- ---------- ----------- -------------- ------------------ -------------
+1             admin          network-admin       con0       E           0:01:42        local                           
+12            alice09        <unknown>           vty4       E           0:00:01        group port49       172.100.100.1
+leaf1#
+```
+
+`show version` — typed to see whether per-command authorization follows. The device said:
+
+```
+Arista vEOS-lab
+Hardware version: 
+Serial number: 
+Hardware MAC address: 0c00.5c49.9e04
+System MAC address: 0c00.5c49.9e04
+
+Software image version: 4.31.2F
+Architecture: x86_64
+Internal build version: 4.31.2F-35442176.4312F
+Internal build ID: 48bb2b78-5325-4a32-b124-dcd4e37fd3bc
+Image format version: 1.0
+Image optimization: None
+
+Uptime: 2 minutes
+Total memory: 1979668 kB
+Free memory: 669000 kB
+
+leaf1#
+```
+
+Every command authorization port49 answered in this session, as it arrived:
+
+```
+terminal length 0 -> permit permit_dominates
+show privilege -> permit permit_dominates
+show users detail -> permit permit_dominates
+show version -> permit permit_dominates
+```
+
+
+### 10. MANDATORY invented attribute on a PER-COMMAND reply
+
+the same question asked of a PER-COMMAND authorization reply instead of a session one. The session reply is the control's, so the only difference from the control is what the command reply carries. Three of the five platforms in this row end the SESSION over an attribute like this; what it costs on the command path is a separate question, and it decides whether a per-command adapter may carry anything at all. The commands typed below are the measurement: if they run, the device tolerated the attribute; if the device refuses one, a policy permit became a refusal; if the session goes away, one attribute cost the operator every command and not just this one. Here it is the same invented attribute sent MANDATORY, which is where §8.2 stops being a SHOULD: a device that does not understand it MUST fail the authorization. It is also the only shape that could tell an adapter its attribute did not land, so what this platform does with it decides whether the flag is worth anything on the command path.
+
+Reply attributes: `["priv-lvl=15"]`
+
+port49 answered the session authorization **permit context_matched**, so everything below is the DEVICE's answer to a session port49 permitted.
+
+**The session opened.**
+
+`terminal length 0` — the FIRST command in the session, and so the first authorization reply to carry `["p49-nonsense=1"]`. The device said:
+
+```
+% Authorization denied for command 'terminal length 0'
+leaf1#
+```
+
+`show privilege`:
+
+```
+% Authorization denied for command 'show privilege'
+leaf1#
+```
+
+`show users detail`:
+
+```
+% Authorization denied for command 'show users detail'
+leaf1#
+```
+
+`show version` — typed to see whether per-command authorization follows. The device said:
+
+```
+% Authorization denied for command 'show version'
+leaf1#
+```
+
+Every command authorization port49 answered in this session, as it arrived:
+
+```
+terminal length 0 -> permit permit_dominates
+show privilege -> permit permit_dominates
+show users detail -> permit permit_dominates
+show version -> permit permit_dominates
+```
+
+
+### 11. OPTIONAL foreign-vendor attribute on a PER-COMMAND reply
+
+the same question asked of a PER-COMMAND authorization reply instead of a session one. The session reply is the control's, so the only difference from the control is what the command reply carries. Three of the five platforms in this row end the SESSION over an attribute like this; what it costs on the command path is a separate question, and it decides whether a per-command adapter may carry anything at all. The commands typed below are the measurement: if they run, the device tolerated the attribute; if the device refuses one, a policy permit became a refusal; if the session goes away, one attribute cost the operator every command and not just this one. Here it is another vendor's attribute, OPTIONAL: `shell:roles`. NX-OS reads this one and applies the role named in it (results/L16-cisco_nxos.md), and vEOS does not (results/L16-arista_eos.md). This is the reply an operator gets when one server definition serves a mixed fleet, and it separates "this device dislikes anything unfamiliar" from "this device dislikes that particular name" without leaning on the invented one alone.
+
+Reply attributes: `["priv-lvl=15"]`
+
+port49 answered the session authorization **permit context_matched**, so everything below is the DEVICE's answer to a session port49 permitted.
+
+**The session opened.**
+
+`terminal length 0` — the FIRST command in the session, and so the first authorization reply to carry `["shell:roles*network-operator"]`. The device said:
+
+```
+Pagination disabled.
+leaf1#
+```
+
+`show privilege`:
+
+```
+Current privilege level is 15
+leaf1#
+```
+
+`show users detail`:
+
+```
+Session       Username       Roles               TTY        State       Duration       Auth               Remote Host  
+------------- -------------- ------------------- ---------- ----------- -------------- ------------------ -------------
+1             admin          network-admin       con0       E           0:02:06        local                           
+14            alice11        <unknown>           vty4       E           0:00:01        group port49       172.100.100.1
+leaf1#
+```
+
+`show version` — typed to see whether per-command authorization follows. The device said:
+
+```
+Arista vEOS-lab
+Hardware version: 
+Serial number: 
+Hardware MAC address: 0c00.5c49.9e04
+System MAC address: 0c00.5c49.9e04
+
+Software image version: 4.31.2F
+Architecture: x86_64
+Internal build version: 4.31.2F-35442176.4312F
+Internal build ID: 48bb2b78-5325-4a32-b124-dcd4e37fd3bc
+Image format version: 1.0
+Image optimization: None
+
+Uptime: 2 minutes
+Total memory: 1979668 kB
+Free memory: 674760 kB
+
+leaf1#
+```
+
+Every command authorization port49 answered in this session, as it arrived:
+
+```
+terminal length 0 -> permit permit_dominates
+show privilege -> permit permit_dominates
+show users detail -> permit permit_dominates
 show version -> permit permit_dominates
 ```
 
@@ -431,8 +615,11 @@ show version -> permit permit_dominates
 | 6. MANDATORY invented attribute | `["priv-lvl=15", "p49-nonsense=1"]` | **session refused** | — | the control (same reply, minus this attribute) | **none** |
 | 7. known attribute, a value the device cannot use | `["priv-lvl=99"]` | ignored | priv=1 role=— | no attributes at all | 3 request(s) |
 | 8. no attributes at all (the control for `ignored`) | `[]` | opened (this is the baseline) | priv=1 role=— | — | 3 request(s) |
+| 9. OPTIONAL invented attribute on a PER-COMMAND reply | session `["priv-lvl=15"]`<br>**command `["p49-nonsense*1"]`** | the command ran | priv=15 role=<unknown> | the control's `["priv-lvl=15"]` session; the cell reads the commands | 4 request(s) |
+| 10. MANDATORY invented attribute on a PER-COMMAND reply | session `["priv-lvl=15"]`<br>**command `["p49-nonsense=1"]`** | **command refused** | — | the control's `["priv-lvl=15"]` session; the cell reads the commands | 4 request(s) |
+| 11. OPTIONAL foreign-vendor attribute on a PER-COMMAND reply | session `["priv-lvl=15"]`<br>**command `["shell:roles*network-operator"]`** | the command ran | priv=15 role=<unknown> | the control's `["priv-lvl=15"]` session; the cell reads the commands | 4 request(s) |
 
-The `what the session got` column is the verbatim `show` output above reduced to the one value the cell is derived from, and `read against` names the row it was compared with. The transcripts both come from are in each variant's section, and a cell that disagrees with the transcript above it is a defect in this generator rather than a finding about the device.
+The `what the session got` column is the verbatim `show` output above reduced to the one value the cell is derived from, and `read against` names the row it was compared with. The transcripts both come from are in each variant's section, and a cell that disagrees with the transcript above it is a defect in this generator rather than a finding about the device. The rows whose `reply attributes` name a **command** list send the control's session reply and differ from it only there, so their `what the session got` column is the control's by construction and their outcome is read off the commands.
 
 ## What this answers
 
@@ -446,6 +633,43 @@ The `what the session got` column is the verbatim `show` output above reduced to
 
 **4. A known attribute with an unusable value is dropped, not clamped.** `["priv-lvl=99"]` left the session on `priv=1 role=—` -- the same as sending nothing. The operator gets a working login with none of the privilege the policy named, and port49's log records the attribute as sent.
 
-**5. Every session that opened went on to per-command authorization**, 6 of 6, whatever the reply carried. So a bad attribute on this platform either ends the session outright or leaves the command path exactly as it was: there is no middle state where the session survives and the device stops asking.
+**5. Every session that opened went on to per-command authorization**, 6 of 6, whatever the SESSION reply carried. So an attribute on the session reply either ends the session outright or leaves the device still asking about commands: there is no middle state where the session survives and the device stops asking. Whether the commands then RUN is a different question, and it is 5b -- these 6 variants put nothing on the command reply.
+
+**5b. The same question asked of a PER-COMMAND reply, in 3 shapes.** Each one sends the control's session attributes (`["priv-lvl=15"]`) and differs from the control only in what a PERMITTED command authorization carries, so whatever the device does below it is doing about the command reply. The control itself answered 4 command authorization(s) and ran every command typed in it.
+
+`["p49-nonsense*1"]` on every permitted command — **ignored: the commands ran.** `show version` came back with the same first line as the control's (`Arista vEOS-lab`), over 4 authorization request(s), and `terminal length 0` before it was answered normally. So this platform reads a per-command reply the way §8.2 asks: what it does not understand there costs nothing.
+
+`["p49-nonsense=1"]` on every permitted command — **a permit became a refusal.** Measured: port49 PERMITTED `terminal length 0` -- 4 command authorization(s) reached it in this session and its log records what it answered -- and the device refused the command anyway. The same command under the control reply, which differs only in that the command reply carries nothing, ran.
+
+Sent:
+
+```
+lab.command_attributes ["p49-nonsense=1"]
+then, in the session:
+terminal length 0
+```
+
+The device replied:
+
+```
+% Authorization denied for command 'terminal length 0'
+leaf1#
+```
+
+So on vEOS-lab 4.31.2F (image tagged 4.32.2F) a per-command reply may carry nothing the device does not read: the decision log records a permit for a command that never ran, and an operator reading it sees an authorization that succeeded.
+
+`["shell:roles*network-operator"]` on every permitted command — **ignored: the commands ran.** `show version` came back with the same first line as the control's (`Arista vEOS-lab`), over 4 authorization request(s), and `terminal length 0` before it was answered normally. So this platform reads a per-command reply the way §8.2 asks: what it does not understand there costs nothing.
+
+**The two paths, attribute by attribute.** The same attribute in the same spelling, once on the session reply and once on a command reply. Both columns are the cells from the table above, with one word changed so they can be compared: a command reply whose commands ran is written `ignored` here, which is what the session column already calls a reply that changed nothing.
+
+| attribute | on the SESSION reply | on a COMMAND reply |
+|---|---|---|
+| `["p49-nonsense*1"]` | ignored | ignored |
+| `["p49-nonsense=1"]` | **the session was refused** | **command refused** |
+| `["shell:roles*network-operator"]` | ignored | ignored |
+
+**The two paths agree on all 3, and on 1 of them the cost is not the same size.** The device objects to the same attributes in both replies -- so one rule predicts both -- but objecting on the session reply costs the operator the login, and objecting on a command reply leaves them logged in and unable to run anything. Same rule, different blast radius, and the second is the one an operator will call in about.
+
+**6. Every login in this run reached the device's AAA.** No SSH connection was refused before the device asked port49, so nothing here says a run of refused authorizations costs anything beyond the sessions refused.
 
 

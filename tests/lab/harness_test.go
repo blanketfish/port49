@@ -722,7 +722,15 @@ func (l *lab) configPath() (string, error) {
 // suffix names the derivation when one platform needs more than one in a run;
 // "" is the platform's standing config.
 func (l *lab) derivedConfig(suffix, attrs, extra string) (string, error) {
-	if attrs == "" && extra == "" {
+	return l.derivedConfigCmd(suffix, attrs, "", extra)
+}
+
+// derivedConfigCmd is derivedConfig with `lab.command_attributes` substitutable
+// too. Register entry L18 is the only caller that sets it: it asks the same
+// question of a session reply and of a per-command reply, and the two lists
+// have to move independently or the variants cannot be told apart.
+func (l *lab) derivedConfigCmd(suffix, attrs, cmdAttrs, extra string) (string, error) {
+	if attrs == "" && cmdAttrs == "" && extra == "" {
 		return labConfigPath(), nil
 	}
 	raw, err := os.ReadFile(labConfigPath())
@@ -730,18 +738,23 @@ func (l *lab) derivedConfig(suffix, attrs, extra string) (string, error) {
 		return "", err
 	}
 	out := string(raw)
-	if attrs != "" {
-		const anchor = "  session_attributes: "
-		i := strings.Index(out, anchor)
+	for _, sub := range []struct{ anchor, value string }{
+		{"  session_attributes: ", attrs},
+		{"  command_attributes: ", cmdAttrs},
+	} {
+		if sub.value == "" {
+			continue
+		}
+		i := strings.Index(out, sub.anchor)
 		if i < 0 {
 			return "", fmt.Errorf("tests/lab/port49d-lab.yaml has no `%s` line, so the attribute set this platform "+
-				"needs cannot be substituted and the run would measure the wrong reply", strings.TrimSpace(anchor))
+				"needs cannot be substituted and the run would measure the wrong reply", strings.TrimSpace(sub.anchor))
 		}
 		j := strings.Index(out[i:], "\n")
 		if j < 0 {
-			return "", fmt.Errorf("tests/lab/port49d-lab.yaml ends inside its session_attributes line")
+			return "", fmt.Errorf("tests/lab/port49d-lab.yaml ends inside its %s line", strings.TrimSpace(sub.anchor))
 		}
-		out = out[:i] + anchor + attrs + out[i+j:]
+		out = out[:i] + sub.anchor + sub.value + out[i+j:]
 	}
 	if extra != "" {
 		out += "\n" + extra

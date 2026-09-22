@@ -38,14 +38,14 @@ import (
 //     `baseline` field, which is where the first draft of this file got it
 //     wrong in a way that would have published the opposite answer.
 //
-// What this test does NOT measure, and it is a hole rather than an answer: the
-// same question on a per-command authorization REPLY. The lab authorizer
-// returns no attributes on that path (`internal/daemon/author/lab.go`,
-// `Lab.Command`) and `lab:` in the daemon config has no key for them, so there
-// is no reply to put a bad attribute in. The wire side is already shared --
-// `author.Handler` copies `Decision.Attributes` onto the response for commands
-// and sessions alike -- so this is a missing config key and not a protocol
-// limit. Adding it is a daemon change, which this task was told not to make.
+// The same question is asked of a per-command authorization REPLY on every
+// platform that sends one, through `lab.command_attributes`. That variant holds
+// the session reply at the control's and varies only what the command reply
+// carries, so a device that behaves differently is reacting to the command
+// reply and to nothing else. Junos has no such variant because no Junos session
+// in this lab has ever produced a per-command authorization request at all
+// (L10, L14, decision 21) -- the question does not arise there rather than
+// going unanswered, and every variant records the request count that says so.
 func TestL18OptionalAttributes(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		d, ok := l18Drivers[l.p.name]
@@ -168,6 +168,12 @@ const (
 	l18JunosPermsM   = "9. Junos `user-permissions`, MANDATORY"
 	l18JunosPermsO   = "10. Junos `user-permissions`, OPTIONAL"
 	l18JunosBothMand = "11. Junos `local-user-name` and `user-permissions` together, MANDATORY"
+	// The per-command variants. They are numbered from 9 on the three platforms
+	// that send a per-command authorization; 9, 10 and 11 on Junos are the
+	// `user-permissions` variants above, and no platform runs both sets.
+	l18CmdOptInvented  = "9. OPTIONAL invented attribute on a PER-COMMAND reply"
+	l18CmdMandInvented = "10. MANDATORY invented attribute on a PER-COMMAND reply"
+	l18CmdOptForeign   = "11. OPTIONAL foreign-vendor attribute on a PER-COMMAND reply"
 )
 
 // l18Variant is one reply-attribute set and the question it answers.
@@ -175,6 +181,10 @@ type l18Variant struct {
 	name  string
 	why   string
 	attrs string // a YAML flow sequence, exactly as it goes into the config
+	// cmdAttrs is the same, for `lab.command_attributes`: what a PERMITTED
+	// per-command authorization reply carries. Empty means a bare permit, which
+	// is every variant but the per-command one.
+	cmdAttrs string
 
 	// baseline names the variant this one's cell is derived against, and
 	// getting it right is the whole difference between a table that means
@@ -291,6 +301,59 @@ func l18CommonVariants(known, knownOpt, badValue string, foreign []l18Foreign) [
 		})
 }
 
+// l18CommandVariants are the per-command half of this row, and they exist only
+// on the platforms that send a per-command authorization at all.
+//
+// The session reply is the control's, byte for byte, in all three. So the ONLY
+// difference between one of these variants and the control is what the
+// per-command REPLY carries, which is what makes them answerable: a device that
+// behaves differently here is reacting to the command reply and to nothing
+// else.
+//
+// Three shapes, the same three the session half asks about and for the same
+// reasons. The OPTIONAL invented one is the mildest thing that can be wrong, so
+// a platform that will not tolerate it will not tolerate anything. The
+// MANDATORY invented one is where §8.2 makes failing the authorization a MUST,
+// and it is the only shape that could tell an adapter its attribute did not
+// land. The OPTIONAL foreign one is the mixed-fleet reply an operator actually
+// writes, and it separates "this device dislikes unfamiliar names" from "this
+// device dislikes that particular name" without leaning on the invented one
+// alone -- exactly as variants 3 and 5 do on the session path.
+func l18CommandVariants(known string, foreign l18Foreign) []l18Variant {
+	const why = "the same question asked of a PER-COMMAND authorization reply instead of a session " +
+		"one. The session reply is the control's, so the only difference from the control is what the " +
+		"command reply carries. Three of the five platforms in this row end the SESSION over an " +
+		"attribute like this; what it costs on the command path is a separate question, and it decides " +
+		"whether a per-command adapter may carry anything at all. The commands typed below are the " +
+		"measurement: if they run, the device tolerated the attribute; if the device refuses one, a " +
+		"policy permit became a refusal; if the session goes away, one attribute cost the operator " +
+		"every command and not just this one."
+	v := func(name, cmdAttrs, tail string) l18Variant {
+		return l18Variant{
+			name:     name,
+			why:      why + " " + tail,
+			attrs:    `["` + known + `"]`,
+			cmdAttrs: cmdAttrs,
+			baseline: l18Control,
+		}
+	}
+	return []l18Variant{
+		v(l18CmdOptInvented, `["`+l18InventedAttr+`*1"]`,
+			"Here it is an OPTIONAL attribute no vendor has -- the shape RFC 8907 §8.2 says a device "+
+				"SHOULD ignore, and the mildest thing that can be wrong in a reply."),
+		v(l18CmdMandInvented, `["`+l18InventedAttr+`=1"]`,
+			"Here it is the same invented attribute sent MANDATORY, which is where §8.2 stops being a "+
+				"SHOULD: a device that does not understand it MUST fail the authorization. It is also "+
+				"the only shape that could tell an adapter its attribute did not land, so what this "+
+				"platform does with it decides whether the flag is worth anything on the command path."),
+		v(l18CmdOptForeign, `["`+foreign.attr+`*`+foreign.value+`"]`,
+			"Here it is another vendor's attribute, OPTIONAL: `"+foreign.attr+"`. "+foreign.why+
+				" This is the reply an operator gets when one server definition serves a mixed fleet, "+
+				"and it separates \"this device dislikes anything unfamiliar\" from \"this device "+
+				"dislikes that particular name\" without leaning on the invented one alone."),
+	}
+}
+
 // l18Foreign is one other-vendor attribute to send at this platform.
 type l18Foreign struct {
 	attr  string
@@ -378,6 +441,19 @@ type l18Driver struct {
 	// waits out the timeout, and the transcript is the same either way.
 	refusalMarkers []string
 
+	// cmdRefusalMarkers are what this platform says when it refuses a COMMAND,
+	// which is a different sentence from the one it uses to refuse a session and
+	// on two of these platforms shares no words with it. They are used ONLY to
+	// derive the per-command variants' cells, never in the login wait, so adding
+	// one cannot change how a session variant was read.
+	//
+	// Every entry is a string this lab has already seen the platform print, cited
+	// on the field's line. Guessing one would put the worst kind of defect in
+	// this file: a marker that never matches turns a refusal into "the command
+	// neither ran nor was refused", and one that matches too eagerly turns a
+	// command that ran into a refusal.
+	cmdRefusalMarkers []string
+
 	// setup and teardown put whatever the variants need on the device. Only
 	// Junos has any.
 	setup    func(t *testing.T, l *lab)
@@ -431,8 +507,15 @@ var l18Drivers = map[string]l18Driver{
 		// authenticating it answers `Authorization denied:` and closes the
 		// channel (results/L16-arista_eos.md).
 		refusalMarkers: []string{"Authorization denied", "% Authorization"},
-		variants: l18CommonVariants("priv-lvl=15", "priv-lvl*15", "priv-lvl=99",
+		// `% Authorization denied for command 'show clock': ...` is what this
+		// image prints for a denied command (results/L2-arista_eos.md,
+		// results/L16-arista_eos.md). The session markers above already match
+		// its opening words; this spells out the command form so a reader of
+		// the note can see which sentence the cell was derived from.
+		cmdRefusalMarkers: []string{"Authorization denied for command"},
+		variants: append(l18CommonVariants("priv-lvl=15", "priv-lvl*15", "priv-lvl=99",
 			[]l18Foreign{l18ForeignShellRoles}),
+			l18CommandVariants("priv-lvl=15", l18ForeignShellRoles)...),
 	},
 	"cisco_nxos": {
 		platform:  "cisco_nxos",
@@ -448,8 +531,17 @@ var l18Drivers = map[string]l18Driver{
 		},
 		probe:          "show version",
 		refusalMarkers: []string{"Authorization denied", "AAA authorization failed", "Cmd exec error"},
-		variants: l18CommonVariants("priv-lvl=15", "priv-lvl*15", "priv-lvl=99",
+		// Two sentences, both measured on this image. A command AAA refuses
+		// prints `Error: AAA authorization failed AAA_AUTHOR_STATUS_METHOD=...`
+		// followed by `Cmd exec error.` (results/L2-cisco_nxos.md); a command
+		// the ROLE forbids prints `% Permission denied for the role`
+		// (results/L16-cisco_nxos.md). The second is here because a reply
+		// attribute that moved the session's role would refuse commands with it
+		// rather than with the AAA sentence.
+		cmdRefusalMarkers: []string{"Permission denied", "Error: AAA"},
+		variants: append(l18CommonVariants("priv-lvl=15", "priv-lvl*15", "priv-lvl=99",
 			[]l18Foreign{l18ForeignBareRoles}),
+			l18CommandVariants("priv-lvl=15", l18ForeignBareRoles)...),
 	},
 	"cisco_iosxe": {
 		platform:   "cisco_iosxe",
@@ -465,6 +557,12 @@ var l18Drivers = map[string]l18Driver{
 		// authenticating answers `% Authorization failed.` and the SSH session
 		// is closed (results/L10-cisco_iosxe.md).
 		refusalMarkers: []string{"% Authorization failed", "Authorization failed", "% Authorization"},
+		// `Command authorization failed.` is IOS-XE's command form, and its
+		// lower-case `a` is the reason this field exists: none of the session
+		// markers above matches it, so a command refusal would have been read
+		// as "neither ran nor was refused". The spelling is the one
+		// iosxeConfigure has checked for since the L4 runs (cli_test.go).
+		cmdRefusalMarkers: []string{"Command authorization failed", "authorization failed"},
 		// See the `attempts` comment: five refusals in a row take this device's
 		// SSH server out for the best part of a minute. Four attempts 20s apart
 		// clears what the first run measured, with room over it.
@@ -473,8 +571,9 @@ var l18Drivers = map[string]l18Driver{
 		// IOS-XE gets BOTH foreign spellings. It reads neither, so the pair
 		// separates "this image dislikes that name" from "this image refuses
 		// anything unfamiliar" without leaning on the invented variant alone.
-		variants: l18CommonVariants("priv-lvl=15", "priv-lvl*15", "priv-lvl=99",
+		variants: append(l18CommonVariants("priv-lvl=15", "priv-lvl*15", "priv-lvl=99",
 			[]l18Foreign{l18ForeignShellRoles, l18ForeignBareRoles}),
+			l18CommandVariants("priv-lvl=15", l18ForeignShellRoles)...),
 	},
 	"juniper_vsrx":          l18JunosDriver("juniper_vsrx"),
 	"juniper_vjunos-router": l18JunosDriver("juniper_vjunos-router"),
@@ -724,12 +823,35 @@ type l18Result struct {
 	attemptErrs []string
 
 	// probeCmd is the command typed to see whether per-command authorization
-	// happens; probeOut is the device's exact reply.
-	probeCmd string
-	probeOut string
+	// happens; probeOut is the device's exact reply and probeRefused says
+	// whether that reply holds any of the words this platform has been measured
+	// to refuse with, session form or command form (l18AllRefusalMarkers).
+	//
+	// probeRefused is part of what the per-command variants turn on: everywhere
+	// else the probe is a liveness check, and there it is the measurement.
+	probeCmd     string
+	probeOut     string
+	probeRefused bool
 	// cmdReqs is every authorize_command that reached port49 in this variant's
 	// window, as `vector -> verdict reason`.
 	cmdReqs []string
+
+	// reachedPrompt says the login got as far as a shell prompt, whether or not
+	// the session survived what was typed next.
+	//
+	// It is what separates "the device refused the session" from "the device
+	// gave a session and then the first authorized command took it away", and
+	// the per-command variants are why it has to exist: the paging-off command
+	// is the FIRST reply that carries `lab.command_attributes`, so a platform
+	// that kills the session over one kills it there, before a single measured
+	// command is typed. Without this the note would print `session refused` over
+	// a transcript showing a prompt.
+	reachedPrompt bool
+	// pagingCmd and pagingOut are that first command and the device's exact
+	// reply to it. On every other variant it is housekeeping; on a per-command
+	// variant it is the first evidence there is.
+	pagingCmd string
+	pagingOut string
 }
 
 type l18Show struct {
@@ -768,7 +890,7 @@ func (r *l18Result) show(cmd string) string {
 // command to see whether per-command authorization follows.
 func (l *lab) l18Run(t *testing.T, d l18Driver, v l18Variant) l18Result {
 	t.Helper()
-	cfg, err := l.derivedConfig("l18-"+l16Slug(v.name), l18Attrs(v.attrs), "")
+	cfg, err := l.derivedConfigCmd("l18-"+l16Slug(v.name), l18Attrs(v.attrs), v.cmdAttrs, "")
 	if err != nil {
 		t.Fatalf("derive the config for %q: %v", v.name, err)
 	}
@@ -784,8 +906,9 @@ func (l *lab) l18Run(t *testing.T, d l18Driver, v l18Variant) l18Result {
 	user, secret := l.nextLogin(t)
 	r.user = user
 
-	c, said, attempts, attemptErrs, err := l.l18CLI(d, user, secret)
-	r.deviceSaid, r.attempts, r.attemptErrs = said, attempts, attemptErrs
+	c, lg, err := l.l18CLI(d, user, secret)
+	r.deviceSaid, r.attempts, r.attemptErrs = lg.said, lg.attempts, lg.attemptErrs
+	r.reachedPrompt, r.pagingCmd, r.pagingOut = lg.reachedPrompt, lg.pagingCmd, lg.pagingOut
 	if err != nil {
 		r.loginErr = err.Error()
 		l.collectL18(&r, l.drainRecords(off, 10*time.Second))
@@ -799,6 +922,7 @@ func (l *lab) l18Run(t *testing.T, d l18Driver, v l18Variant) l18Result {
 	}
 	out, _ := l.l18Show(d, c, d.probe)
 	r.probeOut = precReply(l16TrimEcho(out, d.probe))
+	r.probeRefused = l16Refused(r.probeOut, l18AllRefusalMarkers(d))
 	c.Close()
 
 	l.collectL18(&r, l.drainRecords(off, 10*time.Second))
@@ -839,20 +963,21 @@ func l18Attrs(attrs string) string {
 // TACACS+ packet for the refused one anywhere in the capture (see
 // iosxeTokenCLI). A retry at the SSH layer only -- never after the device has
 // said something -- stops that flake from being written down as a refusal.
-func (l *lab) l18CLI(d l18Driver, user, password string) (c *cliConn, said string, attempts int, errs []string, err error) {
+func (l *lab) l18CLI(d l18Driver, user, password string) (c *cliConn, lg l18Login, err error) {
+	lg.pagingCmd = d.pagingOff
 	tries := d.attempts
 	if tries < 1 {
 		tries = 1
 	}
-	for attempts = 1; attempts <= tries; attempts++ {
+	for lg.attempts = 1; lg.attempts <= tries; lg.attempts++ {
 		c, err = l.sshCLI(user, password)
 		if err != nil {
 			// The device never ran a shell for this login, so it said nothing
 			// this test can quote. Whether it even ASKED port49 is the thing
 			// that tells this apart from a refusal, and the caller reads that
 			// off the decision log rather than guessing here.
-			errs = append(errs, err.Error())
-			if attempts < tries {
+			lg.attemptErrs = append(lg.attemptErrs, err.Error())
+			if lg.attempts < tries {
 				time.Sleep(d.retryPause)
 			}
 			continue
@@ -863,16 +988,20 @@ func (l *lab) l18CLI(d l18Driver, user, password string) (c *cliConn, said strin
 		// anything else means the device answered and did not give one.
 		out, werr := c.expect(90*time.Second, append(d.prompts(l), d.refusalMarkers...)...)
 		if werr != nil {
-			said = c.transcript()
+			lg.said = c.transcript()
 			c.Close()
-			return nil, said, attempts, errs, werr
+			return nil, lg, werr
 		}
 		if !containsAny(out, d.prompts(l)) {
-			said = c.transcript()
+			lg.said = c.transcript()
 			c.Close()
-			return nil, said, attempts, errs, fmt.Errorf("the device refused the session after "+
-				"authenticating it; it said: %s", oneLine(said))
+			return nil, lg, fmt.Errorf("the device refused the session after "+
+				"authenticating it; it said: %s", oneLine(lg.said))
 		}
+		// From here the device HAS given a shell. Anything that goes wrong
+		// below took a session away rather than refusing one, and the note has
+		// to be able to tell those apart -- see l18Login.reachedPrompt.
+		lg.reachedPrompt = true
 		// Only where `<node>#` is really this platform's prompt. On Junos it is
 		// the CONFIGURATION prompt, and a cliConn carrying it would send any
 		// later helper that trusts c.prompt waiting for a mode this session
@@ -881,14 +1010,39 @@ func (l *lab) l18CLI(d l18Driver, user, password string) (c *cliConn, said strin
 		if l.p.name != "juniper_vsrx" && l.p.name != "juniper_vjunos-router" {
 			c.prompt = l.p.node + "#"
 		}
-		if _, perr := c.sendExpect(d.pagingOff, 45*time.Second, d.prompts(l)...); perr != nil {
-			said = c.transcript()
+		pout, perr := c.sendExpect(d.pagingOff, 45*time.Second, d.prompts(l)...)
+		lg.pagingOut = precReply(l16TrimEcho(pout, d.pagingOff))
+		if perr != nil {
+			lg.said = c.transcript()
 			c.Close()
-			return nil, said, attempts, errs, fmt.Errorf("turning paging off with %q: %w", d.pagingOff, perr)
+			return nil, lg, fmt.Errorf("turning paging off with %q: %w", d.pagingOff, perr)
 		}
-		return c, c.transcript(), attempts, errs, nil
+		lg.said = c.transcript()
+		return c, lg, nil
 	}
-	return nil, "", tries, errs, err
+	lg.attempts = tries
+	return nil, lg, err
+}
+
+// l18Login is what one variant's login produced, whether or not it reached a
+// prompt. It is a struct rather than more return values because the two fields
+// the per-command variants added -- reachedPrompt and the paging command's
+// reply -- are the difference between "the device refused this session" and
+// "the device gave a session and the first authorized command took it away",
+// and a positional return is a poor place to keep a distinction that fine.
+type l18Login struct {
+	said        string
+	attempts    int
+	attemptErrs []string
+
+	// reachedPrompt is set the moment the device gives a shell prompt.
+	reachedPrompt bool
+	// pagingCmd and pagingOut are the first command typed in the session and
+	// the device's exact reply. On a per-command variant that command's
+	// authorization is the FIRST reply carrying `lab.command_attributes`, so
+	// this is where a platform that will not tolerate one says so.
+	pagingCmd string
+	pagingOut string
 }
 
 // containsAny reports whether s holds any of want.
@@ -952,6 +1106,18 @@ func l18ByName(rs []l18Result, name string) l18Result {
 // The note
 // ---------------------------------------------------------------------------
 
+// l18HasCommandVariant reports whether this platform runs the per-command
+// variant, read off the variant list rather than off the platform name so the
+// preamble cannot describe a variant the run did not have.
+func l18HasCommandVariant(d l18Driver) bool {
+	for _, v := range d.variants {
+		if v.cmdAttrs != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func l18Preamble(t *testing.T, l *lab, d l18Driver) string {
 	t.Helper()
 	var b strings.Builder
@@ -984,15 +1150,30 @@ func l18Preamble(t *testing.T, l *lab, d l18Driver) string {
 			"could not tell `applied` from `ignored`. This template's class is deliberately different "+
 			"from the default's.\n\n", strings.Join(l18JunosDefine, "\n"))
 	}
-	b.WriteString("**What is not measured here.** The same question asked on a per-command authorization " +
-		"REPLY. The lab authorizer returns no attributes on that path (`Lab.Command` in " +
-		"`internal/daemon/author/lab.go`) and the `lab:` config block has no key for them, so there is " +
-		"no reply to put a bad attribute in. The wire side is not the obstacle -- `author.Handler` " +
-		"copies a decision's attributes onto the response for commands and sessions alike -- so this is " +
-		"a missing configuration key, and adding one is a daemon change this measurement was not " +
-		"scoped to make. Every variant below still records whether per-command authorization happened, " +
-		"which answers the neighbouring question of whether a device under this reply reaches that " +
-		"path at all.\n")
+	if hasCmd := l18HasCommandVariant(d); hasCmd {
+		fmt.Fprintf(&b, "**The per-command reply is asked too, in three shapes.** `lab.command_attributes` "+
+			"puts attributes on a PERMITTED per-command authorization the way `lab.session_attributes` "+
+			"does on a session one, so variants %s, %s and %s hold the session reply constant at the "+
+			"control's and vary only what the command reply carries.\n\n"+
+			"**Their cells are derived differently from the rest, and have to be.** Their sessions are "+
+			"the control's by construction, so comparing sessions would read `ignored` however the "+
+			"device reacted to the command reply. The cell is read off the COMMANDS instead, in this "+
+			"order: the session lost after a prompt was reached, or the device asking for no command "+
+			"authorization at all, or a command whose reply is one of this platform's refusal markers "+
+			"(%s), or -- the only way to `ran` -- a reply whose first line is the one the control's "+
+			"`%s` produced on the same device. A command that neither matched a refusal marker nor came "+
+			"back looking like the control's output is reported as neither, with its words printed, "+
+			"rather than being counted as having run.\n",
+			l18CmdOptInvented, l18CmdMandInvented, l18CmdOptForeign,
+			"`"+strings.Join(l18AllRefusalMarkers(d), "`, `")+"`", d.probe)
+	} else {
+		b.WriteString("**The per-command reply is not asked on this platform, and that is not an " +
+			"omission.** No session in this lab has ever produced a per-command authorization request " +
+			"here -- L10 measured the request stream and L14 measured it over NETCONF, and decision 21 " +
+			"is written on it. There is no per-command reply to attach an attribute to, so the question " +
+			"does not arise rather than going unanswered. Every variant below still records how many " +
+			"command authorizations reached port49, which is the evidence for that sentence.\n")
+	}
 	return b.String()
 }
 
@@ -1021,6 +1202,25 @@ func (r l18Result) render(d l18Driver) string {
 				"the device ran AAA:\n\n```\n%s\n```\n\n",
 				r.attempts, strings.Join(r.attemptErrs, "\n"))
 		}
+		// A session lost AFTER a prompt is not a session the device refused, and
+		// on a per-command variant it is the finding: the first command whose
+		// reply carried the attribute took the whole session with it.
+		if r.reachedPrompt {
+			fmt.Fprintf(&b, "**The device gave a prompt and then the session went away**, on `%s` -- the "+
+				"first command in it, and so the first authorization reply carrying "+
+				"`lab.command_attributes`. What the device said on the channel, verbatim:\n\n```\n%s\n```"+
+				"\n\nWhat the harness reported:\n\n```\n%s\n```\n\n",
+				r.pagingCmd, strings.TrimRight(precReply(r.deviceSaid), "\n"),
+				strings.TrimRight(r.loginErr, "\n"))
+			if len(r.cmdReqs) > 0 {
+				fmt.Fprintf(&b, "Every command authorization port49 answered before it went:\n\n```\n%s\n```\n\n",
+					strings.Join(r.cmdReqs, "\n"))
+			} else {
+				b.WriteString("**No command authorization reached port49 in this session at all**, so the " +
+					"device took the session away without asking about a command.\n\n")
+			}
+			return b.String()
+		}
 		fmt.Fprintf(&b, "**The session did not open.** What the device said on the channel, verbatim:\n\n"+
 			"```\n%s\n```\n\nWhat the harness reported:\n\n```\n%s\n```\n\n",
 			strings.TrimRight(precReply(r.deviceSaid), "\n"), strings.TrimRight(r.loginErr, "\n"))
@@ -1037,11 +1237,19 @@ func (r l18Result) render(d l18Driver) string {
 	} else {
 		b.WriteString("**The session opened.**\n\n")
 	}
+	// On a per-command variant the paging command is the first reply carrying
+	// the attribute under test, so it is evidence and not housekeeping, and it
+	// is printed for that reason and only there.
+	if r.v.cmdAttrs != "" {
+		fmt.Fprintf(&b, "`%s` — the FIRST command in the session, and so the first authorization reply "+
+			"to carry `%s`. The device said:\n\n```\n%s\n```\n\n",
+			r.pagingCmd, r.v.cmdAttrs, strings.TrimRight(l18OrSilent(r.pagingOut), "\n"))
+	}
 	for _, s := range r.shows {
 		fmt.Fprintf(&b, "`%s`:\n\n```\n%s\n```\n\n", s.cmd, strings.TrimRight(s.out, "\n"))
 	}
 	fmt.Fprintf(&b, "`%s` — typed to see whether per-command authorization follows. The device said:\n\n"+
-		"```\n%s\n```\n\n", r.probeCmd, strings.TrimRight(r.probeOut, "\n"))
+		"```\n%s\n```\n\n", r.probeCmd, strings.TrimRight(l18OrSilent(r.probeOut), "\n"))
 	if len(r.cmdReqs) > 0 {
 		fmt.Fprintf(&b, "Every command authorization port49 answered in this session, as it arrived:\n\n"+
 			"```\n%s\n```\n\n", strings.Join(r.cmdReqs, "\n"))
@@ -1072,8 +1280,21 @@ func l18Cell(d l18Driver, r l18Result, rs []l18Result) string {
 	if r.neverAsked() {
 		return "**no session, and port49 was never asked**"
 	}
+	// A per-command variant that lost its session after reaching a prompt did
+	// not have the session refused: the first authorized command took it. That
+	// distinction is checked before the generic refusal cell so the table can
+	// never print `session refused` over a transcript holding a prompt.
+	if !r.opened && r.v.cmdAttrs != "" && r.reachedPrompt {
+		return "**session died on the first command**"
+	}
 	if !r.opened {
 		return "**session refused**"
+	}
+	// The per-command variants' sessions are the control's by construction, so
+	// comparing sessions would say "ignored" however the device reacted to the
+	// command reply. What they are asking is whether the COMMAND survived.
+	if r.v.cmdAttrs != "" {
+		return l18CommandCell(d, r, l18ByName(rs, l18Control))
 	}
 	if r.v.baseline == "" {
 		return "opened (this is the baseline)"
@@ -1092,9 +1313,95 @@ func l18Cell(d l18Driver, r l18Result, rs []l18Result) string {
 	}
 }
 
+// l18CommandCell derives a per-command variant's cell, which is a reading of
+// what happened to the COMMANDS rather than to the session.
+//
+// It has to be, and the reason is worth keeping beside the code: these variants
+// send the control's session attributes, so their sessions are identical to the
+// control's by construction. Run through the ordinary comparison every one of
+// them would read `ignored` -- including one where the device refused every
+// command the operator typed. That is the same class of defect as reading
+// variants 3 to 6 against the empty reply, arriving from the other direction.
+//
+// `ran` is the only cell that requires a positive match, and it is against the
+// CONTROL's own reply to the same command on the same device, not against a
+// string written here: a device whose answer stopped looking like the control's
+// is not reported as having run the command merely because it did not say one
+// of the words this platform is known to refuse with.
+func l18CommandCell(d l18Driver, r, ctrl l18Result) string {
+	switch {
+	case len(r.cmdReqs) == 0:
+		return "opened; **the device stopped asking** (no command authorization)"
+	case l18CommandRefused(d, r):
+		return "**command refused**"
+	case !ctrl.opened || l18FirstLine(ctrl.probeOut) == "":
+		return "opened; **not comparable** (the control produced no reply to compare the command with)"
+	case l18FirstLine(r.probeOut) == l18FirstLine(ctrl.probeOut):
+		return "the command ran"
+	default:
+		return "opened; **the command neither ran nor was refused** (its reply is above)"
+	}
+}
+
+// l18CommandRefused reports that this platform said no to one of the commands
+// typed in this variant, in words it has been measured using.
+//
+// Both commands are checked, and the paging command matters as much as the
+// probe: it is the FIRST authorization reply to carry the attribute under test,
+// so a device that refuses everything refuses it before the probe is typed.
+func l18CommandRefused(d l18Driver, r l18Result) bool {
+	return r.probeRefused || l16Refused(r.pagingOut, l18AllRefusalMarkers(d))
+}
+
+// l18AllRefusalMarkers is every string this platform has been measured to print
+// when it says no, to a session or to a command.
+func l18AllRefusalMarkers(d l18Driver) []string {
+	return append(append([]string{}, d.refusalMarkers...), d.cmdRefusalMarkers...)
+}
+
+// l18RefusedCommand returns which command this platform refused and what it
+// said, so a finding quotes the one that was actually turned down rather than
+// whichever the prose reached for.
+func l18RefusedCommand(d l18Driver, r l18Result) (cmd, out string) {
+	if l16Refused(r.pagingOut, l18AllRefusalMarkers(d)) {
+		return r.pagingCmd, r.pagingOut
+	}
+	return r.probeCmd, r.probeOut
+}
+
+// l18FirstLine is the first non-empty line of a device reply, which is what a
+// per-command cell compares with the control's. `show version` opens with the
+// platform's own name on all three of these images and the lines that follow
+// carry uptime and free memory, so the first line is the part of the reply that
+// is the same twice and the rest is not.
+func l18FirstLine(s string) string {
+	for _, ln := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(ln); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// l18OrSilent renders a device reply that was empty as a sentence saying so,
+// for the same reason emptyDeviceReply exists: a blank fenced block reads as
+// "nothing was captured" whether or not that is what happened.
+func l18OrSilent(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return emptyDeviceReply
+	}
+	return s
+}
+
 // l18BaselineNote is the short "read against" cell, so a reader can see which
 // comparison produced the verdict beside it without going back to the code.
 func l18BaselineNote(v l18Variant) string {
+	// A per-command variant is not read against a session at all: its session
+	// IS the control's, and saying otherwise would invite a reader to check a
+	// comparison the cell did not make.
+	if v.cmdAttrs != "" {
+		return "the control's `" + v.attrs + "` session; the cell reads the commands"
+	}
 	switch v.baseline {
 	case "":
 		return "—"
@@ -1122,14 +1429,23 @@ func l18Table(d l18Driver, rs []l18Result) string {
 		if len(r.cmdReqs) == 0 {
 			cmds = "**none**"
 		}
-		fmt.Fprintf(&b, "| %s | `%s` | %s | %s | %s | %s |\n",
-			r.v.name, r.attrs, l18Cell(d, r, rs), got, l18BaselineNote(r.v), cmds)
+		// A per-command variant's session attributes are the control's; what it
+		// varies is the command reply, so that is what the column has to name or
+		// three rows would read as duplicates of the control.
+		attrs := "`" + r.attrs + "`"
+		if r.v.cmdAttrs != "" {
+			attrs = "session `" + r.attrs + "`<br>**command `" + r.v.cmdAttrs + "`**"
+		}
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n",
+			r.v.name, attrs, l18Cell(d, r, rs), got, l18BaselineNote(r.v), cmds)
 	}
 	b.WriteString("\nThe `what the session got` column is the verbatim `show` output above reduced to " +
 		"the one value the cell is derived from, and `read against` names the row it was compared " +
 		"with. The transcripts both come from are in each variant's section, and a cell that " +
 		"disagrees with the transcript above it is a defect in this generator rather than a finding " +
-		"about the device.\n")
+		"about the device. The rows whose `reply attributes` name a **command** list send the " +
+		"control's session reply and differ from it only there, so their `what the session got` " +
+		"column is the control's by construction and their outcome is read off the commands.\n")
 	return b.String()
 }
 
@@ -1281,6 +1597,11 @@ func l18Reading(t *testing.T, l *lab, d l18Driver, rs []l18Result) string {
 	// attribute still reach the command path?
 	b.WriteString(l18CommandReading(rs))
 
+	// 5b. The same question on a per-command reply, where the platform sends
+	// one. This is the half that was unaskable until `lab.command_attributes`
+	// existed.
+	b.WriteString(l18CommandAttrReading(t, l, d, rs))
+
 	// 6. What a run of refusals does to the device's SSH server, which is the
 	// question an operator actually meets: not "is my session refused" but "is
 	// the device still answering".
@@ -1370,7 +1691,14 @@ func l18Names(rs []l18Result) string {
 func l18CommandReading(rs []l18Result) string {
 	opened, withCmds := 0, 0
 	for _, r := range rs {
-		if !r.opened {
+		// The per-command variants are excluded, and the exclusion is the
+		// difference between a true sentence and a false one. This paragraph
+		// asks whether a bad attribute on the SESSION reply costs the command
+		// path; counting the variants that deliberately put an attribute on the
+		// command reply would let it conclude "the command path is exactly as it
+		// was" on a platform where those variants had every command refused.
+		// They have a paragraph of their own directly below (5b).
+		if !r.opened || r.v.cmdAttrs != "" {
 			continue
 		}
 		opened++
@@ -1390,14 +1718,16 @@ func l18CommandReading(rs []l18Result) string {
 	}
 	if withCmds == opened {
 		return fmt.Sprintf("**5. Every session that opened went on to per-command authorization**, %d of "+
-			"%d, whatever the reply carried. So a bad attribute on this platform either ends the "+
-			"session outright or leaves the command path exactly as it was: there is no middle state "+
-			"where the session survives and the device stops asking.\n\n", withCmds, opened)
+			"%d, whatever the SESSION reply carried. So an attribute on the session reply either ends "+
+			"the session outright or leaves the device still asking about commands: there is no middle "+
+			"state where the session survives and the device stops asking. Whether the commands then "+
+			"RUN is a different question, and it is 5b -- these %d variants put nothing on the command "+
+			"reply.\n\n", withCmds, opened, opened)
 	}
 	return fmt.Sprintf("**5. Per-command authorization did not follow every session.** %d of the %d "+
-		"sessions that opened produced `authorize_command` records and the rest produced none, so on "+
-		"this platform a reply attribute can leave a session alive and outside the command path. The "+
-		"table says which.\n\n", withCmds, opened)
+		"sessions opened by a SESSION-reply variant produced `authorize_command` records and the rest "+
+		"produced none, so on this platform an attribute on the session reply can leave a session "+
+		"alive and outside the command path. The table says which.\n\n", withCmds, opened)
 }
 
 // l18JunosReading is the decision-22 half, and renders nothing on the platforms
@@ -1660,5 +1990,244 @@ func junosPairReading(both, user, perms, empty string) string {
 	default:
 		return "**So the two compose into something neither produces alone.** Read the three signals " +
 			"above before the projection sends both."
+	}
+}
+
+// l18CommandAttrReading answers the per-command half of this row, and renders a
+// sentence saying so on the platforms that have no such variant.
+//
+// The platforms that do not have one are Junos, and it is not an omission: no
+// Junos session in this lab has ever produced a per-command authorization
+// request -- L10 measured the request stream, L14 measured it over NETCONF, and
+// decision 21 is written on it. There is no per-command reply to attach an
+// attribute to on that vendor, so the question does not arise rather than going
+// unanswered.
+func l18CommandAttrReading(t *testing.T, l *lab, d l18Driver, rs []l18Result) string {
+	t.Helper()
+	cmdVariants := []l18Result{
+		l18ByName(rs, l18CmdOptInvented),
+		l18ByName(rs, l18CmdMandInvented),
+		l18ByName(rs, l18CmdOptForeign),
+	}
+	if l18Count(cmdVariants) == 0 {
+		return "**5b. There is no per-command reply on this platform to ask the question of.** Not one " +
+			"session in this run produced an `authorize_command` record, which is what L10 and L14 " +
+			"measured of Junos and what decision 21 is written on. An attribute on a per-command reply " +
+			"is unreachable here because the device never asks.\n\n"
+	}
+	ctrl := l18ByName(rs, l18Control)
+	var b strings.Builder
+	fmt.Fprintf(&b, "**5b. The same question asked of a PER-COMMAND reply, in %d shapes.** Each one sends "+
+		"the control's session attributes (`%s`) and differs from the control only in what a PERMITTED "+
+		"command authorization carries, so whatever the device does below it is doing about the command "+
+		"reply. The control itself answered %d command authorization(s) and ran every command typed in "+
+		"it.\n\n", l18Count(cmdVariants), ctrl.attrs, len(ctrl.cmdReqs))
+	for _, r := range cmdVariants {
+		if r.v.name == "" {
+			continue
+		}
+		b.WriteString(l18OneCommandReading(t, l, d, r, ctrl))
+	}
+	b.WriteString(l18CommandVsSessionReading(d, rs))
+	return b.String()
+}
+
+// l18OneCommandReading is one per-command variant's paragraph. Every branch but
+// the last is a negative and goes through negativeFinding, so none of them can
+// be written without the exact reply sent and the device's exact words back.
+func l18OneCommandReading(t *testing.T, l *lab, d l18Driver, r, ctrl l18Result) string {
+	t.Helper()
+	head := "`" + r.v.cmdAttrs + "` on every permitted command"
+	switch {
+	case !r.opened && r.reachedPrompt:
+		return head + " — **the session went away on the first command.** " + negativeFinding{
+			Claim: "the device gave this login a prompt and then took the session away at `" + r.pagingCmd +
+				"`, the first command in it and so the first authorization reply carrying the attribute. " +
+				"The session attributes are the control's, byte for byte, and the control kept its " +
+				"session. So one attribute on a command reply cost the operator not the command but " +
+				"every command, on " + l.p.version + ".",
+			Sent: "lab.session_attributes " + r.attrs + "\nlab.command_attributes " + r.v.cmdAttrs +
+				"\nthen, in the session:\n" + r.pagingCmd,
+			Got: strings.TrimRight(l18OrSilent(precReply(r.deviceSaid)), "\n"),
+		}.render(t) + "\n"
+	case !r.opened:
+		return head + " — **no session at all, though the session reply was the control's.** " +
+			negativeFinding{
+				Claim: "this login never reached a prompt. Its SESSION attributes are the control's, " +
+					"byte for byte, and the control opened a session minutes earlier on the same " +
+					"device; the only other difference is that a permitted command authorization would " +
+					"have carried the attribute above.",
+				Sent: "lab.session_attributes " + r.attrs + "\nlab.command_attributes " + r.v.cmdAttrs +
+					"\n(then one SSH login as a token operator)",
+				Got: strings.TrimRight(l18OrSilent(precReply(r.deviceSaid)), "\n"),
+			}.render(t) + "\n"
+	case len(r.cmdReqs) == 0:
+		return head + " — **the session survived and the device stopped asking.** " + negativeFinding{
+			Claim: "no `authorize_command` record reached port49 in this variant at all, where the " +
+				"control produced " + fmt.Sprint(len(ctrl.cmdReqs)) + " for the same commands on the " +
+				"same device. A device that stops asking is a device authorizing its own commands, " +
+				"which is worse for an operator than a refusal: port49 is out of the path and its log " +
+				"does not say so.",
+			Sent: "lab.command_attributes " + r.v.cmdAttrs + "\nthen, in the session:\n" +
+				r.pagingCmd + "\n" + r.probeCmd,
+			Got:      strings.TrimRight(l18OrSilent(r.probeOut), "\n"),
+			Inferred: true,
+			Why: "the device did not announce it. What is measured is the ABSENCE of any " +
+				"`authorize_command` record for this session in port49's own decision log, beside " +
+				"the control's " + fmt.Sprint(len(ctrl.cmdReqs)) + " for the same commands.",
+		}.render(t) + "\n"
+	case l18CommandRefused(d, r):
+		refused, out := l18RefusedCommand(d, r)
+		return head + " — **a permit became a refusal.** " + negativeFinding{
+			Claim: "port49 PERMITTED `" + refused + "` -- " + fmt.Sprint(len(r.cmdReqs)) +
+				" command authorization(s) reached it in this session and its log records what it " +
+				"answered -- and the device refused the command anyway. The same command under the " +
+				"control reply, which differs only in that the command reply carries nothing, ran.",
+			Sent: "lab.command_attributes " + r.v.cmdAttrs + "\nthen, in the session:\n" + refused,
+			Got:  strings.TrimRight(l18OrSilent(out), "\n"),
+		}.render(t) + "\nSo on " + l.p.version + " a per-command reply may carry nothing the device does " +
+			"not read: the decision log records a permit for a command that never ran, and an operator " +
+			"reading it sees an authorization that succeeded.\n\n"
+	case l18FirstLine(r.probeOut) != "" && ctrl.opened &&
+		l18FirstLine(r.probeOut) == l18FirstLine(ctrl.probeOut):
+		return fmt.Sprintf("%s — **ignored: the commands ran.** `%s` came back with the same first line "+
+			"as the control's (`%s`), over %d authorization request(s), and `%s` before it was answered "+
+			"normally. So this platform reads a per-command reply the way §8.2 asks: what it does not "+
+			"understand there costs nothing.\n\n",
+			head, r.probeCmd, l18FirstLine(ctrl.probeOut), len(r.cmdReqs), r.pagingCmd)
+	default:
+		return fmt.Sprintf("%s — **neither ran nor refused, and this run does not name it.** `%s` came "+
+			"back with a first line (`%s`) the control's reply does not have (`%s`), and none of this "+
+			"platform's refusal markers is in it. The transcript is in the variant's own section above; "+
+			"read it rather than this sentence.\n\n",
+			head, r.probeCmd, l18Dash(l18FirstLine(r.probeOut)), l18Dash(l18FirstLine(ctrl.probeOut)))
+	}
+}
+
+// l18CommandVsSessionReading puts each per-command variant beside the SESSION
+// variant carrying the same attribute in the same spelling, and says whether
+// the two paths agree.
+//
+// It is pair by pair rather than one verdict because the pairs are free to
+// disagree, and a summary that averaged them would be the defect this file has
+// already published twice: prose contradicting the table above it. The sentence
+// is derived from the two cells, so a platform that ignores an attribute in
+// both places is never described as treating the paths differently.
+func l18CommandVsSessionReading(d l18Driver, rs []l18Result) string {
+	pairs := []struct{ cmd, sess string }{
+		{l18CmdOptInvented, l18OptInvented},
+		{l18CmdMandInvented, l18MandInvented},
+		{l18CmdOptForeign, l18OptForeign},
+	}
+	var lines []string
+	agree, differ, bothObjected := 0, 0, 0
+	for _, p := range pairs {
+		c, s := l18ByName(rs, p.cmd), l18ByName(rs, p.sess)
+		if c.v.name == "" || s.v.name == "" {
+			continue
+		}
+		cs, ss := l18PathOutcome(d, c, rs), l18PathOutcome(d, s, rs)
+		co, so := l18Objected(d, c, rs), l18Objected(d, s, rs)
+		if co == so {
+			agree++
+			if co && cs != ss {
+				bothObjected++
+			}
+		} else {
+			differ++
+		}
+		lines = append(lines, fmt.Sprintf("| `%s` | %s | %s |", c.v.cmdAttrs, ss, cs))
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("**The two paths, attribute by attribute.** The same attribute in the same spelling, " +
+		"once on the session reply and once on a command reply. Both columns are the cells from the " +
+		"table above, with one word changed so they can be compared: a command reply whose commands " +
+		"ran is written `ignored` here, which is what the session column already calls a reply that " +
+		"changed nothing.\n\n")
+	b.WriteString("| attribute | on the SESSION reply | on a COMMAND reply |\n|---|---|---|\n")
+	b.WriteString(strings.Join(lines, "\n") + "\n\n")
+	// The comparison is on whether the device OBJECTED to the attribute, not on
+	// the exact cell, and the difference matters. A platform that kills the
+	// session over an attribute on one reply and refuses every command over the
+	// same attribute on the other is applying one rule at two blast radii; a
+	// sentence that called those two cells a disagreement would contradict the
+	// table it sits under, which is this file's recurring defect.
+	switch {
+	case differ == 0 && bothObjected == 0:
+		fmt.Fprintf(&b, "**The two paths agree on all %d.** An adapter that knows what an attribute does "+
+			"to a session here knows what it does to a command: one rule covers both replies on this "+
+			"platform.\n\n", agree)
+	case differ == 0:
+		fmt.Fprintf(&b, "**The two paths agree on all %d, and on %d of them the cost is not the same "+
+			"size.** The device objects to the same attributes in both replies -- so one rule predicts "+
+			"both -- but objecting on the session reply costs the operator the login, and objecting on "+
+			"a command reply leaves them logged in and unable to run anything. Same rule, different "+
+			"blast radius, and the second is the one an operator will call in about.\n\n",
+			agree, bothObjected)
+	case agree == 0:
+		fmt.Fprintf(&b, "**The two paths disagree on all %d.** What an attribute does to a session says "+
+			"nothing about what it does to a command on this platform, so an adapter needs a rule per "+
+			"reply and the session measurements above do not cover the command path.\n\n", differ)
+	default:
+		fmt.Fprintf(&b, "**The device objects to the same attribute in both replies %d time(s) of %d, "+
+			"and not the rest.** So neither reply predicts the other here, and the table above is the "+
+			"answer rather than any rule drawn from one path.\n\n", agree, agree+differ)
+	}
+	return b.String()
+}
+
+// l18Objected reduces a variant to the one bit the two paths are compared on:
+// did the device object to the attribute at all?
+//
+// It exists because the exact cells are not comparable across the two paths and
+// were never meant to be. `the session was refused` and `command refused` are
+// different sentences about the same decision -- the device would not have the
+// attribute -- and counting them as a disagreement produced a note whose closing
+// sentence said "neither reply predicts the other" over a table showing one rule
+// applied twice. The cells stay in the table, where the difference in blast
+// radius is the thing worth seeing; the verdict is drawn from this.
+func l18Objected(d l18Driver, r l18Result, rs []l18Result) bool {
+	switch {
+	case r.neverAsked():
+		// The reply never reached the device, so it expressed no opinion.
+		return false
+	case !r.opened:
+		return true
+	case r.v.cmdAttrs != "":
+		// Anything but "ran" counts as an objection, which folds one cell in
+		// with them that is not one: `not comparable`, reached only when the
+		// CONTROL produced no reply to compare against. That cell has never
+		// occurred -- the control has opened and answered on every platform in
+		// every run of this row -- and if it ever does, the table above carries
+		// the real words and this sentence should be read against them.
+		return l18CommandCell(d, r, l18ByName(rs, l18Control)) != "the command ran"
+	default:
+		return strings.Contains(l18Cell(d, r, rs), "refused")
+	}
+}
+
+// l18PathOutcome reduces a variant to the three words the pair table compares:
+// what happened, with no distinction the comparison does not need. It is built
+// on the same cells the table prints, so the two cannot disagree.
+func l18PathOutcome(d l18Driver, r l18Result, rs []l18Result) string {
+	switch {
+	case r.neverAsked():
+		return "the device never asked port49"
+	case !r.opened && r.reachedPrompt:
+		return "**the session died**"
+	case !r.opened:
+		return "**the session was refused**"
+	case r.v.cmdAttrs != "":
+		switch cell := l18CommandCell(d, r, l18ByName(rs, l18Control)); cell {
+		case "the command ran":
+			return "ignored"
+		default:
+			return cell
+		}
+	default:
+		return l18Cell(d, r, rs)
 	}
 }
