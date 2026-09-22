@@ -31,13 +31,22 @@ type fixture struct {
 
 func setup(t *testing.T) *fixture {
 	t.Helper()
+	return setupStore(t, func(st *memory.Store) store.Store { return st })
+}
+
+// setupStore is setup with a decorator hook: it builds and seeds the memory
+// store exactly as setup does, then hands wrap(st) to New, so a test can drive
+// a store fault without duplicating the fixture. f.st stays the memory store,
+// so the tests keep reading records out of it directly.
+func setupStore(t *testing.T, wrap func(*memory.Store) store.Store) *fixture {
+	t.Helper()
 	f := &fixture{log: &bytes.Buffer{}, now: time.Unix(1_757_041_495, 0), peer: Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}}
 	f.st = memory.New(func() time.Time { return f.now })
 	ids := 0
 	l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return f.now })
-	f.h = New(f.st, decision.NewJSONLines(f.log), l, metrics.New(prometheus.NewRegistry()),
+	f.h = New(wrap(f.st), decision.NewJSONLines(f.log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return f.now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
-		30*time.Second, time.Hour)
+		15*time.Minute, 2*time.Hour, time.Hour)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
 		store.Token{ID: "t1", Secret: []byte("p49_tok1"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
 		t.Fatal(err)
@@ -260,7 +269,7 @@ func TestStoreErrorIsErrorWithRecord(t *testing.T) {
 	ids := 0
 	h := New(st, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
-		30*time.Second, time.Hour)
+		15*time.Minute, 2*time.Hour, time.Hour)
 
 	reply, done := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}).Start(context.Background(),
 		wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
@@ -405,7 +414,7 @@ func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {
 	ids := 0
 	h := New(noStore{}, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
 		func() time.Time { return now }, func() string { ids++; return "ctx" + string(rune('0'+ids)) },
-		30*time.Second, time.Hour)
+		15*time.Minute, 2*time.Hour, time.Hour)
 
 	// "@corp.example.com" canonicalizes to "" (spec §2): everything before the
 	// first "@" is stripped, leaving nothing.
@@ -443,5 +452,127 @@ func TestFailDelayIsCancellable(t *testing.T) {
 	}
 	if !done || reply.Status != wire.AuthenStatusFail {
 		t.Fatalf("%+v", reply)
+	}
+}
+
+// A client that re-presents the same credential slides the window; one that
+// stops for longer than the idle TTL does not. Both bounds are driven.
+func TestReceiptSlidesThenExpiresOnIdle(t *testing.T) {
+	f := setup(t)
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("first redemption: %+v", reply)
+	}
+	// Four re-presentations 10 minutes apart: 40 minutes on a 15-minute idle
+	// TTL, which a fixed window could never carry.
+	for i := 0; i < 4; i++ {
+		f.now = f.now.Add(10 * time.Minute)
+		reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+		if reply.Status != wire.AuthenStatusPass {
+			t.Fatalf("slide %d: %+v", i, reply)
+		}
+		r := f.records(t)
+		if last := r[len(r)-1]; last["reason"] != "receipt_replayed" {
+			t.Fatalf("slide %d: %v", i, last)
+		}
+	}
+	f.now = f.now.Add(16 * time.Minute) // past the sliding bound
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+	r := f.records(t)
+	if reply.Status != wire.AuthenStatusFail || r[len(r)-1]["reason"] != "token_spent" {
+		t.Fatalf("idle bound: %+v %v", reply, r[len(r)-1])
+	}
+}
+
+func TestReceiptStopsAtTheAbsoluteCap(t *testing.T) {
+	f := setup(t)
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+	f.h.NewSession(f.peer).Start(context.Background(), start)
+	// Present every 10 minutes for two hours: the idle bound never lapses, so
+	// only the cap can stop it.
+	var lastReason any
+	for i := 0; i < 13; i++ {
+		f.now = f.now.Add(10 * time.Minute)
+		f.h.NewSession(f.peer).Start(context.Background(), start)
+		r := f.records(t)
+		lastReason = r[len(r)-1]["reason"]
+	}
+	if lastReason != "token_spent" {
+		t.Fatalf("a receipt slid past receipt_max_age: %v", lastReason)
+	}
+	// And the token is not resurrected by the cap: it stays spent.
+	if c, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(c) != 0 {
+		t.Fatalf("token set: %+v", c)
+	}
+}
+
+// The wire outcome is FAIL, exactly as a wrong password is; only the log tells
+// the two apart (spec §5.7).
+func TestTokenSpentIsIndistinguishableOnTheWire(t *testing.T) {
+	f := setup(t)
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+	f.h.NewSession(f.peer).Start(context.Background(), start)
+	// Past the cap (2h) and inside retention (RetainUntil is 2h15m), so the
+	// receipt is still FOUND and the path under test is token_spent. At 3h the
+	// receipt has been swept and the seeded token has expired, and the test
+	// would pass on token_not_found — a different reason, which §5.7 draws the
+	// distinction between and which this test exists to cover.
+	f.now = f.now.Add(2*time.Hour + time.Minute)
+	spent, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+	r := f.records(t)
+	if r[len(r)-1]["reason"] != "token_spent" {
+		t.Fatalf("this test must drive token_spent, not %v", r[len(r)-1]["reason"])
+	}
+	wrong, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("hunter2")})
+	if spent.Status != wrong.Status || spent.Status != wire.AuthenStatusFail {
+		t.Fatalf("spent %+v wrong %+v", spent, wrong)
+	}
+}
+
+// A revoked principal's receipts are deleted (Task 13), and the credential that
+// earned them must not still be answered PASS from one.
+func TestRevokedPrincipalsReceiptNoLongerReplays(t *testing.T) {
+	f := setup(t)
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("%+v", reply)
+	}
+	if n, err := f.st.DeleteReceiptsByPrincipal(context.Background(), "user:alice@example.com"); err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+	if reply.Status != wire.AuthenStatusFail {
+		t.Fatalf("a revoked credential must not replay: %+v", reply)
+	}
+}
+
+// gonePastTheReadStore answers GetReceipt normally and then loses the receipt
+// before the extend, which is what a revocation landing in that window looks
+// like from inside redeem.
+type gonePastTheReadStore struct{ *memory.Store }
+
+func (gonePastTheReadStore) ExtendReceipt(context.Context, store.ReceiptKey, time.Time) error {
+	return store.ErrNotFound
+}
+
+// The same revocation, landing in the window between the receipt read and the
+// extend. ErrNotFound from ExtendReceipt cannot mean "swept": RetainUntil is
+// later than both bounds and both bounds have just been checked, so the only
+// deleter left is revocation. Answering PASS here hands out a decision the
+// identity layer has already withdrawn.
+func TestExtendMissingTheReceiptDeniesRatherThanReplays(t *testing.T) {
+	f := setupStore(t, func(st *memory.Store) store.Store { return gonePastTheReadStore{st} })
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_tok1")}
+	f.h.NewSession(f.peer).Start(context.Background(), start)
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+	r := f.records(t)
+	if reply.Status != wire.AuthenStatusFail || r[len(r)-1]["reason"] != "token_spent" {
+		t.Fatalf("%+v %v", reply, r[len(r)-1])
 	}
 }

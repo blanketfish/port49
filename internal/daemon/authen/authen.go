@@ -32,19 +32,25 @@ type Peer struct {
 }
 
 type Handler struct {
-	store      store.Store
-	log        decision.Emitter
-	limits     *limits.Limiter
-	metrics    *metrics.Metrics
-	now        func() time.Time
-	newCtxID   func() string
-	receiptTTL time.Duration
-	contextTTL time.Duration
+	store    store.Store
+	log      decision.Emitter
+	limits   *limits.Limiter
+	metrics  *metrics.Metrics
+	now      func() time.Time
+	newCtxID func() string
+	// receiptIdleTTL slides a receipt forward on every presentation it
+	// answers; receiptMaxAge caps it from the first redemption and never
+	// moves. Past either, the presentation is FAIL and `token_spent`
+	// (spec §5.7; §13, decision 15).
+	receiptIdleTTL time.Duration
+	receiptMaxAge  time.Duration
+	contextTTL     time.Duration
 }
 
 func New(s store.Store, e decision.Emitter, l *limits.Limiter, m *metrics.Metrics, now func() time.Time,
-	newCtxID func() string, receiptTTL, contextTTL time.Duration) *Handler {
-	return &Handler{store: s, log: e, limits: l, metrics: m, now: now, newCtxID: newCtxID, receiptTTL: receiptTTL, contextTTL: contextTTL}
+	newCtxID func() string, receiptIdleTTL, receiptMaxAge, contextTTL time.Duration) *Handler {
+	return &Handler{store: s, log: e, limits: l, metrics: m, now: now, newCtxID: newCtxID,
+		receiptIdleTTL: receiptIdleTTL, receiptMaxAge: receiptMaxAge, contextTTL: contextTTL}
 }
 
 // phase is a Session's place in a multi-round ASCII exchange. phaseDone is
@@ -185,11 +191,40 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// that answers with a record it was not asked for is a store fault,
 		// and replaying it would hand out a decision made for another
 		// credential, so it fails rather than passes (spec §5.7).
-		if subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
-			rec.Session.CtxID = r.CtxID
-			return s.finish(rec, r.Status, decision.ReceiptReplayed)
+		if subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) != 1 {
+			return s.fail(ctx, rec, decision.CredentialMismatch)
 		}
-		return s.fail(ctx, rec, decision.CredentialMismatch)
+		now := s.h.now()
+		cap := r.FirstRedeemedAt.Add(s.h.receiptMaxAge)
+		// Two bounds, one outcome. A job that keeps presenting the same
+		// credential slides the idle bound; nothing slides the cap.
+		if !now.Before(cap) || !now.Before(r.IdleExpiresAt) {
+			return s.fail(ctx, rec, decision.TokenSpent)
+		}
+		next := now.Add(s.h.receiptIdleTTL)
+		if next.After(cap) {
+			next = cap
+		}
+		err = s.h.store.ExtendReceipt(ctx, rk, next)
+		s.h.metrics.StoreOps.WithLabelValues("extend_receipt", storeOutcome(err)).Inc()
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			// Not "it was swept": it cannot have been. RetainUntil is
+			// receipt_max_age + receipt_idle_ttl from the first redemption and
+			// both bounds passed two statements ago, so this receipt was inside
+			// its retention when it was read and is inside it now. The only
+			// other thing that deletes a receipt is DeleteReceiptsByPrincipal,
+			// which is revocation (spec §5.1.4; Task 13). So ErrNotFound here
+			// means exactly one thing — this principal was revoked between the
+			// read and the extend — and the answer to that is not a PASS.
+			return s.fail(ctx, rec, decision.TokenSpent)
+		case err != nil:
+			// Any other store error is ERROR, not a PASS: the receipt did not
+			// slide, so the next presentation would silently get a fresh window.
+			return s.storeError(rec)
+		}
+		rec.Session.CtxID = r.CtxID
+		return s.finish(rec, r.Status, decision.ReceiptReplayed)
 	case !errors.Is(err, store.ErrNotFound):
 		return s.storeError(rec)
 	}
@@ -224,14 +259,16 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 
 	// 3. Atomic redemption; the loser of a race adopts the winner's receipt.
 	ctxID := s.h.newCtxID()
-	// The three bounds are all receipt_ttl for now, which reproduces plan 1's
-	// single-expiry behaviour exactly: GetReceipt gates on RetainUntil, and
-	// nothing here reads the sliding bound yet. Task 6 is what separates them.
+	// The retention is deliberately longer than both bounds: a presentation
+	// past a bound has to find the receipt in order to be answered
+	// `token_spent` rather than `token_not_found` (store.Receipt; spec §5.7).
 	now := s.h.now()
 	receipt := store.Receipt{CredentialSHA256: credHash, Status: wire.AuthenStatusPass, CtxID: ctxID,
-		FirstRedeemedAt: now, IdleExpiresAt: now.Add(s.h.receiptTTL), RetainUntil: now.Add(s.h.receiptTTL)}
-	err = s.h.store.RedeemAndReceipt(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username}, winner.ID,
-		store.ReceiptWrite{Key: rk, Receipt: receipt, Principal: winner.Principal, IndexTTL: s.h.receiptTTL})
+		FirstRedeemedAt: now, IdleExpiresAt: now.Add(s.h.receiptIdleTTL),
+		RetainUntil: now.Add(s.h.receiptMaxAge + s.h.receiptIdleTTL)}
+	w := store.ReceiptWrite{Key: rk, Receipt: receipt, Principal: winner.Principal,
+		IndexTTL: s.h.receiptMaxAge + s.h.receiptIdleTTL}
+	err = s.h.store.RedeemAndReceipt(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username}, winner.ID, w)
 	s.h.metrics.StoreOps.WithLabelValues("redeem", storeOutcome(err)).Inc()
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

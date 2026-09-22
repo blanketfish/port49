@@ -109,7 +109,7 @@ func run(cfgPath string) error {
 	}
 
 	deps := server.Deps{Admission: cfg.Admission, Keys: cfg.Keyring(),
-		Authen: authen.New(st, log, lim, m, time.Now, newCtxID, cfg.ReceiptTTL, cfg.ContextIdleTTL),
+		Authen: authen.New(st, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge, cfg.ContextIdleTTL),
 		Author: author.New(st, authz, log, m, time.Now, cfg.SessionServices),
 		Acct:   acct.New(st, spool, m, time.Now),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}

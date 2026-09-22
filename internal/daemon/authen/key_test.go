@@ -144,7 +144,7 @@ func TestReceiptIsScopedToNASUsernameAndCredential(t *testing.T) {
 }
 
 // TestSecondLoginWithAFreshTokenIsNotCredentialMismatch is the bug the hash in
-// the key fixes: alice's second login inside receipt_ttl presented a fresh
+// the key fixes: alice's second login inside the receipt window presented a fresh
 // valid token, found her first receipt, and was answered FAIL.
 func TestSecondLoginWithAFreshTokenIsNotCredentialMismatch(t *testing.T) {
 	f := setup(t)
@@ -179,7 +179,7 @@ func TestReceiptCarryingAnotherCredentialIsRefused(t *testing.T) {
 	now := time.Unix(1_757_041_495, 0)
 	l := limits.New(limits.Config{AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: 2 * time.Millisecond, AuthFailureWindow: time.Minute}, func() time.Time { return now })
 	h := New(wrongReceiptStore{}, decision.NewJSONLines(log), l, metrics.New(prometheus.NewRegistry()),
-		func() time.Time { return now }, func() string { return "ctx1" }, 30*time.Second, time.Hour)
+		func() time.Time { return now }, func() string { return "ctx1" }, 15*time.Minute, 2*time.Hour, time.Hour)
 
 	reply, done := h.NewSession(Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}).
 		Start(context.Background(), papStart("alice", "ssh", "172.100.100.1", "p49_tok1"))

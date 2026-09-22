@@ -73,7 +73,7 @@ func TestLoadAppliesDefaultsAndResolvesKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.Listen != ":4949" || c.MetricsListen != ":9049" || c.Limits.PerNASConnections != 4 ||
-		c.Limits.IdleTimeout == 0 || c.ReceiptTTL == 0 || c.ContextIdleTTL == 0 {
+		c.Limits.IdleTimeout == 0 || c.ReceiptIdleTTL == 0 || c.ReceiptMaxAge == 0 || c.ContextIdleTTL == 0 {
 		t.Fatalf("%+v", c)
 	}
 	// Both reset windows default to 10m when the key is absent: a zero window
@@ -180,7 +180,7 @@ func TestLoadParsesDurationsAndBoundsWindows(t *testing.T) {
 	setSecrets(t)
 	invPath := write(t, "inventory.yaml", inv)
 	body := fmt.Sprintf(sample, invPath) + `
-receipt_ttl: 45s
+receipt_idle_ttl: 45s
 context_idle_ttl: 8h
 metrics_listen: "127.0.0.1:19049"
 `
@@ -190,7 +190,7 @@ metrics_listen: "127.0.0.1:19049"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ReceiptTTL != 45*time.Second || c.ContextIdleTTL != 8*time.Hour ||
+	if c.ReceiptIdleTTL != 45*time.Second || c.ContextIdleTTL != 8*time.Hour ||
 		c.Limits.IdleTimeout != 15*time.Second || c.Limits.MalformedWindow != 2*time.Minute ||
 		c.Limits.AuthFailureWindow != 3*time.Minute || c.MetricsListen != "127.0.0.1:19049" {
 		t.Fatalf("%+v", c)
@@ -457,5 +457,26 @@ func TestLabCommandAttributesAreOptional(t *testing.T) {
 	}
 	if got := cfg.Lab.CommandAttributes; len(got) != 0 {
 		t.Fatalf("a config that does not mention command_attributes should carry none, got %q", got)
+	}
+}
+
+func TestReceiptBoundsDefaultAndTheOldKeyIsRefusedByName(t *testing.T) {
+	setSecrets(t)
+	invPath := write(t, "inventory.yaml", inv)
+	c, err := Load(write(t, "c.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ReceiptIdleTTL != 15*time.Minute || c.ReceiptMaxAge != 2*time.Hour {
+		t.Fatalf("%s %s", c.ReceiptIdleTTL, c.ReceiptMaxAge)
+	}
+	body := fmt.Sprintf(sample, invPath) + "\nreceipt_ttl: 30s\n"
+	_, err = Load(write(t, "d.yaml", body))
+	if err == nil || !strings.Contains(err.Error(), "receipt_idle_ttl") || !strings.Contains(err.Error(), "receipt_max_age") {
+		t.Fatalf("the removed key must name its replacements: %v", err)
+	}
+	body = fmt.Sprintf(sample, invPath) + "\nreceipt_idle_ttl: 3h\nreceipt_max_age: 2h\n"
+	if _, err := Load(write(t, "e.yaml", body)); err == nil {
+		t.Fatal("an idle TTL longer than the cap is a window that can never slide; refuse it")
 	}
 }

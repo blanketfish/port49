@@ -94,12 +94,18 @@ type limitsYAML struct {
 }
 
 type fileConfig struct {
-	Listen         string                    `yaml:"listen"`
-	MetricsListen  string                    `yaml:"metrics_listen"`
-	InventoryFile  string                    `yaml:"inventory_file"`
-	Keys           map[string]KeySet         `yaml:"keys"`
-	Limits         limitsYAML                `yaml:"limits"`
+	Listen        string            `yaml:"listen"`
+	MetricsListen string            `yaml:"metrics_listen"`
+	InventoryFile string            `yaml:"inventory_file"`
+	Keys          map[string]KeySet `yaml:"keys"`
+	Limits        limitsYAML        `yaml:"limits"`
+	// ReceiptTTL is kept only so Load can refuse the key by name: it was
+	// replaced by the two bounds below, and a daemon that starts on a stale
+	// config is a daemon whose receipt window is not what the operator
+	// believes (spec §13, decision 15).
 	ReceiptTTL     time.Duration             `yaml:"receipt_ttl"`
+	ReceiptIdleTTL time.Duration             `yaml:"receipt_idle_ttl"`
+	ReceiptMaxAge  time.Duration             `yaml:"receipt_max_age"`
 	ContextIdleTTL time.Duration             `yaml:"context_idle_ttl"`
 	Accounting     AccountingConfig          `yaml:"accounting"`
 	Platforms      map[string]PlatformConfig `yaml:"platforms"`
@@ -107,12 +113,17 @@ type fileConfig struct {
 }
 
 type Config struct {
-	Listen         string
-	MetricsListen  string
-	InventoryFile  string
-	Keys           map[string]KeySet
-	Limits         limits.Config
-	ReceiptTTL     time.Duration
+	Listen        string
+	MetricsListen string
+	InventoryFile string
+	Keys          map[string]KeySet
+	Limits        limits.Config
+	// ReceiptIdleTTL slides a receipt forward on every presentation it
+	// answers; ReceiptMaxAge caps it from the first redemption and never
+	// moves. A presentation past either is FAIL on the wire and `token_spent`
+	// in the log (spec §5.7; §13, decision 15).
+	ReceiptIdleTTL time.Duration
+	ReceiptMaxAge  time.Duration
 	ContextIdleTTL time.Duration
 	Accounting     AccountingConfig
 	Lab            *LabConfig
@@ -159,12 +170,19 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 
+	if f.ReceiptTTL != 0 {
+		return Config{}, fmt.Errorf("config: receipt_ttl was replaced by receipt_idle_ttl (default 15m) " +
+			"and receipt_max_age (default 2h) when the receipt became a sliding window (spec §13, decision 15); " +
+			"remove the key and set those")
+	}
+
 	c := Config{
 		Listen:         or(f.Listen, ":49"),
 		MetricsListen:  or(f.MetricsListen, ":9049"),
 		InventoryFile:  f.InventoryFile,
 		Keys:           f.Keys,
-		ReceiptTTL:     orD(f.ReceiptTTL, 30*time.Second),
+		ReceiptIdleTTL: orD(f.ReceiptIdleTTL, 15*time.Minute),
+		ReceiptMaxAge:  orD(f.ReceiptMaxAge, 2*time.Hour),
 		ContextIdleTTL: orD(f.ContextIdleTTL, 12*time.Hour),
 		Accounting:     f.Accounting,
 		Lab:            f.Lab,
@@ -370,12 +388,17 @@ func checkPositive(c Config) error {
 		{"limits.malformed_backoff_max", c.Limits.MalformedBackoffMax},
 		{"limits.auth_failure_delay_base", c.Limits.AuthFailureDelayBase},
 		{"limits.auth_failure_delay_max", c.Limits.AuthFailureDelayMax},
-		{"receipt_ttl", c.ReceiptTTL},
+		{"receipt_idle_ttl", c.ReceiptIdleTTL},
+		{"receipt_max_age", c.ReceiptMaxAge},
 		{"context_idle_ttl", c.ContextIdleTTL},
 	} {
 		if f.d <= 0 {
 			return fmt.Errorf("config: %s must be greater than zero; got %s", f.name, f.d)
 		}
+	}
+	if c.ReceiptIdleTTL > c.ReceiptMaxAge {
+		return fmt.Errorf("config: receipt_idle_ttl (%s) is longer than receipt_max_age (%s): "+
+			"the window can never slide, so the idle bound does nothing", c.ReceiptIdleTTL, c.ReceiptMaxAge)
 	}
 	if c.Limits.PerNASConnections < 1 {
 		return fmt.Errorf("config: limits.per_nas_connections must be at least 1; got %d", c.Limits.PerNASConnections)
