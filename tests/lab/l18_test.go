@@ -585,17 +585,35 @@ func (l *lab) junosL18Configure(t *testing.T, lines []string) {
 // would report one platform's level for the other's session.
 func iosxePrivLevel(out string) string { return eosPrivLevel(out) }
 
-// junosAuthSignal reduces `show cli authorization` to the class and the
-// permission bits, which is what changes when a reply attribute lands.
+// junosAuthSignal reduces `show cli authorization` to the three things a
+// reply attribute could change: the class, the permission bits, and the four
+// individual-command regexes.
 //
-// It reads the `class '<name>'` on the header line and then every permission
-// name in the indented list below `Permissions:`. Both halves matter: a reply
-// that moves the session to another class changes the first, and
-// `user-permissions` is documented to replace the bits without moving the class
-// at all, which changes only the second.
+// All three, because decision 22 projects into all three and a signal that
+// watched only one would report an attribute as ignored when it had moved
+// something else. The regexes in particular: §8's projection sends
+// `allow-commands` and `deny-commands`, and a session whose class and bits were
+// untouched but whose regexes were set would otherwise look identical to one
+// that got nothing.
+//
+// A permission is read as a line containing `--`, which is the separator Junos
+// puts between the bit's name and its description:
+//
+//	view        -- Can view current values and statistics
+//	view-configuration-- Can view all configuration (not including secrets)
+//
+// The first version of this function took any indented single-word line
+// instead, and swept up the shell prompt that follows the output --
+// `alice11@srx1>`. Every variant then carried its own username inside its
+// signal, so every signal differed from every other, and the table reported
+// **applied** for all thirteen rows on a run where ten of them had changed
+// nothing at all. The `user-permissions` rows were the expensive ones: their
+// transcripts are byte-identical to the empty control's and the cell said the
+// attribute took effect. Requiring `--` is what keeps the prompt out.
 func junosAuthSignal(out string) string {
 	class, perms := "", []string{}
-	inPerms := false
+	regexes := []string{}
+	inPerms, inRegex := false, false
 	for _, ln := range strings.Split(out, "\n") {
 		t := strings.TrimSpace(ln)
 		if i := strings.Index(t, "class '"); i >= 0 {
@@ -604,31 +622,64 @@ func junosAuthSignal(out string) string {
 				class = rest[:j]
 			}
 		}
-		if strings.HasPrefix(t, "Permissions:") {
-			inPerms = true
+		switch {
+		case strings.HasPrefix(t, "Permissions:"):
+			inPerms, inRegex = true, false
+			continue
+		case strings.HasPrefix(t, "Individual command authorization:"):
+			inPerms, inRegex = false, true
+			continue
+		case t == "":
 			continue
 		}
-		if !inPerms || t == "" {
+		if inPerms {
+			i := strings.Index(t, "--")
+			if i < 0 {
+				// Not a permission line: the output has moved on, or this is
+				// the prompt that follows it.
+				inPerms = false
+				continue
+			}
+			if name := strings.TrimSpace(t[:i]); name != "" {
+				perms = append(perms, name)
+			}
 			continue
 		}
-		// `    view        -- Can view current values and statistics`, and
-		// `view-configuration-- Can view all configuration` with no space
-		// before the dashes, which is why the name is cut at `--` rather than
-		// taken as the first field.
-		name := t
-		if i := strings.Index(name, "--"); i >= 0 {
-			name = name[:i]
+		if inRegex {
+			i := strings.Index(t, ":")
+			if i < 0 {
+				inRegex = false
+				continue
+			}
+			name, val := strings.TrimSpace(t[:i]), strings.TrimSpace(t[i+1:])
+			if name == "" || val == "" {
+				continue
+			}
+			regexes = append(regexes, name+"="+val)
 		}
-		name = strings.TrimSpace(name)
-		if name == "" || strings.Contains(name, " ") {
-			continue
-		}
-		perms = append(perms, name)
 	}
-	if class == "" && len(perms) == 0 {
+	if class == "" && len(perms) == 0 && len(regexes) == 0 {
 		return ""
 	}
-	return "class=" + l18Dash(class) + " permissions=[" + strings.Join(perms, " ") + "]"
+	sig := "class=" + l18Dash(class) + " permissions=[" + strings.Join(perms, " ") + "]"
+	// The four regexes are reported as one word while they are all `none`,
+	// which they are under this lab's configuration, so the common case does
+	// not bury the two values that do change. Anything else is spelled out.
+	allNone := len(regexes) > 0
+	for _, r := range regexes {
+		if !strings.HasSuffix(r, "=none") {
+			allNone = false
+		}
+	}
+	switch {
+	case len(regexes) == 0:
+		sig += " regexes=(not reported)"
+	case allNone:
+		sig += " regexes=all none"
+	default:
+		sig += " regexes=[" + strings.Join(regexes, "; ") + "]"
+	}
+	return sig
 }
 
 func l18Dash(s string) string {
@@ -1439,11 +1490,11 @@ func l18JunosReading(t *testing.T, d l18Driver, rs []l18Result, control l18Resul
 			fmt.Fprintf(&b, "**Both together ended the session.** The device said:\n\n```\n%s\n```\n\n",
 				strings.TrimRight(precReply(both.deviceSaid), "\n"))
 		} else {
+			bs, us, ps := d.signal(&both), d.signal(&user), d.signal(&permsM)
 			fmt.Fprintf(&b, "**Both together** -- the shape the projection would actually send -- left "+
-				"the session `%s`. Read beside `local-user-name` alone (`%s`) and `user-permissions` "+
-				"alone (`%s`), that is what says whether the two compose or one replaces the other. "+
-				"`show cli authorization` in full:\n\n```\n%s\n```\n\n",
-				l18Dash(d.signal(&both)), l18Dash(d.signal(&user)), l18Dash(d.signal(&permsM)),
+				"the session `%s`, against `%s` for `local-user-name` alone and `%s` for "+
+				"`user-permissions` alone. %s `show cli authorization` in full:\n\n```\n%s\n```\n\n",
+				l18Dash(bs), l18Dash(us), l18Dash(ps), junosPairReading(bs, us, ps, d.signal(&control)),
 				strings.TrimRight(both.show("show cli authorization"), "\n"))
 		}
 	}
@@ -1578,3 +1629,36 @@ func l18SSHReading(t *testing.T, l *lab, rs []l18Result) string {
 // package-level constant so the note can quote the number it actually used
 // rather than a number written beside it.
 const l18IOSXEPause = 20 * time.Second
+
+// junosPairReading says what the pair of decision-22 attributes did together,
+// from the three signals rather than from an expectation.
+//
+// It is a sentence and not a table cell because it is the question the
+// projection turns on: §8 sends both, and whether the second one adds anything
+// decides whether the projection is one mechanism or two. The three outcomes
+// are distinguishable from the signals alone -- the pair equal to
+// `local-user-name` alone means the second attribute is inert, the pair equal
+// to `user-permissions` alone means it wins, and anything else means they
+// compose -- so this never states more than the run measured.
+func junosPairReading(both, user, perms, empty string) string {
+	switch {
+	case both == "" || user == "" || perms == "":
+		return "One of the three produced no signal, so this run does not say whether they compose."
+	case both == user && perms == empty:
+		return "**So `user-permissions` contributes nothing, beside `local-user-name` or on its own.** " +
+			"The pair is indistinguishable from `local-user-name` alone, and `user-permissions` alone " +
+			"is indistinguishable from an empty reply. On this image the projection's second attribute " +
+			"is inert: whatever decision 22 puts in it, the operator gets the template's class and " +
+			"nothing else, and port49's log records an attribute that did nothing."
+	case both == user:
+		return "**So `local-user-name` decides it and `user-permissions` does not change the result " +
+			"when both are sent**, even though `user-permissions` alone does something."
+	case both == perms:
+		return "**So `user-permissions` wins when both are sent**: the pair matches it and not " +
+			"`local-user-name` alone, which is the documented replace-rather-than-merge behaviour " +
+			"(§15 L12) showing up between the two attributes rather than inside one."
+	default:
+		return "**So the two compose into something neither produces alone.** Read the three signals " +
+			"above before the projection sends both."
+	}
+}
