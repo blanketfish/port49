@@ -852,6 +852,9 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	if err := l.daemon.Start(); err != nil {
 		return fmt.Errorf("start port49d: %w", err)
 	}
+	// Taken here so loadSeeds can tell this daemon's seed-token file from the
+	// one the previous daemon left at the same path.
+	started := time.Now()
 
 	// One Wait goroutine for the daemon's whole life, because Cmd.Wait may be
 	// called only once and both startup and shutdown need to know it exited.
@@ -862,7 +865,6 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	// ProcessState stays nil until something calls Wait, so the check that used
 	// to live in the loop below could never fire, and a port49d that exited
 	// immediately still cost the full 30 seconds before its stderr was printed.
-	started := time.Now()
 	l.daemonDone = make(chan struct{})
 	go func() {
 		l.daemonErr = l.daemon.Wait()

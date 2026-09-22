@@ -310,9 +310,17 @@ func (l *lab) l3CLI(user, password string) (*cliConn, error) {
 // l3EnableRecords picks the authentication records that are the enable rather
 // than the login.
 //
-// It cannot filter on `service`, because the decision log does not carry it —
-// that is what the capture is for. So it uses the two shapes an enable can
-// take, and the first version of this function only knew one of them:
+// An `escalate` record is unambiguously one: port49 names the event from the
+// authentication START's `service`, so `service=enable` is an escalate and
+// nothing else is (internal/daemon/authen/authen.go). Before plan 2 an enable
+// was logged as an ordinary `redeem` and this function knew only that shape,
+// which is why it kept looking for one: a device may put the enable on the
+// wire as a plain login under another username, and that arrives as a redeem.
+//
+// For those, it cannot filter on `service`, because a redeem record does not
+// carry it — that is what the capture is for. So it uses the two shapes such an
+// enable can take, and the first version of this function only knew one of
+// them:
 //
 //   - a *different* username. This is the `$enab{level}$` shape the whole row
 //     is named after, and the one the memo prices.
@@ -332,11 +340,15 @@ func l3EnableRecords(recs []map[string]any, loginUsers ...string) []map[string]a
 	seen := map[string]bool{}
 	var out []map[string]any
 	for _, r := range recs {
-		if str(r, "event") != "redeem" {
-			continue
-		}
 		s := sub(r, "session")
 		if s == nil {
+			continue
+		}
+		if str(r, "event") == "escalate" {
+			out = append(out, r)
+			continue
+		}
+		if str(r, "event") != "redeem" {
 			continue
 		}
 		u := str(s, "username")
