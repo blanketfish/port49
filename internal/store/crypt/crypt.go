@@ -304,6 +304,14 @@ func (w *wrapped) TouchContext(ctx context.Context, k store.ContextKey, ttl time
 	return w.inner.TouchContext(ctx, k, ttl)
 }
 
+// SetPrivilege passes through for the same reason TouchContext does: PrivLvl
+// is plaintext -- it is a level, not an identity, and PutContext already
+// leaves it in the clear -- so the inner store records the granted level on a
+// record whose sealed fields it cannot read.
+func (w *wrapped) SetPrivilege(ctx context.Context, k store.ContextKey, level uint8) error {
+	return w.inner.SetPrivilege(ctx, k, level)
+}
+
 // DeleteContext is addressed by key alone.
 func (w *wrapped) DeleteContext(ctx context.Context, k store.ContextKey) error {
 	return w.inner.DeleteContext(ctx, k)

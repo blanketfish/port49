@@ -390,6 +390,9 @@ func (noStore) GetContext(context.Context, store.ContextKey) (store.Context, err
 func (noStore) TouchContext(context.Context, store.ContextKey, time.Duration) error {
 	panic("store called")
 }
+func (noStore) SetPrivilege(context.Context, store.ContextKey, uint8) error {
+	panic("store called")
+}
 func (noStore) DeleteContext(context.Context, store.ContextKey) error {
 	panic("store called")
 }

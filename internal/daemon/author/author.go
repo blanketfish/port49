@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -118,6 +119,31 @@ func ParseArgs(args [][]byte) (kv map[string]string, cmd string, cmdArgs []strin
 	return kv, cmd, cmdArgs, raw
 }
 
+// grantedPrivLvl finds the level a session authorization reply grants, if it
+// grants one. The attribute is `priv-lvl`, in either the mandatory (`=`) or
+// optional (`*`) form, since a device reads both and so must the record of
+// what it was told.
+//
+// A value that is not a privilege level is no grant: ok is false and the
+// context keeps the level it had, rather than being moved to something the
+// reply did not say. The last occurrence wins, which is what a device reading
+// the arguments in order ends up applying.
+func grantedPrivLvl(attrs []string) (uint8, bool) {
+	level, ok := uint8(0), false
+	for _, a := range attrs {
+		i := strings.IndexAny(a, "=*")
+		if i < 0 || a[:i] != "priv-lvl" {
+			continue
+		}
+		n, err := strconv.ParseUint(a[i+1:], 10, 8)
+		if err != nil || n > 15 {
+			continue
+		}
+		level, ok = uint8(n), true
+	}
+	return level, ok
+}
+
 // Vector is the command vector authorization and accounting agree on: the
 // command followed by its arguments, or nil for a session request (cmd == "").
 func Vector(cmd string, cmdArgs []string) []string {
@@ -219,6 +245,26 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	}
 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason
 	h.emit(rec)
+
+	// `ctx.privilege` is the level port49 last GRANTED, so a permitted session
+	// authorization whose reply carries `priv-lvl` records it (spec §5.3, §7).
+	// Measured on vEOS: the session authorization arrives at priv_lvl 1, this
+	// reply grants 15, and every command after it arrives at 15, so a context
+	// still holding the login START's level would deny all of them
+	// (tests/lab/results/L1-arista_eos.md, L3-arista_eos.md).
+	//
+	// Sessions only. A per-command reply is not a grant, and letting one move
+	// the level would hand the session's privilege to whatever the last
+	// command's attributes happened to say.
+	//
+	// SetPrivilege, never PutContext, and for the reason the extension below
+	// gives: `c` was read at the top of this request.
+	if cmd == "" {
+		if level, ok := grantedPrivLvl(d.Attributes); ok {
+			err := h.store.SetPrivilege(ctx, store.ContextKey{NAS: peer.NAS, Username: user}, level)
+			h.metrics.StoreOps.WithLabelValues("set_privilege", storeOutcome(err)).Inc()
+		}
+	}
 
 	// Activity extends the idle TTL (spec §5.6): it is a backstop against
 	// abandoned state, not a session clock, and session_expires is the clock.

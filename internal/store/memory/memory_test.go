@@ -400,6 +400,55 @@ func TestTouchContextExtendsWithoutClobbering(t *testing.T) {
 	}
 }
 
+// SetPrivilege is TouchContext's sibling and exists for the same reason: the
+// authorization path has to record the level it just granted without writing
+// back a record it read a moment ago, because the writer it would race is
+// revocation (spec §5.3).
+func TestSetPrivilegeWritesTheLevelAndNothingElse(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", PrivLvl: 1}, time.Minute)
+
+	// A revocation lands after the authorization path took its copy.
+	c, _ := s.GetContext(ctx, k)
+	c.RevokedAt = now
+	s.PutContext(ctx, k, c, time.Minute)
+
+	stamped := now
+	now = now.Add(30 * time.Second)
+	if err := s.SetPrivilege(ctx, k, 15); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PrivLvl != 15 {
+		t.Fatalf("SetPrivilege did not record the granted level: %+v", got)
+	}
+	if got.RevokedAt.IsZero() {
+		t.Fatalf("SetPrivilege discarded the revocation: %+v", got)
+	}
+	if got.CtxID != "c" {
+		t.Fatalf("SetPrivilege must keep the same ctx_id (spec §7): %+v", got)
+	}
+	// It is not an extension: the TTL and its stamp are TouchContext's to move,
+	// and a device that only ever authorizes sessions must not keep a context
+	// alive by being granted the same level over and over.
+	if !got.LastTouchedAt.Equal(stamped) {
+		t.Fatalf("SetPrivilege must not stamp LastTouchedAt: %+v", got)
+	}
+	now = now.Add(31 * time.Second) // past the original expiry
+	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("SetPrivilege extended the expiry; only TouchContext may")
+	}
+	if err := s.SetPrivilege(ctx, k, 15); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("setting a level on an expired context must say so, not resurrect it: %v", err)
+	}
+}
+
 // A redeemed token's Secret must not survive in the backing array. The removal
 // in RedeemAndReceipt clips the capacity to the spent token's index, so when it
 // is the last member of the set nothing reallocates and its entry stays

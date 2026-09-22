@@ -219,6 +219,26 @@ type Store interface {
 	// ErrNotFound if the key is absent or already expired, which is how the
 	// caller learns it lost the race; PutContext cannot tell it that.
 	TouchContext(ctx context.Context, k ContextKey, ttl time.Duration) error
+	// SetPrivilege records the level port49 last granted this context, in
+	// place and under the store's own lock. It writes exactly one field,
+	// PrivLvl, and is TouchContext's sibling for the same reason: the
+	// authorization path must not write back a record it read at the top of
+	// the request, because the writer it would race is revocation.
+	//
+	// It is not an extension. The expiry and LastTouchedAt are TouchContext's
+	// to move, so a device that only ever authorizes sessions cannot keep a
+	// context alive by being granted the same level over and over.
+	//
+	// The caller is a permitted session authorization whose reply carried a
+	// `priv-lvl` attribute: on vEOS the login START arrives at level 1, that
+	// reply grants 15, and every command after it arrives at 15, so a context
+	// still holding the login level would deny all of them
+	// (spec §5.3, §7; tests/lab/results/L1-arista_eos.md, L3-arista_eos.md).
+	// The enable path updates the same field, also in place and with the same
+	// ctx_id.
+	//
+	// ErrNotFound if the key is absent or already expired.
+	SetPrivilege(ctx context.Context, k ContextKey, level uint8) error
 	// DeleteContext has no production caller today: the caller it had was
 	// author's `username_mismatch` branch, which under the old `(nas, port)`
 	// key could delete a live operator's context on an uncredentialed request.

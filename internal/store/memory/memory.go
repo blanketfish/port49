@@ -366,6 +366,23 @@ func (s *Store) TouchContext(_ context.Context, k store.ContextKey, ttl time.Dur
 	return nil
 }
 
+func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(s.now()) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	// Only the level. The expiry and its stamp belong to TouchContext, and
+	// every other field is left exactly as whoever wrote it last left it --
+	// which is the property the caller cannot get by re-putting a record it
+	// read a moment ago (store.Store).
+	e.c.PrivLvl = level
+	s.contexts[k] = e
+	return nil
+}
+
 func (s *Store) DeleteContext(_ context.Context, k store.ContextKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -139,6 +139,22 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 		t.Fatalf("context read: %+v", c)
 	}
 
+	// SetPrivilege and TouchContext pass straight through: both write only
+	// plaintext bookkeeping, so the inner store changes a record it cannot
+	// read, and the sealed fields it never touched still open afterwards.
+	if err := s.SetPrivilege(ctx, ck, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchContext(ctx, ck, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := inner.GetContext(ctx, ck); c.PrivLvl != 1 {
+		t.Fatalf("SetPrivilege must reach the inner store in the clear: %+v", c)
+	}
+	if c, _ := s.GetContext(ctx, ck); c.PrivLvl != 1 || c.Principal != "user:alice@example.com" || c.SessionDiscriminator != "14656" {
+		t.Fatalf("a narrow write must leave the sealed fields readable: %+v", c)
+	}
+
 	if err := s.PutIdempotency(ctx, "user:alice", "k", store.Idempotency{BodyHash: "b", Response: []byte(`{"login":"p49_x"}`), ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}

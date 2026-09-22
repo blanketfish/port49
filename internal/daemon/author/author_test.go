@@ -652,10 +652,9 @@ func TestTheIdleTTLIsExtendedAtMostOncePerHalfTTL(t *testing.T) {
 	}
 }
 
-// TestTheDevicePrivLvlRaisedByOurOwnSessionReply pins the behaviour the §5.3
-// privilege check produces against the sequence the lab actually measured, and
-// it is here because that behaviour looks wrong and the decision is not this
-// task's to make.
+// TestTheDevicePrivLvlRaisedByOurOwnSessionReply is the measured sequence, and
+// the reason `ctx.privilege` means the level port49 last GRANTED rather than
+// the level the login START carried (spec §5.3, §7).
 //
 // Measured on vEOS (tests/lab/results/L1-arista_eos.md lines 62-63;
 // L3-arista_eos.md lines 72-76), and the same shape on the other platforms:
@@ -665,26 +664,15 @@ func TestTheIdleTTLIsExtendedAtMostOncePerHalfTTL(t *testing.T) {
 //	AUTHOR REQUEST  priv_lvl=15 args=[service=shell cmd=terminal ...]
 //
 // The device raises the session to the level port49's own reply granted, and
-// every command after that arrives at 15. The login context's PrivLvl is still
-// the 1 the login START carried — nothing writes the granted level back — so
-// `req.PrivLvl > c.PrivLvl` denies every one of those commands
-// `privilege_exceeded`. That is an operator logged in successfully and then
-// unable to run anything, which is the 3am failure.
-//
-// The check is spec §5.3 as written, and the plan's Task 10 brief specifies it
-// verbatim, so it ships as specified. What is unresolved is which value is
-// "the session's granted level" (§5.7): ctx.privilege, as §5.3's pseudocode
-// says, or what the session authorization reply granted, which is what the
-// device believes and acts on. Resolving it means either the session
-// authorization writes the granted level into the context, or the check reads
-// ctx.max_privilege. Both are owner decisions with a lab test behind them.
-//
-// This test asserts today's behaviour so the break is discoverable rather than
-// latent. When the rule is settled, this test changes with a lab citation.
+// every command after that arrives at 15. A context still holding the login
+// START's 1 would deny every one of them `privilege_exceeded` — an operator who
+// logs in successfully and can then run nothing. So the permitted session
+// authorization records its granted level in place, same ctx_id.
 func TestTheDevicePrivLvlRaisedByOurOwnSessionReply(t *testing.T) {
-	h, st, log := setup(t)
+	h, st, _ := setup(t)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	// The context as a login START at priv_lvl=1 leaves it.
-	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+	st.PutContext(context.Background(), key,
 		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
 
 	// The session authorization the device sends, and the priv-lvl=15 it gets.
@@ -692,16 +680,131 @@ func TestTheDevicePrivLvlRaisedByOurOwnSessionReply(t *testing.T) {
 	sess.PrivLvl = 1
 	resp := h.Handle(context.Background(), peer, sess)
 	if resp.Status != wire.AuthorStatusPassAdd || len(resp.Args) != 1 || string(resp.Args[0]) != "priv-lvl=15" {
-		t.Fatalf("the session authorization must still be permitted and grant priv-lvl=15: %+v", resp)
+		t.Fatalf("the session authorization must be permitted and grant priv-lvl=15: %+v", resp)
+	}
+	c, err := st.GetContext(context.Background(), key)
+	if err != nil || c.PrivLvl != 15 {
+		t.Fatalf("the granted level must be recorded in the context: %+v %v", c, err)
+	}
+	if c.CtxID != "c" {
+		t.Fatalf("recording the granted level must keep the same ctx_id (spec §7): %+v", c)
 	}
 
-	// The first command after it, at the level the device took from that reply.
-	cmd := req("alice", "vty4", "service=shell", "cmd=terminal", "cmd-arg=length", "cmd-arg=0", "cmd-arg=<cr>")
-	cmd.PrivLvl = 15
-	resp = h.Handle(context.Background(), peer, cmd)
+	// The commands after it, at the level the device took from that reply.
+	for _, cmd := range [][]string{
+		{"service=shell", "cmd=terminal", "cmd-arg=length", "cmd-arg=0", "cmd-arg=<cr>"},
+		{"service=shell", "cmd=show", "cmd-arg=version", "cmd-arg=<cr>"},
+	} {
+		r := req("alice", "vty4", cmd...)
+		r.PrivLvl = 15
+		if resp := h.Handle(context.Background(), peer, r); resp.Status != wire.AuthorStatusPassAdd {
+			t.Fatalf("a command at the level port49 granted must be permitted, got %+v for %v", resp, cmd)
+		}
+	}
+}
+
+// The inverse, and the half of the rule that still denies: what is recorded is
+// what the reply GRANTED, not what the device asked for. A session authorized
+// at priv-lvl=1 that is followed by a command claiming 15 is a device asserting
+// a level port49 never gave it.
+func TestACommandAboveTheGrantedLevelIsStillDenied(t *testing.T) {
+	st := memory.New(time.Now)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	st.PutContext(context.Background(), key,
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
+	log := &bytes.Buffer{}
+	h := New(st, &Lab{SessionAttributes: []string{"priv-lvl=1"}}, decision.NewJSONLines(log),
+		metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
+
+	// The context starts at 15 so that the denial below can only come from the
+	// session reply having written 1 over it.
+	sess := req("alice", "vty4", "service=shell", "cmd=")
+	sess.PrivLvl = 1
+	if resp := h.Handle(context.Background(), peer, sess); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("%+v", resp)
+	}
+	if c, _ := st.GetContext(context.Background(), key); c.PrivLvl != 1 {
+		t.Fatalf("the granted level must be recorded even when it lowers the context: %+v", c)
+	}
+
+	r := req("alice", "vty4", "service=shell", "cmd=configure", "cmd-arg=<cr>")
+	r.PrivLvl = 15
+	resp := h.Handle(context.Background(), peer, r)
 	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "privilege_exceeded" {
-		t.Fatalf("this test records a known break; if it now permits, the rule was settled "+
-			"and this test must be rewritten with the lab citation: %+v %v", resp, lastRecord(t, log))
+		t.Fatalf("%+v %v", resp, lastRecord(t, log))
+	}
+}
+
+// A DENIED session authorization grants nothing, so it records nothing: the
+// reply carries no attributes at all, and a context whose level moved on a
+// denial would be taking policy from a request that was refused.
+func TestADeniedSessionAuthorizationRecordsNoLevel(t *testing.T) {
+	st := memory.New(time.Now)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	st.PutContext(context.Background(), key,
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
+	h := New(st, &Lab{SessionAttributes: []string{"priv-lvl=1"}}, decision.NewJSONLines(&bytes.Buffer{}),
+		metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
+
+	sess := req("alice", "vty4", "service=ppp", "protocol=ip") // service_unsupported: denied before the authorizer
+	sess.PrivLvl = 1
+	if resp := h.Handle(context.Background(), peer, sess); resp.Status != wire.AuthorStatusFail {
+		t.Fatalf("%+v", resp)
+	}
+	if c, _ := st.GetContext(context.Background(), key); c.PrivLvl != 15 {
+		t.Fatalf("a denied session authorization must not move the recorded level: %+v", c)
+	}
+}
+
+// A command authorization never records a level, whatever it carries. Only a
+// session authorization grants one; the reply to a command that happened to
+// carry a priv-lvl attribute is not a grant, and treating it as one would let a
+// per-command reply raise the session (spec §5.3).
+func TestACommandReplyDoesNotRecordALevel(t *testing.T) {
+	st := memory.New(time.Now)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	st.PutContext(context.Background(), key,
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
+	h := New(st, &Lab{CommandAttributes: []string{"priv-lvl=15"}}, decision.NewJSONLines(&bytes.Buffer{}),
+		metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
+
+	r := req("alice", "vty4", "service=shell", "cmd=show", "cmd-arg=version", "cmd-arg=<cr>")
+	r.PrivLvl = 1
+	if resp := h.Handle(context.Background(), peer, r); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("%+v", resp)
+	}
+	if c, _ := st.GetContext(context.Background(), key); c.PrivLvl != 1 {
+		t.Fatalf("a command reply must not move the recorded level: %+v", c)
+	}
+}
+
+func TestGrantedPrivLvl(t *testing.T) {
+	for _, tt := range []struct {
+		attrs []string
+		want  uint8
+		ok    bool
+	}{
+		{nil, 0, false},
+		{[]string{"shell:roles*network-admin"}, 0, false},
+		{[]string{"priv-lvl=15"}, 15, true},
+		{[]string{"priv-lvl*15"}, 15, true}, // the optional form a device reads just the same
+		{[]string{"priv-lvl=0"}, 0, true},
+		{[]string{"shell:roles*network-admin", "priv-lvl=1"}, 1, true},
+		// Not a level, so not a grant: the context keeps what it had rather
+		// than being moved to something the reply did not say.
+		{[]string{"priv-lvl="}, 0, false},
+		{[]string{"priv-lvl=fifteen"}, 0, false},
+		{[]string{"priv-lvl=16"}, 0, false},
+		{[]string{"priv-lvl=-1"}, 0, false},
+		{[]string{"priv-lvl=300"}, 0, false},
+		{[]string{"priv-lvlx=15"}, 0, false},
+		// The last one wins, as it does on a device reading them in order.
+		{[]string{"priv-lvl=1", "priv-lvl=15"}, 15, true},
+	} {
+		got, ok := grantedPrivLvl(tt.attrs)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("grantedPrivLvl(%q) = %d, %v; want %d, %v", tt.attrs, got, ok, tt.want, tt.ok)
+		}
 	}
 }
 

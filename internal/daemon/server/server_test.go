@@ -244,8 +244,9 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 	// `priv_lvl=1 args=[service=shell cmd*]` and only raises to 15 once this
 	// reply has granted `priv-lvl=15` (tests/lab/results/L1-arista_eos.md,
 	// L3-arista_eos.md). It used to say 15 here, which the §5.3 privilege check
-	// now denies -- see TestTheDevicePrivLvlRaisedByOurOwnSessionReply in
-	// internal/daemon/author.
+	// denies: the context holds the login START's 1 until this reply grants 15
+	// and the handler records it. See TestTheDevicePrivLvlRaisedByOurOwnSessionReply
+	// in internal/daemon/author for the whole sequence.
 	c = dial(t, addr, []byte("k2"))
 	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 1, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
 		User: []byte("alice"), Port: []byte("vty0"), Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
