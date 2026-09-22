@@ -1033,14 +1033,42 @@ func TestEnableWithoutContextIsContextMissing(t *testing.T) {
 	}
 }
 
-func TestEnableAboveCeilingIsRefused(t *testing.T) {
-	f := setup(t)
-	f.seedLogin(t, "token", 7)
-	sess := f.h.NewSession(f.peer)
-	sess.Start(context.Background(), f.enableStart("alice"))
-	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything")})
-	if reply.Status != wire.AuthenStatusFail || f.records(t)[0]["reason"] != "ceiling_exceeded" {
-		t.Fatalf("%+v %v", reply, f.records(t))
+// The ceiling refuses an escalation above it, and a token minted without one
+// has nothing to refuse against. Zero is "no ceiling", not "level 0 only", and
+// it has to be the same reading the authorizer's clamp takes
+// (store.Context.PrivilegeCeiling, TestTheGrantedLevelIsClampedToMaxPrivilege):
+// a policy engine that mints without the field would otherwise get a fleet
+// where session authorization grants 15 freely and every enable is refused
+// naming a ceiling nobody configured.
+//
+// `auto` throughout, because the ceiling gate runs before the mechanism does:
+// this table is about the bound, not about how the escalation is proved.
+func TestEnableCeilingRefusesOnlyWhatWasMinted(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		maxPriv uint8
+		status  uint8
+		reason  string
+		priv    uint8
+	}{
+		{"above the ceiling is refused", 7, wire.AuthenStatusFail, "ceiling_exceeded", 1},
+		{"at the ceiling escalates", 15, wire.AuthenStatusPass, "escalation_granted", 15},
+		{"no ceiling minted escalates", 0, wire.AuthenStatusPass, "escalation_granted", 15},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := setup(t)
+			f.seedLogin(t, "auto", tt.maxPriv)
+			sess := f.h.NewSession(f.peer)
+			sess.Start(context.Background(), f.enableStart("alice"))
+			reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte("anything")})
+			if reply.Status != tt.status || f.records(t)[0]["reason"] != tt.reason {
+				t.Fatalf("%+v %v", reply, f.records(t))
+			}
+			c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+			if c.PrivLvl != tt.priv {
+				t.Fatalf("recorded level %d, want %d", c.PrivLvl, tt.priv)
+			}
+		})
 	}
 }
 

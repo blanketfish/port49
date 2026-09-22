@@ -280,11 +280,12 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 			//
 			// A zero MaxPrivilege is a token minted with no ceiling, not a
 			// ceiling of zero — the same reading as a zero SessionExpires
-			// above, and what every lab seed token carries today. Clamping to
-			// it would record level 0 and deny every command of a session
-			// port49 had just granted level 15.
-			if c.MaxPrivilege > 0 && level > c.MaxPrivilege {
-				level = c.MaxPrivilege
+			// above. Clamping to it would record level 0 and deny every command
+			// of a session port49 had just granted level 15. The reading lives
+			// in store.Context.PrivilegeCeiling, which the enable path's refusal
+			// reads too, so the two cannot drift apart.
+			if ceiling, ok := c.PrivilegeCeiling(); ok && level > ceiling {
+				level = ceiling
 			}
 			err := h.store.SetPrivilege(ctx, store.ContextKey{NAS: peer.NAS, Username: user}, level)
 			h.metrics.StoreOps.WithLabelValues("set_privilege", storeOutcome(err)).Inc()

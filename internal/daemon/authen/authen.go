@@ -253,7 +253,10 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		if c.Enable == "none" || c.Enable == "" {
 			return s.fail(ctx, rec, decision.EnableRefused)
 		}
-		if s.start.PrivLvl > c.MaxPrivilege {
+		// The ceiling the token was minted with, read through the one helper
+		// the authorizer's clamp also uses: a zero MaxPrivilege is no ceiling,
+		// not a ceiling of zero (store.Context.PrivilegeCeiling).
+		if ceiling, ok := c.PrivilegeCeiling(); ok && s.start.PrivLvl > ceiling {
 			return s.fail(ctx, rec, decision.CeilingExceeded)
 		}
 		// Defense in depth, and a high-signal event worth alerting on

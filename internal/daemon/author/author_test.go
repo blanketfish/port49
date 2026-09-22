@@ -838,9 +838,12 @@ func TestTheGrantedLevelIsClampedToMaxPrivilege(t *testing.T) {
 		{"above the ceiling records the ceiling", 7, "priv-lvl=15", 7},
 		{"at the ceiling", 15, "priv-lvl=15", 15},
 		{"below the ceiling is untouched", 15, "priv-lvl=1", 1},
-		// A token minted with no ceiling, which is what every lab seed token
-		// carries. Zero is "no ceiling", not "level 0 only": clamping to it
-		// would record 0 and deny every command of a session just granted 15.
+		// A token minted with no ceiling — what a policy engine that never sets
+		// the field produces (plan 4). Zero is "no ceiling", not "level 0
+		// only": clamping to it would record 0 and deny every command of a
+		// session just granted 15. The enable path reads the same helper and
+		// refuses nothing on such a token
+		// (authen.TestEnableCeilingRefusesOnlyWhatWasMinted).
 		{"no ceiling minted", 0, "priv-lvl=15", 15},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

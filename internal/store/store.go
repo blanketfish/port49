@@ -417,3 +417,17 @@ func CertKey(issuer, serial string) string { return issuer + "|" + serial }
 
 // HasCeiling reports whether this context carries a session ceiling.
 func (c Context) HasCeiling() bool { return !c.SessionExpires.IsZero() && !c.AuthTime.IsZero() }
+
+// PrivilegeCeiling reports the highest level this context may hold, and whether
+// it carries a privilege ceiling at all. A zero MaxPrivilege is a token minted
+// without one, not a ceiling of zero — the same reading HasCeiling gives a zero
+// SessionExpires, and it is stated here once because two paths ask: the enable
+// path refuses an escalation above it (spec §7, `ceiling_exceeded`) and the
+// authorizer clamps a granted level to it (spec §5.3).
+//
+// Reading zero as a ceiling of zero would split those two. A policy engine that
+// mints without setting the field (plan 4) would get a fleet where session
+// authorization grants 15 freely and every enable is refused naming a ceiling
+// nobody configured — and the operator at 3am has no configured value to look
+// at, because there is none.
+func (c Context) PrivilegeCeiling() (uint8, bool) { return c.MaxPrivilege, c.MaxPrivilege > 0 }
