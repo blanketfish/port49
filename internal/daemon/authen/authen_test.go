@@ -1148,32 +1148,34 @@ func TestEnableOnExpiredContextIsRefused(t *testing.T) {
 	}
 }
 
-// putContextFailsOnce fails the first PutContext and is healthy afterwards, to
-// drive an escalation whose privilege never landed. seedLogin writes through
-// f.st directly, so the first failure this sees is the escalation's own.
-type putContextFailsOnce struct {
+// setPrivilegeFailsOnce fails the first SetPrivilege and is healthy afterwards,
+// to drive an escalation whose privilege never landed. seedLogin writes through
+// f.st directly, so the first failure this sees is the escalation's own —
+// SetPrivilege is where the escalation lands the level, and the only call this
+// fixture makes to it.
+type setPrivilegeFailsOnce struct {
 	store.Store
 	failed bool
 }
 
-func (p *putContextFailsOnce) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
+func (p *setPrivilegeFailsOnce) SetPrivilege(ctx context.Context, k store.ContextKey, level uint8) error {
 	if !p.failed {
 		p.failed = true
-		return errors.New("store: put_context failed")
+		return errors.New("store: set_privilege failed")
 	}
-	return p.Store.PutContext(ctx, k, c, ttl)
+	return p.Store.SetPrivilege(ctx, k, level)
 }
 
 // A replayed enable must replay the escalation's EFFECT, not just its verdict.
-// Here the first escalation's PutContext fails after the token is already
+// Here the first escalation's SetPrivilege fails after the token is already
 // spent: at 3am the operator sees an error, types `enable` again, gets a prompt
 // that accepts and a `#` — and the device now believes they are level 15. If
 // the retry only replayed the receipt, every command they typed would be denied
 // at their login privilege.
 func TestReplayedEnableReAppliesThePrivilege(t *testing.T) {
-	var fake *putContextFailsOnce
+	var fake *setPrivilegeFailsOnce
 	f := setupStore(t, func(st *memory.Store) store.Store {
-		fake = &putContextFailsOnce{Store: st}
+		fake = &setPrivilegeFailsOnce{Store: st}
 		return fake
 	})
 	f.seedLogin(t, "token", 15)
@@ -1186,7 +1188,7 @@ func TestReplayedEnableReAppliesThePrivilege(t *testing.T) {
 	sess.Start(context.Background(), f.enableStart("alice"))
 	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
 	if reply.Status != wire.AuthenStatusError || f.records(t)[0]["reason"] != "store_unavailable" {
-		t.Fatalf("a failed PutContext must be ERROR, not a PASS the context cannot back up: %+v %v", reply, f.records(t))
+		t.Fatalf("a failed SetPrivilege must be ERROR, not a PASS the context cannot back up: %+v %v", reply, f.records(t))
 	}
 	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
 	if c.PrivLvl != 1 {
@@ -1203,6 +1205,70 @@ func TestReplayedEnableReAppliesThePrivilege(t *testing.T) {
 	c, _ = f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
 	if c.CtxID != "ctxL" || c.PrivLvl != 15 {
 		t.Fatalf("the retry must leave the live context at the enable privilege: %+v", c)
+	}
+}
+
+// revokeDuringRedeem stamps the context revoked inside RedeemAndReceipt, which
+// is exactly where a concurrent RevokeByPrincipal lands: after the enable's gate
+// read the context at the top of the request, and before the write that ends the
+// escalation.
+type revokeDuringRedeem struct {
+	store.Store
+	at time.Time
+}
+
+func (r revokeDuringRedeem) RedeemAndReceipt(ctx context.Context, k store.TokenKey, tokenID string, w store.ReceiptWrite) error {
+	if err := r.Store.RedeemAndReceipt(ctx, k, tokenID, w); err != nil {
+		return err
+	}
+	return r.Store.SetRevokedAt(ctx, store.ContextKey{NAS: k.NAS, Username: k.Username}, r.at)
+}
+
+// A revocation that lands mid-enable must survive the escalation. The 3am
+// sequence this pins: the operator revokes alice, `mark` stamps revoked_at and
+// deletes her receipts, and alice's in-flight enable finishes. If the escalation
+// wrote back the context it read a moment earlier, revoked_at would go back to
+// zero — and nothing would ever set it again, because the receipts that would
+// have re-marked it are gone. The revocation reported one context touched and
+// every command for the rest of the idle TTL is permitted.
+//
+// The escalation itself still PASSes: its gates ran against a context that was
+// not yet revoked, and that decision was correct when it was made. What must not
+// happen is the erasure, so the assertion is on the record, not the reply.
+func TestEnableDoesNotUnrevokeAContextRevokedMidExchange(t *testing.T) {
+	revokedAt := time.Unix(1_757_041_500, 0)
+	f := setupStore(t, func(st *memory.Store) store.Store { return revokeDuringRedeem{st, revokedAt} })
+	f.seedLogin(t, "token", 15)
+	secret := f.tag() + "enabenabenabenabenab0123"
+	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "en", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
+			Principal: "user:alice@example.com", ExpiresAt: f.now.Add(time.Minute)})
+
+	sess := f.h.NewSession(f.peer)
+	sess.Start(context.Background(), f.enableStart("alice"))
+	reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	if reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("the escalation's gates ran before the revocation landed: %+v %v", reply, f.records(t))
+	}
+
+	c, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.RevokedAt.Equal(revokedAt) {
+		t.Fatalf("the escalation erased the revocation: revoked_at = %v, want %v (%+v)", c.RevokedAt, revokedAt, c)
+	}
+
+	// And the authorization that follows it denies. This is the enable path's
+	// own copy of the check author.Handle makes first (authen.go, spec §7): both
+	// read the same field, so a revoked_at that survived here is a revoked_at
+	// every later decision sees.
+	sess2 := f.h.NewSession(f.peer)
+	sess2.Start(context.Background(), f.enableStart("alice"))
+	reply, _ = sess2.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+	last := f.records(t)[len(f.records(t))-1]
+	if reply.Status != wire.AuthenStatusFail || last["reason"] != "credential_revoked" {
+		t.Fatalf("the next decision must be credential_revoked: %+v %v", reply, last)
 	}
 }
 

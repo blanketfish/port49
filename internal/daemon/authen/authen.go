@@ -280,7 +280,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// (config.Load), so this context is always the operator's own and never
 		// a shared `$enab15$` pseudo-user's.
 		if c.Enable == "auto" {
-			return s.escalate(ctx, rec, ck, incumbent, decision.EscalationGranted)
+			return s.escalate(ctx, rec, ck, decision.EscalationGranted)
 		}
 	}
 
@@ -349,7 +349,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// mechanism, the ceiling, revocation, expiry and rem_addr against the
 		// live context, so this grants nothing the cold path would not.
 		if enable && r.Status == wire.AuthenStatusPass {
-			return s.escalate(ctx, rec, ck, incumbent, decision.ReceiptReplayed)
+			return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
 		}
 		rec.Session.CtxID = r.CtxID
 		return s.finish(rec, r.Status, decision.ReceiptReplayed)
@@ -414,7 +414,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 				// only replaying the effect puts the privilege on the context
 				// this session actually read.
 				if enable && r.Status == wire.AuthenStatusPass {
-					return s.escalate(ctx, rec, ck, incumbent, decision.ReceiptReplayed)
+					return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
 				}
 				rec.Session.CtxID = r.CtxID
 				return s.finish(rec, r.Status, decision.ReceiptReplayed)
@@ -429,7 +429,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// returns above the `prev` read deliberately — an escalation displaces no
 	// context, so `replaced_ctx_id` must stay absent on its record.
 	if enable {
-		return s.escalate(ctx, rec, ck, incumbent, decision.EscalationGranted)
+		return s.escalate(ctx, rec, ck, decision.EscalationGranted)
 	}
 
 	// A context already under this key is this operator's own earlier login on
@@ -499,30 +499,48 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 // escalate records the new privilege on the incumbent context and keeps
 // everything else, ctx_id foremost: an escalation is not a new session, so the
 // log join across it must not depend on replaced_ctx_id (spec §5.6 row 1, §7).
-// c is written back whole, so Credential, AuthTime, SessionExpires, RefreshedAt
-// and RevokedAt survive — dropping any of them would cost revocation its reach,
-// remove the session ceiling, defeat the staleness clock, or resurrect a
-// revoked session (spec §5.1.4). Nothing is indexed here either: the context was
+//
+// SetPrivilege and TouchContext, never PutContext, and deliberately WITHOUT the
+// store.Context this request read at the top of the enable. Writing that record
+// back is how a revocation landing mid-enable is erased: RevokeByPrincipal
+// stamps RevokedAt and deletes this principal's receipts, the re-put restores a
+// copy whose RevokedAt is zero, and nothing ever sets it again — the receipts
+// that would have re-marked it are already gone. The operator is told one
+// context was touched, the authorizer reads a zero RevokedAt, and the session
+// keeps authorizing for the rest of the idle TTL with nothing in the log
+// connecting the two. The same write would discard an accounting annotation, a
+// session discriminator and a broker refresh.
+//
+// The two narrow setters between them write exactly what an escalation is
+// entitled to change — the level, and the expiry this exchange's activity
+// extends — and they cannot erase a field they do not name (store.Store's
+// comment on TouchContext). Nothing is indexed here either: the context was
 // indexed when it was created, and the principal, sid and certificate it is
-// indexed under have not changed.
+// indexed under have not changed; TouchContext carries those entries forward.
 //
 // reason is a parameter because a replayed escalation re-applies this same
 // effect under ReceiptReplayed: the decision is replayed, and so is what it did.
-func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.ContextKey, c store.Context,
+func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.ContextKey,
 	reason decision.Reason) (wire.AuthenReply, bool) {
-	c.PrivLvl = s.start.PrivLvl
-	c.LastTouchedAt = s.h.now()
-	err := s.h.store.PutContext(ctx, ck, c, s.h.contextTTL)
-	s.h.metrics.StoreOps.WithLabelValues("put_context", storeOutcome(err)).Inc()
+	err := s.h.store.SetPrivilege(ctx, ck, s.start.PrivLvl)
+	s.h.metrics.StoreOps.WithLabelValues("set_privilege", storeOutcome(err)).Inc()
 	if err != nil {
 		// On the token path the enable token is already spent, but without the
 		// new privilege on the context every later authorization would answer
 		// from the old one: ERROR, not a PASS the context cannot back up. The
 		// retransmission that follows replays through the receipt and lands the
 		// privilege then, because that path escalates rather than only
-		// reporting.
+		// reporting. ErrNotFound is one of these: the context is gone, and so
+		// is the escalation.
 		return s.storeError(rec)
 	}
+	// The extension is this exchange's activity, not the escalation itself. A
+	// context reclaimed or revoked between the two writes denies this session on
+	// its next authorization on its own terms, so the outcome is counted and the
+	// PASS stands on the privilege that did land — the same reading author.Handle
+	// gives its own TouchContext.
+	terr := s.h.store.TouchContext(ctx, ck, s.h.contextTTL)
+	s.h.metrics.StoreOps.WithLabelValues("touch_context", storeOutcome(terr)).Inc()
 	return s.finish(rec, wire.AuthenStatusPass, reason)
 }
 
