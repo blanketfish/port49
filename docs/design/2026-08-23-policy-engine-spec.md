@@ -399,7 +399,10 @@ ctx:(nas, username)
   session_expires   1757070295           auth_time + max_session_age
   refreshed_at      1757041495           last broker refresh (5.1.3); the staleness clock
   revoked_at        —                    set by revocation (5.6); denies until idle TTL reclaims
-  task_id           42                   from exec accounting, once observed (5.8)
+  session_discriminator  14656           the platform's own per-session value, from exec
+                                         accounting, once observed (5.8). Not task_id: that
+                                         restarts at 1 per session on both Junos images
+                                         (§15, L17)
   accounting_state  open | closing       advisory (5.8); never authorizes or denies
 ```
 
@@ -1046,8 +1049,8 @@ unrelated in a log. The `(nas, username)` key removes the Bob-then-Alice version
 not this one, Bob reconnecting. Rather than patch it, accounting now sets
 `accounting_state: closing` and nothing
 more — it is reported, and it has **no effect on refresh, authorization, or teardown**; row 6
-reclaims the state. §5.8 specifies the annotation, including the `task_id` binding that makes
-it correct.
+reclaims the state. §5.8 specifies the annotation, including the session-discriminator binding
+that makes it correct.
 
 **Idle TTL is a backstop, not a control.** It SHOULD be extended by activity. A short TTL was
 previously doing security work it cannot do — it narrows a window without closing it, while
@@ -1481,7 +1484,7 @@ and whether overflow blocks or discards oldest-first, are deployment settings. S
 drop count MUST be metrics — an accounting stream silently discarding records destroys the
 reconciliation report without failing anything visibly.
 
-#### Two wire details that break the join
+#### Three wire details that break the join
 
 **Strip the trailing `cmd-arg=<cr>`.** Several vendors terminate the argument list with a
 literal `<cr>`. It is not an argument, and left in place every reconciliation join misses by
@@ -1512,6 +1515,28 @@ Redaction is best-effort by nature and MUST NOT be presented otherwise: a patter
 leaks. It is strictly better than emitting verbatim, and the honest mitigation is that
 port49's own credentials are never typed at a device prompt in the first place.
 
+**Trim an accounting AV pair's key and value.** An accounting argument is not reliably
+`key=value` with no spaces. Measured, vSRX 21.4R3.15 and vJunos-router 23.4R2-S2.1 send
+
+```
+session_pid = 31050
+```
+
+with a space on each side of the `=`, while every other argument in the same record —
+`task_id=1`, `service=shell`, `cmd=login` — carries none
+(`tests/lab/results/L17-juniper_vsrx.md`, `L17-juniper_vjunos-router.md`,
+`L6-juniper_vsrx.md`, `L6-juniper_vjunos-router.md`). A reader that splits at the first
+separator and keeps both halves verbatim therefore stores the key `session_pid ` and the
+value ` 31050`, and a lookup for `session_pid` finds nothing. This is not cosmetic: on Junos
+`session_pid` is the *only* AV pair that separates two concurrent sessions of one operator
+(below), so the untrimmed reader silently binds nothing and every Junos session takes the
+"no discriminator" branch. An accounting reader MUST trim both halves. The lab harness's own
+first run of L17 published a table saying nothing distinguished two sessions, beside a record
+dump that plainly did, which is how this was found.
+
+The authorization path is deliberately left alone: no device in this lab has sent a spaced
+argument on an authorization request, and trimming there would change what a rule matches.
+
 #### Annotating login context
 
 Exec accounting annotates context and never deletes it (§5.6). The context is found by
@@ -1521,23 +1546,46 @@ key (§5.6):
 ```
 exec START for (nas, username):
     ctx has no session discriminator      →  bind it (our own session's START)
-    otherwise                             →  annotate foreign_session, alert
+    discriminator set and equal           →  our own session again; clear accounting_state
+    discriminator set and different       →  annotate foreign, alert
 
 exec STOP for (nas, username):
     discriminator set    →  accounting_state = closing, only on a discriminator match
     discriminator unset  →  accounting_state = closing, on the username alone
 ```
 
+The middle START branch used to read "otherwise → foreign". That made a device's retransmission
+of an exec START, and any second START carrying the discriminator already bound, indistinguishable
+from a login port49 never authenticated — the one condition `foreign` exists to make alertable.
+Equality is the cheap discrimination, so it is made.
+
 **What the discriminator is, is per platform, and `task_id` is not it.** This section used to
 say `task_id` pairs a START with its STOP because "context is already keyed on `(nas, port)`,
 so device-local uniqueness suffices". Both halves are now wrong: the key no longer contains
 `port`, and `task_id` is measured **not** device-unique — on both Junos images it restarts at
 `1` per session, so two concurrent logins both sent `task_id=1`
-(`tests/lab/results/L1-juniper_vsrx.md`, `L1-juniper_vjunos-router.md`). What is measured to
-work: `session_pid` on Junos, unique and stable across the device's immediate reuse of an
-accounting `port`; `task_id` on EOS, device-unique and monotonic
-(`tests/lab/results/L1-arista_eos.md`). Choosing per platform is adapter work and is
+(`tests/lab/results/L17-juniper_vsrx.md`, `L17-juniper_vjunos-router.md`; the per-session
+restart is visible on its own in `L6-juniper_vsrx.md`, `L6-juniper_vjunos-router.md`). What is
+measured to work: `session_pid` on Junos, which took two distinct values across two concurrent
+sessions on both images (`31048`/`31050` on vSRX, `17244`/`17246` on vJunos-router) and was
+stable from a session's START to its STOP; `task_id` on EOS (`27`/`28`), NX-OS
+(`172.100.100.1@pts/3` and `@pts/4`) and IOS-XE (`4033`/`4034`), each distinct across two
+concurrent sessions and stable start to stop (`tests/lab/results/L1-arista_eos.md`,
+`L1-cisco_nxos.md`, `L1-cisco_iosxe.md`). This section previously asserted that Junos
+`session_pid` is "stable across the device's immediate reuse of an accounting `port`"; nothing
+in this lab measured that, and the claim is withdrawn. Also unmeasured: whether `session_pid`
+survives a reboot or a pid wrap, and the discriminator on every non-SSH transport. All three
+are tolerated rather than relied on — a discriminator that does not match leaves the context
+unannotated, which is the unset branch above. Choosing per platform is adapter work and is
 specified with the adapters, not here.
+
+**Which record is the exec record is also per platform.** On EOS, NX-OS and IOS-XE the exec
+START and STOP carry no `cmd` argument at all, so "no command" identifies them. On both Junos
+images they carry `cmd=login` and `cmd=logout`, alongside per-command records that carry the
+typed command (`tests/lab/results/L6-juniper_vsrx.md`, `L6-juniper_vjunos-router.md`,
+`L17-juniper_vsrx.md`, `L17-juniper_vjunos-router.md`). A reader that treats "no command" as
+the only exec form annotates nothing at all on Junos. Per-command records never annotate, on
+any platform.
 
 The unset branch covers `stop-only` accounting and a lost START. `closing` is reported and
 nothing else — it does not stop refresh (§5.1.3), because a STOP from a previous session on the
@@ -1546,10 +1594,35 @@ staleness ceiling deny it later, which is the demotion's own defect in slow moti
 authorization or START on the context clears it. The idle TTL reclaims the state. A record
 that matches neither is logged as unattributable to that context and left alone.
 
-An exec START whose `user` does not match the bound username is a **session port49 did not
-authenticate** — a local fallback, a console login, or a name collision. That is precisely the
-condition §5.6 requires a warning for, and it is high-signal: it means either port49 was
-unreachable or a device-local account shares a principal's name.
+A second exec START on a context already bound to another session — same `user`, a different
+session discriminator — is a **session port49 did not authenticate** and is attributed
+`foreign`. That is precisely the condition §5.6 requires a warning for, and it is high-signal:
+under one name port49 does authenticate, a login arrived that port49 never saw, so either
+port49 was unreachable and the device fell back locally, or someone reached a console, or a
+device-local account shares a principal's name.
+
+This used to read "an exec START whose `user` does not match the bound username". Under the
+`(nas, username)` key (§13, decision 15) that condition is unreachable: a START naming another
+user addresses another key and finds no context there, so it is `unattributed`, which is the
+§5.8 signal it belongs in. The discriminator is what carries the distinction now.
+
+A record whose `user` is one the platform's adapter declares a **system user** — a device-local
+account the platform's own machinery writes accounting under, rather than a logged-in operator —
+is attributed `system` rather than `unattributed`: it is the device acting on its own behalf, not
+a session port49 failed to authenticate, and counting it as either buries the signal both exist
+for. The system-user list is per platform and is adapter data (§8). A platform adapter (plan 5)
+**MAY** name system users; **the list ships empty for every adapter**, and a platform that
+declares none produces no `system` records. **No device in this lab has been measured writing
+such a record.** The Junos measurement went the other way: under this lab's accounting event
+list, every record named the logged-in operator and none named `root` (§15, L17). Two production
+observations are on record as **unmeasured in this lab** — a Junos RPC-driven `show` running as
+`root`, and an NX-OS `admin` record carrying `task_id=vsh.bin.$port` after a cancelled `sudo` —
+and a `tests/lab/results/` note reproducing either is what would fill a list.
+
+`system` is reached only where `unattributed` would otherwise be — after `foreign` has already
+been decided, on a record that resolved to no context at all. A device acting on its own behalf
+is therefore never `foreign`, and the four attribution values `resolved`, `foreign`, `system`
+and `unattributed` partition every accounting record.
 
 #### Unresolvable records
 
@@ -1952,6 +2025,9 @@ attribute is complete in four lines:
 | `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |
 | `redact` | patterns whose argument values are removed before an accounting record is emitted (§5.8) | if the platform sends command accounting — session-only platforms included |
 | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
+| `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
+| `exec_commands` | the `cmd` values that mark an exec record rather than a per-command one; empty means "the exec record carries no `cmd` at all" (§5.8) | defaults per platform |
+| `system_users` | usernames this platform's own machinery writes accounting under, attributed `system` (§5.8); **ships empty for every adapter** | optional |
 | `port_pattern` | expected `port` shape, used only for drift detection | optional |
 
 ### `session_services`
@@ -3315,6 +3391,15 @@ next" stays open; its first item, L3 on IOS-XE, was measured on 2026-09-20 and a
 this platform does **not** send `$enab{level}$`, which removes the expected exposure rather than
 the requirement to handle it if some other train does.
 
+**Superseded 2026-09-22.** Plan 2 builds neither the index nor the reason code. `$enab{level}$`
+becomes an explicit `platforms.<name>.enable_username: enab` option that `config.Load`
+**refuses**, with an error naming what would lift the refusal: a `tests/lab/results/` note
+showing a device sending that username form. Until such a note exists, the `(nas, rem_addr)`
+secondary index, its ambiguity refusal and the §5.7 row that refusal would need are all
+**deferred** — §5.6's bound-attributes table and teardown row 4, and §7's "How an enable token is
+found", stay as the design of record for the day one arrives, describing a path no shipped
+configuration can reach.
+
 One thing plan 2 and plan 4 both gain from that run, and it is not about enable. **IOS-XE refuses
 an authorization reply carrying an attribute it does not recognise, even sent as OPTIONAL**: the
 session port49 permitted is ended by the device with `% Authorization failed.` (§15, L10;
@@ -3579,11 +3664,19 @@ Beyond those already listed in the design document's §14:
   gates an authorization reply on an accounting write.
 - **Accounting never deletes context**: the late-STOP sequence in §5.6 leaves the new
   occupant's context intact and authorizing.
-- **`task_id` binding**: an exec START binds `task_id`; a STOP bearing a different `task_id`
-  does not annotate; a STOP matching it sets `accounting_state: closing`; with no bound
-  `task_id`, a username match is required.
-- **Foreign session detection**: an exec START whose username differs from the bound one is
-  reported as a session port49 did not authenticate.
+- **Session-discriminator binding**: an exec START binds the platform's session discriminator
+  (`session_pid` on Junos, `task_id` elsewhere — §5.8, §15 L17); a STOP bearing a different
+  value does not annotate; a STOP matching it sets `accounting_state: closing`; with no bound
+  discriminator, a username match is required. A per-command record never annotates, and which
+  records are exec records is per platform: `cmd=login` and `cmd=logout` on Junos, no `cmd` at
+  all elsewhere.
+- **Spaced AV pairs are read**: an argument sent as `session_pid = 31050` binds the same value
+  as `session_pid=31050`, because Junos sends the former (§5.8, §15 L17).
+- **Foreign session detection**: an exec START carrying a discriminator other than the one
+  bound is attributed `foreign`; one carrying the bound value is not.
+- **System users**: a record naming a username the platform's adapter declares a system user is
+  attributed `system`, never `foreign` and never `unattributed`; every shipped adapter declares
+  none, so nothing today produces one.
 - **Unattributed records** are recorded rather than discarded, carry `ctx_id: null`, and are
   counted separately.
 
