@@ -30,10 +30,23 @@ owner's 2026-09-21 rulings (`contexts_by_principal` stays unencrypted, and why).
   under PAP/ASCII/HTTP, `token_not_found` under CHAP. Design §8 "Device binding".
 - **Encryption at rest** for tokens, receipts, login context, and the idempotency record,
   with a key shared by broker and daemon and a two-key rotation window. Design §8.
-- **Reusable tokens**: `reusable: true` on the subject, match-only redemption, no receipt,
-  valid until TTL. Spec §13 decision 15 (provisional on L1, L7).
-- **Enable tokens**: mint pair with `kind`, lookup on `$enab{level}$` platforms through
-  `(nas, port)` → context → bound username → candidate set filtered to `kind: enable`;
+- **Sliding receipt, not a `reusable` flag** (owner, 2026-09-21: "Bob shouldn't need to
+  know"). Each re-presentation of the same `(nas, username, credential_sha256)` extends the
+  receipt by `receipt_idle_ttl`, up to an absolute `receipt_max_age` from first redemption;
+  a presentation past either is FAIL on the wire and `token_spent` in the log (new §5.7
+  reason, spec table first); revocation deletes the principal's receipts, so receipts are
+  indexed by principal. Defaults proposed 15 min / 2 h (Ansible linear strategy over a large
+  fleet is the sizing case, L15); numbers await the owner. Replaces decision 15's text.
+- **Device-generated accounting under another user** (Junos root RPC in production, NX-OS
+  `admin` with `task_id=vsh.bin.$port`) must not trip `foreign_session`: a per-platform rule
+  for system-user and `non-tty` records.
+- **Refuse non-ASCII usernames at mint**: `Canonical` folds U+0130 onto `i`, so two directory
+  names could share one `(nas, username)` context.
+- **Enable tokens**: mint pair with `kind`. No measured platform sends `$enab{level}$` (L3
+  closed): vEOS and IOS-XE send the operator's own username with `service=enable`, NX-OS 10.x
+  has no enable. The lookup is therefore the ordinary `(nas, username)` context; an enable
+  START must update `privilege` in place and keep `ctx_id` (plan 1 replaces it, measured);
+  candidate set filtered to `kind: enable`;
   `token_kind_mismatch`; `enable: none | auto | token`; `enable: auto` refused at load where
   `enable_username` is not `principal`; `rem_addr` binding on enable. Spec §7, §5.6.
 - **Candidate-set cap** (order of eight) refusing the mint, never the redemption. Design §8.
@@ -76,10 +89,14 @@ tagged token.
   9300v 10.4(2)F for NX-API and the L7 question; Catalyst 9000v 17.12 and C8000v 17.13 for
   IOS-XE, where the `$enab15$` enable path (L3) lives; vEOS 4.32.2F for eAPI.
 
-**Lab:** closes L3 (enable `rem_addr`), L4 (fall-through on FAIL per platform, Junos
-`authentication-order`), L7 (eAPI/NX-API per-request AAA), and the API-transport half of L1.
-Decision 15 stops being provisional here. **Do not write this plan before plan 1's lab
-results exist.**
+**Inherits from the 2026-09-20/22 lab stretch (PR #3):** L3 is closed (no platform sends
+`$enab{level}$`; NX-OS 10.x has no enable), L4 and L7 are measured on every image and the
+`$enab15$` enable path is gone, so the lab list above is mostly done. What this plan still
+owns: the first end-to-end run with a real credential, and `receipt_ttl` **as a sliding
+window** (decision 15 replacement, once ruled): the agent minting a fresh token on each
+reconnect would remove most of the idle-gap problem the client matrix showed (L15), so the
+agent's reconnect behaviour is part of this plan's design. **Lab:** the API-transport half
+of L1 and the eAPI `/login` flow by hand.
 
 ## Plan 4 — Policy engine (§19 step 4)
 
@@ -107,6 +124,32 @@ here), `capability`/`bits`/`bit_delivery`, the **Junos projection** under decisi
 (bits first, regexes second, refused shape), differential testing in containerlab,
 `port49 platform export`. Spec §9 capability inference. **Lab:** L9, L11 (closed), L12; the
 projection generator is not final until L12 closes.
+
+**Inherits from the lab (PR #3), per platform — a wrong or extra reply attribute is fatal,
+not ignored:**
+- **NX-OS**: send `shell:roles`, never `priv-lvl`. The role wins over `priv-lvl` in both
+  directions, the role alone suffices, and `priv-lvl` with no role silently picks a role by a
+  per-release mapping (0/1/6 → `vdc-operator`, 15 → `network-admin`). An unknown role name
+  silently becomes `network-operator`; two roles are a union; a misnamed attribute is
+  rejected outright. Custom roles by name work (L16). `network-operator` cannot run bare
+  `show interface` (prompts for sudo; `show interface *` works) and the cancelled sudo writes
+  an accounting record under `admin` with `task_id=vsh.bin.$port`.
+- **vEOS**: does not apply `shell:roles` (role `<unknown>`) and **refuses the session** for a
+  mandatory `shell:roles=` or even an optional `cisco-av-pair*`; port49's per-command answer
+  is the only control (L16).
+- **IOS-XE**: kills the session on any unrecognised attribute, optional included; `priv-lvl`
+  only (L3/L16 notes).
+- **Junos**: `platforms.juniper_junos.session_services` (default `[junos-exec]`; production
+  fleets use `tacplus-options service-name`, e.g. `junos-exec-fw`; the name never selects
+  policy). The emitted reference config MUST include `tacplus-options strict-authorization`:
+  without it a port49 denial is advisory (login completes, class from the `remote` template);
+  with it the denial refuses SSH and NETCONF while break-glass still gets in with port49 down
+  (L17). `authorization-time-interval` (min 15 min) re-authorizes but a denial does not end
+  the session: revocation cannot reach a live Junos session. `enhanced-accounting` adds the
+  client source `Port` to the login record. Accounting `service` stays `shell` whatever the
+  session service is; `session_pid` is the per-session discriminator.
+- Device-generated accounting under another user (Junos root RPC in production, NX-OS
+  `admin`/`vsh.bin`) is real and must not be treated as a foreign session (plan 2 rule).
 
 **Inherits from plan 1:** a Junos session authorization is **permitted and carries no
 attributes**. Plan 1 answered every one of them `service_unsupported` until 2026-09-21,

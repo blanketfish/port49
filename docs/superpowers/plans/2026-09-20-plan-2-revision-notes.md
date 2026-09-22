@@ -21,10 +21,13 @@ being available.
 
 **Also ruled 2026-09-21, and plan 2 must carry them:** `limits.auth_failure_delay_max`
 defaults to 2s (L13); a session `service` is checked against
-`platforms.<name>.session_services` and never selects policy (spec §5.2). Decision 15
-(reusable tokens) is still provisional: the lab's client matrix (L15) shows the
-authentication count per job belongs to the client, from 1 to 28 for ten tasks, and the first
-`receipt_ttl` crossing was measured (NAPALM `nxos`, `token_not_found` at 38.8 s).
+`platforms.<name>.session_services` and never selects policy (spec §5.2). Decision 15 is
+being replaced by a **sliding receipt** (owner, 2026-09-21; see the roadmap's plan 2 entry
+for the shape): the lab's client matrix (L15) shows the authentication count per job belongs
+to the client, from 1 to 28 for ten tasks, and the first `receipt_ttl` crossing was measured
+(NAPALM `nxos`, `token_not_found` at 38.8 s). Idle window and absolute cap: numbers awaited.
+Also carry: the `foreign_session` rule for device-generated records under another user, and
+refusing non-ASCII usernames at mint (both in the roadmap entry).
 
 **The key types themselves**
 
