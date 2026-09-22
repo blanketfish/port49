@@ -75,6 +75,11 @@ func TestMintPairAndClamp(t *testing.T) {
 	}
 	if strings.Contains(log.String(), res.Login) || strings.Contains(log.String(), res.Enable) ||
 		!strings.Contains(log.String(), `"event":"mint"`) || !strings.Contains(log.String(), "token_sha256") ||
+		// A mint is a permit, so the reason has to read as one. Unpinned, a
+		// mint shipping `"verdict":"permit","reason":"no_grants_matched"`
+		// contradicts itself in the audit trail and makes minting look like a
+		// denial to anything counting reasons.
+		!strings.Contains(log.String(), `"reason":"grants_matched"`) ||
 		// A mint record has no credential hash to carry (§5.7: it carries
 		// token_sha256 instead). Blank, the field is present on every mint
 		// record in the fleet and joins everything to everything.
