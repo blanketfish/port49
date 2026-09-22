@@ -359,6 +359,42 @@ func (noStore) TouchContext(context.Context, store.ContextKey, time.Duration) er
 func (noStore) DeleteContext(context.Context, store.ContextKey) error {
 	panic("store called")
 }
+func (noStore) PutBlob(context.Context, string, []byte, time.Duration) error {
+	panic("store called")
+}
+func (noStore) GetBlob(context.Context, string) ([]byte, error) {
+	panic("store called")
+}
+func (noStore) BumpBlob(context.Context, string, time.Duration) error {
+	panic("store called")
+}
+func (noStore) IndexContext(context.Context, string, string, string, store.ContextRef, time.Duration) error {
+	panic("store called")
+}
+func (noStore) UnindexContext(context.Context, string, string, string, store.ContextRef) error {
+	panic("store called")
+}
+func (noStore) ContextsByPrincipal(context.Context, string) ([]store.ContextRef, error) {
+	panic("store called")
+}
+func (noStore) ContextsBySid(context.Context, string) ([]store.ContextRef, error) {
+	panic("store called")
+}
+func (noStore) ContextsByCert(context.Context, string) ([]store.ContextRef, error) {
+	panic("store called")
+}
+func (noStore) ReindexSid(context.Context, string, string, store.ContextRef, time.Duration) error {
+	panic("store called")
+}
+func (noStore) ActivePrincipals(context.Context) ([]string, error) {
+	panic("store called")
+}
+func (noStore) PutIdempotency(context.Context, string, string, store.Idempotency) error {
+	panic("store called")
+}
+func (noStore) GetIdempotency(context.Context, string, string) (store.Idempotency, error) {
+	panic("store called")
+}
 
 var _ store.Store = noStore{}
 
