@@ -872,10 +872,10 @@ func l18Preamble(t *testing.T, l *lab, d l18Driver) string {
 		"AND the attribute under test, so that the session has something to be given and the bad "+
 		"attribute is the only variable; they are read against the control, which is the known "+
 		"attribute alone. Variants that REPLACE the whole reply -- the bad value, and on Junos the "+
-		"decision-22 attributes -- are read against `%s`. Reading everything against `%s` instead "+
-		"would mark every row carrying the known attribute `applied`, because the known attribute was "+
-		"applied, and the table would then contradict the transcripts printed above it.\n\n",
-		d.signalName, l18Empty, l18Empty)
+		"decision-22 attributes -- are read against variant %s. Reading everything against that "+
+		"instead would mark every row carrying the known attribute `applied`, because the known "+
+		"attribute was applied, and the table would then contradict the transcripts printed above "+
+		"it.\n\n", d.signalName, l18Empty)
 	if d.setup != nil {
 		fmt.Fprintf(&b, "The device carries one login template for the length of this run, removed "+
 			"afterwards:\n\n```\n%s\n```\n\nIt exists because this image already maps every TACACS+ user "+
