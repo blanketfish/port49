@@ -3,7 +3,9 @@ package broker
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -170,9 +172,25 @@ func TestAnUntrustedCallerIsRefused(t *testing.T) {
 			t.Fatalf("only refusals: %v", m)
 		}
 	}
+	// No certificate: nothing to name. An expired one the anchor verified:
+	// whose it was, so a helpdesk reading the log at 3am can tell.
+	if _, ok := mints[0]["principal"]; ok || mints[0]["auth"].(map[string]any)["fingerprint"] != nil {
+		t.Fatalf("a refusal with no certificate names no one: %v", mints[0])
+	}
+	auth, _ := mints[1]["auth"].(map[string]any)
+	if mints[1]["principal"] != "user:alice@example.com" || auth["method"] != "cert" ||
+		auth["fingerprint"] != "sha256:"+fingerprint(short) {
+		t.Fatalf("an expired certificate's refusal names it: %v", mints[1])
+	}
 	if c, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(c) != 0 {
 		t.Fatal("nothing may be minted for an untrusted caller")
 	}
+}
+
+// fingerprint is the leaf's sha256, hex, as Identity spells it.
+func fingerprint(c tls.Certificate) string {
+	sum := sha256.Sum256(c.Leaf.Raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // A held connection past max_session_age mints nothing: the caller must

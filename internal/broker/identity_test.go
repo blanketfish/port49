@@ -102,6 +102,34 @@ func TestIdentity(t *testing.T) {
 			t.Errorf("%s: Identity = %v, want ErrUntrusted", name, err)
 		}
 	}
+
+	// A refused certificate whose chain the anchor verified is anchor-vouched,
+	// not an unvalidated body, so the refusal still says whose it was: the
+	// credential always, and the principal when its one email SAN is well
+	// formed. With no verified chain there is nothing to name.
+	for name, tt := range map[string]struct {
+		cs        *tls.ConnectionState
+		now       time.Time
+		principal string
+		named     bool
+	}{
+		"expired since":          {state(leaf("A@example.com")), now.Add(2 * time.Hour), "user:a@example.com", true},
+		"a serverAuth-only leaf": {state(server.Leaf), now, "user:a@example.com", true},
+		"two email SANs":         {state(leaf("a@example.com", "b@example.com")), now, "", true},
+		"a space in the SAN":     {state(leaf("a b@example.com")), now, "", true},
+		"no verified chain":      {&tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf("a@example.com")}}, now, "", false},
+	} {
+		p, cred, err := Identity(tt.cs, tt.now)
+		if !errors.Is(err, ErrUntrusted) {
+			t.Fatalf("%s: %v, want ErrUntrusted", name, err)
+		}
+		if p != tt.principal {
+			t.Errorf("%s: principal %q, want %q", name, p, tt.principal)
+		}
+		if named := strings.HasPrefix(cred.Fingerprint, "sha256:") && cred.Issuer != "" && cred.Serial != ""; named != tt.named {
+			t.Errorf("%s: credential %+v, named %v, want %v", name, cred, named, tt.named)
+		}
+	}
 }
 
 // The policy matches an identity exactly and accepts only the canonical form,

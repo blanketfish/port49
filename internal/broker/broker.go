@@ -125,8 +125,11 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	// body that tries.
 	principal, cred, err := Identity(r.TLS, now)
 	if err != nil {
+		// A chain the anchor verified is named on the refusal (principal when
+		// it maps to one, the fingerprint always); no chain names no one.
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
-			Reason: decision.TrustDomainUnresolved, Auth: &decision.Auth{Method: "cert"}})
+			Reason: decision.TrustDomainUnresolved, Principal: principal,
+			Auth: &decision.Auth{Method: "cert", Fingerprint: cred.Fingerprint}})
 		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), err.Error())
 		return
 	}

@@ -1433,6 +1433,12 @@ is what the redemption joins back to (see Correlation below).
 }
 ```
 
+A `mint deny trust_domain_unresolved` for a client certificate the trust anchor verified —
+refused later for expiry, a missing `clientAuth` usage, or not exactly one well-formed email
+SAN — says whose certificate it was: `auth.fingerprint` (the certificate's `sha256:`, §5.1.4)
+always, and `principal` when the one email SAN maps to one. Those fields are anchor-vouched,
+not an unvalidated body. A connection with no verified chain names no one.
+
 #### Reason codes
 
 `reason` is a closed vocabulary, so denials are countable and alertable without parsing prose:

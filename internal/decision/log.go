@@ -48,6 +48,11 @@ type Auth struct {
 	// key is worse than an absent one: it is present on every mint record in
 	// the fleet and therefore joins everything to everything.
 	CredentialSHA256 string `json:"credential_sha256,omitempty"`
+	// Fingerprint is the sha256 of a client certificate the trust anchor
+	// verified and the broker then refused (expired since, no clientAuth, no
+	// one email SAN): on a `mint deny trust_domain_unresolved` it says whose
+	// certificate it was. Identity, not a secret (spec §5.1.4).
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 type Device struct {
