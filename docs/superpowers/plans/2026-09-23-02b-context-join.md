@@ -103,12 +103,19 @@ Where the decisions leave a shape open, this plan chooses, and says why here onc
    landed, so the bound is on concurrent writers to one operator's context, not on time.
 3. **The login reads the live context BEFORE spending the token.** The receipt carries the ctx_id
    and is written atomically with the redemption, so the ctx_id has to be known first: the join's
-   id if the live context is joinable, a fresh one otherwise. The same read makes an unreadable
-   context (store down, or sealed under a retired key) fail the login ERROR `store_unavailable`
-   **with the token unspent** — a context port49 cannot read cannot be merged, and replacing it
-   blind could erase a revocation. This is a behaviour change: today such a context is silently
-   overwritten. It is bounded by the idle TTL, the authorizer already fails every command on that
-   context, and `crypt_open_failures_total{record="context"}` names it.
+   id if the live context is joinable, a fresh one otherwise. The same read makes a store port49
+   cannot reach fail the login ERROR `store_unavailable` **with the token unspent**. A record the
+   store returns but the sealing layer cannot open — sealed under a retired key, or failing GCM
+   authentication — is **replaced fresh** (ruling R1, 2026-09-23): the replace still goes through
+   the revision compare-and-set, and it carries the record's plaintext `RevokedAt` by D1's
+   minted-after rule whatever the principal was, because the principal is sealed (ruling P2). The
+   crypt layer hands `Rev` and `RevokedAt` up in a `store.UnreadableContextError`, because
+   `internal/store` cannot import `internal/store/crypt` (ruling P1). The redeem record says
+   `session.replaced_unreadable: true` and names no `replaced_ctx_id` — the id is sealed. Refusing
+   instead would lock every operator with a live context out of login for up to
+   `context_idle_ttl` after a key rotation past the two-key window, and buy nothing: the authorizer
+   already cannot use that context. What is lost is that context's per-login state (privilege,
+   discriminators), the same as the overwrite before this plan.
 4. **A kept level above a lowered ceiling is clamped** — the join computes
    min(max(held, new), new ceiling), which is `SetPrivilege`'s D2 rule applied to the merge. A
    stored level above the context's own ceiling is a state no other path can produce.
@@ -127,6 +134,25 @@ Where the decisions leave a shape open, this plan chooses, and says why here onc
    answered ERROR and resent by the device — is not counted twice. Name:
    `port49_accounting_attributions_total{attribution}`. No attribution metric existed to reuse.
 9. **`PutContext` stays in the interface** with no production caller; tests and seeding use it.
+10. **A replace unindexes what it replaced** (ruling P3). Task 6 makes the reverse index keep every
+    sid and cert a context was indexed under, which is what a join needs. On a replace it would
+    also keep the displaced login's sid and cert, re-stamped by every extension of the new
+    context, and `session.RevokeBySid`/`RevokeByCert` mark without a principal check — a logout of
+    the old principal would revoke the new one. `JoinResult.Prior` carries the readable record a
+    replace displaced, and the login unindexes its principal, sid and certificate before indexing
+    itself. An unreadable replace cannot: its credential is sealed. That residue is accepted and
+    documented — it can only mark the replacing context revoked, never lift a mark.
+11. **A receipt replays only onto the context it was written for** (ruling P4). The receipt froze
+    a `ctx_id`. A retransmitted login or enable acts — PASS for a login, the privilege for an
+    enable — only while that `ctx_id` is the live context's. Since the join keeps `ctx_id` across
+    the same principal's logins, a match is exactly "the same live context"; a mismatch means the
+    context was replaced (another principal, past its ceiling, unreadable) or reclaimed, and the
+    replay is answered as a presentation of a spent token is: FAIL `token_spent`, with the
+    §5.7 row widened in Task 1 to say so (no new reason code). The check comes after the receipt's
+    bounds and before `ExtendReceipt`, so a refused replay does not slide the window. The login
+    race-loser branch (the concurrent copy that lost `RedeemAndReceipt`) is not checked: the winner
+    presented the same credential and its `JoinContext` is still in flight, so a read there would
+    race the winner's own write and refuse the duplicate for no reason.
 
 ## Global Constraints
 
@@ -149,7 +175,10 @@ Carried from plan 2, and still binding:
 - **Every claim about device behaviour cites a `tests/lab/results/` note or a decision log by name.**
   A claim with neither is marked *unmeasured* and the code must not depend on it.
 - **No new reason code.** A join is `token_redeemed`; a replace is `token_redeemed` with
-  `session.replaced_ctx_id`; an unreadable context is `store_unavailable`.
+  `session.replaced_ctx_id`; a replace of a context the sealing layer cannot open is
+  `token_redeemed` with `session.replaced_unreadable: true`; a store that cannot be reached is
+  `store_unavailable`, with the token unspent; a receipt whose `ctx_id` is no longer the live
+  context's is `token_spent` (its §5.7 row is widened in Task 1 first).
 - Branch `feature/context-join`; never commit code to `main`.
 - Every verification runs `make test && make vet` and `go test -race ./internal/...`.
 - Commit messages end with:
@@ -166,21 +195,22 @@ Carried from plan 2, and still binding:
 docs/design/2026-08-23-policy-engine-spec.md       MOD  §5.1.1, §5.3, §5.6, §5.8, §13 d15, §15 L1, tests list
 docs/design/2026-09-20-login-context-key-options.md MOD  the vEOS concurrent-port correction
 docs/superpowers/plans/README.md                    MOD  plan 5 owes the local-account check
-internal/store/store.go                MOD  ErrConflict; Context.Rev; Token.MintedAt; SwapContext; docs
+internal/store/store.go                MOD  ErrConflict; Context.Rev; Token.MintedAt; SwapContext; UnreadableContextError; docs
 internal/store/join.go                 NEW  Joinable, Join, JoinContext, MaxJoinAttempts, JoinResult
-internal/store/join_test.go            NEW  the field rules, replace cases, retry bound, memory race
+internal/store/join_test.go            NEW  the field rules, replace cases, unreadable replace, retry bound, memory race
 internal/store/storetest/storetest.go  NEW  JoinRacesRevocation: the conformance race, per store
 internal/store/memory/memory.go        MOD  revisions; SwapContext; raise-only SetPrivilege; multi-key reverse index
 internal/store/memory/memory_test.go   MOD  CAS, revision, reverse-index and raise-only tests
-internal/store/crypt/crypt.go          MOD  sealContext; SwapContext
-internal/store/crypt/crypt_test.go     MOD  SwapContext seals; race through the sealing layer; SetPrivilege raise
+internal/store/crypt/crypt.go          MOD  sealContext; SwapContext; GetContext returns UnreadableContextError
+internal/store/crypt/crypt_test.go     MOD  SwapContext seals; race and retired-key replace through the sealing layer; SetPrivilege raise
+internal/decision/log.go               MOD  Session.ReplacedUnreadable; ReplacedCtxID comment
 internal/token/minter.go               MOD  MintedAt on every token
 internal/token/minter_test.go          MOD  MintedAt test
-internal/daemon/authen/authen.go       MOD  pre-read; JoinContext in place of PutContext; loginContext
-internal/daemon/authen/authen_test.go  MOD  noStore.SwapContext; join, revocation, replace, unreadable tests
+internal/daemon/authen/authen.go       MOD  pre-read; JoinContext in place of PutContext; loginContext; unindex on replace; receipt ctx_id check
+internal/daemon/authen/authen_test.go  MOD  noStore.SwapContext; join, revocation, replace, unreadable, unindex, replay tests
 internal/daemon/authen/key_test.go     MOD  the second-login test now joins
 internal/daemon/author/author.go       MOD  comment: raise-only
-internal/daemon/author/author_test.go  MOD  the lowering test inverted
+internal/daemon/author/author_test.go  MOD  the lowering test inverted; the denied-session test made able to fail
 internal/daemon/author/join_test.go    NEW  test 1, through both handlers
 internal/daemon/acct/acct.go           MOD  the attribution counter
 internal/daemon/acct/acct_test.go      MOD  counter and system-port tests
@@ -302,12 +332,43 @@ verified again, so the same principal's `revoked_at` carries across that replace
 table. A context the idle TTL has reclaimed is absent, and the login writes a fresh one with nothing
 to name. The join is a compare-and-set on the context's revision, so a revocation, an accounting
 annotation, a privilege raise or a refresh that lands mid-login is merged rather than erased, and
-two simultaneous logins both land. A context port49 cannot read — the store is down, or the record
-is sealed under a retired key — cannot be joined: the login is `store_unavailable`, and it is
-refused before the token is spent.
+two simultaneous logins both land. A replace unindexes the displaced login's principal, `sid` and
+certificate before the new login is indexed, so a later revocation of the displaced credential
+does not reach the context that replaced it.
+
+A store port49 cannot reach fails the login `store_unavailable`, refused before the token is
+spent. A record the store returns but port49 cannot open — sealed under a key that has left the
+two-key window, or failing authentication — cannot be joined, and is **replaced fresh** through
+the same compare-and-set: the replace carries the record's plaintext `revoked_at` by the rule in
+the table, whoever its principal was, because the principal is sealed; the `redeem` record carries
+`session.replaced_unreadable: true` and no `replaced_ctx_id`, because that id is sealed too; and
+the unreadable login's index entries cannot be named, so they stay until `index_ttl` and a
+revocation of that credential can mark the replacing context — fail-closed, never a lift. Each such
+login opens the record twice (the read before the token is spent and the join's own), so
+`port49_crypt_open_failures_total{record="context"}` counts at least two per login.
+
+A retransmitted login or `enable` replays its receipt only while the receipt's `ctx_id` is the live
+context's. The join keeps `ctx_id` across one principal's logins, so a match is exactly "the same
+context"; after a replace or a reclaim the receipt names a context that no longer exists, and the
+retransmission is answered `token_spent`, as a spent token is, without sliding the receipt. The
+device prompts again. The one copy not checked is the concurrent duplicate that lost the
+redemption race: it presented the winner's own credential, and the winner's context write is still
+in flight.
 
 What remains of the old cost: both windows log one `ctx_id`, so a log reader tells them apart by
 `port`, `rem_addr` and each `redeem` record's `credential_sha256`, not by `ctx_id`.
+```
+
+In §5.7's reason-code table, replace the `token_spent` row's Meaning
+
+```
+`redeem`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed; FAIL on the wire, distinguishable only in the log
+```
+
+with
+
+```
+`redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log
 ```
 
 In the teardown table, replace row 1's Authority cell text
@@ -402,6 +463,10 @@ Replace `- **Context teardown**: a redemption overwrites;` with
 `- **Context teardown**: a redemption by the same principal joins the live context and one by
 another principal replaces it (§5.6);`, leaving the rest of that bullet as it is.
 
+In the **Receipt binds the credential** bullet, after "`(nas, username, credential_sha256)`.", add
+` A retransmitted login or enable replays only while the receipt's `ctx_id` is the live context's;
+after a replace or a reclaim it is `token_spent` (§5.6).`
+
 - [ ] **Step 8: Check nothing else in the spec still says a second login overwrites**
 
 Run: `grep -n "overwrites the first\|overwrite unconditionally\|overwrites unconditionally\|records its granted level" docs/design/2026-08-23-policy-engine-spec.md`
@@ -417,7 +482,10 @@ Spec §5.6 replaces the overwrite with the join table, §5.3 makes
 ctx.privilege the highest level granted, §5.1.1 adds minted_at, §5.8
 adds port49_accounting_attributions_total and documents console root
 as a system-attribution limitation, and §13 decision 15 records that
-a join lifts revoked_at only for a token minted after it.
+a join lifts revoked_at only for a token minted after it. A record the
+sealing layer cannot open is replaced fresh, carrying its revoked_at;
+a receipt replays only onto the context it was written for, and
+token_spent's §5.7 row now covers the one that no longer exists.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -529,8 +597,13 @@ with
 > would have to write the context (corrected 2026-09-23).
 ```
 
-In the worked-example table, replace row 7's first cell `bob does the same on leaf1, also `vty4``
-with `bob does the same on leaf1, on `vty6` (corrected 2026-09-23; the 2026-09-22 log)`.
+In the worked-example table, annotate row 7 rather than overwrite it: the table's values are the
+`04:12:41`–`04:13:00` vEOS run, whose capture is not retained in `tests/lab/logs/`, so its `vty4`
+stays as that run recorded it. Replace the row's first cell `bob does the same on leaf1, also `vty4``
+with `bob does the same on leaf1, also `vty4` as this run recorded it (a concurrent second session
+in the 2026-09-22 run got `vty6`; see the correction note at the top)`. The row's outcome cells do
+not depend on the vty: under the `(nas, port)` key both were locked out because authorization's
+port is not authentication's (row 6), whichever vty they held.
 
 - [ ] **Step 4: The spec — §13 decision 15 and §15 L1**
 
@@ -587,7 +660,8 @@ with
 - [ ] **Step 5: Check nothing else repeats the claim**
 
 Run: `grep -rn "both reported \`vty4\`\|also \`vty4\`\|then both reported" docs/design/`
-Expected: no output other than inside the "Corrected 2026-09-23" sentences Steps 1–4 wrote.
+Expected: no output other than inside the "Corrected 2026-09-23" sentences Steps 1–4 wrote and
+the annotated worked-example row 7 (Step 3), which keeps the 04:12 run's `vty4` beside the note.
 
 - [ ] **Step 6: The roadmap — what plan 5 owes, and what is not planned**
 
@@ -1156,19 +1230,33 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 **Files:**
 - Create: `internal/store/join.go`
 - Create: `internal/store/storetest/storetest.go`
+- Modify: `internal/store/store.go` (`UnreadableContextError`)
+- Modify: `internal/store/crypt/crypt.go` (`GetContext` returns it)
 - Test: `internal/store/join_test.go` (new), `internal/store/crypt/crypt_test.go`
 
 **Interfaces:**
 - Consumes: `store.Store.SwapContext`, `store.ErrConflict`, `store.Context.Rev` (Task 4).
 - Produces:
+  - `type store.UnreadableContextError struct { Rev uint64; RevokedAt time.Time; Err error }`
+    with `Error() string` and `Unwrap() error` — a context record the store returned and the
+    sealing layer could not open, carrying its plaintext revision and revocation (rulings R1, P1).
+    `crypt`'s `GetContext` returns `store.Context{}, &store.UnreadableContextError{…}` for every
+    open failure (unknown key, GCM, JSON), wrapping `openErr`'s error, so
+    `errors.Is(err, crypt.ErrUnknownKey)` still holds and every caller that is not
+    `JoinContext` — the authorizer, accounting, the enable path — still takes its
+    non-`ErrNotFound` branch, unchanged.
   - `const store.MaxJoinAttempts = 8`
-  - `type store.JoinResult struct { Context Context; Joined bool; Replaced string }`
+  - `type store.JoinResult struct { Context Context; Joined bool; Replaced string; ReplacedUnreadable bool; Prior Context }`
+    — `Prior` is the readable live record a replace displaced (zero on a join, a first login and an
+    unreadable replace); Task 8 unindexes its credential (ruling P3).
   - `func store.Joinable(live, login Context, now time.Time) bool` — same principal and not past
     `SessionExpires`.
   - `func store.Join(live, login Context, mintedAt time.Time) Context` — D1's field rules; pure.
   - `func store.JoinContext(ctx context.Context, s Store, k ContextKey, login Context, mintedAt, now time.Time, ttl time.Duration) (JoinResult, error)`
     — read, decide, swap on the revision read; retry on `ErrConflict` up to `MaxJoinAttempts`, then
-    return an error wrapping `ErrConflict`. Any other read or swap error is returned as it is.
+    return an error wrapping `ErrConflict`. A read answering `*UnreadableContextError` is a replace
+    on its `Rev`, carrying its `RevokedAt` by the minted-after rule. Any other read or swap error is
+    returned as it is.
   - `func storetest.JoinRacesRevocation(t *testing.T, newStore func() store.Store, now time.Time)` —
     decision test 4, for any store.
 
@@ -1441,7 +1529,7 @@ func TestJoinContextJoinsTheSamePrincipal(t *testing.T) {
 	s := newMemory()
 	s.PutContext(context.Background(), ck, live(), time.Hour)
 	res, err := store.JoinContext(context.Background(), s, ck, login(), t0, t0, time.Hour)
-	if err != nil || !res.Joined || res.Replaced != "" || res.Context.CtxID != "ctxA" {
+	if err != nil || !res.Joined || res.Replaced != "" || res.Context.CtxID != "ctxA" || res.Prior.CtxID != "" {
 		t.Fatalf("%+v %v", res, err)
 	}
 	if got, _ := s.GetContext(context.Background(), ck); got.CtxID != "ctxA" || got.PrivLvl != 15 || got.BlobHash != "sha256:new" {
@@ -1459,8 +1547,14 @@ func TestJoinContextReplacesAnotherPrincipal(t *testing.T) {
 	n := login()
 	n.Principal = "user:alice@corp.example"
 	res, err := store.JoinContext(context.Background(), s, ck, n, time.Time{}, t0, time.Hour)
-	if err != nil || res.Joined || res.Replaced != "ctxA" {
+	if err != nil || res.Joined || res.Replaced != "ctxA" || res.ReplacedUnreadable {
 		t.Fatalf("%+v %v", res, err)
+	}
+	// The displaced record comes back whole, so the login can unindex its
+	// credential: otherwise a revocation of user:alice@example.com's sid
+	// would keep reaching user:alice@corp.example's context (ruling P3).
+	if res.Prior.CtxID != "ctxA" || res.Prior.Principal != "user:alice@example.com" || res.Prior.Credential.Sid != "sid-A" {
+		t.Fatalf("the replace must hand back what it displaced: %+v", res.Prior)
 	}
 	got, _ := s.GetContext(context.Background(), ck)
 	if got.CtxID != "ctxB" || got.Principal != "user:alice@corp.example" || got.PrivLvl != 1 ||
@@ -1479,7 +1573,7 @@ func TestJoinContextReplacesPastTheCeilingAndCarriesTheRevocation(t *testing.T) 
 	l.RevokedAt = t0.Add(-time.Minute)
 	s.PutContext(context.Background(), ck, l, time.Hour)
 	res, err := store.JoinContext(context.Background(), s, ck, login(), t0.Add(-2*time.Minute), t0, time.Hour)
-	if err != nil || res.Joined || res.Replaced != "ctxA" {
+	if err != nil || res.Joined || res.Replaced != "ctxA" || res.Prior.CtxID != "ctxA" {
 		t.Fatalf("%+v %v", res, err)
 	}
 	got, _ := s.GetContext(context.Background(), ck)
@@ -1508,8 +1602,10 @@ func TestJoinContextGivesUpAfterMaxJoinAttempts(t *testing.T) {
 	}
 }
 
-// storeFails answers the read with an error that is not ErrNotFound — a store
-// that is down, or a record the sealing layer cannot open.
+// storeFails answers the read with an error that is neither ErrNotFound nor an
+// UnreadableContextError: a store that is down. A record the store returned
+// and the sealing layer could not open is the other case, and is replaced
+// (TestJoinContextReplacesAnUnreadableContextCarryingItsRevocation).
 type storeFails struct{ *memory.Store }
 
 func (storeFails) GetContext(context.Context, store.ContextKey) (store.Context, error) {
@@ -1524,6 +1620,92 @@ func TestJoinContextDoesNotWriteBlindOverAReadError(t *testing.T) {
 	}
 	if got, _ := s.Store.GetContext(context.Background(), ck); got.CtxID != "ctxA" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// unreadable answers GetContext the way the sealing layer answers a record it
+// cannot open: no sealed field, and the plaintext revision and revocation in an
+// UnreadableContextError. beforeFirstAnswer runs once, after the first read and
+// before JoinContext can swap — where a racing writer lands.
+type unreadable struct {
+	*memory.Store
+	reads             *int
+	beforeFirstAnswer func()
+}
+
+func (u unreadable) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	c, err := u.Store.GetContext(ctx, k)
+	if err != nil {
+		return c, err
+	}
+	*u.reads++
+	if *u.reads == 1 && u.beforeFirstAnswer != nil {
+		u.beforeFirstAnswer()
+	}
+	return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
+		Err: errors.New("crypt: opening context: sealed under an unknown key")}
+}
+
+// Ruling R1: a record the sealing layer cannot open is not joined — its fields
+// are sealed — and not refused either, or a key rotation past the two-key
+// window locks every operator with a live context out of login. It is replaced
+// by the login, and its plaintext RevokedAt carries by the minted-after rule
+// whoever its principal was, because the principal is sealed (ruling P2): the
+// login here is another principal's, which a readable replace would start
+// clean. Nothing about the displaced record can be named, so Replaced and
+// Prior stay empty and ReplacedUnreadable says why.
+func TestJoinContextReplacesAnUnreadableContextCarryingItsRevocation(t *testing.T) {
+	revokedAt := t0.Add(-time.Minute)
+	for _, tt := range []struct {
+		name     string
+		mintedAt time.Time
+		kept     bool
+	}{
+		{"minted before the revocation", revokedAt.Add(-time.Minute), true},
+		{"minted after the revocation", revokedAt.Add(time.Second), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reads := 0
+			s := unreadable{Store: newMemory(), reads: &reads}
+			l := live()
+			l.RevokedAt = revokedAt
+			s.Store.PutContext(context.Background(), ck, l, time.Hour)
+			n := login()
+			n.Principal = "user:alice@corp.example"
+			res, err := store.JoinContext(context.Background(), s, ck, n, tt.mintedAt, t0, time.Hour)
+			if err != nil || res.Joined || !res.ReplacedUnreadable || res.Replaced != "" || res.Prior.CtxID != "" {
+				t.Fatalf("%+v %v", res, err)
+			}
+			got, _ := s.Store.GetContext(context.Background(), ck)
+			if got.CtxID != "ctxB" || got.PrivLvl != 1 || len(got.SessionDiscriminators) != 0 {
+				t.Fatalf("the login must replace the unreadable record: %+v", got)
+			}
+			if kept := got.RevokedAt.Equal(revokedAt); kept != tt.kept {
+				t.Fatalf("revoked_at %v, kept %v, want kept %v", got.RevokedAt, kept, tt.kept)
+			}
+		})
+	}
+}
+
+// The replace of an unreadable record is still a compare-and-set on the
+// revision the read returned: a revocation landing between the read and the
+// swap moves the revision, the swap is refused, and the second pass carries the
+// revocation the first never saw.
+func TestJoinContextReplacingAnUnreadableContextStillComparesTheRevision(t *testing.T) {
+	reads := 0
+	s := unreadable{Store: newMemory(), reads: &reads}
+	s.Store.PutContext(context.Background(), ck, live(), time.Hour)
+	s.beforeFirstAnswer = func() {
+		if err := s.Store.SetRevokedAt(context.Background(), ck, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := store.JoinContext(context.Background(), s, ck, login(), t0.Add(-time.Minute), t0, time.Hour)
+	if err != nil || !res.ReplacedUnreadable || reads != 2 {
+		t.Fatalf("%+v %v after %d reads", res, err, reads)
+	}
+	if got, _ := s.Store.GetContext(context.Background(), ck); got.CtxID != "ctxB" || !got.RevokedAt.Equal(t0) {
+		t.Fatalf("the replace erased a revocation that landed mid-login: %+v", got)
 	}
 }
 
@@ -1545,14 +1727,100 @@ func TestJoinRacesRevocationThroughTheSealingLayer(t *testing.T) {
 		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
 	}, now)
 }
+
+// Ruling R1 through the real sealing layer: a context sealed under a key that
+// has left the two-key window, and revoked, is replaced by the next login
+// rather than refusing it, and the revocation carries. What makes it possible
+// is that GetContext hands up the plaintext Rev and RevokedAt of a record it
+// cannot open, in a store.UnreadableContextError that still unwraps to
+// ErrUnknownKey — so every other caller still reads it as the key failure it
+// is (TestUnopenableRecordIsNotReportedAsMissing).
+func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	inner := memory.New(func() time.Time { return now })
+	ctx := context.Background()
+	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	var c [32]byte
+	copy(c[:], "cccccccccccccccccccccccccccccccc")
+	retired := Wrap(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, nil)
+	if err := retired.PutContext(ctx, ck, store.Context{CtxID: "ctx_old", Principal: "user:alice@example.com",
+		Username: "alice", PrivLvl: 15}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := retired.SetRevokedAt(ctx, ck, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	s := Wrap(inner, keys(), nil)
+	_, err := s.GetContext(ctx, ck)
+	var u *store.UnreadableContextError
+	if !errors.As(err, &u) || u.Rev == 0 || !u.RevokedAt.Equal(now.Add(-time.Minute)) || !errors.Is(err, ErrUnknownKey) {
+		t.Fatalf("an unopenable context must hand up its plaintext revision and revocation: %v", err)
+	}
+	login := store.Context{CtxID: "ctx_new", Principal: "user:alice@example.com", Username: "alice", PrivLvl: 1}
+	res, err := store.JoinContext(ctx, s, ck, login, now.Add(-2*time.Minute), now, time.Hour)
+	if err != nil || !res.ReplacedUnreadable || res.Joined {
+		t.Fatalf("%+v %v", res, err)
+	}
+	got, err := s.GetContext(ctx, ck)
+	if err != nil || got.CtxID != "ctx_new" || got.PrivLvl != 1 || !got.RevokedAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("the replace must be readable under the current key and keep the revocation: %+v %v", got, err)
+	}
+}
 ```
 
 - [ ] **Step 3: Run them to see them fail**
 
 Run: `go test ./internal/store/... -count=1`
-Expected: FAIL to build — `undefined: store.Join`, `store.JoinContext`, `store.MaxJoinAttempts`.
+Expected: FAIL to build — `undefined: store.Join`, `store.JoinContext`, `store.MaxJoinAttempts`,
+`store.UnreadableContextError`.
 
-- [ ] **Step 4: Implement**
+- [ ] **Step 4a: `UnreadableContextError`, and the sealing layer returns it**
+
+In `internal/store/store.go`, directly after the `ErrConflict` declaration Task 4 added, add:
+
+```go
+
+// UnreadableContextError is a context record the store returned and the
+// sealing layer could not open: sealed under a key that has left the two-key
+// window, or failing authentication. It is not ErrNotFound — the record is
+// there — and it carries the two plaintext fields a login needs to replace the
+// record safely (spec §5.6): the revision, so the replace is still a
+// compare-and-set, and the revocation, so the replace cannot lift it. Every
+// reader but JoinContext treats it as the store error it wraps.
+type UnreadableContextError struct {
+	Rev       uint64
+	RevokedAt time.Time
+	Err       error
+}
+
+func (e *UnreadableContextError) Error() string { return e.Err.Error() }
+func (e *UnreadableContextError) Unwrap() error { return e.Err }
+```
+
+In `internal/store/crypt/crypt.go`'s `GetContext`, replace
+
+```go
+	if err := w.openJSON(c.Sealed, &cs); err != nil {
+		return store.Context{}, w.openErr("context", err)
+	}
+```
+
+with
+
+```go
+	if err := w.openJSON(c.Sealed, &cs); err != nil {
+		// The record is there and will not open. Its revision and revocation
+		// are plaintext, and JoinContext needs both to replace it without
+		// racing a revocation or lifting one (store.UnreadableContextError).
+		// The wrapped error is openErr's, so errors.Is(err, ErrUnknownKey)
+		// still tells a wrong key from a tampered record.
+		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
+			Err: w.openErr("context", err)}
+	}
+```
+
+- [ ] **Step 4b: Implement the join**
 
 Create `internal/store/join.go`:
 
@@ -1588,6 +1856,16 @@ type JoinResult struct {
 	// Empty on a join and on a first login. It is what the redeem record
 	// carries as session.replaced_ctx_id (spec §5.6).
 	Replaced string
+	// ReplacedUnreadable is true when the live record could not be opened
+	// (UnreadableContextError) and the login replaced it. Its ctx_id is
+	// sealed, so Replaced stays empty and this is what the redeem record
+	// carries instead, as session.replaced_unreadable.
+	ReplacedUnreadable bool
+	// Prior is the live record a readable replace displaced, whole; zero on a
+	// join, a first login and an unreadable replace. The login unindexes its
+	// credential, or a revocation of the displaced principal's sid or
+	// certificate would keep reaching the context that replaced it.
+	Prior Context
 }
 
 // Joinable reports whether a login may join the live context rather than
@@ -1674,24 +1952,32 @@ func laterCeiling(a, b time.Time) time.Time {
 // revocation by the same rule a join does: a session ceiling ending is not a
 // credential being verified again.
 //
-// A store error other than a refused swap is returned as it is, and a record
-// the sealing layer cannot open is one of those: a context port49 cannot read
-// cannot be merged, and replacing it blind could erase a revocation.
+// A record the sealing layer cannot open (UnreadableContextError) cannot be
+// merged, and is replaced by the login: refusing it would lock the operator
+// out until the idle TTL reclaims a record nothing can use. The replace is a
+// swap on the plaintext revision the error carries, and it keeps the plaintext
+// RevokedAt by the same minted-after rule whoever the principal was, because
+// the principal is sealed. Any other store error is returned as it is.
 func JoinContext(ctx context.Context, s Store, k ContextKey, login Context, mintedAt, now time.Time, ttl time.Duration) (JoinResult, error) {
 	for attempt := 0; attempt < MaxJoinAttempts; attempt++ {
 		live, err := s.GetContext(ctx, k)
 		var res JoinResult
 		var rev uint64
+		var unreadable *UnreadableContextError
 		switch {
 		case errors.Is(err, ErrNotFound):
 			res.Context = login
+		case errors.As(err, &unreadable):
+			res = JoinResult{Context: login, ReplacedUnreadable: true}
+			res.Context.RevokedAt = carryRevocation(unreadable.RevokedAt, mintedAt)
+			rev = unreadable.Rev
 		case err != nil:
 			return JoinResult{}, err
 		case Joinable(live, login, now):
 			res = JoinResult{Context: Join(live, login, mintedAt), Joined: true}
 			rev = live.Rev
 		default:
-			res = JoinResult{Context: login, Replaced: live.CtxID}
+			res = JoinResult{Context: login, Replaced: live.CtxID, Prior: live}
 			if live.Principal == login.Principal {
 				res.Context.RevokedAt = carryRevocation(live.RevokedAt, mintedAt)
 			}
@@ -1710,8 +1996,10 @@ func JoinContext(ctx context.Context, s Store, k ContextKey, login Context, mint
 
 - [ ] **Step 5: Run the tests, with the race detector**
 
-Run: `go test -race ./internal/store/... -count=1`
-Expected: PASS for `internal/store`, `internal/store/crypt`, `internal/store/memory`.
+Run: `go test -race ./internal/store/... -count=1 && go test ./internal/... -count=1`
+Expected: PASS for `internal/store`, `internal/store/crypt`, `internal/store/memory`, including the
+unchanged `TestUnopenableRecordIsNotReportedAsMissing` (the new error unwraps to `ErrUnknownKey`),
+and every other package: the handlers still read an unopenable context as a store error.
 
 - [ ] **Step 6: Prove the race test can fail**
 
@@ -1737,13 +2025,19 @@ re-run Step 5. Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/store/join.go internal/store/join_test.go internal/store/storetest/storetest.go internal/store/crypt/crypt_test.go
+git add internal/store/store.go internal/store/join.go internal/store/join_test.go \
+  internal/store/storetest/storetest.go internal/store/crypt/crypt.go internal/store/crypt/crypt_test.go
 git commit -m "feat: JoinContext merges a login into the live context by compare-and-set
 
 The field rules of spec §5.6's join table, and a read-merge-swap loop
 bounded at MaxJoinAttempts. storetest.JoinRacesRevocation runs joins
 against each other and against SetRevokedAt on the memory store and
 through the sealing layer: no lost revocation, no lost login.
+
+A record the sealing layer cannot open is replaced rather than
+refused: crypt hands up its plaintext revision and revocation in a
+store.UnreadableContextError, and the replace swaps on that revision
+and keeps the revocation by the minted-after rule.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -2163,6 +2457,42 @@ func TestALowerGrantKeepsTheHeldLevel(t *testing.T) {
 
 ```
 
+- [ ] **Step 2b: Make the denied-session test able to fail again**
+
+`TestADeniedSessionAuthorizationRecordsNoLevel` seeds 15 and a `priv-lvl=1` reply, and asserts the
+level stays 15. Under raise-only a wrongly recorded 1 cannot lower 15, so the test would pass
+whatever the denial path does (ruling P5). Seed 1 and offer 15 instead: a denial that recorded the
+reply's level would now raise the context, and the test sees it. Replace the whole test and its
+comment (from `// A DENIED session authorization grants nothing` up to, not including,
+`// A command authorization never records a level`) with:
+
+```go
+// A DENIED session authorization grants nothing, so it records nothing: the
+// reply carries no attributes at all, and a context whose level moved on a
+// denial would be taking policy from a request that was refused. The context
+// starts at 1 and the authorizer would grant 15, because stored privilege is
+// raise-only (spec §5.3): a denial that recorded a level could only show up as
+// a raise.
+func TestADeniedSessionAuthorizationRecordsNoLevel(t *testing.T) {
+	st := memory.New(time.Now)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	st.PutContext(context.Background(), key,
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
+	h := New(st, &Lab{SessionAttributes: []string{"priv-lvl=15"}}, decision.NewJSONLines(&bytes.Buffer{}),
+		metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
+
+	sess := req("alice", "vty4", "service=ppp", "protocol=ip") // service_unsupported: denied before the authorizer
+	sess.PrivLvl = 1
+	if resp := h.Handle(context.Background(), peer, sess); resp.Status != wire.AuthorStatusFail {
+		t.Fatalf("%+v", resp)
+	}
+	if c, _ := st.GetContext(context.Background(), key); c.PrivLvl != 1 {
+		t.Fatalf("a denied session authorization must not move the recorded level: %+v", c)
+	}
+}
+
+```
+
 - [ ] **Step 3: The crypt pass-through test raises instead of lowering**
 
 In `internal/store/crypt/crypt_test.go`'s `TestWrappedStoreHoldsNoPlaintext`, the context is seeded at
@@ -2182,6 +2512,8 @@ Run: `go test ./internal/store/... ./internal/daemon/author/ -count=1`
 Expected: FAIL — `TestSetPrivilegeIsRaiseOnlyAndClamped` (`level 1, want 15`; `level 15, want 7`) and
 `TestALowerGrantKeepsTheHeldLevel` (`a lower grant must not lower the held level`). The crypt test
 passes either way (a raise lands under both rules); it is changed so it stops asserting the old one.
+`TestADeniedSessionAuthorizationRecordsNoLevel` passes too: the denial path already records nothing,
+and Step 2b only makes the test able to see it if that ever changes.
 
 - [ ] **Step 5: Implement**
 
@@ -2279,26 +2611,39 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ### Task 8: The login joins the live context
 
 **Files:**
-- Modify: `internal/daemon/authen/authen.go` (`redeem`; new `loginContext`)
+- Modify: `internal/daemon/authen/authen.go` (`redeem`; new `loginContext`, `receiptContextLive`)
+- Modify: `internal/decision/log.go` (`Session.ReplacedUnreadable`; `ReplacedCtxID`'s comment)
 - Modify: `internal/session/session.go` (package comment)
 - Modify: `internal/store/store.go` (`RefreshContext`'s comment)
 - Test: `internal/daemon/authen/authen_test.go`, `internal/daemon/authen/key_test.go`,
   `internal/daemon/author/join_test.go` (new), `internal/daemon/acct/join_test.go` (new)
 
 **Interfaces:**
-- Consumes: `store.Joinable`, `store.JoinContext`, `store.JoinResult` (Task 5); `store.Token.MintedAt`
-  (Task 3); raise-only `SetPrivilege` (Task 7).
+- Consumes: `store.Joinable`, `store.JoinContext`, `store.JoinResult` (with `ReplacedUnreadable`
+  and `Prior`), `store.UnreadableContextError` (Task 5); `store.Token.MintedAt` (Task 3);
+  raise-only `SetPrivilege` (Task 7).
 - Produces:
   - `func (s *Session) loginContext(winner *store.Token, username, port, remAddr string) store.Context`
     in package authen — the context a login would create on its own, `CtxID` unset.
+  - `func (s *Session) receiptContextLive(ctx context.Context, ck store.ContextKey, receiptCtxID string, enable bool, incumbent store.Context) (bool, error)`
+    in package authen — whether a replayed receipt may act: its `ctx_id` is the live context's
+    (ruling P4). The error is a store error only.
+  - `decision.Session.ReplacedUnreadable bool` — JSON `replaced_unreadable,omitempty`.
   - On the login path, `redeem` reads the context **before** `RedeemAndReceipt`: joinable → the
-    receipt and the record carry the live `CtxID`; absent or not joinable → `newCtxID()`; any other
-    read error → ERROR `store_unavailable` with the token unspent. After the redemption it calls
+    receipt and the record carry the live `CtxID`; absent, not joinable, or unopenable
+    (`*store.UnreadableContextError`) → `newCtxID()`; any other read error → ERROR
+    `store_unavailable` with the token unspent. After the redemption it calls
     `store.JoinContext(ctx, s.h.store, ck, login, winner.MintedAt, s.h.now(), s.h.contextTTL)` in place
-    of `PutContext`, sets `session.replaced_ctx_id` from `JoinResult.Replaced`, and logs
+    of `PutContext`, sets `session.replaced_ctx_id` from `JoinResult.Replaced` and
+    `session.replaced_unreadable` from `JoinResult.ReplacedUnreadable`, unindexes
+    `JoinResult.Prior`'s principal, sid and certificate on a readable replace (store op
+    `unindex_context`; a failure is counted and does not fail the login), and logs
     `JoinResult.Context.CtxID`. The `store_ops` label for the write is `join_context` (was
     `put_context`).
-  - The enable path is unchanged.
+  - A replayed receipt — login or enable, on the retransmission path and on the enable race-loser
+    path — acts only if `receiptContextLive` says so; otherwise FAIL `token_spent`, before the
+    receipt is extended. The login race-loser path is not checked (plan "Decided" #11).
+  - The enable path's gate is unchanged.
 
 - [ ] **Step 1: Test 1 of the decisions — through authentication and authorization**
 
@@ -2504,7 +2849,7 @@ func TestTheFirstWindowsStopAfterASecondLoginIsResolved(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Tests 3 and 5, the kept ctx_id on the receipt, and the unreadable context**
+- [ ] **Step 3: Tests 3 and 5, the kept ctx_id on the receipt, the unreadable context, the unindex, and the replays**
 
 Append to `internal/daemon/authen/authen_test.go`:
 
@@ -2621,26 +2966,258 @@ func TestAnotherPrincipalUnderTheSameUsernameReplaces(t *testing.T) {
 	}
 }
 
-// unreadableContext answers GetContext the way the sealing layer answers a
-// record sealed under a retired key: an error that is not ErrNotFound.
-type unreadableContext struct{ *memory.Store }
+// contextReadFails answers GetContext the way a store that is down does: an
+// error that is neither ErrNotFound nor a record the sealing layer could not
+// open.
+type contextReadFails struct{ *memory.Store }
 
-func (unreadableContext) GetContext(context.Context, store.ContextKey) (store.Context, error) {
-	return store.Context{}, errors.New("crypt: opening context: sealed under an unknown key")
+func (contextReadFails) GetContext(context.Context, store.ContextKey) (store.Context, error) {
+	return store.Context{}, errors.New("store: connection refused")
 }
 
-// A context port49 cannot read cannot be joined, and replacing it blind could
-// erase a revocation. The login is ERROR — and it is ERROR before the token is
-// spent, so the operator's token still works once the record is readable or
-// reclaimed, and the device's retry is not a replay of a PASS nothing backs.
-func TestAnUnreadableContextFailsTheLoginBeforeTheTokenIsSpent(t *testing.T) {
-	f := setupStore(t, func(st *memory.Store) store.Store { return unreadableContext{st} })
+// A store port49 cannot reach cannot tell it whether there is a context to
+// join, and writing one blind could erase a revocation. The login is ERROR —
+// and it is ERROR before the token is spent, so the operator's token still
+// works once the store is back, and the device's retry is not a replay of a
+// PASS nothing backs.
+func TestAContextReadErrorFailsTheLoginBeforeTheTokenIsSpent(t *testing.T) {
+	f := setupStore(t, func(st *memory.Store) store.Store { return contextReadFails{st} })
 	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", f.tag()+"tok1tok1tok1tok1tok1tok1"))
 	if reply.Status != wire.AuthenStatusError || f.records(t)[0]["reason"] != "store_unavailable" {
 		t.Fatalf("%+v %v", reply, f.records(t))
 	}
 	if cands, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(cands) != 1 {
 		t.Fatalf("the token must not be spent on a login that cannot be written: %d left", len(cands))
+	}
+}
+
+// Ruling R1, end to end through the real sealing layer. A key rotation past
+// the two-key window leaves a live context no daemon can open. Refusing the
+// login would lock the operator out until the idle TTL reclaims a record the
+// authorizer cannot use anyway; instead the login replaces it, the replace
+// keeps the plaintext revocation (the token was minted before it), and the
+// record says what happened — replaced_unreadable, and no replaced_ctx_id,
+// because that id is sealed.
+func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
+	var v0, v2 crypt.Key
+	v0.ID, v2.ID = "v0", "v2"
+	copy(v0.Bytes[:], "retired-context-key-v0-32-bytes!")
+	copy(v2.Bytes[:], "current-context-key-v2-32-bytes!")
+	var sealed store.Store
+	f := setupStore(t, func(st *memory.Store) store.Store {
+		sealed = crypt.Wrap(st, crypt.Keys{Current: v2}, nil)
+		return sealed
+	})
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	revokedAt := f.now.Add(-time.Minute)
+	if err := crypt.Wrap(f.st, crypt.Keys{Current: v0}, nil).PutContext(context.Background(), key,
+		store.Context{CtxID: "ctxL", Principal: "user:alice@example.com", Username: "alice", PrivLvl: 15,
+			RevokedAt: revokedAt}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// setupStore's t1 sits in the inner store in plaintext, which the sealing
+	// layer drops as unreadable; this login's token is sealed under v2.
+	secret := f.tag() + "rotdrotdrotdrotdrotdrotd"
+	if _, err := sealed.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "r", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@example.com", MintedAt: revokedAt.Add(-time.Minute),
+			ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", secret))
+	rec := f.records(t)[0]
+	s := rec["session"].(map[string]any)
+	if reply.Status != wire.AuthenStatusPass || rec["reason"] != "token_redeemed" || s["ctx_id"] != "ctx1" ||
+		s["replaced_ctx_id"] != nil || s["replaced_unreadable"] != true {
+		t.Fatalf("a context under a retired key must be replaced, not refused: %+v %v", reply, rec)
+	}
+	c, err := sealed.GetContext(context.Background(), key)
+	if err != nil || c.CtxID != "ctx1" || c.PrivLvl != 1 || !c.RevokedAt.Equal(revokedAt) {
+		t.Fatalf("the replace must be readable under the current key and keep the revocation: %+v %v", c, err)
+	}
+	if left, _ := sealed.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(left) != 0 {
+		t.Fatalf("the token is spent by the login that replaced the record: %d left", len(left))
+	}
+}
+
+// Ruling P3. A replace displaces another principal's login, and the reverse
+// index keeps every sid and certificate a context was indexed under (the
+// memory store's indexKeys) — so unless the replace unindexes the displaced
+// credential, a back-channel logout of the OLD principal's sid keeps reaching
+// the NEW principal's context for as long as it is extended, and revocation
+// marks it without asking whose it is (session.RevokeBySid).
+func TestAReplaceUnindexesTheCredentialItDisplaced(t *testing.T) {
+	f := setup(t)
+	start := f.joinFixture(t, nil)
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	// ctxL's own login indexed it, as redeem does.
+	if err := f.st.IndexContext(context.Background(), "user:alice@example.com", "sid-1", store.CertKey("ca", "01"), ref, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	secret := f.tag() + "othrothrothrothrothrothr"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "o", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@corp.example", Credential: store.Credential{Method: "oidc", Sid: "sid-corp"},
+			ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	start.Data = []byte(secret)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("%+v", reply)
+	}
+	// Extensions are what would carry a stale entry forward past index_ttl.
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	for i := 0; i < 3; i++ {
+		f.now = f.now.Add(30 * time.Minute)
+		if err := f.st.TouchContext(context.Background(), key, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if refs, _ := f.st.ContextsBySid(context.Background(), "sid-1"); len(refs) != 0 {
+		t.Fatalf("the displaced principal's sid still reaches the replacing context: %v", refs)
+	}
+	if refs, _ := f.st.ContextsByCert(context.Background(), store.CertKey("ca", "01")); len(refs) != 0 {
+		t.Fatalf("the displaced principal's certificate still reaches the replacing context: %v", refs)
+	}
+	if refs, _ := f.st.ContextsBySid(context.Background(), "sid-corp"); len(refs) != 1 {
+		t.Fatalf("the new login must still be indexed under its own sid: %v", refs)
+	}
+	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("unindex_context", "ok")); n != 1 {
+		t.Fatalf("store_operations_total{op=unindex_context,outcome=ok} = %v, want 1", n)
+	}
+}
+
+// Ruling P4, for a login. The receipt froze the ctx_id the login was written
+// under, and a retransmission replays PASS only while that is still the live
+// context. A second login by the same principal JOINS it and keeps the id, so
+// the replay still lands. Another principal's replace, or a reclaim, leaves a
+// receipt naming a context that no longer exists: answering PASS from it would
+// admit a session whose authorizations then answer from someone else's
+// context, or from none. It is `token_spent`, and the window does not slide.
+func TestARetransmittedLoginReplaysOnlyOntoTheContextItWasWrittenFor(t *testing.T) {
+	putAndLogin := func(t *testing.T, f *fixture, id, principal, secret string) {
+		t.Helper()
+		if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+			store.Token{ID: id, Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+				Principal: principal, ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+		if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", secret)); reply.Status != wire.AuthenStatusPass {
+			t.Fatalf("login %s: %+v", id, reply)
+		}
+	}
+	for _, tt := range []struct {
+		name    string
+		between func(t *testing.T, f *fixture)
+		replays bool
+	}{
+		{"the same principal's second login joined it", func(t *testing.T, f *fixture) {
+			putAndLogin(t, f, "t2", "user:alice@example.com", f.tag()+"tok2tok2tok2tok2tok2tok2")
+		}, true},
+		{"another principal's login replaced it", func(t *testing.T, f *fixture) {
+			putAndLogin(t, f, "o", "user:alice@corp.example", f.tag()+"othrothrothrothrothrothr")
+		}, false},
+		{"the idle TTL reclaimed it", func(t *testing.T, f *fixture) {
+			if err := f.st.DeleteContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var counter *extendCountingStore
+			f := setupStore(t, func(st *memory.Store) store.Store {
+				counter = &extendCountingStore{Store: st}
+				return counter
+			})
+			first := papStart("alice", "ssh", "198.51.100.4", f.tag()+"tok1tok1tok1tok1tok1tok1")
+			if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), first); reply.Status != wire.AuthenStatusPass {
+				t.Fatalf("first login: %+v", reply)
+			}
+			tt.between(t, f)
+			reply, _ := f.h.NewSession(f.peer).Start(context.Background(), first)
+			r := f.records(t)
+			last := r[len(r)-1]
+			if tt.replays {
+				if reply.Status != wire.AuthenStatusPass || last["reason"] != "receipt_replayed" ||
+					last["session"].(map[string]any)["ctx_id"] != "ctx1" || counter.extends != 1 {
+					t.Fatalf("a receipt for the joined context must replay: %+v %v, %d extends", reply, last, counter.extends)
+				}
+				return
+			}
+			if reply.Status != wire.AuthenStatusFail || last["reason"] != "token_spent" || counter.extends != 0 {
+				t.Fatalf("a receipt for a context that no longer exists must not replay, or slide: %+v %v, %d extends",
+					reply, last, counter.extends)
+			}
+		})
+	}
+}
+
+// Ruling P4, for an enable; it replaces TestReplayedEnableNamesTheLiveContext.
+// The receipt froze the ctx_id the escalation raised, and a retransmitted
+// enable replays that escalation only onto that context. The same principal's
+// second login joins it and keeps the id, so the replay still lands. A replace
+// writes a new ctx_id — the same principal past its session ceiling, or
+// another principal under the same username — and raising the replacing
+// context would carry an escalation across a ceiling that ended, or hand one
+// principal's enable to another's session. It is `token_spent`.
+func TestAReplayedEnableActsOnlyOnTheContextItWasWrittenFor(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		ceiling   time.Duration // the seeded context's SessionExpires, from now
+		advance   time.Duration // between the escalation and the relogin
+		principal string        // the relogin's
+		ctxID     string        // where the relogin lands
+		replays   bool
+	}{
+		{"the same principal's second login joined it", 8 * time.Hour, 0, "user:alice@example.com", "ctxL", true},
+		{"the same principal's login past the ceiling replaced it", time.Minute, 2 * time.Minute, "user:alice@example.com", "ctx1", false},
+		{"another principal's login replaced it", 8 * time.Hour, 0, "user:alice@corp.example", "ctx1", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := setup(t)
+			f.seedLoginWith(t, "token", 15, func(c *store.Context) { c.SessionExpires = f.now.Add(tt.ceiling) })
+			enable := f.tag() + "enabenabenabenabenab0123"
+			relogin := f.tag() + "relgrelgrelgrelgrelgrelg"
+			for id, tok := range map[string]store.Token{
+				"en": {Secret: []byte(enable), Kind: store.KindEnable, Principal: "user:alice@example.com"},
+				"re": {Secret: []byte(relogin), Kind: store.KindLogin, Principal: tt.principal, Enable: "token", MaxPrivilege: 15},
+			} {
+				tok.ID, tok.Username, tok.ExpiresAt = id, "alice", f.now.Add(time.Hour)
+				if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}, tok); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sess := f.h.NewSession(f.peer)
+			sess.Start(context.Background(), f.enableStart("alice"))
+			if reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(enable)}); reply.Status != wire.AuthenStatusPass {
+				t.Fatalf("first escalation: %+v", reply)
+			}
+			f.now = f.now.Add(tt.advance)
+			if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", relogin)); reply.Status != wire.AuthenStatusPass {
+				t.Fatalf("relogin: %+v", reply)
+			}
+			key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+			if c, _ := f.st.GetContext(context.Background(), key); c.CtxID != tt.ctxID {
+				t.Fatalf("the relogin landed on %q, want %q", c.CtxID, tt.ctxID)
+			}
+
+			// The device retransmits the enable, inside the receipt window.
+			sess2 := f.h.NewSession(f.peer)
+			sess2.Start(context.Background(), f.enableStart("alice"))
+			reply, _ := sess2.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(enable)})
+			last := f.records(t)[len(f.records(t))-1]
+			c, _ := f.st.GetContext(context.Background(), key)
+			if tt.replays {
+				if reply.Status != wire.AuthenStatusPass || last["reason"] != "receipt_replayed" ||
+					last["session"].(map[string]any)["ctx_id"] != "ctxL" || c.PrivLvl != 15 {
+					t.Fatalf("the replay must act on the joined context: %+v %v %+v", reply, last, c)
+				}
+				return
+			}
+			if reply.Status != wire.AuthenStatusFail || last["event"] != "escalate" || last["reason"] != "token_spent" || c.PrivLvl != 1 {
+				t.Fatalf("a replayed enable must not raise a context it was not written for: %+v %v %+v", reply, last, c)
+			}
+		})
 	}
 }
 ```
@@ -2724,59 +3301,41 @@ func (c *capturingStore) SwapContext(ctx context.Context, k store.ContextKey, re
 // memory.SwapContext stamps LastTouchedAt itself
 ```
 
-`TestReplayedEnableNamesTheLiveContext` relied on a same-principal relogin replacing `ctxL`. Under
-the join that relogin keeps `ctxL`, and the only replace left inside a receipt's window is another
-principal's login. Replace its comment
+Delete `TestReplayedEnableNamesTheLiveContext` and its comment — from `// And when the context was
+replaced between the escalation and the` up to, not including, `// A login token presented at the
+enable prompt is token_kind_mismatch`. It asserted that a retransmitted enable raises whatever
+context is live, under whatever ctx_id; ruling P4 makes a replay act only on the context its
+receipt was written for, and `TestAReplayedEnableActsOnlyOnTheContextItWasWrittenFor` (Step 3) is
+its replacement: the same-principal past-ceiling replace it described, another principal's
+replace, and the join under which the replay still lands.
+
+`TestReceiptStopsAtTheAbsoluteCap` replays a login every 10 minutes for two hours on a fixture
+whose context TTL is one hour, and nothing in it touches the context: under P4 the replay at 70
+minutes finds the context reclaimed and is `token_spent`, eleven minutes of test time before the
+cap it exists to pin. In the shipped configuration the context outlives the cap (`context_idle_ttl`
+12h against `receipt_max_age` 2h), and a session that is still presenting its credential is still
+authorizing, which extends the context. Say so in the test: in its loop, replace
 
 ```go
-// And when the context was replaced between the escalation and the
-// retransmission, the replay must name the context that exists now. The receipt
-// froze ctxL; alice's second shell replaced it with ctx1 (spec §15, L1: the key
-// cannot tell two of her shells apart).
+	for i := 0; i < 13; i++ {
+		f.now = f.now.Add(10 * time.Minute)
+		reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
 ```
 
 with
 
 ```go
-// And when the context was replaced between the escalation and the
-// retransmission, the replay must name the context that exists now. The receipt
-// froze ctxL; a login under the same username by another principal replaced it
-// with ctx1 (spec §5.6: only a different principal, or a context past its
-// ceiling, is replaced rather than joined).
-```
-
-and replace its relogin block
-
-```go
-	// A second login on the same (nas, username): ctxL is replaced by ctx1, at
-	// login privilege.
-	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
-		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
-		Port: []byte("ssh"), RemAddr: []byte("198.51.100.4"),
-		Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}); reply.Status != wire.AuthenStatusPass {
-		t.Fatalf("relogin: %+v", reply)
-	}
-```
-
-with
-
-```go
-	// A login under the same username by ANOTHER principal: ctxL is replaced
-	// by ctx1, at login privilege. It is the one way left for the context to
-	// change identity inside a receipt's window — the same principal's second
-	// login joins ctxL and keeps its id (spec §5.6).
-	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{ID: "other", Secret: []byte(f.tag() + "othrothrothrothrothrothr"), Kind: store.KindLogin,
-			Username: "alice", Principal: "user:alice@corp.example", Enable: "token", MaxPrivilege: 15,
-			ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
-		t.Fatal(err)
-	}
-	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
-		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
-		Port: []byte("ssh"), RemAddr: []byte("198.51.100.4"),
-		Data: []byte(f.tag() + "othrothrothrothrothrothr")}); reply.Status != wire.AuthenStatusPass {
-		t.Fatalf("relogin: %+v", reply)
-	}
+	for i := 0; i < 13; i++ {
+		f.now = f.now.Add(10 * time.Minute)
+		// The session is live and authorizing, which is what extends its
+		// context (author.Handle's TouchContext). Without it this fixture's
+		// one-hour context TTL would reclaim the context at 60 minutes, and
+		// a replay onto a reclaimed context is token_spent (spec §5.6) —
+		// which is not the cap this test pins.
+		if err := f.st.TouchContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}, time.Hour); err != nil {
+			t.Fatalf("at i=%d: %v", i, err)
+		}
+		reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
 ```
 
 - [ ] **Step 5: Run them to see them fail**
@@ -2785,12 +3344,16 @@ Run: `go test ./internal/daemon/... -count=1 2>&1 | grep -E '^(--- FAIL|ok|FAIL)
 Expected FAIL: `TestTheHandlerStampsTheContextClocksItself` (nothing calls `SwapContext` yet),
 `TestSecondLoginJoinsTheLiveContext`, `TestASecondLoginJoinsAndKeepsTheFirstWindowsState`,
 `TestAJoinedLoginsReceiptNamesTheKeptContext`, `TestARevocationSurvivesATokenMintedBeforeIt`,
-`TestAnUnreadableContextFailsTheLoginBeforeTheTokenIsSpent`,
+`TestAContextReadErrorFailsTheLoginBeforeTheTokenIsSpent` (today the read comes after the token is
+spent and its error is ignored), `TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation` (no
+`replaced_unreadable`, revocation lost), `TestAReplaceUnindexesTheCredentialItDisplaced` (`sid-1`
+still reaches the context), `TestARetransmittedLoginReplaysOnlyOntoTheContextItWasWrittenFor` and
+`TestAReplayedEnableActsOnlyOnTheContextItWasWrittenFor` (the replays land on a replacing context),
 `TestASecondWindowDoesNotTakeTheFirstWindowsEnable` (`privilege_exceeded`), and
 `TestTheFirstWindowsStopAfterASecondLoginIsResolved` (`"attribution":"foreign"`).
-Expected PASS already: `TestAnotherPrincipalUnderTheSameUsernameReplaces` and
-`TestReplayedEnableNamesTheLiveContext` — the replace they describe is today's behaviour for every
-login, and must stay the behaviour for another principal's.
+Expected PASS already: `TestAnotherPrincipalUnderTheSameUsernameReplaces` — the replace it describes
+is today's behaviour for every login, and must stay the behaviour for another principal's — and
+`TestReceiptStopsAtTheAbsoluteCap` with its touch.
 
 - [ ] **Step 6: Decide the ctx_id before the redemption**
 
@@ -2825,28 +3388,35 @@ with
 	// context's id too; otherwise it is a fresh one.
 	//
 	// The login's read is here, before the token is spent, for a second
-	// reason: a context that cannot be read — the store is down, or the record
-	// is sealed under a retired key — cannot be joined, and JoinContext below
-	// would refuse it anyway. Refusing now leaves the token unspent, so the
-	// operator's retry works once the record is readable or reclaimed, instead
-	// of replaying a PASS that nothing backs.
+	// reason: a store that cannot be reached cannot say whether there is a
+	// context to join, and JoinContext below would fail on it anyway.
+	// Refusing now leaves the token unspent, so the operator's retry works
+	// once the store is back, instead of replaying a PASS that nothing backs.
+	// A record that is there but will not open — sealed under a key that has
+	// left the window — is not that: it is replaced, with a fresh id
+	// (store.UnreadableContextError; spec §5.6).
 	//
-	// The read and JoinContext's own are not one operation. If the context
-	// changes identity between them — reclaimed, or replaced by another
-	// principal's login — the receipt names the id predicted here and the
-	// redeem record names the one written. That costs a retransmission's
-	// replay record its ctx_id, and needs a login under the same username on
-	// the same device inside a few milliseconds.
+	// The read and JoinContext's own are not one operation, and when they
+	// disagree the receipt names the id predicted here while the redeem
+	// record names the one written. Three ways: the context is reclaimed, or
+	// replaced by another principal's login, between the two; or — the one
+	// that needs no other principal — two first logins by the same principal
+	// both read nothing, both mint an id, and the one whose swap loses joins
+	// the other's context. Its receipt then names an id no context holds, so
+	// its retransmission is refused `token_spent` (receiptContextLive) and the
+	// device prompts again. Each needs two logins under one username on one
+	// device inside a few milliseconds.
 	ctxID := incumbent.CtxID
 	var login store.Context
 	if !enable {
 		login = s.loginContext(winner, username, port, remAddr)
 		prev, perr := s.h.store.GetContext(ctx, ck)
 		s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(perr)).Inc()
+		var unreadable *store.UnreadableContextError
 		switch {
 		case perr == nil && store.Joinable(prev, login, s.h.now()):
 			ctxID = prev.CtxID
-		case perr == nil || errors.Is(perr, store.ErrNotFound):
+		case perr == nil || errors.Is(perr, store.ErrNotFound) || errors.As(perr, &unreadable):
 			ctxID = s.h.newCtxID()
 		default:
 			return s.storeError(rec)
@@ -2857,7 +3427,26 @@ with
 
 - [ ] **Step 7: Join in place of the overwrite**
 
-Still in `redeem`, replace everything from the comment `// A context already under this key is this
+Still in `redeem`, the comment above the enable return names a read that no longer sits below it.
+Replace
+
+```go
+	// The enable token is spent and the receipt is written under this
+	// context's own ctx_id: all that is left is the new privilege. This
+	// returns above the `prev` read deliberately — an escalation displaces no
+	// context, so `replaced_ctx_id` must stay absent on its record.
+```
+
+with
+
+```go
+	// The enable token is spent and the receipt is written under this
+	// context's own ctx_id: all that is left is the new privilege. This
+	// returns above the join deliberately — an escalation displaces no
+	// context, so `replaced_ctx_id` must stay absent on its record.
+```
+
+Then replace everything from the comment `// A context already under this key is this
 operator's own earlier login on` down to and including
 
 ```go
@@ -2879,9 +3468,11 @@ with
 	// and a revocation the token predates are all kept, so window A loses
 	// nothing to window B. Another principal under the same username, or a
 	// context past its ceiling, is replaced, and the record names the ctx_id
-	// it displaced. JoinContext reads, merges and swaps on the revision it
-	// read, so a revocation or annotation landing mid-login is merged rather
-	// than erased, and two simultaneous logins both land.
+	// it displaced. A record the sealing layer cannot open is replaced too,
+	// keeping its plaintext revocation, and the record says it was unreadable
+	// because its ctx_id is sealed. JoinContext reads, merges and swaps on the
+	// revision it read, so a revocation or annotation landing mid-login is
+	// merged rather than erased, and two simultaneous logins both land.
 	out, err := store.JoinContext(ctx, s.h.store, ck, login, winner.MintedAt, s.h.now(), s.h.contextTTL)
 	s.h.metrics.StoreOps.WithLabelValues("join_context", storeOutcome(err)).Inc()
 	if err != nil {
@@ -2890,6 +3481,22 @@ with
 		return s.storeError(rec)
 	}
 	rec.Session.ReplacedCtxID = out.Replaced
+	rec.Session.ReplacedUnreadable = out.ReplacedUnreadable
+	// A replace unindexes the credential it displaced before this login is
+	// indexed. The index keeps every sid and certificate a context was
+	// indexed under, so that a join stays revocable by either login's; left
+	// in place after a replace, the displaced login's would keep reaching
+	// this context, and a back-channel logout of that principal would revoke
+	// this one (spec §5.6). A failure is counted and does not fail the login:
+	// what it leaves is a revocation that can reach too far, never one that
+	// cannot reach. An unreadable replace has no Prior — its credential is
+	// sealed — and leaves that residue until index_ttl, as §5.6 says.
+	if out.Prior.CtxID != "" {
+		uerr := s.h.store.UnindexContext(ctx, out.Prior.Principal, out.Prior.Credential.Sid,
+			store.CertKey(out.Prior.Credential.Issuer, out.Prior.Credential.Serial),
+			store.ContextRef{NAS: s.peer.NAS, Username: username})
+		s.h.metrics.StoreOps.WithLabelValues("unindex_context", storeOutcome(uerr)).Inc()
+	}
 	// Indexed under this login's credential even on a join, and added to what
 	// the context was indexed under rather than replacing it: revocation by
 	// either login's sid or certificate has to reach the joined context.
@@ -2937,6 +3544,118 @@ func (s *Session) loginContext(winner *store.Token, username, port, remAddr stri
 }
 ```
 
+- [ ] **Step 7b: A receipt replays only onto the context it was written for**
+
+Ruling P4 (plan "Decided" #11). In the receipt branch of `redeem`, between the bounds check and the
+extension — directly after
+
+```go
+		if !now.Before(capAt) || !now.Before(r.IdleExpiresAt) {
+			return s.fail(ctx, rec, decision.TokenSpent)
+		}
+```
+
+insert
+
+```go
+		// A receipt replays only onto the context it was written for (spec
+		// §5.6). The check is here, before the extension, so a refused
+		// presentation does not slide the window on its way to the refusal.
+		switch ok, lerr := s.receiptContextLive(ctx, ck, r.CtxID, enable, incumbent); {
+		case lerr != nil:
+			return s.storeError(rec)
+		case !ok:
+			return s.fail(ctx, rec, decision.TokenSpent)
+		}
+```
+
+Below it, replace the comment
+
+```go
+		// The receipt froze a ctx_id at the first escalation. The live context
+		// may be a different one by now (spec §15, L1: the key cannot tell two
+		// of this operator's shells apart), and the privilege may never have
+		// landed at all if that escalation's PutContext failed. Replay the
+		// escalation's EFFECT on the context that exists now, and log that
+		// context's id rather than the frozen one — otherwise a PASS goes out
+		// naming a context nothing else will ever mention, which is the thing
+		// this task exists to prevent. The gate above already re-checked the
+		// mechanism, the ceiling, revocation, expiry and rem_addr against the
+		// live context, so this grants nothing the cold path would not.
+```
+
+with
+
+```go
+		// The live context is the one this receipt was written for (checked
+		// above), so the replay acts on it. For an enable that means replaying
+		// the escalation's EFFECT and not only its answer: the privilege may
+		// never have landed if that escalation's SetPrivilege failed. The gate
+		// above already re-checked the mechanism, the ceiling, revocation,
+		// expiry and rem_addr against the live context, so this grants nothing
+		// the cold path would not.
+```
+
+In the race-loser branch below (`RedeemAndReceipt` answered `ErrNotFound`), replace
+
+```go
+			if rerr == nil && subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
+```
+
+with
+
+```go
+			if rerr == nil && subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
+				// An enable replays onto the context it was written for, as a
+				// retransmission does. A login that lost is not checked: it
+				// presented the winner's own credential, and the winner's
+				// JoinContext is still in flight, so a read here would race the
+				// winner's write and refuse the duplicate for nothing.
+				if enable {
+					switch ok, lerr := s.receiptContextLive(ctx, ck, r.CtxID, enable, incumbent); {
+					case lerr != nil:
+						return s.storeError(rec)
+					case !ok:
+						return s.fail(ctx, rec, decision.TokenSpent)
+					}
+				}
+```
+
+and add, after `loginContext`:
+
+```go
+
+// receiptContextLive reports whether a replayed receipt may act: whether the
+// ctx_id it froze is still the live context's (spec §5.6). The join keeps
+// ctx_id across one principal's logins, so a match is exactly "the context
+// this receipt was written for", and a mismatch is a context replaced —
+// another principal, past its ceiling, unreadable — or reclaimed since. A
+// receipt for a context that no longer exists answers nothing that exists:
+// PASS from it would admit a session whose authorizations answer from someone
+// else's context, or raise that context with another principal's enable.
+//
+// An enable already holds the live context from its gate; a login reads it.
+// The error is a store error only — an absent or unopenable context is a
+// plain no.
+func (s *Session) receiptContextLive(ctx context.Context, ck store.ContextKey, receiptCtxID string,
+	enable bool, incumbent store.Context) (bool, error) {
+	if enable {
+		return incumbent.CtxID == receiptCtxID, nil
+	}
+	c, err := s.h.store.GetContext(ctx, ck)
+	s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
+	var unreadable *store.UnreadableContextError
+	switch {
+	case err == nil:
+		return c.CtxID == receiptCtxID, nil
+	case errors.Is(err, store.ErrNotFound), errors.As(err, &unreadable):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+```
+
 - [ ] **Step 8: The comments that described the old behaviour**
 
 In `internal/session/session.go`'s package comment, replace
@@ -2979,6 +3698,37 @@ with
 	// does so through JoinContext, never here (spec §13, decision 15).
 ```
 
+In `internal/decision/log.go`'s `type Session struct`, replace
+
+```go
+	// ReplacedCtxID is set on a redeem that overwrote an existing context for
+	// the same (nas, username) — the same operator logging into the same
+	// device twice. It names the displaced ctx_id so the two shells' records
+	// can still be joined (spec §5.6).
+	ReplacedCtxID string `json:"replaced_ctx_id,omitempty"`
+```
+
+with
+
+```go
+	// ReplacedCtxID is set on a redeem that replaced an existing context for
+	// the same (nas, username) rather than joining it: another principal under
+	// the same username, or the same principal's context past its session
+	// ceiling. It names the displaced ctx_id so the records before and after
+	// can still be joined (spec §5.6). A second login by the same principal
+	// joins and sets nothing here.
+	ReplacedCtxID string `json:"replaced_ctx_id,omitempty"`
+	// ReplacedUnreadable is set on a redeem that replaced a context the
+	// sealing layer could not open — sealed under a key that has left the
+	// two-key window, or failing authentication. Its ctx_id is sealed, so
+	// ReplacedCtxID cannot name it, and this says a context was displaced all
+	// the same (spec §5.6).
+	ReplacedUnreadable bool `json:"replaced_unreadable,omitempty"`
+```
+
+(Step 7 already sets it. Nothing is compiled between Step 5 and Step 9, so the order does not
+matter; run `gofmt -w internal/decision/log.go` if the tag column shifts.)
+
 - [ ] **Step 9: Run everything**
 
 Run: `make test && make vet && go test -race ./internal/... -count=1 && go vet -tags lab ./tests/lab/...`
@@ -2989,7 +3739,8 @@ still passes: its two users are different usernames and never join.
 
 ```bash
 git add internal/daemon/authen/authen.go internal/daemon/authen/authen_test.go internal/daemon/authen/key_test.go \
-  internal/daemon/author/join_test.go internal/daemon/acct/join_test.go internal/session/session.go internal/store/store.go
+  internal/daemon/author/join_test.go internal/daemon/acct/join_test.go internal/session/session.go \
+  internal/store/store.go internal/decision/log.go
 git commit -m "fix: a second login joins the live context instead of replacing it
 
 A second login by the same principal on the same device replaced the
@@ -2998,7 +3749,11 @@ emptied so its STOP paged foreign, and revoked_at was wiped so a token
 minted before a revocation re-admitted the user. The login now reads
 the context before spending the token, carries the joined ctx_id on the
 receipt, and writes through JoinContext. Another principal, or a
-context past its ceiling, is still replaced and logged.
+context past its ceiling, is still replaced and logged, and the
+replace unindexes the credential it displaced. A context under a
+retired key is replaced carrying its revocation, logged
+replaced_unreadable. A retransmitted login or enable replays only onto
+the context its receipt was written for; otherwise token_spent.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3174,6 +3929,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 | D5 roadmap: plan 5 config check; per-window contexts not planned | 2 |
 | Tests 1, 2, 3, 5 | 8 |
 | Test 4 | 5 |
+| R1 / P1 / P2 unreadable context replaced, not refused; `RevokedAt` carried whoever the principal; `replaced_unreadable` | 1 (§5.6), 5 (`UnreadableContextError`, `JoinContext`, store and crypt tests), 8 (pre-read branch, retired-key test) |
+| P3 a replace unindexes the credential it displaced | 5 (`JoinResult.Prior`), 8 (`UnindexContext`, `TestAReplaceUnindexesTheCredentialItDisplaced`) |
+| P4 a receipt replays only onto the context it was written for; `token_spent` row widened | 1 (§5.6, §5.7), 8 (Step 7b, login and enable replay tests) |
+| P5 the denied-session test able to fail | 7 (Step 2b) |
+| P6 comments: `ReplacedCtxID`, the enable-return comment, the receipt/record divergence cases | 8 (Steps 6, 7, 8) |
+| P7 memo row 7 annotated, not overwritten | 2 (Step 3) |
 
 **Placeholder scan:** none. Every code step carries the code or the exact edit.
 
@@ -3182,7 +3943,12 @@ compared only by `memory.SwapContext`; `SwapContext(ctx, k, rev uint64, c, ttl)`
 signature in `store.Store`, memory, crypt, `noStore`, `capturingStore` and `alwaysConflicts`;
 `store.JoinContext(ctx, s, k, login, mintedAt, now, ttl) (JoinResult, error)` is called by
 `storetest.JoinRacesRevocation`, `join_test.go` and `authen.redeem` with the same argument order;
-`JoinResult.Replaced` feeds `decision.Session.ReplacedCtxID` and nothing else;
+`JoinResult.Replaced` feeds `decision.Session.ReplacedCtxID`, `JoinResult.ReplacedUnreadable` feeds
+`decision.Session.ReplacedUnreadable`, and `JoinResult.Prior` feeds `UnindexContext`, each in
+`authen.redeem` only; `*store.UnreadableContextError` is produced only by `crypt`'s `GetContext` (and
+the `unreadable` test stub) and matched with `errors.As` by `JoinContext`, `authen.redeem`'s pre-read
+and `receiptContextLive`; `receiptContextLive(ctx, ck, receiptCtxID, enable, incumbent)` is called
+from the receipt branch and the enable race-loser branch with the same arguments;
 `store.Token.MintedAt` is set by the minter and read by `authen.redeem` only;
 `metrics.Metrics.Attributions` is written by `acct.Handle` only; `authen.New`, `author.New` and
 `acct.New` keep their plan-2 signatures.
@@ -3191,7 +3957,11 @@ signature in `store.Store`, memory, crypt, `noStore`, `capturingStore` and `alwa
 `authen_test.go` has to gain it in the same commit or the authen tests stop compiling. Task 7 must
 land before Task 8: test 1 needs raise-only `SetPrivilege` as well as the join. Task 5 Step 6 is a
 deliberate mutation — undo it before committing. Task 8 moves the login's context read in front of
-`RedeemAndReceipt`; the enable path's read above it is unchanged and must stay where it is.
+`RedeemAndReceipt`; the enable path's read above it is unchanged and must stay where it is. Task 5
+changes what `crypt`'s `GetContext` returns on an open failure; it still unwraps to
+`crypt.ErrUnknownKey`, and `TestUnopenableRecordIsNotReportedAsMissing` must pass unchanged. Task 8's
+`TestReceiptStopsAtTheAbsoluteCap` gains a `TouchContext` per iteration: without it the ctx_id check
+refuses the replay once the fixture's one-hour context TTL lapses, before the cap.
 
 **Unmeasured, and not relied on:** what `port` a Junos console session presents (Task 9's test value
 is labelled illustrative); whether any device reuses a session discriminator across a join (the
