@@ -6122,3 +6122,13 @@ containerlab and go first, in order; Tasks 15–17 need the lab host, one platfo
 follows the notes it cites. The code gate, after Task 14 and again at the end, is `make test && make
 vet`, `go test -race ./internal/...`, and `go vet -tags lab ./tests/lab/...`, reported with their
 real output.
+
+**The PR body carries an "Operator-facing notes" section** (roadmap, top; plan 13 builds the
+documentation from it). For this plan it lists at least: the `port49` binary with `port49 login`
+and `port49 token` and where the agent's socket and log live; the `broker:` block in
+`port49d.yaml` and its keys, and that a policy edit needs a restart which logs every operator out
+(Question 3); the policy file's format and what it refuses; the new reason `candidate_cap_reached`
+and the widened `session_expired` and `credential_revoked`; that a login into a revoked result,
+and its retransmission, now answer FAIL `credential_revoked`; that broker-minted sessions on
+platforms other than `arista_eos` get no session attributes (Question 2); and the three lab notes
+with what each found.

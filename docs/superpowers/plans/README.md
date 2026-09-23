@@ -5,6 +5,10 @@ the standing brief for each plan: what it builds, which spec sections it impleme
 earlier plans hand it, what it must leave for later, and which lab register entries close in
 it. When writing plan N, start here, then read the cited sections, then the previous plan.
 
+**Every plan's PR body carries an "Operator-facing notes" section**: a short list of what an
+operator will see change — new commands, config keys, reason codes, metrics, device behaviour.
+Plan 13 builds the user and admin documentation from these.
+
 Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
 fifteen tasks, reviewed per task and whole-branch); 3 written (below); 4–12 not yet. PR #3's lab
 stretch is merged, so plan 3 is unblocked and is the next plan to write.
@@ -359,6 +363,24 @@ Carried here from plan 1's review:
   into one series per device — both a cardinality problem and, against design §15's "device
   identity never appears in metric labels", a correctness one. Say which it is and bound it
   when the alarms are written.
+
+## Plan 13 — User and admin documentation
+
+**Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
+GitHub Action — written when the repository goes public. Four sections:
+
+- **Concepts:** the token, the receipt and the login context; revocation; trust domains.
+- **Operator guide:** install, the broker and the agent, `port49 login`, and troubleshooting
+  organized by what the operator sees.
+- **Admin guide:** policy, roles and grants, key rotation, revocation, and one device-configuration
+  page per platform built from `tests/lab/results/`, including the traps the lab measured.
+- **Reference:** config keys, reason codes, metrics and the decision-log schema, generated from the
+  code so it cannot drift.
+
+**Inherits:** from every earlier plan, the "Operator-facing notes" section of its PR body (top of
+this file).
+
+**Leaves for later:** nothing. **Lab:** none.
 
 ---
 
