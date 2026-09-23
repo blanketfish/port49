@@ -1000,9 +1000,15 @@ written the context when it is refused, and that context is revoked, so every au
 it is denied anyway until the idle TTL reclaims it. The `redeem` record carries the principal, the
 `ctx_id` and `session.revoked_at`, the revocation that refused it. A retransmission is answered from
 the live context, not from the status the receipt stored: while the context it names is revoked it is
-refused `credential_revoked` again, never replayed as a PASS. A token minted after the revocation
-joins and lifts it, by the table. A revocation that lands after the join's write is not seen by the
-login, which answers PASS; its first authorization is denied `credential_revoked`.
+refused `credential_revoked` again. A token minted after the revocation joins and lifts it, by the
+table, and a refusal made after the join has therefore marked its receipt failed (the receipt was
+written PASS before the join): once the revocation is lifted, the retransmission replays the
+refusal, FAIL `receipt_replayed`. It is not replayed as a PASS, with one exception: the concurrent
+duplicate that lost the redemption race (below) is not checked, and if it reads the winner's receipt
+before the winner's refusal marks it, it answers PASS. That takes two byte-identical presentations
+inside one join; every authorization on the revoked context is denied, and the next retransmission
+is refused (plan 3, pre-flight F16). A revocation that lands after the join's write is not seen by
+the login, which answers PASS; its first authorization is denied `credential_revoked`.
 
 A login is **not** a join, and writes a fresh context whose `redeem` record carries
 `session.replaced_ctx_id`, in two cases: the live context belongs to **another principal** under
@@ -1060,12 +1066,14 @@ such a record counts `port49_store_operations_total{outcome="unreadable"}`, not 
 the store answered, and a key rotation must not read as a store outage.
 
 A retransmitted login or `enable` replays its receipt only while the receipt's `ctx_id` is the live
-context's. The join keeps `ctx_id` across one principal's logins, so a match is exactly "the same
+context's, and, while that context is revoked, is refused `credential_revoked` instead (above). The
+join keeps `ctx_id` across one principal's logins, so a match is exactly "the same
 context"; after a replace or a reclaim the receipt names a context that no longer exists, and the
 retransmission is answered `token_spent`, as a spent token is, without sliding the receipt. The
 device prompts again. The one copy not checked is the concurrent duplicate that lost the
 redemption race: it presented the winner's own credential, and the winner's context write is still
-in flight.
+in flight. It replays the winner's receipt as it stands, so it can replay the winner's PASS even
+where the winner is refused (pre-flight F16, above).
 
 What remains of the old cost: both windows log one `ctx_id`, so a log reader tells them apart by
 `port`, `rem_addr` and each `redeem` record's `credential_sha256`, not by `ctx_id`.
@@ -1447,7 +1455,7 @@ is what the redemption joins back to (see Correlation below).
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
 | `device_mismatch` | `redeem`: the presented token's device tag is not this device's (design document §8) — PAP and ASCII only; under CHAP the tag is not visible and the outcome is `token_not_found` |
 | `credential_mismatch` | `redeem`: the receipt the store returned does not carry the credential hash the lookup asked for. Since 2026-09-20 the hash is *in* the receipt key (§13, decision 15), so a differing credential finds no receipt and redeems normally instead; this reason now covers only a store that answered with a record it was not asked for, which is a store fault and never a normal outcome |
-| `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision |
+| `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision; not while the context it names is revoked — that is `credential_revoked` (§5.6). A login refused after its join replays as FAIL once the revocation is lifted |
 | `token_kind_mismatch` | `redeem`/`escalate`: a login token presented at `enable`, or the reverse (§7) |
 | `enable_refused` | `escalate`: the subject's mechanism is `none` |
 | `ceiling_exceeded` | `escalate`: the requested level is above `max_privilege` |
@@ -3839,8 +3847,8 @@ Beyond those already listed in the design document's §14:
   no receipt and redeems normally rather than being rejected `credential_mismatch`. A spent
   token replayed within `receipt_ttl` is honored only for the same
   `(nas, username, credential_sha256)`. A retransmitted login or enable replays only while the
-  receipt's `ctx_id` is the live context's; after a replace or a reclaim it is `token_spent`
-  (§5.6).
+  receipt's `ctx_id` is the live context's; after a replace or a reclaim it is `token_spent`,
+  and into a revoked context it is `credential_revoked` (§5.6).
 - **CHAP verification**: a candidate set of several unspent tokens resolves to the one that
   produces the matching digest; the atomic removal, not the verification, decides single use,
   and two replicas racing the same token yield exactly one success — **and the loser answers
@@ -4066,7 +4074,9 @@ Beyond those already listed in the design document's §14:
 - **A login into a revoked result is refused**: a login that writes a revoked context — a
   same-principal replace past the ceiling, an unreadable replace, or a revocation landing mid-join,
   each with a token minted before the revocation — answers FAIL `credential_revoked` with the token
-  spent, and its retransmission is refused `credential_revoked`, never replayed as a PASS.
+  spent, and its retransmission is refused `credential_revoked` while the context is revoked and
+  replays FAIL `receipt_replayed` after a later token lifts it — not a PASS, except for the
+  concurrent duplicate of §5.6 (pre-flight F16).
 - **Device tag**: a token minted for device A presented on device B under PAP or ASCII is
   refused `device_mismatch` without a store read; the same under CHAP is `token_not_found`;
   the tag is a keyed hash and two devices never share one.
