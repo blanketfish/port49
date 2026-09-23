@@ -62,6 +62,14 @@ type Token struct {
 	MaxPrivilege  uint8
 	Credential    Credential // sealed
 	AuthTime      time.Time
+	// MintedAt is when the broker cut this token, on the broker's clock — the
+	// clock revocation stamps RevokedAt with. AuthTime cannot stand in for it:
+	// that is when the human authenticated at the IdP, which can be hours
+	// before a mint, so a token minted after a revocation can carry an
+	// AuthTime from before it. JoinContext compares this to a live context's
+	// RevokedAt (spec §5.6). Zero reads as "minted before any revocation",
+	// which keeps the mark.
+	MintedAt time.Time
 
 	Sealed []byte // written by internal/store/crypt; zero in plaintext form
 }
