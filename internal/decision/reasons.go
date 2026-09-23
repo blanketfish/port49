@@ -10,6 +10,10 @@ const (
 	NoGrantsMatched       Reason = "no_grants_matched"
 	UsernameCollision     Reason = "username_collision"
 	TrustDomainUnresolved Reason = "trust_domain_unresolved"
+	// CandidateCapReached: token.candidate_cap unspent tokens already stand
+	// for this (device, username). The mint is refused, never a redemption
+	// (design §8).
+	CandidateCapReached Reason = "candidate_cap_reached"
 
 	// redeem
 	TokenRedeemed Reason = "token_redeemed"

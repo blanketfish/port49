@@ -93,6 +93,9 @@ type Request struct {
 	// A caller may send one key for a whole batch, which is what design §17's
 	// POST /v1/tokens does, and each device still gets its own record.
 	IdempotencyKey, BodyHash string
+	// Policy is the subject and grants that allowed this mint. The minter
+	// judges none of it and copies it onto the mint record (spec §5.7).
+	Policy *decision.Policy
 }
 
 // idemScope puts the device in the idempotency key. §17's key is one header
@@ -238,6 +241,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		Auth:       &decision.Auth{Method: r.Subject.Credential.Method},
 		Device:     &decision.Device{Name: r.Device, Platform: r.Platform},
 		Mint:       &decision.Mint{TokenSHA256: hashes, TTLSeconds: int(ttl.Seconds()), BlobHash: r.BlobHash},
+		Policy:     r.Policy,
 		IndexError: idemErr})
 	return res, nil
 }
