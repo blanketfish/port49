@@ -3657,10 +3657,10 @@ configuration can reach.
 
 One thing plan 2 and plan 4 both gain from that run, and it is not about enable. **IOS-XE refuses
 an authorization reply carrying an attribute it does not recognise, even sent as OPTIONAL**: the
-session port49 permitted is ended by the device with `% Authorization failed.` (§15, L10;
-`tests/lab/results/L10-cisco_iosxe.md`). Whatever attribute set an adapter sends to that platform
-has to be a set the image accepts, and when it is not, port49's own log says `permit` while the
-operator is locked out — there is no diagnostic on this side at all.
+session port49 permitted is ended by the device with `% Authorization failed.` (§15, L10 and
+L18; `tests/lab/results/L18-cisco_iosxe.md`). Whatever attribute set an adapter sends to that
+platform has to be a set the image accepts, and when it is not, port49's own log says `permit`
+while the operator is locked out — there is no diagnostic on this side at all.
 
 *API transports: a sliding receipt, not a `reusable` flag. Ruled 2026-09-22.* The receipt is
 the retry tolerance of §5.1.1: a spent token presented again within the receipt's life is
@@ -4520,9 +4520,10 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   and the SSH session is closed, so the operator is locked out of a session port49 permitted. An
   invented optional attribute (`zzznotareal*attribute`) fails identically, so this is not about
   `shell:roles` in particular — it is any attribute outside the set that image knows. Measured by
-  three single-variable runs on 2026-09-20; `tests/lab/results/L10-cisco_iosxe.md`, and the lab
-  harness now derives a daemon config for this platform carrying `priv-lvl=15` alone
-  (`(*lab).configPath` in `tests/lab/harness_test.go`).
+  three single-variable runs on 2026-09-20, which `L10-cisco_iosxe.md` does not record; the
+  refusal is recorded, variant by variant, in `tests/lab/results/L18-cisco_iosxe.md`
+  (2026-09-22), and the lab harness now derives a daemon config for this platform carrying
+  `priv-lvl=15` alone (`(*lab).configPath` in `tests/lab/harness_test.go`).
 
   **What it costs plan 4.** An adapter cannot be written as "send every attribute the policy
   produces and let the device take what it understands". On this platform an attribute the device
