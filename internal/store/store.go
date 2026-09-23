@@ -483,8 +483,26 @@ type Store interface {
 	// joined context is indexed under every login's sid and certificate, and
 	// the record keeps only the last login's credential. It is what a replace
 	// by another principal calls, so that no key of the displaced principal's
-	// keeps reaching the context that replaced it (spec §5.6). Entries under
+	// keeps reaching the context that replaced it (spec §5.6). An unreadable
+	// replace calls it too: it cannot name what it displaced. Entries under
 	// the same keys for other refs are untouched.
+	//
+	// It is not atomic with the context write before it or the IndexContext
+	// after it, and two races follow, each needing logins under one username
+	// on one device within a few milliseconds:
+	//
+	//   - The replacing principal's own second window joins the new context
+	//     and indexes its sid and certificate between the replace's swap and
+	//     this call. This call then wipes them. Revocation by that principal
+	//     still reaches the context, because the replace's IndexContext puts
+	//     the principal back; by that window's sid or certificate it does not.
+	//   - Two different principals replace each other. The first's late call
+	//     runs after the second's replace and index, wipes the second's
+	//     entries, and the first's IndexContext then lands on the second's
+	//     context. That context ends up indexed under the first principal's
+	//     keys only: a revocation of the first marks it, and one of the second
+	//     misses it. It also needs the username-uniqueness invariant broken
+	//     (spec §5.6, P10).
 	UnindexRef(ctx context.Context, ref ContextRef) error
 	ContextsByPrincipal(ctx context.Context, principal string) ([]ContextRef, error)
 	ContextsBySid(ctx context.Context, sid string) ([]ContextRef, error)

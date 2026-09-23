@@ -972,9 +972,9 @@ authentication and at authorization.
 **One operator, one device, one context — and a second login joins it.** The context is "this
 principal's authorization on this device", not one connection: no wire field on authorization
 tells two of one operator's windows apart on every platform — NX-OS sends `port` empty on every
-command authorization and Junos never authorizes a command (§15, L1; L10, L14; decision 21). So a second login by the
-same principal under the same username on the same device **joins** the live context rather than
-replacing it (ruled 2026-09-23):
+command authorization and Junos never authorizes a command (§15, L1; L10, L14; decision 21). So a
+second login by the same principal under the same username on the same device **joins** the live
+context rather than replacing it (ruled 2026-09-23):
 
 | field | on a join |
 |---|---|
@@ -1006,9 +1006,38 @@ verified again, so the same principal's `revoked_at` carries across that replace
 table. A context the idle TTL has reclaimed is absent, and the login writes a fresh one with nothing
 to name. The join is a compare-and-set on the context's revision, so a revocation, an accounting
 annotation, a privilege raise or a refresh that lands mid-login is merged rather than erased, and
-two simultaneous logins both land. A replace unindexes the displaced login's principal, `sid` and
-certificate before the new login is indexed, so a later revocation of the displaced credential
-does not reach the context that replaced it.
+two simultaneous logins both land.
+
+**A replace unindexes what it displaced, before the new login is indexed**, so a later revocation
+of the displaced credential does not reach the context that replaced it. What it unindexes
+depends on whose context it was:
+
+- **Another principal's**: every key the context was indexed under — its principal and every
+  login's `sid` and certificate, including joined logins the record no longer names. Nothing of
+  the displaced principal's is the new login's to keep. The cost is fail-open for the displaced
+  principal, and it is accepted: their still-open windows now authorize against the new
+  principal's context, and a revocation of them by `sid`, certificate or principal reaches
+  nothing on this device. That needs two subjects under one username, which the uniqueness MUST
+  of §2 already forbids.
+- **An unreadable one**: the same whole clear, because its keys are sealed and cannot be compared
+  (below). When it was the same principal's, its own keys go too, and the new login's index
+  puts them back.
+- **The same principal's, past its ceiling**: only the displaced login's `sid` and certificate
+  that the new login does not share. A shared key is about to be indexed again, and unindexing it
+  first would leave a moment in which a revocation by it finds nothing. An earlier joined login's
+  `sid` stays, and a revocation of it can mark the new context: the same person, fail-closed.
+
+An empty `sid` or certificate (no issuer or no serial) is never indexed or unindexed, and a
+revocation by one is refused rather than run: every certificate login shares the empty `sid`, and
+every OIDC login the empty certificate, so revoking by either would revoke them fleet-wide.
+
+The unindex and the index are not one operation with the context write, and two races follow,
+each needing logins under one username on one device within a few milliseconds. A second window
+of the replacing principal that joins between the replace's write and its whole clear loses its
+`sid` and certificate entries; revocation by principal still reaches the context. And two
+principals replacing each other can leave the survivor indexed under the loser's keys only, so a
+revocation of the loser marks it and one of the survivor misses it; that also needs the
+uniqueness MUST broken.
 
 A store port49 cannot reach fails the login `store_unavailable`, refused before the token is
 spent. A record the store returns but port49 cannot open — sealed under a key that has left the
@@ -3534,11 +3563,11 @@ device collided and locked each other out; and vEOS, which does give two concurr
 different vtys (`vty4`, `vty6`) from session authorization onward, says `ssh` for both at the
 authentication START that writes the context. (Corrected 2026-09-23: this sentence said both vEOS
 sessions reported `vty4`; `tests/lab/results/L1-arista_eos.md` (2026-09-20, `alice05` `vty4` /
-`alice06` `vty6`), and again in the 2026-09-22 run.) The exclusion of the username was bought to serve `$enab{level}$`, which has now been
-measured *not* to apply on either platform that has an enable exchange: vEOS and **IOS-XE**, the
-platform the spelling is named after, both put the operator's own username on the enable START
-with `service=enable` (L3, 2026-09-20). So the thing the exclusion was paid for has not been
-observed on any device in this lab.
+`alice06` `vty6`), and again in the 2026-09-22 run.) The exclusion of the username was bought to
+serve `$enab{level}$`, which has now been measured *not* to apply on either platform that has an
+enable exchange: vEOS and **IOS-XE**, the platform the spelling is named after, both put the
+operator's own username on the enable START with `service=enable` (L3, 2026-09-20). So the thing
+the exclusion was paid for has not been observed on any device in this lab.
 Evidence: `docs/design/2026-09-20-login-context-key-options.md`, and
 `tests/lab/results/L1-arista_eos.md`, `L1-cisco_nxos.md`, `L1-juniper_vsrx.md`,
 `L1-juniper_vjunos-router.md`, `L1-cisco_iosxe.md`, `L3-arista_eos.md`, `L3-cisco_iosxe.md`,
@@ -4143,10 +4172,10 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   **Re-measured on vEOS after the re-key, 2026-09-20.** The `port` observations are unchanged — the device
   still says `ssh` at authentication and `vty<n>` at authorization, so two concurrent sessions cannot be
-  told apart by it where the context is written — and the outcome is now the opposite. Both overlapping sessions were answered
-  `permit context_matched` at their session authorization, under two distinct `ctx_id`s, with the device
-  reporting a *different* vty for each (`vty4` and `vty6`) and neither matching the `ssh` they authenticated
-  under. Off the wire, the AUTHOR RESPONSE that was `status=0x10 server_msg="port49: this session was not
+  told apart by it where the context is written — and the outcome is now the opposite. Both overlapping
+  sessions were answered `permit context_matched` at their session authorization, under two distinct
+  `ctx_id`s, with the device reporting a *different* vty for each (`vty4` and `vty6`) and neither
+  matching the `ssh` they authenticated under. Off the wire, the AUTHOR RESPONSE that was `status=0x10 server_msg="port49: this session was not
   authenticated by port49"` is now `status=0x01` carrying `priv-lvl=15`. The whole vEOS decision log for
   that run holds **no `context_missing` and no `username_mismatch` record at all**, where the previous run
   denied three of twelve session authorizations. L3 is the corroboration: it previously had to strip the

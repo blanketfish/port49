@@ -74,9 +74,16 @@ func (s *Store) nextRevLocked() uint64 {
 // joined: a second login by the same principal on the same device merges into
 // the live context (spec §5.6), and each login is indexed under its own sid
 // and certificate. Revocation by either has to keep reaching the context for
-// as long as it lives, so an extension re-stamps every one of them. They are
-// short — one entry per distinct credential that logged in — and the sweep
-// drops an entry once its index entry is gone.
+// as long as it lives, so an extension re-stamps every one of them.
+//
+// The lists are deliberately uncapped. They hold one entry per distinct
+// credential that logged into this one context on this one device, each
+// behind a token the broker minted. Another principal's replace, or an
+// unreadable one, clears them (UnindexRef), and the sweep drops an entry once
+// its index entry is gone. Dropping an entry to hold a cap would silently cost
+// revocation its reach into a context that is still live and authorizing —
+// the fail-open direction — and no cap could tell which entry was safe to
+// lose.
 type indexKeys struct {
 	principal string
 	sids      []string
