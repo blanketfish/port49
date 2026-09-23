@@ -66,12 +66,50 @@ func (s *Store) nextRevLocked() uint64 {
 }
 
 // indexKeys is the set of index keys one ref was written under. An empty
-// field means that index was never written for this ref — the same "" that
+// principal means that index was never written for this ref — the same "" that
 // IndexContext reads as "skip this index".
+//
+// sids and certKeys are lists, not single values, because a context is
+// joined: a second login by the same principal on the same device merges into
+// the live context (spec §5.6), and each login is indexed under its own sid
+// and certificate. Revocation by either has to keep reaching the context for
+// as long as it lives, so an extension re-stamps every one of them. They are
+// short — one entry per distinct credential that logged in — and the sweep
+// drops an entry once its index entry is gone.
 type indexKeys struct {
 	principal string
-	sid       string
-	certKey   string
+	sids      []string
+	certKeys  []string
+}
+
+func (r indexKeys) empty() bool { return r.principal == "" && len(r.sids) == 0 && len(r.certKeys) == 0 }
+
+// withKey appends key if it is non-empty and not already present. It copies,
+// for the reason addDiscriminator does.
+func withKey(keys []string, key string) []string {
+	if key == "" {
+		return keys
+	}
+	for _, k := range keys {
+		if k == key {
+			return keys
+		}
+	}
+	return append(append([]string(nil), keys...), key)
+}
+
+// withoutKey drops key, copying.
+func withoutKey(keys []string, key string) []string {
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if k != key {
+			out = append(out, k)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 type blobEntry struct {
@@ -205,12 +243,28 @@ func (s *Store) sweepLocked() {
 	// extend, so keeping its entry would be one map entry per ref the daemon
 	// ever saw.
 	for ref, rec := range s.indexedAs {
-		if !indexed(s.byPrincipal, rec.principal, ref) &&
-			!indexed(s.bySid, rec.sid, ref) &&
-			!indexed(s.byCert, rec.certKey, ref) {
+		if !indexed(s.byPrincipal, rec.principal, ref) {
+			rec.principal = ""
+		}
+		rec.sids = stillIndexed(s.bySid, rec.sids, ref)
+		rec.certKeys = stillIndexed(s.byCert, rec.certKeys, ref)
+		if rec.empty() {
 			delete(s.indexedAs, ref)
+		} else {
+			s.indexedAs[ref] = rec
 		}
 	}
+}
+
+// stillIndexed keeps the keys under which idx still holds ref.
+func stillIndexed(idx map[string]map[store.ContextRef]time.Time, keys []string, ref store.ContextRef) []string {
+	var out []string
+	for _, k := range keys {
+		if indexed(idx, k, ref) {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // indexed reports whether idx[key] still holds ref.
@@ -671,8 +725,12 @@ func (s *Store) extendIndexesLocked(ref store.ContextRef, exp time.Time) {
 		return
 	}
 	restamp(s.byPrincipal, rec.principal, ref, exp)
-	restamp(s.bySid, rec.sid, ref, exp)
-	restamp(s.byCert, rec.certKey, ref, exp)
+	for _, sid := range rec.sids {
+		restamp(s.bySid, sid, ref, exp)
+	}
+	for _, certKey := range rec.certKeys {
+		restamp(s.byCert, certKey, ref, exp)
+	}
 }
 
 // restamp pushes an existing entry's expiry out, and does two things it might
@@ -729,20 +787,17 @@ func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, 
 	addRef(s.bySid, sid, ref, exp)
 	addRef(s.byCert, certKey, ref, exp)
 	// Record where this ref now answers from, so an extension of its context
-	// can carry these entries with it (extendIndexesLocked). A non-empty key
-	// replaces what was recorded and an empty one leaves it alone, matching
-	// the "" this method already reads as "skip this index": a second call
-	// that passes no sid must not lose the sid entry the first call wrote.
+	// can carry these entries with it (extendIndexesLocked). A sid or cert is
+	// added to what was recorded, never swapped for it: a joined context
+	// answers under every login's credential (indexKeys). An empty key leaves
+	// the record alone, matching the "" this method already reads as "skip
+	// this index".
 	rec := s.indexedAs[ref]
 	if principal != "" {
 		rec.principal = principal
 	}
-	if sid != "" {
-		rec.sid = sid
-	}
-	if certKey != "" {
-		rec.certKey = certKey
-	}
+	rec.sids = withKey(rec.sids, sid)
+	rec.certKeys = withKey(rec.certKeys, certKey)
 	s.indexedAs[ref] = rec
 	s.writes++
 	if s.writes%sweepEvery == 0 {
@@ -766,13 +821,9 @@ func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string
 		if rec.principal == principal {
 			rec.principal = ""
 		}
-		if rec.sid == sid {
-			rec.sid = ""
-		}
-		if rec.certKey == certKey {
-			rec.certKey = ""
-		}
-		if rec == (indexKeys{}) {
+		rec.sids = withoutKey(rec.sids, sid)
+		rec.certKeys = withoutKey(rec.certKeys, certKey)
+		if rec.empty() {
 			delete(s.indexedAs, ref)
 		} else {
 			s.indexedAs[ref] = rec
@@ -813,10 +864,13 @@ func (s *Store) ReindexSid(_ context.Context, oldSid, newSid string, ref store.C
 	// The reverse record follows the move, or the next extension of this
 	// context would re-stamp the sid entry the rotation just removed and
 	// leave the live one to expire underneath it.
-	if newSid != "" {
-		rec := s.indexedAs[ref]
-		rec.sid = newSid
-		s.indexedAs[ref] = rec
+	if rec, ok := s.indexedAs[ref]; ok || newSid != "" {
+		rec.sids = withKey(withoutKey(rec.sids, oldSid), newSid)
+		if rec.empty() {
+			delete(s.indexedAs, ref)
+		} else {
+			s.indexedAs[ref] = rec
+		}
 	}
 	s.writes++
 	if s.writes%sweepEvery == 0 {

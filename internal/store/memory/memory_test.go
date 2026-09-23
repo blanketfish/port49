@@ -1048,3 +1048,64 @@ func TestEveryContextWriteMovesTheRevision(t *testing.T) {
 		}
 	}
 }
+
+// A context a second login joined is indexed under both logins' credentials,
+// and revocation by either has to reach it for as long as it lives (spec §5.6).
+// The reverse record used to hold one sid and one cert, so the second
+// IndexContext overwrote the first login's and every extension after it
+// re-stamped only the newest: the first login's entries aged out at index_ttl
+// under a context still authorizing, and a back-channel logout for that sid
+// reported zero contexts.
+func TestExtendingCarriesEveryJoinedLoginsSidAndCert(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	ref := store.ContextRef{NAS: "n", Username: "u"}
+	certA, certB := store.CertKey("ca", "01"), store.CertKey("ca", "02")
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u"}, time.Minute)
+	if err := s.IndexContext(ctx, "user:alice", "sA", certA, ref, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "user:alice", "sB", certB, ref, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		now = now.Add(30 * time.Second)
+		if err := s.TouchContext(ctx, k, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		get  func() ([]store.ContextRef, error)
+	}{
+		{"first login's sid", func() ([]store.ContextRef, error) { return s.ContextsBySid(ctx, "sA") }},
+		{"second login's sid", func() ([]store.ContextRef, error) { return s.ContextsBySid(ctx, "sB") }},
+		{"first login's cert", func() ([]store.ContextRef, error) { return s.ContextsByCert(ctx, certA) }},
+		{"second login's cert", func() ([]store.ContextRef, error) { return s.ContextsByCert(ctx, certB) }},
+	} {
+		if refs, err := tc.get(); err != nil || len(refs) != 1 {
+			t.Fatalf("%s aged out under a live context: %v %v", tc.name, refs, err)
+		}
+	}
+
+	// Unindexing one login's keys leaves the other's reaching the context.
+	if err := s.UnindexContext(ctx, "", "sA", certA, ref); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(45 * time.Second)
+	if err := s.TouchContext(ctx, k, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(30 * time.Second)
+	if refs, _ := s.ContextsBySid(ctx, "sA"); len(refs) != 0 {
+		t.Fatalf("an extension resurrected an unindexed sid: %v", refs)
+	}
+	if refs, _ := s.ContextsBySid(ctx, "sB"); len(refs) != 1 {
+		t.Fatalf("unindexing one login's sid lost the other's: %v", refs)
+	}
+	if refs, _ := s.ContextsByCert(ctx, certB); len(refs) != 1 {
+		t.Fatalf("unindexing one login's cert lost the other's: %v", refs)
+	}
+}
