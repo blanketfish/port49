@@ -89,8 +89,17 @@ func Load(path string) (*Policy, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return nil, fmt.Errorf("policy: %s: %w; the vertical slice reads roles, subjects and grants only, "+
-			"and refuses every other key rather than ignoring it (plan 3)", path, err)
+		// Each hint only where it is true: the unknown-key one on a type
+		// error would send an operator looking for a key that is not there.
+		switch msg := err.Error(); {
+		case strings.Contains(msg, "not found in type"):
+			return nil, fmt.Errorf("policy: %s: %w; the vertical slice reads roles, subjects and grants only, "+
+				"and refuses every other key rather than ignoring it (plan 3)", path, err)
+		case strings.Contains(msg, "time.Duration"):
+			return nil, fmt.Errorf("policy: %s: %w; durations need a unit, e.g. 60s", path, err)
+		default:
+			return nil, fmt.Errorf("policy: %s: %w", path, err)
+		}
 	}
 	// A second document would be ignored by a single Decode, and an ignored
 	// `---` then `scopes:` is the unscoped-but-looks-scoped policy the package
@@ -102,6 +111,11 @@ func Load(path string) (*Policy, error) {
 	p, err := build(f)
 	if err != nil {
 		return nil, fmt.Errorf("policy: %s: %w", path, err)
+	}
+	// An empty policy fails closed, but a truncated file or the wrong one
+	// would go unnoticed until the first refused mint.
+	if len(p.subjects) == 0 {
+		return nil, fmt.Errorf("policy: %s: declares no subjects, so nobody can mint; is this the right file?", path)
 	}
 	return p, nil
 }
@@ -142,6 +156,9 @@ func build(f file) (*Policy, error) {
 			if !strings.HasPrefix(id, "user:") || len(id) == len("user:") {
 				return nil, fmt.Errorf("subject %q: identity %q: the vertical slice's one verifier is a human x509 "+
 					"certificate, whose principal is `user:<email>` (spec §2); machine identities are plan 8's", s.Name, id)
+			}
+			if err := checkIdentity(id); err != nil {
+				return nil, fmt.Errorf("subject %q: %w", s.Name, err)
 			}
 			if other, dup := p.byIdentity[id]; dup {
 				if other == s.Name {
@@ -206,7 +223,8 @@ func build(f file) (*Policy, error) {
 	// level by the device while port49 clamps the context to the ceiling, so
 	// every command it types is denied privilege_exceeded. Resolve composes
 	// both as a max over all the subject's grants, so the check does too
-	// (plan 3, pre-flight F17). An absent max_privilege is no ceiling.
+	// (plan 3, pre-flight F17). An absent max_privilege is no ceiling only
+	// when no grant of the subject sets one.
 	for name, gs := range p.grants {
 		var level, ceiling uint8
 		for _, g := range gs {
@@ -222,6 +240,23 @@ func build(f file) (*Policy, error) {
 		}
 	}
 	return p, nil
+}
+
+// checkIdentity refuses a `user:` identity no principal can equal. The
+// daemon's principal is `user:` plus the certificate's email lower-cased, and
+// the lookup is exact, so `user:Alice@Example.com` would load and never match.
+// It is refused rather than lower-cased so the file reads exactly as it matches.
+func checkIdentity(id string) error {
+	email := strings.TrimPrefix(id, "user:")
+	unprintable := func(r rune) bool { return r < 0x21 || r > 0x7e }
+	if strings.IndexFunc(email, unprintable) >= 0 || !strings.Contains(email, "@") {
+		return fmt.Errorf("identity %q: an email must be printable ASCII with no spaces, and contain an @", id)
+	}
+	if lower := strings.ToLower(email); lower != email {
+		return fmt.Errorf("identity %q must be lower-case, because certificate identities are compared "+
+			"lower-case: write \"user:%s\"", id, lower)
+	}
+	return nil
 }
 
 // checkLevel accepts an empty level (the role or grant sets none) or one the

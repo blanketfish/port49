@@ -63,6 +63,12 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a scopes block", roleOK + subjOK + grantOK + "scopes:\n  - {name: dc, match: {}}\n", "roles, subjects and grants only"},
 		{"a second document", roleOK + subjOK + grantOK + "---\nscopes:\n  - {name: dc, match: {}}\n", "one YAML document"},
 		{"one identity twice in a subject", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\", \"user:a@example.com\"], username: a, token_ttl: 60s}\n", "listed twice in subject \"s\""},
+		{"an upper-case identity", roleOK + "subjects:\n  - {name: s, identity: [\"user:Alice@Example.com\"], username: a, token_ttl: 60s}\n", `write "user:alice@example.com"`},
+		{"a space in an identity", roleOK + "subjects:\n  - {name: s, identity: [\"user: a@example.com\"], username: a, token_ttl: 60s}\n", "printable ASCII"},
+		{"an identity with no @", roleOK + "subjects:\n  - {name: s, identity: [\"user:alice\"], username: a, token_ttl: 60s}\n", "printable ASCII"},
+		{"an empty file", "", "declares no subjects"},
+		{"a comment-only file", "# nothing yet\n", "declares no subjects"},
+		{"a token_ttl with no unit", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, token_ttl: 60}\n", "durations need a unit"},
 		{"a group subject", roleOK + "subjects:\n  - {name: s, group: G, username: a, token_ttl: 60s}\n", "field group"},
 		{"operator", "roles:\n  - {name: r, privilege: operator}\n", "`operator` has no priv-lvl mapping"},
 		{"an unknown level", "roles:\n  - {name: r, privilege: root}\n", "is not a privilege level"},
@@ -95,5 +101,14 @@ func TestLoadRefusesByName(t *testing.T) {
 				t.Fatalf("Load = %v, want an error containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// The unknown-key hint is for unknown keys: on a type error it would send an
+// operator looking for a key that does not exist.
+func TestATypeErrorIsNotBlamedOnAnUnknownKey(t *testing.T) {
+	_, err := Load(write(t, roleOK+"subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, token_ttl: 60}\n"))
+	if err == nil || strings.Contains(err.Error(), "every other key") {
+		t.Fatalf("Load = %v, want a type error without the unknown-key hint", err)
 	}
 }
