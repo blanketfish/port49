@@ -3589,7 +3589,8 @@ the enable mechanism. The overwrite this paragraph used to accept reset the stor
 (window A's STOP became `foreign`), and wiped `revoked_at` (a token minted before a revocation
 re-admitted the user). **A join lifts `revoked_at` only when the broker minted the new token after
 the revocation** — the credential verified again, which is the one thing that may; a refresh never
-does (§5.1.3). Another principal under the same username, or a context past `session_expires`, is
+does (§5.1.3). A login whose token predates the revocation is refused `credential_revoked` (§5.6).
+Another principal under the same username, or a context past `session_expires`, is
 still replaced, and §5.6 requires the replace to be logged. A log reader still cannot tell two
 shells apart by `ctx_id`; no wire field distinguishes them on every platform, so this is not fixable
 by a better key.

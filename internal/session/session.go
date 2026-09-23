@@ -15,9 +15,9 @@
 // unredeemed tokens. Design §1182 puts that on the broker — "broker deletes on
 // revoke by principal, sid, or (device, username)" — and until the broker does
 // it, a revoked principal's unredeemed token still redeems. On a device where
-// the revoked context is still live the damage is contained: the login joins
-// that context and keeps its revoked_at, because the token was minted before
-// the revocation (store.JoinContext; spec §5.6). On a device with no live
+// the revoked context is still live the damage is contained: the token was
+// minted before the revocation, so the login is refused `credential_revoked`
+// and the token spent (package authen; spec §5.6). On a device with no live
 // context there is nothing to join, and the redemption writes a fresh context
 // with no revoked_at on it. The operator sees a revocation that marked every
 // context and deleted every receipt, and then a PERMIT on a device they
