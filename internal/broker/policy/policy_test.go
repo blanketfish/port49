@@ -61,6 +61,8 @@ const grantOK = "grants:\n  - {subject: s, scope: all_devices, roles: [r]}\n"
 func TestLoadRefusesByName(t *testing.T) {
 	for _, tt := range []struct{ name, yaml, want string }{
 		{"a scopes block", roleOK + subjOK + grantOK + "scopes:\n  - {name: dc, match: {}}\n", "roles, subjects and grants only"},
+		{"a second document", roleOK + subjOK + grantOK + "---\nscopes:\n  - {name: dc, match: {}}\n", "one YAML document"},
+		{"one identity twice in a subject", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\", \"user:a@example.com\"], username: a, token_ttl: 60s}\n", "listed twice in subject \"s\""},
 		{"a group subject", roleOK + "subjects:\n  - {name: s, group: G, username: a, token_ttl: 60s}\n", "field group"},
 		{"operator", "roles:\n  - {name: r, privilege: operator}\n", "`operator` has no priv-lvl mapping"},
 		{"an unknown level", "roles:\n  - {name: r, privilege: root}\n", "is not a privilege level"},

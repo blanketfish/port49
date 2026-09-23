@@ -92,6 +92,13 @@ func Load(path string) (*Policy, error) {
 		return nil, fmt.Errorf("policy: %s: %w; the vertical slice reads roles, subjects and grants only, "+
 			"and refuses every other key rather than ignoring it (plan 3)", path, err)
 	}
+	// A second document would be ignored by a single Decode, and an ignored
+	// `---` then `scopes:` is the unscoped-but-looks-scoped policy the package
+	// comment refuses.
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("policy: %s: the policy file must be one YAML document; remove the `---` "+
+			"separator and everything after it, or merge it into the first document", path)
+	}
 	p, err := build(f)
 	if err != nil {
 		return nil, fmt.Errorf("policy: %s: %w", path, err)
@@ -137,6 +144,9 @@ func build(f file) (*Policy, error) {
 					"certificate, whose principal is `user:<email>` (spec §2); machine identities are plan 8's", s.Name, id)
 			}
 			if other, dup := p.byIdentity[id]; dup {
+				if other == s.Name {
+					return nil, fmt.Errorf("identity %q is listed twice in subject %q; list it once", id, s.Name)
+				}
 				return nil, fmt.Errorf("identity %q is listed by both subject %q and subject %q; a principal must "+
 					"resolve to one subject", id, other, s.Name)
 			}
