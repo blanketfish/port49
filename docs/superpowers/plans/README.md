@@ -10,16 +10,16 @@ operator will see change — new commands, config keys, reason codes, metrics, d
 Plan 13 builds the user and admin documentation from these.
 
 Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
-fifteen tasks, reviewed per task and whole-branch); 3 written (below); 4–12 not yet. PR #3's lab
-stretch is merged, so plan 3 is unblocked and is the next plan to write.
+fifteen tasks, reviewed per task and whole-branch); **3 merged 2026-09-23** (PR #8, below);
+4–13 not yet. Plan 4 (policy engine) is the next plan to write.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
 metric. PR #7's body lists three fail-closed follow-ups (one uniform "login into a revoked
 result" check after `JoinContext`) for plan 3 to pick up.
-**3 executed 2026-09-23, merge pending** (`2026-09-23-03-vertical-slice.md`, eighteen tasks:
-thirteen code, three lab, two docs; on `feature/vertical-slice`, reviewed per task and
-whole-branch). It closes PR #7's first two follow-ups and carries the third to plan 7; its
+**3 merged 2026-09-23** (PR #8; `2026-09-23-03-vertical-slice.md`, eighteen tasks:
+thirteen code, three lab, two docs; reviewed per task and whole-branch; first real
+certificate-to-device login measured on vEOS). It closes PR #7's first two follow-ups and carries the third to plan 7; its
 "Questions for Ryan" section has three open calls.
 
 ---
