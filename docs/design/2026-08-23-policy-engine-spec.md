@@ -377,12 +377,17 @@ referenced by the token:
 ```
 blob:<sha256>            the fully compiled decision — see 5.1.2
 token:(nas, username)    { handle, kind, blob_hash, principal, username,
-                           max_session_age, expires, ... }
+                           max_session_age, minted_at, expires, ... }
 ```
 
 `max_session_age` rides in the token record because the daemon computes `session_expires`
 at redemption and the blob is shared across principals; where a principal holds several roles
 the broker writes the **minimum** over them.
+
+`minted_at` is when the broker cut the token, on the broker's clock — the clock revocation stamps
+`revoked_at` with. It is what decides whether a login may lift a revocation on the context it joins
+(§5.6): `auth_time` cannot, because it is when the human authenticated at the IdP, which can be
+hours before the mint.
 
 On successful redemption the daemon creates login context, which holds **the hash rather
 than a copy**:
@@ -395,7 +400,7 @@ ctx:(nas, username)
   port              ssh                  recorded as the device presented it at
                                          authentication; part of no key (§13, decision 15)
   rem_addr          198.51.100.4         recorded; compared on enable
-  privilege         15
+  privilege         15                   the HIGHEST level granted on this device (5.3); raise-only
   blob_hash         sha256:a3f9c1…
   credential        see 5.1.4
   auth_time         1757041495           when the human actually authenticated
@@ -618,12 +623,18 @@ normalize(request)
   → if now - ctx.refreshed_at
        > staleness_ceiling             → DENY (context_stale)
   → if request level > ctx.privilege   → DENY (privilege_exceeded)
-       (ctx.privilege is the level port49 last GRANTED: the login START's level, then
-        the `priv-lvl` a permitted session authorization carried, then an escalation;
-        the session-authorization permit records its granted level in place, same
-        ctx_id — measured on vEOS the session authorization arrives at priv_lvl 1,
-        port49 grants 15, and every later command arrives at 15;
-        tests/lab/results/L1-arista_eos.md, L3-arista_eos.md)
+       (ctx.privilege is the HIGHEST level port49 has granted this user on this device:
+        the login START's level, raised by the `priv-lvl` a permitted session
+        authorization carried and by an escalation, and never lowered — the context
+        covers every window of one operator (§5.6), so a second window granted less must
+        not take the first window's enable away. It is clamped to the context's ceiling
+        (`max_privilege`; zero is none), and it is still a bound: the device cannot
+        exceed it without port49 having said yes somewhere. The session-authorization
+        permit raises it in place, same ctx_id — measured on vEOS the session
+        authorization arrives at priv_lvl 1, port49 grants 15, and every later command
+        arrives at 15; tests/lab/results/L1-arista_eos.md, L3-arista_eos.md. The level a
+        session authorization REPLIES is policy's answer and never this field.
+        Ruled 2026-09-23.)
   → collect every matching rule, permit and deny alike
   → if no permit matches                 → DENY (no_rule_matched)
   → if no permit dominates every
@@ -953,15 +964,57 @@ every record, and used to annotate accounting. Neither is ever looked up on. The
 that forced this is in §15 (L1): on no platform in the lab is `port` the same value at
 authentication and at authorization.
 
-**One operator, one device, one context.** The accepted cost of this key is that a second
-login by the same username on the same device overwrites the first login's context with an
-identical-content context under a new `ctx_id`. Same principal, same privilege, same blob, so
-nothing is authorized that was not already authorized — but the older shell now logs the
-newer `ctx_id`, and a log reader cannot tell the two apart. No wire field distinguishes them
-(§15, L1), so this is unavoidable rather than merely unfixed. The overwrite MUST therefore be
-logged: the `redeem` record that performs it carries `session.replaced_ctx_id`, the `ctx_id`
-it displaced, so the reader at 3am sees "second login by alice on ls01, context replaced"
-rather than silence, and can join the older shell's records to the newer ones.
+**One operator, one device, one context — and a second login joins it.** The context is "this
+principal's authorization on this device", not one connection: no wire field on authorization
+tells two of one operator's windows apart on every platform — NX-OS sends `port` empty on every
+command authorization and Junos never authorizes a command (§15, L1, L18). So a second login by the
+same principal under the same username on the same device **joins** the live context rather than
+replacing it (ruled 2026-09-23):
+
+| field | on a join |
+|---|---|
+| `ctx_id` | kept — each `redeem` record still carries its own `credential_sha256` |
+| `privilege` | kept; the new login's level only raises it, clamped to the new ceiling (§5.3) |
+| `session_discriminators`, `accounting_state` | kept |
+| `blob_hash`, `max_privilege`, `enable` | from the newest login — the latest broker decision wins |
+| `auth_time`, `session_expires` | the later of the two; no ceiling is later than any time |
+| `revoked_at` | kept, unless the new token was minted after it (§5.1.1 `minted_at`; §13, decision 15) |
+| credential | the newest; every login is still indexed, so revocation by either login's `sid` or certificate reaches the context |
+| `port`, `rem_addr` | the newest (informational) |
+| `refreshed_at`, `last_touched_at` | now |
+
+A login is **not** a join, and writes a fresh context whose `redeem` record carries
+`session.replaced_ctx_id`, in two cases: the live context belongs to **another principal** under
+the same username, or it is **past `session_expires`**. A ceiling ending is not a credential
+verified again, so the same principal's `revoked_at` carries across that replace by the rule in the
+table. A context the idle TTL has reclaimed is absent, and the login writes a fresh one with nothing
+to name. The join is a compare-and-set on the context's revision, so a revocation, an accounting
+annotation, a privilege raise or a refresh that lands mid-login is merged rather than erased, and
+two simultaneous logins both land. A replace unindexes the displaced login's principal, `sid` and
+certificate before the new login is indexed, so a later revocation of the displaced credential
+does not reach the context that replaced it.
+
+A store port49 cannot reach fails the login `store_unavailable`, refused before the token is
+spent. A record the store returns but port49 cannot open — sealed under a key that has left the
+two-key window, or failing authentication — cannot be joined, and is **replaced fresh** through
+the same compare-and-set: the replace carries the record's plaintext `revoked_at` by the rule in
+the table, whoever its principal was, because the principal is sealed; the `redeem` record carries
+`session.replaced_unreadable: true` and no `replaced_ctx_id`, because that id is sealed too; and
+the unreadable login's index entries cannot be named, so they stay until `index_ttl` and a
+revocation of that credential can mark the replacing context — fail-closed, never a lift. Each such
+login opens the record twice (the read before the token is spent and the join's own), so
+`port49_crypt_open_failures_total{record="context"}` counts at least two per login.
+
+A retransmitted login or `enable` replays its receipt only while the receipt's `ctx_id` is the live
+context's. The join keeps `ctx_id` across one principal's logins, so a match is exactly "the same
+context"; after a replace or a reclaim the receipt names a context that no longer exists, and the
+retransmission is answered `token_spent`, as a spent token is, without sliding the receipt. The
+device prompts again. The one copy not checked is the concurrent duplicate that lost the
+redemption race: it presented the winner's own credential, and the winner's context write is still
+in flight.
+
+What remains of the old cost: both windows log one `ctx_id`, so a log reader tells them apart by
+`port`, `rem_addr` and each `redeem` record's `credential_sha256`, not by `ctx_id`.
 
 **Bound attributes.** `username` is in the key, so a context is only ever found by the name
 that created it. `rem_addr` is recorded at creation and compared where the wire username is
@@ -1008,7 +1061,7 @@ did not generate and cannot verify MUST NOT delete state.
 
 | | Trigger | Authority |
 |---|---|---|
-| 1 | **Login redemption** on the same `(nas, username)` | port49 performed it — overwrites unconditionally, and logs the overwrite (above). An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7). **That is a requirement on plan 2's escalate path, not a description of the tree** — see below |
+| 1 | **Login redemption** on the same `(nas, username)` | port49 performed it — joins the same principal's live context and replaces another principal's, logging the replace (above). An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7). **That is a requirement on plan 2's escalate path, not a description of the tree** — see below |
 | 2 | **Revocation** — OIDC back-channel logout by `sid` or `sub`; a certificate appearing on a CRL or OCSP response by issuer and serial; a policy change withdrawing every grant | authoritative, from the identity layer (§5.1.4). Sets `revoked_at` rather than deleting, so the next command is denied `credential_revoked` with a `server_msg` saying so — distinguishable from a session port49 never saw. Row 6 reclaims the state |
 | 3 | **Session ceiling** — `session_expires` reached and the grace window elapsed | local, needs no external signal |
 | 3a | **Staleness ceiling** — `now - refreshed_at` beyond `staleness_ceiling` because the broker has been unreachable that long (design document §9) | local; denies `context_stale` with a `server_msg` naming the broker outage, retains the context so recovery resumes it |
@@ -1037,6 +1090,8 @@ rather than on a stable `ctx_id`, and the converse holds too: a second *login* S
 `priv_lvl=1` and writes it over an enabled context, so once the policy engine reads
 `privilege` this oscillates both ways. Keeping `ctx_id` across an escalation, and updating
 `privilege` in place, is **plan 2's work**.
+The converse — a second login writing `priv_lvl=1` over an enabled context — is closed by the join
+above and by raise-only privilege (§5.3), 2026-09-23.
 
 **Why accounting was demoted.** It is best-effort, device-generated, and delivered on a
 separate connection that can be queued or bounced off another server first. A delayed logout
@@ -1179,11 +1234,18 @@ that path, not the FAIL itself. The escalation converts into real access only on
 where command authorization does not cover that privilege tier, which is precisely what the
 accounting reconciliation in §9 exists to surface.
 
-**Local account names MUST NOT collide with device-facing usernames.** A device-local `bob`
-that is not the port49 username `bob` matches on username and inherits the context. The
-reference AAA configuration MUST require disjoint namespaces for break-glass and local
-accounts, and port49 SHOULD warn when it observes a local fallback succeed for a username it
-knows.
+**Local account names MUST NOT collide with device-facing usernames, and `enable` MUST NOT fall
+back to a local secret.** A device-local `bob` that is not the port49 username `bob` matches on
+username and inherits the context — and the context holds the highest level port49 has granted
+`bob` on that device (§5.3). Every command such a session sends arrives under the same username and
+is authorized at that level; so does every command of a port49 `bob` session that reached `enable`
+through a local enable secret rather than through port49. The reference AAA configuration MUST
+require disjoint namespaces for break-glass and local accounts and MUST NOT put a local fallback on
+the enable method list, and port49 SHOULD warn when it observes a local fallback succeed for a
+username it knows. The detection that exists is accounting: such a session's exec records carry a
+discriminator port49 never saw begin and are attributed `foreign` (§5.8), counted in
+`port49_accounting_attributions_total{attribution="foreign"}`. Plan 5's adapters owe a
+configuration check that warns when a port49-served username exists as a device-local account.
 
 #### Gated on the lab
 
@@ -1327,7 +1389,7 @@ is what the redemption joins back to (see Correlation below).
 | `store_unavailable` | any event: the store did not answer or returned an error; the reply is `ERROR` so the device falls through to its next method (design document §12) — the log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
-| `token_spent` | `redeem`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed; FAIL on the wire, distinguishable only in the log |
+| `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
 | `device_mismatch` | `redeem`: the presented token's device tag is not this device's (design document §8) — PAP and ASCII only; under CHAP the tag is not visible and the outcome is `token_not_found` |
 | `credential_mismatch` | `redeem`: the receipt the store returned does not carry the credential hash the lookup asked for. Since 2026-09-20 the hash is *in* the receipt key (§13, decision 15), so a differing credential finds no receipt and redeems normally instead; this reason now covers only a store that answered with a record it was not asked for, which is a store fault and never a normal outcome |
 | `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision |
@@ -1675,6 +1737,12 @@ port49 watched this user's other sessions begin, a record arrived for a session 
 never saw — so either port49 was unreachable and the device fell back locally, or someone reached
 a console, or a device-local account shares a principal's name.
 
+Every accounting record the spool accepts is counted in
+`port49_accounting_attributions_total{attribution}`, and `foreign` is the series to alert on. The
+label is the attribution alone — no device and no user; the decision record carries both. It is not
+rate-limited: a burst of `foreign` is itself the signal. A record the spool refused is not counted,
+because the device was answered ERROR and will send it again.
+
 Two earlier readings of this paragraph are superseded. It first said "an exec START whose `user`
 does not match the bound username", which under the `(nas, username)` key (§13, decision 15) is
 unreachable: a START naming another user addresses another key, finds no context, and is
@@ -1728,6 +1796,13 @@ an NX-OS `admin` record carrying `task_id=vsh.bin.$port` after a cancelled `sudo
 been decided, on a record that resolved to no context at all. A device acting on its own behalf
 is therefore never `foreign`, and the four attribution values `resolved`, `foreign`, `system`
 and `unattributed` partition every accounting record.
+
+**A console login as `root` on Junos is attributed `system`, and that is a known limitation.**
+`root` is on `juniper_junos`'s list because the device's own machinery writes accounting under it
+(above), and a person at the console logging in as `root` writes accounting under the same name.
+port49 cannot tell the two apart from the record, so both are `system` and neither is `foreign`.
+The record keeps the `port` the device sent, which is what lets a log reader see where the session
+was. What `port` a Junos console session presents is unmeasured in this lab. Ruled 2026-09-23.
 
 #### Unresolvable records
 
@@ -3453,11 +3528,19 @@ to work on every platform and three of the other four break it in three differen
 changes nothing about the ruling — but it is why the argument for it has to be made from the set
 of platforms and not from any one of them.
 
-*The accepted cost, stated plainly.* One user's concurrent sessions on one device share a
-context. The second login overwrites the first with identical content under a new `ctx_id`,
-so nothing is authorized that was not already authorized, but a log reader cannot tell the
-two shells apart. No wire field distinguishes them, so this is not fixable by a better key;
-§5.6 requires the overwrite to be logged so it is at least visible.
+*The accepted cost, stated plainly.* One user's concurrent sessions on one device share a context.
+**Since 2026-09-23 a second login by the same principal joins it** (§5.6, the join table): the
+`ctx_id`, the privilege already granted, the bound session discriminators and a revocation the new
+token predates are kept, and the newest broker decision supplies the policy blob, the ceiling and
+the enable mechanism. The overwrite this paragraph used to accept reset the stored privilege
+(window A, enabled to 15, was then denied `privilege_exceeded`), emptied the discriminator set
+(window A's STOP became `foreign`), and wiped `revoked_at` (a token minted before a revocation
+re-admitted the user). **A join lifts `revoked_at` only when the broker minted the new token after
+the revocation** — the credential verified again, which is the one thing that may; a refresh never
+does (§5.1.3). Another principal under the same username, or a context past `session_expires`, is
+still replaced, and §5.6 requires the replace to be logged. A log reader still cannot tell two
+shells apart by `ctx_id`; no wire field distinguishes them on every platform, so this is not fixable
+by a better key.
 
 *The receipt's cost is separate, and also accepted.* `port` leaving the receipt key means a
 spent token replays for `receipt_ttl` **anywhere on that NAS and across every transport**,
@@ -3696,7 +3779,9 @@ Beyond those already listed in the design document's §14:
   retransmission replays and a genuinely new login by the same user on the same device finds
   no receipt and redeems normally rather than being rejected `credential_mismatch`. A spent
   token replayed within `receipt_ttl` is honored only for the same
-  `(nas, username, credential_sha256)`.
+  `(nas, username, credential_sha256)`. A retransmitted login or enable replays only while the
+  receipt's `ctx_id` is the live context's; after a replace or a reclaim it is `token_spent`
+  (§5.6).
 - **CHAP verification**: a candidate set of several unspent tokens resolves to the one that
   produces the matching digest; the atomic removal, not the verification, decides single use,
   and two replicas racing the same token yield exactly one success — **and the loser answers
@@ -3708,7 +3793,8 @@ Beyond those already listed in the design document's §14:
   across a key rotation window in which both keys are accepted.
 - **`enable: auto` is refused at policy load** on a platform whose `enable_username` is not
   `principal`.
-- **Context teardown**: a redemption overwrites; an authentication START with a different
+- **Context teardown**: a redemption by the same principal joins the live context and one by
+  another principal replaces it (§5.6); an authentication START with a different
   username invalidates even when rejected; an ASCII login invalidates once the username
   arrives in a CONTINUE; an exec accounting START for the port annotates and never
   invalidates.
