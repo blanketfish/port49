@@ -3859,9 +3859,11 @@ Beyond those already listed in the design document's §14:
   and into a revoked context it is `credential_revoked` (§5.6).
 - **CHAP verification**: a candidate set of several unspent tokens resolves to the one that
   produces the matching digest; the atomic removal, not the verification, decides single use,
-  and two replicas racing the same token yield exactly one success — **and the loser answers
-  PASS from the receipt, never FAIL**, with the same `ctx_id` as the winner (design document
-  §8).
+  and two replicas racing the same token yield exactly one success — **and the loser replays
+  the winner's receipt as it stands**, with the same `ctx_id` as the winner (design document
+  §8): PASS when the winner passed, FAIL `receipt_replayed` once the winner's refusal has
+  marked it failed. A loser that reads the receipt before that mark answers PASS (§5.6,
+  pre-flight F16).
 - **CHAP re-prompt**: a fresh challenge does not match the receipt and correctly fails rather
   than replaying.
 - **Encryption at rest**: a store dump contains no recoverable token; redemption succeeds

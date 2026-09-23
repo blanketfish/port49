@@ -362,8 +362,9 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// never have landed if that escalation's SetPrivilege failed. The gate
 		// above already re-checked the mechanism, the ceiling, revocation,
 		// expiry and rem_addr against the live context, so this grants nothing
-		// the cold path would not.
-		if enable && r.Status == wire.AuthenStatusPass {
+		// the cold path would not. A receipt marked Failed replays its
+		// refusal, whatever Status it was written with.
+		if enable && r.Status == wire.AuthenStatusPass && !r.Failed {
 			return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
 		}
 		return s.replay(ctx, rec, r)

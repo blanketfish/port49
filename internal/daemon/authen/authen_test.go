@@ -2322,6 +2322,39 @@ func TestARefusedLoginStaysRefusedAfterTheRevocationIsLifted(t *testing.T) {
 	}
 }
 
+// failedReceiptStore answers every receipt marked Failed, as FailReceipt
+// leaves one: the login or escalation it was written for was refused after.
+type failedReceiptStore struct{ *memory.Store }
+
+func (s failedReceiptStore) GetReceipt(ctx context.Context, rk store.ReceiptKey) (store.Receipt, error) {
+	r, err := s.Store.GetReceipt(ctx, rk)
+	r.Failed = true
+	return r, err
+}
+
+// A retransmitted enable whose receipt is marked failed replays the refusal;
+// Failed overrides the PASS it was written with, on the retransmission path
+// as on the race-loser path (T2 re-review nit).
+func TestARetransmittedEnableOnAFailedReceiptIsRefused(t *testing.T) {
+	f := setupStore(t, func(st *memory.Store) store.Store { return failedReceiptStore{st} })
+	f.seedLogin(t, "token", 15)
+	secret := f.tag() + "enabenabenabenabenab0123"
+	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "en", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
+			Principal: "user:alice@example.com", ExpiresAt: f.now.Add(time.Minute)})
+	for i, want := range []uint8{wire.AuthenStatusPass, wire.AuthenStatusFail} {
+		sess := f.h.NewSession(f.peer)
+		sess.Start(context.Background(), f.enableStart("alice"))
+		reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+		if reply.Status != want {
+			t.Fatalf("presentation %d: status %d, want %d: %v", i+1, reply.Status, want, f.records(t))
+		}
+	}
+	if last := f.records(t)[len(f.records(t))-1]; last["verdict"] != "deny" || last["reason"] != "receipt_replayed" {
+		t.Fatalf("a failed receipt replays its refusal: %v", last)
+	}
+}
+
 // receiptGoneStore answers FailReceipt with ErrNotFound: a revocation by
 // principal deleted the receipt between the join and the refusal.
 type receiptGoneStore struct{ *memory.Store }
