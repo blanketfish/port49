@@ -2,7 +2,7 @@
 
 - **Date measured:** 2026-09-20
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
-- **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
+- **Image version:** vEOS-lab 4.31.2F (image tagged 4.32.2F) (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
 - **Capture:** `tests/lab/evidence/L6-arista_eos.pcap` — 124 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L6-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH

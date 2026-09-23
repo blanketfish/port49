@@ -411,6 +411,21 @@ func (s *Store) ExtendReceipt(_ context.Context, rk store.ReceiptKey, idleExpire
 	return nil
 }
 
+// FailReceipt sets Failed under the lock and touches nothing else, so a
+// concurrent extend and this mark cannot erase each other.
+func (s *Store) FailReceipt(_ context.Context, rk store.ReceiptKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.receipts[rk]
+	if !ok || !r.RetainUntil.After(s.now()) {
+		delete(s.receipts, rk)
+		return store.ErrNotFound
+	}
+	r.Failed = true
+	s.receipts[rk] = r
+	return nil
+}
+
 // DeleteReceiptsByPrincipal removes every live receipt this principal wrote and
 // reports how many. It is the half of revocation that closes the replay window:
 // deleting the tokens alone leaves a spent token's receipt answering a replay

@@ -149,6 +149,14 @@ type Receipt struct {
 	IdleExpiresAt   time.Time
 	RetainUntil     time.Time
 
+	// Failed is set by FailReceipt and overrides Status: the login this
+	// receipt was written for was refused after the receipt was written (a
+	// join that wrote a revoked context), and every retransmission replays
+	// that refusal. Plaintext on purpose, like the bounds: it is written
+	// without opening the record, so any daemon can write it whatever key
+	// sealed the rest, and it only ever turns a PASS into a FAIL.
+	Failed bool
+
 	Sealed []byte
 }
 
@@ -322,6 +330,10 @@ type Store interface {
 	// ExtendReceipt pushes the sliding bound out. It never moves RetainUntil or
 	// FirstRedeemedAt, so the absolute cap cannot be slid.
 	ExtendReceipt(ctx context.Context, rk ReceiptKey, idleExpiresAt time.Time) error
+	// FailReceipt sets Failed on a live receipt and touches nothing else. It
+	// is how a login refused after its receipt was written makes every
+	// retransmission replay the refusal (spec §5.6).
+	FailReceipt(ctx context.Context, rk ReceiptKey) error
 	DeleteReceiptsByPrincipal(ctx context.Context, principal string) (int, error)
 
 	// PutContext writes c unconditionally. No production path calls it: the

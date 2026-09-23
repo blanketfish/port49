@@ -183,6 +183,77 @@ netconf ssh` in `configs/vjunos-startup.conf`, and `feature nxapi` / `feature ne
 an SSH subsystem; Junos and NX-OS serve it on **830**. `netconfPort` in `transport_test.go`
 carries that difference, so change the two together.
 
+## The vertical slice
+
+Plan 3's broker runs inside `port49d` when the config carries a `broker:` block
+(`tests/lab/slice/broker.yaml`), against the policy in `tests/lab/slice/policy.yaml` and
+certificates from `go run ./tests/lab/cmd/slice-pki` (written to the git-ignored
+`tests/lab/logs/slice-pki/`). `make build` builds `bin/port49` beside `bin/port49d`.
+
+**Automated:** `TestSliceEndToEnd`, vEOS only. It restarts the daemon with the broker block, runs
+`port49 login` and `port49 token leaf1`, logs in as `slice01` with the minted token, and writes
+`results/slice-arista_eos.md`.
+
+**By hand**, for the two measurements plan 3 does not automate. The daemon and topology are then
+yours to start and stop, one platform at a time, destroyed afterwards.
+
+**Wait for `breakglass`, and configure the device, before port49d starts.** Once port49d is
+running, a `breakglass` login reaches it as a TACACS+ login, is refused `token_not_found`, and
+neither vEOS nor IOS-XE falls through to `local` on that FAIL under `aaa authentication login
+default group port49 local` — the ssh client ends `Permission denied
+(publickey,keyboard-interactive)` however long you wait (111 such refusals in
+`results/L7-login-arista_eos.md`; `results/L1-restconf-cisco_iosxe.md`, "Order"). So an
+interactive `breakglass` session exists only while port49d is down. Once port49d is up, the only
+readiness signal is the one the harness uses: the device has sent port49d a packet.
+
+```sh
+make build
+sudo -n setcap cap_net_bind_service=+ep bin/port49d
+sudo -n containerlab deploy -t tests/lab/topologies/<eos|iosxe>.clab.yml
+# port49d is not running yet, so breakglass gets in once the device is up (1-2 minutes);
+# its password is labcreds.BreakglassPassword. Address: leaf1 172.100.100.11, xe1 172.100.100.41
+until ssh -o StrictHostKeyChecking=no breakglass@<address> 'show version | include Software'
+do sleep 10; done
+# any device configuration the run needs (plan 3 Task 17's RESTCONF AAA) goes here, as breakglass
+# the daemon config: the lab file, plus the broker block where the run needs a broker
+cat tests/lab/port49d-lab.yaml tests/lab/slice/broker.yaml > tests/lab/logs/port49d-byhand.yaml
+# a broker run only: its certificates, written before the daemon that loads them at start
+go run ./tests/lab/cmd/slice-pki
+PORT49_LAB_KEY=labsecret PORT49_LAB_ENC_KEY=port49-lab-encryption-key-32byte \
+  bin/port49d -config tests/lab/logs/port49d-byhand.yaml \
+  > tests/lab/logs/decisions-byhand.jsonl 2> tests/lab/logs/port49d-byhand.log &
+sudo -n tcpdump --immediate-mode -i any -U -n -s 0 -w tests/lab/captures/<note-name>.pcap 'tcp port 49' &
+# a broker run only: open the session, then mint one token per device login
+bin/port49 login --broker https://127.0.0.1:8449 \
+  --cert tests/lab/logs/slice-pki/client.pem --key tests/lab/logs/slice-pki/client-key.pem \
+  --broker-ca tests/lab/logs/slice-pki/broker-ca.pem
+TOKEN=$(bin/port49 token leaf1)
+# ... the run ...
+sudo -n pkill -INT -f 'tcpdump.*<note-name>'; kill -INT %1
+make evidence
+sudo -n containerlab destroy -t tests/lab/topologies/<eos|iosxe>.clab.yml --cleanup
+```
+
+A token never goes on a command line: `port49 token` writes it to stdout, a shell variable holds
+it, and `printf` (a builtin, so no process of its own) feeds it to `curl` on stdin. **Never run
+these steps under `set -x` (`xtrace`)**: the shell then prints every expanded command, so the
+minted `$TOKEN` lands in your terminal, your scrollback and any log you tee it to. That happened
+once in plan 3's lab run. The seed-token
+file `/tmp/port49-lab-tokens.jsonl` is truncated at every daemon start; `make evidence` reads it,
+so run `make evidence` before the next daemon start.
+
+`port49 login` needs all four of `--broker`, `--cert`, `--key` and `--broker-ca`; there is no
+fallback to the system roots. It refuses a key file that is a symlink, has group or other bits
+set, or is owned by anyone but you or root: `slice-pki` writes 0600 files in a 0700 directory,
+so run it as the user who runs `port49` and `port49d`. The agent's socket directory (`$XDG_RUNTIME_DIR/port49`,
+else `/tmp/port49-<uid>`) must be a real 0700 directory you own. If the agent will not start,
+`port49 login` prints the end of `agent.log` in that directory; if `port49d` will not start with
+the broker block, its stderr says why: a bad certificate, key or anchor at start is
+`port49d: broker TLS files (…): …`, naming the three files. An expired or not-yet-valid
+server certificate does not stop the start; it is one line, `port49d: broker: server
+certificate expired at …; logins will fail`. Once running, a failed handshake (a login with an
+untrusted or expired certificate) is logged as `port49d: broker: http: TLS handshake error …`.
+
 ## Tokens
 
 `port49d-lab.yaml` seeds single-use tokens, because redemption deletes the token: every login

@@ -322,11 +322,17 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// A receipt replays only onto the context it was written for (spec
 		// §5.6). The check is here, before the extension, so a refused
 		// presentation does not slide the window on its way to the refusal.
-		switch ok, lerr := s.receiptContextLive(ctx, ck, r.CtxID, enable, incumbent); {
+		switch live, ok, lerr := s.receiptContext(ctx, ck, r.CtxID, enable, incumbent); {
 		case lerr != nil:
 			return s.storeError(rec)
 		case !ok:
 			return s.fail(ctx, rec, decision.TokenSpent)
+		case !live.RevokedAt.IsZero():
+			// Answered from what the context says now, not from what the
+			// receipt stored: a revoked context admits nothing, whether the
+			// revocation landed after the login or the login wrote it (spec
+			// §5.6). Refused before the extension, so it does not slide.
+			return s.revoked(ctx, rec, live.Principal, live.CtxID, live.RevokedAt)
 		}
 		next := now.Add(s.h.receiptIdleTTL)
 		if next.After(capAt) {
@@ -356,8 +362,9 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// never have landed if that escalation's SetPrivilege failed. The gate
 		// above already re-checked the mechanism, the ceiling, revocation,
 		// expiry and rem_addr against the live context, so this grants nothing
-		// the cold path would not.
-		if enable && r.Status == wire.AuthenStatusPass {
+		// the cold path would not. A receipt marked Failed replays its
+		// refusal, whatever Status it was written with.
+		if enable && r.Status == wire.AuthenStatusPass && !r.Failed {
 			return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
 		}
 		return s.replay(ctx, rec, r)
@@ -416,7 +423,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// that needs no other principal — two first logins by the same principal
 	// both read nothing, both mint an id, and the one whose swap loses joins
 	// the other's context. Its receipt then names an id no context holds, so
-	// its retransmission is refused `token_spent` (receiptContextLive) and the
+	// its retransmission is refused `token_spent` (receiptContext) and the
 	// device prompts again. Each needs two logins under one username on one
 	// device inside a few milliseconds.
 	ctxID := incumbent.CtxID
@@ -424,12 +431,11 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// revokedAt is set when the login would join a context whose revocation
 	// its token, minted before it, cannot lift (store.CarryRevocation). Such a
 	// login is refused `credential_revoked`, the enable gate's answer for the
-	// same state (spec §5.6). The token is still spent, and the receipt
-	// records the refusal: a retry of a token the revocation was meant to stop
-	// must not get a second chance, and a retransmission replays FAIL, never
-	// a PASS. A revocation that lands after this read is merged by the join
-	// instead, and that login answers PASS into the revoked context; every
-	// authorization after it is denied.
+	// same state (spec §5.6), before anything is written to the context. The
+	// token is still spent, and the receipt records the refusal: a retry of a
+	// token the revocation was meant to stop must not get a second chance.
+	// This is the case the login can see before it writes; the check after
+	// the join below catches the ones it cannot.
 	var revokedAt time.Time
 	if !enable {
 		login = s.loginContext(winner, username, port, remAddr)
@@ -481,9 +487,16 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 				// retransmission does. A login that lost is not checked: it
 				// presented the winner's own credential, and the winner's
 				// JoinContext is still in flight, so a read here would race the
-				// winner's write and refuse the duplicate for nothing.
+				// winner's write and refuse the duplicate for nothing. It can
+				// therefore answer PASS from the receipt of a winner that, after
+				// its join, is refused credential_revoked, if it reads the receipt
+				// before the winner's FailReceipt lands: the one replay the §5.6
+				// rule does not reach. It takes two byte-identical
+				// presentations inside one join; every authorization on the
+				// revoked context is denied, and the next retransmission reads
+				// the live context and is refused (plan 3, pre-flight F16).
 				if enable {
-					switch ok, lerr := s.receiptContextLive(ctx, ck, r.CtxID, enable, incumbent); {
+					switch _, ok, lerr := s.receiptContext(ctx, ck, r.CtxID, enable, incumbent); {
 					case lerr != nil:
 						return s.storeError(rec)
 					case !ok:
@@ -494,7 +507,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 				// the retransmission above: the winner's receipt says PASS, but
 				// only replaying the effect puts the privilege on the context
 				// this session actually read.
-				if enable && r.Status == wire.AuthenStatusPass {
+				if enable && r.Status == wire.AuthenStatusPass && !r.Failed {
 					return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
 				}
 				return s.replay(ctx, rec, r)
@@ -514,10 +527,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// Refused, and nothing is written to the context: it is revoked already,
 	// and a join would only swap in a broker decision nobody may use.
 	if !revokedAt.IsZero() {
-		rec.Principal = winner.Principal
-		rec.Session.CtxID = ctxID
-		rec.Session.RevokedAt = decision.FormatTime(revokedAt)
-		return s.fail(ctx, rec, decision.CredentialRevoked)
+		return s.revoked(ctx, rec, winner.Principal, ctxID, revokedAt)
 	}
 
 	// Join, or write fresh (spec §5.6). A live context of the same principal
@@ -608,6 +618,43 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	if err != nil {
 		rec.IndexError = "context not indexed; revocation by sid, principal or certificate will not reach it"
 	}
+	// One check on what the login actually wrote (spec §5.6). The pre-read
+	// refuses the case it can see before writing; three it cannot see end
+	// here: the same principal's context past its ceiling, replaced carrying a
+	// revocation the token predates; a record under a retired key, replaced
+	// carrying its plaintext revocation; and a revocation that landed between
+	// the pre-read and the join, merged by it. Each wrote a context whose every
+	// authorization is denied, so a PASS would put a permit in the log for a
+	// login that can do nothing, with nothing on it saying why. The token is
+	// spent.
+	//
+	// The receipt was written PASS before the join, so the refusal marks it
+	// failed (FailReceipt). A retransmission is refused credential_revoked
+	// while the context is revoked (receiptContext), and replays the refusal
+	// after a token minted later has lifted the revocation on the same ctx_id
+	// (decision 15): the token the revocation was meant to stop gets no
+	// second try either way. A mark that does not land is counted and put on
+	// the record; the answer is still FAIL, and what is lost is only the
+	// replay after a lift. ErrNotFound lost nothing: a revocation by principal
+	// deleted the receipt, and a deleted receipt replays nothing.
+	//
+	// After the index bookkeeping, not before: the context exists and is
+	// revoked, and a revocation of this credential must still reach it.
+	//
+	// A revocation that lands after the join's swap is not seen here, and that
+	// login answers PASS; its first authorization is denied.
+	if !out.Context.RevokedAt.IsZero() {
+		ferr := s.h.store.FailReceipt(ctx, rk)
+		s.h.metrics.StoreOps.WithLabelValues("fail_receipt", storeOutcome(ferr)).Inc()
+		if ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
+			lost := "receipt not marked failed; a retransmission after the revocation is lifted will replay PASS"
+			if rec.IndexError != "" {
+				lost = rec.IndexError + "; " + lost
+			}
+			rec.IndexError = lost
+		}
+		return s.revoked(ctx, rec, winner.Principal, out.Context.CtxID, out.Context.RevokedAt)
+	}
 	rec.Principal = winner.Principal
 	rec.Session.CtxID = out.Context.CtxID
 	return s.finish(rec, wire.AuthenStatusPass, decision.TokenRedeemed)
@@ -639,34 +686,50 @@ func (s *Session) loginContext(winner *store.Token, username, port, remAddr stri
 	return c
 }
 
-// receiptContextLive reports whether a replayed receipt may act: whether the
-// ctx_id it froze is still the live context's (spec §5.6). The join keeps
-// ctx_id across one principal's logins, so a match is exactly "the context
-// this receipt was written for", and a mismatch is a context replaced —
-// another principal, past its ceiling, unreadable — or reclaimed since. A
-// receipt for a context that no longer exists answers nothing that exists:
-// PASS from it would admit a session whose authorizations answer from someone
-// else's context, or raise that context with another principal's enable.
+// receiptContext reports whether a replayed receipt may act, and returns the
+// live context it would act on: whether the ctx_id it froze is still the live
+// context's (spec §5.6). The join keeps ctx_id across one principal's logins,
+// so a match is exactly "the context this receipt was written for", and a
+// mismatch is a context replaced — another principal, past its ceiling,
+// unreadable — or reclaimed since. A receipt for a context that no longer
+// exists answers nothing that exists: PASS from it would admit a session whose
+// authorizations answer from someone else's context, or raise that context
+// with another principal's enable.
+//
+// The context is returned because a match is not the whole answer: a context
+// revoked since the receipt was written — or revoked by the login that wrote
+// it — admits nothing, and the caller refuses the replay on it.
 //
 // An enable already holds the live context from its gate; a login reads it.
 // The error is a store error only — an absent or unopenable context is a
 // plain no.
-func (s *Session) receiptContextLive(ctx context.Context, ck store.ContextKey, receiptCtxID string,
-	enable bool, incumbent store.Context) (bool, error) {
+func (s *Session) receiptContext(ctx context.Context, ck store.ContextKey, receiptCtxID string,
+	enable bool, incumbent store.Context) (store.Context, bool, error) {
 	if enable {
-		return incumbent.CtxID == receiptCtxID, nil
+		return incumbent, incumbent.CtxID == receiptCtxID, nil
 	}
 	c, err := s.h.store.GetContext(ctx, ck)
 	s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
 	var unreadable *store.UnreadableContextError
 	switch {
 	case err == nil:
-		return c.CtxID == receiptCtxID, nil
+		return c, c.CtxID == receiptCtxID, nil
 	case errors.Is(err, store.ErrNotFound), errors.As(err, &unreadable):
-		return false, nil
+		return store.Context{}, false, nil
 	default:
-		return false, err
+		return store.Context{}, false, err
 	}
+}
+
+// revoked refuses a login, or its retransmission, into a revoked context:
+// FAIL `credential_revoked`, the enable gate's answer for the same state, with
+// the revocation on the record so the refusal explains itself (spec §5.6).
+func (s *Session) revoked(ctx context.Context, rec decision.Record, principal, ctxID string,
+	at time.Time) (wire.AuthenReply, bool) {
+	rec.Principal = principal
+	rec.Session.CtxID = ctxID
+	rec.Session.RevokedAt = decision.FormatTime(at)
+	return s.fail(ctx, rec, decision.CredentialRevoked)
 }
 
 // escalate records the new privilege on the incumbent context and keeps
@@ -717,13 +780,14 @@ func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.Co
 	return s.finish(rec, wire.AuthenStatusPass, reason)
 }
 
-// replay answers from a receipt's stored decision. A refusal — the only one
-// written is a login refused `credential_revoked` (spec §5.6) — replays as a
-// refusal does, after the failure delay and with its server_msg, so a device
-// that retransmits it learns nothing a FAIL would not have told it.
+// replay answers from a receipt's stored decision. A refusal — a login refused
+// `credential_revoked`, written FAIL before its join or marked Failed after it
+// (spec §5.6) — replays as a refusal does, after the failure delay and with its
+// server_msg, so a device that retransmits it learns nothing a FAIL would not
+// have told it.
 func (s *Session) replay(ctx context.Context, rec decision.Record, r store.Receipt) (wire.AuthenReply, bool) {
 	rec.Session.CtxID = r.CtxID
-	if r.Status == wire.AuthenStatusFail {
+	if r.Failed || r.Status == wire.AuthenStatusFail {
 		return s.fail(ctx, rec, decision.ReceiptReplayed)
 	}
 	return s.finish(rec, r.Status, decision.ReceiptReplayed)

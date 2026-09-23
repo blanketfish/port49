@@ -5,14 +5,22 @@ the standing brief for each plan: what it builds, which spec sections it impleme
 earlier plans hand it, what it must leave for later, and which lab register entries close in
 it. When writing plan N, start here, then read the cited sections, then the previous plan.
 
+**Every plan's PR body carries an "Operator-facing notes" section**: a short list of what an
+operator will see change — new commands, config keys, reason codes, metrics, device behaviour.
+Plan 13 builds the user and admin documentation from these.
+
 Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
-fifteen tasks, reviewed per task and whole-branch); 3–12 not yet. PR #3's lab
+fifteen tasks, reviewed per task and whole-branch); 3 written (below); 4–12 not yet. PR #3's lab
 stretch is merged, so plan 3 is unblocked and is the next plan to write.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
 metric. PR #7's body lists three fail-closed follow-ups (one uniform "login into a revoked
 result" check after `JoinContext`) for plan 3 to pick up.
+**3 executed 2026-09-23, merge pending** (`2026-09-23-03-vertical-slice.md`, eighteen tasks:
+thirteen code, three lab, two docs; on `feature/vertical-slice`, reviewed per task and
+whole-branch). It closes PR #7's first two follow-ups and carries the third to plan 7; its
+"Questions for Ryan" section has three open calls.
 
 ---
 
@@ -116,10 +124,10 @@ caller, so plan 3's broker is a transport over an existing core rather than new 
   `port49_crypt_open_failures_total{record}` counter (`token`, `receipt`, `context`,
   `idempotency`) already emitted.
 - **`session.staleness_ceiling` defaults to 0, so the `context_stale` check is dead in the
-  shipping binary** until something calls `Refresh` on a schedule (spec §5.1.3). That schedule
-  is plan 3's wiring, and **the default must be set in the same change** — a ceiling with no
-  refresher denies every context the moment it is set, and a refresher with no ceiling
-  refreshes for nothing.
+  shipping binary** until something calls `Refresh` on a schedule (spec §5.1.3). **Plan 3 did not
+  wire it** (plan 3, Decided 14): the slice reads its policy once and its store dies with the
+  process, so a refresh has nothing to carry. Plan 7 wires the schedule and sets the default in the
+  same change — a ceiling with no refresher denies every context the moment it is set.
 
 **Leaves for later:** the broker API and its authorization (plan 7); blobs' compiled content
 (plan 4, the engine produces them; plan 2 stores opaque bytes by hash).
@@ -138,9 +146,8 @@ package comment is not where the next plan looks:**
   the only witness that a rotation retired a key too early
   (`internal/store/crypt/crypt.go:216-231`). Plan 7 with the rest of the alarms, or plan 6 with
   key rotation reporting, whichever lands first.
-- **`foreign` has no metric and no rate limit of its own** (ledger, Task 11), so nothing can
-  alert on it safely yet: a device that legitimately produces them floods whatever is watching.
-  Plan 3 owns broker metrics; this one travels with them.
+- **`foreign` has a metric** since plan 2b (`port49_accounting_attributions_total{attribution}`,
+  ruled with no rate limit). Nothing further is owed here.
 - **Deferred from Task 13 and Task 9, all three settled and none of them work for plan 2:**
   an `ErrPartial` sentinel and the `Refresh`/`mark` `firstErr` asymmetry — `mark` returns the
   refs it touched *and* the first error, `Refresh` returns a count and an error, and plan 7
@@ -154,7 +161,7 @@ tagged token. Plan 2 does move the harness off written secrets — `lab.seed_tok
 `secret:`/`kind:`, the daemon mints the pairs and writes them to a `0600` `lab.seed_token_file`,
 and `tests/lab/labcreds` reads that file — so the next lab deploy is the first on minted tokens.
 
-## Plan 3 — Vertical slice (§19 step 3)
+## Plan 3 — Vertical slice (§19 step 3) — `2026-09-23-03-vertical-slice.md`
 
 **Builds:** the first real identity reaching a real device with no shared password.
 
@@ -170,11 +177,14 @@ and `tests/lab/labcreds` reads that file — so the next lab deploy is the first
 - **eAPI / NX-API per-request authentication** measured in the lab with reusable tokens.
   Images for this are on hand (plan 1 Task 15 lists them with their vrnetlab kinds): Nexus
   9300v 10.4(2)F for NX-API and the L7 question; Catalyst 9000v 17.12 and C8000v 17.13 for
-  IOS-XE, where the `$enab15$` enable path (L3) lives; vEOS 4.32.2F for eAPI.
+  IOS-XE, where the `$enab15$` enable path (L3) lives; vEOS for eAPI (image tagged 4.32.2F,
+  running 4.31.2F).
 
 **Inherits from the 2026-09-20/22 lab stretch (PR #3):** L3 is closed (no platform sends
-`$enab{level}$`; NX-OS 10.x has no enable), L4 and L7 are measured on every image and the
-`$enab15$` enable path is gone, so the lab list above is mostly done. What this plan still
+`$enab{level}$`; NX-OS 10.x has no enable) and the `$enab15$` enable path is gone. L4 is
+measured over SSH on all five images and stays open on `deadtime`, the other transports and
+authorization fall-through; L7 is measured per request on eAPI and NX-API and stays open on its
+cookie clause. So the lab list above is mostly done. What this plan still
 owns: the first end-to-end run with a real credential. The sliding receipt is no longer an
 open question — plan 2 shipped it as `receipt_idle_ttl` (15m) and `receipt_max_age` (2h), and
 `receipt_ttl` is refused by name at config load — but **the agent's reconnect behaviour is
@@ -182,6 +192,11 @@ still part of this plan's design**: an agent minting a fresh token on each recon
 most of the idle-gap problem the client matrix showed (L15), and the bounds are the fallback
 rather than the answer. **Lab:** the API-transport half of L1 and the eAPI `/login` flow by
 hand.
+
+**Lab, as run:** the slice end to end on vEOS (`tests/lab/results/slice-arista_eos.md`); L7's eAPI
+`/login` clause measured on vEOS (`L7-login-arista_eos.md`), and L7 still open on NX-API's
+`nxapi_auth` cookie (lab register rule 3), with decision 15 provisional on it; L1's RESTCONF
+clause measured on IOS-XE (`L1-restconf-cisco_iosxe.md`), and L1 open on the console.
 
 ## Plan 4 — Policy engine (§19 step 4)
 
@@ -200,6 +215,13 @@ first gives the decision log a real sink — this one owns the log in full, but 
 the sink if it lands later — must give the spool a sink interface that returns an error, and
 the spool must not advance `drainOffset` past a refusal. Without both, the durability contract
 is enforced up to the last hop and not across it.
+
+**Carried from plan 3:**
+
+- **Compare the blob's `Platform` with the device's platform at authorization.** Unreachable
+  while the broker and the daemon share one inventory, so the slice does not check it; it
+  becomes reachable when they stop sharing one.
+- **A `GetBlob` store error answers `store_unavailable`** once the store is remote.
 
 ## Plan 5 — Platform adapters (§19 step 5)
 
@@ -311,6 +333,28 @@ self-only, `/v1/refresh` with `prompt=login` and the cert-path signed-nonce refr
 §5.1.4 (revocation by `sid`, `sub`, CRL/OCSP), §5.6 session lifetime (ceiling warning,
 grace window, `max_session_age` minimum across roles), the staleness ceiling end to end.
 
+**Carried from plan 3:** a store two processes can reach, before the broker leaves `port49d`
+(design §19 step 2); the scheduled refresh and the `staleness_ceiling` default, together; PR #7's
+third follow-up — a join racing another principal's replace under one username can lose its sid or
+certificate index entry (revocation by principal still reaches it); the certificate-to-directory
+mapping replacing the slice's declared `username:`; policy reload. Also owed by plan 3's reviews:
+
+- An **atomic put-if-absent idempotency reservation**. Two concurrent requests under one key
+  with different bodies can both pass the pre-check today, and the minter's read, mint and
+  `PutIdempotency` are three steps, not one.
+- **Per-source limits or admission on the broker listener.** One client reconnecting every 30s
+  can keep all of `broker.MaxConns` (256) slots full.
+- `(*broker.Broker).Server` **returns an error instead of panicking** once a reload path exists.
+- A **counter for broker TLS handshake failures**.
+- A **per-principal cap on held broker connections**, beside the per-source one. Any
+  certificate the anchor signs can open all 256 slots and hold them for `max_session_age`,
+  locking every other operator out of `port49 login`.
+- **A revocation must reach the held connection.** The slice has no revocation lever: to cut
+  someone off, remove their subject from the policy (or re-issue the CA) and restart
+  `port49d`, which logs everyone out. A revocation by principal or by certificate must also
+  refuse mints on, or close, that principal's held broker connections; otherwise a token
+  minted after the revocation lifts it (decision 15).
+
 ## Plan 8 — Workload certificates (§19 step 8)
 
 Design §7 "Machine identity" option 2: enrollment, self-renewal, multi-identity subjects,
@@ -356,6 +400,24 @@ Carried here from plan 1's review:
   into one series per device — both a cardinality problem and, against design §15's "device
   identity never appears in metric labels", a correctness one. Say which it is and bound it
   when the alarms are written.
+
+## Plan 13 — User and admin documentation
+
+**Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
+GitHub Action — written when the repository goes public. Four sections:
+
+- **Concepts:** the token, the receipt and the login context; revocation; trust domains.
+- **Operator guide:** install, the broker and the agent, `port49 login`, and troubleshooting
+  organized by what the operator sees.
+- **Admin guide:** policy, roles and grants, key rotation, revocation, and one device-configuration
+  page per platform built from `tests/lab/results/`, including the traps the lab measured.
+- **Reference:** config keys, reason codes, metrics and the decision-log schema, generated from the
+  code so it cannot drift.
+
+**Inherits:** from every earlier plan, the "Operator-facing notes" section of its PR body (top of
+this file).
+
+**Leaves for later:** nothing. **Lab:** none.
 
 ---
 

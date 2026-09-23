@@ -122,6 +122,14 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	if r, _ := s.GetReceipt(ctx, rk); r.CtxID != "ctx1" || r.CredentialSHA256 != h || !r.IdleExpiresAt.Equal(w.Receipt.IdleExpiresAt) {
 		t.Fatalf("receipt read: %+v", r)
 	}
+	// FailReceipt writes a plaintext mark and reseals nothing: it works under
+	// any key, and the sealed status stays what the login sent.
+	if err := s.FailReceipt(ctx, rk); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := s.GetReceipt(ctx, rk); !r.Failed || r.Status != 1 || r.CtxID != "ctx1" {
+		t.Fatalf("failed receipt read: %+v", r)
+	}
 	// The principal index is written by the inner store, in the clear, and is
 	// what revocation walks (the ruling in this task).
 	if n, _ := inner.DeleteReceiptsByPrincipal(ctx, "user:alice@example.com"); n != 1 {

@@ -47,11 +47,12 @@ func asciiUsername(u string) bool {
 	return true
 }
 
-// canonicalUsername is the invariant, not just the character set: printable
+// CanonicalUsername is the invariant, not just the character set: printable
 // ASCII AND unchanged by canonicalization. The ASCII half alone would admit
 // `@` and `\`, which are 0x21–0x7E and are exactly the two rewrites a
-// directory-backed deployment hits every day.
-func canonicalUsername(u string) bool { return asciiUsername(u) && username.Canonical(u) == u }
+// directory-backed deployment hits every day. Exported so the broker's policy
+// load refuses the same names the mint would, with one definition of them.
+func CanonicalUsername(u string) bool { return asciiUsername(u) && username.Canonical(u) == u }
 
 // ErrTooManyOutstanding is the candidate-set cap: this many unspent tokens
 // already stand for one (device, username). It names the count so the operator
@@ -93,6 +94,9 @@ type Request struct {
 	// A caller may send one key for a whole batch, which is what design §17's
 	// POST /v1/tokens does, and each device still gets its own record.
 	IdempotencyKey, BodyHash string
+	// Policy is the subject and grants that allowed this mint. The minter
+	// judges none of it and copies it onto the mint record (spec §5.7).
+	Policy *decision.Policy
 }
 
 // idemScope puts the device in the idempotency key. §17's key is one header
@@ -102,6 +106,18 @@ type Request struct {
 // device refuses on every attempt. The separator matches the store's own
 // convention (internal/store/memory/memory.go, idemKey).
 func idemScope(key, device string) string { return key + "\x00" + device }
+
+// Conflict reports whether Mint would refuse this key on this device with
+// ErrIdempotencyConflict: a record exists under it for another body. It mints
+// nothing, so a batch can be refused whole before its first device is minted.
+// A store failure is not a conflict; Mint will meet it and refuse that device.
+func (m *Minter) Conflict(ctx context.Context, principal, key, device, bodyHash string) bool {
+	if key == "" {
+		return false
+	}
+	rec, err := m.store.GetIdempotency(ctx, principal, idemScope(key, device))
+	return err == nil && rec.BodyHash != bodyHash
+}
 
 // Result is the minted pair and what the caller must tell the operator:
 // Enable is empty unless the subject's mechanism is `token`, and Username is
@@ -136,7 +152,7 @@ func NewMinter(s store.Store, e decision.Emitter, r io.Reader, tagKey []byte, no
 // minting, clamps the TTL to the subject's maximum, and emits one `mint`
 // record naming each token by hash alone.
 func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
-	if !canonicalUsername(r.Subject.Username) {
+	if !CanonicalUsername(r.Subject.Username) {
 		return Result{}, ErrUsernameNotCanonical
 	}
 	// idemErr names what a lost idempotency record cost, carried onto the mint
@@ -238,6 +254,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		Auth:       &decision.Auth{Method: r.Subject.Credential.Method},
 		Device:     &decision.Device{Name: r.Device, Platform: r.Platform},
 		Mint:       &decision.Mint{TokenSHA256: hashes, TTLSeconds: int(ttl.Seconds()), BlobHash: r.BlobHash},
+		Policy:     r.Policy,
 		IndexError: idemErr})
 	return res, nil
 }

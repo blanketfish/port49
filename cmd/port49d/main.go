@@ -10,10 +10,13 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base32"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	stdlog "log"
 	"net"
 	"net/http"
 	"os"
@@ -24,6 +27,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/broker/policy"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/acct"
 	"github.com/rhwendt/port49/internal/daemon/authen"
@@ -137,6 +143,73 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (lo
 	return logins, enables, nil
 }
 
+// stderr is where port49d's operational lines go — not the decision log,
+// which is stdout — swapped in tests.
+var stderr io.Writer = os.Stderr
+
+// buildBroker loads what the broker needs and returns its server, or nil when
+// no broker: block is configured. It runs before any listener opens, so a
+// policy typo or an unreadable certificate ends the start with one line
+// rather than surfacing at the first mint. Each error names the config key
+// and the file, so that line says what to go and fix.
+func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log decision.Emitter,
+	m *metrics.Metrics) (*http.Server, error) {
+	if cfg.Broker == nil {
+		return nil, nil
+	}
+	pol, err := policy.Load(cfg.Broker.PolicyFile)
+	if err != nil {
+		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
+	}
+	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
+			cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile, err)
+	}
+	// A server certificate outside its validity does not stop the start:
+	// refusing would take device AAA down with the broker. It is said now, in
+	// one line, rather than first showing up as every operator's failed login.
+	if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
+		now := time.Now()
+		switch {
+		case now.After(leaf.NotAfter):
+			fmt.Fprintf(stderr, "port49d: broker: server certificate expired at %s (tls_cert_file %s); logins will fail\n",
+				leaf.NotAfter.UTC().Format(time.RFC3339), cfg.Broker.TLSCertFile)
+		case now.Before(leaf.NotBefore):
+			fmt.Fprintf(stderr, "port49d: broker: server certificate is not valid until %s (tls_cert_file %s); "+
+				"logins will fail\n", leaf.NotBefore.UTC().Format(time.RFC3339), cfg.Broker.TLSCertFile)
+		}
+	}
+	// The broker mints by name, and a token redeems on any device the name
+	// tags. Two entries sharing one would collapse, last wins: a blob compiled
+	// for one platform would be answered on the other, sending attributes that
+	// device may not know while port49 logs permit. IOS-XE refuses the session
+	// over any attribute it does not recognise, optional or mandatory, and every
+	// command whose reply carries one (tests/lab/results/L18-cisco_iosxe.md).
+	// admission.LoadFile does not refuse the repeat, so the broker does.
+	devices := make(map[string]admission.Device, len(cfg.Inventory.Devices))
+	for _, d := range cfg.Inventory.Devices {
+		if _, seen := devices[d.Name]; seen {
+			return nil, fmt.Errorf("inventory names device %q twice; the broker mints by name", d.Name)
+		}
+		devices[d.Name] = d
+	}
+	b := &broker.Broker{Policy: pol, Devices: devices, Minter: minter, Store: st, Log: log, Metrics: m,
+		Now: time.Now, MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax}
+	// Startup only. Server panics on a nil or empty anchor pool; LoadTLS has
+	// just returned a pool of exactly one, so it cannot here, and buildBroker
+	// runs before the TACACS+ listener opens — a panic would end a start, never
+	// a running daemon's device AAA. A reload path (plan 7) must not call
+	// Server until it returns an error instead.
+	srv := b.Server(cfg.Broker.Listen, cert, anchor)
+	// net/http logs what no handler sees — a handshake refused for an expired
+	// or untrusted certificate — through ErrorLog. Left nil it goes to the
+	// standard library's default logger; routed here it lands beside
+	// port49d's other lines, where an operator is already looking.
+	srv.ErrorLog = stdlog.New(stderr, "port49d: broker: ", 0)
+	return srv, nil
+}
+
 func run(cfgPath string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -200,20 +273,30 @@ func run(cfgPath string) error {
 	spoolDone := make(chan struct{})
 	go func() { defer close(spoolDone); spool.Run(spoolCtx) }()
 
-	// The lab authorizer is the only authorizer until the policy engine lands
-	// (plan 4); config.Load refuses a config without it, so it is never nil and
+	// A context the broker minted names a compiled blob and is answered from
+	// it (plan 3). A context with no blob — the lab's seeds — is answered by
+	// the lab authorizer, which stays until the policy engine lands (plan 4);
+	// config.Load refuses a config without it, so the fallback is never nil and
 	// port49 never falls back to permitting everything.
-	authz := &author.Lab{
+	authz := &author.Blob{Store: st, Fallback: &author.Lab{
 		SessionAttributes: cfg.Lab.SessionAttributes,
 		CommandAttributes: cfg.Lab.CommandAttributes,
 		DenyPrefixes:      cfg.Lab.DenyPrefixes,
-	}
+	}}
 	minter := token.NewMinter(st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
 	// Plan 7's broker exposes Refresh, RevokeByPrincipal and RevokeBySID over
-	// HTTP. Nothing in this binary calls them yet; the Manager is built here so
-	// the wiring is proven by the compiler rather than by plan 7 discovering it.
+	// HTTP; plan 3's serves /v1/tokens and /v1/config only, so nothing in this
+	// binary calls them yet. The Manager is built here so the wiring is proven
+	// by the compiler rather than by plan 7 discovering it.
 	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	_ = sessions
+
+	brokerSrv, err := buildBroker(cfg, st, minter, log, m)
+	if err != nil {
+		stopSpool()
+		<-spoolDone
+		return err
+	}
 
 	// The seeded pair is a credential. It goes to a file the operator named, at
 	// 0600, and never to a stream: stderr on a systemd unit lands in the same
@@ -233,7 +316,7 @@ func run(cfgPath string) error {
 			<-spoolDone
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "port49d lab: %d login token(s) and %d enable token(s) minted, "+
+		fmt.Fprintf(stderr, "port49d lab: %d login token(s) and %d enable token(s) minted, "+
 			"credentials written to %s\n", logins, enables, cfg.Lab.SeedTokenFile)
 	}
 
@@ -278,8 +361,28 @@ func run(cfgPath string) error {
 		<-spoolDone
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
+	// The broker binds before anything says "listening": a line claiming
+	// TACACS+ is up, followed by an exit, reads at 3am as a daemon that is up —
+	// and a supervisor restarting it repeats that every few seconds.
+	var bln net.Listener
+	if brokerSrv != nil {
+		if bln, err = net.Listen("tcp", brokerSrv.Addr); err != nil {
+			ln.Close()
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
+		}
+	}
+	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
 		cfg.Listen, cfg.MetricsListen, len(cfg.Inventory.Devices))
+
+	brokerErr := make(chan error, 1)
+	if brokerSrv != nil {
+		// Capped, so connections to the broker cannot take the file
+		// descriptors the TACACS+ listener beside it needs (pre-flight F1).
+		go func() { brokerErr <- brokerSrv.ServeTLS(broker.Limit(bln, broker.MaxConns), "", "") }()
+		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", brokerSrv.Addr)
+	}
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(ctx, ln, deps) }()
@@ -290,19 +393,28 @@ func run(cfgPath string) error {
 		runErr = fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
 		cancel()
 		<-serveErr
+	case err := <-brokerErr:
+		runErr = fmt.Errorf("broker listener on %s: %w", cfg.Broker.Listen, err)
+		cancel()
+		<-serveErr
 	case err := <-serveErr:
 		runErr = err
 		cancel()
 	case <-ctx.Done():
-		fmt.Fprintln(os.Stderr, "port49d: signal received, draining")
+		fmt.Fprintln(stderr, "port49d: signal received, draining")
 		<-serveErr
 	}
 	cancel()
+	if brokerSrv != nil {
+		shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = brokerSrv.Shutdown(shutdownCtx)
+		done()
+	}
 
 	// Serve has returned, so no connection can offer another record: only now
 	// is it true that whatever the spool drains is all of it.
 	stopSpool()
 	<-spoolDone
-	fmt.Fprintln(os.Stderr, "port49d: accounting spool drained, exiting")
+	fmt.Fprintln(stderr, "port49d: accounting spool drained, exiting")
 	return runErr
 }

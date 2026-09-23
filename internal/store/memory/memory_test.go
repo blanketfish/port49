@@ -327,6 +327,32 @@ func TestReceiptRetainedPastItsSlidingBound(t *testing.T) {
 	}
 }
 
+// FailReceipt marks the receipt refused and touches nothing else: not the
+// sealed status it was written with, not either bound, not retention.
+func TestFailReceiptMarksTheReceiptAndNothingElse(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "n", Username: "u"}
+	rk := store.ReceiptKey{NAS: "n", Username: "u"}
+	s.PutToken(ctx, k, store.Token{ID: "t", Secret: []byte("s"), ExpiresAt: now.Add(time.Hour)})
+	want := store.Receipt{Status: 1, CtxID: "ctx1", FirstRedeemedAt: now,
+		IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Hour)}
+	s.RedeemAndReceipt(ctx, k, "t", rw(rk, want, "user:u"))
+	if err := s.FailReceipt(ctx, rk); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetReceipt(ctx, rk); !got.Failed || got.Status != want.Status || got.CtxID != want.CtxID ||
+		!got.FirstRedeemedAt.Equal(want.FirstRedeemedAt) || !got.IdleExpiresAt.Equal(want.IdleExpiresAt) ||
+		!got.RetainUntil.Equal(want.RetainUntil) {
+		t.Fatalf("FailReceipt moved more than Failed: %+v", got)
+	}
+	now = now.Add(2 * time.Hour) // past retention
+	if err := s.FailReceipt(ctx, rk); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("failing a reclaimed receipt: %v", err)
+	}
+}
+
 func TestDeleteReceiptsByPrincipal(t *testing.T) {
 	now := time.Unix(1000, 0)
 	s := New(func() time.Time { return now })

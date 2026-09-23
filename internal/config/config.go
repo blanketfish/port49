@@ -114,6 +114,39 @@ type TokenConfig struct {
 	CandidateCap int `yaml:"candidate_cap"`
 }
 
+// BrokerConfig is the vertical slice's broker (design §19 step 3), served by
+// port49d on a second listener because the store is in-process (plan 3,
+// Decided 1). Absent, port49d runs no broker, as before.
+//
+// The policy file is read once, at start, and the store is in memory: a
+// policy edit needs a restart, and a restart ends every live login context
+// and every unspent token — every operator logs in again (plan 3,
+// Question 3). Plan 4 brings reload.
+//
+// The slice has no revocation lever. To cut someone off, remove their subject
+// from the policy (or re-issue the CA) and restart; certificate revocation is
+// plan 7.
+//
+// A relative path resolves against port49d's working directory, not the
+// config file's, as inventory_file does.
+type BrokerConfig struct {
+	Listen      string `yaml:"listen"`
+	TLSCertFile string `yaml:"tls_cert_file"`
+	// TLSKeyFile is loaded through internal/keyfile, which refuses a symlink,
+	// a file not owned by port49's user or root, any group or other mode bit,
+	// and anything over 1 MiB. Keep the key in a directory only its owner can
+	// write: the check covers the file, and a symlink in a parent directory is
+	// followed.
+	TLSKeyFile string `yaml:"tls_key_file"`
+	// ClientCAFile is the one trust anchor client certificates are verified
+	// against. It must hold exactly one certificate (broker.LoadTLS).
+	ClientCAFile string `yaml:"client_ca_file"`
+	PolicyFile   string `yaml:"policy_file"`
+	// BatchMax caps the devices in one mint request; a larger sweep pages
+	// (design §17). Default 100.
+	BatchMax int `yaml:"batch_max"`
+}
+
 // encKeyYAML names one encryption-at-rest key: the id that travels with every
 // record it seals, and the environment variable holding its 32 bytes. The
 // secret is never inline, for the same reason no shared secret in this file is.
@@ -181,6 +214,7 @@ type fileConfig struct {
 	Encryption     encryptionYAML            `yaml:"encryption"`
 	Session        SessionConfig             `yaml:"session"`
 	Token          TokenConfig               `yaml:"token"`
+	Broker         *BrokerConfig             `yaml:"broker"`
 	Lab            *LabConfig                `yaml:"lab"`
 }
 
@@ -200,7 +234,9 @@ type Config struct {
 	Accounting     AccountingConfig
 	Session        SessionConfig
 	Token          TokenConfig
-	Lab            *LabConfig
+	// Broker is nil when no broker: block is configured.
+	Broker *BrokerConfig
+	Lab    *LabConfig
 
 	// SessionServices is the resolved authorization-`service` table: every
 	// built-in platform, with any operator override already applied. It is
@@ -340,6 +376,24 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("config: lab.seed_token_file is required when lab.seed_tokens is non-empty: " +
 			"port49d mints each seed's secret at start and has to put it somewhere an operator can read " +
 			"and nothing else can — a 0600 file, never a stream")
+	}
+
+	if f.Broker != nil {
+		b := *f.Broker
+		for _, req := range []struct{ key, v string }{
+			{"broker.listen", b.Listen}, {"broker.tls_cert_file", b.TLSCertFile}, {"broker.tls_key_file", b.TLSKeyFile},
+			{"broker.client_ca_file", b.ClientCAFile}, {"broker.policy_file", b.PolicyFile},
+		} {
+			if req.v == "" {
+				return Config{}, fmt.Errorf("config: %s is required when broker: is present; remove the block to run "+
+					"port49d without a broker", req.key)
+			}
+		}
+		b.BatchMax = orI(b.BatchMax, 100)
+		if b.BatchMax < 1 || b.BatchMax > 1000 {
+			return Config{}, fmt.Errorf("config: broker.batch_max must be between 1 and 1000; got %d", b.BatchMax)
+		}
+		c.Broker = &b
 	}
 
 	for ref, ks := range c.Keys {

@@ -988,16 +988,27 @@ context rather than replacing it (ruled 2026-09-23):
 | `port`, `rem_addr` | the newest (informational) |
 | `refreshed_at`, `last_touched_at` | now |
 
-**A login into a revoked context is refused.** When the context a login would join carries
-`revoked_at` and the login's token was not minted after it, the login answers FAIL
-`credential_revoked`, the answer the `enable` gate gives for the same state, and writes nothing to
-the context (ruled 2026-09-23). The token is spent, so a token the revocation was meant to stop gets
-no second try, and the receipt records the refusal, so a retransmission replays FAIL
-`receipt_replayed`, never a PASS. The `redeem` record carries the principal, the context's
-`ctx_id` and `session.revoked_at`, the revocation that refused it. A token minted after the
-revocation joins and lifts it, by the table. A revocation that lands between the login's read and
-its join is merged by the join rather than refused, and that login answers PASS into the revoked
-context, whose every authorization is then denied `credential_revoked`.
+**A login into a revoked context is refused.** A login whose resulting context carries
+`revoked_at` answers FAIL `credential_revoked` — the answer the `enable` gate gives for the same
+state — and its token is spent, so a token the revocation was meant to stop gets no second try
+(ruled 2026-09-23; made one rule in plan 3). There are four ways to get there. The context the login
+would join is already revoked and the token was not minted after it: refused before anything is
+written. The same principal's context past its ceiling, replaced carrying a revocation the token
+predates; a context the sealing layer cannot open, replaced carrying its plaintext `revoked_at`; and
+a revocation that lands between the login's read and its join, merged by the join: each has already
+written the context when it is refused, and that context is revoked, so every authorization against
+it is denied anyway until the idle TTL reclaims it. The `redeem` record carries the principal, the
+`ctx_id` and `session.revoked_at`, the revocation that refused it. A retransmission is answered from
+the live context, not from the status the receipt stored: while the context it names is revoked it is
+refused `credential_revoked` again. A token minted after the revocation joins and lifts it, by the
+table, and a refusal made after the join has therefore marked its receipt failed (the receipt was
+written PASS before the join): once the revocation is lifted, the retransmission replays the
+refusal, FAIL `receipt_replayed`. It is not replayed as a PASS, with one exception: the concurrent
+duplicate that lost the redemption race (below) is not checked, and if it reads the winner's receipt
+before the winner's refusal marks it, it answers PASS. That takes two byte-identical presentations
+inside one join; every authorization on the revoked context is denied, and the next retransmission
+is refused (plan 3, pre-flight F16). A revocation that lands after the join's write is not seen by
+the login, which answers PASS; its first authorization is denied `credential_revoked`.
 
 A login is **not** a join, and writes a fresh context whose `redeem` record carries
 `session.replaced_ctx_id`, in two cases: the live context belongs to **another principal** under
@@ -1055,12 +1066,14 @@ such a record counts `port49_store_operations_total{outcome="unreadable"}`, not 
 the store answered, and a key rotation must not read as a store outage.
 
 A retransmitted login or `enable` replays its receipt only while the receipt's `ctx_id` is the live
-context's. The join keeps `ctx_id` across one principal's logins, so a match is exactly "the same
+context's, and, while that context is revoked, is refused `credential_revoked` instead (above). The
+join keeps `ctx_id` across one principal's logins, so a match is exactly "the same
 context"; after a replace or a reclaim the receipt names a context that no longer exists, and the
 retransmission is answered `token_spent`, as a spent token is, without sliding the receipt. The
 device prompts again. The one copy not checked is the concurrent duplicate that lost the
 redemption race: it presented the winner's own credential, and the winner's context write is still
-in flight.
+in flight. It replays the winner's receipt as it stands, so it can replay the winner's PASS even
+where the winner is refused (pre-flight F16, above).
 
 What remains of the old cost: both windows log one `ctx_id`, so a log reader tells them apart by
 `port`, `rem_addr` and each `redeem` record's `credential_sha256`, not by `ctx_id`.
@@ -1420,6 +1433,12 @@ is what the redemption joins back to (see Correlation below).
 }
 ```
 
+A `mint deny trust_domain_unresolved` for a client certificate the trust anchor verified —
+refused later for expiry, a missing `clientAuth` usage, or not exactly one well-formed email
+SAN — says whose certificate it was: `auth.fingerprint` (the certificate's `sha256:`, §5.1.4)
+always, and `principal` when the one email SAN maps to one. Those fields are anchor-vouched,
+not an unvalidated body. A connection with no verified chain names no one.
+
 #### Reason codes
 
 `reason` is a closed vocabulary, so denials are countable and alertable without parsing prose:
@@ -1430,6 +1449,7 @@ is what the redemption joins back to (see Correlation below).
 | `no_grants_matched` | `mint`: no declared grant for this principal selects the device |
 | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2) |
 | `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7) |
+| `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
 | `context_matched` | `authorize_session`: context found, attributes returned |
 | `escalation_granted` | `escalate`: the level was within `max_privilege` and the mechanism succeeded |
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
@@ -1441,7 +1461,7 @@ is what the redemption joins back to (see Correlation below).
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
 | `device_mismatch` | `redeem`: the presented token's device tag is not this device's (design document §8) — PAP and ASCII only; under CHAP the tag is not visible and the outcome is `token_not_found` |
 | `credential_mismatch` | `redeem`: the receipt the store returned does not carry the credential hash the lookup asked for. Since 2026-09-20 the hash is *in* the receipt key (§13, decision 15), so a differing credential finds no receipt and redeems normally instead; this reason now covers only a store that answered with a record it was not asked for, which is a store fault and never a normal outcome |
-| `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision |
+| `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision; not while the context it names is revoked — that is `credential_revoked` (§5.6). A login refused after its join replays as FAIL once the revocation is lifted |
 | `token_kind_mismatch` | `redeem`/`escalate`: a login token presented at `enable`, or the reverse (§7) |
 | `enable_refused` | `escalate`: the subject's mechanism is `none` |
 | `ceiling_exceeded` | `escalate`: the requested level is above `max_privilege` |
@@ -1451,9 +1471,9 @@ is what the redemption joins back to (see Correlation below).
 | `username_mismatch` | the request's username differs from the one bound at redemption (§5.6). Reachable two ways, and a request under a name port49 never authenticated is neither of them — that is `context_missing`, because the username is the key. First, wherever the username is resolved from context rather than read off the wire: the `$enab{level}$` enable path through the `(nas, rem_addr)` index. Second, as a **store-fault guard** — the context lookup selects on the username, so a store answering with another principal's record fails the re-check that follows it and is denied rather than authorized. A correct store never produces the second |
 | `rem_addr_mismatch` | enable arrived from a different address than the bound one |
 | `privilege_exceeded` | the request is above the session's granted level |
-| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6) |
+| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `max_session_age`, and the caller must authenticate again (§13, decision 17) |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
-| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6); on `redeem`, a login into a revoked context whose token was not minted after the revocation (§5.6) |
+| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) |
@@ -3643,10 +3663,10 @@ configuration can reach.
 
 One thing plan 2 and plan 4 both gain from that run, and it is not about enable. **IOS-XE refuses
 an authorization reply carrying an attribute it does not recognise, even sent as OPTIONAL**: the
-session port49 permitted is ended by the device with `% Authorization failed.` (§15, L10;
-`tests/lab/results/L10-cisco_iosxe.md`). Whatever attribute set an adapter sends to that platform
-has to be a set the image accepts, and when it is not, port49's own log says `permit` while the
-operator is locked out — there is no diagnostic on this side at all.
+session port49 permitted is ended by the device with `% Authorization failed.` (§15, L10 and
+L18; `tests/lab/results/L18-cisco_iosxe.md`). Whatever attribute set an adapter sends to that
+platform has to be a set the image accepts, and when it is not, port49's own log says `permit`
+while the operator is locked out — there is no diagnostic on this side at all.
 
 *API transports: a sliding receipt, not a `reusable` flag. Ruled 2026-09-22.* The receipt is
 the retry tolerance of §5.1.1: a spent token presented again within the receipt's life is
@@ -3688,8 +3708,10 @@ reconnect makes the sliding window rarely reached.
 discussion. The earlier proposal to key API contexts on `(nas, port, rem_addr)` was already
 withdrawn: `port` is constant or empty across SSH sessions too, and `rem_addr` is identical
 for two concurrent sessions behind one bastion, so under `(nas, username)` an API transport
-needs no separate context key at all. Still unmeasured: the eAPI `/login` cookie flow by
-hand, HTTP keep-alive on its own, and a linear-strategy playbook run against the lab with a
+needs no separate context key at all. The eAPI `/login` cookie flow was measured by hand
+2026-09-23: one authentication at `/login`, none for a request carrying the cookie
+(`tests/lab/results/L7-login-arista_eos.md`). Still unmeasured: NX-API's `nxapi_auth` cookie
+by hand, HTTP keep-alive on its own, and a linear-strategy playbook run against the lab with a
 deliberate gap, which is the measurement the 15-minute default should be checked against
 (L7, L15).
 
@@ -3833,13 +3855,15 @@ Beyond those already listed in the design document's §14:
   no receipt and redeems normally rather than being rejected `credential_mismatch`. A spent
   token replayed within `receipt_ttl` is honored only for the same
   `(nas, username, credential_sha256)`. A retransmitted login or enable replays only while the
-  receipt's `ctx_id` is the live context's; after a replace or a reclaim it is `token_spent`
-  (§5.6).
+  receipt's `ctx_id` is the live context's; after a replace or a reclaim it is `token_spent`,
+  and into a revoked context it is `credential_revoked` (§5.6).
 - **CHAP verification**: a candidate set of several unspent tokens resolves to the one that
   produces the matching digest; the atomic removal, not the verification, decides single use,
-  and two replicas racing the same token yield exactly one success — **and the loser answers
-  PASS from the receipt, never FAIL**, with the same `ctx_id` as the winner (design document
-  §8).
+  and two replicas racing the same token yield exactly one success — **and the loser replays
+  the winner's receipt as it stands**, with the same `ctx_id` as the winner (design document
+  §8): PASS when the winner passed, FAIL `receipt_replayed` once the winner's refusal has
+  marked it failed. A loser that reads the receipt before that mark answers PASS (§5.6,
+  pre-flight F16).
 - **CHAP re-prompt**: a fresh challenge does not match the receipt and correctly fails rather
   than replaying.
 - **Encryption at rest**: a store dump contains no recoverable token; redemption succeeds
@@ -4057,6 +4081,12 @@ Beyond those already listed in the design document's §14:
   `server_msg`, and resumes on the first refresh after the broker returns.
 - **Revocation is distinguishable**: a revoked context's next command is denied
   `credential_revoked`, not `context_missing`, until the idle TTL reclaims it.
+- **A login into a revoked result is refused**: a login that writes a revoked context — a
+  same-principal replace past the ceiling, an unreadable replace, or a revocation landing mid-join,
+  each with a token minted before the revocation — answers FAIL `credential_revoked` with the token
+  spent, and its retransmission is refused `credential_revoked` while the context is revoked and
+  replays FAIL `receipt_replayed` after a later token lifts it — not a PASS, except for the
+  concurrent duplicate of §5.6 (pre-flight F16).
 - **Device tag**: a token minted for device A presented on device B under PAP or ASCII is
   refused `device_mismatch` without a store read; the same under CHAP is `token_not_found`;
   the tag is a keyed hash and two devices never share one.
@@ -4106,13 +4136,13 @@ implemented against a guess. This section is the one place the distinction is ke
 
 | ID | Claim to measure | What rests on it | Platforms | Status |
 |---|---|---|---|---|
-| **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE and the console unmeasured; see below |
+| **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE's RESTCONF measured 2026-09-23 (`tests/lab/results/L1-restconf-cisco_iosxe.md`); the console and IOS-XE's NETCONF unmeasured; see below |
 | **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below |
-| **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | closed — measured 2026-09-21; `tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`, `L3-nxos-cisco_nxos.md`. Scope: NX-OS 10.x has no enable exchange (`feature privilege` was removed in 10.x; the owner confirmed the same on production Nexus 9000 hardware running 10.3(5)); NX-OS 9.x and earlier are unmeasured and out of scope. No measured image sends `$enab{level}$`. History: closed in error 2026-09-20 on a note with no transcript, reopened 2026-09-21. Measured: vEOS-lab 4.31.2F (image tagged 4.32.2F) and IOS-XE 17.13.01a both send the operator's own username with `service=enable` and a bare-address `rem_addr` (`tests/lab/results/L3-arista_eos.md`, re-measured 2026-09-22, which is where the image tag was found to overstate the running version; `L3-cisco_iosxe.md`). **NX-OS re-measured 2026-09-21 with the transcript it was missing** (`tests/lab/results/L3-nxos-cisco_nxos.md`): `disable`, `enable` and `enable 15` were each typed separately and each answered `% Invalid command at '^' marker.`, and `feature privilege` is itself refused by this image, so the conclusion the reopened note reached without evidence is confirmed with it |
-| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS and the N9Kv over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS and the N9Kv never do; `deadtime`, IOS-XE, other transports and authorization fall-through unmeasured. **2026-09-21 (L17):** committing `tacplus-options strict-authorization` on both Junos images changes none of the unreachable-server cells — break-glass still logged in under both orders with port49d down — so making a port49 denial binding does not cost the fall-through this row measures; see below |
+| **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | closed — measured 2026-09-21; `tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`, `L3-nxos-cisco_nxos.md`. Scope: NX-OS 10.x has no enable exchange (`feature privilege` was removed in 10.x; the owner confirmed the same on production Nexus 9000 hardware running 10.3(5)); NX-OS 9.x and earlier are unmeasured and out of scope. No measured image sends `$enab{level}$`. History: closed in error 2026-09-20 on a note with no transcript, reopened 2026-09-21. Measured: vEOS-lab 4.31.2F (image tagged 4.32.2F) and IOS-XE 17.13.01a both send the operator's own username with `service=enable` and a bare-address `rem_addr` (`tests/lab/results/L3-arista_eos.md`, re-measured 2026-09-22, which is where the image tag was found to overstate the running version; the image under the tag is `sha256:8ef33020ece8871b19ddfdddf7f3585b04d2ac3672845b0db88debe8e96ff9c9`, created 2026-09-15, the only one on the lab host; `L3-cisco_iosxe.md`). **NX-OS re-measured 2026-09-21 with the transcript it was missing** (`tests/lab/results/L3-nxos-cisco_nxos.md`): `disable`, `enable` and `enable 15` were each typed separately and each answered `% Invalid command at '^' marker.`, and `feature privilege` is itself refused by this image, so the conclusion the reopened note reached without evidence is confirmed with it |
+| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS, the N9Kv and IOS-XE over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS, the N9Kv and IOS-XE never do (`tests/lab/results/L4-cisco_iosxe.md`, which this cell omitted until 2026-09-23); `deadtime`, other transports and authorization fall-through unmeasured. **2026-09-21 (L17):** committing `tacplus-options strict-authorization` on both Junos images changes none of the unreachable-server cells — break-glass still logged in under both orders with port49d down — so making a port49 denial binding does not cost the fall-through this row measures; see below |
 | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | closed — measured 2026-09-20; `tests/lab/results/L5-arista_eos.md`, `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, `L5-cisco_nxos.md`, `L5-cisco_iosxe.md`. No image sends a WATCHDOG over a 2m30s idle interactive session under the lab's accounting config, which sets no periodic update; a device configured for periodic updates is outside what was measured |
 | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
-| **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open — eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. The `/login` cookie flow, which this row also names, is still unmeasured, and it is the only clause left open; see below |
+| **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open — eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. The eAPI `/login` cookie flow measured 2026-09-23 by hand on vEOS (`tests/lab/results/L7-login-arista_eos.md`): a request carrying the cookie runs no authentication and no session authorization, only its command authorization and an accounting stop. Open: NX-API's `nxapi_auth` cookie, unmeasured, so the row stays open (lab register rule 3); see below |
 | **L8** | The maximum password length each platform accepts at an interactive prompt. (PAP was split out to L19 on 2026-09-23.) | The 30-character handle (design document §8) | all | closed — measured 2026-09-23; `tests/lab/results/L8-cisco_nxos.md`, `L8-cisco_iosxe.md`; and 2026-09-20, `L8-arista_eos.md`, `L8-juniper_vjunos-router.md`, `L8-juniper_vsrx.md`. The 30-character handle logs in on all five images. Longest intact: **127 on the N9Kv**, which refuses 128 and above locally and never asks port49; at least 1024 on IOS-XE; at least 138 on vEOS and both Junos images, where nothing longer was tried; see below |
 | **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. | Projection generator constraints (§8) | Junos | open |
 | **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos. **Reading 3's conclusion is corrected by L17 (2026-09-21):** a denied Junos session authorization is advisory under the configuration this lab deploys, not on this vendor — `tacplus-options strict-authorization` makes the same denial refuse the login; see below |
@@ -4121,10 +4151,11 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 2s**, which is the "answered with increasing delay" of design document §11. The ceiling was 5s until this row measured device reply timeouts; **2026-09-21 it was lowered to 2s**, which is under every timeout measured here, so a FAIL is always delivered inside it (`tests/lab/results/L13-*.md`). A ceiling above a device's timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX, vEOS, N9Kv and Catalyst 8000V: about 3s on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, which also retransmits, and above 12s on IOS-XE, which this sweep does not bound from above; past that timeout every platform that reached it takes the fall-through branch; other transports and the next-server case unmeasured; see below |
 | **L14** | Whether a NETCONF session over SSH authenticates through TACACS+ the way an interactive login does; whether any authorization request is sent for the session or for an `<edit-config>`, and with what `service`, `cmd` and `cmd-arg`; what `port` and `rem_addr` contain; what accounting arrives for a NETCONF session and for a commit. | Adapter coverage for automation traffic (§8); the login context key (§5.1.1); what reconciliation may conclude from accounting (§9) | Junos, NX-OS, EOS | open — measured 2026-09-20 on vEOS, vJunos-router and vSRX; on the N9Kv the AAA half is measured and the RPC half is not, because the channel closes before any RPC is answered; IOS-XE and key-based SSH unmeasured. **2026-09-21 (L17):** a Junos NETCONF session on port 830 is refused outright when port49 denies its session authorization and `tacplus-options strict-authorization` is committed, so the statement reaches automation traffic and not only interactive logins; see below |
 | **L16** | Role delivery over TACACS+ and its interaction with command authorization. Whether a custom role named in a reply attribute takes effect — verified by a command it forbids being refused, never by the device echoing the name back; whether the device still sends a per-command authorization request for a command its own role forbids; which wins when the device's role and port49 disagree, **in both directions**; two roles at once (NX-OS documents a union with permit winning); a role name the device does not have; no role attribute at all; the accepted spellings (`shell:roles=` / `shell:roles*`, bare or inside `cisco-av-pair`); and the `priv-lvl=N` to `priv-N` mapping under `feature privilege`. | The session-attribute model (§6) and adapter `privilege` blocks (§8) — a custom role is the NX-OS and EOS analogue of a Junos login class, which is what decision 22 projects into. Also what the decision log means (§5.7, §9): if a device can refuse a command port49 permitted, the log records a permit for a command that never ran. | EOS, NX-OS | open — added 2026-09-21. vEOS measured 2026-09-21 (`shell:roles*<name>` **does not deliver a role** — the device reports the session's role as `<unknown>` — port49's per-command deny binds, and a `cisco-av-pair*` attribute sent as OPTIONAL is refused outright) and **2026-09-22, which corrects the reading drawn from it**: EOS reads the **bare** attribute `roles=<name>`, which the first run never sent, under either argument flag; sent by its own name the role is applied, and under `aaa authorization commands ... local` it is the operator's real privilege. `priv-lvl` must be sent too — a reply with a role and no `priv-lvl` lands the session at level 1 — and an OPTIONAL `priv-lvl*N` **is** applied on this image. NX-OS measured 2026-09-21 (delivery: all three spellings work, an unknown name degrades to `network-operator`, and a delivered role's own rules do not bind while `aaa authorization commands` points at TACACS+) and 2026-09-22 (precedence: **`shell:roles` decides the role and a `priv-lvl` beside it is inert, in both directions**, so an NX-OS adapter sends the role and never the privilege level; with command authorization pointed at `local` instead, the delivered role does bind). Open on EOS: the `cisco-av-pair` ambiguity, and whether a role that permits everything carries a read-only one delivered beside it (the pair was measured, the permissive role alone was not); see below |
-| **L15** | How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and **what port49 then answers**. | Single-use tokens, and therefore whether reusable tokens are needed at all (§13, decision 15); the 30-character handle's blast radius (design §8) | EOS, NX-OS, Junos | open — measured 2026-09-20 on all four images: one exchange per API request and per NETCONF session, every time, and the repeat permitted out of the receipt rather than the store, which moves the question to `receipt_ttl`; IOS-XE, cookie sessions and kept-alive connections unmeasured. **2026-09-21: the real clients were driven and the count is the client's, not the transport's** — one authentication per ten-task job for every SSH client that holds its connection and for Ansible `cisco.nxos` over `httpapi`, against 28 for NAPALM `nxos` over the same NX-API; and the `receipt_ttl` boundary was crossed for the first time, half a NAPALM job refused `token_not_found` 38.8s into a 30s TTL; see below |
+| **L15** | How many TACACS+ authentication exchanges one unit of work costs per transport — one HTTP API request, one NETCONF session, one SSH login — whether a second unit of work presenting the same credential re-authenticates, and **what port49 then answers**. | Single-use tokens, and therefore whether reusable tokens are needed at all (§13, decision 15); the 30-character handle's blast radius (design §8) | EOS, NX-OS, Junos | open — measured 2026-09-20 on all four images: one exchange per API request and per NETCONF session, every time, and the repeat permitted out of the receipt rather than the store, which moves the question to `receipt_ttl`; IOS-XE, NX-API cookie sessions and kept-alive connections unmeasured (the eAPI `/login` cookie measured by hand 2026-09-23: one exchange at `/login`, none per request after it; `tests/lab/results/L7-login-arista_eos.md`). **2026-09-21: the real clients were driven and the count is the client's, not the transport's** — one authentication per ten-task job for every SSH client that holds its connection and for Ansible `cisco.nxos` over `httpapi`, against 28 for NAPALM `nxos` over the same NX-API; and the `receipt_ttl` boundary was crossed for the first time, half a NAPALM job refused `token_not_found` 38.8s into a 30s TTL; see below |
 | **L17** | Which `system tacplus-options` statements change what a port49 answer MEANS on Junos. Whether `strict-authorization` makes a DENIED session authorization refuse the login, on SSH and on NETCONF, and what it does to a local break-glass account while port49d is down. What AV pairs `enhanced-accounting` adds, to which record types, and whether any of them separates two concurrent sessions of one user or carries the client's source port. Which accounting records carry a user who is not the logged-in operator, and what port49 does with them. Whether `authorization-time-interval` re-authorizes a live session, and what a DENIED re-authorization does to one. | Whether port49 constrains a Junos session at all (L10 reading 3; L14) and what the reference AAA configuration in `tests/lab/configs/` must carry; the 3am break-glass argument (§5.6, L4); accounting attribution and what reconciliation may conclude (§5.8, §9); whether a revocation can reach a session that is already open (§5.6) | Junos (vSRX, vJunos-router) | open — added 2026-09-21 and measured the same day on **both** images, cell for cell: `tests/lab/results/L17-juniper_vsrx.md`, `L17-juniper_vjunos-router.md`. `strict-authorization` **does** make a port49 denial binding, on SSH and on NETCONF, and break-glass still gets in with port49d down under both authentication orders. `enhanced-accounting` adds `Port`, `Authentication-Type` and `User_Perms` to the `cmd=login` record only. No record named `root` under this lab's accounting event list. `authorization-time-interval` re-authorizes at exactly the configured interval and a DENIED re-authorization does **not** end the live session. Unmeasured: the other six `tacplus-options` leaves, a real `root` RPC record, production Junos 23.4R2-S8.7, and an interval other than the 15-minute minimum; see below |
 | **L18** | How each platform treats a reply attribute it did not ask for: applied, ignored, or the session killed. Another vendor's attribute, an invented one, and a known attribute carrying a value the device cannot use, each in the OPTIONAL and the MANDATORY spelling. Per variant: whether the session opens and, when it does not, what the device says verbatim; what role or privilege the session ends up with; and whether the device still sends per-command authorization. | Whether an adapter may send one attribute list to a mixed fleet at all (§8). RFC 8907 §8.2 says an OPTIONAL argument a device does not understand SHOULD be ignored and a MANDATORY one MUST fail the authorization; `lab.session_attributes` in `tests/lab/port49d-lab.yaml` rested on the first half until IOS-XE disproved it (L10), and what an operator's typo costs (§6) rests on the same answer. Also decision 22's two Junos attributes (§13, gated on L12). | EOS, NX-OS, IOS-XE, Junos | open — added and measured 2026-09-22 on all five images, `tests/lab/l18_test.go`. **Three vendors answer three different ways, so §8 cannot have one rule.** vEOS follows §8.2 in both directions. The N9Kv and both Junos images honour neither half and ignore everything, mandatory included. IOS-XE refuses the session for anything it does not recognise under either flag — and a run of those refusals stops it answering SSH at all for about a minute, without sending port49 a packet. On Junos `local-user-name` is applied under either flag and **`user-permissions` does nothing**, which is decision 22's second attribute measured for the first time. **The per-command reply is measured too, 2026-09-22, and it does not follow the session reply:** the C8000V refuses EVERY command in the session — `Command authorization failed.` — for any of the three attributes under either flag, on authorizations port49 answered `permit`; vEOS ignores an optional unknown there and refuses every command on a MANDATORY one; the N9Kv ignores all of them. Junos has no per-command reply to ask it of (L10, L14; decision 21). Open: every non-SSH transport, and whether IOS-XE's SSH condition is the vty pool; see below |
 | **L19** | The maximum password length each platform accepts via PAP, on every login path where the device uses PAP. | The 30-character handle (design document §8): an authentication START carries a PAP password in `data`, whose length field is one byte, so PAP can bound the handle where the ASCII prompt does not — and NX-OS uses PAP for every SSH login by default | all | open — added 2026-09-23, split from L8. On the N9Kv an SSH login is carried as PAP and 127 characters arrive (`tests/lab/results/L8-cisco_nxos.md`); PAP on any other path, and on EOS, Junos and IOS-XE, which this lab does not configure for it, is unmeasured; see below |
+| **L20** | Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a **wrong password** for the same user inside that window is also accepted; and whether a credential port49 would now refuse is re-checked inside it. | Whether a revocation in port49 reaches an API client at all (§5.1.4), and decision 15's bound on how long a spent token works — the receipt's `receipt_idle_ttl` and `receipt_max_age` act only on exchanges the device sends | IOS-XE; then every HTTP API transport | open — added 2026-09-23. IOS-XE RESTCONF answered a repeat of an already-spent token, 3s later, with `200 OK` and **zero** TACACS+ traffic (`tests/lab/results/L1-restconf-cisco_iosxe.md`), so a revocation in port49 cannot reach that repeat. Open: the window's length, what the device keys the answer on, and whether a wrong password within the window is accepted too; see below |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -4139,7 +4170,7 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   | image | authentication START | authorization request | accounting |
   |---|---|---|---|
-  | vEOS-lab 4.32.2F | `ssh` | **`vty4`** / `vty5` | `ssh` at start, `vty<n>` at stop |
+  | vEOS-lab 4.31.2F | `ssh` | **`vty4`** / `vty5` | `ssh` at start, `vty<n>` at stop |
   | Nexus 9300v 10.4(2)F | `0` | `0` on the session, **empty string** on every command | `0` |
   | vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15 | empty string | empty string | `0`, `1`, `non-tty` |
   | Catalyst 8000V 17.13.01a | `tty434` | **`tty434`** | `tty434` |
@@ -4190,15 +4221,19 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   Per transport on vEOS: SSH `ssh`, eAPI **`command-api`**, NETCONF **`NETCONF`** — three distinct constants,
   so `port` does tell the transports apart even though it cannot tell two sessions apart. On the N9Kv,
-  NX-API and NETCONF both report `0`, the same value SSH reports.
+  NX-API and NETCONF both report `0`, the same value SSH reports. On IOS-XE, RESTCONF reports
+  `""` (empty) at authentication and `""` (empty) at authorization (not unique across two
+  concurrent requests, which differed only by username); the START's and the REQUEST's byte
+  lengths leave no room for a `port`, so the device sent it empty.
+  `tests/lab/results/L1-restconf-cisco_iosxe.md`.
   `tests/lab/results/L1-arista_eos.md`, `L1-juniper_vjunos-router.md`, `L1-juniper_vsrx.md`,
   `L1-cisco_nxos.md`, `L1-cisco_iosxe.md`, `L7-arista_eos.md`, `L7-cisco_nxos.md`,
   `netconf-arista_eos.md`.
   *Unmeasured:* the console transport — though one incidental observation exists for IOS-XE,
   where a command typed at the serial console reported `port="tty0" rem_addr="async"` against
   `tty434`/`172.100.100.1` for a vty, so that platform distinguishes the console by `port` as
-  vEOS distinguishes eAPI; NETCONF on the N9Kv beyond the authentication; and every non-SSH
-  transport on IOS-XE (this lab does not configure RESTCONF or NETCONF-YANG AAA there).
+  vEOS distinguishes eAPI; NETCONF on the N9Kv beyond the authentication; and NETCONF-YANG on
+  IOS-XE.
 - **L2** — EOS 2026-09-17: the 61-character `server_msg` was displayed to the operator in full.
   `tests/lab/results/L2-arista_eos.md`. Not applicable on Junos, which sends no per-command
   REPLY (decision 21).
@@ -4244,7 +4279,7 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 - **L3** — measured for the first time on any platform, 2026-09-20.
   `tests/lab/results/L3-arista_eos.md`, `L3-cisco_nxos.md`.
 
-  **vEOS-lab 4.32.2F**, two concurrent enables, off the wire:
+  **vEOS-lab 4.31.2F** (image tagged 4.32.2F), two concurrent enables, off the wire:
 
   ```
   AUTHEN START action=login(1) authen_type=ascii(1) service=enable(2) priv_lvl=15
@@ -4337,7 +4372,7 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   `tests/lab/results/L4-juniper_vjunos-router.md`, `L4-juniper_vsrx.md`, `L4-arista_eos.md`,
   `L4-cisco_nxos.md`, `L4-cisco_iosxe.md`.
 
-  | method list | port49 | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.32.2F | Nexus 9300v 10.4(2)F | Catalyst 8000V 17.13.01a |
+  | method list | port49 | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.31.2F | Nexus 9300v 10.4(2)F | Catalyst 8000V 17.13.01a |
   |---|---|---|---|---|---|---|
   | lists a local method | unreachable | local login | local login | local login | local login | local login |
   | lists a local method | answering FAIL | **local login** | **local login** | refused | refused | refused |
@@ -4493,9 +4528,10 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   and the SSH session is closed, so the operator is locked out of a session port49 permitted. An
   invented optional attribute (`zzznotareal*attribute`) fails identically, so this is not about
   `shell:roles` in particular — it is any attribute outside the set that image knows. Measured by
-  three single-variable runs on 2026-09-20; `tests/lab/results/L10-cisco_iosxe.md`, and the lab
-  harness now derives a daemon config for this platform carrying `priv-lvl=15` alone
-  (`(*lab).configPath` in `tests/lab/harness_test.go`).
+  three single-variable runs on 2026-09-20, which `L10-cisco_iosxe.md` does not record; the
+  refusal is recorded, variant by variant, in `tests/lab/results/L18-cisco_iosxe.md`
+  (2026-09-22), and the lab harness now derives a daemon config for this platform carrying
+  `priv-lvl=15` alone (`(*lab).configPath` in `tests/lab/harness_test.go`).
 
   **What it costs plan 4.** An adapter cannot be written as "send every attribute the policy
   produces and let the device take what it understands". On this platform an attribute the device
@@ -4577,7 +4613,7 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   full delay), and the login timed from the client. `tests/lab/results/L13-arista_eos.md`,
   `L13-juniper_vjunos-router.md`, `L13-juniper_vsrx.md`.
 
-  | FAIL delayed by | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.32.2F | Catalyst 8000V 17.13.01a |
+  | FAIL delayed by | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.31.2F | Catalyst 8000V 17.13.01a |
   |---|---|---|---|---|
   | 2s | waited 2.03s, local login | waited 2.06s, local login | waited 2.04s, **refused** | waited, **refused** |
   | 6s | gave up at 3.28s, local login | gave up at 3.51s, local login | gave up at 5.04s, local login | waited, **refused** |
@@ -4665,14 +4701,46 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   measured is that the device runs AAA for each such request — a fact about this client, not the
   demonstration that the transport re-authenticates per request that the earlier wording made it.
   The `/login` session-cookie flow named in this row's own claim, the NX-API `nxapi_auth` cookie,
-  and HTTP keep-alive are precisely the shapes that would lower the count, and all three are
-  unmeasured. Read every count in the table above as an upper bound.
+  and HTTP keep-alive are precisely the shapes that would lower the count. The first was
+  measured 2026-09-23 and does lower it (below); the other two are unmeasured. Read every count
+  in the table above as an upper bound.
 
   What the repeat then got is the finding decision 15 actually turns on, and it is in L15 below.
 
-  *Unmeasured:* the `/login` session-cookie flow, which this row names explicitly and which is the obvious
-  way a device would avoid re-authenticating; HTTP keep-alive; the NX-API JSON-RPC dialect, which is a
-  different code path on the device from `ins_api`; the unix-socket and plain-HTTP eAPI transports.
+  **The eAPI `/login` cookie flow, measured 2026-09-23 by hand**
+  (`tests/lab/results/L7-login-arista_eos.md`). vEOS-lab 4.31.2F (image tagged 4.32.2F), one
+  token minted by the slice's broker, `POST /login`, three `POST /command-api` requests carrying
+  the cookie 23s apart, `POST /logout`, then the cookie once more. Counts are from port49's
+  decision log and the capture.
+
+  | request | redeem | authorize_session | authorize_command | account | port | rem_addr |
+  |---|---|---|---|---|---|---|
+  | `POST /login` | 1 | 1 | 0 | 1 (start, task_id 1) | `command-api` | `172.100.100.1` |
+  | `POST /command-api` `p49-1` | 0 | 0 | 1 | 1 (stop, task_id 9) | `command-api` | `172.100.100.1` |
+  | `POST /command-api` `p49-2` | 0 | 0 | 1 | 1 (stop, task_id 10) | `command-api` | `172.100.100.1` |
+  | `POST /command-api` `p49-3` | 0 | 0 | 1 | 1 (stop, task_id 11) | `command-api` | `172.100.100.1` |
+  | `POST /logout` | 0 | 0 | 0 | 1 (stop, task_id 1) | `command-api` | `172.100.100.1` |
+  | `POST /command-api` `p49-after` | 0 | 0 | 0 | 0 | — | — |
+
+  1. **`POST /login` runs one TACACS+ authentication** (`redeem token_redeemed`, `auth.method`
+     `ascii`, `port` `command-api`, `rem_addr` `172.100.100.1`), then a session authorization
+     and an exec accounting start.
+  2. **A request carrying the cookie does not authenticate again**, and does not authorize the
+     session again: one command authorization (`permit_dominates`) and one accounting stop each,
+     the same for all three requests, 23s and 46s after the first.
+  3. **After `/logout` the device refuses the cookie itself**, `HTTP/1.1 401 Unauthorized` /
+     `Unable to authenticate user: Bad session Id`, and sends port49d nothing for it; the only
+     record in that step is `/logout`'s own accounting stop.
+
+  This is the measured confirmation, for eAPI, that the table above is an upper bound: with a
+  cookie, one authentication and one session authorization cover every later request, and the
+  single-use token is spent once, at `/login`. Every record carried one `ctx_id`.
+
+  *Unmeasured:* the NX-API `nxapi_auth` cookie, the other half of the cookie clause this row
+  names, and the one that keeps it open; an eAPI cookie used past `receipt_idle_ttl` or past its
+  own `Expires` (24h); a denied command under a cookie; two cookie sessions from one token; HTTP
+  keep-alive; the NX-API JSON-RPC dialect, which is a different code path on the device from
+  `ins_api`; the unix-socket and plain-HTTP eAPI transports.
 - **L14** — 2026-09-20. `tests/lab/results/netconf-arista_eos.md`,
   `netconf-juniper_vjunos-router.md`, `netconf-juniper_vsrx.md`, `netconf-cisco_nxos.md`.
 
@@ -4724,7 +4792,8 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   on NX-API, and plain HTTP keep-alive are each a way the count could be lower, and none of them
   was driven. Until they are, "one authentication per unit of work" is what *this* client costs;
   any argument about token lifetimes that depends on the number has to name the client it is
-  about.
+  about. (The eAPI cookie was driven by hand 2026-09-23: one authentication at `/login` and none
+  for the requests carrying the cookie — L7 above, `tests/lab/results/L7-login-arista_eos.md`.)
 
   The second call was then **permitted anyway**, on every transport and every platform:
   `verdict=permit reason=receipt_replayed`. port49 answered it out of the receipt rather than out of the
@@ -4808,9 +4877,9 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   capture filter is `tcp port 49`, so no cookie or Basic header is in evidence; the notes say
   so in those words in every row.
 
-  *Unmeasured:* the eAPI `/login` cookie flow driven by hand, and the NX-API `nxapi_auth`
-  cookie driven by hand — both are now *implied* by the Ansible `cisco.nxos` result rather
-  than driven directly; forcing a cookie to expire and watching what the device does; HTTP
+  *Unmeasured:* the NX-API `nxapi_auth` cookie driven by hand — *implied* by the Ansible
+  `cisco.nxos` result rather than driven directly (the eAPI `/login` cookie was driven by hand
+  2026-09-23, L7 above); forcing a cookie to expire and watching what the device does; HTTP
   keep-alive as a variable separated from the cookie; IOS-XE and Junos clients.
 - **L16** — added 2026-09-21. `tests/lab/l16_test.go`, results in `tests/lab/results/L16-*.md`.
 
@@ -5145,8 +5214,15 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   The docker tag and the vmdk filename both say 4.32.2F; the file was named for a release it
   does not contain. Under the rule in `CLAUDE.md` the device is right and the documents are
   wrong. The harness now reports what the device reports. **Every EOS observation in this
-  section stands — only the release label on it was wrong**, and notes written before today
-  still carry the old label in their headers.
+  section stands — only the release label on it was wrong**. Corrected 2026-09-23: the eleven
+  EOS notes that still carried the old label in their headers (`L1`, `L2`, `L4`, `L5`, `L6`,
+  `L7`, `L8`, `L10`, `L13`, `L16`, `netconf`), the EOS entries of the L1, L4 and L13 tables
+  in this section and the L3 detail, now say vEOS-lab 4.31.2F (image tagged 4.32.2F). Every EOS note ran
+  the one image, `vrnetlab/arista_veos:4.32.2F` — `tests/lab/topologies/eos.clab.yml` has named
+  no other since plan 1 — and that image reports 4.31.2F in `L7-arista_eos.md`'s own eAPI
+  replies (2026-09-21) as well as here. A tag can be rebuilt, so the tag alone does not prove the
+  image was the same: `docker image inspect` on the lab host (2026-09-23) shows one image under
+  it, `sha256:8ef33020ece8871b19ddfdddf7f3585b04d2ac3672845b0db88debe8e96ff9c9`, created 2026-09-15, before the first EOS note.
 
 - **L17** — added and measured 2026-09-21, `tests/lab/junos_opts_test.go`, results in
   `tests/lab/results/L17-juniper_vsrx.md` and `L17-juniper_vjunos-router.md`. **vSRX 21.4R3.15
@@ -5395,6 +5471,37 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   *Unmeasured:* PAP on any path other than an SSH login, and PAP on EOS, Junos and IOS-XE, which
   offer it but are not configured for it here — IOS-XE authenticates `ascii(1)` under this lab's
   configuration, like EOS and Junos and unlike the N9Kv.
+- **L20** — added 2026-09-23 from L1's RESTCONF run on IOS-XE
+  (`tests/lab/results/L1-restconf-cisco_iosxe.md`, "The same credential again"). Catalyst 8000V
+  17.13.01a, `ip http authentication aaa login-authentication default`, one seeded token. The
+  first RESTCONF request cost one authentication and one session authorization; the same Basic
+  credential again, 3s later, got `200 OK` with **no TACACS+ traffic at all** — no decision
+  record and no TCP connection from the device between 06:51:23.931Z and 06:51:30.006Z. So it
+  was neither a receipt replay nor a redeem. What the device keyed that answer on, and for how
+  long it would go on answering that way, are unmeasured.
+
+  **Why it matters: revocation stops at port49.** Everything port49 does to end a token's life —
+  single-use redemption, the receipt's `receipt_idle_ttl` and `receipt_max_age`, revocation by
+  `sid` or `sub` (§5.1.4) — acts only on the next exchange the device sends. A device that
+  answers a repeat without asking sends none, so for as long as it does, a spent token keeps
+  working at the device and a revocation in port49 does not reach that repeat. The window is set
+  by the device, port49 cannot shorten it, and nothing in port49's log shows it is open. Decision
+  15's argument that a captured token lives only while the job is active plus
+  `receipt_idle_ttl` holds for the transports L7 and L15 measured, where every repeat reaches
+  port49; on IOS-XE RESTCONF it is bounded by this window instead, whose length is unmeasured.
+
+  **The open question that decides how much this matters: a wrong password within the
+  window.** If the device keyed its answer on the credential, only the holder of the spent token
+  gets in. If it keyed it on the username, or on the client address and username, then *any*
+  password for that user inside the window also gets `200`, and the device, not port49, is
+  deciding who is authenticated. The run cannot tell these apart, and it decides whether RESTCONF
+  on IOS-XE weakens the token model.
+
+  *Unmeasured:* a wrong password for the same user inside the window; how long the window lasts;
+  what the answer is keyed on (the credential, the username, the client address, the TLS
+  connection); whether a credential port49 would now refuse is re-checked inside it; the same
+  question on eAPI and NX-API with Basic credentials on a kept-alive connection, and on every
+  other platform.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.

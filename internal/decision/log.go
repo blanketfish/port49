@@ -27,6 +27,8 @@ type Record struct {
 	TaskID      string       `json:"task_id,omitempty"`
 	AcctRecord  *AcctRecord  `json:"record,omitempty"`
 	Mint        *Mint        `json:"mint,omitempty"`
+	Policy      *Policy      `json:"policy,omitempty"`
+	Blob        *Blob        `json:"blob,omitempty"`
 	Unvalidated *Unvalidated `json:"unvalidated,omitempty"`
 	ServerMsg   string       `json:"server_msg,omitempty"`
 	// IndexError names what a failed index write cost, on the record for the
@@ -46,6 +48,11 @@ type Auth struct {
 	// key is worse than an absent one: it is present on every mint record in
 	// the fleet and therefore joins everything to everything.
 	CredentialSHA256 string `json:"credential_sha256,omitempty"`
+	// Fingerprint is the sha256 of a client certificate the trust anchor
+	// verified and the broker then refused (expired since, no clientAuth, no
+	// one email SAN): on a `mint deny trust_domain_unresolved` it says whose
+	// certificate it was. Identity, not a secret (spec §5.1.4).
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 type Device struct {
@@ -124,6 +131,28 @@ type Mint struct {
 	TokenSHA256 []string `json:"token_sha256"`
 	TTLSeconds  int      `json:"ttl_seconds"`
 	BlobHash    string   `json:"blob,omitempty"`
+}
+
+// Policy is what a mint record says about why it was allowed (spec §5.7): the
+// subject the principal matched and the grants that selected the device.
+type Policy struct {
+	Subject string        `json:"subject,omitempty"`
+	Grants  []PolicyGrant `json:"grants,omitempty"`
+}
+
+// PolicyGrant is one grant that selected the device.
+type PolicyGrant struct {
+	Scope string   `json:"scope"`
+	Roles []string `json:"roles,omitempty"`
+}
+
+// Blob is the `blob` event's body: the compiled blob whole, emitted once per
+// hash, so replay depends on the log alone and the store owes the auditor
+// nothing (spec §5.1.1; §13, decision 19). Body is the exact bytes the hash
+// names.
+type Blob struct {
+	Hash string          `json:"hash"`
+	Body json.RawMessage `json:"body"`
 }
 
 // Unvalidated is what is recorded for a packet no key validated: cleartext header
