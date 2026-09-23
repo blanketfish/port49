@@ -206,10 +206,12 @@ request.
 **Stability.** Stable in the trivial sense: `port` was empty at authentication and at authorization
 for every request.
 **The repeat.** Neither a receipt replay nor a new redeem: the device answered the second `alice01`
-request with `200 OK` without sending port49d anything, so it keeps the credential for a while itself
-(its HTTP AAA cache, whose lifetime this run did not measure). A spent seeded token kept working at
-the device.
+request with `200 OK` without sending port49d anything. What it keyed that answer on (the
+credential, the username, or the client) and for how long are unmeasured. A spent seeded token kept
+working at the device, 3s after it was spent.
 
-*Unmeasured:* NETCONF-YANG on IOS-XE; the console; how long IOS-XE keeps a RESTCONF credential
-without re-authenticating, and whether a denied or changed credential is re-checked inside that
-window; a RESTCONF write (command authorization for a config change); a request that port49d denies.
+*Unmeasured:* NETCONF-YANG on IOS-XE; the console; how long IOS-XE answers a repeat without asking
+TACACS+, and what it keys that answer on; a different (wrong) password for the same user inside that
+window, which would also get `200` if the answer is not keyed on the credential; whether a credential
+port49d would now refuse is re-checked inside that window; a RESTCONF write (command authorization for
+a config change); a request that port49d denies.
