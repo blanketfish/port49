@@ -70,6 +70,11 @@ type Session struct {
 	// ReplacedCtxID cannot name it, and this says a context was displaced all
 	// the same (spec §5.6).
 	ReplacedUnreadable bool `json:"replaced_unreadable,omitempty"`
+	// RevokedAt is set on a redeem refused `credential_revoked`: the login
+	// would have joined a context whose revocation its token, minted before
+	// it, cannot lift. It is the revocation that refused it, rendered as ts
+	// is (FormatTime), so the refusal explains itself (spec §5.6).
+	RevokedAt string `json:"revoked_at,omitempty"`
 	// Port and RemAddr are as seen on this exchange, which is not necessarily
 	// what the context recorded: they are part of no key (spec §13,
 	// decision 15).
@@ -175,13 +180,21 @@ func CredentialHash(presented []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// timeLayout is how every time on a record is rendered: millisecond precision,
+// matching the spec examples.
+const timeLayout = "2006-01-02T15:04:05.000Z07:00"
+
+// FormatTime renders a time carried in a record field the way ts is rendered,
+// so a reader compares the two as strings.
+func FormatTime(t time.Time) string { return t.UTC().Format(timeLayout) }
+
 // MarshalJSON renders ts with millisecond precision in UTC, matching the spec examples.
 func (r Record) MarshalJSON() ([]byte, error) {
 	type alias Record
 	return json.Marshal(struct {
 		TS string `json:"ts"`
 		*alias
-	}{TS: r.TS.Format("2006-01-02T15:04:05.000Z07:00"), alias: (*alias)(&r)})
+	}{TS: r.TS.Format(timeLayout), alias: (*alias)(&r)})
 }
 
 // UnmarshalJSON is MarshalJSON's counterpart, parsing ts back into a
@@ -197,7 +210,7 @@ func (r *Record) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &a); err != nil {
 		return err
 	}
-	ts, err := time.Parse("2006-01-02T15:04:05.000Z07:00", a.TS)
+	ts, err := time.Parse(timeLayout, a.TS)
 	if err != nil {
 		return err
 	}

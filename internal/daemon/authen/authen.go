@@ -360,8 +360,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		if enable && r.Status == wire.AuthenStatusPass {
 			return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
 		}
-		rec.Session.CtxID = r.CtxID
-		return s.finish(rec, r.Status, decision.ReceiptReplayed)
+		return s.replay(ctx, rec, r)
 	case !errors.Is(err, store.ErrNotFound):
 		return s.storeError(rec)
 	}
@@ -422,6 +421,16 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// device inside a few milliseconds.
 	ctxID := incumbent.CtxID
 	var login store.Context
+	// revokedAt is set when the login would join a context whose revocation
+	// its token, minted before it, cannot lift (store.CarryRevocation). Such a
+	// login is refused `credential_revoked`, the enable gate's answer for the
+	// same state (spec §5.6). The token is still spent, and the receipt
+	// records the refusal: a retry of a token the revocation was meant to stop
+	// must not get a second chance, and a retransmission replays FAIL, never
+	// a PASS. A revocation that lands after this read is merged by the join
+	// instead, and that login answers PASS into the revoked context; every
+	// authorization after it is denied.
+	var revokedAt time.Time
 	if !enable {
 		login = s.loginContext(winner, username, port, remAddr)
 		prev, perr := s.h.store.GetContext(ctx, ck)
@@ -440,6 +449,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 			// name two contexts.
 			ctxID = prev.CtxID
 			login.CtxID = s.h.newCtxID()
+			revokedAt = store.CarryRevocation(prev.RevokedAt, winner.MintedAt)
 		case perr == nil || errors.Is(perr, store.ErrNotFound) || errors.As(perr, &unreadable):
 			ctxID = s.h.newCtxID()
 			login.CtxID = ctxID
@@ -451,7 +461,11 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// past a bound has to find the receipt in order to be answered
 	// `token_spent` rather than `token_not_found` (store.Receipt; spec §5.7).
 	now := s.h.now()
-	receipt := store.Receipt{CredentialSHA256: credHash, Status: wire.AuthenStatusPass, CtxID: ctxID,
+	status := uint8(wire.AuthenStatusPass)
+	if !revokedAt.IsZero() {
+		status = wire.AuthenStatusFail
+	}
+	receipt := store.Receipt{CredentialSHA256: credHash, Status: status, CtxID: ctxID,
 		FirstRedeemedAt: now, IdleExpiresAt: now.Add(s.h.receiptIdleTTL),
 		RetainUntil: now.Add(s.h.receiptMaxAge + s.h.receiptIdleTTL)}
 	w := store.ReceiptWrite{Key: rk, Receipt: receipt, Principal: winner.Principal,
@@ -483,8 +497,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 				if enable && r.Status == wire.AuthenStatusPass {
 					return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
 				}
-				rec.Session.CtxID = r.CtxID
-				return s.finish(rec, r.Status, decision.ReceiptReplayed)
+				return s.replay(ctx, rec, r)
 			}
 			return s.fail(ctx, rec, decision.TokenNotFound)
 		}
@@ -497,6 +510,14 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// context, so `replaced_ctx_id` must stay absent on its record.
 	if enable {
 		return s.escalate(ctx, rec, ck, decision.EscalationGranted)
+	}
+	// Refused, and nothing is written to the context: it is revoked already,
+	// and a join would only swap in a broker decision nobody may use.
+	if !revokedAt.IsZero() {
+		rec.Principal = winner.Principal
+		rec.Session.CtxID = ctxID
+		rec.Session.RevokedAt = decision.FormatTime(revokedAt)
+		return s.fail(ctx, rec, decision.CredentialRevoked)
 	}
 
 	// Join, or write fresh (spec §5.6). A live context of the same principal
@@ -691,6 +712,18 @@ func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.Co
 	terr := s.h.store.TouchContext(ctx, ck, s.h.contextTTL)
 	s.h.metrics.StoreOps.WithLabelValues("touch_context", storeOutcome(terr)).Inc()
 	return s.finish(rec, wire.AuthenStatusPass, reason)
+}
+
+// replay answers from a receipt's stored decision. A refusal — the only one
+// written is a login refused `credential_revoked` (spec §5.6) — replays as a
+// refusal does, after the failure delay and with its server_msg, so a device
+// that retransmits it learns nothing a FAIL would not have told it.
+func (s *Session) replay(ctx context.Context, rec decision.Record, r store.Receipt) (wire.AuthenReply, bool) {
+	rec.Session.CtxID = r.CtxID
+	if r.Status == wire.AuthenStatusFail {
+		return s.fail(ctx, rec, decision.ReceiptReplayed)
+	}
+	return s.finish(rec, r.Status, decision.ReceiptReplayed)
 }
 
 // storeOutcome maps a store error to the StoreOps metric's outcome label.

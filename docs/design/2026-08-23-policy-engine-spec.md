@@ -985,6 +985,17 @@ replacing it (ruled 2026-09-23):
 | `port`, `rem_addr` | the newest (informational) |
 | `refreshed_at`, `last_touched_at` | now |
 
+**A login into a revoked context is refused.** When the context a login would join carries
+`revoked_at` and the login's token was not minted after it, the login answers FAIL
+`credential_revoked`, the answer the `enable` gate gives for the same state, and writes nothing to
+the context (ruled 2026-09-23). The token is spent, so a token the revocation was meant to stop gets
+no second try, and the receipt records the refusal, so a retransmission replays FAIL
+`receipt_replayed`, never a PASS. The `redeem` record carries the principal, the context's
+`ctx_id` and `session.revoked_at`, the revocation that refused it. A token minted after the
+revocation joins and lifts it, by the table. A revocation that lands between the login's read and
+its join is merged by the join rather than refused, and that login answers PASS into the revoked
+context, whose every authorization is then denied `credential_revoked`.
+
 A login is **not** a join, and writes a fresh context whose `redeem` record carries
 `session.replaced_ctx_id`, in two cases: the live context belongs to **another principal** under
 the same username, or it is **past `session_expires`**. A ceiling ending is not a credential
@@ -1408,7 +1419,7 @@ is what the redemption joins back to (see Correlation below).
 | `privilege_exceeded` | the request is above the session's granted level |
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6) |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
-| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6) |
+| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6); on `redeem`, a login into a revoked context whose token was not minted after the revocation (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) |

@@ -78,18 +78,20 @@ func Join(live, login Context, mintedAt time.Time) Context {
 	if ceiling, ok := out.PrivilegeCeiling(); ok && out.PrivLvl > ceiling {
 		out.PrivLvl = ceiling
 	}
-	out.RevokedAt = carryRevocation(live.RevokedAt, mintedAt)
+	out.RevokedAt = CarryRevocation(live.RevokedAt, mintedAt)
 	out.SessionDiscriminators = append([]string(nil), live.SessionDiscriminators...)
 	out.Rev = 0
 	return out
 }
 
-// carryRevocation keeps a revocation unless the token being redeemed was
+// CarryRevocation keeps a revocation unless the token being redeemed was
 // minted after it. A token cut before the revocation is exactly what the
 // revocation was meant to stop, so it must not lift the mark; a token cut after
 // it is the broker having verified the credential again, which is the one thing
-// that may (spec §13, decision 15).
-func carryRevocation(revokedAt, mintedAt time.Time) time.Time {
+// that may (spec §13, decision 15). The login path reads it too, before the
+// token is spent, to refuse a login into a context whose revocation it cannot
+// lift.
+func CarryRevocation(revokedAt, mintedAt time.Time) time.Time {
 	if revokedAt.IsZero() || mintedAt.After(revokedAt) {
 		return time.Time{}
 	}
@@ -142,7 +144,7 @@ func JoinContext(ctx context.Context, s Store, k ContextKey, login Context, mint
 			res.Context = login
 		case errors.As(err, &unreadable):
 			res = JoinResult{Context: login, ReplacedUnreadable: true}
-			res.Context.RevokedAt = carryRevocation(unreadable.RevokedAt, mintedAt)
+			res.Context.RevokedAt = CarryRevocation(unreadable.RevokedAt, mintedAt)
 			rev = unreadable.Rev
 		case err != nil:
 			return JoinResult{}, err
@@ -152,7 +154,7 @@ func JoinContext(ctx context.Context, s Store, k ContextKey, login Context, mint
 		default:
 			res = JoinResult{Context: login, Replaced: live.CtxID, Prior: live}
 			if live.Principal == login.Principal {
-				res.Context.RevokedAt = carryRevocation(live.RevokedAt, mintedAt)
+				res.Context.RevokedAt = CarryRevocation(live.RevokedAt, mintedAt)
 			}
 			rev = live.Rev
 		}

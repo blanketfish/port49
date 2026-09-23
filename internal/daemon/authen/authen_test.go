@@ -1491,13 +1491,13 @@ func TestAJoinedLoginsReceiptNamesTheKeptContext(t *testing.T) {
 // broker having verified the credential again, and admits (spec §13,
 // decision 15).
 //
-// In both cases the login itself answers PASS `token_redeemed`, and that is
-// intended: the token is valid — revocation does not delete unredeemed tokens
-// until plan 7's broker does (package session) — and the join keeps the mark
-// on the context, not on the login (spec §5.6, the join table's revoked_at
-// row). What the operator sees at 3am after a minted-before login is a login
-// that worked and then every authorization denied `credential_revoked`; this
-// pins that, so it cannot change silently.
+// A token minted before the revocation is refused at the login, FAIL
+// `credential_revoked` — the answer the enable gate gives for the same state
+// (ruling F-I2). A PASS there would put a permit for a principal security has
+// just revoked into the log, with every authorization after it denied and
+// nothing on the permit saying why. The token is spent, so it cannot be
+// retried, and the record carries the revoked_at that refused it. A
+// retransmission replays the refusal, never a PASS.
 func TestARevocationSurvivesATokenMintedBeforeIt(t *testing.T) {
 	revokedAt := time.Unix(1_757_041_495, 0).Add(-time.Minute)
 	for _, tt := range []struct {
@@ -1512,7 +1512,8 @@ func TestARevocationSurvivesATokenMintedBeforeIt(t *testing.T) {
 			f := setup(t)
 			start := f.joinFixture(t, func(c *store.Context) { c.RevokedAt = revokedAt })
 			secret := f.tag() + "mintmintmintmintmint0123"
-			if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+			tk := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+			if _, err := f.st.PutToken(context.Background(), tk,
 				store.Token{ID: "m", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
 					Principal: "user:alice@example.com", Enable: "token", MaxPrivilege: 15,
 					MintedAt: tt.mintedAt, ExpiresAt: f.now.Add(time.Minute)}); err != nil {
@@ -1520,12 +1521,40 @@ func TestARevocationSurvivesATokenMintedBeforeIt(t *testing.T) {
 			}
 			start.Data = []byte(secret)
 			reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
-			if rec := f.records(t)[0]; reply.Status != wire.AuthenStatusPass || rec["reason"] != "token_redeemed" {
-				t.Fatalf("the login must answer PASS token_redeemed either way: %+v %v", reply, rec)
+			rec := f.records(t)[0]
+			s := rec["session"].(map[string]any)
+			for _, c := range func() []store.Token { c, _ := f.st.Candidates(context.Background(), tk); return c }() {
+				if c.ID == "m" {
+					t.Fatal("the token must be spent either way")
+				}
 			}
 			c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
 			if got := !c.RevokedAt.IsZero(); got != tt.revoked || c.CtxID != "ctxL" {
 				t.Fatalf("revoked %v, want %v: %+v", got, tt.revoked, c)
+			}
+			retry, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+			if !tt.revoked {
+				if reply.Status != wire.AuthenStatusPass || rec["reason"] != "token_redeemed" || s["revoked_at"] != nil {
+					t.Fatalf("a token minted after the revocation lifts it: %+v %v", reply, rec)
+				}
+				if retry.Status != wire.AuthenStatusPass {
+					t.Fatalf("its retransmission replays the PASS: %+v", retry)
+				}
+				return
+			}
+			if reply.Status != wire.AuthenStatusFail || rec["verdict"] != "deny" || rec["reason"] != "credential_revoked" ||
+				rec["principal"] != "user:alice@example.com" || s["ctx_id"] != "ctxL" {
+				t.Fatalf("a token minted before the revocation must be refused credential_revoked: %+v %v", reply, rec)
+			}
+			if got, err := time.Parse(time.RFC3339Nano, s["revoked_at"].(string)); err != nil || !got.Equal(revokedAt) {
+				t.Fatalf("the record must carry the revoked_at that refused it: %v %v", s["revoked_at"], err)
+			}
+			if c.PrivLvl != 15 || len(c.SessionDiscriminators) != 1 {
+				t.Fatalf("a refused login must not write the context: %+v", c)
+			}
+			last := f.records(t)[len(f.records(t))-1]
+			if retry.Status == wire.AuthenStatusPass || last["verdict"] != "deny" {
+				t.Fatalf("a retransmission must not PASS: %+v %v", retry, last)
 			}
 		})
 	}
