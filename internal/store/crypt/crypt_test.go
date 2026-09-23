@@ -254,3 +254,36 @@ func TestUnopenableRecordIsNotReportedAsMissing(t *testing.T) {
 		t.Fatalf("crypt_open_failures_total{record=\"context\"} = %v", got)
 	}
 }
+
+// SwapContext seals exactly what PutContext seals and hands the revision
+// through: Rev is plaintext, so the inner store can hold the precondition on a
+// record it cannot read, and a revision read through this layer is the one the
+// inner store compares.
+func TestSwapContextSealsAndKeepsTheRevision(t *testing.T) {
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	ctx := context.Background()
+	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	c := store.Context{CtxID: "ctx1", Principal: "user:alice@example.com", Username: "alice",
+		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 15}
+	if err := s.SwapContext(ctx, ck, 0, c, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := inner.GetContext(ctx, ck); raw.Principal != "" || raw.RemAddr != "" || raw.CtxID != "" || raw.Sealed == nil {
+		t.Fatalf("SwapContext wrote plaintext: %+v", raw)
+	}
+	got, err := s.GetContext(ctx, ck)
+	if err != nil || got.Principal != "user:alice@example.com" || got.Rev == 0 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	// A narrow setter lands between the read and the swap, through this layer.
+	if err := s.SetRevokedAt(ctx, ck, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SwapContext(ctx, ck, got.Rev, got, time.Hour); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a revision read through the sealing layer must be the one the inner store compares: %v", err)
+	}
+	if after, _ := s.GetContext(ctx, ck); after.RevokedAt.IsZero() {
+		t.Fatalf("the refused swap erased the revocation: %+v", after)
+	}
+}

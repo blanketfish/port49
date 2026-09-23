@@ -45,11 +45,24 @@ type Store struct {
 	idem      map[string]store.Idempotency
 
 	writes int // incremented on every write; triggers sweep at sweepEvery
+	// revs is the last context revision handed out. It is store-wide rather
+	// than per key so a context that is deleted and written again never
+	// repeats a revision an earlier reader holds.
+	revs uint64
 }
 
 type ctxEntry struct {
 	c   store.Context
 	exp time.Time
+	rev uint64 // store.Context.Rev; see nextRevLocked
+}
+
+// nextRevLocked returns a revision no context has held. Every write to a
+// context takes one, which is what makes SwapContext's comparison mean "no one
+// wrote this record since you read it" (store.Context.Rev).
+func (s *Store) nextRevLocked() uint64 {
+	s.revs++
+	return s.revs
 }
 
 // indexKeys is the set of index keys one ref was written under. An empty
@@ -367,19 +380,26 @@ func (s *Store) PutContext(_ context.Context, k store.ContextKey, c store.Contex
 	// does (store.Context). Leaving it to the caller would hand Task 10's
 	// half-TTL rule a zero on every freshly written context, and a rule that
 	// reads zero extends on every command — the write this exists to avoid.
+	s.writeContextLocked(k, c, now, ttl)
+	return nil
+}
+
+// writeContextLocked is the whole-record write PutContext and SwapContext
+// share once SwapContext's precondition has held.
+func (s *Store) writeContextLocked(k store.ContextKey, c store.Context, now time.Time, ttl time.Duration) {
 	c.LastTouchedAt = now
+	c.Rev = 0 // the entry holds the revision; the record's copy is GetContext's to fill
 	exp := now.Add(ttl)
-	s.contexts[k] = ctxEntry{c: c, exp: exp}
+	s.contexts[k] = ctxEntry{c: c, exp: exp, rev: s.nextRevLocked()}
 	// A re-put is an extension too, so the index entries come with it
-	// (design §12). At login this is a no-op — the context is written before
-	// it is indexed — and it matters on spec §5.6 row 1, the unconditional
-	// overwrite by a second redemption on a device.
+	// (design §12). At a first login this is a no-op — the context is written
+	// before it is indexed — and it matters when a second login joins or
+	// replaces a live context.
 	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, exp)
 	s.writes++
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()
 	}
-	return nil
 }
 
 func (s *Store) GetContext(_ context.Context, k store.ContextKey) (store.Context, error) {
@@ -390,7 +410,26 @@ func (s *Store) GetContext(_ context.Context, k store.ContextKey) (store.Context
 		delete(s.contexts, k)
 		return store.Context{}, store.ErrNotFound
 	}
-	return e.c, nil
+	c := e.c
+	c.Rev = e.rev
+	return c, nil
+}
+
+// SwapContext writes c only if the record at k still carries revision rev, or,
+// for rev zero, only if there is no live record (store.Store). The comparison
+// and the write are one critical section, which is the whole of what makes it
+// a compare-and-set.
+func (s *Store) SwapContext(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	e, ok := s.contexts[k]
+	live := ok && e.exp.After(now)
+	if live && e.rev != rev || !live && rev != 0 {
+		return store.ErrConflict
+	}
+	s.writeContextLocked(k, c, now, ttl)
+	return nil
 }
 
 // TouchContext is the read-modify-write inside the lock that the handler cannot
@@ -409,6 +448,7 @@ func (s *Store) TouchContext(_ context.Context, k store.ContextKey, ttl time.Dur
 	// cannot get by re-putting a record it read a moment ago.
 	e.exp = now.Add(ttl)
 	e.c.LastTouchedAt = now
+	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	// The index entries go with the expiry, or a session kept alive by
 	// activity outlives the entries a revocation reads (extendIndexesLocked).
@@ -429,6 +469,7 @@ func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8)
 	// which is the property the caller cannot get by re-putting a record it
 	// read a moment ago (store.Store).
 	e.c.PrivLvl = level
+	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	return nil
 }
@@ -454,6 +495,7 @@ func (s *Store) AnnotateContext(_ context.Context, k store.ContextKey, discHash,
 	if state != "" {
 		e.c.AccountingState = state
 	}
+	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	return nil
 }
@@ -509,6 +551,7 @@ func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.Co
 	}
 	e.exp = now.Add(ttl)
 	e.c.LastTouchedAt = now
+	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, e.exp)
 	return nil
@@ -527,6 +570,7 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 		return store.ErrNotFound
 	}
 	e.c.RevokedAt = at
+	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	return nil
 }

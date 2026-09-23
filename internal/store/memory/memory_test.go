@@ -958,3 +958,93 @@ func TestIdempotency(t *testing.T) {
 		t.Fatal("idempotency is per principal")
 	}
 }
+
+// SwapContext is a compare-and-set, and each of its refusals is a state a
+// read-merge-write can meet: someone wrote since the read, the record expired
+// under it, or a record appeared where the read found none. Every refusal
+// writes nothing.
+func TestSwapContextIsACompareAndSet(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+
+	// Absent: only rev 0 writes.
+	if err := s.SwapContext(ctx, k, 7, store.Context{CtxID: "x", Username: "u"}, time.Minute); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a revision for a record that does not exist must conflict: %v", err)
+	}
+	if err := s.SwapContext(ctx, k, 0, store.Context{CtxID: "a", Username: "u"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.GetContext(ctx, k)
+	if a.CtxID != "a" || a.Rev == 0 {
+		t.Fatalf("a written record must carry a revision: %+v", a)
+	}
+
+	// Present: rev 0 and a stale revision both conflict, and write nothing.
+	if err := s.SwapContext(ctx, k, 0, store.Context{CtxID: "b", Username: "u"}, time.Minute); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("rev 0 over a live record must conflict: %v", err)
+	}
+	if err := s.SwapContext(ctx, k, a.Rev+1, store.Context{CtxID: "b", Username: "u"}, time.Minute); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a revision the record does not carry must conflict: %v", err)
+	}
+	if got, _ := s.GetContext(ctx, k); got.CtxID != "a" || got.Rev != a.Rev {
+		t.Fatalf("a refused swap wrote: %+v", got)
+	}
+
+	// The revision it was read at writes, stamps like PutContext, and moves it.
+	now = now.Add(30 * time.Second)
+	if err := s.SwapContext(ctx, k, a.Rev, store.Context{CtxID: "b", Username: "u", Rev: 12345}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.GetContext(ctx, k)
+	if b.CtxID != "b" || b.Rev == a.Rev || b.Rev == 12345 || !b.LastTouchedAt.Equal(now) {
+		t.Fatalf("the swap must write, stamp LastTouchedAt, and take a fresh revision whatever the caller passed: %+v", b)
+	}
+
+	// Expired: the old revision conflicts; rev 0 writes.
+	now = now.Add(2 * time.Minute)
+	if err := s.SwapContext(ctx, k, b.Rev, store.Context{CtxID: "c", Username: "u"}, time.Minute); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a revision of an expired record must conflict, not resurrect it: %v", err)
+	}
+	if err := s.SwapContext(ctx, k, 0, store.Context{CtxID: "c", Username: "u"}, time.Minute); err != nil {
+		t.Fatalf("an expired record is absent: %v", err)
+	}
+	if c, _ := s.GetContext(ctx, k); c.CtxID != "c" || c.Rev <= b.Rev {
+		t.Fatalf("a record written again must never repeat a revision: %+v (previous %d)", c, b.Rev)
+	}
+}
+
+// Every writer moves the revision, the narrow setters included. A setter that
+// did not would be a write a read-merge-write cannot see, and SetRevokedAt is
+// the one that matters: a join that read before the revocation and swapped
+// after it would put back a RevokedAt of zero (store.Context.Rev).
+func TestEveryContextWriteMovesTheRevision(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", PrivLvl: 1,
+		AuthTime: now, SessionExpires: now.Add(time.Hour)}, time.Hour)
+	for _, w := range []struct {
+		name  string
+		write func() error
+	}{
+		{"PutContext", func() error { return s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u"}, time.Hour) }},
+		{"TouchContext", func() error { return s.TouchContext(ctx, k, time.Hour) }},
+		{"SetPrivilege", func() error { return s.SetPrivilege(ctx, k, 15) }},
+		{"AnnotateContext", func() error { return s.AnnotateContext(ctx, k, "h", store.AccountingStateOpen) }},
+		{"RefreshContext", func() error {
+			return s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now}, time.Hour)
+		}},
+		{"SetRevokedAt", func() error { return s.SetRevokedAt(ctx, k, now) }},
+	} {
+		before, _ := s.GetContext(ctx, k)
+		if err := w.write(); err != nil {
+			t.Fatalf("%s: %v", w.name, err)
+		}
+		if err := s.SwapContext(ctx, k, before.Rev, before, time.Hour); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("%s did not move the revision: a copy read before it swapped over it (%v)", w.name, err)
+		}
+	}
+}

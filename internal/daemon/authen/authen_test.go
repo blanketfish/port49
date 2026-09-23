@@ -389,6 +389,9 @@ func (noStore) DeleteReceiptsByPrincipal(context.Context, string) (int, error) {
 func (noStore) PutContext(context.Context, store.ContextKey, store.Context, time.Duration) error {
 	panic("store called")
 }
+func (noStore) SwapContext(context.Context, store.ContextKey, uint64, store.Context, time.Duration) error {
+	panic("store called")
+}
 func (noStore) GetContext(context.Context, store.ContextKey) (store.Context, error) {
 	panic("store called")
 }

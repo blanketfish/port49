@@ -270,15 +270,36 @@ func (w *wrapped) DeleteReceiptsByPrincipal(ctx context.Context, principal strin
 	return w.inner.DeleteReceiptsByPrincipal(ctx, principal)
 }
 
-func (w *wrapped) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
+func (w *wrapped) sealContext(c store.Context) (store.Context, error) {
 	s, err := w.sealJSON(contextSecret{CtxID: c.CtxID, Principal: c.Principal, Username: c.Username,
 		Port: c.Port, RemAddr: c.RemAddr, Credential: c.Credential})
 	if err != nil {
-		return err
+		return store.Context{}, err
 	}
 	c.CtxID, c.Principal, c.Username, c.Port, c.RemAddr, c.Credential, c.Sealed =
 		"", "", "", "", "", store.Credential{}, s
-	return w.inner.PutContext(ctx, k, c, ttl)
+	return c, nil
+}
+
+func (w *wrapped) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
+	sc, err := w.sealContext(c)
+	if err != nil {
+		return err
+	}
+	return w.inner.PutContext(ctx, k, sc, ttl)
+}
+
+// SwapContext seals as PutContext does and hands the revision through
+// untouched. Rev is plaintext, and that is what lets this layer take part in a
+// compare-and-set at all: the inner store compares a revision it can read on a
+// record it cannot, so the merge happens up here with the fields open and the
+// precondition is enforced down there under its own lock (store.Store).
+func (w *wrapped) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) error {
+	sc, err := w.sealContext(c)
+	if err != nil {
+		return err
+	}
+	return w.inner.SwapContext(ctx, k, rev, sc, ttl)
 }
 
 func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {

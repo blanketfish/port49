@@ -13,6 +13,12 @@ import (
 
 var ErrNotFound = errors.New("store: not found")
 
+// ErrConflict is SwapContext refusing a write because the context is no longer
+// the one the caller read: another writer landed in between, or the record
+// expired, or one appeared where none was. Nothing was written. The caller
+// reads again and decides again; JoinContext is the loop that does.
+var ErrConflict = errors.New("store: context changed since it was read")
+
 type TokenKey struct {
 	NAS      string // device name from admission
 	Username string // canonical form
@@ -201,6 +207,15 @@ type Context struct {
 	MaxPrivilege uint8
 	CreatedAt    time.Time
 
+	// Rev is the store's revision of this record. GetContext sets it and
+	// SwapContext compares it; every other writer ignores what the caller
+	// passes, and every write to the record — each narrow setter included —
+	// moves it. That last part is the point: a read-merge-write that lost a
+	// race to SetRevokedAt finds the revision moved and reads again, rather
+	// than putting back a copy whose RevokedAt is zero. It is plaintext
+	// bookkeeping, like the expiry.
+	Rev uint64
+
 	Sealed []byte
 }
 
@@ -285,8 +300,27 @@ type Store interface {
 	ExtendReceipt(ctx context.Context, rk ReceiptKey, idleExpiresAt time.Time) error
 	DeleteReceiptsByPrincipal(ctx context.Context, principal string) (int, error)
 
+	// PutContext writes c unconditionally. No production path calls it: the
+	// login path joins through SwapContext (JoinContext), and every other
+	// writer has a narrow setter. It stays for seeding and tests.
 	PutContext(ctx context.Context, k ContextKey, c Context, ttl time.Duration) error
 	GetContext(ctx context.Context, k ContextKey) (Context, error)
+	// SwapContext is PutContext with a precondition: it writes c only if the
+	// record at k is still the one the caller read. rev is the Rev GetContext
+	// returned; zero means "only if there is no live record". Anything else —
+	// a revision that moved, a record that expired, a record that appeared —
+	// is ErrConflict, and nothing is written.
+	//
+	// It is how a whole-record write is made safe against the narrow setters.
+	// The login path has to write most of a context (spec §5.6, the join
+	// table), and the sealing layer cannot merge fields it cannot read under
+	// the inner store's lock, so it reads, merges, and swaps; a revocation,
+	// annotation, privilege raise or refresh that landed in between moves the
+	// revision and the swap refuses. See JoinContext.
+	//
+	// On success it behaves as PutContext does: the expiry is now+ttl,
+	// LastTouchedAt is stamped, and the context's index entries are extended.
+	SwapContext(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration) error
 	// TouchContext extends this context's expiry to now+ttl. It writes exactly
 	// two things, both plaintext bookkeeping about the extension itself: the
 	// expiry, and LastTouchedAt. It never takes a Context from the caller.
