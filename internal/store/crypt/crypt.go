@@ -309,7 +309,13 @@ func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Con
 	}
 	var cs contextSecret
 	if err := w.openJSON(c.Sealed, &cs); err != nil {
-		return store.Context{}, w.openErr("context", err)
+		// The record is there and will not open. Its revision and revocation
+		// are plaintext, and JoinContext needs both to replace it without
+		// racing a revocation or lifting one (store.UnreadableContextError).
+		// The wrapped error is openErr's, so errors.Is(err, ErrUnknownKey)
+		// still tells a wrong key from a tampered record.
+		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
+			Err: w.openErr("context", err)}
 	}
 	c.CtxID, c.Principal, c.Username, c.Port, c.RemAddr, c.Credential, c.Sealed =
 		cs.CtxID, cs.Principal, cs.Username, cs.Port, cs.RemAddr, cs.Credential, nil

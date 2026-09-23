@@ -12,6 +12,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/store/storetest"
 )
 
 func keys() Keys {
@@ -193,6 +194,27 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	}
 }
 
+// MintedAt is what a join's minted-after rule compares against a revocation
+// (store.JoinContext). If the seal/open round trip dropped it, every token would
+// read as minted before any revocation: fail-closed, but a relogin could never
+// lift one.
+func TestTokenMintedAtSurvivesTheSealingLayer(t *testing.T) {
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	minted := time.Unix(1_757_041_495, 0)
+	if _, err := s.PutToken(ctx, k, store.Token{ID: "t1", Secret: []byte("p49_secret"), Kind: store.KindLogin,
+		Principal: "user:alice@example.com", Username: "alice", ExpiresAt: time.Now().Add(time.Minute),
+		MintedAt: minted}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Candidates(ctx, k)
+	if err != nil || len(got) != 1 || !got[0].MintedAt.Equal(minted) {
+		t.Fatalf("MintedAt lost through the sealing layer: %+v %v", got, err)
+	}
+}
+
 // A token sealed under a key that has since been retired is unreadable, and
 // therefore unredeemable. It must not be returned as a candidate with a zero
 // secret, which would match a zero-length credential.
@@ -285,5 +307,55 @@ func TestSwapContextSealsAndKeepsTheRevision(t *testing.T) {
 	}
 	if after, _ := s.GetContext(ctx, ck); after.RevokedAt.IsZero() {
 		t.Fatalf("the refused swap erased the revocation: %+v", after)
+	}
+}
+
+// The join's merge happens up here, with the sealed fields open, and the
+// precondition is held down in the inner store: the property has to survive
+// that split, so it is run against the wrapped store as well as the bare one.
+func TestJoinRacesRevocationThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.JoinRacesRevocation(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
+// Ruling R1 through the real sealing layer: a context sealed under a key that
+// has left the two-key window, and revoked, is replaced by the next login
+// rather than refusing it, and the revocation carries. What makes it possible
+// is that GetContext hands up the plaintext Rev and RevokedAt of a record it
+// cannot open, in a store.UnreadableContextError that still unwraps to
+// ErrUnknownKey — so every other caller still reads it as the key failure it
+// is (TestUnopenableRecordIsNotReportedAsMissing).
+func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	inner := memory.New(func() time.Time { return now })
+	ctx := context.Background()
+	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	var c [32]byte
+	copy(c[:], "cccccccccccccccccccccccccccccccc")
+	retired := Wrap(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, nil)
+	if err := retired.PutContext(ctx, ck, store.Context{CtxID: "ctx_old", Principal: "user:alice@example.com",
+		Username: "alice", PrivLvl: 15}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := retired.SetRevokedAt(ctx, ck, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	s := Wrap(inner, keys(), nil)
+	_, err := s.GetContext(ctx, ck)
+	var u *store.UnreadableContextError
+	if !errors.As(err, &u) || u.Rev == 0 || !u.RevokedAt.Equal(now.Add(-time.Minute)) || !errors.Is(err, ErrUnknownKey) {
+		t.Fatalf("an unopenable context must hand up its plaintext revision and revocation: %v", err)
+	}
+	login := store.Context{CtxID: "ctx_new", Principal: "user:alice@example.com", Username: "alice", PrivLvl: 1}
+	res, err := store.JoinContext(ctx, s, ck, login, now.Add(-2*time.Minute), now, time.Hour)
+	if err != nil || !res.ReplacedUnreadable || res.Joined {
+		t.Fatalf("%+v %v", res, err)
+	}
+	got, err := s.GetContext(ctx, ck)
+	if err != nil || got.CtxID != "ctx_new" || got.PrivLvl != 1 || !got.RevokedAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("the replace must be readable under the current key and keep the revocation: %+v %v", got, err)
 	}
 }

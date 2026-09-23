@@ -19,6 +19,22 @@ var ErrNotFound = errors.New("store: not found")
 // reads again and decides again; JoinContext is the loop that does.
 var ErrConflict = errors.New("store: context changed since it was read")
 
+// UnreadableContextError is a context record the store returned and the
+// sealing layer could not open: sealed under a key that has left the two-key
+// window, or failing authentication. It is not ErrNotFound — the record is
+// there — and it carries the two plaintext fields a login needs to replace the
+// record safely (spec §5.6): the revision, so the replace is still a
+// compare-and-set, and the revocation, so the replace cannot lift it. Every
+// reader but JoinContext treats it as the store error it wraps.
+type UnreadableContextError struct {
+	Rev       uint64
+	RevokedAt time.Time
+	Err       error
+}
+
+func (e *UnreadableContextError) Error() string { return e.Err.Error() }
+func (e *UnreadableContextError) Unwrap() error { return e.Err }
+
 type TokenKey struct {
 	NAS      string // device name from admission
 	Username string // canonical form
