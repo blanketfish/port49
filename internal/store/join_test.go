@@ -176,6 +176,32 @@ func TestJoinContextJoinsTheSamePrincipal(t *testing.T) {
 	}
 }
 
+// A join whose newer ceiling lowers the held level says so: window A's next
+// command is denied privilege_exceeded, and without the level before and
+// after on window B's redeem record nothing connects the two (review M4).
+func TestJoinContextReportsAClampedLevel(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		ceiling uint8
+		want    uint8
+	}{
+		{"a lower ceiling clamps", 7, 15},
+		{"the same ceiling does not", 15, 0},
+		{"no ceiling does not", 0, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newMemory()
+			s.PutContext(context.Background(), ck, live(), time.Hour)
+			n := login()
+			n.MaxPrivilege = tt.ceiling
+			res, err := store.JoinContext(context.Background(), s, ck, n, t0, t0, time.Hour)
+			if err != nil || !res.Joined || res.ClampedFrom != tt.want {
+				t.Fatalf("ClampedFrom = %d, want %d: %+v %v", res.ClampedFrom, tt.want, res, err)
+			}
+		})
+	}
+}
+
 // Another principal under the same username is not this operator's second
 // window: it replaces, and names what it replaced.
 func TestJoinContextReplacesAnotherPrincipal(t *testing.T) {

@@ -1560,6 +1560,45 @@ func TestARevocationSurvivesATokenMintedBeforeIt(t *testing.T) {
 	}
 }
 
+// A join whose token carries a lower ceiling lowers the level window A holds,
+// and window A's next command is denied privilege_exceeded. The redeem record
+// is the only line that can say why, so it carries the level before and after
+// (review M4); a join that clamps nothing carries neither.
+func TestAJoinThatClampsTheHeldLevelSaysSo(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		ceiling uint8
+		clamped bool
+	}{
+		{"a lower ceiling", 7, true},
+		{"the same ceiling", 15, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := setup(t)
+			start := f.joinFixture(t, nil)
+			secret := f.tag() + "clmpclmpclmpclmpclmpclmp"
+			if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+				store.Token{ID: "c", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+					Principal: "user:alice@example.com", Enable: "token", MaxPrivilege: tt.ceiling,
+					ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+				t.Fatal(err)
+			}
+			start.Data = []byte(secret)
+			if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
+				t.Fatalf("%+v %v", reply, f.records(t))
+			}
+			s := f.records(t)[0]["session"].(map[string]any)
+			pc, ok := s["privilege_clamped"].(map[string]any)
+			if ok != tt.clamped {
+				t.Fatalf("privilege_clamped present %v, want %v: %v", ok, tt.clamped, s)
+			}
+			if tt.clamped && (pc["from"] != float64(15) || pc["to"] != float64(7)) {
+				t.Fatalf("privilege_clamped = %v, want from 15 to 7", pc)
+			}
+		})
+	}
+}
+
 // Test 5 of the decisions. The same device-facing username under another
 // principal is not this operator's second window: it replaces, starts at its
 // own login level with nothing bound, and the record names what it displaced.

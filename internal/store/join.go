@@ -34,6 +34,12 @@ type JoinResult struct {
 	// sealed, so Replaced stays empty and this is what the redeem record
 	// carries instead, as session.replaced_unreadable.
 	ReplacedUnreadable bool
+	// ClampedFrom is the level the live context held when a join lowered it
+	// to the newest login's ceiling; zero when the join lowered nothing. The
+	// other windows' next command above the new level is denied
+	// privilege_exceeded, and this is what the redeem record carries to say
+	// why (spec §5.3).
+	ClampedFrom uint8
 	// Prior is the live record a readable replace displaced, whole; zero on a
 	// join, a first login and an unreadable replace. The login unindexes its
 	// credential, or a revocation of the displaced principal's sid or
@@ -150,6 +156,9 @@ func JoinContext(ctx context.Context, s Store, k ContextKey, login Context, mint
 			return JoinResult{}, err
 		case Joinable(live, login, now):
 			res = JoinResult{Context: Join(live, login, mintedAt), Joined: true}
+			if live.PrivLvl > res.Context.PrivLvl {
+				res.ClampedFrom = live.PrivLvl
+			}
 			rev = live.Rev
 		default:
 			res = JoinResult{Context: login, Replaced: live.CtxID, Prior: live}

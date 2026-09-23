@@ -540,6 +540,9 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	}
 	rec.Session.ReplacedCtxID = out.Replaced
 	rec.Session.ReplacedUnreadable = out.ReplacedUnreadable
+	if out.ClampedFrom != 0 {
+		rec.Session.PrivilegeClamped = &decision.PrivilegeClamp{From: out.ClampedFrom, To: out.Context.PrivLvl}
+	}
 	// A replace unindexes the credential it displaced before this login is
 	// indexed. The index keeps every sid and certificate a context was
 	// indexed under, so that a join stays revocable by either login's; left

@@ -75,12 +75,24 @@ type Session struct {
 	// it, cannot lift. It is the revocation that refused it, rendered as ts
 	// is (FormatTime), so the refusal explains itself (spec §5.6).
 	RevokedAt string `json:"revoked_at,omitempty"`
+	// PrivilegeClamped is set on a redeem that joined a context and lowered
+	// the level it held to the newest login's ceiling. The other windows'
+	// next command above To is denied privilege_exceeded, and this is the
+	// line that says why (spec §5.3). Privilege above is the START level,
+	// not the context's.
+	PrivilegeClamped *PrivilegeClamp `json:"privilege_clamped,omitempty"`
 	// Port and RemAddr are as seen on this exchange, which is not necessarily
 	// what the context recorded: they are part of no key (spec §13,
 	// decision 15).
 	Port      string `json:"port"`
 	RemAddr   string `json:"rem_addr"`
 	Privilege uint8  `json:"privilege"`
+}
+
+// PrivilegeClamp is the context's held level before and after a join.
+type PrivilegeClamp struct {
+	From uint8 `json:"from"`
+	To   uint8 `json:"to"`
 }
 
 type Request struct {

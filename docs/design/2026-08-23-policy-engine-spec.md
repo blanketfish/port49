@@ -627,15 +627,18 @@ normalize(request)
        (ctx.privilege is the HIGHEST level port49 has granted this user on this device:
         the login START's level, raised by the `priv-lvl` a permitted session
         authorization carried and by an escalation, and never lowered by a grant — the
-        only thing that lowers it is a join whose newer broker decision carries a lower
-        `max_privilege`, which clamps it (§5.6). The context covers every window of one operator (§5.6), so a second window granted less must
-        not take the first window's enable away. It is clamped to the context's ceiling
-        (`max_privilege`; zero is none), and it is still a bound: the device cannot
-        exceed it without port49 having said yes somewhere. The session-authorization
-        permit raises it in place, same ctx_id — measured on vEOS the session
-        authorization arrives at priv_lvl 1, port49 grants 15, and every later command
-        arrives at 15; tests/lab/results/L1-arista_eos.md, L3-arista_eos.md. The level a
-        session authorization REPLIES is policy's answer and never this field.
+        only things that lower it are a join whose newer broker decision carries a lower
+        `max_privilege`, which clamps it and puts `session.privilege_clamped` (`from`,
+        `to`) on its `redeem` record, and a replace, which starts a new context at its
+        login level (§5.6). The context covers every window of one operator (§5.6), so
+        a second window granted less must not take the first window's enable away. It
+        is clamped to the context's ceiling (`max_privilege`; zero is none), and it is
+        still a bound: the device cannot exceed it without port49 having said yes
+        somewhere. The session-authorization permit raises it in place, same ctx_id —
+        measured on vEOS the session authorization arrives at priv_lvl 1, port49 grants
+        15, and every later command arrives at 15; tests/lab/results/L1-arista_eos.md,
+        L3-arista_eos.md. The level a session authorization REPLIES is policy's answer
+        and never this field.
         Ruled 2026-09-23.)
   → collect every matching rule, permit and deny alike
   → if no permit matches                 → DENY (no_rule_matched)
@@ -976,7 +979,7 @@ replacing it (ruled 2026-09-23):
 | field | on a join |
 |---|---|
 | `ctx_id` | kept — each `redeem` record still carries its own `credential_sha256` |
-| `privilege` | kept; the new login's level only raises it, clamped to the new ceiling (§5.3) |
+| `privilege` | kept; the new login's level only raises it, clamped to the new ceiling (§5.3); a clamp that lowers it puts `session.privilege_clamped` `{from, to}` on the `redeem` record |
 | `session_discriminators`, `accounting_state` | kept |
 | `blob_hash`, `max_privilege`, `enable` | from the newest login — the latest broker decision wins |
 | `auth_time`, `session_expires` | the later of the two; no ceiling is later than any time — a join never shortens a window already granted, so after a join `session_expires` can exceed `auth_time + max_session_age` |
