@@ -206,11 +206,40 @@ func TestTheAgentSaysWhyTheBrokerDoesNotVerify(t *testing.T) {
 	if code != 1 || !strings.Contains(errb.String(), "does not verify") || !strings.Contains(errb.String(), "--broker-ca") {
 		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
+	// One prefix: the agent package's own "agent: " is not repeated after
+	// the command's "port49 agent: " (T13 review).
+	if strings.Contains(errb.String(), "agent: agent:") {
+		t.Fatalf("doubled prefix: %q", errb.String())
+	}
 }
 
 func TestUsage(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run(nil, &out, &errb); code != 2 || !strings.Contains(errb.String(), "port49 token") {
 		t.Fatalf("code %d %q", code, errb.String())
+	}
+}
+
+// login prints the agent package's refusals under its own prefix, once.
+func TestLoginSaysAgentRefusalsWithOnePrefix(t *testing.T) {
+	dir := t.TempDir()
+	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	sockDir, err := os.MkdirTemp("", "p49w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(sockDir)
+	if err := os.Chmod(sockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"login", "--broker", "https://127.0.0.1:1", "--cert", filepath.Join(dir, testpki.LabClientCert),
+		"--key", filepath.Join(dir, testpki.LabClientKey), "--broker-ca", filepath.Join(dir, testpki.LabCA),
+		"--socket", filepath.Join(sockDir, "agent.sock")}, &out, &errb)
+	if code != 1 || !strings.HasPrefix(errb.String(), "port49 login: ") || !strings.Contains(errb.String(), "0700") ||
+		strings.Contains(errb.String(), "agent: agent:") || strings.Contains(errb.String(), "login: agent:") {
+		t.Fatalf("code %d stderr %q", code, errb.String())
 	}
 }

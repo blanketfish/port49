@@ -118,7 +118,7 @@ func login(args []string, stdout, stderr io.Writer) int {
 	}
 	dir := filepath.Dir(sf.socket)
 	if err := agent.PrivateDir(dir); err != nil {
-		fmt.Fprintln(stderr, "port49 login:", err)
+		fmt.Fprintln(stderr, "port49 login:", unprefixed(err))
 		return 1
 	}
 	logPath := filepath.Join(dir, "agent.log")
@@ -175,7 +175,7 @@ func agentMain(args []string, stderr io.Writer) int {
 	}
 	cfg, err := sf.config(stderr)
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 agent:", err)
+		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 2
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -183,12 +183,12 @@ func agentMain(args []string, stderr io.Writer) int {
 	a := agent.New(cfg)
 	conf, err := a.Connect(ctx)
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 agent:", err)
+		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 1
 	}
 	ln, err := agent.Listen(sf.socket)
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 agent:", err)
+		fmt.Fprintln(stderr, "port49 agent:", unprefixed(err))
 		return 1
 	}
 	defer os.Remove(sf.socket)
@@ -236,7 +236,7 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	case errors.As(err, &ie):
 		// The broker could not decide this device. Whatever else the item
 		// carries is not printed.
-		fmt.Fprintf(stderr, "port49 token: %s: %s\n", device, strings.TrimPrefix(ie.Error(), "agent: "))
+		fmt.Fprintf(stderr, "port49 token: %s: %s\n", device, unprefixed(ie))
 		return 1
 	case errors.Is(err, agent.ErrNoAgent):
 		fmt.Fprintf(stderr, "port49 token: no agent at %s; run `port49 login`\n", *socket)
@@ -244,10 +244,10 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	case errors.Is(err, agent.ErrSessionOver):
 		// The error says to log in and then why the session ended: an
 		// expired certificate has to be renewed before a login will work.
-		fmt.Fprintf(stderr, "port49 token: %s\n", strings.TrimPrefix(err.Error(), "agent: "))
+		fmt.Fprintf(stderr, "port49 token: %s\n", unprefixed(err))
 		return 1
 	case err != nil:
-		fmt.Fprintln(stderr, "port49 token:", err)
+		fmt.Fprintln(stderr, "port49 token:", unprefixed(err))
 		return 1
 	}
 	if item.Verdict != "permit" {
@@ -273,4 +273,10 @@ func lastLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// unprefixed is err's text without the agent package's "agent: ", which the
+// command's own "port49 <command>: " already says.
+func unprefixed(err error) string {
+	return strings.TrimPrefix(err.Error(), "agent: ")
 }
