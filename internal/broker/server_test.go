@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"log"
@@ -379,5 +380,48 @@ func (b *lockedBuffer) waitFor(t *testing.T, want string) {
 			t.Fatalf("the broker's error log never said %q: %q", want, got)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A certificate-less connection stalled mid-request never goes idle, so the
+// idle close cannot reach it: headers promising a body and then nothing would
+// hold a slot of the cap for good, and MaxConns of them lock every operator
+// out of the broker. ReadTimeout bounds the request (pre-flight F1).
+func TestAStalledRequestWithoutACertificateIsClosed(t *testing.T) {
+	defer func(d time.Duration) { readTimeout = d }(readTimeout)
+	readTimeout = time.Second
+	f := newFixture(t, 8)
+	url := startServer(t, f)
+	conn, err := tls.Dial("tcp", strings.TrimPrefix(url, "https://"),
+		&tls.Config{RootCAs: f.ca.Pool(), MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "POST /v1/tokens HTTP/1.1\r\nHost: broker\r\n"+
+		"Content-Type: application/json\r\nContent-Length: 200000\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, err = io.Copy(io.Discard, conn)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatal("the broker must close a connection whose request stalls")
+	}
+}
+
+// A nil pool would mean the system roots — every public CA an anchor for the
+// email mapping — and an empty one trusts nobody: Server refuses both.
+func TestServerRefusesAMissingAnchor(t *testing.T) {
+	f := newFixture(t, 8)
+	for name, pool := range map[string]*x509.CertPool{"nil": nil, "empty": x509.NewCertPool()} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("a %s anchor pool must be refused", name)
+				}
+			}()
+			f.b.Server("127.0.0.1:0", f.alice, pool)
+		}()
 	}
 }

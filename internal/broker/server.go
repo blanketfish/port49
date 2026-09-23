@@ -45,7 +45,20 @@ const MaxConns = 256
 //
 // The handshake verifies validity against the broker's own clock, the one
 // Identity checks per request against, so the two never disagree.
+//
+// ReadTimeout bounds reading one request, headers and body: a connection
+// stalled mid-request never goes idle, so without it headers promising a body
+// that never comes would hold a slot of the cap for good (pre-flight F1). The
+// time between requests is IdleTimeout's, so a held connection is unaffected.
+//
+// anchor must hold the one trust anchor. Server panics on a nil pool, which
+// crypto/tls would take as the system roots — every public CA an anchor for
+// the email mapping — and on an empty one, which trusts no one.
 func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool) *http.Server {
+	if anchor == nil || anchor.Equal(x509.NewCertPool()) {
+		panic("broker: the broker trusts exactly one anchor; a nil pool would mean the system roots, " +
+			"and an empty one trusts no one")
+	}
 	return &http.Server{
 		Addr:    addr,
 		Handler: b.Handler(),
@@ -62,6 +75,7 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		ConnContext:       func(ctx context.Context, _ net.Conn) context.Context { return withHeldConn(ctx, b.Now()) },
 		ConnState:         closeIdleWithoutCertificate,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       readTimeout,
 		IdleTimeout:       b.MaxSessionAge,
 	}
 }
@@ -153,3 +167,7 @@ func LoadTLS(certFile, keyFile, anchorFile string) (tls.Certificate, *x509.CertP
 	pool.AddCert(anchors[0])
 	return cert, pool, nil
 }
+
+// readTimeout is Server's ReadTimeout, swapped in tests. A mint request is a
+// few hundred bytes; thirty seconds is generous for one.
+var readTimeout = 30 * time.Second
