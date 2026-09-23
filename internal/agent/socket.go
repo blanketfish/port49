@@ -20,6 +20,11 @@ import (
 // ErrNoAgent is a socket nothing answers on. The answer is `port49 login`.
 var ErrNoAgent = errors.New("agent: no agent is listening")
 
+// getuid is os.Getuid, swapped in tests: seen as another uid, a directory the
+// test created is a squatter's, which is how the owner check is tested
+// without a second account.
+var getuid = os.Getuid
+
 // SocketPath is where the agent listens by default:
 // $XDG_RUNTIME_DIR/port49/agent.sock, or /tmp/port49-<uid>/agent.sock on a
 // host without one.
@@ -61,9 +66,9 @@ func checkPrivateDir(dir string) error {
 		return fmt.Errorf("agent: %s must be a directory at mode 0700, and it is %v; its mode is the socket's "+
 			"access control", dir, fi.Mode().Perm())
 	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != getuid() {
 		return fmt.Errorf("agent: %s is not owned by you (uid %d); whoever owns it can replace the socket, "+
-			"so it is refused - remove it or pass --socket", dir, os.Getuid())
+			"so it is refused - remove it or pass --socket", dir, getuid())
 	}
 	return nil
 }

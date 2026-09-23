@@ -385,7 +385,7 @@ func TestTheSocketDirectoryIsPrivate(t *testing.T) {
 	}
 	// A symlink is refused even to a private directory: on the /tmp fallback,
 	// whoever planted it owns where the socket lands (pre-flight F4). The
-	// owner check beside it needs a second uid to test and is not tested here.
+	// owner check beside it is TestADirectoryAnotherUserOwnsIsRefused.
 	target := filepath.Join(base, "target")
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
@@ -396,6 +396,31 @@ func TestTheSocketDirectoryIsPrivate(t *testing.T) {
 	}
 	if _, err := Listen(filepath.Join(link, "agent.sock")); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatalf("a symlinked directory: %v", err)
+	}
+}
+
+// A real directory at 0700 that another user created first — the squatter on
+// /tmp/port49-<uid> — passes every check but ownership, and ownership is what
+// lets them swap the socket (pre-flight F4). Seen as another uid, the
+// directory this test made is that squatter's: the agent will not listen in
+// it and the client will not dial into it.
+func TestADirectoryAnotherUserOwnsIsRefused(t *testing.T) {
+	dir := filepath.Join(shortDir(t), "squat")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	defer func(f func() int) { getuid = f }(getuid)
+	getuid = func() int { return os.Getuid() + 1 }
+	p := filepath.Join(dir, "agent.sock")
+	if _, err := Listen(p); err == nil || !strings.Contains(err.Error(), "not owned by you") {
+		t.Fatalf("Listen in a directory another user owns: %v", err)
+	}
+	if _, err := NewClient(p).Token(context.Background(), TokenRequest{Device: "leaf1"}); err == nil ||
+		!strings.Contains(err.Error(), "not owned by you") {
+		t.Fatalf("Token through a directory another user owns: %v", err)
 	}
 }
 
