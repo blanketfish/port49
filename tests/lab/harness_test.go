@@ -167,10 +167,6 @@ const (
 	pcapHeaderSize = 24
 )
 
-// A device password of each of these lengths is seeded under user longpw<N>.
-// L8 reads back which lengths arrived intact.
-var passwordLengths = []int{30, 64, 128, 138}
-
 // longDenyPrefix is the first entry of lab.deny_prefixes in port49d-lab.yaml.
 // L2 types this exact line to see how much of a long server_msg a device shows.
 var longDenyPrefix = "show clock | include " + strings.Repeat("A", 150)
@@ -1392,7 +1388,22 @@ func (l *lab) dialHostPort(user, password, hostport string, timeout time.Duratio
 		nc.Close()
 		return nil, err
 	}
-	cfg := &ssh.ClientConfig{
+	cfg := labSSHConfig(user, password)
+	cfg.Timeout = timeout
+	c, chans, reqs, err := ssh.NewClientConn(nc, hostport, cfg)
+	if err != nil {
+		nc.Close()
+		return nil, err
+	}
+	nc.SetDeadline(time.Time{})
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// labSSHConfig is the client configuration every lab dial uses: the password
+// offered both as `password` and as the answer to every keyboard-interactive
+// question, and the wide algorithm lists described on dial.
+func labSSHConfig(user, password string) *ssh.ClientConfig {
+	return &ssh.ClientConfig{
 		User: user,
 		Auth: []ssh.AuthMethod{
 			ssh.Password(password),
@@ -1405,7 +1416,6 @@ func (l *lab) dialHostPort(user, password, hostport string, timeout time.Duratio
 			}),
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         timeout,
 		HostKeyAlgorithms: []string{
 			"ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
 			"rsa-sha2-512", "rsa-sha2-256", "ssh-rsa", "ssh-dss",
@@ -1430,13 +1440,6 @@ func (l *lab) dialHostPort(user, password, hostport string, timeout time.Duratio
 			},
 		},
 	}
-	c, chans, reqs, err := ssh.NewClientConn(nc, hostport, cfg)
-	if err != nil {
-		nc.Close()
-		return nil, err
-	}
-	nc.SetDeadline(time.Time{})
-	return ssh.NewClient(c, chans, reqs), nil
 }
 
 // login opens an SSH session with the given password (a seeded token) and runs

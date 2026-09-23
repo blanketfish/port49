@@ -9,8 +9,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
 // L1: what the `port` field contains per platform and per transport, and
@@ -643,34 +641,6 @@ func acctDump(acct []map[string]any) string {
 		fmt.Fprintf(&b, "%s flags=%s attribution=%s raw=%v\n", str(r, "ts"), str(r, "flags"), str(r, "attribution"), rawOf(r))
 	}
 	return strings.TrimRight(b.String(), "\n")
-}
-
-// L8: the maximum password length the platform accepts at an interactive
-// prompt.
-//
-// The method was a token of each length seeded under its own username, so that
-// a device which truncates yielded `token_not_found` against that user rather
-// than a silent pass against a shorter token. That method is gone: port49d
-// mints every token itself, at one length — 30 characters, design §8 — so a
-// seed can no longer ask for a 64- or 138-character secret and this test can no
-// longer put one on the wire. The `longpw*` users are still seeded and still
-// cost nothing; what is missing is a way to choose the secret's length.
-//
-// It skips rather than measuring what it can, because what it can measure is
-// the 30-character token every other test already logs in with, and publishing
-// that as L8 would replace a note about four lengths with a note about one. The
-// existing notes stand; the register row stays open (spec §15, L8).
-//
-// Reopening it needs a mechanism, not a harness change. The nearest one already
-// in the daemon is `credential_sha256` on the redeem record: type a password of
-// length N under a username with no token at all, and compare the hash port49
-// logged against the hash of what was typed. Equal means all N bytes arrived,
-// and no seeded secret is needed for it. That is a measurement design, and it
-// belongs to whoever next takes L8, not to the wiring that removed the old one.
-func TestL8PasswordLength(t *testing.T) {
-	t.Skipf("L8 needs a password of a chosen length and port49d now mints every token at %d characters "+
-		"(design §8), so the lengths under test (%v) can no longer be seeded; see spec §15 L8 and the "+
-		"comment on lab.seed_tokens in tests/lab/port49d-lab.yaml", labcreds.TokenLen, passwordLengths)
 }
 
 func redeemFor(recs []map[string]any, user string) map[string]any {
