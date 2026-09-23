@@ -26,6 +26,10 @@ func TestAnImageCheckSaysWhenDockerIsDenied(t *testing.T) {
 		{"denied", "permission denied while trying to connect to the Docker daemon socket at " +
 			"unix:///var/run/docker.sock: Get \"http://%2Fvar%2Frun%2Fdocker.sock/v1.47/images/ceos:4.33.1F/json\": " +
 			"dial unix /var/run/docker.sock: connect: permission denied\n", failed, "", "docker group"},
+		// The same refusal in a newer docker's words, as this shell got it on
+		// 2026-09-23.
+		{"denied, newer docker", "permission denied while trying to connect to the docker API at " +
+			"unix:///var/run/docker.sock\n", failed, "", "docker group"},
 	} {
 		absent, err := imageAbsent("ceos:4.33.1F", []byte(c.out), c.err)
 		if absent != c.absent {
