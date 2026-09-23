@@ -41,6 +41,14 @@ func PrivateDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	return checkPrivateDir(dir)
+}
+
+// checkPrivateDir is PrivateDir's check without the MkdirAll. The client runs
+// it too, before it dials: a socket in a directory someone else owns is
+// someone else's, and asking it for a token tells it which device the
+// operator is about to log in to.
+func checkPrivateDir(dir string) error {
 	fi, err := os.Lstat(dir)
 	if err != nil {
 		return err
@@ -97,6 +105,16 @@ func NewClient(socket string) *Client {
 		}}}}
 }
 
+// checkDir refuses a socket whose directory is not private before anything
+// dials it. A directory that is not there is no agent.
+func (c *Client) checkDir() error {
+	dir := filepath.Dir(c.socket)
+	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%w at %s: %v", ErrNoAgent, c.socket, err)
+	}
+	return checkPrivateDir(dir)
+}
+
 // Token asks the agent to mint one device.
 func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error) {
 	body, err := json.Marshal(r)
@@ -105,6 +123,9 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://agent/token", bytes.NewReader(body))
 	if err != nil {
+		return api.MintItem{}, err
+	}
+	if err := c.checkDir(); err != nil {
 		return api.MintItem{}, err
 	}
 	resp, err := c.http.Do(req)
@@ -139,6 +160,9 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 func (c *Client) Status(ctx context.Context) (Status, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://agent/status", nil)
 	if err != nil {
+		return Status{}, err
+	}
+	if err := c.checkDir(); err != nil {
 		return Status{}, err
 	}
 	resp, err := c.http.Do(req)

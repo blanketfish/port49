@@ -92,6 +92,9 @@ type rig struct {
 	// refuse makes the broker refuse every new handshake, as it does a
 	// certificate that expired or a trust anchor that changed.
 	refuse atomic.Bool
+	// fault makes the broker fail every new handshake on its own side, as a
+	// Go server does with internal_error when it cannot build its config.
+	fault atomic.Bool
 }
 
 func (r *rig) clock() time.Time {
@@ -165,6 +168,12 @@ func newRigWith(t *testing.T, o rigOpts) *rig {
 	r.srv = httptest.NewUnstartedServer(r.fb)
 	r.srv.TLS = &tls.Config{Certificates: []tls.Certificate{srvCert}, ClientCAs: ca.Pool(),
 		ClientAuth: tls.VerifyClientCertIfGiven, MinVersion: tls.VersionTLS13,
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			if r.fault.Load() {
+				return nil, errors.New("fault")
+			}
+			return nil, nil
+		},
 		VerifyConnection: func(tls.ConnectionState) error {
 			if r.refuse.Load() {
 				return errors.New("refused")
@@ -552,5 +561,86 @@ func TestTheSocketSaysWhyTheSessionEnded(t *testing.T) {
 	_, err = NewClient(p).Token(context.Background(), TokenRequest{Device: "leaf1"})
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "no longer trusts") {
 		t.Fatalf("through the socket: %v", err)
+	}
+}
+
+// An alert that is not about the certificate — the broker failing on its own
+// side, internal_error — is a broker that is briefly unusable, not one that
+// distrusts this session: the session stays up and the ask after it recovers
+// mints.
+func TestATransientAlertLeavesTheSession(t *testing.T) {
+	r := newRig(t)
+	r.fault.Store(true)
+	r.srv.CloseClientConnections()
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if err == nil || errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("an internal_error alert: %v", err)
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("a non-certificate alert must not end the session")
+	default:
+	}
+	r.fault.Store(false)
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+		t.Fatalf("the ask after the broker recovers: %v", err)
+	}
+}
+
+// The client checks the socket's directory as the agent does before it
+// dials: on the /tmp fallback another user can own the path, and whatever
+// listens there would learn which device the operator is about to log in to
+// (pre-flight F4). Nothing is dialed, and nothing is created.
+func TestTheClientRefusesADirectoryThatIsNotPrivate(t *testing.T) {
+	base := shortDir(t)
+	wide := filepath.Join(base, "wide")
+	if err := os.Mkdir(wide, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(wide, "agent.sock")
+	ln, err := net.Listen("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	dialed := make(chan struct{}, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			dialed <- struct{}{}
+			c.Close()
+		}
+	}()
+	if err := os.Chmod(wide, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClient(p)
+	if _, err := c.Token(context.Background(), TokenRequest{Device: "leaf1"}); err == nil || !strings.Contains(err.Error(), "0700") {
+		t.Fatalf("Token through a directory others can enter: %v", err)
+	}
+	if _, err := c.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "0700") {
+		t.Fatalf("Status through a directory others can enter: %v", err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(wide, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewClient(filepath.Join(link, "agent.sock")).Token(context.Background(), TokenRequest{Device: "leaf1"}); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("Token through a symlinked directory: %v", err)
+	}
+	select {
+	case <-dialed:
+		t.Fatal("the client dialed a socket in a directory it refused")
+	case <-time.After(100 * time.Millisecond):
+	}
+	missing := filepath.Join(base, "missing", "agent.sock")
+	if _, err := NewClient(missing).Token(context.Background(), TokenRequest{Device: "leaf1"}); !errors.Is(err, ErrNoAgent) {
+		t.Fatalf("a directory that is not there is no agent: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(missing)); !os.IsNotExist(err) {
+		t.Fatal("the client must not create the directory")
 	}
 }

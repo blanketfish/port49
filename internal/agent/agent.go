@@ -285,8 +285,9 @@ func (e *ItemError) Error() string {
 }
 
 // refusal says what a failed handshake most likely means, or nil for an
-// error that is not one: a broker that is down or unreachable is left to the
-// caller's own message. In TLS 1.3 the broker rejects a client certificate
+// error that is not one: a broker that is down, unreachable, or sending an
+// alert that is not about the certificate is left to the caller's own
+// message. In TLS 1.3 the broker rejects a client certificate
 // after the client's side of the handshake is done, so the agent sees only
 // the bare alert on its first read, with no reason; the causes are named
 // here instead, and an expired certificate by its own date.
@@ -298,7 +299,7 @@ func (a *Agent) refusal(err error) error {
 			a.broker, verify.Err)
 	}
 	var op *net.OpError
-	if !errors.As(err, &op) || op.Op != "remote error" {
+	if !errors.As(err, &op) || op.Op != "remote error" || !certificateAlerts[op.Err.Error()] {
 		return nil
 	}
 	if leaf := a.leaf(); leaf != nil && !a.now().Before(leaf.NotAfter) {
@@ -308,6 +309,21 @@ func (a *Agent) refusal(err error) error {
 	return fmt.Errorf("agent: the broker at %s refused this certificate (%v); the likely causes: it has expired or "+
 		"been revoked, or it was issued by a CA other than the broker's client trust anchor (client_ca_file)",
 		a.broker, op.Err)
+}
+
+// certificateAlerts are the alerts a broker sends about the certificate it
+// was shown, by crypto/tls's text for them: its alert type is unexported.
+// Any other alert — internal_error, handshake_failure — is a fault on the
+// broker's side, handled like an unreachable broker: the session stays up.
+var certificateAlerts = map[string]bool{
+	"tls: bad certificate":               true,
+	"tls: unsupported certificate":       true,
+	"tls: revoked certificate":           true,
+	"tls: expired certificate":           true,
+	"tls: unknown certificate":           true,
+	"tls: unknown certificate authority": true,
+	"tls: access denied":                 true,
+	"tls: certificate required":          true,
 }
 
 // leaf is the operator's certificate, parsed; nil when there is none.
