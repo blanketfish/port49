@@ -6,13 +6,16 @@ earlier plans hand it, what it must leave for later, and which lab register entr
 it. When writing plan N, start here, then read the cited sections, then the previous plan.
 
 Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
-fifteen tasks, reviewed per task and whole-branch); 3–12 not yet. PR #3's lab
+fifteen tasks, reviewed per task and whole-branch); 3 written (below); 4–12 not yet. PR #3's lab
 stretch is merged, so plan 3 is unblocked and is the next plan to write.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
 metric. PR #7's body lists three fail-closed follow-ups (one uniform "login into a revoked
 result" check after `JoinContext`) for plan 3 to pick up.
+**3 written 2026-09-23** (`2026-09-23-03-vertical-slice.md`, eighteen tasks: thirteen code, three
+lab, two docs; not yet executed, on `feature/vertical-slice`). It closes PR #7's first two
+follow-ups and carries the third to plan 7; its "Questions for Ryan" section has three open calls.
 
 ---
 
@@ -154,7 +157,7 @@ tagged token. Plan 2 does move the harness off written secrets — `lab.seed_tok
 `secret:`/`kind:`, the daemon mints the pairs and writes them to a `0600` `lab.seed_token_file`,
 and `tests/lab/labcreds` reads that file — so the next lab deploy is the first on minted tokens.
 
-## Plan 3 — Vertical slice (§19 step 3)
+## Plan 3 — Vertical slice (§19 step 3) — `2026-09-23-03-vertical-slice.md`
 
 **Builds:** the first real identity reaching a real device with no shared password.
 
