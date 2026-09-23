@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -785,12 +786,26 @@ func listRefs(idx map[string]map[store.ContextRef]time.Time, key string, now tim
 	return out
 }
 
+// blankCertKey reports whether certKey is store.CertKey of an empty issuer or
+// an empty serial. It names no certificate: every OIDC login's credential has
+// neither, so "|" would be one index entry holding every OIDC operator's
+// context on the fleet, and a revocation by it would revoke them all. It is
+// treated as "" — never indexed — as the empty sid is (ruling P8).
+func blankCertKey(certKey string) bool {
+	return certKey == "" || strings.HasPrefix(certKey, "|") || strings.HasSuffix(certKey, "|")
+}
+
 // IndexContext adds ref to each non-empty index — principal, sid, and cert —
 // sharing the one ttl. A caller with no sid or cert passes "" to skip that
-// index (store.ContextRef alone is not enough to reconstruct the context).
+// index (store.ContextRef alone is not enough to reconstruct the context). A
+// certificate key with no issuer or no serial is skipped the same way
+// (blankCertKey).
 func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if blankCertKey(certKey) {
+		certKey = ""
+	}
 	exp := s.now().Add(ttl)
 	addRef(s.byPrincipal, principal, ref, exp)
 	addRef(s.bySid, sid, ref, exp)
@@ -816,10 +831,13 @@ func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, 
 }
 
 // UnindexContext removes ref from each of the three indexes it was written
-// under.
+// under. A blank certificate key was never indexed and is skipped, as "" is.
 func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if blankCertKey(certKey) {
+		certKey = ""
+	}
 	removeRef(s.byPrincipal, principal, ref)
 	removeRef(s.bySid, sid, ref)
 	removeRef(s.byCert, certKey, ref)

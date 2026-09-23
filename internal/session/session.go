@@ -115,10 +115,21 @@ func (m *Manager) Refresh(ctx context.Context, principal string, authTime time.T
 	return n, nil
 }
 
+// ErrBlankRevocation is a revocation by an empty sid, or by a certificate
+// with no issuer or no serial. Every certificate login has sid "" and every
+// OIDC login a certificate with neither, so a revocation by a blank names
+// every such operator on the fleet at once; it is refused and marks nothing
+// (ruling P8). The store never indexes a blank either, so this is the guard
+// on the broker's side of the same rule.
+var ErrBlankRevocation = errors.New("session: revocation by an empty sid or certificate")
+
 // RevokeBySid marks every context authorized by this OIDC session id and
 // deletes the receipts of the principals behind them. It never deletes a
-// context.
+// context. An empty sid is ErrBlankRevocation.
 func (m *Manager) RevokeBySid(ctx context.Context, sid string) ([]store.ContextRef, error) {
+	if sid == "" {
+		return nil, ErrBlankRevocation
+	}
 	refs, err := m.store.ContextsBySid(ctx, sid)
 	if err != nil {
 		return nil, err
@@ -141,8 +152,12 @@ func (m *Manager) RevokeByPrincipal(ctx context.Context, principal string) ([]st
 
 // RevokeByCert marks every context authorized by this certificate — the index
 // key a CRL or OCSP response names (spec §5.1.4) — and deletes the receipts of
-// the principals behind them.
+// the principals behind them. An empty issuer or serial is
+// ErrBlankRevocation.
 func (m *Manager) RevokeByCert(ctx context.Context, issuer, serial string) ([]store.ContextRef, error) {
+	if issuer == "" || serial == "" {
+		return nil, ErrBlankRevocation
+	}
 	refs, err := m.store.ContextsByCert(ctx, store.CertKey(issuer, serial))
 	if err != nil {
 		return nil, err

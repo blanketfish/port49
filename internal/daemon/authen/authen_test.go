@@ -1890,3 +1890,40 @@ func TestAReplayedEnableActsOnlyOnTheContextItWasWrittenFor(t *testing.T) {
 		})
 	}
 }
+
+// Ruling P8, through the login that writes the index. An OIDC login carries
+// no certificate and a certificate login no sid; neither leaves an entry under
+// the blank it does not have, so no lookup by a blank can find either.
+func TestALoginIndexesNoBlankSidOrCertificate(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		cred store.Credential
+	}{
+		{"oidc", store.Credential{Method: "oidc", Sid: "sid-1", Sub: "a7f3"}},
+		{"certificate", store.Credential{Method: "cert", Issuer: "ca", Serial: "01"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := setup(t)
+			secret := f.tag() + "credcredcredcredcredcred"
+			if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+				store.Token{ID: "c", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+					Principal: "user:alice@example.com", Credential: tt.cred, ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+				t.Fatal(err)
+			}
+			if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", secret)); reply.Status != wire.AuthenStatusPass {
+				t.Fatalf("%+v", reply)
+			}
+			if refs, _ := f.st.ContextsBySid(context.Background(), ""); len(refs) != 0 {
+				t.Fatalf("the empty sid is indexed: %v", refs)
+			}
+			for _, certKey := range []string{"|", "ca|", "|01"} {
+				if refs, _ := f.st.ContextsByCert(context.Background(), certKey); len(refs) != 0 {
+					t.Fatalf("cert key %q is indexed: %v", certKey, refs)
+				}
+			}
+			if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@example.com"); len(refs) != 1 {
+				t.Fatalf("the principal must still be indexed: %v", refs)
+			}
+		})
+	}
+}

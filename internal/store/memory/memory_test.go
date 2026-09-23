@@ -1139,3 +1139,48 @@ func TestSetPrivilegeIsRaiseOnlyAndClamped(t *testing.T) {
 		})
 	}
 }
+
+// Ruling P8. An empty sid and a certificate key with no issuer or no serial
+// name nobody: every certificate login has sid "", and every OIDC login has
+// cert key "|". Indexed, each would be one bucket holding every such
+// operator's context on the fleet, and a revocation that reached it would
+// revoke them all. They are never indexed, and an extension has nothing of
+// theirs to carry.
+func TestAnEmptySidOrCertificateIsNeverIndexed(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	for i, certKey := range []string{store.CertKey("", ""), store.CertKey("ca", ""), store.CertKey("", "01")} {
+		ref := store.ContextRef{NAS: "leaf-01", Username: fmt.Sprintf("user%d", i)}
+		if err := s.PutContext(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username},
+			store.Context{CtxID: ref.Username, Principal: "user:" + ref.Username}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.IndexContext(ctx, "user:"+ref.Username, "", certKey, ref, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.TouchContext(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, certKey := range []string{"|", "ca|", "|01"} {
+		if r, _ := s.ContextsByCert(ctx, certKey); len(r) != 0 {
+			t.Fatalf("cert key %q is indexed: %v", certKey, r)
+		}
+	}
+	if r, _ := s.ContextsBySid(ctx, ""); len(r) != 0 {
+		t.Fatalf("the empty sid is indexed: %v", r)
+	}
+	// The principal index is untouched by the skip.
+	if r, _ := s.ContextsByPrincipal(ctx, "user:user0"); len(r) != 1 {
+		t.Fatalf("principal index: %v", r)
+	}
+	// Unindexing with the same empty keys is a no-op, not an error, and does
+	// not disturb what is indexed.
+	if err := s.UnindexContext(ctx, "", "", "|", store.ContextRef{NAS: "leaf-01", Username: "user0"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := s.ContextsByPrincipal(ctx, "user:user0"); len(r) != 1 {
+		t.Fatalf("principal index after a blank unindex: %v", r)
+	}
+}
