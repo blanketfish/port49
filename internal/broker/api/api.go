@@ -1,0 +1,53 @@
+// Package api is the broker's wire format (design §17), shared by the broker
+// and every client of it — the agent first — so the two cannot drift. Every
+// key is snake_case.
+package api
+
+// Config is GET /v1/config: discovery data, never fleet information.
+type Config struct {
+	Methods              []string `json:"methods"`
+	MaxSessionAgeSeconds int      `json:"max_session_age_seconds"`
+	BatchMax             int      `json:"batch_max"`
+}
+
+// MintRequest is POST /v1/tokens. TTLSeconds is a request, not an
+// instruction: the broker clamps it to the subject's token_ttl.
+type MintRequest struct {
+	Devices    []string `json:"devices"`
+	Enable     bool     `json:"enable"`
+	TTLSeconds int      `json:"ttl_seconds"`
+	Purpose    string   `json:"purpose"`
+}
+
+// MintItem is one device's answer. Verdict and Reason use the decision log's
+// closed vocabulary (spec §5.7), so the response and the audit record agree.
+// An item the broker could not decide — a fault on the broker's side, not a
+// refusal of the caller — carries Error and Detail instead of a Verdict, and
+// has no decision record.
+type MintItem struct {
+	Device    string `json:"device"`
+	Verdict   string `json:"verdict,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Address   string `json:"address,omitempty"`
+	Platform  string `json:"platform,omitempty"`
+	Username  string `json:"username,omitempty"`
+	Login     string `json:"login,omitempty"`
+	Enable    string `json:"enable,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// MintResponse is POST /v1/tokens' 200: partial failure is per item, never at
+// the top level (design §17).
+type MintResponse struct {
+	Principal string     `json:"principal"`
+	Subject   string     `json:"subject,omitempty"`
+	Results   []MintItem `json:"results"`
+}
+
+// Error is every non-200 body.
+type Error struct {
+	Error  string `json:"error"`
+	Detail string `json:"detail,omitempty"`
+}
