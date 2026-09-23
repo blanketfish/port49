@@ -103,7 +103,8 @@ func Decode(hash string, body []byte) (Blob, error) {
 		return Blob{}, fmt.Errorf("blob: %s: bytes after the blob", hash)
 	}
 	if err := b.check(); err != nil {
-		return Blob{}, fmt.Errorf("blob: %s: %w", hash, err)
+		// check's errors carry the package prefix already.
+		return Blob{}, fmt.Errorf("%w (blob %s)", err, hash)
 	}
 	return b, nil
 }

@@ -123,8 +123,14 @@ func TestDecodeRefusesWhatItCannotMatch(t *testing.T) {
 		"no platform":             `{"privilege":15,"attributes":[],"permit":["**"],"deny":[]}`,
 		"trailing bytes":          `{"platform":"arista_eos","privilege":15,"attributes":[],"permit":[],"deny":[]} {}`,
 	} {
-		if b, err := Decode(HashOf([]byte(body)), []byte(body)); err == nil {
+		b, err := Decode(HashOf([]byte(body)), []byte(body))
+		if err == nil {
 			t.Errorf("%s: decoded %+v, want an error", name, b)
+			continue
+		}
+		// One package prefix, not one per layer that wrapped the error.
+		if n := strings.Count(err.Error(), "blob:"); n != 1 {
+			t.Errorf("%s: %q says \"blob:\" %d times", name, err, n)
 		}
 	}
 }
