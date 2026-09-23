@@ -215,6 +215,13 @@ the sink if it lands later — must give the spool a sink interface that returns
 the spool must not advance `drainOffset` past a refusal. Without both, the durability contract
 is enforced up to the last hop and not across it.
 
+**Carried from plan 3:**
+
+- **Compare the blob's `Platform` with the device's platform at authorization.** Unreachable
+  while the broker and the daemon share one inventory, so the slice does not check it; it
+  becomes reachable when they stop sharing one.
+- **A `GetBlob` store error answers `store_unavailable`** once the store is remote.
+
 ## Plan 5 — Platform adapters (§19 step 5)
 
 Spec §8 in full: built-in adapters, entity classes, user overrides and layering, pinned
@@ -329,7 +336,15 @@ grace window, `max_session_age` minimum across roles), the staleness ceiling end
 (design §19 step 2); the scheduled refresh and the `staleness_ceiling` default, together; PR #7's
 third follow-up — a join racing another principal's replace under one username can lose its sid or
 certificate index entry (revocation by principal still reaches it); the certificate-to-directory
-mapping replacing the slice's declared `username:`; policy reload.
+mapping replacing the slice's declared `username:`; policy reload. Also owed by plan 3's reviews:
+
+- An **atomic put-if-absent idempotency reservation**. Two concurrent requests under one key
+  with different bodies can both pass the pre-check today, and the minter's read, mint and
+  `PutIdempotency` are three steps, not one.
+- **Per-source limits or admission on the broker listener.** One client reconnecting every 30s
+  can keep all of `broker.MaxConns` (256) slots full.
+- `(*broker.Broker).Server` **returns an error instead of panicking** once a reload path exists.
+- A **counter for broker TLS handshake failures**.
 
 ## Plan 8 — Workload certificates (§19 step 8)
 
