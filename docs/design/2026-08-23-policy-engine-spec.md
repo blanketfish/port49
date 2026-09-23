@@ -4147,7 +4147,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L17** | Which `system tacplus-options` statements change what a port49 answer MEANS on Junos. Whether `strict-authorization` makes a DENIED session authorization refuse the login, on SSH and on NETCONF, and what it does to a local break-glass account while port49d is down. What AV pairs `enhanced-accounting` adds, to which record types, and whether any of them separates two concurrent sessions of one user or carries the client's source port. Which accounting records carry a user who is not the logged-in operator, and what port49 does with them. Whether `authorization-time-interval` re-authorizes a live session, and what a DENIED re-authorization does to one. | Whether port49 constrains a Junos session at all (L10 reading 3; L14) and what the reference AAA configuration in `tests/lab/configs/` must carry; the 3am break-glass argument (§5.6, L4); accounting attribution and what reconciliation may conclude (§5.8, §9); whether a revocation can reach a session that is already open (§5.6) | Junos (vSRX, vJunos-router) | open — added 2026-09-21 and measured the same day on **both** images, cell for cell: `tests/lab/results/L17-juniper_vsrx.md`, `L17-juniper_vjunos-router.md`. `strict-authorization` **does** make a port49 denial binding, on SSH and on NETCONF, and break-glass still gets in with port49d down under both authentication orders. `enhanced-accounting` adds `Port`, `Authentication-Type` and `User_Perms` to the `cmd=login` record only. No record named `root` under this lab's accounting event list. `authorization-time-interval` re-authorizes at exactly the configured interval and a DENIED re-authorization does **not** end the live session. Unmeasured: the other six `tacplus-options` leaves, a real `root` RPC record, production Junos 23.4R2-S8.7, and an interval other than the 15-minute minimum; see below |
 | **L18** | How each platform treats a reply attribute it did not ask for: applied, ignored, or the session killed. Another vendor's attribute, an invented one, and a known attribute carrying a value the device cannot use, each in the OPTIONAL and the MANDATORY spelling. Per variant: whether the session opens and, when it does not, what the device says verbatim; what role or privilege the session ends up with; and whether the device still sends per-command authorization. | Whether an adapter may send one attribute list to a mixed fleet at all (§8). RFC 8907 §8.2 says an OPTIONAL argument a device does not understand SHOULD be ignored and a MANDATORY one MUST fail the authorization; `lab.session_attributes` in `tests/lab/port49d-lab.yaml` rested on the first half until IOS-XE disproved it (L10), and what an operator's typo costs (§6) rests on the same answer. Also decision 22's two Junos attributes (§13, gated on L12). | EOS, NX-OS, IOS-XE, Junos | open — added and measured 2026-09-22 on all five images, `tests/lab/l18_test.go`. **Three vendors answer three different ways, so §8 cannot have one rule.** vEOS follows §8.2 in both directions. The N9Kv and both Junos images honour neither half and ignore everything, mandatory included. IOS-XE refuses the session for anything it does not recognise under either flag — and a run of those refusals stops it answering SSH at all for about a minute, without sending port49 a packet. On Junos `local-user-name` is applied under either flag and **`user-permissions` does nothing**, which is decision 22's second attribute measured for the first time. **The per-command reply is measured too, 2026-09-22, and it does not follow the session reply:** the C8000V refuses EVERY command in the session — `Command authorization failed.` — for any of the three attributes under either flag, on authorizations port49 answered `permit`; vEOS ignores an optional unknown there and refuses every command on a MANDATORY one; the N9Kv ignores all of them. Junos has no per-command reply to ask it of (L10, L14; decision 21). Open: every non-SSH transport, and whether IOS-XE's SSH condition is the vty pool; see below |
 | **L19** | The maximum password length each platform accepts via PAP, on every login path where the device uses PAP. | The 30-character handle (design document §8): an authentication START carries a PAP password in `data`, whose length field is one byte, so PAP can bound the handle where the ASCII prompt does not — and NX-OS uses PAP for every SSH login by default | all | open — added 2026-09-23, split from L8. On the N9Kv an SSH login is carried as PAP and 127 characters arrive (`tests/lab/results/L8-cisco_nxos.md`); PAP on any other path, and on EOS, Junos and IOS-XE, which this lab does not configure for it, is unmeasured; see below |
-| **L20** | Whether a device keeps an API credential and answers a repeat of it without asking TACACS+; for how long; and whether a credential port49 would now refuse is re-checked inside that window. | Whether a revocation in port49 reaches an API client at all (§5.1.4), and decision 15's bound on how long a spent token works — the receipt's `receipt_idle_ttl` and `receipt_max_age` act only on exchanges the device sends | IOS-XE; then every HTTP API transport | open — added 2026-09-23. IOS-XE RESTCONF answered a repeat of one Basic credential 3s later with `200 OK` and no TACACS+ exchange (`tests/lab/results/L1-restconf-cisco_iosxe.md`), so a revocation in port49 cannot reach a RESTCONF client inside the device's cache window; the window's length is unmeasured; see below |
+| **L20** | Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a **wrong password** for the same user inside that window is also accepted; and whether a credential port49 would now refuse is re-checked inside it. | Whether a revocation in port49 reaches an API client at all (§5.1.4), and decision 15's bound on how long a spent token works — the receipt's `receipt_idle_ttl` and `receipt_max_age` act only on exchanges the device sends | IOS-XE; then every HTTP API transport | open — added 2026-09-23. IOS-XE RESTCONF answered a repeat of an already-spent token, 3s later, with `200 OK` and **zero** TACACS+ traffic (`tests/lab/results/L1-restconf-cisco_iosxe.md`), so a revocation in port49 cannot reach that repeat. Open: the window's length, what the device keys the answer on, and whether a wrong password within the window is accepted too; see below |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -5467,23 +5467,31 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   first RESTCONF request cost one authentication and one session authorization; the same Basic
   credential again, 3s later, got `200 OK` with **no TACACS+ traffic at all** — no decision
   record and no TCP connection from the device between 06:51:23.931Z and 06:51:30.006Z. So it
-  was neither a receipt replay nor a redeem: the device kept the credential itself.
+  was neither a receipt replay nor a redeem. What the device keyed that answer on, and for how
+  long it would go on answering that way, are unmeasured.
 
   **Why it matters: revocation stops at port49.** Everything port49 does to end a token's life —
   single-use redemption, the receipt's `receipt_idle_ttl` and `receipt_max_age`, revocation by
   `sid` or `sub` (§5.1.4) — acts only on the next exchange the device sends. A device that
-  answers a repeat from its own cache sends none, so for as long as it keeps the credential, a
-  spent token keeps working at the device and a revocation in port49 does not reach a RESTCONF
-  client holding it. That window is set by the device, port49 cannot shorten it, and nothing in
-  port49's log shows it is open. Decision 15's argument that a captured token lives only while
-  the job is active plus `receipt_idle_ttl` holds for the transports L7 and L15 measured, where
-  every repeat reaches port49; on IOS-XE RESTCONF it is bounded by this cache instead, whose
-  length is unmeasured.
+  answers a repeat without asking sends none, so for as long as it does, a spent token keeps
+  working at the device and a revocation in port49 does not reach that repeat. The window is set
+  by the device, port49 cannot shorten it, and nothing in port49's log shows it is open. Decision
+  15's argument that a captured token lives only while the job is active plus
+  `receipt_idle_ttl` holds for the transports L7 and L15 measured, where every repeat reaches
+  port49; on IOS-XE RESTCONF it is bounded by this window instead, whose length is unmeasured.
 
-  *Unmeasured:* how long IOS-XE keeps a RESTCONF credential; whether a credential port49 would
-  now refuse is re-checked inside that window; whether the cache is keyed by the credential, the
-  client address or the TLS connection; the same question on eAPI and NX-API with Basic
-  credentials on a kept-alive connection, and on every other platform.
+  **The open question that decides how much this matters: a wrong password within the
+  window.** If the device keyed its answer on the credential, only the holder of the spent token
+  gets in. If it keyed it on the username, or on the client address and username, then *any*
+  password for that user inside the window also gets `200`, and the device, not port49, is
+  deciding who is authenticated. The run cannot tell these apart, and it decides whether RESTCONF
+  on IOS-XE weakens the token model.
+
+  *Unmeasured:* a wrong password for the same user inside the window; how long the window lasts;
+  what the answer is keyed on (the credential, the username, the client address, the TLS
+  connection); whether a credential port49 would now refuse is re-checked inside it; the same
+  question on eAPI and NX-API with Basic credentials on a kept-alive connection, and on every
+  other platform.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
