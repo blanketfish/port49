@@ -195,12 +195,26 @@ certificates from `go run ./tests/lab/cmd/slice-pki` (written to the git-ignored
 `results/slice-arista_eos.md`.
 
 **By hand**, for the two measurements plan 3 does not automate. The daemon and topology are then
-yours to start and stop, one platform at a time, destroyed afterwards:
+yours to start and stop, one platform at a time, destroyed afterwards.
+
+**Wait for `breakglass`, and configure the device, before port49d starts.** Once port49d is
+running, a `breakglass` login reaches it as a TACACS+ login, is refused `token_not_found`, and
+neither vEOS nor IOS-XE falls through to `local` on that FAIL under `aaa authentication login
+default group port49 local` — the ssh client ends `Permission denied
+(publickey,keyboard-interactive)` however long you wait (111 such refusals in
+`results/L7-login-arista_eos.md`; `results/L1-restconf-cisco_iosxe.md`, "Order"). So an
+interactive `breakglass` session exists only while port49d is down. Once port49d is up, the only
+readiness signal is the one the harness uses: the device has sent port49d a packet.
 
 ```sh
 make build
 sudo -n setcap cap_net_bind_service=+ep bin/port49d
 sudo -n containerlab deploy -t tests/lab/topologies/<eos|iosxe>.clab.yml
+# port49d is not running yet, so breakglass gets in once the device is up (1-2 minutes);
+# its password is labcreds.BreakglassPassword. Address: leaf1 172.100.100.11, xe1 172.100.100.41
+until ssh -o StrictHostKeyChecking=no breakglass@<address> 'show version | include Software'
+do sleep 10; done
+# any device configuration the run needs (plan 3 Task 17's RESTCONF AAA) goes here, as breakglass
 # the daemon config: the lab file, plus the broker block where the run needs a broker
 cat tests/lab/port49d-lab.yaml tests/lab/slice/broker.yaml > tests/lab/logs/port49d-byhand.yaml
 # a broker run only: its certificates, written before the daemon that loads them at start
