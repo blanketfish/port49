@@ -63,12 +63,15 @@ Where the design leaves a shape open, this plan chooses, and says why here once:
    build one (Task 1 corrects the design). A second process would share nothing. The broker is a
    second listener in the daemon, off unless `broker:` is configured, and a networked store is owed
    before it becomes a process of its own (plan 7).
-2. **`auth_time` is the time of the first request on the held connection**, which the agent sends
-   the instant the handshake completes (`GET /v1/config`), so it is the handshake to within a round
-   trip. Every mint on that connection carries it; a token's `session_expires` is therefore the
-   handshake plus `max_session_age`, which is decision 17's "the key is exercised at handshake".
-   The server does not close a held connection for idleness before `max_session_age`, and refuses a
-   mint on one older than that with `session_expired`.
+2. **`auth_time` is the moment the broker accepted the held connection**, stamped once in
+   `ConnContext`, before the handshake that follows it — never later than the key's use, so a
+   connection left idle before its first request cannot push its session out (pre-flight F3).
+   Every mint on that connection carries it; a token's `session_expires` is therefore the
+   handshake plus `max_session_age` (to within the handshake's own duration), which is decision
+   17's "the key is exercised at handshake". The server does not close an authenticated connection
+   for idleness before `max_session_age`, closes one that presented no certificate as soon as it
+   goes idle (F1), and refuses a mint on one older than the ceiling with `session_expired`. TLS
+   session tickets are off, so every connection is a full handshake that uses the key (F2).
 3. **Client certificates are verified twice.** At the handshake, `tls.VerifyClientCertIfGiven`
    against the one anchor, so an untrusted certificate fails `port49 login` immediately and
    `/v1/config` stays reachable without one (§17: unauthenticated by necessity). That needs the
@@ -118,9 +121,13 @@ Where the design leaves a shape open, this plan chooses, and says why here once:
     0700 and refused otherwise). `port49 login` starts it and waits for it; `port49 token` asks it.
     It holds no token and writes none to disk: every `port49 token` is a mint. A transport failure
     is retried once, on a new connection, with the same `Idempotency-Key`, so a mint whose response
-    was lost is replayed rather than cut again (design §17). The session ends at the first
-    handshake plus `max_session_age` however many reconnects happen in between; the agent then
-    exits.
+    was lost is replayed rather than cut again (design §17). The agent stops minting at the first
+    handshake plus `max_session_age` however many reconnects happen in between, and exits then, or
+    as soon as the broker answers `session_expired` or `trust_domain_unresolved` (F10). That bounds
+    the agent's minting window, not every device session: the broker's ceiling is per connection, so
+    a token minted after a silent reconnect carries the reconnect's `auth_time`, and its context can
+    outlive the first handshake by up to one more `max_session_age` (F8). With plan 9's hardware key
+    each reconnect is a touch, a fresh authentication, and the gap is the design's own.
 12. **One uniform check after `JoinContext` closes PR #7's first two follow-ups.** After the join
     and its index bookkeeping, a login whose written context carries `revoked_at` answers FAIL
     `credential_revoked` with the token spent. A retransmission is answered from the live context,
@@ -156,8 +163,12 @@ None of these blocks a task; each has a recommendation the plan implements as wr
    a hardware token, where a reconnect costs a touch and is therefore a human event. The slice
    loads the key from a PEM file (`--cert`/`--key`); PKCS#11/PIV is plan 9. With a file key, a
    reconnect is silent and proves only that the file was readable. *Recommendation:* accept it,
-   labelled borrowed, and keep the agent's hard stop at the first handshake plus
-   `max_session_age` so a file key cannot stretch a session past the ceiling.
+   labelled borrowed, keep the agent's hard stop at the first handshake plus `max_session_age`,
+   and refuse a key file anyone but its owner can read (F14). The hard stop bounds how long the
+   agent mints; it does not bound every device session, because a context minted after a silent
+   reconnect is timed from that reconnect and can outlive the first handshake by up to one more
+   `max_session_age` (Decided 11; pre-flight F8). Plan 9's hardware key closes that by making each
+   reconnect a touch.
 2. **What should a broker-minted token do on a platform the slice renders no attributes for?**
    It mints, with a bare-permit session reply: NX-OS then lands the operator on `vdc-operator`
    (L18), Junos on the device's `remote` template, and IOS-XE on whatever a reply with no
@@ -229,7 +240,7 @@ internal/daemon/authen/authen_test.go          MOD  three revoked-result cases, 
 internal/decision/reasons.go                   MOD  CandidateCapReached
 internal/decision/log.go                       MOD  Record.Policy, Record.Blob; Policy, PolicyGrant, Blob
 internal/decision/blob_test.go                 NEW
-internal/token/minter.go                       MOD  Request.Policy onto the mint record
+internal/token/minter.go                       MOD  Request.Policy onto the mint record (Task 3); CanonicalUsername exported (Task 6)
 internal/token/policy_test.go                  NEW
 internal/blob/blob.go                          NEW  the slice's blob: encode, hash, decode, rule subset, verdict
 internal/blob/blob_test.go                     NEW
@@ -242,13 +253,15 @@ internal/broker/policy/resolve_test.go         NEW
 internal/broker/policy/labpolicy_test.go       NEW  the lab's policy file loads under `make test`
 internal/testpki/testpki.go                    NEW  throwaway CA and leaves for tests and the lab
 internal/testpki/testpki_test.go               NEW
+internal/keyfile/keyfile.go                    NEW  LoadX509KeyPair refusing a symlinked or group/other-readable key
+internal/keyfile/keyfile_test.go               NEW
 internal/broker/identity.go                    NEW  Identity: verified certificate → principal and credential
 internal/broker/identity_test.go               NEW
 internal/broker/fixture_test.go                NEW  the broker test fixture
 internal/broker/api/api.go                     NEW  the wire types, shared with the agent
 internal/broker/broker.go                      NEW  Broker, Handler, /v1/tokens, /v1/config, heldConn
 internal/broker/broker_test.go                 NEW
-internal/broker/server.go                      NEW  Server, LoadTLS
+internal/broker/server.go                      NEW  Server, LoadTLS, Limit, MaxConns
 internal/broker/server_test.go                 NEW
 internal/config/config.go                      MOD  BrokerConfig, the broker: block
 internal/config/broker_test.go                 NEW
@@ -362,16 +375,17 @@ with
    in-memory store of step 1 is in-process) — **the last not built**: plan 2 shipped the sealing
    layer over the in-process store, so step 3's broker runs inside `port49d`, and a store two
    processes can reach is owed before the broker becomes a process of its own (step 7).
-   Reusable tokens are built here but stay provisional until L7 closes in step 3.
+   Reusable tokens are built here but stay provisional until L7 closes.
 ```
 
 and in step 3 replace `each in its simplest form. L3, L4, and L7 close
    here.` with
 
 ```markdown
-   each in its simplest form. L7 closes here, on the `/login` measurement; L3 closed in the lab
-   work before it, and L4 stays open on `deadtime` and the transports it has not measured (policy
-   engine spec, §15).
+   each in its simplest form. Step 3 measures L7's eAPI `/login` clause; L7 stays open on
+   NX-API's `nxapi_auth` cookie, which is unmeasured, and a row with a platform open stays open.
+   L3 closed in the lab work before it, and L4 stays open on `deadtime` and the transports it has
+   not measured (policy engine spec, §15).
 ```
 
 - [ ] **Step 5: the roadmap — plan 2's hand-offs settled, plan 7's list**
@@ -406,7 +420,7 @@ mapping replacing the slice's declared `username:`; policy reload.
 
 - [ ] **Step 6: Check the edits read in place**
 
-Run: `grep -n 'made one rule in plan 3\|candidate_cap_reached\|A login into a revoked result' docs/design/2026-08-23-policy-engine-spec.md && grep -n 'the last not built\|L7 closes here' docs/design/2026-08-21-port49-design.md && grep -n 'Carried from plan 3' docs/superpowers/plans/README.md`
+Run: `grep -n 'made one rule in plan 3\|candidate_cap_reached\|A login into a revoked result' docs/design/2026-08-23-policy-engine-spec.md && grep -n 'the last not built\|measures L7' docs/design/2026-08-21-port49-design.md && grep -n 'Carried from plan 3' docs/superpowers/plans/README.md`
 Expected: one line per pattern, in the sections named above.
 
 - [ ] **Step 7: Commit**
@@ -419,8 +433,9 @@ Spec §5.6 says every way a login can write a revoked context answers
 credential_revoked, and a retransmission is answered from the live
 context. §5.7 adds candidate_cap_reached and widens session_expired to
 the mint. Design §19 says step 2 never built a two-process store and
-that step 3 closes L7, not L3 and L4. The roadmap carries plan 3's
-deferrals to plan 7.
+that step 3 measures L7's eAPI /login clause but closes none of L3, L4
+or L7: L3 closed earlier, L4 and L7 stay open. The roadmap carries plan
+3's deferrals to plan 7.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -691,6 +706,24 @@ with
 
 ```go
 					switch _, ok, lerr := s.receiptContext(ctx, ck, r.CtxID, enable, incumbent); {
+```
+
+and, in the comment directly above that `if enable {`, replace
+
+```go
+				// winner's write and refuse the duplicate for nothing.
+```
+
+with
+
+```go
+				// winner's write and refuse the duplicate for nothing. It can
+				// therefore answer PASS from the receipt of a winner that, after
+				// its join, was refused credential_revoked: the one replay the
+				// §5.6 rule does not reach. It takes two byte-identical
+				// presentations inside one join; every authorization on the
+				// revoked context is denied, and the next retransmission reads
+				// the live context and is refused (plan 3, pre-flight F16).
 ```
 
 and in the long comment above `ctxID := incumbent.CtxID`, replace `refused \`token_spent\`
@@ -1483,6 +1516,10 @@ import (
 // There is no cache. The store is in-process (plan 3, Decided 1), so a cache
 // would be a second copy of the same map; spec §5.1.1's per-replica cache is
 // plan 4's, with a store worth caching in front of.
+//
+// Its GetBlob is not counted in StoreOps, unlike every other store call site:
+// it holds no metrics handle, and plan 4's Authorizer, which replaces it,
+// counts its reads with its cache (plan 3, pre-flight F18).
 type Blob struct {
 	Store    store.Store
 	Fallback Authorizer
@@ -1572,10 +1609,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 **Files:**
 - Create: `internal/broker/policy/policy.go`
+- Modify: `internal/token/minter.go` (export `CanonicalUsername`)
 - Test: `internal/broker/policy/policy_test.go`
 
 **Interfaces:**
-- Consumes: `blob.CheckRule`, `username.Canonical`.
+- Consumes: `blob.CheckRule`, `token.CanonicalUsername` (exported here from the minter's
+  `canonicalUsername`, so the load check and the mint check are one function; pre-flight F12).
 - Produces: `func Load(path string) (*Policy, error)`; `type Policy` (unexported fields `roles`,
   `subjects`, `byIdentity`, `grants`); the unexported file types `fileRole`, `fileSubject`,
   `fileGrant`; `var levels = map[string]uint8{"readonly": 1, "admin": 15}`; and
@@ -1671,6 +1710,10 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"an unknown role", roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [x]}\n", "role \"x\" is not declared"},
 		{"a grant with no roles", roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices}\n", "at least one role"},
 		{"max_privilege operator", roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: operator}\n", "`operator` has no priv-lvl mapping"},
+		{"a ceiling below the landing level", roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: readonly}\n", "above its grants' max_privilege"},
+		{"a ceiling from another grant", roleOK + "  - {name: ro, privilege: readonly}\n" + subjOK +
+			"grants:\n  - {subject: s, scope: all_devices, roles: [r]}\n  - {subject: s, scope: all_devices, roles: [ro], max_privilege: readonly}\n",
+			"above its grants' max_privilege"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Load(write(t, tt.yaml))
@@ -1687,7 +1730,34 @@ func TestLoadRefusesByName(t *testing.T) {
 Run: `go test ./internal/broker/policy/ -count=1`
 Expected: FAIL to build — `no non-test Go files`, then `undefined: Load` once the package exists.
 
-- [ ] **Step 3: Write the loader**
+- [ ] **Step 3: Export the minter's username invariant**
+
+In `internal/token/minter.go`, replace
+
+```go
+// canonicalUsername is the invariant, not just the character set: printable
+// ASCII AND unchanged by canonicalization. The ASCII half alone would admit
+// `@` and `\`, which are 0x21–0x7E and are exactly the two rewrites a
+// directory-backed deployment hits every day.
+func canonicalUsername(u string) bool { return asciiUsername(u) && username.Canonical(u) == u }
+```
+
+with
+
+```go
+// CanonicalUsername is the invariant, not just the character set: printable
+// ASCII AND unchanged by canonicalization. The ASCII half alone would admit
+// `@` and `\`, which are 0x21–0x7E and are exactly the two rewrites a
+// directory-backed deployment hits every day. Exported so the broker's policy
+// load refuses the same names the mint would, with one definition of them.
+func CanonicalUsername(u string) bool { return asciiUsername(u) && username.Canonical(u) == u }
+```
+
+and in `Mint` replace `if !canonicalUsername(r.Subject.Username) {` with
+`if !CanonicalUsername(r.Subject.Username) {`. Nothing else names it
+(`grep -rn canonicalUsername internal cmd tests` prints nothing afterwards).
+
+- [ ] **Step 4: Write the loader**
 
 Create `internal/broker/policy/policy.go`:
 
@@ -1717,7 +1787,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/blob"
-	"github.com/rhwendt/port49/internal/username"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 type fileRole struct {
@@ -1836,7 +1906,10 @@ func build(f file) (*Policy, error) {
 			}
 			p.byIdentity[id] = s.Name
 		}
-		if !canonical(s.Username) {
+		// The minter's own invariant (token.ErrUsernameNotCanonical), checked
+		// at load so an operator learns about `Alice` from the file and not
+		// from a refused mint.
+		if !token.CanonicalUsername(s.Username) {
 			return nil, fmt.Errorf("subject %q: username %q must be printable ASCII and already canonical — lower "+
 				"case, no DOMAIN\\ prefix, no @suffix — because the daemon looks tokens up by the canonical form of "+
 				"what the device sends (spec §2)", s.Name, s.Username)
@@ -1883,6 +1956,25 @@ func build(f file) (*Policy, error) {
 		}
 		p.grants[g.Subject] = append(p.grants[g.Subject], g)
 	}
+	// A subject whose roles land it above its own ceiling is told the roles'
+	// level by the device while port49 clamps the context to the ceiling, so
+	// every command it types is denied privilege_exceeded. Resolve composes
+	// both as a max over all the subject's grants, so the check does too
+	// (plan 3, pre-flight F17). An absent max_privilege is no ceiling.
+	for name, gs := range p.grants {
+		var level, ceiling uint8
+		for _, g := range gs {
+			ceiling = max(ceiling, levels[g.MaxPrivilege])
+			for _, r := range g.Roles {
+				level = max(level, levels[p.roles[r].Privilege])
+			}
+		}
+		if ceiling > 0 && level > ceiling {
+			return nil, fmt.Errorf("subject %q: its roles land it at priv-lvl %d, above its grants' max_privilege "+
+				"(%d): the device would be told %d while port49 holds the session at %d, and every command would "+
+				"be denied privilege_exceeded; raise max_privilege or lower the role", name, level, ceiling, level, ceiling)
+		}
+	}
 	return p, nil
 }
 
@@ -1901,24 +1993,9 @@ func checkLevel(name string) error {
 	}
 	return fmt.Errorf("%q is not a privilege level; the vertical slice knows readonly and admin", name)
 }
-
-// canonical is the minter's own invariant (token.ErrUsernameNotCanonical),
-// checked at load so an operator learns about `Alice` from the file and not
-// from a refused mint.
-func canonical(u string) bool {
-	if u == "" {
-		return false
-	}
-	for i := 0; i < len(u); i++ {
-		if u[i] < 0x21 || u[i] > 0x7e {
-			return false
-		}
-	}
-	return username.Canonical(u) == u
-}
 ```
 
-- [ ] **Step 4: Add a stub `SubjectOf` so the test builds, and run**
+- [ ] **Step 5: Add a stub `SubjectOf` so the test builds, and run**
 
 `SubjectOf` belongs to Task 7 but the load test uses it. Create
 `internal/broker/policy/resolve.go` with only:
@@ -1933,17 +2010,19 @@ func (p *Policy) SubjectOf(principal string) (string, bool) {
 }
 ```
 
-Run: `go test ./internal/broker/policy/ -count=1`
+Run: `go test ./internal/broker/policy/ ./internal/token/ -count=1`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add internal/broker/policy/
+git add internal/broker/policy/ internal/token/minter.go
 git commit -m "feat: the slice's file policy, refusing by name what it does not read
 
 Literal-identity subjects with a declared username, roles with readonly
-or admin, grants on all_devices. Borrowed ahead from plan 4.
+or admin, grants on all_devices. Borrowed ahead from plan 4. The
+username check is the minter's own, now exported, and a subject whose
+roles land above its max_privilege is refused.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -2202,10 +2281,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 ---
 
-### Task 8: Throwaway certificates, and a verified certificate becomes a principal
+### Task 8: Throwaway certificates, a private key only its owner can read, and a verified certificate becomes a principal
 
 **Files:**
 - Create: `internal/testpki/testpki.go`, `internal/testpki/testpki_test.go`
+- Create: `internal/keyfile/keyfile.go`, `internal/keyfile/keyfile_test.go`
 - Create: `internal/broker/identity.go`
 - Test: `internal/broker/identity_test.go`
 
@@ -2222,6 +2302,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   const LabCA, LabServerCert, LabServerKey, LabClientCert, LabClientKey = "broker-ca.pem", "broker.pem", "broker-key.pem", "client.pem", "client-key.pem"
   func WriteLab(dir, email string, now time.Time) error
   ```
+- Produces (keyfile, used by Task 10's `LoadTLS` and Task 13's `port49`; pre-flight F14):
+  `func LoadX509KeyPair(certFile, keyFile string) (tls.Certificate, error)` — `tls.LoadX509KeyPair`
+  that refuses a key file that is a symlink, not a regular file, or readable by group or other.
 - Produces (broker): `var ErrUntrusted error`;
   `func Identity(cs *tls.ConnectionState, now time.Time) (string, store.Credential, error)`.
 
@@ -2339,10 +2422,53 @@ func TestIdentity(t *testing.T) {
 }
 ```
 
+Create `internal/keyfile/keyfile_test.go`:
+
+```go
+package keyfile
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/testpki"
+)
+
+// A private key is loaded only from a regular file its owner alone can read,
+// and never through a symlink: ssh's rule for a key, and the seed-token file's
+// rule for a credential (cmd/port49d, O_NOFOLLOW).
+func TestAPrivateKeyMustBeItsOwnersAlone(t *testing.T) {
+	dir := t.TempDir()
+	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cert, key := filepath.Join(dir, testpki.LabClientCert), filepath.Join(dir, testpki.LabClientKey)
+	if _, err := LoadX509KeyPair(cert, key); err != nil {
+		t.Fatalf("a 0600 key: %v", err)
+	}
+	link := filepath.Join(dir, "link.pem")
+	if err := os.Symlink(key, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadX509KeyPair(cert, link); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("a key through a symlink: %v", err)
+	}
+	if err := os.Chmod(key, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadX509KeyPair(cert, key); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Fatalf("a group-readable key: %v", err)
+	}
+}
+```
+
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/testpki/ ./internal/broker/ -count=1`
-Expected: FAIL to build — `no non-test Go files` for both packages.
+Run: `go test ./internal/testpki/ ./internal/keyfile/ ./internal/broker/ -count=1`
+Expected: FAIL to build — `no non-test Go files` for all three packages.
 
 - [ ] **Step 3: Write `testpki`**
 
@@ -2517,7 +2643,62 @@ func serial() (*big.Int, error) {
 }
 ```
 
-- [ ] **Step 4: Write `Identity`**
+- [ ] **Step 4: Write `keyfile`**
+
+Create `internal/keyfile/keyfile.go`:
+
+```go
+// Package keyfile loads a TLS certificate and its private key, and refuses a
+// key file anyone but its owner could have read (plan 3, pre-flight F14). The
+// broker's server key and the operator's client key are both read through it.
+package keyfile
+
+import (
+	"crypto/tls"
+	"fmt"
+	"io"
+	"os"
+	"syscall"
+)
+
+// LoadX509KeyPair is tls.LoadX509KeyPair with the key file's own checks: it is
+// opened without following a symlink — whoever can plant one decides what
+// port49 loads — and it must be a regular file with no group or other
+// permission bits, which is ssh's rule for a private key.
+func LoadX509KeyPair(certFile, keyFile string) (tls.Certificate, error) {
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	keyPEM, err := readPrivate(keyFile)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.X509KeyPair(certPEM, keyPEM)
+}
+
+func readPrivate(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("keyfile: %s: %w (a symlink is refused: name the key file itself)", path, err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("keyfile: %s is not a regular file", path)
+	}
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+		return nil, fmt.Errorf("keyfile: %s is mode %v; a private key must be readable by its owner alone - "+
+			"chmod 600 it", path, perm)
+	}
+	return io.ReadAll(f)
+}
+```
+
+- [ ] **Step 5: Write `Identity`**
 
 Create `internal/broker/identity.go`:
 
@@ -2576,20 +2757,21 @@ func Identity(cs *tls.ConnectionState, now time.Time) (string, store.Credential,
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 6: Run the tests**
 
-Run: `go test ./internal/testpki/ ./internal/broker/ -count=1`
+Run: `go test ./internal/testpki/ ./internal/keyfile/ ./internal/broker/ -count=1`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add internal/testpki/ internal/broker/identity.go internal/broker/identity_test.go
+git add internal/testpki/ internal/keyfile/ internal/broker/identity.go internal/broker/identity_test.go
 git commit -m "feat: map a verified client certificate to a user: principal
 
 The one email SAN, lower-cased, checked against the broker's clock on
 every request so a certificate that expires under a held connection
-stops minting. testpki cuts the certificates tests and the lab use.
+stops minting. testpki cuts the certificates tests and the lab use;
+keyfile refuses a private key that is a symlink or readable by others.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -2617,7 +2799,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     `MintResponse{Principal, Subject string; Results []MintItem}`, `Error{Error, Detail string}`.
   - `type Broker struct { Policy *policy.Policy; Devices map[string]admission.Device; Minter *token.Minter; Store store.Store; Log decision.Emitter; Metrics *metrics.Metrics; Now func() time.Time; MaxSessionAge time.Duration; BatchMax int }`
   - `func (b *Broker) Handler() http.Handler`
-  - `func withHeldConn(ctx context.Context) context.Context` — Task 10's `ConnContext`.
+  - `func withHeldConn(ctx context.Context, at time.Time) context.Context` — Task 10's
+    `ConnContext`, which passes the accept time (pre-flight F3).
 
 - [ ] **Step 1: Write the wire types**
 
@@ -2936,7 +3119,11 @@ func TestAnUntrustedCallerIsRefused(t *testing.T) {
 			t.Fatalf("%s: %d %s", tt.name, w.Code, w.Body.String())
 		}
 	}
-	for _, m := range eventsOf(f.records(t), "mint") {
+	mints := eventsOf(f.records(t), "mint")
+	if len(mints) != 2 {
+		t.Fatalf("one refusal record per request, two requests: %v", mints)
+	}
+	for _, m := range mints {
 		if m["reason"] != "trust_domain_unresolved" {
 			t.Fatalf("only refusals: %v", m)
 		}
@@ -2951,7 +3138,7 @@ func TestAnUntrustedCallerIsRefused(t *testing.T) {
 // the next request is a new handshake.
 func TestAConnectionPastTheCeilingIsRefused(t *testing.T) {
 	f := newFixture(t, 8)
-	ctx := withHeldConn(context.Background())
+	ctx := withHeldConn(context.Background(), f.now)
 	decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""))
 	f.now = f.now.Add(12*time.Hour + time.Second)
 	w := f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, "")
@@ -2997,17 +3184,32 @@ func TestTheCandidateCapIsReportedPerItem(t *testing.T) {
 	}
 }
 
+// A malformed batch is refused whole, before any record: a device name that
+// is no inventory name — too long, or not printable ASCII — would otherwise be
+// written verbatim into the no_grants_matched record, and the log never
+// carries an unvalidated body (pre-flight F11). So is an oversized
+// Idempotency-Key, which the store would keep.
 func TestMalformedBatchesAreRefusedWhole(t *testing.T) {
 	f := newFixture(t, 8)
 	for name, body := range map[string]string{
-		"no devices":    `{"devices":[]}`,
-		"over the cap":  `{"devices":["a","b","c","d","e"]}`,
-		"unknown field": `{"devices":["leaf1"],"reusable":true}`,
-		"not json":      `devices=leaf1`,
+		"no devices":          `{"devices":[]}`,
+		"over the cap":        `{"devices":["a","b","c","d","e"]}`,
+		"unknown field":       `{"devices":["leaf1"],"reusable":true}`,
+		"not json":            `devices=leaf1`,
+		"an empty name":       `{"devices":[""]}`,
+		"a 254-byte name":     `{"devices":["` + strings.Repeat("a", 254) + `"]}`,
+		"a control character": `{"devices":["leaf1\u0007"]}`,
+		"a space":             `{"devices":["leaf 1"]}`,
 	} {
 		if w := f.post(context.Background(), f.state(f.alice), body, ""); w.Code != 400 {
 			t.Errorf("%s: %d %s", name, w.Code, w.Body.String())
 		}
+	}
+	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, strings.Repeat("k", 129)); w.Code != 400 {
+		t.Errorf("a 129-byte Idempotency-Key: %d %s", w.Code, w.Body.String())
+	}
+	if recs := f.records(t); len(recs) != 0 {
+		t.Fatalf("a malformed batch writes no record: %v", recs)
 	}
 }
 
@@ -3060,6 +3262,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -3076,6 +3279,14 @@ import (
 // maxBody bounds a mint request. A batch is capped at BatchMax device names,
 // so a megabyte is generous and an unbounded read is a memory hazard (§17).
 const maxBody = 1 << 20
+
+// maxDeviceName is a DNS name's length, and maxIdempotencyKey is generous for
+// the agent's 32 hex characters. Both bound what a caller can make the broker
+// log or store (plan 3, pre-flight F11).
+const (
+	maxDeviceName     = 253
+	maxIdempotencyKey = 128
+)
 
 // Broker is the slice's broker. Every field is required.
 type Broker struct {
@@ -3105,38 +3316,45 @@ func (b *Broker) Handler() http.Handler {
 }
 
 // heldConn is one connection's session state (design §7: on the certificate
-// path the agent's session IS the connection). authTime is stamped by the
-// first request on it, which the agent sends the moment the handshake
-// completes, and never moves (plan 3, Decided 2).
+// path the agent's session IS the connection). at is when the broker accepted
+// the connection: stamped before the handshake that follows, so never later
+// than the key's use, and it never moves. A first request's time would let a
+// client handshake, idle, and start its session's clock later (plan 3,
+// Decided 2; pre-flight F3).
 type heldConn struct {
-	once sync.Once
-	at   time.Time
+	at time.Time
 }
 
 type heldConnKey struct{}
 
-// withHeldConn gives a connection its session state. Server installs it as
-// http.Server.ConnContext, so every request on one connection shares it.
-func withHeldConn(ctx context.Context) context.Context {
-	return context.WithValue(ctx, heldConnKey{}, &heldConn{})
+// withHeldConn gives a connection its session state, authenticated at at.
+// Server installs it as http.Server.ConnContext, so every request on one
+// connection shares it.
+func withHeldConn(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, heldConnKey{}, &heldConn{at: at})
 }
 
 // authTime is when this request's connection authenticated. A request with
 // no held-connection state — a handler driven without Server — authenticated
 // now.
 func (b *Broker) authTime(r *http.Request) time.Time {
-	h, ok := r.Context().Value(heldConnKey{}).(*heldConn)
-	if !ok {
-		return b.Now()
+	if h, ok := r.Context().Value(heldConnKey{}).(*heldConn); ok {
+		return h.at
 	}
-	h.once.Do(func() { h.at = b.Now() })
-	return h.at
+	return b.Now()
 }
 
-func (b *Broker) config(w http.ResponseWriter, r *http.Request) {
-	b.authTime(r) // the agent's first request after the handshake stamps the session
+func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, api.Config{Methods: []string{"x509"},
 		MaxSessionAgeSeconds: int(b.MaxSessionAge / time.Second), BatchMax: b.BatchMax})
+}
+
+// deviceName reports whether name can be an inventory name: 1 to
+// maxDeviceName bytes of printable ASCII. Anything else is refused before it
+// can reach a record (pre-flight F11).
+func deviceName(name string) bool {
+	return name != "" && len(name) <= maxDeviceName &&
+		strings.IndexFunc(name, func(r rune) bool { return r < 0x21 || r > 0x7e }) < 0
 }
 
 func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
@@ -3178,9 +3396,21 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 			"name between 1 and %d devices per request; page a larger sweep (design §17)", b.BatchMax))
 		return
 	}
+	for _, name := range req.Devices {
+		if !deviceName(name) {
+			writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf(
+				"a device name is 1 to %d printable ASCII characters, as the inventory names it", maxDeviceName))
+			return
+		}
+	}
+	key := r.Header.Get("Idempotency-Key")
+	if len(key) > maxIdempotencyKey {
+		writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf(
+			"an Idempotency-Key is at most %d bytes", maxIdempotencyKey))
+		return
+	}
 	sum := sha256.Sum256(body)
 	bodyHash := hex.EncodeToString(sum[:])
-	key := r.Header.Get("Idempotency-Key")
 
 	resp := api.MintResponse{Principal: principal}
 	resp.Subject, _ = b.Policy.SubjectOf(principal)
@@ -3310,7 +3540,9 @@ git commit -m "feat: the broker mints per item over POST /v1/tokens
 Identity from the verified certificate on every request, policy
 resolution, one blob per hash written and emitted once, the minter for
 the tokens, idempotency by key and body, the candidate cap and the
-session ceiling as their own reasons. GET /v1/config is discovery only.
+session ceiling as their own reasons. auth_time is the connection's
+accept time. A device name or Idempotency-Key the broker could not log
+or store safely refuses the batch. GET /v1/config is discovery only.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3326,10 +3558,13 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Test: `internal/broker/server_test.go`
 
 **Interfaces:**
-- Consumes: Task 9's `Broker`, `withHeldConn`; `testpki`.
+- Consumes: Task 9's `Broker`, `withHeldConn`; `testpki`; Task 8's `keyfile.LoadX509KeyPair`.
 - Produces: `func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool) *http.Server`
-  (serve with `ServeTLS(ln, "", "")`); `func LoadTLS(certFile, keyFile, anchorFile string) (tls.Certificate, *x509.CertPool, error)`.
-  Task 11 calls both.
+  (serve with `ServeTLS(Limit(ln, MaxConns), "", "")`); `func LoadTLS(certFile, keyFile, anchorFile string) (tls.Certificate, *x509.CertPool, error)`;
+  `func Limit(ln net.Listener, n int) net.Listener`; `const MaxConns = 256`. Task 11 calls all of them.
+- Pre-flight rulings carried here: F1 (a connection with no certificate is closed when it goes
+  idle; the listener is capped), F2 (no TLS session tickets), F3 (`auth_time` stamped at accept in
+  `ConnContext`), F13 (HTTP/2 off for real), F14 (the server key through `keyfile`).
 
 - [ ] **Step 1: Give the fixture a clock the race detector accepts**
 
@@ -3371,8 +3606,10 @@ Create `internal/broker/server_test.go`:
 package broker
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -3410,10 +3647,10 @@ func clientWith(f *fixture, certs ...tls.Certificate) *http.Client {
 		Certificates: certs, RootCAs: f.ca.Pool(), MinVersion: tls.VersionTLS13}}}
 }
 
-// The agent's session is one connection (design §7): the first request after
-// the handshake stamps auth_time, and every mint on the connection carries it
-// however long after — which is what makes session_expires the handshake plus
-// max_session_age (plan 3, Decided 2).
+// The agent's session is one connection (design §7): the broker stamps
+// auth_time when it accepts the connection, and every mint on the connection
+// carries it however long after — which is what makes session_expires the
+// handshake plus max_session_age (plan 3, Decided 2).
 func TestEveryMintOnAHeldConnectionCarriesItsHandshakeTime(t *testing.T) {
 	f := newFixture(t, 8)
 	url := startServer(t, f)
@@ -3484,11 +3721,14 @@ func TestACertificateFromAnotherCAFailsTheHandshake(t *testing.T) {
 	}
 }
 
-// /v1/config needs no certificate; /v1/tokens does.
+// /v1/config needs no certificate; /v1/tokens does. Keep-alives are off: the
+// broker closes a certificate-less connection as soon as it goes idle, and a
+// pooled one would race that close.
 func TestWithoutACertificateOnlyConfigAnswers(t *testing.T) {
 	f := newFixture(t, 8)
 	url := startServer(t, f)
 	c := clientWith(f)
+	c.Transport.(*http.Transport).DisableKeepAlives = true
 	resp, err := c.Get(url + "/v1/config")
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("config without a certificate: %v %v", resp, err)
@@ -3499,6 +3739,79 @@ func TestWithoutACertificateOnlyConfigAnswers(t *testing.T) {
 		t.Fatalf("a mint without a certificate: %v %v", resp, err)
 	}
 	resp.Body.Close()
+}
+
+// A connection that presented no certificate can reach /v1/config and nothing
+// else, so it is closed the moment it goes idle rather than held for
+// max_session_age. Held, anyone who can reach the listener could pile them up
+// until port49d — which answers every device's AAA — runs out of file
+// descriptors (pre-flight F1).
+func TestACertificateLessConnectionIsClosedWhenIdle(t *testing.T) {
+	f := newFixture(t, 8)
+	url := startServer(t, f)
+	conn, err := tls.Dial("tcp", strings.TrimPrefix(url, "https://"),
+		&tls.Config{RootCAs: f.ca.Pool(), MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "GET /v1/config HTTP/1.1\r\nHost: broker\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("config without a certificate: %v %v", resp, err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, err = br.ReadByte()
+	var ne net.Error
+	if err == nil || (errors.As(err, &ne) && ne.Timeout()) {
+		t.Fatalf("the broker must close an idle connection that presented no certificate; read: %v", err)
+	}
+}
+
+// The listener holds at most n connections; the next waits in the kernel's
+// backlog until one closes (pre-flight F1).
+func TestLimitHoldsTheCap(t *testing.T) {
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := Limit(raw, 1)
+	defer ln.Close()
+	for i := 0; i < 2; i++ {
+		c, err := net.Dial("tcp", raw.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+	}
+	first, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			second <- c
+		}
+	}()
+	select {
+	case c := <-second:
+		c.Close()
+		t.Fatal("a second connection was accepted past the cap")
+	case <-time.After(200 * time.Millisecond):
+	}
+	first.Close()
+	select {
+	case c := <-second:
+		c.Close()
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing a connection must free its slot")
+	}
 }
 
 // One trust anchor, exactly: a bundle would silently widen who the email
@@ -3529,8 +3842,8 @@ func TestLoadTLSTakesExactlyOneAnchor(t *testing.T) {
 
 - [ ] **Step 3: Run them to see them fail**
 
-Run: `go test ./internal/broker/ -run 'HeldConnection|AnotherCA|WithoutACertificate|LoadTLS' -count=1`
-Expected: FAIL to build — `f.b.Server undefined`, `undefined: LoadTLS`.
+Run: `go test ./internal/broker/ -run 'HeldConnection|AnotherCA|WithoutACertificate|CertificateLess|LimitHolds|LoadTLS' -count=1`
+Expected: FAIL to build — `f.b.Server undefined`, `undefined: LoadTLS`, `undefined: Limit`.
 
 - [ ] **Step 4: Write the server**
 
@@ -3548,10 +3861,20 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
+
+	"github.com/rhwendt/port49/internal/keyfile"
 )
 
-// Server serves the broker over mutual TLS on addr; call ServeTLS(ln, "", "").
+// MaxConns caps the broker's open connections. Every agent holds one for its
+// session, so this is the operators logged in at once, with room; the cap
+// keeps a flood of connections from taking the file descriptors port49d
+// answers device AAA with (pre-flight F1).
+const MaxConns = 256
+
+// Server serves the broker over mutual TLS on addr; call
+// ServeTLS(Limit(ln, MaxConns), "", "").
 //
 // The client certificate is requested and, when given, verified against the
 // one anchor at the handshake (VerifyClientCertIfGiven): /v1/config is
@@ -3560,10 +3883,17 @@ import (
 // checks the verified certificate again on every request (Identity).
 //
 // The agent's session IS the connection (design §7; spec §13, decision 17),
-// so the server does not close one for being idle before max_session_age: an
-// operator who mints at 09:00 and again at 15:00 is on one handshake.
-// ConnContext gives each connection the state that stamps its auth_time.
-// HTTP/1.1 only, so a connection is one ordered stream of requests.
+// so the server does not close an authenticated one for being idle before
+// max_session_age: an operator who mints at 09:00 and again at 15:00 is on one
+// handshake. A connection with no certificate is closed as soon as it goes
+// idle (closeIdleWithoutCertificate). ConnContext stamps each connection's
+// auth_time at accept, before its handshake (Decided 2; pre-flight F3).
+//
+// Session tickets are off: a resumed TLS 1.3 session proves nothing about the
+// key, and every connection must be a handshake that uses it — which is what
+// makes a reconnect one more use of the key, and on plan 9's hardware key one
+// more touch (design §7; pre-flight F2). HTTP/1.1 only, enforced by a non-nil
+// TLSNextProto, so a connection is one ordered stream of requests (F13).
 //
 // The handshake verifies validity against the broker's own clock, the one
 // Identity checks per request against, so the two never disagree.
@@ -3572,17 +3902,67 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		Addr:    addr,
 		Handler: b.Handler(),
 		TLSConfig: &tls.Config{
-			MinVersion:   tls.VersionTLS13,
-			Certificates: []tls.Certificate{cert},
-			ClientCAs:    anchor,
-			ClientAuth:   tls.VerifyClientCertIfGiven,
-			NextProtos:   []string{"http/1.1"},
-			Time:         b.Now,
+			MinVersion:             tls.VersionTLS13,
+			Certificates:           []tls.Certificate{cert},
+			ClientCAs:              anchor,
+			ClientAuth:             tls.VerifyClientCertIfGiven,
+			NextProtos:             []string{"http/1.1"},
+			SessionTicketsDisabled: true,
+			Time:                   b.Now,
 		},
-		ConnContext:       func(ctx context.Context, _ net.Conn) context.Context { return withHeldConn(ctx) },
+		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		ConnContext:       func(ctx context.Context, _ net.Conn) context.Context { return withHeldConn(ctx, b.Now()) },
+		ConnState:         closeIdleWithoutCertificate,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       b.MaxSessionAge,
 	}
+}
+
+// closeIdleWithoutCertificate closes a connection that presented no client
+// certificate once it has answered its request. Such a connection can reach
+// /v1/config and nothing else, and held for max_session_age it is a file
+// descriptor anyone who can reach the listener can pin (pre-flight F1).
+func closeIdleWithoutCertificate(c net.Conn, s http.ConnState) {
+	if s != http.StateIdle {
+		return
+	}
+	if tc, ok := c.(*tls.Conn); ok && len(tc.ConnectionState().PeerCertificates) == 0 {
+		_ = c.Close()
+	}
+}
+
+// Limit caps how many connections ln holds open at once: Accept waits for a
+// free slot, and a connection's Close gives its slot back. Hand-rolled rather
+// than golang.org/x/net/netutil, because the slice takes no new dependencies.
+func Limit(ln net.Listener, n int) net.Listener {
+	return &limited{Listener: ln, slots: make(chan struct{}, n)}
+}
+
+type limited struct {
+	net.Listener
+	slots chan struct{}
+}
+
+func (l *limited) Accept() (net.Conn, error) {
+	l.slots <- struct{}{}
+	c, err := l.Listener.Accept()
+	if err != nil {
+		<-l.slots
+		return nil, err
+	}
+	return &limitedConn{Conn: c, free: func() { <-l.slots }}, nil
+}
+
+type limitedConn struct {
+	net.Conn
+	once sync.Once
+	free func()
+}
+
+func (c *limitedConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.free)
+	return err
 }
 
 // LoadTLS reads the broker's server certificate and its one client trust
@@ -3590,7 +3970,9 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 // certificate: one anchor is what pins the issuer of the email mapping
 // (Identity), and a bundle would widen it without anyone deciding to.
 func LoadTLS(certFile, keyFile, anchorFile string) (tls.Certificate, *x509.CertPool, error) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	// The server key is refused if it is a symlink or readable by anyone but
+	// its owner (keyfile; pre-flight F14).
+	cert, err := keyfile.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		return tls.Certificate{}, nil, fmt.Errorf("broker: server certificate: %w", err)
 	}
@@ -3636,8 +4018,10 @@ Expected: PASS.
 git add internal/broker/server.go internal/broker/server_test.go internal/broker/fixture_test.go
 git commit -m "feat: serve the broker over mutual TLS with the session held in the connection
 
-VerifyClientCertIfGiven against exactly one anchor, TLS 1.3, no idle
-close before max_session_age, and auth_time stamped once per connection.
+VerifyClientCertIfGiven against exactly one anchor, TLS 1.3, no session
+tickets, HTTP/1.1 only. An authenticated connection is held to
+max_session_age with auth_time stamped at accept; one with no
+certificate is closed when idle, and the listener is capped.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3654,8 +4038,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Test: `cmd/port49d/broker_test.go`
 
 **Interfaces:**
-- Consumes: `policy.Load`, `broker.LoadTLS`, `(*broker.Broker).Server`, `author.Blob`,
-  `author.Lab`, `admission.Inventory.Devices`.
+- Consumes: `policy.Load`, `broker.LoadTLS`, `(*broker.Broker).Server`, `broker.Limit`,
+  `broker.MaxConns`, `author.Blob`, `author.Lab`, `admission.Inventory.Devices`.
 - Produces: `type config.BrokerConfig struct { Listen, TLSCertFile, TLSKeyFile, ClientCAFile, PolicyFile string; BatchMax int }`
   (yaml `listen`, `tls_cert_file`, `tls_key_file`, `client_ca_file`, `policy_file`, `batch_max`);
   `config.Config.Broker *BrokerConfig` (nil: no broker);
@@ -3873,6 +4257,14 @@ func TestABrokerBuildsFromItsFiles(t *testing.T) {
 		srv.TLSConfig.MinVersion != tls.VersionTLS13 || srv.IdleTimeout != time.Hour {
 		t.Fatalf("server: %+v", srv)
 	}
+	// Every connection a full handshake that uses the key (pre-flight F2),
+	// HTTP/1.1 only (F13), and a certificate-less connection closed when idle
+	// (F1).
+	if !srv.TLSConfig.SessionTicketsDisabled || srv.TLSNextProto == nil || len(srv.TLSNextProto) != 0 ||
+		srv.ConnState == nil || srv.ConnContext == nil {
+		t.Fatalf("server hardening: tickets off %v, TLSNextProto %v, ConnState set %v",
+			srv.TLSConfig.SessionTicketsDisabled, srv.TLSNextProto, srv.ConnState != nil)
+	}
 }
 
 // Everything that can fail on a typo fails before a listener opens.
@@ -3995,7 +4387,9 @@ After the block that opens the TACACS+ listener and prints `port49d: listening o
 			<-spoolDone
 			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
 		}
-		go func() { brokerErr <- brokerSrv.ServeTLS(bln, "", "") }()
+		// Capped, so connections to the broker cannot take the file
+		// descriptors the TACACS+ listener beside it needs (pre-flight F1).
+		go func() { brokerErr <- brokerSrv.ServeTLS(broker.Limit(bln, broker.MaxConns), "", "") }()
 		fmt.Fprintf(os.Stderr, "port49d: broker listening on %s\n", brokerSrv.Addr)
 	}
 ```
@@ -4030,9 +4424,10 @@ Expected: PASS, and `make vet` prints nothing.
 git add internal/config/config.go internal/config/broker_test.go cmd/port49d/main.go cmd/port49d/broker_test.go
 git commit -m "feat: run the broker inside port49d when broker: is configured
 
-The policy file and the TLS material load before any listener opens.
-Broker-minted contexts are answered from their blob; seeded ones keep
-the lab authorizer.
+The policy file and the TLS material load before any listener opens,
+and the broker's listener is capped at broker.MaxConns. Broker-minted
+contexts are answered from their blob; seeded ones keep the lab
+authorizer.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -4057,6 +4452,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.Duration) (api.MintItem, error)
   func (a *Agent) SessionEndsAt() time.Time
   func (a *Agent) Handshakes() int64
+  func (a *Agent) Done() <-chan struct{}          // closed when the broker ends the session (F10)
   func (a *Agent) Handler() http.Handler          // POST /token, GET /status
   var ErrSessionOver, ErrNoAgent error
   type TokenRequest struct { Device string; Enable bool; TTLSeconds int }
@@ -4069,6 +4465,10 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   func (c *Client) Status(ctx context.Context) (Status, error)
   ```
   Task 13's `cmd/port49` uses all of it.
+- Pre-flight rulings carried here: F4 (the socket directory must be a real directory the user
+  owns), F9 (`Connect` logs where it is connecting and gives up after `connectTimeout`, 10s,
+  inside `port49 login`'s 15s wait), F10 (a broker `401 session_expired` or
+  `trust_domain_unresolved` ends the session: `Done` closes and the agent process exits).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4099,12 +4499,15 @@ import (
 
 // fakeBroker speaks the broker's wire format and records every mint's
 // Idempotency-Key. dropFirst hangs up on the first mint without answering;
-// expired answers every mint 401 session_expired.
+// expired answers every mint 401 session_expired; untrusted answers every
+// mint 401 trust_domain_unresolved, as the broker does once the certificate
+// has expired under the held connection.
 type fakeBroker struct {
 	mu        sync.Mutex
 	keys      []string
 	dropFirst bool
 	expired   bool
+	untrusted bool
 }
 
 func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -4114,7 +4517,7 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v1/tokens":
 		fb.mu.Lock()
 		fb.keys = append(fb.keys, r.Header.Get("Idempotency-Key"))
-		n, drop, expired := len(fb.keys), fb.dropFirst && len(fb.keys) == 1, fb.expired
+		n, drop, expired, untrusted := len(fb.keys), fb.dropFirst && len(fb.keys) == 1, fb.expired, fb.untrusted
 		fb.mu.Unlock()
 		if drop {
 			c, _, _ := w.(http.Hijacker).Hijack()
@@ -4123,6 +4526,11 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if expired {
 			writeJSON(w, 401, api.Error{Error: "session_expired"})
+			return
+		}
+		if untrusted {
+			writeJSON(w, 401, api.Error{Error: "trust_domain_unresolved",
+				Detail: "broker: no trusted client certificate: the certificate is valid 2026-09-22T00:00:00Z to 2026-09-23T00:00:00Z"})
 			return
 		}
 		var req api.MintRequest
@@ -4293,6 +4701,68 @@ func TestTheBrokersSessionExpiredEndsTheSession(t *testing.T) {
 	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
 		t.Fatalf("401 session_expired: %v", err)
 	}
+	select {
+	case <-r.a.Done():
+	default:
+		t.Fatal("the broker ending the session must close Done, so the agent exits")
+	}
+}
+
+// A certificate the broker stops trusting mid-session — expired under the
+// held connection, or revoked — ends the session: the agent answers
+// ErrSessionOver saying why, asks the broker nothing more, and Done closes so
+// the agent process exits and the next `port49 login` starts a new session
+// instead of answering "already logged in" (pre-flight F10).
+func TestAnUntrustedAnswerEndsTheSession(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.untrusted = true
+	r.fb.mu.Unlock()
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "no longer trusts") {
+		t.Fatalf("401 trust_domain_unresolved: %v", err)
+	}
+	select {
+	case <-r.a.Done():
+	default:
+		t.Fatal("Done must close")
+	}
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("an ended session: %v", err)
+	}
+	if n := len(r.fb.seen()); n != 1 {
+		t.Fatalf("an ended session must not reach the broker again: %d asks", n)
+	}
+}
+
+// A broker that accepts the TCP connection and never answers the handshake —
+// a hung process, a middlebox that swallows it — fails Connect within
+// connectTimeout, and the agent's log has already said where it was
+// connecting, so `port49 login` has a line to show rather than an empty log
+// (pre-flight F9).
+func TestConnectSaysWhereAndGivesUp(t *testing.T) {
+	// Never accepted: the kernel completes the TCP handshake from the
+	// backlog, and the TLS handshake never starts.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	defer func(d time.Duration) { connectTimeout = d }(connectTimeout)
+	connectTimeout = 200 * time.Millisecond
+	var log strings.Builder
+	url := "https://" + ln.Addr().String()
+	a := New(Config{BrokerURL: url, Log: &log})
+	start := time.Now()
+	if _, err := a.Connect(context.Background()); err == nil {
+		t.Fatal("a broker that never answers must fail Connect")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("Connect took %v; connectTimeout was 200ms", took)
+	}
+	if !strings.Contains(log.String(), "connecting to "+url) {
+		t.Fatalf("the log must say where the agent was connecting: %q", log.String())
+	}
 }
 
 // shortDir is a directory under /tmp: a unix socket path is limited to about
@@ -4332,6 +4802,20 @@ func TestTheSocketDirectoryIsPrivate(t *testing.T) {
 	}
 	if _, err := Listen(filepath.Join(wide, "agent.sock")); err == nil || !strings.Contains(err.Error(), "0700") {
 		t.Fatalf("a directory others can enter: %v", err)
+	}
+	// A symlink is refused even to a private directory: on the /tmp fallback,
+	// whoever planted it owns where the socket lands (pre-flight F4). The
+	// owner check beside it needs a second uid to test and is not tested here.
+	target := filepath.Join(base, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Listen(filepath.Join(link, "agent.sock")); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("a symlinked directory: %v", err)
 	}
 }
 
@@ -4421,9 +4905,17 @@ type Config struct {
 	Log io.Writer
 }
 
-// ErrSessionOver is a session past its ceiling, by the agent's clock or the
-// broker's. The answer is `port49 login`.
-var ErrSessionOver = errors.New("agent: the session has reached max_session_age; run `port49 login`")
+// ErrSessionOver is a session that is over: past its ceiling by the agent's
+// clock or the broker's, or holding a certificate the broker no longer
+// trusts. The answer is `port49 login`.
+var ErrSessionOver = errors.New("agent: the session is over; run `port49 login`")
+
+// connectTimeout bounds Connect: the dial and the handshake that is the
+// session's one use of the key. It is inside `port49 login`'s 15-second wait,
+// so a broker that never answers is reported through the agent's own log
+// rather than by login giving up on a silent agent (pre-flight F9). A var so
+// a test can shorten it.
+var connectTimeout = 10 * time.Second
 
 // Agent is one operator session.
 type Agent struct {
@@ -4435,6 +4927,10 @@ type Agent struct {
 
 	mu       sync.Mutex
 	deadline time.Time
+
+	// done is closed when the broker ends the session (end).
+	done    chan struct{}
+	endOnce sync.Once
 }
 
 // New builds an agent. Nothing is dialed until Connect.
@@ -4443,7 +4939,7 @@ type Agent struct {
 // concurrent asks queue on it rather than opening a second handshake. When it
 // drops, the next ask dials again, which is one more use of the key.
 func New(c Config) *Agent {
-	a := &Agent{broker: strings.TrimRight(c.BrokerURL, "/"), now: c.Now, log: c.Log}
+	a := &Agent{broker: strings.TrimRight(c.BrokerURL, "/"), now: c.Now, log: c.Log, done: make(chan struct{})}
 	if a.now == nil {
 		a.now = time.Now
 	}
@@ -4476,10 +4972,15 @@ func New(c Config) *Agent {
 }
 
 // Connect opens the session: the handshake, which is the one use of the key
-// (design §7), and GET /v1/config on the new connection, which is also what
-// stamps the broker's auth_time for it. The session ends max_session_age from
-// now, however many reconnects happen in between (plan 3, Decided 11).
+// (design §7), and GET /v1/config on the new connection. The broker stamped
+// that connection's auth_time when it accepted it. The session ends
+// max_session_age from now, however many reconnects happen in between (plan 3,
+// Decided 11). It logs where it is connecting first and gives up after
+// connectTimeout, so a broker that never answers leaves a line in the log.
 func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
+	fmt.Fprintf(a.log, "port49 agent: connecting to %s\n", a.broker)
+	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.broker+"/v1/config", nil)
 	if err != nil {
 		return api.Config{}, err
@@ -4515,11 +5016,30 @@ func (a *Agent) SessionEndsAt() time.Time {
 // Handshakes is how many connections this session has opened.
 func (a *Agent) Handshakes() int64 { return a.handshakes.Load() }
 
+// Done is closed when the broker ends the session — it answered
+// session_expired, or it no longer trusts the certificate. The agent process
+// exits on it, so the next `port49 login` starts a new session instead of
+// finding this one "already logged in" (pre-flight F10).
+func (a *Agent) Done() <-chan struct{} { return a.done }
+
+// end records why the broker ended the session and closes Done, once.
+func (a *Agent) end(why error) {
+	a.endOnce.Do(func() {
+		fmt.Fprintf(a.log, "port49 agent: the broker ended the session: %v\n", why)
+		close(a.done)
+	})
+}
+
 // Mint asks the broker for a fresh token for one device. A transport failure
 // is retried once, on a new connection, under the same Idempotency-Key, so a
 // mint whose response was lost is replayed rather than cut again (design
-// §17).
+// §17). A 401 session_expired or trust_domain_unresolved ends the session.
 func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.Duration) (api.MintItem, error) {
+	select {
+	case <-a.done:
+		return api.MintItem{}, ErrSessionOver
+	default:
+	}
 	if ends := a.SessionEndsAt(); ends.IsZero() || !a.now().Before(ends) {
 		return api.MintItem{}, ErrSessionOver
 	}
@@ -4552,8 +5072,21 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
 		_ = json.NewDecoder(resp.Body).Decode(&e)
-		if resp.StatusCode == http.StatusUnauthorized && e.Error == "session_expired" {
-			return api.MintItem{}, ErrSessionOver
+		if resp.StatusCode == http.StatusUnauthorized {
+			var over error
+			switch e.Error {
+			case "session_expired":
+				over = ErrSessionOver
+			case "trust_domain_unresolved":
+				// The certificate expired, or stopped verifying, under the
+				// held connection: nothing this session can do will mint
+				// again (spec §13, decision 12).
+				over = fmt.Errorf("%w: the broker no longer trusts this certificate (%s)", ErrSessionOver, e.Detail)
+			}
+			if over != nil {
+				a.end(over)
+				return api.MintItem{}, over
+			}
 		}
 		return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
 	}
@@ -4648,6 +5181,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
@@ -4666,22 +5200,32 @@ func SocketPath() string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("port49-%d", os.Getuid()), "agent.sock")
 }
 
-// PrivateDir makes dir at mode 0700, or accepts an existing one only at
-// exactly that mode. The directory is the socket's whole access control —
-// whoever can reach the socket can mint as this operator — so one anyone
-// else can enter is refused rather than narrowed: it may already hold
-// someone else's socket.
+// PrivateDir makes dir at mode 0700, or accepts an existing one only if it is
+// a real directory (not a symlink), at exactly that mode, owned by this user.
+// The directory is the socket's whole access control — whoever can reach the
+// socket can mint as this operator, and whoever owns the directory can swap
+// the socket for their own — so anything else is refused rather than
+// narrowed. On the /tmp fallback anyone can create /tmp/port49-<uid> first
+// (pre-flight F4).
 func PrivateDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	fi, err := os.Stat(dir)
+	fi, err := os.Lstat(dir)
 	if err != nil {
 		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("agent: %s is a symlink; the socket's directory must be a real directory you own, "+
+			"at mode 0700", dir)
 	}
 	if !fi.IsDir() || fi.Mode().Perm() != 0o700 {
 		return fmt.Errorf("agent: %s must be a directory at mode 0700, and it is %v; its mode is the socket's "+
 			"access control", dir, fi.Mode().Perm())
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("agent: %s is not owned by you (uid %d); whoever owns it can replace the socket, "+
+			"so it is refused - remove it or pass --socket", dir, os.Getuid())
 	}
 	return nil
 }
@@ -4786,8 +5330,9 @@ git commit -m "feat: an agent that holds the session and mints fresh on every as
 
 One mTLS connection per session, reconnected on a drop, retried under
 the same Idempotency-Key, and ended at the first handshake plus
-max_session_age. A unix socket in a 0700 directory is how port49 token
-reaches it.
+max_session_age or when the broker says the session or the certificate
+is over. Connect logs where it is going and gives up after 10s. A unix
+socket in a 0700 directory the user owns is how port49 token reaches it.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -4803,7 +5348,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Modify: `Makefile` (`build`)
 
 **Interfaces:**
-- Consumes: everything Task 12 produces.
+- Consumes: everything Task 12 produces, `Agent.Done` included (F10); Task 8's
+  `keyfile.LoadX509KeyPair` for the client key (F14).
 - Produces: the `port49` binary: `login` (starts `port49 agent` detached and waits for its socket),
   `token` (prints the login token on stdout, or the item with `--json`), and the internal `agent`
   subcommand `login` execs. Exit codes: 0 success, 1 refusal or failure, 2 usage. Task 14 parses
@@ -4825,8 +5371,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/testpki"
 )
 
 // fakeAgent answers the agent socket's POST /token with a fixed item, or with
@@ -4912,6 +5460,22 @@ func TestLoginRefusesWhatItCanCheckFirst(t *testing.T) {
 	if code != 2 || !strings.Contains(errb.String(), "client certificate") {
 		t.Fatalf("missing files: code %d %q", code, errb.String())
 	}
+	// A client key anyone but its owner can read is refused before anything
+	// starts (keyfile; pre-flight F14).
+	dir := t.TempDir()
+	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(dir, testpki.LabClientKey)
+	if err := os.Chmod(key, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	errb.Reset()
+	code = run([]string{"login", "--broker", "https://127.0.0.1:1", "--cert", filepath.Join(dir, testpki.LabClientCert),
+		"--key", key, "--broker-ca", filepath.Join(dir, testpki.LabCA), "--socket", sock}, &out, &errb)
+	if code != 2 || !strings.Contains(errb.String(), "chmod 600") {
+		t.Fatalf("a world-readable key: code %d %q", code, errb.String())
+	}
 }
 
 func TestUsage(t *testing.T) {
@@ -4942,7 +5506,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -4959,6 +5522,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/agent"
+	"github.com/rhwendt/port49/internal/keyfile"
 )
 
 const usage = `usage:
@@ -5007,7 +5571,9 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 	if s.broker == "" || s.cert == "" || s.key == "" || s.brokerCA == "" {
 		return agent.Config{}, errors.New("--broker, --cert, --key and --broker-ca are all required")
 	}
-	cert, err := tls.LoadX509KeyPair(s.cert, s.key)
+	// Refused if the key is a symlink or readable by anyone but its owner
+	// (keyfile; pre-flight F14).
+	cert, err := keyfile.LoadX509KeyPair(s.cert, s.key)
 	if err != nil {
 		return agent.Config{}, fmt.Errorf("loading the client certificate: %w", err)
 	}
@@ -5088,7 +5654,9 @@ func login(args []string, stdout, stderr io.Writer) int {
 }
 
 // agentMain is the agent process: open the session, serve the socket, and
-// exit at the session's end or on a signal.
+// exit at the session's end, when the broker ends it (Agent.Done: an expired
+// session or a certificate it no longer trusts; pre-flight F10), or on a
+// signal.
 func agentMain(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 agent", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -5127,6 +5695,9 @@ func agentMain(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 agent: signal received; exiting")
 	case <-timer.C:
 		fmt.Fprintln(stderr, "port49 agent: the session reached max_session_age; exiting - run `port49 login` to start another")
+	case <-a.Done():
+		// The agent logged the broker's reason on the line before this one.
+		fmt.Fprintln(stderr, "port49 agent: exiting - run `port49 login` to start another session")
 	}
 	_ = srv.Close()
 	return 0
@@ -5214,7 +5785,8 @@ git commit -m "feat: port49 login and port49 token
 
 login starts the agent detached and waits for its socket; token mints
 through it and prints the login token on stdout, or the whole answer
-with --json.
+with --json. The client key must be its owner's alone, and the agent
+exits when the broker ends the session.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -5638,6 +6210,8 @@ sudo -n setcap cap_net_bind_service=+ep bin/port49d
 sudo -n containerlab deploy -t tests/lab/topologies/<eos|iosxe>.clab.yml
 # the daemon config: the lab file, plus the broker block where the run needs a broker
 cat tests/lab/port49d-lab.yaml tests/lab/slice/broker.yaml > tests/lab/logs/port49d-byhand.yaml
+# a broker run only: its certificates, written before the daemon that loads them at start
+go run ./tests/lab/cmd/slice-pki
 PORT49_LAB_KEY=labsecret PORT49_LAB_ENC_KEY=port49-lab-encryption-key-32byte \
   bin/port49d -config tests/lab/logs/port49d-byhand.yaml \
   > tests/lab/logs/decisions-byhand.jsonl 2> tests/lab/logs/port49d-byhand.log &
@@ -5702,7 +6276,11 @@ slice did not expect, write that down (the note, or a comment on the PR) before 
 - [ ] **Step 3: Confirm it is torn down and the evidence is clean**
 
 Run: `sudo -n containerlab inspect --all; ls tests/lab/evidence/ | grep slice; go run ./tests/lab/cmd/redact-pcap -scan`
-Expected: no lab; `slice-arista_eos.pcap`; the scan passes.
+Expected: no lab; `slice-arista_eos.pcap`; the scan passes. The redactor blanks every credential
+field by its position in the packet, whoever minted what is in it, but it proves the result only
+against the seed tokens it can read: the two broker-minted tokens are not in that file. The proof
+for them is `TestSliceEndToEnd`'s own check that neither token is in the decision log, and Step 4's
+scan of the note (pre-flight F19, accepted).
 
 - [ ] **Step 4: Read the note before committing it**
 
@@ -5731,9 +6309,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 ### Task 16: Lab, by hand — the eAPI `/login` flow on vEOS (L7)
 
-**Platform:** vEOS only, one deploy, destroyed at the end. **Measures:** L7's last open clause:
-whether eAPI's `/login` session cookie changes how many TACACS+ authentications a sequence of API
-requests costs. Every other L7 clause is measured (`tests/lab/results/L7-arista_eos.md`).
+**Platform:** vEOS only, one deploy, destroyed at the end. **Measures:** the eAPI half of L7's
+cookie clause: whether eAPI's `/login` session cookie changes how many TACACS+ authentications a
+sequence of API requests costs. Every other L7 clause but one is measured
+(`tests/lab/results/L7-arista_eos.md`); the other half of the cookie clause, NX-API's `nxapi_auth`
+cookie, is not measured here, so L7 stays open whatever this finds (lab register rule 3; pre-flight
+F6; Task 18).
 
 The questions, each answered off the decision log and the capture, never inferred from an HTTP
 status alone:
@@ -5746,10 +6327,10 @@ status alone:
 - [ ] **Step 1: Bring it up by hand**
 
 Follow `tests/lab/README.md` "The vertical slice", "By hand", with `eos` and note name
-`L7-login-arista_eos`, the broker block included. Then:
+`L7-login-arista_eos`, the broker block included — which runs `slice-pki` before the daemon
+starts, so the broker loads this run's certificates (pre-flight F5). Then:
 
 ```bash
-go run ./tests/lab/cmd/slice-pki
 bin/port49 login --broker https://127.0.0.1:8449 --cert tests/lab/logs/slice-pki/client.pem \
   --key tests/lab/logs/slice-pki/client-key.pem --broker-ca tests/lab/logs/slice-pki/broker-ca.pem
 # wait for breakglass to log in: the device is up
@@ -5825,7 +6406,8 @@ Create `tests/lab/results/L7-login-arista_eos.md` in the shape `(*lab).result` w
 ## Claim
 
 Whether eAPI's `/login` session cookie changes how many TACACS+ authentications a sequence of API
-requests costs (spec §15, L7, the row's last open clause).
+requests costs (spec §15, L7, the eAPI half of the row's cookie clause; NX-API's `nxapi_auth`
+cookie is not measured here).
 
 ## Observation
 ```
@@ -5975,35 +6557,35 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 **Files:**
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§15 rows L1 and L7, and their detail
   paragraphs)
-- Modify: `docs/design/2026-08-21-port49-design.md` (§19 step 2's last sentence, if L7 closes)
 - Modify: `docs/superpowers/plans/README.md` (plan 3's lab line)
 
 The values below come from the two notes. `<DATE>` is the note's "Date measured"; nothing is
-written that the note does not say (`CLAUDE.md`, lab register rule 1).
+written that the note does not say (`CLAUDE.md`, lab register rule 1). **Neither row closes in this
+plan** (pre-flight F6): L7 covers EOS and NX-OS, and NX-API's `nxapi_auth` cookie stays
+unmeasured, so by lab register rule 3 — a row with one platform measured and others open stays
+open — L7 stays open, and decision 15 stays provisional on it; L1 stays open on the console. The
+design's §19 step 2 sentence, "Reusable tokens are built here but stay provisional until L7
+closes" (Task 1), is therefore left as it is.
 
-- [ ] **Step 1: L7 — close it, or say why not**
+- [ ] **Step 1: L7 — record the eAPI `/login` measurement; the row stays open**
 
-L7 closes when `tests/lab/results/L7-login-arista_eos.md` answers questions 1 and 2 from decision
-records (whichever way the device behaved). Then replace the L7 row's Status cell with:
+If `tests/lab/results/L7-login-arista_eos.md` answers questions 1 and 2 from decision records
+(whichever way the device behaved), replace the L7 row's Status cell with:
 
 ```markdown
-closed — measured <DATE>; `tests/lab/results/L7-arista_eos.md`, `L7-cisco_nxos.md`, `L7-login-arista_eos.md`. Per-request HTTP Basic measured 2026-09-20 on both; the eAPI `/login` cookie flow measured <DATE> by hand: <the note's answer to question 2, one clause>; see below
+open — eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. The eAPI `/login` cookie flow measured <DATE> by hand on vEOS (`tests/lab/results/L7-login-arista_eos.md`): <the note's answer to question 2, one clause>. Open: NX-API's `nxapi_auth` cookie, unmeasured, so the row stays open (lab register rule 3); see below
 ```
 
-In the "- **L7**" detail paragraph, append a paragraph beginning `**The \`/login\` cookie flow,
+In the "- **L7**" detail paragraph, append a paragraph beginning `**The eAPI \`/login\` cookie flow,
 measured <DATE> by hand** (\`tests/lab/results/L7-login-arista_eos.md\`).` that carries the note's
-table and its three answers, and in the row's *Unmeasured* sentence delete the words `the \`/login\`
+table and its three answers. In the row's *Unmeasured* sentence, replace the words `the \`/login\`
 session-cookie flow, which this row names explicitly and which is the obvious way a device would
-avoid re-authenticating;`. If a clause the note answers contradicts text elsewhere in the row, fix
-the text and say so in the commit message (`CLAUDE.md`, rule 4).
+avoid re-authenticating;` with `the NX-API \`nxapi_auth\` cookie, the other half of the cookie clause
+this row names, and the one that keeps it open;`. If a clause the note answers contradicts text
+elsewhere in the row, fix the text and say so in the commit message (`CLAUDE.md`, rule 4).
 
-Then in the design, §19 step 2, replace `Reusable tokens are built here but stay provisional until
-L7 closes in step 3.` with `The sliding receipt that replaced reusable tokens (policy engine spec,
-§13, decision 15) was provisional on L7, which closed <DATE>.`
-
-If the note says `/login` could not be measured, do none of that: append to the L7 Status cell `;
-the \`/login\` flow was attempted <DATE> and not measured — \`tests/lab/results/L7-login-arista_eos.md\``
-and leave the row open.
+If the note says `/login` could not be measured, instead append to the L7 Status cell `; the eAPI
+\`/login\` flow was attempted <DATE> and not measured — \`tests/lab/results/L7-login-arista_eos.md\``.
 
 - [ ] **Step 2: L1 — record RESTCONF, keep the row open**
 
@@ -6014,8 +6596,9 @@ and IOS-XE's NETCONF unmeasured`, and in the "Per transport on vEOS" paragraph o
 the sentence `On IOS-XE, RESTCONF reports \`<the note's authentication port>\` at authentication and
 \`<its authorization port>\` at authorization (<unique / not unique> across two concurrent
 requests); \`tests/lab/results/L1-restconf-cisco_iosxe.md\`.` and remove `every non-SSH transport on
-IOS-XE (this lab does not configure RESTCONF or NETCONF-YANG AAA there)` from the *Unmeasured* line,
-replacing it with `NETCONF-YANG on IOS-XE`. If Step 3 of Task 17 stopped, add only
+IOS-XE (this lab does not configure RESTCONF or NETCONF-YANG AAA there)` from the *Unmeasured* line
+(it wraps across two lines in the file), replacing it with `NETCONF-YANG on IOS-XE`. If Step 3 of
+Task 17 stopped, add only
 `; IOS-XE RESTCONF attempted <DATE>, not reachable from the host — \`tests/lab/results/L1-restconf-cisco_iosxe.md\``
 to the Status cell.
 
@@ -6024,22 +6607,26 @@ to the Status cell.
 In `docs/superpowers/plans/README.md`, at the end of the "## Plan 3" section, add:
 
 ```markdown
-**Lab, as run:** the slice end to end on vEOS (`tests/lab/results/slice-arista_eos.md`); L7
-<closed | still open> on the `/login` measurement (`L7-login-arista_eos.md`); L1's RESTCONF clause
-<measured | attempted> on IOS-XE (`L1-restconf-cisco_iosxe.md`), and L1 open on the console.
+**Lab, as run:** the slice end to end on vEOS (`tests/lab/results/slice-arista_eos.md`); L7's eAPI
+`/login` clause <measured | attempted> on vEOS (`L7-login-arista_eos.md`), and L7 still open on
+NX-API's `nxapi_auth` cookie (lab register rule 3), with decision 15 provisional on it; L1's
+RESTCONF clause <measured | attempted> on IOS-XE (`L1-restconf-cisco_iosxe.md`), and L1 open on the
+console.
 ```
 
 - [ ] **Step 4: Check and commit**
 
-Run: `grep -n 'L7-login-arista_eos\|L1-restconf-cisco_iosxe' docs/design/2026-08-23-policy-engine-spec.md docs/superpowers/plans/README.md`
-Expected: the new pointers, in the rows and paragraphs named above.
+Run: `grep -n 'L7-login-arista_eos\|L1-restconf-cisco_iosxe' docs/design/2026-08-23-policy-engine-spec.md docs/superpowers/plans/README.md && grep -n '^| \*\*L7\*\* .*| open — ' docs/design/2026-08-23-policy-engine-spec.md`
+Expected: the new pointers, in the rows and paragraphs named above, and the L7 row still `open`.
 
 ```bash
-git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md docs/superpowers/plans/README.md
-git commit -m "docs: close lab register entry L7; record L1's RESTCONF clause
+git add docs/design/2026-08-23-policy-engine-spec.md docs/superpowers/plans/README.md
+git commit -m "docs: record lab register measurements for L1 and L7
 
-L7's last clause, the eAPI /login cookie flow, measured on vEOS:
-tests/lab/results/L7-login-arista_eos.md. L1 gains IOS-XE RESTCONF
+L7's eAPI /login cookie flow measured on vEOS by hand:
+tests/lab/results/L7-login-arista_eos.md. L7 stays open on NX-API's
+nxapi_auth cookie (lab register rule 3), and decision 15 stays
+provisional on it. L1 gains IOS-XE RESTCONF
 (tests/lab/results/L1-restconf-cisco_iosxe.md) and stays open on the
 console.
 
@@ -6047,12 +6634,11 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ```
 
-(If L7 did not close, the subject is `docs: record lab register measurements for L1 and L7`, and
-the body says which clause stayed unmeasured and why.)
+(If a note records an attempt rather than a measurement, the body says which clause stayed
+unmeasured and why.)
 
 ---
 
-## Self-review
 
 **Roadmap coverage**
 
@@ -6107,6 +6693,19 @@ Task 13 is where `make build` starts building `bin/port49`; Task 14's lab test f
 it. Tasks 15–17 are one platform each, idle-checked first and destroyed after; a lab FAIL is a
 finding to write down before any code changes.
 
+**Pre-flight rulings, and where each lives** (ledger, "Rulings on pre-flight findings"): F1
+certificate-less connections closed when idle, and `broker.Limit` — Tasks 10, 11; F2 no session
+tickets — 10, 11; F3 `auth_time` at accept — Decided 2, Tasks 9, 10, 12; F4 the socket directory's
+owner and no symlink — 12; F5 `slice-pki` before the by-hand daemon — 14, 16; F6 L7 stays open —
+Tasks 1, 16, 18; F7 `CLAUDE.md` is not edited — the PR's operator notes below; F8 the file key's
+reconnect gap — Question 1, Decided 11, the PR notes; F9 `Connect` logs and times out at 10s — 12;
+F10 the broker ending the session ends the agent — 12, 13; F11 device-name and key bounds — 9; F12
+`token.CanonicalUsername` — 6; F13 HTTP/1.1 enforced — 10, 11; F14 `internal/keyfile` — 8, 10, 13;
+F15 the refusal test counts its records — 9; F16 the race-loser comment — 2; F17 a ceiling below
+the landing level refused at load — 6; F18 the unmetered `GetBlob` noted — 5; F19 the redactor's
+proof — 15. Task 10's `TestWithoutACertificateOnlyConfigAnswers` turns keep-alives off because
+F1's close would otherwise race the pooled connection.
+
 **Unmeasured, and not relied on:** what IOS-XE does with a session reply carrying no attributes
 (Question 2; the slice mints there but the lab never logs in there with a broker token); what `port`
 IOS-XE's RESTCONF carries (Task 17 measures it; no code reads it); whether any device honours an
@@ -6130,5 +6729,12 @@ and `port49 token` and where the agent's socket and log live; the `broker:` bloc
 (Question 3); the policy file's format and what it refuses; the new reason `candidate_cap_reached`
 and the widened `session_expired` and `credential_revoked`; that a login into a revoked result,
 and its retransmission, now answer FAIL `credential_revoked`; that broker-minted sessions on
-platforms other than `arista_eos` get no session attributes (Question 2); and the three lab notes
-with what each found.
+platforms other than `arista_eos` get no session attributes (Question 2); that the agent stops
+minting at the first handshake plus `max_session_age`, but a session minted after a silent
+file-key reconnect can outlive that by up to one more `max_session_age` until plan 9's hardware key
+(Question 1; pre-flight F8); that the agent exits when the broker stops trusting its certificate,
+and a key file must be its owner's alone; that the broker listener holds at most
+`broker.MaxConns` connections and drops a certificate-less one once it has answered; the three lab
+notes with what each found, and that L7 stays open on NX-API's cookie; and, **for Ryan**, that
+`CLAUDE.md`'s "The vertical slice is where lab entries L4 and L7 close" is stale — L3 closed
+earlier, L4 and L7 stay open — and is his to correct (pre-flight F7).
