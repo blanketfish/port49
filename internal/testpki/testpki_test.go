@@ -3,6 +3,7 @@ package testpki
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,5 +72,35 @@ func TestWriteLabTightensAnExistingSet(t *testing.T) {
 		if fi.Mode().Perm() != want {
 			t.Fatalf("%s is %v, want %v", path, fi.Mode().Perm(), want)
 		}
+	}
+}
+
+// The new key never lands in the old file: a reader that opened a loose key
+// left by an earlier run, before WriteLab tightened anything, must not read
+// the new key through that open file (T8 review, parked).
+func TestWriteLabNeverWritesTheNewKeyIntoAnOldLooseFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, LabClientKey)
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := WriteLab(dir, "alice@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "old" {
+		t.Fatalf("a file opened while loose now reads %d bytes of the new key", len(got))
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("the new key: %v %v", fi, err)
 	}
 }

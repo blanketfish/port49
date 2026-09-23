@@ -13,7 +13,9 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math/big"
 	"net"
 	"os"
@@ -131,8 +133,9 @@ const (
 // (for 127.0.0.1), and one client certificate for email. Everything is valid
 // for a day from now. Keys are 0600.
 func WriteLab(dir, email string, now time.Time) error {
-	// MkdirAll and WriteFile keep an existing mode; a set left loose by an
-	// earlier run is tightened, not inherited.
+	// MkdirAll keeps an existing mode; a directory left loose by an earlier
+	// run is tightened, not inherited. The files are written fresh
+	// (writeFresh).
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -165,15 +168,30 @@ func WriteLab(dir, email string, now time.Time) error {
 		files[l.cert], files[l.key] = c, k
 	}
 	for name, body := range files {
-		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, body, 0o600); err != nil {
-			return fmt.Errorf("testpki: %s: %w", name, err)
-		}
-		if err := os.Chmod(path, 0o600); err != nil {
+		if err := writeFresh(filepath.Join(dir, name), body); err != nil {
 			return fmt.Errorf("testpki: %s: %w", name, err)
 		}
 	}
 	return nil
+}
+
+// writeFresh writes body to a new 0600 file at path, removing whatever was
+// there first. os.WriteFile would truncate an existing file and keep its mode,
+// so a key left loose by an earlier run would hold the new key, if only until
+// a chmod, and any reader that already had it open could read it.
+func writeFresh(path string, body []byte) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(body); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func serial() (*big.Int, error) {
