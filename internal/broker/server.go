@@ -96,23 +96,40 @@ func closeIdleWithoutCertificate(c net.Conn, s http.ConnState) {
 // Limit caps how many connections ln holds open at once: Accept waits for a
 // free slot, and a connection's Close gives its slot back. Hand-rolled rather
 // than golang.org/x/net/netutil, because the slice takes no new dependencies.
+//
+// Close wakes an Accept that is waiting for a slot. http.Server's Shutdown
+// closes the listener and then waits, ignoring its context, for Serve to
+// return; with every slot held by an authenticated connection (held for
+// max_session_age), Serve would sit in Accept and port49d would hang on
+// SIGTERM with its accounting spool undrained (final review, Important 1).
 func Limit(ln net.Listener, n int) net.Listener {
-	return &limited{Listener: ln, slots: make(chan struct{}, n)}
+	return &limited{Listener: ln, slots: make(chan struct{}, n), done: make(chan struct{})}
 }
 
 type limited struct {
 	net.Listener
-	slots chan struct{}
+	slots     chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func (l *limited) Accept() (net.Conn, error) {
-	l.slots <- struct{}{}
+	select {
+	case l.slots <- struct{}{}:
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
 	c, err := l.Listener.Accept()
 	if err != nil {
 		<-l.slots
 		return nil, err
 	}
 	return &limitedConn{Conn: c, free: func() { <-l.slots }}, nil
+}
+
+func (l *limited) Close() error {
+	l.closeOnce.Do(func() { close(l.done) })
+	return l.Listener.Close()
 }
 
 type limitedConn struct {

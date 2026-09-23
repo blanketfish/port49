@@ -224,6 +224,100 @@ func TestLimitHoldsTheCap(t *testing.T) {
 	}
 }
 
+// With every slot held by an authenticated connection, which is never closed
+// for idling before max_session_age, Shutdown must still return within its
+// context. Serve waits in Accept for a slot; closing the listener has to wake
+// it, or port49d hangs on SIGTERM and its accounting spool is never drained
+// (final review, Important 1).
+func TestShutdownReturnsWithEverySlotHeld(t *testing.T) {
+	f := newFixture(t, 8)
+	now := f.b.Now()
+	srvCert, err := f.ca.Issue(testpki.Leaf{CommonName: "broker", IPs: []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(48 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := f.b.Server("127.0.0.1:0", srvCert, f.ca.Pool())
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const slots = 2
+	served := make(chan struct{})
+	go func() { _ = srv.ServeTLS(Limit(raw, slots), "", ""); close(served) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	for i := 0; i < slots; i++ {
+		conn, err := tls.Dial("tcp", raw.Addr().String(), &tls.Config{Certificates: []tls.Certificate{f.alice},
+			RootCAs: f.ca.Pool(), MinVersion: tls.VersionTLS13})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := io.WriteString(conn, "GET /v1/config HTTP/1.1\r\nHost: broker\r\n\r\n"); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("config on held connection %d: %v %v", i, resp, err)
+		}
+		resp.Body.Close()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	shut := make(chan error, 1)
+	go func() { shut <- srv.Shutdown(ctx) }()
+	select {
+	case <-shut:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Shutdown with a 500ms context was still blocked after 5s with every slot held")
+	}
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after Shutdown")
+	}
+}
+
+// Closing a limited listener wakes an Accept waiting for a slot, with
+// net.ErrClosed, which is how http.Server knows Serve is done.
+func TestClosingALimitedListenerWakesAnAcceptWaitingForASlot(t *testing.T) {
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := Limit(raw, 1)
+	c, err := net.Dial("tcp", raw.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	first, err := ln.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	woke := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if c != nil {
+			c.Close()
+		}
+		woke <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-woke:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Accept after Close: %v, want net.ErrClosed", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not wake an Accept waiting for a slot")
+	}
+}
+
 // One trust anchor, exactly: a bundle would silently widen who the email
 // mapping trusts (design §7, weak mappings are issuer-pinned).
 func TestLoadTLSTakesExactlyOneAnchor(t *testing.T) {
