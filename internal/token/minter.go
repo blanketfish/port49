@@ -47,11 +47,12 @@ func asciiUsername(u string) bool {
 	return true
 }
 
-// canonicalUsername is the invariant, not just the character set: printable
+// CanonicalUsername is the invariant, not just the character set: printable
 // ASCII AND unchanged by canonicalization. The ASCII half alone would admit
 // `@` and `\`, which are 0x21–0x7E and are exactly the two rewrites a
-// directory-backed deployment hits every day.
-func canonicalUsername(u string) bool { return asciiUsername(u) && username.Canonical(u) == u }
+// directory-backed deployment hits every day. Exported so the broker's policy
+// load refuses the same names the mint would, with one definition of them.
+func CanonicalUsername(u string) bool { return asciiUsername(u) && username.Canonical(u) == u }
 
 // ErrTooManyOutstanding is the candidate-set cap: this many unspent tokens
 // already stand for one (device, username). It names the count so the operator
@@ -139,7 +140,7 @@ func NewMinter(s store.Store, e decision.Emitter, r io.Reader, tagKey []byte, no
 // minting, clamps the TTL to the subject's maximum, and emits one `mint`
 // record naming each token by hash alone.
 func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
-	if !canonicalUsername(r.Subject.Username) {
+	if !CanonicalUsername(r.Subject.Username) {
 		return Result{}, ErrUsernameNotCanonical
 	}
 	// idemErr names what a lost idempotency record cost, carried onto the mint
