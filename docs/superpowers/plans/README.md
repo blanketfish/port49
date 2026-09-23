@@ -189,6 +189,11 @@ most of the idle-gap problem the client matrix showed (L15), and the bounds are 
 rather than the answer. **Lab:** the API-transport half of L1 and the eAPI `/login` flow by
 hand.
 
+**Lab, as run:** the slice end to end on vEOS (`tests/lab/results/slice-arista_eos.md`); L7's eAPI
+`/login` clause measured on vEOS (`L7-login-arista_eos.md`), and L7 still open on NX-API's
+`nxapi_auth` cookie (lab register rule 3), with decision 15 provisional on it; L1's RESTCONF
+clause measured on IOS-XE (`L1-restconf-cisco_iosxe.md`), and L1 open on the console.
+
 ## Plan 4 — Policy engine (§19 step 4)
 
 Spec §3 (normalization), §4 (grammar, pipeline stages), §5.1–§5.5 (mint resolution, blob

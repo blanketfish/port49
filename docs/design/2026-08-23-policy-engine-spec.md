@@ -4126,13 +4126,13 @@ implemented against a guess. This section is the one place the distinction is ke
 
 | ID | Claim to measure | What rests on it | Platforms | Status |
 |---|---|---|---|---|
-| **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE and the console unmeasured; see below |
+| **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE's RESTCONF measured 2026-09-23 (`tests/lab/results/L1-restconf-cisco_iosxe.md`); the console and IOS-XE's NETCONF unmeasured; see below |
 | **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below |
 | **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | closed — measured 2026-09-21; `tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`, `L3-nxos-cisco_nxos.md`. Scope: NX-OS 10.x has no enable exchange (`feature privilege` was removed in 10.x; the owner confirmed the same on production Nexus 9000 hardware running 10.3(5)); NX-OS 9.x and earlier are unmeasured and out of scope. No measured image sends `$enab{level}$`. History: closed in error 2026-09-20 on a note with no transcript, reopened 2026-09-21. Measured: vEOS-lab 4.31.2F (image tagged 4.32.2F) and IOS-XE 17.13.01a both send the operator's own username with `service=enable` and a bare-address `rem_addr` (`tests/lab/results/L3-arista_eos.md`, re-measured 2026-09-22, which is where the image tag was found to overstate the running version; `L3-cisco_iosxe.md`). **NX-OS re-measured 2026-09-21 with the transcript it was missing** (`tests/lab/results/L3-nxos-cisco_nxos.md`): `disable`, `enable` and `enable 15` were each typed separately and each answered `% Invalid command at '^' marker.`, and `feature privilege` is itself refused by this image, so the conclusion the reopened note reached without evidence is confirmed with it |
 | **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS and the N9Kv over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS and the N9Kv never do; `deadtime`, IOS-XE, other transports and authorization fall-through unmeasured. **2026-09-21 (L17):** committing `tacplus-options strict-authorization` on both Junos images changes none of the unreachable-server cells — break-glass still logged in under both orders with port49d down — so making a port49 denial binding does not cost the fall-through this row measures; see below |
 | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | closed — measured 2026-09-20; `tests/lab/results/L5-arista_eos.md`, `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, `L5-cisco_nxos.md`, `L5-cisco_iosxe.md`. No image sends a WATCHDOG over a 2m30s idle interactive session under the lab's accounting config, which sets no periodic update; a device configured for periodic updates is outside what was measured |
 | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
-| **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open — eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. The `/login` cookie flow, which this row also names, is still unmeasured, and it is the only clause left open; see below |
+| **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open — eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. The eAPI `/login` cookie flow measured 2026-09-23 by hand on vEOS (`tests/lab/results/L7-login-arista_eos.md`): a request carrying the cookie runs no authentication and no session authorization, only its command authorization and an accounting stop. Open: NX-API's `nxapi_auth` cookie, unmeasured, so the row stays open (lab register rule 3); see below |
 | **L8** | The maximum password length each platform accepts at an interactive prompt. (PAP was split out to L19 on 2026-09-23.) | The 30-character handle (design document §8) | all | closed — measured 2026-09-23; `tests/lab/results/L8-cisco_nxos.md`, `L8-cisco_iosxe.md`; and 2026-09-20, `L8-arista_eos.md`, `L8-juniper_vjunos-router.md`, `L8-juniper_vsrx.md`. The 30-character handle logs in on all five images. Longest intact: **127 on the N9Kv**, which refuses 128 and above locally and never asks port49; at least 1024 on IOS-XE; at least 138 on vEOS and both Junos images, where nothing longer was tried; see below |
 | **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. | Projection generator constraints (§8) | Junos | open |
 | **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos. **Reading 3's conclusion is corrected by L17 (2026-09-21):** a denied Junos session authorization is advisory under the configuration this lab deploys, not on this vendor — `tacplus-options strict-authorization` makes the same denial refuse the login; see below |
@@ -4210,15 +4210,19 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   Per transport on vEOS: SSH `ssh`, eAPI **`command-api`**, NETCONF **`NETCONF`** — three distinct constants,
   so `port` does tell the transports apart even though it cannot tell two sessions apart. On the N9Kv,
-  NX-API and NETCONF both report `0`, the same value SSH reports.
+  NX-API and NETCONF both report `0`, the same value SSH reports. On IOS-XE, RESTCONF reports
+  `""` (empty) at authentication and `""` (empty) at authorization (not unique across two
+  concurrent requests, which differed only by username); the START's and the REQUEST's byte
+  lengths leave no room for a `port`, so the device sent it empty.
+  `tests/lab/results/L1-restconf-cisco_iosxe.md`.
   `tests/lab/results/L1-arista_eos.md`, `L1-juniper_vjunos-router.md`, `L1-juniper_vsrx.md`,
   `L1-cisco_nxos.md`, `L1-cisco_iosxe.md`, `L7-arista_eos.md`, `L7-cisco_nxos.md`,
   `netconf-arista_eos.md`.
   *Unmeasured:* the console transport — though one incidental observation exists for IOS-XE,
   where a command typed at the serial console reported `port="tty0" rem_addr="async"` against
   `tty434`/`172.100.100.1` for a vty, so that platform distinguishes the console by `port` as
-  vEOS distinguishes eAPI; NETCONF on the N9Kv beyond the authentication; and every non-SSH
-  transport on IOS-XE (this lab does not configure RESTCONF or NETCONF-YANG AAA there).
+  vEOS distinguishes eAPI; NETCONF on the N9Kv beyond the authentication; and NETCONF-YANG on
+  IOS-XE.
 - **L2** — EOS 2026-09-17: the 61-character `server_msg` was displayed to the operator in full.
   `tests/lab/results/L2-arista_eos.md`. Not applicable on Junos, which sends no per-command
   REPLY (decision 21).
@@ -4690,9 +4694,40 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   What the repeat then got is the finding decision 15 actually turns on, and it is in L15 below.
 
-  *Unmeasured:* the `/login` session-cookie flow, which this row names explicitly and which is the obvious
-  way a device would avoid re-authenticating; HTTP keep-alive; the NX-API JSON-RPC dialect, which is a
-  different code path on the device from `ins_api`; the unix-socket and plain-HTTP eAPI transports.
+  **The eAPI `/login` cookie flow, measured 2026-09-23 by hand**
+  (`tests/lab/results/L7-login-arista_eos.md`). vEOS-lab 4.31.2F (image tagged 4.32.2F), one
+  token minted by the slice's broker, `POST /login`, three `POST /command-api` requests carrying
+  the cookie 23s apart, `POST /logout`, then the cookie once more. Counts are from port49's
+  decision log and the capture.
+
+  | request | redeem | authorize_session | authorize_command | account | port | rem_addr |
+  |---|---|---|---|---|---|---|
+  | `POST /login` | 1 | 1 | 0 | 1 (start, task_id 1) | `command-api` | `172.100.100.1` |
+  | `POST /command-api` `p49-1` | 0 | 0 | 1 | 1 (stop, task_id 9) | `command-api` | `172.100.100.1` |
+  | `POST /command-api` `p49-2` | 0 | 0 | 1 | 1 (stop, task_id 10) | `command-api` | `172.100.100.1` |
+  | `POST /command-api` `p49-3` | 0 | 0 | 1 | 1 (stop, task_id 11) | `command-api` | `172.100.100.1` |
+  | `POST /logout` | 0 | 0 | 0 | 1 (stop, task_id 1) | `command-api` | `172.100.100.1` |
+  | `POST /command-api` `p49-after` | 0 | 0 | 0 | 0 | — | — |
+
+  1. **`POST /login` runs one TACACS+ authentication** (`redeem token_redeemed`, `auth.method`
+     `ascii`, `port` `command-api`, `rem_addr` `172.100.100.1`), then a session authorization
+     and an exec accounting start.
+  2. **A request carrying the cookie does not authenticate again**, and does not authorize the
+     session again: one command authorization (`permit_dominates`) and one accounting stop each,
+     the same for all three requests, 23s and 46s after the first.
+  3. **After `/logout` the device refuses the cookie itself**, `HTTP/1.1 401 Unauthorized` /
+     `Unable to authenticate user: Bad session Id`, and sends port49d nothing for it; the only
+     record in that step is `/logout`'s own accounting stop.
+
+  This is the measured confirmation, for eAPI, that the table above is an upper bound: with a
+  cookie, one authentication and one session authorization cover every later request, and the
+  single-use token is spent once, at `/login`. Every record carried one `ctx_id`.
+
+  *Unmeasured:* the NX-API `nxapi_auth` cookie, the other half of the cookie clause this row
+  names, and the one that keeps it open; an eAPI cookie used past `receipt_idle_ttl` or past its
+  own `Expires` (24h); a denied command under a cookie; two cookie sessions from one token; HTTP
+  keep-alive; the NX-API JSON-RPC dialect, which is a different code path on the device from
+  `ins_api`; the unix-socket and plain-HTTP eAPI transports.
 - **L14** — 2026-09-20. `tests/lab/results/netconf-arista_eos.md`,
   `netconf-juniper_vjunos-router.md`, `netconf-juniper_vsrx.md`, `netconf-cisco_nxos.md`.
 
