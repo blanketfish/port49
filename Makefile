@@ -2,6 +2,7 @@
 
 build:
 	go build -o bin/port49d ./cmd/port49d
+	go build -o bin/port49 ./cmd/port49
 
 test:
 	go test ./... -count=1
