@@ -165,8 +165,17 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 		return nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
 			cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile, err)
 	}
+	// The broker mints by name, and a token redeems on any device the name
+	// tags. Two entries sharing one would collapse, last wins: a blob compiled
+	// for one platform would be answered on the other, sending attributes that
+	// device may not know while port49 logs permit. What a device does with an
+	// attribute it does not know is unmeasured. admission.LoadFile does not
+	// refuse the repeat, so the broker does.
 	devices := make(map[string]admission.Device, len(cfg.Inventory.Devices))
 	for _, d := range cfg.Inventory.Devices {
+		if _, seen := devices[d.Name]; seen {
+			return nil, fmt.Errorf("inventory names device %q twice; the broker mints by name", d.Name)
+		}
 		devices[d.Name] = d
 	}
 	b := &broker.Broker{Policy: pol, Devices: devices, Minter: minter, Store: st, Log: log, Metrics: m,
@@ -291,7 +300,7 @@ func run(cfgPath string) error {
 			<-spoolDone
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "port49d lab: %d login token(s) and %d enable token(s) minted, "+
+		fmt.Fprintf(stderr, "port49d lab: %d login token(s) and %d enable token(s) minted, "+
 			"credentials written to %s\n", logins, enables, cfg.Lab.SeedTokenFile)
 	}
 
@@ -336,22 +345,27 @@ func run(cfgPath string) error {
 		<-spoolDone
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
-		cfg.Listen, cfg.MetricsListen, len(cfg.Inventory.Devices))
-
-	brokerErr := make(chan error, 1)
+	// The broker binds before anything says "listening": a line claiming
+	// TACACS+ is up, followed by an exit, reads at 3am as a daemon that is up —
+	// and a supervisor restarting it repeats that every few seconds.
+	var bln net.Listener
 	if brokerSrv != nil {
-		bln, err := net.Listen("tcp", brokerSrv.Addr)
-		if err != nil {
+		if bln, err = net.Listen("tcp", brokerSrv.Addr); err != nil {
 			ln.Close()
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
 		}
+	}
+	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
+		cfg.Listen, cfg.MetricsListen, len(cfg.Inventory.Devices))
+
+	brokerErr := make(chan error, 1)
+	if brokerSrv != nil {
 		// Capped, so connections to the broker cannot take the file
 		// descriptors the TACACS+ listener beside it needs (pre-flight F1).
 		go func() { brokerErr <- brokerSrv.ServeTLS(broker.Limit(bln, broker.MaxConns), "", "") }()
-		fmt.Fprintf(os.Stderr, "port49d: broker listening on %s\n", brokerSrv.Addr)
+		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", brokerSrv.Addr)
 	}
 
 	serveErr := make(chan error, 1)
@@ -371,7 +385,7 @@ func run(cfgPath string) error {
 		runErr = err
 		cancel()
 	case <-ctx.Done():
-		fmt.Fprintln(os.Stderr, "port49d: signal received, draining")
+		fmt.Fprintln(stderr, "port49d: signal received, draining")
 		<-serveErr
 	}
 	cancel()
@@ -385,6 +399,6 @@ func run(cfgPath string) error {
 	// is it true that whatever the spool drains is all of it.
 	stopSpool()
 	<-spoolDone
-	fmt.Fprintln(os.Stderr, "port49d: accounting spool drained, exiting")
+	fmt.Fprintln(stderr, "port49d: accounting spool drained, exiting")
 	return runErr
 }

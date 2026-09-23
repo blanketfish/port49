@@ -122,6 +122,9 @@ type TokenConfig struct {
 // policy edit needs a restart, and a restart ends every live login context
 // and every unspent token — every operator logs in again (plan 3,
 // Question 3). Plan 4 brings reload.
+//
+// A relative path resolves against port49d's working directory, not the
+// config file's, as inventory_file does.
 type BrokerConfig struct {
 	Listen      string `yaml:"listen"`
 	TLSCertFile string `yaml:"tls_cert_file"`

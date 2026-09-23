@@ -184,14 +184,13 @@ func TestBrokerTLSErrorsReachPort49dsLog(t *testing.T) {
 	}
 }
 
-// A broker that cannot load ends run before the TACACS+ listener serves: run
-// returns, with the file named, instead of serving until a signal.
-func TestRunRefusesToStartWithABrokerThatCannotLoad(t *testing.T) {
+// writeRunConfig writes a complete port49d.yaml whose broker block uses b,
+// and returns its path.
+func writeRunConfig(t *testing.T, b *config.BrokerConfig) string {
+	t.Helper()
 	t.Setenv("T_RUN_SECRET", "run-test-secret")
 	t.Setenv("T_RUN_ENC", "33333333333333333333333333333333")
 	dir := t.TempDir()
-	b := brokerConfig(t, minimalPolicy).Broker
-	missing := b.PolicyFile + ".missing"
 	inv := filepath.Join(dir, "inventory.yaml")
 	if err := os.WriteFile(inv, []byte(`
 devices:
@@ -215,23 +214,73 @@ accounting: {spool_path: %s}
 lab:
   session_attributes: ["priv-lvl=15"]
 broker:
-  listen: "127.0.0.1:0"
+  listen: %q
   tls_cert_file: %s
   tls_key_file: %s
   client_ca_file: %s
   policy_file: %s
-`, inv, filepath.Join(dir, "acct.jsonl"), b.TLSCertFile, b.TLSKeyFile, b.ClientCAFile, missing)), 0o600); err != nil {
+`, inv, filepath.Join(dir, "acct.jsonl"), b.Listen, b.TLSCertFile, b.TLSKeyFile, b.ClientCAFile,
+		b.PolicyFile)), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return cfgPath
+}
 
+// runExpectingRefusal runs port49d on cfgPath and returns what it wrote to
+// stderr and its error; run must return rather than serve until a signal.
+func runExpectingRefusal(t *testing.T, cfgPath string) (string, error) {
+	t.Helper()
+	var out syncBuffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
 	done := make(chan error, 1)
 	go func() { done <- run(cfgPath) }()
 	select {
 	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), missing) {
-			t.Fatalf("run: %v", err)
-		}
+		return out.String(), err
 	case <-time.After(10 * time.Second):
-		t.Fatal("run is serving TACACS+ with a broker that failed to load")
+		t.Fatal("run is serving TACACS+ with a broker that could not start")
+		return "", nil
+	}
+}
+
+// A broker that cannot load ends run before the TACACS+ listener serves: run
+// returns, with the file named, instead of serving until a signal.
+func TestRunRefusesToStartWithABrokerThatCannotLoad(t *testing.T) {
+	b := brokerConfig(t, minimalPolicy).Broker
+	b.PolicyFile += ".missing"
+	if _, err := runExpectingRefusal(t, writeRunConfig(t, b)); err == nil || !strings.Contains(err.Error(), b.PolicyFile) {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// A broker port already taken ends the start, and nothing on stderr says
+// port49d is listening: at 3am, under a supervisor restarting it every few
+// seconds, a "listening" line followed by an exit reads as TACACS+ being up.
+func TestRunWithTheBrokerPortTakenNeverSaysListening(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	b := brokerConfig(t, minimalPolicy).Broker
+	b.Listen = taken.Addr().String()
+	out, err := runExpectingRefusal(t, writeRunConfig(t, b))
+	if err == nil || !strings.Contains(err.Error(), b.Listen) {
+		t.Fatalf("run: %v", err)
+	}
+	if strings.Contains(out, "listening") {
+		t.Fatalf("stderr claims a listener is up: %q", out)
+	}
+}
+
+// Two inventory devices sharing a name would collapse to one, and a token
+// minted with one's platform would redeem on the other, carrying attributes
+// compiled for a platform it is not.
+func TestABrokerRefusesADeviceNamedTwice(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "leaf1", Platform: "cisco_iosxe"})
+	if err := buildWith(cfg); err == nil || !strings.Contains(err.Error(), `"leaf1"`) {
+		t.Fatalf("a device named twice: %v", err)
 	}
 }
