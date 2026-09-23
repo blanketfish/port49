@@ -1,0 +1,556 @@
+package agent
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/testpki"
+)
+
+// fakeBroker speaks the broker's wire format and records every mint's
+// Idempotency-Key. dropFirst hangs up on the first mint without answering;
+// expired answers every mint 401 session_expired; untrusted answers every
+// mint 401 trust_domain_unresolved, as the broker does once the certificate
+// has expired under the held connection. itemError answers a 200 whose one
+// item carries that error code and no verdict, as the broker does for a fault
+// on its own side; hollow answers an item with neither.
+type fakeBroker struct {
+	mu        sync.Mutex
+	keys      []string
+	dropFirst bool
+	expired   bool
+	untrusted bool
+	itemError string
+	hollow    bool
+}
+
+func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch r.URL.Path {
+	case "/v1/config":
+		writeJSON(w, 200, api.Config{Methods: []string{"x509"}, MaxSessionAgeSeconds: 60, BatchMax: 10})
+	case "/v1/tokens":
+		fb.mu.Lock()
+		fb.keys = append(fb.keys, r.Header.Get("Idempotency-Key"))
+		n, drop, expired, untrusted := len(fb.keys), fb.dropFirst && len(fb.keys) == 1, fb.expired, fb.untrusted
+		itemError, hollow := fb.itemError, fb.hollow
+		fb.mu.Unlock()
+		if drop {
+			c, _, _ := w.(http.Hijacker).Hijack()
+			c.Close()
+			return
+		}
+		if expired {
+			writeJSON(w, 401, api.Error{Error: "session_expired"})
+			return
+		}
+		if untrusted {
+			writeJSON(w, 401, api.Error{Error: "trust_domain_unresolved",
+				Detail: "broker: no trusted client certificate: the certificate is valid 2026-09-22T00:00:00Z to 2026-09-23T00:00:00Z"})
+			return
+		}
+		var req api.MintRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if itemError != "" || hollow {
+			item := api.MintItem{Device: req.Devices[0]}
+			if itemError != "" {
+				item.Error, item.Detail = itemError, "inventory gives this device no platform; tell the operator"
+			}
+			writeJSON(w, 200, api.MintResponse{Principal: "user:alice@example.com", Results: []api.MintItem{item}})
+			return
+		}
+		writeJSON(w, 200, api.MintResponse{Principal: "user:alice@example.com", Results: []api.MintItem{{
+			Device: req.Devices[0], Verdict: "permit", Username: "alice", Login: fmt.Sprintf("login-%02d", n)}}})
+	}
+}
+
+func (fb *fakeBroker) seen() []string {
+	fb.mu.Lock()
+	defer fb.mu.Unlock()
+	return append([]string(nil), fb.keys...)
+}
+
+type rig struct {
+	a   *Agent
+	fb  *fakeBroker
+	srv *httptest.Server
+	mu  sync.Mutex
+	now time.Time
+	// refuse makes the broker refuse every new handshake, as it does a
+	// certificate that expired or a trust anchor that changed.
+	refuse atomic.Bool
+}
+
+func (r *rig) clock() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.now
+}
+
+func (r *rig) advance(d time.Duration) {
+	r.mu.Lock()
+	r.now = r.now.Add(d)
+	r.mu.Unlock()
+}
+
+func newRig(t *testing.T) *rig { return newRigSigned(t, false) }
+
+// newRigSigned builds the rig. The fake broker verifies a client certificate
+// only if one is given, as the real one does (Task 10). foreign gives the
+// agent a certificate from a CA the broker does not trust, and skips Connect.
+func newRigSigned(t *testing.T, foreign bool) *rig { return newRigWith(t, rigOpts{foreign: foreign}) }
+
+// rigOpts are the ways a handshake goes wrong. foreign is a client
+// certificate from a CA the broker does not trust; expired is one past its
+// NotAfter; wrongAnchor gives the agent a trust anchor that did not issue the
+// broker's certificate. Any of them skips Connect.
+type rigOpts struct{ foreign, expired, wrongAnchor bool }
+
+func newRigWith(t *testing.T, o rigOpts) *rig {
+	t.Helper()
+	foreign := o.foreign
+	now := time.Now()
+	ca, err := testpki.NewCA("agent test ca", now.Add(-time.Hour), now.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srvCert, err := ca.Issue(testpki.Leaf{CommonName: "broker", IPs: []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cli, err := ca.Issue(testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}, Client: true,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foreign {
+		other, err := testpki.NewCA("someone else's CA", now.Add(-time.Hour), now.Add(24*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cli, err = other.Issue(testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}, Client: true,
+			NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if o.expired {
+		if cli, err = ca.Issue(testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}, Client: true,
+			NotBefore: now.Add(-48 * time.Hour), NotAfter: now.Add(-24 * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	anchor := ca.Pool()
+	if o.wrongAnchor {
+		other, err := testpki.NewCA("an old broker CA", now.Add(-time.Hour), now.Add(24*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		anchor = other.Pool()
+	}
+	r := &rig{fb: &fakeBroker{}, now: now}
+	r.srv = httptest.NewUnstartedServer(r.fb)
+	r.srv.TLS = &tls.Config{Certificates: []tls.Certificate{srvCert}, ClientCAs: ca.Pool(),
+		ClientAuth: tls.VerifyClientCertIfGiven, MinVersion: tls.VersionTLS13,
+		VerifyConnection: func(tls.ConnectionState) error {
+			if r.refuse.Load() {
+				return errors.New("refused")
+			}
+			return nil
+		}}
+	r.srv.StartTLS()
+	t.Cleanup(r.srv.Close)
+	r.a = New(Config{BrokerURL: r.srv.URL, Cert: cli, BrokerCA: anchor, Now: r.clock})
+	if foreign || o.expired || o.wrongAnchor {
+		return r
+	}
+	if _, err := r.a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// A certificate the broker's anchor did not issue fails `port49 login` at the
+// handshake, rather than logging in with no identity and failing at the first
+// mint (plan 3, Decided 3). The broker only requests a certificate
+// (VerifyClientCertIfGiven), so this holds only because the agent always
+// presents its own.
+func TestAnUntrustedCertificateFailsConnect(t *testing.T) {
+	r := newRigSigned(t, true)
+	if _, err := r.a.Connect(context.Background()); err == nil {
+		t.Fatal("Connect with a certificate the broker does not trust must fail")
+	}
+}
+
+// Every ask is a mint: the agent never hands back a token it handed out
+// before, and every mint travels the one connection the handshake opened.
+func TestEveryTokenIsAFreshMintOnTheHeldConnection(t *testing.T) {
+	r := newRig(t)
+	a, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := r.fb.seen()
+	if a.Login == b.Login || len(keys) != 2 || keys[0] == "" || keys[0] == keys[1] {
+		t.Fatalf("two asks must be two mints under two keys: %q %q %q", a.Login, b.Login, keys)
+	}
+	if n := r.a.Handshakes(); n != 1 {
+		t.Fatalf("one session, one handshake; got %d", n)
+	}
+}
+
+// A dropped connection is re-established on the next ask: one more handshake,
+// which on a hardware key is one more touch (design §7).
+func TestADroppedConnectionIsReestablished(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+		t.Fatal(err)
+	}
+	r.srv.CloseClientConnections()
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+		t.Fatalf("the ask after a drop must reconnect and mint: %v", err)
+	}
+	if n := r.a.Handshakes(); n != 2 {
+		t.Fatalf("handshakes %d, want 2", n)
+	}
+}
+
+// A mint whose response was lost is retried on a new connection under the SAME
+// key, so the broker replays it rather than cutting a second pair (design §17).
+func TestALostResponseIsRetriedUnderTheSameKey(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.dropFirst = true
+	r.fb.mu.Unlock()
+	item, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := r.fb.seen()
+	if len(keys) != 2 || keys[0] != keys[1] || item.Login != "login-02" {
+		t.Fatalf("keys %q item %+v", keys, item)
+	}
+}
+
+// The session ends at the first handshake plus max_session_age, whatever
+// happened in between; the broker is not asked (plan 3, Decided 11).
+func TestTheSessionEndsAtTheCeiling(t *testing.T) {
+	r := newRig(t)
+	r.advance(61 * time.Second)
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("past the ceiling: %v", err)
+	}
+	if len(r.fb.seen()) != 0 {
+		t.Fatal("a session past its ceiling must not reach the broker")
+	}
+}
+
+func TestTheBrokersSessionExpiredEndsTheSession(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.expired = true
+	r.fb.mu.Unlock()
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("401 session_expired: %v", err)
+	}
+	select {
+	case <-r.a.Done():
+	default:
+		t.Fatal("the broker ending the session must close Done, so the agent exits")
+	}
+}
+
+// A certificate the broker stops trusting mid-session — expired under the
+// held connection, or revoked — ends the session: the agent answers
+// ErrSessionOver saying why, asks the broker nothing more, and Done closes so
+// the agent process exits and the next `port49 login` starts a new session
+// instead of answering "already logged in" (pre-flight F10).
+func TestAnUntrustedAnswerEndsTheSession(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.untrusted = true
+	r.fb.mu.Unlock()
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "no longer trusts") {
+		t.Fatalf("401 trust_domain_unresolved: %v", err)
+	}
+	select {
+	case <-r.a.Done():
+	default:
+		t.Fatal("Done must close")
+	}
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("an ended session: %v", err)
+	}
+	if n := len(r.fb.seen()); n != 1 {
+		t.Fatalf("an ended session must not reach the broker again: %d asks", n)
+	}
+}
+
+// A broker that accepts the TCP connection and never answers the handshake —
+// a hung process, a middlebox that swallows it — fails Connect within
+// connectTimeout, and the agent's log has already said where it was
+// connecting, so `port49 login` has a line to show rather than an empty log
+// (pre-flight F9).
+func TestConnectSaysWhereAndGivesUp(t *testing.T) {
+	// Never accepted: the kernel completes the TCP handshake from the
+	// backlog, and the TLS handshake never starts.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	defer func(d time.Duration) { connectTimeout = d }(connectTimeout)
+	connectTimeout = 200 * time.Millisecond
+	var log strings.Builder
+	url := "https://" + ln.Addr().String()
+	a := New(Config{BrokerURL: url, Log: &log})
+	start := time.Now()
+	if _, err := a.Connect(context.Background()); err == nil {
+		t.Fatal("a broker that never answers must fail Connect")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("Connect took %v; connectTimeout was 200ms", took)
+	}
+	if !strings.Contains(log.String(), "connecting to "+url) {
+		t.Fatalf("the log must say where the agent was connecting: %q", log.String())
+	}
+}
+
+// shortDir is a directory under /tmp: a unix socket path is limited to about
+// 108 bytes, and t.TempDir can be longer.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("", "p49a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	return d
+}
+
+// The socket's directory is its access control: created 0700, and one anyone
+// else can enter is refused rather than narrowed.
+func TestTheSocketDirectoryIsPrivate(t *testing.T) {
+	base := shortDir(t)
+	p := filepath.Join(base, "s", "agent.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if fi, _ := os.Stat(filepath.Dir(p)); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("directory mode %v", fi.Mode().Perm())
+	}
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("socket mode %v", fi.Mode().Perm())
+	}
+	wide := filepath.Join(base, "wide")
+	if err := os.Mkdir(wide, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(wide, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Listen(filepath.Join(wide, "agent.sock")); err == nil || !strings.Contains(err.Error(), "0700") {
+		t.Fatalf("a directory others can enter: %v", err)
+	}
+	// A symlink is refused even to a private directory: on the /tmp fallback,
+	// whoever planted it owns where the socket lands (pre-flight F4). The
+	// owner check beside it needs a second uid to test and is not tested here.
+	target := filepath.Join(base, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Listen(filepath.Join(link, "agent.sock")); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("a symlinked directory: %v", err)
+	}
+}
+
+func TestTheClientTalksToTheAgentOverItsSocket(t *testing.T) {
+	r := newRig(t)
+	base := shortDir(t)
+	p := filepath.Join(base, "s", "agent.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: r.a.Handler()}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	c := NewClient(p)
+	item, err := c.Token(context.Background(), TokenRequest{Device: "leaf1"})
+	if err != nil || item.Login != "login-01" || item.Verdict != "permit" {
+		t.Fatalf("%+v %v", item, err)
+	}
+	if st, err := c.Status(context.Background()); err != nil || st.Handshakes != 1 || st.SessionEndsAt == "" {
+		t.Fatalf("status %+v %v", st, err)
+	}
+	r.advance(61 * time.Second)
+	if _, err := c.Token(context.Background(), TokenRequest{Device: "leaf1"}); !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("an ended session through the socket: %v", err)
+	}
+	if _, err := NewClient(filepath.Join(base, "nobody.sock")).Token(context.Background(), TokenRequest{Device: "leaf1"}); !errors.Is(err, ErrNoAgent) {
+		t.Fatalf("no agent: %v", err)
+	}
+}
+
+// A handshake the broker refuses reaches the operator as its likely causes,
+// not as a bare TLS alert: the broker cannot say why in TLS 1.3, so the agent
+// names what to check. An expired certificate is named by its own date,
+// which the agent can see without the broker.
+func TestARefusedHandshakeNamesTheLikelyCauses(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		o    rigOpts
+		want []string
+	}{
+		{"another CA", rigOpts{foreign: true}, []string{"refused this certificate", "expired", "trust anchor"}},
+		{"expired", rigOpts{expired: true}, []string{"refused this certificate", "your certificate expired at"}},
+		{"wrong anchor", rigOpts{wrongAnchor: true}, []string{"broker's certificate", "trust anchor"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRigWith(t, c.o)
+			_, err := r.a.Connect(context.Background())
+			if err == nil {
+				t.Fatal("Connect must fail")
+			}
+			for _, w := range c.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("%q does not say %q", err, w)
+				}
+			}
+		})
+	}
+}
+
+// A reconnect the broker refuses ends the session as its trust_domain_unresolved
+// answer does (pre-flight F10): nothing this session holds will mint again, so
+// the agent exits and the next `port49 login` starts fresh. It is not retried,
+// and not reported as an unreachable broker.
+func TestARefusedReconnectEndsTheSession(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+		t.Fatal(err)
+	}
+	r.refuse.Store(true)
+	r.srv.CloseClientConnections()
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "refused this certificate") {
+		t.Fatalf("a refused reconnect: %v", err)
+	}
+	select {
+	case <-r.a.Done():
+	default:
+		t.Fatal("Done must close")
+	}
+	if n := len(r.fb.seen()); n != 1 {
+		t.Fatalf("a refused handshake reaches no handler: %d asks", n)
+	}
+}
+
+// A broker that is not there is not a refused certificate: the session stays
+// up, so the ask after the broker comes back mints.
+func TestAnUnreachableBrokerLeavesTheSession(t *testing.T) {
+	r := newRig(t)
+	r.srv.Listener.Close()
+	r.srv.CloseClientConnections()
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if err == nil || errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("an unreachable broker: %v", err)
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("an unreachable broker must not end the session")
+	default:
+	}
+}
+
+// An item the broker could not decide carries an error and no verdict. It is
+// an error from Mint and from the socket client, naming the device and the
+// code, so no caller can print an empty verdict and move on.
+func TestAnItemErrorReachesTheOperator(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.itemError = "device_unconfigured"
+	r.fb.mu.Unlock()
+	item, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	var ie *ItemError
+	if !errors.As(err, &ie) || ie.Code != "device_unconfigured" || item.Error != "device_unconfigured" {
+		t.Fatalf("Mint: %+v %v", item, err)
+	}
+	for _, w := range []string{"leaf1", "device_unconfigured", "no platform"} {
+		if !strings.Contains(err.Error(), w) {
+			t.Errorf("%q does not say %q", err, w)
+		}
+	}
+
+	base := shortDir(t)
+	p := filepath.Join(base, "s", "agent.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: r.a.Handler()}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	item, err = NewClient(p).Token(context.Background(), TokenRequest{Device: "leaf1"})
+	if !errors.As(err, &ie) || ie.Code != "device_unconfigured" || !strings.Contains(err.Error(), "leaf1") {
+		t.Fatalf("through the socket: %+v %v", item, err)
+	}
+}
+
+// An item with neither a verdict nor an error is a broker this agent does not
+// understand, and is an error rather than a silent empty answer.
+func TestAnItemWithNoVerdictIsAnError(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.hollow = true
+	r.fb.mu.Unlock()
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err == nil {
+		t.Fatal("an item with no verdict and no error must be an error")
+	}
+}
+
+// The socket carries why the session ended, so `port49 token` can say it.
+func TestTheSocketSaysWhyTheSessionEnded(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.untrusted = true
+	r.fb.mu.Unlock()
+	base := shortDir(t)
+	p := filepath.Join(base, "s", "agent.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: r.a.Handler()}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	_, err = NewClient(p).Token(context.Background(), TokenRequest{Device: "leaf1"})
+	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "no longer trusts") {
+		t.Fatalf("through the socket: %v", err)
+	}
+}
