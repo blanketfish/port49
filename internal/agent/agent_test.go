@@ -399,6 +399,30 @@ func TestTheSocketDirectoryIsPrivate(t *testing.T) {
 	}
 }
 
+// A socket path longer than a Unix socket address holds is refused by name,
+// with what to do about it, not as a bare "bind: invalid argument". A long
+// $XDG_RUNTIME_DIR or --socket is how an operator gets there (T14 review).
+func TestASocketPathTooLongIsRefusedByName(t *testing.T) {
+	base := shortDir(t)
+	fits := filepath.Join(base, strings.Repeat("d", maxSocketPath-len(base)-len("/agent.sock")-1), "agent.sock")
+	if len(fits) != maxSocketPath {
+		t.Fatalf("test setup: %d bytes", len(fits))
+	}
+	ln, err := Listen(fits)
+	if err != nil {
+		t.Fatalf("a path of exactly %d bytes fits: %v", maxSocketPath, err)
+	}
+	ln.Close()
+	long := filepath.Join(base, strings.Repeat("d", maxSocketPath-len(base)-len("/agent.sock")), "agent.sock")
+	_, err = Listen(long)
+	if err == nil || !strings.Contains(err.Error(), "too long") || !strings.Contains(err.Error(), "--socket") {
+		t.Fatalf("a %d-byte socket path: %v", len(long), err)
+	}
+	if _, err := os.Stat(filepath.Dir(long)); !os.IsNotExist(err) {
+		t.Fatal("a path that cannot be a socket creates no directory")
+	}
+}
+
 // A real directory at 0700 that another user created first — the squatter on
 // /tmp/port49-<uid> — passes every check but ownership, and ownership is what
 // lets them swap the socket (pre-flight F4). Seen as another uid, the

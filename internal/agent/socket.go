@@ -73,9 +73,17 @@ func checkPrivateDir(dir string) error {
 	return nil
 }
 
+// maxSocketPath is the longest path a Unix socket address holds on Linux:
+// sun_path is 108 bytes, one of them the terminating NUL.
+const maxSocketPath = 107
+
 // Listen opens the agent's socket at path, refusing to start beside a live
 // agent and clearing a stale socket a dead one left.
 func Listen(path string) (net.Listener, error) {
+	if len(path) > maxSocketPath {
+		return nil, fmt.Errorf("agent: the socket path %s is %d bytes, too long for a Unix socket (at most %d); "+
+			"pass a shorter --socket", path, len(path), maxSocketPath)
+	}
 	if err := PrivateDir(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
