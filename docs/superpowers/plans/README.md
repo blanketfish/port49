@@ -17,9 +17,10 @@ per task and whole-branch): a second login by the same principal joins the live 
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
 metric. PR #7's body lists three fail-closed follow-ups (one uniform "login into a revoked
 result" check after `JoinContext`) for plan 3 to pick up.
-**3 written 2026-09-23** (`2026-09-23-03-vertical-slice.md`, eighteen tasks: thirteen code, three
-lab, two docs; not yet executed, on `feature/vertical-slice`). It closes PR #7's first two
-follow-ups and carries the third to plan 7; its "Questions for Ryan" section has three open calls.
+**3 executed 2026-09-23, merge pending** (`2026-09-23-03-vertical-slice.md`, eighteen tasks:
+thirteen code, three lab, two docs; on `feature/vertical-slice`, reviewed per task and
+whole-branch). It closes PR #7's first two follow-ups and carries the third to plan 7; its
+"Questions for Ryan" section has three open calls.
 
 ---
 
@@ -345,6 +346,14 @@ mapping replacing the slice's declared `username:`; policy reload. Also owed by 
   can keep all of `broker.MaxConns` (256) slots full.
 - `(*broker.Broker).Server` **returns an error instead of panicking** once a reload path exists.
 - A **counter for broker TLS handshake failures**.
+- A **per-principal cap on held broker connections**, beside the per-source one. Any
+  certificate the anchor signs can open all 256 slots and hold them for `max_session_age`,
+  locking every other operator out of `port49 login`.
+- **A revocation must reach the held connection.** The slice has no revocation lever: to cut
+  someone off, remove their subject from the policy (or re-issue the CA) and restart
+  `port49d`, which logs everyone out. A revocation by principal or by certificate must also
+  refuse mints on, or close, that principal's held broker connections; otherwise a token
+  minted after the revocation lifts it (decision 15).
 
 ## Plan 8 — Workload certificates (§19 step 8)
 
