@@ -401,6 +401,23 @@ func (l *lab) bringUp() {
 	l.deploy()
 }
 
+// imageAbsent reads `docker image inspect image`'s answer: "" when the image
+// is there, why not when it is absent, and an error when docker refused this
+// shell. A shell without docker group access gets "permission denied" from
+// the daemon's socket for every image, and reporting that as a missing image
+// sends the operator off to rebuild one that is there.
+func imageAbsent(image string, out []byte, err error) (string, error) {
+	if err == nil {
+		return "", nil
+	}
+	if strings.Contains(string(out), "permission denied") {
+		return "", fmt.Errorf("docker refused this shell (%s); it cannot reach the docker daemon, so no image "+
+			"can be checked or deployed. Add your user to the docker group and start a new login shell (or run "+
+			"`newgrp docker`)", strings.TrimSpace(string(out)))
+	}
+	return "image " + image + " is not present", nil
+}
+
 // resetForRedeploy lets a platform be brought up again later in the same run.
 func (l *lab) resetForRedeploy() {
 	l.once = sync.Once{}
@@ -419,8 +436,14 @@ func (l *lab) deploy() {
 		l.err = err
 		return
 	}
-	if exec.Command("docker", "image", "inspect", l.p.image).Run() != nil {
-		absent := "image " + l.p.image + " is not present"
+	out, err := exec.Command("docker", "image", "inspect", l.p.image).CombinedOutput()
+	absent, err := imageAbsent(l.p.image, out, err)
+	if err != nil {
+		l.err = err
+		fmt.Fprintf(os.Stderr, "lab: %s: %v\n", l.p.name, l.err)
+		return
+	}
+	if absent != "" {
 		if _, explicit, _ := platformSelection(); explicit {
 			l.err = fmt.Errorf("%s, and this run named %q on PORT49_LAB_PLATFORMS; "+
 				"a named platform that measures nothing is a failed run, not a skip. "+
