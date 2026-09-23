@@ -1,0 +1,10 @@
+# The vertical slice's broker block (plan 3), appended to port49d-lab.yaml by
+# TestSliceEndToEnd and by the by-hand runs in tests/lab/README.md. Paths are
+# relative to the repository root, where port49d runs. The certificates come
+# from `go run ./tests/lab/cmd/slice-pki`.
+broker:
+  listen: "127.0.0.1:8449"
+  tls_cert_file: tests/lab/logs/slice-pki/broker.pem
+  tls_key_file: tests/lab/logs/slice-pki/broker-key.pem
+  client_ca_file: tests/lab/logs/slice-pki/broker-ca.pem
+  policy_file: tests/lab/slice/policy.yaml
