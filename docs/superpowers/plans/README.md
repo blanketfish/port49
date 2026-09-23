@@ -176,11 +176,14 @@ and `tests/lab/labcreds` reads that file — so the next lab deploy is the first
 - **eAPI / NX-API per-request authentication** measured in the lab with reusable tokens.
   Images for this are on hand (plan 1 Task 15 lists them with their vrnetlab kinds): Nexus
   9300v 10.4(2)F for NX-API and the L7 question; Catalyst 9000v 17.12 and C8000v 17.13 for
-  IOS-XE, where the `$enab15$` enable path (L3) lives; vEOS 4.32.2F for eAPI.
+  IOS-XE, where the `$enab15$` enable path (L3) lives; vEOS for eAPI (image tagged 4.32.2F,
+  running 4.31.2F).
 
 **Inherits from the 2026-09-20/22 lab stretch (PR #3):** L3 is closed (no platform sends
-`$enab{level}$`; NX-OS 10.x has no enable), L4 and L7 are measured on every image and the
-`$enab15$` enable path is gone, so the lab list above is mostly done. What this plan still
+`$enab{level}$`; NX-OS 10.x has no enable) and the `$enab15$` enable path is gone. L4 is
+measured over SSH on all five images and stays open on `deadtime`, the other transports and
+authorization fall-through; L7 is measured per request on eAPI and NX-API and stays open on its
+cookie clause. So the lab list above is mostly done. What this plan still
 owns: the first end-to-end run with a real credential. The sliding receipt is no longer an
 open question — plan 2 shipped it as `receipt_idle_ttl` (15m) and `receipt_max_age` (2h), and
 `receipt_ttl` is refused by name at config load — but **the agent's reconnect behaviour is
