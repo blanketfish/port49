@@ -17,7 +17,7 @@ import (
 )
 
 // fakeAgent answers the agent socket's POST /token with a fixed item, or with
-// status and an error body when status is not 200. The socket protocol is the
+// status and an error body when status is not 200, whose detail is the item's. The socket protocol is the
 // contract between `port49 token` and the agent; this tests the CLI's half.
 func fakeAgent(t *testing.T, status int, item api.MintItem) string {
 	t.Helper()
@@ -38,7 +38,7 @@ func fakeAgent(t *testing.T, status int, item api.MintItem) string {
 			_ = json.NewEncoder(w).Encode(item)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(api.Error{Error: "session_over"})
+		_ = json.NewEncoder(w).Encode(api.Error{Error: "session_over", Detail: item.Detail})
 	})}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
@@ -107,6 +107,33 @@ func TestAnEndedSessionOrNoAgentSaysToLogIn(t *testing.T) {
 		var out, errb bytes.Buffer
 		if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "port49 login") {
 			t.Errorf("%s: code %d stderr %q", name, code, errb.String())
+		}
+	}
+}
+
+// The agent's 410 says why the session ended. An operator told only to log in
+// again would do it with the same expired certificate, so the reason is
+// printed with the instruction.
+func TestAnEndedSessionSaysWhy(t *testing.T) {
+	p := fakeAgent(t, http.StatusGone, api.MintItem{Detail: "agent: the session is over; run `port49 login`: " +
+		"the broker no longer trusts this certificate (x509: certificate has expired)"})
+	var out, errb bytes.Buffer
+	code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb)
+	if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "port49 login") ||
+		!strings.Contains(errb.String(), "no longer trusts this certificate (x509: certificate has expired)") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A permit with no login token is a broker fault: printing it would hand
+// `$(port49 token leaf1)` an empty password.
+func TestAPermitWithNoTokenIsAFailure(t *testing.T) {
+	p := fakeAgent(t, http.StatusOK, api.MintItem{Device: "leaf1", Verdict: "permit", Username: "alice"})
+	for _, args := range [][]string{{"token", "--socket", p, "leaf1"}, {"token", "--json", "--socket", p, "leaf1"}} {
+		var out, errb bytes.Buffer
+		code := run(args, &out, &errb)
+		if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "leaf1: the broker answered permit with no token") {
+			t.Fatalf("%v: code %d stdout %q stderr %q", args, code, out.String(), errb.String())
 		}
 	}
 }

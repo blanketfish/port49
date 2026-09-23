@@ -242,7 +242,9 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "port49 token: no agent at %s; run `port49 login`\n", *socket)
 		return 1
 	case errors.Is(err, agent.ErrSessionOver):
-		fmt.Fprintln(stderr, "port49 token: the session has ended; run `port49 login`")
+		// The error says to log in and then why the session ended: an
+		// expired certificate has to be renewed before a login will work.
+		fmt.Fprintf(stderr, "port49 token: %s\n", strings.TrimPrefix(err.Error(), "agent: "))
 		return 1
 	case err != nil:
 		fmt.Fprintln(stderr, "port49 token:", err)
@@ -250,6 +252,11 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	if item.Verdict != "permit" {
 		fmt.Fprintf(stderr, "port49 token: %s: %s %s\n", device, item.Verdict, item.Reason)
+		return 1
+	}
+	if item.Login == "" {
+		// Printed, it would be an empty password to whatever reads stdout.
+		fmt.Fprintf(stderr, "port49 token: %s: the broker answered permit with no token\n", device)
 		return 1
 	}
 	if *asJSON {
