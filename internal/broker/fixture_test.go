@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +46,7 @@ type fixture struct {
 	now   time.Time
 	ca    *testpki.CA
 	alice tls.Certificate
+	mu    sync.Mutex
 }
 
 // newFixture's clock starts at the real time: Task 10's handshakes verify
@@ -53,7 +55,11 @@ type fixture struct {
 func newFixture(t *testing.T, candidateCap int) *fixture {
 	t.Helper()
 	f := &fixture{log: &bytes.Buffer{}, now: time.Now().Truncate(time.Second)}
-	clock := func() time.Time { return f.now }
+	clock := func() time.Time {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return f.now
+	}
 	f.st = memory.New(clock)
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(path, []byte(testPolicy), 0o600); err != nil {
@@ -78,6 +84,14 @@ func newFixture(t *testing.T, candidateCap int) *fixture {
 		Store:  f.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: clock,
 		MaxSessionAge: 12 * time.Hour, BatchMax: 4}
 	return f
+}
+
+// advance moves the clock under the lock, for tests where a server goroutine
+// reads it. Single-goroutine tests may still assign f.now directly.
+func (f *fixture) advance(d time.Duration) {
+	f.mu.Lock()
+	f.now = f.now.Add(d)
+	f.mu.Unlock()
 }
 
 func (f *fixture) client(t *testing.T, email string, notAfter time.Time) tls.Certificate {
