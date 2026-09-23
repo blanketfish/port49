@@ -2322,6 +2322,36 @@ func TestARefusedLoginStaysRefusedAfterTheRevocationIsLifted(t *testing.T) {
 	}
 }
 
+// receiptGoneStore answers FailReceipt with ErrNotFound: a revocation by
+// principal deleted the receipt between the join and the refusal.
+type receiptGoneStore struct{ *memory.Store }
+
+func (receiptGoneStore) FailReceipt(context.Context, store.ReceiptKey) error {
+	return store.ErrNotFound
+}
+
+// A receipt a revocation already deleted cannot replay a PASS, so the mark
+// that did not land cost nothing: the refusal carries no index_error, which
+// would send an incident responder after a loss that did not happen.
+func TestAFailReceiptOnADeletedReceiptCostsNothing(t *testing.T) {
+	revokedAt := time.Unix(1_757_041_495, 0).Add(-time.Minute)
+	f := setupStore(t, func(st *memory.Store) store.Store { return receiptGoneStore{st} })
+	f.seedLoginWith(t, "token", 15, func(c *store.Context) {
+		c.RevokedAt = revokedAt
+		c.SessionExpires = f.now.Add(time.Minute)
+	})
+	f.now = f.now.Add(2 * time.Minute)
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(),
+		papStart("alice", "ssh", "198.51.100.4", f.tag()+"tok1tok1tok1tok1tok1tok1"))
+	rec := f.records(t)[0]
+	if reply.Status != wire.AuthenStatusFail || rec["reason"] != "credential_revoked" {
+		t.Fatalf("still refused credential_revoked: %+v %v", reply, rec)
+	}
+	if ie, ok := rec["index_error"]; ok {
+		t.Fatalf("a receipt already deleted lost nothing; index_error %q", ie)
+	}
+}
+
 // failReceiptErrorStore loses the FailReceipt write, which is what a store
 // outage between the join and the refusal looks like.
 type failReceiptErrorStore struct{ *memory.Store }

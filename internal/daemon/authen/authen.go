@@ -634,7 +634,8 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// (decision 15): the token the revocation was meant to stop gets no
 	// second try either way. A mark that does not land is counted and put on
 	// the record; the answer is still FAIL, and what is lost is only the
-	// replay after a lift.
+	// replay after a lift. ErrNotFound lost nothing: a revocation by principal
+	// deleted the receipt, and a deleted receipt replays nothing.
 	//
 	// After the index bookkeeping, not before: the context exists and is
 	// revoked, and a revocation of this credential must still reach it.
@@ -644,7 +645,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	if !out.Context.RevokedAt.IsZero() {
 		ferr := s.h.store.FailReceipt(ctx, rk)
 		s.h.metrics.StoreOps.WithLabelValues("fail_receipt", storeOutcome(ferr)).Inc()
-		if ferr != nil {
+		if ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
 			lost := "receipt not marked failed; a retransmission after the revocation is lifted will replay PASS"
 			if rec.IndexError != "" {
 				lost = rec.IndexError + "; " + lost
