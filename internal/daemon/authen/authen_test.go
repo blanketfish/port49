@@ -1631,6 +1631,65 @@ func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
 	}
 }
 
+// Ruling F-I1. An unreadable replace cannot name what it displaced — the
+// record's principal and credential are sealed — so it clears the ref whole,
+// as another principal's replace does. Otherwise the displaced login's sid
+// stays indexed and every extension of the replacing context re-stamps it, and
+// a back-channel logout of that sid hours later revokes whoever logged in
+// since.
+func TestAnUnreadableReplaceUnindexesWhatItDisplaced(t *testing.T) {
+	var v0, v2 crypt.Key
+	v0.ID, v2.ID = "v0", "v2"
+	copy(v0.Bytes[:], "retired-context-key-v0-32-bytes!")
+	copy(v2.Bytes[:], "current-context-key-v2-32-bytes!")
+	var sealed store.Store
+	f := setupStore(t, func(st *memory.Store) store.Store {
+		sealed = crypt.Wrap(st, crypt.Keys{Current: v2}, nil)
+		return sealed
+	})
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	if err := crypt.Wrap(f.st, crypt.Keys{Current: v0}, nil).PutContext(context.Background(), key,
+		store.Context{CtxID: "ctxL", Principal: "user:bob@example.com", Username: "alice"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexContext(context.Background(), "user:bob@example.com", "sid-bob", store.CertKey("ca", "0b"), ref, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	secret := f.tag() + "rotdrotdrotdrotdrotdrotd"
+	if _, err := sealed.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "r", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@example.com", Credential: store.Credential{Method: "oidc", Sid: "sid-alice"},
+			ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", secret))
+	if s := f.records(t)[0]["session"].(map[string]any); reply.Status != wire.AuthenStatusPass || s["replaced_unreadable"] != true {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+	for i := 0; i < 8; i++ {
+		f.now = f.now.Add(30 * time.Minute)
+		if err := f.st.TouchContext(context.Background(), key, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if refs, _ := f.st.ContextsBySid(context.Background(), "sid-bob"); len(refs) != 0 {
+		t.Fatalf("4h after an unreadable replace the displaced sid still reaches the context: %v", refs)
+	}
+	if refs, _ := f.st.ContextsByCert(context.Background(), store.CertKey("ca", "0b")); len(refs) != 0 {
+		t.Fatalf("the displaced certificate still reaches the context: %v", refs)
+	}
+	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:bob@example.com"); len(refs) != 0 {
+		t.Fatalf("the displaced principal still reaches the context: %v", refs)
+	}
+	if refs, _ := f.st.ContextsBySid(context.Background(), "sid-alice"); len(refs) != 1 {
+		t.Fatalf("the new login must be indexed under its own sid: %v", refs)
+	}
+	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("unindex_ref", "ok")); n != 1 {
+		t.Fatalf("store_operations_total{op=unindex_ref,outcome=ok} = %v, want 1", n)
+	}
+}
+
 // Ruling P3. A replace displaces another principal's login, and the reverse
 // index keeps every sid and certificate a context was indexed under (the
 // memory store's indexKeys) — so unless the replace unindexes the displaced

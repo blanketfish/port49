@@ -526,14 +526,18 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// this context, and a back-channel logout of that principal would revoke
 	// this one (spec §5.6). A failure is counted and does not fail the login:
 	// what it leaves is a revocation that can reach too far, never one that
-	// cannot reach. An unreadable replace has no Prior — its credential is
-	// sealed — and leaves that residue until index_ttl, as §5.6 says.
+	// cannot reach.
 	//
 	// Another principal's replace clears every key the ref was indexed
 	// under (UnindexRef), not only what Prior names: a joined context was
 	// indexed under each of its logins' sids and certificates, and the record
 	// keeps only the last login's. Nothing of the displaced principal's is
-	// this login's to keep.
+	// this login's to keep. An unreadable replace does the same, because it
+	// has no Prior to compare — the displaced record's principal and
+	// credential are sealed — and anything it left would be re-stamped by
+	// every extension of this context for as long as it lives, not only until
+	// index_ttl. When the unreadable record was this principal's own, its own
+	// keys go too, and the IndexContext below puts this login's back.
 	//
 	// The same principal's replace — past its ceiling — unindexes only the
 	// keys this login does not share. A key both logins hold is one this
@@ -544,6 +548,9 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// mark this context: the same person, and fail-closed.
 	ref := store.ContextRef{NAS: s.peer.NAS, Username: username}
 	switch {
+	case out.ReplacedUnreadable:
+		uerr := s.h.store.UnindexRef(ctx, ref)
+		s.h.metrics.StoreOps.WithLabelValues("unindex_ref", storeOutcome(uerr)).Inc()
 	case out.Prior.CtxID == "":
 	case out.Prior.Principal != winner.Principal:
 		uerr := s.h.store.UnindexRef(ctx, ref)

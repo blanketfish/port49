@@ -1002,8 +1002,10 @@ two-key window, or failing authentication — cannot be joined, and is **replace
 the same compare-and-set: the replace carries the record's plaintext `revoked_at` by the rule in
 the table, whoever its principal was, because the principal is sealed; the `redeem` record carries
 `session.replaced_unreadable: true` and no `replaced_ctx_id`, because that id is sealed too; and
-the unreadable login's index entries cannot be named, so they stay until `index_ttl` and a
-revocation of that credential can mark the replacing context — fail-closed, never a lift. Each such
+the unreadable login's index entries cannot be named, so the replace clears every key the context
+was indexed under, as another principal's replace does, before the new login is indexed. Left in
+place they would not age out at `index_ttl`: every extension of the replacing context re-stamps
+them, so a revocation of the displaced credential would reach it for as long as it lives. Each such
 login opens the record twice (the read before the token is spent and the join's own), so
 `port49_crypt_open_failures_total{record="context"}` counts at least two per login.
 
