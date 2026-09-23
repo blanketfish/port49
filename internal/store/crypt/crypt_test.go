@@ -130,10 +130,10 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 
 	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	if err := s.PutContext(ctx, ck, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com", Username: "alice",
-		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 15}, time.Hour); err != nil {
+		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 1}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.PrivLvl != 15 {
+	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.PrivLvl != 1 {
 		t.Fatalf("context plaintext: %+v", c)
 	}
 	if c, _ := s.GetContext(ctx, ck); c.Principal != "user:alice@example.com" || c.RemAddr != "198.51.100.4" {
@@ -144,7 +144,7 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	// all three write only plaintext bookkeeping, so the inner store changes a
 	// record it cannot read, and the sealed fields it never touched still open
 	// afterwards.
-	if err := s.SetPrivilege(ctx, ck, 1); err != nil {
+	if err := s.SetPrivilege(ctx, ck, 15); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.TouchContext(ctx, ck, time.Hour); err != nil {
@@ -154,7 +154,7 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	if err := s.AnnotateContext(ctx, ck, hash, store.AccountingStateClosing); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := inner.GetContext(ctx, ck); c.PrivLvl != 1 {
+	if c, _ := inner.GetContext(ctx, ck); c.PrivLvl != 15 {
 		t.Fatalf("SetPrivilege must reach the inner store in the clear: %+v", c)
 	}
 	// The discriminator set is the point of the hashing: the INNER store, which
@@ -171,7 +171,7 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	if c, _ := inner.GetContext(ctx, ck); c.SessionDiscriminators[0] == "31050" {
 		t.Fatal("the discriminator is stored in the clear, not hashed")
 	}
-	if c, _ := s.GetContext(ctx, ck); c.PrivLvl != 1 || c.Principal != "user:alice@example.com" ||
+	if c, _ := s.GetContext(ctx, ck); c.PrivLvl != 15 || c.Principal != "user:alice@example.com" ||
 		len(c.SessionDiscriminators) != 1 || c.SessionDiscriminators[0] != hash {
 		t.Fatalf("a narrow write must leave the sealed fields readable: %+v", c)
 	}

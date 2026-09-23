@@ -1109,3 +1109,33 @@ func TestExtendingCarriesEveryJoinedLoginsSidAndCert(t *testing.T) {
 		t.Fatalf("unindexing one login's cert lost the other's: %v", refs)
 	}
 }
+
+// The stored level is the highest port49 has granted this user on this device,
+// bounded by the ceiling (spec §5.3). A second window's session authorization
+// granting a lower level must not take window A's enable away, and zero
+// MaxPrivilege is no ceiling (store.Context.PrivilegeCeiling).
+func TestSetPrivilegeIsRaiseOnlyAndClamped(t *testing.T) {
+	for _, tt := range []struct {
+		name             string
+		held, max, level uint8
+		want             uint8
+	}{
+		{"a raise is recorded", 1, 15, 15, 15},
+		{"a lower grant keeps the held level", 15, 15, 1, 15},
+		{"a raise past the ceiling stops at it", 1, 7, 15, 7},
+		{"no ceiling bounds nothing", 1, 0, 15, 15},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := New(time.Now)
+			ctx := context.Background()
+			k := store.ContextKey{NAS: "n", Username: "u"}
+			s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", PrivLvl: tt.held, MaxPrivilege: tt.max}, time.Minute)
+			if err := s.SetPrivilege(ctx, k, tt.level); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := s.GetContext(ctx, k); got.PrivLvl != tt.want {
+				t.Fatalf("level %d, want %d", got.PrivLvl, tt.want)
+			}
+		})
+	}
+}

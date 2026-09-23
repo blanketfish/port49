@@ -522,7 +522,16 @@ func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8)
 	// every other field is left exactly as whoever wrote it last left it --
 	// which is the property the caller cannot get by re-putting a record it
 	// read a moment ago (store.Store).
-	e.c.PrivLvl = level
+	//
+	// Raise-only, then clamped, both under this lock: the ceiling read is the
+	// one on the record now, which a join may have moved since the caller read
+	// it (spec §5.3).
+	if level > e.c.PrivLvl {
+		e.c.PrivLvl = level
+	}
+	if ceiling, ok := e.c.PrivilegeCeiling(); ok && e.c.PrivLvl > ceiling {
+		e.c.PrivLvl = ceiling
+	}
 	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	return nil

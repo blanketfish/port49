@@ -361,11 +361,21 @@ type Store interface {
 	// ErrNotFound if the key is absent or already expired, which is how the
 	// caller learns it lost the race; PutContext cannot tell it that.
 	TouchContext(ctx context.Context, k ContextKey, ttl time.Duration) error
-	// SetPrivilege records the level port49 last granted this context, in
-	// place and under the store's own lock. It writes exactly one field,
-	// PrivLvl, and is TouchContext's sibling for the same reason: the
-	// authorization path must not write back a record it read at the top of
-	// the request, because the writer it would race is revocation.
+	// SetPrivilege raises the level this context records to level, in place
+	// and under the store's own lock. It writes exactly one field, PrivLvl, and
+	// is TouchContext's sibling for the same reason: the authorization path
+	// must not write back a record it read at the top of the request, because
+	// the writer it would race is revocation.
+	//
+	// Raise-only: the stored value is max(current, level), clamped to the
+	// context's ceiling (Context.PrivilegeCeiling; zero MaxPrivilege is none).
+	// PrivLvl means "the highest level port49 has granted this user on this
+	// device", not "the level of the latest window" — the context is keyed
+	// (nas, username) and covers every window of one operator, so a second
+	// window's session authorization granting less must not take the first
+	// window's enable away (spec §5.3). It is still a bound: the device cannot
+	// exceed it without port49 having said yes somewhere. What a session
+	// authorization REPLIES is policy's answer and never this field.
 	//
 	// It is not an extension. The expiry and LastTouchedAt are TouchContext's
 	// to move, so a device that only ever authorizes sessions cannot keep a
