@@ -286,7 +286,7 @@ context at its highest granted level; `foreign` attribution is the only detectio
 exists.
 
 **Possible later, not planned:** per-window contexts on the platforms that give a window its own
-stable identifier — EOS `vty<n>`, bound at session authorization (the 2026-09-22 vEOS run), and
+stable identifier — EOS `vty<n>`, bound at session authorization (`tests/lab/results/L1-arista_eos.md`; again 2026-09-22), and
 IOS-XE `tty<n>` (`tests/lab/results/L1-cisco_iosxe.md`). The `(nas, username)` join is the design of
 record; this would refine it per platform and needs its own ruling first.
 

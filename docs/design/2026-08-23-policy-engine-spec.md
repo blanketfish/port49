@@ -400,7 +400,8 @@ ctx:(nas, username)
   port              ssh                  recorded as the device presented it at
                                          authentication; part of no key (§13, decision 15)
   rem_addr          198.51.100.4         recorded; compared on enable
-  privilege         15                   the HIGHEST level granted on this device (5.3); raise-only
+  privilege         15                   the HIGHEST level granted on this device (5.3); raise-only;
+                                         clamped to `max_privilege`
   blob_hash         sha256:a3f9c1…
   credential        see 5.1.4
   auth_time         1757041495           when the human actually authenticated
@@ -625,8 +626,9 @@ normalize(request)
   → if request level > ctx.privilege   → DENY (privilege_exceeded)
        (ctx.privilege is the HIGHEST level port49 has granted this user on this device:
         the login START's level, raised by the `priv-lvl` a permitted session
-        authorization carried and by an escalation, and never lowered — the context
-        covers every window of one operator (§5.6), so a second window granted less must
+        authorization carried and by an escalation, and never lowered by a grant — the
+        only thing that lowers it is a join whose newer broker decision carries a lower
+        `max_privilege`, which clamps it (§5.6). The context covers every window of one operator (§5.6), so a second window granted less must
         not take the first window's enable away. It is clamped to the context's ceiling
         (`max_privilege`; zero is none), and it is still a bound: the device cannot
         exceed it without port49 having said yes somewhere. The session-authorization
@@ -967,7 +969,7 @@ authentication and at authorization.
 **One operator, one device, one context — and a second login joins it.** The context is "this
 principal's authorization on this device", not one connection: no wire field on authorization
 tells two of one operator's windows apart on every platform — NX-OS sends `port` empty on every
-command authorization and Junos never authorizes a command (§15, L1, L18). So a second login by the
+command authorization and Junos never authorizes a command (§15, L1; L10, L14; decision 21). So a second login by the
 same principal under the same username on the same device **joins** the live context rather than
 replacing it (ruled 2026-09-23):
 
@@ -977,7 +979,7 @@ replacing it (ruled 2026-09-23):
 | `privilege` | kept; the new login's level only raises it, clamped to the new ceiling (§5.3) |
 | `session_discriminators`, `accounting_state` | kept |
 | `blob_hash`, `max_privilege`, `enable` | from the newest login — the latest broker decision wins |
-| `auth_time`, `session_expires` | the later of the two; no ceiling is later than any time |
+| `auth_time`, `session_expires` | the later of the two; no ceiling is later than any time — a join never shortens a window already granted, so after a join `session_expires` can exceed `auth_time + max_session_age` |
 | `revoked_at` | kept, unless the new token was minted after it (§5.1.1 `minted_at`; §13, decision 15) |
 | credential | the newest; every login is still indexed, so revocation by either login's `sid` or certificate reaches the context |
 | `port`, `rem_addr` | the newest (informational) |
@@ -3513,8 +3515,8 @@ the key needed from it: two concurrent N9Kv sessions both reported `0`, so two o
 device collided and locked each other out; and vEOS, which does give two concurrent sessions
 different vtys (`vty4`, `vty6`) from session authorization onward, says `ssh` for both at the
 authentication START that writes the context. (Corrected 2026-09-23: this sentence said both vEOS
-sessions reported `vty4`; `tests/lab/logs/decisions-arista_eos.jsonl`, 2026-09-22 run,
-15:57:48–15:57:55.) The exclusion of the username was bought to serve `$enab{level}$`, which has now been
+sessions reported `vty4`; `tests/lab/results/L1-arista_eos.md` (2026-09-20, `alice05` `vty4` /
+`alice06` `vty6`), and again in the 2026-09-22 run.) The exclusion of the username was bought to serve `$enab{level}$`, which has now been
 measured *not* to apply on either platform that has an enable exchange: vEOS and **IOS-XE**, the
 platform the spelling is named after, both put the operator's own username on the enable START
 with `service=enable` (L3, 2026-09-20). So the thing the exclusion was paid for has not been
@@ -4117,8 +4119,9 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   Concurrency did not rescue it either. Two overlapping N9Kv sessions both reported `0` — one denied
   `username_mismatch`, the other `context_missing`. (This paragraph also said two overlapping vEOS
-  sessions both reported `vty4` at authorization. Corrected 2026-09-23: the 2026-09-22 run shows two
-  concurrent vEOS sessions on `vty4` and `vty6`, below.)
+  sessions both reported `vty4` at authorization. Corrected 2026-09-23: two overlapping vEOS sessions
+  that each hold a shell get different vtys — `vty4` and `vty6` in the 2026-09-20 re-measure below
+  (`tests/lab/results/L1-arista_eos.md`), and again in the 2026-09-22 run.)
 
   **Re-measured on vEOS after the re-key, 2026-09-20.** The `port` observations are unchanged — the device
   still says `ssh` at authentication and `vty<n>` at authorization, so two concurrent sessions cannot be

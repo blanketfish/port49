@@ -4,10 +4,13 @@
 design sentence; it proposes the change and prices it.
 
 > **Corrected 2026-09-23.** This memo said two concurrent vEOS sessions both reported `vty4` at
-> authorization. The 2026-09-22 vEOS run shows two concurrent sessions on **different** vtys from
-> session authorization onward — `alice02` on `vty4`, `alice03` on `vty6`, 15:57:48–15:57:55 — and
-> both on `ssh` at authentication (`tests/lab/logs/decisions-arista_eos.jsonl`, git-ignored; the
-> records are quoted in §1). The conclusion stands: `ssh` at the authentication START is what the
+> authorization, and generalized it to vEOS. Two later runs in which both sessions held a shell
+> show **different** vtys from session authorization onward, and both on `ssh` at authentication:
+> `tests/lab/results/L1-arista_eos.md` (2026-09-20, `alice05` on `vty4`, `alice06` on `vty6`,
+> capture `tests/lab/evidence/L1-arista_eos.pcap`), and again the 2026-09-22 run (`alice02` on
+> `vty4`, `alice03` on `vty6`, 15:57:48–15:57:55; `tests/lab/logs/decisions-arista_eos.jsonl`,
+> git-ignored, so the records are quoted in §1). The 2026-09-17 records in §1 stand as recorded;
+> see the annotation under item 2. The conclusion stands: `ssh` at the authentication START is what the
 > context would have to be keyed on, and it separates nothing. The N9Kv observations are unchanged.
 
 Every device-behavior statement below is marked **measured** (with the note or log file) or
@@ -43,8 +46,11 @@ Measured from `tests/lab/logs/decisions-arista_eos.jsonl` (2026-09-17 run, 64 re
 1. **`port` is not stable for a session's life on vEOS.** It is `ssh` during authentication
    and the first exec accounting START, and becomes `vty<n>` once a vty is allocated. Measured:
    `alice02`, `alice03` and `alice06` each show `ssh` at `redeem` and a vty at
-   `authorize_session`. Two *concurrent* sessions get **different** vtys, stable from
-   `authorize_session` onward — the 2026-09-22 run, `tests/lab/logs/decisions-arista_eos.jsonl`:
+   `authorize_session`. Two *concurrent* sessions that each hold a shell get **different** vtys,
+   stable from `authorize_session` onward — `tests/lab/results/L1-arista_eos.md` (2026-09-20,
+   `alice05` on `vty4`, `alice06` on `vty6`), and again the 2026-09-22 run,
+   `tests/lab/logs/decisions-arista_eos.jsonl`, whose records are quoted here because that log is
+   git-ignored:
 
    | time | event | user | port |
    |---|---|---|---|
@@ -61,6 +67,12 @@ Measured from `tests/lab/logs/decisions-arista_eos.jsonl` (2026-09-17 run, 64 re
    |---|---|---|
    | alice01, alice04, alice05, alice07, alice08, longpw30/64/128/138 (9) | `ssh` only | `permit` / `context_matched` |
    | alice02, alice03, alice06 (3) | `ssh` then `vty4` | **`deny` / `context_missing`** |
+
+   (As the 2026-09-17 run recorded it; that log is not retained. These sessions were denied at
+   session authorization under the old key, so whether two of them held a vty at the same moment
+   is unmeasured. Two sessions that each hold a shell get different vtys:
+   `tests/lab/results/L1-arista_eos.md`, 2026-09-20, and the 2026-09-22 run; see the note at the
+   top.)
 
    The three that failed are exactly the three sessions held open — the two L1 concurrent
    sessions and the L5 idle session. That the vty is allocated only for a persisting session
