@@ -56,6 +56,14 @@ func TestIdentity(t *testing.T) {
 		t.Fatalf("while the anchor is valid: %v", err)
 	}
 
+	// A server certificate under the same anchor is not a client: crypto/tls
+	// refuses it at the handshake, and Identity refuses it again.
+	server, err := ca.Issue(testpki.Leaf{CommonName: "x", Emails: []string{"a@example.com"},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	for name, tt := range map[string]struct {
 		cs  *tls.ConnectionState
 		now time.Time
@@ -73,6 +81,7 @@ func TestIdentity(t *testing.T) {
 		"a control character in it": {state(leaf("a\x01b@example.com")), now},
 		"an email SAN with no @":    {state(leaf("alice")), now},
 		"the anchor expired first":  {outlives, now.Add(2 * time.Hour)},
+		"a serverAuth-only leaf":    {state(server.Leaf), now},
 	} {
 		if _, _, err := Identity(tt.cs, tt.now); !errors.Is(err, ErrUntrusted) {
 			t.Errorf("%s: Identity = %v, want ErrUntrusted", name, err)

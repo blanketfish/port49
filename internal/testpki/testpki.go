@@ -125,7 +125,12 @@ const (
 // (for 127.0.0.1), and one client certificate for email. Everything is valid
 // for a day from now. Keys are 0600.
 func WriteLab(dir, email string, now time.Time) error {
+	// MkdirAll and WriteFile keep an existing mode; a set left loose by an
+	// earlier run is tightened, not inherited.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
 		return err
 	}
 	ca, err := NewCA("port49 lab slice CA", now.Add(-time.Hour), now.Add(24*time.Hour))
@@ -154,7 +159,11 @@ func WriteLab(dir, email string, now time.Time) error {
 		files[l.cert], files[l.key] = c, k
 	}
 	for name, body := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			return fmt.Errorf("testpki: %s: %w", name, err)
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
 			return fmt.Errorf("testpki: %s: %w", name, err)
 		}
 	}

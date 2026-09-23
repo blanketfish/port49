@@ -73,3 +73,57 @@ func TestAKeyThatIsNotARegularFileIsRefused(t *testing.T) {
 		t.Fatal("a named pipe as the key blocked the open")
 	}
 }
+
+// ssh's rule for the owner: the key belongs to the user port49 runs as, or to
+// root. Mode bits alone would let root load a 0600 key another user renamed
+// into a writable directory. There is no second uid in CI, so the effective
+// uid is swapped instead.
+func TestAKeyMustBeOwnedByItsUserOrRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cert, key := filepath.Join(dir, testpki.LabClientCert), filepath.Join(dir, testpki.LabClientKey)
+	me := uint32(os.Geteuid())
+	defer func(g func() int) { geteuid = g }(geteuid)
+
+	geteuid = func() int { return int(me) + 1 }
+	if me != 0 {
+		if _, err := LoadX509KeyPair(cert, key); err == nil || !strings.Contains(err.Error(), "chown") {
+			t.Fatalf("a key owned by another user: %v", err)
+		}
+		// Root running port49 does not take a key another user owns either.
+		geteuid = func() int { return 0 }
+		if _, err := LoadX509KeyPair(cert, key); err == nil || !strings.Contains(err.Error(), "chown") {
+			t.Fatalf("root loading a user's key: %v", err)
+		}
+	}
+
+	// A root-owned file passes the owner check whatever the effective uid:
+	// /etc/passwd is refused for its mode, not its owner.
+	var st syscall.Stat_t
+	if err := syscall.Stat("/etc/passwd", &st); err != nil || st.Uid != 0 || st.Mode&0o077 == 0 {
+		t.Skip("no root-owned, group-readable /etc/passwd to probe")
+	}
+	geteuid = func() int { return int(me) + 1 }
+	if _, err := LoadX509KeyPair(cert, "/etc/passwd"); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Fatalf("a root-owned key: %v", err)
+	}
+}
+
+// The path is the operator's to choose; a key is a few hundred bytes, and a
+// mistyped path to something huge is refused rather than read into memory.
+func TestAnOversizedKeyIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	big := filepath.Join(dir, "big.pem")
+	if err := os.WriteFile(big, make([]byte, maxKeySize+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadX509KeyPair(filepath.Join(dir, testpki.LabClientCert), big); err == nil ||
+		!strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("an oversized key: %v", err)
+	}
+}

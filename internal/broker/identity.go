@@ -3,6 +3,7 @@ package broker
 import (
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -24,7 +25,9 @@ var ErrUntrusted = errors.New("broker: no trusted client certificate")
 // ambiguity fails closed (design §7). An email mapping is a weak mapping and
 // must be issuer-pinned; the broker trusts exactly one anchor (LoadTLS), which
 // pins it. Only VerifiedChains is read: PeerCertificates is what the client
-// sent, not what the anchor vouched for.
+// sent, not what the anchor vouched for. The leaf must carry the clientAuth
+// extended key usage: crypto/tls's client verification already requires it,
+// and Identity does not rely on every caller having gone through that.
 //
 // An rfc822Name is an IA5String, which admits spaces and control characters.
 // The policy accepts only printable ASCII with an @ (policy.checkIdentity), so
@@ -51,6 +54,10 @@ func Identity(cs *tls.ConnectionState, now time.Time) (string, store.Credential,
 		}
 	}
 	leaf := chain[0]
+	if !clientAuth(leaf) {
+		return "", store.Credential{}, fmt.Errorf("%w: the certificate is not issued for client authentication",
+			ErrUntrusted)
+	}
 	if len(leaf.EmailAddresses) != 1 {
 		return "", store.Credential{}, fmt.Errorf("%w: the certificate carries %d email SANs; exactly one maps to a "+
 			"principal", ErrUntrusted, len(leaf.EmailAddresses))
@@ -65,4 +72,13 @@ func Identity(cs *tls.ConnectionState, now time.Time) (string, store.Credential,
 	cred := store.Credential{Method: "cert", Fingerprint: "sha256:" + hex.EncodeToString(sum[:]),
 		Issuer: leaf.Issuer.String(), Serial: leaf.SerialNumber.Text(16), Subject: leaf.Subject.String()}
 	return "user:" + strings.ToLower(email), cred, nil
+}
+
+func clientAuth(c *x509.Certificate) bool {
+	for _, u := range c.ExtKeyUsage {
+		if u == x509.ExtKeyUsageClientAuth || u == x509.ExtKeyUsageAny {
+			return true
+		}
+	}
+	return false
 }

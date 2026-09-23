@@ -46,3 +46,30 @@ func TestWriteLabWritesAUsableSet(t *testing.T) {
 		}
 	}
 }
+
+// os.WriteFile keeps an existing file's mode, so a key left world-readable by
+// an earlier run would stay that way; WriteLab puts the modes back.
+func TestWriteLabTightensAnExistingSet(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pki")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, LabClientKey), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteLab(dir, "alice@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{filepath.Join(dir, LabClientKey): 0o600, dir: 0o700} {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Fatalf("%s is %v, want %v", path, fi.Mode().Perm(), want)
+		}
+	}
+}
