@@ -988,16 +988,21 @@ context rather than replacing it (ruled 2026-09-23):
 | `port`, `rem_addr` | the newest (informational) |
 | `refreshed_at`, `last_touched_at` | now |
 
-**A login into a revoked context is refused.** When the context a login would join carries
-`revoked_at` and the login's token was not minted after it, the login answers FAIL
-`credential_revoked`, the answer the `enable` gate gives for the same state, and writes nothing to
-the context (ruled 2026-09-23). The token is spent, so a token the revocation was meant to stop gets
-no second try, and the receipt records the refusal, so a retransmission replays FAIL
-`receipt_replayed`, never a PASS. The `redeem` record carries the principal, the context's
-`ctx_id` and `session.revoked_at`, the revocation that refused it. A token minted after the
-revocation joins and lifts it, by the table. A revocation that lands between the login's read and
-its join is merged by the join rather than refused, and that login answers PASS into the revoked
-context, whose every authorization is then denied `credential_revoked`.
+**A login into a revoked context is refused.** A login whose resulting context carries
+`revoked_at` answers FAIL `credential_revoked` — the answer the `enable` gate gives for the same
+state — and its token is spent, so a token the revocation was meant to stop gets no second try
+(ruled 2026-09-23; made one rule in plan 3). There are four ways to get there. The context the login
+would join is already revoked and the token was not minted after it: refused before anything is
+written. The same principal's context past its ceiling, replaced carrying a revocation the token
+predates; a context the sealing layer cannot open, replaced carrying its plaintext `revoked_at`; and
+a revocation that lands between the login's read and its join, merged by the join: each has already
+written the context when it is refused, and that context is revoked, so every authorization against
+it is denied anyway until the idle TTL reclaims it. The `redeem` record carries the principal, the
+`ctx_id` and `session.revoked_at`, the revocation that refused it. A retransmission is answered from
+the live context, not from the status the receipt stored: while the context it names is revoked it is
+refused `credential_revoked` again, never replayed as a PASS. A token minted after the revocation
+joins and lifts it, by the table. A revocation that lands after the join's write is not seen by the
+login, which answers PASS; its first authorization is denied `credential_revoked`.
 
 A login is **not** a join, and writes a fresh context whose `redeem` record carries
 `session.replaced_ctx_id`, in two cases: the live context belongs to **another principal** under
@@ -1430,6 +1435,7 @@ is what the redemption joins back to (see Correlation below).
 | `no_grants_matched` | `mint`: no declared grant for this principal selects the device |
 | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2) |
 | `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7) |
+| `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
 | `context_matched` | `authorize_session`: context found, attributes returned |
 | `escalation_granted` | `escalate`: the level was within `max_privilege` and the mechanism succeeded |
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
@@ -1451,9 +1457,9 @@ is what the redemption joins back to (see Correlation below).
 | `username_mismatch` | the request's username differs from the one bound at redemption (§5.6). Reachable two ways, and a request under a name port49 never authenticated is neither of them — that is `context_missing`, because the username is the key. First, wherever the username is resolved from context rather than read off the wire: the `$enab{level}$` enable path through the `(nas, rem_addr)` index. Second, as a **store-fault guard** — the context lookup selects on the username, so a store answering with another principal's record fails the re-check that follows it and is denied rather than authorized. A correct store never produces the second |
 | `rem_addr_mismatch` | enable arrived from a different address than the bound one |
 | `privilege_exceeded` | the request is above the session's granted level |
-| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6) |
+| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `max_session_age`, and the caller must authenticate again (§13, decision 17) |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
-| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6); on `redeem`, a login into a revoked context whose token was not minted after the revocation (§5.6) |
+| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) |
@@ -4057,6 +4063,10 @@ Beyond those already listed in the design document's §14:
   `server_msg`, and resumes on the first refresh after the broker returns.
 - **Revocation is distinguishable**: a revoked context's next command is denied
   `credential_revoked`, not `context_missing`, until the idle TTL reclaims it.
+- **A login into a revoked result is refused**: a login that writes a revoked context — a
+  same-principal replace past the ceiling, an unreadable replace, or a revocation landing mid-join,
+  each with a token minted before the revocation — answers FAIL `credential_revoked` with the token
+  spent, and its retransmission is refused `credential_revoked`, never replayed as a PASS.
 - **Device tag**: a token minted for device A presented on device B under PAP or ASCII is
   refused `device_mismatch` without a store read; the same under CHAP is `token_not_found`;
   the tag is a keyed hash and two devices never share one.

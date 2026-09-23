@@ -123,10 +123,10 @@ caller, so plan 3's broker is a transport over an existing core rather than new 
   `port49_crypt_open_failures_total{record}` counter (`token`, `receipt`, `context`,
   `idempotency`) already emitted.
 - **`session.staleness_ceiling` defaults to 0, so the `context_stale` check is dead in the
-  shipping binary** until something calls `Refresh` on a schedule (spec §5.1.3). That schedule
-  is plan 3's wiring, and **the default must be set in the same change** — a ceiling with no
-  refresher denies every context the moment it is set, and a refresher with no ceiling
-  refreshes for nothing.
+  shipping binary** until something calls `Refresh` on a schedule (spec §5.1.3). **Plan 3 did not
+  wire it** (plan 3, Decided 14): the slice reads its policy once and its store dies with the
+  process, so a refresh has nothing to carry. Plan 7 wires the schedule and sets the default in the
+  same change — a ceiling with no refresher denies every context the moment it is set.
 
 **Leaves for later:** the broker API and its authorization (plan 7); blobs' compiled content
 (plan 4, the engine produces them; plan 2 stores opaque bytes by hash).
@@ -145,9 +145,8 @@ package comment is not where the next plan looks:**
   the only witness that a rotation retired a key too early
   (`internal/store/crypt/crypt.go:216-231`). Plan 7 with the rest of the alarms, or plan 6 with
   key rotation reporting, whichever lands first.
-- **`foreign` has no metric and no rate limit of its own** (ledger, Task 11), so nothing can
-  alert on it safely yet: a device that legitimately produces them floods whatever is watching.
-  Plan 3 owns broker metrics; this one travels with them.
+- **`foreign` has a metric** since plan 2b (`port49_accounting_attributions_total{attribution}`,
+  ruled with no rate limit). Nothing further is owed here.
 - **Deferred from Task 13 and Task 9, all three settled and none of them work for plan 2:**
   an `ErrPartial` sentinel and the `Refresh`/`mark` `firstErr` asymmetry — `mark` returns the
   refs it touched *and* the first error, `Refresh` returns a count and an error, and plan 7
@@ -317,6 +316,12 @@ self-only, `/v1/refresh` with `prompt=login` and the cert-path signed-nonce refr
 `/v1/logout` back-channel), spec §5.1.3 (scheduled refresh through `active_principals`),
 §5.1.4 (revocation by `sid`, `sub`, CRL/OCSP), §5.6 session lifetime (ceiling warning,
 grace window, `max_session_age` minimum across roles), the staleness ceiling end to end.
+
+**Carried from plan 3:** a store two processes can reach, before the broker leaves `port49d`
+(design §19 step 2); the scheduled refresh and the `staleness_ceiling` default, together; PR #7's
+third follow-up — a join racing another principal's replace under one username can lose its sid or
+certificate index entry (revocation by principal still reaches it); the certificate-to-directory
+mapping replacing the slice's declared `username:`; policy reload.
 
 ## Plan 8 — Workload certificates (§19 step 8)
 
