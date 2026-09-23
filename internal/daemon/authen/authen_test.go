@@ -384,6 +384,9 @@ func (noStore) GetReceipt(context.Context, store.ReceiptKey) (store.Receipt, err
 func (noStore) ExtendReceipt(context.Context, store.ReceiptKey, time.Time) error {
 	panic("store called")
 }
+func (noStore) FailReceipt(context.Context, store.ReceiptKey) error {
+	panic("store called")
+}
 func (noStore) DeleteReceiptsByPrincipal(context.Context, string) (int, error) {
 	panic("store called")
 }
@@ -2276,5 +2279,73 @@ func TestAReplacePastTheCeilingWithATokenMintedAfterTheRevocationAdmits(t *testi
 	}
 	if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); !c.RevokedAt.IsZero() {
 		t.Fatalf("the replace must not carry a revocation its token postdates: %+v", c)
+	}
+}
+
+// A login refused credential_revoked after its join wrote its receipt as PASS
+// before the join. The receipt branch refuses on the live context while it is
+// revoked, but a token minted after the revocation lifts it on the same ctx_id
+// (decision 15), and from then on the refused token's retransmission would
+// replay the PASS: the second try spec §5.6 denies a token the revocation was
+// meant to stop. The refusal marks its receipt FAIL, so the retransmission
+// replays the refusal whatever the context says now.
+func TestARefusedLoginStaysRefusedAfterTheRevocationIsLifted(t *testing.T) {
+	revokedAt := time.Unix(1_757_041_495, 0).Add(-time.Minute)
+	f := setup(t)
+	f.seedLoginWith(t, "token", 15, func(c *store.Context) {
+		c.RevokedAt = revokedAt
+		c.SessionExpires = f.now.Add(time.Minute)
+	})
+	f.now = f.now.Add(2 * time.Minute)
+	start := papStart("alice", "ssh", "198.51.100.4", f.tag()+"tok1tok1tok1tok1tok1tok1")
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusFail {
+		t.Fatalf("the replace past the ceiling must be refused: %+v", reply)
+	}
+	secret := f.tag() + "aftraftraftraftraftraftr"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "a", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@example.com", MintedAt: f.now, ExpiresAt: f.now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	f.now = f.now.Add(time.Minute)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", secret)); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("a token minted after the revocation must be admitted, lifting it: %+v", reply)
+	}
+	if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); !c.RevokedAt.IsZero() {
+		t.Fatalf("the join must have lifted the revocation for this test to mean anything: %+v", c)
+	}
+	f.now = f.now.Add(time.Minute)
+	retry, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+	r := f.records(t)
+	if last := r[len(r)-1]; retry.Status != wire.AuthenStatusFail || last["verdict"] != "deny" || last["reason"] != "receipt_replayed" {
+		t.Fatalf("a token refused credential_revoked must replay its refusal once the revocation is lifted: %+v %v", retry, last)
+	}
+}
+
+// failReceiptErrorStore loses the FailReceipt write, which is what a store
+// outage between the join and the refusal looks like.
+type failReceiptErrorStore struct{ *memory.Store }
+
+func (failReceiptErrorStore) FailReceipt(context.Context, store.ReceiptKey) error {
+	return errors.New("store down")
+}
+
+// A FailReceipt that does not land does not turn the refusal into anything
+// else: the answer is FAIL credential_revoked, the metric counts the error,
+// and the record says what the lost write costs.
+func TestALostFailReceiptStillRefusesAndSaysSo(t *testing.T) {
+	revokedAt := time.Unix(1_757_041_495, 0).Add(-time.Minute)
+	f := setupStore(t, func(st *memory.Store) store.Store { return failReceiptErrorStore{st} })
+	f.seedLoginWith(t, "token", 15, func(c *store.Context) {
+		c.RevokedAt = revokedAt
+		c.SessionExpires = f.now.Add(time.Minute)
+	})
+	f.now = f.now.Add(2 * time.Minute)
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(),
+		papStart("alice", "ssh", "198.51.100.4", f.tag()+"tok1tok1tok1tok1tok1tok1"))
+	rec := f.records(t)[0]
+	ie, _ := rec["index_error"].(string)
+	if reply.Status != wire.AuthenStatusFail || rec["reason"] != "credential_revoked" || !strings.Contains(ie, "receipt") {
+		t.Fatalf("a lost FailReceipt must still refuse, and say what it cost: %+v %v", reply, rec)
 	}
 }

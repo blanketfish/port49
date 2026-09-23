@@ -488,8 +488,9 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 				// JoinContext is still in flight, so a read here would race the
 				// winner's write and refuse the duplicate for nothing. It can
 				// therefore answer PASS from the receipt of a winner that, after
-				// its join, was refused credential_revoked: the one replay the
-				// §5.6 rule does not reach. It takes two byte-identical
+				// its join, is refused credential_revoked, if it reads the receipt
+				// before the winner's FailReceipt lands: the one replay the §5.6
+				// rule does not reach. It takes two byte-identical
 				// presentations inside one join; every authorization on the
 				// revoked context is denied, and the next retransmission reads
 				// the live context and is refused (plan 3, pre-flight F16).
@@ -505,7 +506,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 				// the retransmission above: the winner's receipt says PASS, but
 				// only replaying the effect puts the privilege on the context
 				// this session actually read.
-				if enable && r.Status == wire.AuthenStatusPass {
+				if enable && r.Status == wire.AuthenStatusPass && !r.Failed {
 					return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
 				}
 				return s.replay(ctx, rec, r)
@@ -624,8 +625,16 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// the pre-read and the join, merged by it. Each wrote a context whose every
 	// authorization is denied, so a PASS would put a permit in the log for a
 	// login that can do nothing, with nothing on it saying why. The token is
-	// spent. The receipt says PASS, and a retransmission reads the live context
-	// and is refused the same way (receiptContext).
+	// spent.
+	//
+	// The receipt was written PASS before the join, so the refusal marks it
+	// failed (FailReceipt). A retransmission is refused credential_revoked
+	// while the context is revoked (receiptContext), and replays the refusal
+	// after a token minted later has lifted the revocation on the same ctx_id
+	// (decision 15): the token the revocation was meant to stop gets no
+	// second try either way. A mark that does not land is counted and put on
+	// the record; the answer is still FAIL, and what is lost is only the
+	// replay after a lift.
 	//
 	// After the index bookkeeping, not before: the context exists and is
 	// revoked, and a revocation of this credential must still reach it.
@@ -633,6 +642,15 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// A revocation that lands after the join's swap is not seen here, and that
 	// login answers PASS; its first authorization is denied.
 	if !out.Context.RevokedAt.IsZero() {
+		ferr := s.h.store.FailReceipt(ctx, rk)
+		s.h.metrics.StoreOps.WithLabelValues("fail_receipt", storeOutcome(ferr)).Inc()
+		if ferr != nil {
+			lost := "receipt not marked failed; a retransmission after the revocation is lifted will replay PASS"
+			if rec.IndexError != "" {
+				lost = rec.IndexError + "; " + lost
+			}
+			rec.IndexError = lost
+		}
 		return s.revoked(ctx, rec, winner.Principal, out.Context.CtxID, out.Context.RevokedAt)
 	}
 	rec.Principal = winner.Principal
@@ -760,13 +778,14 @@ func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.Co
 	return s.finish(rec, wire.AuthenStatusPass, reason)
 }
 
-// replay answers from a receipt's stored decision. A refusal — the only one
-// written is a login refused `credential_revoked` (spec §5.6) — replays as a
-// refusal does, after the failure delay and with its server_msg, so a device
-// that retransmits it learns nothing a FAIL would not have told it.
+// replay answers from a receipt's stored decision. A refusal — a login refused
+// `credential_revoked`, written FAIL before its join or marked Failed after it
+// (spec §5.6) — replays as a refusal does, after the failure delay and with its
+// server_msg, so a device that retransmits it learns nothing a FAIL would not
+// have told it.
 func (s *Session) replay(ctx context.Context, rec decision.Record, r store.Receipt) (wire.AuthenReply, bool) {
 	rec.Session.CtxID = r.CtxID
-	if r.Status == wire.AuthenStatusFail {
+	if r.Failed || r.Status == wire.AuthenStatusFail {
 		return s.fail(ctx, rec, decision.ReceiptReplayed)
 	}
 	return s.finish(rec, r.Status, decision.ReceiptReplayed)

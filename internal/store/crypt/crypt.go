@@ -264,6 +264,12 @@ func (w *wrapped) ExtendReceipt(ctx context.Context, rk store.ReceiptKey, idleEx
 	return w.inner.ExtendReceipt(ctx, rk, idleExpiresAt)
 }
 
+// FailReceipt writes one plaintext flag and reads nothing sealed, for the
+// same reason as ExtendReceipt: a refusal has to stick under any key.
+func (w *wrapped) FailReceipt(ctx context.Context, rk store.ReceiptKey) error {
+	return w.inner.FailReceipt(ctx, rk)
+}
+
 // DeleteReceiptsByPrincipal walks the plaintext revocation index. It works with
 // no key at all, which is the point of leaving that index unsealed.
 func (w *wrapped) DeleteReceiptsByPrincipal(ctx context.Context, principal string) (int, error) {
