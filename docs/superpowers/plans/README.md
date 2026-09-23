@@ -8,6 +8,9 @@ it. When writing plan N, start here, then read the cited sections, then the prev
 Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
 fifteen tasks, reviewed per task and whole-branch); 3–12 not yet. PR #3's lab
 stretch is merged, so plan 3 is unblocked and is the next plan to write.
+**2b written 2026-09-23** (`2026-09-23-02b-context-join.md`, nine tasks): a second login by
+the same principal joins the live context instead of replacing it, stored privilege is
+raise-only, and accounting attribution gets a metric.
 
 ---
 
