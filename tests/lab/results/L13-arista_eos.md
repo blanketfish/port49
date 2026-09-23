@@ -2,7 +2,7 @@
 
 - **Date measured:** 2026-09-20
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
-- **Image version:** vEOS-lab 4.32.2F (`vrnetlab/arista_veos:4.32.2F`)
+- **Image version:** vEOS-lab 4.31.2F (image tagged 4.32.2F) (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
 - **Capture:** `tests/lab/evidence/L13-arista_eos.pcap` — 276 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L13-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
@@ -72,6 +72,6 @@ What SSH said when the login was refused:
 - The method list in force is whatever `tests/lab/configs` deploys; this row does not sweep the authentication order (that is L4).
 - A second TACACS+ server, so "tries the next server" is untested — the lab has one.
 - The device's retransmission and `deadtime` timers as configured values, beyond what the quoted output above shows.
-- Every transport but SSH, and every platform but vEOS-lab 4.32.2F.
+- Every transport but SSH, and every platform but vEOS-lab 4.31.2F (image tagged 4.32.2F).
 - Delays above 12s, and whether the connection is torn down by the device or by port49d.
 

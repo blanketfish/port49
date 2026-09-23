@@ -4162,7 +4162,7 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   | image | authentication START | authorization request | accounting |
   |---|---|---|---|
-  | vEOS-lab 4.32.2F | `ssh` | **`vty4`** / `vty5` | `ssh` at start, `vty<n>` at stop |
+  | vEOS-lab 4.31.2F | `ssh` | **`vty4`** / `vty5` | `ssh` at start, `vty<n>` at stop |
   | Nexus 9300v 10.4(2)F | `0` | `0` on the session, **empty string** on every command | `0` |
   | vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15 | empty string | empty string | `0`, `1`, `non-tty` |
   | Catalyst 8000V 17.13.01a | `tty434` | **`tty434`** | `tty434` |
@@ -4271,7 +4271,7 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 - **L3** — measured for the first time on any platform, 2026-09-20.
   `tests/lab/results/L3-arista_eos.md`, `L3-cisco_nxos.md`.
 
-  **vEOS-lab 4.32.2F**, two concurrent enables, off the wire:
+  **vEOS-lab 4.31.2F** (image tagged 4.32.2F), two concurrent enables, off the wire:
 
   ```
   AUTHEN START action=login(1) authen_type=ascii(1) service=enable(2) priv_lvl=15
@@ -4364,7 +4364,7 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   `tests/lab/results/L4-juniper_vjunos-router.md`, `L4-juniper_vsrx.md`, `L4-arista_eos.md`,
   `L4-cisco_nxos.md`, `L4-cisco_iosxe.md`.
 
-  | method list | port49 | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.32.2F | Nexus 9300v 10.4(2)F | Catalyst 8000V 17.13.01a |
+  | method list | port49 | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.31.2F | Nexus 9300v 10.4(2)F | Catalyst 8000V 17.13.01a |
   |---|---|---|---|---|---|---|
   | lists a local method | unreachable | local login | local login | local login | local login | local login |
   | lists a local method | answering FAIL | **local login** | **local login** | refused | refused | refused |
@@ -4605,7 +4605,7 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   full delay), and the login timed from the client. `tests/lab/results/L13-arista_eos.md`,
   `L13-juniper_vjunos-router.md`, `L13-juniper_vsrx.md`.
 
-  | FAIL delayed by | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.32.2F | Catalyst 8000V 17.13.01a |
+  | FAIL delayed by | vJunos-router 23.4R2-S2.1 | vSRX 21.4R3.15 | vEOS-lab 4.31.2F | Catalyst 8000V 17.13.01a |
   |---|---|---|---|---|
   | 2s | waited 2.03s, local login | waited 2.06s, local login | waited 2.04s, **refused** | waited, **refused** |
   | 6s | gave up at 3.28s, local login | gave up at 3.51s, local login | gave up at 5.04s, local login | waited, **refused** |
@@ -5206,8 +5206,13 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   The docker tag and the vmdk filename both say 4.32.2F; the file was named for a release it
   does not contain. Under the rule in `CLAUDE.md` the device is right and the documents are
   wrong. The harness now reports what the device reports. **Every EOS observation in this
-  section stands — only the release label on it was wrong**, and notes written before today
-  still carry the old label in their headers.
+  section stands — only the release label on it was wrong**. Corrected 2026-09-23: the eleven
+  EOS notes that still carried the old label in their headers (`L1`, `L2`, `L4`, `L5`, `L6`,
+  `L7`, `L8`, `L10`, `L13`, `L16`, `netconf`), the EOS entries of the L1, L4 and L13 tables
+  in this section and the L3 detail, now say vEOS-lab 4.31.2F (image tagged 4.32.2F). Every EOS note ran
+  the one image, `vrnetlab/arista_veos:4.32.2F` — `tests/lab/topologies/eos.clab.yml` has named
+  no other since plan 1 — and that image reports 4.31.2F in `L7-arista_eos.md`'s own eAPI
+  replies (2026-09-21) as well as here.
 
 - **L17** — added and measured 2026-09-21, `tests/lab/junos_opts_test.go`, results in
   `tests/lab/results/L17-juniper_vsrx.md` and `L17-juniper_vjunos-router.md`. **vSRX 21.4R3.15
