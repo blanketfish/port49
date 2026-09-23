@@ -64,6 +64,21 @@ func TestIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// No extended key usage at all is any purpose (RFC 5280), and crypto/tls
+	// accepts it as a client certificate: many enterprise user certificates
+	// carry none. Only an EKU list without clientAuth is refused.
+	anyPurpose, err := ca.Issue(testpki.Leaf{CommonName: "x", Emails: []string{"a@example.com"}, NoExtKeyUsage: true,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(anyPurpose.Leaf.ExtKeyUsage) != 0 {
+		t.Fatalf("the any-purpose leaf carries an EKU: %v", anyPurpose.Leaf.ExtKeyUsage)
+	}
+	if p, _, err := Identity(state(anyPurpose.Leaf), now); err != nil || p != "user:a@example.com" {
+		t.Fatalf("a leaf with no extended key usage: %q %v", p, err)
+	}
+
 	for name, tt := range map[string]struct {
 		cs  *tls.ConnectionState
 		now time.Time

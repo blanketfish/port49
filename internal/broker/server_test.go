@@ -224,6 +224,28 @@ func TestLimitHoldsTheCap(t *testing.T) {
 	}
 }
 
+// A client certificate with no extended key usage is any purpose (RFC 5280):
+// the handshake takes it, and so does the mint. Many enterprise user
+// certificates carry none (plan 3 ruling on T8, flagged for Ryan).
+func TestACertificateWithNoExtendedKeyUsageMints(t *testing.T) {
+	f := newFixture(t, 8)
+	url := startServer(t, f)
+	c, err := f.ca.Issue(testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}, NoExtKeyUsage: true,
+		NotBefore: f.now.Add(-time.Hour), NotAfter: f.now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := clientWith(f, c).Post(url+"/v1/tokens", "application/json", strings.NewReader(`{"devices":["leaf1"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(body), `"verdict":"permit"`) {
+		t.Fatalf("a mint with a no-EKU certificate: %s %s", resp.Status, body)
+	}
+}
+
 // With every slot held by an authenticated connection, which is never closed
 // for idling before max_session_age, Shutdown must still return within its
 // context. Serve waits in Accept for a slot; closing the listener has to wake

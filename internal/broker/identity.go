@@ -25,9 +25,11 @@ var ErrUntrusted = errors.New("broker: no trusted client certificate")
 // ambiguity fails closed (design §7). An email mapping is a weak mapping and
 // must be issuer-pinned; the broker trusts exactly one anchor (LoadTLS), which
 // pins it. Only VerifiedChains is read: PeerCertificates is what the client
-// sent, not what the anchor vouched for. The leaf must carry the clientAuth
-// extended key usage: crypto/tls's client verification already requires it,
-// and Identity does not rely on every caller having gone through that.
+// sent, not what the anchor vouched for. A leaf that lists extended key
+// usages must list clientAuth: crypto/tls's client verification already
+// requires it, and Identity does not rely on every caller having gone through
+// that. A leaf with none at all is any purpose (RFC 5280, and crypto/tls
+// agrees), as many enterprise user certificates are, and is accepted.
 //
 // An rfc822Name is an IA5String, which admits spaces and control characters.
 // The policy accepts only printable ASCII with an @ (policy.checkIdentity), so
@@ -75,6 +77,9 @@ func Identity(cs *tls.ConnectionState, now time.Time) (string, store.Credential,
 }
 
 func clientAuth(c *x509.Certificate) bool {
+	if len(c.ExtKeyUsage) == 0 && len(c.UnknownExtKeyUsage) == 0 {
+		return true
+	}
 	for _, u := range c.ExtKeyUsage {
 		if u == x509.ExtKeyUsageClientAuth || u == x509.ExtKeyUsageAny {
 			return true
