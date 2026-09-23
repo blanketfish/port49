@@ -27,6 +27,13 @@ import (
 // Its GetBlob is not counted in StoreOps, unlike every other store call site:
 // it holds no metrics handle, and plan 4's Authorizer, which replaces it,
 // counts its reads with its cache (plan 3, pre-flight F18).
+//
+// Two things it does not do yet, both owed by plan 4 (roadmap). It never
+// compares the blob's Platform with the device's: in-process, the broker
+// compiles each blob for the device it mints for, so the two cannot differ
+// until the broker leaves port49d. And a GetBlob store error is
+// blob_unavailable; once the store is remote, an outage is store_unavailable,
+// not a fault in the blob.
 type Blob struct {
 	Store    store.Store
 	Fallback Authorizer
