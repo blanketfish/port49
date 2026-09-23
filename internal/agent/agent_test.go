@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -642,5 +644,154 @@ func TestTheClientRefusesADirectoryThatIsNotPrivate(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Dir(missing)); !os.IsNotExist(err) {
 		t.Fatal("the client must not create the directory")
+	}
+}
+
+// rawBroker is a TLS listener that does, per connection, what serve says:
+// the i-th connection (from 1) is handed to serve after its handshake. It
+// is how a test makes the broker hang up at an exact moment.
+func rawBroker(t *testing.T, serve func(i int, c *tls.Conn, raw *net.TCPConn)) (url string, ca *testpki.CA, cli tls.Certificate) {
+	t.Helper()
+	now := time.Now()
+	ca, err := testpki.NewCA("raw broker ca", now.Add(-time.Hour), now.Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srvCert, err := ca.Issue(testpki.Leaf{CommonName: "broker", IPs: []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cli, err = ca.Issue(testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}, Client: true,
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	cfg := &tls.Config{Certificates: []tls.Certificate{srvCert}, ClientCAs: ca.Pool(),
+		ClientAuth: tls.VerifyClientCertIfGiven, MinVersion: tls.VersionTLS13, SessionTicketsDisabled: true}
+	go func() {
+		for i := 1; ; i++ {
+			raw, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(i int) {
+				defer raw.Close()
+				c := tls.Server(raw, cfg)
+				if c.Handshake() != nil {
+					return
+				}
+				serve(i, c, raw.(*net.TCPConn))
+			}(i)
+		}
+	}()
+	return "https://" + ln.Addr().String(), ca, cli
+}
+
+// hangUp closes a connection with no alert: reset drops it with an RST, as
+// a closed socket does to a write that arrives after the close; otherwise a
+// FIN, which the agent reads as EOF.
+func hangUp(raw *net.TCPConn, reset bool) {
+	if reset {
+		_ = raw.SetLinger(0)
+	}
+	raw.Close()
+}
+
+// answerOne reads one request and answers it as the broker would.
+func answerOne(c *tls.Conn, br *bufio.Reader) bool {
+	req, err := http.ReadRequest(br)
+	if err != nil {
+		return false
+	}
+	var body any = api.Config{Methods: []string{"x509"}, MaxSessionAgeSeconds: 60, BatchMax: 10}
+	if req.URL.Path == "/v1/tokens" {
+		var mr api.MintRequest
+		_ = json.NewDecoder(req.Body).Decode(&mr)
+		body = api.MintResponse{Principal: "user:alice@example.com", Results: []api.MintItem{{
+			Device: mr.Devices[0], Verdict: "permit", Username: "alice", Login: "login"}}}
+	}
+	_, _ = io.Copy(io.Discard, req.Body)
+	b, _ := json.Marshal(body)
+	_, err = fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(b), b)
+	return err == nil
+}
+
+// A broker that refuses the certificate may close the connection before the
+// agent reads its alert: in TLS 1.3 the client's handshake is done first, and
+// its first request then meets a reset or an EOF. That is still reported as a
+// likely refusal, with its causes — every time, not only when the alert wins
+// the race.
+func TestAHangUpAfterTheHandshakeNamesTheLikelyCauses(t *testing.T) {
+	for _, reset := range []bool{true, false} {
+		t.Run(fmt.Sprintf("reset=%v", reset), func(t *testing.T) {
+			url, ca, cli := rawBroker(t, func(_ int, _ *tls.Conn, raw *net.TCPConn) { hangUp(raw, reset) })
+			a := New(Config{BrokerURL: url, Cert: cli, BrokerCA: ca.Pool()})
+			_, err := a.Connect(context.Background())
+			if err == nil {
+				t.Fatal("Connect must fail")
+			}
+			for _, w := range []string{"right after the handshake", "refused this certificate", "expired", "client_ca_file"} {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("%q does not say %q", err, w)
+				}
+			}
+		})
+	}
+}
+
+// Mid-session, a hang-up on a new connection is diagnosed the same way, but
+// it does not end the session: only an alert says for certain that the
+// certificate was refused.
+func TestAHangUpOnReconnectLeavesTheSession(t *testing.T) {
+	url, ca, cli := rawBroker(t, func(i int, c *tls.Conn, raw *net.TCPConn) {
+		if i == 1 {
+			// The session's first connection answers Connect, then drops.
+			answerOne(c, bufio.NewReader(c))
+		}
+		hangUp(raw, true)
+	})
+	a := New(Config{BrokerURL: url, Cert: cli, BrokerCA: ca.Pool()})
+	if _, err := a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := a.Mint(context.Background(), "leaf1", false, 0)
+	if err == nil || errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "right after the handshake") {
+		t.Fatalf("a hang-up on reconnect: %v", err)
+	}
+	select {
+	case <-a.Done():
+		t.Fatal("a hang-up must not end the session")
+	default:
+	}
+}
+
+// A reset on a connection that has already answered is the network or a
+// restarting broker, never a diagnosis about the certificate: the ask is
+// retried on a new connection and mints.
+func TestAResetLaterInTheSessionIsNotACertificateProblem(t *testing.T) {
+	url, ca, cli := rawBroker(t, func(_ int, c *tls.Conn, raw *net.TCPConn) {
+		// Every connection answers one request, then resets on the next.
+		br := bufio.NewReader(c)
+		if answerOne(c, br) {
+			_, _ = br.Peek(1)
+		}
+		hangUp(raw, true)
+	})
+	a := New(Config{BrokerURL: url, Cert: cli, BrokerCA: ca.Pool()})
+	if _, err := a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+		t.Fatalf("a reset on an answered connection must be retried, not diagnosed: %v", err)
+	}
+	select {
+	case <-a.Done():
+		t.Fatal("a reset must not end the session")
+	default:
 	}
 }

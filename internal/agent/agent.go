@@ -25,6 +25,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -105,7 +106,7 @@ func New(c Config) *Agent {
 			if n := a.handshakes.Add(1); n > 1 {
 				fmt.Fprintf(a.log, "port49 agent: reconnected to the broker (handshake %d)\n", n)
 			}
-			return conn, nil
+			return &watchedConn{Conn: conn}, nil
 		},
 		MaxConnsPerHost:     1,
 		MaxIdleConnsPerHost: 1,
@@ -128,10 +129,14 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	if err != nil {
 		return api.Config{}, err
 	}
-	resp, err := a.client.Do(req)
+	resp, err := a.do(req)
 	if err != nil {
 		if refused := a.refusal(err); refused != nil {
 			return api.Config{}, refused
+		}
+		var hup *hangUpError
+		if errors.As(err, &hup) {
+			return api.Config{}, hup
 		}
 		return api.Config{}, fmt.Errorf("agent: connecting to the broker at %s: %w", a.broker, err)
 	}
@@ -207,7 +212,7 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Idempotency-Key", key)
-		resp, err = a.client.Do(req)
+		resp, err = a.do(req)
 		if err == nil {
 			break
 		}
@@ -221,6 +226,13 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 			return api.MintItem{}, over
 		}
 		if attempt == 2 {
+			// A hang-up right after the handshake is most likely a refusal
+			// whose alert was lost, and says so; it does not end the
+			// session, since only an alert says for certain.
+			var hup *hangUpError
+			if errors.As(err, &hup) {
+				return api.MintItem{}, hup
+			}
 			return api.MintItem{}, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
 		}
 	}
@@ -310,6 +322,74 @@ func (a *Agent) refusal(err error) error {
 		"been revoked, or it was issued by a CA other than the broker's client trust anchor (client_ca_file)",
 		a.broker, op.Err)
 }
+
+// watchedConn is a broker connection that knows whether the broker has ever
+// sent it application data.
+type watchedConn struct {
+	net.Conn
+	answered atomic.Bool
+}
+
+func (c *watchedConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.answered.Store(true)
+	}
+	return n, err
+}
+
+// do sends req and, when it fails on a connection whose handshake completed
+// but which the broker never answered, says so with a *hangUpError.
+//
+// In TLS 1.3 the client's handshake is done before the broker has checked its
+// certificate, so the broker's refusal races the first request: the agent
+// may read the alert, or its write may meet the reset of a connection the
+// broker already closed, and then the alert is lost and all it has is
+// "connection reset by peer" or EOF. A new connection closed before its
+// first answer is how a refusal looks when the race is lost. A connection
+// that has answered before, a dial failure and a timeout are not.
+func (a *Agent) do(req *http.Request) (*http.Response, error) {
+	var conn *watchedConn
+	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
+		conn, _ = i.Conn.(*watchedConn)
+	}}
+	resp, err := a.client.Do(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	if err == nil || conn == nil || conn.answered.Load() {
+		return resp, err
+	}
+	var ne net.Error
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		return resp, err
+	}
+	hup := &hangUpError{broker: a.broker, err: err}
+	if leaf := a.leaf(); leaf != nil && !a.now().Before(leaf.NotAfter) {
+		hup.expired = leaf.NotAfter
+	}
+	return resp, hup
+}
+
+// hangUpError is a new connection the broker closed after the handshake and
+// before any answer: most likely a refused certificate whose alert was lost.
+// It is a diagnosis, not a verdict, so it never ends the session.
+type hangUpError struct {
+	broker  string
+	err     error
+	expired time.Time // the certificate's NotAfter, when it is past
+}
+
+func (e *hangUpError) Error() string {
+	if !e.expired.IsZero() {
+		return fmt.Sprintf("agent: the broker at %s closed a new connection right after the handshake (%v); it most "+
+			"likely refused this certificate: your certificate expired at %s; renew it",
+			e.broker, e.err, e.expired.UTC().Format(time.RFC3339))
+	}
+	return fmt.Sprintf("agent: the broker at %s closed a new connection right after the handshake, before answering "+
+		"(%v); it most likely refused this certificate: it has expired or been revoked, it was issued by a CA other "+
+		"than the broker's client trust anchor (client_ca_file), or it is not issued for client authentication",
+		e.broker, e.err)
+}
+
+func (e *hangUpError) Unwrap() error { return e.err }
 
 // certificateAlerts are the alerts a broker sends about the certificate it
 // was shown, by crypto/tls's text for them: its alert type is unexported.
