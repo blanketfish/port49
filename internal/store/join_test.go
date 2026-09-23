@@ -348,6 +348,59 @@ func TestJoinContextReplacingAnUnreadableContextStillComparesTheRevision(t *test
 	}
 }
 
+// readHook answers GetContext from the memory store and runs beforeFirstAnswer
+// once, after the first read and before JoinContext can swap: the race the
+// storetest helper only reaches by chance, forced on every run.
+type readHook struct {
+	*memory.Store
+	reads             *int
+	beforeFirstAnswer func()
+}
+
+func (h readHook) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	c, err := h.Store.GetContext(ctx, k)
+	*h.reads++
+	if *h.reads == 1 && h.beforeFirstAnswer != nil {
+		h.beforeFirstAnswer()
+	}
+	return c, err
+}
+
+// The join is a compare-and-set on the revision it read: a revocation landing
+// between the read and the swap moves the revision, the swap is refused, and
+// the second pass merges the revocation the first never saw. A join that wrote
+// what it read would erase it.
+func TestJoinContextKeepsARevocationThatLandsMidJoin(t *testing.T) {
+	reads := 0
+	s := readHook{Store: newMemory(), reads: &reads}
+	s.Store.PutContext(context.Background(), ck, live(), time.Hour)
+	s.beforeFirstAnswer = func() {
+		if err := s.Store.SetRevokedAt(context.Background(), ck, t0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := store.JoinContext(context.Background(), s, ck, login(), t0.Add(-time.Minute), t0, time.Hour)
+	if err != nil || !res.Joined {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if got, _ := s.Store.GetContext(context.Background(), ck); got.CtxID != "ctxA" || !got.RevokedAt.Equal(t0) {
+		t.Fatalf("the join erased a revocation that landed mid-login: %+v", got)
+	}
+	if reads != 2 {
+		t.Fatalf("the refused swap must send the join back to the read: %d reads, want 2", reads)
+	}
+}
+
+// An UnreadableContextError built without an Err — by a backend that has not
+// been written yet — must still be loggable: it is read on the login path at
+// the moment a key has rotated out.
+func TestUnreadableContextErrorWithoutAnErr(t *testing.T) {
+	e := &store.UnreadableContextError{Rev: 3}
+	if e.Error() == "" || e.Unwrap() != nil || errors.Is(e, store.ErrNotFound) {
+		t.Fatalf("%q %v", e.Error(), e.Unwrap())
+	}
+}
+
 func TestJoinRacesRevocationOnTheMemoryStore(t *testing.T) {
 	storetest.JoinRacesRevocation(t, func() store.Store { return newMemory() }, t0)
 }

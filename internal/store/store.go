@@ -32,7 +32,15 @@ type UnreadableContextError struct {
 	Err       error
 }
 
-func (e *UnreadableContextError) Error() string { return e.Err.Error() }
+// Error does not assume Err is set: it is read on the login path at the moment
+// a key has rotated out, and a backend that left Err nil must not panic there.
+func (e *UnreadableContextError) Error() string {
+	if e.Err == nil {
+		return "store: context record could not be opened"
+	}
+	return e.Err.Error()
+}
+
 func (e *UnreadableContextError) Unwrap() error { return e.Err }
 
 type TokenKey struct {
