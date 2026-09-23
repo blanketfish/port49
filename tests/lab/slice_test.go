@@ -216,6 +216,9 @@ func sliceObservation(recs []map[string]any, tokens []string, outs []string) (st
 		return "", fmt.Errorf("no blob event carries %s", hash)
 	}
 	redeems := sliceRecords(recs, "redeem", "token_redeemed")
+	if len(redeems) < 2 {
+		return "", fmt.Errorf("want two redeems for %s, got %d", sliceUser, len(redeems))
+	}
 	for _, r := range redeems {
 		if str(r, "principal") != slicePrincipal || !minted[str(sub(r, "auth"), "credential_sha256")] {
 			return "", fmt.Errorf("a redeem does not join to a mint: %v", r)
@@ -224,7 +227,11 @@ func sliceObservation(recs []map[string]any, tokens []string, outs []string) (st
 	if str(sub(redeems[0], "session"), "ctx_id") != str(sub(redeems[1], "session"), "ctx_id") {
 		return "", fmt.Errorf("the second window did not join the first's context")
 	}
-	deny := sliceRecords(recs, "authorize_command", "no_permit_dominates_deny")[0]
+	denies := sliceRecords(recs, "authorize_command", "no_permit_dominates_deny")
+	if len(denies) == 0 {
+		return "", fmt.Errorf("no command of %s's was denied no_permit_dominates_deny", sliceUser)
+	}
+	deny := denies[0]
 	if strings.Join(strs(sub(deny, "request"), "vector"), " ") != sliceDenied {
 		return "", fmt.Errorf("the denial is of %v, not %q", strs(sub(deny, "request"), "vector"), sliceDenied)
 	}
