@@ -44,3 +44,14 @@ func TestAMintRecordCarriesItsPolicyBlock(t *testing.T) {
 		t.Fatalf("the §5.7 spelling is candidate_cap_reached, got %q", CandidateCapReached)
 	}
 }
+
+// A grant with no roles leaves the key out rather than logging "roles": null,
+// which a reader would have to special-case beside [] (T3 review).
+func TestAGrantWithNoRolesOmitsTheKey(t *testing.T) {
+	var buf bytes.Buffer
+	NewJSONLines(&buf).Emit(Record{TS: time.Unix(0, 0), Event: EventMint, Verdict: VerdictPermit,
+		Reason: GrantsMatched, Policy: &Policy{Subject: "netops", Grants: []PolicyGrant{{Scope: "all_devices"}}}})
+	if bytes.Contains(buf.Bytes(), []byte(`"roles"`)) {
+		t.Fatalf("empty roles must be omitted: %s", buf.String())
+	}
+}

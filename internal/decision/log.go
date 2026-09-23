@@ -143,7 +143,7 @@ type Policy struct {
 // PolicyGrant is one grant that selected the device.
 type PolicyGrant struct {
 	Scope string   `json:"scope"`
-	Roles []string `json:"roles"`
+	Roles []string `json:"roles,omitempty"`
 }
 
 // Blob is the `blob` event's body: the compiled blob whole, emitted once per
