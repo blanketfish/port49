@@ -235,7 +235,10 @@ sudo -n containerlab destroy -t tests/lab/topologies/<eos|iosxe>.clab.yml --clea
 ```
 
 A token never goes on a command line: `port49 token` writes it to stdout, a shell variable holds
-it, and `printf` (a builtin, so no process of its own) feeds it to `curl` on stdin. The seed-token
+it, and `printf` (a builtin, so no process of its own) feeds it to `curl` on stdin. **Never run
+these steps under `set -x` (`xtrace`)**: the shell then prints every expanded command, so the
+minted `$TOKEN` lands in your terminal, your scrollback and any log you tee it to. That happened
+once in plan 3's lab run. The seed-token
 file `/tmp/port49-lab-tokens.jsonl` is truncated at every daemon start; `make evidence` reads it,
 so run `make evidence` before the next daemon start.
 
