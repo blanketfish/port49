@@ -434,9 +434,9 @@ type Store interface {
 	// pass, which is exactly how §5.1.3 says a policy-driven revocation
 	// reaches live sessions: within one refresh interval, the operator who
 	// was revoked is authorized again, with nothing in the log connecting the
-	// two. If a lift is ever genuinely wanted it belongs behind a separate
-	// setter that only a path which re-verified the credential may call, and
-	// the spec's §13 decision table has to say so first.
+	// two. The one path that may lift a mark is a login whose token the broker
+	// minted after the revocation — the credential verified again — and it
+	// does so through JoinContext, never here (spec §13, decision 15).
 	//
 	// SessionExpires is recomputed here rather than by the caller because the
 	// pair it is computed from is the pair about to be overwritten; see

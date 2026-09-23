@@ -17,6 +17,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/limits"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/store/memory"
@@ -544,6 +545,14 @@ func TestReceiptStopsAtTheAbsoluteCap(t *testing.T) {
 	// i == 11) and not merely that it eventually does.
 	for i := 0; i < 13; i++ {
 		f.now = f.now.Add(10 * time.Minute)
+		// The session is live and authorizing, which is what extends its
+		// context (author.Handle's TouchContext). Without it this fixture's
+		// one-hour context TTL would reclaim the context at 60 minutes, and
+		// a replay onto a reclaimed context is token_spent (spec §5.6) —
+		// which is not the cap this test pins.
+		if err := f.st.TouchContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}, time.Hour); err != nil {
+			t.Fatalf("at i=%d: %v", i, err)
+		}
 		reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
 		r := f.records(t)
 		gotStatus, gotReason := reply.Status, r[len(r)-1]["reason"]
@@ -874,19 +883,19 @@ func TestACeilingIsNeverSilentlyDropped(t *testing.T) {
 	}
 }
 
-// capturingStore keeps the Context the handler handed to PutContext, before
+// capturingStore keeps the Context the handler handed to SwapContext, before
 // any store stamped anything on it.
 type capturingStore struct {
 	*memory.Store
 	got store.Context
 }
 
-func (c *capturingStore) PutContext(ctx context.Context, k store.ContextKey, v store.Context, ttl time.Duration) error {
+func (c *capturingStore) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, v store.Context, ttl time.Duration) error {
 	c.got = v
-	return c.Store.PutContext(ctx, k, v, ttl)
+	return c.Store.SwapContext(ctx, k, rev, v, ttl)
 }
 
-// memory.PutContext stamps LastTouchedAt itself, so reading the context back
+// memory.SwapContext stamps LastTouchedAt itself, so reading the context back
 // cannot tell whether the handler set it. Task 10 reads that field to decide
 // whether an extension is due, and a backend that does not stamp it would
 // leave a zero there and cost a store write per command — so the handler's own
@@ -1342,53 +1351,6 @@ func TestRaceLosingEnableStillRaisesTheContext(t *testing.T) {
 	}
 }
 
-// And when the context was replaced between the escalation and the
-// retransmission, the replay must name the context that exists now. The receipt
-// froze ctxL; alice's second shell replaced it with ctx1 (spec §15, L1: the key
-// cannot tell two of her shells apart). Logging the frozen id would put a
-// ctx_id in the decision log that no context, no authorize_* record and no
-// accounting record ever held — the thing brief item 8 exists to prevent,
-// arriving through the replay door.
-func TestReplayedEnableNamesTheLiveContext(t *testing.T) {
-	f := setup(t)
-	f.seedLogin(t, "token", 15)
-	secret := f.tag() + "enabenabenabenabenab0123"
-	f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
-		store.Token{ID: "en", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
-			Principal: "user:alice@example.com", ExpiresAt: f.now.Add(time.Minute)})
-	sess := f.h.NewSession(f.peer)
-	sess.Start(context.Background(), f.enableStart("alice"))
-	if reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)}); reply.Status != wire.AuthenStatusPass {
-		t.Fatalf("first escalation: %+v", reply)
-	}
-
-	// A second login on the same (nas, username): ctxL is replaced by ctx1, at
-	// login privilege.
-	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
-		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
-		Port: []byte("ssh"), RemAddr: []byte("198.51.100.4"),
-		Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}); reply.Status != wire.AuthenStatusPass {
-		t.Fatalf("relogin: %+v", reply)
-	}
-	if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); c.CtxID != "ctx1" {
-		t.Fatalf("the relogin must have replaced the context: %+v", c)
-	}
-
-	// The device retransmits the enable, inside the receipt window.
-	sess2 := f.h.NewSession(f.peer)
-	sess2.Start(context.Background(), f.enableStart("alice"))
-	reply, _ := sess2.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
-	last := f.records(t)[len(f.records(t))-1]
-	if reply.Status != wire.AuthenStatusPass || last["reason"] != "receipt_replayed" ||
-		last["session"].(map[string]any)["ctx_id"] != "ctx1" {
-		t.Fatalf("the replay must name the live context, not the frozen one: %+v %v", reply, last)
-	}
-	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
-	if c.CtxID != "ctx1" || c.PrivLvl != 15 {
-		t.Fatalf("the replay must raise the context that exists now: %+v", c)
-	}
-}
-
 // A login token presented at the enable prompt is token_kind_mismatch, so the
 // redeem and escalate records can never disagree with the wire (spec §7).
 func TestLoginTokenAtEnableIsKindMismatch(t *testing.T) {
@@ -1466,5 +1428,465 @@ func TestRotatedEncryptionKeyKeepsItsTagUntilItLeavesTheWindow(t *testing.T) {
 	reply, rec = redeem(t, crypt.Wrap(st, crypt.Keys{Current: v2}, nil), token.NewTagWindow(tagV2))
 	if reply.Status != wire.AuthenStatusFail || rec["reason"] != "device_mismatch" {
 		t.Fatalf("once the minting key has left the window its tags must be refused: %v", rec)
+	}
+}
+
+// joinFixture seeds window A's live context and hands back window B's login
+// START. Window A is enabled to 15 and accounting has bound one session to it,
+// which is exactly the state a replace used to erase.
+func (f *fixture) joinFixture(t *testing.T, adjust func(*store.Context)) wire.AuthenStart {
+	t.Helper()
+	f.seedLoginWith(t, "token", 15, func(c *store.Context) {
+		c.PrivLvl = 15
+		c.SessionDiscriminators = []string{store.HashDiscriminator("42")}
+		if adjust != nil {
+			adjust(c)
+		}
+	})
+	return wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("ssh"),
+		RemAddr: []byte("198.51.100.4"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")}
+}
+
+// Window B's login joins window A's context: the ctx_id, A's privilege and A's
+// bound session all survive, and the record names the kept context and
+// displaces nothing (spec §5.6).
+func TestASecondLoginJoinsAndKeepsTheFirstWindowsState(t *testing.T) {
+	f := setup(t)
+	start := f.joinFixture(t, nil)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.CtxID != "ctxL" || c.PrivLvl != 15 || len(c.SessionDiscriminators) != 1 {
+		t.Fatalf("the join must keep window A's ctx_id, privilege and bound session: %+v", c)
+	}
+	s := f.records(t)[0]["session"].(map[string]any)
+	if s["ctx_id"] != "ctxL" || s["replaced_ctx_id"] != nil {
+		t.Fatalf("%v", s)
+	}
+}
+
+// The receipt carries the ctx_id the login will be written under, and for a
+// join that is the live context's: a retransmission of window B's login
+// replays naming ctxL, not an id minted for a context that was never written.
+func TestAJoinedLoginsReceiptNamesTheKeptContext(t *testing.T) {
+	f := setup(t)
+	start := f.joinFixture(t, nil)
+	f.h.NewSession(f.peer).Start(context.Background(), start)
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+	last := f.records(t)[len(f.records(t))-1]
+	if reply.Status != wire.AuthenStatusPass || last["reason"] != "receipt_replayed" ||
+		last["session"].(map[string]any)["ctx_id"] != "ctxL" {
+		t.Fatalf("%+v %v", reply, last)
+	}
+}
+
+// Test 3 of the decisions. A token minted before a revocation is what the
+// revocation was meant to stop, and redeeming it on a device where the revoked
+// context is still live must not lift the mark. A token minted after it is the
+// broker having verified the credential again, and admits (spec §13,
+// decision 15).
+func TestARevocationSurvivesATokenMintedBeforeIt(t *testing.T) {
+	revokedAt := time.Unix(1_757_041_495, 0).Add(-time.Minute)
+	for _, tt := range []struct {
+		name     string
+		mintedAt time.Time
+		revoked  bool
+	}{
+		{"minted before the revocation", revokedAt.Add(-time.Minute), true},
+		{"minted after the revocation", revokedAt.Add(time.Second), false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := setup(t)
+			start := f.joinFixture(t, func(c *store.Context) { c.RevokedAt = revokedAt })
+			secret := f.tag() + "mintmintmintmintmint0123"
+			if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+				store.Token{ID: "m", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+					Principal: "user:alice@example.com", Enable: "token", MaxPrivilege: 15,
+					MintedAt: tt.mintedAt, ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+				t.Fatal(err)
+			}
+			start.Data = []byte(secret)
+			f.h.NewSession(f.peer).Start(context.Background(), start)
+			c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+			if got := !c.RevokedAt.IsZero(); got != tt.revoked || c.CtxID != "ctxL" {
+				t.Fatalf("revoked %v, want %v: %+v", got, tt.revoked, c)
+			}
+		})
+	}
+}
+
+// Test 5 of the decisions. The same device-facing username under another
+// principal is not this operator's second window: it replaces, starts at its
+// own login level with nothing bound, and the record names what it displaced.
+func TestAnotherPrincipalUnderTheSameUsernameReplaces(t *testing.T) {
+	f := setup(t)
+	start := f.joinFixture(t, nil)
+	secret := f.tag() + "othrothrothrothrothrothr"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "o", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@corp.example", ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	start.Data = []byte(secret)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("%+v", reply)
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+	if c.CtxID != "ctx1" || c.Principal != "user:alice@corp.example" || c.PrivLvl != 1 || len(c.SessionDiscriminators) != 0 {
+		t.Fatalf("another principal must get a fresh context: %+v", c)
+	}
+	s := f.records(t)[0]["session"].(map[string]any)
+	if s["ctx_id"] != "ctx1" || s["replaced_ctx_id"] != "ctxL" {
+		t.Fatalf("the replace must name what it displaced: %v", s)
+	}
+}
+
+// contextReadFails answers GetContext the way a store that is down does: an
+// error that is neither ErrNotFound nor a record the sealing layer could not
+// open.
+type contextReadFails struct{ *memory.Store }
+
+func (contextReadFails) GetContext(context.Context, store.ContextKey) (store.Context, error) {
+	return store.Context{}, errors.New("store: connection refused")
+}
+
+// A store port49 cannot reach cannot tell it whether there is a context to
+// join, and writing one blind could erase a revocation. The login is ERROR —
+// and it is ERROR before the token is spent, so the operator's token still
+// works once the store is back, and the device's retry is not a replay of a
+// PASS nothing backs.
+func TestAContextReadErrorFailsTheLoginBeforeTheTokenIsSpent(t *testing.T) {
+	f := setupStore(t, func(st *memory.Store) store.Store { return contextReadFails{st} })
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", f.tag()+"tok1tok1tok1tok1tok1tok1"))
+	if reply.Status != wire.AuthenStatusError || f.records(t)[0]["reason"] != "store_unavailable" {
+		t.Fatalf("%+v %v", reply, f.records(t))
+	}
+	if cands, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(cands) != 1 {
+		t.Fatalf("the token must not be spent on a login that cannot be written: %d left", len(cands))
+	}
+}
+
+// Ruling R1, end to end through the real sealing layer. A key rotation past
+// the two-key window leaves a live context no daemon can open. Refusing the
+// login would lock the operator out until the idle TTL reclaims a record the
+// authorizer cannot use anyway; instead the login replaces it, the replace
+// keeps the plaintext revocation (the token was minted before it), and the
+// record says what happened — replaced_unreadable, and no replaced_ctx_id,
+// because that id is sealed.
+func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
+	var v0, v2 crypt.Key
+	v0.ID, v2.ID = "v0", "v2"
+	copy(v0.Bytes[:], "retired-context-key-v0-32-bytes!")
+	copy(v2.Bytes[:], "current-context-key-v2-32-bytes!")
+	var sealed store.Store
+	f := setupStore(t, func(st *memory.Store) store.Store {
+		sealed = crypt.Wrap(st, crypt.Keys{Current: v2}, nil)
+		return sealed
+	})
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	revokedAt := f.now.Add(-time.Minute)
+	if err := crypt.Wrap(f.st, crypt.Keys{Current: v0}, nil).PutContext(context.Background(), key,
+		store.Context{CtxID: "ctxL", Principal: "user:alice@example.com", Username: "alice", PrivLvl: 15,
+			RevokedAt: revokedAt}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// setupStore's t1 sits in the inner store in plaintext, which the sealing
+	// layer drops as unreadable; this login's token is sealed under v2.
+	secret := f.tag() + "rotdrotdrotdrotdrotdrotd"
+	if _, err := sealed.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "r", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@example.com", MintedAt: revokedAt.Add(-time.Minute),
+			ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", secret))
+	rec := f.records(t)[0]
+	s := rec["session"].(map[string]any)
+	if reply.Status != wire.AuthenStatusPass || rec["reason"] != "token_redeemed" || s["ctx_id"] != "ctx1" ||
+		s["replaced_ctx_id"] != nil || s["replaced_unreadable"] != true {
+		t.Fatalf("a context under a retired key must be replaced, not refused: %+v %v", reply, rec)
+	}
+	c, err := sealed.GetContext(context.Background(), key)
+	if err != nil || c.CtxID != "ctx1" || c.PrivLvl != 1 || !c.RevokedAt.Equal(revokedAt) {
+		t.Fatalf("the replace must be readable under the current key and keep the revocation: %+v %v", c, err)
+	}
+	if left, _ := sealed.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(left) != 0 {
+		t.Fatalf("the token is spent by the login that replaced the record: %d left", len(left))
+	}
+}
+
+// Ruling P3. A replace displaces another principal's login, and the reverse
+// index keeps every sid and certificate a context was indexed under (the
+// memory store's indexKeys) — so unless the replace unindexes the displaced
+// credential, a back-channel logout of the OLD principal's sid keeps reaching
+// the NEW principal's context for as long as it is extended, and revocation
+// marks it without asking whose it is (session.RevokeBySid).
+func TestAReplaceUnindexesTheCredentialItDisplaced(t *testing.T) {
+	f := setup(t)
+	start := f.joinFixture(t, nil)
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	// ctxL's own login indexed it, as redeem does.
+	if err := f.st.IndexContext(context.Background(), "user:alice@example.com", "sid-1", store.CertKey("ca", "01"), ref, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	secret := f.tag() + "othrothrothrothrothrothr"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "o", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@corp.example", Credential: store.Credential{Method: "oidc", Sid: "sid-corp"},
+			ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	start.Data = []byte(secret)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("%+v", reply)
+	}
+	// Extensions are what would carry a stale entry forward past index_ttl.
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	for i := 0; i < 3; i++ {
+		f.now = f.now.Add(30 * time.Minute)
+		if err := f.st.TouchContext(context.Background(), key, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if refs, _ := f.st.ContextsBySid(context.Background(), "sid-1"); len(refs) != 0 {
+		t.Fatalf("the displaced principal's sid still reaches the replacing context: %v", refs)
+	}
+	if refs, _ := f.st.ContextsByCert(context.Background(), store.CertKey("ca", "01")); len(refs) != 0 {
+		t.Fatalf("the displaced principal's certificate still reaches the replacing context: %v", refs)
+	}
+	if refs, _ := f.st.ContextsBySid(context.Background(), "sid-corp"); len(refs) != 1 {
+		t.Fatalf("the new login must still be indexed under its own sid: %v", refs)
+	}
+	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("unindex_context", "ok")); n != 1 {
+		t.Fatalf("store_operations_total{op=unindex_context,outcome=ok} = %v, want 1", n)
+	}
+}
+
+// certReachStore checks, after every index write and context write the login
+// makes, that revocation by one certificate still finds ref. It is how a test
+// sees the moments between the calls, which is where an unindex-then-index
+// would drop a key both logins share.
+type certReachStore struct {
+	*memory.Store
+	certKey string
+	ref     store.ContextRef
+	missed  []string
+}
+
+func (c *certReachStore) check(ctx context.Context, after string) {
+	if refs, _ := c.Store.ContextsByCert(ctx, c.certKey); len(refs) != 1 || refs[0] != c.ref {
+		c.missed = append(c.missed, after)
+	}
+}
+
+func (c *certReachStore) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, v store.Context, ttl time.Duration) error {
+	err := c.Store.SwapContext(ctx, k, rev, v, ttl)
+	c.check(ctx, "swap_context")
+	return err
+}
+
+func (c *certReachStore) UnindexContext(ctx context.Context, principal, sid, certKey string, ref store.ContextRef) error {
+	err := c.Store.UnindexContext(ctx, principal, sid, certKey, ref)
+	c.check(ctx, "unindex_context")
+	return err
+}
+
+func (c *certReachStore) IndexContext(ctx context.Context, principal, sid, certKey string, ref store.ContextRef, ttl time.Duration) error {
+	err := c.Store.IndexContext(ctx, principal, sid, certKey, ref, ttl)
+	c.check(ctx, "index_context")
+	return err
+}
+
+// Ruling P9. A replace that shares keys with what it displaced — here the
+// same principal logging in with the same certificate after its context
+// passed its session ceiling — must not unindex the shared keys. Unindexing
+// them and indexing them again would leave a moment in which a CRL naming
+// that certificate finds nothing, and the context written in that moment
+// would never be marked. Revocation by the certificate reaches the new
+// context at every point of the login, and after it.
+func TestAReplaceKeepsTheKeysItShares(t *testing.T) {
+	var cs *certReachStore
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	certKey := store.CertKey("ca", "01")
+	f := setupStore(t, func(st *memory.Store) store.Store {
+		cs = &certReachStore{Store: st, certKey: certKey, ref: ref}
+		return cs
+	})
+	cert := store.Credential{Method: "cert", Issuer: "ca", Serial: "01"}
+	f.seedLoginWith(t, "token", 15, func(c *store.Context) {
+		c.Credential = cert
+		c.SessionExpires = f.now.Add(time.Minute)
+	})
+	if err := f.st.IndexContext(context.Background(), "user:alice@example.com", "", certKey, ref, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	secret := f.tag() + "certcertcertcertcertcert"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "c", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@example.com", Credential: cert, ExpiresAt: f.now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	f.now = f.now.Add(2 * time.Minute)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", secret)); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("%+v", reply)
+	}
+	if s := f.records(t)[0]["session"].(map[string]any); s["ctx_id"] != "ctx1" || s["replaced_ctx_id"] != "ctxL" {
+		t.Fatalf("a login past the ceiling must replace: %v", s)
+	}
+	if len(cs.missed) != 0 {
+		t.Fatalf("revocation by the shared certificate missed the context after %v", cs.missed)
+	}
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	for i := 0; i < 3; i++ {
+		f.now = f.now.Add(30 * time.Minute)
+		if err := f.st.TouchContext(context.Background(), key, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@example.com"); len(refs) != 1 {
+		t.Fatalf("the shared principal must still reach the replacing context: %v", refs)
+	}
+	refs, err := session.New(f.st, func() time.Time { return f.now }, time.Hour, time.Hour).RevokeByCert(context.Background(), "ca", "01")
+	if err != nil || len(refs) != 1 {
+		t.Fatalf("revocation by the shared certificate: %v %v", refs, err)
+	}
+	if c, _ := f.st.GetContext(context.Background(), key); c.CtxID != "ctx1" || c.RevokedAt.IsZero() {
+		t.Fatalf("the replacing context must be revoked: %+v", c)
+	}
+}
+
+// Ruling P4, for a login. The receipt froze the ctx_id the login was written
+// under, and a retransmission replays PASS only while that is still the live
+// context. A second login by the same principal JOINS it and keeps the id, so
+// the replay still lands. Another principal's replace, or a reclaim, leaves a
+// receipt naming a context that no longer exists: answering PASS from it would
+// admit a session whose authorizations then answer from someone else's
+// context, or from none. It is `token_spent`, and the window does not slide.
+func TestARetransmittedLoginReplaysOnlyOntoTheContextItWasWrittenFor(t *testing.T) {
+	putAndLogin := func(t *testing.T, f *fixture, id, principal, secret string) {
+		t.Helper()
+		if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+			store.Token{ID: id, Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+				Principal: principal, ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+		if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", secret)); reply.Status != wire.AuthenStatusPass {
+			t.Fatalf("login %s: %+v", id, reply)
+		}
+	}
+	for _, tt := range []struct {
+		name    string
+		between func(t *testing.T, f *fixture)
+		replays bool
+	}{
+		{"the same principal's second login joined it", func(t *testing.T, f *fixture) {
+			putAndLogin(t, f, "t2", "user:alice@example.com", f.tag()+"tok2tok2tok2tok2tok2tok2")
+		}, true},
+		{"another principal's login replaced it", func(t *testing.T, f *fixture) {
+			putAndLogin(t, f, "o", "user:alice@corp.example", f.tag()+"othrothrothrothrothrothr")
+		}, false},
+		{"the idle TTL reclaimed it", func(t *testing.T, f *fixture) {
+			if err := f.st.DeleteContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var counter *extendCountingStore
+			f := setupStore(t, func(st *memory.Store) store.Store {
+				counter = &extendCountingStore{Store: st}
+				return counter
+			})
+			first := papStart("alice", "ssh", "198.51.100.4", f.tag()+"tok1tok1tok1tok1tok1tok1")
+			if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), first); reply.Status != wire.AuthenStatusPass {
+				t.Fatalf("first login: %+v", reply)
+			}
+			tt.between(t, f)
+			reply, _ := f.h.NewSession(f.peer).Start(context.Background(), first)
+			r := f.records(t)
+			last := r[len(r)-1]
+			if tt.replays {
+				if reply.Status != wire.AuthenStatusPass || last["reason"] != "receipt_replayed" ||
+					last["session"].(map[string]any)["ctx_id"] != "ctx1" || counter.extends != 1 {
+					t.Fatalf("a receipt for the joined context must replay: %+v %v, %d extends", reply, last, counter.extends)
+				}
+				return
+			}
+			if reply.Status != wire.AuthenStatusFail || last["reason"] != "token_spent" || counter.extends != 0 {
+				t.Fatalf("a receipt for a context that no longer exists must not replay, or slide: %+v %v, %d extends",
+					reply, last, counter.extends)
+			}
+		})
+	}
+}
+
+// Ruling P4, for an enable; it replaces TestReplayedEnableNamesTheLiveContext.
+// The receipt froze the ctx_id the escalation raised, and a retransmitted
+// enable replays that escalation only onto that context. The same principal's
+// second login joins it and keeps the id, so the replay still lands. A replace
+// writes a new ctx_id — the same principal past its session ceiling, or
+// another principal under the same username — and raising the replacing
+// context would carry an escalation across a ceiling that ended, or hand one
+// principal's enable to another's session. It is `token_spent`.
+func TestAReplayedEnableActsOnlyOnTheContextItWasWrittenFor(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		ceiling   time.Duration // the seeded context's SessionExpires, from now
+		advance   time.Duration // between the escalation and the relogin
+		principal string        // the relogin's
+		ctxID     string        // where the relogin lands
+		replays   bool
+	}{
+		{"the same principal's second login joined it", 8 * time.Hour, 0, "user:alice@example.com", "ctxL", true},
+		{"the same principal's login past the ceiling replaced it", time.Minute, 2 * time.Minute, "user:alice@example.com", "ctx1", false},
+		{"another principal's login replaced it", 8 * time.Hour, 0, "user:alice@corp.example", "ctx1", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := setup(t)
+			f.seedLoginWith(t, "token", 15, func(c *store.Context) { c.SessionExpires = f.now.Add(tt.ceiling) })
+			enable := f.tag() + "enabenabenabenabenab0123"
+			relogin := f.tag() + "relgrelgrelgrelgrelgrelg"
+			for id, tok := range map[string]store.Token{
+				"en": {Secret: []byte(enable), Kind: store.KindEnable, Principal: "user:alice@example.com"},
+				"re": {Secret: []byte(relogin), Kind: store.KindLogin, Principal: tt.principal, Enable: "token", MaxPrivilege: 15},
+			} {
+				tok.ID, tok.Username, tok.ExpiresAt = id, "alice", f.now.Add(time.Hour)
+				if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}, tok); err != nil {
+					t.Fatal(err)
+				}
+			}
+			sess := f.h.NewSession(f.peer)
+			sess.Start(context.Background(), f.enableStart("alice"))
+			if reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(enable)}); reply.Status != wire.AuthenStatusPass {
+				t.Fatalf("first escalation: %+v", reply)
+			}
+			f.now = f.now.Add(tt.advance)
+			if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", relogin)); reply.Status != wire.AuthenStatusPass {
+				t.Fatalf("relogin: %+v", reply)
+			}
+			key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+			if c, _ := f.st.GetContext(context.Background(), key); c.CtxID != tt.ctxID {
+				t.Fatalf("the relogin landed on %q, want %q", c.CtxID, tt.ctxID)
+			}
+
+			// The device retransmits the enable, inside the receipt window.
+			sess2 := f.h.NewSession(f.peer)
+			sess2.Start(context.Background(), f.enableStart("alice"))
+			reply, _ := sess2.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(enable)})
+			last := f.records(t)[len(f.records(t))-1]
+			c, _ := f.st.GetContext(context.Background(), key)
+			if tt.replays {
+				if reply.Status != wire.AuthenStatusPass || last["reason"] != "receipt_replayed" ||
+					last["session"].(map[string]any)["ctx_id"] != "ctxL" || c.PrivLvl != 15 {
+					t.Fatalf("the replay must act on the joined context: %+v %v %+v", reply, last, c)
+				}
+				return
+			}
+			if reply.Status != wire.AuthenStatusFail || last["event"] != "escalate" || last["reason"] != "token_spent" || c.PrivLvl != 1 {
+				t.Fatalf("a replayed enable must not raise a context it was not written for: %+v %v %+v", reply, last, c)
+			}
+		})
 	}
 }

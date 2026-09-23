@@ -57,11 +57,19 @@ type Device struct {
 type Session struct {
 	CtxID    string `json:"ctx_id"`
 	Username string `json:"username,omitempty"`
-	// ReplacedCtxID is set on a redeem that overwrote an existing context for
-	// the same (nas, username) — the same operator logging into the same
-	// device twice. It names the displaced ctx_id so the two shells' records
-	// can still be joined (spec §5.6).
+	// ReplacedCtxID is set on a redeem that replaced an existing context for
+	// the same (nas, username) rather than joining it: another principal under
+	// the same username, or the same principal's context past its session
+	// ceiling. It names the displaced ctx_id so the records before and after
+	// can still be joined (spec §5.6). A second login by the same principal
+	// joins and sets nothing here.
 	ReplacedCtxID string `json:"replaced_ctx_id,omitempty"`
+	// ReplacedUnreadable is set on a redeem that replaced a context the
+	// sealing layer could not open — sealed under a key that has left the
+	// two-key window, or failing authentication. Its ctx_id is sealed, so
+	// ReplacedCtxID cannot name it, and this says a context was displaced all
+	// the same (spec §5.6).
+	ReplacedUnreadable bool `json:"replaced_unreadable,omitempty"`
 	// Port and RemAddr are as seen on this exchange, which is not necessarily
 	// what the context recorded: they are part of no key (spec §13,
 	// decision 15).

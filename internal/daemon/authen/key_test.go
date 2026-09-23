@@ -73,10 +73,12 @@ func TestTwoUsersOnOneDeviceDoNotShareASlot(t *testing.T) {
 	}
 }
 
-// TestSecondLoginReplacesContextAndLogsIt is requirement (c) and the accepted
-// cost of the key: one user's concurrent sessions on one device share a
-// context, so the overwrite has to be visible in the log (spec §5.6).
-func TestSecondLoginReplacesContextAndLogsIt(t *testing.T) {
+// TestSecondLoginJoinsTheLiveContext is requirement (c) as spec §5.6 now
+// states it: one user's concurrent sessions on one device share a context, and
+// a second login by the same principal joins it rather than replacing it. The
+// ctx_id is kept, so both shells' later records join on one id, and the second
+// login's record displaces nothing.
+func TestSecondLoginJoinsTheLiveContext(t *testing.T) {
 	f := setup(t)
 	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
 		store.Token{ID: "t2", Secret: []byte(f.tag() + "tok2tok2tok2tok2tok2tok2"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: f.now.Add(15 * time.Minute)}); err != nil {
@@ -92,18 +94,14 @@ func TestSecondLoginReplacesContextAndLogsIt(t *testing.T) {
 	if len(r) != 2 {
 		t.Fatalf("records: %v", r)
 	}
-	first := r[0]["session"].(map[string]any)
-	if first["replaced_ctx_id"] != nil {
-		t.Fatalf("first login replaced nothing: %v", first)
+	for i, rec := range r {
+		s := rec["session"].(map[string]any)
+		if s["ctx_id"] != "ctx1" || s["replaced_ctx_id"] != nil {
+			t.Fatalf("login %d must name the one context and displace nothing: %v", i+1, s)
+		}
 	}
-	second := r[1]["session"].(map[string]any)
-	if second["ctx_id"] != "ctx2" || second["replaced_ctx_id"] != "ctx1" {
-		t.Fatalf("the overwrite must name the context it displaced: %v", second)
-	}
-	// The live context is the second login's, and it is still usable: the
-	// first shell's later authorizations find it and are permitted.
 	c, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
-	if err != nil || c.CtxID != "ctx2" || c.Username != "alice" {
+	if err != nil || c.CtxID != "ctx1" || c.Username != "alice" {
 		t.Fatalf("%+v %v", c, err)
 	}
 }
