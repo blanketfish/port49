@@ -70,7 +70,7 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 			seedPath, len(opt.Secrets))
 	}
 
-	var pairs, diff, credBytes, alreadyFill, shapeTripped, prefixTripped int
+	var pairs, diff, credBytes, alreadyFill, shapeTripped int
 	for _, cp := range names {
 		base := filepath.Base(cp)
 		in, err := os.ReadFile(cp)
@@ -164,16 +164,18 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 		// corpus rather than asserted per file, since a single capture need not
 		// contain a credential.
 		//
-		// The two halves are counted SEPARATELY and each is required below.
-		// Together they hid a bug: every one of the 306 trips of the combined
-		// counter was TokenPrefix, so the shape half was never exercised at all
-		// and an unsound version of it passed this control.
+		// Only the shape half has a control. The prefix half used to be counted
+		// here too, and required to fire, until the captures on the lab host
+		// all came from minted runs: a minted token carries no TokenPrefix, so
+		// a capture can no longer contain one and a control that demands it
+		// can only fail. The prefix is still forbidden in the evidence below,
+		// which costs nothing and would catch an old capture redacted wrong.
+		// Counting the two separately is also what exposed the earlier bug in
+		// the shape rule: every one of the 306 trips of the combined counter
+		// was TokenPrefix, so the shape half had never been exercised.
 		for _, p := range d.Packets {
 			if labcreds.TokenShaped(p.Body) != "" {
 				shapeTripped++
-			}
-			if bytes.Contains(p.Body, []byte(labcreds.TokenPrefix)) {
-				prefixTripped++
 			}
 		}
 
@@ -207,16 +209,10 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 			"proves nothing about the evidence beside them, or the rule no longer describes a minted token",
 			pairs)
 	}
-	if prefixTripped == 0 {
-		t.Errorf("labcreds.TokenPrefix %q was not found in any of the %d unredacted capture(s), so that half "+
-			"of the scan is not known to fire. Once every capture on this machine comes from a minted run "+
-			"this is expected, and the prefix check should be retired rather than left reading as coverage",
-			labcreds.TokenPrefix, pairs)
-	}
 	t.Logf("audited %d capture/evidence pair(s): %d byte(s) differ, all of them credential bytes "+
 		"(%d credential bytes across every record copy, %d already %q); over the unredacted captures the "+
-		"shape rule trips on %d packet(s) and the prefix on %d, so each half is known to be able to fire",
-		pairs, diff, credBytes, alreadyFill, string(rune(Fill)), shapeTripped, prefixTripped)
+		"shape rule trips on %d packet(s), so it is known to be able to fire",
+		pairs, diff, credBytes, alreadyFill, string(rune(Fill)), shapeTripped)
 }
 
 // repoRootForTest walks up to the module root.
