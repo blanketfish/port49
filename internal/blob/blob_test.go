@@ -110,3 +110,85 @@ func TestCommandVerdicts(t *testing.T) {
 		t.Errorf("an unmatched command is NoRuleMatched, got %v", got)
 	}
 }
+
+// A correctly named body is not therefore understood: a rule outside the
+// subset, or a blob naming no platform, is refused rather than read. Read, a
+// misplaced `**` permits too much and an unknown class drops a deny.
+func TestDecodeRefusesWhatItCannotMatch(t *testing.T) {
+	for name, body := range map[string]string{
+		"non-trailing **":         `{"platform":"arista_eos","privilege":15,"attributes":[],"permit":["show ** detail"],"deny":[]}`,
+		"unknown class in a deny": `{"platform":"arista_eos","privilege":15,"attributes":[],"permit":["**"],"deny":["reload @now"]}`,
+		"empty rule":              `{"platform":"arista_eos","privilege":15,"attributes":[],"permit":[""],"deny":[]}`,
+		"null body":               `null`,
+		"no platform":             `{"privilege":15,"attributes":[],"permit":["**"],"deny":[]}`,
+		"trailing bytes":          `{"platform":"arista_eos","privilege":15,"attributes":[],"permit":[],"deny":[]} {}`,
+	} {
+		if b, err := Decode(HashOf([]byte(body)), []byte(body)); err == nil {
+			t.Errorf("%s: decoded %+v, want an error", name, b)
+		}
+	}
+}
+
+// Matches stands on its own: a caller that skipped CheckRule still cannot
+// make a rule outside the subset match more than it says.
+func TestMatchesRefusesWhatCheckRuleRefuses(t *testing.T) {
+	for _, tt := range []struct {
+		rule   string
+		vector []string
+	}{
+		{"show ** detail", []string{"show", "running-config"}},
+		{"", nil},
+		{"   ", nil},
+	} {
+		if Matches(tt.rule, tt.vector) {
+			t.Errorf("Matches(%q, %q) = true, want false", tt.rule, tt.vector)
+		}
+	}
+}
+
+// One decision, one name: nil and empty, spacing, order and duplicates of
+// the rules do not change the hash. Attribute order is the wire's, and kept.
+func TestEncodeCanonicalizes(t *testing.T) {
+	_, want, err := Encode(Blob{Platform: "arista_eos", Attributes: []string{},
+		Permit: []string{"show version"}, Deny: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, b := range map[string]Blob{
+		"nil slices": {Platform: "arista_eos", Permit: []string{"show version"}},
+		"spacing":    {Platform: "arista_eos", Permit: []string{"  show   version "}},
+		"duplicates": {Platform: "arista_eos", Permit: []string{"show version", "show  version"}},
+	} {
+		if _, got, err := Encode(b); err != nil || got != want {
+			t.Errorf("%s: %s %v, want %s", name, got, err, want)
+		}
+	}
+	_, h1, _ := Encode(Blob{Platform: "p", Permit: []string{"a", "b"}, Deny: []string{"c", "d"}})
+	_, h2, _ := Encode(Blob{Platform: "p", Permit: []string{"b", "a"}, Deny: []string{"d", "c"}})
+	if h1 != h2 {
+		t.Error("rule order must not change the hash: deny-overrides is order-independent")
+	}
+	_, a1, _ := Encode(Blob{Platform: "p", Attributes: []string{"x=1", "y=2"}})
+	_, a2, _ := Encode(Blob{Platform: "p", Attributes: []string{"y=2", "x=1"}})
+	if a1 == a2 {
+		t.Error("attributes go on the wire in order; Encode must not reorder them")
+	}
+	in := Blob{Platform: "p", Permit: []string{"b", "a"}}
+	Encode(in)
+	if in.Permit[0] != "b" {
+		t.Error("Encode must not mutate the caller's slices")
+	}
+}
+
+// Encode refuses what Decode would refuse: a daemon must never be handed a
+// blob it cannot read.
+func TestEncodeRefusesWhatDecodeRefuses(t *testing.T) {
+	for name, b := range map[string]Blob{
+		"no platform": {Permit: []string{"**"}},
+		"bad rule":    {Platform: "p", Deny: []string{"reload @now"}},
+	} {
+		if _, _, err := Encode(b); err == nil {
+			t.Errorf("%s: encoded, want an error", name)
+		}
+	}
+}

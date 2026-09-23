@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"slices"
 	"strings"
 )
 
@@ -44,10 +46,25 @@ func HashOf(body []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// Encode renders b and names it. encoding/json writes struct fields in
-// declaration order, so one Blob value always encodes to the same bytes; the
-// caller (policy.Resolve) is what makes one decision one value, by sorting.
+// Encode renders b and names it, after putting it in canonical form so that
+// one decision always has one name: nil slices become empty, each rule is
+// respaced to single spaces, and Permit and Deny are sorted and deduplicated.
+// Sorting the rules is safe because Command is deny-overrides, which does not
+// depend on rule order; Attributes keep the caller's order, which is the
+// wire's. Case is kept. encoding/json writes struct fields in declaration
+// order, so the canonical value always encodes to the same bytes. A blob that
+// Decode would refuse is refused here, so no daemon is handed one.
 func Encode(b Blob) ([]byte, string, error) {
+	b = Blob{
+		Platform:   b.Platform,
+		Privilege:  b.Privilege,
+		Attributes: append([]string{}, b.Attributes...),
+		Permit:     canonicalRules(b.Permit),
+		Deny:       canonicalRules(b.Deny),
+	}
+	if err := b.check(); err != nil {
+		return nil, "", err
+	}
 	body, err := json.Marshal(b)
 	if err != nil {
 		return nil, "", err
@@ -55,10 +72,23 @@ func Encode(b Blob) ([]byte, string, error) {
 	return body, HashOf(body), nil
 }
 
+// canonicalRules copies rules, respaced, sorted and deduplicated.
+func canonicalRules(rules []string) []string {
+	out := make([]string, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, strings.Join(strings.Fields(r), " "))
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 // Decode parses a stored blob. A body that does not hash to its name is
 // refused, and so is a field this daemon does not know: half-reading a
 // decision a newer broker compiled is how a daemon and a broker come to
-// disagree about a rule (spec §5.1.2).
+// disagree about a rule (spec §5.1.2). The hash proves the bytes are the ones
+// named, not that this daemon understands them, so a blob with no platform, a
+// rule outside the subset, or bytes after the value is refused too. Every
+// refusal is an error, which the caller turns into a denied command.
 func Decode(hash string, body []byte) (Blob, error) {
 	if HashOf(body) != hash {
 		return Blob{}, ErrHashMismatch
@@ -69,7 +99,27 @@ func Decode(hash string, body []byte) (Blob, error) {
 	if err := dec.Decode(&b); err != nil {
 		return Blob{}, fmt.Errorf("blob: %s: %w", hash, err)
 	}
+	if _, err := dec.Token(); err != io.EOF {
+		return Blob{}, fmt.Errorf("blob: %s: bytes after the blob", hash)
+	}
+	if err := b.check(); err != nil {
+		return Blob{}, fmt.Errorf("blob: %s: %w", hash, err)
+	}
 	return b, nil
+}
+
+// check refuses a blob this daemon cannot decide with: no platform, or a
+// rule outside the subset.
+func (b Blob) check() error {
+	if b.Platform == "" {
+		return errors.New("blob: no platform")
+	}
+	for _, r := range slices.Concat(b.Permit, b.Deny) {
+		if err := CheckRule(r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // CheckRule refuses a rule outside the slice's subset of spec §4: words, `*`
@@ -96,12 +146,17 @@ func CheckRule(rule string) error {
 }
 
 // Matches reports whether rule matches the whole command vector: there is no
-// implicit prefix match (spec §4). Words compare case-insensitively.
+// implicit prefix match (spec §4). Words compare case-insensitively. It does
+// not trust its caller to have run CheckRule: an empty rule matches nothing,
+// and a `**` anywhere but last matches nothing.
 func Matches(rule string, vector []string) bool {
 	terms := strings.Fields(rule)
+	if len(terms) == 0 {
+		return false
+	}
 	for i, t := range terms {
 		if t == "**" {
-			return true // trailing-only, by CheckRule
+			return i == len(terms)-1
 		}
 		if i >= len(vector) {
 			return false
