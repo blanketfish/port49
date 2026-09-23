@@ -44,7 +44,12 @@ const MaxConns = 256
 // TLSNextProto, so a connection is one ordered stream of requests (F13).
 //
 // The handshake verifies validity against the broker's own clock, the one
-// Identity checks per request against, so the two never disagree.
+// Identity checks per request against, so the two never disagree. A
+// certificate is also put through Identity at the handshake
+// (VerifyConnection): one the anchor verifies but that maps to no principal
+// (no email SAN, or two) fails `port49 login` with a bad_certificate alert
+// and a line in ErrorLog saying why, rather than logging in and failing every
+// mint after (final review, Minor 1).
 //
 // ReadTimeout bounds reading one request, headers and body: a connection
 // stalled mid-request never goes idle, so without it headers promising a body
@@ -70,6 +75,13 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 			NextProtos:             []string{"http/1.1"},
 			SessionTicketsDisabled: true,
 			Time:                   b.Now,
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				if len(cs.PeerCertificates) == 0 {
+					return nil // /v1/config only; /v1/tokens refuses it
+				}
+				_, _, err := Identity(&cs, b.Now())
+				return err
+			},
 		},
 		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
 		ConnContext:       func(ctx context.Context, _ net.Conn) context.Context { return withHeldConn(ctx, b.Now()) },

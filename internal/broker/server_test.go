@@ -224,6 +224,34 @@ func TestLimitHoldsTheCap(t *testing.T) {
 	}
 }
 
+// A certificate the anchor verifies but that maps to no principal fails the
+// handshake, so `port49 login` fails at once and says why, rather than
+// printing "logged in" and failing every `port49 token` after (final review,
+// Minor 1; plan 3, Decided 3).
+func TestACertificateThatMapsToNoPrincipalFailsTheHandshake(t *testing.T) {
+	f := newFixture(t, 8)
+	errs := &lockedBuffer{}
+	url := startServerLogging(t, f, log.New(errs, "", 0))
+	two, err := f.ca.Issue(testpki.Leaf{CommonName: "two", Emails: []string{"a@example.com", "b@example.com"},
+		Client: true, NotBefore: f.now.Add(-time.Hour), NotAfter: f.now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := clientWith(f, two)
+	c.Transport.(*http.Transport).DisableKeepAlives = true
+	if resp, err := c.Get(url + "/v1/config"); err == nil {
+		resp.Body.Close()
+		t.Fatal("a certificate with two email SANs must fail the handshake, not reach /v1/config")
+	}
+	errs.waitFor(t, "2 email SANs")
+	// No certificate at all still reaches /v1/config (design §17).
+	resp, err := clientWith(f).Get(url + "/v1/config")
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("config without a certificate: %v %v", resp, err)
+	}
+	resp.Body.Close()
+}
+
 // A client certificate with no extended key usage is any purpose (RFC 5280):
 // the handshake takes it, and so does the mint. Many enterprise user
 // certificates carry none (plan 3 ruling on T8, flagged for Ryan).

@@ -438,7 +438,7 @@ func TestARefusedHandshakeNamesTheLikelyCauses(t *testing.T) {
 		o    rigOpts
 		want []string
 	}{
-		{"another CA", rigOpts{foreign: true}, []string{"refused this certificate", "expired", "trust anchor"}},
+		{"another CA", rigOpts{foreign: true}, []string{"refused this certificate", "expired", "trust anchor", "exactly one email address"}},
 		{"expired", rigOpts{expired: true}, []string{"refused this certificate", "your certificate expired at"}},
 		{"wrong anchor", rigOpts{wrongAnchor: true}, []string{"broker's certificate", "trust anchor"}},
 	} {
@@ -747,7 +747,8 @@ func TestAHangUpAfterTheHandshakeNamesTheLikelyCauses(t *testing.T) {
 			if err == nil {
 				t.Fatal("Connect must fail")
 			}
-			for _, w := range []string{"right after the handshake", "refused this certificate", "expired", "client_ca_file"} {
+			for _, w := range []string{"right after the handshake", "refused this certificate", "expired", "client_ca_file",
+				"exactly one email address"} {
 				if !strings.Contains(err.Error(), w) {
 					t.Errorf("%q does not say %q", err, w)
 				}

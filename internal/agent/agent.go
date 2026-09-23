@@ -329,8 +329,8 @@ func (a *Agent) refusal(err error) error {
 			"renew it (%v)", a.broker, leaf.NotAfter.UTC().Format(time.RFC3339), op.Err)
 	}
 	return fmt.Errorf("agent: the broker at %s refused this certificate (%v); the likely causes: it has expired or "+
-		"been revoked, or it was issued by a CA other than the broker's client trust anchor (client_ca_file)",
-		a.broker, op.Err)
+		"been revoked, it was issued by a CA other than the broker's client trust anchor (client_ca_file), or it "+
+		"does not carry exactly one email address (the broker's log says which)", a.broker, op.Err)
 }
 
 // watchedConn is a broker connection that knows whether the broker has ever
@@ -397,7 +397,8 @@ func (e *hangUpError) Error() string {
 	}
 	return fmt.Sprintf("agent: the broker at %s closed a new connection right after the handshake, before answering "+
 		"(%v); either it refused this certificate (it has expired or been revoked, it was issued by a CA other than "+
-		"the broker's client trust anchor (client_ca_file), or it is not issued for client authentication), or the "+
+		"the broker's client trust anchor (client_ca_file), it does not carry exactly one email address, or it is "+
+		"not issued for client authentication), or the "+
 		"broker stopped or restarted just then; if `port49 token` fails the same way again, it is the certificate",
 		e.broker, e.err)
 }
