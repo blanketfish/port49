@@ -225,10 +225,20 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 			a.end(over)
 			return api.MintItem{}, over
 		}
+		// A hang-up with a certificate past its NotAfter is that refusal
+		// with its alert lost, which over a real network the RST can
+		// discard: nothing this session holds will mint again, so it ends
+		// as the alert would have (pre-flight F10).
+		if hup := (*hangUpError)(nil); errors.As(err, &hup) && !hup.expired.IsZero() {
+			over := fmt.Errorf("%w: %s", ErrSessionOver, strings.TrimPrefix(hup.Error(), "agent: "))
+			a.end(over)
+			return api.MintItem{}, over
+		}
 		if attempt == 2 {
-			// A hang-up right after the handshake is most likely a refusal
-			// whose alert was lost, and says so; it does not end the
-			// session, since only an alert says for certain.
+			// A hang-up right after the handshake with a certificate still
+			// in date is a refusal whose alert was lost or a broker that
+			// restarted, and says so; it does not end the session, since
+			// only an alert or the expiry says for certain.
 			var hup *hangUpError
 			if errors.As(err, &hup) {
 				return api.MintItem{}, hup
@@ -369,8 +379,10 @@ func (a *Agent) do(req *http.Request) (*http.Response, error) {
 }
 
 // hangUpError is a new connection the broker closed after the handshake and
-// before any answer: most likely a refused certificate whose alert was lost.
-// It is a diagnosis, not a verdict, so it never ends the session.
+// before any answer: a refused certificate whose alert was lost, or a broker
+// that stopped or restarted just then.
+// It is a diagnosis, not a verdict, and ends the session only when expired
+// is set: the agent's own clock says no broker will take the certificate.
 type hangUpError struct {
 	broker  string
 	err     error
@@ -379,13 +391,14 @@ type hangUpError struct {
 
 func (e *hangUpError) Error() string {
 	if !e.expired.IsZero() {
-		return fmt.Sprintf("agent: the broker at %s closed a new connection right after the handshake (%v); it most "+
-			"likely refused this certificate: your certificate expired at %s; renew it",
+		return fmt.Sprintf("agent: the broker at %s closed a new connection right after the handshake (%v); it "+
+			"refused this certificate: your certificate expired at %s; renew it",
 			e.broker, e.err, e.expired.UTC().Format(time.RFC3339))
 	}
 	return fmt.Sprintf("agent: the broker at %s closed a new connection right after the handshake, before answering "+
-		"(%v); it most likely refused this certificate: it has expired or been revoked, it was issued by a CA other "+
-		"than the broker's client trust anchor (client_ca_file), or it is not issued for client authentication",
+		"(%v); either it refused this certificate (it has expired or been revoked, it was issued by a CA other than "+
+		"the broker's client trust anchor (client_ca_file), or it is not issued for client authentication), or the "+
+		"broker stopped or restarted just then; if `port49 token` fails the same way again, it is the certificate",
 		e.broker, e.err)
 }
 

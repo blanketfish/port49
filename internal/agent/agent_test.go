@@ -468,7 +468,17 @@ func TestARefusedReconnectEndsTheSession(t *testing.T) {
 	}
 	r.refuse.Store(true)
 	r.srv.CloseClientConnections()
-	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	// The alert races the agent's first write (TLS 1.3): an ask on which it
+	// lost both attempts is the hang-up diagnosis, and the session stays up
+	// until an alert is read. Five asks make a loss on every one negligible.
+	var err error
+	for i := 0; i < 5; i++ {
+		_, err = r.a.Mint(context.Background(), "leaf1", false, 0)
+		var hup *hangUpError
+		if errors.Is(err, ErrSessionOver) || !errors.As(err, &hup) {
+			break
+		}
+	}
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "refused this certificate") {
 		t.Fatalf("a refused reconnect: %v", err)
 	}
@@ -708,7 +718,9 @@ func answerOne(c *tls.Conn, br *bufio.Reader) bool {
 	if err != nil {
 		return false
 	}
-	var body any = api.Config{Methods: []string{"x509"}, MaxSessionAgeSeconds: 60, BatchMax: 10}
+	// A week: past the client certificate's day, so a test can move the
+	// agent's clock beyond the certificate without ending the session first.
+	var body any = api.Config{Methods: []string{"x509"}, MaxSessionAgeSeconds: 7 * 24 * 3600, BatchMax: 10}
 	if req.URL.Path == "/v1/tokens" {
 		var mr api.MintRequest
 		_ = json.NewDecoder(req.Body).Decode(&mr)
@@ -793,5 +805,39 @@ func TestAResetLaterInTheSessionIsNotACertificateProblem(t *testing.T) {
 	case <-a.Done():
 		t.Fatal("a reset must not end the session")
 	default:
+	}
+}
+
+// A hang-up on reconnect when the agent's own clock says its certificate has
+// expired ends the session as the alert would have: no broker will take that
+// certificate again, and a session kept up would answer the next
+// `port49 login` "already logged in" (pre-flight F10). Over a real network the
+// RST that follows a refusal can discard the alert, so this is the common
+// shape of a certificate expiring mid-session.
+func TestAHangUpWithAnExpiredCertificateEndsTheSession(t *testing.T) {
+	url, ca, cli := rawBroker(t, func(i int, c *tls.Conn, raw *net.TCPConn) {
+		if i == 1 {
+			answerOne(c, bufio.NewReader(c))
+		}
+		hangUp(raw, true)
+	})
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	a := New(Config{BrokerURL: url, Cert: cli, BrokerCA: ca.Pool(), Now: clock})
+	if _, err := a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	now = now.Add(25 * time.Hour) // the client certificate is good for a day
+	mu.Unlock()
+	_, err := a.Mint(context.Background(), "leaf1", false, 0)
+	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "your certificate expired at") {
+		t.Fatalf("a hang-up with an expired certificate: %v", err)
+	}
+	select {
+	case <-a.Done():
+	default:
+		t.Fatal("Done must close")
 	}
 }
