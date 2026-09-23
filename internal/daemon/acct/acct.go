@@ -149,6 +149,9 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 		return wire.AcctReply{Status: wire.AcctStatusError, ServerMsg: []byte("port49: accounting spool unavailable")}
 	}
 	h.metrics.Requests.WithLabelValues("acct", "success").Inc()
+	// Counted once the record is durable, not before: a refused record is
+	// answered ERROR and the device sends it again.
+	h.metrics.Attributions.WithLabelValues(attribution).Inc()
 
 	// Annotate exec records only, never command records, and never delete
 	// (spec §5.6 row 7, §5.8). The record is already durable at this point:
