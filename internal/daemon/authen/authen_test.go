@@ -1553,8 +1553,9 @@ func TestARevocationSurvivesATokenMintedBeforeIt(t *testing.T) {
 				t.Fatalf("a refused login must not write the context: %+v", c)
 			}
 			last := f.records(t)[len(f.records(t))-1]
-			if retry.Status == wire.AuthenStatusPass || last["verdict"] != "deny" {
-				t.Fatalf("a retransmission must not PASS: %+v %v", retry, last)
+			if retry.Status != wire.AuthenStatusFail || last["reason"] != "credential_revoked" {
+				t.Fatalf("a retransmission is refused as the login was, credential_revoked, not "+
+					"receipt_replayed (PR #7's second follow-up): %+v %v", retry, last)
 			}
 		})
 	}
@@ -1654,9 +1655,10 @@ func TestAContextReadErrorFailsTheLoginBeforeTheTokenIsSpent(t *testing.T) {
 // the two-key window leaves a live context no daemon can open. Refusing the
 // login would lock the operator out until the idle TTL reclaims a record the
 // authorizer cannot use anyway; instead the login replaces it, the replace
-// keeps the plaintext revocation (the token was minted before it), and the
+// keeps the plaintext revocation (the token was minted before it), the
 // record says what happened — replaced_unreadable, and no replaced_ctx_id,
-// because that id is sealed.
+// because that id is sealed — and the login is refused credential_revoked,
+// because the context it wrote is revoked (spec §5.6).
 func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
 	var v0, v2 crypt.Key
 	v0.ID, v2.ID = "v0", "v2"
@@ -1686,9 +1688,12 @@ func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
 	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", secret))
 	rec := f.records(t)[0]
 	s := rec["session"].(map[string]any)
-	if reply.Status != wire.AuthenStatusPass || rec["reason"] != "token_redeemed" || s["ctx_id"] != "ctx1" ||
+	// Replaced rather than refused before the token was read — and then
+	// refused, because what the replace wrote carries a revocation this token
+	// predates (the uniform check after the join; spec §5.6).
+	if reply.Status != wire.AuthenStatusFail || rec["reason"] != "credential_revoked" || s["ctx_id"] != "ctx1" ||
 		s["replaced_ctx_id"] != nil || s["replaced_unreadable"] != true {
-		t.Fatalf("a context under a retired key must be replaced, not refused: %+v %v", reply, rec)
+		t.Fatalf("a context under a retired key is replaced, and a replace carrying a revocation is refused: %+v %v", reply, rec)
 	}
 	c, err := sealed.GetContext(context.Background(), key)
 	if err != nil || c.CtxID != "ctx1" || c.PrivLvl != 1 || !c.RevokedAt.Equal(revokedAt) {
@@ -2183,5 +2188,93 @@ func TestAnotherPrincipalsReplaceUnindexesEveryJoinedLogin(t *testing.T) {
 	}
 	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("unindex_ref", "ok")); n != 1 {
 		t.Fatalf("store_operations_total{op=unindex_ref,outcome=ok} = %v, want 1", n)
+	}
+}
+
+// PR #7's first follow-up. A login can write a context that is revoked in
+// ways its pre-read cannot see: the same principal's context past its ceiling
+// is replaced carrying a revocation the token predates, and a revocation that
+// lands between the pre-read and the join is merged by it. (The third, a
+// record under a retired key, is TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation.)
+// Each must answer FAIL credential_revoked with the token spent and the
+// revocation on the record — the enable gate's answer for the same state — and
+// the retransmission must be refused the same way, never replayed as the PASS
+// the receipt was written with.
+func TestALoginWhoseContextEndsUpRevokedIsRefused(t *testing.T) {
+	revokedAt := time.Unix(1_757_041_495, 0).Add(-time.Minute)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	for _, tt := range []struct {
+		name            string
+		setup           func(t *testing.T) (*fixture, wire.AuthenStart)
+		ctxID, replaced string
+	}{
+		{"the same principal past its ceiling", func(t *testing.T) (*fixture, wire.AuthenStart) {
+			f := setup(t)
+			f.seedLoginWith(t, "token", 15, func(c *store.Context) {
+				c.RevokedAt = revokedAt
+				c.SessionExpires = f.now.Add(time.Minute)
+			})
+			f.now = f.now.Add(2 * time.Minute)
+			return f, papStart("alice", "ssh", "198.51.100.4", f.tag()+"tok1tok1tok1tok1tok1tok1")
+		}, "ctx1", "ctxL"},
+		{"a revocation landing mid-join", func(t *testing.T) (*fixture, wire.AuthenStart) {
+			f := setupStore(t, func(st *memory.Store) store.Store {
+				return midRedemption{Store: st, during: func() { _ = st.SetRevokedAt(context.Background(), key, revokedAt) }}
+			})
+			return f, f.joinFixture(t, nil)
+		}, "ctxL", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f, start := tt.setup(t)
+			reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+			rec := f.records(t)[0]
+			s := rec["session"].(map[string]any)
+			if reply.Status != wire.AuthenStatusFail || rec["verdict"] != "deny" || rec["reason"] != "credential_revoked" ||
+				rec["principal"] != "user:alice@example.com" || s["ctx_id"] != tt.ctxID {
+				t.Fatalf("a login whose context ends up revoked must be refused credential_revoked: %+v %v", reply, rec)
+			}
+			if tt.replaced != "" && s["replaced_ctx_id"] != tt.replaced {
+				t.Fatalf("the replace must still name what it displaced: %v", s)
+			}
+			ra, _ := s["revoked_at"].(string)
+			if got, err := time.Parse(time.RFC3339Nano, ra); err != nil || !got.Equal(revokedAt) {
+				t.Fatalf("the record must carry the revocation that refused it: %q %v", ra, err)
+			}
+			if left, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(left) != 0 {
+				t.Fatalf("the token must be spent: %d left", len(left))
+			}
+			retry, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+			r := f.records(t)
+			if last := r[len(r)-1]; retry.Status != wire.AuthenStatusFail || last["reason"] != "credential_revoked" {
+				t.Fatalf("the retransmission must be refused as revoked, not replayed: %+v %v", retry, last)
+			}
+		})
+	}
+}
+
+// The control for the replace case: a token minted after the revocation is
+// the broker having verified the credential again, and the replace it writes
+// is not revoked (spec §13, decision 15). The uniform check must not refuse it.
+func TestAReplacePastTheCeilingWithATokenMintedAfterTheRevocationAdmits(t *testing.T) {
+	revokedAt := time.Unix(1_757_041_495, 0).Add(-time.Minute)
+	f := setup(t)
+	f.seedLoginWith(t, "token", 15, func(c *store.Context) {
+		c.RevokedAt = revokedAt
+		c.SessionExpires = f.now.Add(time.Minute)
+	})
+	secret := f.tag() + "aftraftraftraftraftraftr"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "a", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@example.com", MintedAt: revokedAt.Add(time.Second),
+			ExpiresAt: f.now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	f.now = f.now.Add(2 * time.Minute)
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4", secret))
+	if rec := f.records(t)[0]; reply.Status != wire.AuthenStatusPass || rec["reason"] != "token_redeemed" {
+		t.Fatalf("a token minted after the revocation must be admitted: %+v %v", reply, rec)
+	}
+	if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); !c.RevokedAt.IsZero() {
+		t.Fatalf("the replace must not carry a revocation its token postdates: %+v", c)
 	}
 }
