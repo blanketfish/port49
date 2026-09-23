@@ -209,6 +209,11 @@ PORT49_LAB_KEY=labsecret PORT49_LAB_ENC_KEY=port49-lab-encryption-key-32byte \
   bin/port49d -config tests/lab/logs/port49d-byhand.yaml \
   > tests/lab/logs/decisions-byhand.jsonl 2> tests/lab/logs/port49d-byhand.log &
 sudo -n tcpdump --immediate-mode -i any -U -n -s 0 -w tests/lab/captures/<note-name>.pcap 'tcp port 49' &
+# a broker run only: open the session, then mint one token per device login
+bin/port49 login --broker https://127.0.0.1:8449 \
+  --cert tests/lab/logs/slice-pki/client.pem --key tests/lab/logs/slice-pki/client-key.pem \
+  --broker-ca tests/lab/logs/slice-pki/broker-ca.pem
+TOKEN=$(bin/port49 token leaf1)
 # ... the run ...
 sudo -n pkill -INT -f 'tcpdump.*<note-name>'; kill -INT %1
 make evidence

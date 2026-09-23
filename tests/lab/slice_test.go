@@ -124,12 +124,16 @@ func TestSliceEndToEnd(t *testing.T) {
 		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
 			return len(sliceRecords(rs, "redeem", "token_redeemed")) >= 2 && len(sliceRecords(rs, "authorize_command", "no_permit_dominates_deny")) >= 1
 		})
-		raw, err := os.ReadFile(l.logPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(raw), tok1) || strings.Contains(string(raw), tok2) {
-			t.Fatal("a minted token is in the decision log")
+		// A token appears in the mint response and nowhere else (design §17):
+		// not in the decision log, port49d's stderr, or the agent's log.
+		for _, path := range []string{l.logPath, l.errPath, filepath.Join(filepath.Dir(sock), "agent.log")} {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), tok1) || strings.Contains(string(raw), tok2) {
+				t.Fatalf("a minted token is in %s", path)
+			}
 		}
 		obs, err := sliceObservation(recs, []string{tok1, tok2}, outs)
 		if err != nil {
