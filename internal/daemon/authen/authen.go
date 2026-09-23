@@ -733,6 +733,11 @@ func storeOutcome(err error) string {
 		return "ok"
 	case errors.Is(err, store.ErrNotFound):
 		return "not_found"
+	case errors.As(err, new(*store.UnreadableContextError)):
+		// The record is there and the store answered; the sealing layer
+		// could not open it. Counted apart from "error" so a key rotation
+		// does not read as a store outage (spec §5.6).
+		return "unreadable"
 	default:
 		return "error"
 	}

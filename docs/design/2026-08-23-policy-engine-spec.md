@@ -1018,7 +1018,9 @@ was indexed under, as another principal's replace does, before the new login is 
 place they would not age out at `index_ttl`: every extension of the replacing context re-stamps
 them, so a revocation of the displaced credential would reach it for as long as it lives. Each such
 login opens the record twice (the read before the token is spent and the join's own), so
-`port49_crypt_open_failures_total{record="context"}` counts at least two per login.
+`port49_crypt_open_failures_total{record="context"}` counts at least two per login. Every read of
+such a record counts `port49_store_operations_total{outcome="unreadable"}`, not `outcome="error"`:
+the store answered, and a key rotation must not read as a store outage.
 
 A retransmitted login or `enable` replays its receipt only while the receipt's `ctx_id` is the live
 context's. The join keeps `ctx_id` across one principal's logins, so a match is exactly "the same
