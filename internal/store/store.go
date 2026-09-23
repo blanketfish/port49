@@ -13,6 +13,36 @@ import (
 
 var ErrNotFound = errors.New("store: not found")
 
+// ErrConflict is SwapContext refusing a write because the context is no longer
+// the one the caller read: another writer landed in between, or the record
+// expired, or one appeared where none was. Nothing was written. The caller
+// reads again and decides again; JoinContext is the loop that does.
+var ErrConflict = errors.New("store: context changed since it was read")
+
+// UnreadableContextError is a context record the store returned and the
+// sealing layer could not open: sealed under a key that has left the two-key
+// window, or failing authentication. It is not ErrNotFound — the record is
+// there — and it carries the two plaintext fields a login needs to replace the
+// record safely (spec §5.6): the revision, so the replace is still a
+// compare-and-set, and the revocation, so the replace cannot lift it. Every
+// reader but JoinContext treats it as the store error it wraps.
+type UnreadableContextError struct {
+	Rev       uint64
+	RevokedAt time.Time
+	Err       error
+}
+
+// Error does not assume Err is set: it is read on the login path at the moment
+// a key has rotated out, and a backend that left Err nil must not panic there.
+func (e *UnreadableContextError) Error() string {
+	if e.Err == nil {
+		return "store: context record could not be opened"
+	}
+	return e.Err.Error()
+}
+
+func (e *UnreadableContextError) Unwrap() error { return e.Err }
+
 type TokenKey struct {
 	NAS      string // device name from admission
 	Username string // canonical form
@@ -62,6 +92,14 @@ type Token struct {
 	MaxPrivilege  uint8
 	Credential    Credential // sealed
 	AuthTime      time.Time
+	// MintedAt is when the broker cut this token, on the broker's clock — the
+	// clock revocation stamps RevokedAt with. AuthTime cannot stand in for it:
+	// that is when the human authenticated at the IdP, which can be hours
+	// before a mint, so a token minted after a revocation can carry an
+	// AuthTime from before it. JoinContext compares this to a live context's
+	// RevokedAt (spec §5.6). Zero reads as "minted before any revocation",
+	// which keeps the mark.
+	MintedAt time.Time
 
 	Sealed []byte // written by internal/store/crypt; zero in plaintext form
 }
@@ -193,6 +231,15 @@ type Context struct {
 	MaxPrivilege uint8
 	CreatedAt    time.Time
 
+	// Rev is the store's revision of this record. GetContext sets it and
+	// SwapContext compares it; every other writer ignores what the caller
+	// passes, and every write to the record — each narrow setter included —
+	// moves it. That last part is the point: a read-merge-write that lost a
+	// race to SetRevokedAt finds the revision moved and reads again, rather
+	// than putting back a copy whose RevokedAt is zero. It is plaintext
+	// bookkeeping, like the expiry.
+	Rev uint64
+
 	Sealed []byte
 }
 
@@ -277,8 +324,27 @@ type Store interface {
 	ExtendReceipt(ctx context.Context, rk ReceiptKey, idleExpiresAt time.Time) error
 	DeleteReceiptsByPrincipal(ctx context.Context, principal string) (int, error)
 
+	// PutContext writes c unconditionally. No production path calls it: the
+	// login path joins through SwapContext (JoinContext), and every other
+	// writer has a narrow setter. It stays for seeding and tests.
 	PutContext(ctx context.Context, k ContextKey, c Context, ttl time.Duration) error
 	GetContext(ctx context.Context, k ContextKey) (Context, error)
+	// SwapContext is PutContext with a precondition: it writes c only if the
+	// record at k is still the one the caller read. rev is the Rev GetContext
+	// returned; zero means "only if there is no live record". Anything else —
+	// a revision that moved, a record that expired, a record that appeared —
+	// is ErrConflict, and nothing is written.
+	//
+	// It is how a whole-record write is made safe against the narrow setters.
+	// The login path has to write most of a context (spec §5.6, the join
+	// table), and the sealing layer cannot merge fields it cannot read under
+	// the inner store's lock, so it reads, merges, and swaps; a revocation,
+	// annotation, privilege raise or refresh that landed in between moves the
+	// revision and the swap refuses. See JoinContext.
+	//
+	// On success it behaves as PutContext does: the expiry is now+ttl,
+	// LastTouchedAt is stamped, and the context's index entries are extended.
+	SwapContext(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration) error
 	// TouchContext extends this context's expiry to now+ttl. It writes exactly
 	// two things, both plaintext bookkeeping about the extension itself: the
 	// expiry, and LastTouchedAt. It never takes a Context from the caller.
@@ -295,11 +361,21 @@ type Store interface {
 	// ErrNotFound if the key is absent or already expired, which is how the
 	// caller learns it lost the race; PutContext cannot tell it that.
 	TouchContext(ctx context.Context, k ContextKey, ttl time.Duration) error
-	// SetPrivilege records the level port49 last granted this context, in
-	// place and under the store's own lock. It writes exactly one field,
-	// PrivLvl, and is TouchContext's sibling for the same reason: the
-	// authorization path must not write back a record it read at the top of
-	// the request, because the writer it would race is revocation.
+	// SetPrivilege raises the level this context records to level, in place
+	// and under the store's own lock. It writes exactly one field, PrivLvl, and
+	// is TouchContext's sibling for the same reason: the authorization path
+	// must not write back a record it read at the top of the request, because
+	// the writer it would race is revocation.
+	//
+	// Raise-only: the stored value is max(current, level), clamped to the
+	// context's ceiling (Context.PrivilegeCeiling; zero MaxPrivilege is none).
+	// PrivLvl means "the highest level port49 has granted this user on this
+	// device", not "the level of the latest window" — the context is keyed
+	// (nas, username) and covers every window of one operator, so a second
+	// window's session authorization granting less must not take the first
+	// window's enable away (spec §5.3). It is still a bound: the device cannot
+	// exceed it without port49 having said yes somewhere. What a session
+	// authorization REPLIES is policy's answer and never this field.
 	//
 	// It is not an extension. The expiry and LastTouchedAt are TouchContext's
 	// to move, so a device that only ever authorizes sessions cannot keep a
@@ -358,9 +434,9 @@ type Store interface {
 	// pass, which is exactly how §5.1.3 says a policy-driven revocation
 	// reaches live sessions: within one refresh interval, the operator who
 	// was revoked is authorized again, with nothing in the log connecting the
-	// two. If a lift is ever genuinely wanted it belongs behind a separate
-	// setter that only a path which re-verified the credential may call, and
-	// the spec's §13 decision table has to say so first.
+	// two. The one path that may lift a mark is a login whose token the broker
+	// minted after the revocation — the credential verified again — and it
+	// does so through JoinContext, never here (spec §13, decision 15).
 	//
 	// SessionExpires is recomputed here rather than by the caller because the
 	// pair it is computed from is the pair about to be overwritten; see
@@ -402,6 +478,32 @@ type Store interface {
 
 	IndexContext(ctx context.Context, principal, sid, certKey string, ref ContextRef, ttl time.Duration) error
 	UnindexContext(ctx context.Context, principal, sid, certKey string, ref ContextRef) error
+	// UnindexRef removes ref from every principal, sid and certificate entry
+	// it was indexed under, including keys the caller cannot name any more: a
+	// joined context is indexed under every login's sid and certificate, and
+	// the record keeps only the last login's credential. It is what a replace
+	// by another principal calls, so that no key of the displaced principal's
+	// keeps reaching the context that replaced it (spec §5.6). An unreadable
+	// replace calls it too: it cannot name what it displaced. Entries under
+	// the same keys for other refs are untouched.
+	//
+	// It is not atomic with the context write before it or the IndexContext
+	// after it, and two races follow, each needing logins under one username
+	// on one device within a few milliseconds:
+	//
+	//   - The replacing principal's own second window joins the new context
+	//     and indexes its sid and certificate between the replace's swap and
+	//     this call. This call then wipes them. Revocation by that principal
+	//     still reaches the context, because the replace's IndexContext puts
+	//     the principal back; by that window's sid or certificate it does not.
+	//   - Two different principals replace each other. The first's late call
+	//     runs after the second's replace and index, wipes the second's
+	//     entries, and the first's IndexContext then lands on the second's
+	//     context. That context ends up indexed under the first principal's
+	//     keys only: a revocation of the first marks it, and one of the second
+	//     misses it. It also needs the username-uniqueness invariant broken
+	//     (spec §5.6, P10).
+	UnindexRef(ctx context.Context, ref ContextRef) error
 	ContextsByPrincipal(ctx context.Context, principal string) ([]ContextRef, error)
 	ContextsBySid(ctx context.Context, sid string) ([]ContextRef, error)
 	ContextsByCert(ctx context.Context, certKey string) ([]ContextRef, error)

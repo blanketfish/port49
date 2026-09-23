@@ -958,3 +958,273 @@ func TestIdempotency(t *testing.T) {
 		t.Fatal("idempotency is per principal")
 	}
 }
+
+// SwapContext is a compare-and-set, and each of its refusals is a state a
+// read-merge-write can meet: someone wrote since the read, the record expired
+// under it, or a record appeared where the read found none. Every refusal
+// writes nothing.
+func TestSwapContextIsACompareAndSet(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+
+	// Absent: only rev 0 writes.
+	if err := s.SwapContext(ctx, k, 7, store.Context{CtxID: "x", Username: "u"}, time.Minute); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a revision for a record that does not exist must conflict: %v", err)
+	}
+	if err := s.SwapContext(ctx, k, 0, store.Context{CtxID: "a", Username: "u"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	a, _ := s.GetContext(ctx, k)
+	if a.CtxID != "a" || a.Rev == 0 {
+		t.Fatalf("a written record must carry a revision: %+v", a)
+	}
+
+	// Present: rev 0 and a stale revision both conflict, and write nothing.
+	if err := s.SwapContext(ctx, k, 0, store.Context{CtxID: "b", Username: "u"}, time.Minute); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("rev 0 over a live record must conflict: %v", err)
+	}
+	if err := s.SwapContext(ctx, k, a.Rev+1, store.Context{CtxID: "b", Username: "u"}, time.Minute); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a revision the record does not carry must conflict: %v", err)
+	}
+	if got, _ := s.GetContext(ctx, k); got.CtxID != "a" || got.Rev != a.Rev {
+		t.Fatalf("a refused swap wrote: %+v", got)
+	}
+
+	// The revision it was read at writes, stamps like PutContext, and moves it.
+	now = now.Add(30 * time.Second)
+	if err := s.SwapContext(ctx, k, a.Rev, store.Context{CtxID: "b", Username: "u", Rev: 12345}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := s.GetContext(ctx, k)
+	if b.CtxID != "b" || b.Rev == a.Rev || b.Rev == 12345 || !b.LastTouchedAt.Equal(now) {
+		t.Fatalf("the swap must write, stamp LastTouchedAt, and take a fresh revision whatever the caller passed: %+v", b)
+	}
+
+	// Expired: the old revision conflicts; rev 0 writes.
+	now = now.Add(2 * time.Minute)
+	if err := s.SwapContext(ctx, k, b.Rev, store.Context{CtxID: "c", Username: "u"}, time.Minute); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a revision of an expired record must conflict, not resurrect it: %v", err)
+	}
+	if err := s.SwapContext(ctx, k, 0, store.Context{CtxID: "c", Username: "u"}, time.Minute); err != nil {
+		t.Fatalf("an expired record is absent: %v", err)
+	}
+	if c, _ := s.GetContext(ctx, k); c.CtxID != "c" || c.Rev <= b.Rev {
+		t.Fatalf("a record written again must never repeat a revision: %+v (previous %d)", c, b.Rev)
+	}
+}
+
+// Every writer moves the revision, the narrow setters included. A setter that
+// did not would be a write a read-merge-write cannot see, and SetRevokedAt is
+// the one that matters: a join that read before the revocation and swapped
+// after it would put back a RevokedAt of zero (store.Context.Rev).
+func TestEveryContextWriteMovesTheRevision(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", PrivLvl: 1,
+		AuthTime: now, SessionExpires: now.Add(time.Hour)}, time.Hour)
+	for _, w := range []struct {
+		name  string
+		write func() error
+	}{
+		{"PutContext", func() error { return s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u"}, time.Hour) }},
+		{"TouchContext", func() error { return s.TouchContext(ctx, k, time.Hour) }},
+		{"SetPrivilege", func() error { return s.SetPrivilege(ctx, k, 15) }},
+		{"AnnotateContext", func() error { return s.AnnotateContext(ctx, k, "h", store.AccountingStateOpen) }},
+		{"RefreshContext", func() error {
+			return s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now}, time.Hour)
+		}},
+		{"SetRevokedAt", func() error { return s.SetRevokedAt(ctx, k, now) }},
+	} {
+		before, _ := s.GetContext(ctx, k)
+		if err := w.write(); err != nil {
+			t.Fatalf("%s: %v", w.name, err)
+		}
+		if err := s.SwapContext(ctx, k, before.Rev, before, time.Hour); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("%s did not move the revision: a copy read before it swapped over it (%v)", w.name, err)
+		}
+	}
+}
+
+// A context a second login joined is indexed under both logins' credentials,
+// and revocation by either has to reach it for as long as it lives (spec §5.6).
+// The reverse record used to hold one sid and one cert, so the second
+// IndexContext overwrote the first login's and every extension after it
+// re-stamped only the newest: the first login's entries aged out at index_ttl
+// under a context still authorizing, and a back-channel logout for that sid
+// reported zero contexts.
+func TestExtendingCarriesEveryJoinedLoginsSidAndCert(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	ref := store.ContextRef{NAS: "n", Username: "u"}
+	certA, certB := store.CertKey("ca", "01"), store.CertKey("ca", "02")
+	s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u"}, time.Minute)
+	if err := s.IndexContext(ctx, "user:alice", "sA", certA, ref, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "user:alice", "sB", certB, ref, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		now = now.Add(30 * time.Second)
+		if err := s.TouchContext(ctx, k, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		get  func() ([]store.ContextRef, error)
+	}{
+		{"first login's sid", func() ([]store.ContextRef, error) { return s.ContextsBySid(ctx, "sA") }},
+		{"second login's sid", func() ([]store.ContextRef, error) { return s.ContextsBySid(ctx, "sB") }},
+		{"first login's cert", func() ([]store.ContextRef, error) { return s.ContextsByCert(ctx, certA) }},
+		{"second login's cert", func() ([]store.ContextRef, error) { return s.ContextsByCert(ctx, certB) }},
+	} {
+		if refs, err := tc.get(); err != nil || len(refs) != 1 {
+			t.Fatalf("%s aged out under a live context: %v %v", tc.name, refs, err)
+		}
+	}
+
+	// Unindexing one login's keys leaves the other's reaching the context.
+	if err := s.UnindexContext(ctx, "", "sA", certA, ref); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(45 * time.Second)
+	if err := s.TouchContext(ctx, k, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(30 * time.Second)
+	if refs, _ := s.ContextsBySid(ctx, "sA"); len(refs) != 0 {
+		t.Fatalf("an extension resurrected an unindexed sid: %v", refs)
+	}
+	if refs, _ := s.ContextsBySid(ctx, "sB"); len(refs) != 1 {
+		t.Fatalf("unindexing one login's sid lost the other's: %v", refs)
+	}
+	if refs, _ := s.ContextsByCert(ctx, certB); len(refs) != 1 {
+		t.Fatalf("unindexing one login's cert lost the other's: %v", refs)
+	}
+}
+
+// The stored level is the highest port49 has granted this user on this device,
+// bounded by the ceiling (spec §5.3). A second window's session authorization
+// granting a lower level must not take window A's enable away, and zero
+// MaxPrivilege is no ceiling (store.Context.PrivilegeCeiling).
+func TestSetPrivilegeIsRaiseOnlyAndClamped(t *testing.T) {
+	for _, tt := range []struct {
+		name             string
+		held, max, level uint8
+		want             uint8
+	}{
+		{"a raise is recorded", 1, 15, 15, 15},
+		{"a lower grant keeps the held level", 15, 15, 1, 15},
+		{"a raise past the ceiling stops at it", 1, 7, 15, 7},
+		{"no ceiling bounds nothing", 1, 0, 15, 15},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := New(time.Now)
+			ctx := context.Background()
+			k := store.ContextKey{NAS: "n", Username: "u"}
+			s.PutContext(ctx, k, store.Context{CtxID: "c", Username: "u", PrivLvl: tt.held, MaxPrivilege: tt.max}, time.Minute)
+			if err := s.SetPrivilege(ctx, k, tt.level); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := s.GetContext(ctx, k); got.PrivLvl != tt.want {
+				t.Fatalf("level %d, want %d", got.PrivLvl, tt.want)
+			}
+		})
+	}
+}
+
+// Ruling P8. An empty sid and a certificate key with no issuer or no serial
+// name nobody: every certificate login has sid "", and every OIDC login has
+// cert key "|". Indexed, each would be one bucket holding every such
+// operator's context on the fleet, and a revocation that reached it would
+// revoke them all. They are never indexed, and an extension has nothing of
+// theirs to carry.
+func TestAnEmptySidOrCertificateIsNeverIndexed(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	for i, certKey := range []string{store.CertKey("", ""), store.CertKey("ca", ""), store.CertKey("", "01")} {
+		ref := store.ContextRef{NAS: "leaf-01", Username: fmt.Sprintf("user%d", i)}
+		if err := s.PutContext(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username},
+			store.Context{CtxID: ref.Username, Principal: "user:" + ref.Username}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.IndexContext(ctx, "user:"+ref.Username, "", certKey, ref, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.TouchContext(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, certKey := range []string{"|", "ca|", "|01"} {
+		if r, _ := s.ContextsByCert(ctx, certKey); len(r) != 0 {
+			t.Fatalf("cert key %q is indexed: %v", certKey, r)
+		}
+	}
+	if r, _ := s.ContextsBySid(ctx, ""); len(r) != 0 {
+		t.Fatalf("the empty sid is indexed: %v", r)
+	}
+	// The principal index is untouched by the skip.
+	if r, _ := s.ContextsByPrincipal(ctx, "user:user0"); len(r) != 1 {
+		t.Fatalf("principal index: %v", r)
+	}
+	// Unindexing with the same empty keys is a no-op, not an error, and does
+	// not disturb what is indexed.
+	if err := s.UnindexContext(ctx, "", "", "|", store.ContextRef{NAS: "leaf-01", Username: "user0"}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := s.ContextsByPrincipal(ctx, "user:user0"); len(r) != 1 {
+		t.Fatalf("principal index after a blank unindex: %v", r)
+	}
+}
+
+// Ruling P10. A context another principal replaces must stop answering every
+// key the displaced context was indexed under — not only its last login's,
+// which is all the replace can read off the record. UnindexRef clears every
+// key recorded for the ref and leaves other refs under the same keys alone,
+// and an extension afterwards does not bring any of them back.
+func TestUnindexRefClearsEveryKeyRecordedForTheRef(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	other := store.ContextRef{NAS: "leaf-02", Username: "alice"}
+	ck := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
+	if err := s.PutContext(ctx, ck, store.Context{CtxID: "ctxL", Principal: "user:alice"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// Two joined logins on leaf-01, and the first login's sid on leaf-02 too.
+	s.IndexContext(ctx, "user:alice", "sid-1", store.CertKey("ca", "01"), ref, time.Hour)
+	s.IndexContext(ctx, "user:alice", "sid-2", store.CertKey("ca", "02"), ref, time.Hour)
+	s.IndexContext(ctx, "user:alice", "sid-1", "", other, time.Hour)
+	if err := s.UnindexRef(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(30 * time.Minute)
+	if err := s.TouchContext(ctx, ck, 2*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []string{"sid-1", "sid-2"} {
+		if r, _ := s.ContextsBySid(ctx, sid); len(r) > 1 || (len(r) == 1 && r[0] != other) {
+			t.Fatalf("%s still reaches the unindexed ref: %v", sid, r)
+		}
+	}
+	for _, certKey := range []string{store.CertKey("ca", "01"), store.CertKey("ca", "02")} {
+		if r, _ := s.ContextsByCert(ctx, certKey); len(r) != 0 {
+			t.Fatalf("%s still reaches the unindexed ref: %v", certKey, r)
+		}
+	}
+	if r, _ := s.ContextsByPrincipal(ctx, "user:alice"); len(r) != 1 || r[0] != other {
+		t.Fatalf("the principal index must keep only the other ref: %v", r)
+	}
+	if r, _ := s.ContextsBySid(ctx, "sid-1"); len(r) != 1 || r[0] != other {
+		t.Fatalf("another ref under the same sid must be left alone: %v", r)
+	}
+}

@@ -14,11 +14,15 @@
 // What revocation here does NOT do: it does not delete the principal's
 // unredeemed tokens. Design §1182 puts that on the broker — "broker deletes on
 // revoke by principal, sid, or (device, username)" — and until the broker does
-// it, a revoked principal's unredeemed token still redeems, writing a fresh
-// context by spec §5.6 row 1's unconditional overwrite with no revoked_at on
-// it. The operator sees a revocation that marked every context and deleted
-// every receipt, and then a PERMIT on a device they thought they had closed,
-// with no log line connecting the two. Plan 7 owns closing this.
+// it, a revoked principal's unredeemed token still redeems. On a device where
+// the revoked context is still live the damage is contained: the token was
+// minted before the revocation, so the login is refused `credential_revoked`
+// and the token spent (package authen; spec §5.6). On a device with no live
+// context there is nothing to join, and the redemption writes a fresh context
+// with no revoked_at on it. The operator sees a revocation that marked every
+// context and deleted every receipt, and then a PERMIT on a device they
+// thought they had closed, with no log line connecting the two. Plan 7 owns
+// closing this.
 //
 // Which of the refs returned here is unreachable at the device — a
 // session-only platform, spec §13 decision 21 — is the caller's question, not
@@ -111,10 +115,21 @@ func (m *Manager) Refresh(ctx context.Context, principal string, authTime time.T
 	return n, nil
 }
 
+// ErrBlankRevocation is a revocation by an empty sid, or by a certificate
+// with no issuer or no serial. Every certificate login has sid "" and every
+// OIDC login a certificate with neither, so a revocation by a blank names
+// every such operator on the fleet at once; it is refused and marks nothing
+// (ruling P8). The store never indexes a blank either, so this is the guard
+// on the broker's side of the same rule.
+var ErrBlankRevocation = errors.New("session: revocation by an empty sid or certificate")
+
 // RevokeBySid marks every context authorized by this OIDC session id and
 // deletes the receipts of the principals behind them. It never deletes a
-// context.
+// context. An empty sid is ErrBlankRevocation.
 func (m *Manager) RevokeBySid(ctx context.Context, sid string) ([]store.ContextRef, error) {
+	if sid == "" {
+		return nil, ErrBlankRevocation
+	}
 	refs, err := m.store.ContextsBySid(ctx, sid)
 	if err != nil {
 		return nil, err
@@ -137,8 +152,12 @@ func (m *Manager) RevokeByPrincipal(ctx context.Context, principal string) ([]st
 
 // RevokeByCert marks every context authorized by this certificate — the index
 // key a CRL or OCSP response names (spec §5.1.4) — and deletes the receipts of
-// the principals behind them.
+// the principals behind them. An empty issuer or serial is
+// ErrBlankRevocation.
 func (m *Manager) RevokeByCert(ctx context.Context, issuer, serial string) ([]store.ContextRef, error) {
+	if issuer == "" || serial == "" {
+		return nil, ErrBlankRevocation
+	}
 	refs, err := m.store.ContextsByCert(ctx, store.CertKey(issuer, serial))
 	if err != nil {
 		return nil, err

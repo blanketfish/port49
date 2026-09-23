@@ -12,6 +12,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/store/storetest"
 )
 
 func keys() Keys {
@@ -129,10 +130,10 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 
 	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	if err := s.PutContext(ctx, ck, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com", Username: "alice",
-		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 15}, time.Hour); err != nil {
+		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 1}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.PrivLvl != 15 {
+	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.PrivLvl != 1 {
 		t.Fatalf("context plaintext: %+v", c)
 	}
 	if c, _ := s.GetContext(ctx, ck); c.Principal != "user:alice@example.com" || c.RemAddr != "198.51.100.4" {
@@ -143,7 +144,7 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	// all three write only plaintext bookkeeping, so the inner store changes a
 	// record it cannot read, and the sealed fields it never touched still open
 	// afterwards.
-	if err := s.SetPrivilege(ctx, ck, 1); err != nil {
+	if err := s.SetPrivilege(ctx, ck, 15); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.TouchContext(ctx, ck, time.Hour); err != nil {
@@ -153,7 +154,7 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	if err := s.AnnotateContext(ctx, ck, hash, store.AccountingStateClosing); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := inner.GetContext(ctx, ck); c.PrivLvl != 1 {
+	if c, _ := inner.GetContext(ctx, ck); c.PrivLvl != 15 {
 		t.Fatalf("SetPrivilege must reach the inner store in the clear: %+v", c)
 	}
 	// The discriminator set is the point of the hashing: the INNER store, which
@@ -170,7 +171,7 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	if c, _ := inner.GetContext(ctx, ck); c.SessionDiscriminators[0] == "31050" {
 		t.Fatal("the discriminator is stored in the clear, not hashed")
 	}
-	if c, _ := s.GetContext(ctx, ck); c.PrivLvl != 1 || c.Principal != "user:alice@example.com" ||
+	if c, _ := s.GetContext(ctx, ck); c.PrivLvl != 15 || c.Principal != "user:alice@example.com" ||
 		len(c.SessionDiscriminators) != 1 || c.SessionDiscriminators[0] != hash {
 		t.Fatalf("a narrow write must leave the sealed fields readable: %+v", c)
 	}
@@ -190,6 +191,27 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	}
 	if b, _ := inner.GetBlob(ctx, "sha256:x"); string(b) != "blob" {
 		t.Fatal("blobs are not encrypted; they hold no identity")
+	}
+}
+
+// MintedAt is what a join's minted-after rule compares against a revocation
+// (store.JoinContext). If the seal/open round trip dropped it, every token would
+// read as minted before any revocation: fail-closed, but a relogin could never
+// lift one.
+func TestTokenMintedAtSurvivesTheSealingLayer(t *testing.T) {
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	minted := time.Unix(1_757_041_495, 0)
+	if _, err := s.PutToken(ctx, k, store.Token{ID: "t1", Secret: []byte("p49_secret"), Kind: store.KindLogin,
+		Principal: "user:alice@example.com", Username: "alice", ExpiresAt: time.Now().Add(time.Minute),
+		MintedAt: minted}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Candidates(ctx, k)
+	if err != nil || len(got) != 1 || !got[0].MintedAt.Equal(minted) {
+		t.Fatalf("MintedAt lost through the sealing layer: %+v %v", got, err)
 	}
 }
 
@@ -252,5 +274,105 @@ func TestUnopenableRecordIsNotReportedAsMissing(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(failures.WithLabelValues("context")); got != 1 {
 		t.Fatalf("crypt_open_failures_total{record=\"context\"} = %v", got)
+	}
+}
+
+// SwapContext seals exactly what PutContext seals and hands the revision
+// through: Rev is plaintext, so the inner store can hold the precondition on a
+// record it cannot read, and a revision read through this layer is the one the
+// inner store compares.
+func TestSwapContextSealsAndKeepsTheRevision(t *testing.T) {
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	ctx := context.Background()
+	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	c := store.Context{CtxID: "ctx1", Principal: "user:alice@example.com", Username: "alice",
+		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 15}
+	if err := s.SwapContext(ctx, ck, 0, c, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := inner.GetContext(ctx, ck); raw.Principal != "" || raw.RemAddr != "" || raw.CtxID != "" || raw.Sealed == nil {
+		t.Fatalf("SwapContext wrote plaintext: %+v", raw)
+	}
+	got, err := s.GetContext(ctx, ck)
+	if err != nil || got.Principal != "user:alice@example.com" || got.Rev == 0 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	// A narrow setter lands between the read and the swap, through this layer.
+	if err := s.SetRevokedAt(ctx, ck, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SwapContext(ctx, ck, got.Rev, got, time.Hour); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a revision read through the sealing layer must be the one the inner store compares: %v", err)
+	}
+	if after, _ := s.GetContext(ctx, ck); after.RevokedAt.IsZero() {
+		t.Fatalf("the refused swap erased the revocation: %+v", after)
+	}
+}
+
+// The join's merge happens up here, with the sealed fields open, and the
+// precondition is held down in the inner store: the property has to survive
+// that split, so it is run against the wrapped store as well as the bare one.
+func TestJoinRacesRevocationThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.JoinRacesRevocation(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
+// Ruling R1 through the real sealing layer: a context sealed under a key that
+// has left the two-key window, and revoked, is replaced by the next login
+// rather than refusing it, and the revocation carries. What makes it possible
+// is that GetContext hands up the plaintext Rev and RevokedAt of a record it
+// cannot open, in a store.UnreadableContextError that still unwraps to
+// ErrUnknownKey — so every other caller still reads it as the key failure it
+// is (TestUnopenableRecordIsNotReportedAsMissing).
+func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	inner := memory.New(func() time.Time { return now })
+	ctx := context.Background()
+	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	var c [32]byte
+	copy(c[:], "cccccccccccccccccccccccccccccccc")
+	retired := Wrap(inner, Keys{Current: Key{ID: "v0", Bytes: c}}, nil)
+	if err := retired.PutContext(ctx, ck, store.Context{CtxID: "ctx_old", Principal: "user:alice@example.com",
+		Username: "alice", PrivLvl: 15}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := retired.SetRevokedAt(ctx, ck, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	s := Wrap(inner, keys(), nil)
+	_, err := s.GetContext(ctx, ck)
+	var u *store.UnreadableContextError
+	if !errors.As(err, &u) || u.Rev == 0 || !u.RevokedAt.Equal(now.Add(-time.Minute)) || !errors.Is(err, ErrUnknownKey) {
+		t.Fatalf("an unopenable context must hand up its plaintext revision and revocation: %v", err)
+	}
+	login := store.Context{CtxID: "ctx_new", Principal: "user:alice@example.com", Username: "alice", PrivLvl: 1}
+	res, err := store.JoinContext(ctx, s, ck, login, now.Add(-2*time.Minute), now, time.Hour)
+	if err != nil || !res.ReplacedUnreadable || res.Joined {
+		t.Fatalf("%+v %v", res, err)
+	}
+	got, err := s.GetContext(ctx, ck)
+	if err != nil || got.CtxID != "ctx_new" || got.PrivLvl != 1 || !got.RevokedAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("the replace must be readable under the current key and keep the revocation: %+v %v", got, err)
+	}
+}
+
+// UnindexRef passes through to the inner store, as the other index writes do.
+func TestUnindexRefPassesThrough(t *testing.T) {
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	ctx := context.Background()
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	if err := s.IndexContext(ctx, "user:alice@example.com", "sid-1", store.CertKey("ca", "01"), ref, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UnindexRef(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := inner.ContextsBySid(ctx, "sid-1"); len(r) != 0 {
+		t.Fatalf("UnindexRef did not reach the inner store: %v", r)
 	}
 }

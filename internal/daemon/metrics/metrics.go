@@ -38,6 +38,14 @@ type Metrics struct {
 	// rotation window that has no other symptom. Labels are the record kind only —
 	// "token", "receipt", "context", "idempotency" — never a device or a user.
 	CryptOpenFailures *prometheus.CounterVec
+	// port49_accounting_attributions_total{attribution}: every accounting
+	// record the spool accepted, by the attribution it was given — "resolved",
+	// "unattributed", "system", "foreign" (spec §5.8). `foreign` is the one to
+	// alert on: an exec record for a session port49 did not authenticate,
+	// under a name it does, which is a local fallback, a console, or a
+	// device-local account sharing a port49 username. The label is the
+	// attribution only; the device and the user are on the log record.
+	Attributions *prometheus.CounterVec
 }
 
 func New(reg prometheus.Registerer) *Metrics {
@@ -73,9 +81,11 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Decision records the log sink refused to write."}),
 		CryptOpenFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_crypt_open_failures_total",
 			Help: "Stored records that would not decrypt, by record kind."}, []string{"record"}),
+		Attributions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_attributions_total",
+			Help: "Accounting records accepted, by attribution."}, []string{"attribution"}),
 	}
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures)
+		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions)
 	return m
 }

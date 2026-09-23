@@ -149,6 +149,9 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 		return wire.AcctReply{Status: wire.AcctStatusError, ServerMsg: []byte("port49: accounting spool unavailable")}
 	}
 	h.metrics.Requests.WithLabelValues("acct", "success").Inc()
+	// Counted once the record is durable, not before: a refused record is
+	// answered ERROR and the device sends it again.
+	h.metrics.Attributions.WithLabelValues(attribution).Inc()
 
 	// Annotate exec records only, never command records, and never delete
 	// (spec §5.6 row 7, §5.8). The record is already durable at this point:
@@ -297,6 +300,11 @@ func storeOutcome(err error) string {
 		return "ok"
 	case errors.Is(err, store.ErrNotFound):
 		return "not_found"
+	case errors.As(err, new(*store.UnreadableContextError)):
+		// The record is there and the store answered; the sealing layer
+		// could not open it. Counted apart from "error" so a key rotation
+		// does not read as a store outage (spec §5.6).
+		return "unreadable"
 	default:
 		return "error"
 	}

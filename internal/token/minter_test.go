@@ -329,3 +329,29 @@ func TestMintRefusesUsernamesCanonicalizationWouldChange(t *testing.T) {
 		}
 	}
 }
+
+// Every token carries the moment it was cut, on the minter's clock. A second
+// login joining a revoked context keeps the revocation unless the token was
+// minted after it (spec §5.6), and AuthTime cannot answer that: it is when the
+// human authenticated at the IdP, and a mint an hour later carries the same
+// one. Both tokens of a pair carry the same instant.
+func TestEveryTokenCarriesItsMintTime(t *testing.T) {
+	at := time.Unix(1_757_041_495, 0)
+	st := memory.New(func() time.Time { return at })
+	m := NewMinter(st, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")), func() time.Time { return at }, 3)
+	s := subject()
+	s.AuthTime = at.Add(-time.Hour)
+	if _, err := m.Mint(context.Background(), Request{Subject: s, Device: "leaf-01", WithEnable: true, TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"})
+	if len(c) != 2 {
+		t.Fatalf("want the pair, got %d", len(c))
+	}
+	for _, tok := range c {
+		if !tok.MintedAt.Equal(at) {
+			t.Fatalf("%s token: minted_at %v, want %v (auth_time is %v and must not stand in for it)",
+				tok.Kind, tok.MintedAt, at, tok.AuthTime)
+		}
+	}
+}

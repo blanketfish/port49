@@ -364,3 +364,65 @@ func TestRefreshAndRevokeByPrincipalTakeNoCopyToLose(t *testing.T) {
 		t.Fatalf("a field that is not the broker's was written: %+v", c)
 	}
 }
+
+// indexesEverything answers every sid and certificate lookup with every ref it
+// was given, the way an index that once stored the empty keys would answer a
+// lookup by them. It is what lets a test see that the refusal below is the
+// Manager's own and not an accident of what the store happens to hold.
+type indexesEverything struct {
+	*memory.Store
+	refs []store.ContextRef
+}
+
+func (e indexesEverything) ContextsBySid(context.Context, string) ([]store.ContextRef, error) {
+	return e.refs, nil
+}
+
+func (e indexesEverything) ContextsByCert(context.Context, string) ([]store.ContextRef, error) {
+	return e.refs, nil
+}
+
+// Ruling P8. Every certificate login has sid "", and every OIDC login has a
+// certificate with no issuer and no serial. A revocation by either blank is a
+// broker bug, and honouring it would mark every such operator's context on the
+// fleet and delete their receipts. It is an error, and it marks nothing.
+func TestARevocationByABlankSidOrCertificateMarksNothing(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		revoke func(m *Manager) ([]store.ContextRef, error)
+	}{
+		{"empty sid", func(m *Manager) ([]store.ContextRef, error) { return m.RevokeBySid(context.Background(), "") }},
+		{"empty issuer and serial", func(m *Manager) ([]store.ContextRef, error) {
+			return m.RevokeByCert(context.Background(), "", "")
+		}},
+		{"empty issuer", func(m *Manager) ([]store.ContextRef, error) { return m.RevokeByCert(context.Background(), "", "01") }},
+		{"empty serial", func(m *Manager) ([]store.ContextRef, error) { return m.RevokeByCert(context.Background(), "ca", "") }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Unix(1_000_000, 0)
+			s := memory.New(func() time.Time { return now })
+			seed(t, s, now)
+			rk := store.ReceiptKey{NAS: "leaf-01", Username: "alice", Kind: store.KindLogin}
+			if _, err := s.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+				store.Token{ID: "t", Kind: store.KindLogin, ExpiresAt: now.Add(time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.RedeemAndReceipt(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}, "t",
+				store.ReceiptWrite{Key: rk, Receipt: store.Receipt{CtxID: "c1", RetainUntil: now.Add(time.Hour)},
+					Principal: "user:alice@example.com", IndexTTL: time.Hour}); err != nil {
+				t.Fatal(err)
+			}
+			m := New(indexesEverything{Store: s, refs: []store.ContextRef{ref}}, func() time.Time { return now }, time.Hour, time.Hour)
+			refs, err := tt.revoke(m)
+			if !errors.Is(err, ErrBlankRevocation) || len(refs) != 0 {
+				t.Fatalf("a blank revocation must be refused: %v %v", refs, err)
+			}
+			if c, _ := s.GetContext(context.Background(), key(ref)); !c.RevokedAt.IsZero() {
+				t.Fatalf("a blank revocation marked a context: %+v", c)
+			}
+			if _, err := s.GetReceipt(context.Background(), rk); err != nil {
+				t.Fatalf("a blank revocation deleted a receipt: %v", err)
+			}
+		})
+	}
+}

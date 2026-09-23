@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,20 +46,78 @@ type Store struct {
 	idem      map[string]store.Idempotency
 
 	writes int // incremented on every write; triggers sweep at sweepEvery
+	// revs is the last context revision handed out. It is store-wide rather
+	// than per key so a context that is deleted and written again never
+	// repeats a revision an earlier reader holds.
+	revs uint64
 }
 
 type ctxEntry struct {
 	c   store.Context
 	exp time.Time
+	rev uint64 // store.Context.Rev; see nextRevLocked
+}
+
+// nextRevLocked returns a revision no context has held. Every write to a
+// context takes one, which is what makes SwapContext's comparison mean "no one
+// wrote this record since you read it" (store.Context.Rev).
+func (s *Store) nextRevLocked() uint64 {
+	s.revs++
+	return s.revs
 }
 
 // indexKeys is the set of index keys one ref was written under. An empty
-// field means that index was never written for this ref — the same "" that
+// principal means that index was never written for this ref — the same "" that
 // IndexContext reads as "skip this index".
+//
+// sids and certKeys are lists, not single values, because a context is
+// joined: a second login by the same principal on the same device merges into
+// the live context (spec §5.6), and each login is indexed under its own sid
+// and certificate. Revocation by either has to keep reaching the context for
+// as long as it lives, so an extension re-stamps every one of them.
+//
+// The lists are deliberately uncapped. They hold one entry per distinct
+// credential that logged into this one context on this one device, each
+// behind a token the broker minted. Another principal's replace, or an
+// unreadable one, clears them (UnindexRef), and the sweep drops an entry once
+// its index entry is gone. Dropping an entry to hold a cap would silently cost
+// revocation its reach into a context that is still live and authorizing —
+// the fail-open direction — and no cap could tell which entry was safe to
+// lose.
 type indexKeys struct {
 	principal string
-	sid       string
-	certKey   string
+	sids      []string
+	certKeys  []string
+}
+
+func (r indexKeys) empty() bool { return r.principal == "" && len(r.sids) == 0 && len(r.certKeys) == 0 }
+
+// withKey appends key if it is non-empty and not already present. It copies,
+// for the reason addDiscriminator does.
+func withKey(keys []string, key string) []string {
+	if key == "" {
+		return keys
+	}
+	for _, k := range keys {
+		if k == key {
+			return keys
+		}
+	}
+	return append(append([]string(nil), keys...), key)
+}
+
+// withoutKey drops key, copying.
+func withoutKey(keys []string, key string) []string {
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if k != key {
+			out = append(out, k)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 type blobEntry struct {
@@ -192,12 +251,28 @@ func (s *Store) sweepLocked() {
 	// extend, so keeping its entry would be one map entry per ref the daemon
 	// ever saw.
 	for ref, rec := range s.indexedAs {
-		if !indexed(s.byPrincipal, rec.principal, ref) &&
-			!indexed(s.bySid, rec.sid, ref) &&
-			!indexed(s.byCert, rec.certKey, ref) {
+		if !indexed(s.byPrincipal, rec.principal, ref) {
+			rec.principal = ""
+		}
+		rec.sids = stillIndexed(s.bySid, rec.sids, ref)
+		rec.certKeys = stillIndexed(s.byCert, rec.certKeys, ref)
+		if rec.empty() {
 			delete(s.indexedAs, ref)
+		} else {
+			s.indexedAs[ref] = rec
 		}
 	}
+}
+
+// stillIndexed keeps the keys under which idx still holds ref.
+func stillIndexed(idx map[string]map[store.ContextRef]time.Time, keys []string, ref store.ContextRef) []string {
+	var out []string
+	for _, k := range keys {
+		if indexed(idx, k, ref) {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // indexed reports whether idx[key] still holds ref.
@@ -367,19 +442,26 @@ func (s *Store) PutContext(_ context.Context, k store.ContextKey, c store.Contex
 	// does (store.Context). Leaving it to the caller would hand Task 10's
 	// half-TTL rule a zero on every freshly written context, and a rule that
 	// reads zero extends on every command — the write this exists to avoid.
+	s.writeContextLocked(k, c, now, ttl)
+	return nil
+}
+
+// writeContextLocked is the whole-record write PutContext and SwapContext
+// share once SwapContext's precondition has held.
+func (s *Store) writeContextLocked(k store.ContextKey, c store.Context, now time.Time, ttl time.Duration) {
 	c.LastTouchedAt = now
+	c.Rev = 0 // the entry holds the revision; the record's copy is GetContext's to fill
 	exp := now.Add(ttl)
-	s.contexts[k] = ctxEntry{c: c, exp: exp}
+	s.contexts[k] = ctxEntry{c: c, exp: exp, rev: s.nextRevLocked()}
 	// A re-put is an extension too, so the index entries come with it
-	// (design §12). At login this is a no-op — the context is written before
-	// it is indexed — and it matters on spec §5.6 row 1, the unconditional
-	// overwrite by a second redemption on a device.
+	// (design §12). At a first login this is a no-op — the context is written
+	// before it is indexed — and it matters when a second login joins or
+	// replaces a live context.
 	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, exp)
 	s.writes++
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()
 	}
-	return nil
 }
 
 func (s *Store) GetContext(_ context.Context, k store.ContextKey) (store.Context, error) {
@@ -390,7 +472,26 @@ func (s *Store) GetContext(_ context.Context, k store.ContextKey) (store.Context
 		delete(s.contexts, k)
 		return store.Context{}, store.ErrNotFound
 	}
-	return e.c, nil
+	c := e.c
+	c.Rev = e.rev
+	return c, nil
+}
+
+// SwapContext writes c only if the record at k still carries revision rev, or,
+// for rev zero, only if there is no live record (store.Store). The comparison
+// and the write are one critical section, which is the whole of what makes it
+// a compare-and-set.
+func (s *Store) SwapContext(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	e, ok := s.contexts[k]
+	live := ok && e.exp.After(now)
+	if live && e.rev != rev || !live && rev != 0 {
+		return store.ErrConflict
+	}
+	s.writeContextLocked(k, c, now, ttl)
+	return nil
 }
 
 // TouchContext is the read-modify-write inside the lock that the handler cannot
@@ -409,6 +510,7 @@ func (s *Store) TouchContext(_ context.Context, k store.ContextKey, ttl time.Dur
 	// cannot get by re-putting a record it read a moment ago.
 	e.exp = now.Add(ttl)
 	e.c.LastTouchedAt = now
+	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	// The index entries go with the expiry, or a session kept alive by
 	// activity outlives the entries a revocation reads (extendIndexesLocked).
@@ -428,7 +530,17 @@ func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8)
 	// every other field is left exactly as whoever wrote it last left it --
 	// which is the property the caller cannot get by re-putting a record it
 	// read a moment ago (store.Store).
-	e.c.PrivLvl = level
+	//
+	// Raise-only, then clamped, both under this lock: the ceiling read is the
+	// one on the record now, which a join may have moved since the caller read
+	// it (spec §5.3).
+	if level > e.c.PrivLvl {
+		e.c.PrivLvl = level
+	}
+	if ceiling, ok := e.c.PrivilegeCeiling(); ok && e.c.PrivLvl > ceiling {
+		e.c.PrivLvl = ceiling
+	}
+	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	return nil
 }
@@ -454,6 +566,7 @@ func (s *Store) AnnotateContext(_ context.Context, k store.ContextKey, discHash,
 	if state != "" {
 		e.c.AccountingState = state
 	}
+	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	return nil
 }
@@ -509,6 +622,7 @@ func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.Co
 	}
 	e.exp = now.Add(ttl)
 	e.c.LastTouchedAt = now
+	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, e.exp)
 	return nil
@@ -527,6 +641,7 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 		return store.ErrNotFound
 	}
 	e.c.RevokedAt = at
+	e.rev = s.nextRevLocked()
 	s.contexts[k] = e
 	return nil
 }
@@ -627,8 +742,12 @@ func (s *Store) extendIndexesLocked(ref store.ContextRef, exp time.Time) {
 		return
 	}
 	restamp(s.byPrincipal, rec.principal, ref, exp)
-	restamp(s.bySid, rec.sid, ref, exp)
-	restamp(s.byCert, rec.certKey, ref, exp)
+	for _, sid := range rec.sids {
+		restamp(s.bySid, sid, ref, exp)
+	}
+	for _, certKey := range rec.certKeys {
+		restamp(s.byCert, certKey, ref, exp)
+	}
 }
 
 // restamp pushes an existing entry's expiry out, and does two things it might
@@ -674,31 +793,42 @@ func listRefs(idx map[string]map[store.ContextRef]time.Time, key string, now tim
 	return out
 }
 
+// blankCertKey reports whether certKey is store.CertKey of an empty issuer or
+// an empty serial. It names no certificate: every OIDC login's credential has
+// neither, so "|" would be one index entry holding every OIDC operator's
+// context on the fleet, and a revocation by it would revoke them all. It is
+// treated as "" — never indexed — as the empty sid is (ruling P8).
+func blankCertKey(certKey string) bool {
+	return certKey == "" || strings.HasPrefix(certKey, "|") || strings.HasSuffix(certKey, "|")
+}
+
 // IndexContext adds ref to each non-empty index — principal, sid, and cert —
 // sharing the one ttl. A caller with no sid or cert passes "" to skip that
-// index (store.ContextRef alone is not enough to reconstruct the context).
+// index (store.ContextRef alone is not enough to reconstruct the context). A
+// certificate key with no issuer or no serial is skipped the same way
+// (blankCertKey).
 func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if blankCertKey(certKey) {
+		certKey = ""
+	}
 	exp := s.now().Add(ttl)
 	addRef(s.byPrincipal, principal, ref, exp)
 	addRef(s.bySid, sid, ref, exp)
 	addRef(s.byCert, certKey, ref, exp)
 	// Record where this ref now answers from, so an extension of its context
-	// can carry these entries with it (extendIndexesLocked). A non-empty key
-	// replaces what was recorded and an empty one leaves it alone, matching
-	// the "" this method already reads as "skip this index": a second call
-	// that passes no sid must not lose the sid entry the first call wrote.
+	// can carry these entries with it (extendIndexesLocked). A sid or cert is
+	// added to what was recorded, never swapped for it: a joined context
+	// answers under every login's credential (indexKeys). An empty key leaves
+	// the record alone, matching the "" this method already reads as "skip
+	// this index".
 	rec := s.indexedAs[ref]
 	if principal != "" {
 		rec.principal = principal
 	}
-	if sid != "" {
-		rec.sid = sid
-	}
-	if certKey != "" {
-		rec.certKey = certKey
-	}
+	rec.sids = withKey(rec.sids, sid)
+	rec.certKeys = withKey(rec.certKeys, certKey)
 	s.indexedAs[ref] = rec
 	s.writes++
 	if s.writes%sweepEvery == 0 {
@@ -708,10 +838,13 @@ func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, 
 }
 
 // UnindexContext removes ref from each of the three indexes it was written
-// under.
+// under. A blank certificate key was never indexed and is skipped, as "" is.
 func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if blankCertKey(certKey) {
+		certKey = ""
+	}
 	removeRef(s.byPrincipal, principal, ref)
 	removeRef(s.bySid, sid, ref)
 	removeRef(s.byCert, certKey, ref)
@@ -722,18 +855,35 @@ func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string
 		if rec.principal == principal {
 			rec.principal = ""
 		}
-		if rec.sid == sid {
-			rec.sid = ""
-		}
-		if rec.certKey == certKey {
-			rec.certKey = ""
-		}
-		if rec == (indexKeys{}) {
+		rec.sids = withoutKey(rec.sids, sid)
+		rec.certKeys = withoutKey(rec.certKeys, certKey)
+		if rec.empty() {
 			delete(s.indexedAs, ref)
 		} else {
 			s.indexedAs[ref] = rec
 		}
 	}
+	return nil
+}
+
+// UnindexRef removes ref from every entry recorded for it in indexedAs — its
+// principal and every sid and certificate a login was indexed under — and
+// forgets the record, so no extension re-stamps any of them.
+func (s *Store) UnindexRef(_ context.Context, ref store.ContextRef) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.indexedAs[ref]
+	if !ok {
+		return nil
+	}
+	removeRef(s.byPrincipal, rec.principal, ref)
+	for _, sid := range rec.sids {
+		removeRef(s.bySid, sid, ref)
+	}
+	for _, certKey := range rec.certKeys {
+		removeRef(s.byCert, certKey, ref)
+	}
+	delete(s.indexedAs, ref)
 	return nil
 }
 
@@ -769,10 +919,13 @@ func (s *Store) ReindexSid(_ context.Context, oldSid, newSid string, ref store.C
 	// The reverse record follows the move, or the next extension of this
 	// context would re-stamp the sid entry the rotation just removed and
 	// leave the live one to expire underneath it.
-	if newSid != "" {
-		rec := s.indexedAs[ref]
-		rec.sid = newSid
-		s.indexedAs[ref] = rec
+	if rec, ok := s.indexedAs[ref]; ok || newSid != "" {
+		rec.sids = withKey(withoutKey(rec.sids, oldSid), newSid)
+		if rec.empty() {
+			delete(s.indexedAs, ref)
+		} else {
+			s.indexedAs[ref] = rec
+		}
 	}
 	s.writes++
 	if s.writes%sweepEvery == 0 {

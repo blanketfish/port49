@@ -186,7 +186,8 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		return Result{}, &ErrTooManyOutstanding{Device: r.Device, Username: r.Subject.Username, Count: len(cands), Cap: m.cap}
 	}
 
-	expires := m.now().Add(ttl)
+	mintedAt := m.now()
+	expires := mintedAt.Add(ttl)
 	res := Result{ExpiresAt: expires, Username: r.Subject.Username}
 	var hashes []string
 
@@ -203,7 +204,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 			ID: id[TagLen:], Secret: []byte(secret), Kind: kind, ExpiresAt: expires,
 			Principal: r.Subject.Principal, Username: r.Subject.Username, BlobHash: r.BlobHash,
 			MaxSessionAge: r.Subject.MaxSessionAge, Enable: r.Subject.Enable, MaxPrivilege: r.Subject.MaxPrivilege,
-			Credential: r.Subject.Credential, AuthTime: r.Subject.AuthTime,
+			Credential: r.Subject.Credential, AuthTime: r.Subject.AuthTime, MintedAt: mintedAt,
 		}); err != nil {
 			return "", err
 		}

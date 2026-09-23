@@ -27,6 +27,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.StoreOps.WithLabelValues("put", "ok").Inc()
 	m.DecisionLogWriteFailures.Inc()
 	m.CryptOpenFailures.WithLabelValues("context").Inc()
+	m.Attributions.WithLabelValues("foreign").Inc()
 
 	// Gather all metrics from registry.
 	families, err := reg.Gather()
@@ -49,6 +50,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_store_operations_total":            false,
 		"port49_decision_log_write_failures_total": false,
 		"port49_crypt_open_failures_total":         false,
+		"port49_accounting_attributions_total":     false,
 	}
 
 	// Check that all expected metrics are present and all gathered metrics are snake_case.

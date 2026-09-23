@@ -8,6 +8,9 @@ it. When writing plan N, start here, then read the cited sections, then the prev
 Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
 fifteen tasks, reviewed per task and whole-branch); 3–12 not yet. PR #3's lab
 stretch is merged, so plan 3 is unblocked and is the next plan to write.
+**2b written 2026-09-23** (`2026-09-23-02b-context-join.md`, nine tasks): a second login by
+the same principal joins the live context instead of replacing it, stored privilege is
+raise-only, and accounting attribution gets a metric.
 
 ---
 
@@ -275,6 +278,18 @@ shows `permit context_matched` for Junos. **The attributes are this plan's whole
 job there**: the session-only projection — class, `local-user-name`, `user-permissions`, the
 `allow-commands` / `deny-commands` regexes — is decision 22, gated on L12, and plan 1 sends
 none of it.
+
+**Owed from plan 2b (context join):** a configuration check that **warns when a port49-served
+username exists as a device-local account** on the device (spec §5.6, "Local account names MUST
+NOT collide"). Such an account's commands arrive under the same username and match the port49
+context at its highest granted level; `foreign` attribution is the only detection until this check
+exists.
+
+**Possible later, not planned:** per-window contexts on the platforms that give a window its own
+stable identifier — EOS `vty<n>`, bound at session authorization
+(`tests/lab/results/L1-arista_eos.md`; again 2026-09-22), and IOS-XE `tty<n>`
+(`tests/lab/results/L1-cisco_iosxe.md`). The `(nas, username)` join is the design of record; this
+would refine it per platform and needs its own ruling first.
 
 ## Plan 6 — Inventory service (§19 step 6)
 

@@ -641,3 +641,56 @@ func TestUnmodeledPlatformBindsNothingAndStillClosesOnUsername(t *testing.T) {
 		t.Fatalf("%+v", c)
 	}
 }
+
+// Every record the spool accepted is counted by its attribution, and `foreign`
+// is the one to alert on (spec §5.8): a session port49 did not authenticate,
+// under a name it does. The label is the attribution and nothing else — no
+// device and no user, which CLAUDE.md forbids in a metric label.
+func TestEveryAttributionIsCounted(t *testing.T) {
+	h, st, _, stop := setup(t)
+	sys := authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "test_system_users"}
+	putCtx(t, st, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com",
+		SessionDiscriminators: []string{store.HashDiscriminator("42")}})
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStart, "alice", "vty0", "task_id=42", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=99", "service=shell", "cmd="))
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "mallory", "vty0", "task_id=7", "service=shell", "cmd="))
+	h.Handle(context.Background(), sys, acct(wire.AcctFlagStop, "root", "non-tty", "task_id=3", "service=shell", "cmd="))
+	stop()
+	for _, a := range []string{"resolved", "foreign", "unattributed", "system"} {
+		if got := testutil.ToFloat64(h.metrics.Attributions.WithLabelValues(a)); got != 1 {
+			t.Errorf("port49_accounting_attributions_total{attribution=%q} = %v, want 1", a, got)
+		}
+	}
+}
+
+// A record the spool refused is not counted: the device was answered ERROR and
+// will send it again, and counting both would double it.
+func TestARefusedRecordIsNotCounted(t *testing.T) {
+	st := memory.New(time.Now)
+	m := metrics.New(prometheus.NewRegistry())
+	h := New(st, brokenSpool(filepath.Join(t.TempDir(), "absent", "o.jsonl"), m), m, time.Now, nil)
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "mallory", "vty0", "task_id=1", "service=shell", "cmd="))
+	if got := testutil.ToFloat64(m.Attributions.WithLabelValues("unattributed")); got != 0 {
+		t.Fatalf("a refused record was counted: %v", got)
+	}
+}
+
+// A console login as a system user stays `system` (spec §5.8): `root` on
+// juniper_junos is the device's own machinery in the capture, and port49
+// cannot tell that from a person at the console under the same name. What it
+// can do is keep the port on the record, so a log reader sees where the
+// session was. The port value here is illustrative: what a Junos console
+// presents in `port` is unmeasured in this lab.
+func TestASystemRecordCarriesItsPort(t *testing.T) {
+	h, _, out, stop := setup(t)
+	sys := authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "test_system_users"}
+	h.Handle(context.Background(), sys, acct(wire.AcctFlagStart, "root", "ttyd0", "task_id=1", "service=shell", "cmd="))
+	stop()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["attribution"] != "system" || m["session"].(map[string]any)["port"] != "ttyd0" {
+		t.Fatalf("a system record must stay system and carry the port it arrived on: %v", m)
+	}
+}

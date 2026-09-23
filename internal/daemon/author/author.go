@@ -253,8 +253,12 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason
 	h.emit(rec)
 
-	// `ctx.privilege` is the level port49 last GRANTED, so a permitted session
-	// authorization whose reply carries `priv-lvl` records it (spec §5.3, §7).
+	// `ctx.privilege` is the highest level port49 has GRANTED this user on this
+	// device, so a permitted session authorization whose reply carries
+	// `priv-lvl` raises it to that level and never lowers it: the context covers
+	// every window of one operator, and a second window granted less must not
+	// take the first window's enable away (spec §5.3, §7; SetPrivilege is
+	// raise-only in the store).
 	// Measured on vEOS: the session authorization arrives at priv_lvl 1, this
 	// reply grants 15, and every command after it arrives at 15, so a context
 	// still holding the login START's level would deny all of them
@@ -340,6 +344,11 @@ func storeOutcome(err error) string {
 		return "ok"
 	case errors.Is(err, store.ErrNotFound):
 		return "not_found"
+	case errors.As(err, new(*store.UnreadableContextError)):
+		// The record is there and the store answered; the sealing layer
+		// could not open it. Counted apart from "error" so a key rotation
+		// does not read as a store outage (spec §5.6).
+		return "unreadable"
 	default:
 		return "error"
 	}

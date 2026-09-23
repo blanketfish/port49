@@ -706,30 +706,24 @@ func TestTheDevicePrivLvlRaisedByOurOwnSessionReply(t *testing.T) {
 	}
 }
 
-// The inverse, and the half of the rule that still denies: what is recorded is
-// what the reply GRANTED, not what the device asked for. A session authorized
-// at priv-lvl=1 that is followed by a command claiming 15 is a device asserting
-// a level port49 never gave it.
+// The half of the rule that still denies: what is recorded is what port49
+// GRANTED, not what the device asks for. A session authorized at priv-lvl=1
+// that is followed by a command claiming 15 is a device asserting a level
+// port49 never gave it.
 func TestACommandAboveTheGrantedLevelIsStillDenied(t *testing.T) {
 	st := memory.New(time.Now)
 	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	st.PutContext(context.Background(), key,
-		store.Context{CtxID: "c", Username: "alice", PrivLvl: 15, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
 	log := &bytes.Buffer{}
 	h := New(st, &Lab{SessionAttributes: []string{"priv-lvl=1"}}, decision.NewJSONLines(log),
 		metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
 
-	// The context starts at 15 so that the denial below can only come from the
-	// session reply having written 1 over it.
 	sess := req("alice", "vty4", "service=shell", "cmd=")
 	sess.PrivLvl = 1
 	if resp := h.Handle(context.Background(), peer, sess); resp.Status != wire.AuthorStatusPassAdd {
 		t.Fatalf("%+v", resp)
 	}
-	if c, _ := st.GetContext(context.Background(), key); c.PrivLvl != 1 {
-		t.Fatalf("the granted level must be recorded even when it lowers the context: %+v", c)
-	}
-
 	r := req("alice", "vty4", "service=shell", "cmd=configure", "cmd-arg=<cr>")
 	r.PrivLvl = 15
 	resp := h.Handle(context.Background(), peer, r)
@@ -738,10 +732,13 @@ func TestACommandAboveTheGrantedLevelIsStillDenied(t *testing.T) {
 	}
 }
 
-// A DENIED session authorization grants nothing, so it records nothing: the
-// reply carries no attributes at all, and a context whose level moved on a
-// denial would be taking policy from a request that was refused.
-func TestADeniedSessionAuthorizationRecordsNoLevel(t *testing.T) {
+// A lower grant does not lower the context (spec §5.3). The context is keyed
+// (nas, username) and covers every window of one operator: window B's session
+// authorization answered priv-lvl=1 must not take away the 15 window A was
+// granted, or A's next command is `privilege_exceeded` for no reason A can see.
+// The REPLY still says 1 — that is policy's answer, and the stored level never
+// feeds it.
+func TestALowerGrantKeepsTheHeldLevel(t *testing.T) {
 	st := memory.New(time.Now)
 	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	st.PutContext(context.Background(), key,
@@ -749,12 +746,42 @@ func TestADeniedSessionAuthorizationRecordsNoLevel(t *testing.T) {
 	h := New(st, &Lab{SessionAttributes: []string{"priv-lvl=1"}}, decision.NewJSONLines(&bytes.Buffer{}),
 		metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
 
+	sess := req("alice", "vty6", "service=shell", "cmd=")
+	sess.PrivLvl = 1
+	resp := h.Handle(context.Background(), peer, sess)
+	if resp.Status != wire.AuthorStatusPassAdd || len(resp.Args) != 1 || string(resp.Args[0]) != "priv-lvl=1" {
+		t.Fatalf("the reply is policy's answer and must still say 1: %+v", resp)
+	}
+	if c, _ := st.GetContext(context.Background(), key); c.PrivLvl != 15 {
+		t.Fatalf("a lower grant must not lower the held level: %+v", c)
+	}
+	r := req("alice", "vty4", "service=shell", "cmd=configure", "cmd-arg=<cr>")
+	r.PrivLvl = 15
+	if resp := h.Handle(context.Background(), peer, r); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("window A's command at the level it was granted must still be permitted: %+v", resp)
+	}
+}
+
+// A DENIED session authorization grants nothing, so it records nothing: the
+// reply carries no attributes at all, and a context whose level moved on a
+// denial would be taking policy from a request that was refused. The context
+// starts at 1 and the authorizer would grant 15, because stored privilege is
+// raise-only (spec §5.3): a denial that recorded a level could only show up as
+// a raise.
+func TestADeniedSessionAuthorizationRecordsNoLevel(t *testing.T) {
+	st := memory.New(time.Now)
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	st.PutContext(context.Background(), key,
+		store.Context{CtxID: "c", Username: "alice", PrivLvl: 1, MaxPrivilege: 15, RefreshedAt: time.Now()}, time.Hour)
+	h := New(st, &Lab{SessionAttributes: []string{"priv-lvl=15"}}, decision.NewJSONLines(&bytes.Buffer{}),
+		metrics.New(prometheus.NewRegistry()), time.Now, platform.Defaults(), time.Hour, time.Minute, time.Hour)
+
 	sess := req("alice", "vty4", "service=ppp", "protocol=ip") // service_unsupported: denied before the authorizer
 	sess.PrivLvl = 1
 	if resp := h.Handle(context.Background(), peer, sess); resp.Status != wire.AuthorStatusFail {
 		t.Fatalf("%+v", resp)
 	}
-	if c, _ := st.GetContext(context.Background(), key); c.PrivLvl != 15 {
+	if c, _ := st.GetContext(context.Background(), key); c.PrivLvl != 1 {
 		t.Fatalf("a denied session authorization must not move the recorded level: %+v", c)
 	}
 }

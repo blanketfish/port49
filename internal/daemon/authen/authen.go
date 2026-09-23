@@ -319,6 +319,15 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		if !now.Before(capAt) || !now.Before(r.IdleExpiresAt) {
 			return s.fail(ctx, rec, decision.TokenSpent)
 		}
+		// A receipt replays only onto the context it was written for (spec
+		// §5.6). The check is here, before the extension, so a refused
+		// presentation does not slide the window on its way to the refusal.
+		switch ok, lerr := s.receiptContextLive(ctx, ck, r.CtxID, enable, incumbent); {
+		case lerr != nil:
+			return s.storeError(rec)
+		case !ok:
+			return s.fail(ctx, rec, decision.TokenSpent)
+		}
 		next := now.Add(s.h.receiptIdleTTL)
 		if next.After(capAt) {
 			next = capAt
@@ -341,21 +350,17 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 			// slide, so the next presentation would silently get a fresh window.
 			return s.storeError(rec)
 		}
-		// The receipt froze a ctx_id at the first escalation. The live context
-		// may be a different one by now (spec §15, L1: the key cannot tell two
-		// of this operator's shells apart), and the privilege may never have
-		// landed at all if that escalation's PutContext failed. Replay the
-		// escalation's EFFECT on the context that exists now, and log that
-		// context's id rather than the frozen one — otherwise a PASS goes out
-		// naming a context nothing else will ever mention, which is the thing
-		// this task exists to prevent. The gate above already re-checked the
-		// mechanism, the ceiling, revocation, expiry and rem_addr against the
-		// live context, so this grants nothing the cold path would not.
+		// The live context is the one this receipt was written for (checked
+		// above), so the replay acts on it. For an enable that means replaying
+		// the escalation's EFFECT and not only its answer: the privilege may
+		// never have landed if that escalation's SetPrivilege failed. The gate
+		// above already re-checked the mechanism, the ceiling, revocation,
+		// expiry and rem_addr against the live context, so this grants nothing
+		// the cold path would not.
 		if enable && r.Status == wire.AuthenStatusPass {
 			return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
 		}
-		rec.Session.CtxID = r.CtxID
-		return s.finish(rec, r.Status, decision.ReceiptReplayed)
+		return s.replay(ctx, rec, r)
 	case !errors.Is(err, store.ErrNotFound):
 		return s.storeError(rec)
 	}
@@ -386,21 +391,81 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 
 	// 3. Atomic redemption; the loser of a race adopts the winner's receipt.
 	//
-	// An escalation keeps the context's id (spec §5.6 row 1, §7), and the
-	// receipt has to carry that id rather than a fresh one: the receipt is what
-	// answers a retransmitted enable, and a ctx_id minted here and stored
-	// nowhere would be replayed into the log naming a context that does not
-	// exist. `enable` is false on every login path, where this is plan 1's
-	// behaviour unchanged.
+	// The receipt carries the ctx_id this redemption lands on, so that id is
+	// settled before the redemption rather than after it: the receipt is what
+	// answers a retransmission, and a ctx_id minted here and stored nowhere
+	// would be replayed into the log naming a context that does not exist.
+	// An escalation keeps the context's id (spec §5.6 row 1, §7). A login
+	// joins the live context when it may (spec §5.6), and then it is that
+	// context's id too; otherwise it is a fresh one.
+	//
+	// The login's read is here, before the token is spent, for a second
+	// reason: a store that cannot be reached cannot say whether there is a
+	// context to join, and JoinContext below would fail on it anyway.
+	// Refusing now leaves the token unspent, so the operator's retry works
+	// once the store is back, instead of replaying a PASS that nothing backs.
+	// A record that is there but will not open — sealed under a key that has
+	// left the window — is not that: it is replaced, with a fresh id
+	// (store.UnreadableContextError; spec §5.6).
+	//
+	// The read and JoinContext's own are not one operation, and when they
+	// disagree the receipt names the id predicted here while the redeem
+	// record names the one written. Three ways: the context is reclaimed,
+	// replaced by another principal's login, or carried past its ceiling,
+	// between the two; or — the one
+	// that needs no other principal — two first logins by the same principal
+	// both read nothing, both mint an id, and the one whose swap loses joins
+	// the other's context. Its receipt then names an id no context holds, so
+	// its retransmission is refused `token_spent` (receiptContextLive) and the
+	// device prompts again. Each needs two logins under one username on one
+	// device inside a few milliseconds.
 	ctxID := incumbent.CtxID
+	var login store.Context
+	// revokedAt is set when the login would join a context whose revocation
+	// its token, minted before it, cannot lift (store.CarryRevocation). Such a
+	// login is refused `credential_revoked`, the enable gate's answer for the
+	// same state (spec §5.6). The token is still spent, and the receipt
+	// records the refusal: a retry of a token the revocation was meant to stop
+	// must not get a second chance, and a retransmission replays FAIL, never
+	// a PASS. A revocation that lands after this read is merged by the join
+	// instead, and that login answers PASS into the revoked context; every
+	// authorization after it is denied.
+	var revokedAt time.Time
 	if !enable {
-		ctxID = s.h.newCtxID()
+		login = s.loginContext(winner, username, port, remAddr)
+		prev, perr := s.h.store.GetContext(ctx, ck)
+		s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(perr)).Inc()
+		var unreadable *store.UnreadableContextError
+		switch {
+		case perr == nil && store.Joinable(prev, login, s.h.now()):
+			// The receipt names the context this login predicts it joins,
+			// but the login's own context still gets an id of its own.
+			// JoinContext decides again after the token is spent: a join
+			// keeps the live id whatever login carries (store.Join starts
+			// from the live record), and a replace — the ceiling passed, or
+			// another principal's login landed, in between — writes login
+			// as it is. Carrying the predicted id there would write the
+			// fresh context under the id it displaced, and one ctx_id would
+			// name two contexts.
+			ctxID = prev.CtxID
+			login.CtxID = s.h.newCtxID()
+			revokedAt = store.CarryRevocation(prev.RevokedAt, winner.MintedAt)
+		case perr == nil || errors.Is(perr, store.ErrNotFound) || errors.As(perr, &unreadable):
+			ctxID = s.h.newCtxID()
+			login.CtxID = ctxID
+		default:
+			return s.storeError(rec)
+		}
 	}
 	// The retention is deliberately longer than both bounds: a presentation
 	// past a bound has to find the receipt in order to be answered
 	// `token_spent` rather than `token_not_found` (store.Receipt; spec §5.7).
 	now := s.h.now()
-	receipt := store.Receipt{CredentialSHA256: credHash, Status: wire.AuthenStatusPass, CtxID: ctxID,
+	status := uint8(wire.AuthenStatusPass)
+	if !revokedAt.IsZero() {
+		status = wire.AuthenStatusFail
+	}
+	receipt := store.Receipt{CredentialSHA256: credHash, Status: status, CtxID: ctxID,
 		FirstRedeemedAt: now, IdleExpiresAt: now.Add(s.h.receiptIdleTTL),
 		RetainUntil: now.Add(s.h.receiptMaxAge + s.h.receiptIdleTTL)}
 	w := store.ReceiptWrite{Key: rk, Receipt: receipt, Principal: winner.Principal,
@@ -412,6 +477,19 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 			r, rerr := s.h.store.GetReceipt(ctx, rk)
 			s.h.metrics.StoreOps.WithLabelValues("get_receipt", storeOutcome(rerr)).Inc()
 			if rerr == nil && subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
+				// An enable replays onto the context it was written for, as a
+				// retransmission does. A login that lost is not checked: it
+				// presented the winner's own credential, and the winner's
+				// JoinContext is still in flight, so a read here would race the
+				// winner's write and refuse the duplicate for nothing.
+				if enable {
+					switch ok, lerr := s.receiptContextLive(ctx, ck, r.CtxID, enable, incumbent); {
+					case lerr != nil:
+						return s.storeError(rec)
+					case !ok:
+						return s.fail(ctx, rec, decision.TokenSpent)
+					}
+				}
 				// The concurrent-escalation case, and it has the same shape as
 				// the retransmission above: the winner's receipt says PASS, but
 				// only replaying the effect puts the privilege on the context
@@ -419,8 +497,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 				if enable && r.Status == wire.AuthenStatusPass {
 					return s.escalate(ctx, rec, ck, decision.ReceiptReplayed)
 				}
-				rec.Session.CtxID = r.CtxID
-				return s.finish(rec, r.Status, decision.ReceiptReplayed)
+				return s.replay(ctx, rec, r)
 			}
 			return s.fail(ctx, rec, decision.TokenNotFound)
 		}
@@ -429,61 +506,98 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 
 	// The enable token is spent and the receipt is written under this
 	// context's own ctx_id: all that is left is the new privilege. This
-	// returns above the `prev` read deliberately — an escalation displaces no
+	// returns above the join deliberately — an escalation displaces no
 	// context, so `replaced_ctx_id` must stay absent on its record.
 	if enable {
 		return s.escalate(ctx, rec, ck, decision.EscalationGranted)
 	}
-
-	// A context already under this key is this operator's own earlier login on
-	// this device: the key cannot tell two of their shells apart, and no wire
-	// field can either (spec §15, L1). The overwrite is benign — same
-	// principal, same privilege, same blob — but it must not be silent, so the
-	// record names the ctx_id it displaces (spec §5.6).
-	//
-	// This read and the write below are not atomic. Two simultaneous
-	// redemptions by one user on one device can both read the same `prev` and
-	// both report it, and then one of the two new contexts is overwritten with
-	// nothing naming it — the silence `replaced_ctx_id` exists to prevent, in
-	// the one case it cannot cover. Closing it needs a compare-and-set on
-	// PutContext, which the store interface does not have; plan 2 owns whether
-	// to add one.
-	prev, perr := s.h.store.GetContext(ctx, ck)
-	s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(perr)).Inc()
-	if perr == nil {
-		rec.Session.ReplacedCtxID = prev.CtxID
+	// Refused, and nothing is written to the context: it is revoked already,
+	// and a join would only swap in a broker decision nobody may use.
+	if !revokedAt.IsZero() {
+		rec.Principal = winner.Principal
+		rec.Session.CtxID = ctxID
+		rec.Session.RevokedAt = decision.FormatTime(revokedAt)
+		return s.fail(ctx, rec, decision.CredentialRevoked)
 	}
 
-	// The context carries what the token was minted with, in its §5.1.1 shape:
-	// everything a later authorization has to answer from without reaching the
-	// broker again.
-	newCtx := store.Context{CtxID: ctxID, Principal: winner.Principal, Username: username,
-		Port: port, RemAddr: remAddr, PrivLvl: s.start.PrivLvl, BlobHash: winner.BlobHash,
-		Credential: winner.Credential, AuthTime: winner.AuthTime, RefreshedAt: s.h.now(),
-		LastTouchedAt: s.h.now(),
-		Enable:        winner.Enable, MaxPrivilege: winner.MaxPrivilege, CreatedAt: s.h.now()}
-	// A zero MaxSessionAge is `max_session_age: never` and must stay
-	// expressible (spec §5.6): it leaves SessionExpires zero, which Task 10
-	// reads as no ceiling rather than as expired at the epoch.
-	//
-	// Nothing else is guarded here, and a token carrying a ceiling with no
-	// AuthTime to anchor it is deliberately left to compute a SessionExpires
-	// in the distant past. That denies, loudly and visibly, where dropping the
-	// ceiling instead would hand out an unbounded session that looks exactly
-	// like a legitimate `never` and that nothing logs.
-	if winner.MaxSessionAge > 0 {
-		newCtx.SessionExpires = winner.AuthTime.Add(winner.MaxSessionAge)
-	}
-	err = s.h.store.PutContext(ctx, ck, newCtx, s.h.contextTTL)
-	s.h.metrics.StoreOps.WithLabelValues("put_context", storeOutcome(err)).Inc()
+	// Join, or write fresh (spec §5.6). A live context of the same principal
+	// is this operator's other window on this device, and the login merges
+	// into it: the ctx_id, the privilege already granted, the bound sessions
+	// and a revocation the token predates are all kept, so window A loses
+	// nothing to window B. Another principal under the same username, or a
+	// context past its ceiling, is replaced, and the record names the ctx_id
+	// it displaced. A record the sealing layer cannot open is replaced too,
+	// keeping its plaintext revocation, and the record says it was unreadable
+	// because its ctx_id is sealed. JoinContext reads, merges and swaps on the
+	// revision it read, so a revocation or annotation landing mid-login is
+	// merged rather than erased, and two simultaneous logins both land.
+	out, err := store.JoinContext(ctx, s.h.store, ck, login, winner.MintedAt, s.h.now(), s.h.contextTTL)
+	s.h.metrics.StoreOps.WithLabelValues("join_context", storeOutcome(err)).Inc()
 	if err != nil {
 		// The token is already redeemed, but without a context a later authorization
 		// request has nothing to check against: ERROR, not a PASS we can't back up.
 		return s.storeError(rec)
 	}
+	rec.Session.ReplacedCtxID = out.Replaced
+	rec.Session.ReplacedUnreadable = out.ReplacedUnreadable
+	if out.ClampedFrom != 0 {
+		rec.Session.PrivilegeClamped = &decision.PrivilegeClamp{From: out.ClampedFrom, To: out.Context.PrivLvl}
+	}
+	// A replace unindexes the credential it displaced before this login is
+	// indexed. The index keeps every sid and certificate a context was
+	// indexed under, so that a join stays revocable by either login's; left
+	// in place after a replace, the displaced login's would keep reaching
+	// this context, and a back-channel logout of that principal would revoke
+	// this one (spec §5.6). A failure is counted and does not fail the login:
+	// what it leaves is a revocation that can reach too far, never one that
+	// cannot reach.
+	//
+	// Another principal's replace clears every key the ref was indexed
+	// under (UnindexRef), not only what Prior names: a joined context was
+	// indexed under each of its logins' sids and certificates, and the record
+	// keeps only the last login's. Nothing of the displaced principal's is
+	// this login's to keep. An unreadable replace does the same, because it
+	// has no Prior to compare — the displaced record's principal and
+	// credential are sealed — and anything it left would be re-stamped by
+	// every extension of this context for as long as it lives, not only until
+	// index_ttl. When the unreadable record was this principal's own, its own
+	// keys go too, and the IndexContext below puts this login's back.
+	//
+	// The same principal's replace — past its ceiling — unindexes only the
+	// keys this login does not share. A key both logins hold is one this
+	// login is about to index anyway, and unindexing it first would leave a
+	// moment in which a revocation by it finds nothing, and the context
+	// written in that moment would never be marked. An earlier joined
+	// login's sid that Prior does not name stays, and a revocation of it can
+	// mark this context: the same person, and fail-closed.
+	ref := store.ContextRef{NAS: s.peer.NAS, Username: username}
+	switch {
+	case out.ReplacedUnreadable:
+		uerr := s.h.store.UnindexRef(ctx, ref)
+		s.h.metrics.StoreOps.WithLabelValues("unindex_ref", storeOutcome(uerr)).Inc()
+	case out.Prior.CtxID == "":
+	case out.Prior.Principal != winner.Principal:
+		uerr := s.h.store.UnindexRef(ctx, ref)
+		s.h.metrics.StoreOps.WithLabelValues("unindex_ref", storeOutcome(uerr)).Inc()
+	default:
+		sid := out.Prior.Credential.Sid
+		certKey := store.CertKey(out.Prior.Credential.Issuer, out.Prior.Credential.Serial)
+		if sid == winner.Credential.Sid {
+			sid = ""
+		}
+		if certKey == store.CertKey(winner.Credential.Issuer, winner.Credential.Serial) {
+			certKey = ""
+		}
+		if sid != "" || certKey != "" {
+			uerr := s.h.store.UnindexContext(ctx, "", sid, certKey, ref)
+			s.h.metrics.StoreOps.WithLabelValues("unindex_context", storeOutcome(uerr)).Inc()
+		}
+	}
+	// Indexed under this login's credential even on a join, and added to what
+	// the context was indexed under rather than replacing it: revocation by
+	// either login's sid or certificate has to reach the joined context.
 	err = s.h.store.IndexContext(ctx, winner.Principal, winner.Credential.Sid,
-		store.CertKey(winner.Credential.Issuer, winner.Credential.Serial),
-		store.ContextRef{NAS: s.peer.NAS, Username: username}, s.h.indexTTL)
+		store.CertKey(winner.Credential.Issuer, winner.Credential.Serial), ref, s.h.indexTTL)
 	s.h.metrics.StoreOps.WithLabelValues("index_context", storeOutcome(err)).Inc()
 	// An index write that fails does not fail the login: the operator is
 	// authenticated and the context exists. What is lost is reach — a later
@@ -495,8 +609,64 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		rec.IndexError = "context not indexed; revocation by sid, principal or certificate will not reach it"
 	}
 	rec.Principal = winner.Principal
-	rec.Session.CtxID = ctxID
+	rec.Session.CtxID = out.Context.CtxID
 	return s.finish(rec, wire.AuthenStatusPass, decision.TokenRedeemed)
+}
+
+// loginContext is the context this login would create on its own, in its
+// §5.1.1 shape: everything a later authorization has to answer from without
+// reaching the broker again. Its CtxID is left for the caller. JoinContext
+// writes it as it is on a first login and merges it into the live context on
+// a second.
+func (s *Session) loginContext(winner *store.Token, username, port, remAddr string) store.Context {
+	now := s.h.now()
+	c := store.Context{Principal: winner.Principal, Username: username,
+		Port: port, RemAddr: remAddr, PrivLvl: s.start.PrivLvl, BlobHash: winner.BlobHash,
+		Credential: winner.Credential, AuthTime: winner.AuthTime, RefreshedAt: now,
+		LastTouchedAt: now, Enable: winner.Enable, MaxPrivilege: winner.MaxPrivilege, CreatedAt: now}
+	// A zero MaxSessionAge is `max_session_age: never` and must stay
+	// expressible (spec §5.6): it leaves SessionExpires zero, which Task 10
+	// reads as no ceiling rather than as expired at the epoch.
+	//
+	// Nothing else is guarded here, and a token carrying a ceiling with no
+	// AuthTime to anchor it is deliberately left to compute a SessionExpires
+	// in the distant past. That denies, loudly and visibly, where dropping the
+	// ceiling instead would hand out an unbounded session that looks exactly
+	// like a legitimate `never` and that nothing logs.
+	if winner.MaxSessionAge > 0 {
+		c.SessionExpires = winner.AuthTime.Add(winner.MaxSessionAge)
+	}
+	return c
+}
+
+// receiptContextLive reports whether a replayed receipt may act: whether the
+// ctx_id it froze is still the live context's (spec §5.6). The join keeps
+// ctx_id across one principal's logins, so a match is exactly "the context
+// this receipt was written for", and a mismatch is a context replaced —
+// another principal, past its ceiling, unreadable — or reclaimed since. A
+// receipt for a context that no longer exists answers nothing that exists:
+// PASS from it would admit a session whose authorizations answer from someone
+// else's context, or raise that context with another principal's enable.
+//
+// An enable already holds the live context from its gate; a login reads it.
+// The error is a store error only — an absent or unopenable context is a
+// plain no.
+func (s *Session) receiptContextLive(ctx context.Context, ck store.ContextKey, receiptCtxID string,
+	enable bool, incumbent store.Context) (bool, error) {
+	if enable {
+		return incumbent.CtxID == receiptCtxID, nil
+	}
+	c, err := s.h.store.GetContext(ctx, ck)
+	s.h.metrics.StoreOps.WithLabelValues("get_context", storeOutcome(err)).Inc()
+	var unreadable *store.UnreadableContextError
+	switch {
+	case err == nil:
+		return c.CtxID == receiptCtxID, nil
+	case errors.Is(err, store.ErrNotFound), errors.As(err, &unreadable):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 // escalate records the new privilege on the incumbent context and keeps
@@ -547,6 +717,18 @@ func (s *Session) escalate(ctx context.Context, rec decision.Record, ck store.Co
 	return s.finish(rec, wire.AuthenStatusPass, reason)
 }
 
+// replay answers from a receipt's stored decision. A refusal — the only one
+// written is a login refused `credential_revoked` (spec §5.6) — replays as a
+// refusal does, after the failure delay and with its server_msg, so a device
+// that retransmits it learns nothing a FAIL would not have told it.
+func (s *Session) replay(ctx context.Context, rec decision.Record, r store.Receipt) (wire.AuthenReply, bool) {
+	rec.Session.CtxID = r.CtxID
+	if r.Status == wire.AuthenStatusFail {
+		return s.fail(ctx, rec, decision.ReceiptReplayed)
+	}
+	return s.finish(rec, r.Status, decision.ReceiptReplayed)
+}
+
 // storeOutcome maps a store error to the StoreOps metric's outcome label.
 func storeOutcome(err error) string {
 	switch {
@@ -554,6 +736,11 @@ func storeOutcome(err error) string {
 		return "ok"
 	case errors.Is(err, store.ErrNotFound):
 		return "not_found"
+	case errors.As(err, new(*store.UnreadableContextError)):
+		// The record is there and the store answered; the sealing layer
+		// could not open it. Counted apart from "error" so a key rotation
+		// does not read as a store outage (spec §5.6).
+		return "unreadable"
 	default:
 		return "error"
 	}

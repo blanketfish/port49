@@ -57,17 +57,42 @@ type Device struct {
 type Session struct {
 	CtxID    string `json:"ctx_id"`
 	Username string `json:"username,omitempty"`
-	// ReplacedCtxID is set on a redeem that overwrote an existing context for
-	// the same (nas, username) — the same operator logging into the same
-	// device twice. It names the displaced ctx_id so the two shells' records
-	// can still be joined (spec §5.6).
+	// ReplacedCtxID is set on a redeem that replaced an existing context for
+	// the same (nas, username) rather than joining it: another principal under
+	// the same username, or the same principal's context past its session
+	// ceiling. It names the displaced ctx_id so the records before and after
+	// can still be joined (spec §5.6). A second login by the same principal
+	// joins and sets nothing here.
 	ReplacedCtxID string `json:"replaced_ctx_id,omitempty"`
+	// ReplacedUnreadable is set on a redeem that replaced a context the
+	// sealing layer could not open — sealed under a key that has left the
+	// two-key window, or failing authentication. Its ctx_id is sealed, so
+	// ReplacedCtxID cannot name it, and this says a context was displaced all
+	// the same (spec §5.6).
+	ReplacedUnreadable bool `json:"replaced_unreadable,omitempty"`
+	// RevokedAt is set on a redeem refused `credential_revoked`: the login
+	// would have joined a context whose revocation its token, minted before
+	// it, cannot lift. It is the revocation that refused it, rendered as ts
+	// is (FormatTime), so the refusal explains itself (spec §5.6).
+	RevokedAt string `json:"revoked_at,omitempty"`
+	// PrivilegeClamped is set on a redeem that joined a context and lowered
+	// the level it held to the newest login's ceiling. The other windows'
+	// next command above To is denied privilege_exceeded, and this is the
+	// line that says why (spec §5.3). Privilege above is the START level,
+	// not the context's.
+	PrivilegeClamped *PrivilegeClamp `json:"privilege_clamped,omitempty"`
 	// Port and RemAddr are as seen on this exchange, which is not necessarily
 	// what the context recorded: they are part of no key (spec §13,
 	// decision 15).
 	Port      string `json:"port"`
 	RemAddr   string `json:"rem_addr"`
 	Privilege uint8  `json:"privilege"`
+}
+
+// PrivilegeClamp is the context's held level before and after a join.
+type PrivilegeClamp struct {
+	From uint8 `json:"from"`
+	To   uint8 `json:"to"`
 }
 
 type Request struct {
@@ -167,13 +192,21 @@ func CredentialHash(presented []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// timeLayout is how every time on a record is rendered: millisecond precision,
+// matching the spec examples.
+const timeLayout = "2006-01-02T15:04:05.000Z07:00"
+
+// FormatTime renders a time carried in a record field the way ts is rendered,
+// so a reader compares the two as strings.
+func FormatTime(t time.Time) string { return t.UTC().Format(timeLayout) }
+
 // MarshalJSON renders ts with millisecond precision in UTC, matching the spec examples.
 func (r Record) MarshalJSON() ([]byte, error) {
 	type alias Record
 	return json.Marshal(struct {
 		TS string `json:"ts"`
 		*alias
-	}{TS: r.TS.Format("2006-01-02T15:04:05.000Z07:00"), alias: (*alias)(&r)})
+	}{TS: r.TS.Format(timeLayout), alias: (*alias)(&r)})
 }
 
 // UnmarshalJSON is MarshalJSON's counterpart, parsing ts back into a
@@ -189,7 +222,7 @@ func (r *Record) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &a); err != nil {
 		return err
 	}
-	ts, err := time.Parse("2006-01-02T15:04:05.000Z07:00", a.TS)
+	ts, err := time.Parse(timeLayout, a.TS)
 	if err != nil {
 		return err
 	}

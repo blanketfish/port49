@@ -3,6 +3,16 @@
 **Date:** 2026-09-20. **Status:** decision memo for the owner. Nothing here changes a spec or
 design sentence; it proposes the change and prices it.
 
+> **Corrected 2026-09-23.** This memo said two concurrent vEOS sessions both reported `vty4` at
+> authorization, and generalized it to vEOS. Two later runs in which both sessions held a shell
+> show **different** vtys from session authorization onward, and both on `ssh` at authentication:
+> `tests/lab/results/L1-arista_eos.md` (2026-09-20, `alice05` on `vty4`, `alice06` on `vty6`,
+> capture `tests/lab/evidence/L1-arista_eos.pcap`), and again the 2026-09-22 run (`alice02` on
+> `vty4`, `alice03` on `vty6`, 15:57:48–15:57:55; `tests/lab/logs/decisions-arista_eos.jsonl`,
+> git-ignored, so the records are quoted in §1). The 2026-09-17 records in §1 stand as recorded;
+> see the annotation under item 2. The conclusion stands: `ssh` at the authentication START is what the
+> context would have to be keyed on, and it separates nothing. The N9Kv observations are unchanged.
+
 Every device-behavior statement below is marked **measured** (with the note or log file) or
 **unmeasured**. Nothing is asserted from vendor documentation.
 
@@ -22,7 +32,7 @@ Measured from `tests/lab/logs/decisions-arista_eos.jsonl` (2026-09-17 run, 64 re
 
 | candidate | authen START | author request | acct START | acct STOP | unique per concurrent session? |
 |---|---|---|---|---|---|
-| `port` | `ssh` | `ssh` **or** `vty4` | `ssh` | `ssh` or `vty4` | **no** — both concurrent sessions reported `ssh`, then both reported `vty4` |
+| `port` | `ssh` | `ssh` **or** `vty<n>` | `ssh` | `ssh` or `vty<n>` | **not at authentication** — both concurrent sessions reported `ssh` there; from session authorization onward each has its own vty (`vty4`, `vty6`; corrected 2026-09-23) |
 | `rem_addr` | `172.100.100.1` | same | same | same | **no** — one jump host, identical for both |
 | `user` | present | present | present | present | yes in the lab *by construction* (one username per login); no in production |
 | `task_id` | absent | absent | `8`,`10`,`11`… | pairs with its START | yes — device-unique and monotonic, **but accounting only** |
@@ -34,9 +44,21 @@ Measured from `tests/lab/logs/decisions-arista_eos.jsonl` (2026-09-17 run, 64 re
 **Two things in that table are not in the committed L1 note and change the conclusion.**
 
 1. **`port` is not stable for a session's life on vEOS.** It is `ssh` during authentication
-   and the first exec accounting START, and becomes `vty4` once a vty is allocated. Measured:
-   `alice02`, `alice03` and `alice06` each show `ssh` at `redeem` and `vty4` at
-   `authorize_session`.
+   and the first exec accounting START, and becomes `vty<n>` once a vty is allocated. Measured:
+   `alice02`, `alice03` and `alice06` each show `ssh` at `redeem` and a vty at
+   `authorize_session`. Two *concurrent* sessions that each hold a shell get **different** vtys,
+   stable from `authorize_session` onward — `tests/lab/results/L1-arista_eos.md` (2026-09-20,
+   `alice05` on `vty4`, `alice06` on `vty6`), and again the 2026-09-22 run,
+   `tests/lab/logs/decisions-arista_eos.jsonl`, whose records are quoted here because that log is
+   git-ignored:
+
+   | time | event | user | port |
+   |---|---|---|---|
+   | 15:57:48.801 | redeem | alice02 | `ssh` |
+   | 15:57:49.002 | authorize_session | alice02 | `vty4` |
+   | 15:57:53.817 | redeem | alice03 | `ssh` |
+   | 15:57:54.020 | authorize_session | alice03 | `vty6` |
+   | 15:57:54.988 | escalate | alice03 / alice02 | `vty6` / `vty4` |
 2. **The instability is what breaks the lookup today.** All twelve session authorizations in
    that log are shown below, and the correlation is exact — every session that changed to
    `vty4` was denied, every session that stayed `ssh` matched:
@@ -45,6 +67,12 @@ Measured from `tests/lab/logs/decisions-arista_eos.jsonl` (2026-09-17 run, 64 re
    |---|---|---|
    | alice01, alice04, alice05, alice07, alice08, longpw30/64/128/138 (9) | `ssh` only | `permit` / `context_matched` |
    | alice02, alice03, alice06 (3) | `ssh` then `vty4` | **`deny` / `context_missing`** |
+
+   (As the 2026-09-17 run recorded it; that log is not retained. These sessions were denied at
+   session authorization under the old key, so whether two of them held a vty at the same moment
+   is unmeasured. Two sessions that each hold a shell get different vtys:
+   `tests/lab/results/L1-arista_eos.md`, 2026-09-20, and the 2026-09-22 run; see the note at the
+   top.)
 
    The three that failed are exactly the three sessions held open — the two L1 concurrent
    sessions and the L5 idle session. That the vty is allocated only for a persisting session
@@ -132,7 +160,9 @@ same within one millisecond at 08:16:22.757). `session_pid` differs across that 
 > session and appear in both the authentication START and the authorization request is
 > empty.** Every session discriminator that exists — Junos `port`/`session_pid`, EOS
 > `task_id` — lives only in accounting, which §5.6 row 7 already demotes to advisory and
-> which arrives 1.8–4.4 s late on Junos (measured, L6).
+> which arrives 1.8–4.4 s late on Junos (measured, L6). EOS's `vty<n>` separates concurrent
+> sessions from session authorization onward but is `ssh` at the authentication START that
+> would have to write the context (corrected 2026-09-23).
 
 No better choice of key from existing fields fixes this. That is what makes it a design
 decision rather than a bug.
@@ -217,7 +247,7 @@ alice02/alice03 read as two operators, `alice` and `bob`.
 | 4 | vsrx1 accounting arrives 1.8 s late, batched: `alice port=0 session_pid=28759`, `bob port=1 session_pid=28769` | each annotates its own row, matched on username | — | `account start attribution=resolved` ×2 — *today both are `unattributed`* |
 | 5 | alice redeems on leaf1, `port="ssh"` | `(leaf1, alice)` → ctx, port recorded `ssh` | `(leaf1, alice, h_a')` | `redeem permit token_redeemed` |
 | 6 | leaf1 asks session authz — **`port` has become `vty4`** | found; `(leaf1, alice)` does not mention port | — | `authorize_session permit context_matched` — *today `deny context_missing`* |
-| 7 | bob does the same on leaf1, also `vty4` | `(leaf1, bob)` separate | — | `permit context_matched` — *today both alice and bob are locked out* |
+| 7 | bob does the same on leaf1, also `vty4` as this run recorded it (a concurrent second session in the 2026-09-22 run got `vty6`; see the correction note at the top) | `(leaf1, bob)` separate | — | `permit context_matched` — *today both alice and bob are locked out* |
 | 8 | alice runs `show version` on leaf1 | unchanged | — | `authorize_command permit permit_dominates` |
 
 ### The bad day

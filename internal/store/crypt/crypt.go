@@ -270,15 +270,36 @@ func (w *wrapped) DeleteReceiptsByPrincipal(ctx context.Context, principal strin
 	return w.inner.DeleteReceiptsByPrincipal(ctx, principal)
 }
 
-func (w *wrapped) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
+func (w *wrapped) sealContext(c store.Context) (store.Context, error) {
 	s, err := w.sealJSON(contextSecret{CtxID: c.CtxID, Principal: c.Principal, Username: c.Username,
 		Port: c.Port, RemAddr: c.RemAddr, Credential: c.Credential})
 	if err != nil {
-		return err
+		return store.Context{}, err
 	}
 	c.CtxID, c.Principal, c.Username, c.Port, c.RemAddr, c.Credential, c.Sealed =
 		"", "", "", "", "", store.Credential{}, s
-	return w.inner.PutContext(ctx, k, c, ttl)
+	return c, nil
+}
+
+func (w *wrapped) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
+	sc, err := w.sealContext(c)
+	if err != nil {
+		return err
+	}
+	return w.inner.PutContext(ctx, k, sc, ttl)
+}
+
+// SwapContext seals as PutContext does and hands the revision through
+// untouched. Rev is plaintext, and that is what lets this layer take part in a
+// compare-and-set at all: the inner store compares a revision it can read on a
+// record it cannot, so the merge happens up here with the fields open and the
+// precondition is enforced down there under its own lock (store.Store).
+func (w *wrapped) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) error {
+	sc, err := w.sealContext(c)
+	if err != nil {
+		return err
+	}
+	return w.inner.SwapContext(ctx, k, rev, sc, ttl)
 }
 
 func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
@@ -288,7 +309,13 @@ func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Con
 	}
 	var cs contextSecret
 	if err := w.openJSON(c.Sealed, &cs); err != nil {
-		return store.Context{}, w.openErr("context", err)
+		// The record is there and will not open. Its revision and revocation
+		// are plaintext, and JoinContext needs both to replace it without
+		// racing a revocation or lifting one (store.UnreadableContextError).
+		// The wrapped error is openErr's, so errors.Is(err, ErrUnknownKey)
+		// still tells a wrong key from a tampered record.
+		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
+			Err: w.openErr("context", err)}
 	}
 	c.CtxID, c.Principal, c.Username, c.Port, c.RemAddr, c.Credential, c.Sealed =
 		cs.CtxID, cs.Principal, cs.Username, cs.Port, cs.RemAddr, cs.Credential, nil
@@ -374,6 +401,11 @@ func (w *wrapped) IndexContext(ctx context.Context, principal, sid, certKey stri
 // UnindexContext passes through, matching IndexContext.
 func (w *wrapped) UnindexContext(ctx context.Context, principal, sid, certKey string, ref store.ContextRef) error {
 	return w.inner.UnindexContext(ctx, principal, sid, certKey, ref)
+}
+
+// UnindexRef passes through, matching IndexContext.
+func (w *wrapped) UnindexRef(ctx context.Context, ref store.ContextRef) error {
+	return w.inner.UnindexRef(ctx, ref)
 }
 
 // ContextsByPrincipal passes through: the index is plaintext, so revocation
