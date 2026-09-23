@@ -3509,9 +3509,12 @@ throughout. The consequences were measured on shipping images, not inferred — 
 every interactive session that got a vty allocated, telling the operator *"Authorization
 denied: port49: this session was not authenticated by port49"* about a session port49 had
 just authenticated, and the N9Kv denied every command. `port` also failed to do the one job
-the key needed from it: two concurrent vEOS sessions both reported `vty4`, two concurrent
-N9Kv sessions both reported `0`, so two operators on one device collided and locked each
-other out. The exclusion of the username was bought to serve `$enab{level}$`, which has now been
+the key needed from it: two concurrent N9Kv sessions both reported `0`, so two operators on one
+device collided and locked each other out; and vEOS, which does give two concurrent sessions
+different vtys (`vty4`, `vty6`) from session authorization onward, says `ssh` for both at the
+authentication START that writes the context. (Corrected 2026-09-23: this sentence said both vEOS
+sessions reported `vty4`; `tests/lab/logs/decisions-arista_eos.jsonl`, 2026-09-22 run,
+15:57:48–15:57:55.) The exclusion of the username was bought to serve `$enab{level}$`, which has now been
 measured *not* to apply on either platform that has an enable exchange: vEOS and **IOS-XE**, the
 platform the spelling is named after, both put the operator's own username on the enable START
 with `service=enable` (L3, 2026-09-20). So the thing the exclusion was paid for has not been
@@ -4112,13 +4115,14 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   the session authorization matched and every *command* authorization missed, so the operator got `Error:
   AAA authorization failed`. Neither was intermittent: every session in every run behaved this way.
 
-  Concurrency did not rescue it either. Two overlapping vEOS sessions both reported `vty4` at authorization,
-  and two overlapping N9Kv sessions both reported `0` — one denied `username_mismatch`, the other
-  `context_missing`.
+  Concurrency did not rescue it either. Two overlapping N9Kv sessions both reported `0` — one denied
+  `username_mismatch`, the other `context_missing`. (This paragraph also said two overlapping vEOS
+  sessions both reported `vty4` at authorization. Corrected 2026-09-23: the 2026-09-22 run shows two
+  concurrent vEOS sessions on `vty4` and `vty6`, below.)
 
   **Re-measured on vEOS after the re-key, 2026-09-20.** The `port` observations are unchanged — the device
-  still says `ssh` at authentication and `vty<n>` at authorization, and two concurrent sessions still cannot
-  be told apart by it — and the outcome is now the opposite. Both overlapping sessions were answered
+  still says `ssh` at authentication and `vty<n>` at authorization, so two concurrent sessions cannot be
+  told apart by it where the context is written — and the outcome is now the opposite. Both overlapping sessions were answered
   `permit context_matched` at their session authorization, under two distinct `ctx_id`s, with the device
   reporting a *different* vty for each (`vty4` and `vty6`) and neither matching the `ssh` they authenticated
   under. Off the wire, the AUTHOR RESPONSE that was `status=0x10 server_msg="port49: this session was not

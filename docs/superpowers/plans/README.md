@@ -279,6 +279,17 @@ job there**: the session-only projection — class, `local-user-name`, `user-per
 `allow-commands` / `deny-commands` regexes — is decision 22, gated on L12, and plan 1 sends
 none of it.
 
+**Owed from plan 2b (context join):** a configuration check that **warns when a port49-served
+username exists as a device-local account** on the device (spec §5.6, "Local account names MUST
+NOT collide"). Such an account's commands arrive under the same username and match the port49
+context at its highest granted level; `foreign` attribution is the only detection until this check
+exists.
+
+**Possible later, not planned:** per-window contexts on the platforms that give a window its own
+stable identifier — EOS `vty<n>`, bound at session authorization (the 2026-09-22 vEOS run), and
+IOS-XE `tty<n>` (`tests/lab/results/L1-cisco_iosxe.md`). The `(nas, username)` join is the design of
+record; this would refine it per platform and needs its own ruling first.
+
 ## Plan 6 — Inventory service (§19 step 6)
 
 Spec §10: file inventory in full, NetBox and Nautobot connectors, the versioned bundle,
