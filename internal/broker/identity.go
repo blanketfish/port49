@@ -1,0 +1,68 @@
+package broker
+
+import (
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/rhwendt/port49/internal/store"
+)
+
+// ErrUntrusted is a caller the trust anchor does not vouch for, now: no
+// verified client certificate on the connection, one that has expired since
+// the handshake, or one that maps to no principal or to several. It is
+// `trust_domain_unresolved` in the log (spec §5.7).
+var ErrUntrusted = errors.New("broker: no trusted client certificate")
+
+// Identity maps the connection's verified client certificate to a principal
+// (design §7): `user:` and the certificate's one rfc822Name SAN, lower-cased
+// (spec §2, the human x509 row). Zero or several email SANs are refused —
+// ambiguity fails closed (design §7). An email mapping is a weak mapping and
+// must be issuer-pinned; the broker trusts exactly one anchor (LoadTLS), which
+// pins it. Only VerifiedChains is read: PeerCertificates is what the client
+// sent, not what the anchor vouched for.
+//
+// An rfc822Name is an IA5String, which admits spaces and control characters.
+// The policy accepts only printable ASCII with an @ (policy.checkIdentity), so
+// a SAN outside that form could match no subject; it is refused here, before
+// it reaches a principal or the log.
+//
+// It is called per request, against the broker's clock, because the session
+// is a held connection and a certificate can expire under it: one that has
+// stops minting (spec §13, decision 12), whatever the handshake said. Every
+// certificate in the chain is checked, the anchor included.
+//
+// The credential is identity, not a secret (spec §5.1.4): the certificate's
+// fingerprint, issuer, serial and subject, which revocation by certificate
+// indexes on.
+func Identity(cs *tls.ConnectionState, now time.Time) (string, store.Credential, error) {
+	if cs == nil || len(cs.VerifiedChains) == 0 || len(cs.VerifiedChains[0]) == 0 {
+		return "", store.Credential{}, fmt.Errorf("%w: the connection presented no certificate the trust anchor verified", ErrUntrusted)
+	}
+	chain := cs.VerifiedChains[0]
+	for _, c := range chain {
+		if now.Before(c.NotBefore) || now.After(c.NotAfter) {
+			return "", store.Credential{}, fmt.Errorf("%w: certificate %q is valid %s to %s", ErrUntrusted,
+				c.Subject.String(), c.NotBefore.UTC().Format(time.RFC3339), c.NotAfter.UTC().Format(time.RFC3339))
+		}
+	}
+	leaf := chain[0]
+	if len(leaf.EmailAddresses) != 1 {
+		return "", store.Credential{}, fmt.Errorf("%w: the certificate carries %d email SANs; exactly one maps to a "+
+			"principal", ErrUntrusted, len(leaf.EmailAddresses))
+	}
+	email := leaf.EmailAddresses[0]
+	unprintable := func(r rune) bool { return r < 0x21 || r > 0x7e }
+	if strings.IndexFunc(email, unprintable) >= 0 || !strings.Contains(email, "@") {
+		return "", store.Credential{}, fmt.Errorf("%w: the certificate's email SAN is not printable ASCII with an @",
+			ErrUntrusted)
+	}
+	sum := sha256.Sum256(leaf.Raw)
+	cred := store.Credential{Method: "cert", Fingerprint: "sha256:" + hex.EncodeToString(sum[:]),
+		Issuer: leaf.Issuer.String(), Serial: leaf.SerialNumber.Text(16), Subject: leaf.Subject.String()}
+	return "user:" + strings.ToLower(email), cred, nil
+}
