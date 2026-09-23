@@ -11,7 +11,8 @@ Plan 13 builds the user and admin documentation from these.
 
 Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
 fifteen tasks, reviewed per task and whole-branch); **3 merged 2026-09-23** (PR #8, below);
-4–13 not yet. Plan 4 (policy engine) is the next plan to write.
+**4 written 2026-09-23** (`2026-09-23-04-policy-engine.md`, twenty tasks, one plan — under the
+25-task line, so not split); 5–13 not yet. Plan 4 is the next plan to execute.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
