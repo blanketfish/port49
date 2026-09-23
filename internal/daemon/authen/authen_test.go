@@ -420,6 +420,9 @@ func (noStore) IndexContext(context.Context, string, string, string, store.Conte
 func (noStore) UnindexContext(context.Context, string, string, string, store.ContextRef) error {
 	panic("store called")
 }
+func (noStore) UnindexRef(context.Context, store.ContextRef) error {
+	panic("store called")
+}
 func (noStore) ContextsByPrincipal(context.Context, string) ([]store.ContextRef, error) {
 	panic("store called")
 }
@@ -1487,6 +1490,14 @@ func TestAJoinedLoginsReceiptNamesTheKeptContext(t *testing.T) {
 // context is still live must not lift the mark. A token minted after it is the
 // broker having verified the credential again, and admits (spec §13,
 // decision 15).
+//
+// In both cases the login itself answers PASS `token_redeemed`, and that is
+// intended: the token is valid — revocation does not delete unredeemed tokens
+// until plan 7's broker does (package session) — and the join keeps the mark
+// on the context, not on the login (spec §5.6, the join table's revoked_at
+// row). What the operator sees at 3am after a minted-before login is a login
+// that worked and then every authorization denied `credential_revoked`; this
+// pins that, so it cannot change silently.
 func TestARevocationSurvivesATokenMintedBeforeIt(t *testing.T) {
 	revokedAt := time.Unix(1_757_041_495, 0).Add(-time.Minute)
 	for _, tt := range []struct {
@@ -1508,7 +1519,10 @@ func TestARevocationSurvivesATokenMintedBeforeIt(t *testing.T) {
 				t.Fatal(err)
 			}
 			start.Data = []byte(secret)
-			f.h.NewSession(f.peer).Start(context.Background(), start)
+			reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+			if rec := f.records(t)[0]; reply.Status != wire.AuthenStatusPass || rec["reason"] != "token_redeemed" {
+				t.Fatalf("the login must answer PASS token_redeemed either way: %+v %v", reply, rec)
+			}
 			c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
 			if got := !c.RevokedAt.IsZero(); got != tt.revoked || c.CtxID != "ctxL" {
 				t.Fatalf("revoked %v, want %v: %+v", got, tt.revoked, c)
@@ -1659,8 +1673,9 @@ func TestAReplaceUnindexesTheCredentialItDisplaced(t *testing.T) {
 	if refs, _ := f.st.ContextsBySid(context.Background(), "sid-corp"); len(refs) != 1 {
 		t.Fatalf("the new login must still be indexed under its own sid: %v", refs)
 	}
-	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("unindex_context", "ok")); n != 1 {
-		t.Fatalf("store_operations_total{op=unindex_context,outcome=ok} = %v, want 1", n)
+	// Another principal's replace clears the ref whole (ruling P10).
+	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("unindex_ref", "ok")); n != 1 {
+		t.Fatalf("store_operations_total{op=unindex_ref,outcome=ok} = %v, want 1", n)
 	}
 }
 
@@ -1925,5 +1940,121 @@ func TestALoginIndexesNoBlankSidOrCertificate(t *testing.T) {
 				t.Fatalf("the principal must still be indexed: %v", refs)
 			}
 		})
+	}
+}
+
+// midRedemption runs during after the token is spent and before the login's
+// JoinContext: the gap between the pre-read that predicted the ctx_id and the
+// join that decides it.
+type midRedemption struct {
+	*memory.Store
+	during func()
+}
+
+func (m midRedemption) RedeemAndReceipt(ctx context.Context, k store.TokenKey, tokenID string, w store.ReceiptWrite) error {
+	err := m.Store.RedeemAndReceipt(ctx, k, tokenID, w)
+	m.during()
+	return err
+}
+
+// The pre-read predicted a join, and by the time JoinContext read the context
+// again it was no longer joinable — its ceiling passed, or another principal's
+// login replaced it. The login replaces it, and the context it writes must
+// carry an id of its own: written under the predicted id, one ctx_id would
+// name two contexts (spec §5.6: assigned once, never changes), the record
+// would say a context replaced itself, and an enable receipt written for the
+// displaced context would still match and carry its escalation across. The
+// receipt names the prediction, which no context holds, so the login's
+// retransmission is `token_spent` and the device prompts again.
+func TestAJoinThatBecomesAReplaceMidLoginWritesAFreshCtxID(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		during   func(f *fixture)
+		replaced string
+	}{
+		{"the ceiling passed", func(f *fixture) { f.now = f.now.Add(2 * time.Minute) }, "ctxL"},
+		{"another principal replaced it", func(f *fixture) {
+			f.st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+				store.Context{CtxID: "ctxB", Principal: "user:alice@corp.example", Username: "alice"}, time.Hour)
+		}, "ctxB"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var f *fixture
+			f = setupStore(t, func(st *memory.Store) store.Store {
+				return midRedemption{Store: st, during: func() { tt.during(f) }}
+			})
+			f.seedLoginWith(t, "token", 15, func(c *store.Context) { c.SessionExpires = f.now.Add(time.Minute) })
+			start := papStart("alice", "ssh", "198.51.100.4", f.tag()+"tok1tok1tok1tok1tok1tok1")
+			reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+			s := f.records(t)[0]["session"].(map[string]any)
+			if reply.Status != wire.AuthenStatusPass || s["ctx_id"] == "ctxL" || s["ctx_id"] == s["replaced_ctx_id"] ||
+				s["replaced_ctx_id"] != tt.replaced {
+				t.Fatalf("a replace must write a ctx_id of its own: %+v %v", reply, s)
+			}
+			c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+			if c.CtxID != s["ctx_id"] || c.PrivLvl != 1 {
+				t.Fatalf("the live context must be the fresh one the record names: %+v", c)
+			}
+			reply, _ = f.h.NewSession(f.peer).Start(context.Background(), start)
+			r := f.records(t)
+			if last := r[len(r)-1]; reply.Status != wire.AuthenStatusFail || last["reason"] != "token_spent" {
+				t.Fatalf("a receipt naming the mispredicted id must not replay: %+v %v", reply, last)
+			}
+		})
+	}
+}
+
+// Ruling P10. A context two logins joined is indexed under both logins' sids,
+// and a replace can read only the last one off the record it displaced. When
+// another principal replaces it, every key the ref was indexed under goes,
+// or a back-channel logout of the displaced principal's EARLIER session would
+// keep marking the new principal's context for as long as it is extended.
+func TestAnotherPrincipalsReplaceUnindexesEveryJoinedLogin(t *testing.T) {
+	f := setup(t)
+	for _, tok := range []store.Token{
+		{ID: "s1", Principal: "user:alice@example.com", Credential: store.Credential{Method: "oidc", Sid: "sid-1"}},
+		{ID: "s2", Principal: "user:alice@example.com", Credential: store.Credential{Method: "oidc", Sid: "sid-2"}},
+		{ID: "o", Principal: "user:alice@corp.example", Credential: store.Credential{Method: "oidc", Sid: "sid-corp"}},
+	} {
+		tok.Secret, tok.Kind, tok.Username, tok.ExpiresAt = []byte(f.tag()+tok.ID+strings.Repeat("x", 24-len(tok.ID))),
+			store.KindLogin, "alice", f.now.Add(time.Hour)
+		if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}, tok); err != nil {
+			t.Fatal(err)
+		}
+		if reply, _ := f.h.NewSession(f.peer).Start(context.Background(),
+			papStart("alice", "ssh", "198.51.100.4", string(tok.Secret))); reply.Status != wire.AuthenStatusPass {
+			t.Fatalf("login %s: %+v", tok.ID, reply)
+		}
+	}
+	if s := f.records(t)[2]["session"].(map[string]any); s["replaced_ctx_id"] != "ctx1" {
+		t.Fatalf("the third login must replace the joined context: %v", s)
+	}
+	key := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	for i := 0; i < 3; i++ {
+		f.now = f.now.Add(30 * time.Minute)
+		if err := f.st.TouchContext(context.Background(), key, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, sid := range []string{"sid-1", "sid-2"} {
+		if refs, _ := f.st.ContextsBySid(context.Background(), sid); len(refs) != 0 {
+			t.Fatalf("the displaced principal's %s still reaches the replacing context: %v", sid, refs)
+		}
+	}
+	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@example.com"); len(refs) != 0 {
+		t.Fatalf("the displaced principal still reaches the replacing context: %v", refs)
+	}
+	if refs, _ := f.st.ContextsBySid(context.Background(), "sid-corp"); len(refs) != 1 {
+		t.Fatalf("the new login must be indexed under its own sid: %v", refs)
+	}
+	refs, err := session.New(f.st, func() time.Time { return f.now }, time.Hour, time.Hour).RevokeBySid(context.Background(), "sid-1")
+	if err != nil || len(refs) != 0 {
+		t.Fatalf("a logout of the displaced principal's first session must mark nothing: %v %v", refs, err)
+	}
+	if c, _ := f.st.GetContext(context.Background(), key); !c.RevokedAt.IsZero() {
+		t.Fatalf("the replacing context was revoked by another principal's logout: %+v", c)
+	}
+	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("unindex_ref", "ok")); n != 1 {
+		t.Fatalf("store_operations_total{op=unindex_ref,outcome=ok} = %v, want 1", n)
 	}
 }

@@ -1184,3 +1184,47 @@ func TestAnEmptySidOrCertificateIsNeverIndexed(t *testing.T) {
 		t.Fatalf("principal index after a blank unindex: %v", r)
 	}
 }
+
+// Ruling P10. A context another principal replaces must stop answering every
+// key the displaced context was indexed under — not only its last login's,
+// which is all the replace can read off the record. UnindexRef clears every
+// key recorded for the ref and leaves other refs under the same keys alone,
+// and an extension afterwards does not bring any of them back.
+func TestUnindexRefClearsEveryKeyRecordedForTheRef(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	other := store.ContextRef{NAS: "leaf-02", Username: "alice"}
+	ck := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
+	if err := s.PutContext(ctx, ck, store.Context{CtxID: "ctxL", Principal: "user:alice"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// Two joined logins on leaf-01, and the first login's sid on leaf-02 too.
+	s.IndexContext(ctx, "user:alice", "sid-1", store.CertKey("ca", "01"), ref, time.Hour)
+	s.IndexContext(ctx, "user:alice", "sid-2", store.CertKey("ca", "02"), ref, time.Hour)
+	s.IndexContext(ctx, "user:alice", "sid-1", "", other, time.Hour)
+	if err := s.UnindexRef(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(30 * time.Minute)
+	if err := s.TouchContext(ctx, ck, 2*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []string{"sid-1", "sid-2"} {
+		if r, _ := s.ContextsBySid(ctx, sid); len(r) > 1 || (len(r) == 1 && r[0] != other) {
+			t.Fatalf("%s still reaches the unindexed ref: %v", sid, r)
+		}
+	}
+	for _, certKey := range []string{store.CertKey("ca", "01"), store.CertKey("ca", "02")} {
+		if r, _ := s.ContextsByCert(ctx, certKey); len(r) != 0 {
+			t.Fatalf("%s still reaches the unindexed ref: %v", certKey, r)
+		}
+	}
+	if r, _ := s.ContextsByPrincipal(ctx, "user:alice"); len(r) != 1 || r[0] != other {
+		t.Fatalf("the principal index must keep only the other ref: %v", r)
+	}
+	if r, _ := s.ContextsBySid(ctx, "sid-1"); len(r) != 1 || r[0] != other {
+		t.Fatalf("another ref under the same sid must be left alone: %v", r)
+	}
+}

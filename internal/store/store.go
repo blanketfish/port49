@@ -478,6 +478,14 @@ type Store interface {
 
 	IndexContext(ctx context.Context, principal, sid, certKey string, ref ContextRef, ttl time.Duration) error
 	UnindexContext(ctx context.Context, principal, sid, certKey string, ref ContextRef) error
+	// UnindexRef removes ref from every principal, sid and certificate entry
+	// it was indexed under, including keys the caller cannot name any more: a
+	// joined context is indexed under every login's sid and certificate, and
+	// the record keeps only the last login's credential. It is what a replace
+	// by another principal calls, so that no key of the displaced principal's
+	// keeps reaching the context that replaced it (spec §5.6). Entries under
+	// the same keys for other refs are untouched.
+	UnindexRef(ctx context.Context, ref ContextRef) error
 	ContextsByPrincipal(ctx context.Context, principal string) ([]ContextRef, error)
 	ContextsBySid(ctx context.Context, sid string) ([]ContextRef, error)
 	ContextsByCert(ctx context.Context, certKey string) ([]ContextRef, error)

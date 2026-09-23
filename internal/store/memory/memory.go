@@ -859,6 +859,27 @@ func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string
 	return nil
 }
 
+// UnindexRef removes ref from every entry recorded for it in indexedAs — its
+// principal and every sid and certificate a login was indexed under — and
+// forgets the record, so no extension re-stamps any of them.
+func (s *Store) UnindexRef(_ context.Context, ref store.ContextRef) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.indexedAs[ref]
+	if !ok {
+		return nil
+	}
+	removeRef(s.byPrincipal, rec.principal, ref)
+	for _, sid := range rec.sids {
+		removeRef(s.bySid, sid, ref)
+	}
+	for _, certKey := range rec.certKeys {
+		removeRef(s.byCert, certKey, ref)
+	}
+	delete(s.indexedAs, ref)
+	return nil
+}
+
 // ContextsByPrincipal returns the live context refs indexed under principal.
 func (s *Store) ContextsByPrincipal(_ context.Context, principal string) ([]store.ContextRef, error) {
 	s.mu.Lock()

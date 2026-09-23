@@ -403,6 +403,11 @@ func (w *wrapped) UnindexContext(ctx context.Context, principal, sid, certKey st
 	return w.inner.UnindexContext(ctx, principal, sid, certKey, ref)
 }
 
+// UnindexRef passes through, matching IndexContext.
+func (w *wrapped) UnindexRef(ctx context.Context, ref store.ContextRef) error {
+	return w.inner.UnindexRef(ctx, ref)
+}
+
 // ContextsByPrincipal passes through: the index is plaintext, so revocation
 // resolves a principal to its contexts without the encryption key.
 func (w *wrapped) ContextsByPrincipal(ctx context.Context, principal string) ([]store.ContextRef, error) {

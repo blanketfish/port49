@@ -359,3 +359,20 @@ func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
 		t.Fatalf("the replace must be readable under the current key and keep the revocation: %+v %v", got, err)
 	}
 }
+
+// UnindexRef passes through to the inner store, as the other index writes do.
+func TestUnindexRefPassesThrough(t *testing.T) {
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	ctx := context.Background()
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	if err := s.IndexContext(ctx, "user:alice@example.com", "sid-1", store.CertKey("ca", "01"), ref, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UnindexRef(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := inner.ContextsBySid(ctx, "sid-1"); len(r) != 0 {
+		t.Fatalf("UnindexRef did not reach the inner store: %v", r)
+	}
+}

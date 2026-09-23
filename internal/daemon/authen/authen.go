@@ -411,8 +411,9 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	//
 	// The read and JoinContext's own are not one operation, and when they
 	// disagree the receipt names the id predicted here while the redeem
-	// record names the one written. Three ways: the context is reclaimed, or
-	// replaced by another principal's login, between the two; or — the one
+	// record names the one written. Three ways: the context is reclaimed,
+	// replaced by another principal's login, or carried past its ceiling,
+	// between the two; or — the one
 	// that needs no other principal — two first logins by the same principal
 	// both read nothing, both mint an id, and the one whose swap loses joins
 	// the other's context. Its receipt then names an id no context holds, so
@@ -428,13 +429,23 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		var unreadable *store.UnreadableContextError
 		switch {
 		case perr == nil && store.Joinable(prev, login, s.h.now()):
+			// The receipt names the context this login predicts it joins,
+			// but the login's own context still gets an id of its own.
+			// JoinContext decides again after the token is spent: a join
+			// keeps the live id whatever login carries (store.Join starts
+			// from the live record), and a replace — the ceiling passed, or
+			// another principal's login landed, in between — writes login
+			// as it is. Carrying the predicted id there would write the
+			// fresh context under the id it displaced, and one ctx_id would
+			// name two contexts.
 			ctxID = prev.CtxID
+			login.CtxID = s.h.newCtxID()
 		case perr == nil || errors.Is(perr, store.ErrNotFound) || errors.As(perr, &unreadable):
 			ctxID = s.h.newCtxID()
+			login.CtxID = ctxID
 		default:
 			return s.storeError(rec)
 		}
-		login.CtxID = ctxID
 	}
 	// The retention is deliberately longer than both bounds: a presentation
 	// past a bound has to find the receipt in order to be answered
@@ -518,26 +529,36 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// cannot reach. An unreadable replace has no Prior — its credential is
 	// sealed — and leaves that residue until index_ttl, as §5.6 says.
 	//
-	// Only the keys this login does not share are unindexed. A key both
-	// logins hold — the same principal past its ceiling, the same certificate
-	// — is one this login is about to index anyway, and unindexing it first
-	// would leave a moment in which a revocation by it finds nothing, and the
-	// context written in that moment would never be marked.
-	if out.Prior.CtxID != "" {
-		principal, sid := out.Prior.Principal, out.Prior.Credential.Sid
+	// Another principal's replace clears every key the ref was indexed
+	// under (UnindexRef), not only what Prior names: a joined context was
+	// indexed under each of its logins' sids and certificates, and the record
+	// keeps only the last login's. Nothing of the displaced principal's is
+	// this login's to keep.
+	//
+	// The same principal's replace — past its ceiling — unindexes only the
+	// keys this login does not share. A key both logins hold is one this
+	// login is about to index anyway, and unindexing it first would leave a
+	// moment in which a revocation by it finds nothing, and the context
+	// written in that moment would never be marked. An earlier joined
+	// login's sid that Prior does not name stays, and a revocation of it can
+	// mark this context: the same person, and fail-closed.
+	ref := store.ContextRef{NAS: s.peer.NAS, Username: username}
+	switch {
+	case out.Prior.CtxID == "":
+	case out.Prior.Principal != winner.Principal:
+		uerr := s.h.store.UnindexRef(ctx, ref)
+		s.h.metrics.StoreOps.WithLabelValues("unindex_ref", storeOutcome(uerr)).Inc()
+	default:
+		sid := out.Prior.Credential.Sid
 		certKey := store.CertKey(out.Prior.Credential.Issuer, out.Prior.Credential.Serial)
-		if principal == winner.Principal {
-			principal = ""
-		}
 		if sid == winner.Credential.Sid {
 			sid = ""
 		}
 		if certKey == store.CertKey(winner.Credential.Issuer, winner.Credential.Serial) {
 			certKey = ""
 		}
-		if principal != "" || sid != "" || certKey != "" {
-			uerr := s.h.store.UnindexContext(ctx, principal, sid, certKey,
-				store.ContextRef{NAS: s.peer.NAS, Username: username})
+		if sid != "" || certKey != "" {
+			uerr := s.h.store.UnindexContext(ctx, "", sid, certKey, ref)
 			s.h.metrics.StoreOps.WithLabelValues("unindex_context", storeOutcome(uerr)).Inc()
 		}
 	}
@@ -545,8 +566,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// the context was indexed under rather than replacing it: revocation by
 	// either login's sid or certificate has to reach the joined context.
 	err = s.h.store.IndexContext(ctx, winner.Principal, winner.Credential.Sid,
-		store.CertKey(winner.Credential.Issuer, winner.Credential.Serial),
-		store.ContextRef{NAS: s.peer.NAS, Username: username}, s.h.indexTTL)
+		store.CertKey(winner.Credential.Issuer, winner.Credential.Serial), ref, s.h.indexTTL)
 	s.h.metrics.StoreOps.WithLabelValues("index_context", storeOutcome(err)).Inc()
 	// An index write that fails does not fail the login: the operator is
 	// authenticated and the context exists. What is lost is reach — a later
