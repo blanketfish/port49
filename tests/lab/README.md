@@ -249,9 +249,10 @@ so run it as the user who runs `port49` and `port49d`. The agent's socket direct
 else `/tmp/port49-<uid>`) must be a real 0700 directory you own. If the agent will not start,
 `port49 login` prints the end of `agent.log` in that directory; if `port49d` will not start with
 the broker block, its stderr says why: a bad certificate, key or anchor at start is
-`port49d: broker TLS files (…): …`, naming the three files. Once running, a failed handshake
-(a login with an untrusted or expired certificate) is logged as `port49d: broker: http: TLS
-handshake error …`.
+`port49d: broker TLS files (…): …`, naming the three files. An expired or not-yet-valid
+server certificate does not stop the start; it is one line, `port49d: broker: server
+certificate expired at …; logins will fail`. Once running, a failed handshake (a login with an
+untrusted or expired certificate) is logged as `port49d: broker: http: TLS handshake error …`.
 
 ## Tokens
 

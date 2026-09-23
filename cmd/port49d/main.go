@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base32"
 	"encoding/json"
 	"flag"
@@ -164,6 +165,20 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	if err != nil {
 		return nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
 			cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile, err)
+	}
+	// A server certificate outside its validity does not stop the start:
+	// refusing would take device AAA down with the broker. It is said now, in
+	// one line, rather than first showing up as every operator's failed login.
+	if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
+		now := time.Now()
+		switch {
+		case now.After(leaf.NotAfter):
+			fmt.Fprintf(stderr, "port49d: broker: server certificate expired at %s (tls_cert_file %s); logins will fail\n",
+				leaf.NotAfter.UTC().Format(time.RFC3339), cfg.Broker.TLSCertFile)
+		case now.Before(leaf.NotBefore):
+			fmt.Fprintf(stderr, "port49d: broker: server certificate is not valid until %s (tls_cert_file %s); "+
+				"logins will fail\n", leaf.NotBefore.UTC().Format(time.RFC3339), cfg.Broker.TLSCertFile)
+		}
 	}
 	// The broker mints by name, and a token redeems on any device the name
 	// tags. Two entries sharing one would collapse, last wins: a blob compiled

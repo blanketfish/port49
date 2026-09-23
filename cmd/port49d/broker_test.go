@@ -148,6 +148,47 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
+// An expired or not-yet-valid broker server certificate does not stop the
+// start: refusing would take device AAA down with the broker. But it is said
+// at start, in one line, rather than first showing up as every operator's
+// failed login (final review, Minor 5). A valid one says nothing.
+func TestABrokerServerCertificateOutsideItsValidityIsWarnedAtStart(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		shift time.Duration
+		want  string
+	}{
+		{"valid", 0, ""},
+		{"expired", -48 * time.Hour, "port49d: broker: server certificate expired at "},
+		{"not yet valid", 48 * time.Hour, "port49d: broker: server certificate is not valid until "},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var out syncBuffer
+			defer func(w io.Writer) { stderr = w }(stderr)
+			stderr = &out
+			cfg := brokerConfig(t, minimalPolicy)
+			if err := testpki.WriteLab(filepath.Dir(cfg.Broker.TLSCertFile), "alice@example.com",
+				time.Now().Add(c.shift)); err != nil {
+				t.Fatal(err)
+			}
+			if err := buildWith(cfg); err != nil {
+				t.Fatalf("a certificate outside its validity must not stop the start: %v", err)
+			}
+			got := out.String()
+			if c.want == "" {
+				if got != "" {
+					t.Fatalf("a valid certificate warns nothing: %q", got)
+				}
+				return
+			}
+			if !strings.Contains(got, c.want) || !strings.Contains(got, "logins will fail") ||
+				strings.Count(got, "\n") != 1 {
+				t.Fatalf("stderr %q, want one line with %q", got, c.want)
+			}
+		})
+	}
+}
+
 // A failed handshake — an expired or untrusted certificate — is logged by
 // net/http, not by a handler. It must land in port49d's own stderr stream,
 // prefixed so an operator can grep for it, rather than in the standard
