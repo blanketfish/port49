@@ -149,12 +149,11 @@ lab:
     - {nas: vsrx1, username: alice14}
     - {nas: vsrx1, username: alice15}
     - {nas: vsrx1, username: alice16}
-    # L8: one user per password length that WAS under test. The lengths are no
-    # longer expressible here: port49d mints every token at one length (30
-    # characters, design §8), so a seed can no longer ask for a 64- or
-    # 138-character secret. The names are kept because the register entry is
-    # open and the users cost nothing; the measurement itself needs a mechanism
-    # that does not exist yet. See tests/lab/README.md and spec §15, L8.
+    # L8: one user per password length the first L8 method seeded. Nothing uses
+    # them now: port49d mints every token at one length (30 characters, design
+    # §8), and tests/lab/l8_test.go measures length without any seed, by typing
+    # a probe under a username with no token and reading credential_sha256 off
+    # the refusal. Kept only because the users cost nothing.
     - {nas: leaf1, username: longpw30}
     - {nas: srx1, username: longpw30}
     - {nas: vsrx1, username: longpw30}

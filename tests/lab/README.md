@@ -149,8 +149,8 @@ could not be put back without a redeploy.
 It does not weaken L4: every login L4 attempts is over SSH, on a vty using the `default` list
 under test.
 
-`register_test.go` has one test per open register entry this plan closes: L1, L2, L5, L6, L8,
-L10. Each writes `results/L<N>-<platform>.md` with the observation. **A register test passes
+`register_test.go` has one test per open register entry this plan closes: L1, L2, L5, L6,
+L10; L8 moved to `l8_test.go` when its method changed (below). Each writes `results/L<N>-<platform>.md` with the observation. **A register test passes
 when the measurement was made and fails when it is inconclusive** — whichever way the device
 behaved is the result, but "the login never happened" or "no matching record reached the log"
 is a failure, because nothing was measured.
@@ -196,10 +196,13 @@ exist only on the machine that ran it, and only until the next run: **redact the
 before running the lab again**, or `make evidence` has nothing to verify them against. That
 file is also why `labcreds.Secrets` reads it rather than this config.
 
-`longpw<N>` users are kept, but L8 cannot be measured through them any more. A seed cannot ask
-for a secret of a chosen length now that the daemon mints it — every token is 30 characters
-(design §8) — so the password-length question needs a mechanism that does not exist yet. The
-register entry stays open; see spec §15, L8.
+`longpw<N>` users are kept but unused. A seed cannot ask for a secret of a chosen length now
+that the daemon mints it — every token is 30 characters (design §8) — so `l8_test.go` measures
+password length without one: it types a probe of length N under a username that holds no token,
+and compares `auth.credential_sha256` on port49's refusal against the hash of every prefix of
+the probe. A match on all N characters means the password arrived intact; a shorter match is a
+truncation; no record means the device refused the password itself and never asked. The 30-character
+answer is not left to a probe: the test also logs in once with a real minted token.
 
 ## Captures
 
