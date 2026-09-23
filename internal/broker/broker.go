@@ -175,13 +175,25 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256(body)
 	bodyHash := hex.EncodeToString(sum[:])
 
+	// A conflict on any device refuses the whole batch, so it is looked for
+	// before the first mint: found on the second device, the first would
+	// already hold a stored token, a permit record and a candidate-cap slot
+	// for a pair the 409 never returns. A record exists only where this
+	// principal has minted, so the check tells it nothing about inventory.
+	for _, name := range req.Devices {
+		if b.Minter.Conflict(r.Context(), principal, key, name, bodyHash) {
+			writeConflict(w)
+			return
+		}
+	}
 	resp := api.MintResponse{Principal: principal}
 	resp.Subject, _ = b.Policy.SubjectOf(principal)
 	for _, name := range req.Devices {
 		item, err := b.mintOne(r.Context(), principal, cred, authTime, name, req, key, bodyHash)
 		if errors.Is(err, token.ErrIdempotencyConflict) {
-			writeError(w, http.StatusConflict, "idempotency_conflict",
-				"this Idempotency-Key was used with a different body; the first request's result stands (design §17)")
+			// Only a concurrent request on the same key, between the check
+			// above and this mint, reaches here.
+			writeConflict(w)
 			return
 		}
 		resp.Results = append(resp.Results, item)
@@ -218,7 +230,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 	// nothing about which devices exist.
 	if dev.Platform == "" {
 		log.Printf("broker: inventory names device %q with no platform; refusing to mint for it until it has one", name)
-		return fault(name, "device_unconfigured",
+		return b.fault(name, "device_unconfigured",
 			"inventory gives this device no platform, so the broker cannot compile its policy; tell the operator"), nil
 	}
 	body, hash, err := blob.Encode(res.Blob)
@@ -226,7 +238,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 		// Policy load checks every rule, so this is a broker defect, not a
 		// refusal. The error names policy content and is the operator's.
 		log.Printf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
-		return fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
+		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
 	if err := b.putBlob(ctx, hash, body); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil
@@ -262,8 +274,10 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 }
 
 // fault is an item the broker could not decide: its own error, not a
-// verdict, so it never carries a §5.7 reason.
-func fault(name, code, detail string) api.MintItem {
+// verdict, so it never carries a §5.7 reason and is counted apart from the
+// decisions, by its code alone.
+func (b *Broker) fault(name, code, detail string) api.MintItem {
+	b.Metrics.BrokerItemErrors.WithLabelValues(code).Inc()
 	return api.MintItem{Device: name, Error: code, Detail: detail}
 }
 
@@ -272,20 +286,31 @@ func fault(name, code, detail string) api.MintItem {
 // TTL is max_session_age: a context's session_expires is its auth_time plus
 // that, and auth_time is never later than the mint, so no context this blob
 // backs can outlive it. PutBlob keeps the later expiry, so a re-put never
-// shortens it. The emitted set dies with the process, and so does the
-// in-process store, so once per process is once per store (plan 3, Decided 8).
+// shortens it. A blob is emitted once per process, and the log's first copy
+// serves every later re-put, including one after the store's copy expired
+// (plan 3, Decided 8).
+//
+// The emit happens under b.mu, so a second request for the same hash cannot
+// return from putBlob, and so cannot reach Mint, until the blob record is
+// written: within one sink, every mint record naming a hash follows that
+// hash's blob record. Emit is one buffered line write, so that is all the lock
+// holds.
+//
+// A record the sink drops is still marked emitted: Emit returns no error. The
+// drop is counted by port49_decision_log_write_failures_total, which is the
+// operator's cue that replay from the log is incomplete. Re-emitting a
+// dropped blob is plan 4's, with per-replica emission.
 func (b *Broker) putBlob(ctx context.Context, hash string, body []byte) error {
 	if err := b.Store.PutBlob(ctx, hash, body, b.MaxSessionAge); err != nil {
 		return err
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.blobsSeen == nil {
 		b.blobsSeen = map[string]bool{}
 	}
-	first := !b.blobsSeen[hash]
-	b.blobsSeen[hash] = true
-	b.mu.Unlock()
-	if first {
+	if !b.blobsSeen[hash] {
+		b.blobsSeen[hash] = true
 		b.Log.Emit(decision.Record{TS: b.Now(), Event: decision.EventBlob, Blob: &decision.Blob{Hash: hash, Body: body}})
 	}
 	return nil
@@ -301,6 +326,11 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeConflict(w http.ResponseWriter) {
+	writeError(w, http.StatusConflict, "idempotency_conflict",
+		"this Idempotency-Key was used with a different body; the first request's result stands (design §17)")
 }
 
 func writeError(w http.ResponseWriter, code int, errCode, detail string) {

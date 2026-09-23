@@ -137,6 +137,34 @@ func TestIdempotentReplay(t *testing.T) {
 	}
 }
 
+// Conflict answers the question Mint would refuse on, without minting, so a
+// batch can be refused before its first device is minted.
+func TestConflictIsReadOnly(t *testing.T) {
+	m, st, _ := minter(t)
+	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"}
+	p := req.Subject.Principal
+	if m.Conflict(context.Background(), p, "01J", "leaf-01", "h1") {
+		t.Fatal("no record is no conflict")
+	}
+	if _, err := m.Mint(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		device, body string
+		want         bool
+	}{{"leaf-01", "h1", false}, {"leaf-01", "h2", true}, {"leaf-02", "h2", false}} {
+		if got := m.Conflict(context.Background(), p, "01J", tt.device, tt.body); got != tt.want {
+			t.Errorf("%s %s: %v", tt.device, tt.body, got)
+		}
+	}
+	if m.Conflict(context.Background(), "user:mallory@example.com", "01J", "leaf-01", "h2") {
+		t.Fatal("a key is one principal's")
+	}
+	if c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(c) != 1 {
+		t.Fatal("Conflict minted")
+	}
+}
+
 // §17 sends one Idempotency-Key for a batch of devices, so the record must be
 // scoped by device: unscoped, device two finds device one's record, the body
 // hashes match, and it replays — handing the operator a valid 30-character

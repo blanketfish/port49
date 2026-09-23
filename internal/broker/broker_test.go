@@ -2,15 +2,20 @@ package broker
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/rhwendt/port49/internal/blob"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/token"
 )
@@ -211,6 +216,88 @@ func TestIdempotency(t *testing.T) {
 	m := decodeMint(t, f.post(context.Background(), f.state(mallory), body, "k1"))
 	if it := m.Results[0]; it.Login != "" || it.Reason != "no_grants_matched" {
 		t.Fatalf("another principal replayed alice's key: %+v", it)
+	}
+}
+
+// gatedLog holds the first blob record at the sink until released, standing
+// in for a slow write.
+type gatedLog struct {
+	next              decision.Emitter
+	once              sync.Once
+	inBlob, releaseIt chan struct{}
+}
+
+func (g *gatedLog) Emit(r decision.Record) {
+	if r.Event == decision.EventBlob {
+		g.once.Do(func() { close(g.inBlob); <-g.releaseIt })
+	}
+	g.next.Emit(r)
+}
+
+// Within one sink, a mint record naming a hash follows that hash's blob
+// record, even when a second request for the same blob arrives while the
+// first is still writing it.
+func TestAMintRecordFollowsItsBlob(t *testing.T) {
+	f := newFixture(t, 8)
+	g := &gatedLog{next: f.b.Log, inBlob: make(chan struct{}), releaseIt: make(chan struct{})}
+	f.b.Log = g
+	f.b.Minter = token.NewMinter(f.st, g, rand.Reader, token.TagKey([]byte("k")), func() time.Time { return f.now }, 8)
+	var wg sync.WaitGroup
+	post := func() {
+		defer wg.Done()
+		f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")
+	}
+	wg.Add(1)
+	go post()
+	<-g.inBlob
+	wg.Add(1)
+	go post()
+	// The second request would reach Mint and write its record here if
+	// nothing held it back; give it the time to.
+	time.Sleep(100 * time.Millisecond)
+	close(g.releaseIt)
+	wg.Wait()
+	var sawBlob bool
+	for _, r := range f.records(t) {
+		switch r["event"] {
+		case "blob":
+			sawBlob = true
+		case "mint":
+			if !sawBlob {
+				t.Fatalf("a mint record preceded its blob: %s", f.log.String())
+			}
+		}
+	}
+	if !sawBlob {
+		t.Fatal("no blob record")
+	}
+}
+
+// A conflict on any device refuses the batch before its first mint: a 409
+// after an earlier device minted would leave a stored token, a permit record
+// and a candidate-cap slot for a pair nobody received.
+func TestAConflictLaterInTheBatchMintsNothing(t *testing.T) {
+	f := newFixture(t, 8)
+	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "k1"))
+	before := len(eventsOf(f.records(t), "mint"))
+	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["nx1","leaf1"]}`, "k1"); w.Code != 409 {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if c, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "nx1", Username: "alice"}); len(c) != 0 {
+		t.Fatalf("nx1 minted %d tokens into a refused batch", len(c))
+	}
+	if after := len(eventsOf(f.records(t), "mint")); after != before {
+		t.Fatalf("a refused batch wrote %d mint records", after-before)
+	}
+}
+
+// A fault item is counted by its API error code alone, so a dashboard shows
+// an inventory fault without a device in a label.
+func TestAFaultItemIsCounted(t *testing.T) {
+	f := newFixture(t, 8)
+	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["bare","leaf1"]}`, ""))
+	if got := testutil.ToFloat64(f.b.Metrics.BrokerItemErrors.WithLabelValues("device_unconfigured")); got != 1 {
+		t.Fatalf("port49_broker_item_errors_total{error=device_unconfigured} = %v", got)
 	}
 }
 

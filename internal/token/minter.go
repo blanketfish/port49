@@ -107,6 +107,18 @@ type Request struct {
 // convention (internal/store/memory/memory.go, idemKey).
 func idemScope(key, device string) string { return key + "\x00" + device }
 
+// Conflict reports whether Mint would refuse this key on this device with
+// ErrIdempotencyConflict: a record exists under it for another body. It mints
+// nothing, so a batch can be refused whole before its first device is minted.
+// A store failure is not a conflict; Mint will meet it and refuse that device.
+func (m *Minter) Conflict(ctx context.Context, principal, key, device, bodyHash string) bool {
+	if key == "" {
+		return false
+	}
+	rec, err := m.store.GetIdempotency(ctx, principal, idemScope(key, device))
+	return err == nil && rec.BodyHash != bodyHash
+}
+
 // Result is the minted pair and what the caller must tell the operator:
 // Enable is empty unless the subject's mechanism is `token`, and Username is
 // the name the tokens were written under, which is the name the device must

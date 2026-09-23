@@ -46,6 +46,12 @@ type Metrics struct {
 	// device-local account sharing a port49 username. The label is the
 	// attribution only; the device and the user are on the log record.
 	Attributions *prometheus.CounterVec
+	// port49_broker_item_errors_total{error}: mint items the broker could not
+	// decide, by the API error code on the item — "device_unconfigured" (an
+	// inventory device with no platform) or "broker_error" (a policy that
+	// compiled to a blob the daemon would refuse). Neither is a decision, so
+	// neither is in port49_decisions_total. The label is the code only.
+	BrokerItemErrors *prometheus.CounterVec
 }
 
 func New(reg prometheus.Registerer) *Metrics {
@@ -83,9 +89,11 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Stored records that would not decrypt, by record kind."}, []string{"record"}),
 		Attributions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_attributions_total",
 			Help: "Accounting records accepted, by attribution."}, []string{"attribution"}),
+		BrokerItemErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_item_errors_total",
+			Help: "Mint items the broker could not decide, by API error code."}, []string{"error"}),
 	}
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions)
+		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors)
 	return m
 }
