@@ -168,9 +168,10 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	// The broker mints by name, and a token redeems on any device the name
 	// tags. Two entries sharing one would collapse, last wins: a blob compiled
 	// for one platform would be answered on the other, sending attributes that
-	// device may not know while port49 logs permit. What a device does with an
-	// attribute it does not know is unmeasured. admission.LoadFile does not
-	// refuse the repeat, so the broker does.
+	// device may not know while port49 logs permit. IOS-XE refuses the session
+	// over any attribute it does not recognise, optional or mandatory, and every
+	// command whose reply carries one (tests/lab/results/L18-cisco_iosxe.md).
+	// admission.LoadFile does not refuse the repeat, so the broker does.
 	devices := make(map[string]admission.Device, len(cfg.Inventory.Devices))
 	for _, d := range cfg.Inventory.Devices {
 		if _, seen := devices[d.Name]; seen {
