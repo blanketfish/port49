@@ -123,6 +123,10 @@ type TokenConfig struct {
 // and every unspent token — every operator logs in again (plan 3,
 // Question 3). Plan 4 brings reload.
 //
+// The slice has no revocation lever. To cut someone off, remove their subject
+// from the policy (or re-issue the CA) and restart; certificate revocation is
+// plan 7.
+//
 // A relative path resolves against port49d's working directory, not the
 // config file's, as inventory_file does.
 type BrokerConfig struct {

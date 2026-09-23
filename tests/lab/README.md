@@ -248,7 +248,10 @@ set, or is owned by anyone but you or root: `slice-pki` writes 0600 files in a 0
 so run it as the user who runs `port49` and `port49d`. The agent's socket directory (`$XDG_RUNTIME_DIR/port49`,
 else `/tmp/port49-<uid>`) must be a real 0700 directory you own. If the agent will not start,
 `port49 login` prints the end of `agent.log` in that directory; if `port49d` will not start with
-the broker block, its stderr says why, prefixed `port49d: broker: ` for a TLS error.
+the broker block, its stderr says why: a bad certificate, key or anchor at start is
+`port49d: broker TLS files (…): …`, naming the three files. Once running, a failed handshake
+(a login with an untrusted or expired certificate) is logged as `port49d: broker: http: TLS
+handshake error …`.
 
 ## Tokens
 
