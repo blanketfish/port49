@@ -247,6 +247,15 @@ type Context struct {
 	// than putting back a copy whose RevokedAt is zero. It is plaintext
 	// bookkeeping, like the expiry.
 	Rev uint64
+	// PolicyRev is the store's revision of what a policy refresh decides
+	// (spec §5.1.3): GetContext sets it and SetContextPolicy compares it.
+	// Only a write to what the refresh decides moves it — a whole-record
+	// write (a join or replace), a revocation, a privilege level that
+	// changed, and a policy write (blob hash, ceiling, enable). Accounting and
+	// the idle TTL's touches do not, so a session reporting every command
+	// never makes the refresh lose. It is plaintext bookkeeping, like Rev,
+	// and is drawn from the same counter, so it never repeats either.
+	PolicyRev uint64
 
 	Sealed []byte
 }
@@ -314,8 +323,8 @@ type ContextRefresh struct {
 type ContextPolicy struct {
 	// RevokedAt, when non-zero, is the whole write: the principal has no grant
 	// on this device any more, and the context is marked revoked at this
-	// instant. The fields below are then ignored — a revoked context's policy
-	// is never read again (spec §5.3).
+	// instant, unless it is already revoked later. The fields below are then
+	// ignored — a revoked context's policy is never read again (spec §5.3).
 	RevokedAt time.Time
 	// BlobHash replaces the context's policy blob hash. It is never empty on
 	// a write that does not revoke.
@@ -499,9 +508,12 @@ type Store interface {
 	// ErrNotFound if the key is absent or already expired.
 	SetRevokedAt(ctx context.Context, k ContextKey, at time.Time) error
 	// SetContextPolicy writes a policy refresh's answer into this context, in
-	// place and under the store's own lock, and only if the record is still
-	// the one the caller read: rev is the Rev GetContext returned, and a
-	// revision that moved is ErrConflict with nothing written (spec §5.1.3).
+	// place and under the store's own lock, and only if what the refresh
+	// decides is still what the caller read: policyRev is the PolicyRev
+	// GetContext returned, and a policy revision that moved is ErrConflict
+	// with nothing written (spec §5.1.3). It compares PolicyRev and not Rev
+	// so that accounting and touches, which write nothing the refresh decides,
+	// cannot keep a busy session's refresh losing; it moves both.
 	//
 	// It is the fifth narrow setter, and the only one that is also a
 	// compare-and-set. The others write a value that is right whoever the
@@ -524,10 +536,12 @@ type Store interface {
 	// not activity, or every reload would keep every idle context alive. It
 	// does not touch AuthTime, SessionExpires or RefreshedAt: nothing about
 	// the operator's authentication or the directory was re-verified. And it
-	// never clears RevokedAt, for the reason RefreshContext never does.
+	// never clears RevokedAt, for the reason RefreshContext never does, nor
+	// moves it earlier: a revoking write onto a context already revoked later
+	// keeps the later mark, so no token minted between the two can lift it.
 	//
 	// ErrNotFound if the key is absent or already expired.
-	SetContextPolicy(ctx context.Context, k ContextKey, rev uint64, p ContextPolicy) error
+	SetContextPolicy(ctx context.Context, k ContextKey, policyRev uint64, p ContextPolicy) error
 	// DeleteContext has no production caller today: the caller it had was
 	// author's `username_mismatch` branch, which under the old `(nas, port)`
 	// key could delete a live operator's context on an uncredentialed request.

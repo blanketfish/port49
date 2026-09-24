@@ -379,14 +379,14 @@ func (w *wrapped) SetRevokedAt(ctx context.Context, k store.ContextKey, at time.
 }
 
 // SetContextPolicy passes through: every field it writes or compares is
-// plaintext — a revision, a timestamp, a blob hash, a ceiling, an enable
-// mechanism and the level it clamps — so the inner store can hold the
+// plaintext — a policy revision, a timestamp, a blob hash, a ceiling, an
+// enable mechanism and the level it clamps — so the inner store can hold the
 // compare-and-set on a record whose sealed fields it cannot read, exactly as
 // SwapContext's revision does. The principal the value was computed from is
-// read up here, through GetContext, and the revision is what binds the write
-// to that read.
-func (w *wrapped) SetContextPolicy(ctx context.Context, k store.ContextKey, rev uint64, p store.ContextPolicy) error {
-	return w.inner.SetContextPolicy(ctx, k, rev, p)
+// read up here, through GetContext, and the policy revision is what binds the
+// write to that read.
+func (w *wrapped) SetContextPolicy(ctx context.Context, k store.ContextKey, policyRev uint64, p store.ContextPolicy) error {
+	return w.inner.SetContextPolicy(ctx, k, policyRev, p)
 }
 
 // DeleteContext is addressed by key alone.

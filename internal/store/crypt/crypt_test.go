@@ -321,6 +321,15 @@ func TestSwapContextSealsAndKeepsTheRevision(t *testing.T) {
 // The join's merge happens up here, with the sealed fields open, and the
 // precondition is held down in the inner store: the property has to survive
 // that split, so it is run against the wrapped store as well as the bare one.
+// PolicyRev is plaintext bookkeeping like Rev, so the property has to hold
+// with the sealing layer between the refresher and the inner store.
+func TestPolicyRevisionThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.PolicyRevision(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
 func TestJoinRacesRevocationThroughTheSealingLayer(t *testing.T) {
 	now := time.Unix(1_757_041_495, 0)
 	storetest.JoinRacesRevocation(t, func() store.Store {
@@ -386,8 +395,8 @@ func TestUnindexRefPassesThrough(t *testing.T) {
 }
 
 // SetContextPolicy's compare-and-set survives the sealing layer: the
-// revision read through GetContext, with the principal opened, is the one the
-// inner store compares, and the fields it writes are plaintext, so the sealed
+// policy revision read through GetContext, with the principal opened, is the
+// one the inner store compares, and the fields it writes are plaintext, so the sealed
 // ones are untouched.
 func TestSetContextPolicyThroughTheSealingLayer(t *testing.T) {
 	inner := memory.New(time.Now)
@@ -405,11 +414,11 @@ func TestSetContextPolicyThroughTheSealingLayer(t *testing.T) {
 	if err := s.SetRevokedAt(ctx, ck, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetContextPolicy(ctx, ck, got.Rev, store.ContextPolicy{BlobHash: "sha256:new"}); !errors.Is(err, store.ErrConflict) {
+	if err := s.SetContextPolicy(ctx, ck, got.PolicyRev, store.ContextPolicy{BlobHash: "sha256:new"}); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("the revision read through the sealing layer must be the one compared: %v", err)
 	}
 	got, _ = s.GetContext(ctx, ck)
-	if err := s.SetContextPolicy(ctx, ck, got.Rev, store.ContextPolicy{BlobHash: "sha256:new", MaxPrivilege: 1}); err != nil {
+	if err := s.SetContextPolicy(ctx, ck, got.PolicyRev, store.ContextPolicy{BlobHash: "sha256:new", MaxPrivilege: 1}); err != nil {
 		t.Fatal(err)
 	}
 	after, err := s.GetContext(ctx, ck)
