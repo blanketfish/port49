@@ -32,6 +32,7 @@ type Spec struct {
 	PrivilegeAttributes  *[]string            `yaml:"privilege_attributes"`
 	InertAttributes      *[]string            `yaml:"inert_attributes"`
 	AcceptedAttributes   *[]string            `yaml:"accepted_attributes"`
+	RoleOrder            *map[string][]string `yaml:"role_order"`
 	DeviceConfig         *[]string            `yaml:"device_config"`
 }
 
@@ -59,7 +60,7 @@ func ParseSpecs(raw []byte) (map[string]Spec, error) {
 
 // Over lays s over base, per top-level key (spec §8): a list or a value s
 // sets replaces base's whole, and a map s sets — privilege, ceiling_levels,
-// entity_classes — merges into base's per entry, so a block that adds one
+// entity_classes, role_order — merges into base's per entry, so a block that adds one
 // class keeps the rest. Every field s leaves nil is base's. The result shares
 // nothing with either. Discarding an entry takes `replace: true`, which
 // starts from nothing.
@@ -111,6 +112,9 @@ func (s Spec) Over(base Dialect) Dialect {
 	}
 	if s.DeviceConfig != nil {
 		d.DeviceConfig = slices.Clone(*s.DeviceConfig)
+	}
+	if s.RoleOrder != nil {
+		d.RoleOrder = mergeLists(d.RoleOrder, *s.RoleOrder)
 	}
 	return d
 }
@@ -246,6 +250,24 @@ func Validate(name string, d Dialect) error {
 			}
 		}
 	}
+	for _, attr := range sortedKeys(d.RoleOrder) {
+		switch {
+		case attr == "" || strings.ContainsAny(attr, "=* \t"):
+			return fmt.Errorf("%s: %q is not an attribute name", field("role_order"), attr)
+		case attr == "priv-lvl":
+			return fmt.Errorf("%s: priv-lvl ranks by its number; remove it", field("role_order.priv-lvl"))
+		case len(d.RoleOrder[attr]) == 0:
+			return fmt.Errorf("%s is empty, which ranks nothing; remove it", field("role_order."+attr))
+		}
+		for i, v := range d.RoleOrder[attr] {
+			if v == "" || strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r > 0x7e }) {
+				return fmt.Errorf("%s[%d]: a value is printable ASCII and not empty", field("role_order."+attr), i)
+			}
+			if slices.Index(d.RoleOrder[attr], v) != i {
+				return fmt.Errorf("%s: %q is ranked twice; rank it once", field("role_order."+attr), v)
+			}
+		}
+	}
 	for i, line := range d.DeviceConfig {
 		if strings.TrimSpace(line) == "" || strings.ContainsFunc(line, func(r rune) bool { return r < 0x20 || r > 0x7e }) {
 			return fmt.Errorf("%s[%d]: one printable ASCII configuration line", field("device_config"), i)
@@ -256,12 +278,12 @@ func Validate(name string, d Dialect) error {
 
 // Monotone refuses an adapter whose renderings do not rise with order, the
 // policy's levels lowest first: a lower level's priv-lvl above a higher one's,
-// or an attribute a lower level renders that a higher one does not. The diff
-// gate lets a move to a lower level through as a lowering (spec §12), which
-// holds only while a lower level renders no more than a higher one. port49
-// cannot rank two values of one attribute, a role's name, so it checks the
-// numbers and the names. A level the adapter neither renders nor numbers is
-// skipped: its parent chain renders it.
+// an attribute a lower level renders that a higher one does not, or a value
+// that ranks above the higher level's in its role_order, an unranked value
+// ranking above every other. The diff gate lets a move to a lower level
+// through only where every value provably went down (spec §12); this keeps
+// the adapter's own ladder from being the thing that goes up. A level the
+// adapter neither renders nor numbers is skipped: its parent chain renders it.
 func Monotone(name string, d Dialect, order []string) error {
 	var levels []string
 	for _, l := range order {
@@ -284,14 +306,39 @@ func Monotone(name string, d Dialect, order []string) error {
 			}
 			for _, a := range d.Levels[lower] {
 				attr := engine.AttributeName(a)
-				if !slices.ContainsFunc(d.Levels[higher], func(b string) bool { return engine.AttributeName(b) == attr }) {
+				if attr == "priv-lvl" {
+					continue
+				}
+				j := slices.IndexFunc(d.Levels[higher], func(b string) bool { return engine.AttributeName(b) == attr })
+				if j < 0 {
 					return fmt.Errorf("platforms.%s.privilege.%s: %s is rendered at %s and not at %s, above it; a "+
 						"level renders no more than the levels above it", name, lower, attr, lower, higher)
+				}
+				b := d.Levels[higher][j]
+				if v, w := attributeValue(a), attributeValue(b); v != w && !d.rankedBelow(attr, v, w) {
+					return fmt.Errorf("platforms.%s.privilege.%s: %s ranks above %s's %s in role_order.%s, or is not "+
+						"ranked there; a level renders no more than the levels above it", name, lower, a, higher, b, attr)
 				}
 			}
 		}
 	}
 	return nil
+}
+
+// rankedBelow reports whether role_order puts v below w: v ranked, and w
+// ranked above it or not ranked, which is above everything.
+func (d Dialect) rankedBelow(attr, v, w string) bool {
+	rv, okv := d.RoleRank(attr, v)
+	rw, okw := d.RoleRank(attr, w)
+	return okv && (!okw || rv < rw)
+}
+
+// attributeValue is what follows an attribute's separator.
+func attributeValue(a string) string {
+	if i := strings.IndexAny(a, "=*"); i >= 0 {
+		return a[i+1:]
+	}
+	return ""
 }
 
 func privLvlText(n uint8, ok bool) string {

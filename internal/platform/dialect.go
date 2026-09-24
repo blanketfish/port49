@@ -82,6 +82,13 @@ type Dialect struct {
 	// levels this adapter renders: what the device lets another level run is
 	// unmeasured.
 	AcceptedAttributes []string
+	// RoleOrder ranks the values of an attribute that names a role, lowest
+	// first, where the lab measured one fencing less than another (spec §8):
+	// the diff gate lets a change to such an attribute through only where
+	// its value provably went down (spec §12), and a level renders no role
+	// above the one a higher level renders. A value it does not list is
+	// unranked, and ranks above every value, failing closed.
+	RoleOrder map[string][]string
 	// DeviceConfig is the device configuration this adapter's renderings
 	// depend on, one line each: `port49 platform show` prints it, and a device
 	// without it does not get what the level promises (IOS-XE's level 7 is
@@ -138,6 +145,13 @@ func (d Dialect) clone() Dialect {
 	d.InertAttributes = slices.Clone(d.InertAttributes)
 	d.AcceptedAttributes = slices.Clone(d.AcceptedAttributes)
 	d.DeviceConfig = slices.Clone(d.DeviceConfig)
+	if d.RoleOrder != nil {
+		order := make(map[string][]string, len(d.RoleOrder))
+		for k, v := range d.RoleOrder {
+			order[k] = slices.Clone(v)
+		}
+		d.RoleOrder = order
+	}
 	if d.EntityClasses != nil {
 		classes := make(map[string][]string, len(d.EntityClasses))
 		for k, v := range d.EntityClasses {
@@ -178,6 +192,17 @@ func PrivilegeAttributeNames() []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// RoleRank is value's place in the role_order of attribute name, lowest
+// first. ok is false for a value it does not rank, which ranks above every
+// value it does.
+func (d Dialect) RoleRank(name, value string) (rank int, ok bool) {
+	rank = slices.Index(d.RoleOrder[name], value)
+	if rank < 0 {
+		return 0, false
+	}
+	return rank, true
 }
 
 // Authorizes reports whether the platform declares capability c.

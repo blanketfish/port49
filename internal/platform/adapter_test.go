@@ -27,6 +27,8 @@ var shipped = map[string]Dialect{
 			"operator": {"priv-lvl=15", "roles=network-operator"}, "admin": {"priv-lvl=15", "roles=network-admin"}},
 		PrivilegeAttributes: []string{"priv-lvl", "roles"},
 		InertAttributes:     []string{"home-directory"},
+		// L16-arista_eos.md, command authorization LOCAL.
+		RoleOrder: map[string][]string{"roles": {"network-operator", "network-admin"}},
 		DeviceConfig: []string{"aaa authorization exec default group port49 local",
 			"aaa authorization commands all default group port49 local"},
 	},
@@ -40,6 +42,8 @@ var shipped = map[string]Dialect{
 		CeilingLevels:       map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
 		PrivilegeAttributes: []string{"priv-lvl", "shell:roles", "cisco-av-pair"},
 		InertAttributes:     []string{"home-directory"},
+		// L16-cisco_nxos.md, command authorization LOCAL.
+		RoleOrder: map[string][]string{"shell:roles": {"network-operator", "network-admin"}},
 		DeviceConfig: []string{"aaa authentication login default group port49 local",
 			"aaa authorization commands default group port49 local",
 			"aaa authorization config-commands default group port49 local"},
@@ -233,7 +237,14 @@ func TestValidateNamesTheField(t *testing.T) {
 		"not in accepted_attributes": with(ok, func(d *Dialect) {
 			d.Levels, d.AcceptedAttributes = map[string][]string{"admin": {"roles=x"}}, []string{"priv-lvl"}
 		}),
-		"device_config[0]": with(ok, func(d *Dialect) { d.DeviceConfig = []string{"line one\nline two"} }),
+		"device_config[0]":          with(ok, func(d *Dialect) { d.DeviceConfig = []string{"line one\nline two"} }),
+		"role_order: \"a=b\"":       with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"a=b": {"x"}} }),
+		"role_order.priv-lvl":       with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"priv-lvl": {"1"}} }),
+		"role_order.roles is empty": with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"roles": {}} }),
+		"role_order.roles: \"x\" is ranked twice": with(ok, func(d *Dialect) {
+			d.RoleOrder = map[string][]string{"roles": {"x", "y", "x"}}
+		}),
+		"role_order.roles[0]": with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"roles": {""}} }),
 	} {
 		err := Validate("x", d)
 		if err == nil || !strings.Contains(err.Error(), field) || !strings.Contains(err.Error(), "platforms.x.") {
@@ -332,6 +343,26 @@ func TestShippedAdaptersAreMonotone(t *testing.T) {
 		}
 	}
 	eos, _ := DialectFor("arista_eos")
+	// Value, not name: the swapped roles keep every attribute name.
+	roles := with(eos, func(d *Dialect) {
+		d.Levels["readonly"] = []string{"priv-lvl=15", "roles=network-admin"}
+		d.Levels["admin"] = []string{"priv-lvl=15", "roles=network-operator"}
+	})
+	if err := Monotone("arista_eos", roles, order); err == nil || !strings.Contains(err.Error(),
+		"platforms.arista_eos.privilege.readonly: roles=network-admin ranks above operator's roles=network-operator") {
+		t.Fatalf("%v", err)
+	}
+	// A value role_order does not rank ranks highest: a higher level may
+	// render one, a lower level may not.
+	unranked := with(eos, func(d *Dialect) { d.Levels["admin"] = []string{"priv-lvl=15", "roles=p49-noc"} })
+	if err := Monotone("arista_eos", unranked, order); err != nil {
+		t.Fatalf("an unranked role at the top: %v", err)
+	}
+	unranked = with(eos, func(d *Dialect) { d.Levels["readonly"] = []string{"priv-lvl=1", "roles=p49-noc"} })
+	if err := Monotone("arista_eos", unranked, order); err == nil || !strings.Contains(err.Error(),
+		"platforms.arista_eos.privilege.readonly: roles=p49-noc ranks above operator's roles=network-operator") {
+		t.Fatalf("an unranked role below: %v", err)
+	}
 	swapped := with(eos, func(d *Dialect) { d.Levels["readonly"] = []string{"priv-lvl=15", "roles=network-operator"} })
 	if err := Monotone("arista_eos", with(swapped, func(d *Dialect) {
 		d.Levels["operator"] = []string{"priv-lvl=1", "roles=network-operator"}
@@ -355,6 +386,41 @@ func TestValidateRefusesAnEmptyAcceptedList(t *testing.T) {
 	err = Validate("x", with(generic, func(d *Dialect) { d.AcceptedAttributes = []string{} }))
 	if generic.Levels != nil || err == nil || !strings.Contains(err.Error(), "platforms.x.accepted_attributes is empty") {
 		t.Fatalf("no levels: %v", err)
+	}
+}
+
+// RoleRank places a value in its attribute's role_order, lowest first; a
+// value or an attribute it does not list is unranked.
+func TestRoleRank(t *testing.T) {
+	nx, _ := DialectFor("cisco_nxos")
+	for _, tt := range []struct {
+		name, value string
+		rank        int
+		ok          bool
+	}{
+		{"shell:roles", "network-operator", 0, true},
+		{"shell:roles", "network-admin", 1, true},
+		{"shell:roles", "vdc-operator", 0, false},
+		{"shell:roles", "network-admin vdc-admin", 0, false},
+		{"roles", "network-admin", 0, false},
+	} {
+		if r, ok := nx.RoleRank(tt.name, tt.value); r != tt.rank || ok != tt.ok {
+			t.Errorf("%s=%s: %d %v", tt.name, tt.value, r, ok)
+		}
+	}
+}
+
+// role_order is a map, merged per attribute like privilege.
+func TestOverMergesRoleOrder(t *testing.T) {
+	specs, err := ParseSpecs([]byte("platforms:\n  arista_eos:\n    role_order:\n      x-role: [basic, super]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, _ := DialectFor("arista_eos")
+	d := specs["arista_eos"].Over(base)
+	if !reflect.DeepEqual(d.RoleOrder, map[string][]string{"roles": {"network-operator", "network-admin"},
+		"x-role": {"basic", "super"}}) || len(base.RoleOrder) != 1 {
+		t.Fatalf("%v %v", d.RoleOrder, base.RoleOrder)
 	}
 }
 

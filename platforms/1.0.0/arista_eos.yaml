@@ -25,6 +25,12 @@ platforms:
       readonly: ["priv-lvl=1", "roles=network-operator"]
       operator: ["priv-lvl=15", "roles=network-operator"]
       admin: ["priv-lvl=15", "roles=network-admin"]
+    # network-operator fences more than network-admin: under local command
+    # authorization it was refused `configure` and network-admin was not
+    # (L16-arista_eos.md, command authorization LOCAL). No other role is
+    # measured, so any other value is unranked and ranks above both.
+    role_order:
+      roles: [network-operator, network-admin]
     # What the renderings above depend on, as the lab device carries it
     # (tests/lab/configs/eos-startup.cfg). The group name is the lab's.
     device_config:

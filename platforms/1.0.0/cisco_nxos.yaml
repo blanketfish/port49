@@ -24,6 +24,14 @@ platforms:
       readonly: ["shell:roles*network-operator"]
       operator: ["shell:roles*network-operator"]
       admin: ["shell:roles*network-admin"]
+    # network-operator fences more than network-admin: under local command
+    # authorization it was refused a configuration command and network-admin
+    # was not (L16-cisco_nxos.md, command authorization LOCAL). vdc-operator
+    # was delivered only while port49 answered, where no role narrows
+    # anything (ceiling-cisco_nxos.md), so it is unranked, with every other
+    # value, and ranks above both.
+    role_order:
+      shell:roles: [network-operator, network-admin]
     # What the renderings above depend on, as the lab device carries it
     # (tests/lab/configs/nxos-startup.cfg). The group name is the lab's.
     device_config:

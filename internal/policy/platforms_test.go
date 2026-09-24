@@ -132,6 +132,19 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 		{"a role only a lower level renders",
 			"  x: {privilege: {readonly: [\"priv-lvl=1\", \"shell:roles*network-admin\"], admin: [\"priv-lvl=15\"]}}\n",
 			"platforms.x.privilege.readonly: shell:roles is rendered at readonly and not at admin"},
+		{"roles swapped between levels", "  arista_eos: {privilege: {readonly: [\"priv-lvl=1\", \"roles=network-admin\"], " +
+			"admin: [\"priv-lvl=15\", \"roles=network-operator\"]}}\n",
+			"platforms.arista_eos.privilege.readonly: roles=network-admin ranks above operator's roles=network-operator"},
+		{"a role unranked below a ranked one", "  x: {role_order: {x-role: [basic]}, privilege: {readonly: [\"x-role=super\"], " +
+			"admin: [\"x-role=basic\"]}}\n",
+			"platforms.x.privilege.readonly: x-role=super ranks above admin's x-role=basic"},
+		{"the set's role_order reversed", "  arista_eos: {role_order: {roles: [network-admin, network-operator]}}\n",
+			"platforms.arista_eos.role_order.roles: network-operator is ranked above network-admin, and platform set " +
+				"1.0.0 ranks it below"},
+		{"a variant's role_order reversed", "  wb: {based_on: cisco_nxos, role_order: {shell:roles: [network-admin, network-operator]}}\n",
+			"platforms.wb.role_order.shell:roles: network-operator is ranked above network-admin"},
+		{"the set's role_order reversed under replace", "  cisco_nxos: {replace: true, role_order: {shell:roles: [network-admin, network-operator]}}\n",
+			"platforms.cisco_nxos.role_order.shell:roles: network-operator is ranked above network-admin"},
 	} {
 		if _, err := Parse([]byte("platforms:\n"+tt.block+rest), env()); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: %v, want %q", tt.name, err, tt.want)
@@ -154,6 +167,22 @@ func TestAPlatformBlockRendersMonotoneInThePolicysOrder(t *testing.T) {
 	good := "platforms:\n  cisco_iosxe:\n    privilege:\n      netops: [\"priv-lvl=7\"]\n" + levels + rest
 	if _, err := Parse([]byte(good), env()); err != nil {
 		t.Fatalf("an equal rendering is monotone: %v", err)
+	}
+}
+
+// A block may rank a value the set does not, anywhere, and rank a new
+// platform's roles from nothing.
+func TestAPlatformBlockMayRankNewRoles(t *testing.T) {
+	body := "platforms:\n  arista_eos:\n    role_order:\n      roles: [network-operator, p49-noc, network-admin]\n" +
+		"  f5_bigip:\n    privilege_attributes: [F5-LTM-User-Role]\n    role_order:\n      F5-LTM-User-Role: [guest, admin]\n" +
+		"    privilege:\n      readonly: [\"F5-LTM-User-Role*guest\"]\n      admin: [\"F5-LTM-User-Role*admin\"]\n" +
+		scopeOK + roleOK + subjOK + grantOK
+	p := mustParse(t, body)
+	if r, ok := p.Dialect("arista_eos").RoleRank("roles", "p49-noc"); !ok || r != 1 {
+		t.Fatalf("p49-noc: %d %v", r, ok)
+	}
+	if r, ok := p.Dialect("f5_bigip").RoleRank("F5-LTM-User-Role", "admin"); !ok || r != 1 {
+		t.Fatalf("f5: %d %v", r, ok)
 	}
 }
 

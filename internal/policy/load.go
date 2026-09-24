@@ -305,12 +305,44 @@ func (p *Policy) buildPlatforms(f file) error {
 		if err := platform.Validate(name, d); err != nil {
 			return err
 		}
+		// The set's ranking is the lab's (spec §8): a block may rank a value
+		// the set does not, and never reorder two it does, `replace: true`
+		// included, since the device behind the name is the same device.
+		shippedAs := name
+		if b.BasedOn != "" {
+			shippedAs = b.BasedOn
+		}
+		if err := keepsRoleOrder(at, d, builtin[shippedAs], p.set); err != nil {
+			return err
+		}
 		set[name] = d
 	}
 	for name, d := range p.env.Dialects {
 		set[name] = d
 	}
 	p.adapters = set
+	return nil
+}
+
+// keepsRoleOrder refuses a merged adapter that ranks two values of a role
+// attribute the other way round from the set's adapter it stands for: the
+// diff gate reads a move down role_order as a lowering (spec §12), so a
+// reversed order would pass a raise as one.
+func keepsRoleOrder(at string, d, set platform.Dialect, version string) error {
+	for _, attr := range sortedKeys(set.RoleOrder) {
+		ranked := set.RoleOrder[attr]
+		for i, lower := range ranked {
+			for _, higher := range ranked[i+1:] {
+				rl, okl := d.RoleRank(attr, lower)
+				rh, okh := d.RoleRank(attr, higher)
+				if okl && okh && rl > rh {
+					return fmt.Errorf("%s.role_order.%s: %s is ranked above %s, and platform set %s ranks it below "+
+						"(its lab note); a block may rank a value the set does not, not reorder the set's (spec §8)",
+						at, attr, lower, higher, version)
+				}
+			}
+		}
+	}
 	return nil
 }
 
