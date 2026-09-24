@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"regexp/syntax"
 	"slices"
+	"strings"
 	"unicode"
 )
 
@@ -269,6 +270,18 @@ var indexShape = regexp.MustCompile(`^[0-9][0-9/.:]*$`)
 // nameShape is the name a deny's split `*` takes before an index: letters,
 // with the hyphen `Port-channel` carries.
 var nameShape = regexp.MustCompile(`^[A-Za-z][A-Za-z-]*$`)
+
+// SplitName reads word as IOS-XE sends an interface name typed joined: a
+// name of letters (and `-`) and an index, `GigabitEthernet1` as
+// `GigabitEthernet`, `1` (tests/lab/results/L21-cisco_iosxe.md). ok is false
+// for a word that is not that shape.
+func SplitName(word string) (head, index string, ok bool) {
+	k := strings.IndexFunc(word, func(r rune) bool { return r >= '0' && r <= '9' })
+	if k <= 0 || !nameShape.MatchString(word[:k]) || !indexShape.MatchString(word[k:]) {
+		return "", "", false
+	}
+	return word[:k], word[k:], true
+}
 
 // splitsOf lists every way word is a name and an index joined: each non-empty
 // head with an index-shaped rest.

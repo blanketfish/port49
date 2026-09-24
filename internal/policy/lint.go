@@ -29,6 +29,7 @@ const (
 	FindingAttributeShadowed   = "attribute_shadowed"
 	FindingIncomparableVersion = "incomparable_version"
 	FindingDenyWidened         = "deny_widened"
+	FindingPermitJoinedName    = "permit_joined_name"
 )
 
 // Lint computes the findings, ordered by kind and then message so two runs
@@ -115,6 +116,7 @@ func (p *Policy) Lint() []Finding {
 		}
 	}
 	out = append(out, p.WidenedDenies()...)
+	out = append(out, p.JoinedNamePermits()...)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind < out[j].Kind
@@ -165,6 +167,41 @@ func (p *Policy) WidenedDenies() []Finding {
 				for _, why := range engine.WidenedToAny(rule, p.dialect(plat).EntityClasses, p.normalizeFor(plat)) {
 					out = append(out, Finding{Kind: FindingDenyWidened, Message: fmt.Sprintf(
 						"role %q: deny %q on %s: %s", name, rule, plat, why)})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// JoinedNamePermits names every permit word written as an interface name and
+// its index joined, on each platform in the inventory that sends the two
+// apart: IOS-XE sends a typed `Gi1` as `GigabitEthernet`, `1`
+// (tests/lab/results/L21-cisco_iosxe.md), and a permit matches only as
+// written (spec §3 rule 5), so the word never matches there. It is reported
+// here, and by port49d at start, rather than discovered as a denial.
+func (p *Policy) JoinedNamePermits() []Finding {
+	platforms := map[string]bool{}
+	for _, d := range p.env.Devices {
+		if p.dialect(d.Platform).SplitsInterfaceNames {
+			platforms[d.Platform] = true
+		}
+	}
+	var out []Finding
+	for _, name := range sortedKeys(p.roles) {
+		for _, rule := range p.roles[name].Permit {
+			terms, err := engine.ParseRule(rule)
+			if err != nil {
+				continue
+			}
+			for _, plat := range sortedKeys(platforms) {
+				for _, t := range terms {
+					if head, index, ok := engine.SplitName(t.Text); ok && t.Kind == engine.Word {
+						out = append(out, Finding{Kind: FindingPermitJoinedName, Message: fmt.Sprintf(
+							"role %q: permit %q on %s: `%s` never matches on %s, which sends it as two arguments "+
+								"(tests/lab/results/L21-cisco_iosxe.md); write `%s %s`", name, rule, plat, t.Text, plat,
+							head, index)})
+					}
 				}
 			}
 		}

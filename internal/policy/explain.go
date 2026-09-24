@@ -136,6 +136,7 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	}
 	e.Outcome = o
 	e.Caveats = append(e.Caveats, Caveats(d.Platform, dialect, o)...)
+	e.Caveats = append(e.Caveats, p.splitNotes(line, d.Platform)...)
 	// Spec §12: explain MUST say so where `supports` lacks config_commands. No
 	// built-in platform declares it (internal/platform), so a command typed in
 	// configuration mode is not known to reach port49 at all.
@@ -230,7 +231,7 @@ func (p *Policy) quarantineAt(device string, now time.Time) (causes, scheduled [
 // silently would read as "permitted by none".
 func (p *Policy) wouldPermit(line, platformName string) ([]string, error) {
 	dialect := p.dialect(platformName)
-	raw := CommandRaw(line)
+	raw, _ := p.commandRaw(line, platformName)
 	var out []string
 	for name, r := range p.roles {
 		// This blob is never minted; Compile only needs a bundle named.

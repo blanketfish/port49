@@ -140,6 +140,23 @@ func TestAWidenedDenyIsSaidAtStart(t *testing.T) {
 	}
 }
 
+// A permit naming an interface joined never matches on IOS-XE, which sends
+// the name and the index apart (L21), and the start says so.
+func TestAJoinedInterfacePermitIsSaidAtStart(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`, `permit: ["**", "interface Gi1 **"]}`, 1))
+	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "xe1", Platform: "cisco_iosxe"})
+	if _, _, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+		metrics.New(prometheus.NewRegistry())); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `port49d: broker: role "r": permit "interface Gi1 **" on cisco_iosxe: `+"`Gi1`"+` never matches`) {
+		t.Fatalf("stderr: %s", out.String())
+	}
+}
+
 // The daemon asks the policy at the time of each packet, and the gauge counts
 // at the time of each scrape: a device an expiry will quarantine is neither
 // refused nor counted until then (spec §10).

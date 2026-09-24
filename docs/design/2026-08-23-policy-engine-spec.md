@@ -284,7 +284,14 @@ entire class.
    nothing from a pattern's syntax, so nothing is refused for it; the decision names the deny
    as written. A deny's `*` is "any one argument", and is written where the interface goes, so
    it splits too: it also matches a name (letters and `-`) followed by an index, so
-   `deny: default interface *` binds `default interface GigabitEthernet 1`. A **permit** matches only as written, so it is written as the device sends it.
+   `deny: default interface *` binds `default interface GigabitEthernet 1`. A **permit**
+   matches only as written, so it is written as the device sends it: a permit word written
+   joined (`permit: interface GigabitEthernet1 **`) never matches there, and `port49 policy
+   test` reports it as `permit_joined_name` and `port49d` says it at start. `port49 explain`
+   and the policy tests evaluate what the device sends, so on such a platform a typed argument
+   of letters followed by an index is split in two before it is decided, with a note saying
+   so; a word that is not an interface name (`hostname xe1`) reaches the device whole and may
+   be decided otherwise.
 
 ---
 

@@ -188,6 +188,11 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	for _, f := range pol.WidenedDenies() {
 		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
 	}
+	// A permit naming an interface joined never matches where the platform
+	// sends the name and the index apart (spec §3 rule 5); say which.
+	for _, f := range pol.JoinedNamePermits() {
+		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
+	}
 	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",

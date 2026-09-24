@@ -3,6 +3,7 @@ package policy
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,10 +28,45 @@ func CommandRaw(line string) []string {
 	return raw
 }
 
+// commandRaw is CommandRaw as a device on platformName sends it: where the
+// platform splits interface names (IOS-XE, tests/lab/results/
+// L21-cisco_iosxe.md), an argument written as a name and an index joined
+// arrives as the two, so it is sent as the two here, and split lists each
+// such word. The daemon decides what the device sends, and explain and the
+// policy tests must answer as it does.
+func (p *Policy) commandRaw(line, platformName string) (raw, split []string) {
+	raw = CommandRaw(line)
+	if !p.dialect(platformName).SplitsInterfaceNames || len(raw) < 2 {
+		return raw, nil
+	}
+	out := slices.Clone(raw[:2])
+	for _, a := range raw[2:] {
+		if head, index, ok := engine.SplitName(strings.TrimPrefix(a, "cmd-arg=")); ok {
+			out = append(out, "cmd-arg="+head, "cmd-arg="+index)
+			split = append(split, fmt.Sprintf("`%s` as `%s %s`", head+index, head, index))
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, split
+}
+
+// splitNotes is the caveat for a line commandRaw split on platformName.
+func (p *Policy) splitNotes(line, platformName string) []string {
+	_, split := p.commandRaw(line, platformName)
+	if len(split) == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s splits an interface name from its index, so this was evaluated as IOS-XE sends "+
+		"an interface name (tests/lab/results/L21-cisco_iosxe.md): %s; a word here that is not an interface name "+
+		"reaches the device whole, and may be decided otherwise", platformName, strings.Join(split, ", "))}
+}
+
 // Decide resolves a subject (or, with principal set, a principal) on a device
 // and decides one command line with the very blob a mint would write: encoded,
-// decoded and compiled, the path the daemon takes. It is what `port49
-// explain` and `port49 policy test` both run.
+// decoded and compiled, the path the daemon takes, on the words the device
+// sends for the line (commandRaw). It is what `port49 explain` and `port49
+// policy test` both run.
 func (p *Policy) Decide(subject, principal string, d admission.Device, line string, now time.Time) (Resolution, engine.Outcome, error) {
 	var res Resolution
 	var err error
@@ -54,7 +90,8 @@ func (p *Policy) Decide(subject, principal string, d admission.Device, line stri
 	if err != nil {
 		return res, engine.Outcome{}, err
 	}
-	return res, prog.Command(CommandRaw(line)), nil
+	raw, _ := p.commandRaw(line, d.Platform)
+	return res, prog.Command(raw), nil
 }
 
 // Caveats are what port49's answer does not promise on this platform (spec
@@ -117,7 +154,7 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 				break
 			}
 			r.Permit, r.Reason, r.Outcome = o.Permit, o.Reason, o
-			r.Caveats = Caveats(d.Platform, p.dialect(d.Platform), o)
+			r.Caveats = append(Caveats(d.Platform, p.dialect(d.Platform), o), p.splitNotes(t.Command, d.Platform)...)
 		}
 		verdict := "deny"
 		if r.Permit {
