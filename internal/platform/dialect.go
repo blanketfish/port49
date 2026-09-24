@@ -2,6 +2,7 @@ package platform
 
 import (
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -64,6 +65,14 @@ type Dialect struct {
 	// platform that renders none (Levels nil), where the token's ceiling still
 	// needs one. nil is plan 3's table, ceilingLevels.
 	CeilingLevels map[string]uint8
+	// PrivilegeAttributes are the attribute names measured to carry privilege
+	// on this platform (spec §6): none takes a placeholder, and the policy
+	// diff gates a change to one (spec §12).
+	PrivilegeAttributes []string
+	// InertAttributes are names measured to carry none. An attribute in
+	// neither list bears privilege as far as the diff is concerned: the gate
+	// fails closed on what nobody measured. No platform lists one yet.
+	InertAttributes []string
 }
 
 // dialects are the built-in platforms. Each value is cited or marked
@@ -118,6 +127,13 @@ type Dialect struct {
 //     `network-operator` changed configuration (ceiling-cisco_nxos.md).
 //     IOS-XE, whose level 7 can carry the operator rung (ceiling-cisco_iosxe.md),
 //     keeps plan 3's table until plan 5 renders it.
+//   - PrivilegeAttributes: `priv-lvl` sets the level on EOS, NX-OS and IOS-XE
+//     (L16, ceiling-*.md); EOS applies a bare `roles=<name>` and NX-OS
+//     `shell:roles`, bare or inside `cisco-av-pair` (L16-arista_eos.md,
+//     L16-cisco_nxos.md); Junos applies `local-user-name` and decision 22
+//     names `user-permissions`, measured inert on these releases but a
+//     permission carrier by design (L18-juniper_*.md). The generic adapter
+//     lists `priv-lvl`, what an unknown TACACS+ device most likely reads.
 var dialects = map[string]Dialect{
 	"arista_eos": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
@@ -127,23 +143,27 @@ var dialects = map[string]Dialect{
 			"loopback":   {`^Loopback[0-9]+$`},
 			"physical":   {`^Ethernet[0-9/.]+$`, `^Port-Channel[0-9]+$`},
 		},
-		Levels: map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=15"}, "admin": {"priv-lvl=15"}},
+		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=15"}, "admin": {"priv-lvl=15"}},
+		PrivilegeAttributes: []string{"priv-lvl", "roles"},
 	},
 	"cisco_nxos": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: false,
-		Supports:      []string{"session", "commands"},
-		EntityClasses: map[string][]string{"management": {`^mgmt[0-9]+$`}},
-		CeilingLevels: map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
+		Supports:            []string{"session", "commands"},
+		EntityClasses:       map[string][]string{"management": {`^mgmt[0-9]+$`}},
+		CeilingLevels:       map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
+		PrivilegeAttributes: []string{"priv-lvl", "shell:roles", "cisco-av-pair"},
 	},
 	"cisco_iosxe": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
 		SplitsInterfaceNames: true,
 		Supports:             []string{"session", "commands"},
+		PrivilegeAttributes:  []string{"priv-lvl"},
 	},
 	"juniper_junos": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false,
-		Supports:      []string{"session"},
-		EntityClasses: map[string][]string{"management": {`^(fxp0|em0)$`}},
+		Supports:            []string{"session"},
+		EntityClasses:       map[string][]string{"management": {`^(fxp0|em0)$`}},
+		PrivilegeAttributes: []string{"local-user-name", "user-permissions"},
 	},
 }
 
@@ -151,7 +171,8 @@ var dialects = map[string]Dialect{
 // "Unknown platforms"): the device still logs in, nothing is rendered for it,
 // no modifier is claimed to reach port49, and the device is assumed to send
 // abbreviations as typed.
-var generic = Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session"}}
+var generic = Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session"},
+	PrivilegeAttributes: []string{"priv-lvl"}}
 
 // ceilingLevels is the priv-lvl number a level stands for on a platform that
 // renders no level, where the number is still needed: the token's
@@ -183,6 +204,8 @@ func Dialects() map[string]Dialect {
 
 func (d Dialect) clone() Dialect {
 	d.Supports = append([]string(nil), d.Supports...)
+	d.PrivilegeAttributes = slices.Clone(d.PrivilegeAttributes)
+	d.InertAttributes = slices.Clone(d.InertAttributes)
 	if d.EntityClasses != nil {
 		classes := make(map[string][]string, len(d.EntityClasses))
 		for k, v := range d.EntityClasses {
@@ -201,6 +224,26 @@ func (d Dialect) clone() Dialect {
 		d.CeilingLevels = maps.Clone(d.CeilingLevels)
 	}
 	return d
+}
+
+// BearsPrivilege reports whether an attribute name may carry privilege on
+// this platform: every name but one measured inert (InertAttributes).
+func (d Dialect) BearsPrivilege(name string) bool { return !slices.Contains(d.InertAttributes, name) }
+
+// PrivilegeAttributeNames is every built-in platform's PrivilegeAttributes,
+// sorted: the names no attribute value may put a placeholder in, whatever
+// platform key it is written under (spec §6).
+func PrivilegeAttributeNames() []string {
+	out := slices.Clone(generic.PrivilegeAttributes)
+	for _, d := range dialects {
+		for _, n := range d.PrivilegeAttributes {
+			if !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // Authorizes reports whether the platform declares capability c.
