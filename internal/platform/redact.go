@@ -164,6 +164,12 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 		matched[k] = g.text
 	}
 	hideSplit := make([]bool, len(split))
+	// The command word: the first, or the one after a leading `do`, which is
+	// itself read as a command word.
+	command := 0
+	if len(matched) > 1 && strings.EqualFold(matched[0], "do") {
+		command = 1
+	}
 	for _, r := range rules {
 		if !matchWords(r.Match, matched) {
 			continue
@@ -176,7 +182,7 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 			// `pre-shared-key local X` in an IKEv2 keyring. The command
 			// word is still never removed.
 			for k := 0; k < len(matched); k++ {
-				if sameWord(r.After, matched[k]) {
+				if sameWord(r.After, matched[k]) && (k > command || keywordShaped(r.After, matched, k)) {
 					start = k + 1
 					break
 				}
@@ -226,6 +232,23 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 		out[e] = strings.Join(rebuilt, " ")
 	}
 	return out, true
+}
+
+// keywordShaped reports whether words[k], the command word, abbreviating
+// keyword, reads as the keyword (spec §5.8): the keyword whole, three
+// characters or more, one character (`k X` in a key chain), or two followed by
+// a bare digit, an encryption type (`sh 7 X` in an EOS IPsec profile). An
+// exec `sh ip int br` or `sh run` is not read as `shared-key`; an argument
+// matches every abbreviation.
+func keywordShaped(keyword string, words []string, k int) bool {
+	w := words[k]
+	switch {
+	case strings.EqualFold(w, keyword), len(w) >= 3, len(w) == 1:
+		return true
+	case len(w) == 2:
+		return k+1 < len(words) && len(words[k+1]) == 1 && words[k+1][0] >= '0' && words[k+1][0] <= '9'
+	}
+	return false
 }
 
 // glued is one word as Redact matches it: a whole word, or the keyword or

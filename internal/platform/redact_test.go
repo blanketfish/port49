@@ -427,3 +427,31 @@ func TestAGluedOrNamedSecretIsRedacted(t *testing.T) {
 		t.Fatalf("record: %q %q", gotRaw, gotVector)
 	}
 }
+
+// Every argument matches a secret keyword's every abbreviation, and the
+// command word — the first word, or the word after a leading `do` — only in
+// a key's shape: three characters or more, one character, or two followed by
+// an encryption type's digit. So an exec `sh` is not read as `shared-key`,
+// while `sh 7 X` in an EOS IPsec profile and `k X` in a key chain still are
+// (spec §5.8; task 15 re-review, Question 2).
+func TestAShortCommandWordIsASecretKeywordOnlyInAKeysShape(t *testing.T) {
+	for _, line := range []string{"tacacs-server k Hunter2", "radius-server k Hunter2",
+		"crypto isakmp k Hunter2 address 0.0.0.0", "enable s 0 Hunter2", "enable p Hunter2", "enable pa Hunter2",
+		"username bob pa Hunter2", "username bob se 0 Hunter2", "neighbor 10.0.0.1 pa Hunter2", "sh 7 Hunter2",
+		"sh 0 Hunter2", "k Hunter2", "shared-key 7 Hunter2", "do sh 7 Hunter2", "key-string Hunter2",
+		"license smart register idtoken Hunter2", "management api gnmi token Hunter2"} {
+		for _, name := range []string{"default", "arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
+			if got, _ := Redact(Redactions(name), []string{line}); strings.Contains(got[0], "Hunter2") {
+				t.Errorf("%s: %q: %q", name, line, got[0])
+			}
+		}
+	}
+	for _, line := range []string{"sh ip int br", "sh run", "do sh run", "sh ip bgp | i 65000", "sh ip bgp | i hostname",
+		"do sh ip int br"} {
+		for _, name := range []string{"default", "arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
+			if got, redacted := Redact(Redactions(name), []string{line}); redacted {
+				t.Errorf("%s: %q: %q", name, line, got[0])
+			}
+		}
+	}
+}
