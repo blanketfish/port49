@@ -25,6 +25,12 @@ type flakySink struct {
 
 func (f *flakySink) Emit(r decision.Record) { _ = f.Write(r) }
 
+func (f *flakySink) setDown(down bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.down = down
+}
+
 func (f *flakySink) Write(r decision.Record) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -52,14 +58,14 @@ func TestARefusedRecordIsOfferedAgain(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sink.down = true
+	sink.setDown(true)
 	if ok, n := sp.drainOnce(); ok || n != 0 {
 		t.Fatalf("a refused first record is no progress: ok=%v forwarded=%d", ok, n)
 	}
 	if d := testutil.ToFloat64(m.SpoolDepth); d != 3 {
 		t.Fatalf("depth after a refusal: %v, want 3", d)
 	}
-	sink.down = false
+	sink.setDown(false)
 	if ok, n := sp.drainOnce(); !ok || n != 3 {
 		t.Fatalf("after recovery: ok=%v forwarded=%d", ok, n)
 	}
@@ -75,8 +81,8 @@ func TestARefusedRecordIsOfferedAgain(t *testing.T) {
 // delivered: the next pass resumes at the refused record, not at the start.
 func TestARefusalMidFileResumesAtTheRefusedRecord(t *testing.T) {
 	sink := &flakySink{}
-	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "o.jsonl"), &refuseAfter{next: sink, n: 1},
-		metrics.New(prometheus.NewRegistry()))
+	m := metrics.New(prometheus.NewRegistry())
+	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "o.jsonl"), &refuseAfter{next: sink, n: 1}, m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,8 +94,14 @@ func TestARefusalMidFileResumesAtTheRefusedRecord(t *testing.T) {
 	if ok, n := sp.drainOnce(); ok || n != 1 {
 		t.Fatalf("one delivered, then a refusal: ok=%v forwarded=%d", ok, n)
 	}
+	if d := testutil.ToFloat64(m.SpoolDepth); d != 2 {
+		t.Fatalf("depth after delivering one of three: %v, want 2", d)
+	}
 	if ok, n := sp.drainOnce(); !ok || n != 2 {
 		t.Fatalf("the rest: ok=%v forwarded=%d", ok, n)
+	}
+	if d := testutil.ToFloat64(m.SpoolDepth); d != 0 {
+		t.Fatalf("depth after the drain: %v", d)
 	}
 	if len(sink.got) != 3 || sink.got[0] != "a" || sink.got[1] != "b" || sink.got[2] != "c" {
 		t.Fatalf("delivered %q, want a b c once each", sink.got)
@@ -114,7 +126,7 @@ func TestARefusingSinkNeverQuarantines(t *testing.T) {
 	if q := testutil.ToFloat64(m.SpoolQuarantines); q != 0 {
 		t.Fatalf("quarantined %v files over a sink outage", q)
 	}
-	sink.down = false
+	sink.setDown(false)
 	if ok, n := sp.drainOnce(); !ok || n != 1 || len(sink.got) != 1 {
 		t.Fatalf("after the outage: ok=%v forwarded=%d got=%q", ok, n, sink.got)
 	}
@@ -146,9 +158,7 @@ func TestARefusingSinkIsRetriedAtAPace(t *testing.T) {
 		t.Fatalf("%d writes to a refusing sink in 600ms, want at most 2", tries)
 	}
 	// Recovery is still picked up: the paced retry delivers the record.
-	sink.mu.Lock()
-	sink.down = false
-	sink.mu.Unlock()
+	sink.setDown(false)
 	deadline := time.Now().Add(3 * sinkRetryInterval)
 	for {
 		sink.mu.Lock()

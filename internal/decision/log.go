@@ -259,7 +259,9 @@ func (j *jsonLines) Write(r Record) error {
 	r.TS = r.TS.UTC()
 	b, err := json.Marshal(r)
 	if err != nil {
-		log.Printf("decision: dropping record that failed to marshal: %v", err)
+		// Not "dropping": a caller of Write (the accounting spool) keeps the
+		// record and offers it again; only an Emit caller loses it.
+		log.Printf("decision: refused a record that failed to marshal (lost unless its caller retries it): %v", err)
 		j.failed()
 		return err
 	}

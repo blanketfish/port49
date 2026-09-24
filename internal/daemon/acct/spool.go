@@ -61,7 +61,11 @@ const sinkRetryInterval = time.Second
 // duplicates. The contract reaches across the last hop: a record the sink
 // refuses stops the pass at that record, drainOffset stays at its first byte,
 // and the next pass offers it again (TestARefusedRecordIsOfferedAgain). A
-// refusal is not the file's fault, so it never counts toward quarantine.
+// refusal is not the file's fault, so it never counts toward quarantine. The
+// spool cannot tell a transient refusal from a permanent one, so a record the
+// sink will never take holds every record behind it; the signal is
+// port49_accounting_spool_depth rising with
+// port49_decision_log_write_failures_total.
 // Every error on the drain path is logged (path and error, never record
 // contents), throttled to once a minute per failure kind once a condition
 // persists, so a stuck filesystem cannot flood the log.
