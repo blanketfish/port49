@@ -134,6 +134,9 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a non-trailing **", "roles:\n  - {name: r, permit: [\"show ** detail\"]}\n" + subjOK, "trailing-only"},
 		{"a regex that is *", "roles:\n  - {name: r, permit: [\"show /^.*$/\"]}\n" + subjOK, "is `*`"},
 		{"a regex that is a word", "roles:\n  - {name: r, deny: [\"/^reload$/ **\"]}\n" + subjOK, "the word `reload`"},
+		{"a case-sensitive regex", "roles:\n  - {name: r, deny: [\"* * /(?-i)^TFTP:/\"]}\n" + subjOK, "case-insensitively"},
+		{"a case-sensitive group", "roles:\n  - {name: r, deny: [\"interface /(?s-i:^Mgmt)/\"]}\n" + subjOK, "case-insensitively"},
+		{"a case-sensitive pipe rule", "roles:\n  - {name: r, pipe: {permit: [\"include /(?U-i)x/\"]}}\n" + subjOK, "case-insensitively"},
 		{"a class no platform defines", "roles:\n  - {name: r, permit: [\"interface @uplinks\"]}\n" + subjOK, "which no platform defines"},
 		{"a ceiling no platform numbers", scopeOK + roleOK + subjOK +
 			"grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: operator}\n", "no priv-lvl number on any platform"},
@@ -221,6 +224,11 @@ func TestATestReasonFromTheVocabularyLoads(t *testing.T) {
 	if got := p.Tests()[0].Reason; got != "permit_dominates" {
 		t.Fatalf("reason %q", got)
 	}
+}
+
+// A regex that sets flags without turning case-insensitivity off loads.
+func TestARegexKeepingCaseInsensitivityLoads(t *testing.T) {
+	mustParse(t, "roles:\n  - {name: r, deny: [\"* * /(?i)^tftp:/\", \"* * /(?s)^ftp:/\", \"* * /[(?-i)]/\"]}\n"+subjOK)
 }
 
 // The rank lint catches the usual spellings of `*` and of a word, and leaves
