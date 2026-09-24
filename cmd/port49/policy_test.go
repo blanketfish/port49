@@ -905,3 +905,53 @@ func TestPolicyDiffAdapterLinesNeverPrintABlockSecret(t *testing.T) {
 		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// Moving a subject from admin to readonly lowers it on every per-command
+// platform, end to end through the command: the reply's role goes down
+// role_order on EOS and NX-OS and priv-lvl goes down on IOS-XE, so the diff
+// passes; the reverse is gated on each (task 3 review, carried to the final
+// wave).
+func TestPolicyDiffPassesAnAdminToReadonlyMoveOnEveryPlatform(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: nx-01, platform: cisco_nxos, addresses: [10.0.0.2]}
+  - {name: xe-01, platform: cisco_iosxe, addresses: [10.0.0.3]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := string(readFile(t, oldPol))
+	lowered := strings.Replace(raw, "roles: [admin]}", "roles: [read_only]}", 1)
+	if lowered == raw {
+		t.Fatal("the fixture's ops grant moved")
+	}
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(newPol, []byte(lowered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("admin -> readonly: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "privilege: ops on ") {
+		t.Fatalf("the lowering is not reported:\n%s", out.String())
+	}
+	for _, device := range []string{"leaf-01", "nx-01", "xe-01"} {
+		if !strings.Contains(out.String(), device) {
+			t.Errorf("%s: the lowering is not reported:\n%s", device, out.String())
+		}
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", newPol, "--new", oldPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "RAISES: ops on ") {
+		t.Fatalf("readonly -> admin: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	for _, device := range []string{"leaf-01", "nx-01", "xe-01"} {
+		if !strings.Contains(out.String(), device) {
+			t.Errorf("%s: the raise is not reported:\n%s", device, out.String())
+		}
+	}
+}
