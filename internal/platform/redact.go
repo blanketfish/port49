@@ -95,6 +95,14 @@ func LoadRedactions(raw []byte) (map[string][]Redaction, error) {
 	return out, nil
 }
 
+// Redactor says which patterns apply to a platform's records. The daemon's
+// handlers take one, so a policy's `platforms:` blocks reach them (spec §5.8).
+type Redactor func(platformName string) []Redaction
+
+// BuiltInRedactor is the Redactor with no policy in force: the built-in
+// patterns alone.
+func BuiltInRedactor(platformName string) []Redaction { return Redactions(platformName) }
+
 // Redactions is a platform's built-in patterns, copied: the default list, and
 // the platform's own after it. A platform's list adds and never replaces, so
 // a word the default removes is removed on every platform.
@@ -180,6 +188,55 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 			rebuilt = append(rebuilt, w)
 		}
 		out[e] = strings.Join(rebuilt, " ")
+	}
+	return out, true
+}
+
+// RedactRecord applies rules to a record's raw pairs and its vector, which are
+// two spellings of one command. A pattern anchored at both ends can match one
+// and miss the other — the raw pairs drop their `<cr>` — so where either form
+// loses a word and the other matched nothing, the other loses every argument:
+// removing more rather than leaving the secret in the form the pattern
+// missed (spec §5.8).
+func RedactRecord(rules []Redaction, raw, vector []string) ([]string, []string, bool) {
+	r, inRaw := RedactRaw(rules, raw)
+	v, inVector := Redact(rules, vector)
+	if inRaw == inVector {
+		return r, v, inRaw
+	}
+	// Every argument: the rule check refuses this pattern in a file, where it
+	// would blank every record; here it applies to one record already found
+	// to carry a secret.
+	one := 1
+	everything := []Redaction{{Match: []string{"**"}, From: &one}}
+	if !inRaw {
+		r, _ = RedactRaw(everything, raw)
+	}
+	if !inVector {
+		v, _ = Redact(everything, vector)
+	}
+	return r, v, true
+}
+
+// RedactRule applies rules to a policy rule's words wherever the rule is
+// echoed — a record's matched rules, a denial's server_msg — because a rule
+// written with a literal secret in it is no safer in a log than a typed one.
+// A wildcard, `*` or `**`, is not a secret and keeps its place, so a rule such
+// as `username * secret **` is echoed as written.
+func RedactRule(rules []Redaction, words []string) ([]string, bool) {
+	out, redacted := Redact(rules, words)
+	if !redacted {
+		return words, false
+	}
+	redacted = false
+	for i, w := range words {
+		if w == "*" || w == "**" {
+			out[i] = w
+		}
+		redacted = redacted || out[i] != w
+	}
+	if !redacted {
+		return words, false
 	}
 	return out, true
 }

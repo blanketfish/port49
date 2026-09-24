@@ -29,7 +29,8 @@ const (
 	// Diverge: it does not, or the blob in the log is not the one its hash
 	// names.
 	Diverge Status = "diverge"
-	// Unverifiable: the log does not carry the blob the record names.
+	// Unverifiable: the log does not carry the blob the record names, or the
+	// record was redacted before it was written (spec §5.8).
 	Unverifiable Status = "unverifiable"
 	// Skipped: an authorization denied for a reason decided before any policy
 	// ran. It is counted, so a record cannot leave the replay unseen.
@@ -247,6 +248,12 @@ func one(rec decision.Record, p *program) (Status, string) {
 	case rec.Event == decision.EventAuthorizeCommand:
 		if rec.Request == nil {
 			return Diverge, "the record has no request to replay"
+		}
+		if rec.Request.Redacted {
+			// The command it decided is not in the log, by design: replaying
+			// the redacted words would claim an agreement nobody can check.
+			return Unverifiable, "the record was redacted before it was written (spec §5.8), so the command it " +
+				"decided is not in the log"
 		}
 		o := prog.Command(rec.Request.Raw)
 		reason = o.Reason

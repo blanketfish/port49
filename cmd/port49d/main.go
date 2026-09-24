@@ -339,6 +339,19 @@ func sayPolicy(pol *policy.Policy, now time.Time) {
 	}
 }
 
+// redactorFor is the redaction port49d applies before any record is written
+// (spec §5.8): the built-in patterns and, where a policy is in force, the
+// ones its `platforms:` blocks add, read at each record so a reload reaches
+// them. With no policy the built-in patterns apply alone.
+func redactorFor(live *policy.Live) platform.Redactor {
+	if live == nil {
+		return platform.BuiltInRedactor
+	}
+	return func(name string) []platform.Redaction {
+		return append(platform.Redactions(name), live.Load().Dialect(name).Redact...)
+	}
+}
+
 // watchQuarantine is what the daemon asks of the policy: whether a device is
 // quarantined at the time of a packet (spec §10; §13 decision 20), and at each
 // scrape how many are, for port49_devices_quarantined. Quarantine is
@@ -516,13 +529,13 @@ func run(parent context.Context, cfgPath string) error {
 		// The grace window is carried for plan 7's sweep and read by nothing
 		// today.
 		Author: author.New(handlerStore, authz, log, m, time.Now, cfg.SessionServices,
-			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL),
+			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL).WithRedactor(redactorFor(live)),
 		// The system-user table is injected rather than looked up through a
 		// package global, so nothing can mutate a security rule at run time.
 		// It carries `root` for juniper_junos and nothing else
 		// (internal/platform). No idle TTL: accounting does not extend one
 		// (spec §5.8).
-		Acct:   acct.New(handlerStore, spool, m, time.Now, platform.SystemUsers()),
+		Acct:   acct.New(handlerStore, spool, m, time.Now, platform.SystemUsers()).WithRedactor(redactorFor(live)),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}
 
 	// A dead metrics listener is not a detail: without it nobody can see the

@@ -278,6 +278,25 @@ func TestARoutingCommunityIsKept(t *testing.T) {
 	}
 }
 
+// A record's raw pairs and its vector are two spellings of one command. A
+// pattern anchored at both ends can match one and not the other — the raw
+// pairs lose their `<cr>`, the vector may keep it — so where either form loses
+// a word and the other matched nothing, the other loses every argument: the
+// secret is never left standing in the form the pattern missed.
+func TestARecordIsRedactedInBothForms(t *testing.T) {
+	rules := []Redaction{{Match: []string{"username", "*", "secret", "*"}, After: "secret"}}
+	raw := []string{"cmd=username", "cmd-arg=bob", "cmd-arg=secret", "cmd-arg=Hunter2", "cmd-arg=<cr>"}
+	vector := []string{"username", "bob", "secret", "Hunter2", "<cr>"}
+	gotRaw, gotVector, redacted := RedactRecord(rules, raw, vector)
+	if !redacted || strings.Contains(strings.Join(gotRaw, " ")+strings.Join(gotVector, " "), "Hunter2") ||
+		gotVector[0] != "username" || len(gotVector) != len(vector) {
+		t.Fatalf("raw %q vector %q", gotRaw, gotVector)
+	}
+	if r, v, redacted := RedactRecord(rules, raw[:2], vector[:2]); redacted || len(r) != 2 || len(v) != 2 {
+		t.Fatalf("nothing matched, nothing changed: %q %q", r, v)
+	}
+}
+
 // A password in a URL's userinfo is replaced whatever the patterns say, on
 // every platform, and the scheme, user and host stay so the audit still shows
 // where a configuration went (task 10 re-review C3). No `after:` pattern can
