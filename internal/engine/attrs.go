@@ -1,0 +1,93 @@
+package engine
+
+import (
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+// MaxAttribute is the longest AV pair RFC 8907 can carry: its argument length
+// field is one byte (spec §6, "Validation without semantics").
+const MaxAttribute = 255
+
+// Placeholders is the whole substitution vocabulary of spec §6. A general
+// template language would be a footgun; this is four names and nothing more.
+var Placeholders = []string{"{username}", "{principal}", "{device}", "{privilege}"}
+
+var placeholder = regexp.MustCompile(`\{[^{}]*\}`)
+
+// AttributeName is the attribute's name: everything before its separator,
+// which is the first `=` (mandatory) or `*` (optional).
+func AttributeName(a string) string {
+	if i := strings.IndexAny(a, "=*"); i >= 0 {
+		return a[:i]
+	}
+	return a
+}
+
+// Mandatory reports whether the attribute is sent mandatory (`=`), which a
+// device that cannot parse it answers by refusing the whole session.
+func Mandatory(a string) bool {
+	i := strings.IndexAny(a, "=*")
+	return i >= 0 && a[i] == '='
+}
+
+// CheckAttribute is the structural validation spec §6 requires, since port49
+// cannot check what an attribute means: a non-empty name before the first `=`
+// or `*`, no whitespace in the name, at most MaxAttribute bytes as written,
+// and no placeholder outside the vocabulary.
+func CheckAttribute(a string) error {
+	i := strings.IndexAny(a, "=*")
+	switch {
+	case i < 0:
+		return fmt.Errorf("attribute %q has no `=` (mandatory) or `*` (optional) separator", a)
+	case i == 0:
+		return fmt.Errorf("attribute %q has an empty name", a)
+	case strings.ContainsAny(a[:i], " \t"):
+		return fmt.Errorf("attribute %q: the name contains whitespace", a)
+	case len(a) > MaxAttribute:
+		return fmt.Errorf("attribute %q is %d bytes; RFC 8907 carries at most %d", AttributeName(a), len(a), MaxAttribute)
+	}
+	for _, p := range placeholder.FindAllString(a, -1) {
+		known := false
+		for _, v := range Placeholders {
+			known = known || p == v
+		}
+		if !known {
+			return fmt.Errorf("attribute %q: %s is not a substitution; the vocabulary is %s",
+				a, p, strings.Join(Placeholders, " "))
+		}
+	}
+	return nil
+}
+
+// Values are what a session authorization fills the placeholders with, from
+// the login context and the device (spec §5.2). The blob is shared across
+// principals, so this happens in the daemon at each session authorization and
+// never at mint.
+type Values struct {
+	Username, Principal, Device string
+}
+
+// ErrAttributeTooLong is a substituted attribute longer than RFC 8907 can
+// carry. The broker checks the same values at mint and refuses there, so the
+// daemon meeting it means the context no longer holds what was minted.
+var ErrAttributeTooLong = errors.New("engine: a substituted attribute is longer than 255 bytes")
+
+// SessionAttributes renders the session reply for one login: the blob's
+// attributes with every placeholder filled, `{privilege}` from the blob's own
+// level. It returns a fresh slice.
+func (b Blob) SessionAttributes(v Values) ([]string, error) {
+	r := strings.NewReplacer("{username}", v.Username, "{principal}", v.Principal,
+		"{device}", v.Device, "{privilege}", b.Privilege)
+	out := make([]string, 0, len(b.Attributes))
+	for _, a := range b.Attributes {
+		s := r.Replace(a)
+		if len(s) > MaxAttribute {
+			return nil, fmt.Errorf("%w: %s", ErrAttributeTooLong, AttributeName(a))
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
