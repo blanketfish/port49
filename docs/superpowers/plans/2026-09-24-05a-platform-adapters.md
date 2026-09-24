@@ -61,6 +61,10 @@ clear (spec §5.8 says redaction MUST land here). The roadmap's Plan 5 section, 
    is caught by `TestEmbeddedSetsLoad` first. The citations that were comments on plan 4's Go
    literal move into the YAML beside each value. **1.0.0 is the first set and is final when this
    plan merges**; Tasks 3–5, 14, 15 and 18 still edit it, because it has not been released.
+   `TestEveryReleasedSetIsFrozen` holds each released set value for value, keyed by version so a
+   later default does not unpin 1.0.0, and `TestTheGenericAdapterIsFrozen` holds the generic
+   adapter and plan 3's ceiling table every set is laid over: a change to either is a new set
+   (pre-flight S3).
 2. **A policy that pins no set renders with 1.0.0, forever** (`platform.UnpinnedSet`). Refusing an
    unpinned policy would break every policy file in service for no security gain, and defaulting to
    the newest set is exactly the unreviewed upgrade the pin exists to stop; the first set is the
@@ -73,7 +77,10 @@ clear (spec §5.8 says redaction MUST land here). The roadmap's Plan 5 section, 
    `unreachable`, `fallback`) per entry — spec §8's "adds one class, inherits everything else" —
    and a list or value whole. `redact` appends and never removes. `replace: true` starts from the
    generic adapter, `based_on:` names a platform in the pinned set under a new name, and a name the
-   set does not ship starts from the generic adapter. A block may not claim `verified`.
+   set does not ship starts from the generic adapter. A block may not claim `verified`, may not
+   be named `all` or `default` (the names `attributes:` and the redaction table give every
+   platform), and no adapter may list inert an attribute one of its levels renders, nor
+   `priv-lvl`: what a level renders is the level (pre-flight S8, N7).
 4. **The daemon's wire facts stay where they are.** `session_services` (settable in
    `port49d.yaml`), `session_discriminator`, `exec_commands` and `system_users` are read by a
    daemon with no policy at all, so they stay built in until plan 6's bundle carries adapters to
@@ -112,15 +119,24 @@ clear (spec §5.8 says redaction MUST land here). The roadmap's Plan 5 section, 
    direction; everything else in the reply, and every reply on a platform whose adapter changed, is
    judged as before, failing closed (Task 3).
 8. **An adapter edit is gated in its own right, and privilege is read under the stricter adapter**
-   (review M8, the roadmap's plan 4 hand-off). The diff compares each inventory platform's adapter
-   key by key through `platform.SpecOf`, whether the edit is a block or a pin move. A key that
-   changes what port49 decides or what the gate reads is gated and acknowledged only in writing:
+   (review M8, the roadmap's plan 4 hand-off). The diff compares, key by key through
+   `platform.SpecOf`, the adapter of every platform either version has one for and every
+   inventory platform — a block for a platform no device has yet included, because the inventory
+   is not diffed and the day a device arrives is no review (pre-flight B2) — whether the edit is
+   a block or a pin move. A key that changes what port49 decides, what the gate reads, or what the
+   audit keeps (`redact`, pre-flight S1) is gated and acknowledged only in writing:
    `acknowledge: [{platform: arista_eos, field: entity_classes, reason: ...}]`; other keys are
    reported. `BearsPrivilege` is asked of both versions' adapters, the stricter winning, so
    listing `roles` inert cannot hide a change to `roles` in the same diff.
 9. **Redaction is built in, unpinned, and applied before anything is written.**
-   `platforms/redact.yaml` holds the built-in patterns (`{match, after}` or `{match, from}`), per
-   platform with a `default` list; a policy block adds patterns. They apply to the accounting
+   `platforms/redact.yaml` holds the built-in patterns (`{match, after}` or `{match, from}`): a
+   `default` list every platform gets, and per platform a list that adds to it and never replaces
+   it (pre-flight S2: Junos's list had dropped `key` and `password`). A policy block adds
+   patterns, and an edit to them is gated (Decided 8). A pattern whose `match` is `*` and `**`
+   alone may not use `from`: it would blank every record's arguments, the audit rather than a
+   secret (pre-flight S1). Where a pattern removes words from a record's raw pairs and not its
+   vector, or the other way round, the form it missed loses every argument (pre-flight N2). They
+   apply to the accounting
    record before the spool, which is on disk, and to the `authorize_command` record before it is
    emitted, because a typed secret reaches both (spec §5.7). The decision is made on the command as
    sent. A redacted record carries `"redacted": true`, and `policy replay` reports it
@@ -128,9 +144,11 @@ clear (spec §5.8 says redaction MUST land here). The roadmap's Plan 5 section, 
    abbreviations, removing more rather than less. Every pattern is vendor syntax, unmeasured, and
    the spec says redaction is best-effort.
 10. **N5 closes by moving `enable_username` into the adapter.** The offline tools and the broker
-    now read it from the same file; `port49d.yaml`'s `platforms.<name>.enable_username` is refused
-    by name, pointing at the policy file, whatever its value. `enab` is refused by
-    `platform.Validate` with the words config.Load used. `policy.Env.EnableUsernames` is gone.
+    now read it from the same file. `port49d.yaml`'s `platforms.<name>.enable_username: principal`,
+    the only value config.Load ever accepted, still loads, with a notice at start pointing at the
+    policy file — refusing it would make the upgrade an outage for no gain (pre-flight S4); any
+    other value is refused by name. `enab` is refused by `platform.Validate` with the words
+    config.Load used. `policy.Env.EnableUsernames` is gone.
 11. **The intersection checks report, they do not fail.** `dead_rule` and `fallback_exposure` read
     the adapter's `unreachable` and `fallback`, which list only what the ceiling notes and L16
     measured. §11's own `svc_oxidized` is now reported, exactly as spec §12's example shows.
@@ -138,16 +156,27 @@ clear (spec §5.8 says redaction MUST land here). The roadmap's Plan 5 section, 
     check-config` takes the configuration a compliance tool fetched and exits 1 on a collision
     with a username port49 serves there, or on a line the adapter's `config_checks` name. Run on
     the lab's own configs it finds the enable fallbacks L3 needed and the Junos
-    `authentication-order` L4 measured (Task 15's test).
-13. **`grants remove --pr` works in a worktree of its own.** A branch off `HEAD` carrying the edit
-    and nothing else, pushed, and `gh pr create`; the operator's checkout is never touched, and a
-    policy file with uncommitted edits is refused rather than silently left out.
+    `authentication-order` L4 measured (Task 15's test). A configuration it could not read to the
+    end — a line past the scanner's limit — is an error, never a clean pass (pre-flight S9).
+13. **`grants remove --pr` works in a worktree of its own.** A branch off `--base` as `--remote`
+    has it (fetched), carrying the edit and nothing else, pushed, and `gh pr create`; the
+    operator's checkout is never touched. A policy file with uncommitted edits, or one that
+    differs from the base's, is refused rather than silently carrying other commits or computing
+    the removal from a file the pull request does not merge into (pre-flight S5). A `--remote` or
+    `--base` starting with `-` is refused, and a credential in a URL git or gh prints is replaced
+    before the error is shown (pre-flight N9).
 14. **The lab verifies the replies, and `verified: containerlab` waits for it.** Task 17 delivers
     each adapter's exact reply through the lab authorizer, level by level, and measures what the
     device reports and which ceiling commands it sends port49; the slice runs end to end on all
-    three platforms; three candidate inert attributes are measured beside admin's reply. Task 18
-    flips `verified` only where the note agrees with the adapter, closes L22, and lists inert only
-    what the note shows inert.
+    three platforms; three candidate inert attributes are measured beside admin's reply, and one
+    counts inert only if the session opened with admin's identity and reach and still authorized
+    a `show version` (pre-flight S6: L18 saw IOS-XE open a session and refuse every command in
+    it). Then decision 25's fallback is measured, not inferred (pre-flight B1): operator's reply,
+    one interactive session, port49d stopped under it, a configuration change typed, with
+    admin's reply as the control. The notes are `tests/lab/results/L22-<platform>.md` (pre-flight
+    S7). Task 18 flips `verified` only where the note agrees with the adapter, closes L22 only
+    where the fallback was measured too, removes decision 25's provisional marker only for what
+    was measured, and lists inert only what the note shows inert.
 15. **No new reason code, no new metric, no new dependency.** One record field (`redacted`), three
     report kinds (`dead_rule`, `fallback_exposure`, `platform_override_redundant`), one acknowledge
     shape (`{platform, field, reason}`).
@@ -182,15 +211,17 @@ The owner's rule: trace a mechanism on a bad day first.
   `request.raw` and `record.raw` say `cmd-arg=«redacted»` with `"redacted": true`, and `policy
   replay` says `unverifiable: the record was redacted before it was written`. Nothing reaches the
   spool file on disk in the clear.
-- **`port49d.yaml` still carrying `platforms.<name>.enable_username`:** `port49d` does not start:
-  `config: platforms.cisco_iosxe.enable_username moved to the policy file in plan 5: write it under
-  platforms: {cisco_iosxe: {enable_username: ...}} there, …`. Delete the line; `principal` is the
-  default.
+- **`port49d.yaml` still carrying `platforms.<name>.enable_username: principal`:** `port49d`
+  starts, and says at start: `port49d: platforms.cisco_iosxe.enable_username moved to the policy
+  file in plan 5: write it under platforms: {cisco_iosxe: {enable_username: ...}} there, …;
+  principal is the default, so delete the line`. Any other value does not start, with the same
+  words.
 - **A policy pinning a set the binary does not ship:** `port49d` does not start, and a reload is
   refused and keeps the policy in force: `platform_set: 1.4.0 is not a set this binary ships; it
   ships 1.0.0. …`.
 - **Offboarding a machine subject:** `port49 grants remove --policy … --inventory … --subject
-  svc_old --pr` prints the pull request's URL; the checkout is untouched.
+  svc_old --pr` prints the pull request's URL; the checkout is untouched. Run from a checkout
+  whose policy file differs from `origin/main`'s, it refuses and says so.
 
 ## Global Constraints
 
@@ -243,18 +274,18 @@ platforms/redact.yaml                         NEW  built-in redaction patterns, 
 internal/platform/adapter.go                  NEW  Spec, ParseSpecs, Over, Validate (Task 2); SpecOf, SpecKeys (Task 9)
 internal/platform/set.go                      NEW  DefaultSet, UnpinnedSet, LoadSets, Sets, Set (Tasks 2, 6)
 internal/platform/dialect.go                  MOD  the Go literal goes; new fields per task; PrivLvl reads CeilingLevels (Task 4)
-internal/platform/redact.go                   NEW  Redaction, Redactions, Redact, RedactRaw (Task 10); Redactor (Task 11)
+internal/platform/redact.go                   NEW  Redaction, Redactions, Redact, RedactRaw (Task 10); Redactor, RedactRecord (Task 11)
 internal/platform/config.go                   NEW  ReadConfig, LocalAccount, ConfigFinding (Task 15)
 internal/platform/platform.go                 MOD  EnableUsernames and KnownEnableUsername go (Task 8)
 internal/policy/load.go                       MOD  buildPlatforms, PlatformSet (Task 6); blocks (Task 7); acknowledge shapes (Task 9); PlatformNames/Source (Task 12); Env.Sets (Task 13)
 internal/policy/file.go                       MOD  platform_set, platforms:, acknowledge platform/field
 internal/policy/resolve.go                    MOD  accepted_attributes joint check (Task 5); enable_username from the adapter (Task 8)
-internal/policy/diff.go                       MOD  a level's own rendering (Task 3); Adapters, stricter BearsPrivilege (Task 9)
+internal/policy/diff.go                       MOD  a level's own rendering (Task 3); Adapters, stricter BearsPrivilege (Task 9); redact gated (Task 10)
 internal/policy/lint.go                       MOD  platform_override_redundant (Task 7); ShadowedBuiltIns, Reach (Task 13); intersections (Task 14)
 internal/policy/intersect.go                  NEW  dead_rule, fallback_exposure (Task 14)
 internal/policy/edit.go                       MOD  SetPlatformSet (Task 13)
 internal/policy/review.go                     MOD  ServedUsernames (Task 15)
-internal/config/config.go                     MOD  enable_username refused by name (Task 8)
+internal/config/config.go                     MOD  enable_username: principal loads with a notice, others refused (Task 8)
 internal/decision/log.go                      MOD  Request.Redacted, AcctRecord.Redacted (Task 11)
 internal/daemon/author/author.go              MOD  WithRedactor; emit redacts (Task 11)
 internal/daemon/acct/acct.go                  MOD  WithRedactor; redact before the spool (Task 11)
@@ -263,12 +294,12 @@ cmd/port49d/main.go                           MOD  Env without EnableUsernames (
 cmd/port49/policy.go                          MOD  platform_set line (Task 6); offlineEnv (Task 8); ADAPTER lines (Task 9); grants remove --pr (Task 16)
 cmd/port49/platform.go                        NEW  platform list/show/export (Task 12), upgrade (Task 13)
 cmd/port49/devices.go                         NEW  devices check-config (Task 15)
-cmd/port49/pr.go                              NEW  removalPR (Task 16)
+cmd/port49/pr.go                              NEW  removalPR, withoutCredentials (Task 16)
 cmd/port49/main.go                            MOD  usage and dispatch
 tests/lab/configs/iosxe-startup.cfg           MOD  level 7's lines (Task 5)
 tests/lab/adapters_test.go                    NEW  the differential lab test (Task 17)
 tests/lab/slice_test.go, slice/policy.yaml    MOD  the slice on all three per-command platforms (Task 17)
-tests/lab/results/adapters-*.md, slice-*.md   NEW  written by the lab run (Task 17)
+tests/lab/results/L22-*.md, slice-*.md        NEW  written by the lab run (Task 17)
 docs/superpowers/plans/README.md              MOD  plan 5a as built; 5b's brief (Task 18)
 ```
 
@@ -290,7 +321,9 @@ What changes, so a reviewer can check each against a task:
 - §5.7 "Credentials never appear": a typed secret is redacted in `authorize_command` and `account`
   records; `redacted: true`; replay reports `unverifiable` (Tasks 10, 11).
 - §5.8 "Redact secrets": the pattern grammar as built (`{match, after}` / `{match, from}`),
-  `platforms/redact.yaml`, unpinned, additive (Task 10).
+  `platforms/redact.yaml`, unpinned, additive, a platform's list on top of `default`; patterns
+  lead with `**` (NX-OS's accounting `cmd`, L21); a wildcard-only `from` pattern refused; both
+  forms of a record redacted together (Tasks 10, 11).
 - §5.6: the owed configuration check is `port49 devices check-config` (Task 15).
 - §6: operator blocks live in the policy file; IOS-XE `operator` is `priv-lvl=7` with its
   reference configuration; the device role and decision 25; "Exact attribute spellings" corrected
@@ -298,19 +331,25 @@ What changes, so a reviewer can check each against a task:
   (`tests/lab/results/L16-arista_eos.md`, 2026-09-22), so the doc is fixed and the commit says so;
   `accepted_attributes` (Tasks 3–5).
 - §8: the example adapter is the shipped one; the Fields table gains every key this plan adds;
-  "User-editable, day one", "Knowing what is shipped" and the pin as built (Tasks 2, 6, 7, 12, 13).
+  "User-editable, day one", "Knowing what is shipped" and the pin as built, the generic adapter
+  frozen with the sets; a block may not list inert what a level renders, nor be named `all` or
+  `default`; `port49d.yaml`'s `enable_username: principal` loads with a notice (Tasks 2, 6, 7, 8,
+  12, 13).
 - §12: the intersection checks as built (Task 14), `devices check-config` (15), the level's own
-  rendering and the stricter adapter in the privilege gate (Tasks 3, 9), the adapter-edit gate (9),
-  `grants remove --pr` (16).
-- §13: decision 23 points at decision 25; decision 25 is new, provisional on L22.
-- §15: L22, the role ceiling per level and the adapters' replies, open (closed by Task 18).
+  rendering and the stricter adapter in the privilege gate (Tasks 3, 9), the adapter-edit gate on
+  every platform either version has an adapter for, `redact` gated (9, 10), `grants remove --pr`
+  cut from the remote's base (16).
+- §13: decision 23 points at decision 25; decision 25 is new, provisional on L22, whose question
+  includes the fallback it rests on.
+- §15: L22, the role ceiling per level, the adapters' replies, and operator's reply with port49
+  stopped under an open session, open (closed by Task 18).
 
 - [ ] **Step 1: Apply the spec edits**
 
 <!-- patch: docs/design/2026-08-23-policy-engine-spec.md -->
 ````diff
 diff --git a/docs/design/2026-08-23-policy-engine-spec.md b/docs/design/2026-08-23-policy-engine-spec.md
-index 4e70c81..82516cc 100644
+index 4e70c81..8b26a32 100644
 --- a/docs/design/2026-08-23-policy-engine-spec.md
 +++ b/docs/design/2026-08-23-policy-engine-spec.md
 @@ -1555,8 +1555,10 @@ require disjoint namespaces for break-glass and local accounts and MUST NOT put
@@ -341,7 +380,7 @@ index 4e70c81..82516cc 100644
  #### Replay
  
  `port49 policy replay <record>` re-evaluates a record against the blob it names and reports
-@@ -1907,21 +1917,36 @@ record keeps it.
+@@ -1907,21 +1917,46 @@ record keeps it.
  logs fill with plaintext passwords, and it is worse here than in a conventional deployment
  because port49's stream is designed to be shipped and retained.
  
@@ -371,6 +410,14 @@ index 4e70c81..82516cc 100644
 +`from` counts from the end). A platform that may send what was typed (`expands_abbreviations:
 +false`) has a pattern's word match its abbreviations too, which removes more rather than less.
 +Junos sends a whole command line as one `cmd`, so each element is split into words first.
++The built-in patterns lead with `**`, because a secret sits anywhere in a line and NX-OS's
++accounting `cmd` is the configuration path joined with ` ; ` and a result — `configure
++terminal ; username bob password ... (SUCCESS)` (`tests/lab/results/L21-cisco_nxos.md`) — which
++a pattern anchored at the command word never matches. A pattern whose `match` is `*` and `**`
++alone matches every command, and with `from` it would remove the arguments of every record: it
++is refused, and a secret is named by the word it follows, with `after`. Where a pattern removes
++words from a record's `raw` pairs and not its vector, or the other way round, the form it
++missed loses every argument, so a secret is never left in one of the two.
 +
  Redaction replaces argument *values* with `«redacted»` and preserves the vector's shape and
  length, so the reconciliation join still works on a redacted record. It applies to `raw` as
@@ -378,14 +425,16 @@ index 4e70c81..82516cc 100644
  
 +**The built-in patterns are not part of a pinned platform set** (§8). Redaction changes what
 +the log keeps and never what anyone may do, so a pattern a release adds applies at upgrade.
-+They live in `platforms/redact.yaml` beside the sets, per platform with a `default` list for
-+the rest; a policy file's `platforms.<name>.redact` **adds** patterns and never removes one,
-+`replace: true` included. `port49 platform show` prints both.
++They live in `platforms/redact.yaml` beside the sets: a `default` list every platform gets, and
++per platform a list that **adds** to it and never replaces it. A policy file's
++`platforms.<name>.redact` adds patterns too and never removes one, `replace: true` included;
++because a pattern changes what the audit keeps, an edit to it is gated (§12). `port49 platform
++show` prints both.
 +
  Redaction is best-effort by nature and MUST NOT be presented otherwise: a pattern that misses
  leaks. It is strictly better than emitting verbatim, and the honest mitigation is that
  port49's own credentials are never typed at a device prompt in the first place.
-@@ -2297,7 +2322,8 @@ defaults to the non-breaking choice.
+@@ -2297,7 +2332,8 @@ defaults to the non-breaking choice.
  ### Where attributes are declared
  
  **Platform file**, for anything tied to a level. Operators may extend a shipped platform or
@@ -395,7 +444,7 @@ index 4e70c81..82516cc 100644
  
  ```yaml
  platforms:
-@@ -2366,6 +2392,12 @@ port49 cannot check what an attribute means. It MUST check everything else:
+@@ -2366,6 +2402,12 @@ port49 cannot check what an attribute means. It MUST check everything else:
    the failure is never truncation on the device (L11); it is a refusal at policy load, which
    is where this MUST be caught.
  - Mandatory versus optional, with a warning on any mandatory attribute not recognized.
@@ -408,7 +457,7 @@ index 4e70c81..82516cc 100644
  
  **Unknown attributes default to optional (`*`).** A mandatory attribute a device cannot
  parse causes it to reject the entire session, breaking every login on that platform.
-@@ -2399,16 +2431,33 @@ the device configuration:
+@@ -2399,16 +2441,33 @@ the device configuration:
    `ceiling_indistinct`.
  
  IOS-XE is not in this rule: its level 7, given commands with `privilege exec level 7 ...`,
@@ -446,7 +495,7 @@ index 4e70c81..82516cc 100644
  confirmed against a real image in the containerlab matrix before that adapter is marked
  `VERIFIED` (§8). A wrong attribute name fails silently as an ignored optional attribute, or
  loudly as a rejected session if declared mandatory, and neither outcome should be discovered
-@@ -2566,13 +2615,14 @@ A platform adapter is a small declarative file. Adapters ship built in, are veri
+@@ -2566,13 +2625,14 @@ A platform adapter is a small declarative file. Adapters ship built in, are veri
  containerlab matrix where an image exists, and are both overridable and contributable.
  
  ```yaml
@@ -465,7 +514,7 @@ index 4e70c81..82516cc 100644
      entity_classes:
        management: ['^Management[0-9]+$']
        loopback:   ['^Loopback[0-9]+$']
-@@ -2617,18 +2667,26 @@ attribute is complete in four lines:
+@@ -2617,18 +2677,26 @@ attribute is complete in four lines:
  | `privilege` | level → attributes at session authorization | always |
  | `supports` | capability declaration (see §9) | always |
  | `entity_classes` | named sets of device entity names, referenced as `@class` in rules | if rules use classes |
@@ -477,7 +526,7 @@ index 4e70c81..82516cc 100644
  | `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
  | `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |
 -| `redact` | patterns whose argument values are removed before an accounting record is emitted (§5.8) | if the platform sends command accounting — session-only platforms included |
-+| `redact` | patterns whose argument values are removed before an accounting or authorization record is written (§5.7, §5.8); a block **adds** to the built-in patterns in `platforms/redact.yaml` and never removes one | if the platform sends command accounting — session-only platforms included |
++| `redact` | patterns whose argument values are removed before an accounting or authorization record is written (§5.7, §5.8); a block **adds** to the built-in patterns in `platforms/redact.yaml` and never removes one, and an edit to it is gated (§12) | if the platform sends command accounting — session-only platforms included |
  | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
  | `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
  | `exec_commands` | the `cmd` values that mark an exec record rather than a per-command one; empty means "the exec record carries no `cmd` at all" (§5.8) | defaults per platform |
@@ -494,7 +543,7 @@ index 4e70c81..82516cc 100644
  
  ### `session_services`
  
-@@ -2902,19 +2960,24 @@ Operators MUST be able to define and override platforms without an upstream chan
+@@ -2902,19 +2970,24 @@ Operators MUST be able to define and override platforms without an upstream chan
  containing Supermicro BMCs, Meinberg time servers, and HPE gear cannot wait on releases —
  that is the ticket-queue bottleneck the design exists to remove.
  
@@ -524,7 +573,7 @@ index 4e70c81..82516cc 100644
  
  ```yaml
    whitebox_nos:
-@@ -2923,8 +2986,20 @@ declares a variant, using the same vocabulary as `parent:` on privilege levels:
+@@ -2923,8 +2996,24 @@ declares a variant, using the same vocabulary as `parent:` on privilege levels:
        management: ['^ma1$']
  ```
  
@@ -534,7 +583,10 @@ index 4e70c81..82516cc 100644
 +diff` read exactly what the broker renders from, and a block goes through the same review.
 +They receive identical structural validation to shipped ones: required fields, attribute
 +syntax, the 255-byte limit, entity-class patterns compiling under RE2, a rendering the platform
-+accepts (`accepted_attributes`), and `enable_username` (§7). A block may not claim `verified`.
++accepts (`accepted_attributes`), and `enable_username` (§7). A block may not claim `verified`,
++may not list inert an attribute one of its levels renders — that attribute is the level (§6)
++— and may not be named `all` or `default`, which name every platform in `attributes:` and in
++the redaction table.
 +A class pattern a deny names may not turn case-insensitivity off (`(?-i)`), on any platform: a
 +differently-cased interface name would walk past the deny (§4).
 +
@@ -542,12 +594,13 @@ index 4e70c81..82516cc 100644
 +`session_discriminator`, `exec_commands` and `system_users` are read on the wire, including by
 +a daemon with no policy — and stay built in, `session_services` settable in `port49d.yaml` as
 +before, until plan 6's bundle carries adapters to the daemon. `enable_username` moved the other
-+way in plan 5: `port49d.yaml` refuses it by name and points at the policy file, where the
-+offline tools see it.
++way in plan 5, to the policy file, where the offline tools see it: `port49d.yaml` still loads
++`principal`, the only value it ever took, with a notice saying where the key went, and
++refuses any other value by name.
  
  ### Knowing what is shipped
  
-@@ -2936,19 +3011,29 @@ diffable across tags without running anything.
+@@ -2936,19 +3025,29 @@ diffable across tags without running anything.
  **They are introspectable**, and honest about verification:
  
  ```
@@ -566,7 +619,7 @@ index 4e70c81..82516cc 100644
 +juniper_junos      built-in     —              session
 +```
 +
-+(`containerlab` where `tests/lab/results/adapters-<platform>.md` shows the adapter's replies
++(`containerlab` where `tests/lab/results/L22-<platform>.md` shows the adapter's replies
 +applied as it says; the 2026-09 lab run is plan 5a's Task 17.)
 +
 +```
@@ -587,7 +640,7 @@ index 4e70c81..82516cc 100644
  
  **Published documentation is generated from the embedded files** at release time, so it
  cannot drift from the binary.
-@@ -2958,27 +3043,28 @@ release, upgrading the binary silently changes what every EOS admin session rece
+@@ -2958,27 +3057,30 @@ release, upgrading the binary silently changes what every EOS admin session rece
  **binary upgrade becomes an unreviewed policy change**. Policy therefore pins a version:
  
  ```yaml
@@ -597,7 +650,9 @@ index 4e70c81..82516cc 100644
  
 -Upgrading the binary changes nothing about rendering. `port49 platform upgrade` moves the pin
 -and reports exactly what changes:
-+The sets are directories, `platforms/<version>/`, and a released one is never edited. **A
++The sets are directories, `platforms/<version>/`, and a released one is never edited; nor is
++the generic adapter each set's files are laid over, which a `replace:` block and a platform no
++set ships start from — a change to either ships as a new set. **A
 +policy that pins none renders with 1.0.0, the first set, on every binary** — so a policy
 +written before pinning existed never changes on upgrade, and moves forward only by pinning a
 +newer set. A set the binary does not ship is refused at load, by name. Upgrading the binary
@@ -631,7 +686,7 @@ index 4e70c81..82516cc 100644
  
  **`port49 platform export <name>`** emits a file suitable for an upstream pull request:
  written for one fleet on day one, contributed once proven.
-@@ -3121,7 +3207,7 @@ They are therefore published as **one versioned bundle**:
+@@ -3121,7 +3223,7 @@ They are therefore published as **one versioned bundle**:
  bundle v2291
    inventory      device records, addresses, platforms, attributes
    policy         compiled roles, scopes, subjects, grants
@@ -640,7 +695,7 @@ index 4e70c81..82516cc 100644
  ```
  
  **A sync can make a valid policy invalid, and the bundle builder quarantines rather than
-@@ -3598,7 +3684,7 @@ Mitigations, designed in rather than documented afterward:
+@@ -3598,7 +3700,7 @@ Mitigations, designed in rather than documented afterward:
  ## 11. Complete policy example
  
  ```yaml
@@ -649,7 +704,7 @@ index 4e70c81..82516cc 100644
  
  privilege_levels:
    - {name: readonly}
-@@ -3772,20 +3858,38 @@ the device offers and what port49 permits (§6), CI MUST report where the two di
+@@ -3772,20 +3874,38 @@ the device offers and what port49 permits (§6), CI MUST report where the two di
  system, and both are ordinary review questions once surfaced:
  
  ```
@@ -697,7 +752,7 @@ index 4e70c81..82516cc 100644
  **`port49 devices capabilities`** reports the `supports`-versus-`observed` matrix from §9.
  
  **Shadowed-deny report.** Because a more specific permit can override a deny (§5.4), CI MUST
-@@ -3834,6 +3938,13 @@ each instant. Any of these is a raise:
+@@ -3834,6 +3954,13 @@ each instant. Any of these is a raise:
    ruling 2026-09-24, review C4). The gate cannot read the direction of such a change, so it fails
    closed.
  
@@ -711,16 +766,18 @@ index 4e70c81..82516cc 100644
  Each fails unless a passing session test in the new policy, at that instant, on a device of the
  group reported, asserts the new value of every dimension that rose: `priv_lvl:` for the device
  privilege, `max_privilege:` for the ceiling, `level:` for the level, `enable:` for the mechanism,
-@@ -3901,6 +4012,16 @@ broker refuses to mint for (`attribute_too_long`, `attribute_unsafe`) is locked
+@@ -3901,6 +4028,18 @@ broker refuses to mint for (`attribute_too_long`, `attribute_unsafe`) is locked
  device the refusal covers; a test cannot make that intended, so the change must fix the attribute
  (owner's ruling 2026-09-24, confirming plan 4's behaviour).
  
 +**An adapter edit fails the gate** (review M8, 2026-09-24). Once an operator can edit an
-+adapter (§8), the diff compares each platform's adapter key by key, for every platform the
-+inventory has, whether the change is a `platforms:` block or a moved `platform_set`. A key that
-+changes what port49 decides or what the gate itself reads — `supports`, `privilege`,
-+`ceiling_levels`, `entity_classes`, the normalization keys, `privilege_attributes`,
-+`inert_attributes`, `accepted_attributes`, `enable_username` — fails unless an `acknowledge:`
++adapter (§8), the diff compares each platform's adapter key by key, for every platform either
++version has an adapter for, whether or not the inventory has a device of it yet — the inventory
++is not diffed, so the day a device arrives is no review — and whether the change is a
++`platforms:` block or a moved `platform_set`. A key that changes what port49 decides, what the
++gate itself reads or what the audit keeps — `supports`, `privilege`, `ceiling_levels`,
++`entity_classes`, the normalization keys, `privilege_attributes`, `inert_attributes`,
++`accepted_attributes`, `enable_username`, `redact` — fails unless an `acknowledge:`
 +entry names the platform and the key with a reason, `{platform: arista_eos, field:
 +entity_classes, reason: ...}`: a diff cannot vouch for its own reading when the change is to
 +the reading. Every other key is reported.
@@ -728,17 +785,19 @@ index 4e70c81..82516cc 100644
  **`port49 platform upgrade`** reports what a platform-set bump changes, so a binary upgrade
  is never an unreviewed policy change (§8).
  
-@@ -3922,7 +4043,8 @@ since a group key is shared across the devices in its group.
+@@ -3922,7 +4061,10 @@ since a group key is shared across the devices in its group.
  **Access review** is a rendering of the flat grant table, not an investigation:
  `port49 access review --subject <name>` lists every grant row the subject appears in, with
  scope size and expiry, and `port49 grants remove --subject <name>` produces the pull request
 -that deletes them all — and, when no grant on the subject remains, the subject block itself,
-+that deletes them all (`--pr` opens it: a branch carrying the edit and nothing else, pushed,
-+and the review opened with `gh`, leaving the operator's checkout untouched) — and, when no grant on the subject remains, the subject block itself,
++that deletes them all (`--pr` opens it: a branch off the base as the remote has it, carrying the
++edit and nothing else, pushed, and the review opened with `gh`, leaving the operator's checkout
++untouched; a policy file that differs from the base's is refused, since the removal would be
++computed from a file the pull request does not merge into) — and, when no grant on the subject remains, the subject block itself,
  so nothing is left behind to match. Directory-driven humans are offboarded by group removal;
  these two commands are the offboarding path for machine subjects and literal identities,
  which is the cost decision 2 accepted. A subject block with no grants is reported by CI.
-@@ -4282,7 +4404,8 @@ pointed at port49, no role or level between readonly and admin narrows what port
+@@ -4282,7 +4424,8 @@ pointed at port49, no role or level between readonly and admin narrows what port
  lower would only make it readonly on EOS, and refusing it quarantined every EOS device a
  policy landed there. `operator` gets level 15 on both, port49's per-command rules are the
  fence, and the device's method list must not fall back to `none` or `if-authenticated`.
@@ -748,7 +807,7 @@ index 4e70c81..82516cc 100644
  
  **24. A policy edit reaches live sessions without a logout.** A restart ends every live
  context and every unspent token, so without a live reload the only way to narrow an operator's
-@@ -4293,6 +4416,21 @@ applies from the next command, and a principal with no grant left on a device ha
+@@ -4293,6 +4436,23 @@ applies from the next command, and a principal with no grant left on a device ha
  revoked. Unspent tokens whose answer changed are deleted, because a redemption would otherwise
  write the superseded answer into a fresh context. (§5.1.3)
  
@@ -764,17 +823,19 @@ index 4e70c81..82516cc 100644
 +configuration. On IOS-XE, whose level 7 is the operator rung once the device is told what 7
 +runs, `operator` is `priv-lvl=7`, the adapter carries the reference configuration it depends
 +on, and the device takes `priv-lvl` and nothing else, so any other attribute quarantines it
-+(`L18-cisco_iosxe.md`). *Provisional on L22* until the adapters' own replies are measured.
++(`L18-cisco_iosxe.md`). *Provisional on L22* until the adapters' own replies are measured,
++and operator's reply is measured with port49 stopped under an open session: L16 measured the
++role binding with the method list pointed at `local` alone, not a list falling back to it.
 +(§6, §8)
 +
  ### Deferred, with reasons
  
  Neither of these is an open question about the design. Both are closed for v1 on the
-@@ -4755,6 +4893,7 @@ implemented against a guess. This section is the one place the distinction is ke
+@@ -4755,6 +4915,7 @@ implemented against a guess. This section is the one place the distinction is ke
  | **L18** | How each platform treats a reply attribute it did not ask for: applied, ignored, or the session killed. Another vendor's attribute, an invented one, and a known attribute carrying a value the device cannot use, each in the OPTIONAL and the MANDATORY spelling. Per variant: whether the session opens and, when it does not, what the device says verbatim; what role or privilege the session ends up with; and whether the device still sends per-command authorization. | Whether an adapter may send one attribute list to a mixed fleet at all (§8). RFC 8907 §8.2 says an OPTIONAL argument a device does not understand SHOULD be ignored and a MANDATORY one MUST fail the authorization; `lab.session_attributes` in `tests/lab/port49d-lab.yaml` rested on the first half until IOS-XE disproved it (L10), and what an operator's typo costs (§6) rests on the same answer. Also decision 22's two Junos attributes (§13, gated on L12). | EOS, NX-OS, IOS-XE, Junos | open — added and measured 2026-09-22 on all five images, `tests/lab/l18_test.go`. **Three vendors answer three different ways, so §8 cannot have one rule.** vEOS follows §8.2 in both directions. The N9Kv and both Junos images honour neither half and ignore everything, mandatory included. IOS-XE refuses the session for anything it does not recognise under either flag — and a run of those refusals stops it answering SSH at all for about a minute, without sending port49 a packet. On Junos `local-user-name` is applied under either flag and **`user-permissions` does nothing**, which is decision 22's second attribute measured for the first time. **The per-command reply is measured too, 2026-09-22, and it does not follow the session reply:** the C8000V refuses EVERY command in the session — `Command authorization failed.` — for any of the three attributes under either flag, on authorizations port49 answered `permit`; vEOS ignores an optional unknown there and refuses every command on a MANDATORY one; the N9Kv ignores all of them. Junos has no per-command reply to ask it of (L10, L14; decision 21). Open: every non-SSH transport, and whether IOS-XE's SSH condition is the vty pool; see below |
  | **L19** | The maximum password length each platform accepts via PAP, on every login path where the device uses PAP. | The 30-character handle (design document §8): an authentication START carries a PAP password in `data`, whose length field is one byte, so PAP can bound the handle where the ASCII prompt does not — and NX-OS uses PAP for every SSH login by default | all | open — added 2026-09-23, split from L8. On the N9Kv an SSH login is carried as PAP and 127 characters arrive (`tests/lab/results/L8-cisco_nxos.md`); PAP on any other path, and on EOS, Junos and IOS-XE, which this lab does not configure for it, is unmeasured; see below |
  | **L20** | Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a **wrong password** for the same user inside that window is also accepted; and whether a credential port49 would now refuse is re-checked inside it. | Whether a revocation in port49 reaches an API client at all (§5.1.4), and decision 15's bound on how long a spent token works — the receipt's `receipt_idle_ttl` and `receipt_max_age` act only on exchanges the device sends | IOS-XE; then every HTTP API transport | open — added 2026-09-23. IOS-XE RESTCONF answered a repeat of an already-spent token, 3s later, with `200 OK` and **zero** TACACS+ traffic (`tests/lab/results/L1-restconf-cisco_iosxe.md`), so a revocation in port49 cannot reach that repeat. **Measured 2026-09-24 on IOS-XE** (`tests/lab/results/L20-cisco_iosxe.md`): the cache is per credential (username and password), not per username or client address; a wrong password inside it goes to port49 and is refused; it lasts about 10s fixed from the authentication that filled it; and a cached credential is not re-checked, even with port49 answering every authentication ERROR. Open: every other HTTP API transport, so the row stays open; see below |
-+| **L22** | What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of `clear counters`, `clear ip bgp *` and `configure terminal` it runs, refuses in its own parser, or sends port49 — and which level or role it reports, for the exact reply each built-in adapter sends. | Decision 25; the adapters' `privilege`, `unreachable` and `fallback` (§8); the dead-rule and fallback-exposure reports (§12) | EOS, NX-OS, IOS-XE | open — added by plan 5. Measured by hand 2026-09-24 with single attributes (`tests/lab/results/ceiling-arista_eos.md`, `ceiling-cisco_nxos.md`, `ceiling-cisco_iosxe.md`): level 1 refuses all three in the parser on vEOS and IOS-XE; IOS-XE level 7 with `privilege exec level 7 clear counters` runs `clear counters` alone; at 15 on vEOS and under every N9Kv role, all three reach port49. The adapters' exact replies are plan 5a's Task 17 (`tests/lab/results/adapters-*.md`) |
++| **L22** | What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of `clear counters`, `clear ip bgp *` and `configure terminal` it runs, refuses in its own parser, or sends port49 — and which level or role it reports, for the exact reply each built-in adapter sends; and, with port49 stopped under an open session on a command method list ending in `local`, whether operator's reply can change the configuration where admin's can. | Decision 25; the adapters' `privilege`, `unreachable` and `fallback` (§8); the dead-rule and fallback-exposure reports (§12) | EOS, NX-OS, IOS-XE | open — added by plan 5. Measured by hand 2026-09-24 with single attributes (`tests/lab/results/ceiling-arista_eos.md`, `ceiling-cisco_nxos.md`, `ceiling-cisco_iosxe.md`): level 1 refuses all three in the parser on vEOS and IOS-XE; IOS-XE level 7 with `privilege exec level 7 clear counters` runs `clear counters` alone; at 15 on vEOS and under every N9Kv role, all three reach port49. The adapters' exact replies and the fallback are plan 5a's Task 17 (`tests/lab/results/L22-*.md`) |
  | **L21** | Whether each platform sends the command words the operator typed (`sh run`) or the resolved ones (`show running-config`) on a per-command authorization request, and on the accounting record for it. | `expands_abbreviations` per platform (§3 rule 4, §8): where it is `false` a deny's word matches its own abbreviations, which over-denies, and where it is wrongly `true` an abbreviation slips past a deny | EOS, NX-OS, IOS-XE | closed — measured 2026-09-24; `tests/lab/results/L21-arista_eos.md`, `L21-cisco_nxos.md`, `L21-cisco_iosxe.md`. All three images send the **resolved** words, on the request and on the accounting record, over interactive SSH: `sh ver` arrives as `cmd=show cmd-arg=version`, and `sh clock` was denied by a `show clock` deny on all three. Interface names differ: IOS-XE splits `Gi1` into `GigabitEthernet`, `1`; vEOS and the N9Kv join it (`Ethernet1`, `Ethernet1/1`). Other transports and releases are outside what was measured; see below |
  
  **What has been measured so far, per row.** The measurements exist and the notes are in the
@@ -783,7 +844,7 @@ index 4e70c81..82516cc 100644
 - [ ] **Step 2: Check it landed**
 
 Run: `grep -c 'L22' docs/design/2026-08-23-policy-engine-spec.md && grep -n '^\*\*25\.' docs/design/2026-08-23-policy-engine-spec.md`
-Expected: `2` (the new row, and decision 25's "provisional on L22"), then one line,
+Expected: `3` (the new row, decision 25's "provisional on L22", and §8's `L22-<platform>.md`), then one line,
 `**25. A level renders as a device level and a device role, …`.
 
 - [ ] **Step 3: Commit**
@@ -819,15 +880,20 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `type Spec struct` — one pointer field per adapter key, yaml snake_case; nil is "not set".
   - `func ParseSpecs(raw []byte) (map[string]Spec, error)` — strict, one document, a `platforms:` key.
   - `func (s Spec) Over(base Dialect) Dialect` — every set field replaces base's; shares nothing.
-  - `func Validate(name string, d Dialect) error` — errors name `platforms.<name>.<key>`.
+  - `func Validate(name string, d Dialect) error` — errors name `platforms.<name>.<key>`; it
+    refuses listing inert `priv-lvl` or an attribute one of the adapter's levels renders.
   - `const DefaultSet = "1.0.0"`; `func LoadSets(fsys fs.FS) (map[string]map[string]Dialect, error)`;
     `func Sets() []string`; `func Set(version string) (map[string]Dialect, bool)` (a copy).
   - Unchanged signatures: `DialectFor`, `Dialects`, `PrivilegeAttributeNames`, and every `Dialect`
     method.
 
 Behaviour-preserving: the four files say exactly what plan 4's literal said, and
-`TestTheDefaultSetValueForValue` pins it value for value. Each file is laid over the generic
-adapter, so a minimal adapter — spec §8's four-line time server — loads.
+`TestTheDefaultSetIsTheTablePlan4Shipped` (renamed `TestTheDefaultSetValueForValue` in Task 3)
+pins it value for value. Each file is laid over the generic adapter, so a minimal adapter — spec
+§8's four-line time server — loads. `TestEveryReleasedSetIsFrozen` holds every released set
+against its own table, keyed by version, so the day a later set becomes the default 1.0.0 is
+still held; `TestTheGenericAdapterIsFrozen` holds the generic adapter and plan 3's ceiling table
+under it (pre-flight S3). Task 8 adds `EnableUsername` to both.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -835,10 +901,10 @@ adapter, so a minimal adapter — spec §8's four-line time server — loads.
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
 new file mode 100644
-index 0000000..d8166a9
+index 0000000..d8f7851
 --- /dev/null
 +++ b/internal/platform/adapter_test.go
-@@ -0,0 +1,179 @@
+@@ -0,0 +1,220 @@
 +package platform
 +
 +import (
@@ -899,6 +965,43 @@ index 0000000..d8166a9
 +		if !reflect.DeepEqual(got[name], want) {
 +			t.Errorf("%s:\n got %+v\nwant %+v", name, got[name], want)
 +		}
++	}
++}
++
++// released is every released platform set, value for value. A released set is
++// never edited (spec §8, "the platform set is pinned"): when a later set
++// becomes the default, 1.0.0's entry stays here as it is and the new set is
++// added beside it, so a binary upgrade cannot change what a pinned policy
++// renders without this test failing.
++var released = map[string]map[string]Dialect{"1.0.0": shipped}
++
++func TestEveryReleasedSetIsFrozen(t *testing.T) {
++	for version, want := range released {
++		got, ok := Set(version)
++		if !ok || len(got) != len(want) {
++			t.Fatalf("set %s: %d platforms, want %d", version, len(got), len(want))
++		}
++		for name := range want {
++			if !reflect.DeepEqual(got[name], want[name]) {
++				t.Errorf("set %s, %s:\n got %+v\nwant %+v", version, name, got[name], want[name])
++			}
++		}
++	}
++}
++
++// The generic adapter is under every released set: each file is laid over it,
++// and a `replace:` block or a platform no set ships starts from it. So is
++// plan 3's ceiling table, for a platform that renders nothing. A change to
++// either would change a pinned policy's rendering; a change ships as a new
++// set instead (spec §8).
++func TestTheGenericAdapterIsFrozen(t *testing.T) {
++	want := Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session"},
++		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"}}
++	if !reflect.DeepEqual(generic, want) {
++		t.Errorf("generic:\n got %+v\nwant %+v", generic, want)
++	}
++	if !reflect.DeepEqual(ceilingLevels, map[string]uint8{"readonly": 1, "admin": 15}) {
++		t.Errorf("ceilingLevels: %v", ceilingLevels)
 +	}
 +}
 +
@@ -1002,6 +1105,10 @@ index 0000000..d8166a9
 +		"pipe_token":                with(ok, func(d *Dialect) { d.PipeToken = "" }),
 +		"not an attribute name":     with(ok, func(d *Dialect) { d.InertAttributes = []string{"a=b"} }),
 +		"also in privilege_attribu": with(ok, func(d *Dialect) { d.PrivilegeAttributes, d.InertAttributes = []string{"a"}, []string{"a"} }),
++		"a level renders it": with(ok, func(d *Dialect) {
++			d.Levels, d.InertAttributes = map[string][]string{"admin": {"roles=x"}}, []string{"roles"}
++		}),
++		"inert_attributes: priv-lvl": with(ok, func(d *Dialect) { d.InertAttributes = []string{"priv-lvl"} }),
 +	} {
 +		err := Validate("x", d)
 +		if err == nil || !strings.Contains(err.Error(), field) || !strings.Contains(err.Error(), "platforms.x.") {
@@ -1032,10 +1139,10 @@ and `LoadSets`, `ParseSpecs`, `Validate` are undefined.
 ````diff
 diff --git a/internal/platform/adapter.go b/internal/platform/adapter.go
 new file mode 100644
-index 0000000..58790fa
+index 0000000..8767b09
 --- /dev/null
 +++ b/internal/platform/adapter.go
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,208 @@
 +package platform
 +
 +import (
@@ -1229,6 +1336,17 @@ index 0000000..58790fa
 +		if slices.Contains(d.PrivilegeAttributes, n) {
 +			return fmt.Errorf("%s: %s is also in privilege_attributes; an attribute carries privilege or it does not",
 +				field("inert_attributes"), n)
++		}
++		// What a level renders is the level (spec §6): listed inert, every
++		// later change to it would pass the diff ungated.
++		rendered := n == "priv-lvl"
++		for _, level := range sortedKeys(d.Levels) {
++			rendered = rendered || slices.ContainsFunc(d.Levels[level], func(a string) bool {
++				return engine.AttributeName(a) == n
++			})
++		}
++		if rendered {
++			return fmt.Errorf("%s: %s: a level renders it, so it carries privilege", field("inert_attributes"), n)
 +		}
 +	}
 +	return nil
@@ -1880,7 +1998,7 @@ index 88cbe65..4f24a09 100644
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index d8166a9..08ffe74 100644
+index d8f7851..18e9d43 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -9,8 +9,8 @@ import (
@@ -2050,7 +2168,8 @@ index 20f44ad..33e368c 100644
 Run: `go test ./internal/platform/ ./internal/policy/ ./cmd/... ./internal/broker/`
 Expected: FAIL — `TestEOSSendsTheLevelAndTheRole`, `TestPolicyDiffGatesALevelRaise`,
 `TestPolicyDiffGatesAPrivilegeAttributeInTheReply`, `TestRunServesAPolicyEditToALiveSessionWithNoLogout`,
-`TestTheBlobIsWrittenAndEmittedOncePerHash` and the policy tests asserting the reply.
+`TestTheBlobIsWrittenAndEmittedOncePerHash`, `TestEveryReleasedSetIsFrozen` (the frozen table
+moved ahead of the file) and the policy tests asserting the reply.
 
 - [ ] **Step 3: Render the role, and judge a level's rendering by the level**
 
@@ -2239,7 +2358,7 @@ index 336cc1c..bd1b572 100644
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index 08ffe74..18120cc 100644
+index 18e9d43..4514c51 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -28,15 +28,20 @@ var shipped = map[string]Dialect{
@@ -2558,8 +2677,8 @@ index 33e368c..e38e32b 100644
 Run: `go test ./internal/platform/ ./internal/policy/ ./internal/broker/`
 Expected: FAIL — `TestNXOSSendsTheRoleAndIOSXETheLevel`, `TestTheDefaultSetValueForValue`,
 `TestLevelsRenderAndHaveANumber`, `TestOperatorIsAdminsLevelWhereTheDeviceCannotFenceIt`,
-`TestTheDiffReportsWhatItCannotEnumerate`, `TestTheGateSeesAReleaseAndANewCause` and the other
-moved tests.
+`TestTheDiffReportsWhatItCannotEnumerate`, `TestTheGateSeesAReleaseAndANewCause`,
+`TestEveryReleasedSetIsFrozen` and the other moved tests.
 
 - [ ] **Step 3: Render them**
 
@@ -2739,7 +2858,7 @@ The diff test's `all: [idletime*30]` row moves from `xe-01`, now quarantined for
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index 18120cc..f2f06ca 100644
+index 4514c51..c4dce17 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -25,6 +25,7 @@ var shipped = map[string]Dialect{
@@ -2771,10 +2890,10 @@ index 18120cc..f2f06ca 100644
  	},
  	"juniper_junos": {
  		PipeToken: "|", StripCR: true,
-@@ -168,6 +176,10 @@ func TestValidateNamesTheField(t *testing.T) {
- 		"pipe_token":                with(ok, func(d *Dialect) { d.PipeToken = "" }),
- 		"not an attribute name":     with(ok, func(d *Dialect) { d.InertAttributes = []string{"a=b"} }),
- 		"also in privilege_attribu": with(ok, func(d *Dialect) { d.PrivilegeAttributes, d.InertAttributes = []string{"a"}, []string{"a"} }),
+@@ -209,6 +217,10 @@ func TestValidateNamesTheField(t *testing.T) {
+ 			d.Levels, d.InertAttributes = map[string][]string{"admin": {"roles=x"}}, []string{"roles"}
+ 		}),
+ 		"inert_attributes: priv-lvl": with(ok, func(d *Dialect) { d.InertAttributes = []string{"priv-lvl"} }),
 +		"not in accepted_attributes": with(ok, func(d *Dialect) {
 +			d.Levels, d.AcceptedAttributes = map[string][]string{"admin": {"roles=x"}}, []string{"priv-lvl"}
 +		}),
@@ -2853,7 +2972,7 @@ Expected: FAIL — `d.AcceptedAttributes undefined`, `d.DeviceConfig undefined` 
 <!-- patch: internal/platform/adapter.go -->
 ````diff
 diff --git a/internal/platform/adapter.go b/internal/platform/adapter.go
-index 58790fa..5c4375b 100644
+index 8767b09..39671fd 100644
 --- a/internal/platform/adapter.go
 +++ b/internal/platform/adapter.go
 @@ -31,6 +31,8 @@ type Spec struct {
@@ -2888,8 +3007,8 @@ index 58790fa..5c4375b 100644
  		for _, n := range list.names {
  			if n == "" || strings.ContainsAny(n, "=* \t") {
  				return fmt.Errorf("%s: %q is not an attribute name", field(list.name), n)
-@@ -193,5 +202,22 @@ func Validate(name string, d Dialect) error {
- 				field("inert_attributes"), n)
+@@ -204,5 +213,22 @@ func Validate(name string, d Dialect) error {
+ 			return fmt.Errorf("%s: %s: a level renders it, so it carries privilege", field("inert_attributes"), n)
  		}
  	}
 +	if d.AcceptedAttributes != nil {
@@ -3435,17 +3554,19 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `privilege`, `ceiling_levels` and `entity_classes` per entry. A block's `replace: true` starts
   from the generic adapter; `based_on: <name>` from a platform the pinned set ships, under a new
   name only. A deny naming a class whose pattern on any platform turns case-insensitivity off is
-  refused at load (the roadmap's `(?-i)` hand-off).
+  refused at load (the roadmap's `(?-i)` hand-off). A block named `all` or `default` is refused:
+  `attributes.all` and the redaction table's `default` already name every platform (pre-flight
+  N7).
 
 - [ ] **Step 1: Write the failing tests**
 
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index f2f06ca..5f473f8 100644
+index c4dce17..f7f87b7 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
-@@ -139,16 +139,21 @@ func TestParseSpecsIsStrict(t *testing.T) {
+@@ -176,16 +176,21 @@ func TestParseSpecsIsStrict(t *testing.T) {
  	}
  }
  
@@ -3494,10 +3615,10 @@ index c27fad5..0da7ceb 100644
 ````diff
 diff --git a/internal/policy/platforms_test.go b/internal/policy/platforms_test.go
 new file mode 100644
-index 0000000..4765614
+index 0000000..ec8096a
 --- /dev/null
 +++ b/internal/policy/platforms_test.go
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,168 @@
 +package policy
 +
 +import (
@@ -3610,6 +3731,8 @@ index 0000000..4765614
 +		{"based_on nothing shipped", "  x: {based_on: arista}\n", `platforms.x: based_on "arista" is not a platform in set 1.0.0`},
 +		{"an invalid adapter", "  x: {entity_classes: {mgmt: ['(']}}\n", "platforms.x.entity_classes.mgmt"},
 +		{"an unknown key", "  arista_eos: {entity_class: {}}\n", "field entity_class not found"},
++		{"the attributes key", "  all: {supports: [session]}\n", "platforms.all: all is reserved"},
++		{"the redaction default", "  default: {supports: [session]}\n", "platforms.default: default is reserved"},
 +		{"a rendering the device refuses", "  cisco_iosxe: {privilege: {admin: [\"roles=x\"]}}\n",
 +			"platforms.cisco_iosxe.privilege.admin: roles is not in accepted_attributes"},
 +	} {
@@ -3676,7 +3799,7 @@ Expected: FAIL — `undefined: FindingPlatformOverride` (build failed) and `Test
 <!-- patch: internal/platform/adapter.go -->
 ````diff
 diff --git a/internal/platform/adapter.go b/internal/platform/adapter.go
-index 5c4375b..be5f4a3 100644
+index 39671fd..1191720 100644
 --- a/internal/platform/adapter.go
 +++ b/internal/platform/adapter.go
 @@ -57,24 +57,30 @@ func ParseSpecs(raw []byte) (map[string]Spec, error) {
@@ -3867,7 +3990,7 @@ index 5e9a33b..5fabadf 100644
 <!-- patch: internal/policy/load.go -->
 ````diff
 diff --git a/internal/policy/load.go b/internal/policy/load.go
-index deb3926..523f86f 100644
+index deb3926..cd9ea38 100644
 --- a/internal/policy/load.go
 +++ b/internal/policy/load.go
 @@ -55,9 +55,12 @@ type Policy struct {
@@ -3915,7 +4038,7 @@ index deb3926..523f86f 100644
  func (p *Policy) buildPlatforms(f file) error {
  	p.set = f.PlatformSet
  	if p.set == "" {
-@@ -261,6 +264,43 @@ func (p *Policy) buildPlatforms(f file) error {
+@@ -261,6 +264,49 @@ func (p *Policy) buildPlatforms(f file) error {
  		return fmt.Errorf("platform_set: %s is not a set this binary ships; it ships %s. Pin one of those, or run "+
  			"a binary that ships %s (spec §8)", p.set, strings.Join(platform.Sets(), ", "), p.set)
  	}
@@ -3931,6 +4054,12 @@ index deb3926..523f86f 100644
 +		case !platformNameShape.MatchString(name):
 +			return fmt.Errorf("%s: a platform name is lower case, digits and _, starting with a letter, as an "+
 +				"inventory's platform: field writes it", at)
++		case name == "all" || name == "default":
++			// `all` keys an attribute to every platform (§6) and `default` is
++			// the redaction list of every platform with none (§5.8): a platform
++			// of either name would be read as the other.
++			return fmt.Errorf("%s: %s is reserved: attributes.all names every platform and the built-in redaction "+
++				"table's default list every unlisted one; name the platform as the inventory does", at, name)
 +		case b.Replace && b.BasedOn != "":
 +			return fmt.Errorf("%s: replace starts from nothing and based_on from another platform; use one", at)
 +		case b.BasedOn != "" && shipped:
@@ -3959,7 +4088,7 @@ index deb3926..523f86f 100644
  	for name, d := range p.env.Dialects {
  		set[name] = d
  	}
-@@ -268,6 +308,9 @@ func (p *Policy) buildPlatforms(f file) error {
+@@ -268,6 +314,9 @@ func (p *Policy) buildPlatforms(f file) error {
  	return nil
  }
  
@@ -3969,7 +4098,7 @@ index deb3926..523f86f 100644
  // PlatformSet is the platform set the policy renders with.
  func (p *Policy) PlatformSet() string { return p.set }
  
-@@ -365,6 +408,11 @@ func (p *Policy) buildRoles(f file) error {
+@@ -365,6 +414,11 @@ func (p *Policy) buildRoles(f file) error {
  				if err := p.checkClasses(rule); err != nil {
  					return fmt.Errorf("role %q: %w", r.Name, err)
  				}
@@ -3981,7 +4110,7 @@ index deb3926..523f86f 100644
  				*list.out = append(*list.out, engine.CanonicalRule(rule))
  			}
  		}
-@@ -420,7 +468,7 @@ func checkRule(rule string, deny bool) error {
+@@ -420,7 +474,7 @@ func checkRule(rule string, deny bool) error {
  // valid (engine.CheckAttribute).
  func (p *Policy) checkAttributes(attrs map[string][]string) error {
  	for key, list := range attrs {
@@ -3990,7 +4119,7 @@ index deb3926..523f86f 100644
  			return fmt.Errorf("attributes: %q is neither `all` nor a platform port49 ships or the inventory names", key)
  		}
  		for _, a := range list {
-@@ -445,7 +493,8 @@ func (p *Policy) checkPlaceholder(key, a string) error {
+@@ -445,7 +499,8 @@ func (p *Policy) checkPlaceholder(key, a string) error {
  		return nil
  	}
  	name := a[:strings.IndexAny(a, "=*")]
@@ -4000,7 +4129,7 @@ index deb3926..523f86f 100644
  		return fmt.Errorf("attributes.%s: %s: %s carries privilege and takes no placeholder: the device would get "+
  			"whatever the mint fills in, which no review tool can see (spec §6)", key, a, name)
  	}
-@@ -912,6 +961,36 @@ func (p *Policy) checkClasses(rule string) error {
+@@ -912,6 +967,36 @@ func (p *Policy) checkClasses(rule string) error {
  	return nil
  }
  
@@ -4063,7 +4192,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   refused by `Validate`), `internal/platform/platform.go` (`EnableUsernames`,
   `KnownEnableUsername` go)
 - Modify: `internal/policy/load.go` (`Env.EnableUsernames` goes), `internal/policy/resolve.go`
-- Modify: `internal/config/config.go` (`refuseEnableUsernames`; `Config.EnableUsernames` goes)
+- Modify: `internal/config/config.go` (`moveEnableUsernames`, `Config.Notices`;
+  `Config.EnableUsernames` goes)
 - Modify: `cmd/port49/policy.go` (`offlineEnv`), `cmd/port49d/main.go`,
   `internal/daemon/authen/authen.go` (comment)
 - Test: `internal/platform/{adapter,platform}_test.go`, `internal/policy/resolve_test.go`,
@@ -4073,7 +4203,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Produces: `Dialect.EnableUsername string`, key `enable_username`, `principal` on every built-in
   adapter and the generic one. Removed: `policy.Env.EnableUsernames`, `config.Config.EnableUsernames`,
   `platform.EnableUsernames`, `platform.KnownEnableUsername`. `platform.EnablePrincipal` and
-  `EnableEnab` stay.
+  `EnableEnab` stay. `config.Config.Notices []string`: lines port49d prints at start about the
+  file itself; `enable_username: principal` in `port49d.yaml` loads and adds one, and any other
+  value is refused (pre-flight S4).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4130,7 +4262,7 @@ index 4ac442f..90485e7 100644
 <!-- patch: internal/config/config_test.go -->
 ````diff
 diff --git a/internal/config/config_test.go b/internal/config/config_test.go
-index 4614bd4..60b78df 100644
+index 4614bd4..86f875a 100644
 --- a/internal/config/config_test.go
 +++ b/internal/config/config_test.go
 @@ -8,8 +8,6 @@ import (
@@ -4142,7 +4274,7 @@ index 4614bd4..60b78df 100644
  )
  
  // The sample config is assembled from three pieces rather than written twice,
-@@ -448,28 +446,19 @@ platforms:
+@@ -448,28 +446,27 @@ platforms:
  	}
  }
  
@@ -4155,8 +4287,10 @@ index 4614bd4..60b78df 100644
 -func TestEnableUsernameEnabIsRefusedUntilTheLabShowsIt(t *testing.T) {
 +// TestEnableUsernameMovedToThePolicyFile: the enable username is an adapter
 +// fact, and adapters live in the policy file since plan 5, where the offline
-+// tools read it as port49d does (plan 4 pre-flight N5). Any value here, the
-+// default included, is refused and told where it went.
++// tools read it as port49d does (plan 4 pre-flight N5). `principal`, the only
++// value config.Load ever accepted, still starts, with a notice saying where
++// the key went: refusing it would turn the upgrade into an outage for no
++// gain. Any other value is refused and told the same.
 +func TestEnableUsernameMovedToThePolicyFile(t *testing.T) {
  	setKeyEnv(t)
  	invPath := write(t, "inventory.yaml", inv)
@@ -4173,7 +4307,13 @@ index 4614bd4..60b78df 100644
 -	body = fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: princpal}}\n"
 -	if _, err := Load(write(t, "e.yaml", body)); err == nil {
 -		t.Fatal("a mistyped enable_username must be a load error")
-+	for i, v := range []string{"enab", "principal"} {
++	body := fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: principal}}\n"
++	c, err := Load(write(t, "c.yaml", body))
++	if err != nil || len(c.Notices) != 1 ||
++		!strings.Contains(c.Notices[0], "platforms.cisco_iosxe.enable_username moved to the policy file") {
++		t.Fatalf("principal: %q %v", c.Notices, err)
++	}
++	for i, v := range []string{"enab", "princpal"} {
 +		body := fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: " + v + "}}\n"
 +		_, err := Load(write(t, fmt.Sprintf("c%d.yaml", i), body))
 +		if err == nil || !strings.Contains(err.Error(), "platforms.cisco_iosxe.enable_username moved to the policy file") {
@@ -4187,7 +4327,7 @@ index 4614bd4..60b78df 100644
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index 5f473f8..d2f3478 100644
+index f7f87b7..aa3ea15 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -25,6 +25,7 @@ var shipped = map[string]Dialect{
@@ -4222,7 +4362,17 @@ index 5f473f8..d2f3478 100644
  	},
  }
  
-@@ -166,7 +170,7 @@ func TestOverMergesPerTopLevelKey(t *testing.T) {
+@@ -104,7 +108,8 @@ func TestEveryReleasedSetIsFrozen(t *testing.T) {
+ // set instead (spec §8).
+ func TestTheGenericAdapterIsFrozen(t *testing.T) {
+ 	want := Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session"},
+-		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"}}
++		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
++		EnableUsername: EnablePrincipal}
+ 	if !reflect.DeepEqual(generic, want) {
+ 		t.Errorf("generic:\n got %+v\nwant %+v", generic, want)
+ 	}
+@@ -203,7 +208,7 @@ func TestOverMergesPerTopLevelKey(t *testing.T) {
  
  // Validate refuses what a device would get wrong silently or loudly.
  func TestValidateNamesTheField(t *testing.T) {
@@ -4311,7 +4461,7 @@ index 39b8d0e..c08d427 100644
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `go test ./internal/platform/ ./internal/policy/ ./internal/config/ ./cmd/port49/`
-Expected: FAIL — `d.EnableUsername undefined` (build failed), and
+Expected: FAIL — `d.EnableUsername undefined`, `c.Notices undefined` (build failed), and
 `TestOfflineToolsReadTheAdaptersFromThePolicyFile` (`field enable_username not found`).
 
 - [ ] **Step 3: Move it**
@@ -4352,7 +4502,7 @@ index 6a2d61d..0da947f 100644
 <!-- patch: cmd/port49d/main.go -->
 ````diff
 diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
-index e92e6ea..f37c9b7 100644
+index e92e6ea..bbbba2e 100644
 --- a/cmd/port49d/main.go
 +++ b/cmd/port49d/main.go
 @@ -258,7 +258,7 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
@@ -4364,12 +4514,22 @@ index e92e6ea..f37c9b7 100644
  	if err != nil {
  		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, quotesCut{err})
  	}
+@@ -376,6 +376,9 @@ func run(parent context.Context, cfgPath string) error {
+ 	// starts: an edit in between would otherwise never be said (checkInventory).
+ 	_, inventoryAtStart, _ := fileVersion(cfg.InventoryFile)
+ 	fmt.Fprint(stderr, labWarning(cfg.Lab))
++	for _, n := range cfg.Notices {
++		fmt.Fprintln(stderr, "port49d:", n)
++	}
+ 
+ 	ctx, cancel := context.WithCancel(parent)
+ 	defer cancel()
 ````
 
 <!-- patch: internal/config/config.go -->
 ````diff
 diff --git a/internal/config/config.go b/internal/config/config.go
-index 9b94187..6934dc5 100644
+index 9b94187..1d8bb55 100644
 --- a/internal/config/config.go
 +++ b/internal/config/config.go
 @@ -196,9 +196,9 @@ type PlatformConfig struct {
@@ -4385,7 +4545,7 @@ index 9b94187..6934dc5 100644
  	EnableUsername string `yaml:"enable_username"`
  }
  
-@@ -267,11 +267,6 @@ type Config struct {
+@@ -267,10 +267,9 @@ type Config struct {
  	// error rather than a platform silently on its default (spec §5.2, §8).
  	SessionServices map[string][]string
  
@@ -4393,20 +4553,22 @@ index 9b94187..6934dc5 100644
 -	// platform mapped to platform.EnablePrincipal, the only value config.Load
 -	// accepts today (see resolveEnableUsernames).
 -	EnableUsernames map[string]string
--
++	// Notices are lines port49d prints at start about the file itself: a key
++	// that still loads but has moved, and where it went.
++	Notices []string
+ 
  	// Inventory and Admission are read and built once, here, so the daemon
  	// never re-reads the file and the two can never disagree.
- 	Inventory admission.Inventory
-@@ -383,7 +378,7 @@ func Load(path string) (Config, error) {
+@@ -383,7 +382,7 @@ func Load(path string) (Config, error) {
  	if err := resolveSessionServices(&c, f.Platforms); err != nil {
  		return Config{}, err
  	}
 -	if err := resolveEnableUsernames(&c, f.Platforms); err != nil {
-+	if err := refuseEnableUsernames(f.Platforms); err != nil {
++	if err := moveEnableUsernames(&c, f.Platforms); err != nil {
  		return Config{}, err
  	}
  	// No lab: block is a production daemon: Lab stays nil, the policy engine
-@@ -677,40 +672,22 @@ func resolveSessionServices(c *Config, overrides map[string]PlatformConfig) erro
+@@ -677,17 +676,13 @@ func resolveSessionServices(c *Config, overrides map[string]PlatformConfig) erro
  	return nil
  }
  
@@ -4421,21 +4583,20 @@ index 9b94187..6934dc5 100644
 -// lab has ever sent.
 -func resolveEnableUsernames(c *Config, overrides map[string]PlatformConfig) error {
 -	c.EnableUsernames = platform.EnableUsernames()
-+// refuseEnableUsernames refuses platforms.<name>.enable_username by name. It
-+// is an adapter fact, and since plan 5 adapters live in the policy file's
-+// `platforms:` block, where `port49 policy test` reads it as port49d does; a
-+// key here would be one CI never sees (plan 4 pre-flight N5).
-+func refuseEnableUsernames(overrides map[string]PlatformConfig) error {
++// moveEnableUsernames handles platforms.<name>.enable_username, which is an
++// adapter fact: since plan 5 adapters live in the policy file's `platforms:`
++// block, where `port49 policy test` reads it as port49d does, and a key here
++// would be one CI never sees (plan 4 pre-flight N5). `principal`, the default
++// and the only value config.Load ever accepted, still loads with a notice, so
++// the upgrade is not an outage; any other value is refused by name.
++func moveEnableUsernames(c *Config, overrides map[string]PlatformConfig) error {
  	names := make([]string, 0, len(overrides))
  	for name := range overrides {
  		names = append(names, name)
- 	}
- 	sort.Strings(names)
- 	for _, name := range names {
--		v := overrides[name].EnableUsername
--		if v == "" {
--			continue
--		}
+@@ -698,19 +693,13 @@ func resolveEnableUsernames(c *Config, overrides map[string]PlatformConfig) erro
+ 		if v == "" {
+ 			continue
+ 		}
 -		if !platform.KnownEnableUsername(v) {
 -			return fmt.Errorf("config: platforms.%s.enable_username is %q; it must be %q or %q",
 -				name, v, platform.EnablePrincipal, platform.EnableEnab)
@@ -4447,12 +4608,14 @@ index 9b94187..6934dc5 100644
 -				"(tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md). To enable it, add a "+
 -				"tests/lab/results/ note showing a device sending it and lift this refusal with the code that reads it",
 -				name, platform.EnableEnab)
-+		if overrides[name].EnableUsername != "" {
-+			return fmt.Errorf("config: platforms.%s.enable_username moved to the policy file in plan 5: write it "+
-+				"under `platforms: {%s: {enable_username: ...}}` there, where `port49 policy test` reads it as "+
-+				"port49d does", name, name)
++		moved := fmt.Sprintf("platforms.%s.enable_username moved to the policy file in plan 5: write it under "+
++			"`platforms: {%s: {enable_username: ...}}` there, where `port49 policy test` reads it as port49d does",
++			name, name)
++		if v != platform.EnablePrincipal {
++			return fmt.Errorf("config: %s", moved)
  		}
 -		c.EnableUsernames[name] = v
++		c.Notices = append(c.Notices, moved+"; principal is the default, so delete the line")
  	}
  	return nil
  }
@@ -4480,7 +4643,7 @@ index f7d02a7..504c978 100644
 <!-- patch: internal/platform/adapter.go -->
 ````diff
 diff --git a/internal/platform/adapter.go b/internal/platform/adapter.go
-index be5f4a3..aa5459a 100644
+index 1191720..1850a5b 100644
 --- a/internal/platform/adapter.go
 +++ b/internal/platform/adapter.go
 @@ -33,6 +33,7 @@ type Spec struct {
@@ -4501,7 +4664,7 @@ index be5f4a3..aa5459a 100644
  	return d
  }
  
-@@ -224,6 +228,20 @@ func Validate(name string, d Dialect) error {
+@@ -235,6 +239,20 @@ func Validate(name string, d Dialect) error {
  			}
  		}
  	}
@@ -4594,7 +4757,7 @@ index b46d125..1ee9ac0 100644
 <!-- patch: internal/policy/load.go -->
 ````diff
 diff --git a/internal/policy/load.go b/internal/policy/load.go
-index 523f86f..4e961db 100644
+index cd9ea38..ba63278 100644
 --- a/internal/policy/load.go
 +++ b/internal/policy/load.go
 @@ -40,9 +40,6 @@ type Env struct {
@@ -4663,6 +4826,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     `Diff.Adapters []AdapterChange`; `func (d Diff) UnacknowledgedAdapters() int`.
   - `Acknowledgment` gains `Platform, Field` (order: `Role, Rule, Platform, Field, Reason`).
   - `policy diff`'s summary line ends `; N unacknowledged adapter edits`, and exits 1 on any.
+  - `comparison.adapters` compares every platform either version has an adapter for, and every
+    inventory platform: a block for a platform with no device yet is gated too (pre-flight B2).
+
+The inert-listing test uses NX-OS's `cisco-av-pair`, which no level renders: Task 2's `Validate`
+refuses listing inert an attribute a level renders, such as EOS's `roles`, so the M8 hole is shown
+on the one kind of attribute a block may still list inert.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4715,7 +4884,7 @@ index 90485e7..8f32574 100644
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index d2f3478..d48dc44 100644
+index aa3ea15..f10e966 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -2,6 +2,7 @@ package platform
@@ -4726,7 +4895,7 @@ index d2f3478..d48dc44 100644
  	"strings"
  	"testing"
  	"testing/fstest"
-@@ -205,3 +206,18 @@ func with(d Dialect, edit func(*Dialect)) Dialect {
+@@ -247,3 +248,18 @@ func with(d Dialect, edit func(*Dialect)) Dialect {
  	edit(&d)
  	return d
  }
@@ -4750,10 +4919,10 @@ index d2f3478..d48dc44 100644
 <!-- patch: internal/policy/diff_test.go -->
 ````diff
 diff --git a/internal/policy/diff_test.go b/internal/policy/diff_test.go
-index 0c90e00..b7e3dd3 100644
+index 0c90e00..f0bbfe7 100644
 --- a/internal/policy/diff_test.go
 +++ b/internal/policy/diff_test.go
-@@ -753,3 +753,61 @@ func TestAnAPIOnlyTestDoesNotAcknowledgeAnIdentityMove(t *testing.T) {
+@@ -753,3 +753,66 @@ func TestAnAPIOnlyTestDoesNotAcknowledgeAnIdentityMove(t *testing.T) {
  		t.Fatalf("an api:-only test acknowledged the move: %d unacknowledged", n)
  	}
  }
@@ -4763,28 +4932,29 @@ index 0c90e00..b7e3dd3 100644
 +// it cannot hide a change to that attribute in the same diff. The list edit is
 +// gated in its own right, and acknowledged only in writing (review M8).
 +func TestAnInertListingCannotHideItsOwnEdit(t *testing.T) {
-+	after := "platforms:\n  arista_eos:\n    privilege_attributes: [priv-lvl]\n    inert_attributes: [home-directory, roles]\n" +
-+		strings.Replace(diffBase, "roles: [read_only, cve]}", `roles: [read_only, cve], attributes: {arista_eos: ["roles=network-admin"]}}`, 1)
++	after := "platforms:\n  cisco_nxos:\n    privilege_attributes: [priv-lvl, shell:roles]\n" +
++		"    inert_attributes: [home-directory, cisco-av-pair]\n" + strings.Replace(diffBase,
++		"roles: [read_only, cve]}", `roles: [read_only, cve], attributes: {cisco_nxos: ["cisco-av-pair*shell:roles=network-admin"]}}`, 1)
 +	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
 +	raised := false
 +	for _, l := range d.Levels {
-+		if slices.Contains(l.Devices, "leaf-01") && slices.Contains(l.Raised, "reply") && !l.Acknowledged {
++		if slices.Contains(l.Devices, "nx-01") && slices.Contains(l.Raised, "reply") && !l.Acknowledged {
 +			raised = true
 +		}
 +	}
 +	if !raised {
-+		t.Fatalf("roles changed on EOS, which the old adapter says bears privilege: %+v", d.Levels)
++		t.Fatalf("cisco-av-pair changed on NX-OS, which the old adapter says bears privilege: %+v", d.Levels)
 +	}
-+	if len(d.Adapters) != 2 || d.Adapters[0] != (AdapterChange{Platform: "arista_eos", Field: "privilege_attributes",
-+		Old: `["priv-lvl","roles"]`, New: `["priv-lvl"]`, Gated: true}) || d.Adapters[1] != (AdapterChange{
-+		Platform: "arista_eos", Field: "inert_attributes", Old: `["home-directory"]`, New: `["home-directory","roles"]`,
-+		Gated: true}) || d.UnacknowledgedAdapters() != 2 {
++	if len(d.Adapters) != 2 || d.Adapters[0] != (AdapterChange{Platform: "cisco_nxos", Field: "privilege_attributes",
++		Old: `["priv-lvl","shell:roles","cisco-av-pair"]`, New: `["priv-lvl","shell:roles"]`, Gated: true}) ||
++		d.Adapters[1] != (AdapterChange{Platform: "cisco_nxos", Field: "inert_attributes", Old: `["home-directory"]`,
++			New: `["home-directory","cisco-av-pair"]`, Gated: true}) || d.UnacknowledgedAdapters() != 2 {
 +		t.Fatalf("adapters %+v", d.Adapters)
 +	}
-+	acked := after + "acknowledge:\n  - {platform: arista_eos, field: inert_attributes, reason: \"roles is a label here\"}\n" +
-+		"  - {platform: arista_eos, field: privilege_attributes, reason: \"roles is a label here\"}\n"
++	acked := after + "acknowledge:\n  - {platform: cisco_nxos, field: inert_attributes, reason: \"a label here\"}\n" +
++		"  - {platform: cisco_nxos, field: privilege_attributes, reason: \"a label here\"}\n"
 +	d = Compare(mustParse(t, diffBase), mustParse(t, acked), noon)
-+	if d.UnacknowledgedAdapters() != 0 || d.Adapters[1].AcknowledgedBy != "roles is a label here" ||
++	if d.UnacknowledgedAdapters() != 0 || d.Adapters[1].AcknowledgedBy != "a label here" ||
 +		len(d.StaleAcknowledgments) != 0 {
 +		t.Fatalf("adapters %+v stale %+v", d.Adapters, d.StaleAcknowledgments)
 +	}
@@ -4792,26 +4962,30 @@ index 0c90e00..b7e3dd3 100644
 +		t.Fatal("the entry acknowledges the list edit, not the reply the edit would have hidden")
 +	}
 +	// The same entry against a diff with no such edit acknowledges nothing.
-+	if d := Compare(mustParse(t, diffBase), mustParse(t, diffBase+"acknowledge:\n  - {platform: arista_eos, "+
++	if d := Compare(mustParse(t, diffBase), mustParse(t, diffBase+"acknowledge:\n  - {platform: cisco_nxos, "+
 +		"field: inert_attributes, reason: x}\n"), noon); len(d.StaleAcknowledgments) != 1 {
 +		t.Fatalf("stale %+v", d.StaleAcknowledgments)
 +	}
 +}
 +
-+// A key of an adapter that changes what port49 decides is gated, on each
-+// platform the inventory has devices of; one that changes only what explain
-+// says is reported (spec §8, §12).
++// A key of an adapter that changes what port49 decides is gated, on every
++// platform either version has an adapter for, a device or not; one that
++// changes only what explain says is reported (spec §8, §12). A block for a
++// platform no device has yet is gated too: the inventory is not diffed, so
++// the day a device of it arrives is not a review.
 +func TestAnAdapterEditIsGatedOrReported(t *testing.T) {
 +	after := "platforms:\n  cisco_iosxe:\n    privilege: {operator: [\"priv-lvl=15\"]}\n  cisco_nxos:\n" +
-+		"    shows_server_msg: true\n  f5_bigip:\n    supports: [session]\n" + diffBase
++		"    shows_server_msg: true\n  f5_bigip:\n    supports: [session]\n    privilege: {admin: [\"priv-lvl=15\"]}\n" +
++		diffBase
 +	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
-+	if len(d.Adapters) != 2 || d.UnacknowledgedAdapters() != 1 {
++	if len(d.Adapters) != 3 || d.UnacknowledgedAdapters() != 2 {
 +		t.Fatalf("adapters %+v", d.Adapters)
 +	}
-+	xe, nx := d.Adapters[0], d.Adapters[1]
++	xe, nx, f5 := d.Adapters[0], d.Adapters[1], d.Adapters[2]
 +	if xe.Platform != "cisco_iosxe" || xe.Field != "privilege" || !xe.Gated ||
 +		!strings.Contains(xe.New, `"operator":["priv-lvl=15"]`) ||
-+		nx.Platform != "cisco_nxos" || nx.Field != "shows_server_msg" || nx.Gated {
++		nx.Platform != "cisco_nxos" || nx.Field != "shows_server_msg" || nx.Gated ||
++		f5.Platform != "f5_bigip" || f5.Field != "privilege" || !f5.Gated || f5.Old != "null" {
 +		t.Fatalf("adapters %+v", d.Adapters)
 +	}
 +}
@@ -4922,7 +5096,7 @@ index 0da947f..69c3ff8 100644
 <!-- patch: internal/platform/adapter.go -->
 ````diff
 diff --git a/internal/platform/adapter.go b/internal/platform/adapter.go
-index aa5459a..c18e358 100644
+index 1850a5b..d2ff68e 100644
 --- a/internal/platform/adapter.go
 +++ b/internal/platform/adapter.go
 @@ -5,6 +5,7 @@ import (
@@ -4933,7 +5107,7 @@ index aa5459a..c18e358 100644
  	"regexp"
  	"slices"
  	"strings"
-@@ -249,3 +250,52 @@ func Validate(name string, d Dialect) error {
+@@ -260,3 +261,52 @@ func Validate(name string, d Dialect) error {
  	}
  	return nil
  }
@@ -4991,7 +5165,7 @@ index aa5459a..c18e358 100644
 <!-- patch: internal/policy/diff.go -->
 ````diff
 diff --git a/internal/policy/diff.go b/internal/policy/diff.go
-index 8a41277..75491c1 100644
+index 8a41277..07a1968 100644
 --- a/internal/policy/diff.go
 +++ b/internal/policy/diff.go
 @@ -1,6 +1,7 @@
@@ -5010,13 +5184,14 @@ index 8a41277..75491c1 100644
  )
  
  // Diff is the effective-permission diff between two versions of a policy
-@@ -49,6 +51,43 @@ type Diff struct {
+@@ -49,6 +51,44 @@ type Diff struct {
  	// widening in the diff is the one they name. They acknowledge nothing and
  	// are reported, acknowledge_stale (spec §12).
  	StaleAcknowledgments []Acknowledgment
 +	// Adapters are the keys of a platform's adapter that differ between the
-+	// versions, on every platform the inventory has devices of: a
-+	// platform_set moved, or a `platforms:` block edited (spec §8, §12).
++	// versions, on every platform either version has an adapter for or the
++	// inventory has devices of: a platform_set moved, or a `platforms:` block
++	// edited (spec §8, §12).
 +	Adapters []AdapterChange
 +}
 +
@@ -5054,7 +5229,7 @@ index 8a41277..75491c1 100644
  }
  
  // PrincipalChange is a principal that resolves to another subject in the new
-@@ -337,6 +376,7 @@ func Compare(before, after *Policy, now time.Time) Diff {
+@@ -337,6 +377,7 @@ func Compare(before, after *Policy, now time.Time) Diff {
  		c.at(at)
  	}
  	c.principals(now)
@@ -5062,7 +5237,7 @@ index 8a41277..75491c1 100644
  	for _, a := range after.acked {
  		if !c.usedAcks[a] {
  			c.d.StaleAcknowledgments = append(c.d.StaleAcknowledgments, a)
-@@ -786,9 +826,14 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
+@@ -786,9 +827,14 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
  	// EOS is lowered, although the role its rendering names changed from
  	// network-admin to network-operator. An adapter edit is judged whole here
  	// and gated in its own right.
@@ -5079,7 +5254,7 @@ index 8a41277..75491c1 100644
  		oldRendered, _, _ = c.before.render(dialect, was.level)
  		newRendered, _, _ = c.after.render(dialect, is.level)
  	}
-@@ -796,7 +841,7 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
+@@ -796,7 +842,7 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
  		return slices.ContainsFunc(from, func(a string) bool {
  			name := a[:strings.IndexAny(a, "=*")]
  			return name != "priv-lvl" && !slices.Contains(to, a) && !slices.Contains(rendered, a) &&
@@ -5088,17 +5263,24 @@ index 8a41277..75491c1 100644
  		})
  	}
  	if moved(l.NewReply, l.OldReply, newRendered) || moved(l.OldReply, l.NewReply, oldRendered) {
-@@ -989,3 +1034,33 @@ func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]
+@@ -989,3 +1035,40 @@ func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]
  	}
  	return acks
  }
 +
 +// adapters compares each platform's adapter, key by key, for every platform
-+// the inventory has devices of.
++// the inventory has devices of and every platform either version has an
++// adapter for. A block for a platform no device has yet is compared too: the
++// inventory is not diffed, so the day a device of it arrives is no review.
 +func (c *comparison) adapters() {
 +	platforms := map[string]bool{}
 +	for _, d := range c.after.Devices() {
 +		platforms[d.Platform] = true
++	}
++	for _, p := range []*Policy{c.before, c.after} {
++		for name := range p.adapters {
++			platforms[name] = true
++		}
 +	}
 +	keys := platform.SpecKeys()
 +	for _, name := range sortedKeys(platforms) {
@@ -5171,7 +5353,7 @@ index 5fabadf..9140a7e 100644
 <!-- patch: internal/policy/load.go -->
 ````diff
 diff --git a/internal/policy/load.go b/internal/policy/load.go
-index 4e961db..c6a3d85 100644
+index ba63278..5de23bf 100644
 --- a/internal/policy/load.go
 +++ b/internal/policy/load.go
 @@ -141,10 +141,11 @@ type Test struct {
@@ -5188,7 +5370,7 @@ index 4e961db..c6a3d85 100644
  }
  
  // NoCeiling is how a test asserts that the grants compose to no ceiling.
-@@ -880,10 +881,17 @@ func (p *Policy) buildTests(f file) error {
+@@ -886,10 +887,17 @@ func (p *Policy) buildTests(f file) error {
  
  func (p *Policy) buildAcknowledgments(f file) error {
  	for i, a := range f.Acknowledge {
@@ -5232,13 +5414,18 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Create: `platforms/redact.yaml`, `internal/platform/redact.go`
 - Modify: `platforms/platforms.go` (`Redact`), `internal/platform/dialect.go`,
   `internal/platform/adapter.go` (`Redact`: field, key, `Over` appends, `Validate`, `SpecOf`)
-- Test: `internal/platform/redact_test.go`
+- Modify: `internal/policy/diff.go` (`redact` is a gated key)
+- Test: `internal/platform/redact_test.go`, `internal/policy/diff_test.go`
 
 **Interfaces:**
 - Produces:
   - `const Redacted = "«redacted»"`.
   - `type Redaction struct { Match []string; After string; From *int }` (yaml `match`, `after`, `from`).
-  - `func LoadRedactions(raw []byte) (map[string][]Redaction, error)`; `func Redactions(platformName string) []Redaction`.
+  - `func LoadRedactions(raw []byte) (map[string][]Redaction, error)`; `func Redactions(platformName string) []Redaction`
+    — the `default` list, then the platform's own: a platform's list adds and never replaces
+    (pre-flight S2).
+  - A pattern whose `match` is `*` and `**` alone is refused with `from`: it would blank every
+    record (pre-flight S1). `redact` is a gated adapter key in `policy diff`.
   - `func Redact(rules []Redaction, abbrev bool, elements []string) ([]string, bool)` — the elements
     with every removed word replaced, and whether any was; an untouched element comes back as it was.
   - `func RedactRaw(rules []Redaction, abbrev bool, raw []string) ([]string, bool)` — over the
@@ -5251,10 +5438,10 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ````diff
 diff --git a/internal/platform/redact_test.go b/internal/platform/redact_test.go
 new file mode 100644
-index 0000000..366aba2
+index 0000000..8feafb7
 --- /dev/null
 +++ b/internal/platform/redact_test.go
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,177 @@
 +package platform
 +
 +import (
@@ -5265,7 +5452,9 @@ index 0000000..366aba2
 +	"github.com/rhwendt/port49/platforms"
 +)
 +
-+// The built-in table loads, has a default list, and gives Junos its own.
++// The built-in table loads, has a default list, and gives Junos its own on
++// top of it: a platform's list adds to the default and never replaces it, so
++// a word the default removes is removed everywhere.
 +func TestBuiltInRedactionsLoad(t *testing.T) {
 +	if _, err := LoadRedactions(platforms.Redact); err != nil {
 +		t.Fatal(err)
@@ -5273,8 +5462,9 @@ index 0000000..366aba2
 +	if !reflect.DeepEqual(Redactions("arista_eos"), Redactions("meinberg_lantime")) || len(Redactions("")) == 0 {
 +		t.Fatal("a platform with no list of its own takes the default")
 +	}
-+	if reflect.DeepEqual(Redactions("juniper_junos"), Redactions("arista_eos")) {
-+		t.Fatal("junos has its own list")
++	junos, all := Redactions("juniper_junos"), Redactions("arista_eos")
++	if len(junos) <= len(all) || !reflect.DeepEqual(junos[:len(all)], all) {
++		t.Fatalf("junos has the default list and its own after it: %+v", junos)
 +	}
 +	list := Redactions("arista_eos")
 +	list[0].After = "changed"
@@ -5317,6 +5507,45 @@ index 0000000..366aba2
 +	}
 +	if strings.Contains(strings.Join(got, " "), "Hunter2") || raw[5] != "cmd-arg=Hunter2" {
 +		t.Fatal("the secret is gone from the copy, and the input is not edited")
++	}
++}
++
++// One real line per secret each vendor's syntax carries, on each platform's
++// built-in patterns: the secret is not in what is written. The NX-OS
++// accounting `cmd` is the configuration path joined with ` ; ` and a result
++// (tests/lab/results/L21-cisco_nxos.md), which is why the patterns lead with
++// `**`.
++func TestEachVendorsSecretsAreRedacted(t *testing.T) {
++	for _, tt := range []struct {
++		platform string
++		raw      []string
++	}{
++		{"arista_eos", []string{"cmd=snmp-server", "cmd-arg=user", "cmd-arg=u", "cmd-arg=g", "cmd-arg=v3",
++			"cmd-arg=auth", "cmd-arg=sha", "cmd-arg=SECRET1", "cmd-arg=priv", "cmd-arg=aes", "cmd-arg=SECRET2"}},
++		{"arista_eos", []string{"cmd=ip", "cmd-arg=ospf", "cmd-arg=message-digest-key", "cmd-arg=1", "cmd-arg=md5",
++			"cmd-arg=SECRET1"}},
++		{"cisco_iosxe", []string{"cmd=neighbor", "cmd-arg=10.0.0.1", "cmd-arg=password", "cmd-arg=7",
++			"cmd-arg=SECRET1"}},
++		{"cisco_iosxe", []string{"cmd=crypto", "cmd-arg=isakmp", "cmd-arg=key", "cmd-arg=SECRET1", "cmd-arg=address",
++			"cmd-arg=10.0.0.1"}},
++		{"cisco_iosxe", []string{"cmd=ntp", "cmd-arg=authentication-key", "cmd-arg=1", "cmd-arg=md5",
++			"cmd-arg=SECRET1"}},
++		{"cisco_nxos", []string{"cmd=configure terminal ; username bob password SECRET1 role network-admin (SUCCESS)"}},
++		{"cisco_nxos", []string{"cmd=configure terminal ; snmp-server user u network-admin auth sha SECRET1 priv " +
++			"aes-128 SECRET2 (SUCCESS)"}},
++		{"juniper_junos", []string{"cmd=set protocols ospf area 0 interface ge-0/0/0.0 authentication md5 1 key SECRET1"}},
++		{"juniper_junos", []string{"cmd=set snmp v3 usm local-engine user u authentication-sha authentication-password " +
++			"SECRET1"}},
++		{"juniper_junos", []string{"cmd=set snmp v3 usm local-engine user u privacy-aes128 privacy-password SECRET1"}},
++		{"juniper_junos", []string{"cmd=set system radius-server 10.0.0.1 secret SECRET1"}},
++		{"juniper_junos", []string{"cmd=set security ike policy p pre-shared-key ascii-text SECRET1"}},
++		{"juniper_junos", []string{"cmd=set system login user bob authentication plain-text-password-value SECRET1"}},
++	} {
++		d, _ := DialectFor(tt.platform)
++		got, redacted := RedactRaw(Redactions(tt.platform), !d.ExpandsAbbreviations, tt.raw)
++		if joined := strings.Join(got, " "); !redacted || strings.Contains(joined, "SECRET") {
++			t.Errorf("%s %q: %q", tt.platform, tt.raw, got)
++		}
 +	}
 +}
 +
@@ -5365,6 +5594,7 @@ index 0000000..366aba2
 +		"one of the two":            {Match: []string{"**"}, After: "x", From: &one},
 +		"from: 0 is the command":    {Match: []string{"**"}, From: &zero},
 +		"after \"a b\" is one word": {Match: []string{"**"}, After: "a b"},
++		"matches every command":     {Match: []string{"*", "**"}, From: &one},
 +	} {
 +		if err := r.check(); err == nil || !strings.Contains(err.Error(), want) {
 +			t.Errorf("%q: %v", want, err)
@@ -5391,18 +5621,42 @@ index 0000000..366aba2
 +}
 ````
 
+<!-- patch: internal/policy/diff_test.go -->
+````diff
+diff --git a/internal/policy/diff_test.go b/internal/policy/diff_test.go
+index f0bbfe7..a2d2638 100644
+--- a/internal/policy/diff_test.go
++++ b/internal/policy/diff_test.go
+@@ -816,3 +816,15 @@ func TestAnAdapterEditIsGatedOrReported(t *testing.T) {
+ 		t.Fatalf("adapters %+v", d.Adapters)
+ 	}
+ }
++
++// A redaction pattern changes what the audit keeps, so a block that adds one
++// is gated like a rendering: a pattern written wide enough removes what every
++// command was typed with from the log and the spool (spec §5.8, §12).
++func TestARedactionEditIsGated(t *testing.T) {
++	after := "platforms:\n  arista_eos:\n    redact: [{match: ['**'], after: interface}]\n" + diffBase
++	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
++	if len(d.Adapters) != 1 || d.Adapters[0].Field != "redact" || !d.Adapters[0].Gated ||
++		d.UnacknowledgedAdapters() != 1 {
++		t.Fatalf("adapters %+v", d.Adapters)
++	}
++}
+````
+
 - [ ] **Step 2: Run it to see it fail**
 
-Run: `go test ./internal/platform/`
+Run: `go test ./internal/platform/ ./internal/policy/`
 Expected: FAIL — `undefined: LoadRedactions`, `undefined: platforms.Redact`, `undefined: Redacted`
-(build failed).
+(build failed), and `TestARedactionEditIsGated` (`field redact not found`).
 
 - [ ] **Step 3: Write the patterns and the redactor**
 
 <!-- patch: internal/platform/adapter.go -->
 ````diff
 diff --git a/internal/platform/adapter.go b/internal/platform/adapter.go
-index c18e358..f6fc370 100644
+index d2ff68e..d8c30b5 100644
 --- a/internal/platform/adapter.go
 +++ b/internal/platform/adapter.go
 @@ -35,6 +35,7 @@ type Spec struct {
@@ -5424,7 +5678,7 @@ index c18e358..f6fc370 100644
  	return d
  }
  
-@@ -229,6 +234,11 @@ func Validate(name string, d Dialect) error {
+@@ -240,6 +245,11 @@ func Validate(name string, d Dialect) error {
  			}
  		}
  	}
@@ -5436,7 +5690,7 @@ index c18e358..f6fc370 100644
  	switch d.EnableUsername {
  	case EnablePrincipal:
  	case EnableEnab:
-@@ -284,6 +294,9 @@ func SpecOf(d Dialect) Spec {
+@@ -295,6 +305,9 @@ func SpecOf(d Dialect) Spec {
  	if d.DeviceConfig != nil {
  		s.DeviceConfig = &d.DeviceConfig
  	}
@@ -5479,10 +5733,10 @@ index 65bb981..b64e031 100644
 ````diff
 diff --git a/internal/platform/redact.go b/internal/platform/redact.go
 new file mode 100644
-index 0000000..5a1a021
+index 0000000..c5fdc51
 --- /dev/null
 +++ b/internal/platform/redact.go
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,230 @@
 +package platform
 +
 +import (
@@ -5535,6 +5789,12 @@ index 0000000..5a1a021
 +		return fmt.Errorf("after %q is one word", r.After)
 +	case r.From != nil && *r.From == 0:
 +		return errors.New("from: 0 is the command word, which the reconciliation join needs; the first argument is 1")
++	case r.From != nil && !slices.ContainsFunc(r.Match, func(w string) bool { return w != "*" && w != "**" }):
++		// A match of wildcards alone is every command, and `from` then
++		// blanks the arguments of every record: the audit trail, not a
++		// secret. Name the word the secret follows, with after.
++		return errors.New("a match of * and ** alone matches every command, and from would remove the arguments of " +
++			"every record; name the command's words, or use after with the word the secret follows")
 +	}
 +	return nil
 +}
@@ -5574,14 +5834,15 @@ index 0000000..5a1a021
 +	return out, nil
 +}
 +
-+// Redactions is a platform's built-in patterns, copied: its own list, or the
-+// default list for a platform with none.
++// Redactions is a platform's built-in patterns, copied: the default list, and
++// the platform's own after it. A platform's list adds and never replaces, so
++// a word the default removes is removed on every platform.
 +func Redactions(platformName string) []Redaction {
-+	list, ok := redactions[platformName]
-+	if !ok {
-+		list = redactions["default"]
++	list := slices.Clone(redactions["default"])
++	if platformName != "default" {
++		list = append(list, redactions[platformName]...)
 +	}
-+	return slices.Clone(list)
++	return list
 +}
 +
 +// Redact applies rules to a command's elements — a vector, or the values of
@@ -5708,6 +5969,27 @@ index 0000000..5a1a021
 +}
 ````
 
+<!-- patch: internal/policy/diff.go -->
+````diff
+diff --git a/internal/policy/diff.go b/internal/policy/diff.go
+index 07a1968..e702a6b 100644
+--- a/internal/policy/diff.go
++++ b/internal/policy/diff.go
+@@ -75,9 +75,11 @@ type AdapterChange struct {
+ 
+ // gatedAdapterKeys are the adapter keys an edit to is gated; every other key
+ // is reported. A key a later plan adds is reported until it is listed here.
++// `redact` is gated because it changes what the audit keeps: a pattern wide
++// enough removes what every command was typed with from the log and the spool.
+ var gatedAdapterKeys = []string{"supports", "privilege", "ceiling_levels", "entity_classes", "expands_abbreviations",
+ 	"splits_interface_names", "pipe_token", "pipe_authorized", "strip_cr", "privilege_attributes", "inert_attributes",
+-	"accepted_attributes", "enable_username"}
++	"accepted_attributes", "enable_username", "redact"}
+ 
+ // UnacknowledgedAdapters counts the gated adapter edits no acknowledge: entry
+ // names.
+````
+
 <!-- patch: platforms/platforms.go -->
 ````diff
 diff --git a/platforms/platforms.go b/platforms/platforms.go
@@ -5730,10 +6012,10 @@ index 6d4c9a8..a558a07 100644
 ````diff
 diff --git a/platforms/redact.yaml b/platforms/redact.yaml
 new file mode 100644
-index 0000000..056794f
+index 0000000..fa9e90c
 --- /dev/null
 +++ b/platforms/redact.yaml
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,41 @@
 +# Redaction patterns (spec §5.8): the words of a command that are removed
 +# before an accounting or authorization record is written, because a typed
 +# secret — `username bob secret Hunter2` — arrives in full.
@@ -5750,22 +6032,31 @@ index 0000000..056794f
 +# the command word and is never removed; a negative N counts from the end).
 +# `*` is one word and `**` any number, as in a rule.
 +#
-+# `default` is every platform with no list of its own, an unmodeled one
-+# included.
++# `default` applies to every platform, an unmodeled one included; a
++# platform's own list adds to it and never replaces it.
++#
++# The patterns lead with `**` because a secret can sit anywhere in a line, and
++# NX-OS's accounting `cmd` is the configuration path joined with ` ; ` and a
++# result, `configure terminal ; username bob password ... (SUCCESS)`
++# (tests/lab/results/L21-cisco_nxos.md): a pattern anchored at the command
++# word would never match it.
 +default:
 +  - {match: ['**'], after: secret}
 +  - {match: ['**'], after: password}
 +  - {match: ['**'], after: key}
 +  - {match: ['**'], after: key-string}
 +  - {match: ['**'], after: authentication-key}
++  - {match: ['**'], after: message-digest-key}
 +  - {match: ['**'], after: community}
++  # SNMPv3 passphrases: `snmp-server user u g v3 auth sha <pass> priv aes 128
++  # <pass>`. Scoped to the command, so `auth` elsewhere is left alone.
++  - {match: ['**', snmp-server, user, '**'], after: auth}
 +juniper_junos:
-+  - {match: ['**'], after: secret}
 +  - {match: ['**'], after: encrypted-password}
 +  - {match: ['**'], after: plain-text-password-value}
-+  - {match: ['**'], after: authentication-key}
 +  - {match: ['**'], after: pre-shared-key}
-+  - {match: ['**'], after: community}
++  - {match: ['**'], after: authentication-password}
++  - {match: ['**'], after: privacy-password}
 ````
 
 - [ ] **Step 4: Run everything**
@@ -5788,18 +6079,21 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ### Task 11: No record is written with a typed secret in it
 
 **Files:**
-- Modify: `internal/platform/redact.go` (`Redactor`, `BuiltInRedactor`)
+- Modify: `internal/platform/redact.go` (`Redactor`, `BuiltInRedactor`, `RedactRecord`)
 - Modify: `internal/decision/log.go` (`Request.Redacted`, `AcctRecord.Redacted`)
 - Modify: `internal/daemon/author/author.go` (`WithRedactor`; `emit` redacts),
   `internal/daemon/acct/acct.go` (`WithRedactor`; redact before `Offer`)
 - Modify: `internal/replay/replay.go` (a redacted record is `unverifiable`)
 - Modify: `cmd/port49d/main.go` (`redactorFor`, wired into both handlers)
 - Test: `internal/daemon/author/author_test.go`, `internal/daemon/acct/acct_test.go`,
-  `internal/replay/replay_test.go`, `cmd/port49d/redact_test.go`
+  `internal/replay/replay_test.go`, `cmd/port49d/redact_test.go`, `internal/platform/redact_test.go`
 
 **Interfaces:**
 - Produces: `type platform.Redactor func(platformName string) (rules []Redaction, abbrev bool)`;
-  `platform.BuiltInRedactor`; `(*author.Handler).WithRedactor(platform.Redactor) *author.Handler`;
+  `platform.BuiltInRedactor`; `func platform.RedactRecord(rules []Redaction, abbrev bool, raw,
+  vector []string) ([]string, []string, bool)` — both forms of a record together, the form a
+  pattern missed losing every argument where the other lost a word (pre-flight N2);
+  `(*author.Handler).WithRedactor(platform.Redactor) *author.Handler`;
   `(*acct.Handler).WithRedactor(platform.Redactor) *acct.Handler`. A handler with none uses the
   built-in patterns, so no constructor changes and no test helper moves.
 - JSON: `request.redacted`, `record.redacted`, `omitempty`.
@@ -5942,6 +6236,37 @@ index c09baac..6377ce4 100644
 +}
 ````
 
+<!-- patch: internal/platform/redact_test.go -->
+````diff
+diff --git a/internal/platform/redact_test.go b/internal/platform/redact_test.go
+index 8feafb7..97e2614 100644
+--- a/internal/platform/redact_test.go
++++ b/internal/platform/redact_test.go
+@@ -175,3 +175,22 @@ func TestABlockAddsRedactions(t *testing.T) {
+ 		t.Fatalf("%+v", d.Redact)
+ 	}
+ }
++
++// A record's raw pairs and its vector are two spellings of one command. A
++// pattern anchored at both ends can match one and not the other — the raw
++// pairs lose their `<cr>`, the vector may keep it — so where either form loses
++// a word and the other matched nothing, the other loses every argument: the
++// secret is never left standing in the form the pattern missed.
++func TestARecordIsRedactedInBothForms(t *testing.T) {
++	rules := []Redaction{{Match: []string{"username", "*", "secret", "*"}, After: "secret"}}
++	raw := []string{"cmd=username", "cmd-arg=bob", "cmd-arg=secret", "cmd-arg=Hunter2", "cmd-arg=<cr>"}
++	vector := []string{"username", "bob", "secret", "Hunter2", "<cr>"}
++	gotRaw, gotVector, redacted := RedactRecord(rules, false, raw, vector)
++	if !redacted || strings.Contains(strings.Join(gotRaw, " ")+strings.Join(gotVector, " "), "Hunter2") ||
++		gotVector[0] != "username" || len(gotVector) != len(vector) {
++		t.Fatalf("raw %q vector %q", gotRaw, gotVector)
++	}
++	if r, v, redacted := RedactRecord(rules, false, raw[:2], vector[:2]); redacted || len(r) != 2 || len(v) != 2 {
++		t.Fatalf("nothing matched, nothing changed: %q %q", r, v)
++	}
++}
+````
+
 <!-- patch: internal/replay/replay_test.go -->
 ````diff
 diff --git a/internal/replay/replay_test.go b/internal/replay/replay_test.go
@@ -5975,22 +6300,22 @@ index 7ce2b0a..8658f12 100644
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/daemon/... ./internal/replay/ ./cmd/port49d/`
-Expected: FAIL — `h.WithRedactor undefined`, `undefined: redactorFor` (build failed), and
-`TestAccountingNeverWritesASecret`, `TestARedactedRecordIsUnverifiable`.
+Run: `go test ./internal/daemon/... ./internal/replay/ ./cmd/port49d/ ./internal/platform/`
+Expected: FAIL — `h.WithRedactor undefined`, `undefined: redactorFor`, `undefined: RedactRecord`
+(build failed), and `TestAccountingNeverWritesASecret`, `TestARedactedRecordIsUnverifiable`.
 
 - [ ] **Step 3: Redact before writing**
 
 <!-- patch: cmd/port49d/main.go -->
 ````diff
 diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
-index f37c9b7..c0f8dcb 100644
+index bbbba2e..78bfeb9 100644
 --- a/cmd/port49d/main.go
 +++ b/cmd/port49d/main.go
-@@ -345,6 +345,20 @@ func sayPolicy(pol *policy.Policy, now time.Time) {
- // time-scoped, and the policy in force changes at a reload, so neither is
- // captured at start: both ask the Live at the moment of asking. nil with no
- // policy.
+@@ -339,6 +339,20 @@ func sayPolicy(pol *policy.Policy, now time.Time) {
+ 	}
+ }
+ 
 +// redactorFor is the redaction port49d applies before any record is written
 +// (spec §5.8): the built-in patterns and, where a policy is in force, the
 +// ones its `platforms:` blocks add, read at each record so a reload reaches
@@ -6005,10 +6330,10 @@ index f37c9b7..c0f8dcb 100644
 +	}
 +}
 +
- func watchQuarantine(live *policy.Live, m *metrics.Metrics,
- 	now func() time.Time) func(device string, at time.Time) (string, bool) {
- 	if live == nil {
-@@ -513,13 +527,13 @@ func run(parent context.Context, cfgPath string) error {
+ // watchQuarantine is what the daemon asks of the policy: whether a device is
+ // quarantined at the time of a packet (spec §10; §13 decision 20), and at each
+ // scrape how many are, for port49_devices_quarantined. Quarantine is
+@@ -516,13 +530,13 @@ func run(parent context.Context, cfgPath string) error {
  		// The grace window is carried for plan 7's sweep and read by nothing
  		// today.
  		Author: author.New(handlerStore, authz, log, m, time.Now, cfg.SessionServices,
@@ -6029,7 +6354,7 @@ index f37c9b7..c0f8dcb 100644
 <!-- patch: internal/daemon/acct/acct.go -->
 ````diff
 diff --git a/internal/daemon/acct/acct.go b/internal/daemon/acct/acct.go
-index 7b92012..67293db 100644
+index 7b92012..21c50b6 100644
 --- a/internal/daemon/acct/acct.go
 +++ b/internal/daemon/acct/acct.go
 @@ -33,6 +33,17 @@ type Handler struct {
@@ -6050,7 +6375,7 @@ index 7b92012..67293db 100644
  }
  
  // New builds the accounting handler.
-@@ -143,6 +154,20 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
+@@ -143,6 +154,17 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
  		rec.Principal = c.Principal
  		rec.Session.CtxID = c.CtxID
  	}
@@ -6062,11 +6387,8 @@ index 7b92012..67293db 100644
 +		redact = platform.BuiltInRedactor
 +	}
 +	rules, abbrev := redact(peer.Platform)
-+	if r, ok := platform.RedactRaw(rules, abbrev, raw); ok {
-+		rec.AcctRecord.Raw, rec.AcctRecord.Redacted = r, true
-+	}
-+	if v, ok := platform.Redact(rules, abbrev, vector); ok {
-+		rec.AcctRecord.Vector, rec.AcctRecord.Redacted = v, true
++	if r, v, ok := platform.RedactRecord(rules, abbrev, raw, vector); ok {
++		rec.AcctRecord.Raw, rec.AcctRecord.Vector, rec.AcctRecord.Redacted = r, v, true
 +	}
  
  	if err := h.spool.Offer(rec); err != nil {
@@ -6076,7 +6398,7 @@ index 7b92012..67293db 100644
 <!-- patch: internal/daemon/author/author.go -->
 ````diff
 diff --git a/internal/daemon/author/author.go b/internal/daemon/author/author.go
-index 8a92242..ebfa408 100644
+index 8a92242..121315e 100644
 --- a/internal/daemon/author/author.go
 +++ b/internal/daemon/author/author.go
 @@ -87,6 +87,17 @@ type Handler struct {
@@ -6097,7 +6419,7 @@ index 8a92242..ebfa408 100644
  }
  
  // New builds an authorization handler. stalenessCeiling, graceWindow and
-@@ -349,6 +360,23 @@ func (h *Handler) deny(rec decision.Record, reason decision.Reason, msg string)
+@@ -349,6 +360,21 @@ func (h *Handler) deny(rec decision.Record, reason decision.Reason, msg string)
  }
  
  func (h *Handler) emit(rec decision.Record) {
@@ -6110,9 +6432,7 @@ index 8a92242..ebfa408 100644
 +			redact = platform.BuiltInRedactor
 +		}
 +		rules, abbrev := redact(rec.Device.Platform)
-+		raw, inRaw := platform.RedactRaw(rules, abbrev, rec.Request.Raw)
-+		vector, inVector := platform.Redact(rules, abbrev, rec.Request.Vector)
-+		if inRaw || inVector {
++		if raw, vector, ok := platform.RedactRecord(rules, abbrev, rec.Request.Raw, rec.Request.Vector); ok {
 +			req := *rec.Request
 +			req.Raw, req.Vector, req.Redacted = raw, vector, true
 +			rec.Request = &req
@@ -6167,10 +6487,10 @@ index 586f7cb..bf07bf4 100644
 <!-- patch: internal/platform/redact.go -->
 ````diff
 diff --git a/internal/platform/redact.go b/internal/platform/redact.go
-index 5a1a021..b79df89 100644
+index c5fdc51..568b667 100644
 --- a/internal/platform/redact.go
 +++ b/internal/platform/redact.go
-@@ -89,6 +89,18 @@ func LoadRedactions(raw []byte) (map[string][]Redaction, error) {
+@@ -95,6 +95,18 @@ func LoadRedactions(raw []byte) (map[string][]Redaction, error) {
  	return out, nil
  }
  
@@ -6186,9 +6506,42 @@ index 5a1a021..b79df89 100644
 +	return Redactions(platformName), !d.ExpandsAbbreviations
 +}
 +
- // Redactions is a platform's built-in patterns, copied: its own list, or the
- // default list for a platform with none.
- func Redactions(platformName string) []Redaction {
+ // Redactions is a platform's built-in patterns, copied: the default list, and
+ // the platform's own after it. A platform's list adds and never replaces, so
+ // a word the default removes is removed on every platform.
+@@ -171,6 +183,32 @@ func Redact(rules []Redaction, abbrev bool, elements []string) ([]string, bool)
+ 	return out, true
+ }
+ 
++// RedactRecord applies rules to a record's raw pairs and its vector, which are
++// two spellings of one command. A pattern anchored at both ends can match one
++// and miss the other — the raw pairs drop their `<cr>` — so where either form
++// loses a word and the other matched nothing, the other loses every argument:
++// removing more rather than leaving the secret in the form the pattern
++// missed (spec §5.8).
++func RedactRecord(rules []Redaction, abbrev bool, raw, vector []string) ([]string, []string, bool) {
++	r, inRaw := RedactRaw(rules, abbrev, raw)
++	v, inVector := Redact(rules, abbrev, vector)
++	if inRaw == inVector {
++		return r, v, inRaw
++	}
++	// Every argument: the rule check refuses this pattern in a file, where it
++	// would blank every record; here it applies to one record already found
++	// to carry a secret.
++	one := 1
++	everything := []Redaction{{Match: []string{"**"}, From: &one}}
++	if !inRaw {
++		r, _ = RedactRaw(everything, false, raw)
++	}
++	if !inVector {
++		v, _ = Redact(everything, false, vector)
++	}
++	return r, v, true
++}
++
+ // RedactRaw applies rules to a record's raw AV pairs: the values of its cmd
+ // and cmd-arg pairs are the command's elements, a trailing `<cr>` aside, and
+ // each keeps its own key and separator.
 ````
 
 <!-- patch: internal/replay/replay.go -->
@@ -6386,10 +6739,10 @@ index 0000000..5276533
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index d48dc44..b9986b4 100644
+index f10e966..aa1d950 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
-@@ -189,7 +189,8 @@ func TestValidateNamesTheField(t *testing.T) {
+@@ -231,7 +231,8 @@ func TestValidateNamesTheField(t *testing.T) {
  		"not in accepted_attributes": with(ok, func(d *Dialect) {
  			d.Levels, d.AcceptedAttributes = map[string][]string{"admin": {"roles=x"}}, []string{"priv-lvl"}
  		}),
@@ -6404,13 +6757,13 @@ index d48dc44..b9986b4 100644
 <!-- patch: internal/policy/platforms_test.go -->
 ````diff
 diff --git a/internal/policy/platforms_test.go b/internal/policy/platforms_test.go
-index 4765614..24b605b 100644
+index ec8096a..4db69a9 100644
 --- a/internal/policy/platforms_test.go
 +++ b/internal/policy/platforms_test.go
-@@ -110,6 +110,7 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
- 		{"based_on nothing shipped", "  x: {based_on: arista}\n", `platforms.x: based_on "arista" is not a platform in set 1.0.0`},
- 		{"an invalid adapter", "  x: {entity_classes: {mgmt: ['(']}}\n", "platforms.x.entity_classes.mgmt"},
+@@ -112,6 +112,7 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
  		{"an unknown key", "  arista_eos: {entity_class: {}}\n", "field entity_class not found"},
+ 		{"the attributes key", "  all: {supports: [session]}\n", "platforms.all: all is reserved"},
+ 		{"the redaction default", "  default: {supports: [session]}\n", "platforms.default: default is reserved"},
 +		{"a verified claim", "  arista_eos: {verified: containerlab}\n", "platforms.arista_eos: verified is port49's own claim"},
  		{"a rendering the device refuses", "  cisco_iosxe: {privilege: {admin: [\"roles=x\"]}}\n",
  			"platforms.cisco_iosxe.privilege.admin: roles is not in accepted_attributes"},
@@ -6683,7 +7036,7 @@ index 0000000..f1b0a4e
 <!-- patch: internal/platform/adapter.go -->
 ````diff
 diff --git a/internal/platform/adapter.go b/internal/platform/adapter.go
-index f6fc370..d47c714 100644
+index d8c30b5..b06afa1 100644
 --- a/internal/platform/adapter.go
 +++ b/internal/platform/adapter.go
 @@ -18,24 +18,25 @@ import (
@@ -6752,7 +7105,7 @@ index f6fc370..d47c714 100644
  // capabilities is spec §9's vocabulary for `supports`.
  var capabilities = []string{"session", "commands", "config_commands"}
  
-@@ -239,6 +249,9 @@ func Validate(name string, d Dialect) error {
+@@ -250,6 +260,9 @@ func Validate(name string, d Dialect) error {
  			return fmt.Errorf("%s[%d]: %w", field("redact"), i, err)
  		}
  	}
@@ -6762,7 +7115,7 @@ index f6fc370..d47c714 100644
  	switch d.EnableUsername {
  	case EnablePrincipal:
  	case EnableEnab:
-@@ -297,6 +310,9 @@ func SpecOf(d Dialect) Spec {
+@@ -308,6 +321,9 @@ func SpecOf(d Dialect) Spec {
  	if d.Redact != nil {
  		s.Redact = &d.Redact
  	}
@@ -6798,20 +7151,20 @@ index b64e031..9679b6e 100644
 <!-- patch: internal/policy/load.go -->
 ````diff
 diff --git a/internal/policy/load.go b/internal/policy/load.go
-index c6a3d85..3b19311 100644
+index 5de23bf..626ca92 100644
 --- a/internal/policy/load.go
 +++ b/internal/policy/load.go
-@@ -274,6 +274,9 @@ func (p *Policy) buildPlatforms(f file) error {
- 		case !platformNameShape.MatchString(name):
- 			return fmt.Errorf("%s: a platform name is lower case, digits and _, starting with a letter, as an "+
- 				"inventory's platform: field writes it", at)
+@@ -280,6 +280,9 @@ func (p *Policy) buildPlatforms(f file) error {
+ 			// of either name would be read as the other.
+ 			return fmt.Errorf("%s: %s is reserved: attributes.all names every platform and the built-in redaction "+
+ 				"table's default list every unlisted one; name the platform as the inventory does", at, name)
 +		case b.Verified != nil:
 +			return fmt.Errorf("%s: verified is port49's own claim about its lab (spec §8); an adapter written "+
 +				"here is unverified until it is contributed and measured, so remove the key", at)
  		case b.Replace && b.BasedOn != "":
  			return fmt.Errorf("%s: replace starts from nothing and based_on from another platform; use one", at)
  		case b.BasedOn != "" && shipped:
-@@ -312,6 +315,29 @@ var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+@@ -318,6 +321,29 @@ var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
  // PlatformSet is the platform set the policy renders with.
  func (p *Policy) PlatformSet() string { return p.set }
  
@@ -6918,10 +7271,10 @@ index 5276533..f485e2f 100644
 <!-- patch: internal/policy/platforms_test.go -->
 ````diff
 diff --git a/internal/policy/platforms_test.go b/internal/policy/platforms_test.go
-index 24b605b..334ad41 100644
+index 4db69a9..8a72a6f 100644
 --- a/internal/policy/platforms_test.go
 +++ b/internal/policy/platforms_test.go
-@@ -165,3 +165,61 @@ func TestARedundantOverrideIsReported(t *testing.T) {
+@@ -167,3 +167,61 @@ func TestARedundantOverrideIsReported(t *testing.T) {
  		t.Fatalf("%q", got)
  	}
  }
@@ -7235,7 +7588,7 @@ index 9140a7e..334f0c1 100644
 <!-- patch: internal/policy/load.go -->
 ````diff
 diff --git a/internal/policy/load.go b/internal/policy/load.go
-index 3b19311..5a3e409 100644
+index 626ca92..e8a3a0b 100644
 --- a/internal/policy/load.go
 +++ b/internal/policy/load.go
 @@ -40,6 +40,9 @@ type Env struct {
@@ -7263,7 +7616,7 @@ index 3b19311..5a3e409 100644
  	generic, _ := platform.DialectFor("")
  	p.overrides = f.Platforms
  	for _, name := range sortedKeys(f.Platforms) {
-@@ -309,6 +312,23 @@ func (p *Policy) buildPlatforms(f file) error {
+@@ -315,6 +318,23 @@ func (p *Policy) buildPlatforms(f file) error {
  	return nil
  }
  
@@ -7287,7 +7640,7 @@ index 3b19311..5a3e409 100644
  // platformNameShape is how an inventory writes a platform.
  var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
  
-@@ -325,7 +345,7 @@ func (p *Policy) PlatformNames() []string { return sortedKeys(p.adapters) }
+@@ -331,7 +351,7 @@ func (p *Policy) PlatformNames() []string { return sortedKeys(p.adapters) }
  // set does not ship).
  func (p *Policy) PlatformSource(name string) string {
  	b, written := p.overrides[name]
@@ -7340,7 +7693,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index b9986b4..0c82c85 100644
+index aa1d950..8aab240 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -28,6 +28,10 @@ var shipped = map[string]Dialect{
@@ -7372,7 +7725,7 @@ index b9986b4..0c82c85 100644
  	},
  	"juniper_junos": {
  		PipeToken: "|", StripCR: true,
-@@ -189,8 +197,10 @@ func TestValidateNamesTheField(t *testing.T) {
+@@ -231,8 +239,10 @@ func TestValidateNamesTheField(t *testing.T) {
  		"not in accepted_attributes": with(ok, func(d *Dialect) {
  			d.Levels, d.AcceptedAttributes = map[string][]string{"admin": {"roles=x"}}, []string{"priv-lvl"}
  		}),
@@ -7533,7 +7886,7 @@ Expected: FAIL — `d.Unreachable undefined`, `undefined: FindingDeadRule` (buil
 <!-- patch: internal/platform/adapter.go -->
 ````diff
 diff --git a/internal/platform/adapter.go b/internal/platform/adapter.go
-index d47c714..86b8d0c 100644
+index b06afa1..cc97f02 100644
 --- a/internal/platform/adapter.go
 +++ b/internal/platform/adapter.go
 @@ -37,6 +37,8 @@ type Spec struct {
@@ -7563,7 +7916,7 @@ index d47c714..86b8d0c 100644
  	return d
  }
  
-@@ -249,6 +262,19 @@ func Validate(name string, d Dialect) error {
+@@ -260,6 +273,19 @@ func Validate(name string, d Dialect) error {
  			return fmt.Errorf("%s[%d]: %w", field("redact"), i, err)
  		}
  	}
@@ -7583,7 +7936,7 @@ index d47c714..86b8d0c 100644
  	if !slices.Contains(verifications, d.Verified) {
  		return fmt.Errorf("%s is %q; it is containerlab, community, or unset", field("verified"), d.Verified)
  	}
-@@ -313,6 +339,12 @@ func SpecOf(d Dialect) Spec {
+@@ -324,6 +350,12 @@ func SpecOf(d Dialect) Spec {
  	if d.Verified != "" {
  		s.Verified = &d.Verified
  	}
@@ -7916,7 +8269,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 **Interfaces:**
 - Produces: `Dialect.LocalAccounts []string` (RE2, one capture group), `Dialect.ConfigChecks
   []ConfigCheck`, `type ConfigCheck struct { Match, Says string }`, keys `local_accounts`,
-  `config_checks`; `func (d Dialect) ReadConfig(config []byte) ([]LocalAccount, []ConfigFinding)`;
+  `config_checks`; `func (d Dialect) ReadConfig(config []byte) ([]LocalAccount, []ConfigFinding,
+  error)` — the error where the text was not read to the end, which the command exits 1 on
+  (pre-flight S9);
   `func (p *Policy) ServedUsernames(device string, now time.Time) (map[string]string, []string, error)`.
   `port49 devices check-config --policy F --inventory I --device NAME CONFIGFILE`, exit 1 on a
   finding. This is plan 2b's owed check (spec §5.6).
@@ -7988,7 +8343,7 @@ index 0000000..b9c4960
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index 0c82c85..818ad81 100644
+index 8aab240..fc778c9 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -31,7 +31,15 @@ var shipped = map[string]Dialect{
@@ -8057,10 +8412,10 @@ index 0c82c85..818ad81 100644
 ````diff
 diff --git a/internal/platform/config_test.go b/internal/platform/config_test.go
 new file mode 100644
-index 0000000..6c994a7
+index 0000000..d897423
 --- /dev/null
 +++ b/internal/platform/config_test.go
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,91 @@
 +package platform
 +
 +import (
@@ -8092,9 +8447,9 @@ index 0000000..6c994a7
 +			t.Fatal(err)
 +		}
 +		d, _ := DialectFor(tt.platform)
-+		accounts, findings := d.ReadConfig(raw)
-+		if !reflect.DeepEqual(accounts, tt.accounts) {
-+			t.Errorf("%s accounts: %+v", tt.platform, accounts)
++		accounts, findings, err := d.ReadConfig(raw)
++		if err != nil || !reflect.DeepEqual(accounts, tt.accounts) {
++			t.Errorf("%s accounts: %+v %v", tt.platform, accounts, err)
 +		}
 +		var lines []int
 +		for _, f := range findings {
@@ -8118,14 +8473,25 @@ index 0000000..6c994a7
 +		"cisco_nxos":  "aaa authorization config-commands default group port49 none",
 +	} {
 +		d, _ := DialectFor(platformName)
-+		if _, findings := d.ReadConfig([]byte("hostname x\n" + line + "\n")); len(findings) != 1 ||
++		if _, findings, _ := d.ReadConfig([]byte("hostname x\n" + line + "\n")); len(findings) != 1 ||
 +			findings[0].Line != 2 || !strings.Contains(findings[0].Says, "none or if-authenticated") {
 +			t.Errorf("%s: %+v", platformName, findings)
 +		}
 +	}
 +	eos, _ := DialectFor("arista_eos")
-+	if _, findings := eos.ReadConfig([]byte("aaa authorization commands all default group port49 local\n")); len(findings) != 0 {
++	if _, findings, _ := eos.ReadConfig([]byte("aaa authorization commands all default group port49 local\n")); len(findings) != 0 {
 +		t.Errorf("a list ending in local is what the spec asks for: %+v", findings)
++	}
++}
++
++// A configuration the check could not read to the end is an error, never a
++// clean result: a line past the scanner's limit — a banner, a certificate
++// chain — would otherwise stop the read and pass whatever followed it.
++func TestAConfigReadShortIsAnError(t *testing.T) {
++	eos, _ := DialectFor("arista_eos")
++	raw := "banner motd " + strings.Repeat("x", 2<<20) + "\naaa authorization commands all default group port49 none\n"
++	if _, _, err := eos.ReadConfig([]byte(raw)); err == nil {
++		t.Fatal("a line past the limit must fail the read")
 +	}
 +}
 +
@@ -8190,10 +8556,10 @@ Expected: FAIL — `undefined: ConfigCheck`, `p.ServedUsernames undefined` (buil
 ````diff
 diff --git a/cmd/port49/devices.go b/cmd/port49/devices.go
 new file mode 100644
-index 0000000..873ee3c
+index 0000000..bb7db55
 --- /dev/null
 +++ b/cmd/port49/devices.go
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,82 @@
 +package main
 +
 +import (
@@ -8247,7 +8613,11 @@ index 0000000..873ee3c
 +		fmt.Fprintln(stderr, "port49 devices check-config:", err)
 +		return 1
 +	}
-+	accounts, findings := p.Dialect(d.Platform).ReadConfig(config)
++	accounts, findings, err := p.Dialect(d.Platform).ReadConfig(config)
++	if err != nil {
++		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
++		return 1
++	}
 +	failed := 0
 +	for _, a := range accounts {
 +		if subject, ok := served[a.Name]; ok {
@@ -8304,7 +8674,7 @@ index fc91e4c..bf4648c 100644
 <!-- patch: internal/platform/adapter.go -->
 ````diff
 diff --git a/internal/platform/adapter.go b/internal/platform/adapter.go
-index 86b8d0c..f296b06 100644
+index cc97f02..cde77ac 100644
 --- a/internal/platform/adapter.go
 +++ b/internal/platform/adapter.go
 @@ -39,6 +39,8 @@ type Spec struct {
@@ -8329,7 +8699,7 @@ index 86b8d0c..f296b06 100644
  	return d
  }
  
-@@ -275,6 +283,19 @@ func Validate(name string, d Dialect) error {
+@@ -286,6 +294,19 @@ func Validate(name string, d Dialect) error {
  				level)
  		}
  	}
@@ -8349,7 +8719,7 @@ index 86b8d0c..f296b06 100644
  	if !slices.Contains(verifications, d.Verified) {
  		return fmt.Errorf("%s is %q; it is containerlab, community, or unset", field("verified"), d.Verified)
  	}
-@@ -345,6 +366,12 @@ func SpecOf(d Dialect) Spec {
+@@ -356,6 +377,12 @@ func SpecOf(d Dialect) Spec {
  	if d.Fallback != nil {
  		s.Fallback = &d.Fallback
  	}
@@ -8368,15 +8738,16 @@ index 86b8d0c..f296b06 100644
 ````diff
 diff --git a/internal/platform/config.go b/internal/platform/config.go
 new file mode 100644
-index 0000000..dfaa4ca
+index 0000000..569c437
 --- /dev/null
 +++ b/internal/platform/config.go
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,67 @@
 +package platform
 +
 +import (
 +	"bufio"
 +	"bytes"
++	"fmt"
 +	"regexp"
 +)
 +
@@ -8396,9 +8767,10 @@ index 0000000..dfaa4ca
 +
 +// ReadConfig reads a device's configuration text, as `show running-config`
 +// prints it, against the adapter: every local account its LocalAccounts
-+// patterns name, and every line a ConfigChecks entry matches. It is a lab and
-+// CI instrument: port49 never logs into a device (spec §8, "Verification").
-+func (d Dialect) ReadConfig(config []byte) ([]LocalAccount, []ConfigFinding) {
++// patterns name, every line a ConfigChecks entry matches, and an error where
++// the text could not be read to the end. It is a lab and CI instrument: port49
++// never logs into a device (spec §8, "Verification").
++func (d Dialect) ReadConfig(config []byte) ([]LocalAccount, []ConfigFinding, error) {
 +	var accounts []LocalAccount
 +	var findings []ConfigFinding
 +	var accountRes, checkRes []*regexp.Regexp
@@ -8430,7 +8802,12 @@ index 0000000..dfaa4ca
 +			}
 +		}
 +	}
-+	return accounts, findings
++	// A read that stopped short is not a clean configuration: whatever
++	// followed the line it stopped at was never checked.
++	if err := sc.Err(); err != nil {
++		return nil, nil, fmt.Errorf("the configuration was not read to the end: %w", err)
++	}
++	return accounts, findings, nil
 +}
 ````
 
@@ -8623,8 +9000,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Produces: `var runGit func(dir string, args ...string) (string, error)`;
   `var openPR func(dir, branch, base, title, body string) (string, error)` (a test replaces it);
   `func removalPR(path, subject string, edited []byte, r policy.Removal, remote, base string) (string, error)`.
-  Branch `port49/offboard-<subject>`; a subject name outside `[A-Za-z0-9._-]` is refused for
-  `--pr`. `--pr` with `--write` is a usage error.
+  Branch `port49/offboard-<subject>`, cut from `--base` as `--remote` has it after a fetch; a
+  subject name outside `[A-Za-z0-9._-]` is refused for `--pr`, and so is a `--remote` or `--base`
+  starting with `-`, or a policy file that differs from the base's (pre-flight S5).
+  `func withoutCredentials(string) string` replaces a URL's credential in git's and gh's error
+  text (pre-flight N9). `--pr` with `--write` is a usage error.
 
 The test runs real `git` against a scratch repository and a bare remote, with identity and
 signing set in the repository, and skips where `git` is not installed; `gh` is never run.
@@ -8635,10 +9015,10 @@ signing set in the repository, and skips where `git` is not installed; `gh` is n
 ````diff
 diff --git a/cmd/port49/pr_test.go b/cmd/port49/pr_test.go
 new file mode 100644
-index 0000000..f2a7887
+index 0000000..4c6117d
 --- /dev/null
 +++ b/cmd/port49/pr_test.go
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,146 @@
 +package main
 +
 +import (
@@ -8729,6 +9109,60 @@ index 0000000..f2a7887
 +	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "noc", "--pr",
 +		"--write"}, &out, &errb); code != 2 {
 +		t.Fatalf("--pr and --write: code %d", code)
++	}
++}
++
++// The branch is cut from the base on the remote, not from the checkout's
++// HEAD: an operator on a branch ahead of main gets a pull request carrying the
++// removal alone, and one whose policy file differs from the base's is refused,
++// because the removal was computed from a file the pull request would not
++// merge into (spec §12, "the edit and nothing else").
++func TestThePullRequestIsCutFromTheBase(t *testing.T) {
++	repo, remote, pol, inv := gitRepo(t)
++	orig := openPR
++	openPR = func(dir, branch, base, title, body string) (string, error) { return "https://example.test/pull/8", nil }
++	t.Cleanup(func() { openPR = orig })
++	if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("unrelated\n"), 0o644); err != nil {
++		t.Fatal(err)
++	}
++	for _, args := range [][]string{{"checkout", "--quiet", "-b", "work"}, {"add", "notes.txt"},
++		{"commit", "--quiet", "-m", "unrelated"}} {
++		if _, err := runGit(repo, args...); err != nil {
++			t.Fatal(err)
++		}
++	}
++	var out, errb bytes.Buffer
++	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops", "--pr"}, &out,
++		&errb); code != 0 {
++		t.Fatalf("code %d\n%s", code, errb.String())
++	}
++	if log, _ := runGit(remote, "log", "--format=%s", "main..port49/offboard-ops"); log != "chore(policy): offboard ops" {
++		t.Fatalf("the branch carries more than the removal:\n%s", log)
++	}
++	if err := os.WriteFile(pol, append(readFile(t, pol), []byte("# committed here, not on main\n")...), 0o644); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := runGit(repo, "commit", "--quiet", "-am", "a local policy edit"); err != nil {
++		t.Fatal(err)
++	}
++	errb.Reset()
++	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "noc", "--pr"}, &out,
++		&errb); code != 1 || !strings.Contains(errb.String(), "differs from origin/main") {
++		t.Fatalf("code %d %s", code, errb.String())
++	}
++	errb.Reset()
++	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "noc", "--pr",
++		"--remote", "--receive-pack=touch /tmp/x"}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "not a remote") {
++		t.Fatalf("code %d %s", code, errb.String())
++	}
++}
++
++// git's own error text can carry a remote's URL, and a URL can carry a
++// credential: it is removed before the error is printed.
++func TestAGitErrorDoesNotPrintACredential(t *testing.T) {
++	got := withoutCredentials("fatal: unable to access 'https://ci:ghp_s3cret@github.com/o/p.git/': 403")
++	if strings.Contains(got, "ghp_s3cret") || !strings.Contains(got, "https://«redacted»@github.com/o/p.git/") {
++		t.Fatalf("%q", got)
 +	}
 +}
 ````
@@ -8826,10 +9260,10 @@ index 69c3ff8..70ce382 100644
 ````diff
 diff --git a/cmd/port49/pr.go b/cmd/port49/pr.go
 new file mode 100644
-index 0000000..1fec2fe
+index 0000000..62d7f96
 --- /dev/null
 +++ b/cmd/port49/pr.go
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,140 @@
 +package main
 +
 +import (
@@ -8856,9 +9290,20 @@ index 0000000..1fec2fe
 +	var out, errb bytes.Buffer
 +	cmd.Stdout, cmd.Stderr = &out, &errb
 +	if err := cmd.Run(); err != nil {
-+		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
++		return "", fmt.Errorf("git %s: %v: %s", strings.Join(args, " "), err,
++			withoutCredentials(strings.TrimSpace(errb.String())))
 +	}
 +	return strings.TrimSpace(out.String()), nil
++}
++
++// credentialInURL is the user-information part of a URL, where a token
++// pasted into a remote's address sits.
++var credentialInURL = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@`)
++
++// withoutCredentials is git's or gh's error text with any credential in a URL
++// replaced: some git releases print the remote's address as configured.
++func withoutCredentials(s string) string {
++	return credentialInURL.ReplaceAllString(s, "${1}«redacted»@")
 +}
 +
 +// openPR opens the pull request with the gh CLI, in dir, and returns its URL.
@@ -8869,22 +9314,32 @@ index 0000000..1fec2fe
 +	var out, errb bytes.Buffer
 +	cmd.Stdout, cmd.Stderr = &out, &errb
 +	if err := cmd.Run(); err != nil {
-+		return "", fmt.Errorf("gh pr create: %v: %s", err, strings.TrimSpace(errb.String()))
++		return "", fmt.Errorf("gh pr create: %v: %s", err, withoutCredentials(strings.TrimSpace(errb.String())))
 +	}
 +	return strings.TrimSpace(out.String()), nil
 +}
 +
 +// removalPR opens the pull request `grants remove` prepares (spec §12; plan 4
-+// prepares the file, plan 5 opens the review): a branch off the repository's
-+// HEAD with the policy file edited and nothing else, pushed to remote, and a
-+// pull request against base. It works in a worktree of its own, so the
-+// operator's checkout, and any edit in it, is never touched; it refuses a
-+// policy file with uncommitted changes, which the pull request would
-+// otherwise silently leave out. It returns the pull request's URL.
++// prepares the file, plan 5 opens the review): a branch off base as the
++// remote has it, with the policy file edited and nothing else, pushed to
++// remote, and a pull request against base. It works in a worktree of its own,
++// so the operator's checkout, and any edit in it, is never touched. It
++// refuses a policy file with uncommitted changes, which the pull request would
++// otherwise silently leave out, and one that differs from base's, since the
++// removal was computed from a file the pull request would not merge into. It
++// returns the pull request's URL.
 +func removalPR(path, subject string, edited []byte, r policy.Removal, remote, base string) (string, error) {
 +	if !branchSafe.MatchString(subject) {
 +		return "", fmt.Errorf("subject %q cannot name a branch; offboard it with --write and open the review by hand",
 +			subject)
++	}
++	// Both reach git's argument list; one starting with `-` would be read as
++	// an option (`--receive-pack=...` runs a command).
++	if remote == "" || strings.HasPrefix(remote, "-") {
++		return "", fmt.Errorf("--remote %q is not a remote's name", remote)
++	}
++	if base == "" || strings.HasPrefix(base, "-") {
++		return "", fmt.Errorf("--base %q is not a branch's name", base)
 +	}
 +	path, err := filepath.EvalSymlinks(path)
 +	if err != nil {
@@ -8905,6 +9360,20 @@ index 0000000..1fec2fe
 +		return "", errors.New("the policy file has uncommitted changes; commit or discard them first, so the pull " +
 +			"request carries the removal and nothing else")
 +	}
++	if _, err := runGit(top, "fetch", "--quiet", remote, base); err != nil {
++		return "", err
++	}
++	from, err := runGit(top, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
++	if err != nil {
++		return "", err
++	}
++	here, _ := runGit(top, "rev-parse", "HEAD:"+filepath.ToSlash(rel))
++	there, _ := runGit(top, "rev-parse", from+":"+filepath.ToSlash(rel))
++	if here == "" || here != there {
++		return "", fmt.Errorf("the policy file differs from %s/%s; the removal is computed from your checkout's "+
++			"copy, so bring it level with %s/%s first, and the pull request carries the removal and nothing else",
++			remote, base, remote, base)
++	}
 +	branch := "port49/offboard-" + subject
 +	scratch, err := os.MkdirTemp("", "port49-offboard-")
 +	if err != nil {
@@ -8912,7 +9381,7 @@ index 0000000..1fec2fe
 +	}
 +	defer os.RemoveAll(scratch)
 +	work := filepath.Join(scratch, "work")
-+	if _, err := runGit(top, "worktree", "add", "-b", branch, work, "HEAD"); err != nil {
++	if _, err := runGit(top, "worktree", "add", "-b", branch, work, from); err != nil {
 +		return "", err
 +	}
 +	defer runGit(top, "worktree", "remove", "--force", work)
@@ -8960,14 +9429,15 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Create: `tests/lab/adapters_test.go`
 - Modify: `tests/lab/slice_test.go`, `tests/lab/slice/policy.yaml` (the slice on all three
   per-command platforms)
-- Results (written by the run): `tests/lab/results/adapters-arista_eos.md`,
-  `adapters-cisco_nxos.md`, `adapters-cisco_iosxe.md`, `slice-cisco_nxos.md`,
-  `slice-cisco_iosxe.md`, a fresh `slice-arista_eos.md`; evidence under `tests/lab/evidence/`.
+- Results (written by the run): `tests/lab/results/L22-arista_eos.md`, `L22-cisco_nxos.md`,
+  `L22-cisco_iosxe.md` — named for the register row they close (CLAUDE.md, "Closing an entry") —
+  `slice-cisco_nxos.md`, `slice-cisco_iosxe.md`, a fresh `slice-arista_eos.md`; evidence under
+  `tests/lab/evidence/` (`L22-*.pcap`, `slice-*.pcap`).
 
 **Interfaces:**
 - Consumes: `platform.DialectFor(name).Render(level)` — the binary under test's own rendering;
-  the harness's `derivedConfig`, `startDaemonWith`, `nextLogin`, `login`, `drainRecords`,
-  `capture`, `result`, `waitDeviceReady`.
+  the harness's `derivedConfig`, `startDaemonWith`, `stopDaemon`, `nextLogin`, `login`, `dial`,
+  `drainRecords`, `capture`, `result`, `waitDeviceReady`.
 - Produces: the notes Task 18 reads, and `adapterExpect`, the table the run is judged against —
   Decided 5's rendering and `tests/lab/results/ceiling-*.md`'s ladder.
 
@@ -8979,12 +9449,29 @@ from it (`make lab` deploys; a hand run must `containerlab deploy --reconfigure`
 For each level the test delivers the adapter's exact reply through the lab authorizer
 (`lab.session_attributes`), logs in with a fresh seeded token, and records the device's identity
 line (`show privilege`, or `show user-account` on NX-OS), and whether `clear counters` and
-`configure terminal` reached port49 at all. On NX-OS it records the bare `show interface` too,
-since production has seen `network-operator` prompted for sudo there. Then it tries
-`home-directory*/home/port49`, `idletime*30` and `timeout*480` beside admin's reply; on IOS-XE a
-refusal locks SSH for about a minute, and the test waits it out. It fails on any level whose
-measurement differs from the adapter's promise — and CLAUDE.md rule 4 then applies: the adapter
-is wrong, not the device.
+`configure terminal` reached port49 at all, and whether a `show version` was permitted. On NX-OS
+it records the bare `show interface` too, since production has seen `network-operator` prompted
+for sudo there. Each command goes on its own SSH exec channel, as the harness's `login` sends it;
+on IOS-XE `clear counters` then meets `[confirm]` with no one to answer, which does not matter,
+because whether it reached port49 is read off the authorization record, which comes first.
+
+Then it tries `home-directory*/home/port49`, `idletime*30` and `timeout*480` beside admin's reply;
+on IOS-XE a refusal locks SSH for about a minute, and the test waits it out. A candidate is inert
+only where its session opened with admin's identity, admin's reach for both ceiling commands, and
+a permitted `show version`: L18 saw the C8000V open a session and refuse every command in it, so
+an open session alone proves nothing (pre-flight S6).
+
+Last, the fallback decision 25 rests on, which L16 measured only with the method list pointed at
+`local` alone (pre-flight B1): operator's reply, one interactive pty session, port49d stopped
+under it, then `configure terminal` and `hostname <node>` — the value the device already holds,
+as L16 did — typed with the device's method list falling back to `local`. admin's reply is the
+control; on EOS and NX-OS it must change the configuration, or the operator's refusal says nothing
+about its role. On IOS-XE the control is recorded, not required: a token session at 15 falling
+back is unmeasured, and operator's level 7 refuses `configure terminal` in the parser anyway.
+
+It fails on any level whose measurement differs from the adapter's promise, and on an operator
+who changes the configuration with port49 down — and CLAUDE.md rule 4 then applies: the adapter
+(or decision 25) is wrong, not the device.
 
 - [ ] **Step 1: Write the lab test and move the slice**
 
@@ -8992,21 +9479,26 @@ is wrong, not the device.
 ````diff
 diff --git a/tests/lab/adapters_test.go b/tests/lab/adapters_test.go
 new file mode 100644
-index 0000000..7905583
+index 0000000..f5db9db
 --- /dev/null
 +++ b/tests/lab/adapters_test.go
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,380 @@
 +//go:build lab
 +
 +package lab
 +
 +import (
++	"bytes"
 +	"encoding/json"
 +	"fmt"
++	"io"
 +	"slices"
 +	"strings"
++	"sync"
 +	"testing"
 +	"time"
++
++	"golang.org/x/crypto/ssh"
 +
 +	adapter "github.com/rhwendt/port49/internal/platform"
 +)
@@ -9018,15 +9510,25 @@ index 0000000..7905583
 +// it will do — the privilege or role the device reports, and which of the
 +// ceiling commands it sends port49 at all (tests/lab/results/ceiling-*.md).
 +// Then each candidate inert attribute beside admin's reply: whether the
-+// session still opens and the privilege is unchanged, which is what listing
++// session still opens, the privilege is unchanged, the same ceiling commands
++// reach port49 and a `show version` is still authorized — L18 saw the C8000V
++// open a session and then refuse every command in it — which is what listing
 +// it inert would claim (spec §6). On NX-OS the bare `show interface` is
 +// recorded too: production has seen network-operator prompted for sudo there
 +// (roadmap, plan 5), and readonly gets that role.
 +//
++// Last, the fallback decision 25 rests on: operator's reply, one interactive
++// session, port49d stopped under it, and a configuration change typed — the
++// device's method list falls back to local, and the role it delivered at
++// login is the policy. admin's reply is the control: a refusal that happens
++// to every session says nothing about the role.
++//
 +// The lab authorizer delivers the reply (`lab.session_attributes`), so every
 +// variant is one daemon restart and one seeded login; the rendering itself is
 +// the adapter's, read from the binary under test, so the note measures what
-+// ships.
++// ships. The level and inert variants send each command on its own SSH exec
++// channel, as the harness's login does; the fallback holds one pty session,
++// because port49d stops in the middle of it. The note is L22's (spec §15).
 +
 +// adapterProbe is one level's expectation: the identity line the device must
 +// print, and whether each ceiling command reaches port49.
@@ -9058,7 +9560,8 @@ index 0000000..7905583
 +}
 +
 +// inertCandidates are the attributes Task 18 lists inert where this run finds
-+// the session unchanged: spec §6's own case and two Cisco shell attributes an
++// the session unchanged — opened, admin's identity and reach, and a permitted
++// `show version` — spec §6's own case and two Cisco shell attributes an
 +// operator is likeliest to add under `all`.
 +var inertCandidates = []string{"home-directory*/home/port49", "idletime*30", "timeout*480"}
 +
@@ -9069,7 +9572,7 @@ index 0000000..7905583
 +			t.Skipf("%s renders no level until plan 5b's projection", l.p.name)
 +		}
 +		d, _ := adapter.DialectFor(l.p.name)
-+		stop := l.capture(t, "adapters")
++		stop := l.capture(t, "L22")
 +		defer stop()
 +		defer func() {
 +			std, err := l.configPath()
@@ -9099,11 +9602,19 @@ index 0000000..7905583
 +					row.clear, want.clearReached, row.cfg, want.cfgReached)
 +			}
 +		}
-+		fmt.Fprintf(&obs, "\n### Inert candidates, each beside admin's reply\n\n| attribute | session | identity |\n|---|---|---|\n")
++		fmt.Fprintf(&obs, "\n### Inert candidates, each beside admin's reply\n\n"+
++			"| attribute | session | identity | `clear counters` | `configure terminal` | `show version` | inert |\n"+
++			"|---|---|---|---|---|---|---|\n")
 +		admin, _ := d.Render("admin")
++		adminRow := l.adapterVariant(t, "admin-control", admin)
 +		for _, a := range inertCandidates {
 +			row := l.adapterVariant(t, "inert-"+strings.SplitN(a, "*", 2)[0], append(slices.Clone(admin), a))
-+			fmt.Fprintf(&obs, "| `%s` | %s | %s |\n", a, row.session, row.identity)
++			// Inert only where nothing about the session moved: opened, admin's
++			// identity, admin's reach, and a command still authorized.
++			inert := row.err == nil && row.identity == adminRow.identity && row.clear == adminRow.clear &&
++				row.cfg == adminRow.cfg && row.showVersion
++			fmt.Fprintf(&obs, "| `%s` | %s | %s | %s | %s | %s | %s |\n", a, row.session, row.identity,
++				reached(row.clear), reached(row.cfg), permitted(row.showVersion), yesNo(inert))
 +			if row.err != nil && l.p.name == "cisco_iosxe" {
 +				// A refused session stops this image answering SSH for about a
 +				// minute (L18); wait it out before the next variant.
@@ -9112,10 +9623,33 @@ index 0000000..7905583
 +				}
 +			}
 +		}
-+		l.result(t, "adapters", "Each built-in adapter's reply at readonly, operator and admin is applied by the "+
++		fmt.Fprintf(&obs, "\n### Fallback: port49d stopped under an open session\n\n"+
++			"| level | reply | `configure terminal`, then `hostname %s` | transcript after port49d stopped |\n"+
++			"|---|---|---|---|\n", l.p.node)
++		for _, level := range []string{"operator", "admin"} {
++			attrs, _ := d.Render(level)
++			fb := l.fallbackVariant(t, level, attrs)
++			fmt.Fprintf(&obs, "| %s | `%s` | %s | `%s` |\n", level, strings.Join(attrs, "`, `"), fb.outcome(),
++				strings.ReplaceAll(fb.transcript, "\n", " ⏎ "))
++			switch {
++			case fb.err != nil:
++				t.Errorf("fallback %s: %v", level, fb.err)
++			case level == "operator" && fb.changed:
++				t.Errorf("fallback: an operator changed the configuration with port49 down; decision 25 says the "+
++					"role it was given refuses it (L16, command authorization LOCAL):\n%s", fb.transcript)
++			case level == "admin" && !fb.changed && l.p.name != "cisco_iosxe":
++				// The control: network-admin configures under local
++				// authorization, or the operator's refusal measured nothing.
++				t.Errorf("fallback control: admin could not change the configuration either, so the operator's "+
++					"refusal says nothing about its role:\n%s", fb.transcript)
++			}
++		}
++		l.result(t, "L22", "Each built-in adapter's reply at readonly, operator and admin is applied by the "+
 +			"device as the adapter says — the privilege or role the device reports, and which of `clear counters` "+
-+			"and `configure terminal` it sends port49 at all — and which candidate inert attributes leave admin's "+
-+			"session unchanged (plan 5a, Task 17; spec §6, §8).", obs.String())
++			"and `configure terminal` it sends port49 at all; which candidate inert attributes leave admin's "+
++			"session unchanged; and, with port49d stopped under an open session, that operator's reply cannot "+
++			"change the configuration where admin's can (plan 5a, Task 17; spec §6, §8, §15 L22; decision 25).",
++			obs.String())
 +	})
 +}
 +
@@ -9125,6 +9659,7 @@ index 0000000..7905583
 +	session          string
 +	identity         string
 +	clear, cfg       bool
++	showVersion      bool // a `show version` authorize_command was permitted
 +	clearOut, cfgOut string
 +	// showIf is the first line of NX-OS's reply to a bare `show interface`,
 +	// "—" elsewhere.
@@ -9136,6 +9671,20 @@ index 0000000..7905583
 +		return "sent to port49"
 +	}
 +	return "refused by the device"
++}
++
++func permitted(b bool) string {
++	if b {
++		return "permitted by port49"
++	}
++	return "not permitted"
++}
++
++func yesNo(b bool) string {
++	if b {
++		return "yes"
++	}
++	return "no"
 +}
 +
 +// adapterVariant restarts port49d delivering attrs, logs in with a fresh
@@ -9155,7 +9704,7 @@ index 0000000..7905583
 +	if l.p.name == "cisco_nxos" {
 +		identity = "show user-account " + user
 +	}
-+	commands := []string{identity, "clear counters", "configure terminal"}
++	commands := []string{identity, "clear counters", "configure terminal", "show version"}
 +	if l.p.name == "cisco_nxos" {
 +		commands = append(commands, "show interface")
 +	}
@@ -9167,8 +9716,8 @@ index 0000000..7905583
 +		row.session = "refused: " + err.Error()
 +		return row
 +	}
-+	if len(outs) == 4 {
-+		row.showIf = "`" + strings.TrimSpace(strings.Split(strings.TrimSpace(outs[3])+"\n", "\n")[0]) + "`"
++	if len(outs) == 5 {
++		row.showIf = "`" + strings.TrimSpace(strings.Split(strings.TrimSpace(outs[4])+"\n", "\n")[0]) + "`"
 +	}
 +	if len(outs) >= 3 {
 +		row.identity = strings.TrimSpace(strings.Split(strings.TrimSpace(outs[0]), "\n")[0])
@@ -9191,6 +9740,8 @@ index 0000000..7905583
 +			row.clear = true
 +		case len(v) >= 2 && v[0] == "configure" && v[1] == "terminal":
 +			row.cfg = true
++		case len(v) >= 2 && v[0] == "show" && v[1] == "version" && str(r, "verdict") == "permit":
++			row.showVersion = true
 +		}
 +	}
 +	return row
@@ -9203,12 +9754,121 @@ index 0000000..7905583
 +	}
 +	return l.startDaemonWith(cfg, true)
 +}
++
++// fallbackRow is one fallback variant: whether the configuration change
++// took, and what the device printed after port49d stopped.
++type fallbackRow struct {
++	err        error
++	changed    bool
++	transcript string
++}
++
++func (f fallbackRow) outcome() string {
++	switch {
++	case f.err != nil:
++		return "not measured: " + f.err.Error()
++	case f.changed:
++		return "**accepted**"
++	}
++	return "refused"
++}
++
++// fallbackVariant delivers attrs, opens one interactive session, stops
++// port49d under it, and types `configure terminal` and `hostname <node>` —
++// the value the device already holds, as L16 did, so an accepted change
++// changes nothing. The device's command method list ends in local
++// (tests/lab/configs/*-startup.cfg), so with port49d gone it authorizes on
++// its own. The change took where the device printed no `%` error after the
++// hostname line and left configuration mode on `end`.
++func (l *lab) fallbackVariant(t *testing.T, level string, attrs []string) fallbackRow {
++	t.Helper()
++	quoted, _ := json.Marshal(attrs)
++	cfg, err := l.derivedConfig("fallback-"+level, string(quoted), "")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.restart(cfg); err != nil {
++		t.Fatalf("fallback %s: port49d would not start: %v", level, err)
++	}
++	user, secret := l.nextLogin(t)
++	c, err := l.dial(user, secret, 45*time.Second)
++	if err != nil {
++		return fallbackRow{err: err}
++	}
++	defer c.Close()
++	s, err := c.NewSession()
++	if err != nil {
++		return fallbackRow{err: err}
++	}
++	defer s.Close()
++	if err := s.RequestPty("vt100", 40, 200, ssh.TerminalModes{ssh.ECHO: 0}); err != nil {
++		return fallbackRow{err: fmt.Errorf("request pty: %w", err)}
++	}
++	stdin, err := s.StdinPipe()
++	if err != nil {
++		return fallbackRow{err: err}
++	}
++	var buf syncBuffer
++	s.Stdout, s.Stderr = &buf, &buf
++	if err := s.Shell(); err != nil {
++		return fallbackRow{err: fmt.Errorf("start shell: %w", err)}
++	}
++	typeLine := func(line string, wait time.Duration) {
++		_, _ = io.WriteString(stdin, line+"\r")
++		time.Sleep(wait)
++	}
++	typeLine("", 3*time.Second)
++	if err := l.stopDaemon(); err != nil {
++		return fallbackRow{err: err}
++	}
++	mark := buf.Len()
++	// A down TACACS+ server is a refused connection, so the device moves to
++	// local at once; the waits are for the device's own prompt.
++	typeLine("configure terminal", 5*time.Second)
++	typeLine("hostname "+l.p.node, 5*time.Second)
++	afterHostname := buf.Len()
++	typeLine("end", 3*time.Second)
++	typeLine("exit", 2*time.Second)
++	stdin.Close()
++	out := buf.String()
++	hostnameOut := out[mark:afterHostname]
++	if i := strings.Index(hostnameOut, "hostname "+l.p.node); i >= 0 {
++		hostnameOut = hostnameOut[i:]
++	}
++	return fallbackRow{changed: strings.Contains(out[mark:afterHostname], "(config)#") &&
++		!strings.Contains(hostnameOut, "%"), transcript: strings.TrimSpace(out[mark:])}
++}
++
++// syncBuffer is a bytes.Buffer the SSH session writes from its own
++// goroutine while the test reads it.
++type syncBuffer struct {
++	mu sync.Mutex
++	b  bytes.Buffer
++}
++
++func (b *syncBuffer) Write(p []byte) (int, error) {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return b.b.Write(p)
++}
++
++func (b *syncBuffer) Len() int {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return b.b.Len()
++}
++
++func (b *syncBuffer) String() string {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	return b.b.String()
++}
 ````
 
 <!-- patch: tests/lab/slice_test.go -->
 ````diff
 diff --git a/tests/lab/slice_test.go b/tests/lab/slice_test.go
-index 2cd0b8c..03c192c 100644
+index 2cd0b8c..4a6fbcd 100644
 --- a/tests/lab/slice_test.go
 +++ b/tests/lab/slice_test.go
 @@ -28,8 +28,9 @@ import (
@@ -9218,7 +9878,7 @@ index 2cd0b8c..03c192c 100644
 -// vEOS only: the slice renders session attributes for arista_eos alone (plan 3,
 -// Decided 6), and a login elsewhere would measure plan 5's missing adapter.
 +// The per-command platforms: plan 5a's adapters render a level on vEOS, the
-+// N9Kv and IOS-XE (tests/lab/results/adapters-*.md). Junos renders nothing
++// N9Kv and IOS-XE (tests/lab/results/L22-*.md). Junos renders nothing
 +// until plan 5b's projection, so a login there would measure a missing adapter.
  
  const (
@@ -9362,20 +10022,23 @@ PORT49_LAB_PLATFORMS=nxos go test -tags lab ./tests/lab/... -count=1 -v -timeout
 PORT49_LAB_PLATFORMS=iosxe go test -tags lab ./tests/lab/... -count=1 -v -timeout 120m -run 'TestAdapterReplies|TestSliceEndToEnd'
 make evidence
 ```
-Expected: `PASS` for both tests on each platform, and `tests/lab/results/adapters-<platform>.md`
-written for each, with a table whose rows are Decided 5's and `adapterExpect`'s. Keep the raw
+Expected: `PASS` for both tests on each platform, and `tests/lab/results/L22-<platform>.md`
+written for each, with a table whose rows are Decided 5's and `adapterExpect`'s, an "Inert
+candidates" table with an `inert` column, and a "Fallback" table in which operator's change is
+refused and, on EOS and NX-OS, admin's is accepted. Keep the raw
 captures in `tests/lab/captures/` until the evidence is committed: the `labpcap` audit reads them,
 so a lab run in a worktree copies its raw captures to the main checkout before the worktree is
 removed.
 
-If a level fails, stop: do not edit `adapterExpect` to match. Bring the note to review; the
-adapter (or decision 25) changes, with the note cited, before Task 18.
+If a level or the fallback fails, stop: do not edit `adapterExpect` or the fallback's judgement
+to match. Bring the note to review; the adapter (or decision 25) changes, with the note cited,
+before Task 18.
 
 - [ ] **Step 4: Commit the test, the notes and the evidence**
 
 ```bash
 git add tests/lab/adapters_test.go tests/lab/slice_test.go tests/lab/slice/policy.yaml \
-  tests/lab/results/adapters-*.md tests/lab/results/slice-*.md tests/lab/evidence/adapters-*.pcap \
+  tests/lab/results/L22-*.md tests/lab/results/slice-*.md tests/lab/evidence/L22-*.pcap \
   tests/lab/evidence/slice-*.pcap
 git commit -m "test: the per-command adapters' replies, measured in the lab (L22)
 
@@ -9398,7 +10061,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 verify.
 
 This task is written for the outcome Task 17 is built to confirm — every level on every platform
-as the adapter says. The code part below is that case, and was run green. For a platform whose
+as the adapter says, and the fallback refusing operator's configuration change. The code part below is that case, and was run green. For a platform whose
 note disagrees, leave its `verified` unset (drop its hunk and its `shipped` line) and say which
 row disagreed in the PR body.
 
@@ -9425,14 +10088,14 @@ index f485e2f..9273748 100644
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index 818ad81..45951c5 100644
+index fc778c9..5e992d7 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -28,6 +28,7 @@ var shipped = map[string]Dialect{
  		InertAttributes:     []string{"home-directory"},
  		EnableUsername:      EnablePrincipal,
  		DeviceConfig:        []string{"aaa authorization commands all default group port49 local"},
-+		Verified:            "containerlab", // tests/lab/results/adapters-arista_eos.md
++		Verified:            "containerlab", // tests/lab/results/L22-arista_eos.md
  		// ceiling-arista_eos.md; L16-arista_eos.md, command authorization LOCAL.
  		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **",
  			"show users detail **"}},
@@ -9440,7 +10103,7 @@ index 818ad81..45951c5 100644
  		EnableUsername:      EnablePrincipal,
  		DeviceConfig: []string{"aaa authorization commands default group port49 local",
  			"aaa authorization config-commands default group port49 local"},
-+		Verified:      "containerlab", // tests/lab/results/adapters-cisco_nxos.md
++		Verified:      "containerlab", // tests/lab/results/L22-cisco_nxos.md
  		Fallback:      map[string]string{"admin": "network-admin: every command, configuration included"},
  		LocalAccounts: []string{`^username (\S+)`},
  		ConfigChecks: []ConfigCheck{
@@ -9448,7 +10111,7 @@ index 818ad81..45951c5 100644
  			"aaa authorization commands 7 default group port49 local",
  			"aaa authorization commands 15 default group port49 local",
  			"aaa accounting commands 7 default start-stop group port49", "privilege exec level 7 clear counters"},
-+		Verified: "containerlab", // tests/lab/results/adapters-cisco_iosxe.md
++		Verified: "containerlab", // tests/lab/results/L22-cisco_iosxe.md
  		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **"},
  			"operator": {"clear ip bgp **", "configure terminal **"}},
  		Fallback:      map[string]string{"admin": "level 15: every command, configuration included"},
@@ -9457,7 +10120,7 @@ index 818ad81..45951c5 100644
 <!-- patch: platforms/1.0.0/arista_eos.yaml -->
 ````diff
 diff --git a/platforms/1.0.0/arista_eos.yaml b/platforms/1.0.0/arista_eos.yaml
-index 42a2b8e..9ea12f0 100644
+index 42a2b8e..2159842 100644
 --- a/platforms/1.0.0/arista_eos.yaml
 +++ b/platforms/1.0.0/arista_eos.yaml
 @@ -3,6 +3,10 @@
@@ -9466,7 +10129,7 @@ index 42a2b8e..9ea12f0 100644
    arista_eos:
 +    # Every reply this adapter renders was applied by the lab image as the
 +    # adapter says, at readonly, operator and admin
-+    # (tests/lab/results/adapters-arista_eos.md; spec §15, L22).
++    # (tests/lab/results/L22-arista_eos.md; spec §15, L22).
 +    verified: containerlab
      # Session and per-command authorization (L1, L10). Config-command
      # authorization is unmeasured, so it is not claimed.
@@ -9476,7 +10139,7 @@ index 42a2b8e..9ea12f0 100644
 <!-- patch: platforms/1.0.0/cisco_iosxe.yaml -->
 ````diff
 diff --git a/platforms/1.0.0/cisco_iosxe.yaml b/platforms/1.0.0/cisco_iosxe.yaml
-index 5477d53..6407fad 100644
+index 5477d53..7794da8 100644
 --- a/platforms/1.0.0/cisco_iosxe.yaml
 +++ b/platforms/1.0.0/cisco_iosxe.yaml
 @@ -3,6 +3,10 @@
@@ -9485,7 +10148,7 @@ index 5477d53..6407fad 100644
    cisco_iosxe:
 +    # Every reply this adapter renders was applied by the lab image as the
 +    # adapter says, at readonly, operator and admin
-+    # (tests/lab/results/adapters-cisco_iosxe.md; spec §15, L22).
++    # (tests/lab/results/L22-cisco_iosxe.md; spec §15, L22).
 +    verified: containerlab
      # Session and per-command authorization (L1, L10). Config-command
      # authorization is unmeasured, so it is not claimed.
@@ -9495,7 +10158,7 @@ index 5477d53..6407fad 100644
 <!-- patch: platforms/1.0.0/cisco_nxos.yaml -->
 ````diff
 diff --git a/platforms/1.0.0/cisco_nxos.yaml b/platforms/1.0.0/cisco_nxos.yaml
-index ae58461..a7516a6 100644
+index ae58461..20a8530 100644
 --- a/platforms/1.0.0/cisco_nxos.yaml
 +++ b/platforms/1.0.0/cisco_nxos.yaml
 @@ -3,6 +3,10 @@
@@ -9504,7 +10167,7 @@ index ae58461..a7516a6 100644
    cisco_nxos:
 +    # Every reply this adapter renders was applied by the lab image as the
 +    # adapter says, at readonly, operator and admin
-+    # (tests/lab/results/adapters-cisco_nxos.md; spec §15, L22).
++    # (tests/lab/results/L22-cisco_nxos.md; spec §15, L22).
 +    verified: containerlab
      # Session and per-command authorization (L1, L10). Config-command
      # authorization is unmeasured, so it is not claimed.
@@ -9513,20 +10176,22 @@ index ae58461..a7516a6 100644
 
 - [ ] **Step 2: List inert only what the notes show inert**
 
-For each candidate in a note's "Inert candidates" table whose row is `opened` with the identity
-admin's row shows, add the attribute's name to that platform's `inert_attributes`, and on
-`cisco_iosxe` to `accepted_attributes` too, with the note cited on the line above — for example,
-if `adapters-arista_eos.md` shows `idletime*30` opened at `Current privilege level is 15`:
+For each candidate in a note's "Inert candidates" table whose `inert` column says `yes` — the
+session opened with admin's identity, both ceiling commands reached port49 as admin's did, and
+`show version` was permitted — add the attribute's name to that platform's `inert_attributes`,
+and on `cisco_iosxe` to `accepted_attributes` too, with the note cited on the line above — for
+example, if `L22-arista_eos.md` shows `idletime*30` inert:
 
 ```yaml
-    # home-directory: spec §6's case. idletime: opened at admin's level beside its reply
-    # (tests/lab/results/adapters-arista_eos.md, "Inert candidates").
+    # home-directory: spec §6's case. idletime: admin's session unchanged beside its reply
+    # (tests/lab/results/L22-arista_eos.md, "Inert candidates").
     inert_attributes: [home-directory, idletime]
 ```
 
-and in `internal/platform/adapter_test.go`'s `shipped` the same list. A candidate that was refused,
-or that changed the identity line, is not inert and is not listed; on IOS-XE a refused candidate
-also stays out of `accepted_attributes`. `home-directory` stays listed on every platform whatever
+and in `internal/platform/adapter_test.go`'s `shipped` the same list. A candidate whose `inert`
+column says `no` — refused, a changed identity, a changed reach, or commands no longer authorized
+— is not inert and is not listed; on IOS-XE it also stays out of `accepted_attributes`, since
+there one attribute under `all:` would reach the whole fleet (pre-flight S6). `home-directory` stays listed on every platform whatever
 its row shows (it is spec §6's seeded case and already inert); if IOS-XE refused it, add that
 finding to the IOS-XE file's comment, since IOS-XE's closed list already quarantines a reply that
 carries it.
@@ -9536,13 +10201,18 @@ carries it.
 In spec §15, replace L22's status cell with (dates from the notes' **Date measured** lines):
 
 ```
-closed — measured <date in the notes>; tests/lab/results/adapters-arista_eos.md, adapters-cisco_nxos.md, adapters-cisco_iosxe.md. Each built-in adapter's reply at readonly, operator and admin was applied as the adapter says: on vEOS level 1 then 15 with network-operator, network-operator and network-admin; on the N9Kv network-operator, network-operator, network-admin, every ceiling command sent to port49; on IOS-XE 17.13.01a levels 1, 7 and 15, level 7 sending `clear counters` and refusing `configure terminal` in the parser. By hand 2026-09-24: tests/lab/results/ceiling-*.md
+closed — measured <date in the notes>; tests/lab/results/L22-arista_eos.md, L22-cisco_nxos.md, L22-cisco_iosxe.md. Each built-in adapter's reply at readonly, operator and admin was applied as the adapter says: on vEOS level 1 then 15 with network-operator, network-operator and network-admin; on the N9Kv network-operator, network-operator, network-admin, every ceiling command sent to port49; on IOS-XE 17.13.01a levels 1, 7 and 15, level 7 sending `clear counters` and refusing `configure terminal` in the parser. With port49d stopped under an open session and the method list falling back to local, operator's reply could not change the configuration on any of the three, and admin's could on vEOS and the N9Kv. By hand 2026-09-24: tests/lab/results/ceiling-*.md
 ```
 
-In decision 25, delete the sentence `*Provisional on L22* until the adapters' own replies are
-measured.` In L10's status cell, append: `The three per-command adapters' spellings are measured
-by plan 5a (tests/lab/results/adapters-*.md); Junos's wait on L12 (plan 5b), so the row stays
-open.` If a platform disagreed, L22 stays open and says which, and decision 25 stays provisional.
+Decision 25's provisional marker comes off only for what was measured. Where every level row and
+the fallback agree, delete the sentence beginning `*Provisional on L22*` whole. Where the level
+rows agree and the fallback disagreed or could not be measured, L22 stays open and says so, and
+the sentence becomes `*Provisional on L22* for the outage half: operator's reply with port49
+stopped under an open session is <not yet measured | measured changing the configuration on
+<platform>, tests/lab/results/L22-<platform>.md>.` In L10's status cell, append: `The three
+per-command adapters' spellings are measured by plan 5a (tests/lab/results/L22-*.md); Junos's wait
+on L12 (plan 5b), so the row stays open.` If a platform's level rows disagreed, L22 stays open and
+says which, and decision 25 stays provisional whole.
 
 - [ ] **Step 4: Write the roadmap's as-built paragraph**
 
@@ -9594,6 +10264,38 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 | Differential testing in containerlab | 17 (per-command); the projection's is 5b |
 | Capability inference §9; Junos projection, L9, L12; `bits`, `bit_delivery`, `command_projection` | **5b** |
 
+## Pre-flight rulings folded in (2026-09-24)
+
+The pre-flight report is `.superpowers/sdd/2026-09-24-05a-platform-adapters/preflight-report.md`;
+every ruling below was accepted by the owner's lead and is in the tasks as written.
+
+| Finding | Ruling | Where |
+|---|---|---|
+| B1 decision 25's outage half unmeasured | Task 17 measures it (fallback variant, admin control); L22's question includes it; Task 18 lifts the provisional marker only for what was measured | Tasks 1, 17, 18 |
+| B2 adapter gate blind to platforms with no device | `comparison.adapters` covers every platform either version has an adapter for | Tasks 1, 9 |
+| S1 `redact` only reported | `redact` is gated; a wildcard-only `match` with `from` is refused | Tasks 1, 10 |
+| S2 redaction gaps | a platform's list adds to `default`; `message-digest-key`, SNMPv3 `auth`, Junos `authentication-password`, `privacy-password`; one real line per vendor tested | Tasks 1, 10 |
+| S3 pin misses the generic adapter and later releases | `TestEveryReleasedSetIsFrozen` (keyed by version), `TestTheGenericAdapterIsFrozen` | Tasks 1, 2, 8 |
+| S4 `enable_username: principal` stops port49d | loads with a start notice; other values refused | Tasks 1, 8 |
+| S5 `--pr` branches off HEAD | cut from the fetched base; a file differing from the base's refused; `-`-leading `--remote`/`--base` refused | Tasks 1, 16 |
+| S6 inert judged on "opened" alone | inert needs admin's identity and reach and a permitted `show version` | Tasks 17, 18 |
+| S7 results not named for L22 | `L22-<platform>.md`, `L22-*.pcap` | Tasks 1, 17, 18 |
+| S8 a rendered attribute listable inert | `Validate` refuses it, and `priv-lvl` | Tasks 1, 2, 9 (test moved to NX-OS `cisco-av-pair`) |
+| S9 check-config passes a short read | `ReadConfig` returns the scanner's error; exit 1 | Task 15 |
+| N2 raw and vector redacted apart | `RedactRecord`: the missed form loses every argument | Tasks 1, 11 |
+| N3 NX-OS accounting `cmd` | the patterns lead with `**`, said in §5.8 and `redact.yaml`, tested | Tasks 1, 10 |
+| N4 mandatory `roles=` on EOS | operator note below | — |
+| N6 exec channel vs interactive | Task 17's prose and note name the transport | Task 17 |
+| N7 `all` / `default` as platform names | refused | Tasks 1, 7 |
+| N8 `redactorFor` split a doc comment | moved above it | Task 11 |
+| N9 credential in git's error text | `withoutCredentials` | Task 16 |
+
+Skipped, with the reason: **N1** (a minimum abbreviation length) removes *less* on the platforms
+that send what was typed, so a typed `pa` for `password` would leak — the opposite of failing
+closed. **N5** is already the first operator note. **N11** is a false positive in the closed
+direction; making the gate look past a redact-only edit would loosen it. **N10** and **N12** asked
+for nothing.
+
 ## Questions for Ryan
 
 One call, with the recommendation the plan implements as written. Nothing else in 5a needed you:
@@ -9625,14 +10327,20 @@ every other choice is the security-first default, argued in "Decided".
 - **Adapters are editable** in the policy file's `platforms:` block; `port49 platform list`, `show`,
   `export`, `upgrade`. An edit to a key the gate reads needs an `acknowledge: {platform, field,
   reason}` entry for `policy diff` to pass.
-- **`port49d.yaml` `platforms.<name>.enable_username` is refused**; move it to the policy file.
+- **`port49d.yaml` `platforms.<name>.enable_username` has moved** to the policy file. `principal`
+  still starts, with a notice at start; any other value does not. Delete the line.
 - **Typed secrets are redacted** in authorization and accounting records (`"redacted": true`);
   `policy replay` reports such records `unverifiable`. Built-in patterns in
-  `platforms/redact.yaml`; add more under `platforms.<name>.redact`.
+  `platforms/redact.yaml`; add more under `platforms.<name>.redact` — an edit there is gated in
+  `policy diff` like a rendering, because it changes what the audit keeps.
+- **EOS is sent `roles=` in its mandatory form.** An EOS release that cannot parse `roles` refuses
+  every login on that platform, and no local fallback follows, because port49 answered; measured
+  fine on vEOS 4.31.2F. Try one device of each EOS release before the fleet.
 - **New reports in `policy test`:** `dead_rule`, `fallback_exposure`,
   `platform_override_redundant`. They report; they do not fail.
 - **New commands:** `port49 devices check-config` (a device-local account colliding with a served
-  username, forbidden method-list fallbacks), `port49 grants remove --pr`.
+  username, forbidden method-list fallbacks), `port49 grants remove --pr` (cut from the remote's
+  base, and refused where the checkout's policy file differs from it).
 - **Lowering a level on EOS or NX-OS passes `policy diff`** as before, although the role in the
   reply changed with it.
 - **Lab:** register row L22 (added, and closed by Task 18 if the run agrees); the three
