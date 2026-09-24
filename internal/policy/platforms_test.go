@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -315,5 +317,133 @@ func TestARedundantOverrideIsReported(t *testing.T) {
 	got := findings(p, FindingPlatformOverride)
 	if len(got) != 1 || !strings.Contains(got[0], "platforms.arista_eos.expands_abbreviations says what platform set 1.0.0") {
 		t.Fatalf("%q", got)
+	}
+}
+
+// Moving the pin is a policy change like any other (spec §8): the diff finds
+// every adapter key the move changes on a platform the inventory has, a block
+// that keeps its own value hides the built-in's change and is named for it,
+// and Reach says what a change touches. This build ships one set, so the
+// environment stands up a second.
+func TestAPinMoveIsReportedKeyByKey(t *testing.T) {
+	first, _ := platform.Set("1.0.0")
+	second, _ := platform.Set("1.0.0")
+	eos, xe := second["arista_eos"], second["cisco_iosxe"]
+	eos.EntityClasses = map[string][]string{"management": {"^Management1$"}, "loopback": eos.EntityClasses["loopback"],
+		"physical": eos.EntityClasses["physical"]}
+	xe.DeviceConfig = append(xe.DeviceConfig, "privilege exec level 7 show logging")
+	second["arista_eos"], second["cisco_iosxe"] = eos, xe
+	e := env()
+	e.Sets = map[string]map[string]platform.Dialect{"1.0.0": first, "1.1.0": second}
+	body := "platforms:\n  arista_eos:\n    entity_classes: {management: ['^Management[12]$']}\n" + scopeOK + roleOK +
+		subjOK + grantOK
+	before, err := Parse([]byte("platform_set: 1.0.0\n"+body), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := SetPlatformSet([]byte("platform_set: 1.0.0\n"+body), "1.1.0")
+	if err != nil || !strings.HasPrefix(string(moved), "platform_set: 1.1.0\nplatforms:\n") {
+		t.Fatalf("%v\n%s", err, moved)
+	}
+	after, err := Parse(moved, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Compare(before, after, noon)
+	if len(d.Adapters) != 1 || d.Adapters[0].Platform != "cisco_iosxe" || d.Adapters[0].Field != "device_config" ||
+		!d.Adapters[0].Gated || d.Adapters[0].Sha256 != fmt.Sprintf("%x", sha256.Sum256([]byte(d.Adapters[0].New))) {
+		t.Fatalf("the block hides arista_eos's management change; iosxe's device_config is gated: %+v", d.Adapters)
+	}
+	// The entry `platform upgrade` prints, pasted, acknowledges the move.
+	a := d.Adapters[0]
+	acked, err := Parse(append(moved, fmt.Sprintf("acknowledge:\n  - {platform: %s, field: %s, sha256: %s, reason: "+
+		"set 1.1.0}\n", a.Platform, a.Field, a.Sha256)...), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := Compare(before, acked, noon); d.UnacknowledgedAdapters() != 0 || len(d.StaleAcknowledgments) != 0 {
+		t.Fatalf("acknowledged: %+v stale %+v", d.Adapters, d.StaleAcknowledgments)
+	}
+	if got := after.ShadowedBuiltIns("1.0.0"); !reflect.DeepEqual(got, []string{"platforms.arista_eos.entity_classes"}) {
+		t.Fatalf("shadowed: %q", got)
+	}
+	if devices, subjects := before.Reach("arista_eos", noon); devices != 2 || subjects != 1 {
+		t.Fatalf("reach: %d devices, %d subjects", devices, subjects)
+	}
+}
+
+// Reach counts a subject only where it holds a grant on a device of the
+// platform, and nothing on a platform the inventory has none of.
+func TestReachCountsOnlyTheSubjectsAChangeTouches(t *testing.T) {
+	p, err := Parse([]byte(scopeOK+roleOK+"subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, "+
+		"token_ttl: 60s}\n  - {name: idle, identity: [\"user:b@example.com\"], username: b, token_ttl: 60s}\n"+
+		grantOK), env())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if devices, subjects := p.Reach("arista_eos", noon); devices != 2 || subjects != 1 {
+		t.Fatalf("arista_eos: %d devices, %d subjects", devices, subjects)
+	}
+	if devices, subjects := p.Reach("acme_os", noon); devices != 0 || subjects != 0 {
+		t.Fatalf("acme_os: %d devices, %d subjects", devices, subjects)
+	}
+}
+
+// A pin move changes the generic adapter too, which a platform the set does
+// not ship stands on: a block over it that keeps its own value hides the
+// change and is named for it, and the diff gates the keys the block leaves to
+// the generic adapter on a platform the inventory has.
+func TestAPinMoveComparesTheGenericAdapter(t *testing.T) {
+	first, _ := platform.Set("1.0.0")
+	g1, _ := platform.Generic("1.0.0")
+	g2, _ := platform.Generic("1.0.0")
+	g2.EntityClasses = map[string][]string{"management": {"^mgmt$"}}
+	g2.DeviceConfig = []string{"aaa authorization exec default group port49 local"}
+	e := withDevice("acme-01", "acme_os")
+	e.Sets = map[string]map[string]platform.Dialect{"1.0.0": first, "1.1.0": first}
+	e.Generics = map[string]platform.Dialect{"1.0.0": g1, "1.1.0": g2}
+	body := "platforms:\n  acme_os:\n    entity_classes: {management: ['^oob$']}\n" + scopeOK + roleOK + subjOK + grantOK
+	before, err := Parse([]byte("platform_set: 1.0.0\n"+body), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, _ := SetPlatformSet([]byte("platform_set: 1.0.0\n"+body), "1.1.0")
+	after, err := Parse(moved, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := after.ShadowedBuiltIns("1.0.0"); !reflect.DeepEqual(got, []string{"platforms.acme_os.entity_classes"}) {
+		t.Fatalf("shadowed: %q", got)
+	}
+	if got := after.GenericChanges("1.0.0"); !reflect.DeepEqual(got, []string{"generic.entity_classes",
+		"generic.device_config"}) {
+		t.Fatalf("generic: %q", got)
+	}
+	d := Compare(before, after, noon)
+	if len(d.Adapters) != 1 || d.Adapters[0].Platform != "acme_os" || d.Adapters[0].Field != "device_config" ||
+		!d.Adapters[0].Gated {
+		t.Fatalf("acme_os's device_config comes from the generic adapter and is gated: %+v", d.Adapters)
+	}
+}
+
+// SetPlatformSet rewrites the pin and nothing else, or adds one where the
+// file pins none.
+func TestSetPlatformSetTouchesOnlyThePin(t *testing.T) {
+	raw := "# the policy\nscopes: []\nplatform_set: 1.0.0   # pinned 2026-09-24\nroles: []\n"
+	got, err := SetPlatformSet([]byte(raw), "1.1.0")
+	if err != nil || string(got) != "# the policy\nscopes: []\nplatform_set: 1.1.0\nroles: []\n" {
+		t.Fatalf("%v %q", err, got)
+	}
+	if got, _ := SetPlatformSet([]byte("roles: []\n"), "1.0.0"); string(got) != "platform_set: 1.0.0\nroles: []\n" {
+		t.Fatalf("%q", got)
+	}
+	if _, err := SetPlatformSet([]byte("platform_set:\n  - 1.0.0\n"), "1.1.0"); err == nil {
+		t.Fatal("a pin that is not one line is refused")
+	}
+	if _, err := SetPlatformSet([]byte("{platform_set: 1.0.0, roles: []}\n"), "1.1.0"); err == nil {
+		t.Fatal("a flow mapping, whose one line holds every key, is refused")
+	}
+	if _, err := SetPlatformSet([]byte("roles: []\n"), "1.1.0\nroles: [x]"); err == nil {
+		t.Fatal("a version that is not dotted numbers is refused")
 	}
 }

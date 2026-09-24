@@ -325,7 +325,7 @@ func (p *Policy) indistinctCeilings() []string {
 // silently pin the old value when a later set improves it.
 func (p *Policy) redundantOverrides() []Finding {
 	var out []Finding
-	builtin, ok := platform.Set(p.set)
+	builtin, ok := p.builtinSet(p.set)
 	for _, name := range sortedKeys(p.overrides) {
 		b := p.overrides[name]
 		base, shipped := builtin[name]
@@ -348,4 +348,89 @@ func (p *Policy) redundantOverrides() []Finding {
 		}
 	}
 	return out
+}
+
+// ShadowedBuiltIns names every key a `platforms:` block sets over a built-in
+// whose built-in value differs between set from and the policy's own set:
+// what `port49 platform upgrade` must say, because the upgrade changes the
+// built-in and the block goes on hiding it (spec §8, override drift). The
+// built-in under a block is the platform's own adapter, the one it is
+// based_on, or the set's generic adapter for a block that replaces or adds a
+// platform.
+func (p *Policy) ShadowedBuiltIns(from string) []string {
+	var out []string
+	keys := platform.SpecKeys()
+	for _, name := range sortedKeys(p.overrides) {
+		b := p.overrides[name]
+		was, ok1 := p.baseUnder(name, b, from)
+		is, ok2 := p.baseUnder(name, b, p.set)
+		if !ok1 || !ok2 {
+			continue
+		}
+		set := reflect.ValueOf(b.Spec)
+		old, now := reflect.ValueOf(platform.SpecOf(was)), reflect.ValueOf(platform.SpecOf(is))
+		for i, key := range keys {
+			if !set.Field(i).IsNil() && !reflect.DeepEqual(old.Field(i).Interface(), now.Field(i).Interface()) {
+				out = append(out, "platforms."+name+"."+key)
+			}
+		}
+	}
+	return out
+}
+
+// GenericChanges names every key of the generic adapter that differs between
+// set from and the policy's own set, as `generic.<key>`. The diff compares
+// the generic adapter only on a platform the inventory has or a block names,
+// so a move that changes it reaches an unmodeled platform's first device
+// unreviewed; `port49 platform upgrade` says so (task 9 review M2).
+func (p *Policy) GenericChanges(from string) []string {
+	was, ok1 := p.builtinGeneric(from)
+	is, ok2 := p.builtinGeneric(p.set)
+	if !ok1 || !ok2 {
+		return nil
+	}
+	var out []string
+	old, now := reflect.ValueOf(platform.SpecOf(was)), reflect.ValueOf(platform.SpecOf(is))
+	for i, key := range platform.SpecKeys() {
+		if !reflect.DeepEqual(old.Field(i).Interface(), now.Field(i).Interface()) {
+			out = append(out, "generic."+key)
+		}
+	}
+	return out
+}
+
+// baseUnder is the adapter set version gives the block for name to merge
+// over, as buildPlatforms picks it.
+func (p *Policy) baseUnder(name string, b filePlatform, version string) (platform.Dialect, bool) {
+	builtin, ok := p.builtinSet(version)
+	if !ok {
+		return platform.Dialect{}, false
+	}
+	if b.BasedOn != "" {
+		d, ok := builtin[b.BasedOn]
+		return d, ok
+	}
+	if d, shipped := builtin[name]; shipped && !b.Replace {
+		return d, true
+	}
+	return p.builtinGeneric(version)
+}
+
+// Reach is how many devices of a platform the inventory has, and how many
+// subjects hold a grant on one of them at now: what a change to that
+// platform's adapter affects.
+func (p *Policy) Reach(platformName string, now time.Time) (devices, subjects int) {
+	holds := map[string]bool{}
+	for _, d := range p.env.Devices {
+		if d.Platform != platformName {
+			continue
+		}
+		devices++
+		for name, sub := range p.subs {
+			if len(p.compose(sub, d, now).grants) > 0 {
+				holds[name] = true
+			}
+		}
+	}
+	return devices, len(holds)
 }

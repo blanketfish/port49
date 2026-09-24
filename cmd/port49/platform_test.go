@@ -2,13 +2,20 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/policy"
 )
 
 // `port49 platform list` prints every platform with where its adapter comes
@@ -118,4 +125,84 @@ func listRow(out, name string) string {
 		}
 	}
 	return ""
+}
+
+// `port49 platform upgrade` reports what moving the pin changes and, with
+// --write, rewrites the pin alone. A set this binary does not ship is not a
+// pin the policy can load on, and nothing is written.
+func TestPlatformUpgradeMovesThePin(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv, "--to", "1.0.0", "--write"},
+		&out, &errb); code != 0 || out.String() != "platform_set 1.0.0 -> 1.0.0\n  no adapter the inventory uses changes\n" {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if got := readFile(t, pol); string(got) != "platform_set: 1.0.0\n"+string(raw) {
+		t.Fatalf("%s", got)
+	}
+	if code := run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv, "--to", "9.9.9", "--write"},
+		&out, &errb); code != 1 || !strings.Contains(errb.String(), "does not load on platform set 9.9.9, so nothing was written") {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if code := run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv}, &out, &errb); code != 2 {
+		t.Fatalf("no --to: code %d", code)
+	}
+}
+
+// The upgrade report prints, for a gated key the move changes, the
+// acknowledge: entry that clears it, bound to the new value's sha256; pasted
+// into the moved file, it acknowledges the move. This build ships one set, so
+// the environment stands up a second.
+func TestTheUpgradeReportPrintsPasteReadyAcknowledgments(t *testing.T) {
+	pol, inv := policyFixture(t)
+	devices, err := admission.LoadFile(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := platform.Set("1.0.0")
+	second, _ := platform.Set("1.0.0")
+	eos := second["arista_eos"]
+	eos.DeviceConfig = append(eos.DeviceConfig, "aaa accounting exec default start-stop group port49")
+	second["arista_eos"] = eos
+	e := policy.Env{Devices: devices.Devices, Sets: map[string]map[string]platform.Dialect{"1.0.0": first,
+		"1.1.0": second}}
+	raw := readFile(t, pol)
+	before, err := policy.Parse(raw, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := policy.SetPlatformSet(raw, "1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := policy.Parse(moved, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	var out bytes.Buffer
+	upgradeReport(&out, before, after, now)
+	newValue, _ := json.Marshal(eos.DeviceConfig)
+	entry := fmt.Sprintf("{platform: arista_eos, field: device_config, sha256: %x, reason: \"...\"}",
+		sha256.Sum256(newValue))
+	for _, want := range []string{"platform_set 1.0.0 -> 1.1.0\n  platforms.arista_eos.device_config\n",
+		"    affects 1 devices, 2 subjects\n", "    gated: add " + entry + " under acknowledge:\n",
+		"  port49 policy diff fails on the move until"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, out.String())
+		}
+	}
+	pasted := regexp.MustCompile(`add (\{.*\}) under acknowledge:`).FindStringSubmatch(out.String())[1]
+	acked, err := policy.Parse(append(moved, []byte("acknowledge:\n  - "+strings.Replace(pasted, "...",
+		"set 1.1.0 adds exec accounting", 1)+"\n")...), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	upgradeReport(&out, before, acked, now)
+	if !strings.Contains(out.String(), "    gated, acknowledged: set 1.1.0 adds exec accounting\n") ||
+		strings.Contains(out.String(), "policy diff fails") {
+		t.Fatalf("%s", out.String())
+	}
 }

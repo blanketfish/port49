@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -238,3 +239,42 @@ func field(m *yaml.Node, key string) string {
 	}
 	return ""
 }
+
+// SetPlatformSet is the policy file pinned to version, for `port49 platform
+// upgrade` (spec §8): the `platform_set:` line rewritten where the file has
+// one, or a line added at the top where it pins none. Every other byte is the
+// operator's, so the pull request shows only the pin.
+func SetPlatformSet(raw []byte, version string) ([]byte, error) {
+	if !setVersionShape.MatchString(version) {
+		return nil, fmt.Errorf("%q is not a platform set version: dotted numbers, as 1.0.0", version)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	line := "platform_set: " + version + "\n"
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, errors.New("the policy file is not a YAML mapping")
+	}
+	if doc.Content[0].Style&yaml.FlowStyle != 0 {
+		// One line holds every key: rewriting it would drop the rest.
+		return nil, errors.New("the policy file is one flow mapping; write it in block style to move the pin")
+	}
+	top := doc.Content[0]
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		key, value := top.Content[i], top.Content[i+1]
+		if key.Value != "platform_set" {
+			continue
+		}
+		if value.Kind != yaml.ScalarNode || value.Line != key.Line {
+			return nil, errors.New("platform_set is not a one-line value; write it as `platform_set: 1.0.0`")
+		}
+		lines := bytes.SplitAfter(raw, []byte("\n"))
+		lines[key.Line-1] = []byte(line)
+		return bytes.Join(lines, nil), nil
+	}
+	return append([]byte(line), raw...), nil
+}
+
+// setVersionShape is a platform set version as a pin writes it.
+var setVersionShape = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)

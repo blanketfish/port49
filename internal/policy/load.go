@@ -40,6 +40,11 @@ type Env struct {
 	// Dialects replaces platforms of the pinned set when non-nil: tests use
 	// it to stand a platform up with other behaviour.
 	Dialects map[string]platform.Dialect
+	// Sets and Generics replace the built-in platform sets and their generic
+	// adapters, by version, when Sets is non-nil: tests use them to stand up
+	// a second set, since this build ships one.
+	Sets     map[string]map[string]platform.Dialect
+	Generics map[string]platform.Dialect
 	// Now is the present the joint checks start from: a grant already expired
 	// by then is not checked. Zero is the clock at load; tests fix it.
 	Now time.Time
@@ -259,13 +264,13 @@ func (p *Policy) buildPlatforms(f file) error {
 	if p.set == "" {
 		p.set = platform.UnpinnedSet
 	}
-	set, ok := platform.Set(p.set)
+	set, ok := p.builtinSet(p.set)
 	if !ok {
 		return fmt.Errorf("platform_set: %s is not a set this binary ships; it ships %s. Pin one of those, or run "+
 			"a binary that ships %s (spec §8)", p.set, strings.Join(platform.Sets(), ", "), p.set)
 	}
-	builtin, _ := platform.Set(p.set)
-	generic, _ := platform.Generic(p.set)
+	builtin, _ := p.builtinSet(p.set)
+	generic, _ := p.builtinGeneric(p.set)
 	p.overrides = f.Platforms
 	for _, name := range sortedKeys(f.Platforms) {
 		b := f.Platforms[name]
@@ -446,6 +451,33 @@ func mapKeys[V any](m *map[string]V) []string {
 	return sortedKeys(*m)
 }
 
+// builtinSet is a built-in platform set by version, copied: the environment's
+// where it gives sets, the binary's otherwise.
+func (p *Policy) builtinSet(version string) (map[string]platform.Dialect, bool) {
+	if p.env.Sets == nil {
+		return platform.Set(version)
+	}
+	set, ok := p.env.Sets[version]
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string]platform.Dialect, len(set))
+	for name, d := range set {
+		out[name] = d
+	}
+	return out, true
+}
+
+// builtinGeneric is a set's generic adapter by version: the environment's
+// where it gives sets (the binary's where it gives no generic for the
+// version), the binary's otherwise.
+func (p *Policy) builtinGeneric(version string) (platform.Dialect, bool) {
+	if d, ok := p.env.Generics[version]; ok && p.env.Sets != nil {
+		return d, true
+	}
+	return platform.Generic(version)
+}
+
 // platformNameShape is how an inventory writes a platform.
 var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -462,7 +494,7 @@ func (p *Policy) PlatformNames() []string { return sortedKeys(p.adapters) }
 // set does not ship).
 func (p *Policy) PlatformSource(name string) string {
 	b, written := p.overrides[name]
-	builtin, _ := platform.Set(p.set)
+	builtin, _ := p.builtinSet(p.set)
 	_, shipped := builtin[name]
 	switch {
 	case !written:
@@ -1239,7 +1271,7 @@ func (p *Policy) dialect(name string) platform.Dialect {
 	if d, ok := p.adapters[name]; ok {
 		return d
 	}
-	d, _ := platform.Generic(p.set)
+	d, _ := p.builtinGeneric(p.set)
 	return d
 }
 

@@ -10,9 +10,11 @@ import (
 	"slices"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 )
@@ -32,6 +34,8 @@ func platformCmd(args []string, stdout, stderr io.Writer) int {
 		return platformShow(args[1:], stdout, stderr, false)
 	case "export":
 		return platformShow(args[1:], stdout, stderr, true)
+	case "upgrade":
+		return platformUpgrade(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
@@ -180,6 +184,104 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		}
 	}
 	return 0
+}
+
+// platformUpgrade moves a policy's platform_set pin and reports exactly what
+// the move changes (spec §8, §12): every adapter key that differs between the
+// two sets on a platform the inventory has, with the devices and subjects it
+// reaches, and every key a `platforms:` block keeps its own value for while
+// the built-in under it changes. The report is the output; --write also
+// rewrites the pin in the file, and nothing else in it. `port49 policy diff`
+// on the two files is the gate: this says what it will find, and prints the
+// acknowledge: entries the gated keys need.
+func platformUpgrade(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("port49 platform upgrade", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var files policyFiles
+	files.register(fs)
+	to := fs.String("to", "", "the platform set to pin")
+	write := fs.Bool("write", false, "rewrite the pin in the policy file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if files.missing() || *to == "" || fs.NArg() != 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	inv, err := admission.LoadFile(files.inventory)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 platform upgrade:", err)
+		return 1
+	}
+	raw, err := os.ReadFile(files.policy)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 platform upgrade:", err)
+		return 1
+	}
+	before, err := policy.Parse(raw, offlineEnv(inv.Devices))
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 platform upgrade:", err)
+		return 1
+	}
+	moved, err := policy.SetPlatformSet(raw, *to)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 platform upgrade:", err)
+		return 1
+	}
+	after, err := policy.Parse(moved, offlineEnv(inv.Devices))
+	if err != nil {
+		fmt.Fprintf(stderr, "port49 platform upgrade: the policy does not load on platform set %s, so nothing was "+
+			"written: %v\n", *to, err)
+		return 1
+	}
+	upgradeReport(stdout, before, after, time.Now())
+	if *write {
+		if err := replaceFile(files.policy, moved); err != nil {
+			fmt.Fprintln(stderr, "port49 platform upgrade:", err)
+			return 1
+		}
+	}
+	return 0
+}
+
+// upgradeReport is what moving the pin from before's set to after's changes:
+// each adapter key, with what it reaches and, where the gate reads it, the
+// acknowledge: entry that clears it, ready to paste (spec §12: the entry names
+// the new value's sha256, so it acknowledges this move and no later edit);
+// each key a block keeps over a built-in that moved; each key of the generic
+// adapter that moved.
+func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
+	fmt.Fprintf(w, "platform_set %s -> %s\n", before.PlatformSet(), after.PlatformSet())
+	d := policy.Compare(before, after, now)
+	for _, a := range d.Adapters {
+		devices, subjects := before.Reach(a.Platform, now)
+		fmt.Fprintf(w, "  platforms.%s.%s\n    %s -> %s\n    affects %d devices, %d subjects\n", a.Platform, a.Field,
+			a.Old, a.New, devices, subjects)
+		switch {
+		case !a.Gated:
+			fmt.Fprintln(w, "    reported")
+		case a.Acknowledged:
+			fmt.Fprintf(w, "    gated, acknowledged: %s\n", a.AcknowledgedBy)
+		default:
+			fmt.Fprintf(w, "    gated: add {platform: %s, field: %s, sha256: %s, reason: \"...\"} under acknowledge:\n",
+				a.Platform, a.Field, a.Sha256)
+		}
+	}
+	for _, key := range after.ShadowedBuiltIns(before.PlatformSet()) {
+		fmt.Fprintf(w, "  shadowed: %s: set %s changes the built-in value and the policy's block keeps its "+
+			"own; compare the two\n", key, after.PlatformSet())
+	}
+	for _, key := range after.GenericChanges(before.PlatformSet()) {
+		fmt.Fprintf(w, "  %s: set %s changes what a platform it does not ship gets; the first device of a "+
+			"platform no block names takes the new value unreviewed\n", key, after.PlatformSet())
+	}
+	if len(d.Adapters) == 0 {
+		fmt.Fprintln(w, "  no adapter the inventory uses changes")
+	}
+	if d.UnacknowledgedAdapters() > 0 {
+		fmt.Fprintf(w, "  port49 policy diff fails on the move until every gated entry above is under acknowledge: "+
+			"(spec §12); it also shows the replies the move changes\n")
+	}
 }
 
 // adapterFile is d as an adapter file: `platforms: {name: ...}`.
