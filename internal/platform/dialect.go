@@ -73,6 +73,16 @@ type Dialect struct {
 	// diff does not gate. An attribute in neither list bears privilege: the
 	// gate and the load fail closed on what nobody listed.
 	InertAttributes []string
+	// AcceptedAttributes, where it is not nil, is every attribute name this
+	// platform's session reply may carry: the device refuses the whole session
+	// for any other (IOS-XE, L18), so a composition whose reply carries one
+	// fails the joint check and quarantines the device. nil takes any name.
+	AcceptedAttributes []string
+	// DeviceConfig is the device configuration this adapter's renderings
+	// depend on, one line each: `port49 platform show` prints it, and a device
+	// without it does not get what the level promises (IOS-XE's level 7 is
+	// level 1 until it is given commands, ceiling-cisco_iosxe.md).
+	DeviceConfig []string
 }
 
 // builtin is the default set's adapters, platforms/<DefaultSet>/*.yaml, where
@@ -122,6 +132,8 @@ func (d Dialect) clone() Dialect {
 	d.Supports = append([]string(nil), d.Supports...)
 	d.PrivilegeAttributes = slices.Clone(d.PrivilegeAttributes)
 	d.InertAttributes = slices.Clone(d.InertAttributes)
+	d.AcceptedAttributes = slices.Clone(d.AcceptedAttributes)
+	d.DeviceConfig = slices.Clone(d.DeviceConfig)
 	if d.EntityClasses != nil {
 		classes := make(map[string][]string, len(d.EntityClasses))
 		for k, v := range d.EntityClasses {

@@ -553,3 +553,32 @@ grants: [{subject: s, scope: all_devices, roles: [adm], max_privilege: operator}
 		}
 	}
 }
+
+// IOS-XE refuses the whole session for an attribute it does not take, under
+// either flag, and a run of refusals stops it answering SSH, break-glass
+// included (tests/lab/results/L18-cisco_iosxe.md). A composition whose reply
+// would carry one quarantines the device, naming the attribute and where it
+// came from; one keyed to other platforms leaves IOS-XE alone.
+func TestAnAttributeIOSXEDoesNotTakeQuarantinesIt(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {KEY: ["idletime*30"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`
+	p := mustParse(t, strings.Replace(body, "KEY", "all", 1))
+	q := p.Quarantines(noon)
+	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
+		"its session reply sends idletime*30 (role ro), and cisco_iosxe takes no attribute but priv-lvl") {
+		t.Fatalf("quarantines: %+v", q)
+	}
+	for _, key := range []string{"arista_eos", "cisco_nxos"} {
+		if q := mustParse(t, strings.Replace(body, "KEY", key, 1)).Quarantines(noon); len(q) != 0 {
+			t.Errorf("%s: %+v", key, q)
+		}
+	}
+	// priv-lvl is what it takes, from the level or from a role.
+	ok := strings.Replace(strings.Replace(body, "KEY", "cisco_iosxe", 1), "idletime*30", "priv-lvl=1", 1)
+	if q := mustParse(t, ok).Quarantines(noon); len(q) != 0 {
+		t.Fatalf("%+v", q)
+	}
+}

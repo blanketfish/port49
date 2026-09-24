@@ -24,6 +24,12 @@ platforms:
       readonly: ["shell:roles*network-operator"]
       operator: ["shell:roles*network-operator"]
       admin: ["shell:roles*network-admin"]
+    # The command method list must end in local, where the delivered role
+    # binds (L16-cisco_nxos.md, command authorization LOCAL; spec §6,
+    # decision 23). The group name is the lab's.
+    device_config:
+      - aaa authorization commands default group port49 local
+      - aaa authorization config-commands default group port49 local
     # No priv-lvl is rendered, so the token's ceiling takes its number here:
     # operator numbers 15, admin's, on the owner's ruling of 2026-09-24
     # (spec §6, decision 23).

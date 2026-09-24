@@ -465,6 +465,21 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 				res.Attributes[at].Attribute, res.Attributes[at].Source, res.Ceiling, res.MaxPrivilege)
 		}
 	}
+	// A platform that refuses a session for any attribute it does not take
+	// is never sent one: the device would refuse every login, and on IOS-XE a
+	// run of refusals stops it answering SSH for about a minute, break-glass
+	// included (tests/lab/results/L18-cisco_iosxe.md). Quarantined, the
+	// device is closed without a reply and falls to local at once.
+	if accepted := p.dialect(d.Platform).AcceptedAttributes; accepted != nil {
+		for _, a := range res.Attributes {
+			if name := engine.AttributeName(a.Attribute); !slices.Contains(accepted, name) {
+				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s takes no attribute but %s: the "+
+					"device refuses the whole session for any other, and a run of refusals stops it answering SSH, "+
+					"break-glass included (tests/lab/results/L18-cisco_iosxe.md); key the attribute to the platforms "+
+					"that read it", d.Platform, a.Attribute, a.Source, d.Platform, strings.Join(accepted, ", "))
+			}
+		}
+	}
 	if sub.Enable == "auto" {
 		if eu := p.env.EnableUsernames[d.Platform]; eu != "" && eu != platform.EnablePrincipal {
 			return fmt.Sprintf("enable: auto reaches this device, whose platform %s does not put the operator's "+

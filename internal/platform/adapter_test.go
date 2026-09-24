@@ -25,6 +25,7 @@ var shipped = map[string]Dialect{
 			"operator": {"priv-lvl=15", "roles=network-operator"}, "admin": {"priv-lvl=15", "roles=network-admin"}},
 		PrivilegeAttributes: []string{"priv-lvl", "roles"},
 		InertAttributes:     []string{"home-directory"},
+		DeviceConfig:        []string{"aaa authorization commands all default group port49 local"},
 	},
 	"cisco_nxos": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true,
@@ -36,6 +37,8 @@ var shipped = map[string]Dialect{
 		CeilingLevels:       map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
 		PrivilegeAttributes: []string{"priv-lvl", "shell:roles", "cisco-av-pair"},
 		InertAttributes:     []string{"home-directory"},
+		DeviceConfig: []string{"aaa authorization commands default group port49 local",
+			"aaa authorization config-commands default group port49 local"},
 	},
 	"cisco_iosxe": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true, SplitsInterfaceNames: true,
@@ -44,6 +47,11 @@ var shipped = map[string]Dialect{
 		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=7"}, "admin": {"priv-lvl=15"}},
 		PrivilegeAttributes: []string{"priv-lvl"},
 		InertAttributes:     []string{"home-directory"},
+		AcceptedAttributes:  []string{"priv-lvl"},
+		DeviceConfig: []string{"aaa authorization commands 1 default group port49 local",
+			"aaa authorization commands 7 default group port49 local",
+			"aaa authorization commands 15 default group port49 local",
+			"aaa accounting commands 7 default start-stop group port49", "privilege exec level 7 clear counters"},
 	},
 	"juniper_junos": {
 		PipeToken: "|", StripCR: true,
@@ -209,6 +217,10 @@ func TestValidateNamesTheField(t *testing.T) {
 			d.Levels, d.InertAttributes = map[string][]string{"admin": {"roles=x"}}, []string{"roles"}
 		}),
 		"inert_attributes: priv-lvl": with(ok, func(d *Dialect) { d.InertAttributes = []string{"priv-lvl"} }),
+		"not in accepted_attributes": with(ok, func(d *Dialect) {
+			d.Levels, d.AcceptedAttributes = map[string][]string{"admin": {"roles=x"}}, []string{"priv-lvl"}
+		}),
+		"device_config[0]": with(ok, func(d *Dialect) { d.DeviceConfig = []string{"line one\nline two"} }),
 	} {
 		err := Validate("x", d)
 		if err == nil || !strings.Contains(err.Error(), field) || !strings.Contains(err.Error(), "platforms.x.") {

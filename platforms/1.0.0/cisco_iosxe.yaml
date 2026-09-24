@@ -22,6 +22,21 @@ platforms:
       readonly: ["priv-lvl=1"]
       operator: ["priv-lvl=7"]
       admin: ["priv-lvl=15"]
+    # The only attribute this image takes: anything else refuses the session,
+    # and a policy whose reply would carry one quarantines the device instead
+    # (L18-cisco_iosxe.md; decision 25).
+    accepted_attributes: [priv-lvl]
+    # What level 7 needs from the device: a command list for each level
+    # port49 renders, so the device asks port49 about level-7 commands, and
+    # the one command the measured operator rung runs. The request carries the
+    # command's level, not the session's (ceiling-cisco_iosxe.md). The group
+    # name is the lab's.
+    device_config:
+      - aaa authorization commands 1 default group port49 local
+      - aaa authorization commands 7 default group port49 local
+      - aaa authorization commands 15 default group port49 local
+      - aaa accounting commands 7 default start-stop group port49
+      - privilege exec level 7 clear counters
     # No entity class is defined: the lab's management interface is
     # GigabitEthernet1, a physical port by name.
     #

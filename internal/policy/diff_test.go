@@ -560,7 +560,7 @@ func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
 		{`{juniper_junos: [local-user-name=super-user]}`, "srx-lab-01", `["local-user-name=super-user"]`},
 		{`{cisco_nxos: ["shell:roles=network-admin"]}`, "nx-01", `["shell:roles=network-admin"]`},
 		{`{arista_eos: ["roles=network-admin"]}`, "leaf-01", `["priv-lvl=1", "roles=network-admin"]`},
-		{`{all: ["idletime*30"]}`, "xe-01", `["priv-lvl=1", "idletime*30"]`},
+		{`{all: ["idletime*30"]}`, "nx-01", `["shell:roles*network-operator", "idletime*30"]`},
 	} {
 		after := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: "+tt.attrs+"}", 1)
 		d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)

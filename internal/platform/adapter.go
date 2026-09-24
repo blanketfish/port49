@@ -31,6 +31,8 @@ type Spec struct {
 	ShowsServerMsg       *bool                `yaml:"shows_server_msg"`
 	PrivilegeAttributes  *[]string            `yaml:"privilege_attributes"`
 	InertAttributes      *[]string            `yaml:"inert_attributes"`
+	AcceptedAttributes   *[]string            `yaml:"accepted_attributes"`
+	DeviceConfig         *[]string            `yaml:"device_config"`
 }
 
 // ParseSpecs reads an adapter file: one YAML document whose one key is
@@ -97,6 +99,12 @@ func (s Spec) Over(base Dialect) Dialect {
 	}
 	if s.InertAttributes != nil {
 		d.InertAttributes = slices.Clone(*s.InertAttributes)
+	}
+	if s.AcceptedAttributes != nil {
+		d.AcceptedAttributes = slices.Clone(*s.AcceptedAttributes)
+	}
+	if s.DeviceConfig != nil {
+		d.DeviceConfig = slices.Clone(*s.DeviceConfig)
 	}
 	return d
 }
@@ -180,7 +188,8 @@ func Validate(name string, d Dialect) error {
 	for _, list := range []struct {
 		name  string
 		names []string
-	}{{"privilege_attributes", d.PrivilegeAttributes}, {"inert_attributes", d.InertAttributes}} {
+	}{{"privilege_attributes", d.PrivilegeAttributes}, {"inert_attributes", d.InertAttributes},
+		{"accepted_attributes", d.AcceptedAttributes}} {
 		for _, n := range list.names {
 			if n == "" || strings.ContainsAny(n, "=* \t") {
 				return fmt.Errorf("%s: %q is not an attribute name", field(list.name), n)
@@ -202,6 +211,23 @@ func Validate(name string, d Dialect) error {
 		}
 		if rendered {
 			return fmt.Errorf("%s: %s: a level renders it, so it carries privilege", field("inert_attributes"), n)
+		}
+	}
+	if d.AcceptedAttributes != nil {
+		// The adapter's own rendering has to be something the device takes,
+		// or every session at that level is refused.
+		for _, level := range sortedKeys(d.Levels) {
+			for _, a := range d.Levels[level] {
+				if n := engine.AttributeName(a); !slices.Contains(d.AcceptedAttributes, n) {
+					return fmt.Errorf("%s: %s is not in accepted_attributes, so the device would refuse every session "+
+						"at %s", field("privilege."+level), n, level)
+				}
+			}
+		}
+	}
+	for i, line := range d.DeviceConfig {
+		if strings.TrimSpace(line) == "" || strings.ContainsFunc(line, func(r rune) bool { return r < 0x20 || r > 0x7e }) {
+			return fmt.Errorf("%s[%d]: one printable ASCII configuration line", field("device_config"), i)
 		}
 	}
 	return nil
