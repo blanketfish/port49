@@ -594,3 +594,18 @@ func TestPolicyDiffGatesARegexConstrainedWidening(t *testing.T) {
 		t.Fatalf("a narrowing: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// A policy with no tests passes `port49 policy test` with a report line
+// saying so (owner's ruling 2026-09-24; spec §12).
+func TestPolicyTestPassesAPolicyWithNoTestsAndSaysSo(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := string(readFile(t, pol))
+	if err := os.WriteFile(pol, []byte(raw[:strings.Index(raw, "tests:\n")]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "report: no_tests: ") || !strings.Contains(out.String(), "0 tests, 0 failed") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

@@ -102,3 +102,23 @@ grants:
 		t.Error("a live grant shadows nothing")
 	}
 }
+
+// A policy with no tests loads and is reported, no_tests: nothing in it can
+// acknowledge a shadow or an expansion (owner's ruling 2026-09-24; spec §12).
+func TestLintReportsAPolicyWithNoTests(t *testing.T) {
+	has := func(p *Policy) bool {
+		for _, f := range p.Lint(noon) {
+			if f.Kind == FindingNoTests {
+				return true
+			}
+		}
+		return false
+	}
+	bare := scopeOK + roleOK + subjOK + grantOK
+	if !has(mustParse(t, bare)) {
+		t.Fatal("a policy with no tests is reported")
+	}
+	if has(mustParse(t, bare+"tests:\n  - {subject: s, device: leaf-01, level: admin}\n")) {
+		t.Fatal("a policy with a test is not")
+	}
+}

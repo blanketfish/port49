@@ -30,6 +30,7 @@ const (
 	FindingIncomparableVersion = "incomparable_version"
 	FindingDenyWidened         = "deny_widened"
 	FindingPermitJoinedName    = "permit_joined_name"
+	FindingNoTests             = "no_tests"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -119,6 +120,10 @@ func (p *Policy) Lint(now time.Time) []Finding {
 					"(spec §5.5)", name, d.Name, s.comparedValues(d))
 			}
 		}
+	}
+	if len(p.tests) == 0 {
+		add(FindingNoTests, "the policy has no tests: nothing in it acknowledges a shadowed deny, an expansion or "+
+			"a privilege raise, so the gates fail on the first one; add tests (spec §12, \"Policy tests\")")
 	}
 	out = append(out, p.WidenedDenies()...)
 	out = append(out, p.JoinedNamePermits()...)
