@@ -4085,14 +4085,19 @@ and on EOS `network-operator` at operator. `operator` gets readonly's role for t
 configuration where its device role binds. L16 measured that `network-operator` under LOCAL
 command authorization refuses configuration. L22 measured what else it runs with port49d
 stopped under an open session (`tests/lab/results/L22-*.md`):
-- On vEOS it still ran `clear counters` and `clear ip bgp *`, which is operator's EOS entry.
+- On vEOS it still ran `clear counters`, and `clear ip bgp *` passed authorization (`% BGP
+  inactive`: the lab node runs no BGP). That is operator's EOS entry, which names only the
+  commands measured.
 - On the N9Kv it was refused both (`% Permission denied for the role`).
 - On IOS-XE, local authorization refused every command a token session typed, at 15 and at 7,
-  because a token user has no local account. So IOS-XE has no entry.
+  because a token user had no local account. That holds on a device that passes `port49
+  devices check-config`'s local-account check (§5.6). A local account named like a port49
+  username would authorize from its own privilege. So IOS-XE has no entry.
 
 The report has no exemption for `operator`. It judges every level by that level's adapter
 `fallback` entry. A level with no entry is not reported. That silence is measured for IOS-XE
-and for NX-OS's `clear` commands, and is unmeasured elsewhere, not safe.
+at 7 and 15 and for NX-OS's `clear` commands. It is unmeasured elsewhere, which is not the
+same as safe.
 A `platforms:` block adds to both and takes nothing away, `replace: true` and `based_on:`
 included: its `unreachable` rules join the set's for the level, and its `fallback` text is
 kept apart from the set's, as the adapter's `fallback_note`, which only port49 writes and a

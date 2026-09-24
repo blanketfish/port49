@@ -36,8 +36,8 @@ var shipped = map[string]Dialect{
 		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **",
 			"show users detail **"}},
 		Fallback: map[string]string{
-			"operator": "network-operator: clear counters and clear ip bgp * run; configuration refused " +
-				"(% Authorization denied)",
+			"operator": "network-operator, of the commands measured: clear counters ran, clear ip bgp * passed " +
+				"authorization (BGP inactive on the lab node), configuration refused (% Authorization denied)",
 			"admin": "network-admin: every command, configuration included"},
 		LocalAccounts: []string{`^username\s+(\S+)`},
 		ConfigChecks: []ConfigCheck{

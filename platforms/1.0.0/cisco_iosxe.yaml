@@ -67,10 +67,13 @@ platforms:
     # No fallback exposure: with port49d down under an open session, local
     # authorization refused every command a token session typed, `%
     # Authorization failed.`, at 15 (`clear counters`, `clear ip bgp *`,
-    # `configure terminal`) and at 7 (`clear counters`). A token user has no
-    # local account (tests/lab/results/L22-cisco_iosxe.md,
-    # L22-carried-cisco_iosxe.md). A fallback entry names more than the
-    # policy grants, so none is listed; readonly's level 1 was not measured.
+    # `configure terminal`) and at 7 (`clear counters`), because a token user
+    # had no local account (tests/lab/results/L22-cisco_iosxe.md,
+    # L22-carried-cisco_iosxe.md). That holds on a device whose configuration
+    # passes check-config's local_accounts check (spec §5.6). A local account
+    # named like a port49 username would authorize from its own privilege. A
+    # fallback entry names more than the policy grants, so none is listed.
+    # readonly's level 1 was not measured.
     # `port49 devices check-config` (spec §5.6).
     local_accounts: ['^username\s+(\S+)']
     config_checks:
