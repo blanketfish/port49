@@ -179,7 +179,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]`), Env{Devices: append(in
 		}
 		return p
 	}
-	long, unsafe := policy("note*"+strings.Repeat("x", 230)+"{username}"), policy("where*{device}")
+	long, unsafe := policy("home-directory*"+strings.Repeat("x", 220)+"{username}"), policy("home-directory*{device}")
 	for _, line := range []string{"", "show version"} {
 		_, out := explained(t, long, "s", "", "leaf-01", line, false)
 		mustContain(t, out, "refused attribute_too_long", "the broker mints no token")
@@ -256,7 +256,7 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}, {subject: other, scope: 
 func TestExplainSaysAGroupSubjectIsCheckedWithoutAPrincipal(t *testing.T) {
 	p := mustParse(t, `
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {all: ["who*{principal}"]}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {all: ["home-directory*{principal}"]}}]
 subjects:
   - {name: g, group: "CN=g,OU=Groups,DC=example,DC=com", token_ttl: 60s}
   - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}

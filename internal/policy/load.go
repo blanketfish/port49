@@ -397,19 +397,41 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
 			if err := engine.CheckAttribute(a); err != nil {
 				return fmt.Errorf("attributes.%s: %w", key, err)
 			}
-			// A placeholder in a privilege attribute hides the level the
-			// device gets from every review tool and hands it to whatever the
-			// mint fills in (spec §6).
-			name := a[:strings.IndexAny(a, "=*")]
-			if slices.Contains(platform.PrivilegeAttributeNames(), name) && strings.Contains(a, "{") {
-				for _, v := range engine.Placeholders {
-					if strings.Contains(a, v) {
-						return fmt.Errorf("attributes.%s: %s: %s carries privilege and takes no placeholder: the "+
-							"device would get whatever the mint fills in, which no review tool can see (spec §6)",
-							key, a, name)
-					}
-				}
+			if err := p.checkPlaceholder(key, a); err != nil {
+				return err
 			}
+		}
+	}
+	return nil
+}
+
+// checkPlaceholder allows a placeholder only in an attribute listed inert on
+// its platform key, or under `all` on every platform port49 ships and the
+// inventory names (spec §6). Anywhere else the device would get whatever the
+// mint fills in, which no review tool sees: a level, or a principal's text in
+// a session-only device's own allow-list.
+func (p *Policy) checkPlaceholder(key, a string) error {
+	if !slices.ContainsFunc(engine.Placeholders, func(v string) bool { return strings.Contains(a, v) }) {
+		return nil
+	}
+	name := a[:strings.IndexAny(a, "=*")]
+	if slices.Contains(platform.PrivilegeAttributeNames(), name) {
+		return fmt.Errorf("attributes.%s: %s: %s carries privilege and takes no placeholder: the device would get "+
+			"whatever the mint fills in, which no review tool can see (spec §6)", key, a, name)
+	}
+	platforms := []string{key}
+	if key == "all" {
+		platforms = sortedKeys(p.platforms())
+		for _, d := range p.env.Devices {
+			if !slices.Contains(platforms, d.Platform) {
+				platforms = append(platforms, d.Platform)
+			}
+		}
+	}
+	for _, name2 := range platforms {
+		if p.dialect(name2).BearsPrivilege(name) {
+			return fmt.Errorf("attributes.%s: %s: %s is not listed inert on %s, so it takes no placeholder: only an "+
+				"attribute an adapter holds to carry no privilege may (spec §6)", key, a, name, platformName(name2))
 		}
 	}
 	return nil

@@ -155,6 +155,9 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a placeholder in priv-lvl", "roles:\n  - {name: r, attributes: {all: [\"priv-lvl={username}\"]}}\n" + subjOK, "priv-lvl carries privilege and takes no placeholder"},
 		{"a placeholder in local-user-name", "roles:\n  - {name: r, attributes: {juniper_junos: [\"local-user-name*{principal}\"]}}\n" + subjOK, "local-user-name carries privilege"},
 		{"a placeholder in a grant's roles", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r], attributes: {arista_eos: [\"roles={device}\"]}}\n", "roles carries privilege"},
+		{"a placeholder in allow-commands", "roles:\n  - {name: r, attributes: {juniper_junos: [\"allow-commands={principal}\"]}}\n" + subjOK, "allow-commands carries privilege"},
+		{"a placeholder in allow-configuration", "roles:\n  - {name: r, attributes: {juniper_junos: [\"allow-configuration={username}\"]}}\n" + subjOK, "allow-configuration carries privilege"},
+		{"a placeholder in an attribute no adapter lists", "roles:\n  - {name: r, attributes: {all: [\"note*{device}\"]}}\n" + subjOK, "note is not listed inert on"},
 		{"an unknown substitution", "roles:\n  - {name: r, attributes: {all: [\"home*{home}\"]}}\n" + subjOK, "not a substitution"},
 		{"a scope match comparison", "scopes:\n  - {name: x, match: {os_version: {newer: \"1\"}}}\n" + subjOK, "not a comparison"},
 		{"a scope regex RE2 refuses", "scopes:\n  - {name: x, match: {site: {re: \"(?!x)\"}}}\n" + subjOK, "match.site.re"},
@@ -422,6 +425,16 @@ func TestAScopeErrorIsTheSameEveryLoad(t *testing.T) {
 		_, err := Parse([]byte(body), env())
 		if err == nil || !strings.Contains(err.Error(), "match.site.lt needs a version") {
 			t.Fatalf("load %d: %v", i, err)
+		}
+	}
+}
+
+// A placeholder goes only in an attribute listed inert: home-directory, spec
+// §6's motivating case, on every platform (review I4).
+func TestAPlaceholderGoesOnlyInAnInertAttribute(t *testing.T) {
+	for _, key := range []string{"all", "arista_eos", "juniper_junos"} {
+		if _, err := Parse([]byte("roles:\n  - {name: r, attributes: {"+key+": [\"home-directory*/home/{username}\"]}}\n"+subjOK), env()); err != nil {
+			t.Errorf("%s: %v", key, err)
 		}
 	}
 }
