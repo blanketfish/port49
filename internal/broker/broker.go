@@ -208,10 +208,14 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	defer release()
+	// Nothing under the hold takes a second one: a pending Swap blocks every
+	// new Hold, so a nested one would wait on the swap that waits on this.
+	ctx, cancel := context.WithTimeout(r.Context(), holdTimeout)
+	defer cancel()
 	resp := api.MintResponse{Principal: principal}
 	resp.Subject, _ = pol.SubjectOf(principal)
 	for _, name := range req.Devices {
-		item, err := b.mintOne(r.Context(), pol, principal, cred, authTime, name, req, key, bodyHash)
+		item, err := b.mintOne(ctx, pol, principal, cred, authTime, name, req, key, bodyHash)
 		if errors.Is(err, token.ErrIdempotencyConflict) {
 			// Only a concurrent request on the same key, between the check
 			// above and this mint, reaches here.
@@ -403,3 +407,11 @@ func writeConflict(w http.ResponseWriter) {
 func writeError(w http.ResponseWriter, code int, errCode, detail string) {
 	writeJSON(w, code, api.Error{Error: errCode, Detail: detail})
 }
+
+// holdTimeout bounds a mint request's store calls while it holds the policy,
+// swapped in tests. A pending Swap blocks every new Hold, so a store that stops
+// answering would otherwise hold a reload, and every mint queued behind it,
+// until the store came back. Past it the rest of the batch is refused
+// store_unavailable, as a store that refused would be. Ten seconds is long for
+// a healthy store and short for an operator waiting on a reload.
+var holdTimeout = 10 * time.Second

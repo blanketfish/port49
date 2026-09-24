@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,6 +96,29 @@ func TestAnUnsafePolicyFileRefusesTheStart(t *testing.T) {
 	}
 	if err := buildWith(cfg); err == nil || !strings.Contains(err.Error(), "broker.policy_file "+cfg.Broker.PolicyFile) ||
 		!strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A directory owned by neither port49d's user nor root is refused even when
+// the file in it is safe: its owner can chmod it and replace the file. No
+// second uid exists to own one in a test, so the owner lookup is swapped for
+// directories alone.
+func TestAPolicyDirectoryAnotherUserOwnsIsRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root every file is owned by an accepted uid")
+	}
+	defer func(f func(fs.FileInfo) (uint32, bool)) { fileOwner = f }(fileOwner)
+	real := fileOwner
+	fileOwner = func(fi fs.FileInfo) (uint32, bool) {
+		if fi.IsDir() {
+			return uint32(os.Geteuid() + 1), true
+		}
+		return real(fi)
+	}
+	path := policyAt(t, 0o600, 0o700)
+	if _, err := readPolicyFile(path); err == nil || !strings.Contains(err.Error(), "the directory "+filepath.Dir(path)) ||
+		!strings.Contains(err.Error(), "chown it") {
 		t.Fatalf("%v", err)
 	}
 }

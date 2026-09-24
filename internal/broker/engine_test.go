@@ -16,6 +16,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/store"
 )
 
 // refusingSink refuses blob records while down and passes everything else.
@@ -241,5 +242,50 @@ func TestASwapDoesNotWaitForAResponseWrite(t *testing.T) {
 	case <-swapped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("a swap waited for a response write")
+	}
+}
+
+// stallingStore is a store whose PutBlob does not answer until its context
+// ends: a store that has stopped responding without refusing.
+type stallingStore struct {
+	store.Store
+	entered chan struct{}
+}
+
+func (s *stallingStore) PutBlob(ctx context.Context, _ string, _ []byte, _ time.Duration) error {
+	close(s.entered)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A mint holding the policy while a swap waits must still finish: a pending
+// swap blocks every new Hold, so a mint that took a second one would never
+// return, and one waiting on a store that never answers would hold the swap,
+// and every mint queued behind it, for good. The store calls under the hold
+// are bounded by holdTimeout, so the mint is refused store_unavailable and the
+// swap goes through.
+func TestAMintHoldingThePolicyFinishesUnderAPendingSwap(t *testing.T) {
+	defer func(d time.Duration) { holdTimeout = d }(holdTimeout)
+	holdTimeout = 100 * time.Millisecond
+	f := newFixture(t, 8)
+	st := &stallingStore{Store: f.st, entered: make(chan struct{})}
+	f.b.Store = st
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/v1/tokens", strings.NewReader(`{"devices":["leaf1"]}`))
+	r.TLS = f.state(f.alice)
+	minted := make(chan struct{})
+	go func() { f.b.Handler().ServeHTTP(w, r); close(minted) }()
+	<-st.entered
+	swapped := make(chan struct{})
+	go func() { f.b.Policy.Swap(f.b.Policy.Load()); close(swapped) }()
+	for _, c := range []chan struct{}{minted, swapped} {
+		select {
+		case <-c:
+		case <-time.After(2 * time.Second):
+			t.Fatal("a mint holding the policy under a pending swap never finished")
+		}
+	}
+	if it := decodeMint(t, w).Results[0]; it.Verdict != "deny" || it.Reason != "store_unavailable" {
+		t.Fatalf("%+v", it)
 	}
 }
