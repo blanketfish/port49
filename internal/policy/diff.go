@@ -69,8 +69,12 @@ type Diff struct {
 // task 9 review C1). Old and New are the key's value as JSON, `null` where
 // the adapter leaves it unset.
 type AdapterChange struct {
-	Platform, Field     string
-	Old, New            string
+	Platform, Field string
+	Old, New        string
+	// OldShown and NewShown are Old and New as port49 may print them, a
+	// block's text redacted (platform.RedactAdapter): what the diff prints
+	// lands in CI logs (spec §5.8; final review I3).
+	OldShown, NewShown  string
 	Sha256              string // hex sha256 of New: what an acknowledge: entry names
 	Gated, Acknowledged bool
 	AcknowledgedBy      string
@@ -1109,15 +1113,27 @@ func (c *comparison) adapters() {
 	// (owner's ruling 2026-09-24, task 13).
 	platforms[genericPlatform] = true
 	keys := platform.SpecKeys()
+	// A secret either version's text holds is hidden on both sides: an edit
+	// that removes a block's pattern still prints the old text.
+	patterns := slices.Concat(c.before.Redactions(), c.after.Redactions())
+	secret := c.before.SecretClasses()
+	for class := range c.after.SecretClasses() {
+		secret[class] = true
+	}
+	shown := func(p *Policy, name string) reflect.Value {
+		return reflect.ValueOf(p.shownSpec(name, patterns, secret))
+	}
 	for _, name := range sortedKeys(platforms) {
 		was := reflect.ValueOf(c.before.adapterSpec(name))
 		is := reflect.ValueOf(c.after.adapterSpec(name))
+		wasShown, isShown := shown(c.before, name), shown(c.after, name)
 		for i, key := range keys {
 			if reflect.DeepEqual(was.Field(i).Interface(), is.Field(i).Interface()) {
 				continue
 			}
 			a := AdapterChange{Platform: name, Field: key, Old: canonical(was.Field(i).Interface()),
-				New: canonical(is.Field(i).Interface()), Gated: adapterKeyGated(key)}
+				New: canonical(is.Field(i).Interface()), OldShown: canonical(wasShown.Field(i).Interface()),
+				NewShown: canonical(isShown.Field(i).Interface()), Gated: adapterKeyGated(key)}
 			a.Sha256 = fmt.Sprintf("%x", sha256.Sum256([]byte(a.New)))
 			for _, ack := range c.after.acked {
 				// The digest binds the entry to this edit: one left in the file
@@ -1143,6 +1159,16 @@ func (c *comparison) adapters() {
 // matching on its denies (task 9 review I2).
 func (p *Policy) adapterSpec(name string) platform.Spec {
 	s := platform.SpecOf(p.dialect(name))
+	if _, known := p.platforms()[name]; !known && name != genericPlatform {
+		s.Supports = nil
+	}
+	return s
+}
+
+// shownSpec is adapterSpec with a block's text as port49 may print it
+// (platform.RedactAdapter).
+func (p *Policy) shownSpec(name string, patterns []platform.Redaction, secret map[string]bool) platform.Spec {
+	s := platform.SpecOf(platform.RedactAdapter(patterns, secret, p.dialect(name)))
 	if _, known := p.platforms()[name]; !known && name != genericPlatform {
 		s.Supports = nil
 	}

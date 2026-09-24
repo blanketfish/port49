@@ -856,3 +856,52 @@ func TestThePolicyToolsNeverPrintARuleSecret(t *testing.T) {
 	check("a load error", "explain", "--policy", oldPol, "--inventory", inv, "--subject", "noc", "--device", "leaf-01")
 	check("a load error", "policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv)
 }
+
+// policy diff's adapter lines print a block's values as JSON, which lands in
+// CI logs: a config check's match, a class pattern and every other block
+// text print redacted as platform show prints them, and the digest an
+// acknowledgment binds is still taken over the value as written (final review
+// I3).
+func TestPolicyDiffAdapterLinesNeverPrintABlockSecret(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	block := "platforms:\n  arista_eos:\n" +
+		"    config_checks:\n      - {match: '^snmp-server community Hunter2a', says: a check}\n" +
+		"    entity_classes: {secret_pattern: ['^snmp-server community Hunter2b$'], bad_comm: ['^Hunter2c$']}\n" +
+		"    unreachable: {readonly: [\"snmp-server community Hunter2d **\"]}\n" +
+		"    fallback: {readonly: \"a local user, password Hunter2e\"}\n"
+	withClass := strings.Replace(raw, "roles:\n", "roles:\n  - {name: snmp, deny: [snmp-server community @bad_comm **]}\n", 1)
+	if err := os.WriteFile(newPol, []byte(block+withClass), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "ADAPTER: platforms.arista_eos.config_checks") ||
+		!strings.Contains(out.String(), "ADAPTER: platforms.arista_eos.entity_classes") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	for _, probe := range []string{"Hunter2a", "Hunter2b", "Hunter2c", "Hunter2d", "Hunter2e"} {
+		if strings.Contains(out.String()+errb.String(), probe) {
+			t.Errorf("policy diff prints %s:\n%s%s", probe, out.String(), errb.String())
+		}
+	}
+	// A set's own check prints as written, and the entry binds the value as
+	// written: acknowledged with it, the diff passes.
+	if !strings.Contains(out.String(), `\\b(local|enable)\\s*$`) {
+		t.Errorf("a shipped match is printed as written:\n%s", out.String())
+	}
+	var acks []string
+	for _, m := range regexp.MustCompile(`add (\{platform: arista_eos, field: \w+, sha256: [0-9a-f]{64}, reason: )"\.\.\."\}`).
+		FindAllStringSubmatch(out.String(), -1) {
+		acks = append(acks, "  - "+m[1]+"a test}")
+	}
+	acked := block + withClass + "acknowledge:\n" + strings.Join(acks, "\n") + "\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

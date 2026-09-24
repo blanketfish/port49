@@ -217,6 +217,37 @@ func shippedBy(has func(Dialect) bool) bool {
 	return false
 }
 
+// ShippedText reports whether some built-in set's adapter ships text as one
+// of the values a block can also write: a device_config line, a config
+// check's match or says, an unreachable rule, a fallback text or an entity
+// class pattern. Such text is lab text, never a secret, and prints as written
+// wherever port49 quotes it.
+func ShippedText(text string) bool {
+	return shippedBy(func(d Dialect) bool {
+		if slices.Contains(d.DeviceConfig, text) || slices.ContainsFunc(d.ConfigChecks, func(c ConfigCheck) bool {
+			return c.Match == text || c.Says == text
+		}) {
+			return true
+		}
+		for _, list := range d.Unreachable {
+			if slices.Contains(list, text) {
+				return true
+			}
+		}
+		for _, t := range d.Fallback {
+			if t == text {
+				return true
+			}
+		}
+		for _, list := range d.EntityClasses {
+			if slices.Contains(list, text) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 // RedactUnreachable is an unreachable rule as port49 may print it: as
 // written where a set ships it, and otherwise redacted as a rule is
 // (RedactRule), since a block's rule is policy text like a role's (spec §5.8).
@@ -271,4 +302,55 @@ func RedactClassPatterns(rules []Redaction, class string, patterns []string, sec
 		}
 	}
 	return out
+}
+
+// RedactAdapter is d with every text a `platforms:` block can write that may
+// carry a secret as port49 may print it (spec §5.8): its device_config lines
+// and config checks (RedactConfigLine, RedactConfigCheck), its
+// unreachable rules, its fallback text and note, and its entity classes'
+// patterns, secret naming the classes a rule names where a value is
+// redacted. A set's own text prints as written.
+func RedactAdapter(patterns []Redaction, secret map[string]bool, d Dialect) Dialect {
+	if d.DeviceConfig != nil {
+		lines := make([]string, len(d.DeviceConfig))
+		for i, line := range d.DeviceConfig {
+			lines[i] = RedactConfigLine(patterns, line)
+		}
+		d.DeviceConfig = lines
+	}
+	if d.ConfigChecks != nil {
+		checks := make([]ConfigCheck, len(d.ConfigChecks))
+		for i, c := range d.ConfigChecks {
+			checks[i] = RedactConfigCheck(patterns, c)
+		}
+		d.ConfigChecks = checks
+	}
+	if d.Unreachable != nil {
+		unreachable := make(map[string][]string, len(d.Unreachable))
+		for level, rules := range d.Unreachable {
+			unreachable[level] = make([]string, len(rules))
+			for i, rule := range rules {
+				unreachable[level][i] = RedactUnreachable(patterns, rule)
+			}
+		}
+		d.Unreachable = unreachable
+	}
+	for _, texts := range []*map[string]string{&d.Fallback, &d.FallbackNote} {
+		if *texts == nil {
+			continue
+		}
+		out := make(map[string]string, len(*texts))
+		for level, text := range *texts {
+			out[level] = RedactFallback(patterns, text)
+		}
+		*texts = out
+	}
+	if d.EntityClasses != nil {
+		classes := make(map[string][]string, len(d.EntityClasses))
+		for class, list := range d.EntityClasses {
+			classes[class] = RedactClassPatterns(patterns, class, list, secret[class])
+		}
+		d.EntityClasses = classes
+	}
+	return d
 }

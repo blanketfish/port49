@@ -340,7 +340,7 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			"it acknowledges nothing; delete it (spec §12)\n", ackName(a), a.Reason)
 	}
 	for _, a := range d.Adapters {
-		change := fmt.Sprintf("platforms.%s.%s %s -> %s", a.Platform, a.Field, a.Old, a.New)
+		change := fmt.Sprintf("%s %s -> %s", adapterKey(a), a.OldShown, a.NewShown)
 		switch {
 		case !a.Gated:
 			fmt.Fprintf(stdout, "adapter: %s\n", change)

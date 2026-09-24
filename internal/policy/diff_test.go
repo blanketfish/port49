@@ -954,9 +954,10 @@ func TestAnInertListingCannotHideItsOwnEdit(t *testing.T) {
 	}
 	listed := `["home-directory","idletime","timeout","x-label"]`
 	if len(d.Adapters) != 2 || d.Adapters[0] != (AdapterChange{Platform: "cisco_nxos", Field: "inert_attributes",
-		Old: `["home-directory","idletime","timeout"]`, New: listed, Sha256: digest(listed), Gated: true}) ||
+		Old: `["home-directory","idletime","timeout"]`, New: listed, OldShown: `["home-directory","idletime","timeout"]`,
+		NewShown: listed, Sha256: digest(listed), Gated: true}) ||
 		d.Adapters[1] != (AdapterChange{Platform: "cisco_nxos", Field: "verified", Old: `"containerlab"`, New: "null",
-			Sha256: digest("null")}) || d.UnacknowledgedAdapters() != 1 {
+			OldShown: `"containerlab"`, NewShown: "null", Sha256: digest("null")}) || d.UnacknowledgedAdapters() != 1 {
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
 	acked := after + "acknowledge:\n  - {platform: cisco_nxos, field: inert_attributes, sha256: " + d.Adapters[0].Sha256 +
@@ -1230,7 +1231,7 @@ grants:
 	}
 	d := Compare(before, after, noon)
 	if len(d.Adapters) != 1 || d.Adapters[0] != (AdapterChange{Platform: "acme_os", Field: "supports", Old: "null",
-		New: `["session"]`, Sha256: digest(`["session"]`), Gated: true}) || d.UnacknowledgedAdapters() != 1 {
+		New: `["session"]`, OldShown: "null", NewShown: `["session"]`, Sha256: digest(`["session"]`), Gated: true}) || d.UnacknowledgedAdapters() != 1 {
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
 }

@@ -165,7 +165,7 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		patterns, secret = p.Redactions(), p.SecretClasses()
 	}
 	for platformName, d := range set {
-		set[platformName] = redactAdapter(patterns, secret, d)
+		set[platformName] = platform.RedactAdapter(patterns, secret, d)
 	}
 	if *all {
 		// A file already there would be read back as part of the set.
@@ -244,6 +244,12 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	// The report goes to CI logs as policy diff's does: every quoted value is
+	// redacted, by the policy's patterns once it loads (spec §5.8; final
+	// review I3).
+	out, errOut, flush := redactOutput(stdout, stderr)
+	defer flush()
+	stdout, stderr = out, errOut
 	inv, err := admission.LoadFile(files.inventory)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 platform upgrade:", err)
@@ -279,6 +285,8 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 			after.PlatformSet(), *to)
 		return 1
 	}
+	out.rules = append(before.Redactions(), after.Redactions()...)
+	errOut.rules = out.rules
 	upgradeReport(stdout, before, after, time.Now())
 	if *write {
 		if err := replaceFile(files.policy, moved); err != nil {
@@ -300,13 +308,8 @@ func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
 	d := policy.Compare(before, after, now)
 	for _, a := range d.Adapters {
 		devices, subjects := before.Reach(a.Platform, now)
-		key := "platforms." + a.Platform + "." + a.Field
-		if a.Platform == "generic" {
-			// What every device of a platform with no adapter receives.
-			key = "generic." + a.Field
-		}
-		fmt.Fprintf(w, "  %s\n    %s -> %s\n    affects %d devices, %d subjects\n", key, a.Old, a.New, devices,
-			subjects)
+		fmt.Fprintf(w, "  %s\n    %s -> %s\n    affects %d devices, %d subjects\n", adapterKey(a), a.OldShown,
+			a.NewShown, devices, subjects)
 		switch {
 		case !a.Gated:
 			fmt.Fprintln(w, "    reported")
@@ -332,6 +335,17 @@ func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
 	}
 }
 
+// adapterKey is the key an adapter change is to, as policy diff and platform
+// upgrade both name it: platforms.<p>.<key>, and generic.<key> for the
+// generic adapter, which every device of a platform with no adapter receives
+// and no block writes.
+func adapterKey(a policy.AdapterChange) string {
+	if a.Platform == "generic" {
+		return "generic." + a.Field
+	}
+	return "platforms." + a.Platform + "." + a.Field
+}
+
 // exportMode is what adapterFile writes a block's fallback note as.
 type exportMode int
 
@@ -349,57 +363,6 @@ const (
 	// measured: the note is dropped (spec §8).
 	exportSet
 )
-
-// redactAdapter is d with every text a `platforms:` block can write that may
-// carry a secret as port49 may print it (spec §5.8): its device_config lines
-// and config checks (platform.RedactConfigLine, RedactConfigCheck), its
-// unreachable rules, its fallback text and note, and its entity classes'
-// patterns, secret naming the classes a rule names where a value is
-// redacted. A set's own text prints as written.
-func redactAdapter(patterns []platform.Redaction, secret map[string]bool, d platform.Dialect) platform.Dialect {
-	if d.DeviceConfig != nil {
-		lines := make([]string, len(d.DeviceConfig))
-		for i, line := range d.DeviceConfig {
-			lines[i] = platform.RedactConfigLine(patterns, line)
-		}
-		d.DeviceConfig = lines
-	}
-	if d.ConfigChecks != nil {
-		checks := make([]platform.ConfigCheck, len(d.ConfigChecks))
-		for i, c := range d.ConfigChecks {
-			checks[i] = platform.RedactConfigCheck(patterns, c)
-		}
-		d.ConfigChecks = checks
-	}
-	if d.Unreachable != nil {
-		unreachable := make(map[string][]string, len(d.Unreachable))
-		for level, rules := range d.Unreachable {
-			unreachable[level] = make([]string, len(rules))
-			for i, rule := range rules {
-				unreachable[level][i] = platform.RedactUnreachable(patterns, rule)
-			}
-		}
-		d.Unreachable = unreachable
-	}
-	for _, texts := range []*map[string]string{&d.Fallback, &d.FallbackNote} {
-		if *texts == nil {
-			continue
-		}
-		out := make(map[string]string, len(*texts))
-		for level, text := range *texts {
-			out[level] = platform.RedactFallback(patterns, text)
-		}
-		*texts = out
-	}
-	if d.EntityClasses != nil {
-		classes := make(map[string][]string, len(d.EntityClasses))
-		for class, list := range d.EntityClasses {
-			classes[class] = platform.RedactClassPatterns(patterns, class, list, secret[class])
-		}
-		d.EntityClasses = classes
-	}
-	return d
-}
 
 // notMeasured is the comment on a fallback level exportBlock folded a note
 // into.

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -534,5 +535,44 @@ func TestAPastedBackRedactedValueIsRefused(t *testing.T) {
 		if code != 1 || !strings.Contains(errb.String(), key) || !strings.Contains(errb.String(), "re-enter the value from your policy") {
 			t.Errorf("%s: code %d\n%s", key, code, errb.String())
 		}
+	}
+}
+
+// A set move that changes a key a block merges into prints the block's part
+// of it, and the report goes to CI logs like policy diff's: it prints the
+// block's text redacted (final review I3).
+func TestTheUpgradeReportNeverPrintsABlockSecret(t *testing.T) {
+	pol, inv := policyFixture(t)
+	devices, err := admission.LoadFile(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := platform.Set("1.0.0")
+	second, _ := platform.Set("1.0.0")
+	eos := second["arista_eos"]
+	eos.Unreachable = map[string][]string{"readonly": append(slices.Clone(eos.Unreachable["readonly"]), "show tech-support **")}
+	second["arista_eos"] = eos
+	g, _ := platform.Generic("1.0.0")
+	e := policy.Env{Devices: devices.Devices, Sets: map[string]map[string]platform.Dialect{"1.0.0": first,
+		"1.1.0": second}, Generics: map[string]platform.Dialect{"1.0.0": g, "1.1.0": g}}
+	raw := append([]byte("platforms:\n  arista_eos:\n    unreachable: {readonly: [\"snmp-server community Hunter2 **\"]}\n"),
+		readFile(t, pol)...)
+	before, err := policy.Parse(raw, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := policy.SetPlatformSet(raw, "1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := policy.Parse(moved, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	upgradeReport(&out, before, after, time.Now())
+	if strings.Contains(out.String(), "Hunter2") || !strings.Contains(out.String(), "platforms.arista_eos.unreachable") ||
+		!strings.Contains(out.String(), "snmp-server community «redacted» **") {
+		t.Fatalf("%s", out.String())
 	}
 }

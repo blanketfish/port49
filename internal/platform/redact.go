@@ -288,9 +288,14 @@ func AllRedactions() []Redaction {
 }
 
 // RedactQuoted is line with every quoted value in it — "…" as %q writes one,
-// or `…` — redacted word by word as a rule is (RedactRule), and the rest
-// left as it was. A line that quotes policy text, an error or a report,
-// goes to a log like any other (spec §5.8).
+// or `…` — redacted as prose is (RedactProse): word by word as a rule is,
+// split by whitespace and then by punctuation and a regex's operators, so
+// the `^snmp-server community X` a diff prints of a config check is read as
+// its words (final review I3). A rule's wildcards keep their places, and the
+// rest of the line is left as it was. A value some built-in set ships as
+// adapter text is lab text and prints as written (ShippedText), as platform
+// show prints it. A line that quotes policy text, an error or a report, goes
+// to a log like any other (spec §5.8).
 func RedactQuoted(rules []Redaction, line string) string {
 	var out strings.Builder
 	for i := 0; i < len(line); {
@@ -314,18 +319,31 @@ func RedactQuoted(rules []Redaction, line string) string {
 			i++
 			continue
 		}
-		words, redacted := RedactRule(rules, strings.Fields(value))
+		shown, redacted := redactQuotedValue(rules, value)
 		switch {
 		case !redacted:
 			out.WriteString(quoted)
 		case quoted[0] == '"':
-			out.WriteString(strconv.Quote(strings.Join(words, " ")))
+			out.WriteString(strconv.Quote(shown))
 		default:
-			out.WriteString("`" + strings.Join(words, " ") + "`")
+			out.WriteString("`" + shown + "`")
 		}
 		i += len(quoted)
 	}
 	return out.String()
+}
+
+// redactQuotedValue is one quoted value as RedactQuoted prints it, and
+// whether redaction changed it.
+func redactQuotedValue(rules []Redaction, value string) (string, bool) {
+	if ShippedText(value) {
+		return value, false
+	}
+	shown := RedactProse(rules, value)
+	if shown == strings.Join(strings.Fields(value), " ") {
+		return value, false
+	}
+	return shown, true
 }
 
 // RedactRecord applies rules to a record's raw pairs and its vector, which are

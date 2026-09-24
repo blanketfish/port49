@@ -3,6 +3,7 @@ package platform
 import (
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -470,5 +471,27 @@ func TestAnOptionsSecretIsRedacted(t *testing.T) {
 		if got, _ := Redact(Redactions("arista_eos"), []string{in}); got[0] != want {
 			t.Errorf("%q: %q, want %q", in, got[0], want)
 		}
+	}
+}
+
+// A quoted value is split as prose is, by whitespace and then by
+// punctuation and a regex's operators, an escape one separator: the JSON a
+// diff prints of a config check's match, `^snmp-server community X`, is
+// redacted as platform show redacts it; text a set ships prints as written
+// (final review I3).
+func TestAQuotedRegexIsRedactedAsProse(t *testing.T) {
+	all := AllRedactions()
+	for _, line := range []string{
+		`[{"match":"^snmp-server community Hunter2","says":"x"}]`,
+		`["^snmp-server\\s+community\\s+Hunter2$"]`,
+		"`(password|secret):Hunter2`",
+	} {
+		if got := RedactQuoted(all, line); strings.Contains(got, "Hunter2") {
+			t.Errorf("%s -> %s", line, got)
+		}
+	}
+	shippedLine := strconv.Quote(`^aaa authentication enable default .*\b(local|enable)\s*$`)
+	if got := RedactQuoted(all, shippedLine); got != shippedLine {
+		t.Errorf("a shipped match: %s", got)
 	}
 }
