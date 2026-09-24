@@ -609,7 +609,10 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    `broker.policy_watch_interval` (default 5s, 1s to 5m). A change it finds is loaded once
    two reads in a row agree, and what is loaded is the bytes those two reads agreed on, so an
    edit is in force within two intervals of its write; a `SIGHUP` loads what is on disk at
-   once. Either way a file must be written atomically (a
+   once. A file that differs at every read never has two agree and never loads — two tools
+   fighting over it, or a templater stamping the time — so after six reads running that
+   differ it is said once, and `port49_policy_file_refused` holds at 1 until it settles and
+   loads or the file in force is put back. Either way a file must be written atomically (a
    temporary file renamed over it): a writer stalled part-way for two intervals, or a `SIGHUP`
    sent mid-write, loads what is there, and a list cut short can load wider than the one
    intended.
@@ -693,23 +696,27 @@ token minted at 09:58. A token whose answer is unchanged, the bundle aside, is k
 not a reason to make everyone mint again. A shortened `token_ttl` is a changed answer, since
 those tokens would outlive what the policy now allows; a lengthened one is not. A login in flight across the swap may still write the
 superseded answer after the refresh has passed its context, so the refresh runs again a
-settle interval (30s) after every reload.
+settle interval (30s) after every reload, and after every pass at a grant's expiry.
 
 **A grant's expiry is a scheduled edit.** A resolution changes with no edit to the file when a
 grant expires (§5.1), so the refresh also runs at every expiry instant; otherwise a live context
 would keep an expired grant's rules until the next edit. A pass judges every context at one
 instant, so a grant that expires while a pass is running sends it round again at once, and the
 next expiry is scheduled from the instant the last pass judged at, never from the clock after
-it.
+it: an expiry between the two is due at once. A redemption in flight across an expiry pass has
+the same race as one across a swap — it can write the expired grant after the pass visited its
+context — so an expiry pass is settled 30s later exactly as a reload is.
 
 **The store down during a reload** does not stop the swap: the new policy is in force for every
 mint at once (and every mint fails `store_unavailable` until the store answers). The refresh
 stops at its first store error, says how far it got, and runs again every 30s until it
 finishes; a context not yet reached keeps its previous policy until then, and
-`port49_policy_refresh_pending` holds at 1 from the swap until a pass reaches every live
-context and leaves none behind — a context skipped as busy, or a pass stopped by a
-store error, keeps it at 1 until a later pass reaches that context — the alert for a policy in
-force that has not yet reached every live session. A context revoked for a compile fault is
+`port49_policy_refresh_pending` holds at 1 from the swap, or from a grant's expiry, until the
+settle pass after it completes, reaching every live context and leaving none behind — a
+context skipped as busy, or a pass stopped by a store error, keeps it at 1 until a later pass
+reaches that context — the alert for a policy in force that has not yet reached every live
+session. It is never 0 while a settle pass is outstanding: until then a login in flight may
+still write the superseded answer. A context revoked for a compile fault is
 done: revoked is its answer under the policy in force, so it does not hold the gauge, and it is
 counted `failed` in `port49_context_refreshes_total`, which is its alarm. The directory-driven scheduled
 refresh through `active_principals` is plan 7's.
@@ -4512,6 +4519,10 @@ Beyond those already listed in the design document's §14:
   context after it is still refreshed; `port49_policy_refresh_pending` stays 1 until a later
   pass reaches the busy context. An accounting record landing between the refresh's read and
   its write does not conflict.
+- **An expiry is settled like a reload**: the pass at a grant's expiry is followed by a settle
+  pass 30s later, `port49_policy_refresh_pending` is 1 from the expiry until that settle pass
+  completes, and an expiry that fell between the instant a pass judged at and its end is due
+  at once.
 - **A reload that fails the joint check for some devices revokes no context**: an edit whose
   composition fails on one platform's devices loads, quarantines those devices, and leaves
   their live contexts as they were; no context anywhere is revoked `blob_unavailable`. One
