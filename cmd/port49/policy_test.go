@@ -83,7 +83,7 @@ func TestPolicyTestIsACIGate(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "PASS noc on leaf-01: \"reload\" -> deny no_rule_matched") ||
-		!strings.Contains(out.String(), "2 tests, 0 failed") {
+		!strings.Contains(out.String(), "2 tests, 0 failed; 0 shadowed denies, 0 unacknowledged") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 	raw, _ := os.ReadFile(pol)
@@ -95,6 +95,33 @@ func TestPolicyTestIsACIGate(t *testing.T) {
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
 		!strings.Contains(out.String(), "FAIL noc on leaf-01: \"reload\" -> deny no_rule_matched, want permit") {
 		t.Fatalf("code %d\n%s", code, out.String())
+	}
+}
+
+// A deny a more specific permit beats fails the gate until a policy test
+// exercises it (spec §12): the report names the deny, the subject and the
+// permit, and the test is the acknowledgment.
+func TestPolicyTestFailsAnUnacknowledgedShadow(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw, _ := os.ReadFile(pol)
+	shadowed := strings.Replace(string(raw), "permit: [show **]}", "permit: [show **, reload now]}", 1)
+	if err := os.WriteFile(pol, []byte(shadowed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `shadowed: "reload **" (no_reload) does not bind noc where "reload now" (read_only) is more specific, on arista_eos; no policy test exercises it`) ||
+		!strings.Contains(out.String(), "1 shadowed denies, 1 unacknowledged") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := shadowed + "  - {subject: noc, device: leaf-01, command: \"reload now\", expect: permit}\n"
+	if err := os.WriteFile(pol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "a policy test exercises it") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
 

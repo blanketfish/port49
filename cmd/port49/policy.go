@@ -91,8 +91,9 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
 
 // policyTest is the CI gate (spec §11, §12): it loads the policy against the
 // inventory — every load-time check is a failure here — prints what CI must
-// report without refusing, then runs the file's tests. It exits 1 if the
-// policy does not load or any test fails.
+// report without refusing, the shadowed-deny report, then runs the file's
+// tests. It exits 1 if the policy does not load, any test fails, or a deny is
+// shadowed and no test exercises it.
 func policyTest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 policy test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -118,6 +119,27 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, f := range p.Lint() {
 		fmt.Fprintf(stdout, "report: %s: %s\n", f.Kind, f.Message)
+	}
+	// The shadowed-deny report is what replaces the guarantee deny-overrides
+	// gave (spec §12): every deny a more specific permit beats, for whom, and
+	// by what. One no policy test exercises fails the gate; a possible one,
+	// which two regex or class terms decide, is reported and does not.
+	shadows := p.ShadowedDenies()
+	unacknowledged := 0
+	for _, s := range shadows {
+		line := fmt.Sprintf("%q (%s) does not bind %s where %q (%s) is more specific, on %s", s.Deny, s.DenyRole,
+			s.Subject, s.Permit, s.PermitRole, strings.Join(s.Platforms, ", "))
+		switch {
+		case s.Possible:
+			fmt.Fprintf(stdout, "possibly shadowed: %s; two regex or class terms decide it, which is not "+
+				"decidable cheaply\n", line)
+		case s.Acknowledged:
+			fmt.Fprintf(stdout, "shadowed: %s; a policy test exercises it\n", line)
+		default:
+			unacknowledged++
+			fmt.Fprintf(stdout, "shadowed: %s; no policy test exercises it: add one that expects permit on a "+
+				"command it covers, or narrow the permit\n", line)
+		}
 	}
 	results := p.RunTests(now)
 	failed := 0
@@ -150,8 +172,9 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "     note: %s\n", c)
 		}
 	}
-	fmt.Fprintf(stdout, "%d tests, %d failed\n", len(results), failed)
-	if failed > 0 {
+	fmt.Fprintf(stdout, "%d tests, %d failed; %d shadowed denies, %d unacknowledged\n", len(results), failed,
+		len(shadows), unacknowledged)
+	if failed > 0 || unacknowledged > 0 {
 		return 1
 	}
 	return 0
