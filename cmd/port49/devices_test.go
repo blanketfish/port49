@@ -58,7 +58,8 @@ func TestCheckConfigFindsACollisionAndAForbiddenLine(t *testing.T) {
 }
 
 // checkConfigFixture is policyFixture with block laid in front of the policy
-// as its platforms: key, and an IOS-XE device beside leaf-01.
+// as its platforms: key, and an IOS-XE, an NX-OS and a Junos device beside
+// leaf-01.
 func checkConfigFixture(t *testing.T, block string) (pol, inv string) {
 	t.Helper()
 	pol, inv = policyFixture(t)
@@ -73,6 +74,8 @@ func checkConfigFixture(t *testing.T, block string) (pol, inv string) {
 devices:
   - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}
   - {name: xe-01, platform: cisco_iosxe, addresses: [10.0.0.2]}
+  - {name: nx-01, platform: cisco_nxos, addresses: [10.0.0.3]}
+  - {name: srx-01, platform: juniper_junos, addresses: [10.0.0.4]}
 key_groups:
   - {match: {cidr: 10.0.0.0/8}, key_ref: k}
 `), 0o600); err != nil {
@@ -189,5 +192,37 @@ func TestCheckConfigNeverPrintsASecret(t *testing.T) {
 	if code != 1 || !strings.Contains(errb.String(), "not read to the end") ||
 		strings.Contains(out.String()+errb.String(), "Hunter2") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A device-local account collides with a served username in any form the
+// daemon reads as that username: the daemon looks a context up by the
+// canonical form of what the device sends — lower case, no DOMAIN\\ prefix,
+// no @suffix (spec §2) — so a local NOC under a local fallback reaches the
+// port49 noc's context. A quoted name, a tab, and Junos's protect: and
+// inactive: prefixes are read too.
+func TestCheckConfigFindsACollisionInAnyForm(t *testing.T) {
+	pol, inv := checkConfigFixture(t, "")
+	for device, tt := range map[string]struct {
+		config string
+		want   int
+	}{
+		"xe-01": {"username NOC privilege 1 secret 0 x\nusername Ops secret 0 x\nusername\tnoc@corp secret 0 x\n" +
+			"username  \"ops\" secret 0 x\nusername CORP\\noc secret 0 x\nusername breakglass secret 0 x\n", 5},
+		"srx-01": {"system {\n    login {\n        protect: user noc {\n            class super-user;\n        }\n" +
+			"        user \"ops\" {\n        }\n        inactive: user NOC {\n        }\n        user breakglass {\n" +
+			"        }\n    }\n}\nset system login user \"Ops\" class super-user\n", 4},
+	} {
+		cfg := filepath.Join(t.TempDir(), device+".cfg")
+		if err := os.WriteFile(cfg, []byte(tt.config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", device, cfg},
+			&out, &errb)
+		if n := strings.Count(out.String(), "COLLISION: "); code != 1 || n != tt.want ||
+			strings.Contains(out.String(), `"breakglass"`) {
+			t.Errorf("%s: code %d, %d collisions, want %d\n%s%s", device, code, n, tt.want, out.String(), errb.String())
+		}
 	}
 }

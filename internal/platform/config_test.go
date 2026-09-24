@@ -151,7 +151,7 @@ func TestTheSetsConfigIsTheFloor(t *testing.T) {
 	if !reflect.DeepEqual(got.ConfigChecks, ref.ConfigChecks) {
 		t.Errorf("config_checks %+v", got.ConfigChecks)
 	}
-	if !reflect.DeepEqual(got.LocalAccounts, []string{`^username (\S+)`, `^user (\S+)`}) {
+	if !reflect.DeepEqual(got.LocalAccounts, []string{`^username\s+(\S+)`, `^user (\S+)`}) {
 		t.Errorf("local_accounts %q", got.LocalAccounts)
 	}
 	if !reflect.DeepEqual(ConfigFloor(ref, ref), ref) || !reflect.DeepEqual(ref, shipped["arista_eos"]) {

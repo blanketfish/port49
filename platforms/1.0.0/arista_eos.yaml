@@ -55,7 +55,7 @@ platforms:
     # `port49 devices check-config`: a local account named as a port49
     # username inherits that username's context (spec §5.6), and two lines
     # the spec forbids.
-    local_accounts: ['^username (\S+)']
+    local_accounts: ['^username\s+(\S+)']
     config_checks:
       - match: '^aaa authorization commands \S+ default .*\b(none|if-authenticated)\s*$'
         says: "the command method list falls back to none or if-authenticated: an operator session at 15 runs every command when port49 cannot answer; end it in local (spec §6, decision 23)"

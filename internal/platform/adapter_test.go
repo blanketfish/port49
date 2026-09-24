@@ -36,7 +36,7 @@ var shipped = map[string]Dialect{
 		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **",
 			"show users detail **"}},
 		Fallback:      map[string]string{"admin": "network-admin: every command, configuration included"},
-		LocalAccounts: []string{`^username (\S+)`},
+		LocalAccounts: []string{`^username\s+(\S+)`},
 		ConfigChecks: []ConfigCheck{
 			{Match: `^aaa authorization commands \S+ default .*\b(none|if-authenticated)\s*$`, Says: "the command method " +
 				"list falls back to none or if-authenticated: an operator session at 15 runs every command when port49 " +
@@ -62,7 +62,7 @@ var shipped = map[string]Dialect{
 			"aaa authorization commands default group port49 local",
 			"aaa authorization config-commands default group port49 local"},
 		Fallback:      map[string]string{"admin": "network-admin: every command, configuration included"},
-		LocalAccounts: []string{`^username (\S+)`},
+		LocalAccounts: []string{`^username\s+(\S+)`},
 		ConfigChecks: []ConfigCheck{
 			{Match: `^aaa authorization (config-)?commands default .*\b(none|if-authenticated)\s*$`, Says: "the command " +
 				"method list falls back to none or if-authenticated: an operator session runs every command when port49 " +
@@ -89,7 +89,7 @@ var shipped = map[string]Dialect{
 		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **"},
 			"operator": {"clear ip bgp **", "configure terminal **"}},
 		Fallback:      map[string]string{"admin": "level 15: every command, configuration included"},
-		LocalAccounts: []string{`^username (\S+)`},
+		LocalAccounts: []string{`^username\s+(\S+)`},
 		ConfigChecks: []ConfigCheck{
 			{Match: `^aaa authorization commands \d+ default .*\b(none|if-authenticated)\s*$`, Says: "the command method " +
 				"list falls back to none or if-authenticated: an ERROR or an outage then permits every command at that " +
@@ -107,7 +107,8 @@ var shipped = map[string]Dialect{
 			"allow-configuration-regexps", "deny-configuration-regexps"},
 		InertAttributes: []string{"home-directory"},
 		EnableUsername:  EnablePrincipal,
-		LocalAccounts:   []string{`^set system login user (\S+)`, `^\s*user (\S+) \{`},
+		LocalAccounts: []string{`^set\s+system\s+login\s+user\s+"?([^\s"]+)`,
+			`^\s*(?:(?:protect|inactive):\s+)*user\s+"?([^\s"{]+)"?\s*\{`},
 		ConfigChecks: []ConfigCheck{{Match: `authentication-order .*\bpassword\b`, Says: "a FAIL from port49 falls " +
 			"through to the local password on this platform (tests/lab/results/L4-juniper_vsrx.md, " +
 			"L4-juniper_vjunos-router.md): a denied operator logs in locally"}},

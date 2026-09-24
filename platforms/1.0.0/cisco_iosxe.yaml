@@ -65,7 +65,7 @@ platforms:
     fallback:
       admin: "level 15: every command, configuration included"
     # `port49 devices check-config` (spec §5.6).
-    local_accounts: ['^username (\S+)']
+    local_accounts: ['^username\s+(\S+)']
     config_checks:
       - match: '^aaa authorization commands \d+ default .*\b(none|if-authenticated)\s*$'
         says: "the command method list falls back to none or if-authenticated: an ERROR or an outage then permits every command at that level (tests/lab/results/L4-error-cisco_iosxe.md); end it in local"

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/username"
 )
 
 // checkConfig is `port49 devices check-config` (spec §5.6, §6): a device's
@@ -80,7 +82,10 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	failed := 0
 	for _, a := range accounts {
-		if subject, ok := served[a.Name]; ok {
+		// The daemon looks a context up by the canonical form of the username
+		// the device sends (spec §2), so a local NOC, CORP\noc or noc@corp
+		// reaches the port49 noc's context as a local noc would.
+		if subject, ok := served[username.Canonical(strings.Trim(a.Name, `"`))]; ok {
 			failed++
 			fmt.Fprintf(stdout, "COLLISION: %s:%d: a device-local account %q is the username port49 serves subject %s "+
 				"on %s: a session under it inherits that context's level, and the spec forbids the collision (spec "+
