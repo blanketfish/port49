@@ -96,9 +96,6 @@ func TestLevelsRenderAndHaveANumber(t *testing.T) {
 	if a, ok := eos.Render("admin"); !ok || !reflect.DeepEqual(a, []string{"priv-lvl=15"}) {
 		t.Fatalf("eos admin: %v %v", a, ok)
 	}
-	if _, ok := eos.Render("operator"); ok {
-		t.Fatal("eos operator is unmapped: nothing measured says what level it is")
-	}
 	if n, ok := eos.PrivLvl("readonly"); !ok || n != 1 {
 		t.Fatalf("eos readonly: %d %v", n, ok)
 	}
@@ -109,8 +106,31 @@ func TestLevelsRenderAndHaveANumber(t *testing.T) {
 	if n, ok := nx.PrivLvl("admin"); !ok || n != 15 {
 		t.Fatalf("nx-os admin's ceiling number: %d %v", n, ok)
 	}
-	if _, ok := nx.PrivLvl("operator"); ok {
-		t.Fatal("operator has no number anywhere yet")
+}
+
+// operator gets admin's device privilege on arista_eos and cisco_nxos, where
+// the device cannot draw the operator line (tests/lab/results/ceiling-*.md;
+// spec §6, decision 23), and nothing new on IOS-XE, which can (plan 5's).
+func TestOperatorIsAdminsLevelWhereTheDeviceCannotFenceIt(t *testing.T) {
+	eos, _ := DialectFor("arista_eos")
+	if a, ok := eos.Render("operator"); !ok || !reflect.DeepEqual(a, []string{"priv-lvl=15"}) {
+		t.Fatalf("eos operator renders as admin does: %v %v", a, ok)
+	}
+	if n, ok := eos.PrivLvl("operator"); !ok || n != 15 {
+		t.Fatalf("eos operator: %d %v", n, ok)
+	}
+	nx, _ := DialectFor("cisco_nxos")
+	if n, ok := nx.PrivLvl("operator"); !ok || n != 15 {
+		t.Fatalf("nx-os operator's ceiling number is admin's: %d %v", n, ok)
+	}
+	if n, ok := nx.PrivLvl("readonly"); !ok || n != 1 {
+		t.Fatalf("nx-os readonly: %d %v", n, ok)
+	}
+	for _, name := range []string{"cisco_iosxe", "juniper_junos", "no_such_platform"} {
+		d, _ := DialectFor(name)
+		if _, ok := d.PrivLvl("operator"); ok {
+			t.Fatalf("%s: operator has no number there yet", name)
+		}
 	}
 }
 
@@ -134,6 +154,40 @@ func TestUnknownPlatformsAreGenericAndTheTableIsCopied(t *testing.T) {
 	for name := range Dialects() {
 		if !slices.Contains(Names(), name) {
 			t.Errorf("dialect %s has no session-service platform", name)
+		}
+	}
+}
+
+// Each platform lists the attribute names that carry privilege on it, from
+// the lab (L16, L18; spec §6), and the names it holds inert, seeded with spec
+// §6's home-directory; every other attribute bears privilege for the gate
+// (spec §12).
+func TestPrivilegeAttributesArePerPlatformAndFailClosed(t *testing.T) {
+	junos := []string{"local-user-name", "user-permissions", "allow-commands", "deny-commands", "allow-configuration",
+		"deny-configuration", "allow-commands-regexps", "deny-commands-regexps", "allow-configuration-regexps",
+		"deny-configuration-regexps"}
+	for name, want := range map[string][]string{
+		"arista_eos":       {"priv-lvl", "roles"},
+		"cisco_nxos":       {"priv-lvl", "shell:roles", "cisco-av-pair"},
+		"cisco_iosxe":      {"priv-lvl"},
+		"juniper_junos":    junos,
+		"no_such_platform": {"priv-lvl"},
+	} {
+		d, _ := DialectFor(name)
+		if !reflect.DeepEqual(d.PrivilegeAttributes, want) {
+			t.Errorf("%s: %v", name, d.PrivilegeAttributes)
+		}
+		if !reflect.DeepEqual(d.InertAttributes, []string{"home-directory"}) {
+			t.Errorf("%s inert: %v", name, d.InertAttributes)
+		}
+		if !d.BearsPrivilege("idletime") || !d.BearsPrivilege(want[0]) || d.BearsPrivilege("home-directory") {
+			t.Errorf("%s: only an attribute listed inert bears no privilege", name)
+		}
+	}
+	all := PrivilegeAttributeNames()
+	for _, n := range append([]string{"priv-lvl", "roles", "shell:roles", "cisco-av-pair"}, junos...) {
+		if !slices.Contains(all, n) {
+			t.Errorf("PrivilegeAttributeNames lacks %s: %v", n, all)
 		}
 	}
 }

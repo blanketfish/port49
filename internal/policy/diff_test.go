@@ -94,7 +94,7 @@ func TestTheDiffReportsWhatItCannotEnumerate(t *testing.T) {
 	if gained != len(inventory()) {
 		t.Fatalf("access %+v", d.Access)
 	}
-	quarantining := mustParse(t, strings.Replace(diffBase, "privilege: readonly", "privilege: operator", 1))
+	quarantining := mustParse(t, unmappedLevel+strings.Replace(diffBase, "privilege: readonly", "privilege: unmapped", 1))
 	if q := Compare(before, quarantining, noon).Quarantined; len(q) != 2 || q[0].Device != "campus-sw-7" {
 		t.Fatalf("newly quarantined %+v", q)
 	}
@@ -195,7 +195,7 @@ func TestTheGateSeesAWidenedPipeAllowlist(t *testing.T) {
 // everything before, so everything the new version permits there is gated;
 // and a device quarantined in both for a new cause is newly quarantined.
 func TestTheGateSeesAReleaseAndANewCause(t *testing.T) {
-	quarantining := strings.Replace(diffBase, "privilege: readonly", "privilege: operator", 1)
+	quarantining := unmappedLevel + strings.Replace(diffBase, "privilege: readonly", "privilege: unmapped", 1)
 	d := Compare(mustParse(t, quarantining), mustParse(t, diffBase), noon)
 	if len(d.Released) != 2 || d.Released[0].Device != "campus-sw-7" || d.Unacknowledged() == 0 {
 		t.Fatalf("released %+v, %d unacknowledged", d.Released, d.Unacknowledged())
@@ -260,5 +260,491 @@ func TestTheDiffSeesTheBrokersMintChecks(t *testing.T) {
 	acked := fits + "tests:\n  - {subject: s, device: leaf-01, command: \"show version\", expect: permit}\n"
 	if d := Compare(mustParse(t, mintRefused), mustParse(t, acked), noon); d.Unacknowledged() != 0 {
 		t.Fatalf("a test acknowledges it: %+v", d.Changes)
+	}
+}
+
+// A level raise, or a ceiling raised or removed, fails the gate unless a
+// session test in the new version asserts the new value for that subject on
+// that device; a lowering is reported and does not (owner's ruling
+// 2026-09-24; spec §12).
+func TestTheGateFailsALevelOrCeilingRaise(t *testing.T) {
+	ceilinged := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], max_privilege: readonly}", 1)
+	raised := strings.Replace(diffBase, "privilege: readonly, permit", "privilege: admin, permit", 1)
+	for _, tt := range []struct {
+		name, before, after string
+		raises              int
+	}{
+		// The inventory's four platforms are four groups of devices.
+		{"a level raise", diffBase, raised, 1},
+		{"a level lowering", raised, diffBase, 0},
+		{"a ceiling removed", ceilinged, diffBase, 1},
+		{"a ceiling added", diffBase, ceilinged, 0},
+		{"a ceiling raised", ceilinged, strings.Replace(ceilinged, "max_privilege: readonly", "max_privilege: admin", 1), 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Compare(mustParse(t, tt.before), mustParse(t, tt.after), noon)
+			if len(d.Levels) == 0 {
+				t.Fatal("the change is reported")
+			}
+			raises := 0
+			for _, l := range d.Levels {
+				if l.Raise {
+					raises++
+				}
+			}
+			if raises != tt.raises*4 || d.UnacknowledgedLevels() != tt.raises*4 {
+				t.Fatalf("levels %+v: %d raises, %d unacknowledged", d.Levels, raises, d.UnacknowledgedLevels())
+			}
+		})
+	}
+	// A session test on one device of each group asserting the new value is
+	// the acknowledgment; one asserting the old value, or on another subject,
+	// is not.
+	levelTest := func(assert string) string {
+		out := "tests:\n"
+		for _, device := range []string{"campus-sw-7", "nx-01", "xe-01", "srx-lab-01"} {
+			out += "  - {subject: noc, device: " + device + ", " + assert + "}\n"
+		}
+		return out
+	}
+	// readonly to admin raises the level and the device privilege, 1 to 15:
+	// the test asserts both.
+	d := Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("level: admin, max_privilege: none, priv_lvl: 15")), noon)
+	if d.UnacknowledgedLevels() != 0 {
+		t.Fatalf("a session test acknowledges the raise: %+v", d.Levels)
+	}
+	d = Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("level: admin")), noon)
+	if d.UnacknowledgedLevels() != 4 {
+		t.Fatalf("the level alone does not acknowledge the device privilege's rise: %+v", d.Levels)
+	}
+	d = Compare(mustParse(t, diffBase), mustParse(t, raised+"tests:\n  - {subject: noc, device: leaf-01, level: admin, priv_lvl: 15}\n"), noon)
+	if d.UnacknowledgedLevels() != 3 {
+		t.Fatalf("a test on one group acknowledges that group alone: %+v", d.Levels)
+	}
+	d = Compare(mustParse(t, ceilinged), mustParse(t, diffBase+levelTest("level: readonly, max_privilege: none")), noon)
+	if d.UnacknowledgedLevels() != 0 {
+		t.Fatalf("a session test asserting no ceiling acknowledges its removal: %+v", d.Levels)
+	}
+	d = Compare(mustParse(t, ceilinged), mustParse(t, diffBase+"tests:\n  - {subject: noc, device: leaf-01, level: readonly}\n"+
+		"  - {subject: noc, device: nx-01, level: readonly}\n"), noon)
+	if d.UnacknowledgedLevels() != 4 {
+		t.Fatalf("a level alone does not acknowledge a ceiling's removal: %+v", d.Levels)
+	}
+}
+
+// A regex-constrained widening fails the gate unless a passing policy test in
+// the new version exercises it; a narrowing is reported and does not (owner's
+// ruling 2026-09-24; spec §12).
+func TestTheGateFailsARegexConstrainedWidening(t *testing.T) {
+	unacked := func(d Diff) (gated, open int) {
+		for _, r := range d.Regex {
+			if r.Gated {
+				gated++
+				if !r.Acknowledged {
+					open++
+				}
+			}
+		}
+		return gated, open
+	}
+	// An acknowledgment holds on its own device group (review M1), so the
+	// test runs on one device of each.
+	test := func(command, expect string) string {
+		out := "tests:\n"
+		for _, device := range []string{"leaf-01", "nx-01", "xe-01", "srx-lab-01"} {
+			out += "  - {subject: noc, device: " + device + ", command: \"" + command + "\", expect: " + expect + "}\n"
+		}
+		return out
+	}
+	// A permit carrying a regex, added.
+	added := strings.Replace(regexBase, `permit: ["copy /^scp:/ *"]`, `permit: ["copy /^scp:/ *", "copy /^sftp:/ *"]`, 1)
+	if g, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, added), noon)); g == 0 || o != g {
+		t.Fatalf("an added regex permit: %d gated, %d unacknowledged", g, o)
+	}
+	if _, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, added+test("copy sftp://h/f flash:", "permit")), noon)); o != 0 {
+		t.Fatal("a test the added permit decides acknowledges it")
+	}
+	if _, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, added+test("copy scp://h/f flash:", "permit")), noon)); o == 0 {
+		t.Fatal("a test another permit decides does not")
+	}
+	// Removed, it is a narrowing.
+	if g, _ := unacked(Compare(mustParse(t, added), mustParse(t, regexBase), noon)); g != 0 {
+		t.Fatalf("a removed regex permit is not gated: %d", g)
+	}
+	// A regex permit meeting a deny the change removed.
+	freed := strings.Replace(regexBase, "copy * startup-config", "copy * running-config", 1)
+	if g, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, freed), noon)); g == 0 || o != g {
+		t.Fatalf("a regex permit a removed deny frees: %d gated, %d unacknowledged", g, o)
+	}
+	if _, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, freed+test("copy scp://h/f startup-config", "permit")), noon)); o != 0 {
+		t.Fatal("a test of that permit over that deny acknowledges it")
+	}
+	// A deny carrying a regex, rewritten wider: no command flips, so a test it
+	// still refuses acknowledges nothing (review I1), and an acknowledge:
+	// entry naming the old rule with a reason does.
+	regexDeny := strings.Replace(regexBase, "copy * startup-config", "copy * /^start/", 1)
+	wider := strings.Replace(regexBase, "copy * startup-config", "copy * /^(start|run)/", 1)
+	if g, o := unacked(Compare(mustParse(t, regexDeny), mustParse(t, wider), noon)); g == 0 || o != g {
+		t.Fatalf("a rewritten regex deny: %d gated, %d unacknowledged", g, o)
+	}
+	if _, o := unacked(Compare(mustParse(t, regexDeny), mustParse(t, wider+test("copy scp://h/f startup-config", "deny")), noon)); o == 0 {
+		t.Fatal("a test expecting deny never acknowledges a widening")
+	}
+	written := wider + "acknowledge:\n  - {role: guard, rule: \"copy * /^start/\", reason: \"rewritten wider as /^(start|run)/\"}\n"
+	if d := Compare(mustParse(t, regexDeny), mustParse(t, written), noon); d.UnacknowledgedRegex() != 0 {
+		t.Fatalf("an acknowledge: entry naming the old rule acknowledges it: %+v", d.Regex)
+	} else {
+		for _, r := range d.Regex {
+			if r.Gated && r.AcknowledgedBy != "rewritten wider as /^(start|run)/" {
+				t.Fatalf("the diff carries the entry's reason: %+v", r)
+			}
+		}
+	}
+	stale := wider + "acknowledge:\n  - {role: guard, rule: \"copy * /^stort/\", reason: \"typo\"}\n"
+	if _, o := unacked(Compare(mustParse(t, regexDeny), mustParse(t, stale), noon)); o == 0 {
+		t.Fatal("an entry naming another rule acknowledges nothing")
+	}
+	// Added, it is a narrowing: replacing the word deny with a regex one gates
+	// only the word deny's removal where it meets the regex permit, once per
+	// platform group.
+	if g, _ := unacked(Compare(mustParse(t, regexBase), mustParse(t, regexDeny), noon)); g != 4 {
+		t.Fatalf("replacing a word deny with a regex one gates only the removal's exposure: %d", g)
+	}
+}
+
+// The privilege gate compares what the device gets, not level names (review
+// C1; spec §12): each probe the review ran raised privilege with the gate
+// silent, and each now fails it until a session test asserts the new value.
+func TestTheGateFailsEveryKindOfPrivilegeRaise(t *testing.T) {
+	custom := "privilege_levels: [{name: readonly}, {name: operator}, {name: admin}, {name: netops, parent: readonly}]\n" +
+		strings.Replace(diffBase, "privilege: readonly", "privilege: netops", 1)
+	ceilinged := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], max_privilege: admin}", 1)
+	for _, tt := range []struct {
+		name, before, after string
+		groups              int
+		dimension           string
+		ack                 string
+	}{
+		{"a grant attribute priv-lvl=15", diffBase,
+			strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: {all: [priv-lvl=15]}}", 1),
+			4, "priv_lvl", "priv_lvl: 15"},
+		{"a role attribute priv-lvl=15 on one platform", diffBase,
+			strings.Replace(diffBase, "{name: read_only, privilege: readonly, permit: [show **]}",
+				"{name: read_only, privilege: readonly, permit: [show **], attributes: {arista_eos: [priv-lvl=15]}}", 1),
+			1, "priv_lvl", "priv_lvl: 15"},
+		{"a custom level's parent moved up", custom, strings.Replace(custom, "parent: readonly", "parent: admin", 1),
+			4, "priv_lvl", "priv_lvl: 15"},
+		{"enable switched on under a ceiling", ceilinged,
+			strings.Replace(ceilinged, "token_ttl: 60s}", "token_ttl: 60s, enable: token}", 1), 4, "enable", "enable: token"},
+		{"enable switched on with no ceiling", diffBase,
+			strings.Replace(diffBase, "token_ttl: 60s}", "token_ttl: 60s, enable: token}", 1), 4, "enable", "enable: token"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Compare(mustParse(t, tt.before), mustParse(t, tt.after), noon)
+			if d.UnacknowledgedLevels() != tt.groups {
+				t.Fatalf("levels %+v: %d unacknowledged, want %d", d.Levels, d.UnacknowledgedLevels(), tt.groups)
+			}
+			for _, l := range d.Levels {
+				if l.Raise && !slices.Contains(l.Raised, tt.dimension) {
+					t.Errorf("%+v does not name %s", l, tt.dimension)
+				}
+			}
+			tests := "tests:\n"
+			for _, device := range []string{"leaf-01", "nx-01", "xe-01", "srx-lab-01"} {
+				tests += "  - {subject: noc, device: " + device + ", " + tt.ack + "}\n"
+			}
+			// A test on a group that did not rise may fail; it acknowledges
+			// nothing there and nothing there needs it.
+			d = Compare(mustParse(t, tt.before), mustParse(t, tt.after+tests), noon)
+			if n := d.UnacknowledgedLevels(); n != 0 {
+				t.Fatalf("session tests on every group: %d unacknowledged, %+v", n, d.Levels)
+			}
+		})
+	}
+}
+
+// A session test acknowledges a raise only at the instant it passes: one that
+// passes only after a grant expires does not acknowledge the raise before it
+// (review M2). At noon the ceiling is admin, from the grant that expires;
+// after it, none. The test asserts none.
+func TestASessionAckHoldsOnlyAtItsInstant(t *testing.T) {
+	after := strings.Replace(diffBase, "  - {name: cve, deny: [show chassis **]}\n",
+		"  - {name: cve, deny: [show chassis **]}\n  - {name: adm, privilege: admin, permit: [show **]}\n", 1)
+	after = strings.Replace(after, "  - {subject: noc, scope: all_devices, roles: [read_only, cve]}\n",
+		"  - {subject: noc, scope: all_devices, roles: [read_only, cve, adm], max_privilege: admin, expires: 2026-10-01}\n"+
+			"  - {subject: noc, scope: all_devices, roles: [read_only, adm]}\n", 1)
+	later := "tests:\n"
+	for _, device := range []string{"leaf-01", "nx-01", "xe-01", "srx-lab-01"} {
+		later += "  - {subject: noc, device: " + device + ", level: admin, max_privilege: none, priv_lvl: 15}\n"
+	}
+	d := Compare(mustParse(t, diffBase), mustParse(t, after+later), noon)
+	atNoon, afterwards := 0, 0
+	for _, l := range d.Levels {
+		switch {
+		case l.At.Equal(noon) && l.Raise && !l.Acknowledged:
+			atNoon++
+		case !l.At.Equal(noon) && l.Raise && l.Acknowledged:
+			afterwards++
+		}
+	}
+	if atNoon != 4 || afterwards != 4 {
+		t.Fatalf("levels %+v: %d unacknowledged at noon, %d acknowledged after the expiry", d.Levels, atNoon, afterwards)
+	}
+}
+
+// The review's probe (I1): narrowing `/^(wri|rel)/` to `/^wri/` frees reload
+// fleet-wide, and a test that `write erase` is still refused must not
+// acknowledge it. A test that reload is now permitted does, on its own
+// group; an acknowledge: entry does everywhere.
+func TestNarrowingARegexDenyIsNotAcknowledgedByADenyTest(t *testing.T) {
+	base := `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: ops, privilege: readonly, permit: ["**"]}
+  - {name: guard, deny: ["/^(wri|rel)/ **"]}
+subjects:
+  - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
+grants:
+  - {subject: noc, scope: all_devices, roles: [ops, guard]}
+`
+	narrowed := strings.Replace(base, "/^(wri|rel)/ **", "/^wri/ **", 1)
+	gate := func(after string) int {
+		d := Compare(mustParse(t, base), mustParse(t, after), noon)
+		return d.Unacknowledged() + d.UnacknowledgedLevels() + d.UnacknowledgedRegex() + len(d.Quarantined) + len(d.Refused)
+	}
+	if n := gate(narrowed); n != 4 {
+		t.Fatalf("no test: gate %d, want 4 groups", n)
+	}
+	if n := gate(narrowed + "tests:\n  - {subject: noc, device: leaf-01, command: \"write erase\", expect: deny}\n"); n != 4 {
+		t.Fatalf("a deny test acknowledges nothing: gate %d", n)
+	}
+	if n := gate(narrowed + "tests:\n  - {subject: noc, device: leaf-01, command: \"reload now\", expect: permit}\n"); n != 3 {
+		t.Fatalf("a permit flip acknowledges its own group alone (review M1): gate %d", n)
+	}
+	if n := gate(narrowed + "acknowledge:\n  - {role: guard, rule: \"/^(wri|rel)/ **\", reason: \"reload moves to the change window\"}\n"); n != 0 {
+		t.Fatalf("an acknowledge: entry: gate %d", n)
+	}
+}
+
+// A permit test acknowledges an expansion past a deny only at the instant it
+// passes (review M2): here it asserts the level the subject has only after a
+// grant expires, so it does not acknowledge the expansion at noon.
+func TestAnExpansionAckHoldsOnlyAtItsInstant(t *testing.T) {
+	after := strings.Replace(diffBase, "  - {name: cve, deny: [show chassis **]}\n",
+		"  - {name: cve, deny: [show chassis **]}\n  - {name: ir, permit: [show chassis hardware]}\n"+
+			"  - {name: adm, privilege: admin}\n", 1)
+	after = strings.Replace(after, "roles: [read_only, cve]}\n", "roles: [read_only, cve, ir]}\n"+
+		"  - {subject: noc, scope: all_devices, roles: [adm], expires: 2026-10-01}\n", 1)
+	test := after + "tests:\n  - {subject: noc, device: leaf-01, command: \"show chassis hardware\", expect: permit, level: readonly}\n"
+	d := Compare(mustParse(t, diffBase), mustParse(t, test), noon)
+	for _, c := range d.Changes {
+		if c.Gated && c.Acknowledged && c.At.Equal(noon) {
+			t.Fatalf("a test that fails at noon acknowledges noon's expansion: %+v", c)
+		}
+	}
+	if d.Unacknowledged() == 0 {
+		t.Fatalf("changes %+v", d.Changes)
+	}
+}
+
+// A privilege-bearing attribute other than priv-lvl, added to the session
+// reply, raises what the device lets the session do (review C2): each fails
+// the gate on its platform's group until a session test asserts the new
+// reply, and so does taking it away again.
+func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
+	for _, tt := range []struct{ attrs, device, reply string }{
+		{`{juniper_junos: [local-user-name=super-user]}`, "srx-lab-01", `["local-user-name=super-user"]`},
+		{`{cisco_nxos: ["shell:roles=network-admin"]}`, "nx-01", `["shell:roles=network-admin"]`},
+		{`{arista_eos: ["roles=network-admin"]}`, "leaf-01", `["priv-lvl=1", "roles=network-admin"]`},
+		{`{all: ["idletime*30"]}`, "xe-01", `["idletime*30"]`},
+	} {
+		after := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: "+tt.attrs+"}", 1)
+		d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
+		raised := 0
+		for _, l := range d.Levels {
+			if l.Raise && slices.Contains(l.Raised, "reply") && !l.Acknowledged {
+				raised++
+			}
+		}
+		if raised == 0 || d.UnacknowledgedLevels() != raised {
+			t.Fatalf("%s: levels %+v", tt.attrs, d.Levels)
+		}
+		acked := after + "tests:\n  - {subject: noc, device: " + tt.device + ", reply: " + tt.reply + "}\n"
+		d = Compare(mustParse(t, diffBase), mustParse(t, acked), noon)
+		if d.UnacknowledgedLevels() != raised-1 {
+			t.Fatalf("%s: a reply: test on %s acknowledges its group: %+v", tt.attrs, tt.device, d.Levels)
+		}
+		// Taking it away widens access too, whose direction the gate cannot
+		// read (review C4): it fails until a reply: test asserts the reply
+		// without it.
+		back := Compare(mustParse(t, after), mustParse(t, diffBase), noon)
+		if back.UnacknowledgedLevels() != raised {
+			t.Fatalf("%s: removing it fails the gate: %+v", tt.attrs, back.Levels)
+		}
+		was := `[]`
+		if tt.device == "leaf-01" {
+			was = `["priv-lvl=1"]`
+		}
+		back = Compare(mustParse(t, after), mustParse(t, diffBase+"tests:\n  - {subject: noc, device: "+tt.device+", reply: "+was+"}\n"), noon)
+		if back.UnacknowledgedLevels() != raised-1 {
+			t.Fatalf("%s: a reply: test acknowledges the removal: %+v", tt.attrs, back.Levels)
+		}
+	}
+}
+
+// The gate compares principals, not only subjects (review C3): an identity
+// moved to another person, identities swapped between subjects, and a
+// username changed each hand access over with no subject's access changing.
+// Each fails until a session test naming the principal asserts it; a
+// principal taken away is reported and passes.
+func TestTheGateComparesPrincipals(t *testing.T) {
+	gated := func(d Diff) (n int) {
+		for _, p := range d.Principals {
+			if p.Gated && !p.Acknowledged {
+				n++
+			}
+		}
+		for _, s := range d.Subjects {
+			if s.Gated && !s.Acknowledged {
+				n++
+			}
+		}
+		return n
+	}
+	mallory := strings.Replace(diffBase, "user:noc@example.com", "user:mallory@example.com", 1)
+	d := Compare(mustParse(t, diffBase), mustParse(t, mallory), noon)
+	if gated(d) != 1 || len(d.Principals) != 2 {
+		t.Fatalf("mallory: %+v", d.Principals)
+	}
+	for _, p := range d.Principals {
+		if (p.Principal == "user:mallory@example.com") != p.Gated {
+			t.Errorf("only the principal who gained a subject is gated: %+v", p)
+		}
+	}
+	acked := mallory + "tests:\n  - {principal: \"user:mallory@example.com\", device: leaf-01, level: readonly}\n"
+	if n := gated(Compare(mustParse(t, diffBase), mustParse(t, acked), noon)); n != 0 {
+		t.Fatalf("a session test naming the principal acknowledges it: %d", n)
+	}
+	subjectTest := mallory + "tests:\n  - {subject: noc, device: leaf-01, level: readonly}\n"
+	if n := gated(Compare(mustParse(t, diffBase), mustParse(t, subjectTest), noon)); n != 1 {
+		t.Fatalf("a subject test does not: %d", n)
+	}
+
+	two := diffBase + "  - {subject: adm, scope: all_devices, roles: [boss]}\n"
+	two = strings.Replace(two, "subjects:\n", "subjects:\n  - {name: adm, identity: \"user:adm@example.com\", username: adm, token_ttl: 60s}\n", 1)
+	two = strings.Replace(two, "roles:\n", "roles:\n  - {name: boss, privilege: admin, permit: [\"**\"]}\n", 1)
+	swapped := strings.Replace(strings.Replace(two, "user:adm@example.com", "user:TMP", 1), "user:noc@example.com", "user:adm@example.com", 1)
+	swapped = strings.Replace(swapped, "user:TMP", "user:noc@example.com", 1)
+	if n := gated(Compare(mustParse(t, two), mustParse(t, swapped), noon)); n != 2 {
+		t.Fatalf("swapped identities: %d gated", n)
+	}
+
+	renamed := strings.Replace(diffBase, "username: noc", "username: admin", 1)
+	d = Compare(mustParse(t, diffBase), mustParse(t, renamed), noon)
+	if gated(d) != 1 || len(d.Subjects) != 1 || d.Subjects[0].NewUsername != "admin" {
+		t.Fatalf("username: %+v", d.Subjects)
+	}
+	if n := gated(Compare(mustParse(t, diffBase), mustParse(t, renamed+
+		"tests:\n  - {principal: \"user:noc@example.com\", device: leaf-01, level: readonly}\n"), noon)); n != 0 {
+		t.Fatalf("a principal session test acknowledges a username change: %d", n)
+	}
+
+	removed := strings.Replace(diffBase, "identity: \"user:noc@example.com\"", "identity: [\"user:noc@example.com\", \"user:old@example.com\"]", 1)
+	if d := Compare(mustParse(t, removed), mustParse(t, diffBase), noon); gated(d) != 0 || len(d.Principals) != 1 {
+		t.Fatalf("a removal is reported and passes: %+v", d.Principals)
+	}
+}
+
+// A stale acknowledge: entry acknowledges nothing and is reported (review
+// M5): one whose rule is still in the new policy removed nothing, and one no
+// widening in the diff names is left over from an earlier change.
+func TestAStaleAcknowledgmentAcknowledgesNothing(t *testing.T) {
+	regexDeny := strings.Replace(regexBase, "copy * startup-config", "copy * /^start/", 1)
+	wider := strings.Replace(regexBase, "copy * startup-config", "copy * /^(start|run)/", 1)
+	// The old rule is kept under another role in the new policy: the entry
+	// names a rule the new policy still has, so it removed nothing.
+	kept := strings.Replace(wider, "  - {name: guard,", "  - {name: keep, deny: [\"copy * /^start/\"]}\n  - {name: guard,", 1) +
+		"acknowledge:\n  - {role: keep, rule: \"copy * /^start/\", reason: \"still here\"}\n"
+	p := mustParse(t, kept)
+	if !slices.ContainsFunc(p.Lint(noon), func(f Finding) bool { return f.Kind == FindingAcknowledgeStale }) {
+		t.Fatal("policy test reports an entry whose rule the policy still has")
+	}
+	leftover := wider + "acknowledge:\n  - {role: guard, rule: \"copy * /^start/\", reason: \"rewritten wider\"}\n" +
+		"  - {role: guard, rule: \"reload **\", reason: \"from last quarter\"}\n"
+	d := Compare(mustParse(t, regexDeny), mustParse(t, leftover), noon)
+	if d.UnacknowledgedRegex() != 0 || len(d.StaleAcknowledgments) != 1 || d.StaleAcknowledgments[0].Rule != "reload **" {
+		t.Fatalf("stale %+v, regex %+v", d.StaleAcknowledgments, d.Regex)
+	}
+	// An entry naming a rule the new policy still has, under the role it is
+	// removed from elsewhere, acknowledges nothing.
+	still := strings.Replace(wider, "  - {name: guard, deny: [copy * /^(start|run)/]}",
+		"  - {name: guard, deny: [copy * /^(start|run)/]}\n  - {name: spare, deny: [\"copy * /^start/\"]}", 1)
+	still += "acknowledge:\n  - {role: spare, rule: \"copy * /^start/\", reason: \"x\"}\n"
+	if d := Compare(mustParse(t, regexDeny), mustParse(t, still), noon); d.UnacknowledgedRegex() == 0 {
+		t.Fatalf("an entry for another role's rule acknowledges nothing: %+v", d.Regex)
+	}
+}
+
+// The reviewer's C4 probes: removing Junos's deny-commands or its
+// local-user-name widens a session-only device's access, and fails the gate.
+func TestRemovingAJunosPrivilegeAttributeFailsTheGate(t *testing.T) {
+	for _, attr := range []string{`"deny-commands=^(request|clear)"`, `"local-user-name=ro-class"`} {
+		with := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: {juniper_junos: ["+attr+"]}}", 1)
+		if d := Compare(mustParse(t, with), mustParse(t, diffBase), noon); d.UnacknowledgedLevels() != 1 {
+			t.Fatalf("%s removed: %+v", attr, d.Levels)
+		}
+	}
+}
+
+// A broker API right gained fails the gate until a test asserts the
+// subject's rights with api:, naming the subject or one of its principals;
+// one lost is reported (review M6).
+func TestTheGateComparesAPIRights(t *testing.T) {
+	gated := func(d Diff) int { return d.UnacknowledgedPrincipals() }
+	rights := strings.Replace(diffBase, "token_ttl: 60s}", "token_ttl: 60s, api: [explain_others, revoke_others, replay]}", 1)
+	d := Compare(mustParse(t, diffBase), mustParse(t, rights), noon)
+	if gated(d) != 1 || len(d.Subjects) != 1 || strings.Join(d.Subjects[0].APIGained, " ") != "explain_others replay revoke_others" {
+		t.Fatalf("subjects %+v", d.Subjects)
+	}
+	for _, test := range []string{
+		"  - {subject: noc, device: leaf-01, api: [revoke_others, replay, explain_others]}\n",
+		"  - {principal: \"user:noc@example.com\", device: nx-01, api: [explain_others, replay, revoke_others]}\n",
+	} {
+		if n := gated(Compare(mustParse(t, diffBase), mustParse(t, rights+"tests:\n"+test), noon)); n != 0 {
+			t.Fatalf("%s: %d", test, n)
+		}
+	}
+	if n := gated(Compare(mustParse(t, diffBase), mustParse(t, rights+"tests:\n  - {subject: noc, device: leaf-01, api: [replay]}\n"), noon)); n != 1 {
+		t.Fatalf("a test asserting another list fails and acknowledges nothing: %d", n)
+	}
+	if d := Compare(mustParse(t, rights), mustParse(t, diffBase), noon); gated(d) != 0 || len(d.Subjects) != 1 {
+		t.Fatalf("a right lost is reported and passes: %+v", d.Subjects)
+	}
+	// A principal moved to a subject with rights its old one lacked needs the
+	// rights asserted by a test naming it.
+	two := rights + "  - {subject: ops, scope: all_devices, roles: [read_only]}\n"
+	two = strings.Replace(two, "subjects:\n", "subjects:\n  - {name: ops, identity: \"user:ops@example.com\", username: ops, token_ttl: 60s}\n", 1)
+	moved := strings.Replace(two, "identity: \"user:ops@example.com\"", "identity: [\"user:ops@example.com\", \"user:eve@example.com\"]", 1)
+	moved = strings.Replace(moved, "identity: \"user:noc@example.com\"", "identity: [\"user:noc@example.com\"]", 1)
+	eveToNoc := strings.Replace(strings.Replace(moved, ", \"user:eve@example.com\"", "", 1),
+		"identity: [\"user:noc@example.com\"]", "identity: [\"user:noc@example.com\", \"user:eve@example.com\"]", 1)
+	levelOnly := eveToNoc + "tests:\n  - {principal: \"user:eve@example.com\", device: leaf-01, level: readonly}\n"
+	if n := gated(Compare(mustParse(t, moved), mustParse(t, levelOnly), noon)); n != 1 {
+		t.Fatalf("a principal test without api: does not acknowledge the rights it gained: %d", n)
+	}
+	withAPI := eveToNoc + "tests:\n  - {principal: \"user:eve@example.com\", device: leaf-01, level: readonly, api: [explain_others, replay, revoke_others]}\n"
+	if n := gated(Compare(mustParse(t, moved), mustParse(t, withAPI), noon)); n != 0 {
+		t.Fatalf("one asserting them does: %d", n)
+	}
+}
+
+// An api:-only principal test needs no mint, so it proves nothing about the
+// access an identity move hands over, and does not acknowledge one (review
+// M7).
+func TestAnAPIOnlyTestDoesNotAcknowledgeAnIdentityMove(t *testing.T) {
+	mallory := strings.Replace(diffBase, "user:noc@example.com", "user:mallory@example.com", 1) +
+		"tests:\n  - {principal: \"user:mallory@example.com\", device: leaf-01, api: []}\n"
+	if n := Compare(mustParse(t, diffBase), mustParse(t, mallory), noon).UnacknowledgedPrincipals(); n != 1 {
+		t.Fatalf("an api:-only test acknowledged the move: %d unacknowledged", n)
 	}
 }

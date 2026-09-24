@@ -17,6 +17,15 @@ type file struct {
 	Subjects        []fileSubject `yaml:"subjects"`
 	Grants          []fileGrant   `yaml:"grants"`
 	Tests           []fileTest    `yaml:"tests"`
+	Acknowledge     []fileAck     `yaml:"acknowledge"`
+}
+
+// fileAck is one acknowledge: entry (spec §12): the author's written word for
+// a removed or rewritten deny no test can flip.
+type fileAck struct {
+	Role   string `yaml:"role"`
+	Rule   string `yaml:"rule"`
+	Reason string `yaml:"reason"`
 }
 
 type fileLevel struct {
@@ -77,6 +86,18 @@ type fileTest struct {
 	Command   string `yaml:"command"`
 	Expect    string `yaml:"expect"`
 	Reason    string `yaml:"reason"`
+	// Level and MaxPrivilege are a session test's assertions (spec §12,
+	// "Policy tests"); MaxPrivilege `none` asserts no ceiling.
+	Level        string `yaml:"level"`
+	MaxPrivilege string `yaml:"max_privilege"`
+	// PrivLvl is a number 0-15 or `none`; Enable is none, auto or token.
+	PrivLvl string `yaml:"priv_lvl"`
+	Enable  string `yaml:"enable"`
+	// Reply is the exact session reply, in order, placeholders empty; nil
+	// asserts nothing and an empty list asserts an empty reply.
+	Reply *[]string `yaml:"reply"`
+	// API is the subject's broker API rights, in any order.
+	API *[]string `yaml:"api"`
 }
 
 // stringList is a YAML scalar or a sequence of scalars: spec §11 writes one

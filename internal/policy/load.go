@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"regexp/syntax"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -61,6 +62,7 @@ type Policy struct {
 	byID    map[string]string // identity → subject
 	grants  []*Grant
 	tests   []Test
+	acked   []Acknowledgment
 	env     Env
 	// quarantine is every device a joint check failed on, by name (Task 10).
 	quarantine map[string]*Quarantine
@@ -112,10 +114,36 @@ type Grant struct {
 	Attributes   map[string][]string
 }
 
-// Test is one `tests:` entry (spec §11, §12).
+// Test is one `tests:` entry (spec §11, §12). With no Command it is a session
+// test, which asserts Level, MaxPrivilege or both.
 type Test struct {
 	Subject, Principal, Device, Command, Expect, Reason string
+	// Level is the level the roles compose to on the device, and
+	// MaxPrivilege the ceiling the grants compose to there, `none` for no
+	// ceiling; PrivLvl is the device privilege the session lands at, a
+	// number or `none` (Policy.devicePrivLvl), and Enable the subject's
+	// mechanism. Empty asserts nothing.
+	Level, MaxPrivilege, PrivLvl, Enable string
+	// Reply is the exact session reply, in order, with the placeholders
+	// empty, where AssertsReply.
+	Reply        []string
+	AssertsReply bool
+	// API is the subject's broker API rights, sorted, where AssertsAPI. A
+	// test asserting them alone passes on any device: they do not depend on
+	// one (spec §12).
+	API        []string
+	AssertsAPI bool
 }
+
+// Acknowledgment is one `acknowledge:` entry (spec §12): a removed or
+// rewritten deny, named by its role and exact rule text, that the author
+// acknowledges in writing, with why.
+type Acknowledgment struct {
+	Role, Rule, Reason string
+}
+
+// NoCeiling is how a test asserts that the grants compose to no ceiling.
+const NoCeiling = "none"
 
 // DefaultPipe is the output-modifier allowlist every role inherits unless it
 // declares its own (spec §4).
@@ -169,7 +197,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	}
 	p := &Policy{Bundle: engine.HashOf(raw), env: env}
 	for _, step := range []func(file) error{p.buildLevels, p.buildRoles, p.buildScopes, p.buildSubjects,
-		p.buildGrants, p.checkMinters, p.buildTests} {
+		p.buildGrants, p.checkMinters, p.buildTests, p.buildAcknowledgments} {
 		if err := step(f); err != nil {
 			return nil, err
 		}
@@ -244,6 +272,14 @@ func (p *Policy) buildLevels(f file) error {
 		if !seen[r] {
 			return fmt.Errorf("privilege_levels must list %s: readonly, operator and admin are reserved and cannot "+
 				"be removed, so every shipped platform keeps working (spec §6); put them where they belong in the order", r)
+		}
+	}
+	// The reserved levels keep their relative order, or "higher" would mean
+	// one thing in the shipped adapters and another in this file (spec §6).
+	for i := 1; i < len(reservedLevels); i++ {
+		if slices.Index(p.levels, reservedLevels[i-1]) > slices.Index(p.levels, reservedLevels[i]) {
+			return fmt.Errorf("privilege_levels: the reserved levels keep their order: readonly, then operator, then " +
+				"admin; custom levels may go anywhere their parent allows (spec §6)")
 		}
 	}
 	for name, parent := range p.parents {
@@ -366,6 +402,41 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
 			if err := engine.CheckAttribute(a); err != nil {
 				return fmt.Errorf("attributes.%s: %w", key, err)
 			}
+			if err := p.checkPlaceholder(key, a); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkPlaceholder allows a placeholder only in an attribute listed inert on
+// its platform key, or under `all` on every platform port49 ships and the
+// inventory names (spec §6). Anywhere else the device would get whatever the
+// mint fills in, which no review tool sees: a level, or a principal's text in
+// a session-only device's own allow-list.
+func (p *Policy) checkPlaceholder(key, a string) error {
+	if !slices.ContainsFunc(engine.Placeholders, func(v string) bool { return strings.Contains(a, v) }) {
+		return nil
+	}
+	name := a[:strings.IndexAny(a, "=*")]
+	if slices.Contains(platform.PrivilegeAttributeNames(), name) {
+		return fmt.Errorf("attributes.%s: %s: %s carries privilege and takes no placeholder: the device would get "+
+			"whatever the mint fills in, which no review tool can see (spec §6)", key, a, name)
+	}
+	platforms := []string{key}
+	if key == "all" {
+		platforms = sortedKeys(p.platforms())
+		for _, d := range p.env.Devices {
+			if !slices.Contains(platforms, d.Platform) {
+				platforms = append(platforms, d.Platform)
+			}
+		}
+	}
+	for _, name2 := range platforms {
+		if p.dialect(name2).BearsPrivilege(name) {
+			return fmt.Errorf("attributes.%s: %s: %s is not listed inert on %s, so it takes no placeholder: only an "+
+				"attribute an adapter holds to carry no privilege may (spec §6)", key, a, name, platformName(name2))
 		}
 	}
 	return nil
@@ -680,9 +751,14 @@ func (p *Policy) buildTests(f file) error {
 			return fmt.Errorf("%s: subject %q is not declared", row, t.Subject)
 		case t.Device == "":
 			return fmt.Errorf("%s: device is required", row)
-		case strings.TrimSpace(t.Command) == "":
-			return fmt.Errorf("%s: command is required", row)
-		case t.Expect != "permit" && t.Expect != "deny":
+		case strings.TrimSpace(t.Command) == "" && t.Level == "" && t.MaxPrivilege == "" && t.PrivLvl == "" &&
+			t.Enable == "" && t.Reply == nil && t.API == nil:
+			return fmt.Errorf("%s: command is required, or a session test's level, max_privilege, priv_lvl, enable, "+
+				"reply or api", row)
+		case strings.TrimSpace(t.Command) == "" && (t.Expect != "" || t.Reason != ""):
+			return fmt.Errorf("%s: a session test takes no expect or reason: it passes where the subject is "+
+				"minted a token with the level and ceiling it names", row)
+		case strings.TrimSpace(t.Command) != "" && t.Expect != "permit" && t.Expect != "deny":
 			return fmt.Errorf("%s: expect is permit or deny, not %q", row, t.Expect)
 		case t.Reason != "" && !decision.Known(decision.Reason(t.Reason)):
 			return fmt.Errorf("%s: %q is not a reason in spec §5.7's vocabulary", row, t.Reason)
@@ -697,9 +773,77 @@ func (p *Policy) buildTests(f file) error {
 		if _, ok := p.device(t.Device); !ok {
 			return fmt.Errorf("%s: device %q is not in the inventory", row, t.Device)
 		}
-		p.tests = append(p.tests, Test(t))
+		if err := p.checkLevel(t.Level); err != nil {
+			return fmt.Errorf("%s: level: %w", row, err)
+		}
+		if t.MaxPrivilege != NoCeiling {
+			if err := p.checkLevel(t.MaxPrivilege); err != nil {
+				return fmt.Errorf("%s: max_privilege: %w", row, err)
+			}
+		}
+		if n, err := strconv.Atoi(t.PrivLvl); t.PrivLvl != "" && t.PrivLvl != NoCeiling && (err != nil || n < 0 || n > 15) {
+			return fmt.Errorf("%s: priv_lvl is a number from 0 to 15, or none, not %q", row, t.PrivLvl)
+		}
+		if t.Enable != "" && t.Enable != "none" && t.Enable != "auto" && t.Enable != "token" {
+			return fmt.Errorf("%s: enable is none, auto or token, not %q", row, t.Enable)
+		}
+		test := Test{Subject: t.Subject, Principal: t.Principal, Device: t.Device, Command: t.Command,
+			Expect: t.Expect, Reason: t.Reason, Level: t.Level, MaxPrivilege: t.MaxPrivilege, PrivLvl: t.PrivLvl,
+			Enable: t.Enable, AssertsReply: t.Reply != nil}
+		if t.Reply != nil {
+			test.Reply = append([]string{}, (*t.Reply)...)
+		}
+		if t.API != nil {
+			for _, r := range *t.API {
+				if !slices.Contains(apiRights, r) {
+					return fmt.Errorf("%s: api: %q is not a right; the rights are %s", row, r, strings.Join(apiRights, ", "))
+				}
+			}
+			test.API, test.AssertsAPI = slices.Clone(*t.API), true
+			slices.Sort(test.API)
+		}
+		p.tests = append(p.tests, test)
 	}
 	return nil
+}
+
+func (p *Policy) buildAcknowledgments(f file) error {
+	for i, a := range f.Acknowledge {
+		switch {
+		case a.Role == "" || a.Rule == "":
+			return fmt.Errorf("acknowledge[%d]: role and rule are required: the entry names the exact deny it "+
+				"acknowledges (spec §12)", i)
+		case strings.TrimSpace(a.Reason) == "":
+			return fmt.Errorf("acknowledge[%d]: reason is required: review reads it beside the change it "+
+				"acknowledges (spec §12)", i)
+		}
+		p.acked = append(p.acked, Acknowledgment(a))
+	}
+	return nil
+}
+
+// hasDeny reports whether any role in the policy denies rule as written:
+// an acknowledge: entry naming it removed nothing (spec §12).
+func (p *Policy) hasDeny(rule string) bool {
+	for _, r := range p.roles {
+		if slices.Contains(r.Deny, rule) {
+			return true
+		}
+	}
+	return false
+}
+
+// Acknowledgments returns the file's acknowledge: entries.
+func (p *Policy) Acknowledgments() []Acknowledgment { return p.acked }
+
+// acknowledgment is the entry naming a deny, if any.
+func (p *Policy) acknowledgment(role, rule string) (Acknowledgment, bool) {
+	for _, a := range p.acked {
+		if a.Role == role && a.Rule == rule {
+			return a, true
+		}
+	}
+	return Acknowledgment{}, false
 }
 
 func (p *Policy) device(name string) (admission.Device, bool) {

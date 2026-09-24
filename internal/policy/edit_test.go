@@ -13,8 +13,8 @@ func TestRemoveSubjectDeletesItsRowsAndItsBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Grants != 1 || r.Tests != 2 {
-		t.Fatalf("removed %+v, want one grant row and two tests", r)
+	if r.Grants != 1 || r.Tests != 3 {
+		t.Fatalf("removed %+v, want one grant row and three tests", r)
 	}
 	if strings.Contains(string(out), "name: svc_oxidized") || strings.Contains(string(out), "subject: svc_oxidized") ||
 		strings.Contains(string(out), "system:serviceaccount") {
@@ -47,7 +47,7 @@ func TestRemoveSubjectTakesTestsNamingItsIdentities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Tests != 3 || strings.Contains(string(out), "system:serviceaccount") || !onlyDeletions(raw, string(out)) {
+	if r.Tests != 4 || strings.Contains(string(out), "system:serviceaccount") || !onlyDeletions(raw, string(out)) {
 		t.Fatalf("removed %+v:\n%s", r, out)
 	}
 }
@@ -67,11 +67,12 @@ func TestRemoveSubjectCutsOnlyTheRemovedLines(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// spec11.yaml lines 98-99 (the subject block), 105 (its grant row), and
-	// 113-116 (its two tests, wrapped, one with a trailing comment).
+	// spec11.yaml lines 98-99 (the subject block), 105 (its grant row),
+	// 113-116 (two of its tests, wrapped, one with a trailing comment), and
+	// 121 (its session test).
 	var want []string
 	for i, line := range strings.SplitAfter(string(raw), "\n") {
-		if n := i + 1; (n >= 98 && n <= 99) || n == 105 || (n >= 113 && n <= 116) {
+		if n := i + 1; (n >= 98 && n <= 99) || n == 105 || (n >= 113 && n <= 116) || n == 121 {
 			continue
 		}
 		want = append(want, line)

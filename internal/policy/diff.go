@@ -39,6 +39,56 @@ type Diff struct {
 	// Unresolved are compositions the diff could not compare. The gate
 	// cannot vouch for them, so each fails it.
 	Unresolved []string
+	// Principals are principals that resolve to another subject, or none,
+	// and Subjects subjects whose username or group changed: who holds an
+	// access, which no subject's own diff shows (spec §12).
+	Principals []PrincipalChange
+	Subjects   []SubjectChange
+	// StaleAcknowledgments are the new version's acknowledge: entries no
+	// widening in the diff is the one they name. They acknowledge nothing and
+	// are reported, acknowledge_stale (spec §12).
+	StaleAcknowledgments []Acknowledgment
+}
+
+// PrincipalChange is a principal that resolves to another subject in the new
+// version, or to none. Gated where it now resolves to a subject it did not:
+// Acknowledged is a passing session test in the new version naming it.
+type PrincipalChange struct {
+	Principal, OldSubject, NewSubject string
+	// APIGained are broker API rights the new subject has and the old did
+	// not: the acknowledging test must assert them with api: (spec §12).
+	APIGained           []string
+	Gated, Acknowledged bool
+}
+
+// SubjectChange is a subject whose username, group or broker API rights
+// changed (spec §12). A username change is gated, and acknowledged by a
+// passing session test naming one of the subject's principals; API rights
+// gained are gated, and acknowledged by a passing test asserting the whole
+// list with api:, naming the subject or one of its principals; a group change
+// and rights lost are reported, since a group subject mints for no one until
+// plan 7 and a right lost widens nothing.
+type SubjectChange struct {
+	Subject, OldUsername, NewUsername, OldGroup, NewGroup string
+	OldAPI, NewAPI, APIGained                             []string
+	Gated, Acknowledged                                   bool
+}
+
+// UnacknowledgedPrincipals counts the gated principal and username changes
+// no session test asserts.
+func (d Diff) UnacknowledgedPrincipals() int {
+	n := 0
+	for _, p := range d.Principals {
+		if p.Gated && !p.Acknowledged {
+			n++
+		}
+	}
+	for _, s := range d.Subjects {
+		if s.Gated && !s.Acknowledged {
+			n++
+		}
+	}
+	return n
 }
 
 // Change is one command whose verdict moved.
@@ -77,13 +127,25 @@ type AccessChange struct {
 	Gained  bool
 }
 
-// LevelChange is a privilege change (spec §6): the level the roles compose
-// to, or the ceiling the grants do.
+// LevelChange is a privilege change (spec §6, §12): the level the roles
+// compose to, the ceiling the grants do, the device privilege the session
+// lands at, or the subject's enable.
 type LevelChange struct {
 	Subject                                    string
 	Devices                                    []string
 	At                                         time.Time
 	OldLevel, NewLevel, OldCeiling, NewCeiling string
+	// OldPrivLvl and NewPrivLvl are the device privilege, a number or `none`
+	// (Policy.devicePrivLvl); OldEnable and NewEnable the mechanism.
+	OldPrivLvl, NewPrivLvl, OldEnable, NewEnable string
+	// OldReply and NewReply are the session reply, placeholders empty.
+	OldReply, NewReply []string
+	// Raised names each dimension that rose, as a session test asserts it:
+	// priv_lvl, max_privilege, level, enable, reply. Raise is spec §12's gate on
+	// privilege, any of them. Acknowledged is a passing session test in the
+	// new version, at At, on one of Devices, asserting the new value of each.
+	Raised              []string
+	Raise, Acknowledged bool
 }
 
 // RegexChange is a rule carrying a regex or class term whose commands are not
@@ -98,6 +160,13 @@ type RegexChange struct {
 	Rule    engine.Rule
 	Deny    engine.Rule
 	Added   bool
+	// Gated is a widening, which fails spec §12's gate: a constrained permit
+	// added, a constrained deny removed, or a constrained permit meeting a
+	// deny the change removed. Acknowledged is a passing policy test in the
+	// new version that exercises it, or an acknowledge: entry naming the
+	// removed deny, whose reason is AcknowledgedBy (regexAcked).
+	Gated, Acknowledged bool
+	AcknowledgedBy      string
 }
 
 // MintRefusal is one subject the new version's broker would refuse to mint
@@ -114,6 +183,30 @@ type MintRefusal struct {
 type Release struct {
 	Device, Platform string
 	At               time.Time
+}
+
+// UnacknowledgedLevels counts the level and ceiling raises no session test
+// asserts.
+func (d Diff) UnacknowledgedLevels() int {
+	n := 0
+	for _, l := range d.Levels {
+		if l.Raise && !l.Acknowledged {
+			n++
+		}
+	}
+	return n
+}
+
+// UnacknowledgedRegex counts the regex-constrained widenings no test
+// exercises.
+func (d Diff) UnacknowledgedRegex() int {
+	n := 0
+	for _, r := range d.Regex {
+		if r.Gated && !r.Acknowledged {
+			n++
+		}
+	}
+	return n
 }
 
 // Unacknowledged counts the gated changes no test exercises.
@@ -140,6 +233,31 @@ type side struct {
 	// with why: nothing is minted, so nothing is permitted.
 	refused, refusedDetail string
 	err                    error
+	priv                   privilege
+}
+
+// privilege is what one side gives the device and what port49 enforces there
+// (spec §12): the level and its ceiling by name, the ceiling's number, the
+// device privilege the session lands at, and the subject's enable.
+type privilege struct {
+	level, ceiling string
+	hasMax         bool
+	max            uint8
+	// device is the device privilege as a session test asserts it: a number
+	// or NoCeiling's `none`.
+	device, enable string
+	// reply is the session reply joined by replySep, and platform whose
+	// adapter says which of its attributes bear privilege.
+	reply, platform string
+}
+
+// replySep joins a reply's attributes, which cannot carry a newline
+// (engine.CheckAttribute).
+const replySep = "\n"
+
+func (v privilege) key() string {
+	return strings.Join([]string{v.level, v.ceiling, strconv.FormatBool(v.hasMax), strconv.Itoa(int(v.max)), v.device,
+		v.enable, v.reply}, "/")
 }
 
 func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
@@ -170,7 +288,12 @@ func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
 	if err != nil {
 		return side{err: err}
 	}
-	return side{prog: prog, res: res, hash: hash}
+	priv := privilege{level: res.Level, ceiling: res.Ceiling, hasMax: res.HasCeiling, max: res.MaxPrivilege,
+		device: NoCeiling, enable: res.Enable, reply: strings.Join(sessionReply(res), replySep), platform: d.Platform}
+	if n, ok := p.devicePrivLvl(res, d.Platform); ok {
+		priv.device = strconv.Itoa(int(n))
+	}
+	return side{prog: prog, res: res, hash: hash, priv: priv}
 }
 
 // decide is the side's answer to one command vector, each argument sent as
@@ -201,11 +324,112 @@ func Compare(before, after *Policy, now time.Time) Diff {
 		}
 	}
 	slices.SortFunc(instants, func(a, b time.Time) int { return a.Compare(b) })
-	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{}}
+	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{},
+		usedAcks: map[Acknowledgment]bool{}}
+	for k := range after.sessionAcks(instants) {
+		c.acks[k] = true
+	}
+	for k := range after.regexAcks(before, instants) {
+		c.acks[k] = true
+	}
 	for _, at := range instants {
 		c.at(at)
 	}
+	c.principals(now)
+	for _, a := range after.acked {
+		if !c.usedAcks[a] {
+			c.d.StaleAcknowledgments = append(c.d.StaleAcknowledgments, a)
+		}
+	}
 	return c.d
+}
+
+// principals compares who holds each subject's access (spec §12): every
+// principal either version lists, by the subject it resolves to, and every
+// subject in both by its username and group. A principal session test is the
+// acknowledgment, at now: it names the person and asserts what they get.
+func (c *comparison) principals(now time.Time) {
+	tested, apiTested := map[string]bool{}, map[string]bool{}
+	for _, r := range c.after.RunTests(now) {
+		if !r.Pass || !r.Test.Session() {
+			continue
+		}
+		who := "subject:" + r.Test.Subject
+		if r.Test.Principal != "" {
+			who = "principal:" + r.Test.Principal
+			// A test asserting API rights alone needs no mint, so it says
+			// nothing about the access a principal holds.
+			if !r.Test.onlyAPI() {
+				tested[r.Test.Principal] = true
+			}
+		}
+		if r.Test.AssertsAPI {
+			apiTested[who] = true
+		}
+	}
+	rights := func(p *Policy, subject string) []string {
+		if s, ok := p.subs[subject]; ok {
+			return s.API
+		}
+		return nil
+	}
+	ids := map[string]bool{}
+	for id := range c.before.byID {
+		ids[id] = true
+	}
+	for id := range c.after.byID {
+		ids[id] = true
+	}
+	for _, id := range sortedKeys(ids) {
+		was, is := c.before.byID[id], c.after.byID[id]
+		if was == is {
+			continue
+		}
+		ch := PrincipalChange{Principal: id, OldSubject: was, NewSubject: is, Gated: is != "",
+			APIGained: gained(rights(c.before, was), rights(c.after, is))}
+		ch.Acknowledged = ch.Gated && tested[id] && (len(ch.APIGained) == 0 || apiTested["principal:"+id])
+		c.d.Principals = append(c.d.Principals, ch)
+	}
+	for _, name := range sortedKeys(c.after.subs) {
+		is := c.after.subs[name]
+		was, ok := c.before.subs[name]
+		if !ok {
+			// A new subject's principals are gated above; a new group
+			// subject's rights have no principal to carry them.
+			was = &Subject{Username: is.Username, Group: is.Group}
+		}
+		apiGained := gained(was.API, is.API)
+		if was.Username == is.Username && was.Group == is.Group && slices.Equal(sortedRights(was.API), sortedRights(is.API)) {
+			continue
+		}
+		ch := SubjectChange{Subject: name, OldUsername: was.Username, NewUsername: is.Username, OldGroup: was.Group,
+			NewGroup: is.Group, OldAPI: sortedRights(was.API), NewAPI: sortedRights(is.API), APIGained: apiGained,
+			Gated: was.Username != is.Username || len(apiGained) > 0}
+		names := slices.Clone(is.Identity)
+		usernameOK := was.Username == is.Username || slices.ContainsFunc(names, func(id string) bool { return tested[id] })
+		apiOK := len(apiGained) == 0 || apiTested["subject:"+name] ||
+			slices.ContainsFunc(names, func(id string) bool { return apiTested["principal:"+id] })
+		ch.Acknowledged = ch.Gated && usernameOK && apiOK
+		c.d.Subjects = append(c.d.Subjects, ch)
+	}
+}
+
+// gained is what to has that from does not, sorted.
+func gained(from, to []string) []string {
+	var out []string
+	for _, r := range to {
+		if !slices.Contains(from, r) {
+			out = append(out, r)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+func sortedRights(list []string) []string {
+	out := slices.Clone(list)
+	slices.Sort(out)
+	return out
 }
 
 // comparison is one Compare in progress.
@@ -215,7 +439,9 @@ type comparison struct {
 	// seen holds what has been reported, so an instant repeats nothing an
 	// earlier one found.
 	seen map[string]bool
-	d    Diff
+	// usedAcks are the acknowledge: entries that acknowledged a widening.
+	usedAcks map[Acknowledgment]bool
+	d        Diff
 }
 
 func (c *comparison) once(parts ...string) bool {
@@ -289,10 +515,11 @@ func (c *comparison) at(at time.Time) {
 			if was.refused != "" && is.prog == nil {
 				continue
 			}
-			// The ceiling is the grants', not the blob's, so it is part of
+			// The ceiling, the device privilege and enable are the grants'
+			// and the subject's, not only the blob's, so they are part of
 			// what makes two devices alike.
-			key := strconv.FormatBool(was.quarantined) + "|" + was.refused + "|" + was.hash + "|" + was.res.Ceiling + "|" + is.hash +
-				"|" + is.res.Ceiling
+			key := strconv.FormatBool(was.quarantined) + "|" + was.refused + "|" + was.hash + "|" + was.priv.key() + "|" +
+				is.hash + "|" + is.priv.key()
 			if _, ok := groups[key]; !ok {
 				groups[key] = &group{was: was, is: is}
 				order = append(order, key)
@@ -355,10 +582,12 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 		return
 	}
 	wr, ir := was.res, is.res
-	if (wr.Level != ir.Level || wr.Ceiling != ir.Ceiling) &&
-		c.once("level", subject, on, wr.Level, ir.Level, wr.Ceiling, ir.Ceiling) {
-		c.d.Levels = append(c.d.Levels, LevelChange{Subject: subject, Devices: devices, At: at, OldLevel: wr.Level,
-			NewLevel: ir.Level, OldCeiling: wr.Ceiling, NewCeiling: ir.Ceiling})
+	if was.priv != is.priv && c.once("level", subject, on, was.priv.key(), is.priv.key()) {
+		c.d.Levels = append(c.d.Levels, c.levelChange(LevelChange{Subject: subject, Devices: devices, At: at,
+			OldLevel: wr.Level, NewLevel: ir.Level, OldCeiling: wr.Ceiling, NewCeiling: ir.Ceiling,
+			OldPrivLvl: was.priv.device, NewPrivLvl: is.priv.device, OldEnable: was.priv.enable,
+			NewEnable: is.priv.enable, OldReply: splitReply(was.priv.reply), NewReply: splitReply(is.priv.reply)},
+			was.priv, is.priv))
 	}
 	if was.hash == is.hash {
 		return
@@ -367,14 +596,14 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 		if c.once("regex", subject, on, r.Rule.Verdict, r.Rule.Role, r.Rule.Rule, r.Deny.Role, r.Deny.Rule,
 			strconv.FormatBool(r.Added)) {
 			r.Subject, r.Devices, r.At = subject, devices, at
-			c.d.Regex = append(c.d.Regex, r)
+			c.d.Regex = append(c.d.Regex, c.regexAcked(r))
 		}
 	}
 	for _, e := range engine.Exposures(was.prog, is.prog) {
 		if c.once("exposure", subject, on, e.Permit.Role, e.Permit.Rule, e.Deny.Role, e.Deny.Rule,
 			strconv.FormatBool(e.Added)) {
-			c.d.Regex = append(c.d.Regex, RegexChange{Subject: subject, Devices: devices, At: at, Rule: e.Permit,
-				Deny: e.Deny, Added: e.Added})
+			c.d.Regex = append(c.d.Regex, c.regexAcked(RegexChange{Subject: subject, Devices: devices, At: at,
+				Rule: e.Permit, Deny: e.Deny, Added: e.Added}))
 		}
 	}
 	var base []string
@@ -410,15 +639,15 @@ func (c *comparison) change(subject string, devices []string, at time.Time, v []
 		switch {
 		case from.Reason == decision.DeviceQuarantined || oldRefused != "":
 			ch.Gated = true
-			ch.Acknowledged = c.acks[releaseKey(subject, to.Decided.Role, to.Decided.Rule)]
+			ch.Acknowledged = c.acks[instantKey(at, releaseKey(subject, to.Decided.Role, to.Decided.Rule))]
 		case from.Reason == decision.PipeStageDenied && from.Stage > 0 && from.Stage <= len(to.Pipeline):
 			ch.Gated = true
 			ch.PipeEntry = is.prog.PipeEntry(to.Pipeline[from.Stage-1])
-			ch.Acknowledged = c.acks[pipeKey(subject, ch.PipeEntry)]
+			ch.Acknowledged = c.acks[instantKey(at, pipeKey(subject, ch.PipeEntry))]
 		case from.Deny != nil:
 			ch.Gated = true
-			ch.Acknowledged = c.acks[shadowKey(subject, from.Deny.Role, from.Deny.Rule, to.Decided.Role,
-				to.Decided.Rule)]
+			ch.Acknowledged = c.acks[instantKey(at, shadowKey(subject, from.Deny.Role, from.Deny.Rule, to.Decided.Role,
+				to.Decided.Rule))]
 		}
 	}
 	var oldRule, newRule string
@@ -432,6 +661,214 @@ func (c *comparison) change(subject string, devices []string, at time.Time, v []
 		string(to.Reason), oldRule, newRule}, v...)...) {
 		c.d.Changes = append(c.d.Changes, ch)
 	}
+}
+
+// regexAcked marks a regex-constrained widening and whether it is
+// acknowledged in the new version, on a device of its group at its instant
+// (spec §12): an added permit, by a permit test it decides; a removed or
+// rewritten deny, by a permit test on a command it refused before and the
+// new version permits; a permit meeting such a deny, by a permit test that
+// permit decides on a command that deny refused before. A removed deny, and
+// every permit meeting it, is also acknowledged by an acknowledge: entry
+// naming it. A test expecting deny acknowledges nothing: it cannot tell a
+// narrower rewrite from a wider one. A narrowing is reported and not gated.
+func (c *comparison) regexAcked(r RegexChange) RegexChange {
+	tested := func(parts ...string) bool {
+		return slices.ContainsFunc(r.Devices, func(device string) bool {
+			return c.acks[instantKey(r.At, append([]string{r.Subject, device, "regex"}, parts...)...)]
+		})
+	}
+	var deny engine.Rule
+	switch {
+	case r.Deny.Rule != "":
+		r.Gated, deny = !r.Added, r.Deny
+		r.Acknowledged = tested("pair", r.Deny.Role, r.Deny.Rule, r.Rule.Role, r.Rule.Rule)
+	case r.Rule.Verdict == engine.Permit:
+		r.Gated = r.Added
+		r.Acknowledged = tested("permit", r.Rule.Role, r.Rule.Rule)
+	default:
+		r.Gated, deny = !r.Added, r.Rule
+		r.Acknowledged = tested("flip", r.Rule.Role, r.Rule.Rule)
+	}
+	// An entry naming a rule the new version still has removed nothing: it
+	// is stale, and acknowledges nothing.
+	if a, ok := c.after.acknowledgment(deny.Role, deny.Rule); ok && deny.Rule != "" && r.Gated &&
+		!c.after.hasDeny(deny.Rule) {
+		c.usedAcks[a] = true
+		if !r.Acknowledged {
+			r.Acknowledged, r.AcknowledgedBy = true, a.Reason
+		}
+	}
+	if !r.Gated {
+		r.Acknowledged, r.AcknowledgedBy = false, ""
+	}
+	return r
+}
+
+// regexAcks is what each passing permit test in p acknowledges of a
+// regex-constrained change, at each of instants, on its device: the permit
+// that decides it; where before refused its command with a deny, that deny's
+// flip, and the pair of that deny and the permit (spec §12). A test expecting
+// deny acknowledges nothing here.
+func (p *Policy) regexAcks(before *Policy, instants []time.Time) map[string]bool {
+	acks := map[string]bool{}
+	for _, at := range instants {
+		for _, r := range p.RunTests(at) {
+			if !r.Pass || !r.Permit || r.Test.Session() || r.MintError != "" || r.Outcome.Decided == nil {
+				continue
+			}
+			subject := r.Test.Subject
+			if subject == "" {
+				subject = p.byID[r.Test.Principal]
+			}
+			dev, ok := p.device(r.Test.Device)
+			if !ok || subject == "" {
+				continue
+			}
+			win := r.Outcome.Decided
+			acks[instantKey(at, subject, dev.Name, "regex", "permit", win.Role, win.Rule)] = true
+			if _, was, err := before.Decide(subject, "", dev, r.Test.Command, at); err == nil && !was.Permit &&
+				was.Deny != nil {
+				acks[instantKey(at, subject, dev.Name, "regex", "flip", was.Deny.Role, was.Deny.Rule)] = true
+				acks[instantKey(at, subject, dev.Name, "regex", "pair", was.Deny.Role, was.Deny.Rule, win.Role,
+					win.Rule)] = true
+			}
+		}
+	}
+	return acks
+}
+
+// levelChange marks a raise and whether a session test asserts it (spec
+// §12). The gate compares what the device gets and what port49 enforces, not
+// level names:
+//
+//   - priv_lvl: the device privilege rose, or became unknown;
+//   - max_privilege: the ceiling went away, or rose by its number or by its
+//     place in either version's privilege_levels;
+//   - level: the level rose under either version's order; a level a version
+//     does not declare is below every level it does;
+//   - enable: the mechanism went from none to token, or to auto, which asks
+//     for nothing more than a login;
+//   - reply: the session reply gained, changed or lost an attribute that
+//     bears privilege on the platform, priv-lvl aside.
+func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
+	rose := func(from, to string) bool {
+		return from != to && to != "" && (c.before.levelIndex(to) > c.before.levelIndex(from) ||
+			c.after.levelIndex(to) > c.after.levelIndex(from))
+	}
+	if was.device != is.device {
+		from, errFrom := strconv.Atoi(was.device)
+		to, errTo := strconv.Atoi(is.device)
+		if errTo != nil || (errFrom == nil && to > from) || (errFrom != nil && errTo == nil) {
+			l.Raised = append(l.Raised, "priv_lvl")
+		}
+	}
+	if was.ceiling != "" && (is.ceiling == "" || (was.hasMax && is.hasMax && is.max > was.max) ||
+		rose(was.ceiling, is.ceiling)) {
+		l.Raised = append(l.Raised, "max_privilege")
+	}
+	if rose(was.level, is.level) {
+		l.Raised = append(l.Raised, "level")
+	}
+	if enableRank[is.enable] > enableRank[was.enable] {
+		l.Raised = append(l.Raised, "enable")
+	}
+	// An attribute the reply gained, changed or lost, other than priv-lvl,
+	// which priv_lvl judges, changes what the device lets the session do in a
+	// direction the gate cannot read, unless its adapter lists it inert: on a
+	// session-only platform losing deny-commands widens access (spec §12).
+	dialect := c.after.dialect(is.platform)
+	moved := func(from, to []string) bool {
+		return slices.ContainsFunc(from, func(a string) bool {
+			name := a[:strings.IndexAny(a, "=*")]
+			return name != "priv-lvl" && !slices.Contains(to, a) && dialect.BearsPrivilege(name)
+		})
+	}
+	if moved(l.NewReply, l.OldReply) || moved(l.OldReply, l.NewReply) {
+		l.Raised = append(l.Raised, "reply")
+	}
+	l.Raise = len(l.Raised) > 0
+	if !l.Raise {
+		return l
+	}
+	l.Acknowledged = slices.ContainsFunc(l.Devices, func(device string) bool {
+		for _, field := range l.Raised {
+			if !c.acks[levelKey(l.At, l.Subject, device, field, l.NewValue(field))] {
+				return false
+			}
+		}
+		return true
+	})
+	return l
+}
+
+// enableRank orders the mechanisms by what they ask of an escalation: none
+// refuses it, token asks for a second credential, auto for nothing more.
+var enableRank = map[string]int{"none": 0, "": 0, "token": 1, "auto": 2}
+
+// NewValue is the new version's value of a raised dimension, as a session
+// test asserts it.
+func (l LevelChange) NewValue(field string) string {
+	switch field {
+	case "priv_lvl":
+		return l.NewPrivLvl
+	case "max_privilege":
+		if l.NewCeiling == "" {
+			return NoCeiling
+		}
+		return l.NewCeiling
+	case "level":
+		return l.NewLevel
+	case "reply":
+		return strings.Join(l.NewReply, replySep)
+	}
+	return l.NewEnable
+}
+
+func splitReply(joined string) []string {
+	if joined == "" {
+		return []string{}
+	}
+	return strings.Split(joined, replySep)
+}
+
+func levelKey(at time.Time, subject, device, field, value string) string {
+	return instantKey(at, subject, "session", device, field, value)
+}
+
+// instantKey is an acknowledgment key that holds at one instant: a test
+// acknowledges what it asserts only where it passes (spec §12).
+func instantKey(at time.Time, parts ...string) string {
+	return shadowKey(append([]string{at.UTC().Format(time.RFC3339Nano)}, parts...)...)
+}
+
+// sessionAcks is what each passing test in p asserting a session value
+// acknowledges, at each of instants: the value it resolved, for its subject
+// on its device, at that instant (spec §12).
+func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
+	acks := map[string]bool{}
+	for _, at := range instants {
+		for _, r := range p.RunTests(at) {
+			if !r.Pass {
+				continue
+			}
+			subject := r.Test.Subject
+			if subject == "" {
+				subject = p.byID[r.Test.Principal]
+			}
+			for field, asserted := range map[string]bool{"level": r.Test.Level != "",
+				"max_privilege": r.Test.MaxPrivilege != "", "priv_lvl": r.Test.PrivLvl != "", "enable": r.Test.Enable != "",
+				"reply": r.Test.AssertsReply} {
+				if !asserted {
+					continue
+				}
+				value := map[string]string{"level": r.Level, "max_privilege": r.Ceiling, "priv_lvl": r.PrivLvl,
+					"enable": r.Enable, "reply": strings.Join(r.Reply, replySep)}[field]
+				acks[levelKey(at, subject, r.Test.Device, field, value)] = true
+			}
+		}
+	}
+	return acks
 }
 
 // display is a probe vector as a person reads it.
@@ -491,8 +928,9 @@ func constrained(rule string) bool {
 // (subject, deny, permit) for a permit in p that wins over every deny it
 // meets, as the shadowed-deny report reads a test; at a pipeline stage, the
 // allowlist entry that now permits it; on a device before quarantined, or
-// where before's broker refused the mint, every such permit. The test is the author saying the expansion is meant (spec
-// §12).
+// where before's broker refused the mint, every such permit. Each holds only
+// at the instant the test passed. The test is the author saying the
+// expansion is meant (spec §12).
 func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]bool {
 	acks := map[string]bool{}
 	for _, t := range p.passedPermits(instants) {
@@ -517,7 +955,7 @@ func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]
 		switch {
 		case errors.Is(err, ErrDeviceQuarantined) || refused != "":
 			for _, pm := range winners {
-				acks[releaseKey(t.subject, pm.Role, pm.Rule)] = true
+				acks[instantKey(t.at, releaseKey(t.subject, pm.Role, pm.Rule))] = true
 			}
 		case err != nil && !errors.Is(err, ErrNoGrants):
 		case was.Reason == decision.PipeStageDenied && was.Stage > 0 && was.Stage <= len(o.Pipeline):
@@ -526,11 +964,11 @@ func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]
 				continue
 			}
 			if prog, err := engine.Compile(res.Blob); err == nil {
-				acks[pipeKey(t.subject, prog.PipeEntry(o.Pipeline[was.Stage-1]))] = true
+				acks[instantKey(t.at, pipeKey(t.subject, prog.PipeEntry(o.Pipeline[was.Stage-1])))] = true
 			}
 		case !was.Permit && was.Deny != nil:
 			for _, pm := range winners {
-				acks[shadowKey(t.subject, was.Deny.Role, was.Deny.Rule, pm.Role, pm.Rule)] = true
+				acks[instantKey(t.at, shadowKey(t.subject, was.Deny.Role, was.Deny.Rule, pm.Role, pm.Rule))] = true
 			}
 		}
 	}

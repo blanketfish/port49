@@ -89,20 +89,21 @@ func TestExplainShowsTheSessionAttributes(t *testing.T) {
 	mustContain(t, out, "permit context_matched (session)", "level       admin; max_privilege none",
 		"priv-lvl=15", "(mandatory)  <- platform arista_eos, level admin")
 	_, out = explained(t, p, "noc_tier1", "", "leaf-01", "show version", true)
-	mustContain(t, out, "permit permit_dominates", "session attributes that would be returned:", "priv-lvl=7")
+	mustContain(t, out, "permit permit_dominates", "session attributes that would be returned:",
+		"priv-lvl=15                      (mandatory)  <- platform arista_eos, level operator")
 }
 
 // A quarantined device is explained as the mint answers it, with every cause
 // the device failed at load (spec §10).
 func TestExplainNamesAQuarantinedDevice(t *testing.T) {
-	p := mustParse(t, `
+	p := mustParse(t, unmappedLevel+`
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: op, privilege: operator, permit: [show **]}]
+roles: [{name: op, privilege: unmapped, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [op]}]`)
 	_, out := explained(t, p, "s", "", "leaf-01", "show version", false)
 	mustContain(t, out, "deny device_quarantined", "leaf-01 (arista_eos) fails a joint check now",
-		"level operator has no rendering on arista_eos")
+		"level unmapped has no rendering on arista_eos")
 	_, out = explained(t, p, "s", "", "nx-01", "show version", false)
 	mustContain(t, out, "permit permit_dominates")
 }
@@ -111,10 +112,10 @@ grants: [{subject: s, scope: all_devices, roles: [op]}]`)
 // quarantine an expiry will bring on is a note beside the answer that holds
 // until then; after it, the device is explained as quarantined.
 func TestExplainAnswersAQuarantineAtTheTimeAsked(t *testing.T) {
-	p := mustParse(t, `
+	p := mustParse(t, unmappedLevel+`
 scopes: [{name: all_devices, match: {}}, {name: dc, match: {site: dc1}}]
 roles:
-  - {name: op, privilege: operator, permit: [show **]}
+  - {name: op, privilege: unmapped, permit: [show **]}
   - {name: adm, privilege: admin, permit: ["**"]}
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
 grants:
@@ -130,7 +131,7 @@ grants:
 	var buf bytes.Buffer
 	e.Render(&buf, false)
 	oneVerdict(t, buf.String())
-	mustContain(t, buf.String(), "deny device_quarantined", "level operator has no rendering on arista_eos")
+	mustContain(t, buf.String(), "deny device_quarantined", "level unmapped has no rendering on arista_eos")
 	if strings.Contains(buf.String(), "will be quarantined") {
 		t.Errorf("a current entry is a cause, not a note:\n%s", buf.String())
 	}
@@ -178,7 +179,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]`), Env{Devices: append(in
 		}
 		return p
 	}
-	long, unsafe := policy("note*"+strings.Repeat("x", 230)+"{username}"), policy("where*{device}")
+	long, unsafe := policy("home-directory*"+strings.Repeat("x", 220)+"{username}"), policy("home-directory*{device}")
 	for _, line := range []string{"", "show version"} {
 		_, out := explained(t, long, "s", "", "leaf-01", line, false)
 		mustContain(t, out, "refused attribute_too_long", "the broker mints no token")
@@ -255,7 +256,7 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}, {subject: other, scope: 
 func TestExplainSaysAGroupSubjectIsCheckedWithoutAPrincipal(t *testing.T) {
 	p := mustParse(t, `
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {all: ["who*{principal}"]}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {all: ["home-directory*{principal}"]}}]
 subjects:
   - {name: g, group: "CN=g,OU=Groups,DC=example,DC=com", token_ttl: 60s}
   - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}

@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -9,9 +10,9 @@ import (
 // mint refuses it and the daemon closes the connection (spec §10). The other
 // devices answer as ever.
 func TestATestOnAQuarantinedDeviceIsADeny(t *testing.T) {
-	p := mustParse(t, `
+	p := mustParse(t, unmappedLevel+`
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: op, privilege: operator, permit: [show **]}]
+roles: [{name: op, privilege: unmapped, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [op]}]
 tests:
@@ -100,5 +101,54 @@ grants:
 	}
 	if n := shadowed("2027-01-01"); n == 0 {
 		t.Error("a live grant shadows nothing")
+	}
+}
+
+// A policy with no tests loads and is reported, no_tests: nothing in it can
+// acknowledge a shadow or an expansion (owner's ruling 2026-09-24; spec §12).
+func TestLintReportsAPolicyWithNoTests(t *testing.T) {
+	has := func(p *Policy) bool {
+		for _, f := range p.Lint(noon) {
+			if f.Kind == FindingNoTests {
+				return true
+			}
+		}
+		return false
+	}
+	bare := scopeOK + roleOK + subjOK + grantOK
+	if !has(mustParse(t, bare)) {
+		t.Fatal("a policy with no tests is reported")
+	}
+	if has(mustParse(t, bare+"tests:\n  - {subject: s, device: leaf-01, level: admin}\n")) {
+		t.Fatal("a policy with a test is not")
+	}
+}
+
+// A ceiling that numbers the same as a higher level on a platform in the
+// inventory does not limit device privilege there, and is reported (review
+// I2; spec §7).
+func TestLintReportsACeilingThatDoesNotLimitDevicePrivilege(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: operator}]`)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingCeilingIndistinct {
+			got = append(got, f.Message)
+		}
+	}
+	want := []string{
+		"max_privilege: operator does not limit device privilege on arista_eos: it numbers 15, as admin does; port49's command rules are the only fence",
+		"max_privilege: operator does not limit device privilege on cisco_nxos: it numbers 15, as admin does; port49's command rules are the only fence",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("got %q", got)
+	}
+	if slices.ContainsFunc(mustParse(t, scopeOK+roleOK+subjOK+grantOK).Lint(noon), func(f Finding) bool {
+		return f.Kind == FindingCeilingIndistinct
+	}) {
+		t.Fatal("no ceiling, nothing to report")
 	}
 }

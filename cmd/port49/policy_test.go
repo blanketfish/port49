@@ -13,6 +13,11 @@ import (
 	"github.com/rhwendt/port49/internal/platform"
 )
 
+// unmappedLevel declares a level no built-in platform renders: a role landing
+// an arista_eos session there quarantines the device. `operator` renders on
+// EOS since the owner's ruling of 2026-09-24 (spec §6, decision 23).
+const unmappedLevel = "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"
+
 // policyFixture writes a small policy and inventory and returns their paths.
 func policyFixture(t *testing.T) (pol, inv string) {
 	t.Helper()
@@ -186,7 +191,7 @@ func TestPolicyTestAndDiffAnswerAsTheBrokerMints(t *testing.T) {
 	oldPol, inv := policyFixture(t)
 	raw := readFile(t, oldPol)
 	refused := strings.Replace(string(raw), "{name: read_only, privilege: readonly, permit: [show **]}",
-		`{name: read_only, privilege: readonly, permit: [show **], attributes: {all: ["home*/`+strings.Repeat("h", 237)+`/{principal}"]}}`, 1)
+		`{name: read_only, privilege: readonly, permit: [show **], attributes: {all: ["home-directory*/`+strings.Repeat("h", 227)+`/{principal}"]}}`, 1)
 	newPol := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(newPol, []byte(refused), 0o600); err != nil {
 		t.Fatal(err)
@@ -201,6 +206,21 @@ func TestPolicyTestAndDiffAnswerAsTheBrokerMints(t *testing.T) {
 		!strings.Contains(out.String(), "REFUSED: noc on leaf-01: the new version's broker refuses every mint there, attribute_too_long") ||
 		!strings.Contains(out.String(), "1 mints newly refused") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// No test acknowledges a lockout (owner's ruling 2026-09-24): with every
+	// test in the new version passing, the refusal still fails the gate.
+	allPass := strings.Replace(refused, `command: "show version", expect: permit`, `command: "show version", expect: deny`, 1)
+	if err := os.WriteFile(newPol, []byte(allPass), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("the new version's own tests pass: code %d\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "1 mints newly refused") {
+		t.Fatalf("a refused mint fails whatever the tests say: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
 
@@ -244,12 +264,12 @@ func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
 		!strings.Contains(errb.String(), "@uplinks, which no platform defines") || out.Len() != 0 {
 		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
 	}
-	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), "privilege: readonly", "privilege: operator", 1)), 0o600); err != nil {
+	if err := os.WriteFile(pol, []byte(unmappedLevel+strings.Replace(string(raw), "privilege: readonly", "privilege: unmapped", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
-		!strings.Contains(out.String(), "quarantine: leaf-01 (arista_eos): subject \"noc\": level operator has no rendering") ||
+		!strings.Contains(out.String(), "quarantine: leaf-01 (arista_eos): subject \"noc\": level unmapped has no rendering") ||
 		!strings.Contains(out.String(), "FAIL noc on leaf-01: \"show version\" -> deny device_quarantined, want permit") {
 		t.Fatalf("code %d\n%s", code, out.String())
 	}
@@ -462,11 +482,11 @@ func readFile(t *testing.T, path string) []byte {
 func TestPolicyTestPrintsReportsNotesAndScheduledQuarantines(t *testing.T) {
 	pol, inv := policyFixture(t)
 	body := strings.Replace(string(readFile(t, pol)), "  - {name: admin, privilege: admin, permit: [\"**\"]}\n",
-		"  - {name: admin, privilege: admin, permit: [\"**\"]}\n  - {name: op, privilege: operator, permit: [show **]}\n", 1)
+		"  - {name: admin, privilege: admin, permit: [\"**\"]}\n  - {name: op, privilege: unmapped, permit: [show **]}\n", 1)
 	body = strings.Replace(body, "  - {subject: ops, scope: all_devices, roles: [admin]}\n",
 		"  - {subject: ops, scope: all_devices, roles: [admin], expires: 2099-01-01}\n"+
 			"  - {subject: ops, scope: all_devices, roles: [op]}\n", 1)
-	body = strings.Replace(body, "subjects:\n", "subjects:\n  - {name: gone, identity: \"user:gone@example.com\", username: gone, token_ttl: 60s}\n", 1)
+	body = unmappedLevel + strings.Replace(body, "subjects:\n", "subjects:\n  - {name: gone, identity: \"user:gone@example.com\", username: gone, token_ttl: 60s}\n", 1)
 	body += "  - {subject: noc, device: leaf-01, command: \"show version | include x\", expect: permit}\n"
 	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -481,5 +501,258 @@ func TestPolicyTestPrintsReportsNotesAndScheduledQuarantines(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
 		}
+	}
+}
+
+// A session test prints the level and ceiling the subject resolved to, and
+// what it wanted when it fails (spec §12, "Policy tests").
+func TestPolicyTestPrintsASessionTest(t *testing.T) {
+	pol, inv := policyFixture(t)
+	body := string(readFile(t, pol)) + "  - {subject: ops, device: leaf-01, level: admin, max_privilege: none}\n" +
+		"  - {subject: noc, device: leaf-01, level: admin}\n"
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+	for _, want := range []string{
+		"PASS ops on leaf-01: session -> level admin, max_privilege none, priv_lvl 15, enable none\n",
+		"FAIL noc on leaf-01: session -> level readonly, max_privilege none, priv_lvl 1, enable none, want level admin\n",
+		"4 tests, 1 failed",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
+		}
+	}
+	if code != 1 {
+		t.Fatalf("code %d", code)
+	}
+}
+
+// A level raise fails `port49 policy diff` until a session test in the new
+// version asserts the new level there; the lowering back is reported and
+// passes (owner's ruling 2026-09-24; spec §12).
+func TestPolicyDiffGatesALevelRaise(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := readFile(t, oldPol)
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	raised := strings.Replace(string(raw), "privilege: readonly", "privilege: admin", 1)
+	if err := os.WriteFile(newPol, []byte(raised), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "RAISES: noc on leaf-01: level readonly -> admin, max_privilege none -> none, "+
+			"priv_lvl 1 -> 15, enable none -> none, reply [\"priv-lvl=1\"] -> [\"priv-lvl=15\"]; no session test asserts it: add {subject: noc, device: leaf-01, "+
+			"priv_lvl: 15, level: admin}") ||
+		!strings.Contains(out.String(), "1 unacknowledged privilege raises") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", newPol, "--new", oldPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "privilege: noc on leaf-01: level admin -> readonly") {
+		t.Fatalf("a lowering: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if err := os.WriteFile(newPol, []byte(raised+"  - {subject: noc, device: leaf-01, level: admin, priv_lvl: 15}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "raises (a session test asserts it): noc on leaf-01: level readonly -> admin") {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A regex-constrained widening fails `port49 policy diff` until a policy test
+// in the new version exercises it (owner's ruling 2026-09-24; spec §12).
+func TestPolicyDiffGatesARegexConstrainedWidening(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := readFile(t, oldPol)
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	widened := strings.Replace(string(raw), "permit: [show **]}", `permit: [show **, "copy /^scp:/ *"]}`, 1)
+	if err := os.WriteFile(newPol, []byte(widened), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `REGEX-CONSTRAINED: noc on leaf-01: permit "copy /^scp:/ *" (read_only) added; `+
+			`the commands it matches are not enumerated (spec §12), and no policy test exercises it`) ||
+		!strings.Contains(out.String(), "1 unacknowledged regex-constrained widenings") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := widened + "  - {subject: noc, device: leaf-01, command: \"copy scp://h/f flash:\", expect: permit}\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `regex-constrained (a policy test exercises it): noc on leaf-01: permit "copy /^scp:/ *"`) {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", newPol, "--new", oldPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `regex-constrained: noc on leaf-01: permit "copy /^scp:/ *" (read_only) removed`) {
+		t.Fatalf("a narrowing: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A policy with no tests passes `port49 policy test` with a report line
+// saying so (owner's ruling 2026-09-24; spec §12).
+func TestPolicyTestPassesAPolicyWithNoTestsAndSaysSo(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := string(readFile(t, pol))
+	if err := os.WriteFile(pol, []byte(raw[:strings.Index(raw, "tests:\n")]), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "report: no_tests: ") || !strings.Contains(out.String(), "0 tests, 0 failed") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A ceiling raise says what it lets enable do (review M4).
+func TestPolicyDiffSaysWhatARaisedCeilingLetsEnableDo(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := strings.Replace(string(readFile(t, oldPol)), "roles: [read_only, no_reload]}",
+		"roles: [read_only, no_reload], max_privilege: readonly}", 1)
+	for _, tt := range []struct{ enable, want string }{
+		{"", "(enable is none, so nothing escalates to the ceiling today; setting enable later would)"},
+		{", enable: token", "(enable: token can now escalate the session to the new ceiling)"},
+	} {
+		capped := strings.Replace(raw, `username: noc, token_ttl: 60s}`, `username: noc, token_ttl: 60s`+tt.enable+`}`, 1)
+		if err := os.WriteFile(oldPol, []byte(capped), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		newPol := filepath.Join(t.TempDir(), "policy.yaml")
+		if err := os.WriteFile(newPol, []byte(strings.Replace(capped, ", max_privilege: readonly}", "}", 1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+			!strings.Contains(out.String(), "max_privilege: none} "+tt.want) {
+			t.Fatalf("enable %q: code %d\n%s%s", tt.enable, code, out.String(), errb.String())
+		}
+	}
+}
+
+// An acknowledge: entry is printed by `policy test`, and by `policy diff`
+// beside the change it acknowledges (review I1; spec §12).
+func TestPolicyToolsPrintAnAcknowledgment(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := strings.Replace(string(readFile(t, oldPol)), "deny: [reload **]}", `deny: ["/^(rel|wri)/ **"]}`, 1)
+	if err := os.WriteFile(oldPol, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	narrowed := strings.Replace(raw, `"/^(rel|wri)/ **"`, `"/^wri/ **"`, 1)
+	narrowed = strings.Replace(narrowed, `command: "reload", expect: deny`, `command: "write", expect: deny`, 1)
+	if err := os.WriteFile(newPol, []byte(narrowed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 {
+		t.Fatalf("a deny test acknowledges nothing: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := narrowed + "acknowledge:\n  - {role: no_reload, rule: \"/^(rel|wri)/ **\", reason: \"reload moves to the change window\"}\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `regex-constrained (acknowledged: reload moves to the change window): noc on leaf-01: deny "/^(rel|wri)/ **" (no_reload) removed`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// The same entry against a diff that removes nothing is stale.
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", newPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `report: acknowledge_stale: no_reload "/^(rel|wri)/ **"`) {
+		t.Fatalf("stale: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `acknowledge: no_reload "/^(rel|wri)/ **": reload moves to the change window`) {
+		t.Fatalf("policy test: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A privilege attribute added to the reply fails the diff, and the RAISES
+// line names the reply: test to add (review C2).
+func TestPolicyDiffGatesAPrivilegeAttributeInTheReply(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	added := strings.Replace(raw, "roles: [read_only, no_reload]}", `roles: [read_only, no_reload], attributes: {arista_eos: ["roles=network-admin"]}}`, 1)
+	if err := os.WriteFile(newPol, []byte(added), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `reply ["priv-lvl=1"] -> ["priv-lvl=1", "roles=network-admin"]; no session test asserts it: `+
+			`add {subject: noc, device: leaf-01, reply: ["priv-lvl=1", "roles=network-admin"]}`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if err := os.WriteFile(newPol, []byte(added+`  - {subject: noc, device: leaf-01, reply: ["priv-lvl=1", "roles=network-admin"]}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// An identity handed to another person fails the diff until a session test
+// names the new principal (review C3).
+func TestPolicyDiffGatesAPrincipalWhoGainsASubject(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	swapped := strings.Replace(raw, "user:ops@example.com", "user:mallory@example.com", 1)
+	if err := os.WriteFile(newPol, []byte(swapped), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "PRINCIPAL: user:mallory@example.com now resolves to subject ops (was none): that person now holds ops's access") ||
+		!strings.Contains(out.String(), "principal: user:ops@example.com no longer resolves to a subject (was ops)") ||
+		!strings.Contains(out.String(), "1 unacknowledged principal or username changes") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := swapped + `  - {principal: "user:mallory@example.com", device: leaf-01, level: admin}` + "\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A broker right gained fails the diff until a test asserts the subject's
+// rights with api: (review M6).
+func TestPolicyDiffGatesABrokerRightGained(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	rights := strings.Replace(raw, "username: noc, token_ttl: 60s}", "username: noc, token_ttl: 60s, api: [revoke_others]}", 1)
+	if err := os.WriteFile(newPol, []byte(rights), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `API: subject noc's broker rights [] -> ["revoke_others"]`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if err := os.WriteFile(newPol, []byte(rights+"  - {subject: noc, device: leaf-01, api: [revoke_others]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", newPol, "--new", oldPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `api: subject noc's broker rights ["revoke_others"] -> []`) {
+		t.Fatalf("a right lost: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }

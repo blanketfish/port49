@@ -16,26 +16,20 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
 )
 
-// spec11Env is the corpus's environment: its own inventory file, and the
-// built-in platforms with one line added. §11 lands bgp_operator and
-// interface_tech at `operator`, and nothing measured says what `operator` is on
-// vEOS, so the shipped arista_eos adapter leaves it unmapped and a real policy
-// shaped like §11 quarantines its EOS devices (plan 4, Question 1). The corpus is about
-// decisions, not rendering, so it maps it here, to spec §8's example value.
+// spec11Env is the corpus's environment: its own inventory file and the
+// built-in platforms as shipped. §11 lands bgp_operator and interface_tech at
+// `operator`, which arista_eos renders as admin's level since the owner's
+// ruling of 2026-09-24 (spec §6, decision 23), so §11 loads without a
+// test-only mapping.
 func spec11Env(t *testing.T) Env {
 	t.Helper()
 	inv, err := admission.LoadFile("testdata/spec11-inventory.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	dialects := platform.Dialects()
-	eos := dialects["arista_eos"]
-	eos.Levels["operator"] = []string{"priv-lvl=7"}
-	dialects["arista_eos"] = eos
-	return Env{Devices: inv.Devices, Dialects: dialects}
+	return Env{Devices: inv.Devices}
 }
 
 func spec11(t *testing.T, raw []byte) *Policy {
@@ -64,7 +58,7 @@ func TestTheCompletePolicyExamplePassesItsOwnTests(t *testing.T) {
 		t.Fatalf("§11 quarantines nothing on its own inventory: %+v", q)
 	}
 	results := p.RunTests(noon)
-	if len(results) != 7 {
+	if len(results) != 8 {
 		t.Fatalf("%d results", len(results))
 	}
 	for _, r := range results {

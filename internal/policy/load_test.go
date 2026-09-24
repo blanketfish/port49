@@ -45,9 +45,15 @@ func mustParse(t *testing.T, body string) *Policy {
 	return p
 }
 
+// unmappedLevel declares a level, between operator and admin, that no
+// built-in platform renders or numbers: a role landing an arista_eos session
+// there quarantines the device, and a ceiling naming it loads nowhere. Since
+// the owner's ruling of 2026-09-24 `operator` renders on EOS (spec §6,
+// decision 23), so it is the tests' stand-in for a level with no mapping.
+const unmappedLevel = "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"
+
 // good is spec §11's shape, cut to what every platform in inventory() can
-// render with the built-in adapters: `operator` has no mapping on arista_eos
-// (internal/platform), so no role here lands an EOS session there.
+// render with the built-in adapters.
 const good = `
 scopes:
   - {name: all_devices, match: {}}
@@ -141,11 +147,17 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a case-sensitive regex", "roles:\n  - {name: r, deny: [\"* * /(?-i)^TFTP:/\"]}\n" + subjOK, "case-insensitively"},
 		{"a case-sensitive group", "roles:\n  - {name: r, deny: [\"interface /(?s-i:^Mgmt)/\"]}\n" + subjOK, "case-insensitively"},
 		{"a class no platform defines", "roles:\n  - {name: r, permit: [\"interface @uplinks\"]}\n" + subjOK, "which no platform defines"},
-		{"a ceiling no platform numbers", scopeOK + roleOK + subjOK +
-			"grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: operator}\n", "no priv-lvl number on any platform"},
+		{"a ceiling no platform numbers", unmappedLevel + scopeOK + roleOK + subjOK +
+			"grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: unmapped}\n", "no priv-lvl number on any platform"},
 		{"a bad pipe rule", "roles:\n  - {name: r, pipe: {permit: [\"inc*\"]}}\n" + subjOK, "pipe"},
 		{"an attribute with no separator", "roles:\n  - {name: r, attributes: {all: [idletime]}}\n" + subjOK, "separator"},
 		{"an attribute for no platform", "roles:\n  - {name: r, attributes: {junos: [\"idletime*30\"]}}\n" + subjOK, "neither `all`"},
+		{"a placeholder in priv-lvl", "roles:\n  - {name: r, attributes: {all: [\"priv-lvl={username}\"]}}\n" + subjOK, "priv-lvl carries privilege and takes no placeholder"},
+		{"a placeholder in local-user-name", "roles:\n  - {name: r, attributes: {juniper_junos: [\"local-user-name*{principal}\"]}}\n" + subjOK, "local-user-name carries privilege"},
+		{"a placeholder in a grant's roles", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r], attributes: {arista_eos: [\"roles={device}\"]}}\n", "roles carries privilege"},
+		{"a placeholder in allow-commands", "roles:\n  - {name: r, attributes: {juniper_junos: [\"allow-commands={principal}\"]}}\n" + subjOK, "allow-commands carries privilege"},
+		{"a placeholder in allow-configuration", "roles:\n  - {name: r, attributes: {juniper_junos: [\"allow-configuration={username}\"]}}\n" + subjOK, "allow-configuration carries privilege"},
+		{"a placeholder in an attribute no adapter lists", "roles:\n  - {name: r, attributes: {all: [\"note*{device}\"]}}\n" + subjOK, "note is not listed inert on"},
 		{"an unknown substitution", "roles:\n  - {name: r, attributes: {all: [\"home*{home}\"]}}\n" + subjOK, "not a substitution"},
 		{"a scope match comparison", "scopes:\n  - {name: x, match: {os_version: {newer: \"1\"}}}\n" + subjOK, "not a comparison"},
 		{"a scope regex RE2 refuses", "scopes:\n  - {name: x, match: {site: {re: \"(?!x)\"}}}\n" + subjOK, "match.site.re"},
@@ -182,6 +194,14 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a test principal in no form", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {principal: alice, device: leaf-01, command: x, expect: deny}\n", "no recognized form"},
 		{"an upper-case test principal", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {principal: \"user:A@example.com\", device: leaf-01, command: x, expect: deny}\n", `write "user:a@example.com"`},
 		{"a test reason outside spec §5.7", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: deny, reason: no_grant_matched}\n", "not a reason"},
+		{"a test with no command and nothing asserted", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01}\n", "command is required, or a session test's level, max_privilege, priv_lvl, enable, reply or api"},
+		{"a session test with an expect", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, level: admin, expect: permit}\n", "a session test takes no expect"},
+		{"a test level that is not a level", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, level: root}\n", `level: "root" is not a privilege level`},
+		{"a test max_privilege that is not a level", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, max_privilege: root}\n", `max_privilege: "root" is not a privilege level`},
+		{"an acknowledgment with no reason", "acknowledge:\n  - {role: guard, rule: \"reload **\"}\n" + subjOK, "acknowledge[0]: reason is required"},
+		{"an acknowledgment with a blank reason", "acknowledge:\n  - {role: guard, rule: \"reload **\", reason: \"  \"}\n" + subjOK, "reason is required"},
+		{"an acknowledgment with no rule", "acknowledge:\n  - {role: guard, reason: why}\n" + subjOK, "acknowledge[0]: role and rule are required"},
+		{"a test api right that is not a right", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, api: [root]}\n", `api: "root" is not a right`},
 		{"a test error names its row", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: maybe}\n", `tests[0] (subject s, device leaf-01, "reload"): `},
 		{"a grant error names its row", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [x]}\n", `grants[0] (subject s, scope all_devices): role "x"`},
 		{"the same grant twice", scopeOK + roleOK + "  - {name: q, permit: [show **]}\n" + subjOK +
@@ -190,6 +210,8 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a role twice in one grant", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r, r]}\n", "listed twice"},
 		{"a null match value", "scopes:\n  - {name: x, match: {site: null}}\n" + subjOK, "a match value is a string"},
 		{"an unnamed role's max_session_age", "roles:\n  - {max_session_age: 8h}\n" + subjOK, "roles[0]: max_session_age"},
+		{"the reserved levels reordered", "privilege_levels: [{name: admin}, {name: operator}, {name: readonly}]\n" + subjOK, "keep their order: readonly, then operator, then admin"},
+		{"two reserved levels swapped", "privilege_levels: [{name: readonly}, {name: admin}, {name: x}, {name: operator}]\n" + subjOK, "keep their order"},
 		{"a level ordered before its parent", "privilege_levels: [{name: readonly}, {name: x, parent: operator}, {name: operator}, {name: admin}]\n" + subjOK, "after its parent"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -404,6 +426,16 @@ func TestAScopeErrorIsTheSameEveryLoad(t *testing.T) {
 		_, err := Parse([]byte(body), env())
 		if err == nil || !strings.Contains(err.Error(), "match.site.lt needs a version") {
 			t.Fatalf("load %d: %v", i, err)
+		}
+	}
+}
+
+// A placeholder goes only in an attribute listed inert: home-directory, spec
+// §6's motivating case, on every platform (review I4).
+func TestAPlaceholderGoesOnlyInAnInertAttribute(t *testing.T) {
+	for _, key := range []string{"all", "arista_eos", "juniper_junos"} {
+		if _, err := Parse([]byte("roles:\n  - {name: r, attributes: {"+key+": [\"home-directory*/home/{username}\"]}}\n"+subjOK), env()); err != nil {
+			t.Errorf("%s: %v", key, err)
 		}
 	}
 }

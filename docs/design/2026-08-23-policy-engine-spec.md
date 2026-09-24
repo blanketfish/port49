@@ -2032,8 +2032,9 @@ transitively up the chain. A level with `parent:` MUST be listed after its paren
 a level that renders lower than one it passed over, so doing so is a policy load error.
 
 This also turns an existing wart into declared behavior. NX-OS is role-native with two
-built-in roles, so `readonly` and `operator` render identically there — with `parent:` that
-is visible and intentional rather than a surprise. Usually it is exactly right:
+built-in roles, so two of its levels render identically there — `operator` as `admin`, since
+the owner's ruling of 2026-09-24 (decision 23) — and with `parent:` that is visible and
+intentional rather than a surprise. Usually it is exactly right:
 `read_only_limited` differs from `readonly` in *which commands port49 permits*, not in what
 the device needs to be told. Platforms may still override where the distinction is real.
 On a session-only platform that distinction has to reach the device anyway, because nothing
@@ -2045,7 +2046,11 @@ inventory, is a **policy load error**.
 
 **Reordering the list is a breaking change.** Inserting a level mid-list changes every
 max-join that crosses it, and the effective-permission diff MUST report that as a privilege
-change rather than a cosmetic one.
+change rather than a cosmetic one: a subject whose level rises under the old order or the new
+one is a raise (§12). **The reserved levels keep their relative order** — `readonly` before
+`operator` before `admin` — and a `privilege_levels` that reorders them is refused at load
+(owner's ruling 2026-09-24): nothing needs it, and it would make "higher" mean two things.
+Custom levels go anywhere their `parent:` allows.
 
 The operator writes `privilege: readonly` on a role. Where multiple roles are granted, the
 effective level is the **max** over the enum. A role with no `privilege` contributes
@@ -2142,6 +2147,21 @@ inventory name and `{privilege}` the abstract level the roles compose to (`admin
 An attribute is at most 255 bytes as written, checked at load, and again once filled in, at
 mint, where the broker holds the same values the daemon will substitute.
 
+**A placeholder goes only in an attribute listed as inert** (owner's rulings 2026-09-24,
+reviews I3 and I4). Each platform's adapter lists the attribute names that carry privilege on
+it — `priv-lvl` everywhere; `roles` on `arista_eos` and `shell:roles`, and `cisco-av-pair` which
+can carry it, on `cisco_nxos` (L16); `local-user-name` and `user-permissions` on
+`juniper_junos` (L18, decision 22), with the Junos command and configuration regexes
+`allow-commands`, `deny-commands`, `allow-configuration`, `deny-configuration` and their
+`-regexps` forms (vendor-documented, unmeasured, L18) — and the names it holds to carry none.
+The inert list is seeded with this section's own motivating case, `home-directory`, on every
+shipped adapter; it is unmeasured on any lab image. A placeholder is allowed only in an attribute
+listed inert on its platform key, or under `all` on every platform in the inventory; anywhere
+else — a privilege-bearing attribute or one no adapter lists — it is refused at load. A
+substitution refuses only `=`, `*` and control characters, so `priv-lvl={username}` would hide
+the level from every review tool, and `allow-commands={principal}` would let a principal's
+text widen a session-only device's own allow-list.
+
 ### Validation without semantics
 
 port49 cannot check what an attribute means. It MUST check everything else:
@@ -2160,9 +2180,34 @@ Defaulting to optional means adding a custom attribute cannot take down a fleet;
 one mandatory is then a deliberate, reviewable act.
 
 **Not every level is natively representable.** NX-OS is role-native with two built-in roles,
-so `readonly` and `operator` render identically and the distinction is carried entirely by
-command authorization. That is acceptable, but it MUST be visible in the platform file
+so two levels render identically — `operator` as `admin` (decision 23) — and the distinction
+is carried entirely by command authorization. That is acceptable, but it MUST be visible in the platform file
 rather than silently surprising.
+
+**On `arista_eos` and `cisco_nxos`, `operator` gets the device privilege `admin` gets**
+(owner's ruling 2026-09-24, decision 23). Neither device can draw the operator line itself
+while command authorization points at port49: vEOS at level 15 ran `clear counters`, `clear
+ip bgp *` and `configure` as `network-operator`, and at level 1 its parser refused even
+`clear counters`; on the N9Kv every role, `network-operator` included, ran all three and
+changed configuration (`tests/lab/results/ceiling-arista_eos.md`, `ceiling-cisco_nxos.md`).
+So `operator` renders as `priv-lvl=15` on EOS, as `admin` does, and on NX-OS, which renders
+no level today, it carries admin's ceiling number, 15. **The difference between an operator
+and an admin there is entirely port49's command rules.** An operator reading `show privilege`
+sees 15; that is expected, and the rules are the fence. Two things follow for whoever writes
+the device configuration:
+
+- The device's command method list MUST NOT fall back to `none` or `if-authenticated`. Where
+  port49 cannot answer, an operator session at 15 then runs everything; `local` is the only
+  safe fallback, and there the device's local role is the policy (§15, L4).
+- `readonly` still renders `priv-lvl=1` on EOS, where the parser enforces it (level 1 refused
+  all three), so a readonly session is fenced by the device and by port49 both.
+- `max_privilege: operator` does not limit device privilege there: it numbers 15, so `enable`
+  can reach 15 under it. It still caps the level (§7), and `policy test` reports it as
+  `ceiling_indistinct`.
+
+IOS-XE is not in this rule: its level 7, given commands with `privilege exec level 7 ...`,
+is exactly the operator rung, so the device can enforce it (`ceiling-cisco_iosxe.md`). Its
+rendering is plan 5's adapter work.
 
 **Platforms that are not `priv-lvl`-native** (Junos maps to `local-user-name`) MUST declare
 a mapping for every level. A missing mapping is a **policy load error in CI**, not a broken
@@ -2259,6 +2304,15 @@ the joint check and quarantines the device on that platform (§10), naming the r
 and the attribute; and the daemon refuses a session reply above the context's ceiling
 (`blob_unavailable`) rather than sending it and holding the session lower.
 
+**The ceiling is a cap on the level, not only on its number.** A composition whose roles land
+above its grants' `max_privilege` in `privilege_levels` fails the joint check on every platform,
+however the platform numbers the two: a role at `admin` capped at `operator` is quarantined on
+`arista_eos` and `cisco_nxos`, where both are 15 (decision 23), exactly as on IOS-XE. Where a
+ceiling numbers the same as a higher level on a platform in inventory, `port49 policy test`
+reports `ceiling_indistinct`: `max_privilege: operator` does not limit device privilege there,
+`enable` can reach 15 under it, and port49's command rules are the only fence (owner's ruling
+2026-09-24).
+
 If the role's `privilege` already reaches what the subject needs, leave `max_privilege` and
 `enable` unset — the session lands there and nothing needs escalating. Set `max_privilege`
 only when a session should start low and be raised on demand, and then `enable` says how.
@@ -2324,7 +2378,7 @@ platforms:
     supports: [session, commands, config_commands]
     privilege:
       readonly: ["priv-lvl=1",  "shell:roles*network-operator"]
-      operator: ["priv-lvl=7"]
+      operator: ["priv-lvl=15"]      # admin's level; port49's rules are the fence (§6)
       admin:    ["priv-lvl=15", "shell:roles*network-admin"]
     entity_classes:
       management: ['^Management[0-9]+$']
@@ -2343,6 +2397,14 @@ port49 for authorization as `show clock` alone (`tests/lab/results/L2-arista_eos
 `L2-cisco_nxos.md`, `L2-cisco_iosxe.md`, "Truncation length"). The device applied the modifier
 itself, so on those images a pipe rule protects nothing and `explain` says so. Whether any
 modifier ever reaches port49 on any platform is unmeasured.
+
+The example's `operator` said `priv-lvl=7` until 2026-09-24. No lab run measured a vEOS session
+at 7, and at 15 the device fences nothing port49 permits (`tests/lab/results/ceiling-arista_eos.md`),
+so the owner ruled `operator` onto `admin`'s level on `arista_eos` and `cisco_nxos` (§6, decision
+23). **Operator note:** on those two platforms an operator and an admin get the same device
+privilege, and the whole difference is port49's per-command rules. A device command method list
+that falls back to `none` or `if-authenticated` therefore runs an operator's every command when
+port49 cannot answer; end it in `local` (§15, L4).
 
 Most devices need far less. A time server or a BMC that does authentication plus one
 attribute is complete in four lines:
@@ -2872,7 +2934,7 @@ bundle v2291
 **A sync can make a valid policy invalid, and the bundle builder quarantines rather than
 refuses.** Several load checks are joint over policy and inventory — a privilege level with no
 mapping on a platform present in inventory (§6), a session reply whose `priv-lvl` exceeds
-the grants' `max_privilege` there (§7), `enable: auto` reaching a platform whose enable
+the grants' `max_privilege` there, or roles landing above the ceiling's level (§7), `enable: auto` reaching a platform whose enable
 exchange carries no principal (§5.6). A device racked tomorrow with a new platform can
 fail them against a policy that was valid today. Refusing the whole bundle would block every
 inventory change fleet-wide until someone edits policy, including the leaf racked in another
@@ -3456,6 +3518,7 @@ tests:
      expect: deny}        # only the CVE deny matches
   - {subject: security_ir,  device: srx-fw-04, command: "show chassis cluster status",
      expect: permit}      # the assess permit dominates the CVE deny at every position
+  - {subject: svc_oxidized, device: leaf-01, level: admin}  # a session test
 ```
 
 Three things this example is chosen to show.
@@ -3489,7 +3552,27 @@ Leaf regex is the one construct that degrades this: a regex position is not enum
 the diff reports *"argument 3 is regex-constrained and the constraint changed"* rather than
 listing commands. This is contained, and is a reason to prefer literals and `*`.
 
-**Policy tests** run in CI against a file-backed inventory, as in §11.
+**Policy tests** run in CI against a file-backed inventory, as in §11. A test names a
+`subject` (or a `principal`) and a `device`, and asserts one or both of:
+
+- **a command:** `command:` with `expect: permit` or `deny`, and optionally the `reason:`;
+- **the session:** `level:`, the level the subject's roles compose to on that device;
+  `max_privilege:`, the ceiling its grants compose to there (`none` for no ceiling);
+  `priv_lvl:`, the device privilege the session lands at — the `priv-lvl` the session reply
+  sends after §6 layering, or, where it sends none, the number the platform gives the level
+  (`none` where neither says); `enable:`, the subject's escalation mechanism (`none`,
+  `auto` or `token`); and `reply:`, the exact session reply as a list, in order, with the
+  placeholders empty (`[]` for none); and `api:`, the subject's broker API rights, which a test
+  may assert alone, on any device, since they do not depend on one. A test with no `command:` is a session test and takes no `expect:`; it
+  passes only where the subject would be minted a token for the device, with every value it
+  names.
+
+A session test is what acknowledges a privilege raise to the gate below.
+
+**A policy with no tests passes `port49 policy test`, and says so:** it prints `report:
+no_tests: ...` (owner's ruling 2026-09-24). Nothing in such a file acknowledges a shadowed deny
+or an expansion, so the gates below fail on the first one; the line is there so a reviewer
+sees an empty test list before that happens rather than after.
 
 **Intersection checks.** Because the effective permission set is the intersection of what
 the device offers and what port49 permits (§6), CI MUST report where the two disagree. Neither of these is visible in any existing TACACS+
@@ -3531,9 +3614,99 @@ and each device the new policy quarantines. It exits non-zero on a command a den
 the new policy permits, unless a policy test in the new policy exercises that permit over that
 deny, on a newly quarantined device, and on a subject whose mint the new policy's broker
 refuses (`attribute_too_long`, `attribute_unsafe`), since the diff, `policy test` and `explain`
-run the broker's mint checks and answer as it does. Regex and class terms are matched only
-against the words the rules name, so a rule that carries one and changed, or a permit that carries one and
-meets a deny that changed, is reported as regex-constrained rather than enumerated (§4).
+run the broker's mint checks and answer as it does.
+
+**A privilege raise fails the gate too** (owner's rulings 2026-09-24). The gate compares what
+the device gets and what port49 enforces, not level names, for each subject on each device at
+each instant. Any of these is a raise:
+
+- **the device privilege rose** — the `priv-lvl` the session reply sends after role and grant
+  `attributes:` layering, or where it sends none the number the platform gives the level, so a
+  role or grant attribute `priv-lvl=15`, or a custom level's `parent:` moved up, is a raise;
+- **the ceiling rose or went away** — by its number on the platform or by its place in
+  `privilege_levels`;
+- **the level rose** — later in `privilege_levels` under the old order *or* the new one, so a
+  reordering that lifts a level is a raise even when the name did not change; a level one
+  version does not declare counts as below every level it does;
+- **`enable` was switched on** — from unset or `none` to `auto` or `token`, which lets the
+  session escalate to its ceiling, or with none to anything;
+- **the session reply gained, changed or lost a privilege-bearing attribute** — the whole
+  rendered reply is compared (placeholders empty), so any change to it is at least a reported
+  line, and one that adds, changes or removes an attribute other than `priv-lvl` (which the first
+  item judges) is a raise unless that attribute is one the platform's adapter lists as inert
+  (§6). `local-user-name` on Junos, `shell:roles` on NX-OS and `roles` on EOS each change what the
+  device lets the session do (L16, L18), and on a session-only platform the reply is the only
+  fence, so removing one widens access too: without `deny-commands` a Junos session loses its
+  only refusal, and without `local-user-name` it falls back to the device's template user (owner's
+  ruling 2026-09-24, review C4). The gate cannot read the direction of such a change, so it fails
+  closed.
+
+Each fails unless a passing session test in the new policy, at that instant, on a device of the
+group reported, asserts the new value of every dimension that rose: `priv_lvl:` for the device
+privilege, `max_privilege:` for the ceiling, `level:` for the level, `enable:` for the mechanism,
+`reply:` — the exact attribute list, in order, placeholders empty — for the session reply.
+The devices a raise is reported on hold the same blobs, levels, numbers, `enable` and reply, so a
+test on any one of them is the assertion for all. A lowering is reported and does not fail.
+
+**The gate also compares principals, not only subjects** (owner's ruling 2026-09-24, review C3):
+a subject is a name, and who holds its access is its `identity:` list and what the device sees
+is its `username:`. For every principal either version lists, the diff reports one that now
+resolves to a subject it did not (added to a subject, or moved from another), and a subject whose
+`username:` changed. Each fails the gate unless a passing session test naming that `principal:`
+in the new policy asserts the access it resolves to; for a `username:` change, a session test
+naming one of the subject's principals. A principal removed from every subject is reported and
+does not fail. A subject's `group:` changing is reported; group subjects mint for no one until the
+directory arrives (plan 7), and the gate on them is that plan's.
+
+**A broker API right gained fails the gate** (owner's ruling 2026-09-24, review M6). A subject's
+`api:` rights (§2) let it act on other people's sessions, so the diff compares them per subject,
+and per principal where a principal moves to a subject with rights its old one lacked. A right
+gained fails unless a passing test in the new policy asserts the subject's whole right list with
+`api:` — naming the subject or one of its principals for a subject's gain, naming the principal
+for a principal's. A right lost is reported and does not fail.
+
+**A regex-constrained change fails the gate too** (owner's ruling 2026-09-24). Regex and class
+terms are matched only against the words the rules name, so a rule that carries one and changed,
+or a permit that carries one and meets a deny that changed, is reported as regex-constrained
+rather than enumerated (§4) — and because the diff cannot see which commands moved, the author
+has to show it. Each of these widenings fails unless it is acknowledged, on a device of the group
+it is reported on, at the instant it is reported:
+
+- a permit carrying a regex or class term that the new policy added — by a passing test that
+  expects `permit` on a command that permit decides;
+- a deny carrying one that the new policy removed or rewrote — by a passing test that expects
+  `permit` on a command that deny refused in the old policy and the new one permits;
+- a permit carrying one that meets a deny the new policy removed or rewrote — by a passing test
+  that expects `permit` on a command that deny refused in the old policy and that permit decides
+  in the new one, keyed to that (permit, deny) pair.
+
+**A test expecting `deny` never acknowledges a widening:** it cannot tell a rewrite that narrowed
+the deny from one that widened it (owner's ruling 2026-09-24, on review I1: `/^(wri|rel)/ **`
+rewritten as `/^wri/ **` frees `reload`, and a test that `write erase` is still refused says
+nothing about it). A deny rewritten wider has no command to flip, so it is acknowledged the only
+other way, **by the author in writing**: a top-level entry naming the exact removed or rewritten
+rule, with its role and a reason,
+
+```yaml
+acknowledge:
+  - {role: guard, rule: "/^(wri|rel)/ **", reason: "rewritten wider as /^(wri|rel|rep)/"}
+```
+
+which acknowledges that rule's removal and every permit meeting it. The entry is keyed to the
+removed rule's text, so it matches nothing once that rule is gone from the old policy too, and
+cannot quietly cover a later change. **A stale entry acknowledges nothing and is reported,**
+`report: acknowledge_stale`: by `policy test` where the rule it names is still in the policy (so
+it removed nothing), and by `policy diff` where no widening in the diff is the one it names. `port49 policy test` prints every entry and `policy diff`
+prints the entry beside the change it acknowledges, so review sees the reason. An entry with no
+reason is refused at load.
+
+The narrowings — such a permit removed, such a deny added, or a permit meeting a deny the change
+added — are reported and do not fail.
+
+**A newly refused mint fails the gate, and no test acknowledges it.** A subject the new policy's
+broker refuses to mint for (`attribute_too_long`, `attribute_unsafe`) is locked out of every
+device the refusal covers; a test cannot make that intended, so the change must fix the attribute
+(owner's ruling 2026-09-24, confirming plan 4's behaviour).
 
 **`port49 platform upgrade`** reports what a platform-set bump changes, so a binary upgrade
 is never an unreviewed policy change (§8).
@@ -3909,6 +4082,15 @@ where a deployment provisions classes. A permit narrower than the bits with a de
 it is refused at load; the `-regexps` family's documented deny-precedence may lift that once
 measured. The choice is made from the composed grant, never per role. (§8, §15)
 
+**23. Where the device cannot draw the operator line, `operator` renders as `admin`'s level.**
+*Owner's ruling 2026-09-24.* On `arista_eos` and `cisco_nxos`, with command authorization
+pointed at port49, no role or level between readonly and admin narrows what port49 permits
+(`tests/lab/results/ceiling-arista_eos.md`, `ceiling-cisco_nxos.md`), so rendering `operator`
+lower would only make it readonly on EOS, and refusing it quarantined every EOS device a
+policy landed there. `operator` gets level 15 on both, port49's per-command rules are the
+fence, and the device's method list must not fall back to `none` or `if-authenticated`.
+IOS-XE, whose level 7 can carry the rung, is left to plan 5's adapters. (§6, §8)
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -3978,7 +4160,41 @@ Beyond those already listed in the design document's §14:
   attributes.
 - **Unknown attributes default to optional.**
 - **Privilege composition**: `max` across granted roles over the declared ordering;
-  `parent:` resolves transitively; an unresolvable level fails at load.
+  `parent:` resolves transitively; an unresolvable level fails at load; a `privilege_levels`
+  that reorders the reserved levels fails at load.
+- **The ceiling caps the level**: an `admin` role capped at `operator` is quarantined on every
+  platform, `arista_eos` and `cisco_nxos` included, where both number 15; there
+  `max_privilege: operator` is reported `ceiling_indistinct`.
+- **Session tests**: `level:`, `max_privilege:`, `priv_lvl:` and `enable:` each pass only on the
+  value the mint would give, and a session test fails where no token would be minted.
+- **The privilege gate sees what the device gets**: each of a role or grant attribute
+  `priv-lvl=15`, a custom level's `parent:` moved up, a level raised under either order, a
+  ceiling raised or removed, and `enable` switched on fails `port49 policy diff` until a session
+  test asserts the raised value, on a device of that group, at that instant; a lowering passes.
+- **The regex gate cannot be satisfied by a deny test**: `/^(wri|rel)/ **` rewritten as
+  `/^wri/ **` fails `port49 policy diff` with a passing test that `write erase` is denied, and
+  passes with a test that `reload` is now permitted on each device group or an `acknowledge:`
+  entry naming the old rule with a reason; an entry with no reason fails at load.
+- **Acknowledgments hold at their instant**: a test that passes only after a grant expires
+  acknowledges no expansion or raise reported before it.
+- **The gate sees the whole reply**: a grant attribute `local-user-name=super-user` on Junos,
+  `shell:roles=network-admin` on NX-OS or `roles=network-admin` on EOS fails `port49 policy
+  diff` on that platform's group until a `reply:` session test asserts the new reply, and so
+  does removing one, `deny-commands` or `local-user-name` on Junos included.
+- **Placeholders only in inert attributes**: `priv-lvl={username}`,
+  `allow-commands={principal}`, `allow-configuration={username}` and a placeholder in an
+  attribute no adapter lists (`note*{device}`) each fail at load; `home-directory*/home/{username}`
+  loads under `all` and under each platform.
+- **The gate sees broker rights**: `api: [explain_others, revoke_others, replay]` added to a
+  subject fails `port49 policy diff` until a test asserts the whole list with `api:`; a
+  principal moved to a subject with more rights needs that assertion in its own test; a right
+  lost passes.
+- **The gate sees principals**: an identity moved to another person, identities swapped between
+  subjects, and a `username:` change each fail `port49 policy diff` until a session test naming
+  the principal passes; a subject test does not acknowledge them, and a principal removed passes.
+- **Stale acknowledgments**: an `acknowledge:` entry naming a rule the policy still denies is
+  reported `acknowledge_stale` and acknowledges nothing; `policy diff` reports every entry no
+  widening used.
 - **Enable**: all three mechanisms, including the `$enab15$` username path resolving through
   the `(nas, rem_addr)` secondary index, and its refusal when that index is ambiguous.
 - **Receipt binds the credential**: the hash is in the key, so a byte-identical
@@ -4636,8 +4852,8 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
     (`privilege exec level 7 clear counters`) gives level 7 exactly the operator rung; vEOS
     refuses all three at level 1 and runs all three as `network-operator` at 15; on the N9Kv
     every role runs all three. So on EOS and NX-OS the operator rung is port49's per-command
-    policy alone. `operator` on `arista_eos` stays unmapped, quarantining the devices it
-    reaches, until the owner decides its rendering.
+    policy alone. *Owner's ruling 2026-09-24:* `operator` renders as level 15 on both, with
+    port49's rules as the only fence (§6, decision 23); it no longer quarantines an EOS device.
 - **L5** — EOS 2026-09-17 and Junos 2026-09-20: no WATCHDOG at all on any of the three, over a
   2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`,
   `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, and the N9Kv and Catalyst 8000V both join them with

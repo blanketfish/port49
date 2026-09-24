@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/decision"
 )
 
 // mintRefused is a policy whose session reply, filled in with the subject's
@@ -14,7 +15,7 @@ import (
 // attribute_too_long, so nothing is permitted anywhere.
 var mintRefused = `
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {all: ["home*/` + strings.Repeat("h", 230) + `/{username}"]}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {all: ["home-directory*/` + strings.Repeat("h", 220) + `/{username}"]}}]
 subjects: [{name: s, identity: "user:s@example.com", username: a-username-long-enough-to-overflow, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [ro]}]
 `
@@ -129,5 +130,110 @@ tests:
 	if len(found) != 1 || !strings.Contains(found[0], `role "joined": permit "interface GigabitEthernet1 **" on cisco_iosxe`) ||
 		!strings.Contains(found[0], "never matches on cisco_iosxe") || !strings.Contains(found[0], "write `GigabitEthernet 1`") {
 		t.Fatalf("lint: %q", found)
+	}
+}
+
+// A session test asserts the level a subject's roles compose to on a device
+// and the ceiling its grants compose to there (spec §12, "Policy tests"), and
+// passes only where the subject would be minted a token for it. A command
+// test may assert them too.
+func TestASessionTestAssertsTheLevelAndCeiling(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}, {name: nx, match: {platform: cisco_nxos}}]
+roles:
+  - {name: ro, privilege: readonly, permit: [show **]}
+  - {name: adm, privilege: admin, permit: ["**"]}
+subjects:
+  - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}
+grants:
+  - {subject: s, scope: all_devices, roles: [ro]}
+  - {subject: s, scope: nx, roles: [adm], max_privilege: admin}
+tests:
+  - {subject: s, device: leaf-01, level: readonly, max_privilege: none}
+  - {subject: s, device: nx-01, level: admin, max_privilege: admin}
+  - {subject: s, device: nx-01, command: "show version", expect: permit, level: admin}
+  - {subject: s, device: leaf-01, level: admin}
+  - {subject: s, device: nx-01, max_privilege: none}
+  - {subject: s, device: leaf-01, command: "show version", expect: permit, level: admin}
+  - {principal: "user:nobody@example.com", device: leaf-01, level: readonly}
+`)
+	want := []bool{true, true, true, false, false, false, false}
+	results := p.RunTests(noon)
+	if len(results) != len(want) {
+		t.Fatalf("%d results", len(results))
+	}
+	for i, r := range results {
+		if r.Pass != want[i] {
+			t.Errorf("tests[%d] %+v: pass %v, want %v (level %q, max_privilege %q, err %v)", i, r.Test, r.Pass, want[i],
+				r.Level, r.Ceiling, r.Err)
+		}
+	}
+	if r := results[1]; r.Level != "admin" || r.Ceiling != "admin" || r.Permit {
+		t.Fatalf("a session test reports what it resolved: %+v", r)
+	}
+	quarantined := mustParse(t, unmappedLevel+`
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: odd, privilege: unmapped, permit: [show **]}]
+subjects: [{name: q, identity: "user:q@example.com", username: q, token_ttl: 60s}]
+grants: [{subject: q, scope: all_devices, roles: [odd]}]
+tests: [{subject: q, device: leaf-01, level: unmapped}]
+`).RunTests(noon)
+	if r := quarantined[0]; r.Pass || r.Reason != decision.DeviceQuarantined {
+		t.Fatalf("a session test on a quarantined device: %+v", r)
+	}
+}
+
+// A session test asserts the device privilege the session lands at — the
+// priv-lvl the reply sends after layering, else the level's number — and the
+// subject's enable (review C1; spec §12, "Policy tests").
+func TestASessionTestAssertsDevicePrivilegeAndEnable(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: ro, privilege: readonly, permit: [show **]}
+  - {name: lift, attributes: {arista_eos: ["priv-lvl=15"]}}
+subjects:
+  - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s, enable: token}
+grants:
+  - {subject: s, scope: all_devices, roles: [ro, lift], max_privilege: admin}
+tests:
+  - {subject: s, device: leaf-01, priv_lvl: 15, enable: token}
+  - {subject: s, device: nx-01, priv_lvl: 1}
+  - {subject: s, device: srx-lab-01, priv_lvl: 1}
+  - {subject: s, device: leaf-01, priv_lvl: 1}
+  - {subject: s, device: leaf-01, enable: none}
+`)
+	want := []bool{true, true, true, false, false}
+	for i, r := range p.RunTests(noon) {
+		if r.Pass != want[i] {
+			t.Errorf("tests[%d] %+v: pass %v, want %v (priv_lvl %q, enable %q)", i, r.Test, r.Pass, want[i], r.PrivLvl, r.Enable)
+		}
+	}
+	for _, bad := range []string{"priv_lvl: 16", "priv_lvl: high", "enable: maybe"} {
+		if _, err := Parse([]byte(scopeOK+roleOK+subjOK+grantOK+"tests:\n  - {subject: s, device: leaf-01, "+bad+"}\n"), env()); err == nil {
+			t.Errorf("%s loads", bad)
+		}
+	}
+}
+
+// A session test's reply: is the exact session reply, in order, with the
+// placeholders empty (spec §12).
+func TestASessionTestAssertsTheReply(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {all: ["home-directory*/h/{username}"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]
+tests:
+  - {subject: s, device: leaf-01, reply: ["priv-lvl=1", "home-directory*/h/"]}
+  - {subject: s, device: nx-01, reply: ["home-directory*/h/"]}
+  - {subject: s, device: leaf-01, reply: ["home-directory*/h/", "priv-lvl=1"]}
+  - {subject: s, device: nx-01, reply: []}
+`)
+	want := []bool{true, true, false, false}
+	for i, r := range p.RunTests(noon) {
+		if r.Pass != want[i] {
+			t.Errorf("tests[%d]: pass %v, want %v (reply %q)", i, r.Pass, want[i], r.Reply)
+		}
 	}
 }

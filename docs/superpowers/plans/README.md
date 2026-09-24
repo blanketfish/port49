@@ -13,7 +13,11 @@ Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
 fifteen tasks, reviewed per task and whole-branch); **3 merged 2026-09-23** (PR #8, below);
 **lab 2026-09-24 merged** (PR #9); **4 merged 2026-09-24** (PR #10;
 `2026-09-23-04-policy-engine.md`, twenty-three tasks plus a lab fold, reviewed per task and
-whole-branch; its "Questions for Ryan" section has five open calls); 5–13 not yet. **Plan 4b
+whole-branch; the five calls in PR #10's "Questions for Ryan" were decided 2026-09-24 and
+built on `feature/gate-rulings`: `operator` renders as level 15 on EOS and NX-OS, a level or
+ceiling raise and a regex-constrained widening fail `port49 policy diff`, a refused mint always
+does, a policy with no tests is reported `no_tests`, and a `lab:` block announces itself at
+start); 5–13 not yet. **Plan 4b
 (live policy) is the next plan to write.**
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -260,9 +264,9 @@ privilege-expansion gate (spec §12), and replay re-derives a session's attribut
   `tests/lab/results/L2-*.md`); `expands_abbreviations` is true on EOS, NX-OS and IOS-XE, set
   from L21 (closed 2026-09-24, interactive SSH; other transports unmeasured), and false on Junos
   and the generic adapter; entity classes are names from spec §8 and the lab configs, unverified against a device;
-  only `arista_eos` renders levels, and `operator` renders nowhere (plan 4, Question 1), so a policy
-  landing an EOS session at `operator` quarantines those devices until plan 5 renders it (the
-  role-ceiling results below).
+  only `arista_eos` renders levels. `operator` renders as `priv-lvl=15` there and carries ceiling
+  number 15 on `cisco_nxos` (decided 2026-09-24, spec §6 and decision 23; the role-ceiling results
+  below); IOS-XE's `operator` is still unrendered and is this plan's.
 - **The owner's level definitions (2026-09-24), binding on the adapters:** `readonly` is show and
   info only; `operator` is non-disruptive state changes and no configuration (`clear counters`
   yes, `clear bgp *` no); `admin` is everything. The device role is the ceiling, and port49's
@@ -278,8 +282,10 @@ privilege-expansion gate (spec §12), and replay re-derives a session's attribut
   `privilege exec level 7 clear counters` is the `operator` rung, so the device can enforce it; on
   EOS level 1 refuses all three and `network-operator` at 15 runs all three (L16 found the role binds only
   under local authorization); on NX-OS every role runs all three. **On EOS and NX-OS the
-  `operator` rung is port49's per-command policy alone.** Open for the owner: how EOS and NX-OS
-  render `operator` (for example level 15 with port49's rules drawing the line).
+  `operator` rung is port49's per-command policy alone.** *Decided 2026-09-24:* `operator` renders
+  as level 15 on both, with port49's rules the only fence, and a device method list must not fall
+  back to `none` or `if-authenticated` (spec §6, §8, decision 23). IOS-XE level 7 with `privilege
+  exec level 7 ...` in the reference config is this plan's adapter work.
 - **L21**, added by plan 4, closed 2026-09-24 (`tests/lab/results/L21-*.md`): all three
   per-command platforms send resolved words over SSH; other transports are unmeasured.
 - The dead-rule and fallback-exposure intersection checks of spec §12 are this plan's; plan 4
@@ -292,11 +298,23 @@ privilege-expansion gate (spec §12), and replay re-derives a session's attribut
   policy without config's resolved `EnableUsernames`, so CI cannot see a `platforms:`
   enable-username override the daemon applies. Harmless while `config.Load` refuses such an
   override; plan 5's to close when its adapters bring the overrides (plan 4 pre-flight, N5).
+- **When adapters become editable (review M8, 2026-09-24):** the policy diff reads which reply
+  attributes bear privilege (`Dialect.PrivilegeAttributes`, `InertAttributes`) from the new
+  version's dialect today, which is sound only while the table is built in. Once an operator can
+  edit an adapter, judge `BearsPrivilege` under the stricter of the before and after dialects, so
+  listing an attribute inert in the same change cannot hide its own edit, and gate any edit to an
+  adapter's privilege-bearing or inert lists as a privilege change in its own right.
 - Operator-supplied entity-class patterns, when adapters bring them, must be checked for `(?-i)`
   where a deny uses them: plan 4 refuses a deny regex that turns case-insensitivity off, because
   a case-sensitive deny can be walked past by case (spec §4), and permits keep the opt-in.
-- **Open for the owner:** should a level or ceiling raise (`readonly` to `admin`) fail `port49
-  policy diff`'s gate? Spec §12 only reports it, and plan 4 built it that way.
+- **Decided 2026-09-24** (spec §12): a privilege raise — the device privilege the session reply
+  gives, the ceiling, the level under either order, or `enable` switched on — fails `port49 policy
+  diff` unless a session test (`level:`, `max_privilege:`, `priv_lvl:`, `enable:`) in the new
+  policy asserts it; a regex-constrained widening fails unless a permit test shows it or an
+  `acknowledge:` entry names the removed deny with a reason; a newly refused mint always fails.
+  The reserved levels keep their order, and a ceiling caps the level on every platform. A policy
+  with no tests passes `policy test` with `report: no_tests`, and `port49d` prints a `LAB MODE`
+  line at start when its config has a `lab:` block (design §13).
 
 **Hands to plan 6:** quarantine is applied by `port49d` when it loads the policy
 (`policy.checkDevices`); plan 6 publishes it in the bundle, `admission: quarantined`, from the
@@ -453,8 +471,8 @@ intersection checks, which need the level and role data this plan's adapters bri
 the shadowed-deny report, the effective-permission diff and the privilege-expansion gate, because
 it is the plan that replaced deny-overrides with dominance. Also: opening the pull request `port49
 grants remove` prepares (plan 4 delivers the file edit). The rest of what plan 4 hands this
-plan — the borrowed dialect table, the role-ceiling results and the open `operator` rendering on
-EOS and NX-OS, the owner's level definitions, the `(?-i)` check on entity classes — is under plan
+plan — the borrowed dialect table, the role-ceiling results and the `operator` rendering on EOS
+and NX-OS decided 2026-09-24, the owner's level definitions, the `(?-i)` check on entity classes — is under plan
 4's "Hands to plan 5".
 
 **Possible later, not planned:** per-window contexts on the platforms that give a window its own

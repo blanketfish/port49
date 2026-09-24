@@ -63,10 +63,10 @@ grants:
 // expires, with the composition that is left: the report covers that one too,
 // or the shadow would go live unreported the day the grant lapses.
 func TestAShadowOnADeviceAnExpiryReturnsIsReported(t *testing.T) {
-	p, err := Parse([]byte(`
+	p, err := Parse([]byte(unmappedLevel+`
 scopes: [{name: all_devices, match: {}}]
 roles:
-  - {name: op, privilege: operator, permit: [show version]}
+  - {name: op, privilege: unmapped, permit: [show version]}
   - {name: ro, privilege: readonly, permit: [show chassis hardware]}
   - {name: cve, deny: [show chassis **]}
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
@@ -78,7 +78,7 @@ grants:
 		t.Fatal(err)
 	}
 	if _, q := p.Quarantined("campus-sw-7", noon); !q {
-		t.Fatal("operator has no rendering on arista_eos: the device should be quarantined now")
+		t.Fatal("unmapped has no rendering on arista_eos: the device should be quarantined now")
 	}
 	got := p.ShadowedDenies(noon)
 	if len(got) != 1 || got[0].Subject != "s" || got[0].DenyRole != "cve" || got[0].PermitRole != "ro" ||

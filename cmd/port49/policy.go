@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -135,6 +136,11 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	for _, f := range p.Lint(now) {
 		fmt.Fprintf(stdout, "report: %s: %s\n", f.Kind, f.Message)
 	}
+	// An acknowledge: entry is the author's written word for a widening no
+	// test can show (spec §12); review reads each one.
+	for _, a := range p.Acknowledgments() {
+		fmt.Fprintf(stdout, "acknowledge: %s %q: %s\n", a.Role, a.Rule, a.Reason)
+	}
 	// The shadowed-deny report is what replaces the guarantee deny-overrides
 	// gave (spec §12): every deny a more specific permit beats, for whom, and
 	// by what, now and once any grant expires. One no policy test exercises
@@ -177,6 +183,17 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 			failed++
 		}
 		line := fmt.Sprintf("%s %s on %s: %q -> %s %s", status, who, r.Test.Device, r.Test.Command, got, r.Reason)
+		if r.Test.Session() {
+			line = fmt.Sprintf("%s %s on %s: session -> deny %s", status, who, r.Test.Device, r.Reason)
+			if r.Ceiling != "" {
+				line = fmt.Sprintf("%s %s on %s: session -> level %s, max_privilege %s, priv_lvl %s, enable %s", status,
+					who, r.Test.Device, orNone(r.Level), r.Ceiling, r.PrivLvl, r.Enable)
+			}
+		} else if (r.Test.Level != "" || r.Test.MaxPrivilege != "" || r.Test.PrivLvl != "" || r.Test.Enable != "") &&
+			r.Ceiling != "" {
+			line += fmt.Sprintf(" at level %s, max_privilege %s, priv_lvl %s, enable %s", orNone(r.Level), r.Ceiling,
+				r.PrivLvl, r.Enable)
+		}
 		if r.MintError != "" {
 			line = fmt.Sprintf("%s %s on %s: %q -> deny: the broker refuses the mint, %s", status, who,
 				r.Test.Device, r.Test.Command, r.MintError)
@@ -184,11 +201,34 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		if r.Err != nil {
 			line = fmt.Sprintf("%s %s on %s: %q -> error: %v", status, who, r.Test.Device, r.Test.Command, r.Err)
 		} else if !r.Pass {
-			want := r.Test.Expect
-			if r.Test.Reason != "" {
-				want += " " + r.Test.Reason
+			var want []string
+			if r.Test.Expect != "" {
+				want = append(want, r.Test.Expect)
 			}
-			line += ", want " + want
+			if r.Test.Reason != "" {
+				want = append(want, r.Test.Reason)
+			}
+			if r.Test.Level != "" {
+				want = append(want, "level "+r.Test.Level)
+			}
+			if r.Test.MaxPrivilege != "" {
+				want = append(want, "max_privilege "+r.Test.MaxPrivilege)
+			}
+			if r.Test.PrivLvl != "" {
+				want = append(want, "priv_lvl "+r.Test.PrivLvl)
+			}
+			if r.Test.Enable != "" {
+				want = append(want, "enable "+r.Test.Enable)
+			}
+			if r.Test.AssertsReply {
+				line += ", reply " + yamlList(r.Reply)
+				want = append(want, "reply "+yamlList(r.Test.Reply))
+			}
+			if r.Test.AssertsAPI {
+				line += ", api " + yamlList(r.API)
+				want = append(want, "api "+yamlList(r.Test.API))
+			}
+			line += ", want " + strings.Join(want, " ")
 		}
 		fmt.Fprintln(stdout, line)
 		for _, c := range r.Caveats {
@@ -209,8 +249,11 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 // rules distinguish, now and at every later grant expiry. It prints each
 // change and exits 1 on a command the old version refused (by a deny, at a
 // pipeline stage, or by quarantining the device) that the new version
-// permits and no policy test in it exercises, on a device the new version
-// quarantines for a new cause, on a subject whose mint the new version's
+// permits and no policy test in it exercises, on a level or ceiling raise no
+// session test in it asserts, on a regex-constrained widening no policy test
+// in it exercises, on a principal who gains a subject or a username change no
+// principal session test in it asserts, on a device the new version quarantines for a
+// new cause, on a subject whose mint the new version's
 // broker refuses where the old did not, and on a composition it could not
 // compare.
 func policyDiff(args []string, stdout, stderr io.Writer) int {
@@ -266,6 +309,54 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "RELEASES: %s (%s)%s: the old version quarantines it, so every command the new one "+
 			"permits there is an expansion\n", r.Device, r.Platform, from(r.At))
 	}
+	for _, a := range d.StaleAcknowledgments {
+		fmt.Fprintf(stdout, "report: acknowledge_stale: %s %q (%s): no widening in this diff is the one it names, so "+
+			"it acknowledges nothing; delete it (spec §12)\n", a.Role, a.Rule, a.Reason)
+	}
+	for _, p := range d.Principals {
+		switch {
+		case !p.Gated:
+			fmt.Fprintf(stdout, "principal: %s no longer resolves to a subject (was %s)\n", p.Principal, p.OldSubject)
+		case p.Acknowledged:
+			fmt.Fprintf(stdout, "principal (a session test asserts it): %s now resolves to subject %s (was %s)\n",
+				p.Principal, p.NewSubject, orNone(p.OldSubject))
+		default:
+			assert := "level: ..."
+			if len(p.APIGained) > 0 {
+				assert += ", api: " + yamlList(p.APIGained) + " (the subject's whole list)"
+			}
+			fmt.Fprintf(stdout, "PRINCIPAL: %s now resolves to subject %s (was %s): that person now holds %s's access; "+
+				"no session test names the principal: add {principal: %q, device: <a device %s reaches>, %s}\n",
+				p.Principal, p.NewSubject, orNone(p.OldSubject), p.NewSubject, p.Principal, p.NewSubject, assert)
+		}
+	}
+	for _, s := range d.Subjects {
+		if s.OldGroup != s.NewGroup {
+			fmt.Fprintf(stdout, "subject: %s's group %q -> %q; a group subject mints for no one until plan 7\n", s.Subject,
+				s.OldGroup, s.NewGroup)
+		}
+		if !slices.Equal(s.OldAPI, s.NewAPI) {
+			label, tail := "api", ""
+			switch {
+			case len(s.APIGained) > 0 && s.Acknowledged:
+				label = "api (a test asserts it)"
+			case len(s.APIGained) > 0:
+				label, tail = "API", fmt.Sprintf("; the new rights act on other people's sessions, and no test asserts "+
+					"them: add {subject: %s, device: <any device>, api: %s}", s.Subject, yamlList(s.NewAPI))
+			}
+			fmt.Fprintf(stdout, "%s: subject %s's broker rights %s -> %s%s\n", label, s.Subject, yamlList(s.OldAPI),
+				yamlList(s.NewAPI), tail)
+		}
+		if s.OldUsername == s.NewUsername {
+			continue
+		}
+		label, tail := "USERNAME", "; no session test names one of its principals: add one"
+		if s.Acknowledged {
+			label, tail = "username (a session test asserts it)", ""
+		}
+		fmt.Fprintf(stdout, "%s: subject %s's username %s -> %s: what every device sees and logs for it%s\n", label,
+			s.Subject, s.OldUsername, s.NewUsername, tail)
+	}
 	for _, a := range d.Access {
 		verb := "loses"
 		if a.Gained {
@@ -275,9 +366,38 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			from(a.At))
 	}
 	for _, l := range d.Levels {
-		fmt.Fprintf(stdout, "privilege: %s on %s%s: level %s -> %s, max_privilege %s -> %s\n", l.Subject,
-			strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel), orNone(l.OldCeiling),
-			orNone(l.NewCeiling))
+		label, tail := "privilege", ""
+		switch {
+		case l.Raise && l.Acknowledged:
+			label = "raises (a session test asserts it)"
+		case l.Raise:
+			// The test that acknowledges it, on the first device, asserting
+			// each value that rose.
+			hint := "{subject: " + l.Subject + ", device: " + l.Devices[0]
+			for _, field := range l.Raised {
+				if field == "reply" {
+					hint += ", reply: " + yamlList(l.NewReply)
+					continue
+				}
+				hint += ", " + field + ": " + orNone(l.NewValue(field))
+			}
+			label, tail = "RAISES", "; no session test asserts it: add "+hint+"}"
+			if slices.Contains(l.Raised, "max_privilege") {
+				// The ceiling is how far enable may take the session.
+				if l.NewEnable == "none" {
+					tail += " (enable is none, so nothing escalates to the ceiling today; setting enable later would)"
+				} else {
+					tail += " (enable: " + l.NewEnable + " can now escalate the session to the new ceiling)"
+				}
+			}
+		}
+		reply := ""
+		if !slices.Equal(l.OldReply, l.NewReply) {
+			reply = ", reply " + yamlList(l.OldReply) + " -> " + yamlList(l.NewReply)
+		}
+		fmt.Fprintf(stdout, "%s: %s on %s%s: level %s -> %s, max_privilege %s -> %s, priv_lvl %s -> %s, enable %s -> %s%s%s\n",
+			label, l.Subject, strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel),
+			orNone(l.OldCeiling), orNone(l.NewCeiling), l.OldPrivLvl, l.NewPrivLvl, l.OldEnable, l.NewEnable, reply, tail)
 	}
 	widen, narrow := 0, 0
 	for _, c := range d.Changes {
@@ -318,22 +438,45 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		if r.Added {
 			verb = "added"
 		}
+		label, tail := "regex-constrained", ""
+		switch {
+		case r.Gated && r.AcknowledgedBy != "":
+			label = "regex-constrained (acknowledged: " + r.AcknowledgedBy + ")"
+		case r.Gated && r.Acknowledged:
+			label = "regex-constrained (a policy test exercises it)"
+		case r.Gated:
+			label, tail = "REGEX-CONSTRAINED", ", and no policy test exercises it"
+		}
 		if r.Deny.Rule != "" {
-			fmt.Fprintf(stdout, "regex-constrained: %s: permit %q (%s) meets deny %q (%s), which the change %s; "+
-				"the commands they share are not enumerated (spec §12)\n", on, r.Rule.Rule, r.Rule.Role, r.Deny.Rule,
-				r.Deny.Role, verb)
+			fmt.Fprintf(stdout, "%s: %s: permit %q (%s) meets deny %q (%s), which the change %s; "+
+				"the commands they share are not enumerated (spec §12)%s\n", label, on, r.Rule.Rule, r.Rule.Role,
+				r.Deny.Rule, r.Deny.Role, verb, tail)
 			continue
 		}
-		fmt.Fprintf(stdout, "regex-constrained: %s: %s %q (%s) %s; the commands it matches are not "+
-			"enumerated (spec §12)\n", on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb)
+		fmt.Fprintf(stdout, "%s: %s: %s %q (%s) %s; the commands it matches are not "+
+			"enumerated (spec §12)%s\n", label, on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb, tail)
 	}
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
-		"%d devices newly quarantined, %d released; %d mints newly refused; %d unresolved\n", len(d.Changes), widen,
-		narrow, d.Unacknowledged(), len(d.Quarantined), len(d.Released), len(d.Refused), len(d.Unresolved))
-	if d.Unacknowledged() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 {
+		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d unacknowledged "+
+		"principal or username changes; %d devices newly quarantined, %d released; %d mints newly refused; "+
+		"%d unresolved\n", len(d.Changes), widen, narrow, d.Unacknowledged(), d.UnacknowledgedLevels(),
+		d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(), len(d.Quarantined), len(d.Released), len(d.Refused),
+		len(d.Unresolved))
+	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
+		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 {
 		return 1
 	}
 	return 0
+}
+
+// yamlList is a list as a policy file writes it in flow style, each item
+// quoted, so a RAISES hint can be pasted as a test.
+func yamlList(items []string) string {
+	quoted := make([]string, len(items))
+	for i, it := range items {
+		quoted[i] = strconv.Quote(it)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 // quarantineLine is an entry after a label that already says quarantine:
