@@ -2514,11 +2514,14 @@ port49 cannot check what an attribute means. It MUST check everything else:
   is where this MUST be caught.
 - Mandatory versus optional, with a warning on any mandatory attribute not recognized.
 - **What the device takes.** An adapter MAY list `accepted_attributes`, every attribute name
-  the platform's session reply may carry. IOS-XE refuses the session for anything else under
-  either flag, and a run of refusals stops it answering SSH for about a minute, break-glass
-  included (`tests/lab/results/L18-cisco_iosxe.md`), so its adapter lists `priv-lvl` alone and
-  a composition whose reply carries another attribute fails the joint check and quarantines
-  the device (§10): closed without a reply, it falls to local at once. Where an adapter sets
+  the platform's session reply may carry. IOS-XE refused the session for every other
+  attribute L18 tried, under either flag, and a run of refusals stops it answering SSH for
+  about a minute, break-glass included (`tests/lab/results/L18-cisco_iosxe.md`). L22 saw the
+  same for `home-directory`. It also found `idletime*30` and `timeout*480` accepted beside
+  `priv-lvl=15` and inert (`tests/lab/results/L22-cisco_iosxe.md`). The adapter still lists
+  `priv-lvl` alone, which is what port49 renders. A composition whose reply carries any other
+  attribute fails the joint check and quarantines the device (§10): closed without a reply,
+  it falls to local at once. Where an adapter sets
   `accepted_attributes`, a `priv-lvl` in the reply must also be one of the levels that
   adapter's `privilege` renders (1, 7 and 15 on `cisco_iosxe`): what the device lets any other
   level run is unmeasured, so a role or grant layering another fails the joint check the same

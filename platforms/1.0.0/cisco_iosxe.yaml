@@ -22,10 +22,15 @@ platforms:
       readonly: ["priv-lvl=1"]
       operator: ["priv-lvl=7"]
       admin: ["priv-lvl=15"]
-    # The only attribute this image takes: anything else refuses the session,
-    # and a policy whose reply would carry one quarantines the device instead
-    # (L18-cisco_iosxe.md; decision 25). So does a priv-lvl no level here
-    # renders, and on every platform one that is not 0 to 15 (L18, variant 7).
+    # The only attribute listed, which is what port49 needs here. L18 saw
+    # the session refused for every other attribute it tried, under either
+    # flag (L18-cisco_iosxe.md), and L22 saw the same for home-directory.
+    # L22 also found idletime*30 and timeout*480 accepted beside priv-lvl=15
+    # and inert (L22-cisco_iosxe.md). They are not listed: the list is kept
+    # to what port49 renders, and a policy whose reply would carry anything
+    # else quarantines the device (decision 25). So does a priv-lvl no level
+    # here renders, and on every platform one that is not 0 to 15 (L18,
+    # variant 7).
     accepted_attributes: [priv-lvl]
     # What the renderings above depend on, as the lab device carries it
     # (tests/lab/configs/iosxe-startup.cfg). The group name is the lab's.
