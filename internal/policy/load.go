@@ -252,6 +252,7 @@ func refusedKeys(raw []byte) error {
 	var loose struct {
 		KeyGroups any              `yaml:"key_groups"`
 		Roles     []map[string]any `yaml:"roles"`
+		Platforms map[string]any   `yaml:"platforms"`
 	}
 	if err := yaml.Unmarshal(raw, &loose); err != nil {
 		return nil // the strict decode reports it, with a line number
@@ -260,6 +261,18 @@ func refusedKeys(raw []byte) error {
 	case loose.KeyGroups != nil:
 		return errors.New("key_groups: key groups live in the inventory file (inventory_file) until plan 6 " +
 			"moves them to the policy repository; move the block there")
+	}
+	// A block key written with no value, or null, decodes as unset and
+	// inherits the set's value: it reads as set and means the opposite
+	// (task 2 review minor 3). The key names are the file's identifiers.
+	for _, name := range sortedKeys(loose.Platforms) {
+		block, _ := loose.Platforms[name].(map[string]any)
+		for _, key := range sortedKeys(block) {
+			if block[key] == nil {
+				return fmt.Errorf("platforms.%s.%s is null: give it a value, or remove the key to take the set's "+
+					"(spec §8)", name, key)
+			}
+		}
 	}
 	for i, r := range loose.Roles {
 		if _, ok := r["max_session_age"]; ok {

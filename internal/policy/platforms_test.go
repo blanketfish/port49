@@ -154,6 +154,11 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 	rest := scopeOK + roleOK + subjOK + grantOK
 	for _, tt := range []struct{ name, block, want string }{
 		{"a name no inventory could write", "  Arista-EOS: {supports: [session]}\n", "platforms.Arista-EOS: a platform name"},
+		// A key written with no value decodes as unset and inherits: it reads
+		// as set and means the opposite (task 2 review minor 3).
+		{"a key with no value", "  arista_eos:\n    inert_attributes:\n",
+			"platforms.arista_eos.inert_attributes is null"},
+		{"a key set to null", "  cisco_iosxe: {accepted_attributes: ~}\n", "platforms.cisco_iosxe.accepted_attributes is null"},
 		{"replace and based_on", "  x: {replace: true, based_on: arista_eos}\n", "platforms.x: replace starts from nothing"},
 		{"based_on a shipped name", "  cisco_nxos: {based_on: arista_eos}\n", "platforms.cisco_nxos: based_on declares a variant"},
 		{"based_on nothing shipped", "  x: {based_on: arista}\n", `platforms.x: based_on "arista" is not a platform in set 1.0.0`},
