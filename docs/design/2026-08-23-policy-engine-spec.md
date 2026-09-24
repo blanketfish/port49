@@ -2182,6 +2182,9 @@ the device configuration:
   safe fallback, and there the device's local role is the policy (§15, L4).
 - `readonly` still renders `priv-lvl=1` on EOS, where the parser enforces it (level 1 refused
   all three), so a readonly session is fenced by the device and by port49 both.
+- `max_privilege: operator` does not limit device privilege there: it numbers 15, so `enable`
+  can reach 15 under it. It still caps the level (§7), and `policy test` reports it as
+  `ceiling_indistinct`.
 
 IOS-XE is not in this rule: its level 7, given commands with `privilege exec level 7 ...`,
 is exactly the operator rung, so the device can enforce it (`ceiling-cisco_iosxe.md`). Its
@@ -2281,6 +2284,15 @@ composition whose reply, after layering, sends a `priv-lvl` above its `max_privi
 the joint check and quarantines the device on that platform (§10), naming the role or grant
 and the attribute; and the daemon refuses a session reply above the context's ceiling
 (`blob_unavailable`) rather than sending it and holding the session lower.
+
+**The ceiling is a cap on the level, not only on its number.** A composition whose roles land
+above its grants' `max_privilege` in `privilege_levels` fails the joint check on every platform,
+however the platform numbers the two: a role at `admin` capped at `operator` is quarantined on
+`arista_eos` and `cisco_nxos`, where both are 15 (decision 23), exactly as on IOS-XE. Where a
+ceiling numbers the same as a higher level on a platform in inventory, `port49 policy test`
+reports `ceiling_indistinct`: `max_privilege: operator` does not limit device privilege there,
+`enable` can reach 15 under it, and port49's command rules are the only fence (owner's ruling
+2026-09-24).
 
 If the role's `privilege` already reaches what the subject needs, leave `max_privilege` and
 `enable` unset — the session lands there and nothing needs escalating. Set `max_privilege`
@@ -2903,7 +2915,7 @@ bundle v2291
 **A sync can make a valid policy invalid, and the bundle builder quarantines rather than
 refuses.** Several load checks are joint over policy and inventory — a privilege level with no
 mapping on a platform present in inventory (§6), a session reply whose `priv-lvl` exceeds
-the grants' `max_privilege` there (§7), `enable: auto` reaching a platform whose enable
+the grants' `max_privilege` there, or roles landing above the ceiling's level (§7), `enable: auto` reaching a platform whose enable
 exchange carries no principal (§5.6). A device racked tomorrow with a new platform can
 fail them against a policy that was valid today. Refusing the whole bundle would block every
 inventory change fleet-wide until someone edits policy, including the leaf racked in another
