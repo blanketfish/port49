@@ -187,8 +187,54 @@ func TestAReloadRefreshesLiveContextsAndSchedulesTheSettlePass(t *testing.T) {
 	if !strings.Contains(rig.out.String(), "port49d: policy refresh: 1 live context(s) updated, 0 revoked") {
 		t.Fatalf("stderr: %q", rig.out.String())
 	}
-	if testutil.ToFloat64(rig.m.PolicyRefreshPending) != 0 {
-		t.Fatal("a pass that completed leaves nothing pending")
+	// A login in flight across the swap may still write the superseded
+	// answer, so the reload is pending until the settle pass completes.
+	if testutil.ToFloat64(rig.m.PolicyRefreshPending) != 1 {
+		t.Fatal("port49_policy_refresh_pending must hold at 1 until the settle pass completes")
+	}
+	rig.now = rig.now.Add(settleAfterReload)
+	rig.with(func() { rig.r.refresh(context.Background()) })
+	if testutil.ToFloat64(rig.m.PolicyRefreshPending) != 0 || !rig.r.due.IsZero() {
+		t.Fatalf("the settle pass clears the gauge, and nothing is due: due %v", rig.r.due)
+	}
+}
+
+// A grant's expiry is settled as a reload is: a redemption in flight across
+// the expiry pass may write the expired grant after the pass visited its
+// context, so the pass runs again settleAfterReload later, and the expiry is
+// pending until it completes.
+func TestAnExpiryPassIsSettled(t *testing.T) {
+	lapse := time.Now().Add(time.Hour).Truncate(time.Second)
+	rig := newReloadRig(t, strings.Replace(minimalPolicy, "roles: [r]}", "roles: [r], expires: "+
+		lapse.UTC().Format(time.RFC3339)+"}", 1))
+	rig.now = lapse
+	rig.with(func() { rig.r.refresh(context.Background()) })
+	if !rig.r.due.Equal(lapse.Add(settleAfterReload)) || testutil.ToFloat64(rig.m.PolicyRefreshPending) != 1 {
+		t.Fatalf("the expiry pass is settled 30s later and pending until then: due %v", rig.r.due)
+	}
+	rig.now = lapse.Add(settleAfterReload)
+	rig.with(func() { rig.r.refresh(context.Background()) })
+	if !rig.r.due.IsZero() || testutil.ToFloat64(rig.m.PolicyRefreshPending) != 0 {
+		t.Fatalf("the settle pass clears it: due %v", rig.r.due)
+	}
+}
+
+// The next expiry is scheduled from the instant the pass judged at
+// (RefreshReport.At), not from port49d's clock after it: an expiry between the
+// two is one no context was judged after, so it is due at once.
+func TestAnExpiryAfterThePassJudgedIsDueAtOnce(t *testing.T) {
+	lapse := time.Now().Add(time.Hour).Truncate(time.Second)
+	rig := newReloadRig(t, strings.Replace(minimalPolicy, "roles: [r]}", "roles: [r], expires: "+
+		lapse.UTC().Format(time.RFC3339)+"}", 1))
+	judged := lapse.Add(-time.Minute)
+	rig.b.Now = func() time.Time { return judged }
+	rig.now = lapse.Add(time.Minute)
+	rig.with(func() { rig.r.refresh(context.Background()) })
+	if !rig.r.due.Equal(lapse) {
+		t.Fatalf("the expiry the pass judged before is due at once: due %v, want %v", rig.r.due, lapse)
+	}
+	if len(rig.r.priors) != 1 || !rig.r.priors[0].At.Equal(judged) {
+		t.Fatalf("the next span starts where the pass judged: %+v", rig.r.priors)
 	}
 }
 

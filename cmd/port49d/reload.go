@@ -14,12 +14,13 @@ import (
 	"github.com/rhwendt/port49/internal/policy"
 )
 
-// After a reload the refresh runs twice: at once, and again settleAfterReload
-// later. The second pass catches a login that spent a token the first pass
-// was about to supersede and wrote its context after the first pass had
-// visited it — a login in flight across the swap finishes on the policy it
-// started with (plan 4b), and this is how its context is brought forward.
-// refreshRetry is how soon a pass the store stopped is run again.
+// After a reload, and after a grant's expiry, the refresh runs twice: at
+// once, and again settleAfterReload later. The second pass catches a login
+// that spent a token the first pass was about to supersede and wrote its
+// context after the first pass had visited it — a login in flight across the
+// swap, or across the expiry, finishes on the answer it started with (plan
+// 4b), and this is how its context is brought forward. refreshRetry is how
+// soon a pass the store stopped is run again.
 const (
 	settleAfterReload = 30 * time.Second
 	refreshRetry      = 30 * time.Second
@@ -36,11 +37,12 @@ const (
 // is still serving, once per distinct content, with port49_policy_file_refused
 // at 1 until the file loads or is put back. A file someone else could have
 // written is refused the same way (readPolicyFile). A refresh the store
-// stopped: one line with how far it got and when it will try again, and
-// port49_policy_refresh_pending at 1 until a pass completes; the policy is in
-// force for every mint regardless, and the contexts not yet reached keep their
-// previous policy until then. The pass that completes after a stop always
-// says so.
+// stopped: one line with how far it got and when it will try again; the
+// policy is in force for every mint regardless, and the contexts not yet
+// reached keep their previous policy until then. The pass that completes
+// after a stop always says so. port49_policy_refresh_pending is 1 from a swap
+// or an expiry until the settle pass after it completes, and while any pass
+// is owed a retry.
 type reloader struct {
 	cfg      config.Config
 	broker   *broker.Broker
@@ -51,8 +53,13 @@ type reloader struct {
 	// priors are the policies in force since the last complete refresh, which
 	// the next refresh compares the policy in force against (broker.Prior).
 	priors []broker.Prior
-	// due is when the next refresh runs; zero is never.
+	// due is when the next refresh runs; zero is never (reschedule).
 	due time.Time
+	// expiry is the next grant expiry after the instant the last complete
+	// pass judged at; settle is when the settle pass after a swap or an
+	// expiry is due, zero once it has completed; retry is when a stopped pass
+	// runs again, zero when none stopped. Zero is none.
+	expiry, settle, retry time.Time
 	// pending is a changed file's version seen by one poll, waiting for the
 	// next to agree: an editor writing in place is not read half-way.
 	pending string
@@ -71,7 +78,8 @@ func newReloader(cfg config.Config, b *broker.Broker, m *metrics.Metrics, now fu
 	r := &reloader{cfg: cfg, broker: b, metrics: m, now: now, interval: cfg.Broker.PolicyWatchInterval,
 		priors: []broker.Prior{{Policy: b.Policy.Load(), At: start}}}
 	_, r.inventory, _ = fileVersion(cfg.InventoryFile)
-	r.schedule(start)
+	r.expiry, _ = b.Policy.Load().NextChange(start)
+	r.reschedule()
 	return r
 }
 
@@ -192,40 +200,59 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 			pol.Bundle)
 		return
 	}
-	now := r.now()
 	r.broker.Policy.Swap(pol)
-	// The last prior is the policy that was in force; its span ends here.
+	// Swap waits for the mints in flight, which finish on the policy they
+	// started with, so the replaced policy's span ends when it returns.
+	now := r.now()
 	r.priors[len(r.priors)-1].Until = now
 	r.priors = append(r.priors, broker.Prior{Policy: pol, At: now})
+	r.expiry, _ = pol.NextChange(now)
+	r.settle = now.Add(settleAfterReload)
 	r.metrics.PolicyRefreshPending.Set(1)
 	r.metrics.PolicyReloads.WithLabelValues("applied").Inc()
 	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s; %d device(s) quarantined now, %d before\n",
 		trigger, pol.Bundle, old.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
 	sayPolicy(pol, now)
 	r.refresh(ctx)
-	if settle := now.Add(settleAfterReload); r.due.IsZero() || settle.Before(r.due) {
-		r.due = settle
-	}
 }
 
-// refresh runs one refresh pass and schedules the next: at the next grant
-// expiry when it finished, or refreshRetry from now when the store stopped it
-// or a context was still changing. port49_policy_refresh_pending is 1 from a
-// swap or a stopped pass until a pass completes: while it is, a live context
-// may still hold a policy no longer in force — a withdrawn grant included.
+// refresh runs one refresh pass and schedules the next. A pass the store
+// stopped, or that left a context still changing, runs again refreshRetry
+// from now. One that completed is scheduled from the instant it judged at
+// (RefreshReport.At), not from the clock after it: the next grant expiry after
+// that instant, which is due at once if it has already passed, and the settle
+// pass settleAfterReload after a pass that crossed an expiry.
+//
+// port49_policy_refresh_pending is 1 from a swap or an expiry until the settle
+// pass after it completes, and while a pass is owed a retry: while it is, a
+// live context may still hold a policy no longer in force — a withdrawn or
+// expired grant included.
 func (r *reloader) refresh(ctx context.Context) {
 	rep, err := r.broker.Refresh(ctx, r.priors)
-	now := r.now()
 	if err != nil {
 		r.stopped = true
 		r.metrics.PolicyRefreshPending.Set(1)
 		fmt.Fprintf(stderr, "port49d: policy refresh stopped (%s so far): %v; the contexts not reached keep their "+
 			"previous policy; trying again in %s\n", summary(rep), err, refreshRetry)
-		r.due = now.Add(refreshRetry)
+		r.retry = r.now().Add(refreshRetry)
+		r.reschedule()
 		return
 	}
-	r.priors = []broker.Prior{{Policy: r.broker.Policy.Load(), At: now}}
-	r.metrics.PolicyRefreshPending.Set(0)
+	cur := r.broker.Policy.Load()
+	r.priors = []broker.Prior{{Policy: cur, At: rep.At}}
+	r.retry = time.Time{}
+	if !r.settle.IsZero() && !rep.At.Before(r.settle) {
+		r.settle = time.Time{}
+	}
+	if !r.expiry.IsZero() && !rep.At.Before(r.expiry) {
+		r.settle = rep.At.Add(settleAfterReload)
+	}
+	r.expiry, _ = cur.NextChange(rep.At)
+	if r.settle.IsZero() {
+		r.metrics.PolicyRefreshPending.Set(0)
+	} else {
+		r.metrics.PolicyRefreshPending.Set(1)
+	}
 	switch {
 	case r.stopped:
 		r.stopped = false
@@ -233,14 +260,20 @@ func (r *reloader) refresh(ctx context.Context) {
 	case rep.Updated+rep.Revoked+rep.Quarantined+rep.Failed+rep.TokenKeys > 0:
 		fmt.Fprintf(stderr, "port49d: policy refresh: %s\n", summary(rep))
 	}
-	r.schedule(now)
+	r.reschedule()
 }
 
-// schedule sets the next refresh to the next instant a grant expires.
-func (r *reloader) schedule(now time.Time) {
-	r.due = time.Time{}
-	if at, ok := r.broker.Policy.Load().NextChange(now); ok {
-		r.due = at
+// reschedule sets due. A retry owed comes first, and alone: that pass judges
+// everything an expiry or a settle pass would, and a store still down must
+// not be asked again at once for an expiry already past. Otherwise it is the
+// earlier of the next expiry and the settle pass.
+func (r *reloader) reschedule() {
+	r.due = r.retry
+	if r.due.IsZero() {
+		r.due = r.expiry
+		if r.due.IsZero() || (!r.settle.IsZero() && r.settle.Before(r.due)) {
+			r.due = r.settle
+		}
 	}
 }
 
