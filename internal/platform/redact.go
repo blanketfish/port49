@@ -146,15 +146,19 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 	// A value glued to its keyword, `key=X` or `password:X`, is the word
 	// after the keyword: each such word is matched as the two, and a keyword
 	// ending in the separator, `password:`, as the keyword (task 15 review
-	// I4). A URL is left whole: redactURL read it.
+	// I4). A URL is left whole: redactURL read it. A keyword's leading `-`
+	// or `/` is an option's, not the keyword's, so `--password=X` is the
+	// password (task 15 re-review N1).
 	var split []glued
 	for i, w := range words {
 		j := strings.IndexAny(w, "=:")
 		if rewritten[i] || j <= 0 || strings.Contains(w, "://") {
-			split = append(split, glued{word: i, text: w})
+			lead, text := option(w)
+			split = append(split, glued{word: i, lead: lead, text: text})
 			continue
 		}
-		split = append(split, glued{word: i, text: w[:j], sep: w[j : j+1]})
+		lead, text := option(w[:j])
+		split = append(split, glued{word: i, lead: lead, text: text, sep: w[j : j+1]})
 		if j+1 < len(w) {
 			split = append(split, glued{word: i, text: w[j+1:], value: true})
 		}
@@ -206,7 +210,7 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 		case !hideSplit[k]:
 		case g.value && !hide[g.word]:
 			kw := split[k-1]
-			words[g.word], rewritten[g.word] = kw.text+kw.sep+Redacted, true
+			words[g.word], rewritten[g.word] = kw.lead+kw.text+kw.sep+Redacted, true
 		default:
 			hide[g.word] = true
 		}
@@ -252,12 +256,24 @@ func keywordShaped(keyword string, words []string, k int) bool {
 }
 
 // glued is one word as Redact matches it: a whole word, or the keyword or
-// the value part of one glued with sep.
+// the value part of one glued with sep, with an option's leading `-` or `/`
+// as lead.
 type glued struct {
 	word  int
+	lead  string
 	text  string
 	sep   string
 	value bool
+}
+
+// option splits an option's leading `-` and `/` from w; a word of nothing
+// else is left whole.
+func option(w string) (lead, text string) {
+	text = strings.TrimLeft(w, "-/")
+	if text == "" {
+		return "", w
+	}
+	return w[:len(w)-len(text)], text
 }
 
 // AllRedactions is every built-in pattern, the default list and every

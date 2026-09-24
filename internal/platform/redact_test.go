@@ -455,3 +455,18 @@ func TestAShortCommandWordIsASecretKeywordOnlyInAKeysShape(t *testing.T) {
 		}
 	}
 }
+
+// A keyword's leading `-` or `/` is not part of it, so a secret glued to an
+// option is redacted (task 15 re-review N1).
+func TestAnOptionsSecretIsRedacted(t *testing.T) {
+	for in, want := range map[string]string{
+		"bash curl --password=Hunter2 x": "bash curl --password=«redacted» «redacted»",
+		"run /password:Hunter2":          "run /password:«redacted»",
+		"bash tool -key=Hunter2":         "bash tool -key=«redacted»",
+		"bash curl --password Hunter2":   "bash curl --password «redacted»",
+	} {
+		if got, _ := Redact(Redactions("arista_eos"), []string{in}); got[0] != want {
+			t.Errorf("%q: %q, want %q", in, got[0], want)
+		}
+	}
+}
