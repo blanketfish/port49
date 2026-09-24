@@ -68,6 +68,10 @@ type Broker struct {
 
 	mu        sync.Mutex
 	blobsSeen map[string]bool
+	// quarantineRecorded is, by ctx_id, the bundle under which a refresh last
+	// recorded the context left for a quarantine: one record per context per
+	// policy, not one per pass (refreshContext).
+	quarantineRecorded map[string]string
 }
 
 // Handler routes the two endpoints the slice serves.

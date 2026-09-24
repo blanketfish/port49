@@ -75,6 +75,22 @@ type Metrics struct {
 	// leave; the gauge is what an alert watches, and it names no device.
 	DevicesQuarantined prometheus.GaugeFunc
 	quarantined        atomic.Pointer[func() int]
+	// port49_context_refreshes_total{outcome}: live login contexts a policy
+	// refresh visited, by what it did to each (spec §5.1.3) — "updated" (the
+	// policy in force written into it), "unchanged", "revoked" (no grant left
+	// on that device), "quarantined" (the device is quarantined; the context
+	// is left as it was), or "failed" (a context that could not be opened, or
+	// a policy in force that could not be resolved or compiled for it — both
+	// revoked, failing closed — or a context still changing after every
+	// compare-and-set attempt, left for the retry; the process log says which).
+	// A context the refresh skipped — another principal's since, the lab's,
+	// already revoked — is not counted. The label is the outcome only.
+	ContextRefreshes *prometheus.CounterVec
+	// port49_tokens_superseded_total: (device, username) keys whose unspent
+	// tokens a policy change deleted, because the policy now in force would
+	// not mint what they carry. Each is one operator's `port49 token` to run
+	// again; none is a session ended.
+	TokensSuperseded prometheus.Counter
 }
 
 // CountQuarantined sets what port49_devices_quarantined reports at each scrape.
@@ -123,6 +139,10 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Mint items the broker could not decide, by API error code."}, []string{"error"}),
 		BlobCache: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_blob_cache_lookups_total",
 			Help: "Compiled-blob cache lookups by the authorizer, by outcome."}, []string{"outcome"}),
+		ContextRefreshes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_context_refreshes_total",
+			Help: "Live login contexts a policy refresh visited, by outcome."}, []string{"outcome"}),
+		TokensSuperseded: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_tokens_superseded_total",
+			Help: "(device, username) keys whose unspent tokens a policy change deleted."}),
 	}
 	m.DevicesQuarantined = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_quarantined",
 		Help: "Inventory devices the loaded policy quarantines now."}, func() float64 {
@@ -134,6 +154,6 @@ func New(reg prometheus.Registerer) *Metrics {
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
-		m.DevicesQuarantined)
+		m.DevicesQuarantined, m.ContextRefreshes, m.TokensSuperseded)
 	return m
 }
