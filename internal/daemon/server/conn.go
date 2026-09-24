@@ -172,7 +172,9 @@ func (s *conn) serve(ctx context.Context) {
 		// its commands on the local fall-through (measured with this daemon
 		// on vEOS, the N9Kv, IOS-XE and vJunos-router 2026-09-24,
 		// tests/lab/results/quarantine-*.md). The device is not suspect — the
-		// policy could not be compiled for it — so it takes no strike either.
+		// policy could not be compiled for it — so it takes no strike either,
+		// and nothing throttles the records: there is one per connection, so
+		// their rate is the device's AAA rate, one per exchange.
 		if s.quarantined() {
 			s.quarantine(h)
 			return

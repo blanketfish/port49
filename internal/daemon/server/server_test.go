@@ -695,7 +695,8 @@ func slowBackoff() *limits.Limiter {
 
 // closedAtOnce asserts the server hung up on c without a reply and without
 // holding the connection: a device waiting on a silent server costs ~5 s per
-// command, one refused costs nothing (L4, measured 2026-09-24).
+// command (tests/lab/results/L4-error-*.md), and this close costs what a
+// refused connection does (tests/lab/results/quarantine-*.md).
 func closedAtOnce(t *testing.T, c *client) {
 	t.Helper()
 	start := time.Now()

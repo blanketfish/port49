@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -25,7 +26,7 @@ func (p *Policy) Review(subject string, now time.Time) ([]ReviewRow, error) {
 	}
 	var out []ReviewRow
 	for _, g := range p.Grants(subject) {
-		row := ReviewRow{Scope: g.Scope, Roles: g.Roles, MaxPrivilege: g.MaxPrivilege, Expires: g.Expires,
+		row := ReviewRow{Scope: g.Scope, Roles: slices.Clone(g.Roles), MaxPrivilege: g.MaxPrivilege, Expires: g.Expires,
 			Expired: !g.Expires.IsZero() && !now.Before(g.Expires)}
 		for _, d := range p.env.Devices {
 			if ok, _ := p.scopes[g.Scope].selects(d); ok {

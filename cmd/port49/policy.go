@@ -457,7 +457,7 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "%s (%s; %s)\n", *subject, s.Domain, who)
 	if len(rows) == 0 {
-		fmt.Fprintln(stdout, "no grant rows: the subject matches nothing; `port49 grants remove` deletes the block")
+		fmt.Fprintln(stdout, "no grant rows: the subject reaches no device; `port49 grants remove` deletes the block")
 		return 0
 	}
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)

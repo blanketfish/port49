@@ -321,13 +321,32 @@ func TestAccessReviewPrintsTheGrantRows(t *testing.T) {
 		t.Fatalf("code %d %s", code, errb.String())
 	}
 	for _, want := range []string{"noc (humans; identity user:noc@example.com)", "SCOPE", "all_devices  no_reload read_only  -",
-		"never", "1"} {
+		"never    1\n"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
 	}
 	if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "nobody"}, &out, &errb); code != 1 {
 		t.Fatalf("an undeclared subject: code %d", code)
+	}
+	// A group subject, a lapsed row, and a subject with no rows at all.
+	body := strings.Replace(string(readFile(t, pol)), "subjects:\n",
+		"subjects:\n  - {name: oncall, group: NetOps-OnCall, token_ttl: 60s}\n"+
+			"  - {name: idle, identity: \"user:idle@example.com\", username: idle, token_ttl: 60s}\n", 1)
+	body = strings.Replace(body, "grants:\n", "grants:\n  - {subject: oncall, scope: all_devices, roles: [read_only], expires: 2020-01-01}\n", 1)
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "oncall"}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "oncall (humans; group NetOps-OnCall)") ||
+		!strings.Contains(out.String(), "2020-01-01T00:00:00Z (expired)") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "idle"}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "no grant rows: the subject reaches no device") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
 

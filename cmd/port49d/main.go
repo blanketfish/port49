@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -151,8 +152,9 @@ var stderr io.Writer = os.Stderr
 // policy it loaded, or nils when no broker: block is configured. The daemon
 // asks the policy about quarantine, and nothing else (spec §10). It runs
 // before any listener opens, so a policy typo or an unreadable certificate
-// ends the start with one line rather than surfacing at the first mint. Each error names the config key
-// and the file, so that line says what to go and fix.
+// ends the start with one line rather than surfacing at the first mint. Each
+// error names the config key and the file, so that line says what to go and
+// fix.
 func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log decision.Emitter,
 	m *metrics.Metrics) (*http.Server, *policy.Policy, error) {
 	if cfg.Broker == nil {
@@ -253,7 +255,7 @@ func watchQuarantine(pol *policy.Policy, m *metrics.Metrics,
 	m.CountQuarantined(func() int {
 		at, n := now(), 0
 		for _, q := range pol.Quarantines(at) {
-			if _, ok := pol.Quarantined(q.Device, at); ok {
+			if slices.ContainsFunc(q.Entries, func(e policy.QuarantineEntry) bool { return e.Current(at) }) {
 				n++
 			}
 		}
