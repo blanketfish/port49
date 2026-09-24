@@ -809,3 +809,50 @@ func TestPolicyDiffGatesAnAdapterEdit(t *testing.T) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// A policy's rules and its tests' commands are printed by `policy test`,
+// `policy diff` and `explain`, whose output lands in CI logs: a value the
+// redaction patterns hide reads «redacted» there as everywhere else (spec
+// §5.8; task 11 review I1). A load error that quotes the rule is redacted
+// too.
+func TestThePolicyToolsNeverPrintARuleSecret(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	withDeny := strings.Replace(raw, "deny: [reload **]}", `deny: [reload **, "snmp-server community Hunter2 **"]}`, 1)
+	if err := os.WriteFile(oldPol, []byte(withDeny), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	shadowed := strings.Replace(withDeny, "permit: [show **]}", `permit: [show **, "snmp-server community Hunter2 ro"]}`, 1)
+	if err := os.WriteFile(newPol, []byte(shadowed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check := func(what string, args ...string) string {
+		t.Helper()
+		var out, errb bytes.Buffer
+		run(args, &out, &errb)
+		if strings.Contains(out.String()+errb.String(), "Hunter2") {
+			t.Fatalf("%s printed the secret:\n%s%s", what, out.String(), errb.String())
+		}
+		return out.String()
+	}
+	if out := check("policy test", "policy", "test", "--policy", newPol, "--inventory", inv); !strings.Contains(out,
+		`shadowed: "snmp-server community «redacted» **" (no_reload)`) {
+		t.Fatalf("policy test: %s", out)
+	}
+	if out := check("policy diff", "policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv); !strings.Contains(
+		out, "EXPANDS: noc on leaf-01") {
+		t.Fatalf("policy diff: %s", out)
+	}
+	if out := check("explain", "explain", "--policy", newPol, "--inventory", inv, "--subject", "noc", "--device",
+		"leaf-01", "--command", "snmp-server community Hunter2 ro"); !strings.Contains(out, "snmp-server community «redacted»") {
+		t.Fatalf("explain: %s", out)
+	}
+	broken := strings.Replace(withDeny, `"snmp-server community Hunter2 **"`, `"snmp-server community Hunter2 /^rw$/"`, 1)
+	if err := os.WriteFile(oldPol, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check("a load error", "policy", "test", "--policy", oldPol, "--inventory", inv)
+	check("a load error", "explain", "--policy", oldPol, "--inventory", inv, "--subject", "noc", "--device", "leaf-01")
+	check("a load error", "policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv)
+}

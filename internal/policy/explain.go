@@ -11,6 +11,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // Explanation is `port49 explain`'s answer (spec §12): one hypothetical
@@ -271,6 +272,40 @@ func missingClass(rule string, classes map[string][]string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// Redacted is e with the command asked about and every rule it names
+// redacted by rules, as the daemon's records are (spec §5.8): what explain
+// prints may land in a log, and a rule literal is no safer there than a
+// typed secret.
+func (e Explanation) Redacted(rules []platform.Redaction) Explanation {
+	if words, ok := platform.Redact(rules, strings.Fields(e.Command)); ok {
+		e.Command = strings.Join(words, " ")
+	}
+	one := func(m engine.Match) engine.Match {
+		if words, ok := platform.RedactRule(rules, strings.Fields(m.Rule)); ok {
+			m.Rule = strings.Join(words, " ")
+		}
+		return m
+	}
+	all := func(ms []engine.Match) []engine.Match {
+		out := slices.Clone(ms)
+		for i := range out {
+			out[i] = one(out[i])
+		}
+		return out
+	}
+	o := &e.Outcome
+	if o.Decided != nil {
+		m := one(*o.Decided)
+		o.Decided = &m
+	}
+	if o.Deny != nil {
+		m := one(*o.Deny)
+		o.Deny = &m
+	}
+	o.Permits, o.Denies = all(o.Permits), all(o.Denies)
+	return e
 }
 
 // Render writes the explanation for a person: the verdict and its one reason

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/replay"
 )
@@ -69,17 +71,23 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	// What explain prints may be kept: every rule and command it names is
+	// redacted as the daemon's records are (spec §5.8).
+	out, errOut, flush := redactOutput(stdout, stderr)
+	defer flush()
+	stdout, stderr = out, errOut
 	p, err := files.load()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 explain:", err)
 		return 1
 	}
+	out.rules, errOut.rules = p.Redactions(), p.Redactions()
 	e, err := p.Explain(*subject, *principal, *device, *command, time.Now())
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 explain:", err)
 		return 1
 	}
-	e.Render(stdout, *attrs)
+	e.Redacted(p.Redactions()).Render(stdout, *attrs)
 	return 0
 }
 
@@ -118,11 +126,18 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	// CI keeps what this prints: every rule and command it quotes is
+	// redacted as the daemon's records are (spec §5.8).
+	out, errOut, flush := redactOutput(stdout, stderr)
+	defer flush()
+	stderr = errOut
 	p, err := files.load()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy test:", err)
 		return 1
 	}
+	out.rules, errOut.rules = p.Redactions(), p.Redactions()
+	stdout = out
 	now := time.Now()
 	// The set the policy renders with, first: a reviewer reading a rendering
 	// change needs to know which adapters produced it (spec §8).
@@ -272,6 +287,11 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	// CI keeps what this prints: every rule and command it quotes is
+	// redacted as the daemon's records are (spec §5.8).
+	out, errOut, flush := redactOutput(stdout, stderr)
+	defer flush()
+	stderr = errOut
 	inv, err := admission.LoadFile(*inventory)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy diff:", err)
@@ -287,6 +307,9 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 policy diff: --new:", err)
 		return 1
 	}
+	out.rules = append(before.Redactions(), after.Redactions()...)
+	errOut.rules = out.rules
+	stdout = out
 	now := time.Now()
 	d := policy.Compare(before, after, now)
 	// A change that first holds at a later grant expiry says when.
@@ -764,4 +787,42 @@ func writeSynced(tmp *os.File, data []byte, old os.FileInfo) error {
 		}
 	}
 	return tmp.Sync()
+}
+
+// redacting passes what is written through to w a line at a time, with every
+// quoted value in each line redacted by rules (platform.RedactQuoted). Until
+// a policy loads, rules are every built-in pattern.
+type redacting struct {
+	w     io.Writer
+	rules []platform.Redaction
+	buf   []byte
+}
+
+func (r *redacting) Write(p []byte) (int, error) {
+	r.buf = append(r.buf, p...)
+	for {
+		i := bytes.IndexByte(r.buf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		if _, err := io.WriteString(r.w, platform.RedactQuoted(r.rules, string(r.buf[:i+1]))); err != nil {
+			return 0, err
+		}
+		r.buf = r.buf[i+1:]
+	}
+}
+
+// redactOutput wraps stdout and stderr in redacting writers; flush writes
+// what is left of an unfinished line.
+func redactOutput(stdout, stderr io.Writer) (out, errOut *redacting, flush func()) {
+	out = &redacting{w: stdout, rules: platform.AllRedactions()}
+	errOut = &redacting{w: stderr, rules: platform.AllRedactions()}
+	return out, errOut, func() {
+		for _, r := range []*redacting{out, errOut} {
+			if len(r.buf) > 0 {
+				io.WriteString(r.w, platform.RedactQuoted(r.rules, string(r.buf)))
+				r.buf = nil
+			}
+		}
+	}
 }
