@@ -253,6 +253,28 @@ func (p *Policy) Redactions() []platform.Redaction {
 	return all
 }
 
+// SecretClasses is every entity class a role's rule names where a value is
+// redacted, by every pattern the policy knows (Redactions): such a class
+// holds those values, `snmp-server community @bad **` bad communities, and
+// what prints its patterns prints them redacted, as the blob event does
+// (spec §5.8).
+func (p *Policy) SecretClasses() map[string]bool {
+	patterns, out := p.Redactions(), map[string]bool{}
+	for _, name := range sortedKeys(p.roles) {
+		r := p.roles[name]
+		for _, rule := range slices.Concat(r.Permit, r.Deny, r.Pipe) {
+			orig := strings.Fields(rule)
+			words, _ := platform.RedactRule(patterns, orig)
+			for k, w := range words {
+				if w == platform.Redacted && strings.HasPrefix(orig[k], "@") {
+					out[orig[k][1:]] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
 // RuleSecretLiterals names every rule with a value the redaction patterns of
 // a platform in the inventory hide (spec §5.8): the rule loads — a deny on a
 // known-bad community is legitimate — but wherever it is echoed, a record's

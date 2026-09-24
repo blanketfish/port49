@@ -203,3 +203,72 @@ func RedactConfigCheck(rules []Redaction, c ConfigCheck) ConfigCheck {
 	}
 	return out
 }
+
+// shippedBy reports whether some built-in set's adapter satisfies has: text a
+// set ships is lab text, never a secret, and prints as written.
+func shippedBy(has func(Dialect) bool) bool {
+	for _, set := range sets {
+		for _, d := range set {
+			if has(d) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RedactUnreachable is an unreachable rule as port49 may print it: as
+// written where a set ships it, and otherwise redacted as a rule is
+// (RedactRule), since a block's rule is policy text like a role's (spec §5.8).
+func RedactUnreachable(rules []Redaction, rule string) string {
+	if shippedBy(func(d Dialect) bool {
+		for _, list := range d.Unreachable {
+			if slices.Contains(list, rule) {
+				return true
+			}
+		}
+		return false
+	}) {
+		return rule
+	}
+	words, _ := RedactRule(rules, strings.Fields(rule))
+	return strings.Join(words, " ")
+}
+
+// RedactFallback is a fallback text as port49 may print it: as written where
+// a set ships it as measured, and otherwise redacted as prose (RedactProse):
+// a block's text, or its note, is the operator's and may say anything.
+func RedactFallback(rules []Redaction, text string) string {
+	if shippedBy(func(d Dialect) bool {
+		for _, t := range d.Fallback {
+			if t == text {
+				return true
+			}
+		}
+		return false
+	}) {
+		return text
+	}
+	return RedactProse(rules, text)
+}
+
+// RedactClassPatterns is an entity class's patterns as port49 may print
+// them. A class a rule names where a value is redacted holds those values,
+// `snmp-server community @bad **` bad communities, and every pattern reads
+// Redacted, as the blob event writes it; otherwise a pattern a set ships for
+// the class prints as written, and any other is redacted as prose, since a
+// block's regex may spell a secret out.
+func RedactClassPatterns(rules []Redaction, class string, patterns []string, secret bool) []string {
+	out := make([]string, len(patterns))
+	for i, p := range patterns {
+		switch {
+		case secret:
+			out[i] = Redacted
+		case shippedBy(func(d Dialect) bool { return slices.Contains(d.EntityClasses[class], p) }):
+			out[i] = p
+		default:
+			out[i] = RedactProse(rules, p)
+		}
+	}
+	return out
+}

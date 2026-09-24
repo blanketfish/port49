@@ -160,12 +160,12 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 	// what show and export print lands in terminals, CI logs and upstream pull
 	// requests: each is redacted by every pattern that applies, and policy
 	// test reports the lines (spec §5.8). A set's own print as written.
-	patterns := platform.AllRedactions()
+	patterns, secret := platform.AllRedactions(), map[string]bool{}
 	if p != nil {
-		patterns = p.Redactions()
+		patterns, secret = p.Redactions(), p.SecretClasses()
 	}
 	for platformName, d := range set {
-		set[platformName] = redactAdapter(patterns, d)
+		set[platformName] = redactAdapter(patterns, secret, d)
 	}
 	if *all {
 		// A file already there would be read back as part of the set.
@@ -350,9 +350,13 @@ const (
 	exportSet
 )
 
-// redactAdapter is d with its device_config lines and config checks as port49
-// may print them (platform.RedactConfigLine, RedactConfigCheck).
-func redactAdapter(patterns []platform.Redaction, d platform.Dialect) platform.Dialect {
+// redactAdapter is d with every text a `platforms:` block can write that may
+// carry a secret as port49 may print it (spec §5.8): its device_config lines
+// and config checks (platform.RedactConfigLine, RedactConfigCheck), its
+// unreachable rules, its fallback text and note, and its entity classes'
+// patterns, secret naming the classes a rule names where a value is
+// redacted. A set's own text prints as written.
+func redactAdapter(patterns []platform.Redaction, secret map[string]bool, d platform.Dialect) platform.Dialect {
 	if d.DeviceConfig != nil {
 		lines := make([]string, len(d.DeviceConfig))
 		for i, line := range d.DeviceConfig {
@@ -366,6 +370,33 @@ func redactAdapter(patterns []platform.Redaction, d platform.Dialect) platform.D
 			checks[i] = platform.RedactConfigCheck(patterns, c)
 		}
 		d.ConfigChecks = checks
+	}
+	if d.Unreachable != nil {
+		unreachable := make(map[string][]string, len(d.Unreachable))
+		for level, rules := range d.Unreachable {
+			unreachable[level] = make([]string, len(rules))
+			for i, rule := range rules {
+				unreachable[level][i] = platform.RedactUnreachable(patterns, rule)
+			}
+		}
+		d.Unreachable = unreachable
+	}
+	for _, texts := range []*map[string]string{&d.Fallback, &d.FallbackNote} {
+		if *texts == nil {
+			continue
+		}
+		out := make(map[string]string, len(*texts))
+		for level, text := range *texts {
+			out[level] = platform.RedactFallback(patterns, text)
+		}
+		*texts = out
+	}
+	if d.EntityClasses != nil {
+		classes := make(map[string][]string, len(d.EntityClasses))
+		for class, list := range d.EntityClasses {
+			classes[class] = platform.RedactClassPatterns(patterns, class, list, secret[class])
+		}
+		d.EntityClasses = classes
 	}
 	return d
 }

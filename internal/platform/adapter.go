@@ -311,6 +311,9 @@ func Validate(name string, d Dialect) error {
 			return fmt.Errorf("%s is empty, which matches nothing; remove the class instead", field("entity_classes."+class))
 		}
 		for i, p := range d.EntityClasses[class] {
+			if strings.Contains(p, Redacted) {
+				return pastedBack(fmt.Sprintf("%s[%d]", field("entity_classes."+class), i))
+			}
 			if _, err := regexp.Compile(p); err != nil {
 				return fmt.Errorf("%s[%d] does not compile: %s", field("entity_classes."+class), i, RegexpProblem(err))
 			}
@@ -390,12 +393,20 @@ func Validate(name string, d Dialect) error {
 	}
 	for _, level := range sortedKeys(d.Unreachable) {
 		for i, rule := range d.Unreachable[level] {
+			if strings.Contains(rule, Redacted) {
+				// No position: a block's list merges into the set's, so its
+				// place in the union is not its place in the block.
+				return pastedBack(field("unreachable." + level))
+			}
 			if _, err := engine.ParseRule(rule); err != nil {
 				return fmt.Errorf("%s[%d]: %w", field("unreachable."+level), i, err)
 			}
 		}
 	}
 	for _, level := range sortedKeys(d.Fallback) {
+		if strings.Contains(d.Fallback[level], Redacted) {
+			return pastedBack(field("fallback." + level))
+		}
 		if strings.TrimSpace(d.Fallback[level]) == "" {
 			return fmt.Errorf("%s is empty: say what the device gives a session at %s on its own", field("fallback."+level),
 				level)
@@ -403,6 +414,9 @@ func Validate(name string, d Dialect) error {
 	}
 	for _, level := range sortedKeys(d.FallbackNote) {
 		// A block's own text for the level, kept as its note.
+		if strings.Contains(d.FallbackNote[level], Redacted) {
+			return pastedBack(field("fallback." + level))
+		}
 		if strings.TrimSpace(d.FallbackNote[level]) == "" {
 			return fmt.Errorf("%s is empty: say what the device gives a session at %s on its own", field("fallback."+level),
 				level)

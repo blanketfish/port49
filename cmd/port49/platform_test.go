@@ -437,6 +437,47 @@ func TestPlatformShowAndExportRedactABlocksSecrets(t *testing.T) {
 	}
 }
 
+// A block's unreachable rules, its fallback text and note and its class
+// patterns are block text like its device_config, and show and export print
+// them redacted (final review I2): a class a rule names where a value is
+// redacted holds those values, as the blob event reads it (spec §5.8).
+func TestPlatformShowAndExportRedactABlocksOtherText(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := strings.Replace(string(readFile(t, pol)), "roles:\n",
+		"roles:\n  - {name: snmp, deny: [snmp-server community @bad_comm **]}\n", 1)
+	block := "platforms:\n  arista_eos:\n" +
+		"    unreachable: {readonly: [\"snmp-server community Hunter2a **\"]}\n" +
+		"    fallback: {admin: \"local admin, enable password: Hunter2b\", readonly: \"a local user, password Hunter2c\"}\n" +
+		"    entity_classes: {bad_comm: ['^Hunter2d$'], secret_pattern: ['^snmp-server community Hunter2e$']}\n"
+	if err := os.WriteFile(pol, []byte(block+raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	for _, args := range [][]string{{"platform", "show", "--policy", pol, "--inventory", inv, "arista_eos"},
+		{"platform", "export", "--policy", pol, "--inventory", inv, "arista_eos"},
+		{"platform", "export", "--all", "--dir", dir, "--policy", pol, "--inventory", inv}} {
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != 0 {
+			t.Fatalf("%q: code %d %s", args, code, errb.String())
+		}
+		text := out.String()
+		if args[2] == "--all" {
+			text = string(readFile(t, filepath.Join(dir, "arista_eos.yaml")))
+		}
+		for _, probe := range []string{"Hunter2a", "Hunter2b", "Hunter2c", "Hunter2d", "Hunter2e"} {
+			if strings.Contains(text+errb.String(), probe) {
+				t.Errorf("%q prints %s:\n%s%s", args, probe, text, errb.String())
+			}
+		}
+		// The set's own text prints as written; export writes the block's
+		// note where the block wrote it, in place of the set's.
+		if !strings.Contains(text, "clear counters **") ||
+			args[1] == "show" && !strings.Contains(text, "network-admin: every command") {
+			t.Errorf("%q:\n%s", args, text)
+		}
+	}
+}
+
 // A block's check with no secret in it exports as written, regex escapes
 // included: pasted back, a mangled match would be a check that matches
 // nothing (task 15 re-review 2, R1).
@@ -469,6 +510,11 @@ func TestAPastedBackRedactedValueIsRefused(t *testing.T) {
 		"platforms.arista_eos.config_checks[0].match": "    config_checks:\n      - {match: '^snmp-server community Hunter2', says: x}\n",
 		"platforms.arista_eos.device_config[1]": "    device_config: [\"aaa authorization exec default group port49 local\", " +
 			"\"snmp-server community Hunter2 ro\"]\n",
+		"platforms.arista_eos.unreachable.readonly holds": "    unreachable: {readonly: [\"snmp-server community Hunter2 **\"]}\n",
+		"platforms.arista_eos.fallback.readonly":          "    fallback: {readonly: \"a local user, password Hunter2\"}\n",
+		"platforms.arista_eos.fallback.admin":             "    fallback: {admin: \"local admin, password Hunter2\"}\n",
+		"platforms.arista_eos.entity_classes.secret_pattern[0]": "    entity_classes: {secret_pattern: " +
+			"['^snmp-server community Hunter2$']}\n",
 	} {
 		pol, inv := policyFixture(t)
 		raw := readFile(t, pol)
