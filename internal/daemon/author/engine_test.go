@@ -384,3 +384,24 @@ func TestTheEngineNeverAnswersError(t *testing.T) {
 		}
 	}
 }
+
+// The engine's vector drops the pipeline and the raw pairs keep it, so a
+// pattern anchored at the end — one a `platforms:` block may add — matches
+// the vector and not the raw pairs, while a built-in one matches both. Each
+// pattern is judged on its own: the form it missed loses every argument,
+// whatever another pattern did there (spec §5.8; task 11 review C1).
+func TestASecretOneFormMissesIsRedactedInBoth(t *testing.T) {
+	f := newEngineFixture(t, eosBlob())
+	f.h.WithRedactor(func(name string) []platform.Redaction {
+		return append(platform.Redactions(name),
+			platform.Redaction{Match: []string{"tunnel", "psk", "*", "key", "*"}, After: "psk"})
+	})
+	_, rec := f.authorize(t, "cmd=tunnel", "cmd-arg=psk", "cmd-arg=S3cret", "cmd-arg=key", "cmd-arg=K1",
+		"cmd-arg=|", "cmd-arg=no-more", "cmd-arg=<cr>")
+	if strings.Contains(f.log.String(), "S3cret") || strings.Contains(f.log.String(), "K1") {
+		t.Fatalf("a secret reached the log: %s", f.log.String())
+	}
+	if r := rec["request"].(map[string]any); r["redacted"] != true {
+		t.Fatalf("%v", r)
+	}
+}

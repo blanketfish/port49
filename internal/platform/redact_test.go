@@ -338,3 +338,20 @@ func TestAURLPasswordIsRedacted(t *testing.T) {
 		}
 	}
 }
+
+// Two patterns, one matching both forms and one matching only the vector:
+// the raw pairs still lose what the second one hides. Whether a form lost a
+// word is judged per pattern, never per record (task 11 review C1).
+func TestEachPatternIsJudgedOnBothForms(t *testing.T) {
+	rules := []Redaction{{Match: []string{"tunnel", "psk", "*", "key", "*"}, After: "psk"},
+		{Match: []string{"**"}, After: "key"}}
+	raw := []string{"cmd=tunnel", "cmd-arg=psk", "cmd-arg=S3cret", "cmd-arg=key", "cmd-arg=K1", "cmd-arg=|",
+		"cmd-arg=no-more"}
+	vector := []string{"tunnel", "psk", "S3cret", "key", "K1"}
+	r, v, redacted := RedactRecord(rules, raw, vector)
+	if !redacted || strings.Contains(strings.Join(r, " ")+strings.Join(v, " "), "S3cret") ||
+		strings.Contains(strings.Join(r, " ")+strings.Join(v, " "), "K1") || r[0] != "cmd=tunnel" || v[0] != "tunnel" ||
+		len(r) != len(raw) || len(v) != len(vector) {
+		t.Fatalf("raw %q vector %q", r, v)
+	}
+}

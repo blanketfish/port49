@@ -193,29 +193,76 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 }
 
 // RedactRecord applies rules to a record's raw pairs and its vector, which are
-// two spellings of one command. A pattern anchored at both ends can match one
-// and miss the other — the raw pairs drop their `<cr>` — so where either form
-// loses a word and the other matched nothing, the other loses every argument:
-// removing more rather than leaving the secret in the form the pattern
-// missed (spec §5.8).
+// two spellings of one command: the raw pairs keep a pipeline the engine's
+// vector drops, and drop a `<cr>` a vector may keep. Each pattern is judged
+// on its own against both forms as sent. Where it removes words from one form
+// and matches nothing in the other, the other loses every argument — removing
+// more rather than leaving the secret in the form the pattern missed — and
+// that holds whatever another pattern did to either form (spec §5.8). The
+// results of every pattern are merged: a word any of them removed is removed.
 func RedactRecord(rules []Redaction, raw, vector []string) ([]string, []string, bool) {
-	r, inRaw := RedactRaw(rules, raw)
-	v, inVector := Redact(rules, vector)
-	if inRaw == inVector {
-		return r, v, inRaw
-	}
+	at, elements := rawElements(raw)
+	// A URL's password is removed wherever it is, pattern or none; what each
+	// pattern adds is judged against that.
+	baseRaw, urlRaw := Redact(nil, elements)
+	baseVector, urlVector := Redact(nil, vector)
+	raws, vectors := [][]string{baseRaw}, [][]string{baseVector}
 	// Every argument: the rule check refuses this pattern in a file, where it
 	// would blank every record; here it applies to one record already found
 	// to carry a secret.
 	one := 1
 	everything := []Redaction{{Match: []string{"**"}, From: &one}}
-	if !inRaw {
-		r, _ = RedactRaw(everything, raw)
+	redacted := urlRaw || urlVector
+	for _, rule := range rules {
+		r, _ := Redact([]Redaction{rule}, elements)
+		v, _ := Redact([]Redaction{rule}, vector)
+		inRaw, inVector := !slices.Equal(r, baseRaw), !slices.Equal(v, baseVector)
+		switch {
+		case inRaw && !inVector:
+			v, _ = Redact(everything, vector)
+		case inVector && !inRaw:
+			r, _ = Redact(everything, elements)
+		case !inRaw:
+			continue
+		}
+		raws, vectors, redacted = append(raws, r), append(vectors, v), true
 	}
-	if !inVector {
-		v, _ = Redact(everything, vector)
+	if !redacted {
+		return raw, vector, false
 	}
-	return r, v, true
+	out := slices.Clone(raw)
+	for k, e := range merge(elements, raws) {
+		j := strings.IndexAny(out[at[k]], "=*")
+		out[at[k]] = out[at[k]][:j+1] + e
+	}
+	return out, merge(vector, vectors), true
+}
+
+// merge is elements with every word any of outs changed taken from an out
+// that changed it. Redact rebuilds an element it touches from its words, one
+// for one, so the words of an element line up across every out.
+func merge(elements []string, outs [][]string) []string {
+	merged := slices.Clone(elements)
+	for e, orig := range elements {
+		var words []string
+		for _, out := range outs {
+			if out[e] == orig {
+				continue
+			}
+			if words == nil {
+				words = strings.Fields(orig)
+			}
+			for i, w := range strings.Fields(out[e]) {
+				if w != strings.Fields(orig)[i] {
+					words[i] = w
+				}
+			}
+		}
+		if words != nil {
+			merged[e] = strings.Join(words, " ")
+		}
+	}
+	return merged
 }
 
 // RedactRule applies rules to a policy rule's words wherever the rule is
@@ -245,18 +292,7 @@ func RedactRule(rules []Redaction, words []string) ([]string, bool) {
 // and cmd-arg pairs are the command's elements, a trailing `<cr>` aside, and
 // each keeps its own key and separator.
 func RedactRaw(rules []Redaction, raw []string) ([]string, bool) {
-	var at []int
-	var elements []string
-	for i, a := range raw {
-		j := strings.IndexAny(a, "=*")
-		if j < 0 || (a[:j] != "cmd" && a[:j] != "cmd-arg") {
-			continue
-		}
-		at, elements = append(at, i), append(elements, a[j+1:])
-	}
-	if n := len(elements); n > 0 && elements[n-1] == "<cr>" {
-		at, elements = at[:n-1], elements[:n-1]
-	}
+	at, elements := rawElements(raw)
 	redactedElements, redacted := Redact(rules, elements)
 	if !redacted {
 		return raw, false
@@ -267,6 +303,22 @@ func RedactRaw(rules []Redaction, raw []string) ([]string, bool) {
 		out[i] = out[i][:j+1] + redactedElements[k]
 	}
 	return out, true
+}
+
+// rawElements is where in raw the command's elements are, and their values:
+// the cmd and cmd-arg pairs, a trailing `<cr>` aside.
+func rawElements(raw []string) (at []int, elements []string) {
+	for i, a := range raw {
+		j := strings.IndexAny(a, "=*")
+		if j < 0 || (a[:j] != "cmd" && a[:j] != "cmd-arg") {
+			continue
+		}
+		at, elements = append(at, i), append(elements, a[j+1:])
+	}
+	if n := len(elements); n > 0 && elements[n-1] == "<cr>" {
+		at, elements = at[:n-1], elements[:n-1]
+	}
+	return at, elements
 }
 
 // matchWords reports whether pattern matches every word, anchored at both
