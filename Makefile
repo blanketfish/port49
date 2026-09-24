@@ -8,7 +8,10 @@ test:
 	go test ./... -count=1
 
 vet:
-	gofmt -l . | tee /dev/stderr | test -z "$$(cat)"
+# gofmt lists every unformatted file and fails if there is one. No tee to
+# /dev/stderr: that reopens stderr with O_TRUNC, which empties a log that
+# `make test && make vet > log 2>&1` is writing.
+	gofmt -l . | (! grep .)
 	go vet ./...
 
 # Short fuzz pass for every FuzzXxx in the packages that parse bytes off an
