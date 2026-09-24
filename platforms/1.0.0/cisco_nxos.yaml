@@ -53,6 +53,12 @@ platforms:
     # `port49 devices check-config` (spec §5.6). NX-OS 10.x has no enable
     # exchange (L3-nxos-cisco_nxos.md).
     local_accounts: ['^username\s+(\S+)']
+    # This check alone does not catch the case it names: NX-OS 10.4(2) takes
+    # a typed `... group port49 none` and keeps `... group port49`, with no
+    # `none` in the running-config (tests/lab/results/L4-error-cisco_nxos.md,
+    # "(b)"). What catches that device is device_config's `... group port49
+    # local` line, reported MISSING. The check stays for a release that keeps
+    # the word.
     config_checks:
       - match: '^aaa authorization (config-)?commands default .*\b(none|if-authenticated)\s*$'
         says: "the command method list falls back to none or if-authenticated: an operator session runs every command when port49 cannot answer; end it in local (spec §6, decision 23)"
