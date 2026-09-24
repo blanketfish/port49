@@ -42,6 +42,8 @@ type Spec struct {
 	Unreachable          *map[string][]string `yaml:"unreachable,omitempty"`
 	Fallback             *map[string]string   `yaml:"fallback,omitempty"`
 	FallbackNote         *map[string]string   `yaml:"fallback_note,omitempty"`
+	LocalAccounts        *[]string            `yaml:"local_accounts,omitempty"`
+	ConfigChecks         *[]ConfigCheck       `yaml:"config_checks,omitempty"`
 }
 
 // ParseSpecs reads an adapter file: one YAML document whose one key is
@@ -163,6 +165,12 @@ func (s Spec) Over(base Dialect) Dialect {
 		for k, v := range *s.FallbackNote {
 			d.FallbackNote[k] = v
 		}
+	}
+	if s.LocalAccounts != nil {
+		d.LocalAccounts = slices.Clone(*s.LocalAccounts)
+	}
+	if s.ConfigChecks != nil {
+		d.ConfigChecks = slices.Clone(*s.ConfigChecks)
 	}
 	return d
 }
@@ -400,6 +408,19 @@ func Validate(name string, d Dialect) error {
 				level)
 		}
 	}
+	for i, p := range d.LocalAccounts {
+		re, err := regexp.Compile(p)
+		if err != nil || re.NumSubexp() != 1 {
+			return fmt.Errorf("%s[%d] is an RE2 pattern with one capture group, the account's name",
+				field("local_accounts"), i)
+		}
+	}
+	for i, c := range d.ConfigChecks {
+		if _, err := regexp.Compile(c.Match); err != nil || c.Match == "" || strings.TrimSpace(c.Says) == "" {
+			return fmt.Errorf("%s[%d]: match is an RE2 pattern over a configuration line, and says what the line costs",
+				field("config_checks"), i)
+		}
+	}
 	if !slices.Contains(verifications, d.Verified) {
 		return fmt.Errorf("%s is not containerlab, community, or unset", field("verified"))
 	}
@@ -574,6 +595,12 @@ func SpecOf(d Dialect) Spec {
 	}
 	if d.FallbackNote != nil {
 		s.FallbackNote = &d.FallbackNote
+	}
+	if d.LocalAccounts != nil {
+		s.LocalAccounts = &d.LocalAccounts
+	}
+	if d.ConfigChecks != nil {
+		s.ConfigChecks = &d.ConfigChecks
 	}
 	return s
 }

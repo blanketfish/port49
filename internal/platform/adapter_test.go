@@ -35,7 +35,15 @@ var shipped = map[string]Dialect{
 		// ceiling-arista_eos.md; L16-arista_eos.md, command authorization LOCAL.
 		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **",
 			"show users detail **"}},
-		Fallback: map[string]string{"admin": "network-admin: every command, configuration included"},
+		Fallback:      map[string]string{"admin": "network-admin: every command, configuration included"},
+		LocalAccounts: []string{`^username (\S+)`},
+		ConfigChecks: []ConfigCheck{
+			{Match: `^aaa authorization commands \S+ default .*\b(none|if-authenticated)\s*$`, Says: "the command method " +
+				"list falls back to none or if-authenticated: an operator session at 15 runs every command when port49 " +
+				"cannot answer; end it in local (spec §6, decision 23)"},
+			{Match: `^aaa authentication enable default .*\b(local|enable)\s*$`, Says: "enable falls back to a local " +
+				"secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)"},
+		},
 	},
 	"cisco_nxos": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true,
@@ -53,7 +61,13 @@ var shipped = map[string]Dialect{
 		DeviceConfig: []string{"aaa authentication login default group port49 local",
 			"aaa authorization commands default group port49 local",
 			"aaa authorization config-commands default group port49 local"},
-		Fallback: map[string]string{"admin": "network-admin: every command, configuration included"},
+		Fallback:      map[string]string{"admin": "network-admin: every command, configuration included"},
+		LocalAccounts: []string{`^username (\S+)`},
+		ConfigChecks: []ConfigCheck{
+			{Match: `^aaa authorization (config-)?commands default .*\b(none|if-authenticated)\s*$`, Says: "the command " +
+				"method list falls back to none or if-authenticated: an operator session runs every command when port49 " +
+				"cannot answer; end it in local (spec §6, decision 23)"},
+		},
 	},
 	"cisco_iosxe": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true, SplitsInterfaceNames: true,
@@ -74,7 +88,15 @@ var shipped = map[string]Dialect{
 			"aaa accounting commands 15 default start-stop group port49"},
 		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **"},
 			"operator": {"clear ip bgp **", "configure terminal **"}},
-		Fallback: map[string]string{"admin": "level 15: every command, configuration included"},
+		Fallback:      map[string]string{"admin": "level 15: every command, configuration included"},
+		LocalAccounts: []string{`^username (\S+)`},
+		ConfigChecks: []ConfigCheck{
+			{Match: `^aaa authorization commands \d+ default .*\b(none|if-authenticated)\s*$`, Says: "the command method " +
+				"list falls back to none or if-authenticated: an ERROR or an outage then permits every command at that " +
+				"level (tests/lab/results/L4-error-cisco_iosxe.md); end it in local"},
+			{Match: `^aaa authentication enable default .*\b(local|enable)\s*$`, Says: "enable falls back to a local " +
+				"secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)"},
+		},
 	},
 	"juniper_junos": {
 		PipeToken: "|", StripCR: true,
@@ -85,6 +107,10 @@ var shipped = map[string]Dialect{
 			"allow-configuration-regexps", "deny-configuration-regexps"},
 		InertAttributes: []string{"home-directory"},
 		EnableUsername:  EnablePrincipal,
+		LocalAccounts:   []string{`^set system login user (\S+)`, `^\s*user (\S+) \{`},
+		ConfigChecks: []ConfigCheck{{Match: `authentication-order .*\bpassword\b`, Says: "a FAIL from port49 falls " +
+			"through to the local password on this platform (tests/lab/results/L4-juniper_vsrx.md, " +
+			"L4-juniper_vjunos-router.md): a denied operator logs in locally"}},
 	},
 }
 

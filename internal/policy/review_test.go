@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -30,5 +31,20 @@ func TestReviewListsEveryGrantRow(t *testing.T) {
 	}
 	if _, err := p.Review("nobody", noon); err == nil {
 		t.Fatal("an undeclared subject is an error")
+	}
+}
+
+// ServedUsernames is every username a grant reaches the device with, by the
+// subject that claims it; a group subject's members are the directory's, so
+// the group is named instead (spec §5.6; plan 7).
+func TestServedUsernamesAreTheOnesAGrantReaches(t *testing.T) {
+	p := mustParse(t, good)
+	users, groups, err := p.ServedUsernames("leaf-01", noon)
+	if err != nil || !reflect.DeepEqual(users, map[string]string{"alice": "alice", "svc-config-backup": "svc_oxidized"}) ||
+		!reflect.DeepEqual(groups, []string{"netops_admins"}) {
+		t.Fatalf("%v %v %v", users, groups, err)
+	}
+	if _, _, err := p.ServedUsernames("nowhere", noon); err == nil {
+		t.Fatal("a device not in the inventory")
 	}
 }

@@ -64,6 +64,13 @@ platforms:
     # exposure it would be.
     fallback:
       admin: "level 15: every command, configuration included"
+    # `port49 devices check-config` (spec §5.6).
+    local_accounts: ['^username (\S+)']
+    config_checks:
+      - match: '^aaa authorization commands \d+ default .*\b(none|if-authenticated)\s*$'
+        says: "the command method list falls back to none or if-authenticated: an ERROR or an outage then permits every command at that level (tests/lab/results/L4-error-cisco_iosxe.md); end it in local"
+      - match: '^aaa authentication enable default .*\b(local|enable)\s*$'
+        says: "enable falls back to a local secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)"
     # No entity class is defined: the lab's management interface is
     # GigabitEthernet1, a physical port by name.
     #

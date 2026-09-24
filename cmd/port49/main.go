@@ -43,6 +43,7 @@ const usage = `usage:
   port49 platform show [--set VERSION | --policy FILE --inventory FILE] PLATFORM
   port49 platform export [--set VERSION | --policy FILE --inventory FILE] (PLATFORM | --all --dir EMPTY_DIR)
   port49 platform upgrade --policy FILE --inventory FILE --to VERSION [--write]
+  port49 devices check-config --policy FILE --inventory FILE --device NAME CONFIGFILE
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -74,6 +75,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	case "platform":
 		return platformCmd(args[1:], stdout, stderr)
+	case "devices":
+		if len(args) > 1 && args[1] == "check-config" {
+			return checkConfig(args[2:], stdout, stderr)
+		}
 	}
 	fmt.Fprint(stderr, usage)
 	return 2

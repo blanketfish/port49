@@ -129,6 +129,22 @@ type Dialect struct {
 	// or forge (spec §12). Its Spec key, fallback_note, is set only by
 	// SpecOf; a block may not write it.
 	FallbackNote map[string]string
+	// LocalAccounts are RE2 patterns, one capture group each, that find a
+	// device-local account's name in the device's configuration: `port49
+	// devices check-config` warns where one is a username port49 serves
+	// there, which the spec forbids (§5.6, "Local account names MUST NOT
+	// collide").
+	LocalAccounts []string
+	// ConfigChecks are configuration lines the spec says a device must not
+	// carry (§5.6, §6), each with what it costs: the same check names them.
+	ConfigChecks []ConfigCheck
+}
+
+// ConfigCheck is one line a device's configuration must not carry: an RE2
+// pattern over each line, and what the line costs, as the check says it.
+type ConfigCheck struct {
+	Match string `yaml:"match"`
+	Says  string `yaml:"says"`
 }
 
 // builtin is the default set's adapters, platforms/<DefaultSet>/*.yaml, where
@@ -231,6 +247,8 @@ func (d Dialect) clone() Dialect {
 	if d.FallbackNote != nil {
 		d.FallbackNote = maps.Clone(d.FallbackNote)
 	}
+	d.LocalAccounts = slices.Clone(d.LocalAccounts)
+	d.ConfigChecks = slices.Clone(d.ConfigChecks)
 	return d
 }
 

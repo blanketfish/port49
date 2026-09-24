@@ -30,3 +30,8 @@ platforms:
       deny-configuration, allow-commands-regexps, deny-commands-regexps, allow-configuration-regexps,
       deny-configuration-regexps]
     inert_attributes: [home-directory]
+    # `port49 devices check-config` (spec §5.6), set or hierarchical form.
+    local_accounts: ['^set system login user (\S+)', '^\s*user (\S+) \{']
+    config_checks:
+      - match: 'authentication-order .*\bpassword\b'
+        says: "a FAIL from port49 falls through to the local password on this platform (tests/lab/results/L4-juniper_vsrx.md, L4-juniper_vjunos-router.md): a denied operator logs in locally"

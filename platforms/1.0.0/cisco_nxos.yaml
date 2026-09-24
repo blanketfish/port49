@@ -50,6 +50,12 @@ platforms:
     # changed configuration (L16-cisco_nxos.md, command authorization LOCAL).
     fallback:
       admin: "network-admin: every command, configuration included"
+    # `port49 devices check-config` (spec §5.6). NX-OS 10.x has no enable
+    # exchange (L3-nxos-cisco_nxos.md).
+    local_accounts: ['^username (\S+)']
+    config_checks:
+      - match: '^aaa authorization (config-)?commands default .*\b(none|if-authenticated)\s*$'
+        says: "the command method list falls back to none or if-authenticated: an operator session runs every command when port49 cannot answer; end it in local (spec §6, decision 23)"
     # No priv-lvl is rendered, so the token's ceiling takes its number here:
     # operator numbers 15, admin's, on the owner's ruling of 2026-09-24
     # (spec §6, decision 23).
