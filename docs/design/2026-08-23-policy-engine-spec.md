@@ -2492,10 +2492,15 @@ can carry it, on `cisco_nxos` (L16); `local-user-name` and `user-permissions` on
 `allow-commands`, `deny-commands`, `allow-configuration`, `deny-configuration` and their
 `-regexps` forms (vendor-documented, unmeasured, L18) — and the names it holds to carry none.
 The inert list is seeded with this section's own motivating case, `home-directory`, on every
-shipped adapter but `cisco_iosxe`. vEOS and the N9Kv leave a session with it beside admin's
-reply unchanged. The C8000V refuses the session for it, `% Authorization failed.`
-(`tests/lab/results/L22-*.md`), so on IOS-XE it bears privilege like every other name, and a
-policy that sends it there quarantines the device. On `juniper_junos` it is unmeasured. A placeholder is allowed only in an attribute
+shipped adapter but `cisco_iosxe`, and holds what else the lab measured inert: `idletime` and
+`timeout` on `arista_eos`, `cisco_nxos` and `cisco_iosxe`. vEOS and the N9Kv leave a session
+with any of the three beside admin's reply unchanged — the same level or role, both ceiling
+commands still sent to port49, `show version` still permitted — and the C8000V does the same
+for `idletime*30` and `timeout*480` (`tests/lab/results/L22-*.md`, "Inert candidates"). The
+C8000V refuses the session for `home-directory`, `% Authorization failed.`
+(`L22-cisco_iosxe.md`), so on IOS-XE it bears privilege like every other name, and a policy
+that sends it there quarantines the device. On `juniper_junos` all three are unmeasured, and
+only `home-directory` is listed. A placeholder is allowed only in an attribute
 listed inert on its platform key, or under `all` on every platform in the inventory; anywhere
 else — a privilege-bearing attribute or one no adapter lists — it is refused at load. A
 substitution refuses only `=`, `*` and control characters, so `priv-lvl={username}` would hide
@@ -2518,10 +2523,10 @@ port49 cannot check what an attribute means. It MUST check everything else:
   attribute L18 tried, under either flag, and a run of refusals stops it answering SSH for
   about a minute, break-glass included (`tests/lab/results/L18-cisco_iosxe.md`). L22 saw the
   same for `home-directory`. It also found `idletime*30` and `timeout*480` accepted beside
-  `priv-lvl=15` and inert (`tests/lab/results/L22-cisco_iosxe.md`). The adapter still lists
-  `priv-lvl` alone, which is what port49 renders. A composition whose reply carries any other
-  attribute fails the joint check and quarantines the device (§10): closed without a reply,
-  it falls to local at once. Where an adapter sets
+  `priv-lvl=15` and inert (`tests/lab/results/L22-cisco_iosxe.md`), so the adapter lists
+  `priv-lvl`, which is what port49 renders, and those two. A composition whose reply carries
+  any other attribute fails the joint check and quarantines the device (§10): closed without a
+  reply, it falls to local at once. Where an adapter sets
   `accepted_attributes`, a `priv-lvl` in the reply must also be one of the levels that
   adapter's `privilege` renders (1, 7 and 15 on `cisco_iosxe`): what the device lets any other
   level run is unmeasured, so a role or grant layering another fails the joint check the same
@@ -2578,8 +2583,9 @@ exec` line, operator is readonly (`ceiling-cisco_iosxe.md`, "Reading"). Without 
 command method list, the device runs a level-7 command without asking port49: with the
 `privilege exec` line and no `aaa authorization commands 7`, operator's `clear counters` ran
 and port49 saw no authorization request for it (`tests/lab/results/L22-carried-cisco_iosxe.md`).
-IOS-XE's `operator` rendering stays *provisional on L22* (decision 25) until that row
-closes. `port49 devices check-config` catches the missing list: it requires every
+With both in place, L22 measured `priv-lvl=7` as the rung: level 7, `clear counters` sent to
+port49, `configure terminal` refused in the parser (`L22-cisco_iosxe.md`; decision 25).
+`port49 devices check-config` catches the missing list: it requires every
 `device_config` line of the adapter, and fails on one the configuration lacks (§12).
 
 **The device role is the other half, and it is what binds when port49 cannot answer.** With
@@ -2763,6 +2769,7 @@ containerlab matrix where an image exists, and are both overridable and contribu
 # platforms/1.0.0/arista_eos.yaml, abridged
 platforms:
   arista_eos:
+    verified: containerlab         # tests/lab/results/L22-arista_eos.md
     supports: [session, commands]  # config_commands is unmeasured (§9)
     privilege:
       readonly: ["priv-lvl=1",  "roles=network-operator"]
@@ -3217,8 +3224,9 @@ appearing identical to one verified on every commit, and so must a built-in adap
 changed: SOURCE says `overridden`, `variant` or `local`, and VERIFIED `—`. `platform show
 <name>` prints a definition — the built-in, or with `--policy` the merged result — headed by
 where it came from and followed by the built-in redaction patterns; `platform export <name>`
-prints the file alone, as a block that pastes back into a policy, and `platform export --all
---dir DIR` writes one per platform, a directory `platforms/` would accept. A set carries only
+prints the file alone, as a block that pastes back into a policy — without `verified`, which a
+block may not claim — and `platform export --all --dir DIR` writes one per platform, a
+directory `platforms/` would accept. A set carries only
 what the lab measured, so `--all` writes each `fallback` as the set measured it and drops a
 block's note; `export <name>` writes the note under `fallback`, where the block wrote it, with
 the comment `# operator note, not measured` on its line (§12).
@@ -4721,11 +4729,12 @@ everywhere a role binds — `roles=network-operator` beside `priv-lvl=15` on EOS
 `shell:roles*network-operator` on NX-OS — and an outage never hands an operator
 configuration. On IOS-XE, whose level 7 is the operator rung once the device is told what 7
 runs, `operator` is `priv-lvl=7`, the adapter carries the reference configuration it depends
-on, and the device takes `priv-lvl` and nothing else, so any other attribute quarantines it
-(`L18-cisco_iosxe.md`). *Provisional on L22* until the adapters' own replies are measured,
-and operator's reply is measured with port49 stopped under an open session: L16 measured the
-role binding with the method list pointed at `local` alone, not a list falling back to it.
-(§6, §8)
+on, and the device takes `priv-lvl` and, of the other attributes measured, only `idletime`
+and `timeout`, so any other attribute quarantines it (`L18-cisco_iosxe.md`,
+`L22-cisco_iosxe.md`). L22 measured each adapter's reply at every level applied as rendered,
+and with port49 stopped under an open session on a method list falling back to `local`,
+operator's reply refused a configuration change on all three platforms
+(`tests/lab/results/L22-*.md`). (§6, §8)
 
 ### Deferred, with reasons
 
@@ -5179,7 +5188,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | closed — measured 2026-09-24; `tests/lab/results/L7-arista_eos.md`, `L7-login-arista_eos.md`, `L7-cisco_nxos.md`, `L7-nxapi-cookie-cisco_nxos.md`. eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. Both cookies measured: eAPI `/login` 2026-09-23 and NX-API `nxapi_auth` 2026-09-24 — a request carrying the cookie runs no authentication and no session authorization, only its command authorizations (NX-API: the command plus `end`; `configure terminal` too for `cli_conf`). The `nxapi_auth` cookie expires after 10 minutes idle (`NXAPI timeout 10`), ends on `POST /logout`, and wins over a wrong Basic password sent beside it; NAPALM `nxos` never uses it (21 authentications for a six-call job) while Ansible `httpapi` does (one); see below |
 | **L8** | The maximum password length each platform accepts at an interactive prompt. (PAP was split out to L19 on 2026-09-23.) | The 30-character handle (design document §8) | all | closed — measured 2026-09-23; `tests/lab/results/L8-cisco_nxos.md`, `L8-cisco_iosxe.md`; and 2026-09-20, `L8-arista_eos.md`, `L8-juniper_vjunos-router.md`, `L8-juniper_vsrx.md`. The 30-character handle logs in on all five images. Longest intact: **127 on the N9Kv**, which refuses 128 and above locally and never asks port49; at least 1024 on IOS-XE; at least 138 on vEOS and both Junos images, where nothing longer was tried; see below |
 | **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. | Projection generator constraints (§8) | Junos | open |
-| **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos. **Reading 3's conclusion is corrected by L17 (2026-09-21):** a denied Junos session authorization is advisory under the configuration this lab deploys, not on this vendor — `tacplus-options strict-authorization` makes the same denial refuse the login; see below |
+| **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos. **Reading 3's conclusion is corrected by L17 (2026-09-21):** a denied Junos session authorization is advisory under the configuration this lab deploys, not on this vendor — `tacplus-options strict-authorization` makes the same denial refuse the login; see below. The three per-command adapters' spellings are measured by plan 5a (tests/lab/results/L22-*.md); Junos's wait on L12 (plan 5b), so the row stays open |
 | **L11** | Junos precedence, repetition, and length behavior for wire and class rules. | The projection model (§8) | Junos (SRX) | **closed** — measured 2026-09-03; results in `port49-junos-lab-tests-results.md` |
 | **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
 | **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 2s**, which is the "answered with increasing delay" of design document §11. The ceiling was 5s until this row measured device reply timeouts; **2026-09-21 it was lowered to 2s**, which is under every timeout measured here, so a FAIL is always delivered inside it (`tests/lab/results/L13-*.md`). A ceiling above a device's timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX, vEOS, N9Kv and Catalyst 8000V: about 3s on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, which also retransmits, and above 12s on IOS-XE, which this sweep does not bound from above; past that timeout every platform that reached it takes the fall-through branch; other transports and the next-server case unmeasured; see below |
@@ -5191,7 +5200,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L19** | The maximum password length each platform accepts via PAP, on every login path where the device uses PAP. | The 30-character handle (design document §8): an authentication START carries a PAP password in `data`, whose length field is one byte, so PAP can bound the handle where the ASCII prompt does not — and NX-OS uses PAP for every SSH login by default | all | open — added 2026-09-23, split from L8. On the N9Kv an SSH login is carried as PAP and 127 characters arrive (`tests/lab/results/L8-cisco_nxos.md`); PAP on any other path, and on EOS, Junos and IOS-XE, which this lab does not configure for it, is unmeasured; see below |
 | **L20** | Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a **wrong password** for the same user inside that window is also accepted; and whether a credential port49 would now refuse is re-checked inside it. | Whether a revocation in port49 reaches an API client at all (§5.1.4), and decision 15's bound on how long a spent token works — the receipt's `receipt_idle_ttl` and `receipt_max_age` act only on exchanges the device sends | IOS-XE; then every HTTP API transport | open — added 2026-09-23. IOS-XE RESTCONF answered a repeat of an already-spent token, 3s later, with `200 OK` and **zero** TACACS+ traffic (`tests/lab/results/L1-restconf-cisco_iosxe.md`), so a revocation in port49 cannot reach that repeat. **Measured 2026-09-24 on IOS-XE** (`tests/lab/results/L20-cisco_iosxe.md`): the cache is per credential (username and password), not per username or client address; a wrong password inside it goes to port49 and is refused; it lasts about 10s fixed from the authentication that filled it; and a cached credential is not re-checked, even with port49 answering every authentication ERROR. Open: every other HTTP API transport, so the row stays open; see below |
 | **L21** | Whether each platform sends the command words the operator typed (`sh run`) or the resolved ones (`show running-config`) on a per-command authorization request, and on the accounting record for it. | `expands_abbreviations` per platform (§3 rule 4, §8): where it is `false` a deny's word matches its own abbreviations, which over-denies, and where it is wrongly `true` an abbreviation slips past a deny | EOS, NX-OS, IOS-XE | closed — measured 2026-09-24; `tests/lab/results/L21-arista_eos.md`, `L21-cisco_nxos.md`, `L21-cisco_iosxe.md`. All three images send the **resolved** words, on the request and on the accounting record, over interactive SSH: `sh ver` arrives as `cmd=show cmd-arg=version`, and `sh clock` was denied by a `show clock` deny on all three. Interface names differ: IOS-XE splits `Gi1` into `GigabitEthernet`, `1`; vEOS and the N9Kv join it (`Ethernet1`, `Ethernet1/1`). Other transports and releases are outside what was measured; see below |
-| **L22** | What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of `clear counters`, `clear ip bgp *` and `configure terminal` it runs, refuses in its own parser, or sends port49 — and which level or role it reports, for the exact reply each built-in adapter sends; and, with port49 stopped under an open session on a command method list ending in `local`, whether operator's reply can change the configuration where admin's can, and whether it runs `clear counters` and `clear ip bgp *`; and, on IOS-XE with `privilege exec level 7 clear counters` configured and no `aaa authorization commands 7` list, whether a level-7 session runs `clear counters` without asking port49. | Decision 25; the adapters' `privilege`, `unreachable` and `fallback` (§8); the dead-rule and fallback-exposure reports (§12) | EOS, NX-OS, IOS-XE | open — added by plan 5. Measured by hand 2026-09-24 with single attributes (`tests/lab/results/ceiling-arista_eos.md`, `ceiling-cisco_nxos.md`, `ceiling-cisco_iosxe.md`): level 1 refuses all three in the parser on vEOS and IOS-XE; IOS-XE level 7 with `privilege exec level 7 clear counters` runs `clear counters` alone; at 15 on vEOS and under every N9Kv role, all three reach port49. The adapters' exact replies and the fallback are plan 5a's Task 17 (`tests/lab/results/L22-*.md`) |
+| **L22** | What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of `clear counters`, `clear ip bgp *` and `configure terminal` it runs, refuses in its own parser, or sends port49 — and which level or role it reports, for the exact reply each built-in adapter sends; and, with port49 stopped under an open session on a command method list ending in `local`, whether operator's reply can change the configuration where admin's can, and whether it runs `clear counters` and `clear ip bgp *`; and, on IOS-XE with `privilege exec level 7 clear counters` configured and no `aaa authorization commands 7` list, whether a level-7 session runs `clear counters` without asking port49. | Decision 25; the adapters' `privilege`, `unreachable` and `fallback` (§8); the dead-rule and fallback-exposure reports (§12) | EOS, NX-OS, IOS-XE | closed — measured 2026-09-24; tests/lab/results/L22-arista_eos.md, L22-cisco_nxos.md, L22-cisco_iosxe.md. Each built-in adapter's reply at readonly, operator and admin was applied as the adapter says: on vEOS level 1 then 15 with network-operator, network-operator and network-admin; on the N9Kv network-operator, network-operator, network-admin, every ceiling command sent to port49; on IOS-XE 17.13.01a levels 1, 7 and 15, level 7 sending `clear counters` and refusing `configure terminal` in the parser. With port49d stopped under an open session and the method list falling back to local, operator's reply could not change the configuration on any of the three, and admin's could on vEOS and the N9Kv. Beside it (`L22-carried-*.md`): vEOS's network-operator still ran `clear counters` and passed `clear ip bgp *` through authorization, the N9Kv's was refused both, and IOS-XE refused a token session every command at 7 and at 15, admin's included; on IOS-XE with no `aaa authorization commands 7` list, operator's `clear counters` ran without asking port49. Inert beside admin's reply: `home-directory`, `idletime` and `timeout` on vEOS and the N9Kv; `idletime` and `timeout` on IOS-XE, which refused the session for `home-directory`. By hand 2026-09-24: tests/lab/results/ceiling-*.md |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
