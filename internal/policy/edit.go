@@ -262,6 +262,12 @@ func SetPlatformSet(raw []byte, version string) ([]byte, error) {
 		// One line holds every key: rewriting it would drop the rest.
 		return nil, errors.New("the policy file is one flow mapping; write it in block style to move the pin")
 	}
+	// YAML ends a line at a bare CR too, and the split below does not: the
+	// node's line numbers would point past its lines (task 13 review).
+	if bytes.Contains(bytes.ReplaceAll(raw, []byte("\r\n"), nil), []byte("\r")) {
+		return nil, errors.New("the policy file ends a line with a bare CR; save it with LF or CRLF line endings " +
+			"to move the pin")
+	}
 	lines := bytes.SplitAfter(raw, []byte("\n"))
 	eol := "\n"
 	if bytes.HasSuffix(lines[0], []byte("\r\n")) {

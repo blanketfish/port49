@@ -595,3 +595,15 @@ func TestSetPlatformSetTouchesOnlyThePin(t *testing.T) {
 		}
 	}
 }
+
+// A file whose lines end in a bare CR is one line to a split on LF, and YAML
+// reads it as many: the pin's line number points past the split, and the
+// rewrite panicked with nothing written. It is refused, naming the line
+// endings (task 13 review, parked).
+func TestSetPlatformSetRefusesCROnlyLineEndings(t *testing.T) {
+	raw := []byte("scopes: [{name: all_devices, match: {}}]\rplatform_set: 1.0.0\rsubjects: []\r")
+	out, err := SetPlatformSet(raw, "1.1.0")
+	if err == nil || out != nil || !strings.Contains(err.Error(), "line endings") {
+		t.Fatalf("%q, %v", out, err)
+	}
+}
