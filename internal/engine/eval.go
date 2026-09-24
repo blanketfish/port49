@@ -117,8 +117,8 @@ func compileRule(verdict, rule, role string, classes map[string][]string, n Norm
 			head.joinHead, tail.joinTail = true, true
 			shapes = append(shapes, []cterm{head, tail})
 		}
-		if len(out)*len(shapes) > maxBranches {
-			return nil, fmt.Errorf("deny %q splits more than %d ways; write it as more than one rule", canon, maxBranches)
+		if len(out)*len(shapes) > maxSplits {
+			return nil, fmt.Errorf("deny %q splits more than %d ways; write it as more than one rule", canon, maxSplits)
 		}
 		var next []compiled
 		for _, c := range out {
@@ -131,6 +131,13 @@ func compileRule(verdict, rule, role string, classes map[string][]string, n Norm
 	}
 	return out, nil
 }
+
+// maxSplits bounds the shapes one deny compiles to where the platform splits
+// names: each joinable term doubles them, so it allows ten such terms. A blob
+// past it is refused, which quarantines every device it reaches (spec §10),
+// so the bound sits far past any rule written by hand rather than at the
+// pattern-branch bound.
+const maxSplits = 1024
 
 // joinable reports whether a term may match a name and an index joined: a
 // `*`, a class or regex may, and a word that ends in an index.

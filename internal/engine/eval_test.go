@@ -341,6 +341,21 @@ func TestADenyAnyTermMatchesTheSplitName(t *testing.T) {
 	expect(t, compileBlob(t, pb), "default interface GigabitEthernet 1", false, decision.NoRuleMatched)
 }
 
+// A deny's joinable terms each double its shapes on a platform that splits
+// names; a rule long enough to pass the bound is refused, which quarantines
+// every such device (spec §10), so the bound sits far past any rule an
+// operator writes: seven `*` compile, and eleven are refused with the rule
+// named.
+func TestASplitDenyIsBoundedFarPastARealRule(t *testing.T) {
+	b := testBlob(true, "admin:permit **", "d:deny * * * * * * *")
+	b.Normalize.SplitsInterfaceNames = true
+	expect(t, compileBlob(t, b), "a b c d e f GigabitEthernet 1", false, decision.NoPermitDominatesDeny)
+	b.Rules[1].Rule = "* * * * * * * * * * *"
+	if _, err := Compile(b); err == nil || !strings.Contains(err.Error(), `deny "* * * * * * * * * * *" splits more than`) {
+		t.Fatalf("Compile = %v", err)
+	}
+}
+
 // A platform measured sending no per-command authorization (Junos; spec §13
 // decision 21) has no command to widen for, so no deny is widened or refused
 // for it: a command that did arrive is matched as written.
