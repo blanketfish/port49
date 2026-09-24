@@ -134,14 +134,14 @@ func (s Spec) Over(base Dialect) Dialect {
 		d.Verified = *s.Verified
 	}
 	if s.Unreachable != nil {
-		d.Unreachable = mergeLists(d.Unreachable, *s.Unreachable)
+		d.Unreachable = unionLists(d.Unreachable, *s.Unreachable)
 	}
 	if s.Fallback != nil {
 		if d.Fallback == nil {
 			d.Fallback = map[string]string{}
 		}
 		for k, v := range *s.Fallback {
-			d.Fallback[k] = v
+			d.Fallback[k] = fallbackOver(d.Fallback[k], v)
 		}
 	}
 	return d
@@ -157,6 +157,82 @@ func mergeLists(base, over map[string][]string) map[string][]string {
 		base[k] = slices.Clone(v)
 	}
 	return base
+}
+
+// unionLists adds every entry of over to base's list for its key, a map Over
+// already owns, keeping base's: what the lab measured the device refuses, a
+// block adds to and never takes away (spec §8, §12). A nil base becomes a new
+// map.
+func unionLists(base, over map[string][]string) map[string][]string {
+	if base == nil {
+		base = make(map[string][]string, len(over))
+	}
+	for k, v := range over {
+		for _, e := range v {
+			if !slices.Contains(base[k], e) {
+				base[k] = append(base[k], e)
+			}
+		}
+	}
+	return base
+}
+
+// operatorNote opens the part of a fallback text a `platforms:` block wrote
+// over the set's: the operator's word, never the lab's.
+const operatorNote = "(operator note: "
+
+// fallbackOver is a block's fallback text v laid over base's: base's measured
+// text always stays first, and v follows it as the operator's note unless it
+// restates it (spec §12). Over nothing, v is the text as written.
+func fallbackOver(base, v string) string {
+	set, _ := FallbackParts(base)
+	switch vSet, _ := FallbackParts(v); {
+	case set == "" || vSet == set:
+		return v
+	case strings.TrimSpace(v) == "":
+		return base
+	}
+	return set + " " + NoteFallback(v)
+}
+
+// NoteFallback is v labelled as the operator's note, as a block's fallback
+// text for a level no set measured reads (spec §12). A note already labelled
+// is itself.
+func NoteFallback(v string) string {
+	if set, note := FallbackParts(v); set == "" && note != "" {
+		return v
+	}
+	return operatorNote + v + ")"
+}
+
+// FallbackParts splits a fallback text into what the set measured and the
+// operator's note after it, either of them empty, so a report can redact each
+// on its own (spec §5.8).
+func FallbackParts(text string) (set, note string) {
+	i := strings.Index(text, operatorNote)
+	if i < 0 || !strings.HasSuffix(text, ")") || (i > 0 && text[i-1] != ' ') {
+		return text, ""
+	}
+	return strings.TrimSuffix(text[:i], " "), strings.TrimSuffix(text[i+len(operatorNote):], ")")
+}
+
+// KeepMeasured is d with ref's unreachable rules and fallback texts laid back
+// under it: what the set measured about the device a block cannot discard,
+// `replace: true` included, since the device behind the name is the same
+// device (spec §8, §12).
+func KeepMeasured(d, ref Dialect) Dialect {
+	d = d.clone()
+	d.Unreachable = unionLists(d.Unreachable, ref.Unreachable)
+	if len(d.Unreachable) == 0 {
+		d.Unreachable = nil
+	}
+	for _, level := range sortedKeys(ref.Fallback) {
+		if d.Fallback == nil {
+			d.Fallback = map[string]string{}
+		}
+		d.Fallback[level] = fallbackOver(ref.Fallback[level], d.Fallback[level])
+	}
+	return d
 }
 
 // verifications are what `verified` may say (spec §8, "Knowing what is
@@ -322,7 +398,7 @@ func Validate(name string, d Dialect) error {
 		}
 	}
 	for _, level := range sortedKeys(d.Fallback) {
-		if strings.TrimSpace(d.Fallback[level]) == "" {
+		if set, note := FallbackParts(d.Fallback[level]); strings.TrimSpace(set+note) == "" {
 			return fmt.Errorf("%s is empty: say what the device gives a session at %s on its own", field("fallback."+level),
 				level)
 		}

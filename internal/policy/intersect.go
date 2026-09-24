@@ -64,7 +64,7 @@ func (p *Policy) intersections(now time.Time) []Finding {
 					add(FindingFallbackExposure, name+"\x00"+d.Platform+"\x00"+level,
 						"subject %q at %s: port49's rules confine it to %s, and if port49 cannot answer and the device "+
 							"falls back to local it gets %s: more than the policy grants (spec §6, §12)", name, on,
-						strings.Join(redacted(redact, permitsOf(res.Blob)), ", "), fallback)
+						strings.Join(redacted(redact, permitsOf(res.Blob)), ", "), redactedFallback(redact, fallback))
 				}
 			}
 		}
@@ -138,6 +138,22 @@ func permitsOf(b engine.Blob) []string {
 		return []string{"nothing"}
 	}
 	return out
+}
+
+// redactedFallback is an adapter's fallback text as the exposure prints it:
+// the set's text and the operator's note are policy text a `platforms:` block
+// can write and are printed unquoted, so each is redacted on its own (spec
+// §5.8), a pattern being anchored at both ends of what it reads.
+func redactedFallback(patterns []platform.Redaction, text string) string {
+	set, note := platform.FallbackParts(text)
+	out := redacted(patterns, []string{set, note})
+	switch {
+	case note == "":
+		return out[0]
+	case set == "":
+		return platform.NoteFallback(out[1])
+	}
+	return out[0] + " " + platform.NoteFallback(out[1])
 }
 
 // redacted is rules as a report lists them unquoted, each redacted by

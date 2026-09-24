@@ -195,6 +195,11 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 			"platforms.cisco_iosxe.privilege.admn: level admn is not declared"},
 		{"a ceiling entry for an undeclared level", "  cisco_nxos: {ceiling_levels: {superuser: 15}}\n",
 			"platforms.cisco_nxos.ceiling_levels.superuser: level superuser is not declared"},
+		// Both would only add a report, so a typo would silently add none.
+		{"an unreachable entry for an undeclared level", "  arista_eos: {unreachable: {radonly: [\"clear **\"]}}\n",
+			"platforms.arista_eos.unreachable.radonly: level radonly is not declared"},
+		{"a fallback entry for an undeclared level", "  arista_eos: {fallback: {admni: \"all of it\"}}\n",
+			"platforms.arista_eos.fallback.admni: level admni is not declared"},
 		{"the set's role_order reversed under replace", "  cisco_nxos: {replace: true, role_order: {shell:roles: [network-admin, network-operator]}}\n",
 			"platforms.cisco_nxos.role_order.shell:roles: network-operator is ranked above network-admin"},
 	} {

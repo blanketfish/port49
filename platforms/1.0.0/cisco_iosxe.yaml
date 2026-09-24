@@ -54,7 +54,7 @@ platforms:
       - aaa accounting commands 7 default start-stop group port49
       - aaa accounting commands 15 default start-stop group port49
     # The parser refuses these without asking port49 (ceiling-cisco_iosxe.md),
-    # at 7 with the reference line above in place.
+    # at 7 with `privilege exec level 7 clear counters` in place.
     unreachable:
       readonly: [clear counters **, clear ip bgp **, configure terminal **]
       operator: [clear ip bgp **, configure terminal **]

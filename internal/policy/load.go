@@ -333,6 +333,25 @@ func (p *Policy) buildPlatforms(f file) error {
 		// The lab verified the set's adapter, not this one: `platform show`
 		// and `export` print the claim only where nothing changed it (spec §8).
 		d.Verified = ""
+		shippedAs := name
+		if b.BasedOn != "" {
+			shippedAs = b.BasedOn
+		}
+		// What the set measured the device refuses, and gives a session on
+		// its own, the reports keep whatever the block says (spec §12); text
+		// the block gives a level the set measured nothing for is the
+		// operator's note, never read as a measurement.
+		ref, measured := builtin[shippedAs]
+		if measured {
+			d = platform.KeepMeasured(d, ref)
+		}
+		if b.Spec.Fallback != nil {
+			for _, level := range sortedKeys(*b.Spec.Fallback) {
+				if ref.Fallback[level] == "" {
+					d.Fallback[level] = platform.NoteFallback(d.Fallback[level])
+				}
+			}
+		}
 		if err := platform.Validate(name, d); err != nil {
 			return err
 		}
@@ -344,11 +363,7 @@ func (p *Policy) buildPlatforms(f file) error {
 		if err := inertBearsNoPrivilege(at, d); err != nil {
 			return err
 		}
-		shippedAs := name
-		if b.BasedOn != "" {
-			shippedAs = b.BasedOn
-		}
-		if ref, ok := builtin[shippedAs]; ok {
+		if measured {
 			if err := keepsSetClaims(at, shippedAs, d, ref, p.set); err != nil {
 				return err
 			}
@@ -629,7 +644,8 @@ func (p *Policy) checkBlockOrder(file) error {
 		for _, entries := range []struct {
 			key    string
 			levels []string
-		}{{"privilege", mapKeys(b.Privilege)}, {"ceiling_levels", mapKeys(b.CeilingLevels)}} {
+		}{{"privilege", mapKeys(b.Privilege)}, {"ceiling_levels", mapKeys(b.CeilingLevels)},
+			{"unreachable", mapKeys(b.Unreachable)}, {"fallback", mapKeys(b.Fallback)}} {
 			for _, l := range entries.levels {
 				if !slices.Contains(p.levels, l) {
 					return fmt.Errorf("platforms.%s.%s.%s: level %s is not declared; the levels are %s", name,

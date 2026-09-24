@@ -3065,9 +3065,9 @@ that is the ticket-queue bottleneck the design exists to remove.
 
 Built-ins ship embedded in the binary; an operator's blocks live in the policy file, under
 its `platforms:` key, and merge over them per top-level key. A key whose value is a map —
-`privilege`, `ceiling_levels`, `entity_classes`, `unreachable`, `fallback` — merges per entry,
-so a block that adds one class keeps the rest; a list or a value replaces the built-in's
-whole; `redact` adds and never removes (§5.8):
+`privilege`, `ceiling_levels`, `entity_classes` — merges per entry, so a block that adds one
+class keeps the rest; a list or a value replaces the built-in's whole; `redact` adds and never
+removes (§5.8); `unreachable` and `fallback` add and never remove what the set measured (§12):
 
 ```yaml
 # in the policy file — adds one class, inherits everything else
@@ -4039,6 +4039,12 @@ LOCAL command authorization refused configuration. Whether it also refuses `clea
 `clear ip bgp *` is an open question of L22. The report has no exemption for `operator`. It
 judges every level by that level's adapter `fallback` entry. A level with no entry, which is
 operator's case until L22 closes, is not reported, and that silence is unmeasured, not safe.
+A `platforms:` block adds to both and takes nothing away, `replace: true` and `based_on:`
+included: its `unreachable` rules join the set's for the level, and its `fallback` text is
+printed after the set's as `(operator note: ...)`, or alone in that form for a level the set
+measured nothing for, so it never reads as a measurement. An entry for a level the policy
+does not declare is refused. The rules and texts are printed unquoted, so the report redacts
+them itself (§5.8).
 Each is reported by `port49 policy test` and does not fail it: the answer is a review question,
 not a wrong policy.
 

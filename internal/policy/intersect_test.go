@@ -3,6 +3,8 @@ package policy
 import (
 	"strings"
 	"testing"
+
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // A permit the device refuses in its own parser at the session's level is
@@ -100,5 +102,111 @@ grants:
 		if strings.Contains(f, "public") || !strings.Contains(f, "snmp-server community «redacted» **") {
 			t.Errorf("%q", f)
 		}
+	}
+}
+
+// intersectBody is a readonly role with a dead permit on EOS and a confined
+// admin subject, for the block tests below.
+const intersectBody = `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: noc, privilege: readonly, permit: [show **, clear counters]}
+  - {name: backup, privilege: admin, permit: [show **]}
+subjects:
+  - {name: a, identity: "user:a@example.com", username: a, token_ttl: 60s}
+  - {name: svc, identity: "app:svc", username: svc, token_ttl: 60s}
+grants:
+  - {subject: a, scope: all_devices, roles: [noc]}
+  - {subject: svc, scope: all_devices, roles: [backup]}
+`
+
+// printed is each finding as `port49 policy test` and port49d print it,
+// through the redaction of quoted values.
+func printed(p *Policy, kind string) []string {
+	var out []string
+	for _, f := range findings(p, kind) {
+		out = append(out, platform.RedactQuoted(p.Redactions(), f))
+	}
+	return out
+}
+
+func onPlatform(list []string, name string) []string {
+	var out []string
+	for _, f := range list {
+		if strings.Contains(f, " on "+name+":") {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// A block adds to what the set measured and never takes it away (spec §8,
+// §12): its unreachable rules join the set's for the level, and its fallback
+// text follows the set's as the operator's note. `replace: true` keeps both
+// too: the device behind the name is the same device.
+func TestABlockCannotWeakenTheIntersectionReports(t *testing.T) {
+	for name, block := range map[string]string{
+		"a shorter list and new text": `platforms:
+  arista_eos:
+    unreachable: {readonly: [show users detail **]}
+    fallback: {admin: "read-only in practice"}
+`,
+		"replace": `platforms:
+  arista_eos: {replace: true, privilege_attributes: [priv-lvl, roles], role_order: {roles: [network-operator, network-admin]},
+    privilege: {readonly: [priv-lvl=1, roles=network-operator], operator: [priv-lvl=15, roles=network-operator],
+      admin: [priv-lvl=15, roles=network-admin]}}
+`,
+	} {
+		p := mustParse(t, block+intersectBody)
+		if dead := onPlatform(findings(p, FindingDeadRule), "arista_eos"); len(dead) != 1 ||
+			!strings.HasPrefix(dead[0], `role "noc": permit "clear counters" cannot be reached`) {
+			t.Errorf("%s: the set's dead rule: %q", name, dead)
+		}
+		exposed := onPlatform(findings(p, FindingFallbackExposure), "arista_eos")
+		if len(exposed) != 1 || !strings.Contains(exposed[0], "it gets network-admin: every command, configuration included") {
+			t.Errorf("%s: the set's fallback: %q", name, exposed)
+		}
+		if name != "replace" && !strings.Contains(exposed[0], "included (operator note: read-only in practice): more") {
+			t.Errorf("%s: the block's note: %q", name, exposed[0])
+		}
+	}
+}
+
+// The fallback text, the operator's note included, and the dead rule's
+// unreachable list are printed unquoted, so they are redacted where the
+// report is built (spec §5.8).
+func TestTheIntersectionReportsRedactBlockText(t *testing.T) {
+	p := mustParse(t, `platforms:
+  arista_eos:
+    unreachable: {readonly: [snmp-server community public **]}
+    fallback: {admin: "snmp-server community Hunter2 ro"}
+`+strings.Replace(intersectBody, "clear counters]", "clear counters, snmp-server community public **]", 1))
+	dead := onPlatform(printed(p, FindingDeadRule), "arista_eos")
+	if len(dead) != 2 {
+		t.Fatalf("%q", dead)
+	}
+	for _, f := range dead {
+		if strings.Contains(f, "public") || !strings.Contains(f, "snmp-server community «redacted» **;") {
+			t.Errorf("%q", f)
+		}
+	}
+	exposed := onPlatform(printed(p, FindingFallbackExposure), "arista_eos")
+	if len(exposed) != 1 || strings.Contains(exposed[0], "Hunter2") ||
+		!strings.Contains(exposed[0], "(operator note: snmp-server community «redacted» «redacted»)") {
+		t.Errorf("%q", exposed)
+	}
+}
+
+// A block may give a fallback to a level the set measured none for, which
+// only adds a report, and the text reads as the operator's note.
+func TestABlockFallbackForAnUnmeasuredLevelIsANote(t *testing.T) {
+	p := mustParse(t, `platforms:
+  arista_eos:
+    fallback: {operator: "network-operator: show commands"}
+`+strings.Replace(intersectBody, "{name: backup, privilege: admin", "{name: backup, privilege: operator", 1))
+	exposed := onPlatform(findings(p, FindingFallbackExposure), "arista_eos")
+	if len(exposed) != 1 || !strings.HasPrefix(exposed[0], `subject "svc" at operator (`) ||
+		!strings.Contains(exposed[0], "it gets (operator note: network-operator: show commands): more") {
+		t.Errorf("%q", exposed)
 	}
 }
