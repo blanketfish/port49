@@ -267,20 +267,24 @@ func TestAnAbbreviatedNameIsDeniedWhereAbbreviationsAreAssumed(t *testing.T) {
 	}
 }
 
-// A deny pattern whose abbreviations port49 cannot list is a joint check that
-// fails only where abbreviations are assumed: spec-style exfiltration denies
-// load with EOS, NX-OS, IOS-XE and Junos devices and quarantine nothing, and a
-// device on the generic adapter, the one platform that may send what was typed,
-// is quarantined with a cause naming the term while the rest of the fleet
-// loads (spec §3 rule 4, §10, §13 decision 20).
-func TestAnUnreadableDenyPatternQuarantinesOnlyWhereAbbreviationsAreAssumed(t *testing.T) {
+// A deny pattern whose abbreviations port49 cannot list quarantines nothing:
+// spec-style exfiltration denies load with EOS, NX-OS, IOS-XE and Junos
+// devices, and on the generic adapter, the one platform that may send what was
+// typed, the pattern matches any argument in its position — logins keep
+// working, the commands its other terms reach are denied, and the report names
+// the term and the platform (spec §3 rule 4, §10, §13 decision 20).
+func TestAnUnreadableDenyPatternMatchesAnythingWhereAbbreviationsAreAssumed(t *testing.T) {
 	body := scopeOK + `roles:
   - {name: r, privilege: admin, permit: ["**"]}
   - {name: no_exfil, deny: ["* * /tftp/", "copy * /^tftp:/"]}
-` + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r, no_exfil]}\n"
+  - {name: no_mgmt, deny: ["interface /^Management[0-9]+$/"]}
+` + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r, no_exfil, no_mgmt]}\n"
 	p := mustParse(t, body)
 	if q := p.Quarantines(noon); len(q) != 0 {
 		t.Fatalf("quarantined %+v", q)
+	}
+	if got := findings(p, FindingDenyWidened); len(got) != 0 {
+		t.Fatalf("no platform in the inventory widens: %q", got)
 	}
 	if _, o, err := p.Decide("s", "", deviceNamed(t, "xe-01"), "copy running-config tftp://x/y", noon); err != nil || o.Permit {
 		t.Fatalf("the deny binds on IOS-XE: %+v %v", o, err)
@@ -290,24 +294,46 @@ func TestAnUnreadableDenyPatternQuarantinesOnlyWhereAbbreviationsAreAssumed(t *t
 	if err != nil {
 		t.Fatalf("the policy loads with a generic device present: %v", err)
 	}
-	q := p.Quarantines(noon)
-	if len(q) != 1 || q[0].Device != "ntp-01" {
-		t.Fatalf("only the generic device is quarantined: %+v", q)
+	if q := p.Quarantines(noon); len(q) != 0 {
+		t.Fatalf("nothing is quarantined: %+v", q)
 	}
-	if cause, ok := p.Quarantined("ntp-01", noon); !ok || !strings.Contains(cause, `/tftp/`) || !strings.Contains(cause, "meinberg_lantime") {
-		t.Errorf("the cause names the term and the platform: %q", cause)
+	if _, err := p.Resolve("user:a@example.com", generic, noon); err != nil {
+		t.Fatalf("the generic device still mints: %v", err)
 	}
-	// A platform the operator marks as sending what was typed is the same
-	// joint check: its devices are quarantined, and the policy still loads.
+	for command, want := range map[string]bool{"copy running-config startup-config": false, "int ma1": false,
+		"interface Ethernet1": true, "show version": true} {
+		if _, o, err := p.Decide("s", "", generic, command, noon); err != nil || o.Permit != want {
+			t.Errorf("generic %q: permit %v (%s), err %v; want %v", command, o.Permit, o.Reason, err, want)
+		}
+	}
+	got := findings(p, FindingDenyWidened)
+	if len(got) != 1 || !strings.Contains(got[0], `"* * /tftp/"`) || !strings.Contains(got[0], "meinberg_lantime") ||
+		!strings.Contains(got[0], "any argument") {
+		t.Errorf("the report names the term and the platform: %q", got)
+	}
+	// A platform the operator marks as sending what was typed is the same.
 	xe, _ := platform.DialectFor("cisco_iosxe")
 	xe.ExpandsAbbreviations = false
 	p, err = Parse([]byte(body), Env{Devices: inventory(), Dialects: map[string]platform.Dialect{"cisco_iosxe": xe}})
 	if err != nil {
 		t.Fatalf("an operator's dialect does not refuse the policy: %v", err)
 	}
-	if q := p.Quarantines(noon); len(q) != 1 || q[0].Device != "xe-01" {
-		t.Fatalf("only the IOS-XE device is quarantined: %+v", q)
+	if q := p.Quarantines(noon); len(q) != 0 {
+		t.Fatalf("nothing is quarantined: %+v", q)
 	}
+	if got := findings(p, FindingDenyWidened); len(got) != 1 || !strings.Contains(got[0], "cisco_iosxe") {
+		t.Errorf("%q", got)
+	}
+}
+
+func findings(p *Policy, kind string) []string {
+	var out []string
+	for _, f := range p.Lint() {
+		if f.Kind == kind {
+			out = append(out, f.Message)
+		}
+	}
+	return out
 }
 
 // IOS-XE sends a typed `int Gi1` as `GigabitEthernet`, `1`

@@ -182,6 +182,12 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 			fmt.Fprintf(stderr, "port49d: broker: device %s (%s) %s\n", q.Device, q.Platform, msg)
 		}
 	}
+	// A deny term that matches any argument, because its platform may send
+	// what was typed and its abbreviations cannot be read, over-denies
+	// rather than refusing the device (spec §3 rule 4); say which.
+	for _, f := range pol.WidenedDenies() {
+		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
+	}
 	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",

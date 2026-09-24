@@ -260,12 +260,12 @@ entire class.
    `int ma1` is denied by `deny: interface @management` where `@management` is
    `^Management[0-9]+$`. A deny pattern that cannot be read that way — unanchored, starting
    with anything but its literal name, or a name that runs on into a part that may be more
-   of it — cannot have the abbreviations it would miss listed, so it fails the joint check on
-   each platform marked `expands_abbreviations: false` that authorizes commands: the
-   devices there that the deny reaches are quarantined with a cause naming the term (§10,
-   §13 decision 20), and every other platform loads. A platform measured sending no
-   per-command authorization (Junos, decision 21) widens nothing and is never quarantined
-   for a command rule. The cost is an over-denial of a full word that is a prefix of
+   of it — cannot have the abbreviations it would miss listed, so on a platform marked
+   `expands_abbreviations: false` that authorizes commands the term matches **any argument**
+   in its position: an over-denial of the commands the deny's other terms reach, and no
+   device is quarantined or login refused for it. `port49 policy test` reports each such
+   term and platform as `deny_widened`, and `port49d` says it at start. A platform measured
+   sending no per-command authorization (Junos, decision 21) widens nothing. The cost is an over-denial of a full word that is a prefix of
    a deny's word — `show ip` against `deny: show ipv6 **` — reported by name in the
    `server_msg`. `arista_eos`, `cisco_nxos` and `cisco_iosxe` are marked `true`, set from
    L21 (closed 2026-09-24): all three send the resolved words over interactive SSH (§15, L21;

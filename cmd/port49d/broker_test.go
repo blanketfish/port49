@@ -117,6 +117,29 @@ func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
 	}
 }
 
+// A deny term that matches any argument on a platform that may send what was
+// typed, because its abbreviations cannot be read, is said at start with the
+// term and the platform; the device is not quarantined (spec §3 rule 4).
+func TestAWidenedDenyIsSaidAtStart(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`, `permit: ["**"], deny: ["* * /tftp/"]}`, 1))
+	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "ntp1", Platform: "meinberg_lantime"})
+	_, pol, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := pol.Quarantined("ntp1", time.Now()); ok {
+		t.Fatal("a widened deny quarantines nothing")
+	}
+	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "* * /tftp/" on meinberg_lantime: /tftp/:`) ||
+		!strings.Contains(out.String(), "matches any argument") {
+		t.Fatalf("stderr: %s", out.String())
+	}
+}
+
 // The daemon asks the policy at the time of each packet, and the gauge counts
 // at the time of each scrape: a device an expiry will quarantine is neither
 // refused nor counted until then (spec §10).

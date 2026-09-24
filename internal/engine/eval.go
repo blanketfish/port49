@@ -77,7 +77,8 @@ func Compile(b Blob) (*Program, error) {
 }
 
 // compileRule compiles one rule. A deny's regex and class patterns are widened
-// as the dialect n calls for (denyPatterns); a permit is never widened. On a
+// as the dialect n calls for (denyPatterns), up to any argument where their
+// abbreviations cannot be read; a permit is never widened. On a
 // platform that splits interface names, a deny compiles to the rule as written
 // and one shape per combination of its terms split (joinable), each covering
 // the name and the index as two positions.
@@ -93,9 +94,9 @@ func compileRule(verdict, rule, role string, classes map[string][]string, n Norm
 		for _, pat := range termPatterns(t, classes) {
 			patterns := []string{pat}
 			if verdict == Deny {
-				if patterns, err = denyPatterns(pat, n); err != nil {
-					return nil, fmt.Errorf("deny %q: %s: %w", canon, termName(t, pat), err)
-				}
+				// An unreadable pattern comes back widened to any argument;
+				// WidenedToAny reports it, and it is no reason to refuse.
+				patterns, _ = denyPatterns(pat, n)
 			}
 			for _, p := range patterns {
 				re, err := compileTerm(p)

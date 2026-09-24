@@ -25,11 +25,11 @@ import (
 // with no letter names nothing a device abbreviates and is left as written. A
 // pattern whose branches cannot be read that way — unanchored, starting with a
 // class or a wildcard that may be a letter, or a stem that runs on into
-// something that may be a letter — is refused, because the abbreviations it
-// would miss cannot be listed (spec §3 rule 4: fail closed rather than match a
-// possibly-abbreviated vector). The refusal is the blob's, so it quarantines
-// the devices on that platform and no other; the policy still loads (spec
-// §10, §13 decision 20).
+// something that may be a letter — matches any argument in its position,
+// because the abbreviations it would miss cannot be listed (spec §3 rule 4:
+// fail closed rather than match a possibly-abbreviated vector). That
+// over-denies the commands the deny's other terms reach and refuses no
+// device; WidenedToAny names each such term for the policy report.
 //
 // A split is read at match time instead, and needs nothing from a pattern's
 // syntax: the vector is never re-joined (spec §3 rule 5), so a deny term that
@@ -50,8 +50,8 @@ type stemmed struct {
 // parts may expand to. A pattern past it is refused rather than widened.
 const maxBranches = 64
 
-var errUnreadable = errors.New("port49 cannot list what it would miss; " +
-	"start the pattern with `^` and the literal name, like /^Management[0-9]+$/")
+var errUnreadable = errors.New("port49 cannot list what it would miss, so it matches any argument there; " +
+	"start the pattern with `^` and the literal name, like /^Management[0-9]+$/, to narrow it")
 
 // stems reads a pattern, compiled as compileTerm compiles it, as the names it
 // matches. Branches that start with no letter are omitted: there is nothing in
@@ -242,16 +242,19 @@ func classHasName(ranges []rune, hyphen bool) bool {
 
 func nameRune(r rune, hyphen bool) bool { return unicode.IsLetter(r) || (hyphen && r == '-') }
 
+// anyArgument is what an unreadable deny pattern matches instead.
+const anyArgument = `(?s).*`
+
 // denyPatterns is what one pattern of a deny's regex or class term matches on
 // a platform with dialect n: the pattern, and its abbreviations where the
-// platform may send what was typed. It refuses a pattern whose widening it
-// cannot read.
+// platform may send what was typed. A pattern whose abbreviations it cannot
+// read matches any argument, and the error says why.
 func denyPatterns(pattern string, n Normalize) ([]string, error) {
 	out := []string{pattern}
 	if n.abbreviated() {
 		abbrs, err := abbreviations(pattern)
 		if err != nil {
-			return nil, fmt.Errorf("the platform may send it abbreviated (spec §3 rule 4) and %w", err)
+			return append(out, anyArgument), fmt.Errorf("the platform may send it abbreviated (spec §3 rule 4) and %w", err)
 		}
 		out = append(out, abbrs...)
 	}
@@ -275,12 +278,23 @@ func splitsOf(word string) [][2]string {
 	return out
 }
 
-// CheckDeny refuses a deny rule whose regex or class terms cannot be widened
-// as a platform with dialect n needs (spec §3 rule 4). A class classes
-// does not define is skipped: that is another check's refusal.
-func CheckDeny(rule string, classes map[string][]string, n Normalize) error {
-	_, err := compileRule(Deny, rule, "", classes, n)
-	return err
+// WidenedToAny names each regex or class term of a deny rule that matches
+// any argument on a platform with dialect n, because its abbreviations cannot
+// be read, with why. A class classes does not define names nothing.
+func WidenedToAny(rule string, classes map[string][]string, n Normalize) []string {
+	terms, err := ParseRule(rule)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, t := range terms {
+		for _, pat := range termPatterns(t, classes) {
+			if _, err := denyPatterns(pat, n); err != nil {
+				out = append(out, termName(t, pat)+": "+err.Error())
+			}
+		}
+	}
+	return out
 }
 
 // termPatterns are the patterns behind a regex or class term, and none for any

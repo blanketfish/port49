@@ -28,6 +28,7 @@ const (
 	FindingMandatoryAttribute  = "mandatory_attribute"
 	FindingAttributeShadowed   = "attribute_shadowed"
 	FindingIncomparableVersion = "incomparable_version"
+	FindingDenyWidened         = "deny_widened"
 )
 
 // Lint computes the findings, ordered by kind and then message so two runs
@@ -113,6 +114,7 @@ func (p *Policy) Lint() []Finding {
 			}
 		}
 	}
+	out = append(out, p.WidenedDenies()...)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind < out[j].Kind
@@ -144,4 +146,28 @@ func (s *Scope) comparedValues(d admission.Device) string {
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+// WidenedDenies names every deny term that matches any argument on a platform
+// in the inventory, because the platform may send what was typed and the
+// term's abbreviations cannot be read (spec §3 rule 4). It over-denies rather
+// than refuse the device, so the operator is told here, and by port49d at
+// start, which term and why.
+func (p *Policy) WidenedDenies() []Finding {
+	platforms := map[string]bool{}
+	for _, d := range p.env.Devices {
+		platforms[d.Platform] = true
+	}
+	var out []Finding
+	for _, name := range sortedKeys(p.roles) {
+		for _, rule := range p.roles[name].Deny {
+			for _, plat := range sortedKeys(platforms) {
+				for _, why := range engine.WidenedToAny(rule, p.dialect(plat).EntityClasses, p.normalizeFor(plat)) {
+					out = append(out, Finding{Kind: FindingDenyWidened, Message: fmt.Sprintf(
+						"role %q: deny %q on %s: %s", name, rule, plat, why)})
+				}
+			}
+		}
+	}
+	return out
 }

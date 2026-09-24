@@ -214,36 +214,43 @@ func TestAnAbbreviatedNameCannotSlipPastADenysPattern(t *testing.T) {
 	expect(t, resolved, "interface Ma1", true, decision.PermitDominates)
 }
 
-// A deny's pattern whose abbreviations cannot be read from its syntax is
-// refused on a platform that may send what was typed, rather than left to
-// miss one (spec §3 rule 4): an unanchored pattern, or one that does not
-// start with the literal name. Where the platform sends resolved words, or on
-// a permit, it is fine.
-func TestADenyPatternWithUnreadableAbbreviationsIsRefused(t *testing.T) {
+// A deny's pattern whose abbreviations cannot be read from its syntax —
+// unanchored, or not starting with its literal name — matches any argument in
+// its position on a platform that may send what was typed: an over-denial
+// spec §3 rule 4 accepts, rather than an abbreviation slipping past it or a
+// device refused altogether. Its other terms still bind, WidenedToAny names
+// it, and where the platform sends resolved words, or on a permit, it is
+// matched as written.
+func TestADenyPatternWithUnreadableAbbreviationsMatchesAnything(t *testing.T) {
 	for _, rule := range []string{"interface /Management/", "interface /^[a-z]+[0-9]+$/", "interface /^Ma.?nagement1$/",
 		"interface /^Gig[a-z]*[0-9]+$/"} {
-		if _, _, err := Encode(testBlob(false, "d:deny "+rule)); err == nil || !strings.Contains(err.Error(), "abbreviat") {
-			t.Errorf("%s: %v, want a refusal naming the abbreviations it cannot read", rule, err)
+		typed := program(t, false, "admin:permit **", "d:deny "+rule)
+		expect(t, typed, "interface Port-channel7", false, decision.NoPermitDominatesDeny)
+		expect(t, typed, "vlan Port-channel7", true, decision.PermitDominates)
+		if got := WidenedToAny(rule, nil, typed.Blob.Normalize); len(got) != 1 || !strings.Contains(got[0], "abbreviat") {
+			t.Errorf("%s: %q, want the term named with why", rule, got)
 		}
-		if _, _, err := Encode(testBlob(true, "d:deny "+rule)); err != nil {
-			t.Errorf("%s, resolved words: %v", rule, err)
+		resolved := program(t, true, "admin:permit **", "d:deny "+rule)
+		expect(t, resolved, "interface Port-channel7", true, decision.PermitDominates)
+		if got := WidenedToAny(rule, nil, resolved.Blob.Normalize); len(got) != 0 {
+			t.Errorf("%s, resolved words: %q", rule, got)
 		}
-		if _, _, err := Encode(testBlob(false, "p:permit "+rule)); err != nil {
-			t.Errorf("%s, a permit: %v", rule, err)
-		}
+		permit := program(t, false, "p:permit "+rule)
+		expect(t, permit, "interface Port-channel7", false, decision.NoRuleMatched)
 	}
 	// A name with an optional part, an alternation, a pattern past which
 	// anything may follow, and one that starts with no letter all read.
 	for _, rule := range []string{"interface /^Gig(abit)?Ethernet[0-9/]+$/", "interface /^(management|mgmt)[0-9]*$/",
 		"copy * /^tftp:/", "show /^run.*/", "vlan /^[0-9]+$/", "interface @physical"} {
-		if _, _, err := Encode(testBlob(false, "d:deny "+rule)); err != nil {
-			t.Errorf("%s: %v", rule, err)
+		if got := WidenedToAny(rule, testBlob(false).Classes, testBlob(false).Normalize); len(got) != 0 {
+			t.Errorf("%s: %q", rule, got)
 		}
 	}
 	gig := program(t, false, "admin:permit **", "d:deny interface /^Gig(abit)?Ethernet[0-9/]+$/")
 	for _, line := range []string{"int Gi1/0/1", "interface GigE1", "interface g0"} {
 		expect(t, gig, line, false, decision.NoPermitDominatesDeny)
 	}
+	expect(t, gig, "interface Port-channel7", true, decision.PermitDominates)
 }
 
 // L21 on IOS-XE: `int Gi1` arrives as two arguments, `GigabitEthernet` and
@@ -313,14 +320,16 @@ func TestAnyDenyTermMatchesTheSplitName(t *testing.T) {
 // for it: a command that did arrive is matched as written.
 func TestASessionOnlyPlatformWidensNothing(t *testing.T) {
 	b := testBlob(false, "admin:permit **", "nd:deny reload **", "d:deny interface /Management/")
-	if _, _, err := Encode(b); err == nil {
-		t.Fatal("a platform that may send what was typed refuses the unanchored deny")
-	}
+	expect(t, compileBlob(t, b), "interface x", false, decision.NoPermitDominatesDeny)
 	b.Normalize.SessionOnly = true
 	p := compileBlob(t, b)
 	expect(t, p, "rel", true, decision.PermitDominates)
 	expect(t, p, "reload", false, decision.NoPermitDominatesDeny)
 	expect(t, p, "interface xManagementx", false, decision.NoPermitDominatesDeny)
+	expect(t, p, "interface x", true, decision.PermitDominates)
+	if got := WidenedToAny("interface /Management/", nil, b.Normalize); len(got) != 0 {
+		t.Errorf("%q", got)
+	}
 }
 
 // Specificity is a property of the rule and the command, never of position, so
