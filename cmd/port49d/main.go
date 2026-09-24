@@ -281,9 +281,10 @@ func (q quotesCut) Unwrap() error { return q.err }
 
 func (q quotesCut) Error() string {
 	var out strings.Builder
-	// A quoted rule's secret value is redacted before anything is cut: the
-	// policy did not load, so every built-in pattern applies (spec §5.8).
-	s := []rune(platform.RedactQuoted(platform.AllRedactions(), q.err.Error()))
+	// A load error quotes no rule text and no term (policy.Parse names a rule
+	// by role, list and position), so there is nothing here to redact: a
+	// refused file's own redaction patterns never loaded (spec §5.8).
+	s := []rune(q.err.Error())
 	for i := 0; i < len(s); i++ {
 		out.WriteRune(s[i])
 		if s[i] != '"' && s[i] != '`' {

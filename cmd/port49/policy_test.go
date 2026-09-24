@@ -262,7 +262,7 @@ func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
-		!strings.Contains(errb.String(), "@uplinks, which no platform defines") || out.Len() != 0 {
+		!strings.Contains(errb.String(), "permit #1: term 2 names a class which no platform defines") || out.Len() != 0 {
 		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
 	}
 	if err := os.WriteFile(pol, []byte(unmappedLevel+strings.Replace(string(raw), "privilege: readonly", "privilege: unmapped", 1)), 0o600); err != nil {

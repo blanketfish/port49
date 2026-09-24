@@ -42,21 +42,32 @@ func TestTheDaemonRedactsWithThePolicyInForce(t *testing.T) {
 	}
 }
 
-// A policy the daemon refuses is quoted in its refusal line, at start and on
-// every reload, and stderr is a log: a rule's secret value is redacted there
-// as it is everywhere else (spec §5.8; task 11 review C2).
+// A policy the daemon refuses is named in its refusal line, at start and on
+// every reload, and stderr is a log. The line quotes no rule text and no
+// term, so a value is hidden whether a built-in pattern covers it or only
+// the refused file's own `platforms:` pattern does, which never loaded
+// (spec §5.8; task 11 review C2, fail closed).
 func TestARefusedPolicyNeverPrintsARuleSecret(t *testing.T) {
-	secret := strings.Replace(minimalPolicy, `permit: ["**"]}`,
-		`permit: ["**"], deny: ["snmp-server community Hunter2 /^rw$/"]}`, 1)
-	if _, err := parsePolicy(brokerConfig(t, minimalPolicy), []byte(secret)); err == nil ||
-		strings.Contains(err.Error(), "Hunter2") || !strings.Contains(err.Error(), "snmp-server community") {
-		t.Fatalf("at start: %v", err)
-	}
-	rig := newReloadRig(t, minimalPolicy)
-	rig.write(t, secret)
-	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
-	if out := rig.out.String(); !strings.Contains(out, "refused; still serving") || strings.Contains(out, "Hunter2") {
-		t.Fatalf("on a reload: %q", out)
+	operator := "platforms: {arista_eos: {redact: [{match: ['**'], after: psk}]}}\n"
+	for _, tt := range []struct{ name, prefix, deny, want string }{
+		{"a regex that is a word", "", "snmp-server community /^Hunter2$/", `role "r": deny #1: term 3 is a regex`},
+		{"a case-sensitive deny", "", "snmp-server community /(?-i)Hunter2/", `role "r": deny #1: term 3 turns`},
+		{"a value only the file's own pattern covers", operator, "crypto psk Hunter2 /^rw$/",
+			`role "r": deny #1: term 4 is a regex`},
+	} {
+		secret := tt.prefix + strings.Replace(minimalPolicy, `permit: ["**"]}`,
+			`permit: ["**"], deny: ["`+tt.deny+`"]}`, 1)
+		if _, err := parsePolicy(brokerConfig(t, minimalPolicy), []byte(secret)); err == nil ||
+			strings.Contains(err.Error(), "Hunter2") || !strings.Contains(err.Error(), tt.want) {
+			t.Fatalf("%s, at start: %v", tt.name, err)
+		}
+		rig := newReloadRig(t, minimalPolicy)
+		rig.write(t, secret)
+		rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+		if out := rig.out.String(); !strings.Contains(out, "refused; still serving") || !strings.Contains(out, tt.want) ||
+			strings.Contains(out, "Hunter2") {
+			t.Fatalf("%s, on a reload: %q", tt.name, out)
+		}
 	}
 }
 

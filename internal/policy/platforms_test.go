@@ -273,8 +273,7 @@ func TestACaseSensitiveClassIsRefusedInADeny(t *testing.T) {
 	deny := block + scopeOK + "roles:\n  - {name: r, privilege: admin, permit: [\"**\"], deny: [interface @uplink]}\n" +
 		subjOK + grantOK
 	if _, err := Parse([]byte(deny), env()); err == nil || !strings.Contains(err.Error(),
-		`role "r": deny "interface @uplink" names @uplink, whose pattern /(?-i)^Ethernet49$/ on arista_eos turns `+
-			`case-insensitivity off`) {
+		`role "r": deny #1: term 2 names a class whose pattern on arista_eos turns case-insensitivity off`) {
 		t.Fatalf("%v", err)
 	}
 	// A flag group clearing i is the same opt-out, and so is a class on a

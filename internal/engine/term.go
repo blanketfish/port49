@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 )
 
@@ -58,32 +59,43 @@ func ParseRule(rule string) ([]Term, error) {
 	if len(fields) == 0 {
 		return nil, errors.New("an empty rule matches nothing; remove it")
 	}
+	// An error names the term by its position and never quotes the rule or
+	// the term: a rule may carry a value redaction hides, and a refusal goes
+	// to a log where the policy's own redaction patterns may never have
+	// loaded (spec §5.8).
 	terms := make([]Term, 0, len(fields))
 	for i, f := range fields {
+		n := i + 1
 		switch {
 		case f == "**":
 			if i != len(fields)-1 {
-				return nil, fmt.Errorf("rule %q: `**` is trailing-only (spec §4)", rule)
+				return nil, fmt.Errorf("term %d: `**` is trailing-only (spec §4)", n)
 			}
 			terms = append(terms, Term{Kind: Rest})
 		case f == "*":
 			terms = append(terms, Term{Kind: Any})
 		case strings.HasPrefix(f, "@"):
 			if !className.MatchString(f[1:]) {
-				return nil, fmt.Errorf("rule %q: %q is not a class name; a class is `@` and a snake_case name", rule, f)
+				return nil, fmt.Errorf("term %d is not a class name; a class is `@` and a snake_case name", n)
 			}
 			terms = append(terms, Term{Kind: Class, Text: f[1:]})
 		case len(f) >= 2 && strings.HasPrefix(f, "/") && strings.HasSuffix(f, "/"):
 			body := f[1 : len(f)-1]
 			if body == "" {
-				return nil, fmt.Errorf("rule %q: an empty regex matches every argument; write `*`", rule)
+				return nil, fmt.Errorf("term %d: an empty regex matches every argument; write `*`", n)
 			}
 			if _, err := compileTerm(body); err != nil {
-				return nil, fmt.Errorf("rule %q: regex %q: %w", rule, f, err)
+				// A syntax error's text quotes the pattern; its code does not.
+				why := "RE2 refuses it"
+				var serr *syntax.Error
+				if errors.As(err, &serr) {
+					why = string(serr.Code)
+				}
+				return nil, fmt.Errorf("term %d is a regex that does not compile: %s", n, why)
 			}
 			terms = append(terms, Term{Kind: Regex, Text: body})
 		case strings.Contains(f, "*"):
-			return nil, fmt.Errorf("rule %q: %q puts a wildcard inside a word; a wildcard is a whole term (spec §4)", rule, f)
+			return nil, fmt.Errorf("term %d puts a wildcard inside a word; a wildcard is a whole term (spec §4)", n)
 		default:
 			terms = append(terms, Term{Kind: Word, Text: f})
 		}

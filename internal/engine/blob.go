@@ -203,20 +203,22 @@ func (b Blob) check() error {
 	if b.Normalize.PipeToken == "" {
 		return errors.New("engine: blob has no pipe token")
 	}
-	for _, r := range b.Rules {
+	// A rule is named by its position, never quoted: replay prints this, and
+	// a rule may carry a value redaction hides (spec §5.8).
+	for i, r := range b.Rules {
 		if r.Verdict != Permit && r.Verdict != Deny {
-			return fmt.Errorf("engine: rule %q: verdict %q is neither permit nor deny", r.Rule, r.Verdict)
+			return fmt.Errorf("engine: rule #%d: verdict %q is neither permit nor deny", i+1, r.Verdict)
 		}
 		if r.Role == "" {
-			return fmt.Errorf("engine: rule %q names no role", r.Rule)
+			return fmt.Errorf("engine: rule #%d names no role", i+1)
 		}
 		if _, err := ParseRule(r.Rule); err != nil {
-			return fmt.Errorf("engine: %w", err)
+			return fmt.Errorf("engine: rule #%d: %w", i+1, err)
 		}
 	}
-	for _, p := range b.Pipe {
+	for i, p := range b.Pipe {
 		if _, err := ParseRule(p); err != nil {
-			return fmt.Errorf("engine: pipe %w", err)
+			return fmt.Errorf("engine: pipe rule #%d: %w", i+1, err)
 		}
 	}
 	for name := range referencedClasses(b) {

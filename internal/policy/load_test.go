@@ -154,7 +154,7 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a duplicate role", "roles:\n  - {name: r}\n  - {name: r}\n" + subjOK, "declared twice"},
 		{"a non-trailing **", "roles:\n  - {name: r, permit: [\"show ** detail\"]}\n" + subjOK, "trailing-only"},
 		{"a regex that is *", "roles:\n  - {name: r, permit: [\"show /^.*$/\"]}\n" + subjOK, "is `*`"},
-		{"a regex that is a word", "roles:\n  - {name: r, deny: [\"/^reload$/ **\"]}\n" + subjOK, "the word `reload`"},
+		{"a regex that is a word", "roles:\n  - {name: r, deny: [\"/^reload$/ **\"]}\n" + subjOK, "deny #1: term 1 is a regex that is one word"},
 		{"a case-sensitive regex", "roles:\n  - {name: r, deny: [\"* * /(?-i)^TFTP:/\"]}\n" + subjOK, "case-insensitively"},
 		{"a case-sensitive group", "roles:\n  - {name: r, deny: [\"interface /(?s-i:^Mgmt)/\"]}\n" + subjOK, "case-insensitively"},
 		{"a class no platform defines", "roles:\n  - {name: r, permit: [\"interface @uplinks\"]}\n" + subjOK, "which no platform defines"},
@@ -466,5 +466,38 @@ func TestAPolicyPinsItsPlatformSet(t *testing.T) {
 	want, _ := platform.Set("1.0.0")
 	if got := p.Dialect("cisco_iosxe"); !reflect.DeepEqual(got, want["cisco_iosxe"]) {
 		t.Fatalf("the pinned set's adapter: %+v", got)
+	}
+}
+
+// A refused policy's error is printed by port49d at start and on every
+// reload, and by policy test, diff and explain, and it goes to logs. It
+// quotes no rule text and no term: it names the role, the list, the rule's
+// position and the problem, and the operator finds the rule in the file.
+// Redacting the quote is not enough: the refused file's own redaction
+// patterns never loaded (spec §5.8; task 11 review C2, fail closed).
+func TestALoadErrorQuotesNoRuleText(t *testing.T) {
+	for _, tt := range []struct{ name, yaml, want string }{
+		{"a regex that is a word", `deny: [reload, "snmp-server community /^Hunter2$/"]`,
+			`role "r": deny #2: term 3 is a regex that is one word; write the word instead`},
+		{"a case-sensitive deny", `deny: ["snmp-server community /(?-i)Hunter2/"]`,
+			`role "r": deny #1: term 3 turns case-insensitivity off`},
+		{"a regex that does not compile", `permit: [show, "crypto psk /Hunter2(/"]`,
+			`role "r": permit #2: term 3 is a regex that does not compile`},
+		{"a class no platform defines", `permit: ["snmp-server community @hunter2_list"]`,
+			`role "r": permit #1: term 3 names a class which no platform defines`},
+		{"a term that is not a class name", `deny: ["snmp-server community @Hunter2"]`,
+			`role "r": deny #1: term 3 is not a class name`},
+		{"a wildcard inside a word", `deny: ["snmp-server community Hunt*er2"]`,
+			`role "r": deny #1: term 3 puts a wildcard inside a word`},
+		{"a non-trailing **", `permit: ["crypto psk ** Hunter2"]`, `role "r": permit #1: term 3: `},
+		{"a pipe permit", `pipe: {permit: ["include /^Hunter2$/"]}`,
+			`role "r": pipe #1: term 2 is a regex that is one word`},
+		{"a string where a list goes", `deny: "snmp-server community Hunter2"`, "cannot unmarshal"},
+		{"a short string where a list goes", `deny: Hunter2`, "cannot unmarshal"},
+	} {
+		_, err := Parse([]byte("roles:\n  - {name: r, "+tt.yaml+"}\n"+subjOK), env())
+		if err == nil || !strings.Contains(err.Error(), tt.want) || strings.Contains(strings.ToLower(err.Error()), "hunt") {
+			t.Errorf("%s: %v", tt.name, err)
+		}
 	}
 }

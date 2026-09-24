@@ -197,10 +197,14 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		if strings.Contains(err.Error(), "time.Duration") {
-			return nil, fmt.Errorf("%w; durations need a unit, e.g. 60s", err)
+		// A type error quotes the value it could not decode, and the value
+		// may be a rule or a secret in it: the line and the types say where
+		// (spec §5.8).
+		msg := yamlValue.ReplaceAllString(err.Error(), "cannot unmarshal a $1 value")
+		if strings.Contains(msg, "time.Duration") {
+			return nil, fmt.Errorf("%s; durations need a unit, e.g. 60s", msg)
 		}
-		return nil, err
+		return nil, errors.New(msg)
 	}
 	// A second document would be ignored by a single Decode, and an ignored
 	// `---` followed by a `scopes:` block is a policy that reads as scoped and
@@ -224,6 +228,9 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	p.checkDevices()
 	return p, nil
 }
+
+// yamlValue is the value a YAML type error quotes.
+var yamlValue = regexp.MustCompile("cannot unmarshal (!!\\w+) `[^`]*`")
 
 // refusedKeys names the plan that reads a key this build does not, before the
 // strict decode can say only that the field is unknown. Spec §11's example
@@ -650,21 +657,25 @@ func (p *Policy) buildRoles(f file) error {
 			return fmt.Errorf("role %q: privilege: %w", r.Name, err)
 		}
 		role := &Role{Name: r.Name, Privilege: r.Privilege, Reason: r.Reason, Attributes: r.Attributes}
+		// A rule is named by its list and position, never quoted: a refusal
+		// goes to logs, and the refused file's own redaction patterns never
+		// loaded (spec §5.8).
 		for _, list := range []struct {
+			name string
 			in   []string
 			out  *[]string
 			deny bool
-		}{{r.Permit, &role.Permit, false}, {r.Deny, &role.Deny, true}} {
-			for _, rule := range list.in {
+		}{{"permit", r.Permit, &role.Permit, false}, {"deny", r.Deny, &role.Deny, true}} {
+			for i, rule := range list.in {
 				if err := checkRule(rule, list.deny); err != nil {
-					return fmt.Errorf("role %q: %w", r.Name, err)
+					return fmt.Errorf("role %q: %s #%d: %w", r.Name, list.name, i+1, err)
 				}
 				if err := p.checkClasses(rule); err != nil {
-					return fmt.Errorf("role %q: %w", r.Name, err)
+					return fmt.Errorf("role %q: %s #%d: %w", r.Name, list.name, i+1, err)
 				}
 				if list.deny {
 					if err := p.checkDenyClasses(rule); err != nil {
-						return fmt.Errorf("role %q: %w", r.Name, err)
+						return fmt.Errorf("role %q: %s #%d: %w", r.Name, list.name, i+1, err)
 					}
 				}
 				*list.out = append(*list.out, engine.CanonicalRule(rule))
@@ -672,12 +683,12 @@ func (p *Policy) buildRoles(f file) error {
 		}
 		if r.Pipe != nil {
 			role.Pipe = []string{}
-			for _, rule := range r.Pipe.Permit {
+			for i, rule := range r.Pipe.Permit {
 				if err := checkRule(rule, false); err != nil {
-					return fmt.Errorf("role %q: pipe: %w", r.Name, err)
+					return fmt.Errorf("role %q: pipe #%d: %w", r.Name, i+1, err)
 				}
 				if err := p.checkClasses(rule); err != nil {
-					return fmt.Errorf("role %q: pipe: %w", r.Name, err)
+					return fmt.Errorf("role %q: pipe #%d: %w", r.Name, i+1, err)
 				}
 				role.Pipe = append(role.Pipe, engine.CanonicalRule(rule))
 			}
@@ -702,16 +713,20 @@ func checkRule(rule string, deny bool) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range terms {
+	for i, t := range terms {
 		if t.Kind != engine.Regex {
 			continue
 		}
 		if deny && caseSensitive(t.Text) {
-			return fmt.Errorf("deny %q: /%s/ turns case-insensitivity off; port49 matches case-insensitively, "+
-				"and a case-sensitive deny could be walked past by changing case (spec §4)", rule, t.Text)
+			return fmt.Errorf("term %d turns case-insensitivity off; port49 matches case-insensitively, and a "+
+				"case-sensitive deny could be walked past by changing case (spec §4)", i+1)
 		}
 		if simpler, ok := rankLint(t.Text); ok {
-			return fmt.Errorf("rule %q: /%s/ is %s; write that instead (spec §4)", rule, t.Text, simpler)
+			if simpler != anyTerm {
+				// The word itself is the term's text: not quoted.
+				return fmt.Errorf("term %d is a regex that is one word; write the word instead (spec §4)", i+1)
+			}
+			return fmt.Errorf("term %d is a regex that is %s; write that instead (spec §4)", i+1, simpler)
 		}
 	}
 	return nil
@@ -1211,7 +1226,7 @@ func (p *Policy) checkClasses(rule string) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range terms {
+	for i, t := range terms {
 		if t.Kind != engine.Class {
 			continue
 		}
@@ -1222,8 +1237,8 @@ func (p *Policy) checkClasses(rule string) error {
 			}
 		}
 		if !defined {
-			return fmt.Errorf("rule %q names @%s, which no platform defines; a class is a platform's (spec §4, §8)",
-				rule, t.Text)
+			return fmt.Errorf("term %d names a class which no platform defines; a class is a platform's (spec §4, §8)",
+				i+1)
 		}
 	}
 	return nil
@@ -1241,17 +1256,17 @@ func (p *Policy) checkDenyClasses(rule string) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range terms {
+	for i, t := range terms {
 		if t.Kind != engine.Class {
 			continue
 		}
 		for _, name := range sortedKeys(p.adapters) {
 			for _, pattern := range p.adapters[name].EntityClasses[t.Text] {
 				if caseSensitive(pattern) {
-					return fmt.Errorf("deny %q names @%s, whose pattern /%s/ on %s turns case-insensitivity off; "+
+					return fmt.Errorf("term %d names a class whose pattern on %s turns case-insensitivity off; "+
 						"port49 matches case-insensitively, and a differently-cased name would walk past the deny "+
-						"(spec §4); remove the (?-i) from platforms.%s.entity_classes.%s", rule, t.Text, pattern, name,
-						name, t.Text)
+						"(spec §4); remove the (?-i) from that class under platforms.%s.entity_classes", i+1, name,
+						name)
 				}
 			}
 		}

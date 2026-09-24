@@ -791,7 +791,9 @@ func writeSynced(tmp *os.File, data []byte, old os.FileInfo) error {
 
 // redacting passes what is written through to w a line at a time, with every
 // quoted value in each line redacted by rules (platform.RedactQuoted). Until
-// a policy loads, rules are every built-in pattern.
+// a policy loads there are none: a load error quotes no rule text (policy.Parse
+// names a rule by role, list and position), and the file's own patterns never
+// loaded (spec §5.8).
 type redacting struct {
 	w     io.Writer
 	rules []platform.Redaction
@@ -815,8 +817,7 @@ func (r *redacting) Write(p []byte) (int, error) {
 // redactOutput wraps stdout and stderr in redacting writers; flush writes
 // what is left of an unfinished line.
 func redactOutput(stdout, stderr io.Writer) (out, errOut *redacting, flush func()) {
-	out = &redacting{w: stdout, rules: platform.AllRedactions()}
-	errOut = &redacting{w: stderr, rules: platform.AllRedactions()}
+	out, errOut = &redacting{w: stdout}, &redacting{w: stderr}
 	return out, errOut, func() {
 		for _, r := range []*redacting{out, errOut} {
 			if len(r.buf) > 0 {
