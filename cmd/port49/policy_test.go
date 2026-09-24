@@ -72,3 +72,50 @@ func TestExplainRefusesAnIncompleteAsk(t *testing.T) {
 		t.Fatalf("no inventory: code %d %s", code, errb.String())
 	}
 }
+
+// `port49 policy test` passes a policy whose tests pass, and fails one whose
+// test does not, naming it.
+func TestPolicyTestIsACIGate(t *testing.T) {
+	pol, inv := policyFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "PASS noc on leaf-01: \"reload\" -> deny no_rule_matched") ||
+		!strings.Contains(out.String(), "2 tests, 0 failed") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	raw, _ := os.ReadFile(pol)
+	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), `command: "reload", expect: deny`,
+		`command: "reload", expect: permit`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "FAIL noc on leaf-01: \"reload\" -> deny no_rule_matched, want permit") {
+		t.Fatalf("code %d\n%s", code, out.String())
+	}
+}
+
+// A policy that fails a load-time check fails the gate, with the check's
+// message, before any test runs: here, a class no platform defines (spec §4).
+// A policy that loads with a device quarantined names it (spec §10).
+func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw, _ := os.ReadFile(pol)
+	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), "permit: [show **]", "permit: [interface @uplinks]", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "@uplinks, which no platform defines") || out.Len() != 0 {
+		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
+	}
+	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), "privilege: readonly", "privilege: operator", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "quarantine: leaf-01 (arista_eos): quarantined: subject \"noc\": level operator has no rendering") ||
+		!strings.Contains(out.String(), "FAIL noc on leaf-01: \"show version\" -> deny device_quarantined, want permit") {
+		t.Fatalf("code %d\n%s", code, out.String())
+	}
+}

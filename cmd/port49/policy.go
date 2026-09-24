@@ -64,3 +64,85 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
 	e.Render(stdout, *attrs)
 	return 0
 }
+
+// policyCmd runs `port49 policy SUBCOMMAND`.
+func policyCmd(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	switch args[0] {
+	case "test":
+		return policyTest(args[1:], stdout, stderr)
+	}
+	fmt.Fprint(stderr, usage)
+	return 2
+}
+
+// policyTest is the CI gate (spec §11, §12): it loads the policy against the
+// inventory — every load-time check is a failure here — prints what CI must
+// report without refusing, then runs the file's tests. It exits 1 if the
+// policy does not load or any test fails.
+func policyTest(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("port49 policy test", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var files policyFiles
+	files.register(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	p, err := files.load()
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 policy test:", err)
+		return 1
+	}
+	now := time.Now()
+	// A quarantined device is reported, not a failure of its own: the policy
+	// loaded, and decision 20 exists so one device cannot block the rest. A
+	// test on it fails in the ordinary way, as device_quarantined. An entry an
+	// expiry will bring on is reported too, so CI sees it before it lands.
+	for _, q := range p.Quarantines(now) {
+		for _, e := range q.Entries {
+			fmt.Fprintf(stdout, "quarantine: %s (%s): %s\n", q.Device, q.Platform, e.Message(now))
+		}
+	}
+	for _, f := range p.Lint() {
+		fmt.Fprintf(stdout, "report: %s: %s\n", f.Kind, f.Message)
+	}
+	results := p.RunTests(now)
+	failed := 0
+	for _, r := range results {
+		who := r.Test.Subject
+		if who == "" {
+			who = r.Test.Principal
+		}
+		got := "deny"
+		if r.Permit {
+			got = "permit"
+		}
+		status := "PASS"
+		if !r.Pass {
+			status = "FAIL"
+			failed++
+		}
+		line := fmt.Sprintf("%s %s on %s: %q -> %s %s", status, who, r.Test.Device, r.Test.Command, got, r.Reason)
+		if r.Err != nil {
+			line = fmt.Sprintf("%s %s on %s: %q -> error: %v", status, who, r.Test.Device, r.Test.Command, r.Err)
+		} else if !r.Pass {
+			want := r.Test.Expect
+			if r.Test.Reason != "" {
+				want += " " + r.Test.Reason
+			}
+			line += ", want " + want
+		}
+		fmt.Fprintln(stdout, line)
+		for _, c := range r.Caveats {
+			fmt.Fprintf(stdout, "     note: %s\n", c)
+		}
+	}
+	fmt.Fprintf(stdout, "%d tests, %d failed\n", len(results), failed)
+	if failed > 0 {
+		return 1
+	}
+	return 0
+}

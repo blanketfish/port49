@@ -34,6 +34,7 @@ const usage = `usage:
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 explain --policy FILE --inventory FILE (--subject NAME | --principal ID) --device NAME
                  [--command "LINE"] [--show-attributes]
+  port49 policy test --policy FILE --inventory FILE
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -53,6 +54,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return agentMain(args[1:], stderr)
 	case "explain":
 		return explainCmd(args[1:], stdout, stderr)
+	case "policy":
+		return policyCmd(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
