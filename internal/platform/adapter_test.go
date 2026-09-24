@@ -184,16 +184,21 @@ func TestParseSpecsIsStrict(t *testing.T) {
 	}
 }
 
-// Over replaces what a block sets, whole, and keeps the rest.
-func TestOverReplacesOnlyWhatIsSet(t *testing.T) {
-	specs, err := ParseSpecs([]byte("platforms:\n  arista_eos:\n    entity_classes:\n      uplink: ['^Ethernet49$']\n"))
+// Over merges a map a block sets per entry, replaces a list or a value
+// whole, and keeps what the block leaves out (spec §8's "adds one class,
+// inherits everything else").
+func TestOverMergesPerTopLevelKey(t *testing.T) {
+	specs, err := ParseSpecs([]byte("platforms:\n  arista_eos:\n    entity_classes:\n      uplink: ['^Ethernet49$']\n" +
+		"      management: ['^Management1$']\n    supports: [session]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	base, _ := DialectFor("arista_eos")
 	d := specs["arista_eos"].Over(base)
-	if !reflect.DeepEqual(d.EntityClasses, map[string][]string{"uplink": {`^Ethernet49$`}}) {
-		t.Fatalf("classes: %v", d.EntityClasses)
+	want := map[string][]string{"uplink": {`^Ethernet49$`}, "management": {`^Management1$`},
+		"loopback": base.EntityClasses["loopback"], "physical": base.EntityClasses["physical"]}
+	if !reflect.DeepEqual(d.EntityClasses, want) || !reflect.DeepEqual(d.Supports, []string{"session"}) {
+		t.Fatalf("classes: %v supports %v", d.EntityClasses, d.Supports)
 	}
 	if !reflect.DeepEqual(d.Levels, base.Levels) || !d.ExpandsAbbreviations {
 		t.Fatalf("the rest is the base's: %+v", d)
@@ -310,6 +315,38 @@ func TestOverReplacesTheAcceptedAttributesAndDeviceConfig(t *testing.T) {
 	d = Spec{}.Over(base)
 	if !reflect.DeepEqual(d.AcceptedAttributes, base.AcceptedAttributes) || !reflect.DeepEqual(d.DeviceConfig, base.DeviceConfig) {
 		t.Fatalf("unset keys keep the base's: %v %v", d.AcceptedAttributes, d.DeviceConfig)
+	}
+}
+
+// Every shipped adapter renders monotone in the reserved order, so a block
+// that sets no privilege never trips Monotone on what it inherits; one that
+// swaps two levels' numbers does.
+func TestShippedAdaptersAreMonotone(t *testing.T) {
+	order := []string{"readonly", "operator", "admin"}
+	for _, v := range Sets() {
+		set, _ := Set(v)
+		for name, d := range set {
+			if err := Monotone(name, d, order); err != nil {
+				t.Errorf("%s %s: %v", v, name, err)
+			}
+		}
+	}
+	eos, _ := DialectFor("arista_eos")
+	swapped := with(eos, func(d *Dialect) { d.Levels["readonly"] = []string{"priv-lvl=15", "roles=network-operator"} })
+	if err := Monotone("arista_eos", with(swapped, func(d *Dialect) {
+		d.Levels["operator"] = []string{"priv-lvl=1", "roles=network-operator"}
+	}), order); err == nil || !strings.Contains(err.Error(), "privilege.readonly: priv-lvl 15 is above operator's 1") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// An explicitly empty accepted_attributes is refused: nothing accepted and
+// no list at all are opposite readings, and neither is safe to guess.
+func TestValidateRefusesAnEmptyAcceptedList(t *testing.T) {
+	xe, _ := DialectFor("cisco_iosxe")
+	err := Validate("cisco_iosxe", with(xe, func(d *Dialect) { d.AcceptedAttributes = []string{} }))
+	if err == nil || !strings.Contains(err.Error(), "platforms.cisco_iosxe.accepted_attributes is empty") {
+		t.Fatalf("%v", err)
 	}
 }
 

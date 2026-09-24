@@ -131,7 +131,6 @@ func TestLoadRefusesByName(t *testing.T) {
 	for _, tt := range []struct{ name, yaml, want string }{
 		{"a platform set this binary does not ship", "platform_set: 1.4.0\n" + roleOK + subjOK, "it ships 1.0.0"},
 		{"key_groups", "key_groups: []\n" + roleOK + subjOK, "inventory file"},
-		{"platforms", "platforms: {arista_eos: {}}\n" + roleOK + subjOK, "plan 5"},
 		{"a role's max_session_age", "roles:\n  - {name: r, max_session_age: 8h}\n" + subjOK, "plan 7"},
 		{"an unknown key", scopeOK + roleOK + subjOK + "gratns: []\n", "field gratns not found"},
 		{"a second document", scopeOK + roleOK + subjOK + grantOK + "---\nscopes: []\n", "one YAML document"},

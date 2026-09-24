@@ -57,24 +57,30 @@ func ParseSpecs(raw []byte) (map[string]Spec, error) {
 	return f.Platforms, nil
 }
 
-// Over lays s over base: every field s sets replaces base's, whole, and every
-// field it leaves nil is base's. The result shares nothing with either.
+// Over lays s over base, per top-level key (spec §8): a list or a value s
+// sets replaces base's whole, and a map s sets — privilege, ceiling_levels,
+// entity_classes — merges into base's per entry, so a block that adds one
+// class keeps the rest. Every field s leaves nil is base's. The result shares
+// nothing with either. Discarding an entry takes `replace: true`, which
+// starts from nothing.
 func (s Spec) Over(base Dialect) Dialect {
 	d := base.clone()
 	if s.Supports != nil {
 		d.Supports = slices.Clone(*s.Supports)
 	}
 	if s.Privilege != nil {
-		d.Levels = cloneLists(*s.Privilege)
+		d.Levels = mergeLists(d.Levels, *s.Privilege)
 	}
 	if s.CeilingLevels != nil {
-		d.CeilingLevels = make(map[string]uint8, len(*s.CeilingLevels))
+		if d.CeilingLevels == nil {
+			d.CeilingLevels = map[string]uint8{}
+		}
 		for k, v := range *s.CeilingLevels {
 			d.CeilingLevels[k] = v
 		}
 	}
 	if s.EntityClasses != nil {
-		d.EntityClasses = cloneLists(*s.EntityClasses)
+		d.EntityClasses = mergeLists(d.EntityClasses, *s.EntityClasses)
 	}
 	if s.ExpandsAbbreviations != nil {
 		d.ExpandsAbbreviations = *s.ExpandsAbbreviations
@@ -109,12 +115,16 @@ func (s Spec) Over(base Dialect) Dialect {
 	return d
 }
 
-func cloneLists(m map[string][]string) map[string][]string {
-	out := make(map[string][]string, len(m))
-	for k, v := range m {
-		out[k] = slices.Clone(v)
+// mergeLists sets every entry of over in base, a map Over already owns, and
+// returns it; a nil base becomes a new map.
+func mergeLists(base, over map[string][]string) map[string][]string {
+	if base == nil {
+		base = make(map[string][]string, len(over))
 	}
-	return out
+	for k, v := range over {
+		base[k] = slices.Clone(v)
+	}
+	return base
 }
 
 // capabilities is spec §9's vocabulary for `supports`.
@@ -218,6 +228,12 @@ func Validate(name string, d Dialect) error {
 			return fmt.Errorf("%s: %s: a level renders it, so it carries privilege", field("inert_attributes"), n)
 		}
 	}
+	if d.AcceptedAttributes != nil && len(d.AcceptedAttributes) == 0 {
+		// Read as nothing accepted, it refuses every session; read as no list,
+		// it lifts the device's restriction. Neither is safe to guess.
+		return fmt.Errorf("%s is empty: list every attribute name the device takes, or remove the key to take any",
+			field("accepted_attributes"))
+	}
 	if d.AcceptedAttributes != nil {
 		// The adapter's own rendering has to be something the device takes,
 		// or every session at that level is refused.
@@ -236,4 +252,51 @@ func Validate(name string, d Dialect) error {
 		}
 	}
 	return nil
+}
+
+// Monotone refuses an adapter whose renderings do not rise with order, the
+// policy's levels lowest first: a lower level's priv-lvl above a higher one's,
+// or an attribute a lower level renders that a higher one does not. The diff
+// gate lets a move to a lower level through as a lowering (spec §12), which
+// holds only while a lower level renders no more than a higher one. port49
+// cannot rank two values of one attribute, a role's name, so it checks the
+// numbers and the names. A level the adapter neither renders nor numbers is
+// skipped: its parent chain renders it.
+func Monotone(name string, d Dialect, order []string) error {
+	var levels []string
+	for _, l := range order {
+		_, rendered := d.Levels[l]
+		_, numbered := d.CeilingLevels[l]
+		if rendered || numbered {
+			levels = append(levels, l)
+		}
+	}
+	for i, lower := range levels {
+		n, numbered := d.PrivLvl(lower)
+		at := "platforms." + name + ".ceiling_levels." + lower
+		if slices.ContainsFunc(d.Levels[lower], func(a string) bool { return engine.AttributeName(a) == "priv-lvl" }) {
+			at = "platforms." + name + ".privilege." + lower
+		}
+		for _, higher := range levels[i+1:] {
+			if m, ok := d.PrivLvl(higher); numbered && (!ok || n > m) {
+				return fmt.Errorf("%s: priv-lvl %d is above %s's %s; a level renders no more than the levels above it",
+					at, n, higher, privLvlText(m, ok))
+			}
+			for _, a := range d.Levels[lower] {
+				attr := engine.AttributeName(a)
+				if !slices.ContainsFunc(d.Levels[higher], func(b string) bool { return engine.AttributeName(b) == attr }) {
+					return fmt.Errorf("platforms.%s.privilege.%s: %s is rendered at %s and not at %s, above it; a "+
+						"level renders no more than the levels above it", name, lower, attr, lower, higher)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func privLvlText(n uint8, ok bool) string {
+	if !ok {
+		return "none"
+	}
+	return fmt.Sprint(n)
 }

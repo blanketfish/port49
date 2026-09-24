@@ -55,9 +55,12 @@ type Policy struct {
 	Bundle string
 
 	// set is the platform set the policy pins (spec §8), and adapters its
-	// platforms: the built-in set, Env.Dialects over it.
-	set      string
-	adapters map[string]platform.Dialect
+	// platforms: the built-in set, the file's `platforms:` blocks over it,
+	// Env.Dialects over those. overrides are the blocks as written, for the
+	// drift report.
+	set       string
+	adapters  map[string]platform.Dialect
+	overrides map[string]filePlatform
 
 	levels  []string          // the declared ordering, lowest first
 	parents map[string]string // level → parent, for rendering
@@ -201,7 +204,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 			"everything after it, or merge it into the first document")
 	}
 	p := &Policy{Bundle: engine.HashOf(raw), env: env}
-	for _, step := range []func(file) error{p.buildPlatforms, p.buildLevels, p.buildRoles, p.buildScopes, p.buildSubjects,
+	for _, step := range []func(file) error{p.buildPlatforms, p.buildLevels, p.checkBlockOrder, p.buildRoles, p.buildScopes, p.buildSubjects,
 		p.buildGrants, p.checkMinters, p.buildTests, p.buildAcknowledgments} {
 		if err := step(f); err != nil {
 			return nil, err
@@ -222,7 +225,6 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 func refusedKeys(raw []byte) error {
 	var loose struct {
 		KeyGroups any              `yaml:"key_groups"`
-		Platforms any              `yaml:"platforms"`
 		Roles     []map[string]any `yaml:"roles"`
 	}
 	if err := yaml.Unmarshal(raw, &loose); err != nil {
@@ -232,8 +234,6 @@ func refusedKeys(raw []byte) error {
 	case loose.KeyGroups != nil:
 		return errors.New("key_groups: key groups live in the inventory file (inventory_file) until plan 6 " +
 			"moves them to the policy repository; move the block there")
-	case loose.Platforms != nil:
-		return errors.New("platforms: user platform definitions are plan 5's; the built-in adapters apply")
 	}
 	for i, r := range loose.Roles {
 		if _, ok := r["max_session_age"]; ok {
@@ -250,7 +250,10 @@ func refusedKeys(raw []byte) error {
 
 // buildPlatforms resolves the platform set the policy pins, or UnpinnedSet
 // where it pins none (spec §8): a binary upgrade never changes what a policy
-// renders, and a set this binary does not ship is refused by name.
+// renders, and a set this binary does not ship is refused by name. Each
+// `platforms:` block then merges over the set per top-level key, or starts
+// from another platform (`based_on:`) or from nothing (`replace: true`), and
+// is validated exactly as a built-in is.
 func (p *Policy) buildPlatforms(f file) error {
 	p.set = f.PlatformSet
 	if p.set == "" {
@@ -261,12 +264,58 @@ func (p *Policy) buildPlatforms(f file) error {
 		return fmt.Errorf("platform_set: %s is not a set this binary ships; it ships %s. Pin one of those, or run "+
 			"a binary that ships %s (spec §8)", p.set, strings.Join(platform.Sets(), ", "), p.set)
 	}
+	builtin, _ := platform.Set(p.set)
+	generic, _ := platform.DialectFor("")
+	p.overrides = f.Platforms
+	for _, name := range sortedKeys(f.Platforms) {
+		b := f.Platforms[name]
+		at := "platforms." + name
+		_, shipped := builtin[name]
+		var base platform.Dialect
+		switch {
+		case !platformNameShape.MatchString(name):
+			return fmt.Errorf("%s: a platform name is lower case, digits and _, starting with a letter, as an "+
+				"inventory's platform: field writes it", at)
+		case name == "all" || name == "default":
+			// `all` keys an attribute to every platform (§6) and `default` is
+			// the redaction list of every platform with none (§5.8): a platform
+			// of either name would be read as the other.
+			return fmt.Errorf("%s: %s is reserved: attributes.all names every platform and the built-in redaction "+
+				"table's default list every unlisted one; name the platform as the inventory does", at, name)
+		case b.Replace && b.BasedOn != "":
+			return fmt.Errorf("%s: replace starts from nothing and based_on from another platform; use one", at)
+		case b.BasedOn != "" && shipped:
+			return fmt.Errorf("%s: based_on declares a variant under a new name, and %s is a platform this set "+
+				"ships; set the keys to change on it directly, or name the variant", at, name)
+		case b.BasedOn != "":
+			d, ok := builtin[b.BasedOn]
+			if !ok {
+				return fmt.Errorf("%s: based_on %q is not a platform in set %s; it ships %s", at, b.BasedOn, p.set,
+					strings.Join(sortedKeys(builtin), ", "))
+			}
+			base = d
+		case b.Replace || !shipped:
+			// A new platform, or one discarded whole, starts from what an
+			// unmodeled device gets (spec §8, "Unknown platforms").
+			base = generic
+		default:
+			base = builtin[name]
+		}
+		d := b.Spec.Over(base)
+		if err := platform.Validate(name, d); err != nil {
+			return err
+		}
+		set[name] = d
+	}
 	for name, d := range p.env.Dialects {
 		set[name] = d
 	}
 	p.adapters = set
 	return nil
 }
+
+// platformNameShape is how an inventory writes a platform.
+var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // PlatformSet is the platform set the policy renders with.
 func (p *Policy) PlatformSet() string { return p.set }
@@ -333,6 +382,20 @@ func (p *Policy) buildLevels(f file) error {
 	return nil
 }
 
+// checkBlockOrder refuses a `platforms:` block whose merged adapter does not
+// render monotone in the policy's level order (platform.Monotone), which is
+// known only once the levels are built. The pinned set's own adapters are
+// monotone as shipped; a block is the operator's word, and the diff gate's
+// lowering exemption rests on it.
+func (p *Policy) checkBlockOrder(file) error {
+	for _, name := range sortedKeys(p.overrides) {
+		if err := platform.Monotone(name, p.adapters[name], p.levels); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *Policy) checkLevel(name string) error {
 	if name == "" || slices.Contains(p.levels, name) {
 		return nil
@@ -364,6 +427,11 @@ func (p *Policy) buildRoles(f file) error {
 				}
 				if err := p.checkClasses(rule); err != nil {
 					return fmt.Errorf("role %q: %w", r.Name, err)
+				}
+				if list.deny {
+					if err := p.checkDenyClasses(rule); err != nil {
+						return fmt.Errorf("role %q: %w", r.Name, err)
+					}
 				}
 				*list.out = append(*list.out, engine.CanonicalRule(rule))
 			}
@@ -420,7 +488,7 @@ func checkRule(rule string, deny bool) error {
 // valid (engine.CheckAttribute).
 func (p *Policy) checkAttributes(attrs map[string][]string) error {
 	for key, list := range attrs {
-		if key != "all" && !platform.Known(key) && !p.inInventory(key) {
+		if _, adapted := p.adapters[key]; key != "all" && !adapted && !p.inInventory(key) {
 			return fmt.Errorf("attributes: %q is neither `all` nor a platform port49 ships or the inventory names", key)
 		}
 		for _, a := range list {
@@ -445,7 +513,8 @@ func (p *Policy) checkPlaceholder(key, a string) error {
 		return nil
 	}
 	name := a[:strings.IndexAny(a, "=*")]
-	if slices.Contains(platform.PrivilegeAttributeNames(), name) {
+	if slices.Contains(platform.PrivilegeAttributeNames(), name) || slices.ContainsFunc(sortedKeys(p.adapters),
+		func(n string) bool { return slices.Contains(p.adapters[n].PrivilegeAttributes, name) }) {
 		return fmt.Errorf("attributes.%s: %s: %s carries privilege and takes no placeholder: the device would get "+
 			"whatever the mint fills in, which no review tool can see (spec §6)", key, a, name)
 	}
@@ -907,6 +976,36 @@ func (p *Policy) checkClasses(rule string) error {
 		if !defined {
 			return fmt.Errorf("rule %q names @%s, which no platform defines; a class is a platform's (spec §4, §8)",
 				rule, t.Text)
+		}
+	}
+	return nil
+}
+
+// checkDenyClasses refuses a deny naming a class whose pattern turns
+// case-insensitivity off on any platform: a class pattern is compiled
+// case-insensitively (engine.compileTerm), and one that opts out lets a
+// differently-cased interface name walk past the deny (spec §3 rule 3, §4).
+// A deny's own regex term is checkRule's; a class's patterns are an
+// adapter's, the operator's since plan 5, so they are checked here where the
+// adapters are known. A permit may opt out, since that only narrows it.
+func (p *Policy) checkDenyClasses(rule string) error {
+	terms, err := engine.ParseRule(rule)
+	if err != nil {
+		return err
+	}
+	for _, t := range terms {
+		if t.Kind != engine.Class {
+			continue
+		}
+		for _, name := range sortedKeys(p.adapters) {
+			for _, pattern := range p.adapters[name].EntityClasses[t.Text] {
+				if caseSensitive(pattern) {
+					return fmt.Errorf("deny %q names @%s, whose pattern /%s/ on %s turns case-insensitivity off; "+
+						"port49 matches case-insensitively, and a differently-cased name would walk past the deny "+
+						"(spec §4); remove the (?-i) from platforms.%s.entity_classes.%s", rule, t.Text, pattern, name,
+						name, t.Text)
+				}
+			}
 		}
 	}
 	return nil

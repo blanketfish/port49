@@ -5,20 +5,33 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // The policy file's schema (spec §11), snake_case throughout. Every key is
 // declared: the decoder refuses one it does not know rather than ignoring it,
 // because an ignored key is a policy that reads one way and runs another.
 type file struct {
-	PlatformSet     string        `yaml:"platform_set"`
-	PrivilegeLevels []fileLevel   `yaml:"privilege_levels"`
-	Scopes          []fileScope   `yaml:"scopes"`
-	Roles           []fileRole    `yaml:"roles"`
-	Subjects        []fileSubject `yaml:"subjects"`
-	Grants          []fileGrant   `yaml:"grants"`
-	Tests           []fileTest    `yaml:"tests"`
-	Acknowledge     []fileAck     `yaml:"acknowledge"`
+	PlatformSet     string                  `yaml:"platform_set"`
+	Platforms       map[string]filePlatform `yaml:"platforms"`
+	PrivilegeLevels []fileLevel             `yaml:"privilege_levels"`
+	Scopes          []fileScope             `yaml:"scopes"`
+	Roles           []fileRole              `yaml:"roles"`
+	Subjects        []fileSubject           `yaml:"subjects"`
+	Grants          []fileGrant             `yaml:"grants"`
+	Tests           []fileTest              `yaml:"tests"`
+	Acknowledge     []fileAck               `yaml:"acknowledge"`
+}
+
+// filePlatform is one block under `platforms:` (spec §8, "User-editable, day
+// one"): the adapter keys of platform.Spec, merged per key over the pinned
+// set's adapter of that name, or over another's with based_on, or over
+// nothing with replace.
+type filePlatform struct {
+	platform.Spec `yaml:",inline"`
+	Replace       bool   `yaml:"replace"`
+	BasedOn       string `yaml:"based_on"`
 }
 
 // fileAck is one acknowledge: entry (spec §12): the author's written word for

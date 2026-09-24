@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // Finding is something CI reports about a policy that loads: not an error,
@@ -33,6 +35,7 @@ const (
 	FindingNoTests             = "no_tests"
 	FindingCeilingIndistinct   = "ceiling_indistinct"
 	FindingAcknowledgeStale    = "acknowledge_stale"
+	FindingPlatformOverride    = "platform_override_redundant"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -132,6 +135,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
 				"and acknowledges nothing; delete it (spec §12)", a.Role, a.Rule, a.Rule)
 		}
 	}
+	out = append(out, p.redundantOverrides()...)
 	if len(p.tests) == 0 {
 		add(FindingNoTests, "the policy has no tests: nothing in it acknowledges a shadowed deny, an expansion or "+
 			"a privilege raise, so the gates fail on the first one; add tests (spec §12, \"Policy tests\")")
@@ -264,6 +268,37 @@ func (p *Policy) indistinctCeilings() []string {
 						higher))
 					break
 				}
+			}
+		}
+	}
+	return out
+}
+
+// redundantOverrides names every key a `platforms:` block sets to what the
+// pinned set already says (spec §8, "Knowing what is shipped"): an override
+// that matches the built-in can be removed, and left in place it would
+// silently pin the old value when a later set improves it.
+func (p *Policy) redundantOverrides() []Finding {
+	var out []Finding
+	for _, name := range sortedKeys(p.overrides) {
+		b := p.overrides[name]
+		builtin, ok := platform.Set(p.set)
+		base, shipped := builtin[name]
+		if !ok || !shipped || b.Replace || b.BasedOn != "" {
+			continue
+		}
+		v := reflect.ValueOf(b.Spec)
+		for i := 0; i < v.NumField(); i++ {
+			if v.Field(i).IsNil() {
+				continue
+			}
+			var one platform.Spec
+			reflect.ValueOf(&one).Elem().Field(i).Set(v.Field(i))
+			if reflect.DeepEqual(one.Over(base), base) {
+				key := strings.Split(v.Type().Field(i).Tag.Get("yaml"), ",")[0]
+				out = append(out, Finding{Kind: FindingPlatformOverride, Message: fmt.Sprintf(
+					"platforms.%s.%s says what platform set %s already says; remove it, or it keeps this value when "+
+						"a later set changes it", name, key, p.set)})
 			}
 		}
 	}
