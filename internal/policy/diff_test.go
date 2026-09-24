@@ -238,3 +238,27 @@ func TestTheDiffSeesASplitAnyDeny(t *testing.T) {
 		t.Fatalf("no split change: %+v", d.Changes)
 	}
 }
+
+// The diff reads a version's mints as the broker would: a mint the new
+// version refuses is reported and fails the gate, and one the old version
+// refused makes everything the new one permits an expansion from refused.
+func TestTheDiffSeesTheBrokersMintChecks(t *testing.T) {
+	fits := strings.Replace(mintRefused, "a-username-long-enough-to-overflow", "s", 1)
+	d := Compare(mustParse(t, fits), mustParse(t, mintRefused), noon)
+	if len(d.Refused) == 0 || d.Refused[0].Code != "attribute_too_long" || d.Refused[0].Subject != "s" || len(d.Changes) != 0 {
+		t.Fatalf("refused %+v, changes %+v", d.Refused, d.Changes)
+	}
+	d = Compare(mustParse(t, mintRefused), mustParse(t, fits), noon)
+	if len(d.Refused) != 0 || len(d.Changes) == 0 || d.Unacknowledged() != len(d.Changes) {
+		t.Fatalf("refused %+v, changes %+v", d.Refused, d.Changes)
+	}
+	for _, c := range d.Changes {
+		if c.OldRefused != "attribute_too_long" || !c.Gated || !c.New.Permit {
+			t.Errorf("%+v", c)
+		}
+	}
+	acked := fits + "tests:\n  - {subject: s, device: leaf-01, command: \"show version\", expect: permit}\n"
+	if d := Compare(mustParse(t, mintRefused), mustParse(t, acked), noon); d.Unacknowledged() != 0 {
+		t.Fatalf("a test acknowledges it: %+v", d.Changes)
+	}
+}

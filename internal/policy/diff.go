@@ -22,8 +22,9 @@ import (
 // moved; every device that gained or lost a subject's access outright; every
 // rule carrying a regex or class term that changed, or that a changed deny
 // meets, which the diff cannot enumerate; every device the new version
-// quarantines for a cause the old did not, and every one it releases; and
-// every composition that would not resolve.
+// quarantines for a cause the old did not, and every one it releases; every
+// subject whose mint the new version's broker refuses where the old did not;
+// and every composition that would not resolve.
 type Diff struct {
 	Changes     []Change
 	Access      []AccessChange
@@ -31,6 +32,10 @@ type Diff struct {
 	Regex       []RegexChange
 	Quarantined []Quarantine
 	Released    []Release
+	// Refused are compositions whose mint the new version's broker would
+	// refuse and the old one's would not (MintCheck): the subject is locked
+	// out there, which fails the gate as a new quarantine does.
+	Refused []MintRefusal
 	// Unresolved are compositions the diff could not compare. The gate
 	// cannot vouch for them, so each fails it.
 	Unresolved []string
@@ -53,6 +58,9 @@ type Change struct {
 	// PipeEntry is the new version's allowlist entry that permits the
 	// pipeline stage the old version refused (pipe_stage_denied).
 	PipeEntry string
+	// OldRefused is the mint item error the old version's broker answered
+	// for this subject and device, which refused everything there.
+	OldRefused string
 	// Gated is spec §12's privilege-expansion gate: a command the old
 	// version refused with a deny, at a pipeline stage, or by quarantining
 	// the device, that the new version permits. Acknowledged is a policy
@@ -92,6 +100,15 @@ type RegexChange struct {
 	Added   bool
 }
 
+// MintRefusal is one subject the new version's broker would refuse to mint
+// for on some devices, with the mint item error and why.
+type MintRefusal struct {
+	Subject      string
+	Devices      []string
+	At           time.Time
+	Code, Detail string
+}
+
 // Release is a device the old version quarantines and the new does not.
 // Everything the new version permits there is a change from refused.
 type Release struct {
@@ -119,7 +136,10 @@ type side struct {
 	// changed nothing here.
 	hash        string
 	quarantined bool
-	err         error
+	// refused is the mint item error the broker would answer (MintCheck),
+	// with why: nothing is minted, so nothing is permitted.
+	refused, refusedDetail string
+	err                    error
 }
 
 func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
@@ -136,6 +156,9 @@ func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
 	}
 	if err != nil {
 		return side{err: err}
+	}
+	if code, detail := mintCheck(res, sub.Identity, d.Name); code != "" {
+		return side{refused: code, refusedDetail: detail}
 	}
 	unbundled := res.Blob
 	unbundled.Bundle = "diff"
@@ -244,9 +267,13 @@ func (c *comparison) at(at time.Time) {
 	for _, subject := range subjects {
 		var order []string
 		groups := map[string]*group{}
+		refusals := map[string][]string{}
 		for _, dev := range c.after.Devices() {
 			was, is := c.before.side(subject, dev, at), c.after.side(subject, dev, at)
-			if is.quarantined || (was.quarantined && is.prog == nil && is.err == nil) {
+			if is.refused != "" && is.refused != was.refused {
+				refusals[is.refused+"\x00"+is.refusedDetail] = append(refusals[is.refused+"\x00"+is.refusedDetail], dev.Name)
+			}
+			if is.quarantined || is.refused != "" || (was.quarantined && is.prog == nil && is.err == nil) {
 				continue
 			}
 			if err := errors.Join(was.err, is.err); err != nil {
@@ -256,12 +283,15 @@ func (c *comparison) at(at time.Time) {
 				}
 				continue
 			}
-			if !was.quarantined && was.prog == nil && is.prog == nil {
+			if !was.quarantined && was.refused == "" && was.prog == nil && is.prog == nil {
+				continue
+			}
+			if was.refused != "" && is.prog == nil {
 				continue
 			}
 			// The ceiling is the grants', not the blob's, so it is part of
 			// what makes two devices alike.
-			key := strconv.FormatBool(was.quarantined) + "|" + was.hash + "|" + was.res.Ceiling + "|" + is.hash +
+			key := strconv.FormatBool(was.quarantined) + "|" + was.refused + "|" + was.hash + "|" + was.res.Ceiling + "|" + is.hash +
 				"|" + is.res.Ceiling
 			if _, ok := groups[key]; !ok {
 				groups[key] = &group{was: was, is: is}
@@ -272,6 +302,14 @@ func (c *comparison) at(at time.Time) {
 		for _, key := range order {
 			g := groups[key]
 			c.group(subject, g.devices, g.was, g.is, at)
+		}
+		for _, key := range sortedKeys(refusals) {
+			code, detail, _ := strings.Cut(key, "\x00")
+			devices := refusals[key]
+			if c.once("refused", subject, strings.Join(devices, ","), key) {
+				c.d.Refused = append(c.d.Refused, MintRefusal{Subject: subject, Devices: devices, At: at, Code: code,
+					Detail: detail})
+			}
 		}
 	}
 }
@@ -294,12 +332,17 @@ func currentEntries(p *Policy, device string, at time.Time) []QuarantineEntry {
 // group compares one subject on devices that hold the same blobs.
 func (c *comparison) group(subject string, devices []string, was, is side, at time.Time) {
 	on := strings.Join(devices, ",")
-	if was.quarantined {
-		// The old version refused everything here, so everything the new
-		// one permits is a change from refused (spec §10, §12).
+	if was.quarantined || was.refused != "" {
+		// The old version refused everything here, by quarantine or at the
+		// mint, so everything the new one permits is a change from refused
+		// (spec §10, §12).
+		from := engine.Outcome{Reason: decision.DeviceQuarantined}
+		if was.refused != "" {
+			from = engine.Outcome{}
+		}
 		for _, v := range engine.Probes(is.prog) {
 			if to := is.decide(v); to.Permit {
-				c.change(subject, devices, at, v, engine.Outcome{Reason: decision.DeviceQuarantined}, to, is)
+				c.change(subject, devices, at, v, from, to, is, was.refused)
 			}
 		}
 		return
@@ -338,7 +381,7 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 	for _, v := range engine.Probes(was.prog, is.prog) {
 		from, to := was.decide(v), is.decide(v)
 		if from.Permit != to.Permit {
-			c.change(subject, devices, at, v, from, to, is)
+			c.change(subject, devices, at, v, from, to, is, "")
 		} else if from.Permit && base == nil {
 			base = v
 		}
@@ -353,18 +396,19 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 	for _, stage := range engine.PipeProbes(was.prog, is.prog) {
 		v := slices.Concat(base, []string{token}, stage)
 		if from, to := was.decide(v), is.decide(v); from.Permit != to.Permit {
-			c.change(subject, devices, at, v, from, to, is)
+			c.change(subject, devices, at, v, from, to, is, "")
 		}
 	}
 }
 
 // change records one command whose verdict moved, and whether it is gated.
 func (c *comparison) change(subject string, devices []string, at time.Time, v []string, from, to engine.Outcome,
-	is side) {
-	ch := Change{Subject: subject, Devices: devices, At: at, Command: display(v), Vector: v, Old: from, New: to}
+	is side, oldRefused string) {
+	ch := Change{Subject: subject, Devices: devices, At: at, Command: display(v), Vector: v, Old: from, New: to,
+		OldRefused: oldRefused}
 	if to.Permit && !from.Permit {
 		switch {
-		case from.Reason == decision.DeviceQuarantined:
+		case from.Reason == decision.DeviceQuarantined || oldRefused != "":
 			ch.Gated = true
 			ch.Acknowledged = c.acks[releaseKey(subject, to.Decided.Role, to.Decided.Rule)]
 		case from.Reason == decision.PipeStageDenied && from.Stage > 0 && from.Stage <= len(to.Pipeline):
@@ -384,7 +428,7 @@ func (c *comparison) change(subject string, devices []string, at time.Time, v []
 	if to.Decided != nil {
 		newRule = to.Decided.Rule
 	}
-	if c.once(append([]string{"change", subject, strings.Join(devices, ","), string(from.Reason),
+	if c.once(append([]string{"change", subject, strings.Join(devices, ","), oldRefused, string(from.Reason),
 		string(to.Reason), oldRule, newRule}, v...)...) {
 		c.d.Changes = append(c.d.Changes, ch)
 	}
@@ -446,8 +490,8 @@ func constrained(rule string) bool {
 // of instants, where before refused the same command: with a deny, every
 // (subject, deny, permit) for a permit in p that wins over every deny it
 // meets, as the shadowed-deny report reads a test; at a pipeline stage, the
-// allowlist entry that now permits it; on a device before quarantined, every
-// such permit. The test is the author saying the expansion is meant (spec
+// allowlist entry that now permits it; on a device before quarantined, or
+// where before's broker refused the mint, every such permit. The test is the author saying the expansion is meant (spec
 // §12).
 func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]bool {
 	acks := map[string]bool{}
@@ -465,9 +509,13 @@ func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]
 				winners = append(winners, pm)
 			}
 		}
-		_, was, err := before.Decide(t.subject, "", dev, t.result.Test.Command, t.at)
+		res, was, err := before.Decide(t.subject, "", dev, t.result.Test.Command, t.at)
+		refused := ""
+		if err == nil {
+			refused, _ = mintCheck(res, before.principalsOf(t.subject, ""), dev.Name)
+		}
 		switch {
-		case errors.Is(err, ErrDeviceQuarantined):
+		case errors.Is(err, ErrDeviceQuarantined) || refused != "":
 			for _, pm := range winners {
 				acks[releaseKey(t.subject, pm.Role, pm.Rule)] = true
 			}

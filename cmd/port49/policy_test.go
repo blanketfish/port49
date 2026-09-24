@@ -156,6 +156,31 @@ func TestPolicyDiffGatesAnExpansionPastADeny(t *testing.T) {
 	}
 }
 
+// A mint the broker would refuse permits nothing, so `policy test` fails a
+// test that expects permit there and names the mint item error, and `policy
+// diff` fails a change that locks a subject out at the mint (spec §12).
+func TestPolicyTestAndDiffAnswerAsTheBrokerMints(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw, _ := os.ReadFile(oldPol)
+	refused := strings.Replace(string(raw), "{name: read_only, privilege: readonly, permit: [show **]}",
+		`{name: read_only, privilege: readonly, permit: [show **], attributes: {all: ["home*/`+strings.Repeat("h", 237)+`/{principal}"]}}`, 1)
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(newPol, []byte(refused), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `FAIL noc on leaf-01: "show version" -> deny: the broker refuses the mint, attribute_too_long`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "REFUSED: noc on leaf-01: the new version's broker refuses every mint there, attribute_too_long") ||
+		!strings.Contains(out.String(), "1 mints newly refused") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
 // A possible shadow a test exercises is a shadow: the test proved the two
 // patterns meet.
 func TestPolicyTestReportsAPossibleShadowATestProves(t *testing.T) {

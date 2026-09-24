@@ -249,32 +249,36 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 		log.Printf("broker: resolving %s on %q: %v", principal, name, err)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
-	body, hash, err := engine.Encode(res.Blob)
-	if err != nil {
-		// Policy load checks every rule, so this is a broker defect, not a
-		// refusal. The error names policy content and is the operator's.
-		log.Printf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
-		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
-	}
 	// The daemon fills the session reply's placeholders from the context, at
 	// each session authorization (spec §5.2), with the values the broker holds
 	// now. An attribute they would push past 255 bytes is refused here, where
 	// the operator can be told, rather than there, where the device can only
-	// be refused.
-	//
-	// A value carrying a separator is refused the same way (attribute_unsafe):
-	// the fault is in the data it fills in, not the broker, and the daemon
-	// would refuse the reply it builds (blob_unavailable).
-	_, err = res.Blob.SessionAttributes(engine.Values{Username: res.Username, Principal: principal, Device: name})
-	switch {
-	case errors.Is(err, engine.ErrAttributeTooLong):
-		log.Printf("broker: the session reply for %s on %q does not fit the wire: %v", principal, name, err)
-		return b.fault(name, "attribute_too_long",
+	// be refused. A value carrying a separator is refused the same way
+	// (attribute_unsafe): the fault is in the data it fills in, not the
+	// broker, and the daemon would refuse the reply it builds
+	// (blob_unavailable). policy.MintCheck is the one reading of these, so
+	// explain, the policy tests and the diff answer as the broker does.
+	switch code, detail := policy.MintCheck(res, principal, name); code {
+	case "":
+	case "attribute_too_long":
+		log.Printf("broker: the session reply for %s on %q does not fit the wire: %s", principal, name, detail)
+		return b.fault(name, code,
 			"a session attribute for this device is longer than 255 bytes once filled in; tell the operator"), nil
-	case err != nil:
-		log.Printf("broker: the session reply for %s on %q cannot carry a substitution: %v", principal, name, err)
-		return b.fault(name, "attribute_unsafe", "a session attribute for this device would carry =, * or a "+
+	case "attribute_unsafe":
+		log.Printf("broker: the session reply for %s on %q cannot carry a substitution: %s", principal, name, detail)
+		return b.fault(name, code, "a session attribute for this device would carry =, * or a "+
 			"control character once filled in; tell the operator"), nil
+	default:
+		// Policy load checks every rule and compiles every device's blob, so
+		// this is a broker defect, not a refusal. The error names policy
+		// content and is the operator's.
+		log.Printf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %s", principal, name, detail)
+		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
+	}
+	body, hash, err := engine.Encode(res.Blob)
+	if err != nil {
+		log.Printf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
+		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
 	if err := b.putBlob(ctx, hash, body); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil

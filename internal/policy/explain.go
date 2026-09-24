@@ -61,8 +61,7 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 		}
 		subject = name
 	}
-	sub, ok := p.subs[subject]
-	if !ok {
+	if _, ok := p.subs[subject]; !ok {
 		return Explanation{}, fmt.Errorf("subject %q is not declared", subject)
 	}
 	e := Explanation{Subject: subject, Device: device, Platform: d.Platform, Command: line}
@@ -99,12 +98,9 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	// answers now, and the note says from when it will not.
 	_, e.Caveats = p.quarantineAt(d.Name, now)
 	e.Resolution = res
-	principals := sub.Identity
-	if principal != "" {
-		principals = []string{principal}
-	}
-	if e.MintError, e.MintDetail, err = mintCheck(res, principals, device); err != nil || e.MintError != "" {
-		return e, err
+	principals := p.principalsOf(subject, principal)
+	if e.MintError, e.MintDetail = mintCheck(res, principals, device); e.MintError != "" {
+		return e, nil
 	}
 	if len(principals) == 0 && slices.ContainsFunc(res.Blob.Attributes, func(a string) bool {
 		return strings.Contains(a, "{principal}")
@@ -158,29 +154,55 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	return e, nil
 }
 
-// mintCheck runs what the broker runs on a resolution before it mints
-// (internal/broker, mintOne): the blob must encode, and the session reply must
-// fill in within the wire's limits with each principal's values. It mirrors
-// the broker's mint item errors; a change to one is a change to both. With no
-// principal to try (a group subject), {principal} is filled in empty, and
-// Explain says so.
-func mintCheck(res Resolution, principals []string, device string) (code, detail string, err error) {
+// MintCheck is what the broker runs on a resolution before it mints for one
+// principal on one device (internal/broker, mintOne), and what explain, the
+// policy tests and the diff run so they answer as it does: the blob must
+// encode, and the session reply must fill in within the wire's limits. code
+// is the mint item error, empty when the mint may go ahead: attribute_too_long
+// for a reply past 255 bytes, attribute_unsafe for a filled-in value carrying
+// a separator or control character (the fault is in the data, not the
+// broker), and broker_error for anything else.
+func MintCheck(res Resolution, principal, device string) (code, detail string) {
 	if _, _, err := engine.Encode(res.Blob); err != nil {
-		return "broker_error", err.Error(), nil
+		return "broker_error", err.Error()
 	}
+	_, err := res.Blob.SessionAttributes(engine.Values{Username: res.Username, Principal: principal, Device: device})
+	switch {
+	case err == nil:
+		return "", ""
+	case errors.Is(err, engine.ErrAttributeTooLong):
+		return "attribute_too_long", err.Error()
+	case errors.Is(err, engine.ErrSubstitution):
+		return "attribute_unsafe", err.Error()
+	}
+	return "broker_error", err.Error()
+}
+
+// mintCheck is MintCheck for each of principals, the first refusal naming
+// the principal. With none to try (a group subject), {principal} is filled in
+// empty, and Explain says so.
+func mintCheck(res Resolution, principals []string, device string) (code, detail string) {
 	if len(principals) == 0 {
 		principals = []string{""}
 	}
 	for _, pr := range principals {
-		_, err := res.Blob.SessionAttributes(engine.Values{Username: res.Username, Principal: pr, Device: device})
-		switch {
-		case errors.Is(err, engine.ErrAttributeTooLong):
-			return "attribute_too_long", fmt.Sprintf("for %s: %v", pr, err), nil
-		case err != nil:
-			return "attribute_unsafe", fmt.Sprintf("for %s: %v", pr, err), nil
+		if code, detail := MintCheck(res, pr, device); code != "" {
+			return code, fmt.Sprintf("for %s: %s", pr, detail)
 		}
 	}
-	return "", "", nil
+	return "", ""
+}
+
+// principalsOf are the principals a mint for subject may be asked for: the
+// one given, or the subject's identities.
+func (p *Policy) principalsOf(subject, principal string) []string {
+	if principal != "" {
+		return []string{principal}
+	}
+	if sub, ok := p.subs[subject]; ok {
+		return sub.Identity
+	}
+	return nil
 }
 
 // quarantineAt splits the device's quarantine entries at now: the causes that

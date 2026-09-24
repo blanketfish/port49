@@ -164,6 +164,10 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 			failed++
 		}
 		line := fmt.Sprintf("%s %s on %s: %q -> %s %s", status, who, r.Test.Device, r.Test.Command, got, r.Reason)
+		if r.MintError != "" {
+			line = fmt.Sprintf("%s %s on %s: %q -> deny: the broker refuses the mint, %s", status, who,
+				r.Test.Device, r.Test.Command, r.MintError)
+		}
 		if r.Err != nil {
 			line = fmt.Sprintf("%s %s on %s: %q -> error: %v", status, who, r.Test.Device, r.Test.Command, r.Err)
 		} else if !r.Pass {
@@ -193,7 +197,9 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 // change and exits 1 on a command the old version refused (by a deny, at a
 // pipeline stage, or by quarantining the device) that the new version
 // permits and no policy test in it exercises, on a device the new version
-// quarantines for a new cause, and on a composition it could not compare.
+// quarantines for a new cause, on a subject whose mint the new version's
+// broker refuses where the old did not, and on a composition it could not
+// compare.
 func policyDiff(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 policy diff", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -239,6 +245,10 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "QUARANTINES: %s (%s): %s\n", q.Device, q.Platform, e.Message(now))
 		}
 	}
+	for _, r := range d.Refused {
+		fmt.Fprintf(stdout, "REFUSED: %s on %s%s: the new version's broker refuses every mint there, %s (%s)\n",
+			r.Subject, strings.Join(r.Devices, ", "), from(r.At), r.Code, r.Detail)
+	}
 	for _, r := range d.Released {
 		fmt.Fprintf(stdout, "RELEASES: %s (%s)%s: the old version quarantines it, so every command the new one "+
 			"permits there is an expansion\n", r.Device, r.Platform, from(r.At))
@@ -276,10 +286,12 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			label = "expands (a policy test exercises it)"
 		}
 		var was string
-		switch c.Old.Reason {
-		case decision.DeviceQuarantined:
+		switch {
+		case c.OldRefused != "":
+			was = "refused at the mint (" + c.OldRefused + ")"
+		case c.Old.Reason == decision.DeviceQuarantined:
 			was = "refused (device_quarantined)"
-		case decision.PipeStageDenied:
+		case c.Old.Reason == decision.PipeStageDenied:
 			was = fmt.Sprintf("refused at pipeline stage %d (pipe_stage_denied)", c.Old.Stage)
 			permitted = fmt.Sprintf("now permitted by the pipe allowlist entry %q", c.PipeEntry)
 		default:
@@ -303,9 +315,9 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			"enumerated (spec §12)\n", on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb)
 	}
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
-		"%d devices newly quarantined, %d released; %d unresolved\n", len(d.Changes), widen, narrow,
-		d.Unacknowledged(), len(d.Quarantined), len(d.Released), len(d.Unresolved))
-	if d.Unacknowledged() > 0 || len(d.Quarantined) > 0 || len(d.Unresolved) > 0 {
+		"%d devices newly quarantined, %d released; %d mints newly refused; %d unresolved\n", len(d.Changes), widen,
+		narrow, d.Unacknowledged(), len(d.Quarantined), len(d.Released), len(d.Refused), len(d.Unresolved))
+	if d.Unacknowledged() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 {
 		return 1
 	}
 	return 0

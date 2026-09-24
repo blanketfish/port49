@@ -82,29 +82,40 @@ type TestResult struct {
 	Permit  bool
 	Reason  decision.Reason
 	Outcome engine.Outcome
-	Pass    bool
-	Err     error
-	Caveats []string
+	// MintError is the mint item error the broker would answer instead of
+	// minting (MintCheck), or device_unconfigured: the test is a deny and
+	// carries no reason, since no decision is made.
+	MintError string
+	Pass      bool
+	Err       error
+	Caveats   []string
 }
 
 // RunTests runs the file's tests against its inventory at now (spec §11,
-// §12). A principal with no grant on the device is a deny, no_grants_matched,
-// and any principal on a quarantined device a deny, device_quarantined: each is
-// what the mint would answer.
+// §12), answering in the mint's order as explain does: a principal with no
+// grant on the device is a deny, no_grants_matched; a device with no platform
+// is refused device_unconfigured; any principal on a quarantined device is a
+// deny, device_quarantined; and a mint the broker would refuse (MintCheck)
+// permits nothing.
 func (p *Policy) RunTests(now time.Time) []TestResult {
 	var out []TestResult
 	for _, t := range p.tests {
 		r := TestResult{Test: t}
 		d, _ := p.device(t.Device)
-		_, o, err := p.Decide(t.Subject, t.Principal, d, t.Command, now)
+		res, o, err := p.Decide(t.Subject, t.Principal, d, t.Command, now)
 		switch {
 		case errors.Is(err, ErrNoGrants):
 			r.Reason = decision.NoGrantsMatched
+		case d.Platform == "":
+			r.MintError = "device_unconfigured"
 		case errors.Is(err, ErrDeviceQuarantined):
 			r.Reason = decision.DeviceQuarantined
 		case err != nil:
 			r.Err = err
 		default:
+			if r.MintError, _ = mintCheck(res, p.principalsOf(t.Subject, t.Principal), d.Name); r.MintError != "" {
+				break
+			}
 			r.Permit, r.Reason, r.Outcome = o.Permit, o.Reason, o
 			r.Caveats = Caveats(d.Platform, p.dialect(d.Platform), o)
 		}
