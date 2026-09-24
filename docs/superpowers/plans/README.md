@@ -455,12 +455,13 @@ record field, a §5.7 edit first, and the refresh should use it too.
 **Hands to plan 12:** the policy file check covers the file, the directory holding it, and the
 directory holding every symlink on the path. It does not cover ACLs or other ancestor
 directories. The deployment docs must say that the path to the policy file is the deployment's
-to protect, since whoever can write it decides every operator's access within seconds. A
-directory's mode is excused on a read-only mount (`fstatfs`), which is how a ConfigMap or
-Secret mount passes: its 0777 root is mounted read-only
-(`tests/lab/results/configmap-mounts.md`). The deployment docs must also say to use `fsGroup`
-or `defaultMode: 0444` for a non-root `port49d`, and that an edit takes about 55 s to reach the
-pod.
+to protect, since whoever can write it decides every operator's access within seconds. The mode
+of a directory holding a link, never the file's own directory, is excused on a read-only mount
+(`fstatfs`). That is how a ConfigMap or Secret mount passes: its 0777 root is mounted read-only
+(`tests/lab/results/configmap-mounts.md`). The excuse trusts whoever writes the mount's source,
+so the deployment docs must say: do not mount the policy from FUSE, or from a host path others
+can write (re-review n1). They must also say to use `fsGroup` or `defaultMode: 0444` for a
+non-root `port49d`, and that an edit takes about 55 s to reach the pod.
 **The refresh's cost** (4b final review I3): one `mintedBy` compile measured 17.8 µs on the
 fixture's three-role policy. The token scan runs principals × devices × instants for each
 superseded policy, so 500 principals by 5,000 devices is about 45 s per instant per prior, and

@@ -628,10 +628,13 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    configured name's own, one half-way along the chain, and one standing for a directory.
    Whoever can write a link's directory can re-point it at any file that passes, such as a
    root-owned `policy.yaml.bak` from before a grant was withdrawn. The read is capped at
-   1 MiB, and a refusal quotes at most 64 characters of any value it found. A directory's mode
-   is excused, and its owner still checked, when `fstatfs` on the opened directory reports its
-   filesystem read-only. Nobody can write a read-only mount, whatever the mode says. This is how
-   a Kubernetes ConfigMap or Secret mount passes, as measured
+   1 MiB, and a refusal quotes at most 64 characters of any value it found. The mode of a
+   directory holding a link is excused, and its owner still checked, when `fstatfs` on the
+   opened directory reports its filesystem read-only. The excuse trusts whoever writes the
+   mount's source: the kubelet, for a ConfigMap. It never applies to the directory holding the
+   file itself, because a read-only bind of a host directory others can write lets them rename
+   a stale policy over the file on the host. This is how a Kubernetes ConfigMap or Secret mount
+   passes, as measured
    (`tests/lab/results/configmap-mounts.md`). Its mount root holds both links at mode 0777
    (01777 for a Secret, 02777 or 03777 with `fsGroup`), but the mount is read-only, even to root
    in the pod. The file (root's, 0644 or `defaultMode`) and its timestamped directory (root's,
