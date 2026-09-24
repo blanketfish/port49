@@ -500,9 +500,12 @@ than 25 tasks. The seam is the kind of platform:
   containerlab`, and any `platforms:` block over one of them clears it (`platform list` prints
   `—`, `policy diff` reports the change, `platform export <name>` leaves the key out so the
   block pastes back). Inert as measured: `home-directory`, `idletime` and `timeout` on EOS and
-  NX-OS; `idletime` and `timeout` on IOS-XE, whose `accepted_attributes` is `[priv-lvl,
-  idletime, timeout]` rather than Decided 6's `priv-lvl` alone. IOS-XE refused the session for
-  `home-directory`, so it is not inert there and a placeholder in it is refused. `fallback`
+  NX-OS. IOS-XE lists nothing inert: it refused the session for `home-directory`, and a refused
+  session there locks out SSH, so `idletime` and `timeout`, measured inert and now accepted
+  (`accepted_attributes: [priv-lvl, idletime, timeout]`, not Decided 6's `priv-lvl` alone), are
+  held bearing. Both are numbers everywhere: a placeholder in either is refused at load, and a
+  value that is not a plain decimal 0 to 65535, or on IOS-XE the mandatory `=` form,
+  quarantines the device. `fallback`
   entries say what L22 measured: EOS operator names the commands that still ran, NX-OS operator
   and IOS-XE have none (IOS-XE refused a token session every command at 7 and 15). Beyond the
   plan: an operator's fallback text is kept apart as `fallback_note`, a block's `unreachable`
