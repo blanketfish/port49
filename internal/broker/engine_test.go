@@ -3,6 +3,8 @@ package broker
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,7 +58,7 @@ func TestAMintRecordNamesItsBundle(t *testing.T) {
 	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, ""))
 	mints := eventsOf(f.records(t), "mint")
 	pol, _ := mints[len(mints)-1]["policy"].(map[string]any)
-	if pol["bundle"] != f.b.Policy.Bundle || !strings.HasPrefix(f.b.Policy.Bundle, "sha256:") {
+	if pol["bundle"] != f.b.Policy.Load().Bundle || !strings.HasPrefix(f.b.Policy.Load().Bundle, "sha256:") {
 		t.Fatalf("mint record policy: %v", pol)
 	}
 }
@@ -85,7 +87,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: nx, r
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.b.Policy = pol
+	f.b.Policy.Swap(pol)
 	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","nx1"]}`, ""))
 	byDevice := map[string]string{}
 	for _, it := range resp.Results {
@@ -129,7 +131,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.b.Policy = pol
+	f.b.Policy.Swap(pol)
 	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, ""))
 	if it := resp.Results[0]; it.Error != "attribute_too_long" || it.Login != "" {
 		t.Fatalf("%+v", it)
@@ -158,7 +160,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.b.Policy = pol
+	f.b.Policy.Swap(pol)
 	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["sw=1"]}`, ""))
 	if it := resp.Results[0]; it.Error != "attribute_unsafe" || it.Login != "" {
 		t.Fatalf("%+v", it)
@@ -175,5 +177,69 @@ func (f *fixture) assertItemErrorOnly(t *testing.T, code string) {
 	}
 	if mints := eventsOf(f.records(t), "mint"); len(mints) != 0 {
 		t.Errorf("an item error wrote a decision record: %v", mints)
+	}
+}
+
+// The next mint answers from a swapped policy, and names its bundle: a
+// broker keeps nothing of the policy it was built with (plan 4b). Removing
+// netops's one grant leaves alice no_grants_matched on the very next request.
+func TestTheNextMintAnswersFromASwappedPolicy(t *testing.T) {
+	f := newFixture(t, 8)
+	if it := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")).Results[0]; it.Verdict != "permit" {
+		t.Fatalf("before the swap: %+v", it)
+	}
+	body := strings.Replace(testPolicy, "  - {subject: netops, scope: all_devices, roles: [network_admin, no_reload], max_privilege: admin}\n",
+		"  - {subject: idle, scope: all_devices, roles: [network_admin]}\n", 1)
+	pol, err := policy.Parse([]byte(body), policy.Env{Devices: []admission.Device{f.b.Devices["leaf1"]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.b.Policy.Swap(pol)
+	f.log.Reset()
+	if it := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")).Results[0]; it.Verdict != "deny" || it.Reason != "no_grants_matched" {
+		t.Fatalf("after the swap: %+v", it)
+	}
+	carol := f.client(t, "carol@example.com", f.now.Add(24*time.Hour))
+	decodeMint(t, f.post(context.Background(), f.state(carol), `{"devices":["leaf1"]}`, ""))
+	mints := eventsOf(f.records(t), "mint")
+	if pol0, _ := mints[len(mints)-1]["policy"].(map[string]any); pol0["bundle"] != pol.Bundle {
+		t.Fatalf("the mint after the swap names the new bundle: %v", mints[len(mints)-1])
+	}
+}
+
+// stalledWriter is a response writer whose Write blocks until released: a
+// client that stopped reading, or a peer that vanished mid-response.
+type stalledWriter struct {
+	header  http.Header
+	writing chan struct{}
+	release chan struct{}
+}
+
+func (w *stalledWriter) Header() http.Header { return w.header }
+func (w *stalledWriter) WriteHeader(int)     {}
+func (w *stalledWriter) Write(p []byte) (int, error) {
+	close(w.writing)
+	<-w.release
+	return len(p), nil
+}
+
+// A mint holds the policy until its last token is written, not until its
+// response is: a response the client never reads must not hold a reload, or
+// every mint queued behind the reload, and every refresh after it (pre-flight
+// S1).
+func TestASwapDoesNotWaitForAResponseWrite(t *testing.T) {
+	f := newFixture(t, 8)
+	w := &stalledWriter{header: http.Header{}, writing: make(chan struct{}), release: make(chan struct{})}
+	defer close(w.release)
+	r := httptest.NewRequest("POST", "/v1/tokens", strings.NewReader(`{"devices":["leaf1"]}`))
+	r.TLS = f.state(f.alice)
+	go f.b.Handler().ServeHTTP(w, r)
+	<-w.writing
+	swapped := make(chan struct{})
+	go func() { f.b.Policy.Swap(f.b.Policy.Load()); close(swapped) }()
+	select {
+	case <-swapped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a swap waited for a response write")
 	}
 }

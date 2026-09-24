@@ -62,9 +62,9 @@ func buildWith(cfg config.Config) error {
 }
 
 func TestNoBrokerBlockBuildsNoBroker(t *testing.T) {
-	srv, pol, err := buildBroker(config.Config{}, nil, nil, nil, nil)
-	if srv != nil || pol != nil || err != nil {
-		t.Fatalf("%v %v %v", srv, pol, err)
+	srv, b, err := buildBroker(config.Config{}, nil, nil, nil, nil)
+	if srv != nil || b != nil || err != nil {
+		t.Fatalf("%v %v %v", srv, b, err)
 	}
 }
 
@@ -108,12 +108,12 @@ func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
 	var out bytes.Buffer
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = &out
-	_, pol, err := buildBroker(brokerConfig(t, unmappedLevel+strings.Replace(minimalPolicy, "privilege: admin", "privilege: unmapped", 1)),
+	_, b, err := buildBroker(brokerConfig(t, unmappedLevel+strings.Replace(minimalPolicy, "privilege: admin", "privilege: unmapped", 1)),
 		memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatalf("a quarantined device must not stop the start: %v", err)
 	}
-	if _, ok := pol.Quarantined("leaf1", time.Now()); !ok {
+	if _, ok := b.Policy.Quarantined("leaf1", time.Now()); !ok {
 		t.Fatal("the daemon is handed the policy that quarantines leaf1")
 	}
 	if !strings.Contains(out.String(), "device leaf1 (arista_eos) is quarantined") ||
@@ -131,12 +131,12 @@ func TestAWidenedDenyIsSaidAtStart(t *testing.T) {
 	stderr = &out
 	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`, `permit: ["**"], deny: ["* * /tftp/"]}`, 1))
 	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "ntp1", Platform: "meinberg_lantime"})
-	_, pol, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+	_, b, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
 		metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := pol.Quarantined("ntp1", time.Now()); ok {
+	if _, ok := b.Policy.Quarantined("ntp1", time.Now()); ok {
 		t.Fatal("a widened deny quarantines nothing")
 	}
 	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "* * /tftp/" on meinberg_lantime: /tftp/:`) ||
@@ -171,7 +171,7 @@ func TestTheDaemonsQuarantineFollowsTheClock(t *testing.T) {
 	stderr = &out
 	now := time.Now()
 	lapse := now.Add(48 * time.Hour).Truncate(time.Second)
-	_, pol, err := buildBroker(brokerConfig(t, unmappedLevel+`
+	_, b, err := buildBroker(brokerConfig(t, unmappedLevel+`
 scopes: [{name: all_devices, match: {}}]
 roles:
   - {name: op, privilege: unmapped, permit: [show **]}
@@ -191,7 +191,7 @@ grants:
 	}
 	m := metrics.New(prometheus.NewRegistry())
 	clock := now
-	quarantined := watchQuarantine(pol, m, func() time.Time { return clock })
+	quarantined := watchQuarantine(b.Policy, m, func() time.Time { return clock })
 	if _, ok := quarantined("leaf1", now); ok || testutil.ToFloat64(m.DevicesQuarantined) != 0 {
 		t.Fatal("before the expiry leaf1 is neither refused nor counted")
 	}

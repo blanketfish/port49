@@ -50,7 +50,10 @@ const (
 
 // Broker is the slice's broker. Every field is required.
 type Broker struct {
-	Policy *policy.Policy
+	// Policy is the policy in force. port49d swaps it when the file changes
+	// (plan 4b), and a request resolves against the one version it held from
+	// its first mint to its last, never half of each.
+	Policy *policy.Live
 	// Devices is the inventory by name: the admission snapshot the daemon
 	// admits from (plan 3, Decided 15). A target is named, never addressed,
 	// and a name inventory does not know is refused (design §17).
@@ -189,25 +192,43 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Held from the first resolution to the last token write, so a reload's
+	// swap waits for this request's mints and the refresh after it sees every
+	// token the old policy minted (policy.Live). Released before the response
+	// is written: a client that stops reading, or a peer that vanishes
+	// mid-response, must not hold a reload — and, behind it, every mint and
+	// every refresh — until TCP gives up. The deferred call is for a panic,
+	// which net/http recovers: a hold it leaked would stop every reload.
+	pol, hold := b.Policy.Hold()
+	held := true
+	release := func() {
+		if held {
+			held = false
+			hold()
+		}
+	}
+	defer release()
 	resp := api.MintResponse{Principal: principal}
-	resp.Subject, _ = b.Policy.SubjectOf(principal)
+	resp.Subject, _ = pol.SubjectOf(principal)
 	for _, name := range req.Devices {
-		item, err := b.mintOne(r.Context(), principal, cred, authTime, name, req, key, bodyHash)
+		item, err := b.mintOne(r.Context(), pol, principal, cred, authTime, name, req, key, bodyHash)
 		if errors.Is(err, token.ErrIdempotencyConflict) {
 			// Only a concurrent request on the same key, between the check
 			// above and this mint, reaches here.
+			release()
 			writeConflict(w)
 			return
 		}
 		resp.Results = append(resp.Results, item)
 	}
+	release()
 	writeJSON(w, http.StatusOK, resp)
 }
 
 // mintOne answers one device. The only error it returns is an idempotency
 // conflict, which is the whole request's; every other refusal is an item.
-func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Credential, authTime time.Time,
-	name string, req api.MintRequest, key, bodyHash string) (api.MintItem, error) {
+func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal string, cred store.Credential,
+	authTime time.Time, name string, req api.MintRequest, key, bodyHash string) (api.MintItem, error) {
 	deny := func(reason decision.Reason, platform string) api.MintItem {
 		b.emit(decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
 			Principal: principal, Auth: &decision.Auth{Method: cred.Method},
@@ -221,7 +242,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 		// device and no platform, which is what tells an operator which.
 		return deny(decision.NoGrantsMatched, ""), nil
 	}
-	res, err := b.Policy.Resolve(principal, dev, b.Now())
+	res, err := pol.Resolve(principal, dev, b.Now())
 	switch {
 	case errors.Is(err, policy.ErrNoGrants):
 		return deny(decision.NoGrantsMatched, dev.Platform), nil
@@ -290,7 +311,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
 		TTL:            time.Duration(req.TTLSeconds) * time.Second,
 		IdempotencyKey: key, BodyHash: bodyHash,
-		Policy: &decision.Policy{Bundle: b.Policy.Bundle, Subject: res.Subject, Grants: res.Grants}})
+		Policy: &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Grants: res.Grants}})
 	var capped *token.ErrTooManyOutstanding
 	switch {
 	case errors.Is(err, token.ErrIdempotencyConflict):

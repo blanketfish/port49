@@ -38,7 +38,10 @@ func startServerLogging(t *testing.T, f *fixture, errLog *log.Logger) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := f.b.Server("127.0.0.1:0", srvCert, f.ca.Pool())
+	srv, err := f.b.Server("127.0.0.1:0", srvCert, f.ca.Pool())
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.ErrorLog = errLog
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -287,7 +290,10 @@ func TestShutdownReturnsWithEverySlotHeld(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := f.b.Server("127.0.0.1:0", srvCert, f.ca.Pool())
+	srv, err := f.b.Server("127.0.0.1:0", srvCert, f.ca.Pool())
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -555,17 +561,13 @@ func TestAStalledRequestWithoutACertificateIsClosed(t *testing.T) {
 }
 
 // A nil pool would mean the system roots — every public CA an anchor for the
-// email mapping — and an empty one trusts nobody: Server refuses both.
+// email mapping — and an empty one trusts nobody: Server refuses both, with
+// an error rather than a panic.
 func TestServerRefusesAMissingAnchor(t *testing.T) {
 	f := newFixture(t, 8)
 	for name, pool := range map[string]*x509.CertPool{"nil": nil, "empty": x509.NewCertPool()} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("a %s anchor pool must be refused", name)
-				}
-			}()
-			f.b.Server("127.0.0.1:0", f.alice, pool)
-		}()
+		if srv, err := f.b.Server("127.0.0.1:0", f.alice, pool); err == nil || srv != nil {
+			t.Errorf("a %s anchor pool must be refused: %v %v", name, srv, err)
+		}
 	}
 }

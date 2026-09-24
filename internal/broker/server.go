@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -56,13 +57,16 @@ const MaxConns = 256
 // that never comes would hold a slot of the cap for good (pre-flight F1). The
 // time between requests is IdleTimeout's, so a held connection is unaffected.
 //
-// anchor must hold the one trust anchor. Server panics on a nil pool, which
+// anchor must hold the one trust anchor. Server refuses a nil pool, which
 // crypto/tls would take as the system roots — every public CA an anchor for
-// the email mapping — and on an empty one, which trusts no one.
-func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool) *http.Server {
+// the email mapping — and an empty one, which trusts no one. It returns the
+// refusal rather than panicking (plan 4b): port49d now runs code after start
+// that swaps policy under a live daemon, and nothing on a path that can run
+// with device AAA already serving may end the process.
+func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool) (*http.Server, error) {
 	if anchor == nil || anchor.Equal(x509.NewCertPool()) {
-		panic("broker: the broker trusts exactly one anchor; a nil pool would mean the system roots, " +
-			"and an empty one trusts no one")
+		return nil, errors.New("broker: the broker trusts exactly one anchor; a nil pool would mean the system " +
+			"roots, and an empty one trusts no one")
 	}
 	return &http.Server{
 		Addr:    addr,
@@ -89,7 +93,7 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       readTimeout,
 		IdleTimeout:       b.MaxSessionAge,
-	}
+	}, nil
 }
 
 // closeIdleWithoutCertificate closes a connection that presented no client
