@@ -10,7 +10,11 @@
 // translates between two spellings.
 package platform
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // sessionServices is the authorization `service` value each platform's
 // sessions arrive with. Every entry is measured, not assumed (spec §15, L10):
@@ -213,6 +217,32 @@ func SystemUsers() map[string][]string {
 	out := make(map[string][]string, len(systemUsers))
 	for name, users := range systemUsers {
 		out[name] = append([]string(nil), users...)
+	}
+	return out
+}
+
+// WireFactsDiffer names what the daemon reads off the wire for name that it
+// does not for a platform with no entry here: its session service, its exec
+// records' commands and its system users. A `based_on:` variant is keyed by
+// its own name, so it gets an unknown platform's facts (spec §8; plan 6
+// carries them), and a base these name would leave the variant's sessions
+// refused service_unsupported and its records misread. A session
+// discriminator is not named: without one the daemon binds a record by
+// username alone, the safe direction (sessionDiscriminators).
+func WireFactsDiffer(name string) []string {
+	var out []string
+	if s := SessionServices(name); strings.Join(s, " ") != strings.Join(fallback, " ") {
+		out = append(out, "session service "+strings.Join(s, " "))
+	}
+	if cmds := execCommands[name]; len(cmds) > 0 {
+		quoted := make([]string, len(cmds))
+		for i, c := range cmds {
+			quoted[i] = "cmd=" + c
+		}
+		out = append(out, "exec records "+strings.Join(quoted, " and "))
+	}
+	if users := systemUsers[name]; len(users) > 0 {
+		out = append(out, fmt.Sprintf("system users %s", strings.Join(users, " ")))
 	}
 	return out
 }

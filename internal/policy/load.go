@@ -324,6 +324,15 @@ func (p *Policy) buildPlatforms(f file) error {
 				return fmt.Errorf("%s: based_on %q is not a platform in set %s; it ships %s", at, b.BasedOn, p.set,
 					strings.Join(sortedKeys(builtin), ", "))
 			}
+			// port49d keys what it reads off the wire by platform name, so the
+			// variant would get an unknown platform's (plan 6; final review
+			// M8).
+			if facts := platform.WireFactsDiffer(b.BasedOn); len(facts) > 0 {
+				return fmt.Errorf("%s: based_on %s is refused: port49d reads %s's %s by the platform's name, and a "+
+					"variant named %s would get an unknown platform's instead, so its sessions would be refused "+
+					"service_unsupported and its records misread; use %s itself until plan 6 carries these to a "+
+					"variant (spec §8)", at, b.BasedOn, b.BasedOn, strings.Join(facts, ", "), name, b.BasedOn)
+			}
 			base = d
 		case b.Replace || !shipped:
 			// A new platform, or one discarded whole, starts from what an

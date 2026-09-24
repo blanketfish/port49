@@ -157,6 +157,11 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 		{"replace and based_on", "  x: {replace: true, based_on: arista_eos}\n", "platforms.x: replace starts from nothing"},
 		{"based_on a shipped name", "  cisco_nxos: {based_on: arista_eos}\n", "platforms.cisco_nxos: based_on declares a variant"},
 		{"based_on nothing shipped", "  x: {based_on: arista}\n", `platforms.x: based_on "arista" is not a platform in set 1.0.0`},
+		// The daemon's wire facts are keyed by platform name until plan 6: a
+		// Junos variant would be sent every session as shell, and its
+		// login and logout records read as commands (final review M8).
+		{"based_on a platform whose wire facts a variant loses", "  srx_variant: {based_on: juniper_junos}\n",
+			"platforms.srx_variant: based_on juniper_junos is refused: port49d reads juniper_junos's session service"},
 		{"an invalid adapter", "  x: {entity_classes: {mgmt: ['(']}}\n", "platforms.x.entity_classes.mgmt"},
 		{"an unknown key", "  arista_eos: {entity_class: {}}\n", "an unknown field in type policy.filePlatform"},
 		{"the attributes key", "  all: {supports: [session]}\n", "platforms.all: all is reserved"},
