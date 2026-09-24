@@ -256,9 +256,9 @@ privilege-expansion gate (spec §12), and replay re-derives a session's attribut
 
 - `internal/platform/dialect.go` is borrowed ahead and is plan 5's to replace with the layered
   adapters: `pipe_authorized` is false on EOS, NX-OS and IOS-XE (measured,
-  `tests/lab/results/L2-*.md`); `expands_abbreviations` is false everywhere in the borrowed
-  table, though L21 closed 2026-09-24 with EOS, NX-OS and IOS-XE sending resolved words over SSH,
-  so the adapters may set it `true` for that transport; entity classes are names from spec §8 and the lab configs, unverified against a device;
+  `tests/lab/results/L2-*.md`); `expands_abbreviations` is true on EOS, NX-OS and IOS-XE, set
+  from L21 (closed 2026-09-24, interactive SSH; other transports unmeasured), and false on Junos
+  and the generic adapter; entity classes are names from spec §8 and the lab configs, unverified against a device;
   only `arista_eos` renders levels, and `operator` renders nowhere (plan 4, Question 1), so a policy
   landing an EOS session at `operator` quarantines those devices until plan 5 renders it (the
   role-ceiling results below).

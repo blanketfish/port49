@@ -34,7 +34,7 @@ func TestResolveComposesAndCompiles(t *testing.T) {
 	b := r.Blob
 	if b.Platform != "arista_eos" || b.Bundle != p.Bundle || b.Privilege != "readonly" ||
 		!reflect.DeepEqual(b.Attributes, []string{"priv-lvl=1"}) || !reflect.DeepEqual(b.Pipe, sortedCopy(DefaultPipe)) ||
-		b.Normalize.PipeToken != "|" || b.Normalize.PipeAuthorized || b.Normalize.ExpandsAbbreviations {
+		b.Normalize.PipeToken != "|" || b.Normalize.PipeAuthorized || !b.Normalize.ExpandsAbbreviations {
 		t.Fatalf("blob: %+v", b)
 	}
 	if len(b.Rules) != 4 || b.Rules[0] != (engine.Rule{Verdict: engine.Deny, Rule: "reload **", Role: "no_disruptive"}) {

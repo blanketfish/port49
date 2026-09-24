@@ -6,6 +6,14 @@ import (
 	"testing"
 )
 
+// expandsMeasured is every platform that may claim ExpandsAbbreviations, with
+// the results note that measured it sending the resolved words.
+var expandsMeasured = map[string]bool{
+	"arista_eos":  true, // tests/lab/results/L21-arista_eos.md
+	"cisco_nxos":  true, // tests/lab/results/L21-cisco_nxos.md
+	"cisco_iosxe": true, // tests/lab/results/L21-cisco_iosxe.md
+}
+
 // Every built-in platform has a dialect, and every dialect's pipe claim is the
 // measured one: on each platform with a command path, a typed output modifier
 // never reached port49 (tests/lab/results/L2-*.md). A dialect that claimed
@@ -22,8 +30,11 @@ func TestEveryBuiltInPlatformHasAMeasuredDialect(t *testing.T) {
 		if d.PipeToken != "|" || !d.StripCR {
 			t.Errorf("%s: pipe token %q strip_cr %v", name, d.PipeToken, d.StripCR)
 		}
-		if d.ExpandsAbbreviations {
-			t.Errorf("%s: claims to expand abbreviations; L21 measured SSH only, the flip is plan 5's (spec §15, L21), and a wrong claim fails open", name)
+		// A wrong claim to expand fails open — an abbreviation slips past a
+		// deny's word — so a true value must be the measured one.
+		if d.ExpandsAbbreviations != expandsMeasured[name] {
+			t.Errorf("%s: ExpandsAbbreviations %v, want %v: true only where L21 measured resolved words (spec §15, L21)",
+				name, d.ExpandsAbbreviations, expandsMeasured[name])
 		}
 		for class, patterns := range d.EntityClasses {
 			for _, p := range patterns {

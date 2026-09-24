@@ -256,10 +256,11 @@ entire class.
    permitted by `permit: show **`. An abbreviation is therefore denied or matched as written
    and never slips past a deny. The cost is an over-denial of a full word that is a prefix of
    a deny's word — `show ip` against `deny: show ipv6 **` — reported by name in the
-   `server_msg`. L21 closed 2026-09-24: EOS, NX-OS and IOS-XE send the resolved words over
-   interactive SSH (§15, L21), so their adapters may mark them `true` for that transport;
-   plan 4's borrowed dialect table still marks every built-in platform `false`, which only
-   over-denies, until plan 5's adapters replace it.
+   `server_msg`. `arista_eos`, `cisco_nxos` and `cisco_iosxe` are marked `true`, set from
+   L21 (closed 2026-09-24): all three send the resolved words over interactive SSH (§15, L21;
+   `tests/lab/results/L21-arista_eos.md`, `L21-cisco_nxos.md`, `L21-cisco_iosxe.md`).
+   `juniper_junos`, which authorizes no command, and the generic adapter are unmeasured and
+   stay `false`.
 5. **Preserve argument boundaries.** Arguments are never re-joined.
 
 ---
@@ -2292,7 +2293,7 @@ platforms:
       loopback:   ['^Loopback[0-9]+$']
       physical:   ['^Ethernet[0-9/.]+$', '^Port-Channel[0-9]+$']
     enable_username: principal
-    expands_abbreviations: false   # plan 4's table; resolved words measured over SSH (§15, L21)
+    expands_abbreviations: true    # measured: tests/lab/results/L21-arista_eos.md
     pipe_token: "|"
     pipe_authorized: false         # measured: tests/lab/results/L2-arista_eos.md
     port_pattern: '^vty[0-9]+$'

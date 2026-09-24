@@ -71,10 +71,14 @@ type Dialect struct {
 //     command request to carry one and is unmeasured, so false.
 //   - StripCR: every command authorization measured ends `cmd-arg=<cr>`
 //     (L10-arista_eos.md, L10-cisco_nxos.md, L10-cisco_iosxe.md).
-//   - ExpandsAbbreviations is false everywhere, the direction that fails
-//     closed. L21 measured EOS, NX-OS and IOS-XE sending the resolved words over
-//     interactive SSH only (spec §15, L21), so the flip is per transport and is
-//     plan 5's adapters' to make.
+//   - ExpandsAbbreviations is true on EOS, NX-OS and IOS-XE, set from L21:
+//     typed `sh ver`, `sho run` and `sh clock` arrived as the full keywords on
+//     the authorization request and the accounting record on vEOS 4.31.2F,
+//     NX-OS 10.4(2)F and IOS-XE 17.13.01a, and `sh clock` was denied by a
+//     `show clock` deny on all three (tests/lab/results/L21-arista_eos.md,
+//     L21-cisco_nxos.md, L21-cisco_iosxe.md). That was interactive SSH; eAPI,
+//     NX-API and NETCONF are unmeasured. Junos sends no command to expand and
+//     is unmeasured, so false, the direction that fails closed.
 //   - Supports: EOS, NX-OS and IOS-XE send per-command authorization (L1, L10);
 //     Junos sends none, in 26 sessions on two images (L18; decision 21).
 //     Config-command authorization is unmeasured, so no platform claims it.
@@ -91,7 +95,7 @@ type Dialect struct {
 //     platform renders nothing, as in plan 3; plan 5 fills them.
 var dialects = map[string]Dialect{
 	"arista_eos": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false, ShowsServerMsg: true,
+		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
 		Supports: []string{"session", "commands"},
 		EntityClasses: map[string][]string{
 			"management": {`^Management[0-9]+$`},
@@ -101,12 +105,12 @@ var dialects = map[string]Dialect{
 		Levels: map[string][]string{"readonly": {"priv-lvl=1"}, "admin": {"priv-lvl=15"}},
 	},
 	"cisco_nxos": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false, ShowsServerMsg: false,
+		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: false,
 		Supports:      []string{"session", "commands"},
 		EntityClasses: map[string][]string{"management": {`^mgmt[0-9]+$`}},
 	},
 	"cisco_iosxe": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false, ShowsServerMsg: true,
+		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
 		Supports: []string{"session", "commands"},
 	},
 	"juniper_junos": {
