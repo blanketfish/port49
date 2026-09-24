@@ -1368,17 +1368,22 @@ func (p *Policy) dialect(name string) platform.Dialect {
 // prints, and a block that rewrote a set line to end in `none` would
 // otherwise have the check require the unsafe line; the set's lines and
 // checks apply whatever the block says. A platform no set ships has no floor.
-func (p *Policy) ConfigDialect(platformName string) platform.Dialect {
+// A set that cannot be read is an error, never an adapter without its floor.
+func (p *Policy) ConfigDialect(platformName string) (platform.Dialect, error) {
 	d := p.dialect(platformName)
 	shippedAs := platformName
 	if b, ok := p.overrides[platformName]; ok && b.BasedOn != "" {
 		shippedAs = b.BasedOn
 	}
-	builtin, _ := p.builtinSet(p.set)
-	if ref, ok := builtin[shippedAs]; ok {
-		return platform.ConfigFloor(d, ref)
+	builtin, ok := p.builtinSet(p.set)
+	if !ok {
+		return platform.Dialect{}, fmt.Errorf("platform set %s cannot be read, so the lines and checks it holds a "+
+			"device to are unknown", p.set)
 	}
-	return d
+	if ref, ok := builtin[shippedAs]; ok {
+		return platform.ConfigFloor(d, ref), nil
+	}
+	return d, nil
 }
 
 // SubjectOf names the subject a principal resolves to, by its identity lists.

@@ -70,7 +70,11 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 devices check-config:", err)
 		return 1
 	}
-	dialect := p.ConfigDialect(d.Platform)
+	dialect, err := p.ConfigDialect(d.Platform)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 devices check-config:", err)
+		return 1
+	}
 	accounts, findings, err := dialect.ReadConfig(config)
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)

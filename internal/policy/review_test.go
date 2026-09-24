@@ -66,7 +66,10 @@ func TestConfigDialectKeepsTheSetsLines(t *testing.T) {
 		"eos_lab":    "platforms:\n  eos_lab:\n    based_on: arista_eos\n" + unsafe,
 	} {
 		p := mustParse(t, block+good)
-		d := p.ConfigDialect(name)
+		d, err := p.ConfigDialect(name)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, line := range set.DeviceConfig {
 			if !slices.Contains(d.DeviceConfig, line) {
 				t.Errorf("%q: %q is not required", block, line)
@@ -77,11 +80,22 @@ func TestConfigDialectKeepsTheSetsLines(t *testing.T) {
 		}
 	}
 	p := mustParse(t, "platforms:\n  acme_os:\n    supports: [session]\n    device_config: [\"aaa new-model\"]\n"+good)
-	if d := p.ConfigDialect("acme_os"); !reflect.DeepEqual(d.DeviceConfig, []string{"aaa new-model"}) ||
+	if d, err := p.ConfigDialect("acme_os"); err != nil || !reflect.DeepEqual(d.DeviceConfig, []string{"aaa new-model"}) ||
 		d.ConfigChecks != nil {
-		t.Fatalf("%+v", d)
+		t.Fatalf("%+v %v", d, err)
 	}
-	if d := p.ConfigDialect("cisco_iosxe"); !reflect.DeepEqual(d, p.Dialect("cisco_iosxe")) {
+	if d, err := p.ConfigDialect("cisco_iosxe"); err != nil || !reflect.DeepEqual(d, p.Dialect("cisco_iosxe")) {
 		t.Fatal("no block: the policy's adapter is the set's")
+	}
+}
+
+// Where the set cannot be read the floor is not silently dropped: the check
+// fails closed (task 15 review M3). A loaded policy's set always reads, so
+// this is the belt to that.
+func TestConfigDialectFailsClosedWithoutTheSet(t *testing.T) {
+	p := mustParse(t, good)
+	p.set = "9.9.9"
+	if _, err := p.ConfigDialect("arista_eos"); err == nil || !strings.Contains(err.Error(), "9.9.9") {
+		t.Fatalf("%v", err)
 	}
 }
