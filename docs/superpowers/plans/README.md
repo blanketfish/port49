@@ -18,7 +18,7 @@ built on `feature/gate-rulings`: `operator` renders as level 15 on EOS and NX-OS
 ceiling raise and a regex-constrained widening fail `port49 policy diff`, a refused mint always
 does, a policy with no tests is reported `no_tests`, and a `lab:` block announces itself at
 start; PR #11); **4b merged 2026-09-24** (PR #12;
-(`2026-09-24-04b-live-policy.md`, eight tasks: one docs, six code, one docs; reviewed per task
+`2026-09-24-04b-live-policy.md`, eight tasks: one docs, six code, one docs; reviewed per task
 and whole-branch;
 its three "Questions for Ryan" were decided security-first: delete unspent tokens whose answer
 changed, rewrite every live context on every reload, leave a quarantined device's contexts);
