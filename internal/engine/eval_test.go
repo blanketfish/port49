@@ -260,9 +260,9 @@ func TestACommandWithNoWordsIsDenied(t *testing.T) {
 	}
 }
 
-// Whitespace around an argument is compared both as received and trimmed, so
-// it only ever makes a rule match more: `reload ` is still the deny's
-// `reload`, and the vector is left exactly as received.
+// A deny compares an argument both as received and trimmed, so whitespace
+// only ever makes a deny match more: `reload ` is still the deny's `reload`,
+// and the vector is left exactly as received.
 func TestWhitespaceAroundAnArgumentCannotSlipPastADeny(t *testing.T) {
 	p := program(t, true, "admin:permit **", "no_disruptive:deny reload **", "no_exfil:deny copy * /^tftp:/")
 	for _, raw := range [][]string{
@@ -332,5 +332,24 @@ func TestStripCROffAndAnEmptyPipeAllowlist(t *testing.T) {
 	expect(t, p, "show run", true, decision.PermitDominates)
 	if o := expect(t, p, "show run | include bgp", false, decision.PipeStageDenied); o.Stage != 1 {
 		t.Errorf("stage %d", o.Stage)
+	}
+}
+
+// Trimming whitespace is deny-only, like abbreviation (spec §3 rule 4): a
+// permit that matched `hardware ` would newly dominate the deny, so a permit
+// and a pipe allow-list entry match each argument exactly as received. This
+// command was denied at 2bf2fe9, permitted at 7cf55b9, and is denied again.
+func TestWhitespaceNeverWidensAPermit(t *testing.T) {
+	p := program(t, true, "a:permit show **", "b:permit show chassis hardware", "c:deny show chassis **")
+	o := p.Command([]string{"service=shell", "cmd=show", "cmd-arg=chassis", "cmd-arg=hardware ", "cmd-arg=<cr>"})
+	if o.Permit || o.Reason != decision.NoPermitDominatesDeny || o.Deny.Rule != "show chassis **" || len(o.Permits) != 1 {
+		t.Errorf(`show chassis "hardware ": permit=%v %s, deny %+v, permits %+v`, o.Permit, o.Reason, o.Deny, o.Permits)
+	}
+	q := program(t, true, "r:permit show **")
+	for _, stage := range []string{"json ", " count", "include "} {
+		o := q.Command([]string{"service=shell", "cmd=show", "cmd-arg=run", "cmd-arg=|", "cmd-arg=" + stage, "cmd-arg=<cr>"})
+		if o.Permit || o.Reason != decision.PipeStageDenied || o.Stage != 1 {
+			t.Errorf("stage %q: permit=%v %s stage %d", stage, o.Permit, o.Reason, o.Stage)
+		}
 	}
 }

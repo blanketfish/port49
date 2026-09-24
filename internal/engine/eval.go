@@ -90,6 +90,12 @@ func compileRule(verdict, rule, role string, classes map[string][]string) (compi
 // widening a permit that way would fail open — and it can only make a deny
 // match more, so on such a platform an abbreviation is denied or matched as
 // written, never slipped past a deny.
+//
+// A deny also matches an argument with the whitespace around it trimmed, so
+// `reload ` is still denied by `deny reload **`. That widening is deny-only
+// for the same reason: a permit that matched more could newly dominate a deny,
+// so permits and pipe allow-list entries match every argument exactly as
+// received.
 func (c compiled) match(vector []string, abbrev bool) ([]int, bool) {
 	spec := make([]int, 0, len(vector))
 	for i, t := range c.terms {
@@ -102,10 +108,12 @@ func (c compiled) match(vector []string, abbrev bool) ([]int, bool) {
 		if i >= len(vector) {
 			return nil, false
 		}
-		// Whitespace around an argument is compared both ways, as received
-		// and trimmed, so it can only make a rule match more: `reload ` is
-		// still denied by `deny reload **`, and no position moves.
-		arg, trimmed := vector[i], strings.TrimSpace(vector[i])
+		// A deny compares the argument both as received and trimmed, which
+		// only makes it match more and moves no position.
+		arg, trimmed := vector[i], vector[i]
+		if c.verdict == Deny {
+			trimmed = strings.TrimSpace(arg)
+		}
 		switch t.kind {
 		case Any:
 		case Word:
