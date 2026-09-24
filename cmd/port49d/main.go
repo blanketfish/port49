@@ -260,9 +260,51 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
 func parsePolicy(cfg config.Config, raw []byte) (*policy.Policy, error) {
 	pol, err := policy.Parse(raw, policy.Env{Devices: cfg.Inventory.Devices, EnableUsernames: cfg.EnableUsernames})
 	if err != nil {
-		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
+		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, quotesCut{err})
 	}
 	return pol, nil
+}
+
+// maxQuoted is the most of any one quoted value a refusal line carries.
+const maxQuoted = 64
+
+// quotesCut is a parse error whose text cuts every quoted value in it to
+// maxQuoted characters. A refusal quotes what it found, and the file can hold
+// anything a link aimed it at, so the line says where the fault is without
+// echoing the file into stderr.
+type quotesCut struct{ err error }
+
+func (q quotesCut) Unwrap() error { return q.err }
+
+func (q quotesCut) Error() string {
+	var out strings.Builder
+	s := []rune(q.err.Error())
+	for i := 0; i < len(s); i++ {
+		out.WriteRune(s[i])
+		if s[i] != '"' && s[i] != '`' {
+			continue
+		}
+		// A quoted value runs to the matching quote; inside "…" a backslash
+		// escapes the next character, as %q writes it.
+		end := i + 1
+		for end < len(s) && s[end] != s[i] {
+			if s[i] == '"' && s[end] == '\\' {
+				end++
+			}
+			end++
+		}
+		if end >= len(s) {
+			continue // no closing quote: not a quoted value
+		}
+		value := s[i+1 : end]
+		if len(value) > maxQuoted {
+			value = append(value[:maxQuoted:maxQuoted], '…')
+		}
+		out.WriteString(string(value))
+		out.WriteRune(s[end])
+		i = end
+	}
+	return out.String()
 }
 
 // sayPolicy writes what a loaded policy does to the fleet short of refusing
