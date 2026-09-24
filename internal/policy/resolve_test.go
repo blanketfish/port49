@@ -282,7 +282,11 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	if p, err := Parse([]byte(body), e); err != nil || len(p.Quarantines(noon)) != 0 {
 		t.Fatalf("every shipped platform carries the principal: %v", err)
 	}
-	e.EnableUsernames = map[string]string{"arista_eos": platform.EnableEnab}
+	// Validate refuses `enab` in any adapter a file writes, so only an
+	// environment's own table can stand one up.
+	eos, _ := platform.DialectFor("arista_eos")
+	eos.EnableUsername = platform.EnableEnab
+	e.Dialects = map[string]platform.Dialect{"arista_eos": eos}
 	p, err := Parse([]byte(body), e)
 	if err != nil {
 		t.Fatal(err)

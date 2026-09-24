@@ -27,6 +27,7 @@ var shipped = map[string]Dialect{
 			"operator": {"priv-lvl=15", "roles=network-operator"}, "admin": {"priv-lvl=15", "roles=network-admin"}},
 		PrivilegeAttributes: []string{"priv-lvl", "roles"},
 		InertAttributes:     []string{"home-directory"},
+		EnableUsername:      EnablePrincipal,
 		// L16-arista_eos.md, command authorization LOCAL.
 		RoleOrder: map[string][]string{"roles": {"network-operator", "network-admin"}},
 		DeviceConfig: []string{"aaa authorization exec default group port49 local",
@@ -42,6 +43,7 @@ var shipped = map[string]Dialect{
 		CeilingLevels:       map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
 		PrivilegeAttributes: []string{"priv-lvl", "shell:roles", "cisco-av-pair"},
 		InertAttributes:     []string{"home-directory"},
+		EnableUsername:      EnablePrincipal,
 		// L16-cisco_nxos.md, command authorization LOCAL.
 		RoleOrder: map[string][]string{"shell:roles": {"network-operator", "network-admin"}},
 		DeviceConfig: []string{"aaa authentication login default group port49 local",
@@ -55,6 +57,7 @@ var shipped = map[string]Dialect{
 		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=7"}, "admin": {"priv-lvl=15"}},
 		PrivilegeAttributes: []string{"priv-lvl"},
 		InertAttributes:     []string{"home-directory"},
+		EnableUsername:      EnablePrincipal,
 		AcceptedAttributes:  []string{"priv-lvl"},
 		DeviceConfig: []string{"aaa authorization exec default group port49 local",
 			"aaa authorization commands 1 default group port49 local",
@@ -73,6 +76,7 @@ var shipped = map[string]Dialect{
 			"allow-configuration", "deny-configuration", "allow-commands-regexps", "deny-commands-regexps",
 			"allow-configuration-regexps", "deny-configuration-regexps"},
 		InertAttributes: []string{"home-directory"},
+		EnableUsername:  EnablePrincipal,
 	},
 }
 
@@ -109,16 +113,34 @@ func TestEveryReleasedSetIsFrozen(t *testing.T) {
 	}
 }
 
-// The generic adapter is under every released set: each file is laid over it,
-// and a `replace:` block or a platform no set ships starts from it. So is
-// plan 3's ceiling table, for a platform that renders nothing. A change to
-// either would change a pinned policy's rendering; a change ships as a new
-// set instead (spec §8).
+// releasedGeneric is every released set's generic adapter, value for value:
+// each of the set's files is laid over it, and a `replace:` block or a
+// platform the set does not ship starts from it. It is frozen with its set,
+// so a device on a platform missing from a pinned set renders the same on
+// every later binary; a new set with a different generic adds its own entry.
+var releasedGeneric = map[string]Dialect{
+	"1.0.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
+		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
+		EnableUsername: EnablePrincipal},
+}
+
+// Each released set's generic adapter is its own and frozen, and every set
+// this binary ships has one. So is plan 3's ceiling table, for a platform that
+// renders nothing. A change to either would change a pinned policy's
+// rendering; a change ships as a new set instead (spec §8).
 func TestTheGenericAdapterIsFrozen(t *testing.T) {
-	want := Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session"},
-		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"}}
-	if !reflect.DeepEqual(generic, want) {
-		t.Errorf("generic:\n got %+v\nwant %+v", generic, want)
+	for version, want := range releasedGeneric {
+		if got, ok := Generic(version); !ok || !reflect.DeepEqual(got, want) {
+			t.Errorf("set %s generic:\n got %+v\nwant %+v", version, got, want)
+		}
+	}
+	for _, version := range Sets() {
+		if _, ok := Generic(version); !ok {
+			t.Errorf("set %s has no generic adapter", version)
+		}
+	}
+	if d, _ := DialectFor("no_such_platform"); !reflect.DeepEqual(d, releasedGeneric[DefaultSet]) {
+		t.Errorf("DialectFor an unknown platform is not the default set's generic: %+v", d)
 	}
 	if !reflect.DeepEqual(ceilingLevels, map[string]uint8{"readonly": 1, "admin": 15}) {
 		t.Errorf("ceilingLevels: %v", ceilingLevels)
@@ -162,6 +184,9 @@ func TestLoadSetsRefusesAMisfiledAdapter(t *testing.T) {
 			"  other:\n    supports: [session]\n")}},
 		"an invalid adapter": {"1.0.0/meinberg_lantime.yaml": {Data: []byte(
 			"platforms:\n  meinberg_lantime:\n    supports: [telnet]\n")}},
+		// A set is laid over its own generic adapter, so one with none
+		// frozen for it has nothing to stand on.
+		"a set with no generic adapter": {"9.9.9/meinberg_lantime.yaml": {Data: []byte(good)}},
 	} {
 		if _, err := LoadSets(fsys); err == nil {
 			t.Errorf("%s: loaded", name)
@@ -215,7 +240,7 @@ func TestOverMergesPerTopLevelKey(t *testing.T) {
 
 // Validate refuses what a device would get wrong silently or loudly.
 func TestValidateNamesTheField(t *testing.T) {
-	ok := Dialect{PipeToken: "|", Supports: []string{"session"}}
+	ok := Dialect{PipeToken: "|", Supports: []string{"session"}, EnableUsername: EnablePrincipal}
 	for field, d := range map[string]Dialect{
 		"supports":                  {PipeToken: "|"},
 		"supports: \"telnet\"":      {PipeToken: "|", Supports: []string{"telnet"}},
@@ -260,7 +285,8 @@ func TestValidateNamesTheField(t *testing.T) {
 // priv-lvl=99 (L18-cisco_iosxe.md, variant 7), and PrivLvl never numbers such
 // a level from ceiling_levels instead.
 func TestValidateRefusesARenderedPrivLvlThatIsNotALevel(t *testing.T) {
-	ok := Dialect{PipeToken: "|", Supports: []string{"session"}, CeilingLevels: map[string]uint8{"admin": 15}}
+	ok := Dialect{PipeToken: "|", Supports: []string{"session"}, CeilingLevels: map[string]uint8{"admin": 15},
+		EnableUsername: EnablePrincipal}
 	for _, a := range []string{"priv-lvl=16", "priv-lvl=99", "priv-lvl=abc", "priv-lvl=", "priv-lvl*-1"} {
 		d := with(ok, func(d *Dialect) { d.Levels = map[string][]string{"admin": {a}} })
 		if err := Validate("x", d); err == nil || !strings.Contains(err.Error(), "platforms.x.privilege.admin: "+a+
@@ -280,7 +306,7 @@ func TestValidateRefusesARenderedPrivLvlThatIsNotALevel(t *testing.T) {
 // A device_config line is one printable ASCII line, so an operator's adapter
 // cannot slip a second line, or a byte a terminal acts on, into what is pasted.
 func TestValidateRefusesADeviceConfigLineThatIsNotOneLine(t *testing.T) {
-	ok := Dialect{PipeToken: "|", Supports: []string{"session"}}
+	ok := Dialect{PipeToken: "|", Supports: []string{"session"}, EnableUsername: EnablePrincipal}
 	for _, line := range []string{"", "  ", "a\tb", "a\rb", "a\x1bb", "café", "a\x7fb"} {
 		d := with(ok, func(d *Dialect) { d.DeviceConfig = []string{"aaa new-model", line} })
 		if err := Validate("x", d); err == nil || !strings.Contains(err.Error(), "platforms.x.device_config[1]") {

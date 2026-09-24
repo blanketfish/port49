@@ -40,9 +40,9 @@ func mustLoadSets(fsys fs.FS) map[string]map[string]Dialect {
 
 // LoadSets reads every set in fsys: a directory per version, a file per
 // platform named for it, each defining that platform alone. Each file is laid
-// over the generic adapter, so a key it leaves out is what an unmodeled device
-// gets (spec §8, "Unknown platforms"), and every adapter is validated as a
-// user's would be ("User-editable, day one").
+// over its set's generic adapter, so a key it leaves out is what an unmodeled
+// device gets (spec §8, "Unknown platforms"), and every adapter is validated
+// as a user's would be ("User-editable, day one").
 func LoadSets(fsys fs.FS) (map[string]map[string]Dialect, error) {
 	dirs, err := fs.ReadDir(fsys, ".")
 	if err != nil {
@@ -56,6 +56,11 @@ func LoadSets(fsys fs.FS) (map[string]map[string]Dialect, error) {
 		version := dir.Name()
 		if _, ok := parseVersion(version); !ok {
 			return nil, fmt.Errorf("platform set %q: a set is named by its version, e.g. 1.0.0", version)
+		}
+		generic, ok := generics[version]
+		if !ok {
+			return nil, fmt.Errorf("platform set %s: no generic adapter is frozen for it; add its entry to "+
+				"generics, repeating the last set's if nothing changed", version)
 		}
 		files, err := fs.ReadDir(fsys, version)
 		if err != nil {

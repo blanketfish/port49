@@ -15,7 +15,6 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/replay"
 )
@@ -26,11 +25,12 @@ import (
 type policyFiles struct{ policy, inventory string }
 
 // offlineEnv is the environment the offline tools load a policy in: the
-// inventory, and the built-in enable-username table port49d resolves from
-// config, so a joint check port49d runs (`enable: auto`) runs here too.
-// Config accepts no override of it today (config.resolveEnableUsernames).
+// inventory, and nothing else. Every adapter fact a joint check reads — the
+// enable username that `enable: auto` needs included — is in the policy
+// file's platform set and `platforms:` blocks, which port49d loads the same
+// way, so CI answers what port49d answers (plan 4 pre-flight N5).
 func offlineEnv(devices []admission.Device) policy.Env {
-	return policy.Env{Devices: devices, EnableUsernames: platform.EnableUsernames()}
+	return policy.Env{Devices: devices}
 }
 
 func (f *policyFiles) register(fs *flag.FlagSet) {

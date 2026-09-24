@@ -2,6 +2,7 @@ package platform
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -54,20 +55,25 @@ func TestNamesIsSortedAndComplete(t *testing.T) {
 	}
 }
 
-// TestEnableUsernamesNamesEveryKnownPlatformAsPrincipal pins the built-in
-// enable-username table: every platform this package knows, mapped to
-// EnablePrincipal, because no platform in the lab has been measured sending
-// anything else (tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md,
-// L3-nxos-cisco_nxos.md).
-func TestEnableUsernamesNamesEveryKnownPlatformAsPrincipal(t *testing.T) {
-	got := EnableUsernames()
-	for _, name := range Names() {
-		if got[name] != EnablePrincipal {
-			t.Errorf("%s: enable username is %q, want %q", name, got[name], EnablePrincipal)
+// TestEveryAdapterSaysTheEnableSTARTCarriesThePrincipal pins the built-in
+// adapters' enable username: every platform this package knows, and the
+// generic adapter, says EnablePrincipal, because no platform in the lab has
+// been measured sending anything else (tests/lab/results/L3-arista_eos.md,
+// L3-cisco_iosxe.md, L3-nxos-cisco_nxos.md). `enab` is refused wherever it is
+// written.
+func TestEveryAdapterSaysTheEnableSTARTCarriesThePrincipal(t *testing.T) {
+	for _, name := range append(Names(), "no_such_platform") {
+		if d, _ := DialectFor(name); d.EnableUsername != EnablePrincipal {
+			t.Errorf("%s: enable username is %q, want %q", name, d.EnableUsername, EnablePrincipal)
 		}
 	}
-	if len(got) != len(Names()) {
-		t.Fatalf("EnableUsernames() has %d entries, want %d", len(got), len(Names()))
+	d, _ := DialectFor("arista_eos")
+	for v, want := range map[string]string{EnableEnab: "tests/lab/results", "princpal": `it must be "principal"`} {
+		d.EnableUsername = v
+		if err := Validate("arista_eos", d); err == nil || !strings.Contains(err.Error(),
+			"platforms.arista_eos.enable_username") || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", v, err)
+		}
 	}
 }
 

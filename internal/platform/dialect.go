@@ -94,6 +94,12 @@ type Dialect struct {
 	// without it does not get what the level promises (IOS-XE's level 7 is
 	// level 1 until it is given commands, ceiling-cisco_iosxe.md).
 	DeviceConfig []string
+	// EnableUsername is what the platform's enable START carries in `user`:
+	// EnablePrincipal, the operator's own username, on every platform
+	// measured. It lives in the adapter, where the offline tools read it as
+	// port49d does, so the `enable: auto` joint check answers the same in CI
+	// (spec §5.6, §7).
+	EnableUsername string
 }
 
 // builtin is the default set's adapters, platforms/<DefaultSet>/*.yaml, where
@@ -104,12 +110,25 @@ func builtin() map[string]Dialect { return sets[DefaultSet] }
 // inert is the generic adapter's InertAttributes, as every shipped adapter's.
 var inert = []string{"home-directory"}
 
-// generic is the dialect of a platform port49 ships no adapter for (spec §8,
-// "Unknown platforms"): the device still logs in, nothing is rendered for it,
-// no modifier is claimed to reach port49, and the device is assumed to send
-// abbreviations as typed.
-var generic = Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session"},
-	PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert}
+// generics is each set's generic adapter, by version: the dialect of a
+// platform the set ships no adapter for (spec §8, "Unknown platforms"). The
+// device still logs in, nothing is rendered for it, no modifier is claimed to
+// reach port49, and the device is assumed to send abbreviations as typed.
+// Each of the set's files is laid over it, so it is frozen with its set: a
+// device on a platform missing from a pinned set renders the same on every
+// later binary. A new set that changes it adds its own entry; one that does
+// not repeats the last, and LoadSets refuses a set with none.
+var generics = map[string]Dialect{
+	"1.0.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
+		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
+}
+
+// Generic returns set version's generic adapter, copied, and whether the
+// binary has one for that version.
+func Generic(version string) (Dialect, bool) {
+	d, ok := generics[version]
+	return d.clone(), ok
+}
 
 // ceilingLevels is the priv-lvl number a level stands for on a platform that
 // renders no level, where the number is still needed: the token's
@@ -119,13 +138,13 @@ var generic = Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session
 // on IOS-XE and Junos.
 var ceilingLevels = map[string]uint8{"readonly": 1, "admin": 15}
 
-// DialectFor returns name's dialect and whether port49 ships one. An unknown
-// platform gets the generic dialect. The maps are copies: a caller cannot edit
-// the table through them.
+// DialectFor returns name's dialect in the default set and whether port49
+// ships one. An unknown platform gets the default set's generic dialect. The
+// maps are copies: a caller cannot edit the table through them.
 func DialectFor(name string) (Dialect, bool) {
 	d, ok := builtin()[name]
 	if !ok {
-		d = generic
+		d = generics[DefaultSet]
 	}
 	return d.clone(), ok
 }
@@ -180,7 +199,14 @@ func (d Dialect) BearsPrivilege(name string) bool { return !slices.Contains(d.In
 // every built-in set, sorted: the names no attribute value may put a
 // placeholder in, whatever platform key it is written under (spec §6).
 func PrivilegeAttributeNames() []string {
-	out := slices.Clone(generic.PrivilegeAttributes)
+	var out []string
+	for _, d := range generics {
+		for _, n := range d.PrivilegeAttributes {
+			if !slices.Contains(out, n) {
+				out = append(out, n)
+			}
+		}
+	}
 	for _, set := range sets {
 		for _, d := range set {
 			for _, n := range d.PrivilegeAttributes {

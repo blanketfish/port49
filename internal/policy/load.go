@@ -40,9 +40,6 @@ type Env struct {
 	// Dialects replaces platforms of the pinned set when non-nil: tests use
 	// it to stand a platform up with other behaviour.
 	Dialects map[string]platform.Dialect
-	// EnableUsernames is config's resolved table (config.Config); a platform
-	// with no entry is `principal`.
-	EnableUsernames map[string]string
 	// Now is the present the joint checks start from: a grant already expired
 	// by then is not checked. Zero is the clock at load; tests fix it.
 	Now time.Time
@@ -265,7 +262,7 @@ func (p *Policy) buildPlatforms(f file) error {
 			"a binary that ships %s (spec §8)", p.set, strings.Join(platform.Sets(), ", "), p.set)
 	}
 	builtin, _ := platform.Set(p.set)
-	generic, _ := platform.DialectFor("")
+	generic, _ := platform.Generic(p.set)
 	p.overrides = f.Platforms
 	for _, name := range sortedKeys(f.Platforms) {
 		b := f.Platforms[name]
@@ -1081,13 +1078,14 @@ func (p *Policy) privLvl(dialect platform.Dialect, level string) (uint8, bool) {
 	return 0, false
 }
 
-// dialect is the platform's dialect in this policy's set, or the generic
-// adapter for a platform the set has none for (spec §8, "Unknown platforms").
+// dialect is the platform's dialect in this policy's set, or that set's
+// generic adapter for a platform it has none for (spec §8, "Unknown
+// platforms").
 func (p *Policy) dialect(name string) platform.Dialect {
 	if d, ok := p.adapters[name]; ok {
 		return d
 	}
-	d, _ := platform.DialectFor("")
+	d, _ := platform.Generic(p.set)
 	return d
 }
 

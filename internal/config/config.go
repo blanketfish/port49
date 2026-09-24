@@ -196,9 +196,9 @@ type PlatformConfig struct {
 	// fleet part-way through a rename lists both names.
 	SessionServices []string `yaml:"session_services"`
 
-	// EnableUsername selects what username an enable START is expected to
-	// carry: `principal` (the default, and the only value config.Load
-	// accepts) or `enab`, which is refused — see resolveEnableUsernames.
+	// EnableUsername moved to the policy file's `platforms:` block in plan 5,
+	// where the offline tools see it as port49d does (plan 4 pre-flight N5).
+	// It is declared only so config.Load can say where it went.
 	EnableUsername string `yaml:"enable_username"`
 }
 
@@ -267,10 +267,9 @@ type Config struct {
 	// error rather than a platform silently on its default (spec §5.2, §8).
 	SessionServices map[string][]string
 
-	// EnableUsernames is the resolved enable-username table: every built-in
-	// platform mapped to platform.EnablePrincipal, the only value config.Load
-	// accepts today (see resolveEnableUsernames).
-	EnableUsernames map[string]string
+	// Notices are lines port49d prints at start about the file itself: a key
+	// that still loads but has moved, and where it went.
+	Notices []string
 
 	// Inventory and Admission are read and built once, here, so the daemon
 	// never re-reads the file and the two can never disagree.
@@ -383,7 +382,7 @@ func Load(path string) (Config, error) {
 	if err := resolveSessionServices(&c, f.Platforms); err != nil {
 		return Config{}, err
 	}
-	if err := resolveEnableUsernames(&c, f.Platforms); err != nil {
+	if err := moveEnableUsernames(&c, f.Platforms); err != nil {
 		return Config{}, err
 	}
 	// No lab: block is a production daemon: Lab stays nil, the policy engine
@@ -677,17 +676,13 @@ func resolveSessionServices(c *Config, overrides map[string]PlatformConfig) erro
 	return nil
 }
 
-// resolveEnableUsernames applies any platforms.<name>.enable_username override
-// to the built-in table, and refuses `enab`.
-//
-// The $enab{level}$ enable path is unbuilt on purpose: it would need a
-// (nas, rem_addr) secondary index, and rem_addr is measured identical for two
-// concurrent sessions behind one bastion, so that index would have to refuse
-// rather than guess — and its refusal needs a reason code spec §5.7 does not
-// carry. None of that is worth building for a username form no device in this
-// lab has ever sent.
-func resolveEnableUsernames(c *Config, overrides map[string]PlatformConfig) error {
-	c.EnableUsernames = platform.EnableUsernames()
+// moveEnableUsernames handles platforms.<name>.enable_username, which is an
+// adapter fact: since plan 5 adapters live in the policy file's `platforms:`
+// block, where `port49 policy test` reads it as port49d does, and a key here
+// would be one CI never sees (plan 4 pre-flight N5). `principal`, the default
+// and the only value config.Load ever accepted, still loads with a notice, so
+// the upgrade is not an outage; any other value is refused by name.
+func moveEnableUsernames(c *Config, overrides map[string]PlatformConfig) error {
 	names := make([]string, 0, len(overrides))
 	for name := range overrides {
 		names = append(names, name)
@@ -698,19 +693,13 @@ func resolveEnableUsernames(c *Config, overrides map[string]PlatformConfig) erro
 		if v == "" {
 			continue
 		}
-		if !platform.KnownEnableUsername(v) {
-			return fmt.Errorf("config: platforms.%s.enable_username is %q; it must be %q or %q",
-				name, v, platform.EnablePrincipal, platform.EnableEnab)
+		moved := fmt.Sprintf("platforms.%s.enable_username moved to the policy file in plan 5: write it under "+
+			"`platforms: {%s: {enable_username: ...}}` there, where `port49 policy test` reads it as port49d does",
+			name, name)
+		if v != platform.EnablePrincipal {
+			return fmt.Errorf("config: %s", moved)
 		}
-		if v == platform.EnableEnab {
-			return fmt.Errorf("config: platforms.%s.enable_username: %q is refused: no platform in the lab has been "+
-				"measured sending that username form, and port49 does not ship an unexercised enable path for it. "+
-				"Every platform with an enable exchange sends the operator's own username "+
-				"(tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md). To enable it, add a "+
-				"tests/lab/results/ note showing a device sending it and lift this refusal with the code that reads it",
-				name, platform.EnableEnab)
-		}
-		c.EnableUsernames[name] = v
+		c.Notices = append(c.Notices, moved+"; principal is the default, so delete the line")
 	}
 	return nil
 }

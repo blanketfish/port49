@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
 )
 
 // unmappedLevel declares a level no built-in platform renders: a role landing
@@ -460,11 +458,22 @@ func TestGrantsRemoveFailsWhenStdoutFails(t *testing.T) {
 	}
 }
 
-// The offline tools load a policy with the enable-username table port49d
-// resolves, so the `enable: auto` joint check answers the same offline.
-func TestOfflineToolsLoadWithTheEnableUsernameTable(t *testing.T) {
-	if got := offlineEnv(nil).EnableUsernames; !reflect.DeepEqual(got, platform.EnableUsernames()) {
-		t.Fatalf("%v", got)
+// The offline tools load a policy as port49d does: the inventory, and every
+// adapter fact from the policy file itself, so an enable-username the file
+// declares refuses the load in CI exactly as it refuses port49d's start.
+func TestOfflineToolsReadTheAdaptersFromThePolicyFile(t *testing.T) {
+	if e := offlineEnv(nil); e.Dialects != nil || !e.Now.IsZero() {
+		t.Fatalf("%+v", e)
+	}
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	if err := os.WriteFile(pol, append([]byte("platforms: {arista_eos: {enable_username: enab}}\n"), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "platforms.arista_eos.enable_username") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
 

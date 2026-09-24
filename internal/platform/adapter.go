@@ -34,6 +34,7 @@ type Spec struct {
 	AcceptedAttributes   *[]string            `yaml:"accepted_attributes"`
 	RoleOrder            *map[string][]string `yaml:"role_order"`
 	DeviceConfig         *[]string            `yaml:"device_config"`
+	EnableUsername       *string              `yaml:"enable_username"`
 }
 
 // ParseSpecs reads an adapter file: one YAML document whose one key is
@@ -112,6 +113,9 @@ func (s Spec) Over(base Dialect) Dialect {
 	}
 	if s.DeviceConfig != nil {
 		d.DeviceConfig = slices.Clone(*s.DeviceConfig)
+	}
+	if s.EnableUsername != nil {
+		d.EnableUsername = *s.EnableUsername
 	}
 	if s.RoleOrder != nil {
 		d.RoleOrder = mergeLists(d.RoleOrder, *s.RoleOrder)
@@ -267,6 +271,20 @@ func Validate(name string, d Dialect) error {
 				return fmt.Errorf("%s: %q is ranked twice; rank it once", field("role_order."+attr), v)
 			}
 		}
+	}
+	switch d.EnableUsername {
+	case EnablePrincipal:
+	case EnableEnab:
+		// The $enab{level}$ enable path is unbuilt on purpose: it would need a
+		// (nas, rem_addr) index that must refuse rather than guess, and no
+		// device in the lab has sent that username form (spec §7, L3).
+		return fmt.Errorf("%s: %q is refused: no platform in the lab has been measured sending that username "+
+			"form, and port49 does not ship an unexercised enable path for it. Every platform with an enable "+
+			"exchange sends the operator's own username (tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md). "+
+			"To enable it, add a tests/lab/results/ note showing a device sending it and lift this refusal with "+
+			"the code that reads it", field("enable_username"), EnableEnab)
+	default:
+		return fmt.Errorf("%s is %q; it must be %q", field("enable_username"), d.EnableUsername, EnablePrincipal)
 	}
 	for i, line := range d.DeviceConfig {
 		if strings.TrimSpace(line) == "" || strings.ContainsFunc(line, func(r rune) bool { return r < 0x20 || r > 0x7e }) {

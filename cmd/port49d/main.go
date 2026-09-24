@@ -258,7 +258,7 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
 // bytes it hashed, so the version it remembers refusing is the version it
 // refused, and the version the watch saw agree twice is the version loaded.
 func parsePolicy(cfg config.Config, raw []byte) (*policy.Policy, error) {
-	pol, err := policy.Parse(raw, policy.Env{Devices: cfg.Inventory.Devices, EnableUsernames: cfg.EnableUsernames})
+	pol, err := policy.Parse(raw, policy.Env{Devices: cfg.Inventory.Devices})
 	if err != nil {
 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, quotesCut{err})
 	}
@@ -376,6 +376,9 @@ func run(parent context.Context, cfgPath string) error {
 	// starts: an edit in between would otherwise never be said (checkInventory).
 	_, inventoryAtStart, _ := fileVersion(cfg.InventoryFile)
 	fmt.Fprint(stderr, labWarning(cfg.Lab))
+	for _, n := range cfg.Notices {
+		fmt.Fprintln(stderr, "port49d:", n)
+	}
 
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()

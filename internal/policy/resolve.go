@@ -524,7 +524,7 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 		}
 	}
 	if sub.Enable == "auto" {
-		if eu := p.env.EnableUsernames[d.Platform]; eu != "" && eu != platform.EnablePrincipal {
+		if p.dialect(d.Platform).EnableUsername != platform.EnablePrincipal {
 			return fmt.Sprintf("enable: auto reaches this device, whose platform %s does not put the operator's "+
 				"own username on the enable exchange; use token or none (spec §5.6, \"Why enable: auto is "+
 				"restricted\")", d.Platform)
