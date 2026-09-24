@@ -69,6 +69,28 @@ func (s *conn) unvalidated(h wire.Header, body []byte, diag keyring.Diagnosis, v
 	s.d.Metrics.Unvalidated.WithLabelValues(string(diag)).Inc()
 }
 
+// quarantine records a packet from a quarantined device: the header's
+// cleartext fields, the source and the device, and the reason
+// device_quarantined (spec §5.7, §10). No body was read, so none is hashed.
+func (s *conn) quarantine(h wire.Header) {
+	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Reason: decision.DeviceQuarantined,
+		Device: &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform},
+		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagDeviceQuarantined),
+			KeyRef: s.dev.KeyRef, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
+	s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagDeviceQuarantined)).Inc()
+}
+
+// quarantined asks the policy about this connection's device at the time of
+// this packet, so a single-connection session opened before a grant's expiry
+// is closed from it, and one opened during a quarantine is served once it ends.
+func (s *conn) quarantined() bool {
+	if !s.admitted || s.d.Quarantined == nil {
+		return false
+	}
+	_, ok := s.d.Quarantined(s.dev.Device.Name, s.d.Now())
+	return ok
+}
+
 // backoff holds the connection for the limiter's per-source delay before it is
 // closed, so a source that floods malformed packets pays a growing cost while
 // every other source is untouched. It is cancellable so shutdown is not stuck
@@ -136,6 +158,20 @@ func (s *conn) serve(ctx context.Context) {
 		if !s.admitted {
 			s.unvalidated(h, nil, keyring.DiagUnadmittedSource, 0)
 			s.backoff(ctx, "unadmitted_source")
+			return
+		}
+
+		// A quarantined device gets silence, not FAIL (spec §10; §13 decision
+		// 20): one header read, nothing decrypted, no reply, so the device
+		// declares the server dead and falls to its local method exactly as in
+		// an outage. It is closed at once, not held for the limiter's backoff:
+		// a server that stays silent costs the device ~5 s per command on
+		// IOS-XE, EOS and NX-OS, every session, while a closed connection
+		// costs it nothing (L4, measured 2026-09-24). The device is not
+		// suspect — the policy could not be compiled for it — so it takes no
+		// strike either.
+		if s.quarantined() {
+			s.quarantine(h)
 			return
 		}
 

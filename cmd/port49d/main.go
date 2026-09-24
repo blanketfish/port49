@@ -147,15 +147,16 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (lo
 // which is stdout — swapped in tests.
 var stderr io.Writer = os.Stderr
 
-// buildBroker loads what the broker needs and returns its server, or nil when
-// no broker: block is configured. It runs before any listener opens, so a
-// policy typo or an unreadable certificate ends the start with one line
-// rather than surfacing at the first mint. Each error names the config key
+// buildBroker loads what the broker needs and returns its server and the
+// policy it loaded, or nils when no broker: block is configured. The daemon
+// asks the policy about quarantine, and nothing else (spec §10). It runs
+// before any listener opens, so a policy typo or an unreadable certificate
+// ends the start with one line rather than surfacing at the first mint. Each error names the config key
 // and the file, so that line says what to go and fix.
 func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log decision.Emitter,
-	m *metrics.Metrics) (*http.Server, error) {
+	m *metrics.Metrics) (*http.Server, *policy.Policy, error) {
 	if cfg.Broker == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// The policy is checked against the inventory the daemon admits from: a
 	// class a platform in it does not define, or a level it cannot render, is
@@ -163,7 +164,7 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	pol, err := policy.Load(cfg.Broker.PolicyFile, policy.Env{Devices: cfg.Inventory.Devices,
 		EnableUsernames: cfg.EnableUsernames})
 	if err != nil {
-		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
+		return nil, nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
 	}
 	// A device a joint check failed on is quarantined rather than the policy
 	// refused: its mints are refused device_quarantined and the rest of the
@@ -183,7 +184,7 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	}
 	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
 	if err != nil {
-		return nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
+		return nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
 			cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile, err)
 	}
 	// A server certificate outside its validity does not stop the start:
@@ -209,7 +210,7 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	devices := make(map[string]admission.Device, len(cfg.Inventory.Devices))
 	for _, d := range cfg.Inventory.Devices {
 		if _, seen := devices[d.Name]; seen {
-			return nil, fmt.Errorf("inventory names device %q twice; the broker mints by name", d.Name)
+			return nil, nil, fmt.Errorf("inventory names device %q twice; the broker mints by name", d.Name)
 		}
 		devices[d.Name] = d
 	}
@@ -218,7 +219,7 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	// Startup only. Server panics on a nil or empty anchor pool; LoadTLS has
 	// just returned a pool of exactly one, so it cannot here, and buildBroker
 	// runs before the TACACS+ listener opens — a panic would end a start, never
-	// a running daemon's device AAA. A reload path (plan 7) must not call
+	// a running daemon's device AAA. A live reload (plan 4b) must not call
 	// Server until it returns an error instead.
 	srv := b.Server(cfg.Broker.Listen, cert, anchor)
 	// net/http logs what no handler sees — a handshake refused for an expired
@@ -226,7 +227,28 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	// standard library's default logger; routed here it lands beside
 	// port49d's other lines, where an operator is already looking.
 	srv.ErrorLog = stdlog.New(stderr, "port49d: broker: ", 0)
-	return srv, nil
+	return srv, pol, nil
+}
+
+// watchQuarantine is what the daemon asks of the policy: whether a device is
+// quarantined at the time of a packet (spec §10; §13 decision 20), and at each
+// scrape how many are, for port49_devices_quarantined. Quarantine is
+// time-scoped, so neither is captured at start. nil with no policy.
+func watchQuarantine(pol *policy.Policy, m *metrics.Metrics,
+	now func() time.Time) func(device string, at time.Time) (string, bool) {
+	if pol == nil {
+		return nil
+	}
+	m.CountQuarantined(func() int {
+		at, n := now(), 0
+		for _, q := range pol.Quarantines(at) {
+			if _, ok := pol.Quarantined(q.Device, at); ok {
+				n++
+			}
+		}
+		return n
+	})
+	return pol.Quarantined
 }
 
 func run(cfgPath string) error {
@@ -313,7 +335,7 @@ func run(cfgPath string) error {
 	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	_ = sessions
 
-	brokerSrv, err := buildBroker(cfg, st, minter, log, m)
+	brokerSrv, pol, err := buildBroker(cfg, st, minter, log, m)
 	if err != nil {
 		stopSpool()
 		<-spoolDone
@@ -342,7 +364,10 @@ func run(cfgPath string) error {
 			"credentials written to %s\n", logins, enables, cfg.Lab.SeedTokenFile)
 	}
 
-	deps := server.Deps{Admission: cfg.Admission, Keys: cfg.Keyring(),
+	// A quarantined device is closed without a reply, as for an unknown
+	// source, so it falls to its local method exactly as in an outage.
+	// buildBroker has already named each one and its cause.
+	deps := server.Deps{Admission: cfg.Admission, Quarantined: watchQuarantine(pol, m, time.Now), Keys: cfg.Keyring(),
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.

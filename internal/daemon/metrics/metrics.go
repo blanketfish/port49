@@ -2,7 +2,11 @@
 // are bounded by construction; device identity never appears here.
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"sync/atomic"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 type Metrics struct {
 	Requests       *prometheus.CounterVec   // port49_requests_total{exchange, outcome}
@@ -58,9 +62,20 @@ type Metrics struct {
 	// port49_blob_cache_lookups_total{outcome}: the authorizer's per-replica
 	// blob cache, "hit" or "miss" (spec §5.1.1). A miss is one store read,
 	// counted again in port49_store_operations_total{op="get_blob"}; a hit
-	// during a store outage is a command still being answered.
+	// during a blob-read failure is a command still being answered.
 	BlobCache *prometheus.CounterVec
+	// port49_devices_quarantined: how many inventory devices the loaded policy
+	// quarantines now (spec §10). Quarantine is time-scoped — a grant's expiry
+	// can bring one on or end it — so the count is taken at each scrape, from
+	// the function CountQuarantined sets; 0 until it is set. Each device is
+	// named in port49d's start lines and on every record its connections
+	// leave; the gauge is what an alert watches, and it names no device.
+	DevicesQuarantined prometheus.GaugeFunc
+	quarantined        atomic.Pointer[func() int]
 }
+
+// CountQuarantined sets what port49_devices_quarantined reports at each scrape.
+func (m *Metrics) CountQuarantined(count func() int) { m.quarantined.Store(&count) }
 
 func New(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
@@ -106,8 +121,16 @@ func New(reg prometheus.Registerer) *Metrics {
 		BlobCache: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_blob_cache_lookups_total",
 			Help: "Compiled-blob cache lookups by the authorizer, by outcome."}, []string{"outcome"}),
 	}
+	m.DevicesQuarantined = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_quarantined",
+		Help: "Inventory devices the loaded policy quarantines now."}, func() float64 {
+		if count := m.quarantined.Load(); count != nil {
+			return float64((*count)())
+		}
+		return 0
+	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache)
+		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
+		m.DevicesQuarantined)
 	return m
 }

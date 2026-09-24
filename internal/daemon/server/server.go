@@ -28,7 +28,12 @@ import (
 )
 
 type Deps struct {
-	Admission   *admission.Trie
+	Admission *admission.Trie
+	// Quarantined reports whether an admitted device is quarantined by the
+	// loaded policy at now (spec §10): (*policy.Policy).Quarantined, or nil
+	// with no broker. It is asked at every packet, with Now, because a grant's
+	// expiry can start or end a quarantine while a connection is open.
+	Quarantined func(device string, now time.Time) (cause string, ok bool)
 	Keys        map[string]keyring.Set
 	Authen      *authen.Handler
 	Author      *author.Handler

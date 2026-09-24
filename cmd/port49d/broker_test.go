@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/config"
@@ -50,20 +51,20 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 `
 
 func buildWith(cfg config.Config) error {
-	_, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+	_, _, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
 		metrics.New(prometheus.NewRegistry()))
 	return err
 }
 
 func TestNoBrokerBlockBuildsNoBroker(t *testing.T) {
-	srv, err := buildBroker(config.Config{}, nil, nil, nil, nil)
-	if srv != nil || err != nil {
-		t.Fatalf("%v %v", srv, err)
+	srv, pol, err := buildBroker(config.Config{}, nil, nil, nil, nil)
+	if srv != nil || pol != nil || err != nil {
+		t.Fatalf("%v %v %v", srv, pol, err)
 	}
 }
 
 func TestABrokerBuildsFromItsFiles(t *testing.T) {
-	srv, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
+	srv, _, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
 		decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
@@ -102,12 +103,51 @@ func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
 	var out bytes.Buffer
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = &out
-	if err := buildWith(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1))); err != nil {
+	_, pol, err := buildBroker(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1)),
+		memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
 		t.Fatalf("a quarantined device must not stop the start: %v", err)
+	}
+	if _, ok := pol.Quarantined("leaf1", time.Now()); !ok {
+		t.Fatal("the daemon is handed the policy that quarantines leaf1")
 	}
 	if !strings.Contains(out.String(), "device leaf1 (arista_eos) is quarantined") ||
 		!strings.Contains(out.String(), "level operator has no rendering on arista_eos") {
 		t.Fatalf("stderr: %s", out.String())
+	}
+}
+
+// The daemon asks the policy at the time of each packet, and the gauge counts
+// at the time of each scrape: a device an expiry will quarantine is neither
+// refused nor counted until then (spec §10).
+func TestTheDaemonsQuarantineFollowsTheClock(t *testing.T) {
+	now := time.Now()
+	lapse := now.Add(48 * time.Hour).Truncate(time.Second)
+	_, pol, err := buildBroker(brokerConfig(t, `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: op, privilege: operator, permit: [show **]}
+  - {name: adm, privilege: admin, permit: ["**"]}
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants:
+  - {subject: s, scope: all_devices, roles: [op]}
+  - {subject: s, scope: all_devices, roles: [adm], expires: `+lapse.Format(time.RFC3339)+`}
+`), memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := metrics.New(prometheus.NewRegistry())
+	clock := now
+	quarantined := watchQuarantine(pol, m, func() time.Time { return clock })
+	if _, ok := quarantined("leaf1", now); ok || testutil.ToFloat64(m.DevicesQuarantined) != 0 {
+		t.Fatal("before the expiry leaf1 is neither refused nor counted")
+	}
+	clock = lapse
+	if _, ok := quarantined("leaf1", lapse); !ok || testutil.ToFloat64(m.DevicesQuarantined) != 1 {
+		t.Fatalf("from the expiry leaf1 is refused and counted: gauge %v", testutil.ToFloat64(m.DevicesQuarantined))
+	}
+	if watchQuarantine(nil, m, time.Now) != nil {
+		t.Fatal("with no broker there is no quarantine to ask")
 	}
 }
 
@@ -215,7 +255,7 @@ func TestBrokerTLSErrorsReachPort49dsLog(t *testing.T) {
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = &out
 
-	srv, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
+	srv, _, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
 		decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)

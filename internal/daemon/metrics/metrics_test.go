@@ -30,6 +30,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.Attributions.WithLabelValues("foreign").Inc()
 	m.BrokerItemErrors.WithLabelValues("device_unconfigured").Inc()
 	m.BlobCache.WithLabelValues("hit").Inc()
+	m.CountQuarantined(func() int { return 1 })
 
 	// Gather all metrics from registry.
 	families, err := reg.Gather()
@@ -55,6 +56,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_accounting_attributions_total":     false,
 		"port49_broker_item_errors_total":          false,
 		"port49_blob_cache_lookups_total":          false,
+		"port49_devices_quarantined":               false,
 	}
 
 	// Check that all expected metrics are present and all gathered metrics are snake_case.
@@ -101,6 +103,24 @@ func TestCryptOpenFailuresReachesTheRegistry(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("port49_crypt_open_failures_total series in the registry = %d, want 1", n)
+	}
+}
+
+// port49_devices_quarantined is counted when it is scraped, not set once at
+// start: quarantine is time-scoped, so the count moves with the clock.
+func TestDevicesQuarantinedIsCountedAtEachScrape(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	if n := testutil.ToFloat64(m.DevicesQuarantined); n != 0 {
+		t.Fatalf("before any count is set: %v", n)
+	}
+	count := 1
+	m.CountQuarantined(func() int { return count })
+	if n := testutil.ToFloat64(m.DevicesQuarantined); n != 1 {
+		t.Fatalf("got %v, want 1", n)
+	}
+	count = 3
+	if n := testutil.ToFloat64(m.DevicesQuarantined); n != 3 {
+		t.Fatalf("got %v, want 3 at the next scrape", n)
 	}
 }
 
