@@ -596,12 +596,16 @@ A policy edit reaches every live session **without anyone logging out** (plan 4b
 read on a timer and on `SIGHUP`, and a change is handled in four steps:
 
 1. **Validate or keep the old.** The new file is loaded against the inventory exactly as at
-   start. A file that does not load is refused: the policy in force keeps serving, the refusal
-   is logged once with the reason and the bundle still serving, counted in
+   start, and that load's joint check resolves and compiles every subject on every device the
+   new policy selects, at every grant expiry. A composition that fails is handled exactly as
+   §10 says: the device is quarantined, or, only where no platform could pass, the whole
+   policy is refused. So a reload that loads never leaves a live context whose policy cannot
+   be compiled. A file that does not load is refused: the policy in force keeps serving, the
+   refusal is logged once with the reason and the bundle still serving, counted in
    `port49_policy_reloads_total{outcome}` as `refused` (`applied` and `unchanged` beside it), and
    `port49_policy_file_refused` holds at 1 until a file loads or the old one is put back. A typo
-   never takes the fleet down, and that includes a file that parses but whose joint checks
-   (§10) find a composition no platform can compile. Nothing is half-applied. The timer is
+   never takes the fleet down, and that includes a file that parses but that no platform can
+   compile (§10). Nothing is half-applied. The timer is
    `broker.policy_watch_interval` (default 5s, 1s to 5m). A change it finds is loaded once
    two reads in a row agree, and what is loaded is the bytes those two reads agreed on, so an
    edit is in force within two intervals of its write; a `SIGHUP` loads what is on disk at
@@ -639,13 +643,13 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    denied `credential_revoked`. A context the policy in force cannot be resolved or compiled
    for is revoked too, failing closed, with a `refresh` deny record (`blob_unavailable`), a
    process-log line naming the `ctx_id` and the fault, and a `failed` count; the pass goes on
-   to the next context. That is an unexpected fault, not a bad file: step 1's load runs the
-   joint checks (§10), which compile every subject-by-device composition the new policy can
-   reach at every grant expiry. A composition no platform can compile **refuses the policy at
-   the reload**, and the old one keeps serving; one that fails only on some platforms
-   quarantines the devices on them (§13, decision 20), whose contexts are left as they are
-   (below). A bad file is never a reason to revoke the fleet. A
-   context on a device quarantined now is left as it is until the refresh that lifts the
+   to the next context. That is an unexpected broker fault, not a bad file: step 1's joint
+   check has already compiled every subject on every device, quarantining a device where a
+   composition fails and refusing the policy where no platform could pass (§10, §13 decision
+   20), so a compile fault here is never a reason to revoke the fleet. Such a context is
+   revoked, so it is on the policy in force and counts as reached for
+   `port49_policy_refresh_pending`; the `failed` count is the alarm. A context on a device
+   quarantined now is left as it is until the refresh that lifts the
    quarantine. A narrowed rule denies the next command and a widened
    one permits it; a widened *level* reaches the device only at the next session authorization
    or `enable`, where levels are granted. `auth_time`, `session_expires`, `refreshed_at` and the
@@ -689,7 +693,7 @@ mint at once (and every mint fails `store_unavailable` until the store answers).
 stops at its first store error, says how far it got, and runs again every 30s until it
 finishes; a context not yet reached keeps its previous policy until then, and
 `port49_policy_refresh_pending` holds at 1 from the swap until a pass reaches every live
-context and leaves none behind — a context skipped as busy or failed, or a pass stopped by a
+context and leaves none behind — a context skipped as busy, or a pass stopped by a
 store error, keeps it at 1 until a later pass reaches that context — the alert for a policy in
 force that has not yet reached every live session. The directory-driven scheduled
 refresh through `active_principals` is plan 7's.
@@ -1689,7 +1693,7 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, or the policy in force not compiling for the context, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
-| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a composition the load quarantines (§7). On `refresh`: the policy in force could not be resolved or compiled for this context — a broker defect, since the load compiles every subject on every device (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed` |
+| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a composition the load quarantines (§7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device and quarantined, or refused, what failed (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed` |
 | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
 | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed. On `refresh`, a deny recorded at each pass: the live context is left as it was until the quarantine lifts |
 
@@ -4490,10 +4494,15 @@ Beyond those already listed in the design document's §14:
   context after it is still refreshed; `port49_policy_refresh_pending` stays 1 until a later
   pass reaches the busy context. An accounting record landing between the refresh's read and
   its write does not conflict.
+- **A reload that fails the joint check for some devices revokes no context**: an edit whose
+  composition fails on one platform's devices loads, quarantines those devices, and leaves
+  their live contexts as they were; no context anywhere is revoked `blob_unavailable`. One
+  that no platform could pass is refused, and the policy in force keeps serving.
 - **A refresh that cannot compile revokes, and records it**: a context the policy in force
   cannot be resolved or compiled for is revoked, its `refresh` record is a deny
   `blob_unavailable` naming its `ctx_id`, the process log names the fault, it is counted
-  `failed`, and every context after it is still refreshed.
+  `failed`, every context after it is still refreshed, and it does not hold
+  `port49_policy_refresh_pending` at 1.
 - **Grace window**: a command past the ceiling is denied with `session_expired` while context
   is retained; a re-auth inside the grace window resumes the same session; past it, context is
   gone and the reason becomes `context_missing`.
