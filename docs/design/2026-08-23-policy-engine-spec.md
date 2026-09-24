@@ -3532,6 +3532,11 @@ listing commands. This is contained, and is a reason to prefer literals and `*`.
 
 A session test is what acknowledges a privilege raise to the gate below.
 
+**A policy with no tests passes `port49 policy test`, and says so:** it prints `report:
+no_tests: ...` (owner's ruling 2026-09-24). Nothing in such a file acknowledges a shadowed deny
+or an expansion, so the gates below fail on the first one; the line is there so a reviewer
+sees an empty test list before that happens rather than after.
+
 **Intersection checks.** Because the effective permission set is the intersection of what
 the device offers and what port49 permits (§6), CI MUST report where the two disagree. Neither of these is visible in any existing TACACS+
 system, and both are ordinary review questions once surfaced:
