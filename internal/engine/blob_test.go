@@ -111,7 +111,7 @@ func TestDecodeRefusesWhatItCannotDecideWith(t *testing.T) {
 	if _, err := Decode(hash, tampered); !errors.Is(err, ErrHashMismatch) {
 		t.Fatalf("a tampered body must be refused as a hash mismatch: %v", err)
 	}
-	const head = `{"version":2,"bundle":"b","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":false,"splits_interface_names":false},"privilege":"","attributes":[],`
+	const head = `{"version":2,"bundle":"b","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":false},"privilege":"","attributes":[],`
 	for name, tt := range map[string]struct{ body, want string }{
 		"plan 3's slice blob": {`{"platform":"arista_eos","privilege":15,"attributes":[],"permit":["**"],"deny":[]}`, "plan 3's"},
 		"a newer version":     {strings.Replace(head, `"version":2`, `"version":3`, 1) + `"rules":[],"pipe":[],"classes":{}}`, "format version 3"},
@@ -133,6 +133,30 @@ func TestDecodeRefusesWhatItCannotDecideWith(t *testing.T) {
 		if b, err := Decode(HashOf([]byte(tt.body)), []byte(tt.body)); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("%s: decoded %+v, %v; want an error mentioning %q", name, b, err, tt.want)
 		}
+	}
+}
+
+// A dialect flag added after version 2 is written only when set, so a v2 blob
+// written without it still decodes, reads it as false, and is still the one
+// canonical spelling of its decision; the flag set is a different blob.
+func TestALaterDialectFlagIsOmittedWhenFalse(t *testing.T) {
+	const v2 = `{"version":2,"bundle":"b","platform":"cisco_iosxe","normalize":{"pipe_token":"|","pipe_authorized":false,` +
+		`"strip_cr":true,"expands_abbreviations":true},"privilege":"","attributes":[],"rules":[],"pipe":[],"classes":{}}`
+	b, err := Decode(HashOf([]byte(v2)), []byte(v2))
+	if err != nil || b.Normalize.SplitsInterfaceNames {
+		t.Fatalf("a v2 blob without the key: %+v, %v", b.Normalize, err)
+	}
+	body, hash, err := Encode(b)
+	if err != nil || string(body) != v2 || hash != HashOf([]byte(v2)) {
+		t.Fatalf("re-encoded as %s, %v", body, err)
+	}
+	b.Normalize.SplitsInterfaceNames = true
+	body, split, err := Encode(b)
+	if err != nil || split == hash || !strings.Contains(string(body), `"splits_interface_names":true`) {
+		t.Fatalf("set: %s %v", body, err)
+	}
+	if _, err := Decode(split, body); err != nil {
+		t.Fatal(err)
 	}
 }
 

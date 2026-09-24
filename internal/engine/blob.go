@@ -59,12 +59,14 @@ type Blob struct {
 }
 
 // Normalize is the platform's dialect as the evaluator needs it (spec §3).
+// A flag added after format version 2 is written only when set, so a v2 blob
+// written before it still decodes, reads it as false, and keeps its hash.
 type Normalize struct {
 	PipeToken            string `json:"pipe_token"`
 	PipeAuthorized       bool   `json:"pipe_authorized"`
 	StripCR              bool   `json:"strip_cr"`
 	ExpandsAbbreviations bool   `json:"expands_abbreviations"`
-	SplitsInterfaceNames bool   `json:"splits_interface_names"`
+	SplitsInterfaceNames bool   `json:"splits_interface_names,omitempty"`
 }
 
 // Rule is one command rule and the role that carries it. The role is on the
