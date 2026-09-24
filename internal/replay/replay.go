@@ -57,7 +57,7 @@ var replayable = map[decision.Reason]bool{
 // Replay reads a decision log and replays every authorization record that
 // consulted a blob, and reports every other authorization record as Skipped.
 // only, when non-zero, restricts it to the record on that line. A line that
-// is not a record is an error: a decision log is JSON lines and nothing else.
+// is not a record diverges, and the replay goes on past it.
 //
 // It streams: a record is replayed as it is read, against a program compiled
 // once per blob, and only a record read before its blob event is held back —
@@ -74,7 +74,16 @@ func Replay(r io.Reader, only int) ([]Result, error) {
 		}
 		var rec decision.Record
 		if err := rec.UnmarshalJSON(sc.Bytes()); err != nil {
-			return nil, fmt.Errorf("line %d is not a decision record: %w", n, err)
+			// A write torn by a full disk leaves such a line, and the log
+			// writes the record again whole after it; an edit may too.
+			// Either way it is this line's divergence, not the log's end.
+			if only == 0 || only == n {
+				rp.emit(numbered{line: n, rec: decision.Record{Event: "unreadable"}}, Diverge, "not a decision record: truncated or altered ("+err.Error()+")")
+			}
+			if only != 0 && n >= only && len(rp.pending) == 0 {
+				break
+			}
+			continue
 		}
 		rp.read(n, rec)
 		if only != 0 && n >= only && len(rp.pending) == 0 {

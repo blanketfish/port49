@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -198,10 +199,29 @@ func TestAnOverlongLineNamesItsLine(t *testing.T) {
 	}
 }
 
-// A decision log is JSON lines and nothing else.
-func TestALineThatIsNotARecordIsAnError(t *testing.T) {
-	if _, err := Replay(strings.NewReader("{\"ts\":\"2026-09-23T00:00:00.000Z\",\"event\":\"mint\"}\nnot json\n"), 0); err == nil ||
-		!strings.Contains(err.Error(), "line 2") {
-		t.Fatalf("%v", err)
+// A line that is not a record — a write torn by a full disk, which the log
+// then writes again whole, or an edit — diverges and the rest of the log is
+// still replayed: one bad line does not make the log unreplayable.
+func TestALineThatIsNotARecordDivergesAndTheRestReplays(t *testing.T) {
+	log, _ := daemonLog(t)
+	lines := strings.Split(log, "\n")
+	torn := lines[2][:len(lines[2])/2]
+	lines = append(lines[:2], append([]string{torn}, lines[2:]...)...)
+	res := replayAll(t, strings.Join(lines, "\n"))
+	i := slices.IndexFunc(res, func(r Result) bool { return r.Line == 3 })
+	if i < 0 || res[i].Status != Diverge || !strings.Contains(res[i].Detail, "not a decision record: truncated or altered") {
+		t.Fatalf("the torn line: %+v", res)
+	}
+	agree := 0
+	for _, r := range res[i+1:] {
+		if r.Status == Agree {
+			agree++
+		}
+	}
+	if agree == 0 {
+		t.Fatalf("nothing after the torn line replayed: %+v", res)
+	}
+	if one, err := Replay(strings.NewReader(strings.Join(lines, "\n")), 3); err != nil || len(one) != 1 || one[0].Status != Diverge {
+		t.Fatalf("--line on the torn line: %+v %v", one, err)
 	}
 }
