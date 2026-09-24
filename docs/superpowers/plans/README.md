@@ -301,9 +301,12 @@ privilege-expansion gate (spec §12), and replay re-derives a session's attribut
 - Operator-supplied entity-class patterns, when adapters bring them, must be checked for `(?-i)`
   where a deny uses them: plan 4 refuses a deny regex that turns case-insensitivity off, because
   a case-sensitive deny can be walked past by case (spec §4), and permits keep the opt-in.
-- **Decided 2026-09-24** (spec §12): a level or ceiling raise fails `port49 policy diff` unless a
-  session test (`level:`, `max_privilege:`) in the new policy asserts it; a regex-constrained
-  widening fails unless a policy test exercises it; a newly refused mint always fails. A policy
+- **Decided 2026-09-24** (spec §12): a privilege raise — the device privilege the session reply
+  gives, the ceiling, the level under either order, or `enable` switched on — fails `port49 policy
+  diff` unless a session test (`level:`, `max_privilege:`, `priv_lvl:`, `enable:`) in the new
+  policy asserts it; a regex-constrained widening fails unless a permit test shows it or an
+  `acknowledge:` entry names the removed deny with a reason; a newly refused mint always fails.
+  The reserved levels keep their order, and a ceiling caps the level on every platform. A policy
   with no tests passes `policy test` with `report: no_tests`, and `port49d` prints a `LAB MODE`
   line at start when its config has a `lab:` block (design §13).
 
