@@ -1999,9 +1999,14 @@ carry a value a pattern hides — `deny snmp-server community public **` — and
 policy test` and `port49d` at start report it as `rule_secret_literal`, naming the role and the
 rule in its redacted form, so the operator knows the value lives in the policy file and reads
 `«redacted»` everywhere else. Everywhere else means: every line `port49d` and its broker write
-that quotes policy text (a refused policy at start or reload included), and what `port49 policy
-test`, `policy diff` and `explain` print, since CI keeps it. Those redact every quoted value by
-every pattern that applies anywhere under the policy, erring toward hiding. The `blob` event
+about a policy that loaded, and what `port49 policy test`, `policy diff` and `explain` print for
+one, since CI keeps it. Those redact every quoted value by every pattern that applies anywhere
+under the policy, the file's own `platforms:` patterns included, erring toward hiding. A policy
+that does not load is refused **closed**: its patterns never loaded, so the refusal — at start,
+on a reload, or from those tools — quotes no rule text and no term. It names the role, the list,
+the rule's and the term's positions, and the problem, e.g. `role "admin": deny #2: term 3 is a
+regex that is one word; write the word instead`, and the operator finds the rule in the file. A
+YAML type error names the line and the types, not the value. The `blob` event
 (§5.7, "Replay") is logged with such rules and pipe permits redacted, and with the patterns of
 an entity class a rule names where a value is redacted (`snmp-server community @bad **`)
 replaced by `«redacted»`; it carries `"redacted": true`. The store keeps the blob verbatim, and
