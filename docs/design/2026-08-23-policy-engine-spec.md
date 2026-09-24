@@ -513,9 +513,9 @@ a 10,000-device fleet across four platforms yields a few dozen blobs.
 
 **One escape hatch.** If a platform is found to require genuine abbreviation expansion, its
 command vocabulary is too large to embed per blob; that table alone would ride in the
-inventory bundle while everything else stays compiled. Most platforms expand server-side and
-§3 already fails closed where expansion is unreliable, so this is recorded rather than
-designed for.
+inventory bundle while everything else stays compiled. Whether any platform sends abbreviations is
+unmeasured (§15, L21), and §3 already fails closed where expansion is unreliable, so this is
+recorded rather than designed for.
 
 ### 5.1.3 Refreshing live context
 
@@ -1480,7 +1480,7 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error. On authentication and accounting the reply is `ERROR`, so the device falls through to its next method (design document §12); on authorization it is `FAIL` — fail closed, a break-glass account's commands included — until L4 measures what each device does with an authorization `ERROR` (§15; plan 4, owner's ruling 2026-09-24). The operator's escape is to stop port49d or block TCP 49, so devices treat the server as down and fall to their local method (measured, §15 L4 and L17); port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; arrives with the remote store, plan 6/7). The log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error. On authentication and accounting the reply is `ERROR`, so the device falls through to its next method (design document §12; unmeasured, §15 L4); on authorization it is `FAIL` — fail closed, a break-glass account's commands included — until L4 measures what each device does with an authorization `ERROR` (§15; plan 4, owner's ruling 2026-09-24). The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured, and so is whether commands in a session already open fall to local authorization (L4). port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; arrives with the remote store, plan 6/7). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
