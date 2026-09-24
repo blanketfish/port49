@@ -1928,7 +1928,7 @@ Platform adapters therefore declare redaction patterns, applied before the recor
 spool — which is on disk — and before an authorization record is emitted (§5.7):
 
 ```yaml
-# platforms/redact.yaml — the built-in patterns
+# platforms/redact.yaml — the built-in patterns (abridged)
 default:
   - {match: ['**'], after: secret}
   - {match: ['**'], after: password}
@@ -1936,12 +1936,17 @@ default:
   - {match: ['**'], after: key-string}
   - {match: ['**'], after: authentication-key}
   - {match: ['**'], after: message-digest-key}
-  - {match: ['**'], after: community}
+  - {match: ['**'], after: pre-shared-key}
+  - {match: ['**', snmp-server, community, '**'], after: community}
+  - {match: ['**', snmp-server, host, '**'], after: host}
   - {match: ['**', snmp-server, user, '**'], after: auth}
+  - {match: ['**', authentication, text, '**'], after: text}
+  - {match: ['**'], after: area-password}
+  - {match: ['**', ipsec, spi, '**'], after: spi}
+  # ... HSRP, IS-IS, BGP, PIM and NHRP keywords; the file is the list
 juniper_junos:
   - {match: ['**'], after: encrypted-password}
   - {match: ['**'], after: plain-text-password-value}
-  - {match: ['**'], after: pre-shared-key}
   - {match: ['**'], after: authentication-password}
   - {match: ['**'], after: privacy-password}
 ```
@@ -1949,10 +1954,13 @@ juniper_junos:
 A pattern's `match` is words, `*` for one word and `**` for any number, anchored at both ends
 as a rule is. Words are compared ignoring case, in `match` and `after` alike, as §4's rules are,
 so a difference in case makes a pattern remove more and never less. A command it matches loses
-every word after the first word equal to `after`, or
+every word after the first word equal to `after`, the command word included, or
 every word from position `from` on (0 is the command word and is never removed; a negative
-`from` counts from the end). A platform that may send what was typed (`expands_abbreviations:
-false`) has a pattern's word match its abbreviations too, which removes more rather than less.
+`from` counts from the end). A pattern's word matches its abbreviations too — any shorter
+prefix of it, ignoring case — on every platform, whatever `expands_abbreviations` says, so
+`usern x sec 0 X` and `snmp comm X` are redacted. That removes more rather than less, and it
+does not trust the flag: L21 measured expansion for interactive SSH only, and a flag that is
+wrong where redaction relies on it leaks a secret into a log that cannot take it back.
 Junos sends a whole command line as one `cmd`, so each element is split into words first.
 The built-in patterns lead with `**`, because a secret sits anywhere in a line and NX-OS's
 accounting `cmd` is the configuration path joined with ` ; ` and a result — `configure
@@ -1976,8 +1984,10 @@ because a pattern changes what the audit keeps, an edit to it is gated (§12). `
 show` prints both.
 
 Redaction is best-effort by nature and MUST NOT be presented otherwise: a pattern that misses
-leaks. It is strictly better than emitting verbatim, and the honest mitigation is that
-port49's own credentials are never typed at a device prompt in the first place.
+leaks, and no keyword pattern catches a secret typed as a search term, so `show
+running-config | include <secret>` is logged as typed. It is strictly better than emitting
+verbatim, and the honest mitigation is that port49's own credentials are never typed at a
+device prompt in the first place.
 
 **Trim an accounting AV pair's key and value.** An accounting argument is not reliably
 `key=value` with no spaces. Measured, vSRX 21.4R3.15 and vJunos-router 23.4R2-S2.1 send
