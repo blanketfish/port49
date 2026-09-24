@@ -2434,7 +2434,8 @@ port49 cannot check what an attribute means. It MUST check everything else:
   blob's list does not take (`blob_unavailable`, nothing sent), under whatever adapter the
   policy merged.
 - **`priv-lvl`'s value is a level.** On every platform, a `priv-lvl` a level renders or a role
-  or grant layers MUST be a decimal integer from 0 to 15. IOS-XE refused the session for
+  or grant layers MUST be a decimal integer from 0 to 15, written plainly: no sign, no leading
+  zero, since what a device makes of `07` is unmeasured. IOS-XE refused the session for
   `priv-lvl=99` rather than clamp or ignore it (`tests/lab/results/L18-cisco_iosxe.md`,
   variant 7). An adapter whose rendering sends another value is refused at load, and a
   composition whose reply carries one fails the joint check and quarantines the device (§10).
@@ -3024,7 +3025,7 @@ platforms:
 ```
 
 `replace: true` on a platform block discards the built-in and starts from the generic adapter
-(below). `based_on:` declares a variant of a platform the pinned set ships, under a new name,
+(below), save what the set measured about the device, which the block must restate (below). `based_on:` declares a variant of a platform the pinned set ships, under a new name,
 using the same vocabulary as `parent:` on privilege levels; a name the set does not ship starts
 from the generic adapter:
 
@@ -3056,6 +3057,26 @@ may not. A block may add values to a `role_order` the set ships, anywhere in it,
 rank two values the set ranks the other way round — under `replace: true` and `based_on:`
 included, since the device behind the name is the same device and the set's ranking is its lab
 note's.
+
+The rest of what the set measured about a device is likewise a floor or a ceiling a block only
+tightens, for a platform the set ships and for a `based_on:` variant of one, `replace: true`
+included; a block that would loosen one is refused at load, naming the key:
+
+- `privilege_attributes` is a floor: a block may add a name and never remove one the set lists.
+- `accepted_attributes` is a ceiling: a block may narrow it and never widen or drop it, so
+  `replace: true` on `cisco_iosxe` restates `[priv-lvl]` or the load fails — the device refuses
+  the session for any other name and then stops answering SSH (L18).
+- `supports` is a ceiling: a capability the set did not measure would make a rule read as
+  enforced where the device never asks (§9).
+- `pipe_authorized` and `expands_abbreviations` may not be set `true` where the set measured
+  `false`, and `splits_interface_names` and `strip_cr` may not be set `false` where it measured
+  `true`: each would let a command past a deny, or claim a rule the device does not enforce.
+
+And on every block, a new platform's included, `inert_attributes` may not name an attribute any
+shipped adapter lists in `privilege_attributes`: listed inert, a later change to it would pass
+the diff ungated and take a placeholder, so one reviewed edit would blind the gate to it for
+good. A `privilege` or `ceiling_levels` entry for a level `privilege_levels` does not declare is
+refused by name: it renders nothing, and reads as a change.
 A class pattern a deny names may not turn case-insensitivity off (`(?-i)`), on any platform: a
 differently-cased interface name would walk past the deny (§4).
 
