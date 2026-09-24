@@ -128,6 +128,11 @@ type Test struct {
 	// empty, where AssertsReply.
 	Reply        []string
 	AssertsReply bool
+	// API is the subject's broker API rights, sorted, where AssertsAPI. A
+	// test asserting them alone passes on any device: they do not depend on
+	// one (spec §12).
+	API        []string
+	AssertsAPI bool
 }
 
 // Acknowledgment is one `acknowledge:` entry (spec §12): a removed or
@@ -747,9 +752,9 @@ func (p *Policy) buildTests(f file) error {
 		case t.Device == "":
 			return fmt.Errorf("%s: device is required", row)
 		case strings.TrimSpace(t.Command) == "" && t.Level == "" && t.MaxPrivilege == "" && t.PrivLvl == "" &&
-			t.Enable == "" && t.Reply == nil:
-			return fmt.Errorf("%s: command is required, or a session test's level, max_privilege, priv_lvl, enable "+
-				"or reply", row)
+			t.Enable == "" && t.Reply == nil && t.API == nil:
+			return fmt.Errorf("%s: command is required, or a session test's level, max_privilege, priv_lvl, enable, "+
+				"reply or api", row)
 		case strings.TrimSpace(t.Command) == "" && (t.Expect != "" || t.Reason != ""):
 			return fmt.Errorf("%s: a session test takes no expect or reason: it passes where the subject is "+
 				"minted a token with the level and ceiling it names", row)
@@ -787,6 +792,15 @@ func (p *Policy) buildTests(f file) error {
 			Enable: t.Enable, AssertsReply: t.Reply != nil}
 		if t.Reply != nil {
 			test.Reply = append([]string{}, (*t.Reply)...)
+		}
+		if t.API != nil {
+			for _, r := range *t.API {
+				if !slices.Contains(apiRights, r) {
+					return fmt.Errorf("%s: api: %q is not a right; the rights are %s", row, r, strings.Join(apiRights, ", "))
+				}
+			}
+			test.API, test.AssertsAPI = slices.Clone(*t.API), true
+			slices.Sort(test.API)
 		}
 		p.tests = append(p.tests, test)
 	}

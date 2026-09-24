@@ -695,3 +695,45 @@ func TestRemovingAJunosPrivilegeAttributeFailsTheGate(t *testing.T) {
 		}
 	}
 }
+
+// A broker API right gained fails the gate until a test asserts the
+// subject's rights with api:, naming the subject or one of its principals;
+// one lost is reported (review M6).
+func TestTheGateComparesAPIRights(t *testing.T) {
+	gated := func(d Diff) int { return d.UnacknowledgedPrincipals() }
+	rights := strings.Replace(diffBase, "token_ttl: 60s}", "token_ttl: 60s, api: [explain_others, revoke_others, replay]}", 1)
+	d := Compare(mustParse(t, diffBase), mustParse(t, rights), noon)
+	if gated(d) != 1 || len(d.Subjects) != 1 || strings.Join(d.Subjects[0].APIGained, " ") != "explain_others replay revoke_others" {
+		t.Fatalf("subjects %+v", d.Subjects)
+	}
+	for _, test := range []string{
+		"  - {subject: noc, device: leaf-01, api: [revoke_others, replay, explain_others]}\n",
+		"  - {principal: \"user:noc@example.com\", device: nx-01, api: [explain_others, replay, revoke_others]}\n",
+	} {
+		if n := gated(Compare(mustParse(t, diffBase), mustParse(t, rights+"tests:\n"+test), noon)); n != 0 {
+			t.Fatalf("%s: %d", test, n)
+		}
+	}
+	if n := gated(Compare(mustParse(t, diffBase), mustParse(t, rights+"tests:\n  - {subject: noc, device: leaf-01, api: [replay]}\n"), noon)); n != 1 {
+		t.Fatalf("a test asserting another list fails and acknowledges nothing: %d", n)
+	}
+	if d := Compare(mustParse(t, rights), mustParse(t, diffBase), noon); gated(d) != 0 || len(d.Subjects) != 1 {
+		t.Fatalf("a right lost is reported and passes: %+v", d.Subjects)
+	}
+	// A principal moved to a subject with rights its old one lacked needs the
+	// rights asserted by a test naming it.
+	two := rights + "  - {subject: ops, scope: all_devices, roles: [read_only]}\n"
+	two = strings.Replace(two, "subjects:\n", "subjects:\n  - {name: ops, identity: \"user:ops@example.com\", username: ops, token_ttl: 60s}\n", 1)
+	moved := strings.Replace(two, "identity: \"user:ops@example.com\"", "identity: [\"user:ops@example.com\", \"user:eve@example.com\"]", 1)
+	moved = strings.Replace(moved, "identity: \"user:noc@example.com\"", "identity: [\"user:noc@example.com\"]", 1)
+	eveToNoc := strings.Replace(strings.Replace(moved, ", \"user:eve@example.com\"", "", 1),
+		"identity: [\"user:noc@example.com\"]", "identity: [\"user:noc@example.com\", \"user:eve@example.com\"]", 1)
+	levelOnly := eveToNoc + "tests:\n  - {principal: \"user:eve@example.com\", device: leaf-01, level: readonly}\n"
+	if n := gated(Compare(mustParse(t, moved), mustParse(t, levelOnly), noon)); n != 1 {
+		t.Fatalf("a principal test without api: does not acknowledge the rights it gained: %d", n)
+	}
+	withAPI := eveToNoc + "tests:\n  - {principal: \"user:eve@example.com\", device: leaf-01, level: readonly, api: [explain_others, replay, revoke_others]}\n"
+	if n := gated(Compare(mustParse(t, moved), mustParse(t, withAPI), noon)); n != 0 {
+		t.Fatalf("one asserting them does: %d", n)
+	}
+}

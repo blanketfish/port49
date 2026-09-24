@@ -127,10 +127,26 @@ type TestResult struct {
 	// session.
 	PrivLvl, Enable string
 	// Reply is the session reply, placeholders empty (sessionReply).
-	Reply   []string
+	Reply []string
+	// API is the subject's broker API rights, sorted.
+	API     []string
 	Pass    bool
 	Err     error
 	Caveats []string
+}
+
+// onlyAPI reports whether a session test asserts API rights and nothing else.
+func (t Test) onlyAPI() bool {
+	return t.AssertsAPI && t.Level == "" && t.MaxPrivilege == "" && t.PrivLvl == "" && t.Enable == "" && !t.AssertsReply
+}
+
+// subjectFor names the subject a test's subject or principal resolves to,
+// or none.
+func (p *Policy) subjectFor(subject, principal string) string {
+	if subject != "" {
+		return subject
+	}
+	return p.byID[principal]
 }
 
 // Session reports whether the test asserts the session alone.
@@ -183,6 +199,12 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 			r.Permit, r.Reason, r.Outcome = o.Permit, o.Reason, o
 			r.Caveats = append(Caveats(d.Platform, p.dialect(d.Platform), o), p.splitNotes(t.Command, d.Platform)...)
 		}
+		// API rights belong to the subject, not to a session on a device, so
+		// they are read whether or not the mint would be made (spec §12).
+		if name := p.subjectFor(t.Subject, t.Principal); name != "" {
+			r.API = slices.Clone(p.subs[name].API)
+			slices.Sort(r.API)
+		}
 		// A level or ceiling is asserted of a session the mint would make,
 		// so it fails wherever no level was resolved.
 		minted := r.Err == nil && r.Ceiling != ""
@@ -191,8 +213,10 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 			(t.PrivLvl == "" || minted && samePrivLvl(t.PrivLvl, r.PrivLvl)) &&
 			(t.Enable == "" || minted && t.Enable == r.Enable) &&
 			(!t.AssertsReply || minted && slices.Equal(t.Reply, r.Reply))
+		r.Pass = r.Pass && (!t.AssertsAPI || slices.Equal(t.API, r.API))
 		if t.Session() {
-			r.Pass = r.Pass && minted
+			// A test asserting API rights alone needs no mint.
+			r.Pass = r.Pass && (minted || t.onlyAPI())
 		} else {
 			verdict := "deny"
 			if r.Permit {

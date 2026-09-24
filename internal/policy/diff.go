@@ -55,15 +55,22 @@ type Diff struct {
 // Acknowledged is a passing session test in the new version naming it.
 type PrincipalChange struct {
 	Principal, OldSubject, NewSubject string
-	Gated, Acknowledged               bool
+	// APIGained are broker API rights the new subject has and the old did
+	// not: the acknowledging test must assert them with api: (spec §12).
+	APIGained           []string
+	Gated, Acknowledged bool
 }
 
-// SubjectChange is a subject in both versions whose username or group
-// changed. A username change is gated, and acknowledged by a passing session
-// test naming one of the subject's principals; a group change is reported,
-// since a group subject mints for no one until plan 7.
+// SubjectChange is a subject whose username, group or broker API rights
+// changed (spec §12). A username change is gated, and acknowledged by a
+// passing session test naming one of the subject's principals; API rights
+// gained are gated, and acknowledged by a passing test asserting the whole
+// list with api:, naming the subject or one of its principals; a group change
+// and rights lost are reported, since a group subject mints for no one until
+// plan 7 and a right lost widens nothing.
 type SubjectChange struct {
 	Subject, OldUsername, NewUsername, OldGroup, NewGroup string
+	OldAPI, NewAPI, APIGained                             []string
 	Gated, Acknowledged                                   bool
 }
 
@@ -342,11 +349,25 @@ func Compare(before, after *Policy, now time.Time) Diff {
 // subject in both by its username and group. A principal session test is the
 // acknowledgment, at now: it names the person and asserts what they get.
 func (c *comparison) principals(now time.Time) {
-	tested := map[string]bool{}
+	tested, apiTested := map[string]bool{}, map[string]bool{}
 	for _, r := range c.after.RunTests(now) {
-		if r.Pass && r.Test.Session() && r.Test.Principal != "" {
+		if !r.Pass || !r.Test.Session() {
+			continue
+		}
+		who := "subject:" + r.Test.Subject
+		if r.Test.Principal != "" {
+			who = "principal:" + r.Test.Principal
 			tested[r.Test.Principal] = true
 		}
+		if r.Test.AssertsAPI {
+			apiTested[who] = true
+		}
+	}
+	rights := func(p *Policy, subject string) []string {
+		if s, ok := p.subs[subject]; ok {
+			return s.API
+		}
+		return nil
 	}
 	ids := map[string]bool{}
 	for id := range c.before.byID {
@@ -360,21 +381,51 @@ func (c *comparison) principals(now time.Time) {
 		if was == is {
 			continue
 		}
-		gated := is != ""
-		c.d.Principals = append(c.d.Principals, PrincipalChange{Principal: id, OldSubject: was, NewSubject: is,
-			Gated: gated, Acknowledged: gated && tested[id]})
+		ch := PrincipalChange{Principal: id, OldSubject: was, NewSubject: is, Gated: is != "",
+			APIGained: gained(rights(c.before, was), rights(c.after, is))}
+		ch.Acknowledged = ch.Gated && tested[id] && (len(ch.APIGained) == 0 || apiTested["principal:"+id])
+		c.d.Principals = append(c.d.Principals, ch)
 	}
 	for _, name := range sortedKeys(c.after.subs) {
-		was, ok := c.before.subs[name]
 		is := c.after.subs[name]
-		if !ok || (was.Username == is.Username && was.Group == is.Group) {
+		was, ok := c.before.subs[name]
+		if !ok {
+			// A new subject's principals are gated above; a new group
+			// subject's rights have no principal to carry them.
+			was = &Subject{Username: is.Username, Group: is.Group}
+		}
+		apiGained := gained(was.API, is.API)
+		if was.Username == is.Username && was.Group == is.Group && slices.Equal(sortedRights(was.API), sortedRights(is.API)) {
 			continue
 		}
 		ch := SubjectChange{Subject: name, OldUsername: was.Username, NewUsername: is.Username, OldGroup: was.Group,
-			NewGroup: is.Group, Gated: was.Username != is.Username}
-		ch.Acknowledged = ch.Gated && slices.ContainsFunc(is.Identity, func(id string) bool { return tested[id] })
+			NewGroup: is.Group, OldAPI: sortedRights(was.API), NewAPI: sortedRights(is.API), APIGained: apiGained,
+			Gated: was.Username != is.Username || len(apiGained) > 0}
+		names := slices.Clone(is.Identity)
+		usernameOK := was.Username == is.Username || slices.ContainsFunc(names, func(id string) bool { return tested[id] })
+		apiOK := len(apiGained) == 0 || apiTested["subject:"+name] ||
+			slices.ContainsFunc(names, func(id string) bool { return apiTested["principal:"+id] })
+		ch.Acknowledged = ch.Gated && usernameOK && apiOK
 		c.d.Subjects = append(c.d.Subjects, ch)
 	}
+}
+
+// gained is what to has that from does not, sorted.
+func gained(from, to []string) []string {
+	var out []string
+	for _, r := range to {
+		if !slices.Contains(from, r) {
+			out = append(out, r)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+func sortedRights(list []string) []string {
+	out := slices.Clone(list)
+	slices.Sort(out)
+	return out
 }
 
 // comparison is one Compare in progress.

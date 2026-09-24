@@ -224,6 +224,10 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 				line += ", reply " + yamlList(r.Reply)
 				want = append(want, "reply "+yamlList(r.Test.Reply))
 			}
+			if r.Test.AssertsAPI {
+				line += ", api " + yamlList(r.API)
+				want = append(want, "api "+yamlList(r.Test.API))
+			}
 			line += ", want " + strings.Join(want, " ")
 		}
 		fmt.Fprintln(stdout, line)
@@ -317,9 +321,13 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "principal (a session test asserts it): %s now resolves to subject %s (was %s)\n",
 				p.Principal, p.NewSubject, orNone(p.OldSubject))
 		default:
+			assert := "level: ..."
+			if len(p.APIGained) > 0 {
+				assert += ", api: " + yamlList(p.APIGained) + " (the subject's whole list)"
+			}
 			fmt.Fprintf(stdout, "PRINCIPAL: %s now resolves to subject %s (was %s): that person now holds %s's access; "+
-				"no session test names the principal: add {principal: %q, device: <a device %s reaches>, level: ...}\n",
-				p.Principal, p.NewSubject, orNone(p.OldSubject), p.NewSubject, p.Principal, p.NewSubject)
+				"no session test names the principal: add {principal: %q, device: <a device %s reaches>, %s}\n",
+				p.Principal, p.NewSubject, orNone(p.OldSubject), p.NewSubject, p.Principal, p.NewSubject, assert)
 		}
 	}
 	for _, s := range d.Subjects {
@@ -327,7 +335,19 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "subject: %s's group %q -> %q; a group subject mints for no one until plan 7\n", s.Subject,
 				s.OldGroup, s.NewGroup)
 		}
-		if !s.Gated {
+		if !slices.Equal(s.OldAPI, s.NewAPI) {
+			label, tail := "api", ""
+			switch {
+			case len(s.APIGained) > 0 && s.Acknowledged:
+				label = "api (a test asserts it)"
+			case len(s.APIGained) > 0:
+				label, tail = "API", fmt.Sprintf("; the new rights act on other people's sessions, and no test asserts "+
+					"them: add {subject: %s, device: <any device>, api: %s}", s.Subject, yamlList(s.NewAPI))
+			}
+			fmt.Fprintf(stdout, "%s: subject %s's broker rights %s -> %s%s\n", label, s.Subject, yamlList(s.OldAPI),
+				yamlList(s.NewAPI), tail)
+		}
+		if s.OldUsername == s.NewUsername {
 			continue
 		}
 		label, tail := "USERNAME", "; no session test names one of its principals: add one"

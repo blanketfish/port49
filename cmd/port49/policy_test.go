@@ -727,3 +727,32 @@ func TestPolicyDiffGatesAPrincipalWhoGainsASubject(t *testing.T) {
 		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// A broker right gained fails the diff until a test asserts the subject's
+// rights with api: (review M6).
+func TestPolicyDiffGatesABrokerRightGained(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	rights := strings.Replace(raw, "username: noc, token_ttl: 60s}", "username: noc, token_ttl: 60s, api: [revoke_others]}", 1)
+	if err := os.WriteFile(newPol, []byte(rights), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `API: subject noc's broker rights [] -> ["revoke_others"]`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if err := os.WriteFile(newPol, []byte(rights+"  - {subject: noc, device: leaf-01, api: [revoke_others]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", newPol, "--new", oldPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `api: subject noc's broker rights ["revoke_others"] -> []`) {
+		t.Fatalf("a right lost: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

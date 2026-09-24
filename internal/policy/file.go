@@ -96,6 +96,8 @@ type fileTest struct {
 	// Reply is the exact session reply, in order, placeholders empty; nil
 	// asserts nothing and an empty list asserts an empty reply.
 	Reply *[]string `yaml:"reply"`
+	// API is the subject's broker API rights, in any order.
+	API *[]string `yaml:"api"`
 }
 
 // stringList is a YAML scalar or a sequence of scalars: spec §11 writes one
