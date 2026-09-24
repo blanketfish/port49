@@ -2046,7 +2046,11 @@ inventory, is a **policy load error**.
 
 **Reordering the list is a breaking change.** Inserting a level mid-list changes every
 max-join that crosses it, and the effective-permission diff MUST report that as a privilege
-change rather than a cosmetic one.
+change rather than a cosmetic one: a subject whose level rises under the old order or the new
+one is a raise (§12). **The reserved levels keep their relative order** — `readonly` before
+`operator` before `admin` — and a `privilege_levels` that reorders them is refused at load
+(owner's ruling 2026-09-24): nothing needs it, and it would make "higher" mean two things.
+Custom levels go anywhere their `parent:` allows.
 
 The operator writes `privilege: readonly` on a role. Where multiple roles are granted, the
 effective level is the **max** over the enum. A role with no `privilege` contributes
@@ -3537,10 +3541,14 @@ listing commands. This is contained, and is a reason to prefer literals and `*`.
 `subject` (or a `principal`) and a `device`, and asserts one or both of:
 
 - **a command:** `command:` with `expect: permit` or `deny`, and optionally the `reason:`;
-- **the session:** `level:`, the level the subject's roles compose to on that device, and
-  `max_privilege:`, the ceiling its grants compose to there (`none` for no ceiling). A test
-  with no `command:` is a session test and takes no `expect:`; it passes only where the
-  subject would be minted a token for the device, with the level and ceiling it names.
+- **the session:** `level:`, the level the subject's roles compose to on that device;
+  `max_privilege:`, the ceiling its grants compose to there (`none` for no ceiling);
+  `priv_lvl:`, the device privilege the session lands at — the `priv-lvl` the session reply
+  sends after §6 layering, or, where it sends none, the number the platform gives the level
+  (`none` where neither says); and `enable:`, the subject's escalation mechanism (`none`,
+  `auto` or `token`). A test with no `command:` is a session test and takes no `expect:`; it
+  passes only where the subject would be minted a token for the device, with every value it
+  names.
 
 A session test is what acknowledges a privilege raise to the gate below.
 
@@ -3591,14 +3599,26 @@ deny, on a newly quarantined device, and on a subject whose mint the new policy'
 refuses (`attribute_too_long`, `attribute_unsafe`), since the diff, `policy test` and `explain`
 run the broker's mint checks and answer as it does.
 
-**A level or ceiling raise fails the gate too** (owner's ruling 2026-09-24): a subject whose
-roles now compose to a higher level on a device (`readonly` to `admin`), or whose grants' ceiling
-is raised or removed there, unless a session test in the new policy asserts the new value for
-that subject on that device — `level:` for a level raise, `max_privilege:` for a ceiling raise.
-Higher is later in `privilege_levels` as the new policy orders it; a level the new policy no
-longer declares counts as raised from. The devices a raise is reported on hold the same blobs
-and ceiling, so a test on any one of them is the assertion for all. A lowering is reported and
-does not fail.
+**A privilege raise fails the gate too** (owner's rulings 2026-09-24). The gate compares what
+the device gets and what port49 enforces, not level names, for each subject on each device at
+each instant. Any of these is a raise:
+
+- **the device privilege rose** — the `priv-lvl` the session reply sends after role and grant
+  `attributes:` layering, or where it sends none the number the platform gives the level, so a
+  role or grant attribute `priv-lvl=15`, or a custom level's `parent:` moved up, is a raise;
+- **the ceiling rose or went away** — by its number on the platform or by its place in
+  `privilege_levels`;
+- **the level rose** — later in `privilege_levels` under the old order *or* the new one, so a
+  reordering that lifts a level is a raise even when the name did not change; a level one
+  version does not declare counts as below every level it does;
+- **`enable` was switched on** — from unset or `none` to `auto` or `token`, which lets the
+  session escalate to its ceiling, or with none to anything.
+
+Each fails unless a passing session test in the new policy, at that instant, on a device of the
+group reported, asserts the new value of every dimension that rose: `priv_lvl:` for the device
+privilege, `max_privilege:` for the ceiling, `level:` for the level, `enable:` for the mechanism.
+The devices a raise is reported on hold the same blobs, levels, numbers and `enable`, so a test
+on any one of them is the assertion for all. A lowering is reported and does not fail.
 
 **A regex-constrained change fails the gate too** (owner's ruling 2026-09-24). Regex and class
 terms are matched only against the words the rules name, so a rule that carries one and changed,
