@@ -504,12 +504,13 @@ than 25 tasks. The seam is the kind of platform:
   session there locks out SSH, so `idletime` and `timeout`, measured inert and now accepted
   (`accepted_attributes: [priv-lvl, idletime, timeout]`, not Decided 6's `priv-lvl` alone), are
   held bearing. Both are numbers everywhere: a placeholder in either is refused at load, and a
-  value that is not a plain decimal 0 to 65535, or on IOS-XE the mandatory `=` form,
-  quarantines the device. `fallback`
+  value that is not a plain decimal 0 to 65535 quarantines the device, and so on IOS-XE does
+  either attribute sent in the mandatory `=` form (`idletime=30`): only the optional `*` form,
+  `idletime*30` and `timeout*480`, was measured there. `fallback`
   entries say what L22 measured: EOS operator names the commands that still ran, NX-OS operator
   and IOS-XE have none (IOS-XE refused a token session every command at 7 and 15). Beyond the
   plan: an operator's fallback text is kept apart as `fallback_note`, a block's `unreachable`
-  joins the set's, a change to the generic adapter is gated (`platform: generic`), an
+  rules are kept apart from the set's as the operator's (`unreachable_note`), a change to the generic adapter is gated (`platform: generic`), an
   `acknowledge:` entry names the sha256 of the value it covers and a stale one is reported, a
   load error quotes no rule text, and `grants remove --pr` targets the repository the push URL
   names. Carried: Junos's inert list and every Junos spelling to 5b (L10, L12, both open); L22's

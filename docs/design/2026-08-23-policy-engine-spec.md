@@ -2539,7 +2539,8 @@ identity, never a number a device takes. Only `home-directory` keeps placeholder
 measured exactly `idletime*30` and `timeout*480`, so a literal value that is not a plain
 decimal — no sign, no leading zero, 0 to 65535 — fails the joint check and quarantines the
 device on every platform (§10), and on a platform that sets `accepted_attributes`
-(`cisco_iosxe`) so does either attribute in the mandatory `=` form, which is unmeasured there.
+(`cisco_iosxe`) so does either attribute in the mandatory `=` form (`idletime=30`), which is
+unmeasured there: it takes them only in the optional `*` form, as measured.
 What a device makes of `0` is unmeasured: `timeout*0` passes the check, and it is no escalation, since per-command authorization still reaches the session
 and on `cisco_iosxe` a change to either is gated (task 18 review N2).
 
