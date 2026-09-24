@@ -3190,10 +3190,19 @@ say so. The second is the redaction patterns (§5.8), which are unpinned by desi
 ```
 platform_set 1.0.0 -> 1.1.0
   platforms.arista_eos.privilege
-    {"admin":["priv-lvl=15","roles=network-admin"],...} -> {...} (gated: the change that moves the pin acknowledges it, ...)
+    {"admin":["priv-lvl=15","roles=network-admin"],...} -> {...}
     affects 4412 devices, 6 subjects
+    gated: add {platform: arista_eos, field: privilege, sha256: <64 hex digits>, reason: "..."} under acknowledge:
+  generic.strip_cr
+    true -> false
+    affects 3 devices, 1 subjects
+    gated: add {platform: generic, field: strip_cr, sha256: <64 hex digits>, reason: "..."} under acknowledge:
   shadowed: platforms.arista_eos.entity_classes: set 1.1.0 changes the built-in value and the policy's block keeps its own; compare the two
+  port49 policy diff fails on the move until every gated entry above is under acknowledge: (spec §12); it also shows the replies the move changes
 ```
+
+Every gated key the move changes, the generic adapter's included (§12), is printed with the
+`acknowledge:` entry that clears it, ready to paste: the change that moves the pin carries them.
 
 `port49 policy diff` on the file before and after is the gate: a pin move is an adapter edit
 like any other (§12). CI also reports override drift — `platform_override_redundant`, a block
@@ -4167,7 +4176,12 @@ the key is inherited from. A version with no adapter for a platform has the gene
 `supports` is compared as no claim at all: the generic `session` is assumed, not measured, and an
 unmeasured platform is not session-only. So a block that says only what the generic adapter
 says still shows as an edit to `supports`, which makes the platform session-only and turns off
-abbreviation matching on its denies (task 9 review I2).
+abbreviation matching on its denies (task 9 review I2). **The generic adapter is compared too,
+as platform `generic`,** whether or not any device stands on it: it is what every device of a
+platform with no adapter receives, and what a `replace:` block or a new platform starts from, so a
+moved pin that changes it is gated key by key like any platform's, and acknowledged by
+`{platform: generic, field: ..., sha256: ..., reason: ...}`. `generic` is therefore reserved as a
+block name (owner's ruling 2026-09-24).
 
 **Every adapter key is gated, fail closed, unless it is on a closed list of report-only keys.**
 A gated key fails unless an `acknowledge:` entry names the platform, the key and the sha256 of
