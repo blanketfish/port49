@@ -785,9 +785,11 @@ func checkRule(rule string, deny bool) error {
 
 // checkAttributes validates an attribute block: keyed by `all` or by a
 // platform port49 ships or the inventory names, each attribute structurally
-// valid (engine.CheckAttribute).
+// valid (engine.CheckAttribute). Keys are read in name order, so a block with
+// two bad keys names the same one every run (final review M10).
 func (p *Policy) checkAttributes(attrs map[string][]string) error {
-	for key, list := range attrs {
+	for _, key := range sortedKeys(attrs) {
+		list := attrs[key]
 		if _, adapted := p.adapters[key]; key != "all" && !adapted && !p.inInventory(key) {
 			return fmt.Errorf("attributes: %q is neither `all` nor a platform port49 ships or the inventory names", key)
 		}

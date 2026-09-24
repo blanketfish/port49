@@ -514,3 +514,19 @@ func TestALoadErrorQuotesNoRuleText(t *testing.T) {
 		}
 	}
 }
+
+// A block with two bad keys names the same one every run, the first in name
+// order: a map's order is random, and a refusal that changes from run to run
+// reads as a flaky check (final review M10).
+func TestAnAttributeRefusalNamesTheSameKeyEveryRun(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {zz_os: ["a=1"], mm_os: ["b=2"], aa_os: ["c=3"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]`
+	for range 30 {
+		if _, err := Parse([]byte(body), env()); err == nil || !strings.Contains(err.Error(), `"aa_os"`) {
+			t.Fatalf("%v", err)
+		}
+	}
+}
