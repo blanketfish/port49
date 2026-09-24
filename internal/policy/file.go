@@ -77,6 +77,10 @@ type fileTest struct {
 	Command   string `yaml:"command"`
 	Expect    string `yaml:"expect"`
 	Reason    string `yaml:"reason"`
+	// Level and MaxPrivilege are a session test's assertions (spec §12,
+	// "Policy tests"); MaxPrivilege `none` asserts no ceiling.
+	Level        string `yaml:"level"`
+	MaxPrivilege string `yaml:"max_privilege"`
 }
 
 // stringList is a YAML scalar or a sequence of scalars: spec §11 writes one

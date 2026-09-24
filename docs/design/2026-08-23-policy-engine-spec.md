@@ -3487,8 +3487,7 @@ tests:
      expect: deny}        # only the CVE deny matches
   - {subject: security_ir,  device: srx-fw-04, command: "show chassis cluster status",
      expect: permit}      # the assess permit dominates the CVE deny at every position
-  - {subject: svc_oxidized, device: leaf-01, level: admin}
-                          # a session test: elevated_session lifts the login to admin
+  - {subject: svc_oxidized, device: leaf-01, level: admin}  # a session test
 ```
 
 Three things this example is chosen to show.

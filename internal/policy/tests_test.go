@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/decision"
 )
 
 // mintRefused is a policy whose session reply, filled in with the subject's
@@ -129,5 +130,55 @@ tests:
 	if len(found) != 1 || !strings.Contains(found[0], `role "joined": permit "interface GigabitEthernet1 **" on cisco_iosxe`) ||
 		!strings.Contains(found[0], "never matches on cisco_iosxe") || !strings.Contains(found[0], "write `GigabitEthernet 1`") {
 		t.Fatalf("lint: %q", found)
+	}
+}
+
+// A session test asserts the level a subject's roles compose to on a device
+// and the ceiling its grants compose to there (spec §12, "Policy tests"), and
+// passes only where the subject would be minted a token for it. A command
+// test may assert them too.
+func TestASessionTestAssertsTheLevelAndCeiling(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}, {name: nx, match: {platform: cisco_nxos}}]
+roles:
+  - {name: ro, privilege: readonly, permit: [show **]}
+  - {name: adm, privilege: admin, permit: ["**"]}
+subjects:
+  - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}
+grants:
+  - {subject: s, scope: all_devices, roles: [ro]}
+  - {subject: s, scope: nx, roles: [adm], max_privilege: admin}
+tests:
+  - {subject: s, device: leaf-01, level: readonly, max_privilege: none}
+  - {subject: s, device: nx-01, level: admin, max_privilege: admin}
+  - {subject: s, device: nx-01, command: "show version", expect: permit, level: admin}
+  - {subject: s, device: leaf-01, level: admin}
+  - {subject: s, device: nx-01, max_privilege: none}
+  - {subject: s, device: leaf-01, command: "show version", expect: permit, level: admin}
+  - {principal: "user:nobody@example.com", device: leaf-01, level: readonly}
+`)
+	want := []bool{true, true, true, false, false, false, false}
+	results := p.RunTests(noon)
+	if len(results) != len(want) {
+		t.Fatalf("%d results", len(results))
+	}
+	for i, r := range results {
+		if r.Pass != want[i] {
+			t.Errorf("tests[%d] %+v: pass %v, want %v (level %q, max_privilege %q, err %v)", i, r.Test, r.Pass, want[i],
+				r.Level, r.Ceiling, r.Err)
+		}
+	}
+	if r := results[1]; r.Level != "admin" || r.Ceiling != "admin" || r.Permit {
+		t.Fatalf("a session test reports what it resolved: %+v", r)
+	}
+	quarantined := mustParse(t, unmappedLevel+`
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: odd, privilege: unmapped, permit: [show **]}]
+subjects: [{name: q, identity: "user:q@example.com", username: q, token_ttl: 60s}]
+grants: [{subject: q, scope: all_devices, roles: [odd]}]
+tests: [{subject: q, device: leaf-01, level: unmapped}]
+`).RunTests(noon)
+	if r := quarantined[0]; r.Pass || r.Reason != decision.DeviceQuarantined {
+		t.Fatalf("a session test on a quarantined device: %+v", r)
 	}
 }

@@ -177,6 +177,15 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 			failed++
 		}
 		line := fmt.Sprintf("%s %s on %s: %q -> %s %s", status, who, r.Test.Device, r.Test.Command, got, r.Reason)
+		if r.Test.Session() {
+			line = fmt.Sprintf("%s %s on %s: session -> deny %s", status, who, r.Test.Device, r.Reason)
+			if r.Ceiling != "" {
+				line = fmt.Sprintf("%s %s on %s: session -> level %s, max_privilege %s", status, who, r.Test.Device,
+					orNone(r.Level), r.Ceiling)
+			}
+		} else if (r.Test.Level != "" || r.Test.MaxPrivilege != "") && r.Ceiling != "" {
+			line += fmt.Sprintf(" at level %s, max_privilege %s", orNone(r.Level), r.Ceiling)
+		}
 		if r.MintError != "" {
 			line = fmt.Sprintf("%s %s on %s: %q -> deny: the broker refuses the mint, %s", status, who,
 				r.Test.Device, r.Test.Command, r.MintError)
@@ -184,11 +193,20 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		if r.Err != nil {
 			line = fmt.Sprintf("%s %s on %s: %q -> error: %v", status, who, r.Test.Device, r.Test.Command, r.Err)
 		} else if !r.Pass {
-			want := r.Test.Expect
-			if r.Test.Reason != "" {
-				want += " " + r.Test.Reason
+			var want []string
+			if r.Test.Expect != "" {
+				want = append(want, r.Test.Expect)
 			}
-			line += ", want " + want
+			if r.Test.Reason != "" {
+				want = append(want, r.Test.Reason)
+			}
+			if r.Test.Level != "" {
+				want = append(want, "level "+r.Test.Level)
+			}
+			if r.Test.MaxPrivilege != "" {
+				want = append(want, "max_privilege "+r.Test.MaxPrivilege)
+			}
+			line += ", want " + strings.Join(want, " ")
 		}
 		fmt.Fprintln(stdout, line)
 		for _, c := range r.Caveats {

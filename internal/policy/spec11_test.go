@@ -58,7 +58,7 @@ func TestTheCompletePolicyExamplePassesItsOwnTests(t *testing.T) {
 		t.Fatalf("§11 quarantines nothing on its own inventory: %+v", q)
 	}
 	results := p.RunTests(noon)
-	if len(results) != 7 {
+	if len(results) != 8 {
 		t.Fatalf("%d results", len(results))
 	}
 	for _, r := range results {

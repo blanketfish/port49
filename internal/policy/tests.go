@@ -68,13 +68,7 @@ func (p *Policy) splitNotes(line, platformName string) []string {
 // sends for the line (commandRaw). It is what `port49 explain` and `port49
 // policy test` both run.
 func (p *Policy) Decide(subject, principal string, d admission.Device, line string, now time.Time) (Resolution, engine.Outcome, error) {
-	var res Resolution
-	var err error
-	if principal != "" {
-		res, err = p.Resolve(principal, d, now)
-	} else {
-		res, err = p.ResolveSubject(subject, d, now)
-	}
+	res, err := p.resolveFor(subject, principal, d, now)
 	if err != nil {
 		return res, engine.Outcome{}, err
 	}
@@ -123,23 +117,38 @@ type TestResult struct {
 	// minting (MintCheck), or device_unconfigured: the test is a deny and
 	// carries no reason, since no decision is made.
 	MintError string
-	Pass      bool
-	Err       error
-	Caveats   []string
+	// Level and Ceiling are what the subject resolved to on the device, for
+	// a test that asserts them; Ceiling is NoCeiling where the grants set
+	// none.
+	Level, Ceiling string
+	Pass           bool
+	Err            error
+	Caveats        []string
 }
+
+// Session reports whether the test asserts the session alone.
+func (t Test) Session() bool { return strings.TrimSpace(t.Command) == "" }
 
 // RunTests runs the file's tests against its inventory at now (spec §11,
 // §12), answering in the mint's order as explain does: a principal with no
 // grant on the device is a deny, no_grants_matched; a device with no platform
 // is refused device_unconfigured; any principal on a quarantined device is a
 // deny, device_quarantined; and a mint the broker would refuse (MintCheck)
-// permits nothing.
+// permits nothing. A session test (Session) passes where the mint would be
+// made, with the level and ceiling it asserts.
 func (p *Policy) RunTests(now time.Time) []TestResult {
 	var out []TestResult
 	for _, t := range p.tests {
 		r := TestResult{Test: t}
 		d, _ := p.device(t.Device)
-		res, o, err := p.Decide(t.Subject, t.Principal, d, t.Command, now)
+		var res Resolution
+		var o engine.Outcome
+		var err error
+		if t.Session() {
+			res, err = p.resolveFor(t.Subject, t.Principal, d, now)
+		} else {
+			res, o, err = p.Decide(t.Subject, t.Principal, d, t.Command, now)
+		}
 		switch {
 		case errors.Is(err, ErrNoGrants):
 			r.Reason = decision.NoGrantsMatched
@@ -153,17 +162,42 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 			if r.MintError, _ = mintCheck(res, p.principalsOf(t.Subject, t.Principal), d.Name); r.MintError != "" {
 				break
 			}
+			r.Level, r.Ceiling = res.Level, res.Ceiling
+			if r.Ceiling == "" {
+				r.Ceiling = NoCeiling
+			}
+			if t.Session() {
+				break
+			}
 			r.Permit, r.Reason, r.Outcome = o.Permit, o.Reason, o
 			r.Caveats = append(Caveats(d.Platform, p.dialect(d.Platform), o), p.splitNotes(t.Command, d.Platform)...)
 		}
-		verdict := "deny"
-		if r.Permit {
-			verdict = "permit"
+		// A level or ceiling is asserted of a session the mint would make,
+		// so it fails wherever no level was resolved.
+		minted := r.Err == nil && r.Ceiling != ""
+		r.Pass = r.Err == nil && (t.Level == "" || minted && t.Level == r.Level) &&
+			(t.MaxPrivilege == "" || minted && t.MaxPrivilege == r.Ceiling)
+		if t.Session() {
+			r.Pass = r.Pass && minted
+		} else {
+			verdict := "deny"
+			if r.Permit {
+				verdict = "permit"
+			}
+			r.Pass = r.Pass && verdict == t.Expect && (t.Reason == "" || decision.Reason(t.Reason) == r.Reason)
 		}
-		r.Pass = r.Err == nil && verdict == t.Expect && (t.Reason == "" || decision.Reason(t.Reason) == r.Reason)
 		out = append(out, r)
 	}
 	return out
+}
+
+// resolveFor resolves a subject, or with principal set a principal, on a
+// device, as Decide does before it decides anything.
+func (p *Policy) resolveFor(subject, principal string, d admission.Device, now time.Time) (Resolution, error) {
+	if principal != "" {
+		return p.Resolve(principal, d, now)
+	}
+	return p.ResolveSubject(subject, d, now)
 }
 
 // Dialect is the platform's dialect under this policy's environment.

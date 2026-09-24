@@ -488,3 +488,28 @@ func TestPolicyTestPrintsReportsNotesAndScheduledQuarantines(t *testing.T) {
 		}
 	}
 }
+
+// A session test prints the level and ceiling the subject resolved to, and
+// what it wanted when it fails (spec §12, "Policy tests").
+func TestPolicyTestPrintsASessionTest(t *testing.T) {
+	pol, inv := policyFixture(t)
+	body := string(readFile(t, pol)) + "  - {subject: ops, device: leaf-01, level: admin, max_privilege: none}\n" +
+		"  - {subject: noc, device: leaf-01, level: admin}\n"
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+	for _, want := range []string{
+		"PASS ops on leaf-01: session -> level admin, max_privilege none\n",
+		"FAIL noc on leaf-01: session -> level readonly, max_privilege none, want level admin\n",
+		"4 tests, 1 failed",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
+		}
+	}
+	if code != 1 {
+		t.Fatalf("code %d", code)
+	}
+}

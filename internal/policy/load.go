@@ -112,10 +112,18 @@ type Grant struct {
 	Attributes   map[string][]string
 }
 
-// Test is one `tests:` entry (spec §11, §12).
+// Test is one `tests:` entry (spec §11, §12). With no Command it is a session
+// test, which asserts Level, MaxPrivilege or both.
 type Test struct {
 	Subject, Principal, Device, Command, Expect, Reason string
+	// Level is the level the roles compose to on the device, and
+	// MaxPrivilege the ceiling the grants compose to there, `none` for no
+	// ceiling; empty asserts nothing.
+	Level, MaxPrivilege string
 }
+
+// NoCeiling is how a test asserts that the grants compose to no ceiling.
+const NoCeiling = "none"
 
 // DefaultPipe is the output-modifier allowlist every role inherits unless it
 // declares its own (spec §4).
@@ -680,9 +688,12 @@ func (p *Policy) buildTests(f file) error {
 			return fmt.Errorf("%s: subject %q is not declared", row, t.Subject)
 		case t.Device == "":
 			return fmt.Errorf("%s: device is required", row)
-		case strings.TrimSpace(t.Command) == "":
-			return fmt.Errorf("%s: command is required", row)
-		case t.Expect != "permit" && t.Expect != "deny":
+		case strings.TrimSpace(t.Command) == "" && t.Level == "" && t.MaxPrivilege == "":
+			return fmt.Errorf("%s: command is required, or a session test's level or max_privilege", row)
+		case strings.TrimSpace(t.Command) == "" && (t.Expect != "" || t.Reason != ""):
+			return fmt.Errorf("%s: a session test takes no expect or reason: it passes where the subject is "+
+				"minted a token with the level and ceiling it names", row)
+		case strings.TrimSpace(t.Command) != "" && t.Expect != "permit" && t.Expect != "deny":
 			return fmt.Errorf("%s: expect is permit or deny, not %q", row, t.Expect)
 		case t.Reason != "" && !decision.Known(decision.Reason(t.Reason)):
 			return fmt.Errorf("%s: %q is not a reason in spec §5.7's vocabulary", row, t.Reason)
@@ -696,6 +707,14 @@ func (p *Policy) buildTests(f file) error {
 		}
 		if _, ok := p.device(t.Device); !ok {
 			return fmt.Errorf("%s: device %q is not in the inventory", row, t.Device)
+		}
+		if err := p.checkLevel(t.Level); err != nil {
+			return fmt.Errorf("%s: level: %w", row, err)
+		}
+		if t.MaxPrivilege != NoCeiling {
+			if err := p.checkLevel(t.MaxPrivilege); err != nil {
+				return fmt.Errorf("%s: max_privilege: %w", row, err)
+			}
 		}
 		p.tests = append(p.tests, Test(t))
 	}
