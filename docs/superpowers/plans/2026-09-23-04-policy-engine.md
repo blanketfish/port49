@@ -5,16 +5,18 @@
 **Goal:** The policy engine in full: the file policy's whole grammar resolves a principal on a
 device into a compiled, content-addressed blob, the daemon decides every session and command
 against that blob by specificity dominance, every decision record names what it was decided
-against and replays, and the operator has `explain`, policy tests, replay, access review and
-`grants remove`.
+against and replays, a device the policy cannot be compiled for is quarantined rather than the
+fleet refused, and the operator has `explain`, policy tests with the shadowed-deny report, the
+effective-permission diff and its privilege-expansion gate, replay, access review and `grants
+remove`.
 
 **Architecture:** Two packages replace plan 3's borrowed-ahead three. `internal/engine` is the
 executor: the blob format (version 2) and the one evaluator the daemon, `port49 policy replay`
 and `port49 explain` all run, so a replay that disagrees with the log is a finding, never a
 difference between two implementations. `internal/policy` is the authoring side the broker and
 the offline tools use: the §11 grammar, scopes with attached roles and the version comparator,
-resolution and compilation, joint checks against the inventory, lint, tests, explain, review and
-the grant-removal edit. The daemon's authorizer, `author.Engine`, caches compiled blobs by hash
+resolution and compilation, joint checks against the inventory and the quarantine they produce,
+lint, tests, the shadowed-deny report, the diff, explain, review and the grant-removal edit. The daemon's authorizer, `author.Engine`, caches compiled blobs by hash
 per replica and never reads a platform definition. The accounting spool gains a sink that can
 say no. Nothing here talks to a network: the broker still runs inside `port49d` (plan 3,
 Decided 1) and the tools read files.
@@ -103,16 +105,20 @@ Where the spec leaves a shape open, this plan chooses, and says why here once:
 7. **The pipe allowlist is the union over roles that permit something.** A deny-only or
    privilege-only role inherits no default list, or `no_disruptive` would widen every other
    role's allowlist.
-8. **Joint policy-and-inventory checks run at load by compiling every subject on every device**:
-   a class the platform does not define, a level it cannot render, a ceiling it cannot number, a
-   landing level above the ceiling, and `enable: auto` where the enable exchange does not carry the
-   principal. A policy that loads therefore never fails to compile at a mint. Only a level some
-   subject lands at on some device is checked: `readonly`, `operator` and `admin` are always
-   declared (spec §6), so checking every declared level would refuse every policy on a platform
-   that maps two of them. A failure refuses the
-   policy, naming subject, device and cause; plan 6 turns it into a quarantined device (decision
-   20). The cost is O(subjects × devices) at start, which is fine at the lab's size and is plan
-   12's to measure at the fleet's.
+8. **Joint policy-and-inventory checks run at load by compiling every subject on every device,
+   and a device that fails one is quarantined, not the policy refused** (spec §10; §13 decision
+   20). The checks: a class the platform does not define, a level it cannot render, a ceiling it
+   cannot number, a landing level above the ceiling, and `enable: auto` where the enable exchange
+   does not carry the principal. A quarantined device is named at start with every cause, refused
+   at mint `device_quarantined` (Task 13), and closed without a reply by the daemon (Task 20). The
+   rest of the fleet loads. Refusing the policy instead would take every device down for one, and
+   decision 20 exists to prevent that. A check no platform could pass is the policy's own error
+   and does refuse it: a class no platform defines, or a `max_privilege` no platform can number
+   (Task 8). Only a level some subject lands at on some device is checked: `readonly`, `operator`
+   and `admin` are always declared (spec §6), so checking every declared level would quarantine
+   every device on a platform that maps two of them. Plan 6 moves quarantine into the bundle the
+   inventory service publishes. The cost is O(subjects × devices) at start, which is fine at the
+   lab's size and is plan 12's to measure at the fleet's.
 9. **`on_missing` defaults to `exclude`, and a scope with a match key that delivers a deny must
    declare it**, whether a role carrying the deny is attached to the scope or granted on it. The
    default is the safe direction for a grant; for a mitigation the safe direction is the other
@@ -145,7 +151,9 @@ Where the spec leaves a shape open, this plan chooses, and says why here once:
 15. **The per-replica blob cache holds compiled programs, 1,024 of them, with no invalidation**, and
     is counted (`port49_blob_cache_lookups_total{outcome}`, plus `get_blob` in
     `port49_store_operations_total`). A cached blob answers a blob-read failure. It does not
-    carry a whole-store outage, because `Handle` reads the context from the same store first.
+    carry a whole-store outage, because `Handle` reads the context from the same store first;
+    continuing active logins from a replica's warm context cache through a store outage arrives
+    with the remote store (plan 6; design §12, amended in Task 1).
 16. **`decision.Sink` is an `Emitter` whose `Write` returns the refusal.** The spool drains through
     it and stops at a refused record without advancing `drainOffset`; the broker marks a blob
     emitted only when the sink took it, so the next mint re-emits a refused one. `jsonLines` is the
@@ -158,8 +166,8 @@ Where the spec leaves a shape open, this plan chooses, and says why here once:
     `/v1/explain` is plan 7's.
 19. **`grants remove` edits the YAML tree**, so comments and the order of everything else survive;
     it removes the subject's grant rows, its block, and the tests naming it, refuses a result that
-    does not load, and prints the file (or `--write`s it). Opening the pull request is the
-    operator's.
+    does not load, and prints the file (or `--write`s it). Opening the pull request is plan 5's
+    (owner's ruling 2026-09-24); the file edit is delivered here.
 20. **Keys another plan reads are refused by name, not ignored**: `platform_set` and `platforms`
     (plan 5), `key_groups` (in the inventory file until plan 6), a role's `max_session_age`
     (plan 7). `all_devices` must be declared: spec §5.5 says it is an ordinary scope, so the lab's
@@ -170,18 +178,37 @@ Where the spec leaves a shape open, this plan chooses, and says why here once:
     conservative reading of `expires: 2026-12-01` is that the grant is gone when the day begins.
 23. **A regex equivalent to `*` or to a literal word is a load error** (spec §14, "Rank lint"),
     for the spellings a lint can recognize; a `(?-i)` literal is not flagged, since case-sensitivity
-    is something a word cannot say.
+    is something a word cannot say. Full regex equivalence is decidable but not cheaply (it needs
+    automaton construction and comparison, which Go's RE2 does not expose), so spec §14 is amended
+    in Task 1 to say "common spellings", with that reason.
 24. **Spec §11's `svc_oxidized` gains `username: svc-config-backup`** (spec §2's own value): as
     printed it fails §14's "a subject with neither fails at policy load", so the example and the
     assertion disagree, and the example is the one corrected.
+25. **The shadowed-deny report and the privilege-expansion gate are this plan's**, not plan 5's,
+    because this plan is the one that replaces deny-overrides with dominance (Task 13), and spec
+    §12 says the report "is what replaces the guarantee deny-overrides would have provided". A
+    shadow, or an expansion past a deny, is acknowledged by a policy test that exercises that
+    permit over that deny. §11's `security_ir` test already acknowledges §5.4's own exemption, and
+    spec §12 is amended in Task 1 to say so. `port49 policy test` fails on an unacknowledged
+    shadow (Task 21), and `port49 policy diff` on an unacknowledged expansion or a newly
+    quarantined device (Task 22). An overlap two regex or class terms decide is reported as
+    possible and does not fail. The dead-rule and fallback-exposure checks stay plan 5's
+    (Question 4).
+26. **A permitted session record carries what it returned** (`reply.attributes`, spec §5.7 amended
+    in Task 1), and replay re-derives and compares it (Task 17). An altered session reply is a
+    divergence like an altered verdict.
+27. **`explain` says where the platform lacks `config_commands`** (spec §12's MUST): no built-in
+    platform declares it, so every command explanation on a platform that authorizes commands
+    carries the note (Task 15).
 
 ## Questions for Ryan
 
 None of these blocks a task; each has a recommendation the plan implements as written.
 
 1. **`operator` on `arista_eos` renders nothing, so a policy that lands an EOS session at
-   `operator` is refused at load** — including spec §11 as written (its `bgp_operator` and
-   `interface_tech`), which the corpus test loads only by adding `priv-lvl=7` in a test-only table.
+   `operator` quarantines the EOS devices it reaches** (Decided 8) — including spec §11 as written
+   (its `bgp_operator` and `interface_tech`), which the corpus test loads cleanly only by adding
+   `priv-lvl=7` in a test-only table.
    Spec §8's example says `priv-lvl=7`; no lab run has measured what a vEOS session at 7 can reach.
    *Recommendation:* keep it refused, measure `priv-lvl=7` on vEOS in plan 5's differential run,
    and map it there.
@@ -205,7 +232,11 @@ None of these blocks a task; each has a recommendation the plan implements as wr
    checks. Plan 4's roadmap entry names `explain`, policy tests, access review and `grants
    remove`, and this plan builds only those. *Recommendation:* plan 5, which is where the level
    and role data the intersection checks need comes from; say so in the roadmap. *Ruled
-   2026-09-24: plan 5.* The roadmap's Plan 5 section lists them, and Task 20 hands them there.
+   2026-09-24, then split by the deviation audit the same day:* the shadowed-deny report, the
+   effective-permission diff and the privilege-expansion gate are this plan's (Tasks 21, 22;
+   Decided 25), because this plan switches to dominance; the dead-rule and fallback-exposure
+   intersection checks are plan 5's. The roadmap's Plan 5 section lists them, and Task 23 hands
+   them there.
 
 ## Global Constraints
 
@@ -254,10 +285,10 @@ New in this plan:
 ## File Structure
 
 ```
-docs/design/2026-08-23-policy-engine-spec.md    MOD  §3 rule 4, §5.4 ties, §5.5 on_missing, §5.7 bundle + reason row, §6, §8 example, §11, §15 L21 (Task 1)
-docs/design/2026-08-21-port49-design.md         MOD  §19 step 4 borrows from step 5 (Task 1)
-docs/superpowers/plans/README.md                MOD  plan 4 as built; hands to 5, 6, 7 (Task 20)
-internal/decision/log.go                        MOD  Sink; Policy.{Bundle,Blob,MatchedDeny,MatchedPermits,Stage}; PolicyGrant.Expires; PolicyRule
+docs/design/2026-08-23-policy-engine-spec.md    MOD  §3 rule 4, §5.4 ties, §5.5 on_missing, §5.7 bundle, reply + reason rows, §6, §8 example, §10 quarantine, §11, §12 shadows + diff, §14 rank lint, §15 L2, L4, L21 (Task 1)
+docs/design/2026-08-21-port49-design.md         MOD  §12 store-unavailable cell; §19 step 4 borrows from step 5 (Task 1)
+docs/superpowers/plans/README.md                MOD  plan 4 as built; plan 4b; hands to 5, 6, 7 (Task 23)
+internal/decision/log.go                        MOD  Sink; Policy.{Bundle,Blob,MatchedDeny,MatchedPermits,Stage}; PolicyGrant.Expires; PolicyRule; Record.Reply
 internal/decision/reasons.go                    MOD  BlobPlatformMismatch
 internal/decision/policy_test.go                NEW
 internal/daemon/acct/spool.go                   MOD  drains to a decision.Sink; stops at a refusal
@@ -270,6 +301,10 @@ internal/engine/attrs.go                        NEW  CheckAttribute, SessionAttr
 internal/engine/blob_test.go                    NEW
 internal/engine/eval.go                         NEW  Compile, Program.Command, Outcome, Dominates, Normalize
 internal/engine/eval_test.go                    NEW
+internal/engine/shadow.go                       NEW  Shadow, Program.Shadows (Task 21)
+internal/engine/shadow_test.go                  NEW
+internal/engine/probe.go                        NEW  Probes, OtherArgument (Task 22)
+internal/engine/probe_test.go                   NEW
 internal/policy/version.go                      NEW  CompareVersions
 internal/policy/version_test.go                 NEW
 internal/policy/file.go                         NEW  the YAML schema
@@ -278,7 +313,7 @@ internal/policy/rank.go                         NEW  rankLint
 internal/policy/load_test.go                    NEW
 internal/policy/scope.go                        NEW  Scope.selects, compose
 internal/policy/scope_test.go                   NEW
-internal/policy/resolve.go                      NEW  Resolve, ResolveSubject, compile, layering, checkDevices
+internal/policy/resolve.go                      NEW  Resolve, ResolveSubject, compile, layering, checkDevices, Quarantine
 internal/policy/resolve_test.go                 NEW
 internal/policy/lint.go                         NEW  Lint, Finding
 internal/policy/tests.go                        NEW  Decide, Caveats, RunTests, CommandRaw
@@ -286,16 +321,23 @@ internal/policy/lint_test.go                    NEW
 internal/policy/spec11_test.go                  NEW  the §11 corpus, order independence
 internal/policy/testdata/spec11.yaml            NEW
 internal/policy/testdata/spec11-inventory.yaml  NEW
-internal/daemon/author/author.go                MOD  Request; the new Authorizer; Decision.Policy; storeUnavailableMsg
+internal/policy/shadow.go                       NEW  ShadowedDenies (Task 21)
+internal/policy/shadow_test.go                  NEW
+internal/policy/diff.go                         NEW  Compare, Diff (Task 22)
+internal/policy/diff_test.go                    NEW
+internal/daemon/author/author.go                MOD  Request; the new Authorizer; Decision.Policy; storeUnavailableMsg; Record.Reply
 internal/daemon/author/engine.go                NEW  Engine: the daemon's authorizer
 internal/daemon/author/engine_test.go           NEW
 internal/daemon/author/lab.go                   MOD  the new signatures; the instrument's comment
 internal/daemon/author/blob.go                  MOD then DEL (Tasks 12, 13)
 internal/daemon/author/blob_test.go             MOD then DEL (Tasks 12, 13)
 internal/daemon/author/author_test.go           MOD
-internal/daemon/metrics/metrics.go              MOD  BlobCache; the item-error codes
+internal/daemon/metrics/metrics.go              MOD  BlobCache; the item-error codes; DevicesQuarantined (Task 20)
 internal/daemon/metrics/metrics_test.go         MOD
-internal/daemon/server/server_test.go           MOD  panicAuthorizer's signatures
+internal/daemon/server/server.go                MOD  Deps.Quarantined (Task 20)
+internal/daemon/server/conn.go                  MOD  a quarantined device is closed without a reply (Task 20)
+internal/daemon/server/server_test.go           MOD  panicAuthorizer's signatures; quarantine (Task 20)
+internal/keyring/keyring.go                     MOD  DiagDeviceQuarantined (Task 20)
 internal/broker/broker.go                       MOD  internal/policy and internal/engine; attribute_too_long; re-emits a refused blob
 internal/broker/engine_test.go                  NEW
 internal/broker/{fixture,identity,broker}_test.go MOD
@@ -305,7 +347,7 @@ internal/blob/                                  DEL
 internal/broker/policy/                         DEL
 internal/policy/labpolicy_test.go               NEW  the lab's slice policy loads against the lab inventory
 tests/lab/slice/policy.yaml                     MOD  declares all_devices
-cmd/port49d/main.go                             MOD  author.Engine; policy.Load with the inventory; no lab: block
+cmd/port49d/main.go                             MOD  author.Engine; policy.Load with the inventory; no lab: block; quarantine to the daemon
 cmd/port49d/broker_test.go                      MOD
 internal/config/config.go                       MOD  lab: optional
 internal/config/config_test.go                  MOD
@@ -318,13 +360,13 @@ internal/policy/edit_test.go                    NEW
 internal/replay/replay.go                       NEW  Replay
 internal/replay/replay_test.go                  NEW
 cmd/port49/main.go                              MOD  usage; explain, policy, access, grants
-cmd/port49/policy.go                            NEW  the five tools' commands (Tasks 15–19)
+cmd/port49/policy.go                            NEW  the six tools' commands (Tasks 15–19, 21, 22)
 cmd/port49/policy_test.go                       NEW
 ```
 
-Twenty tasks: **one docs task first** (Task 1: the spec rows and edits the code relies on), **eighteen
-code tasks** (2–19), and **one docs task last** (Task 20: the roadmap). Under the 25-task line, so
-one plan. Tasks 2–11 add packages beside the running system and change nothing a device sees
+Twenty-three tasks: **one docs task first** (Task 1: the spec rows and edits the code relies on),
+**twenty-one code tasks** (2–22), and **one docs task last** (Task 23: the roadmap). Under the
+25-task line, so one plan. Tasks 2–11 add packages beside the running system and change nothing a device sees
 except the spool's retry; Task 12 adds the new authorizer beside the old; **Task 13 is the switch**,
 after which the broker writes version-2 blobs and the daemon reads them. Every task leaves `make
 test` green.
@@ -516,7 +558,7 @@ index ceac013..3641578 100644
 <!-- patch: docs/design/2026-08-21-port49-design.md -->
 ```diff
 diff --git a/docs/design/2026-08-21-port49-design.md b/docs/design/2026-08-21-port49-design.md
-index 5ad785e..95ca2f9 100644
+index 5ad785e..339a8c0 100644
 --- a/docs/design/2026-08-21-port49-design.md
 +++ b/docs/design/2026-08-21-port49-design.md
 @@ -1100,7 +1100,7 @@ silently engages is indistinguishable from a bug.
@@ -524,7 +566,7 @@ index 5ad785e..95ca2f9 100644
  |---|---|---|---|---|
  | **Directory unavailable** | ✓ credential only | ⚠ ok within grace; else denied | ✓ stale context to ceiling | ⚠ as new login |
 -| **Token store unavailable** | ✓ `port49 login` touches no store | ✗ | ⚠ continues only where a replica holds a warm cache entry; otherwise ✗ → device falls back to local authorization | ✗ |
-+| **Token store unavailable** | ✓ `port49 login` touches no store | ✗ | ✗ port49 answers `FAIL` `store_unavailable` and every command is denied until the store returns; device-local break-glass is the escape (policy engine spec §5.7; authorization fall-through unmeasured, §15 L4) | ✗ |
++| **Token store unavailable** | ✓ `port49 login` touches no store | ✗ | ✗ port49 answers `FAIL` `store_unavailable` and every command is denied until the store returns; device-local break-glass is the escape (policy engine spec §5.7; authorization fall-through unmeasured, §15 L4). Continuing active logins from a replica's warm context cache through a store outage arrives with the remote store (plan 6) | ✗ |
  | **Broker unavailable** | ✗ | ✗ | ⚠ unaffected within the staleness ceiling; ✗ beyond it | ✗ |
  | **All daemons unavailable** | ✓ | ✗ → device-local break-glass | ⚠ device retains its shell profile; remote authorization stops | ✗ |
  | **One region unavailable** | ✓ | ✓ device fails over | ✓ | ✓ |
@@ -550,15 +592,35 @@ attributes, the one daemon-side case Task 12 answers with it. It records the out
 observation in the L2 row. It keeps L4 open and gives its note a *To measure* paragraph with
 three runs: authentication ERROR fall-through, authorization FAIL vs ERROR, and the role ceiling
 per platform. The design patch above also changes the §12 failure matrix's store-unavailable
-cell to match.
+cell to match, and names plan 6 as the one that brings warm-context continuation back with the
+remote store.
+
+The deviation audit's rulings (2026-09-24) add to the same patch. §5.7 says what
+`reply.attributes` is and that replay compares it (Decided 26). §10 says a joint check no
+platform could pass refuses the policy, one that fails for some platforms quarantines their
+devices, and `port49d` applies quarantine at load until plan 6 (Decided 8). §12 says how a
+shadowed deny is acknowledged and what `port49 policy diff` computes and gates on (Decided 25).
+§14's rank lint says "common spellings", with the reason (Decided 23).
 
 <!-- patch: docs/design/2026-08-23-policy-engine-spec.md -->
 ````diff
 diff --git a/docs/design/2026-08-23-policy-engine-spec.md b/docs/design/2026-08-23-policy-engine-spec.md
-index 3641578..7b47dd3 100644
+index 3641578..e2da2c6 100644
 --- a/docs/design/2026-08-23-policy-engine-spec.md
 +++ b/docs/design/2026-08-23-policy-engine-spec.md
-@@ -1475,7 +1475,7 @@ not an unvalidated body. A connection with no verified chain names no one.
+@@ -1402,6 +1402,11 @@ of an array — the question an operator has after renaming `tacplus-options ser
+ half an SRX fleet, and the one a `service_unsupported` denial has to answer. It is recorded,
+ never consulted for policy (§5.2).
+ 
++`reply.attributes` is what a permitted `authorize_session` returned, as sent — every
++placeholder filled (§6). A replay re-derives it from the blob and the record's own
++`session.username`, `principal` and `device.name` and compares, so an altered session reply is
++a divergence like an altered verdict (plan 4).
++
+ **Never suppress permits.** Sampling, or logging denies only, looks thrifty and destroys the
+ artifact: *what did Alice run on Tuesday* is answered entirely by permits. Volume is the cost
+ of the product, not a problem to optimize away.
+@@ -1475,7 +1480,7 @@ not an unvalidated body. A connection with no verified chain names no one.
  | `permit_dominates` | a permit dominated every matching deny (§5.4) |
  | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
  | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
@@ -567,7 +629,7 @@ index 3641578..7b47dd3 100644
  | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
  | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
  | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
-@@ -1496,7 +1496,7 @@ not an unvalidated body. A connection with no verified chain names no one.
+@@ -1496,7 +1501,7 @@ not an unvalidated body. A connection with no verified chain names no one.
  | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
  | `device_unknown` | the source address is not in the admission trie (§10) |
  | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
@@ -576,7 +638,7 @@ index 3641578..7b47dd3 100644
  | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
  | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed |
  
-@@ -1944,7 +1944,8 @@ confines it once it is.
+@@ -1944,7 +1949,8 @@ confines it once it is.
  - **When port49 is unreachable.** Under `aaa authorization commands … group tacacs+ local`,
    the device falls back to local authorization, and the role assigned at login is what
    remains. This is the "active login" column of the design document's failure matrix — the
@@ -586,7 +648,61 @@ index 3641578..7b47dd3 100644
  - **Commands the device never submits.** With `aaa authorization commands 15` and no
    `commands 1`, everything below that tier is governed by the device role alone, always.
  
-@@ -4168,9 +4169,9 @@ implemented against a guess. This section is the one place the distinction is ke
+@@ -2816,6 +2822,13 @@ device is published with `admission: quarantined` and the reason; the daemon log
+ change that would clear it, and `port49 devices capabilities` shows it. The rest of the fleet
+ moves.
+ 
++A joint check that no platform could pass is the policy's own error, not a device's: a class
++no platform defines, or a `max_privilege` no platform can number, refuses the policy at load.
++One that fails for some platforms quarantines the devices on them. Until the inventory service
++publishes bundles (plan 6), `port49d` applies quarantine when it loads the policy: each
++quarantined device is logged at start with its cause, its mints are refused
++`device_quarantined`, and its connections are closed without a reply (plan 4).
++
+ **A quarantined device gets silence, not FAIL.** The daemon closes the connection without a
+ reply, exactly as for `device_unknown`. The device then declares the server dead and falls to
+ its local method, which is the posture every platform documents for a port49 outage and the
+@@ -3436,11 +3449,24 @@ the same name (§6), CI MUST name both so the override is deliberate.
+ 
+ **Shadowed-deny report.** Because a more specific permit can override a deny (§5.4), CI MUST
+ name every shadowed deny, the subject it fails to bind, and the permit that beats it. This is
+-what replaces the guarantee deny-overrides would have provided.
++what replaces the guarantee deny-overrides would have provided. A shadow is acknowledged by
++a policy test (§11) for that subject that expects `permit` on a command where that permit wins
++over that deny — §11's `security_ir` test is one. `port49 policy test` names every shadowed
++deny and exits non-zero on one no test acknowledges. Where the overlap turns on two regex or
++class terms at one position it cannot be decided cheaply, and the shadow is reported as
++possible rather than failed.
+ 
+ **Privilege-expansion gate.** The check that matters under most-specific semantics is not
+ "did the permit set grow" but **"does this change make command C permitted where it was
+-denied"** — computable exactly from the trie.
++denied"** — computable exactly from the trie. `port49 policy diff --old FILE --new FILE`
++evaluates both policies, for every subject on every device, over every command shape their
++rules distinguish — each word, `*`, `**`, and each deny word's abbreviations — and reports each
++command whose decision changed, each level or ceiling that changed (a privilege change, §6),
++and each device the new policy quarantines. It exits non-zero on a command a deny refused that
++the new policy permits, unless a policy test in the new policy exercises that permit over that
++deny, and on a newly quarantined device. Regex and class terms are matched only against the
++words the rules name, so a rule that carries one and changed is reported as regex-constrained
++rather than enumerated (§4).
+ 
+ **`port49 platform upgrade`** reports what a platform-set bump changes, so a binary upgrade
+ is never an unreviewed policy change (§8).
+@@ -3857,7 +3883,11 @@ Beyond those already listed in the design document's §14:
+   `* * /^tftp:/` (1,1,2) and permits, while `copy running-config *` (3,3,1) does not.
+ - **Equal tuples do not dominate**, so an equally specific permit and deny resolve to deny.
+ - **Class and regex are equally ranked**: neither dominates the other at a shared position.
+-- **Rank lint**: a regex equivalent to `*` or to a literal is flagged at policy load.
++- **Rank lint**: a regex equivalent to `*` or to a literal is flagged at policy load, in the
++  spellings an author writes — `^.*$`, `.*`, `^show$` in any case, and what they simplify to.
++  Full regex equivalence is decidable but not cheaply: it takes building and comparing automata,
++  which Go's RE2 does not expose, so the lint recognizes the common spellings and stops there
++  (plan 4).
+ - **Order independence**: a policy file with roles, grants, and rules shuffled produces
+   byte-identical decisions across the full test corpus.
+ - **Entity classes**: one rule using `@management` denies `Management1` on EOS, `mgmt0` on
+@@ -4168,9 +4198,9 @@ implemented against a guess. This section is the one place the distinction is ke
  | ID | Claim to measure | What rests on it | Platforms | Status |
  |---|---|---|---|---|
  | **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE's RESTCONF measured 2026-09-23 (`tests/lab/results/L1-restconf-cisco_iosxe.md`); the console and IOS-XE's NETCONF unmeasured; see below |
@@ -598,7 +714,7 @@ index 3641578..7b47dd3 100644
  | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | closed — measured 2026-09-20; `tests/lab/results/L5-arista_eos.md`, `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, `L5-cisco_nxos.md`, `L5-cisco_iosxe.md`. No image sends a WATCHDOG over a 2m30s idle interactive session under the lab's accounting config, which sets no periodic update; a device configured for periodic updates is outside what was measured |
  | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
  | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open — eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. The eAPI `/login` cookie flow measured 2026-09-23 by hand on vEOS (`tests/lab/results/L7-login-arista_eos.md`): a request carrying the cookie runs no authentication and no session authorization, only its command authorization and an accounting stop. Open: NX-API's `nxapi_auth` cookie, unmeasured, so the row stays open (lab register rule 3); see below |
-@@ -4488,6 +4489,22 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
+@@ -4488,6 +4518,22 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
    true. Note also that both contradicted sentences are about *authorization* fall-through,
    which this row has not measured; what is measured is that the general principle they appeal
    to is false on Junos for authentication.
@@ -617,7 +733,7 @@ index 3641578..7b47dd3 100644
 +    `network-operator`), whether the device itself allows `clear counters`, `clear ip bgp *`
 +    and `configure`. The device role is the ceiling and port49's command rules draw the line
 +    inside it (§6), so this is what an adapter's level mapping (plan 5) rests on; `operator`
-+    on `arista_eos` stays refused at load until it is measured.
++    on `arista_eos` stays unmapped, quarantining the devices it reaches, until it is measured.
  - **L5** — EOS 2026-09-17 and Junos 2026-09-20: no WATCHDOG at all on any of the three, over a
    2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`,
    `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, and the N9Kv and Catalyst 8000V both join them with
@@ -629,9 +745,10 @@ Run: `grep -n 'blob_platform_mismatch\|^| \*\*L21\*\*\|pipe_authorized: false\|u
 Expected: at least these four among the matches (spec §2, §4 and §9 already match too): the reason
 row in §5.7, the L21 row in §15, the corrected §8 example line, and §11's subject line.
 
-Run: `grep -n 'on authorization it is .FAIL.\|To measure. (added 2026-09-24\|on_missing: exclude}' docs/design/2026-08-23-policy-engine-spec.md; grep -n 'port49 answers .FAIL. .store_unavailable.' docs/design/2026-08-21-port49-design.md`
+Run: `grep -n 'on authorization it is .FAIL.\|To measure. (added 2026-09-24\|on_missing: exclude}\|reply.attributes. is what\|A shadow is acknowledged\|port49 policy diff --old\|stops there$\|applies quarantine when it loads' docs/design/2026-08-23-policy-engine-spec.md; grep -n 'port49 answers .FAIL. .store_unavailable.' docs/design/2026-08-21-port49-design.md`
 Expected: the §5.7 `store_unavailable` row, the L4 note's *To measure* paragraph, §11's `dc_fabric`
-line, and the design §12 cell.
+line, the §5.7 `reply.attributes` paragraph, the §12 shadow and diff paragraphs, §14's rank lint,
+the §10 quarantine paragraph, and the design §12 cell.
 
 ```bash
 git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
@@ -661,6 +778,16 @@ authorization FAIL vs ERROR, the role ceiling per platform). The L2 row
 records the output-modifier observation; blob_unavailable's row covers
 a context that no longer fits its blob.
 
+From the deviation audit (owner's rulings 2026-09-24): §10 says a joint
+check no platform could pass refuses the policy and one that fails for
+some platforms quarantines their devices, applied by port49d at load
+until plan 6; §12 says a policy test acknowledges a shadowed deny and
+what port49 policy diff gates on; §5.7 adds reply.attributes, which
+replay compares; §14's rank lint says "common spellings", because full
+regex equivalence is decidable but not cheaply (it needs automata Go's
+RE2 does not expose); design §12 names plan 6 for warm-context
+continuation.
+
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ```
@@ -682,6 +809,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     `MatchedPermits []PolicyRule`, `Stage int`; `PolicyGrant` gains `Expires string`;
     `type PolicyRule struct { Rule []string; Specificity []int; Role string }`.
   - `const BlobPlatformMismatch Reason = "blob_platform_mismatch"`.
+  - `Record.Reply *Reply`, `type Reply struct { Attributes []string }` (JSON `reply.attributes`):
+    what a permitted authorization returned, as sent.
   Task 3's spool drains to a `Sink`; Task 6's `Outcome.Policy` builds the block; Task 13's broker
   re-emits a blob the `Sink` refused.
 
@@ -730,6 +859,25 @@ func TestAnAuthorizationRecordCarriesItsMatchedRules(t *testing.T) {
 	}
 }
 
+// A permitted session record carries the attributes it returned, as sent,
+// so replay can re-derive and compare them (spec §5.7).
+func TestASessionRecordCarriesItsReply(t *testing.T) {
+	var buf bytes.Buffer
+	NewJSONLines(&buf).Emit(Record{TS: time.Unix(0, 0), Event: EventAuthorizeSession, Verdict: VerdictPermit,
+		Reason: ContextMatched, Reply: &Reply{Attributes: []string{"priv-lvl=15", "home-directory*/home/alice"}}})
+	var raw struct {
+		Reply struct {
+			Attributes []string `json:"attributes"`
+		} `json:"reply"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Reply.Attributes) != 2 || raw.Reply.Attributes[1] != "home-directory*/home/alice" {
+		t.Fatalf("reply: %s", buf.String())
+	}
+}
+
 // Write is Emit with the refusal returned, and a refusal is counted once
 // whichever the caller used (the spool retries on Write; spec §5.8).
 func TestWriteReturnsTheSinksRefusal(t *testing.T) {
@@ -760,10 +908,32 @@ for the other new fields, `s.Write undefined`, `undefined: BlobPlatformMismatch`
 <!-- patch: internal/decision/log.go -->
 ```diff
 diff --git a/internal/decision/log.go b/internal/decision/log.go
-index 1f85e89..4559b18 100644
+index 1f85e89..90134b2 100644
 --- a/internal/decision/log.go
 +++ b/internal/decision/log.go
-@@ -133,17 +133,47 @@ type Mint struct {
+@@ -22,6 +22,7 @@ type Record struct {
+ 	Device      *Device      `json:"device,omitempty"`
+ 	Session     *Session     `json:"session,omitempty"`
+ 	Request     *Request     `json:"request,omitempty"`
++	Reply       *Reply       `json:"reply,omitempty"`
+ 	Flags       string       `json:"flags,omitempty"`
+ 	Attribution string       `json:"attribution,omitempty"`
+ 	TaskID      string       `json:"task_id,omitempty"`
+@@ -116,6 +117,13 @@ type Request struct {
+ 	Vector  []string `json:"vector"`
+ }
+ 
++// Reply is what a permitted authorization returned to the device, as sent: a
++// session's attributes with every placeholder filled. Replay re-derives them
++// from the blob and compares (spec §5.7).
++type Reply struct {
++	Attributes []string `json:"attributes"`
++}
++
+ type AcctRecord struct {
+ 	Raw         []string `json:"raw"`
+ 	Vector      []string `json:"vector"`
+@@ -133,17 +141,47 @@ type Mint struct {
  	BlobHash    string   `json:"blob,omitempty"`
  }
  
@@ -813,7 +983,7 @@ index 1f85e89..4559b18 100644
  }
  
  // Blob is the `blob` event's body: the compiled blob whole, emitted once per
-@@ -173,13 +203,24 @@ type Emitter interface {
+@@ -173,13 +211,24 @@ type Emitter interface {
  	Emit(Record)
  }
  
@@ -839,7 +1009,7 @@ index 1f85e89..4559b18 100644
  
  // NewJSONLinesWithFailureHook is NewJSONLines plus a callback run once for
  // every record the sink refuses. A refused record is a record that does not
-@@ -187,7 +228,7 @@ func NewJSONLines(w io.Writer) Emitter { return &jsonLines{w: w} }
+@@ -187,7 +236,7 @@ func NewJSONLines(w io.Writer) Emitter { return &jsonLines{w: w} }
  // the callback rather than a metric keeps this package's dependencies to the
  // standard library, so the record shape and the metric registry stay
  // independent of each other.
@@ -848,7 +1018,7 @@ index 1f85e89..4559b18 100644
  	return &jsonLines{w: w, onFailure: onFailure}
  }
  
-@@ -198,13 +239,17 @@ func (j *jsonLines) failed() {
+@@ -198,13 +247,17 @@ func (j *jsonLines) failed() {
  	}
  }
  
@@ -868,7 +1038,7 @@ index 1f85e89..4559b18 100644
  	}
  	j.mu.Lock()
  	defer j.mu.Unlock()
-@@ -213,6 +258,7 @@ func (j *jsonLines) Emit(r Record) {
+@@ -213,6 +266,7 @@ func (j *jsonLines) Emit(r Record) {
  		log.Printf("decision: write failed: %v", err)
  		j.failed()
  	}
@@ -914,7 +1084,8 @@ git commit -m "feat: a decision sink that reports refusal, and the record's poli
 decision.Sink is an Emitter whose Write returns the sink's refusal;
 jsonLines is it. A record's policy block gains bundle, blob, the
 matched deny and permits with their tuples and roles, and the refused
-pipeline stage (spec §5.7). blob_platform_mismatch joins the reason
+pipeline stage (spec §5.7), and a record carries the attributes a
+permit returned, as sent. blob_platform_mismatch joins the reason
 constants after its spec row.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
@@ -1433,7 +1604,7 @@ type Dialect struct {
 //   - Levels: arista_eos renders `priv-lvl` for readonly and admin, applied by
 //     vEOS on every lab run since 2026-09-20 (L16-arista_eos.md). `operator`
 //     is unmapped — nothing measured says what level it is — so a policy
-//     that lands an arista_eos session there is refused at load. Every other
+//     that lands an arista_eos session there quarantines the device. Every other
 //     platform renders nothing, as in plan 3; plan 5 fills them.
 var dialects = map[string]Dialect{
 	"arista_eos": {
@@ -2304,7 +2475,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `func (*Program) Command(raw []string) Outcome`.
   - `func Dominates(x, y []int) bool`.
   - `type Match struct { Rule, Role string; Specificity []int }`;
-    `type Outcome struct { Permit bool; Reason decision.Reason; Vector []string; Pipeline [][]string; Decided, Deny *Match; Permits []Match; Stage int }`;
+    `type Outcome struct { Permit bool; Reason decision.Reason; Vector []string; Pipeline [][]string; Decided, Deny *Match; Permits, Denies []Match; Stage int }`
+    — `Denies` is every deny that matched, which on a permit are the denies the deciding permit
+    overrode (Tasks 21, 22 read it);
     `func (Outcome) Policy(bundle, blob string) *decision.Policy`; `func (Outcome) ServerMsg() string`.
   Task 11's `Decide`, Task 12's `Engine`, Task 15's `Explain` and Task 17's `Replay` all call
   `Program.Command`: one evaluator.
@@ -2423,6 +2596,13 @@ func TestANarrowerPermitDominatesABroaderDeny(t *testing.T) {
 	}
 	// Only the deny matches, so it is denied, and no permit is there to name.
 	expect(t, p, "show chassis hardware detail", false, decision.NoRuleMatched)
+	// Every deny a winning permit overrode is on the outcome, not only the
+	// one the record names.
+	two := program(t, true, "backup:permit show chassis hardware", "cve:deny show chassis **", "old:deny show * hardware")
+	if o := expect(t, two, "show chassis hardware", true, decision.PermitDominates); len(o.Denies) != 2 ||
+		o.Denies[0].Rule != "show chassis **" || o.Denies[1].Rule != "show * hardware" {
+		t.Errorf("both overridden denies: %+v", o.Denies)
+	}
 }
 
 // Dominance, denying: each of spec §14's four cases, and equal tuples.
@@ -2731,9 +2911,13 @@ type Outcome struct {
 	// the deny no permit dominated. Nil for no_rule_matched.
 	Decided *Match
 	// Deny is the record's matched_deny; Permits its matched_permits, the
-	// deciding permit first and the rest most specific first.
+	// deciding permit first and the rest most specific first. Denies is every
+	// deny that matched, most specific first: on a permit, every one of them
+	// is a deny the deciding permit overrode, which is what the shadowed-deny
+	// report's acknowledgment reads (spec §12).
 	Deny    *Match
 	Permits []Match
+	Denies  []Match
 	// Stage is the 1-based pipeline stage a pipe_stage_denied refused.
 	Stage int
 }
@@ -2800,7 +2984,7 @@ func (p *Program) Command(raw []string) Outcome {
 	}
 	sortMatches(permits)
 	sortMatches(denies)
-	out.Permits = permits
+	out.Permits, out.Denies = permits, denies
 	if len(permits) == 0 {
 		out.Reason = decision.NoRuleMatched
 		if len(denies) > 0 {
@@ -3168,15 +3352,19 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `func (*Policy) SubjectOf(principal string) (string, bool)`, `Subject(name) (*Subject, bool)`,
     `Grants(subject) []*Grant`, `Devices() []admission.Device`, `Tests() []Test`; unexported
     `dialect(name)` and `device(name)`.
-  - `var DefaultPipe []string`; unexported `rankLint(body string) (string, bool)`.
-  Tasks 9–11 and 15–19 build on `Policy`.
+  - `var DefaultPipe []string`; unexported `rankLint(body string) (string, bool)`,
+    `checkClasses`, `numberedAnywhere`, `platforms()`, and `privLvl(dialect, level)`, which
+    Task 10 uses too.
+  Tasks 9–11, 15–19, 21 and 22 build on `Policy`.
 
 The whole §11 grammar is read — `privilege_levels` with `parent:`, `scopes` with `match`,
 `on_missing`, `security_log` and `attached_roles`, roles with `pipe` and `attributes`, group and
 identity subjects with `api:`, grants with `expires` and `attributes`, and `tests:`. The checks here
 are the structural ones; the joint checks against inventory arrive in Task 10. A scope with a match
 key that delivers a deny, attached or through a grant, must declare `on_missing` (Decided 9). A
-grant's roles are kept sorted, so nothing a grant reports depends on how the file lists them.
+grant's roles are kept sorted, so nothing a grant reports depends on how the file lists them. Two
+joint checks no platform could pass are the policy's own errors and refused here: a rule naming a
+class no platform defines, and a `max_privilege` no platform can number (Decided 8).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3318,6 +3506,9 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a non-trailing **", "roles:\n  - {name: r, permit: [\"show ** detail\"]}\n" + subjOK, "trailing-only"},
 		{"a regex that is *", "roles:\n  - {name: r, permit: [\"show /^.*$/\"]}\n" + subjOK, "is `*`"},
 		{"a regex that is a word", "roles:\n  - {name: r, deny: [\"/^reload$/ **\"]}\n" + subjOK, "the word `reload`"},
+		{"a class no platform defines", "roles:\n  - {name: r, permit: [\"interface @uplinks\"]}\n" + subjOK, "which no platform defines"},
+		{"a ceiling no platform numbers", scopeOK + roleOK + subjOK +
+			"grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: operator}\n", "no priv-lvl number on any platform"},
 		{"a bad pipe rule", "roles:\n  - {name: r, pipe: {permit: [\"inc*\"]}}\n" + subjOK, "pipe"},
 		{"an attribute with no separator", "roles:\n  - {name: r, attributes: {all: [idletime]}}\n" + subjOK, "separator"},
 		{"an attribute for no platform", "roles:\n  - {name: r, attributes: {junos: [\"idletime*30\"]}}\n" + subjOK, "neither `all`"},
@@ -3813,6 +4004,9 @@ func (p *Policy) buildRoles(f file) error {
 				if err := checkRule(rule); err != nil {
 					return fmt.Errorf("role %q: %w", r.Name, err)
 				}
+				if err := p.checkClasses(rule); err != nil {
+					return fmt.Errorf("role %q: %w", r.Name, err)
+				}
 				*list.out = append(*list.out, engine.CanonicalRule(rule))
 			}
 		}
@@ -3820,6 +4014,9 @@ func (p *Policy) buildRoles(f file) error {
 			role.Pipe = []string{}
 			for _, rule := range r.Pipe.Permit {
 				if err := checkRule(rule); err != nil {
+					return fmt.Errorf("role %q: pipe: %w", r.Name, err)
+				}
+				if err := p.checkClasses(rule); err != nil {
 					return fmt.Errorf("role %q: pipe: %w", r.Name, err)
 				}
 				role.Pipe = append(role.Pipe, engine.CanonicalRule(rule))
@@ -4088,6 +4285,10 @@ func (p *Policy) buildGrants(f file) error {
 		if err := p.checkLevel(g.MaxPrivilege); err != nil {
 			return fmt.Errorf("grants[%d]: max_privilege: %w", i, err)
 		}
+		if g.MaxPrivilege != "" && !p.numberedAnywhere(g.MaxPrivilege) {
+			return fmt.Errorf("grants[%d]: max_privilege %s has no priv-lvl number on any platform, so no token "+
+				"could carry it; use a level a platform numbers (spec §5.3, §6)", i, g.MaxPrivilege)
+		}
 		// A deny reaches a scope through a grant as surely as through
 		// attached_roles, and a broken sync that drops the device from the
 		// scope lifts it the same way (spec §5.5).
@@ -4150,6 +4351,67 @@ func (p *Policy) device(name string) (admission.Device, bool) {
 		}
 	}
 	return admission.Device{}, false
+}
+
+// platforms is every dialect this policy can meet: the built-in table with
+// the environment's own table over it.
+func (p *Policy) platforms() map[string]platform.Dialect {
+	out := platform.Dialects()
+	for name, d := range p.env.Dialects {
+		out[name] = d
+	}
+	return out
+}
+
+// checkClasses refuses a rule naming a class no platform defines. That is
+// the policy's own error, a typo, rather than a device's: no inventory could
+// make it compile. A class some platforms define and others do not is a joint
+// check, and quarantines the devices on the others (Task 10; spec §10).
+func (p *Policy) checkClasses(rule string) error {
+	terms, err := engine.ParseRule(rule)
+	if err != nil {
+		return err
+	}
+	for _, t := range terms {
+		if t.Kind != engine.Class {
+			continue
+		}
+		defined := false
+		for _, d := range p.platforms() {
+			if _, ok := d.EntityClasses[t.Text]; ok {
+				defined = true
+			}
+		}
+		if !defined {
+			return fmt.Errorf("rule %q names @%s, which no platform defines; a class is a platform's (spec §4, §8)",
+				rule, t.Text)
+		}
+	}
+	return nil
+}
+
+// numberedAnywhere reports whether some platform gives level a priv-lvl
+// number, following the parent chain: a ceiling none can number is the
+// policy's own error, like a class none defines.
+func (p *Policy) numberedAnywhere(level string) bool {
+	for _, d := range p.platforms() {
+		if _, ok := p.privLvl(d, level); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// privLvl is the priv-lvl number a platform gives a level, following the
+// level's parent chain to the first level the platform numbers (spec §6,
+// `parent:`).
+func (p *Policy) privLvl(dialect platform.Dialect, level string) (uint8, bool) {
+	for l := level; l != ""; l = p.parents[l] {
+		if n, ok := dialect.PrivLvl(l); ok {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 // dialect is the platform's dialect under this policy's environment.
@@ -4261,7 +4523,8 @@ attributes, group and identity subjects classified by trust domain,
 grants with expiry and attributes, and tests. Keys another plan reads
 are refused by name (platform_set, platforms, key_groups, a role's
 max_session_age); all_devices must be declared; a regex that is only a
-costlier * or word is refused (spec §14, rank lint).
+costlier * or word is refused (spec §14, rank lint), and so are a class
+no platform defines and a ceiling no platform can number.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -4689,14 +4952,19 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     `type AttributeSource struct { Attribute, Source string; Shadows []string }`.
   - `func (*Policy) Resolve(principal string, d admission.Device, now time.Time) (Resolution, error)`;
     `func (*Policy) ResolveSubject(subject string, d admission.Device, now time.Time) (Resolution, error)`.
-  - unexported `compile`, `layerAttributes`, `render`, `privLvl`, `checkDevices`.
-  Task 13's broker calls `Resolve`; Task 11's `Decide` and Task 15's `Explain` call both.
+  - `var ErrDeviceQuarantined`; `type Quarantine struct { Device, Platform string; Causes []string }`;
+    `func (*Policy) Quarantined() []Quarantine`. `Resolve` and `ResolveSubject` answer
+    `ErrDeviceQuarantined` for a quarantined device, naming the first cause.
+  - unexported `compile`, `layerAttributes`, `render`, `checkDevices`, `checkDevice`.
+  Task 13's broker calls `Resolve`; Task 11's `Decide` and Task 15's `Explain` call both; Task 20
+  hands `Quarantined` to the daemon.
 
 Spec §5.1's pipeline, end to end: subjects → grants (scope selects the device, not expired) → roles
 (union, plus attached) → privilege (max over the declared order) → `max_privilege` (max over the
 grants, as this platform's `priv-lvl` number; zero is no ceiling) → rules → attributes rendered for
 the platform. `checkDevices` runs that for every subject on every device in the inventory at load
-(Decided 8), which is what lets the broker treat a compile failure at a mint as its own defect.
+and quarantines a device any of them fails on (Decided 8), which is what lets the broker treat a
+compile failure at a mint as its own defect.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4854,64 +5122,98 @@ grants:
 	}
 }
 
-// The joint checks: a policy is refused at load, naming the subject, the
-// device and the reason, when a mint on some device in inventory could not
-// compile or would contradict itself (spec §4, §5.6, §6).
-func TestJointChecksRefuseAtLoad(t *testing.T) {
-	for _, tt := range []struct{ name, yaml, want string }{
+// The joint checks (spec §10; §13 decision 20): a device on which some
+// subject's composition would not compile, or would contradict itself, is
+// quarantined — named with the subject and the cause, refused at Resolve — and
+// every other device loads. One quarantined device never takes the fleet down.
+func TestJointCheckFailuresQuarantineTheDevice(t *testing.T) {
+	all := []string{"campus-sw-7", "leaf-01", "nx-01", "srx-fw-04", "srx-fw-05", "srx-fw-22", "srx-lab-01", "xe-01"}
+	for _, tt := range []struct {
+		name, yaml, want string
+		devices          []string
+	}{
 		{"a class the platform does not define", `
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: tech, permit: [interface @physical]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [tech]}]`, `role "tech" names @physical, which cisco_nxos does not define`},
+grants: [{subject: s, scope: all_devices, roles: [tech]}]`, `role "tech" names @physical, which`,
+			[]string{"nx-01", "srx-fw-04", "srx-fw-05", "srx-fw-22", "srx-lab-01", "xe-01"}},
 		{"a level the platform cannot render", `
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: op, privilege: operator, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [op]}]`, "level operator has no rendering on arista_eos"},
-		{"a ceiling with no number", `
-scopes: [{name: all_devices, match: {}}]
-roles: [{name: ro, privilege: readonly, permit: [show **]}]
-subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: operator}]`, "max_privilege operator has no priv-lvl"},
+grants: [{subject: s, scope: all_devices, roles: [op]}]`, "level operator has no rendering on arista_eos",
+			[]string{"campus-sw-7", "leaf-01"}},
 		{"a landing level above the ceiling", `
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: adm, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [adm], max_privilege: readonly}]`, "above its grants' max_privilege"},
+grants: [{subject: s, scope: all_devices, roles: [adm], max_privilege: readonly}]`, "above its grants' max_privilege", all},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Parse([]byte(tt.yaml), env())
-			if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), `subject "s"`) {
-				t.Fatalf("Parse = %v, want an error naming subject s and containing %q", err, tt.want)
+			p := mustParse(t, tt.yaml)
+			var got []string
+			for _, q := range p.Quarantined() {
+				got = append(got, q.Device)
+				if len(q.Causes) != 1 || !strings.Contains(q.Causes[0], tt.want) ||
+					!strings.Contains(q.Causes[0], `subject "s"`) || !strings.Contains(q.Causes[0], q.Platform) {
+					t.Errorf("%s: causes %q, want one naming subject s, %s and %q", q.Device, q.Causes, q.Platform, tt.want)
+				}
+			}
+			if strings.Join(got, ",") != strings.Join(tt.devices, ",") {
+				t.Fatalf("quarantined %v, want %v", got, tt.devices)
+			}
+			for _, d := range inventory() {
+				_, err := p.Resolve("user:s@example.com", d, noon)
+				if slices.Contains(tt.devices, d.Name) != errors.Is(err, ErrDeviceQuarantined) {
+					t.Errorf("%s: Resolve = %v", d.Name, err)
+				}
 			}
 		})
 	}
 	// A class only EOS defines is fine on a scope that selects only EOS: the
 	// check is per device, not per policy.
-	mustParse(t, `
+	if p := mustParse(t, `
 scopes: [{name: eos, match: {platform: arista_eos}}]
 roles: [{name: tech, permit: [interface @physical]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: eos, roles: [tech]}]`)
+grants: [{subject: s, scope: eos, roles: [tech]}]`); len(p.Quarantined()) != 0 {
+		t.Fatalf("quarantined %+v", p.Quarantined())
+	}
+	// A ceiling no platform can number is the policy's own error: no inventory
+	// could make it load, so it is refused rather than quarantining the fleet.
+	if _, err := Parse([]byte(`
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: operator}]`), env()); err == nil ||
+		!strings.Contains(err.Error(), "no priv-lvl number on any platform") {
+		t.Fatalf("Parse = %v", err)
+	}
 }
 
-// `enable: auto` is refused at load on a platform whose enable exchange does
-// not carry the principal (spec §5.6; §14). config.Load refuses such a
-// platform today, so the check is exercised with a table that says otherwise.
-func TestEnableAutoIsRefusedWhereTheEnableUsernameIsNotThePrincipal(t *testing.T) {
+// `enable: auto` quarantines a device whose enable exchange does not carry the
+// principal (spec §5.6; §14). config.Load refuses such a platform today, so
+// the check is exercised with a table that says otherwise.
+func TestEnableAutoQuarantinesWhereTheEnableUsernameIsNotThePrincipal(t *testing.T) {
 	body := `
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: ro, privilege: readonly, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, enable: auto, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	e := env()
-	if _, err := Parse([]byte(body), e); err != nil {
+	if p, err := Parse([]byte(body), e); err != nil || len(p.Quarantined()) != 0 {
 		t.Fatalf("every shipped platform carries the principal: %v", err)
 	}
 	e.EnableUsernames = map[string]string{"arista_eos": platform.EnableEnab}
-	if _, err := Parse([]byte(body), e); err == nil || !strings.Contains(err.Error(), "enable: auto reaches device") {
-		t.Fatalf("Parse = %v", err)
+	p, err := Parse([]byte(body), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := p.Quarantined()
+	if len(q) != 2 || q[0].Device != "campus-sw-7" || q[1].Device != "leaf-01" ||
+		!strings.Contains(q[0].Causes[0], "enable: auto reaches this device") {
+		t.Fatalf("quarantined %+v", q)
 	}
 }
 ```
@@ -4989,6 +5291,9 @@ func (p *Policy) Resolve(principal string, d admission.Device, now time.Time) (R
 	if !ok {
 		return Resolution{}, ErrNoGrants
 	}
+	if err := p.quarantined(d); err != nil {
+		return Resolution{}, err
+	}
 	return p.resolve(p.subs[name], d, now)
 }
 
@@ -4999,6 +5304,9 @@ func (p *Policy) ResolveSubject(subject string, d admission.Device, now time.Tim
 	sub, ok := p.subs[subject]
 	if !ok {
 		return Resolution{}, fmt.Errorf("policy: subject %q is not declared", subject)
+	}
+	if err := p.quarantined(d); err != nil {
+		return Resolution{}, err
 	}
 	return p.resolve(sub, d, now)
 }
@@ -5152,76 +5460,118 @@ func (p *Policy) render(dialect platform.Dialect, level string) ([]string, strin
 	return nil, "", false
 }
 
-// privLvl is render's twin for the priv-lvl number the ceiling needs.
-func (p *Policy) privLvl(dialect platform.Dialect, level string) (uint8, bool) {
-	for l := level; l != ""; l = p.parents[l] {
-		if n, ok := dialect.PrivLvl(l); ok {
-			return n, true
-		}
+// ErrDeviceQuarantined is device_quarantined: the device failed a joint
+// policy-and-inventory check at load, so nothing is minted for it (spec §10,
+// §13 decision 20). The wrapped message names the cause.
+var ErrDeviceQuarantined = errors.New("policy: the device is quarantined")
+
+// Quarantine is one device that failed a joint check at load, and every
+// cause: the subjects whose composition on it would not compile or would
+// contradict itself.
+type Quarantine struct {
+	Device, Platform string
+	Causes           []string
+}
+
+// Quarantined lists the quarantined devices by name.
+func (p *Policy) Quarantined() []Quarantine {
+	out := make([]Quarantine, 0, len(p.quarantine))
+	for _, q := range p.quarantine {
+		out = append(out, *q)
 	}
-	return 0, false
+	sort.Slice(out, func(i, j int) bool { return out[i].Device < out[j].Device })
+	return out
+}
+
+// quarantined is Resolve's refusal for a quarantined device, naming its first
+// cause.
+func (p *Policy) quarantined(d admission.Device) error {
+	if q, ok := p.quarantine[d.Name]; ok {
+		return fmt.Errorf("%w: %s", ErrDeviceQuarantined, q.Causes[0])
+	}
+	return nil
 }
 
 // checkDevices runs every subject's composition on every device in the
-// inventory and refuses the policy where one would not compile or would
-// contradict itself: a class the platform does not define, a level it cannot
+// inventory, and quarantines a device where one would not compile or would
+// contradict itself: a class its platform does not define, a level it cannot
 // render, a ceiling it cannot number, a landing level above the ceiling, and
-// `enable: auto` where the enable exchange does not carry the principal
-// (spec §4, §5.6, §6, §7). They are joint policy-and-inventory checks, so a
-// policy that passes here never meets them at a mint. Plan 6 turns a failure
-// into a quarantined device rather than a refused policy (spec §13,
-// decision 20).
-func (p *Policy) checkDevices() error {
+// `enable: auto` where its enable exchange does not carry the principal
+// (spec §4, §5.6, §6, §7). A quarantined device is skipped — refused at mint,
+// closed without a reply by the daemon — and the rest of the fleet loads
+// (spec §10, §13 decision 20); refusing the policy instead would take every
+// device down for one. A check no platform could pass is the policy's own
+// error and refused at load (checkClasses, numberedAnywhere). Plan 6 moves
+// quarantine into the bundle the inventory service publishes.
+func (p *Policy) checkDevices() {
+	p.quarantine = map[string]*Quarantine{}
 	names := make([]string, 0, len(p.subs))
 	for name := range p.subs {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		sub := p.subs[name]
-		for _, d := range p.env.Devices {
-			res, err := p.resolve(sub, d, time.Time{})
-			if errors.Is(err, ErrNoGrants) {
-				continue
-			}
-			if err != nil {
-				return fmt.Errorf("subject %q on device %q: %w", name, d.Name, err)
-			}
-			dialect := p.dialect(d.Platform)
-			if res.MaxPrivilege > 0 && res.Level != "" {
-				if landing, ok := p.privLvl(dialect, res.Level); ok && landing > res.MaxPrivilege {
-					return fmt.Errorf("subject %q on device %q: its roles land it at %s (priv-lvl %d), above its "+
-						"grants' max_privilege %s (%d): the device would be told %d while port49 holds the session "+
-						"at %d, and every command would be denied privilege_exceeded; raise max_privilege or lower "+
-						"the role", name, d.Name, res.Level, landing, res.Ceiling, res.MaxPrivilege, landing, res.MaxPrivilege)
+	for _, d := range p.env.Devices {
+		for _, name := range names {
+			if cause := p.checkDevice(p.subs[name], d); cause != "" {
+				q, ok := p.quarantine[d.Name]
+				if !ok {
+					q = &Quarantine{Device: d.Name, Platform: d.Platform}
+					p.quarantine[d.Name] = q
 				}
-			}
-			if sub.Enable == "auto" {
-				if eu := p.env.EnableUsernames[d.Platform]; eu != "" && eu != platform.EnablePrincipal {
-					return fmt.Errorf("subject %q: enable: auto reaches device %q, whose platform %s does not put "+
-						"the operator's own username on the enable exchange; use token or none (spec §5.6, "+
-						"\"Why enable: auto is restricted\")", name, d.Name, d.Platform)
-				}
+				q.Causes = append(q.Causes, fmt.Sprintf("subject %q: %s", name, cause))
 			}
 		}
 	}
-	return nil
+}
+
+// checkDevice is one subject's joint checks on one device; "" is none failed.
+func (p *Policy) checkDevice(sub *Subject, d admission.Device) string {
+	res, err := p.resolve(sub, d, time.Time{})
+	if errors.Is(err, ErrNoGrants) {
+		return ""
+	}
+	if err != nil {
+		return err.Error()
+	}
+	if res.MaxPrivilege > 0 && res.Level != "" {
+		if landing, ok := p.privLvl(p.dialect(d.Platform), res.Level); ok && landing > res.MaxPrivilege {
+			return fmt.Sprintf("on %s its roles land it at %s (priv-lvl %d), above its grants' max_privilege %s "+
+				"(%d): the device would be told %d while port49 holds the session at %d, and every command would "+
+				"be denied privilege_exceeded; raise max_privilege or lower the role", d.Platform, res.Level, landing,
+				res.Ceiling, res.MaxPrivilege, landing, res.MaxPrivilege)
+		}
+	}
+	if sub.Enable == "auto" {
+		if eu := p.env.EnableUsernames[d.Platform]; eu != "" && eu != platform.EnablePrincipal {
+			return fmt.Sprintf("enable: auto reaches this device, whose platform %s does not put the operator's "+
+				"own username on the enable exchange; use token or none (spec §5.6, \"Why enable: auto is "+
+				"restricted\")", d.Platform)
+		}
+	}
+	return ""
 }
 ```
 
 <!-- patch: internal/policy/load.go -->
 ```diff
 diff --git a/internal/policy/load.go b/internal/policy/load.go
-index 88f41a0..1e3d746 100644
+index 2526877..05be69f 100644
 --- a/internal/policy/load.go
 +++ b/internal/policy/load.go
-@@ -171,6 +171,9 @@ func Parse(raw []byte, env Env) (*Policy, error) {
+@@ -56,6 +56,8 @@ type Policy struct {
+ 	grants  []*Grant
+ 	tests   []Test
+ 	env     Env
++	// quarantine is every device a joint check failed on, by name (Task 10).
++	quarantine map[string]*Quarantine
+ }
+ 
+ // Scope selects devices by their inventory attributes (spec §5.5).
+@@ -171,6 +173,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
  	if len(p.subs) == 0 {
  		return nil, errors.New("declares no subjects, so nobody can mint; is this the right file?")
  	}
-+	if err := p.checkDevices(); err != nil {
-+		return nil, err
-+	}
++	p.checkDevices()
  	return p, nil
  }
  
@@ -5243,9 +5593,10 @@ roles they and the device's scopes carry, the level and ceiling they
 compose to, and a blob with the platform's classes and normalization
 and the session attributes layered platform, role, grant, each
 override recorded. Every subject is compiled on every device at load,
-so a class a platform lacks, a level it cannot render, a ceiling below
-the landing level, or enable: auto where the enable exchange carries no
-principal refuses the policy before any mint meets it.
+and a device where a class its platform lacks, a level it cannot render,
+a ceiling below the landing level, or enable: auto where its enable
+exchange carries no principal would meet a mint is quarantined, with
+every cause; the rest of the fleet loads (spec §10; decision 20).
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -5273,7 +5624,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     — the blob a mint would write, encoded, decoded and compiled, then `Command`.
   - `func Caveats(platformName string, d platform.Dialect, o engine.Outcome) []string`.
   - `type TestResult struct { Test Test; Permit bool; Reason decision.Reason; Outcome engine.Outcome; Pass bool; Err error; Caveats []string }`;
-    `func (*Policy) RunTests(now time.Time) []TestResult`.
+    `func (*Policy) RunTests(now time.Time) []TestResult` — a test on a quarantined device is a
+    deny, `device_quarantined`.
   - `func (*Policy) Dialect(name string) platform.Dialect`; `func (*Policy) Device(name string) (admission.Device, bool)`.
   Task 15's `Explain` uses `Decide` and `Caveats`; Task 16's `policy test` prints `Lint` and
   `RunTests`.
@@ -5452,7 +5804,7 @@ import (
 // built-in platforms with one line added. §11 lands bgp_operator and
 // interface_tech at `operator`, and nothing measured says what `operator` is on
 // vEOS, so the shipped arista_eos adapter leaves it unmapped and a real policy
-// shaped like §11 is refused at load (plan 4, Question 1). The corpus is about
+// shaped like §11 quarantines its EOS devices (plan 4, Question 1). The corpus is about
 // decisions, not rendering, so it maps it here, to spec §8's example value.
 func spec11Env(t *testing.T) Env {
 	t.Helper()
@@ -5489,6 +5841,9 @@ func spec11Raw(t *testing.T) []byte {
 // grant expires 2026-12-01.
 func TestTheCompletePolicyExamplePassesItsOwnTests(t *testing.T) {
 	p := spec11(t, spec11Raw(t))
+	if q := p.Quarantined(); len(q) != 0 {
+		t.Fatalf("§11 quarantines nothing on its own inventory: %+v", q)
+	}
 	results := p.RunTests(noon)
 	if len(results) != 7 {
 		t.Fatalf("%d results", len(results))
@@ -5659,6 +6014,26 @@ import (
 	"strings"
 	"testing"
 )
+
+// A policy test on a quarantined device is a deny, device_quarantined: the
+// mint refuses it and the daemon closes the connection (spec §10). The other
+// devices answer as ever.
+func TestATestOnAQuarantinedDeviceIsADeny(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: op, privilege: operator, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [op]}]
+tests:
+  - {subject: s, device: leaf-01, command: "show version", expect: deny, reason: device_quarantined}
+  - {subject: s, device: nx-01, command: "show version", expect: permit}
+`)
+	for _, r := range p.RunTests(noon) {
+		if !r.Pass {
+			t.Errorf("%s on %s: permit=%v %s %v", r.Test.Subject, r.Test.Device, r.Permit, r.Reason, r.Err)
+		}
+	}
+}
 
 // Every kind of finding, once: what CI reports about a policy that loads
 // (spec §5.5, §6, §12; §14, "Attached roles").
@@ -5953,7 +6328,8 @@ type TestResult struct {
 
 // RunTests runs the file's tests against its inventory at now (spec §11,
 // §12). A principal with no grant on the device is a deny, no_grants_matched,
-// which is what the mint would answer.
+// and any principal on a quarantined device a deny, device_quarantined: each is
+// what the mint would answer.
 func (p *Policy) RunTests(now time.Time) []TestResult {
 	var out []TestResult
 	for _, t := range p.tests {
@@ -5963,6 +6339,8 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 		switch {
 		case errors.Is(err, ErrNoGrants):
 			r.Reason = decision.NoGrantsMatched
+		case errors.Is(err, ErrDeviceQuarantined):
+			r.Reason = decision.DeviceQuarantined
 		case err != nil:
 			r.Err = err
 		default:
@@ -6004,7 +6382,8 @@ hold as decisions; shuffling every list in it changes no decision down
 to the rule a record names. Lint reports scopes attaching a permit,
 subjects with no grant, api: rights, group subjects nobody can mint for
 yet, mandatory attributes, attribute shadowing, and devices a scope
-took in because their version could not be compared.
+took in because their version could not be compared. A test on a
+quarantined device is a deny, device_quarantined.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -6029,7 +6408,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `type Request struct { Context store.Context; Device authen.Peer; Raw, Vector []string }`.
   - `type Authorizer interface { Session(ctx context.Context, r Request) Decision; Command(ctx context.Context, r Request) Decision }`
     — the device reaches the authorizer, which is what the platform check and `{device}` need.
-  - `Decision` gains `Policy *decision.Policy`, which `Handle` puts on the record, permit or deny.
+  - `Decision` gains `Policy *decision.Policy`, which `Handle` puts on the record, permit or deny;
+    a permit's attributes go on the record as `reply.attributes` (Task 2).
   - `Handle` still answers `store_unavailable` FAIL (Decided 13), and its context-read denial uses
     `storeUnavailableMsg` from `engine.go`, the one spelling of that `server_msg`.
   - `type Engine struct { Store store.Store; Metrics *metrics.Metrics; Fallback Authorizer }` —
@@ -6144,7 +6524,10 @@ func TestTheEngineAnswersASessionFromTheBlob(t *testing.T) {
 		t.Fatalf("session reply: %+v", resp)
 	}
 	pol, _ := rec["policy"].(map[string]any)
-	if rec["reason"] != "context_matched" || pol["blob"] != f.hash || pol["bundle"] != "sha256:policy" {
+	reply, _ := rec["reply"].(map[string]any)
+	attrs, _ := reply["attributes"].([]any)
+	if rec["reason"] != "context_matched" || pol["blob"] != f.hash || pol["bundle"] != "sha256:policy" ||
+		len(attrs) != 2 || attrs[1] != "home-directory*/home/alice" {
 		t.Fatalf("session record: %v", rec)
 	}
 }
@@ -6448,7 +6831,7 @@ Expected: FAIL to build — `undefined: Request`, `undefined: Engine`, `m.BlobCa
 <!-- patch: internal/daemon/author/author.go -->
 ```diff
 diff --git a/internal/daemon/author/author.go b/internal/daemon/author/author.go
-index 9f27a7b..aeca081 100644
+index 9f27a7b..c2325c3 100644
 --- a/internal/daemon/author/author.go
 +++ b/internal/daemon/author/author.go
 @@ -18,18 +18,31 @@ import (
@@ -6496,7 +6879,7 @@ index 9f27a7b..aeca081 100644
  	}
  	// The key already selected on the username; this re-checks what came back,
  	// for the same reason package authen re-checks the receipt hash after its
-@@ -242,11 +255,13 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
+@@ -242,15 +255,22 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
  	}
  
  	var d Decision
@@ -6512,6 +6895,15 @@ index 9f27a7b..aeca081 100644
  	if !d.Permit {
  		return h.deny(rec, d.Reason, d.ServerMsg)
  	}
+ 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason
++	// What the device is told goes on the record as sent, so a replay can
++	// re-derive a session's attributes and compare (spec §5.7).
++	if len(d.Attributes) > 0 {
++		rec.Reply = &decision.Reply{Attributes: d.Attributes}
++	}
+ 	h.emit(rec)
+ 
+ 	// `ctx.privilege` is the highest level port49 has GRANTED this user on this
 ```
 
 <!-- patch: internal/daemon/author/lab.go -->
@@ -6841,8 +7233,8 @@ compiled blob, cached per replica by hash, and puts the policy block
 on the record. A blob for another platform than the device's is
 blob_platform_mismatch, a missing or corrupt one blob_unavailable, and
 a store that does not answer store_unavailable, answered FAIL as before
-(spec §5.7). The Authorizer interface takes a Request carrying the
-device.
+(spec §5.7). A permit's attributes go on the record as sent. The
+Authorizer interface takes a Request carrying the device.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -6866,8 +7258,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `engine.Encode`, `Blob.SessionAttributes` (Task 5); `author.Engine` (Task 12); `decision.Sink`
   (Task 2).
 - Produces: `broker.Broker.Policy` is `*policy.Policy` from `internal/policy`; a mint item error
-  `attribute_too_long`, which the agent names for the operator; the mint record's `policy.bundle`; `putBlob` marks a blob emitted only when
-  the sink took it. `buildBroker` loads the policy with `policy.Env{Devices: cfg.Inventory.Devices,
+  `attribute_too_long`, which the agent names for the operator; a quarantined device's mint refused
+  `device_quarantined`, and each quarantined device named on stderr at start; the mint record's
+  `policy.bundle`; `putBlob` marks a blob emitted only when the sink took it. `buildBroker` loads the policy with `policy.Env{Devices: cfg.Inventory.Devices,
   EnableUsernames: cfg.EnableUsernames}`. `run` wires `&author.Engine{Store: st, Metrics: m,
   Fallback: &author.Lab{…}}`.
 
@@ -6939,6 +7332,36 @@ func TestAMintRecordNamesItsBundle(t *testing.T) {
 	pol, _ := mints[len(mints)-1]["policy"].(map[string]any)
 	if pol["bundle"] != f.b.Policy.Bundle || !strings.HasPrefix(f.b.Policy.Bundle, "sha256:") {
 		t.Fatalf("mint record policy: %v", pol)
+	}
+}
+
+// A device a joint check failed on is quarantined at load, and a mint for it
+// is refused device_quarantined, by name, while every other device mints
+// (spec §10; §13 decision 20). leaf1 is arista_eos, which renders no operator.
+func TestAQuarantinedDeviceIsRefusedAtMint(t *testing.T) {
+	f := newFixture(t, 8)
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: operator, permit: ["**"]}]
+subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pol, err := policy.Load(path, policy.Env{Devices: []admission.Device{f.b.Devices["leaf1"], f.b.Devices["nx1"]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.b.Policy = pol
+	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","nx1"]}`, ""))
+	byDevice := map[string]string{}
+	for _, it := range resp.Results {
+		byDevice[it.Device] = it.Verdict + " " + it.Reason
+	}
+	if byDevice["leaf1"] != "deny device_quarantined" || !strings.HasPrefix(byDevice["nx1"], "permit") {
+		t.Fatalf("%+v", resp.Results)
 	}
 }
 
@@ -7103,7 +7526,7 @@ index 0ebd913..88cbe65 100644
 <!-- patch: cmd/port49d/broker_test.go -->
 ```diff
 diff --git a/cmd/port49d/broker_test.go b/cmd/port49d/broker_test.go
-index 82f3268..4400ff8 100644
+index 82f3268..4082187 100644
 --- a/cmd/port49d/broker_test.go
 +++ b/cmd/port49d/broker_test.go
 @@ -43,6 +43,7 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
@@ -7114,19 +7537,40 @@ index 82f3268..4400ff8 100644
  roles: [{name: r, privilege: admin, permit: ["**"]}]
  subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
  grants: [{subject: s, scope: all_devices, roles: [r]}]
-@@ -83,8 +84,10 @@ func TestABrokerBuildsFromItsFiles(t *testing.T) {
+@@ -83,8 +84,8 @@ func TestABrokerBuildsFromItsFiles(t *testing.T) {
  
  // Everything that can fail on a typo fails before a listener opens.
  func TestABrokerThatCannotLoadFailsTheStart(t *testing.T) {
 -	if err := buildWith(brokerConfig(t, "roles: [{name: r, privilege: operator}]\n")); err == nil ||
 -		!strings.Contains(err.Error(), "operator") {
-+	// Checked against the inventory: leaf1 is arista_eos, which renders no
-+	// `operator` (internal/platform).
-+	if err := buildWith(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1))); err == nil ||
-+		!strings.Contains(err.Error(), "level operator has no rendering on arista_eos") {
++	if err := buildWith(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: root", 1))); err == nil ||
++		!strings.Contains(err.Error(), `"root" is not a privilege level`) {
  		t.Fatalf("a bad policy: %v", err)
  	}
  	cfg := brokerConfig(t, minimalPolicy)
+@@ -94,6 +95,22 @@ func TestABrokerThatCannotLoadFailsTheStart(t *testing.T) {
+ 	}
+ }
+ 
++// A device the policy cannot be compiled for is quarantined, not a reason to
++// stay down: the start goes on, and names the device and the cause (spec §10;
++// §13 decision 20). leaf1 is arista_eos, which renders no `operator`.
++func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
++	var out bytes.Buffer
++	defer func(w io.Writer) { stderr = w }(stderr)
++	stderr = &out
++	if err := buildWith(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1))); err != nil {
++		t.Fatalf("a quarantined device must not stop the start: %v", err)
++	}
++	if !strings.Contains(out.String(), "device leaf1 (arista_eos) is quarantined") ||
++		!strings.Contains(out.String(), "level operator has no rendering on arista_eos") {
++		t.Fatalf("stderr: %s", out.String())
++	}
++}
++
+ // At 3am the one line port49d exits with names the file to go and look at.
+ func TestABrokerLoadFailureNamesTheFile(t *testing.T) {
+ 	for name, breakIt := range map[string]func(b *config.BrokerConfig) string{
 ```
 
 <!-- write: internal/policy/labpolicy_test.go -->
@@ -7155,6 +7599,9 @@ func TestTheLabPolicyLoads(t *testing.T) {
 	p, err := Load(filepath.Join(root, "tests", "lab", "slice", "policy.yaml"), Env{Devices: inv.Devices})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if q := p.Quarantined(); len(q) != 0 {
+		t.Fatalf("the lab policy quarantines no lab device: %+v", q)
 	}
 	leaf := admission.Device{Name: "leaf1", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.11")}}
 	r, err := p.Resolve("user:alice@slice.port49.test", leaf, noon)
@@ -7199,7 +7646,7 @@ cannot be assigned to `Broker.Policy`.
 <!-- patch: internal/broker/broker.go -->
 ```diff
 diff --git a/internal/broker/broker.go b/internal/broker/broker.go
-index 0a195ce..95a1e03 100644
+index 0a195ce..d34cfd4 100644
 --- a/internal/broker/broker.go
 +++ b/internal/broker/broker.go
 @@ -1,6 +1,6 @@
@@ -7224,7 +7671,7 @@ index 0a195ce..95a1e03 100644
  	"github.com/rhwendt/port49/internal/store"
  	"github.com/rhwendt/port49/internal/token"
  )
-@@ -221,10 +221,16 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
+@@ -221,10 +221,23 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
  		// device and no platform, which is what tells an operator which.
  		return deny(decision.NoGrantsMatched, ""), nil
  	}
@@ -7234,16 +7681,23 @@ index 0a195ce..95a1e03 100644
 +	if errors.Is(err, policy.ErrNoGrants) {
  		return deny(decision.NoGrantsMatched, dev.Platform), nil
  	}
++	if errors.Is(err, policy.ErrDeviceQuarantined) {
++		// A joint check failed on this device at load: nothing correct can be
++		// compiled for it, and the daemon closes its connections without a
++		// reply, so no token is minted to present there (spec §10).
++		return deny(decision.DeviceQuarantined, dev.Platform), nil
++	}
 +	if err != nil {
 +		// The policy's load-time checks compile every subject on every device
-+		// in inventory, so this is a broker defect, not a refusal.
++		// in inventory and quarantine the ones that fail, so this is a broker
++		// defect, not a refusal.
 +		log.Printf("broker: resolving %s on %q: %v", principal, name, err)
 +		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 +	}
  	// Inventory may name a device with no platform (admission.LoadFile does
  	// not require one), and no blob can be compiled for it. That is the
  	// operator's inventory to fix, not a refusal of the caller, so it is this
-@@ -236,13 +242,24 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
+@@ -236,13 +249,24 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
  		return b.fault(name, "device_unconfigured",
  			"inventory gives this device no platform, so the broker cannot compile its policy; tell the operator"), nil
  	}
@@ -7269,7 +7723,7 @@ index 0a195ce..95a1e03 100644
  	if err := b.putBlob(ctx, hash, body); err != nil {
  		return deny(decision.StoreUnavailable, dev.Platform), nil
  	}
-@@ -253,7 +270,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
+@@ -253,7 +277,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
  		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
  		TTL:            time.Duration(req.TTLSeconds) * time.Second,
  		IdempotencyKey: key, BodyHash: bodyHash,
@@ -7278,7 +7732,7 @@ index 0a195ce..95a1e03 100644
  	var capped *token.ErrTooManyOutstanding
  	switch {
  	case errors.Is(err, token.ErrIdempotencyConflict):
-@@ -299,10 +316,11 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
+@@ -299,10 +323,11 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
  // hash's blob record. Emit is one buffered line write, so that is all the lock
  // holds.
  //
@@ -7294,7 +7748,7 @@ index 0a195ce..95a1e03 100644
  func (b *Broker) putBlob(ctx context.Context, hash string, body []byte) error {
  	if err := b.Store.PutBlob(ctx, hash, body, b.MaxSessionAge); err != nil {
  		return err
-@@ -313,8 +331,13 @@ func (b *Broker) putBlob(ctx context.Context, hash string, body []byte) error {
+@@ -313,8 +338,13 @@ func (b *Broker) putBlob(ctx context.Context, hash string, body []byte) error {
  		b.blobsSeen = map[string]bool{}
  	}
  	if !b.blobsSeen[hash] {
@@ -7315,10 +7769,18 @@ index 0a195ce..95a1e03 100644
 <!-- patch: cmd/port49d/main.go -->
 ```diff
 diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
-index 3370855..ae5ae89 100644
+index 3370855..f3d92dc 100644
 --- a/cmd/port49d/main.go
 +++ b/cmd/port49d/main.go
-@@ -29,7 +29,6 @@ import (
+@@ -21,6 +21,7 @@ import (
+ 	"net/http"
+ 	"os"
+ 	"os/signal"
++	"strings"
+ 	"syscall"
+ 	"time"
+ 
+@@ -29,7 +30,6 @@ import (
  
  	"github.com/rhwendt/port49/internal/admission"
  	"github.com/rhwendt/port49/internal/broker"
@@ -7326,7 +7788,7 @@ index 3370855..ae5ae89 100644
  	"github.com/rhwendt/port49/internal/config"
  	"github.com/rhwendt/port49/internal/daemon/acct"
  	"github.com/rhwendt/port49/internal/daemon/authen"
-@@ -39,6 +38,7 @@ import (
+@@ -39,6 +39,7 @@ import (
  	"github.com/rhwendt/port49/internal/daemon/server"
  	"github.com/rhwendt/port49/internal/decision"
  	"github.com/rhwendt/port49/internal/platform"
@@ -7334,20 +7796,31 @@ index 3370855..ae5ae89 100644
  	"github.com/rhwendt/port49/internal/session"
  	"github.com/rhwendt/port49/internal/store"
  	"github.com/rhwendt/port49/internal/store/crypt"
-@@ -157,7 +157,11 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
+@@ -157,10 +158,22 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
  	if cfg.Broker == nil {
  		return nil, nil
  	}
 -	pol, err := policy.Load(cfg.Broker.PolicyFile)
 +	// The policy is checked against the inventory the daemon admits from: a
 +	// class a platform in it does not define, or a level it cannot render, is
-+	// refused here rather than at the first mint for that device (spec §4, §6).
++	// found here rather than at the first mint for that device (spec §4, §6).
 +	pol, err := policy.Load(cfg.Broker.PolicyFile, policy.Env{Devices: cfg.Inventory.Devices,
 +		EnableUsernames: cfg.EnableUsernames})
  	if err != nil {
  		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
  	}
-@@ -273,12 +277,12 @@ func run(cfgPath string) error {
++	// A device a joint check failed on is quarantined rather than the policy
++	// refused: its mints are refused device_quarantined and the rest of the
++	// fleet loads (spec §10; §13 decision 20). Each is said here, with its
++	// cause, so the line at start names what to fix.
++	for _, q := range pol.Quarantined() {
++		fmt.Fprintf(stderr, "port49d: broker: device %s (%s) is quarantined, and nothing is minted for it until "+
++			"the policy or the inventory changes: %s\n", q.Device, q.Platform, strings.Join(q.Causes, "; "))
++	}
+ 	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
+@@ -273,12 +286,12 @@ func run(cfgPath string) error {
  	spoolDone := make(chan struct{})
  	go func() { defer close(spoolDone); spool.Run(spoolCtx) }()
  
@@ -7460,8 +7933,11 @@ git commit -m "refactor: broker and daemon run the policy engine; the slice's bl
 The broker resolves and compiles through internal/policy and writes
 version-2 blobs; port49d answers them with author.Engine. A session
 attribute the principal's own values push past 255 bytes is refused
-at mint (attribute_too_long), and the agent says so. The mint record names its bundle, and a
-blob event the sink refused is emitted again by the next mint.
+at mint (attribute_too_long), and the agent says so. A quarantined
+device's mint is refused device_quarantined, and port49d names each one
+and its cause at start instead of refusing to start. The mint record
+names its bundle, and a blob event the sink refused is emitted again by
+the next mint.
 internal/blob, author.Blob and internal/broker/policy, borrowed ahead
 by plan 3, are removed. all_devices is declared in the slice policy.
 
@@ -7541,7 +8017,7 @@ Expected: FAIL — `a config without lab: loads: config: lab: block is required 
 <!-- patch: internal/config/config.go -->
 ```diff
 diff --git a/internal/config/config.go b/internal/config/config.go
-index c235f92..4a5df04 100644
+index c235f92..9c1f697 100644
 --- a/internal/config/config.go
 +++ b/internal/config/config.go
 @@ -59,9 +59,11 @@ type SeedToken struct {
@@ -7564,7 +8040,7 @@ index c235f92..4a5df04 100644
  // policy edit needs a restart, and a restart ends every live login context
  // and every unspent token — every operator logs in again (plan 3,
 -// Question 3). Plan 4 brings reload.
-+// Question 3). Reload is plan 7's, with policy refresh (roadmap).
++// Question 3). Live policy reload, which keeps every login, is plan 4b's (roadmap).
  //
  // The slice has no revocation lever. To cut someone off, remove their subject
  // from the policy (or re-issue the CA) and restart; certificate revocation is
@@ -7615,10 +8091,10 @@ index c235f92..4a5df04 100644
 <!-- patch: cmd/port49d/main.go -->
 ```diff
 diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
-index ae5ae89..e19387a 100644
+index f3d92dc..c90d4b4 100644
 --- a/cmd/port49d/main.go
 +++ b/cmd/port49d/main.go
-@@ -279,14 +279,17 @@ func run(cfgPath string) error {
+@@ -288,14 +288,17 @@ func run(cfgPath string) error {
  
  	// A context the broker minted names a compiled blob and is answered from it
  	// by the policy engine (plan 4). A context with no blob — the lab's seeds —
@@ -7643,7 +8119,7 @@ index ae5ae89..e19387a 100644
  	minter := token.NewMinter(st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
  	// Plan 7's broker exposes Refresh, RevokeByPrincipal and RevokeBySID over
  	// HTTP; plan 3's serves /v1/tokens and /v1/config only, so nothing in this
-@@ -313,7 +316,7 @@ func run(cfgPath string) error {
+@@ -322,7 +325,7 @@ func run(cfgPath string) error {
  	//
  	// One line per seed, JSON, written before the listener opens; the file is
  	// truncated at start so a restart cannot leave a spent token behind.
@@ -7685,12 +8161,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 **Interfaces:**
 - Consumes: `Decide`, `Caveats`, `ResolveSubject` (Tasks 10, 11); `admission.LoadFile`.
 - Produces:
-  - `type Explanation struct { Subject, Device, Platform, Command string; Resolution Resolution; NoGrants bool; Outcome engine.Outcome; WouldPermit, Caveats []string }`;
+  - `type Explanation struct { Subject, Device, Platform, Command string; Resolution Resolution; NoGrants bool; Quarantine []string; Outcome engine.Outcome; WouldPermit, Caveats []string }`;
     `func (*Policy) Explain(subject, principal, device, line string, now time.Time) (Explanation, error)`;
     `func (Explanation) Render(w io.Writer, showAttributes bool)`.
   - `cmd/port49`: `type policyFiles struct{ policy, inventory string }` with `register(*flag.FlagSet)`
     and `load() (*policy.Policy, error)`; `func explainCmd(args []string, stdout, stderr io.Writer) int`.
-  Tasks 16–19 add their commands to `cmd/port49/policy.go` beside it.
+  Tasks 16–19, 21 and 22 add their commands to `cmd/port49/policy.go` beside it.
 
 `port49 explain --policy FILE --inventory FILE (--subject NAME | --principal ID) --device NAME
 [--command "LINE"] [--show-attributes]`. It names exactly one reason and the rule and role behind
@@ -7698,8 +8174,11 @@ it, and for a denied command every role whose permits would match it (spec §12)
 `--command` it shows the session: the level, the ceiling, and each attribute with where it came
 from and what it shadows (spec §6, "Diagnosing an unfamiliar vendor"). It states what the device
 will not honor: a pipeline on a platform that applies modifiers itself, and on a session-only
-platform any command, a revocation and a ceiling (spec §4, §5.6, §12; decision 21). It exits 0 for a
-permit and for a deny — the answer is the output — and 1 when the files or a name do not load.
+platform any command, a revocation and a ceiling (spec §4, §5.6, §12; decision 21), and, where the
+platform does not declare `config_commands` (no built-in one does), that a configuration-mode
+command may never be sent to port49 at all (spec §12's MUST; Decided 27). A quarantined device is
+explained as the mint answers it, `device_quarantined`, with every cause. It exits 0 for a permit
+and for a deny — the answer is the output — and 1 when the files or a name do not load.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -7760,7 +8239,8 @@ func TestExplainNamesOneReasonAndWhoWouldPermit(t *testing.T) {
 func TestExplainSaysWhatTheDeviceWillNotHonor(t *testing.T) {
 	p := spec11(t, spec11Raw(t))
 	_, out := explained(t, p, "netops_admins", "", "leaf-01", "show run | redirect ftp://x", false)
-	mustContain(t, out, "permit permit_dominates", "note: arista_eos applies output modifiers itself")
+	mustContain(t, out, "permit permit_dominates", "note: arista_eos applies output modifiers itself",
+		"note: arista_eos does not declare config_commands")
 	_, out = explained(t, p, "svc_oxidized", "", "srx-fw-04", "show chassis hardware", false)
 	mustContain(t, out, "note: juniper_junos does not send per-command authorization",
 		"a revocation or a session ceiling does not reach a live session")
@@ -7777,6 +8257,21 @@ func TestExplainShowsTheSessionAttributes(t *testing.T) {
 		"priv-lvl=15", "(mandatory)  <- platform arista_eos, level admin")
 	_, out = explained(t, p, "noc_tier1", "", "leaf-01", "show version", true)
 	mustContain(t, out, "permit permit_dominates", "session attributes that would be returned:", "priv-lvl=7")
+}
+
+// A quarantined device is explained as the mint answers it, with every cause
+// the device failed at load (spec §10).
+func TestExplainNamesAQuarantinedDevice(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: op, privilege: operator, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [op]}]`)
+	_, out := explained(t, p, "s", "", "leaf-01", "show version", false)
+	mustContain(t, out, "deny device_quarantined", "leaf-01 (arista_eos) failed a joint check at load",
+		"level operator has no rendering on arista_eos")
+	_, out = explained(t, p, "s", "", "nx-01", "show version", false)
+	mustContain(t, out, "permit permit_dominates")
 }
 
 // A principal with no subject and a subject with no grant on the device are
@@ -7908,7 +8403,10 @@ type Explanation struct {
 	Resolution Resolution
 	// NoGrants is no_grants_matched: nothing else is filled in.
 	NoGrants bool
-	Outcome  engine.Outcome
+	// Quarantine is device_quarantined: the causes the device failed a joint
+	// check at load with (spec §10). Nothing else is filled in.
+	Quarantine []string
+	Outcome    engine.Outcome
 	// WouldPermit names the roles, held or not, whose permits alone match a
 	// denied command on this platform: what to ask for, or what a deny beats.
 	WouldPermit []string
@@ -7934,6 +8432,10 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 		return Explanation{}, fmt.Errorf("subject %q is not declared", subject)
 	}
 	e := Explanation{Subject: subject, Device: device, Platform: d.Platform, Command: line}
+	if q, ok := p.quarantine[d.Name]; ok {
+		e.Quarantine = q.Causes
+		return e, nil
+	}
 	dialect := p.dialect(d.Platform)
 	if line == "" {
 		res, err := p.ResolveSubject(subject, d, now)
@@ -7958,6 +8460,14 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	}
 	e.Resolution, e.Outcome = res, o
 	e.Caveats = Caveats(d.Platform, dialect, o)
+	// Spec §12: explain MUST say so where `supports` lacks config_commands. No
+	// built-in platform declares it (internal/platform), so a command typed in
+	// configuration mode is not known to reach port49 at all.
+	if dialect.Authorizes("commands") && !dialect.Authorizes("config_commands") {
+		e.Caveats = append(e.Caveats, fmt.Sprintf("%s does not declare config_commands: whether a command typed in "+
+			"configuration mode is sent to port49 at all is unmeasured, so if this is a configuration-mode command "+
+			"the device may apply it whatever this answer says (spec §9, §12)", d.Platform))
+	}
 	if !o.Permit {
 		e.WouldPermit = p.wouldPermit(line, d.Platform)
 	}
@@ -8006,6 +8516,15 @@ func missingClass(rule string, classes map[string][]string) bool {
 // Render writes the explanation for a person: the verdict and its one reason
 // first, then what it rests on.
 func (e Explanation) Render(w io.Writer, showAttributes bool) {
+	if len(e.Quarantine) > 0 {
+		fmt.Fprintf(w, "deny %s\n  %s (%s) failed a joint check at load, so nothing is minted for it and port49d "+
+			"closes its connections without a reply until the policy or the inventory changes (spec §10):\n",
+			decision.DeviceQuarantined, e.Device, e.Platform)
+		for _, c := range e.Quarantine {
+			fmt.Fprintf(w, "    %s\n", c)
+		}
+		return
+	}
 	if e.NoGrants {
 		fmt.Fprintf(w, "deny %s\n  %s holds no grant whose scope selects %s (%s); attached roles never add a "+
 			"device (spec §5.5)\n", decision.NoGrantsMatched, e.Subject, e.Device, e.Platform)
@@ -8229,9 +8748,11 @@ git commit -m "feat: port49 explain
 Resolves a hypothetical decision from the policy and inventory files
 and names exactly one reason, the rule and role behind it, and the
 roles that would permit a denied command (spec §12). Says what the
-device will not honor: a pipeline a platform applies itself, and on a
-session-only platform any command, revocation or ceiling. With no
-command, shows the session attributes and where each came from.
+device will not honor: a pipeline a platform applies itself, a
+configuration-mode command where the platform lacks config_commands,
+and on a session-only platform any command, revocation or ceiling.
+Explains a quarantined device with its causes. With no command, shows
+the session attributes and where each came from.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -8251,19 +8772,21 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   dispatcher; Task 17 adds `replay` to it) and `func policyTest(args []string, stdout, stderr io.Writer) int`.
 
 `port49 policy test --policy FILE --inventory FILE` is the CI gate (spec §11, §12): every load-time
-check is a failure, then each `report:` line is a lint finding (not a failure), then one `PASS` or
-`FAIL` line per test with its caveats, then the count. It exits 1 if the policy does not load or
-any test fails.
+check is a failure, then each `quarantine:` line names a quarantined device and its causes (not a
+failure: the policy loaded, and decision 20 exists so one device cannot block the rest), each
+`report:` line is a lint finding (not a failure), then one `PASS` or `FAIL` line per test with its
+caveats, then the count. It exits 1 if the policy does not load or any test fails. Task 21 adds the
+shadowed-deny report to it.
 
 - [ ] **Step 1: Write the failing tests**
 
 <!-- patch: cmd/port49/policy_test.go -->
 ```diff
 diff --git a/cmd/port49/policy_test.go b/cmd/port49/policy_test.go
-index 54f4cff..fbb1a67 100644
+index 54f4cff..aaef5c3 100644
 --- a/cmd/port49/policy_test.go
 +++ b/cmd/port49/policy_test.go
-@@ -72,3 +72,41 @@ func TestExplainRefusesAnIncompleteAsk(t *testing.T) {
+@@ -72,3 +72,50 @@ func TestExplainRefusesAnIncompleteAsk(t *testing.T) {
  		t.Fatalf("no inventory: code %d %s", code, errb.String())
  	}
  }
@@ -8291,8 +8814,8 @@ index 54f4cff..fbb1a67 100644
 +}
 +
 +// A policy that fails a load-time check fails the gate, with the check's
-+// message, before any test runs: here, a class the inventory's one platform
-+// does not define (spec §4).
++// message, before any test runs: here, a class no platform defines (spec §4).
++// A policy that loads with a device quarantined names it (spec §10).
 +func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
 +	pol, inv := policyFixture(t)
 +	raw, _ := os.ReadFile(pol)
@@ -8301,8 +8824,17 @@ index 54f4cff..fbb1a67 100644
 +	}
 +	var out, errb bytes.Buffer
 +	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
-+		!strings.Contains(errb.String(), "@uplinks, which arista_eos does not define") || out.Len() != 0 {
++		!strings.Contains(errb.String(), "@uplinks, which no platform defines") || out.Len() != 0 {
 +		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
++	}
++	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), "privilege: readonly", "privilege: operator", 1)), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	out.Reset()
++	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
++		!strings.Contains(out.String(), "quarantine: leaf-01 (arista_eos): subject \"noc\": level operator has no rendering") ||
++		!strings.Contains(out.String(), "FAIL noc on leaf-01: \"show version\" -> deny device_quarantined, want permit") {
++		t.Fatalf("code %d\n%s", code, out.String())
 +	}
 +}
 ```
@@ -8317,10 +8849,18 @@ Expected: FAIL — `code 2` (the usage), since `run` does not know `policy`.
 <!-- patch: cmd/port49/policy.go -->
 ```diff
 diff --git a/cmd/port49/policy.go b/cmd/port49/policy.go
-index 0e5ed74..4d09eb4 100644
+index 0e5ed74..0bba01c 100644
 --- a/cmd/port49/policy.go
 +++ b/cmd/port49/policy.go
-@@ -64,3 +64,75 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
+@@ -4,6 +4,7 @@ import (
+ 	"flag"
+ 	"fmt"
+ 	"io"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/rhwendt/port49/internal/admission"
+@@ -64,3 +65,81 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
  	e.Render(stdout, *attrs)
  	return 0
  }
@@ -8355,6 +8895,12 @@ index 0e5ed74..4d09eb4 100644
 +	if err != nil {
 +		fmt.Fprintln(stderr, "port49 policy test:", err)
 +		return 1
++	}
++	// A quarantined device is reported, not a failure of its own: the policy
++	// loaded, and decision 20 exists so one device cannot block the rest. A
++	// test on it fails in the ordinary way, as device_quarantined.
++	for _, q := range p.Quarantined() {
++		fmt.Fprintf(stdout, "quarantine: %s (%s): %s\n", q.Device, q.Platform, strings.Join(q.Causes, "; "))
 +	}
 +	for _, f := range p.Lint() {
 +		fmt.Fprintf(stdout, "report: %s: %s\n", f.Kind, f.Message)
@@ -8435,8 +8981,9 @@ git add cmd/port49/
 git commit -m "feat: port49 policy test
 
 The CI gate: loads the policy against the inventory (every load-time
-check a failure), prints what CI must report, runs the file's tests
-with the evaluator the daemon runs, and exits 1 on any failure.
+check a failure), names each quarantined device, prints what CI must
+report, runs the file's tests with the evaluator the daemon runs, and
+exits 1 on any failure.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -8462,7 +9009,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 Spec §5.7's three uses in one command, `port49 policy replay [--line N] LOGFILE|-`: it reads the
 log alone — every blob a record names is in the same stream as a `blob` event (decision 19) — and
 re-evaluates every authorization record that consulted a blob, comparing the verdict, the reason
-and the matched rules. A blob event whose body does not hash to its name is a divergence (the log
+and the matched rules, and for a session the attributes it returned, re-derived from the blob and
+the record's own username, principal and device name (Decided 26). A blob event whose body does not hash to its name is a divergence (the log
 was altered); a record whose blob the log never carried is unverifiable. A record denied for an
 operational reason (`store_unavailable`, `blob_unavailable`) was decided before policy ran, and is
 not replayed. It exits 1 on any divergence or unverifiable record.
@@ -8500,7 +9048,7 @@ func daemonLog(t *testing.T) (string, string) {
 	t.Helper()
 	b := engine.Blob{Bundle: "sha256:policy", Platform: "arista_eos",
 		Normalize: engine.Normalize{PipeToken: "|", StripCR: true}, Privilege: "admin",
-		Attributes: []string{"priv-lvl=15"},
+		Attributes: []string{"priv-lvl=15", "home-directory*/home/{username}"},
 		Rules: []engine.Rule{
 			{Verdict: engine.Permit, Rule: "copy **", Role: "net_operator"},
 			{Verdict: engine.Permit, Rule: "show **", Role: "read_only"},
@@ -8597,7 +9145,9 @@ func TestTamperingIsDetected(t *testing.T) {
 	}{
 		"an edited verdict": {edit(3, `"verdict":"deny","reason":"no_permit_dominates_deny"`,
 			`"verdict":"permit","reason":"permit_dominates"`), Diverge, "logged permit permit_dominates, replayed deny"},
-		"an edited rule":     {edit(3, `"role":"no_exfil"`, `"role":"read_only"`), Diverge, "matched rules do not"},
+		"an edited rule": {edit(3, `"role":"no_exfil"`, `"role":"read_only"`), Diverge, "matched rules do not"},
+		"an edited session reply": {edit(1, `"home-directory*/home/alice"`, `"home-directory*/home/mallory"`), Diverge,
+			"session attributes do not"},
 		"a substituted blob": {edit(0, `"role":"no_exfil"`, `"role":"nobody"`), Diverge, "does not hash to its name"},
 		"a missing blob":     {strings.Join(lines[1:], "\n"), Unverifiable, "no blob event for " + hash},
 		"another bundle":     {edit(2, `"bundle":"sha256:policy"`, `"bundle":"sha256:other"`), Diverge, "names bundle"},
@@ -8626,7 +9176,7 @@ func TestALineThatIsNotARecordIsAnError(t *testing.T) {
 <!-- patch: cmd/port49/policy_test.go -->
 ```diff
 diff --git a/cmd/port49/policy_test.go b/cmd/port49/policy_test.go
-index fbb1a67..341d802 100644
+index aaef5c3..e8b5769 100644
 --- a/cmd/port49/policy_test.go
 +++ b/cmd/port49/policy_test.go
 @@ -6,6 +6,9 @@ import (
@@ -8639,8 +9189,8 @@ index fbb1a67..341d802 100644
  )
  
  // policyFixture writes a small policy and inventory and returns their paths.
-@@ -110,3 +113,50 @@ func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
- 		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
+@@ -119,3 +122,50 @@ func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
+ 		t.Fatalf("code %d\n%s", code, out.String())
  	}
  }
 +
@@ -8716,6 +9266,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
@@ -8815,9 +9366,26 @@ func one(rec decision.Record, blobs map[string][]byte) (Status, string) {
 	}
 	verdict, reason := decision.VerdictPermit, decision.ContextMatched
 	var pol *decision.Policy
+	var attrs []string
+	session := false
 	switch {
 	case rec.Device != nil && rec.Device.Platform != b.Platform:
 		verdict, reason = decision.VerdictDeny, decision.BlobPlatformMismatch
+	case rec.Event == decision.EventAuthorizeSession:
+		// A session is decided by its attributes as much as by its verdict
+		// (spec §5.7): re-derive them from the blob and the record's own
+		// values, as the daemon filled them.
+		v := engine.Values{Principal: rec.Principal}
+		if rec.Session != nil {
+			v.Username = rec.Session.Username
+		}
+		if rec.Device != nil {
+			v.Device = rec.Device.Name
+		}
+		if attrs, err = b.SessionAttributes(v); err != nil {
+			return Diverge, "the blob's session attributes do not fit this record's values: " + err.Error()
+		}
+		session = true
 	case rec.Event == decision.EventAuthorizeCommand:
 		if rec.Request == nil {
 			return Diverge, "the record has no request to replay"
@@ -8831,6 +9399,16 @@ func one(rec decision.Record, blobs map[string][]byte) (Status, string) {
 	}
 	if verdict != rec.Verdict || reason != rec.Reason {
 		return Diverge, fmt.Sprintf("logged %s %s, replayed %s %s", rec.Verdict, rec.Reason, verdict, reason)
+	}
+	if session {
+		var logged []string
+		if rec.Reply != nil {
+			logged = rec.Reply.Attributes
+		}
+		if !slices.Equal(logged, attrs) {
+			return Diverge, fmt.Sprintf("the verdict agrees but the session attributes do not: logged %q, replayed %q",
+				logged, attrs)
+		}
 	}
 	if pol != nil {
 		logged, _ := json.Marshal(rec.Policy)
@@ -8847,14 +9425,15 @@ func one(rec decision.Record, blobs map[string][]byte) (Status, string) {
 <!-- patch: cmd/port49/policy.go -->
 ```diff
 diff --git a/cmd/port49/policy.go b/cmd/port49/policy.go
-index 4d09eb4..11d96fd 100644
+index 0bba01c..1d8ea45 100644
 --- a/cmd/port49/policy.go
 +++ b/cmd/port49/policy.go
-@@ -4,10 +4,12 @@ import (
+@@ -4,11 +4,13 @@ import (
  	"flag"
  	"fmt"
  	"io"
 +	"os"
+ 	"strings"
  	"time"
  
  	"github.com/rhwendt/port49/internal/admission"
@@ -8863,7 +9442,7 @@ index 4d09eb4..11d96fd 100644
  )
  
  // policyFiles are the two files every policy tool reads: the policy and the
-@@ -74,6 +76,8 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
+@@ -75,6 +77,8 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
  	switch args[0] {
  	case "test":
  		return policyTest(args[1:], stdout, stderr)
@@ -8872,7 +9451,7 @@ index 4d09eb4..11d96fd 100644
  	}
  	fmt.Fprint(stderr, usage)
  	return 2
-@@ -136,3 +140,53 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
+@@ -143,3 +147,53 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
  	}
  	return 0
  }
@@ -8947,7 +9526,7 @@ index 51946a1..1df839d 100644
 - [ ] **Step 4: Run the packages**
 
 Run: `go test ./internal/replay/ ./cmd/port49/ -count=1 && go vet ./internal/replay/ ./cmd/...`
-Expected: PASS: five of the daemon's own records replay in agreement, and each of the five
+Expected: PASS: five of the daemon's own records replay in agreement, and each of the six
 tamperings is reported.
 
 - [ ] **Step 5: Commit**
@@ -8958,9 +9537,9 @@ git commit -m "feat: port49 policy replay
 
 Re-evaluates every authorization record in a decision log against the
 blob event the log carries for it, with the evaluator the daemon runs,
-and reports agreement, divergence (verdict, reason or matched rules; a
-blob that does not hash to its name) or a record whose blob the log
-never carried (spec §5.7).
+and reports agreement, divergence (verdict, reason, matched rules or a
+session's returned attributes; a blob that does not hash to its name)
+or a record whose blob the log never carried (spec §5.7).
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -9028,10 +9607,10 @@ func TestReviewListsEveryGrantRow(t *testing.T) {
 <!-- patch: cmd/port49/policy_test.go -->
 ```diff
 diff --git a/cmd/port49/policy_test.go b/cmd/port49/policy_test.go
-index 341d802..7cb394d 100644
+index e8b5769..4a2794f 100644
 --- a/cmd/port49/policy_test.go
 +++ b/cmd/port49/policy_test.go
-@@ -160,3 +160,22 @@ func TestPolicyReplayFindsAnEditedRecord(t *testing.T) {
+@@ -169,3 +169,22 @@ func TestPolicyReplayFindsAnEditedRecord(t *testing.T) {
  		t.Fatalf("code %d\n%s", code, out.String())
  	}
  }
@@ -9108,19 +9687,18 @@ func (p *Policy) Review(subject string, now time.Time) ([]ReviewRow, error) {
 <!-- patch: cmd/port49/policy.go -->
 ```diff
 diff --git a/cmd/port49/policy.go b/cmd/port49/policy.go
-index 11d96fd..7042cd9 100644
+index 1d8ea45..c4ebd15 100644
 --- a/cmd/port49/policy.go
 +++ b/cmd/port49/policy.go
-@@ -5,6 +5,8 @@ import (
- 	"fmt"
+@@ -6,6 +6,7 @@ import (
  	"io"
  	"os"
-+	"strings"
+ 	"strings"
 +	"text/tabwriter"
  	"time"
  
  	"github.com/rhwendt/port49/internal/admission"
-@@ -190,3 +192,60 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
+@@ -197,3 +198,60 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
  	}
  	return 0
  }
@@ -9320,10 +9898,10 @@ func TestRemoveSubjectRefusesAnUndeclaredSubject(t *testing.T) {
 <!-- patch: cmd/port49/policy_test.go -->
 ```diff
 diff --git a/cmd/port49/policy_test.go b/cmd/port49/policy_test.go
-index 7cb394d..5e35d90 100644
+index 4a2794f..8df594f 100644
 --- a/cmd/port49/policy_test.go
 +++ b/cmd/port49/policy_test.go
-@@ -179,3 +179,40 @@ func TestAccessReviewPrintsTheGrantRows(t *testing.T) {
+@@ -188,3 +188,40 @@ func TestAccessReviewPrintsTheGrantRows(t *testing.T) {
  		t.Fatalf("an undeclared subject: code %d", code)
  	}
  }
@@ -9503,7 +10081,7 @@ func field(m *yaml.Node, key string) string {
 <!-- patch: cmd/port49/policy.go -->
 ```diff
 diff --git a/cmd/port49/policy.go b/cmd/port49/policy.go
-index 7042cd9..417c32a 100644
+index c4ebd15..2da2ed9 100644
 --- a/cmd/port49/policy.go
 +++ b/cmd/port49/policy.go
 @@ -5,6 +5,7 @@ import (
@@ -9514,7 +10092,7 @@ index 7042cd9..417c32a 100644
  	"strings"
  	"text/tabwriter"
  	"time"
-@@ -249,3 +250,82 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
+@@ -255,3 +256,82 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
  	tw.Flush()
  	return 0
  }
@@ -9649,21 +10227,1909 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 ---
 
-### Task 20: The roadmap records what plan 4 built and hands forward
+### Task 20: A quarantined device gets silence, not FAIL
 
 **Files:**
-- Modify: `docs/superpowers/plans/README.md` (the "Plan 4" section)
+- Modify: `internal/daemon/server/server.go`, `internal/daemon/server/conn.go`,
+  `internal/keyring/keyring.go`, `internal/daemon/metrics/metrics.go`, `cmd/port49d/main.go`
+- Test: modify `internal/daemon/server/server_test.go`, `internal/daemon/metrics/metrics_test.go`,
+  `cmd/port49d/broker_test.go`
 
 **Interfaces:**
-- Produces: plan 4's "As built" paragraph, and what plans 5, 6 and 7 inherit from it, where
-  the next plan writer starts (`CLAUDE.md`).
+- Consumes: `Policy.Quarantined` (Task 10); `buildBroker` (Task 13).
+- Produces: `server.Deps.Quarantined map[string]bool`, read-only once `Serve` starts;
+  `keyring.DiagDeviceQuarantined`; `metrics.Metrics.DevicesQuarantined`, the gauge
+  `port49_devices_quarantined` (no labels); `buildBroker(...) (*http.Server, *policy.Policy, error)`.
+
+Task 13 refuses the mint for a quarantined device. Spec §10 asks for more: "a quarantined device
+gets silence, not FAIL". The daemon closes the connection without a reply, exactly as for
+`device_unknown`, so the device declares the server dead and falls to its local method, the
+posture every platform documents for an outage. That covers a context minted before the policy
+changed, and the lab's seeded contexts. The connection costs one header read. Nothing is
+decrypted, and the body, which carries the credential, is never read. The record is the
+header-only `unvalidated` record, with the reason `device_quarantined` and the device named.
+buildBroker now hands `run` the policy it loaded, and the daemon reads its quarantine list and
+nothing else of it.
+
+- [ ] **Step 1: Write the failing tests**
+
+<!-- patch: internal/daemon/server/server_test.go -->
+```diff
+diff --git a/internal/daemon/server/server_test.go b/internal/daemon/server/server_test.go
+index 3cf45b7..d9e7de6 100644
+--- a/internal/daemon/server/server_test.go
++++ b/internal/daemon/server/server_test.go
+@@ -159,6 +159,13 @@ func (ts *testServer) shutdown() {
+ // lab authorizer every other test wants; a test passes its own only to reach
+ // a path the lab authorizer cannot produce.
+ func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.Authorizer) *testServer {
++	t.Helper()
++	return newTestServerWith(t, log, st, authz, nil)
++}
++
++// newTestServerWith is newTestServer with a last word on the Deps, for a test
++// that needs one field the others do not.
++func newTestServerWith(t *testing.T, log *syncBuffer, st store.Store, authz author.Authorizer, adjust func(*Deps)) *testServer {
+ 	t.Helper()
+ 	if authz == nil {
+ 		authz = &author.Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
+@@ -195,6 +202,9 @@ func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.A
+ 		Author: author.New(st, authz, em, m, time.Now, platform.Defaults(), time.Hour, 10*time.Minute, time.Hour),
+ 		Acct:   acct.New(st, sp, m, time.Now, platform.SystemUsers()),
+ 		Limits: lim, Metrics: m, Log: em, Now: time.Now, IdleTimeout: time.Second}
++	if adjust != nil {
++		adjust(&d)
++	}
+ 	ln, err := net.Listen("tcp", "127.0.0.1:0")
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -650,6 +660,33 @@ func TestUnadmittedSourceIsRecordedAndClosed(t *testing.T) {
+ 	}
+ }
+ 
++// A quarantined device gets silence, not FAIL (spec §10; §13 decision 20):
++// its connection is closed without a reply after one header, and the record
++// names the device and says device_quarantined. The body, which carries the
++// credential, is never read.
++func TestAQuarantinedDeviceIsClosedWithoutAReply(t *testing.T) {
++	log := &syncBuffer{}
++	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
++		d.Quarantined = map[string]bool{"leaf-01": true}
++	})
++	c := dial(t, ts.addr, []byte("k2"))
++	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
++		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
++	c.conn.SetReadDeadline(time.Now().Add(time.Second))
++	if _, err := c.conn.Read(make([]byte, 1)); err == nil {
++		t.Fatal("a quarantined device must get no reply")
++	}
++	if !waitFor(t, func() bool { return log.contains(`"reason":"device_quarantined"`) }) {
++		t.Fatalf("log: %s", log.String())
++	}
++	if !log.contains(`"name":"leaf-01"`) || !log.contains(`"diagnosis":"device_quarantined"`) || log.contains("p49_e2e") {
++		t.Fatalf("the record names the device, and never the credential: %s", log.String())
++	}
++	if n := testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")); n != 1 {
++		t.Fatalf("unvalidated{device_quarantined} = %v", n)
++	}
++}
++
+ func TestPerNASCapRefusesThirdConnection(t *testing.T) {
+ 	log := &syncBuffer{}
+ 	addr, _, m := startServer(t, log)
+```
+
+<!-- patch: internal/daemon/metrics/metrics_test.go -->
+```diff
+diff --git a/internal/daemon/metrics/metrics_test.go b/internal/daemon/metrics/metrics_test.go
+index 65a3d0f..61d42c4 100644
+--- a/internal/daemon/metrics/metrics_test.go
++++ b/internal/daemon/metrics/metrics_test.go
+@@ -30,6 +30,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
+ 	m.Attributions.WithLabelValues("foreign").Inc()
+ 	m.BrokerItemErrors.WithLabelValues("device_unconfigured").Inc()
+ 	m.BlobCache.WithLabelValues("hit").Inc()
++	m.DevicesQuarantined.Set(1)
+ 
+ 	// Gather all metrics from registry.
+ 	families, err := reg.Gather()
+@@ -55,6 +56,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
+ 		"port49_accounting_attributions_total":     false,
+ 		"port49_broker_item_errors_total":          false,
+ 		"port49_blob_cache_lookups_total":          false,
++		"port49_devices_quarantined":               false,
+ 	}
+ 
+ 	// Check that all expected metrics are present and all gathered metrics are snake_case.
+```
+
+<!-- patch: cmd/port49d/broker_test.go -->
+```diff
+diff --git a/cmd/port49d/broker_test.go b/cmd/port49d/broker_test.go
+index 4082187..15c8944 100644
+--- a/cmd/port49d/broker_test.go
++++ b/cmd/port49d/broker_test.go
+@@ -50,20 +50,20 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
+ `
+ 
+ func buildWith(cfg config.Config) error {
+-	_, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
++	_, _, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+ 		metrics.New(prometheus.NewRegistry()))
+ 	return err
+ }
+ 
+ func TestNoBrokerBlockBuildsNoBroker(t *testing.T) {
+-	srv, err := buildBroker(config.Config{}, nil, nil, nil, nil)
+-	if srv != nil || err != nil {
+-		t.Fatalf("%v %v", srv, err)
++	srv, pol, err := buildBroker(config.Config{}, nil, nil, nil, nil)
++	if srv != nil || pol != nil || err != nil {
++		t.Fatalf("%v %v %v", srv, pol, err)
+ 	}
+ }
+ 
+ func TestABrokerBuildsFromItsFiles(t *testing.T) {
+-	srv, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
++	srv, _, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
+ 		decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
+ 	if err != nil {
+ 		t.Fatal(err)
+@@ -102,9 +102,14 @@ func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
+ 	var out bytes.Buffer
+ 	defer func(w io.Writer) { stderr = w }(stderr)
+ 	stderr = &out
+-	if err := buildWith(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1))); err != nil {
++	_, pol, err := buildBroker(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1)),
++		memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
++	if err != nil {
+ 		t.Fatalf("a quarantined device must not stop the start: %v", err)
+ 	}
++	if q := pol.Quarantined(); len(q) != 1 || q[0].Device != "leaf1" {
++		t.Fatalf("the daemon is handed the quarantine list: %+v", q)
++	}
+ 	if !strings.Contains(out.String(), "device leaf1 (arista_eos) is quarantined") ||
+ 		!strings.Contains(out.String(), "level operator has no rendering on arista_eos") {
+ 		t.Fatalf("stderr: %s", out.String())
+@@ -215,7 +220,7 @@ func TestBrokerTLSErrorsReachPort49dsLog(t *testing.T) {
+ 	defer func(w io.Writer) { stderr = w }(stderr)
+ 	stderr = &out
+ 
+-	srv, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
++	srv, _, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
+ 		decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
+ 	if err != nil {
+ 		t.Fatal(err)
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `go vet ./internal/daemon/... ./cmd/port49d/`
+Expected: FAIL to build — `d.Quarantined undefined`, `m.DevicesQuarantined undefined`, and
+`assignment mismatch: 3 variables but buildBroker returns 2 values`.
+
+- [ ] **Step 3: Close a quarantined device's connections, and hand the list to the daemon**
+
+<!-- patch: internal/keyring/keyring.go -->
+```diff
+diff --git a/internal/keyring/keyring.go b/internal/keyring/keyring.go
+index b6e63b7..d9c8c7f 100644
+--- a/internal/keyring/keyring.go
++++ b/internal/keyring/keyring.go
+@@ -32,6 +32,7 @@ const (
+ 	// Emitted by the connection layer for packets the keyring never sees; Resolve never returns them.
+ 	DiagUnadmittedSource         Diagnosis = "unadmitted_source"          // source address not in the inventory
+ 	DiagMalformedAfterValidation Diagnosis = "malformed_after_validation" // key validated, body did not decode
++	DiagDeviceQuarantined        Diagnosis = "device_quarantined"         // admitted, but quarantined by policy (spec §10)
+ )
+ 
+ type Result struct {
+```
+
+<!-- patch: internal/daemon/metrics/metrics.go -->
+```diff
+diff --git a/internal/daemon/metrics/metrics.go b/internal/daemon/metrics/metrics.go
+index cf5ccbf..1c44852 100644
+--- a/internal/daemon/metrics/metrics.go
++++ b/internal/daemon/metrics/metrics.go
+@@ -57,8 +57,13 @@ type Metrics struct {
+ 	// port49_blob_cache_lookups_total{outcome}: the authorizer's per-replica
+ 	// blob cache, "hit" or "miss" (spec §5.1.1). A miss is one store read,
+ 	// counted again in port49_store_operations_total{op="get_blob"}; a hit
+-	// during a store outage is a command still being answered.
++	// during a blob-read failure is a command still being answered.
+ 	BlobCache *prometheus.CounterVec
++	// port49_devices_quarantined: how many inventory devices the loaded policy
++	// quarantined (spec §10). Each is named in port49d's start lines and on
++	// every record its connections leave; the gauge is what an alert watches,
++	// and it names no device.
++	DevicesQuarantined prometheus.Gauge
+ }
+ 
+ func New(reg prometheus.Registerer) *Metrics {
+@@ -100,9 +105,12 @@ func New(reg prometheus.Registerer) *Metrics {
+ 			Help: "Mint items the broker could not decide, by API error code."}, []string{"error"}),
+ 		BlobCache: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_blob_cache_lookups_total",
+ 			Help: "Compiled-blob cache lookups by the authorizer, by outcome."}, []string{"outcome"}),
++		DevicesQuarantined: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_devices_quarantined",
++			Help: "Inventory devices the loaded policy quarantined."}),
+ 	}
+ 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
+ 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
+-		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache)
++		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
++		m.DevicesQuarantined)
+ 	return m
+ }
+```
+
+<!-- patch: internal/daemon/server/server.go -->
+```diff
+diff --git a/internal/daemon/server/server.go b/internal/daemon/server/server.go
+index ac91db1..361dc88 100644
+--- a/internal/daemon/server/server.go
++++ b/internal/daemon/server/server.go
+@@ -28,7 +28,11 @@ import (
+ )
+ 
+ type Deps struct {
+-	Admission   *admission.Trie
++	Admission *admission.Trie
++	// Quarantined names the admitted devices the loaded policy quarantined
++	// (spec §10): each connection from one is closed without a reply after
++	// its first header. Read-only once Serve starts.
++	Quarantined map[string]bool
+ 	Keys        map[string]keyring.Set
+ 	Authen      *authen.Handler
+ 	Author      *author.Handler
+@@ -97,7 +101,8 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
+ 		d.Metrics.Connections.WithLabelValues("open").Inc()
+ 
+ 		dev, admitted := d.Admission.Lookup(src)
+-		cc := &conn{d: d, c: c, src: src, dev: dev, admitted: admitted,
++		quarantined := admitted && d.Quarantined[dev.Device.Name]
++		cc := &conn{d: d, c: c, src: src, dev: dev, admitted: admitted, quarantined: quarantined,
+ 			keys: d.Keys[dev.KeyRef], sessions: map[uint32]*authen.Session{}}
+ 
+ 		wg.Add(1)
+```
+
+<!-- patch: internal/daemon/server/conn.go -->
+```diff
+diff --git a/internal/daemon/server/conn.go b/internal/daemon/server/conn.go
+index 5da5800..c2f0d1e 100644
+--- a/internal/daemon/server/conn.go
++++ b/internal/daemon/server/conn.go
+@@ -44,7 +44,9 @@ type conn struct {
+ 	src      netip.Addr
+ 	dev      admission.Resolved
+ 	admitted bool
+-	keys     keyring.Set
++	// quarantined is an admitted device the policy quarantined (spec §10).
++	quarantined bool
++	keys        keyring.Set
+ 
+ 	version  int  // 0 until the first packet validates; then the only version this connection uses
+ 	single   bool // the first packet asked to keep the connection open
+@@ -69,6 +71,17 @@ func (s *conn) unvalidated(h wire.Header, body []byte, diag keyring.Diagnosis, v
+ 	s.d.Metrics.Unvalidated.WithLabelValues(string(diag)).Inc()
+ }
+ 
++// quarantine records a connection from a quarantined device: the header's
++// cleartext fields, the source and the device, and the reason
++// device_quarantined (spec §5.7, §10). No body was read, so none is hashed.
++func (s *conn) quarantine(h wire.Header) {
++	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Reason: decision.DeviceQuarantined,
++		Device: &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform},
++		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagDeviceQuarantined),
++			KeyRef: s.dev.KeyRef, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
++	s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagDeviceQuarantined)).Inc()
++}
++
+ // backoff holds the connection for the limiter's per-source delay before it is
+ // closed, so a source that floods malformed packets pays a growing cost while
+ // every other source is untouched. It is cancellable so shutdown is not stuck
+@@ -111,7 +124,7 @@ func (s *conn) serve(ctx context.Context) {
+ 		// The deadline is wall-clock I/O, so it uses the real clock even when a
+ 		// test injects Deps.Now for record timestamps.
+ 		deadline := s.d.IdleTimeout
+-		if !s.admitted && deadline > unadmittedHeaderDeadline {
++		if (!s.admitted || s.quarantined) && deadline > unadmittedHeaderDeadline {
+ 			deadline = unadmittedHeaderDeadline
+ 		}
+ 		if err := s.c.SetReadDeadline(time.Now().Add(deadline)); err != nil {
+@@ -139,6 +152,17 @@ func (s *conn) serve(ctx context.Context) {
+ 			return
+ 		}
+ 
++		// A quarantined device gets silence, not FAIL (spec §10; §13 decision
++		// 20): one header read, nothing decrypted, no reply, so the device
++		// declares the server dead and falls to its local method exactly as in
++		// an outage. The policy could not be compiled for it; it is not
++		// suspect, and nothing it sent is kept but the header.
++		if s.quarantined {
++			s.quarantine(h)
++			s.backoff(ctx, "device_quarantined")
++			return
++		}
++
+ 		// Header checks come before anything that would touch the body, so an
+ 		// unencrypted packet is refused without its cleartext ever being read.
+ 		if err := h.Validate(); err != nil {
+```
+
+<!-- patch: cmd/port49d/main.go -->
+```diff
+diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
+index c90d4b4..f07445d 100644
+--- a/cmd/port49d/main.go
++++ b/cmd/port49d/main.go
+@@ -148,15 +148,16 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (lo
+ // which is stdout — swapped in tests.
+ var stderr io.Writer = os.Stderr
+ 
+-// buildBroker loads what the broker needs and returns its server, or nil when
+-// no broker: block is configured. It runs before any listener opens, so a
++// buildBroker loads what the broker needs and returns its server and the
++// policy it loaded, or nils when no broker: block is configured. The daemon
++// reads the policy's quarantine list, and nothing else of it (spec §10). It runs before any listener opens, so a
+ // policy typo or an unreadable certificate ends the start with one line
+ // rather than surfacing at the first mint. Each error names the config key
+ // and the file, so that line says what to go and fix.
+ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log decision.Emitter,
+-	m *metrics.Metrics) (*http.Server, error) {
++	m *metrics.Metrics) (*http.Server, *policy.Policy, error) {
+ 	if cfg.Broker == nil {
+-		return nil, nil
++		return nil, nil, nil
+ 	}
+ 	// The policy is checked against the inventory the daemon admits from: a
+ 	// class a platform in it does not define, or a level it cannot render, is
+@@ -164,7 +165,7 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
+ 	pol, err := policy.Load(cfg.Broker.PolicyFile, policy.Env{Devices: cfg.Inventory.Devices,
+ 		EnableUsernames: cfg.EnableUsernames})
+ 	if err != nil {
+-		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
++		return nil, nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
+ 	}
+ 	// A device a joint check failed on is quarantined rather than the policy
+ 	// refused: its mints are refused device_quarantined and the rest of the
+@@ -176,7 +177,7 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
+ 	}
+ 	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
+ 	if err != nil {
+-		return nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
++		return nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
+ 			cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile, err)
+ 	}
+ 	// A server certificate outside its validity does not stop the start:
+@@ -203,7 +204,7 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
+ 	devices := make(map[string]admission.Device, len(cfg.Inventory.Devices))
+ 	for _, d := range cfg.Inventory.Devices {
+ 		if _, seen := devices[d.Name]; seen {
+-			return nil, fmt.Errorf("inventory names device %q twice; the broker mints by name", d.Name)
++			return nil, nil, fmt.Errorf("inventory names device %q twice; the broker mints by name", d.Name)
+ 		}
+ 		devices[d.Name] = d
+ 	}
+@@ -212,7 +213,7 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
+ 	// Startup only. Server panics on a nil or empty anchor pool; LoadTLS has
+ 	// just returned a pool of exactly one, so it cannot here, and buildBroker
+ 	// runs before the TACACS+ listener opens — a panic would end a start, never
+-	// a running daemon's device AAA. A reload path (plan 7) must not call
++	// a running daemon's device AAA. A live reload (plan 4b) must not call
+ 	// Server until it returns an error instead.
+ 	srv := b.Server(cfg.Broker.Listen, cert, anchor)
+ 	// net/http logs what no handler sees — a handshake refused for an expired
+@@ -220,7 +221,7 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
+ 	// standard library's default logger; routed here it lands beside
+ 	// port49d's other lines, where an operator is already looking.
+ 	srv.ErrorLog = stdlog.New(stderr, "port49d: broker: ", 0)
+-	return srv, nil
++	return srv, pol, nil
+ }
+ 
+ func run(cfgPath string) error {
+@@ -307,7 +308,7 @@ func run(cfgPath string) error {
+ 	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
+ 	_ = sessions
+ 
+-	brokerSrv, err := buildBroker(cfg, st, minter, log, m)
++	brokerSrv, pol, err := buildBroker(cfg, st, minter, log, m)
+ 	if err != nil {
+ 		stopSpool()
+ 		<-spoolDone
+@@ -336,7 +337,19 @@ func run(cfgPath string) error {
+ 			"credentials written to %s\n", logins, enables, cfg.Lab.SeedTokenFile)
+ 	}
+ 
+-	deps := server.Deps{Admission: cfg.Admission, Keys: cfg.Keyring(),
++	// Quarantine (spec §10; §13 decision 20): a device the policy could not
++	// be compiled for is closed without a reply, as for an unknown source, so
++	// it falls to its local method exactly as in an outage. buildBroker has
++	// already named each one and its cause.
++	quarantined := map[string]bool{}
++	if pol != nil {
++		for _, q := range pol.Quarantined() {
++			quarantined[q.Device] = true
++		}
++	}
++	m.DevicesQuarantined.Set(float64(len(quarantined)))
++
++	deps := server.Deps{Admission: cfg.Admission, Quarantined: quarantined, Keys: cfg.Keyring(),
+ 		// The context indexes are given the context's own idle TTL: they exist
+ 		// to let revocation reach a live context, so they need to outlast
+ 		// nothing the context does not.
+```
+
+- [ ] **Step 4: Run the packages**
+
+Run: `gofmt -l internal cmd; go test ./internal/daemon/... ./internal/keyring/ ./cmd/port49d/ -count=1 && go vet -tags lab ./tests/lab/...`
+Expected: no gofmt output; PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/daemon/ internal/keyring/keyring.go cmd/port49d/
+git commit -m "feat: a quarantined device gets silence, not FAIL
+
+port49d closes a quarantined device's connections after one header,
+without a reply and without reading the body, as for an unknown source,
+so the device falls to its local method as in an outage (spec §10;
+decision 20). The record is the header-only one with the reason
+device_quarantined and the device named; port49_devices_quarantined
+counts them. buildBroker hands run the policy's quarantine list.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+```
+
+---
+
+### Task 21: The shadowed-deny report, and the tests that acknowledge it
+
+**Files:**
+- Create: `internal/engine/shadow.go`, `internal/policy/shadow.go`
+- Modify: `cmd/port49/policy.go`
+- Test: `internal/engine/shadow_test.go`, `internal/policy/shadow_test.go`; modify
+  `cmd/port49/policy_test.go`
+
+**Interfaces:**
+- Consumes: the compiled rules and `Outcome.Denies` (Task 6); `RunTests` (Task 11); the
+  quarantine (Task 10).
+- Produces: `type Shadow struct { Deny, Permit Rule; Possible bool }`;
+  `func (*Program) Shadows() []Shadow`; `type ShadowedDeny struct { Subject, Deny, DenyRole, Permit, PermitRole string; Platforms []string; Possible, Acknowledged bool }`;
+  `func (*Policy) ShadowedDenies() []ShadowedDeny`. `port49 policy test` prints the report and exits
+  1 on a shadow no test acknowledges.
+
+Task 13 replaced plan 3's deny-overrides with dominance, so a deny is now a default a more
+specific permit can beat. Spec §12 puts visibility where the guarantee used to be: "CI MUST name
+every shadowed deny, the subject it fails to bind, and the permit that beats it." A shadow is a
+dominance that can happen. There is some command both rules match on which the permit is at least
+as specific at every position and more specific at one. That is decidable term by term. Two
+words meet if they are equal, or if the deny's word takes the permit's as an abbreviation where
+the platform may send one. A word meets a regex or class the pattern matches. `*` and `**` meet
+anything. Two regex or class terms at one position may or may not share a string, and that is not
+decidable cheaply, so the shadow is reported as *possible* and does not fail the gate.
+
+§5.4's deliberate exemption, `cve_2026_xxxx_assess` over the CVE deny, is a shadow, so a gate
+that failed every shadow would fail §11 itself. The acknowledgment is the one §11 already
+carries: a policy test for that subject that expects `permit` on a command where that permit
+wins over that deny (spec §12, amended in Task 1). A permit outcome lists every deny its deciding
+permit overrode (`Outcome.Denies`), so a passing test acknowledges each pair it exercises.
+
+- [ ] **Step 1: Write the failing tests**
+
+<!-- write: internal/engine/shadow_test.go -->
+```go
+package engine
+
+import (
+	"testing"
+)
+
+// A shadow is exactly a dominance that can happen (spec §5.4, §12): the
+// motivating CVE case is one, a broad permit is none, and a deny the permit
+// never meets is none.
+func TestShadowsAreTheDominancesThatCanHappen(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		permit, deny  string
+		want          bool
+		wantPossible  bool
+		expandsAbbrev bool
+	}{
+		{"the backup account's exception", "show chassis hardware", "show chassis **", true, false, true},
+		{"a broader permit", "show **", "show chassis **", false, false, true},
+		{"the tftp deny", "copy **", "* * /^tftp:/", false, false, true},
+		{"equal tuples", "show version", "show version", false, false, true},
+		{"never the same command", "show version", "reload **", false, false, true},
+		{"a word the regex takes", "copy running-config tftp://x", "* * /^tftp:/", true, false, true},
+		{"a word the regex refuses", "copy running-config scp://x", "* * /^tftp:/", false, false, true},
+		{"a class against a regex", "copy running-config @backup_targets", "* * /^scp:/", true, true, true},
+		{"a deny of everything", "show version", "**", true, false, true},
+		// Where the platform may send what was typed, the deny's word also
+		// takes its own abbreviations, and a permit written as one meets it.
+		{"an abbreviation, sent as typed", "rel now", "reload **", true, false, false},
+		{"an abbreviation, sent resolved", "rel now", "reload **", false, false, true},
+	} {
+		p := program(t, tt.expandsAbbrev, "p:permit "+tt.permit, "d:deny "+tt.deny)
+		got := p.Shadows()
+		if (len(got) == 1) != tt.want {
+			t.Errorf("%s: shadows %+v, want %v", tt.name, got, tt.want)
+			continue
+		}
+		if tt.want && (got[0].Possible != tt.wantPossible || got[0].Deny.Rule != CanonicalRule(tt.deny) ||
+			got[0].Permit.Role != "p") {
+			t.Errorf("%s: %+v", tt.name, got[0])
+		}
+	}
+}
+
+// Shadows are listed in one order whatever the rules' order, so a report
+// built on them is stable across a shuffled policy.
+func TestShadowsAreOrdered(t *testing.T) {
+	a := program(t, true, "x:permit show chassis hardware", "y:permit show chassis cluster status",
+		"c:deny show chassis **", "b:deny show * hardware")
+	b := program(t, true, "b:deny show * hardware", "c:deny show chassis **",
+		"y:permit show chassis cluster status", "x:permit show chassis hardware")
+	sa, sb := a.Shadows(), b.Shadows()
+	if len(sa) != 3 || len(sb) != 3 {
+		t.Fatalf("%+v / %+v", sa, sb)
+	}
+	for i := range sa {
+		if sa[i] != sb[i] {
+			t.Fatalf("order differs at %d: %+v / %+v", i, sa[i], sb[i])
+		}
+	}
+	if sa[0].Deny.Role != "b" || sa[1].Permit.Role != "x" || sa[2].Permit.Role != "y" {
+		t.Fatalf("%+v", sa)
+	}
+}
+```
+
+<!-- write: internal/policy/shadow_test.go -->
+```go
+package policy
+
+import (
+	"strings"
+	"testing"
+)
+
+// §11 shadows exactly one deny, and says so: the CVE deny does not bind
+// security_ir on `show chassis cluster status`. That is §5.4's deliberate
+// exemption, and §11's own test for it is the acknowledgment (spec §12).
+func TestTheCompletePolicyExampleShadowsOneDenyAndItsTestAcknowledgesIt(t *testing.T) {
+	p := spec11(t, spec11Raw(t))
+	got := p.ShadowedDenies()
+	if len(got) != 1 {
+		t.Fatalf("shadows %+v", got)
+	}
+	s := got[0]
+	if s.Subject != "security_ir" || s.Deny != "show chassis cluster **" || s.DenyRole != "cve_2026_xxxx" ||
+		s.Permit != "show chassis cluster status" || s.PermitRole != "cve_2026_xxxx_assess" ||
+		strings.Join(s.Platforms, ",") != "juniper_junos" || s.Possible || !s.Acknowledged {
+		t.Fatalf("%+v", s)
+	}
+}
+
+// A shadow no test exercises is reported unacknowledged, and a permit test on
+// a command where the permit wins over the deny acknowledges it. A test on
+// another command, or another subject, does not.
+func TestAShadowIsAcknowledgedOnlyByATestThatExercisesIt(t *testing.T) {
+	const body = `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: backup, privilege: readonly, permit: [show chassis hardware, show version]}
+  - {name: cve, deny: [show chassis **]}
+subjects:
+  - {name: svc, identity: "app:backup", username: svc-backup, token_ttl: 60s}
+  - {name: other, identity: "app:other", username: svc-other, token_ttl: 60s}
+grants:
+  - {subject: svc, scope: all_devices, roles: [backup, cve]}
+  - {subject: other, scope: all_devices, roles: [backup, cve]}
+`
+	p := mustParse(t, body+`tests:
+  - {subject: svc, device: leaf-01, command: "show version", expect: permit}
+`)
+	got := p.ShadowedDenies()
+	if len(got) != 2 || got[0].Subject != "other" || got[1].Subject != "svc" || got[0].Acknowledged || got[1].Acknowledged {
+		t.Fatalf("%+v", got)
+	}
+	if len(got[1].Platforms) != 4 {
+		t.Fatalf("the pair meets on every platform in inventory: %+v", got[1].Platforms)
+	}
+	p = mustParse(t, body+`tests:
+  - {subject: svc, device: leaf-01, command: "show chassis hardware", expect: permit}
+`)
+	got = p.ShadowedDenies()
+	if len(got) != 2 || got[0].Acknowledged || !got[1].Acknowledged {
+		t.Fatalf("%+v", got)
+	}
+}
+```
+
+<!-- patch: cmd/port49/policy_test.go -->
+```diff
+diff --git a/cmd/port49/policy_test.go b/cmd/port49/policy_test.go
+index 8df594f..831a397 100644
+--- a/cmd/port49/policy_test.go
++++ b/cmd/port49/policy_test.go
+@@ -83,7 +83,7 @@ func TestPolicyTestIsACIGate(t *testing.T) {
+ 	var out, errb bytes.Buffer
+ 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+ 		!strings.Contains(out.String(), "PASS noc on leaf-01: \"reload\" -> deny no_rule_matched") ||
+-		!strings.Contains(out.String(), "2 tests, 0 failed") {
++		!strings.Contains(out.String(), "2 tests, 0 failed; 0 shadowed denies, 0 unacknowledged") {
+ 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+ 	}
+ 	raw, _ := os.ReadFile(pol)
+@@ -98,6 +98,33 @@ func TestPolicyTestIsACIGate(t *testing.T) {
+ 	}
+ }
+ 
++// A deny a more specific permit beats fails the gate until a policy test
++// exercises it (spec §12): the report names the deny, the subject and the
++// permit, and the test is the acknowledgment.
++func TestPolicyTestFailsAnUnacknowledgedShadow(t *testing.T) {
++	pol, inv := policyFixture(t)
++	raw, _ := os.ReadFile(pol)
++	shadowed := strings.Replace(string(raw), "permit: [show **]}", "permit: [show **, reload now]}", 1)
++	if err := os.WriteFile(pol, []byte(shadowed), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	var out, errb bytes.Buffer
++	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
++		!strings.Contains(out.String(), `shadowed: "reload **" (no_reload) does not bind noc where "reload now" (read_only) is more specific, on arista_eos; no policy test exercises it`) ||
++		!strings.Contains(out.String(), "1 shadowed denies, 1 unacknowledged") {
++		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
++	}
++	acked := shadowed + "  - {subject: noc, device: leaf-01, command: \"reload now\", expect: permit}\n"
++	if err := os.WriteFile(pol, []byte(acked), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	out.Reset()
++	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
++		!strings.Contains(out.String(), "a policy test exercises it") {
++		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
++	}
++}
++
+ // A policy that fails a load-time check fails the gate, with the check's
+ // message, before any test runs: here, a class no platform defines (spec §4).
+ // A policy that loads with a device quarantined names it (spec §10).
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `go test ./internal/engine/ ./internal/policy/ ./cmd/port49/ -count=1`
+Expected: FAIL to build — `p.Shadows undefined` and `p.ShadowedDenies undefined`; `cmd/port49`
+fails `TestPolicyTestIsACIGate`, whose summary line has no shadow count yet.
+
+- [ ] **Step 3: Compute the shadows and gate on them**
+
+<!-- write: internal/engine/shadow.go -->
+```go
+package engine
+
+import (
+	"regexp"
+	"slices"
+	"strings"
+)
+
+// Shadow is a deny that a permit in the same blob overrides for some command:
+// on a command both match, the permit is at least as specific at every
+// position and more specific at one, so the deny does not bind there (spec
+// §5.4, "What is given up, and what replaces it"). Under most-specific
+// semantics a deny is a default rather than a guarantee, and this is the
+// visibility spec §12 puts in the guarantee's place.
+type Shadow struct {
+	Deny, Permit Rule
+	// Possible is an overlap that turns on two regex or class terms meeting
+	// at one position. Whether two patterns share a string cannot be decided
+	// cheaply, so it is reported as possible rather than asserted (spec §12).
+	Possible bool
+}
+
+// Shadows lists every deny some permit in the program overrides, ordered by
+// the deny's role and rule and then the permit's, so a report built from it
+// does not depend on a file's layout.
+func (p *Program) Shadows() []Shadow {
+	abbrev := !p.Blob.Normalize.ExpandsAbbreviations
+	var out []Shadow
+	for _, d := range p.rules {
+		if d.verdict != Deny {
+			continue
+		}
+		for _, pm := range p.rules {
+			if pm.verdict != Permit {
+				continue
+			}
+			if ok, possible := overrides(pm, d, abbrev); ok {
+				out = append(out, Shadow{Deny: Rule{Verdict: Deny, Rule: d.rule, Role: d.role},
+					Permit: Rule{Verdict: Permit, Rule: pm.rule, Role: pm.role}, Possible: possible})
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b Shadow) int {
+		return strings.Compare(a.Deny.Role+"\x00"+a.Deny.Rule+"\x00"+a.Permit.Role+"\x00"+a.Permit.Rule,
+			b.Deny.Role+"\x00"+b.Deny.Rule+"\x00"+b.Permit.Role+"\x00"+b.Permit.Rule)
+	})
+	return out
+}
+
+// overrides reports whether some command is matched by both rules with the
+// permit's tuple dominating the deny's (spec §5.4). The shortest length both
+// can match is enough: past it both rules sit in their trailing `**`, which
+// scores 0 on each side and cannot change the comparison.
+func overrides(pm, d compiled, abbrev bool) (ok, possible bool) {
+	pf, pr := fixedLen(pm.terms)
+	df, dr := fixedLen(d.terms)
+	var n int
+	switch {
+	case !pr && !dr:
+		if pf != df {
+			return false, false
+		}
+		n = pf
+	case pr && !dr:
+		if df < pf {
+			return false, false
+		}
+		n = df
+	case !pr && dr:
+		if pf < df {
+			return false, false
+		}
+		n = pf
+	default:
+		n = max(pf, df)
+	}
+	strict := false
+	for i := 0; i < n; i++ {
+		a, b := termAt(pm.terms, pf, i), termAt(d.terms, df, i)
+		meet, maybe := overlap(a, b, abbrev)
+		if !meet {
+			return false, false
+		}
+		possible = possible || maybe
+		switch ra, rb := a.kind.Rank(), b.kind.Rank(); {
+		case ra < rb:
+			return false, false
+		case ra > rb:
+			strict = true
+		}
+	}
+	return strict, possible && strict
+}
+
+// fixedLen is the number of terms before a trailing `**`, and whether there
+// is one.
+func fixedLen(terms []cterm) (int, bool) {
+	if n := len(terms); n > 0 && terms[n-1].kind == Rest {
+		return n - 1, true
+	}
+	return len(terms), false
+}
+
+// termAt is the term covering position i: a fixed term, or the trailing `**`.
+func termAt(terms []cterm, fixed, i int) cterm {
+	if i < fixed {
+		return terms[i]
+	}
+	return cterm{kind: Rest}
+}
+
+// overlap reports whether one argument can match both the permit's term a and
+// the deny's term b, and whether that answer is only possible. A deny's word
+// also matches its own abbreviations where the platform may send them
+// (abbrev), exactly as the matcher reads it; a permit's word matches only as
+// written.
+func overlap(a, b cterm, abbrev bool) (meet, possible bool) {
+	switch {
+	case a.kind == Rest || b.kind == Rest || a.kind == Any || b.kind == Any:
+		return true, false
+	case a.kind == Word && b.kind == Word:
+		return strings.EqualFold(a.word, b.word) || (abbrev && abbreviates(a.word, b.word)), false
+	case a.kind == Word:
+		return anyMatch(b.res, a.word), false
+	case b.kind == Word:
+		if anyMatch(a.res, b.word) {
+			return true, false
+		}
+		if abbrev {
+			for i := 1; i < len(b.word); i++ {
+				if anyMatch(a.res, b.word[:i]) {
+					return true, false
+				}
+			}
+		}
+		return false, false
+	case a.kind == b.kind && a.word == b.word:
+		return true, false
+	}
+	return true, true
+}
+
+func anyMatch(res []*regexp.Regexp, s string) bool {
+	for _, re := range res {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+```
+
+<!-- write: internal/policy/shadow.go -->
+```go
+package policy
+
+import (
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/rhwendt/port49/internal/engine"
+)
+
+// ShadowedDeny is one deny a subject holds that a permit it also holds
+// overrides for some command (spec §5.4, §12): the report that replaces the
+// guarantee deny-overrides gave. It names the deny, the subject it fails to
+// bind, and the permit that beats it.
+type ShadowedDeny struct {
+	Subject                            string
+	Deny, DenyRole, Permit, PermitRole string
+	// Platforms are where the pair meets: the platforms of the devices the
+	// subject holds both rules on.
+	Platforms []string
+	// Possible is an overlap two regex or class terms decide, which is not
+	// decidable cheaply (engine.Shadow).
+	Possible bool
+	// Acknowledged is a policy test for this subject that expects permit on
+	// a command where this permit wins over this deny (spec §12).
+	Acknowledged bool
+}
+
+// ShadowedDenies computes the shadowed-deny report over every subject on every
+// device the policy loaded against, quarantined devices aside, with every
+// grant in force (a zero time expires nothing, as the load-time checks read
+// them). One row per subject and rule pair, in name order.
+func (p *Policy) ShadowedDenies() []ShadowedDeny {
+	acks := p.shadowAcks()
+	rows := map[string]*ShadowedDeny{}
+	for name, sub := range p.subs {
+		for _, d := range p.env.Devices {
+			if _, q := p.quarantine[d.Name]; q {
+				continue
+			}
+			res, err := p.resolve(sub, d, time.Time{})
+			if err != nil {
+				continue
+			}
+			prog, err := engine.Compile(res.Blob)
+			if err != nil {
+				continue
+			}
+			for _, s := range prog.Shadows() {
+				key := shadowKey(name, s.Deny.Role, s.Deny.Rule, s.Permit.Role, s.Permit.Rule)
+				row, ok := rows[key]
+				if !ok {
+					row = &ShadowedDeny{Subject: name, Deny: s.Deny.Rule, DenyRole: s.Deny.Role, Permit: s.Permit.Rule,
+						PermitRole: s.Permit.Role, Possible: s.Possible, Acknowledged: acks[key]}
+					rows[key] = row
+				}
+				if !slices.Contains(row.Platforms, d.Platform) {
+					row.Platforms = append(row.Platforms, d.Platform)
+					slices.Sort(row.Platforms)
+				}
+			}
+		}
+	}
+	out := make([]ShadowedDeny, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, *r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		return shadowKey(a.Subject, a.DenyRole, a.Deny, a.PermitRole, a.Permit) <
+			shadowKey(b.Subject, b.DenyRole, b.Deny, b.PermitRole, b.Permit)
+	})
+	return out
+}
+
+// shadowAcks is every (subject, deny, permit) a passing permit test
+// exercises: on a permit, every deny that matched is one the deciding permit
+// overrode (engine.Outcome.Denies), so the author has seen it happen.
+func (p *Policy) shadowAcks() map[string]bool {
+	acks := map[string]bool{}
+	for _, r := range p.RunTests(time.Time{}) {
+		if !r.Pass || !r.Permit || r.Outcome.Decided == nil {
+			continue
+		}
+		subject := r.Test.Subject
+		if subject == "" {
+			subject = p.byID[r.Test.Principal]
+		}
+		for _, d := range r.Outcome.Denies {
+			acks[shadowKey(subject, d.Role, d.Rule, r.Outcome.Decided.Role, r.Outcome.Decided.Rule)] = true
+		}
+	}
+	return acks
+}
+
+func shadowKey(parts ...string) string { return strings.Join(parts, "\x00") }
+```
+
+<!-- patch: cmd/port49/policy.go -->
+```diff
+diff --git a/cmd/port49/policy.go b/cmd/port49/policy.go
+index 2da2ed9..aadbd3b 100644
+--- a/cmd/port49/policy.go
++++ b/cmd/port49/policy.go
+@@ -88,8 +88,9 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
+ 
+ // policyTest is the CI gate (spec §11, §12): it loads the policy against the
+ // inventory — every load-time check is a failure here — prints what CI must
+-// report without refusing, then runs the file's tests. It exits 1 if the
+-// policy does not load or any test fails.
++// report without refusing, the shadowed-deny report, then runs the file's
++// tests. It exits 1 if the policy does not load, any test fails, or a deny is
++// shadowed and no test exercises it.
+ func policyTest(args []string, stdout, stderr io.Writer) int {
+ 	fs := flag.NewFlagSet("port49 policy test", flag.ContinueOnError)
+ 	fs.SetOutput(stderr)
+@@ -112,6 +113,27 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
+ 	for _, f := range p.Lint() {
+ 		fmt.Fprintf(stdout, "report: %s: %s\n", f.Kind, f.Message)
+ 	}
++	// The shadowed-deny report is what replaces the guarantee deny-overrides
++	// gave (spec §12): every deny a more specific permit beats, for whom, and
++	// by what. One no policy test exercises fails the gate; a possible one,
++	// which two regex or class terms decide, is reported and does not.
++	shadows := p.ShadowedDenies()
++	unacknowledged := 0
++	for _, s := range shadows {
++		line := fmt.Sprintf("%q (%s) does not bind %s where %q (%s) is more specific, on %s", s.Deny, s.DenyRole,
++			s.Subject, s.Permit, s.PermitRole, strings.Join(s.Platforms, ", "))
++		switch {
++		case s.Possible:
++			fmt.Fprintf(stdout, "possibly shadowed: %s; two regex or class terms decide it, which is not "+
++				"decidable cheaply\n", line)
++		case s.Acknowledged:
++			fmt.Fprintf(stdout, "shadowed: %s; a policy test exercises it\n", line)
++		default:
++			unacknowledged++
++			fmt.Fprintf(stdout, "shadowed: %s; no policy test exercises it: add one that expects permit on a "+
++				"command it covers, or narrow the permit\n", line)
++		}
++	}
+ 	results := p.RunTests(time.Now())
+ 	failed := 0
+ 	for _, r := range results {
+@@ -143,8 +165,9 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
+ 			fmt.Fprintf(stdout, "     note: %s\n", c)
+ 		}
+ 	}
+-	fmt.Fprintf(stdout, "%d tests, %d failed\n", len(results), failed)
+-	if failed > 0 {
++	fmt.Fprintf(stdout, "%d tests, %d failed; %d shadowed denies, %d unacknowledged\n", len(results), failed,
++		len(shadows), unacknowledged)
++	if failed > 0 || unacknowledged > 0 {
+ 		return 1
+ 	}
+ 	return 0
+```
+
+- [ ] **Step 4: Run the packages**
+
+Run: `go test ./internal/engine/ ./internal/policy/ ./cmd/port49/ -count=1 && go vet ./internal/... ./cmd/...`
+Expected: PASS: §11 shadows one deny and its own test acknowledges it.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/engine/shadow.go internal/engine/shadow_test.go internal/policy/shadow.go \
+  internal/policy/shadow_test.go cmd/port49/
+git commit -m "feat: the shadowed-deny report, gated in port49 policy test
+
+Every deny a more specific permit beats, the subject it fails to bind
+and the permit that beats it (spec §12): the visibility that replaces
+deny-overrides' guarantee. A policy test that exercises the permit over
+the deny acknowledges it; an unacknowledged shadow fails port49 policy
+test, and one two regex or class terms decide is reported as possible.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+```
+
+---
+
+### Task 22: The effective-permission diff and the privilege-expansion gate
+
+**Files:**
+- Create: `internal/engine/probe.go`, `internal/policy/diff.go`
+- Modify: `cmd/port49/policy.go`, `cmd/port49/main.go`
+- Test: `internal/engine/probe_test.go`, `internal/policy/diff_test.go`; modify
+  `cmd/port49/policy_test.go`
+
+**Interfaces:**
+- Consumes: `Program.Command`, the compiled rules (Task 6); `Resolve` and the quarantine (Task 10);
+  `RunTests`, `Decide`, `CommandRaw` (Task 11); `shadowKey` (Task 21).
+- Produces: `const OtherArgument`; `func Probes(programs ...*Program) [][]string`;
+  `type Diff struct { Changes []Change; Access []AccessChange; Levels []LevelChange; Regex []RegexChange; Quarantined []Quarantine }`,
+  `func (Diff) Unacknowledged() int`; `func Compare(before, after *Policy) Diff`;
+  `port49 policy diff --old FILE --new FILE --inventory FILE`.
+
+Spec §5.4: "a permit may override a deny, so 'only permit growth widens access' becomes the check
+that matters … the gate is stated directly: this change makes command C permitted where it was
+denied." Spec §12 makes the diff exact: "old versus new is a computable difference, not a sample."
+
+The computation is a walk over command shapes, not a sample. Two commands matched by exactly the
+same rules score the same tuples, so every program decides them alike. `Probes` walks the
+programs' rules together, position by position. Each argument is drawn from the words the rules
+name, each deny word's abbreviations where the platform may send them, and one argument that
+stands for everything else. Candidates are grouped by which rules they keep alive, and one
+representative per group is followed. The walk stops one position past the longest rule. A test
+checks the result against a brute-force walk of a whole small command space. The exactness ends
+where spec §4 says it does: a regex or class term is tried only against the words the rules name,
+so a changed rule that carries one is reported as *regex-constrained* rather than enumerated.
+
+`Compare` walks every subject on every device, grouping devices whose blobs are the same before
+and after. It reports each command whose verdict moved, each subject that gains or loses a device
+outright, each level or ceiling that moved (a privilege change, spec §6), each changed regex or
+class rule, and each device the new version quarantines. The gate is a command a matching deny
+refused that the new version permits. A policy test in the new version that exercises that permit
+over that deny acknowledges it, exactly as for a shadow (Task 21). `port49 policy diff` exits 1 on
+an unacknowledged expansion or a newly quarantined device.
+
+- [ ] **Step 1: Write the failing tests**
+
+<!-- write: internal/engine/probe_test.go -->
+```go
+package engine
+
+import (
+	"strings"
+	"testing"
+)
+
+// verdictOf is a program's answer to a command vector, as a comparable string.
+func verdictOf(p *Program, vector []string) string {
+	o := p.Command(cmd(strings.Join(vector, " ")))
+	return string(o.Reason)
+}
+
+// universe is every vector up to length n over words: small enough to
+// enumerate, and a check on Probes that does not trust Probes.
+func universe(words []string, n int) [][]string {
+	out := [][]string{}
+	var grow func(prefix []string)
+	grow = func(prefix []string) {
+		if len(prefix) > 0 {
+			out = append(out, append([]string(nil), prefix...))
+		}
+		if len(prefix) == n {
+			return
+		}
+		for _, w := range words {
+			grow(append(append([]string(nil), prefix...), w))
+		}
+	}
+	grow(nil)
+	return out
+}
+
+// The probes find every pair of answers two programs can give to one command:
+// the same set a brute-force walk over a whole small command space finds.
+// That is the diff's exactness claim (spec §5.4, §12), for words, `*`, `**`
+// and abbreviations.
+func TestProbesFindEveryDisagreementBruteForceFinds(t *testing.T) {
+	before := program(t, false, "ro:permit show **", "cve:deny show chassis **", "nd:deny reload **", "op:permit clear * all")
+	after := program(t, false, "ro:permit show **", "cve:deny show chassis **", "nd:deny reload **",
+		"backup:permit show chassis hardware", "op:permit clear counters *", "op2:permit rel now")
+	pairs := func(vectors [][]string) map[string]bool {
+		seen := map[string]bool{}
+		for _, v := range vectors {
+			if a, b := verdictOf(before, v), verdictOf(after, v); a != b {
+				seen[a+" -> "+b] = true
+			}
+		}
+		return seen
+	}
+	words := []string{"show", "chassis", "hardware", "clear", "counters", "all", "reload", "rel", "re", "now", "x"}
+	want := pairs(universe(words, 4))
+	got := pairs(Probes(before, after))
+	if len(want) == 0 {
+		t.Fatal("the fixture must disagree somewhere")
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("brute force finds %q, the probes do not", k)
+		}
+	}
+	for k := range got {
+		if !want[k] {
+			t.Errorf("the probes find %q, brute force does not", k)
+		}
+	}
+}
+
+// The command a change turns on is itself among the probes, spelled with the
+// rule's words, and a word no rule names is one probe, not many.
+func TestProbesUseTheRulesWords(t *testing.T) {
+	before := program(t, true, "ro:permit show **", "cve:deny show chassis **")
+	after := program(t, true, "ro:permit show **", "cve:deny show chassis **", "backup:permit show chassis hardware")
+	var flipped []string
+	for _, v := range Probes(before, after) {
+		if verdictOf(before, v) != verdictOf(after, v) {
+			flipped = append(flipped, strings.Join(v, " "))
+		}
+	}
+	if len(flipped) != 1 || flipped[0] != "show chassis hardware" {
+		t.Fatalf("flipped %q", flipped)
+	}
+	if Probes() != nil || Probes(nil) != nil {
+		t.Fatal("no programs, no probes")
+	}
+}
+```
+
+<!-- write: internal/policy/diff_test.go -->
+```go
+package policy
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/rhwendt/port49/internal/decision"
+)
+
+const diffBase = `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: read_only, privilege: readonly, permit: [show **]}
+  - {name: cve, deny: [show chassis **]}
+subjects:
+  - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
+grants:
+  - {subject: noc, scope: all_devices, roles: [read_only, cve]}
+`
+
+// The gate spec §12 states directly: this change makes command C permitted
+// where a deny refused it. It is found on every device group, and a policy
+// test in the new version that exercises the permit over the deny is the
+// acknowledgment.
+func TestTheGateFindsAPermitThatBeatsADeny(t *testing.T) {
+	before := mustParse(t, diffBase)
+	after := mustParse(t, strings.Replace(diffBase, "permit: [show **]}", "permit: [show **, show chassis hardware]}", 1))
+	d := Compare(before, after)
+	if len(d.Changes) == 0 || d.Unacknowledged() != len(d.Changes) {
+		t.Fatalf("changes %+v", d.Changes)
+	}
+	devices := 0
+	for _, c := range d.Changes {
+		if c.Command != "show chassis hardware" || !c.Gated || c.Old.Permit || !c.New.Permit ||
+			c.Old.Deny.Role != "cve" || c.New.Decided.Role != "read_only" {
+			t.Errorf("%+v", c)
+		}
+		devices += len(c.Devices)
+	}
+	if devices != len(inventory()) {
+		t.Fatalf("every device is covered once: %d", devices)
+	}
+	acked := mustParse(t, strings.Replace(diffBase, "permit: [show **]}", "permit: [show **, show chassis hardware]}", 1)+
+		"tests:\n  - {subject: noc, device: leaf-01, command: \"show chassis hardware\", expect: permit}\n")
+	if d := Compare(before, acked); d.Unacknowledged() != 0 || len(d.Changes) == 0 {
+		t.Fatalf("a test acknowledges it on every device: %+v", d.Changes)
+	}
+}
+
+// Permit growth where no deny stood is a change, reported, and not gated; a
+// permit taken away is a narrowing.
+func TestGrowthIsReportedAndNotGated(t *testing.T) {
+	before := mustParse(t, diffBase)
+	after := mustParse(t, strings.Replace(diffBase, "permit: [show **]}", "permit: [show **, ping *]}", 1))
+	d := Compare(before, after)
+	if len(d.Changes) == 0 || d.Unacknowledged() != 0 {
+		t.Fatalf("%+v", d.Changes)
+	}
+	for _, c := range d.Changes {
+		if !strings.HasPrefix(c.Command, "ping ") || c.Gated || c.Old.Reason != decision.NoRuleMatched {
+			t.Errorf("%+v", c)
+		}
+	}
+	if back := Compare(after, before); len(back.Changes) != len(d.Changes) || back.Changes[0].New.Permit {
+		t.Fatalf("the reverse is a narrowing: %+v", back.Changes)
+	}
+}
+
+// A level or ceiling that moves is a privilege change (spec §6); a subject
+// gaining a device outright is one line, not one per command; a rule carrying
+// a regex is named rather than enumerated (spec §12); and a device the new
+// version quarantines is listed.
+func TestTheDiffReportsWhatItCannotEnumerate(t *testing.T) {
+	before := mustParse(t, diffBase)
+	after := mustParse(t, strings.Replace(strings.Replace(diffBase,
+		"privilege: readonly, permit: [show **]}", "privilege: admin, permit: [show **, \"copy * /^scp:/\"]}", 1),
+		"grants:\n", "  - {name: ops, identity: \"user:ops@example.com\", username: ops, token_ttl: 60s}\ngrants:\n"+
+			"  - {subject: ops, scope: all_devices, roles: [read_only]}\n", 1))
+	d := Compare(before, after)
+	if len(d.Levels) == 0 || d.Levels[0].OldLevel != "readonly" || d.Levels[0].NewLevel != "admin" {
+		t.Fatalf("levels %+v", d.Levels)
+	}
+	if len(d.Regex) == 0 || d.Regex[0].Rule.Rule != "copy * /^scp:/" || !d.Regex[0].Added {
+		t.Fatalf("regex %+v", d.Regex)
+	}
+	gained := 0
+	for _, a := range d.Access {
+		if a.Subject == "ops" && a.Gained {
+			gained += len(a.Devices)
+		}
+	}
+	if gained != len(inventory()) {
+		t.Fatalf("access %+v", d.Access)
+	}
+	quarantining := mustParse(t, strings.Replace(diffBase, "privilege: readonly", "privilege: operator", 1))
+	if q := Compare(before, quarantining).Quarantined; len(q) != 2 || q[0].Device != "campus-sw-7" {
+		t.Fatalf("newly quarantined %+v", q)
+	}
+}
+```
+
+<!-- patch: cmd/port49/policy_test.go -->
+```diff
+diff --git a/cmd/port49/policy_test.go b/cmd/port49/policy_test.go
+index 831a397..67a6d5d 100644
+--- a/cmd/port49/policy_test.go
++++ b/cmd/port49/policy_test.go
+@@ -125,6 +125,37 @@ func TestPolicyTestFailsAnUnacknowledgedShadow(t *testing.T) {
+ 	}
+ }
+ 
++// `port49 policy diff` is the privilege-expansion gate (spec §12): a command
++// a deny refused that the new version permits fails it, until a policy test
++// in the new version exercises that permit over that deny.
++func TestPolicyDiffGatesAnExpansionPastADeny(t *testing.T) {
++	oldPol, inv := policyFixture(t)
++	raw, _ := os.ReadFile(oldPol)
++	newPol := filepath.Join(t.TempDir(), "policy.yaml")
++	expanded := strings.Replace(string(raw), "permit: [show **]}", "permit: [show **, reload now]}", 1)
++	if err := os.WriteFile(newPol, []byte(expanded), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	var out, errb bytes.Buffer
++	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
++		!strings.Contains(out.String(), `EXPANDS: noc on leaf-01: "reload now" was denied by "reload **" (no_reload), now permitted by "reload now" (read_only)`) ||
++		!strings.Contains(out.String(), "1 unacknowledged expansions past a deny") {
++		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
++	}
++	acked := expanded + "  - {subject: noc, device: leaf-01, command: \"reload now\", expect: permit}\n"
++	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	out.Reset()
++	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
++		!strings.Contains(out.String(), "expands (a policy test exercises it)") {
++		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
++	}
++	if code := run([]string{"policy", "diff", "--old", oldPol, "--inventory", inv}, &out, &errb); code != 2 {
++		t.Fatalf("no --new: code %d", code)
++	}
++}
++
+ // A policy that fails a load-time check fails the gate, with the check's
+ // message, before any test runs: here, a class no platform defines (spec §4).
+ // A policy that loads with a device quarantined names it (spec §10).
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `go test ./internal/engine/ ./internal/policy/ ./cmd/port49/ -count=1`
+Expected: FAIL to build — `undefined: Probes`, `undefined: Compare`; `cmd/port49`'s diff test gets
+the usage, `code 2`.
+
+- [ ] **Step 3: Write the probes, the diff and the command**
+
+<!-- write: internal/engine/probe.go -->
+```go
+package engine
+
+import (
+	"slices"
+	"strconv"
+	"strings"
+)
+
+// OtherArgument stands for every argument no rule names. It is one value
+// because every rule treats all such arguments alike, except a regex or class
+// term, which is tested against it as against any other word.
+const OtherArgument = "port49-other-argument"
+
+// probeRule is one rule as Probes walks it.
+type probeRule struct {
+	terms  []cterm
+	fixed  int
+	rest   bool
+	abbrev bool
+}
+
+// Probes returns one command vector for every distinct way the programs'
+// rules can be told apart (spec §5.4, §12, "Effective-permission diff"). Two
+// commands matched by exactly the same rules score the same tuples, so every
+// program decides them alike, and one vector per such class is enough to
+// compare programs: that is what makes the diff a computed difference rather
+// than a sample. Arguments are drawn from the words the rules name, each deny
+// word's abbreviations where the program's platform may send them, and
+// OtherArgument. A regex or class term is tested only against those, and that
+// is where the comparison stops being exact (spec §4, "Leaf regex"); the
+// caller reports a changed rule carrying one instead of enumerating it.
+//
+// Nil programs are skipped. The vectors come in a fixed order.
+func Probes(programs ...*Program) [][]string {
+	var rules []probeRule
+	maxFixed := -1
+	for _, p := range programs {
+		if p == nil {
+			continue
+		}
+		for _, r := range p.rules {
+			fixed, rest := fixedLen(r.terms)
+			rules = append(rules, probeRule{terms: r.terms, fixed: fixed, rest: rest,
+				abbrev: r.verdict == Deny && !p.Blob.Normalize.ExpandsAbbreviations})
+			maxFixed = max(maxFixed, fixed)
+		}
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	// A rule of n fixed terms matches vectors of length n, or n and longer
+	// behind a `**`; one past the longest, only `**` rules remain and nothing
+	// new can be told apart.
+	maxLen := maxFixed + 1
+	cands := make([][]string, maxLen)
+	for i := range cands {
+		set := map[string]bool{}
+		for _, r := range rules {
+			if i >= r.fixed || r.terms[i].kind != Word {
+				continue
+			}
+			w := strings.ToLower(r.terms[i].word)
+			set[w] = true
+			if r.abbrev {
+				for k := 1; k < len(w); k++ {
+					set[w[:k]] = true
+				}
+			}
+		}
+		for w := range set {
+			cands[i] = append(cands[i], w)
+		}
+		slices.Sort(cands[i])
+		cands[i] = append(cands[i], OtherArgument)
+	}
+
+	all := make([]int, len(rules))
+	for i := range all {
+		all[i] = i
+	}
+	var out [][]string
+	seen := map[string]bool{}
+	var walk func(depth int, alive []int, prefix []string)
+	walk = func(depth int, alive []int, prefix []string) {
+		if depth > 0 && endsAt(rules, alive, depth) {
+			out = append(out, slices.Clone(prefix))
+		}
+		if depth == maxLen {
+			return
+		}
+		var order []string
+		next := map[string][]int{}
+		rep := map[string]string{}
+		for _, c := range cands[depth] {
+			var keep []int
+			for _, ri := range alive {
+				if rules[ri].matchesAt(depth, c) {
+					keep = append(keep, ri)
+				}
+			}
+			if len(keep) == 0 {
+				continue
+			}
+			key := aliveKey(keep)
+			if _, ok := rep[key]; !ok {
+				order = append(order, key)
+				next[key], rep[key] = keep, c
+			}
+		}
+		for _, key := range order {
+			state := strconv.Itoa(depth+1) + "|" + key
+			if seen[state] {
+				continue
+			}
+			seen[state] = true
+			walk(depth+1, next[key], append(slices.Clone(prefix), rep[key]))
+		}
+	}
+	walk(0, all, nil)
+	return out
+}
+
+// endsAt reports whether some rule still alive matches a vector that stops at
+// length n.
+func endsAt(rules []probeRule, alive []int, n int) bool {
+	for _, ri := range alive {
+		if r := rules[ri]; (!r.rest && r.fixed == n) || (r.rest && r.fixed <= n) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesAt reports whether the rule, alive so far, still matches with arg at
+// position i, exactly as compiled.match reads it.
+func (r probeRule) matchesAt(i int, arg string) bool {
+	if i >= r.fixed {
+		return r.rest
+	}
+	t := r.terms[i]
+	switch t.kind {
+	case Any:
+		return true
+	case Word:
+		return strings.EqualFold(t.word, arg) || (r.abbrev && abbreviates(arg, t.word))
+	default:
+		return anyMatch(t.res, arg)
+	}
+}
+
+func aliveKey(alive []int) string {
+	var b strings.Builder
+	for _, ri := range alive {
+		b.WriteString(strconv.Itoa(ri))
+		b.WriteByte(',')
+	}
+	return b.String()
+}
+```
+
+<!-- write: internal/policy/diff.go -->
+```go
+package policy
+
+import (
+	"errors"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
+)
+
+// Diff is the effective-permission diff between two versions of a policy
+// loaded against the same inventory (spec §5.4, §12): every command whose
+// verdict moved, for every subject, on the devices that hold the same blobs
+// before and after; every level and ceiling that moved; every device that
+// gained or lost a subject's access outright; every changed rule carrying a
+// regex or class term, which the diff cannot enumerate; and every device the
+// new version quarantines that the old did not.
+type Diff struct {
+	Changes     []Change
+	Access      []AccessChange
+	Levels      []LevelChange
+	Regex       []RegexChange
+	Quarantined []Quarantine
+}
+
+// Change is one command whose verdict moved.
+type Change struct {
+	Subject  string
+	Devices  []string
+	Command  string
+	Old, New engine.Outcome
+	// Gated is spec §12's privilege-expansion gate: a command a deny refused
+	// that the new version permits. Acknowledged is a policy test in the new
+	// version that exercises that permit over that deny.
+	Gated, Acknowledged bool
+}
+
+// AccessChange is a subject gaining or losing every grant on some devices.
+// It is one line, not one per command.
+type AccessChange struct {
+	Subject string
+	Devices []string
+	Gained  bool
+}
+
+// LevelChange is a privilege change (spec §6): the level the roles compose
+// to, or the ceiling the grants do.
+type LevelChange struct {
+	Subject                                    string
+	Devices                                    []string
+	OldLevel, NewLevel, OldCeiling, NewCeiling string
+}
+
+// RegexChange is a rule carrying a regex or class term that one version has
+// and the other does not. Commands it matches are not enumerated, because a
+// regex position is not (spec §12, "Effective-permission diff in CI").
+type RegexChange struct {
+	Subject string
+	Devices []string
+	Rule    engine.Rule
+	Added   bool
+}
+
+// Unacknowledged counts the gated changes no test exercises.
+func (d Diff) Unacknowledged() int {
+	n := 0
+	for _, c := range d.Changes {
+		if c.Gated && !c.Acknowledged {
+			n++
+		}
+	}
+	return n
+}
+
+// side is one version's view of one subject on one device.
+type side struct {
+	prog        *engine.Program
+	res         Resolution
+	hash        string
+	quarantined bool
+}
+
+func (p *Policy) side(subject string, d admission.Device) side {
+	if _, ok := p.quarantine[d.Name]; ok {
+		return side{quarantined: true}
+	}
+	sub, ok := p.subs[subject]
+	if !ok {
+		return side{}
+	}
+	res, err := p.resolve(sub, d, time.Time{})
+	if err != nil {
+		return side{}
+	}
+	_, hash, err := engine.Encode(res.Blob)
+	if err != nil {
+		return side{}
+	}
+	prog, err := engine.Compile(res.Blob)
+	if err != nil {
+		return side{}
+	}
+	return side{prog: prog, res: res, hash: hash}
+}
+
+// decide is the side's answer to one command: no grant is a deny,
+// no_grants_matched, as the mint would answer.
+func (s side) decide(line string) engine.Outcome {
+	if s.prog == nil {
+		return engine.Outcome{Reason: decision.NoGrantsMatched}
+	}
+	return s.prog.Command(CommandRaw(line))
+}
+
+// Compare computes the diff from before to after, every grant in force. The
+// two must have been loaded against the same inventory; after's is the one
+// walked.
+func Compare(before, after *Policy) Diff {
+	var d Diff
+	for _, q := range after.Quarantined() {
+		if _, was := before.quarantine[q.Device]; !was {
+			d.Quarantined = append(d.Quarantined, q)
+		}
+	}
+	names := map[string]bool{}
+	for n := range before.subs {
+		names[n] = true
+	}
+	for n := range after.subs {
+		names[n] = true
+	}
+	subjects := make([]string, 0, len(names))
+	for n := range names {
+		subjects = append(subjects, n)
+	}
+	sort.Strings(subjects)
+	acks := after.expansionAcks(before)
+	type group struct {
+		was, is side
+		devices []string
+	}
+	for _, subject := range subjects {
+		var order []string
+		groups := map[string]*group{}
+		for _, dev := range after.Devices() {
+			was, is := before.side(subject, dev), after.side(subject, dev)
+			if was.quarantined || is.quarantined || (was.prog == nil && is.prog == nil) {
+				continue
+			}
+			key := was.hash + "|" + is.hash
+			if _, ok := groups[key]; !ok {
+				groups[key] = &group{was: was, is: is}
+				order = append(order, key)
+			}
+			groups[key].devices = append(groups[key].devices, dev.Name)
+		}
+		for _, key := range order {
+			g := groups[key]
+			if g.was.prog == nil || g.is.prog == nil {
+				d.Access = append(d.Access, AccessChange{Subject: subject, Devices: g.devices, Gained: g.was.prog == nil})
+				continue
+			}
+			if g.was.hash == g.is.hash {
+				continue
+			}
+			was, is := g.was.res, g.is.res
+			if was.Level != is.Level || was.Ceiling != is.Ceiling {
+				d.Levels = append(d.Levels, LevelChange{Subject: subject, Devices: g.devices, OldLevel: was.Level,
+					NewLevel: is.Level, OldCeiling: was.Ceiling, NewCeiling: is.Ceiling})
+			}
+			d.Regex = append(d.Regex, regexChanges(subject, g.devices, was.Blob.Rules, is.Blob.Rules)...)
+			for _, v := range engine.Probes(g.was.prog, g.is.prog) {
+				line := strings.Join(v, " ")
+				from, to := g.was.decide(line), g.is.decide(line)
+				if from.Permit == to.Permit {
+					continue
+				}
+				c := Change{Subject: subject, Devices: g.devices, Command: line, Old: from, New: to}
+				if !from.Permit && from.Deny != nil {
+					c.Gated = true
+					c.Acknowledged = acks[shadowKey(subject, from.Deny.Role, from.Deny.Rule, to.Decided.Role,
+						to.Decided.Rule)]
+				}
+				d.Changes = append(d.Changes, c)
+			}
+		}
+	}
+	return d
+}
+
+// regexChanges lists the rules carrying a regex or class term that one side
+// has and the other does not.
+func regexChanges(subject string, devices []string, was, is []engine.Rule) []RegexChange {
+	var out []RegexChange
+	for _, v := range []struct {
+		have, other []engine.Rule
+		added       bool
+	}{{is, was, true}, {was, is, false}} {
+		for _, r := range v.have {
+			if !constrained(r.Rule) || slices.Contains(v.other, r) {
+				continue
+			}
+			out = append(out, RegexChange{Subject: subject, Devices: devices, Rule: r, Added: v.added})
+		}
+	}
+	return out
+}
+
+func constrained(rule string) bool {
+	terms, _ := engine.ParseRule(rule)
+	for _, t := range terms {
+		if t.Kind == engine.Regex || t.Kind == engine.Class {
+			return true
+		}
+	}
+	return false
+}
+
+// expansionAcks is every (subject, deny, permit) a passing permit test in p
+// exercises where before refused the same command with that deny: the test is
+// the author saying the expansion is meant (spec §12).
+func (p *Policy) expansionAcks(before *Policy) map[string]bool {
+	acks := map[string]bool{}
+	for _, r := range p.RunTests(time.Time{}) {
+		if !r.Pass || !r.Permit || r.Outcome.Decided == nil {
+			continue
+		}
+		subject := r.Test.Subject
+		if subject == "" {
+			subject = p.byID[r.Test.Principal]
+		}
+		dev, ok := p.device(r.Test.Device)
+		if !ok {
+			continue
+		}
+		_, was, err := before.Decide(subject, "", dev, r.Test.Command, time.Time{})
+		if err != nil && !errors.Is(err, ErrNoGrants) {
+			continue
+		}
+		if !was.Permit && was.Deny != nil {
+			acks[shadowKey(subject, was.Deny.Role, was.Deny.Rule, r.Outcome.Decided.Role,
+				r.Outcome.Decided.Rule)] = true
+		}
+	}
+	return acks
+}
+```
+
+<!-- patch: cmd/port49/policy.go -->
+```diff
+diff --git a/cmd/port49/policy.go b/cmd/port49/policy.go
+index aadbd3b..12a9d2e 100644
+--- a/cmd/port49/policy.go
++++ b/cmd/port49/policy.go
+@@ -81,6 +81,8 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
+ 		return policyTest(args[1:], stdout, stderr)
+ 	case "replay":
+ 		return policyReplay(args[1:], stdout, stderr)
++	case "diff":
++		return policyDiff(args[1:], stdout, stderr)
+ 	}
+ 	fmt.Fprint(stderr, usage)
+ 	return 2
+@@ -173,6 +175,101 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
+ 	return 0
+ }
+ 
++// policyDiff is the effective-permission diff and the privilege-expansion
++// gate (spec §12): both versions of a policy, loaded against one inventory,
++// compared for every subject on every device over every command shape their
++// rules distinguish. It prints each change and exits 1 on a command a deny
++// refused that the new version permits and no policy test in it exercises,
++// and on a device the new version quarantines.
++func policyDiff(args []string, stdout, stderr io.Writer) int {
++	fs := flag.NewFlagSet("port49 policy diff", flag.ContinueOnError)
++	fs.SetOutput(stderr)
++	oldPath := fs.String("old", "", "the policy file as it is")
++	newPath := fs.String("new", "", "the policy file as the change would leave it")
++	inventory := fs.String("inventory", "", "the inventory file the daemon admits from (inventory_file)")
++	if err := fs.Parse(args); err != nil {
++		return 2
++	}
++	if *oldPath == "" || *newPath == "" || *inventory == "" || fs.NArg() != 0 {
++		fmt.Fprint(stderr, usage)
++		return 2
++	}
++	inv, err := admission.LoadFile(*inventory)
++	if err != nil {
++		fmt.Fprintln(stderr, "port49 policy diff:", err)
++		return 1
++	}
++	before, err := policy.Load(*oldPath, policy.Env{Devices: inv.Devices})
++	if err != nil {
++		fmt.Fprintln(stderr, "port49 policy diff: --old:", err)
++		return 1
++	}
++	after, err := policy.Load(*newPath, policy.Env{Devices: inv.Devices})
++	if err != nil {
++		fmt.Fprintln(stderr, "port49 policy diff: --new:", err)
++		return 1
++	}
++	d := policy.Compare(before, after)
++	for _, q := range d.Quarantined {
++		fmt.Fprintf(stdout, "QUARANTINES: %s (%s): %s\n", q.Device, q.Platform, strings.Join(q.Causes, "; "))
++	}
++	for _, a := range d.Access {
++		verb := "loses"
++		if a.Gained {
++			verb = "gains"
++		}
++		fmt.Fprintf(stdout, "access: %s %s every grant on %s\n", a.Subject, verb, strings.Join(a.Devices, ", "))
++	}
++	for _, l := range d.Levels {
++		fmt.Fprintf(stdout, "privilege: %s on %s: level %s -> %s, max_privilege %s -> %s\n", l.Subject,
++			strings.Join(l.Devices, ", "), orNone(l.OldLevel), orNone(l.NewLevel), orNone(l.OldCeiling),
++			orNone(l.NewCeiling))
++	}
++	widen, narrow := 0, 0
++	for _, c := range d.Changes {
++		on := c.Subject + " on " + strings.Join(c.Devices, ", ")
++		switch {
++		case c.New.Permit && c.Gated:
++			widen++
++			label := "EXPANDS"
++			if c.Acknowledged {
++				label = "expands (a policy test exercises it)"
++			}
++			fmt.Fprintf(stdout, "%s: %s: %q was denied by %q (%s), now permitted by %q (%s)\n", label, on, c.Command,
++				c.Old.Deny.Rule, c.Old.Deny.Role, c.New.Decided.Rule, c.New.Decided.Role)
++		case c.New.Permit:
++			widen++
++			fmt.Fprintf(stdout, "widens: %s: %q was %s, now permitted by %q (%s)\n", on, c.Command, c.Old.Reason,
++				c.New.Decided.Rule, c.New.Decided.Role)
++		default:
++			narrow++
++			fmt.Fprintf(stdout, "narrows: %s: %q was permitted by %q (%s), now %s\n", on, c.Command,
++				c.Old.Decided.Rule, c.Old.Decided.Role, c.New.Reason)
++		}
++	}
++	for _, r := range d.Regex {
++		verb := "removed"
++		if r.Added {
++			verb = "added"
++		}
++		fmt.Fprintf(stdout, "regex-constrained: %s on %s: %s %q (%s) %s; the commands it matches are not "+
++			"enumerated (spec §12)\n", r.Subject, strings.Join(r.Devices, ", "), r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb)
++	}
++	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
++		"%d devices newly quarantined\n", len(d.Changes), widen, narrow, d.Unacknowledged(), len(d.Quarantined))
++	if d.Unacknowledged() > 0 || len(d.Quarantined) > 0 {
++		return 1
++	}
++	return 0
++}
++
++func orNone(s string) string {
++	if s == "" {
++		return "none"
++	}
++	return s
++}
++
+ // policyReplay re-evaluates a decision log against the blobs it carries
+ // (spec §5.7, "Replay"): an auditor's reconstruction, a regression check of a
+ // captured corpus against this build, and an integrity check of the log. It
+```
+
+<!-- patch: cmd/port49/main.go -->
+```diff
+diff --git a/cmd/port49/main.go b/cmd/port49/main.go
+index ec2ac13..f0019b2 100644
+--- a/cmd/port49/main.go
++++ b/cmd/port49/main.go
+@@ -36,6 +36,7 @@ const usage = `usage:
+                  [--command "LINE"] [--show-attributes]
+   port49 policy test --policy FILE --inventory FILE
+   port49 policy replay [--line N] LOGFILE|-
++  port49 policy diff --old FILE --new FILE --inventory FILE
+   port49 access review --policy FILE --inventory FILE --subject NAME
+   port49 grants remove --policy FILE --inventory FILE --subject NAME [--write]
+ `
+```
+
+- [ ] **Step 4: Run the whole gate**
+
+Run: `make test && make vet && go test -race ./internal/... ./cmd/... -count=1 && go vet -tags lab ./tests/lab/... && make build`
+Expected: every package `ok`; no gofmt or vet output; no race; `bin/port49d` and `bin/port49` built.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/engine/probe.go internal/engine/probe_test.go internal/policy/diff.go \
+  internal/policy/diff_test.go cmd/port49/
+git commit -m "feat: port49 policy diff, the privilege-expansion gate
+
+Compares two versions of a policy, loaded against one inventory, for
+every subject on every device over every command shape their rules
+distinguish (spec §5.4, §12): commands whose verdict moved, access
+gained or lost, level and ceiling changes, changed regex or class rules
+(reported, not enumerated), and newly quarantined devices. Exits 1 on
+a command a deny refused that the new version permits, unless a policy
+test exercises it, and on a newly quarantined device.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+```
+
+---
+
+### Task 23: The roadmap records what plan 4 built and hands forward
+
+**Files:**
+- Modify: `docs/superpowers/plans/README.md` (the "Plan 4" section, a new "Plan 4b" section, and
+  the carries in "Plan 5" and "Plan 7")
+
+**Interfaces:**
+- Produces: plan 4's "As built" paragraph, what plans 5, 6 and 7 inherit from it, and the plan 4b
+  entry — live policy: file watch and `SIGHUP`, validate or keep the old, atomic swap, and the
+  refresh of live contexts per spec §5.1.3, with no logout, which is the owner's core goal. That
+  is where the next plan writer starts (`CLAUDE.md`).
 
 - [ ] **Step 1: Apply the roadmap edit**
 
 <!-- patch: docs/superpowers/plans/README.md -->
 ```diff
 diff --git a/docs/superpowers/plans/README.md b/docs/superpowers/plans/README.md
-index 545d2aa..1639839 100644
+index d3eea86..333ab1a 100644
 --- a/docs/superpowers/plans/README.md
 +++ b/docs/superpowers/plans/README.md
 @@ -199,7 +199,7 @@ hand.
@@ -9675,7 +12141,7 @@ index 545d2aa..1639839 100644
  
  Spec §3 (normalization), §4 (grammar, pipeline stages), §5.1–§5.5 (mint resolution, blob
  compilation, refresh, credential identity, scopes and `attached_roles`, version comparison),
-@@ -224,6 +224,55 @@ is enforced up to the last hop and not across it.
+@@ -224,6 +224,87 @@ is enforced up to the last hop and not across it.
    becomes reachable when they stop sharing one.
  - **A `GetBlob` store error answers `store_unavailable`** once the store is remote.
  
@@ -9686,7 +12152,11 @@ index 545d2aa..1639839 100644
 +for seeded contexts, behind an optional `lab:` block (plan 4, Decided 12). The accounting spool
 +drains to a `decision.Sink` and stops at a refused record. Authorization answers
 +`store_unavailable` FAIL, as plans 1–3 did, until L4 measures authorization fall-through (plan 4,
-+Question 3, owner's ruling 2026-09-24).
++Question 3, owner's ruling 2026-09-24). A device that fails a joint policy-and-inventory check is
++quarantined, not the policy refused: named at start, refused at mint `device_quarantined`, and
++closed without a reply by the daemon (spec §10, decision 20). `port49 policy test` carries the
++shadowed-deny report and `port49 policy diff` the effective-permission diff and the
++privilege-expansion gate (spec §12), and replay re-derives a session's attributes.
 +
 +**Hands to plan 5:**
 +
@@ -9695,7 +12165,7 @@ index 545d2aa..1639839 100644
 +  `tests/lab/results/L2-*.md`); `expands_abbreviations` is false everywhere until L21 closes per
 +  platform; entity classes are names from spec §8 and the lab configs, unverified against a device;
 +  only `arista_eos` renders levels, and `operator` renders nowhere (plan 4, Question 1), so a policy
-+  landing an EOS session at `operator` is refused at load, and stays refused until the role-ceiling
++  landing an EOS session at `operator` quarantines those devices, and stays so until the role-ceiling
 +  run below measures it.
 +- **The owner's level definitions (2026-09-24), binding on the adapters:** `readonly` is show and
 +  info only; `operator` is non-disruptive state changes and no configuration (`clear counters`
@@ -9710,47 +12180,111 @@ index 545d2aa..1639839 100644
 +  `clear counters`, `clear ip bgp *` and `configure`.
 +- **L21**, added by plan 4: type an abbreviation on each platform and record what the
 +  authorization request and the accounting record carry.
-+- The CI reports of spec §12 — the effective-permission diff, the shadowed-deny report, the
-+  privilege-expansion gate, and the dead-rule and fallback-exposure intersection checks — are
-+  this plan's (plan 4, Question 4, owner's ruling 2026-09-24; listed in its section).
++- The dead-rule and fallback-exposure intersection checks of spec §12 are this plan's; plan 4
++  built the shadowed-deny report, the effective-permission diff and the privilege-expansion gate,
++  because it is the plan that switched to dominance (plan 4, Question 4, owner's rulings
++  2026-09-24; listed in its section).
++- Opening the pull request `port49 grants remove` prepares: plan 4 edits the file (printed, or
++  `--write`), and plan 5 opens the review (owner's ruling 2026-09-24).
 +- The offline tools (`port49 explain`, `policy test`, `access review`, `grants remove`) load a
 +  policy without config's resolved `EnableUsernames`, so CI cannot see a `platforms:`
 +  enable-username override the daemon applies. Harmless while `config.Load` refuses such an
 +  override; plan 5's to close when its adapters bring the overrides.
 +
-+**Hands to plan 6:** the joint policy-and-inventory checks refuse a policy at load
-+(`policy.checkDevices`); plan 6 turns a failure into a quarantined device (spec §13, decision 20).
-+`security_log` is accepted and emits nothing until a sync can change a scope's membership. `bundle`
-+on every blob and record is the policy file's `sha256:` until versioned bundles replace it.
++**Hands to plan 6:** quarantine is applied by `port49d` when it loads the policy
++(`policy.checkDevices`); plan 6 publishes it in the bundle, `admission: quarantined`, from the
++inventory service (spec §10, decision 20). `security_log` is accepted and emits nothing until a
++sync can change a scope's membership. `bundle` on every blob and record is the policy file's
++`sha256:` until versioned bundles replace it. The remote store brings continuing active logins
++from a replica's warm context cache through a store outage (design §12).
 +
 +**Hands to plan 7:** group subjects load, and are evaluated by name in the offline tools, but mint
 +for no one until the directory resolves membership; `api:` rights are validated and reported, not
-+enforced; `max_session_age` per role is refused at load by name; policy reload; `/v1/explain` over
-+the API (the offline `port49 explain` exists).
++enforced; `max_session_age` per role is refused at load by name; `/v1/explain` over the API (the
++offline `port49 explain` exists). Policy reload is plan 4b's.
++
++## Plan 4b — Live policy (spec §5.1.3)
++
++The owner's core goal (2026-09-24): **a policy change reaches every live session without anyone
++logging out.** Today a policy edit needs a `port49d` restart, and a restart ends every live login
++context and every unspent token (plan 3, Question 3).
++
++- **Reload trigger:** a watch on `broker.policy_file` and `SIGHUP`, both.
++- **Validate or keep the old:** the new file is loaded against the current inventory exactly as
++  at start. A file that does not load leaves the running policy in force, logged with the error
++  and counted (`port49_policy_reloads_total{outcome}`); nothing half-applies.
++- **Atomic swap:** the broker's policy and the daemon's quarantine list change in one step, so
++  no mint sees one version's policy and another's quarantine.
++- **Refresh of live contexts (spec §5.1.3):** each principal with a live context is re-resolved
++  against the new policy, a new blob is written where the result differs, and `blob_hash` is
++  updated in each of that principal's live contexts. A policy-removed grant therefore reaches an
++  active session on its next command, **with no logout**. Blobs are immutable, so a replica's
++  cached copy of the old one is never wrong, only no longer referenced.
++- Carried here from plan 7: `(*broker.Broker).Server` returns an error instead of panicking, now
++  that a reload path exists.
++
++Plan 7 keeps the scheduled refresh through `active_principals` for directory changes, and the
++`staleness_ceiling` default that goes with it.
 +
  ## Plan 5 — Platform adapters (§19 step 5)
  
  Spec §8 in full: built-in adapters, entity classes, user overrides and layering, pinned
+@@ -310,11 +391,11 @@ NOT collide"). Such an account's commands arrive under the same username and mat
+ context at its highest granted level; `foreign` attribution is the only detection until this check
+ exists.
+ 
+-**Owed from plan 4 (owner's ruling 2026-09-24):** spec §12's CI reports — the
+-effective-permission diff, the shadowed-deny report, the privilege-expansion gate, and the
+-dead-rule and fallback-exposure intersection checks. Plan 4 builds `explain`, policy tests,
+-access review and `grants remove` and none of these; they land here because the level and role
+-data the intersection checks need comes from this plan's adapters.
++**Owed from plan 4 (owner's rulings 2026-09-24):** spec §12's dead-rule and fallback-exposure
++intersection checks, which need the level and role data this plan's adapters bring. Plan 4 built
++the shadowed-deny report, the effective-permission diff and the privilege-expansion gate, because
++it is the plan that replaced deny-overrides with dominance. Also: opening the pull request `port49
++grants remove` prepares (plan 4 delivers the file edit).
+ 
+ **Possible later, not planned:** per-window contexts on the platforms that give a window its own
+ stable identifier — EOS `vty<n>`, bound at session authorization
+@@ -344,14 +425,13 @@ grace window, `max_session_age` minimum across roles), the staleness ceiling end
+ (design §19 step 2); the scheduled refresh and the `staleness_ceiling` default, together; PR #7's
+ third follow-up — a join racing another principal's replace under one username can lose its sid or
+ certificate index entry (revocation by principal still reaches it); the certificate-to-directory
+-mapping replacing the slice's declared `username:`; policy reload. Also owed by plan 3's reviews:
++mapping replacing the slice's declared `username:`. Also owed by plan 3's reviews:
+ 
+ - An **atomic put-if-absent idempotency reservation**. Two concurrent requests under one key
+   with different bodies can both pass the pre-check today, and the minter's read, mint and
+   `PutIdempotency` are three steps, not one.
+ - **Per-source limits or admission on the broker listener.** One client reconnecting every 30s
+   can keep all of `broker.MaxConns` (256) slots full.
+-- `(*broker.Broker).Server` **returns an error instead of panicking** once a reload path exists.
+ - A **counter for broker TLS handshake failures**.
+ - A **per-principal cap on held broker connections**, beside the per-source one. Any
+   certificate the anchor signs can open all 256 slots and hold them for `max_session_age`,
 ```
 
-The owner's rulings of 2026-09-24 (Questions 3 and 4, the L4 runs, the level definitions) are
-already written into the patch. If a later ruling lands before this task runs, write it into the
+The owner's rulings of 2026-09-24 (Questions 3 and 4, the L4 runs, the level definitions, the
+deviation audit's plan 4b and the pull request for `grants remove`) are already written into the
+patch. If a later ruling lands before this task runs, write it into the
 matching bullet in the same way.
 
 - [ ] **Step 2: Check and commit**
 
-Run: `grep -n 'Hands to plan 5\|Hands to plan 6\|Hands to plan 7\|As built' docs/superpowers/plans/README.md`
-Expected: the four paragraphs, under "## Plan 4".
+Run: `grep -n 'Hands to plan 5\|Hands to plan 6\|Hands to plan 7\|As built\|^## Plan 4b' docs/superpowers/plans/README.md`
+Expected: the four paragraphs under "## Plan 4", then the "## Plan 4b" heading before "## Plan 5".
 
 ```bash
 git add docs/superpowers/plans/README.md
 git commit -m "docs: the roadmap records plan 4 and hands forward
 
-What plan 4 built, and what plans 5, 6 and 7 inherit from it: the
-borrowed dialect table and L21, the owner's level definitions and the
-three L4 runs, the CI reports, the joint checks plan 6 turns into
-quarantine, and the group subjects, api: rights and reload that wait
-for plan 7.
+What plan 4 built, and what plans 4b, 5, 6 and 7 inherit from it: live
+policy reload with a refresh of live contexts and no logout (plan 4b,
+the owner's core goal); the borrowed dialect table and L21, the owner's
+level definitions, the three L4 runs, the two remaining CI reports and
+the pull request for grants remove (plan 5); quarantine in the bundle
+and warm-context continuation (plan 6); and the group subjects and
+api: rights that wait for plan 7.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -9767,20 +12301,23 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 | §4 grammar and pipeline stages | 5 (`ParseRule`), 6 (`match`, `pipePermits`), 8 (`DefaultPipe`, rank lint) |
 | §5.1 mint resolution | 9 (`compose`), 10 (`Resolve`), 13 (the broker mints through it) |
 | §5.1.2 blob compilation | 5 (format v2), 10 (`compile`) |
-| §5.1.3 refresh; §5.1.4 credential identity | unchanged: refresh is plan 7's (roadmap); `Resolve` is what a refresh will call |
+| §5.1.3 refresh; §5.1.4 credential identity | unchanged: a policy-driven refresh with no logout is plan 4b's "live policy", the scheduled refresh plan 7's (roadmap, Task 23); `Resolve` is what a refresh will call |
 | §5.4 dominance | 6 (`Dominates`, `Command`); 1 (§5.4 ties) |
 | §5.5 scopes, `attached_roles`, `on_missing`, version comparison | 7, 9; 11 (the incomparable report); 1 (§5.5) |
-| §5.7 the decision log in full, replay | 2 (policy block, `Sink`), 12 (records carry it), 13 (mint `bundle`, blob re-emission), 17 (replay) |
+| §5.7 the decision log in full, replay | 2 (policy block, `Sink`, `reply`), 12 (records carry them), 13 (mint `bundle`, blob re-emission), 17 (replay, session attributes included) |
+| §10 quarantine (decision 20) | 10 (`checkDevices` quarantines), 13 (mint refused, named at start), 20 (closed without a reply), 16 (reported), 22 (a new one fails the diff) |
 | §6 levels, `parent:`, attribute layering, substitution | 8 (levels), 10 (`layerAttributes`, `render`), 5 (`SessionAttributes`), 12 (substituted per session), 13 (checked at mint) |
 | §11 as a test corpus | 11 |
-| §12 `explain`, policy tests, access review, `grants remove --subject` | 15, 16, 18, 19 |
+| §12 `explain`, policy tests, access review, `grants remove --subject` | 15 (with the `config_commands` caveat), 16, 18, 19 (the pull request is plan 5's) |
+| §12 shadowed-deny report | 21 |
+| §12 effective-permission diff, privilege-expansion gate | 22 |
 | §14 "Matching and precedence", "Decision log" assertions | table below |
 | Replace `author.Lab` with the real `Authorizer` | 12, 13 (`author.Engine`); 14 (`lab:` optional); Decided 12 |
 | The spool's failing sink, no advance past a refusal | 2, 3 |
 | Carried: blob platform checked against the device's | 12 (`blob_platform_mismatch`), 1 (§5.7 row) |
 | Carried: a `GetBlob` store error answers `store_unavailable` | 12 (FAIL, Decided 13) |
 | Produces the compiled blob plan 2 stores | 13 (`engine.Encode` into `putBlob`) |
-| Spec text the plan changes | 1 (spec §3, §5.4, §5.5, §5.7, §6, §8, §11, §15 L2, L4, L21; design §12, §19), 20 (roadmap) |
+| Spec text the plan changes | 1 (spec §3, §5.4, §5.5, §5.7, §6, §8, §10, §11, §12, §14, §15 L2, L4, L21; design §12, §19), 23 (roadmap) |
 
 **Spec §14 assertions, and where each is tested**
 
@@ -9791,23 +12328,24 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 | Dominance, permitting | `engine.TestANarrowerPermitDominatesABroaderDeny` |
 | Dominance, denying (all four), equal tuples, class = regex | `engine.TestNoPermitDominatesTheseDenies` |
 | Dominance, buying it back | `engine.TestAnExceptionMustBeAsPreciseAtEveryPosition` |
-| Rank lint | `policy.TestLoadRefusesByName` ("a regex that is *", "… a word") |
+| Rank lint (common spellings; §14 amended) | `policy.TestLoadRefusesByName` ("a regex that is *", "… a word") |
 | Order independence | `engine.TestEvaluationIsOrderIndependent`, `policy.TestShufflingThePolicyChangesNoDecision` |
-| Entity classes per platform; undefined class a load error | `platform.TestManagementIsDefinedPerPlatform`, `policy.TestJointChecksRefuseAtLoad` |
+| Entity classes per platform; undefined class a load error | `platform.TestManagementIsDefinedPerPlatform`, `policy.TestLoadRefusesByName` ("a class no platform defines"), `policy.TestJointCheckFailuresQuarantineTheDevice` |
 | Pipeline enforcement, chained stages | `engine.TestEveryPipelineStageIsChecked` |
 | Abbreviation handling | `engine.TestAnAbbreviationCannotSlipPastADeny` |
 | Attribute layering, shadowing reported | `policy.TestAttributesLayerAndRecordWhatTheyShadow`, `TestLintReportsWhatAReviewerMustSee` |
 | 255-byte limit at load (and at mint) | `engine.TestCheckAttribute`, `broker.TestASessionReplyThatWillNotFitIsRefusedAtMint` |
-| Privilege composition, `parent:`, unresolvable level | `policy.TestAPrincipalHoldsTheGrantsWhoseScopeSelectsTheDevice`, `TestCustomLevelsReplaceTheOrdering`, `TestJointChecksRefuseAtLoad` |
-| `enable: auto` refused at load where not `principal` | `policy.TestEnableAutoIsRefusedWhereTheEnableUsernameIsNotThePrincipal` |
+| Privilege composition, `parent:`, unresolvable level | `policy.TestAPrincipalHoldsTheGrantsWhoseScopeSelectsTheDevice`, `TestCustomLevelsReplaceTheOrdering`, `TestJointCheckFailuresQuarantineTheDevice` |
+| `enable: auto` refused where not `principal` | `policy.TestEnableAutoQuarantinesWhereTheEnableUsernameIsNotThePrincipal` |
 | Username resolution and uniqueness | `policy.TestLoadRefusesByName` ("a machine without a username", "a shared username") |
 | Replay agreement | `replay.TestEveryRecordReplaysToTheSameDecision` |
-| Replay divergence detected | `replay.TestTamperingIsDetected` |
+| Replay divergence detected | `replay.TestTamperingIsDetected` (a session reply included) |
 | Reason codes closed | Task 1 before Task 2; `decision.TestAnAuthorizationRecordCarriesItsMatchedRules` |
 | Blob lifetime follows the context (a restarted replica resolves it) | not exercised: the in-process store keeps no contexts across a restart; plan 6 or the remote store. `author.TestACachedBlobOutlivesABlobReadFailure` covers the cache; the store TTL is plan 3's (Decided 8 there), unchanged |
 | Attached roles by trust domain; no grant, no access | `policy.TestAttachedRolesFollowTheTrustDomainAndNeverAddADevice` |
 | Attached permit reported, deny-only not | `policy.TestLintReportsWhatAReviewerMustSee` |
 | State-scoped mitigation; `on_missing` | `policy.TestAnIncomparableVersionIsIncludedAndSaysSo`, `TestOnMissingExcludesByDefault`, `TestLoadRefusesByName` ("a deny granted on a keyed scope without on_missing") |
+| Quarantine | `policy.TestJointCheckFailuresQuarantineTheDevice`, `broker.TestAQuarantinedDeviceIsRefusedAtMint`, `server.TestAQuarantinedDeviceIsClosedWithoutAReply`, `main.TestAQuarantinedDeviceDoesNotStopTheStart`; the lab half (the device falls to its local method) is plan 6's with the bundle |
 
 **Placeholder scan:** none. Every code block is the file or the patch as built and tested; the
 only prose instruction without a block is Task 13's `git rm`, which is the block.
@@ -9822,7 +12360,10 @@ time.Time) (Resolution, error)` has that signature in Tasks 10, 11, 13 and 15;
 `author.Request{Context, Device, Raw, Vector}` is built only by `Handle` and read by `Engine` and
 `Lab`; `decision.Sink` is taken by `acct.NewSpool` and asserted by `broker.putBlob`;
 `policy.Env{Devices, Dialects, EnableUsernames}` is filled by `buildBroker` (Task 13), the CLI's
-`policyFiles.load` (Task 15) and the tests.
+`policyFiles.load` (Task 15), `policyDiff` (Task 22) and the tests;
+`buildBroker` returns `(*http.Server, error)` in Task 13 and `(*http.Server, *policy.Policy,
+error)` from Task 20; `engine.Outcome.Denies` is produced by `Command` (Task 6) and read by
+`shadowAcks` and `expansionAcks` (Tasks 21, 22).
 
 **Things an implementer must not miss.**
 
@@ -9834,6 +12375,9 @@ time.Time) (Resolution, error)` has that signature in Tasks 10, 11, 13 and 15;
 - `engine.Compile` wants a blob as `Decode` returns it — version set. A hand-built `Blob` in a
   test goes through `Encode` and `Decode` first (the tests' `program` and `Decide` helpers do).
 - `author.Engine.Metrics` is required; it counts every lookup.
+- Task 20 changes `buildBroker`'s results; its patch updates every caller, `run` and the tests.
+- Task 16's `cmd/port49/policy.go` imports `strings`, so Tasks 17 and 18 add only `os` and
+  `text/tabwriter` beside it.
 - The corpus's `operator → priv-lvl=7` lives only in `spec11_test.go`'s `spec11Env`. Do not add
   it to `internal/platform`: that is Question 1.
 
@@ -9848,9 +12392,9 @@ lab's own management interfaces (plan 5 verifies them).
 
 ## Execution
 
-Runs on Go 1.22 with no new dependencies, on branch `feature/policy-engine`. Twenty tasks: one
-spec task first, eighteen code tasks (2–19), one roadmap task last, one commit each. No task needs
-the lab host. The code gate, after Task 13 and again after Task 19, is `make test && make vet`,
+Runs on Go 1.22 with no new dependencies, on branch `feature/policy-engine`. Twenty-three tasks:
+one spec task first, twenty-one code tasks (2–22), one roadmap task last, one commit each. No task
+needs the lab host. The code gate, after Task 13 and again after Task 22, is `make test && make vet`,
 `go test -race ./internal/... ./cmd/...`, `go vet -tags lab ./tests/lab/...` and `make build`,
 reported with their real output.
 
@@ -9865,12 +12409,16 @@ documentation from it). For this plan it lists at least:
   a plan-3 policy without it is refused with that line in the error. Refused by name:
   `platform_set`, `platforms`, `key_groups` (keep them in the inventory file), a role's
   `max_session_age`. A group subject loads but mints for no one until plan 7.
-- **Load-time refusals against the inventory:** a class a platform in inventory does not define, a
-  level it cannot render (`operator` on `arista_eos` — Question 1), a ceiling below the landing
-  level, `enable: auto` where the enable username is not the principal, and a regex that is only
-  a costlier `*` or word. `port49d` refuses to start on any of them, naming subject and device.
-  Also refused, without the inventory: a scope with a match key that delivers a deny, attached or
-  through a grant, and does not declare `on_missing` (`all_devices` is exempt).
+- **Quarantine, not refusal, against the inventory:** a device where a class its platform does not
+  define, a level it cannot render (`operator` on `arista_eos` — Question 1), a ceiling below the
+  landing level, or `enable: auto` where the enable username is not the principal would meet a
+  mint is quarantined. `port49d` starts, names each quarantined device and its causes on stderr,
+  refuses its mints `device_quarantined`, and closes its TACACS+ connections without a reply, so
+  the device falls to its local method as in an outage; `port49_devices_quarantined` counts them.
+  The rest of the fleet runs. **Refused at load:** a class no platform defines, a `max_privilege`
+  no platform can number, a regex that is only a costlier `*` or word, and a scope with a match
+  key that delivers a deny, attached or through a grant, without `on_missing` (`all_devices` is
+  exempt).
 - **Decisions:** specificity dominance replaces plan 3's deny-overrides — a more specific permit now
   overrides a broader deny, which plan 3 never allowed; a deny is a default, and `port49 policy
   test` and `explain` show which permit beats it. Output modifiers are allow-listed per role (the
@@ -9887,9 +12435,21 @@ documentation from it). For this plan it lists at least:
   new mint item error `attribute_too_long` in `port49_broker_item_errors_total{error}`, which
   `port49 token` reports as "a session attribute for this device is too long once filled in".
 - **Decision records** carry `policy.bundle` (the policy file's `sha256:`), `policy.blob`, and the
-  matched deny and permits with their tuples and roles; grants on a mint record carry `expires`.
+  matched deny and permits with their tuples and roles; grants on a mint record carry `expires`; a
+  permitted authorization carries `reply.attributes`, what the device was sent, which `port49
+  policy replay` re-derives and compares. A quarantined device's connection leaves a header-only
+  record with the reason `device_quarantined`.
+- **Policy reload** is still a restart, which logs everyone out; live reload with no logout is plan
+  4b, next on the roadmap.
 - **New commands**, all offline over files: `port49 explain`, `port49 policy test`, `port49 policy
-  replay`, `port49 access review`, `port49 grants remove`.
+  replay`, `port49 policy diff`, `port49 access review`, `port49 grants remove`.
+- **CI gates:** `port49 policy test` prints the shadowed-deny report and fails on a deny a more
+  specific permit beats unless a policy test exercises that permit over that deny. `port49 policy
+  diff --old --new --inventory` prints every command whose verdict a change moves, access gained or
+  lost, level and ceiling changes and changed regex rules, and fails on a command a deny refused
+  that the change permits (unless a test exercises it) or on a newly quarantined device.
+- **`explain`** notes that a configuration-mode command may never reach port49 on a platform that
+  does not declare `config_commands`, which is every built-in one today.
 - **`lab:` is optional in `port49d.yaml`.** Without it a context with no blob is denied; with it,
   seeded lab tokens keep the lab's fixed answers. A broker-minted token is always answered by the
   policy engine.
@@ -9899,4 +12459,6 @@ documentation from it). For this plan it lists at least:
   contradicts; §11's `svc_oxidized` lacked the username §14 requires, and its `dc_fabric` now
   declares `on_missing`. All are corrected in Task 1, and register row L21 is new. Spec §5.7, §6
   and design §12 now say authorization answers `store_unavailable` FAIL, and L4 carries three new
-  runs to measure. Spec §12's CI diff reports are plan 5's (Question 4, owner's ruling).
+  runs to measure. Spec §12's shadowed-deny report and privilege-expansion gate land here; its
+  dead-rule and fallback-exposure checks are plan 5's (Question 4, owner's rulings). Spec §14's
+  rank lint now says "common spellings", with the reason.
