@@ -694,8 +694,8 @@ func (p *Policy) regexAcks(before *Policy, instants []time.Time) map[string]bool
 //     does not declare is below every level it does;
 //   - enable: the mechanism went from none to token, or to auto, which asks
 //     for nothing more than a login;
-//   - reply: the session reply gained or changed an attribute that bears
-//     privilege on the platform, priv-lvl aside.
+//   - reply: the session reply gained, changed or lost an attribute that
+//     bears privilege on the platform, priv-lvl aside.
 func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 	rose := func(from, to string) bool {
 		return from != to && to != "" && (c.before.levelIndex(to) > c.before.levelIndex(from) ||
@@ -718,16 +718,19 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 	if enableRank[is.enable] > enableRank[was.enable] {
 		l.Raised = append(l.Raised, "enable")
 	}
-	// An attribute the reply gained or changed, other than priv-lvl, which
-	// priv_lvl judges, raises what the device lets the session do unless its
-	// adapter measured it inert (spec §12).
+	// An attribute the reply gained, changed or lost, other than priv-lvl,
+	// which priv_lvl judges, changes what the device lets the session do in a
+	// direction the gate cannot read, unless its adapter lists it inert: on a
+	// session-only platform losing deny-commands widens access (spec §12).
 	dialect := c.after.dialect(is.platform)
-	for _, a := range l.NewReply {
-		name := a[:strings.IndexAny(a, "=*")]
-		if name != "priv-lvl" && !slices.Contains(l.OldReply, a) && dialect.BearsPrivilege(name) {
-			l.Raised = append(l.Raised, "reply")
-			break
-		}
+	moved := func(from, to []string) bool {
+		return slices.ContainsFunc(from, func(a string) bool {
+			name := a[:strings.IndexAny(a, "=*")]
+			return name != "priv-lvl" && !slices.Contains(to, a) && dialect.BearsPrivilege(name)
+		})
+	}
+	if moved(l.NewReply, l.OldReply) || moved(l.OldReply, l.NewReply) {
+		l.Raised = append(l.Raised, "reply")
 	}
 	l.Raise = len(l.Raised) > 0
 	if !l.Raise {

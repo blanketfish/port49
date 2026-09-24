@@ -550,7 +550,7 @@ func TestAnExpansionAckHoldsOnlyAtItsInstant(t *testing.T) {
 // A privilege-bearing attribute other than priv-lvl, added to the session
 // reply, raises what the device lets the session do (review C2): each fails
 // the gate on its platform's group until a session test asserts the new
-// reply; taking it away again is reported and passes.
+// reply, and so does taking it away again.
 func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
 	for _, tt := range []struct{ attrs, device, reply string }{
 		{`{juniper_junos: [local-user-name=super-user]}`, "srx-lab-01", `["local-user-name=super-user"]`},
@@ -574,9 +574,20 @@ func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
 		if d.UnacknowledgedLevels() != raised-1 {
 			t.Fatalf("%s: a reply: test on %s acknowledges its group: %+v", tt.attrs, tt.device, d.Levels)
 		}
-		if back := Compare(mustParse(t, after), mustParse(t, diffBase), noon); back.UnacknowledgedLevels() != 0 ||
-			len(back.Levels) == 0 {
-			t.Fatalf("%s: removing it is reported and passes: %+v", tt.attrs, back.Levels)
+		// Taking it away widens access too, whose direction the gate cannot
+		// read (review C4): it fails until a reply: test asserts the reply
+		// without it.
+		back := Compare(mustParse(t, after), mustParse(t, diffBase), noon)
+		if back.UnacknowledgedLevels() != raised {
+			t.Fatalf("%s: removing it fails the gate: %+v", tt.attrs, back.Levels)
+		}
+		was := `[]`
+		if tt.device == "leaf-01" {
+			was = `["priv-lvl=1"]`
+		}
+		back = Compare(mustParse(t, after), mustParse(t, diffBase+"tests:\n  - {subject: noc, device: "+tt.device+", reply: "+was+"}\n"), noon)
+		if back.UnacknowledgedLevels() != raised-1 {
+			t.Fatalf("%s: a reply: test acknowledges the removal: %+v", tt.attrs, back.Levels)
 		}
 	}
 }
@@ -671,5 +682,16 @@ func TestAStaleAcknowledgmentAcknowledgesNothing(t *testing.T) {
 	still += "acknowledge:\n  - {role: spare, rule: \"copy * /^start/\", reason: \"x\"}\n"
 	if d := Compare(mustParse(t, regexDeny), mustParse(t, still), noon); d.UnacknowledgedRegex() == 0 {
 		t.Fatalf("an entry for another role's rule acknowledges nothing: %+v", d.Regex)
+	}
+}
+
+// The reviewer's C4 probes: removing Junos's deny-commands or its
+// local-user-name widens a session-only device's access, and fails the gate.
+func TestRemovingAJunosPrivilegeAttributeFailsTheGate(t *testing.T) {
+	for _, attr := range []string{`"deny-commands=^(request|clear)"`, `"local-user-name=ro-class"`} {
+		with := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: {juniper_junos: ["+attr+"]}}", 1)
+		if d := Compare(mustParse(t, with), mustParse(t, diffBase), noon); d.UnacknowledgedLevels() != 1 {
+			t.Fatalf("%s removed: %+v", attr, d.Levels)
+		}
 	}
 }
