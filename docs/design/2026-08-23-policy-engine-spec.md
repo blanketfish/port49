@@ -708,7 +708,10 @@ superseded policy minted and the policy in force would not mint identically — 
 removed at 10:00 returns at 10:05 on a device where the operator had no context yet, from a
 token minted at 09:58. A token whose answer is unchanged, the bundle aside, is kept: a reload is
 not a reason to make everyone mint again. A shortened `token_ttl` is a changed answer, since
-those tokens would outlive what the policy now allows; a lengthened one is not. A login in flight across the swap may still write the
+those tokens would outlive what the policy now allows; a lengthened one is not. An idempotent
+retry of a mint whose tokens were deleted this way is not replayed, because the replay would
+hand back a token that no longer exists. It is minted afresh under the policy in force, and the
+`mint` record's `index_error` says the replay was abandoned. A login in flight across the swap may still write the
 superseded answer after the refresh has passed its context, so the refresh runs again a
 settle interval (30s) after every reload, and after every pass at a grant's expiry.
 

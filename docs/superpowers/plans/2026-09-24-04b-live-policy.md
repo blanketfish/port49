@@ -4972,9 +4972,15 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `port49_tokens_superseded_total`.
 - **An unspent token whose answer the edit changed is deleted**: its holder sees
   `token_not_found` and runs `port49 token` again. Tokens whose answer did not change are kept.
+  An idempotent retry of a mint whose tokens were superseded is not replayed with the dead token.
+  It mints afresh under the policy in force, and its `mint` record's `index_error` says why.
 - **`credential_revoked` now also follows a routine edit** that withdraws a grant. The
   `refresh deny no_grants_matched` record naming the same `ctx_id` tells the two apart; an alert
   on `credential_revoked` as an incident signal should leave those out.
+- **A policy file that changes on a schedule reloads on that schedule.** A templater that
+  stamps the time into it every minute gives a reload every minute, and every reload writes one
+  `refresh` record per live context. Stamp nothing that changes unless the policy does. A
+  `SIGHUP` with no edit is answered `unchanged` without being compiled again.
 - **The inventory is still read only at start.** A reload after an inventory edit says so; restart
   to apply it (plan 6).
 - **`SIGHUP` no longer ends `port49d`**, with or without a `broker:` block.

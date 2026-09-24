@@ -426,6 +426,17 @@ walks principals × devices × superseded policies × expiry instants, compiling
 - **Decision-log emits under a hold are not context-bounded** (4b Task 4). A mint writes its
   records while it holds the policy, so a stalled log sink stalls a swap. Harmless with a local
   file; bound it before the log can be remote.
+- **The settle pass assumes redeem-to-write is under 30s** (4b final review m3). A login that
+  spent a token before the supersede and writes its context after the settle pass keeps the
+  superseded answer until the next reload or expiry, and the pending gauge reads 0. With the
+  memory store this is immediate. The daemon's per-packet store calls use the connection's
+  context with no deadline. Give them one that is well under `settleAfterReload`.
+- **What the broker remembers grows with the policy's history** (4b final review m10). A file
+  rewritten on a schedule, such as a templater stamping the time, reloads on that schedule.
+  Every load writes one `refresh` record per live context and a new blob, held in the store for
+  `max_session_age` and in `b.blobsSeen` for good. `b.superseded` holds one instant per
+  (device, username) ever superseded. Both are bounded by memory today; bound them before the
+  store is shared.
 
 **Hands to plan 7:** the scheduled directory refresh is `Refresh`'s context pass with group
 membership re-read; a policy refresh does not stamp `refreshed_at`, because nothing about the
@@ -435,12 +446,24 @@ policy refresh already does for a withdrawn grant. **A candidate reload guard** 
 a reload that fails the joint check for most devices applies anyway and quarantines them live,
 as spec §10 and decision 20 require; the CI gate (`port49 policy diff` fails on a newly
 quarantined device) is today's only guard. An optional guard that refuses a reload quarantining
-more than a configured share of the fleet is plan 7's to weigh.
+more than a configured share of the fleet is plan 7's to weigh. **Revocation records must name the
+contexts they could not reach** (decision 21; 4b final review I1). The policy refresh
+already counts contexts on session-only platforms (`RefreshReport.Unreached`), says so on its
+summary line, and names each `ctx_id` in the process log. Revocation by identity adds the
+record field, a §5.7 edit first, and the refresh should use it too.
 
-**Hands to plan 12:** the policy file check covers the file and the directory holding it, not
-ACLs or ancestor directories; the deployment docs must say that the path to the policy file is
-the deployment's to protect, since whoever can write it decides every operator's access within
-seconds.
+**Hands to plan 12:** the policy file check covers the file, the directory holding it, and the
+directory holding every symlink on the path. It does not cover ACLs or other ancestor
+directories. The deployment docs must say that the path to the policy file is the deployment's
+to protect, since whoever can write it decides every operator's access within seconds. A
+Kubernetes ConfigMap or Secret mount fails that walk today: its mount root is 0777 or 01777,
+though read-only (`tests/lab/results/configmap-mounts.md`). That ruling is open.
+**The refresh's cost** (4b final review I3): one `mintedBy` compile measured 17.8 µs on the
+fixture's three-role policy. The token scan runs principals × devices × instants for each
+superseded policy, so 500 principals by 5,000 devices is about 45 s per instant per prior, and
+a real policy compiles slower. The context pass now runs first, both loops stop when cancelled,
+and a settle pass or retry no longer compares the policy in force with itself. Measure the
+rest at fleet size here.
 
 ## Plan 5 — Platform adapters (§19 step 5)
 
