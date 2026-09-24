@@ -20,8 +20,10 @@ platforms:
     # port49; level 7 does the same until the device is told what level 7
     # may run, and `privilege exec level 7 clear counters` makes it exactly
     # the operator rung (ceiling-cisco_iosxe.md). So operator is 7 here, not
-    # admin's 15 (decision 25), and the reference configuration carries the
-    # line that gives 7 its commands.
+    # admin's 15 (decision 25), and the reference configuration carries both
+    # lines the rung was measured with: the level-7 command authorization
+    # list, `aaa authorization commands 7 default group port49 local`, and
+    # `privilege exec level 7 clear counters` (device_config, below).
     privilege:
       readonly: ["priv-lvl=1"]
       operator: ["priv-lvl=7"]
@@ -93,10 +95,12 @@ platforms:
     # RESTCONF and NETCONF are unmeasured.
     expands_abbreviations: true
     # `int Gi1` arrived as `cmd-arg=GigabitEthernet cmd-arg=1`
-    # (L21-cisco_iosxe.md). Other interface types are unmeasured.
+    # (L21-cisco_iosxe.md). Other interface types and subinterfaces are
+    # unmeasured.
     splits_interface_names: true
     # A typed `show clock | include ...` reached port49 as `show clock` alone
-    # (L2-cisco_iosxe.md, "Truncation length").
+    # (L2-cisco_iosxe.md, "Truncation length"). Whether any other modifier reaches
+    # port49 is unmeasured.
     pipe_token: "|"
     pipe_authorized: false
     # Every command authorization ends `cmd-arg=<cr>` (L10-cisco_iosxe.md).

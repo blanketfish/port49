@@ -83,7 +83,8 @@ platforms:
     # `int Et1` arrived as one argument, `Ethernet1` (L21-arista_eos.md).
     splits_interface_names: false
     # A typed `show clock | include ...` reached port49 as `show clock` alone
-    # (L2-arista_eos.md, "Truncation length").
+    # (L2-arista_eos.md, "Truncation length"). Whether any other modifier reaches
+    # port49 is unmeasured.
     pipe_token: "|"
     pipe_authorized: false
     # Every command authorization ends `cmd-arg=<cr>` (L10-arista_eos.md).

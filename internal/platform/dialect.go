@@ -173,6 +173,9 @@ var inert = []string{"home-directory"}
 // device on a platform missing from a pinned set renders the same on every
 // later binary. A new set that changes it adds its own entry; one that does
 // not repeats the last, and LoadSets refuses a set with none.
+//
+// Its PrivilegeAttributes lists priv-lvl, what an unknown TACACS+ device most
+// likely reads.
 var generics = map[string]Dialect{
 	"1.0.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
 		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},

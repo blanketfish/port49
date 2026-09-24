@@ -17,15 +17,20 @@ platforms:
     # that fails closed.
     expands_abbreviations: false
     splits_interface_names: false
+    # Junos never authorizes a command (L18; decision 21), so no modifier
+    # reaches port49.
     pipe_token: "|"
     pipe_authorized: false
+    # Unmeasured for a command request, which Junos never sends; its
+    # accounting records end `<cr>` (tests/lab/results/L17-juniper_vjunos-router.md), and
+    # true is every measured platform's value.
     strip_cr: true
     # No command request to carry one; unmeasured, so false.
     shows_server_msg: false
     # local-user-name is applied (L18-juniper_*.md); user-permissions is
-    # measured inert on these releases and a permission carrier by design
-    # (decision 22); the command and configuration regexes are
-    # vendor-documented and unmeasured (L18).
+    # measured inert on these releases (L18-juniper_vsrx.md, variants 9 and
+    # 10) and a permission carrier by design (decision 22); the command and
+    # configuration regexes are vendor-documented and unmeasured (L18).
     privilege_attributes: [local-user-name, user-permissions, allow-commands, deny-commands, allow-configuration,
       deny-configuration, allow-commands-regexps, deny-commands-regexps, allow-configuration-regexps,
       deny-configuration-regexps]

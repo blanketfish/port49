@@ -266,9 +266,9 @@ func denyPatterns(pattern string, n Normalize) ([]string, error) {
 	return out, nil
 }
 
-// indexShape is an argument a split name's index may be: what IOS-XE sent
-// after `GigabitEthernet` for `Gi1` (L21), widened to slot, subinterface and
-// channel separators, which are unmeasured.
+// indexShape is an argument a split name's index may be, read as digits and
+// `/ . :`: what IOS-XE sent after `GigabitEthernet` for `Gi1` (L21), widened
+// to slot, subinterface and channel separators, which are unmeasured.
 var indexShape = regexp.MustCompile(`^[0-9][0-9/.:]*$`)
 
 // nameShape is the name a deny's split `*` takes before an index: letters,
