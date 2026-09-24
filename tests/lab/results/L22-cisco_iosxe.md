@@ -23,7 +23,7 @@ Each built-in adapter's reply at readonly, operator and admin is applied by the 
 
 | attribute | session | identity | `clear counters` | `configure terminal` | `show version` | inert |
 |---|---|---|---|---|---|---|
-| `home-directory*/home/port49` | refused: none of ["xe1#" "xe1>"] appeared on the SSH CLI as alice05 within 1m0s; what it said was: % Authorization failed. |  | refused by the device | refused by the device | not permitted | no |
+| `home-directory*/home/port49` | refused: none of ["xe1#" "xe1>"] appeared on the SSH CLI as alice05 within 1m0s; what it said was: % Authorization failed. |  | not observed | not observed | not observed | no |
 | `idletime*30` | opened | Current privilege level is 15 | sent to port49 | sent to port49 | permitted by port49 | yes |
 | `timeout*480` | opened | Current privilege level is 15 | sent to port49 | sent to port49 | permitted by port49 | yes |
 
@@ -31,31 +31,6 @@ Each built-in adapter's reply at readonly, operator and admin is applied by the 
 
 | level | reply | `configure terminal`, then `hostname xe1` | transcript after port49d stopped |
 |---|---|---|---|
-| operator | `priv-lvl=7` | refused | `configure terminal
- ⏎        ^
- ⏎ % Invalid input detected at '^' marker.
- ⏎ 
- ⏎ xe1#hostname xe1
- ⏎      ^
- ⏎ % Invalid input detected at '^' marker.
- ⏎ 
- ⏎ xe1#end
- ⏎ % Authorization failed.
- ⏎       ^
- ⏎ % Invalid input detected at '^' marker.
- ⏎ 
- ⏎ xe1#exit` |
-| admin | `priv-lvl=15` | refused | `configure terminal
- ⏎ % Authorization failed.
- ⏎ 
- ⏎ xe1#hostname xe1
- ⏎      ^
- ⏎ % Invalid input detected at '^' marker.
- ⏎ 
- ⏎ xe1#end
- ⏎ % Authorization failed.
- ⏎       ^
- ⏎ % Invalid input detected at '^' marker.
- ⏎ 
- ⏎ xe1#exit` |
+| operator | `priv-lvl=7` | refused | `configure terminal ⏎ ^ ⏎ % Invalid input detected at '^' marker. ⏎ ⏎ xe1#hostname xe1 ⏎ ^ ⏎ % Invalid input detected at '^' marker. ⏎ ⏎ xe1#end ⏎ % Authorization failed. ⏎ ^ ⏎ % Invalid input detected at '^' marker. ⏎ ⏎ xe1#exit` |
+| admin | `priv-lvl=15` | refused | `configure terminal ⏎ % Authorization failed. ⏎ ⏎ xe1#hostname xe1 ⏎ ^ ⏎ % Invalid input detected at '^' marker. ⏎ ⏎ xe1#end ⏎ % Authorization failed. ⏎ ^ ⏎ % Invalid input detected at '^' marker. ⏎ ⏎ xe1#exit` |
 
