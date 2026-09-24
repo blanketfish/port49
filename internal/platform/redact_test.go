@@ -495,3 +495,17 @@ func TestAQuotedRegexIsRedactedAsProse(t *testing.T) {
 		t.Errorf("a shipped match: %s", got)
 	}
 }
+
+// An escaped backslash is one separator, taken before a single escape: in
+// `password\\SEKRIT` the `\S` is not an escape, and reading it as one hid
+// the S from the word after `password` (task 15 re-review 3, S1).
+func TestAnEscapedBackslashIsOneSeparator(t *testing.T) {
+	got := RedactProse(AllRedactions(), `^password\\SEKRIT$`)
+	if strings.Contains(got, "S") || got != `^password\\`+Redacted+`$` {
+		t.Fatalf("%s", got)
+	}
+	// A regex escape after the pair is still one separator.
+	if got := RedactProse(AllRedactions(), `^username\\\s+x$`); got != `^username\\\s+x$` {
+		t.Fatalf("%s", got)
+	}
+}

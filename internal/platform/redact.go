@@ -517,10 +517,13 @@ func redactURL(word string) (string, bool) {
 // operators, `^`, `$`, `|`, `\`, `*` and `+`, separate too, so a block's
 // config check match `^snmp-server community X` is read as its words, and an
 // escape, `\s` or `\S`, is one separator, never the word `s`, which would
-// read as `secret`'s abbreviation (task 15 re-review 2, R1). The pattern's
-// first alternative finds the escapes, which RedactProse skips.
+// read as `secret`'s abbreviation (task 15 re-review 2, R1). An escaped
+// backslash, `\\`, is one separator too, taken first, so the letter after
+// it starts a word rather than an escape: `password\\SEKRIT` is not read as
+// `password`, `\S`, `EKRIT` (task 15 re-review 3, S1). The pattern's first
+// two alternatives find the escapes, which RedactProse skips.
 // Over-redaction is the accepted cost.
-var proseWord = regexp.MustCompile("\\\\[A-Za-z]|[^\\s()\\[\\]{}<>,;:!?\"'=`^$|\\\\*+]+")
+var proseWord = regexp.MustCompile("\\\\\\\\|\\\\[A-Za-z]|[^\\s()\\[\\]{}<>,;:!?\"'=`^$|\\\\*+]+")
 
 // RedactProse is text redacted as a rule is, first by whitespace, which is
 // where a URL's password is found whole, and then by proseWord, with the
