@@ -31,7 +31,7 @@ func blobFixture(t *testing.T) (*Blob, store.Context) {
 // blob's attributes — not the lab's.
 func TestABlobContextIsAnsweredFromItsBlob(t *testing.T) {
 	a, c := blobFixture(t)
-	d := a.Session(context.Background(), c, nil)
+	d := a.Session(context.Background(), Request{Context: c})
 	if !d.Permit || d.Reason != decision.ContextMatched || len(d.Attributes) != 1 || d.Attributes[0] != "priv-lvl=15" {
 		t.Fatalf("session: %+v", d)
 	}
@@ -45,7 +45,7 @@ func TestABlobContextIsAnsweredFromItsBlob(t *testing.T) {
 		// The lab's own deny list does not apply to a blob context.
 		{[]string{"show", "clock"}, true, decision.PermitDominates},
 	} {
-		d := a.Command(context.Background(), c, tt.vector, nil)
+		d := a.Command(context.Background(), Request{Context: c, Vector: tt.vector})
 		if d.Permit != tt.permit || d.Reason != tt.reason {
 			t.Errorf("Command(%q) = %+v, want permit=%v %s", tt.vector, d, tt.permit, tt.reason)
 		}
@@ -54,7 +54,7 @@ func TestABlobContextIsAnsweredFromItsBlob(t *testing.T) {
 		}
 	}
 	if d := (&Blob{Store: a.Store, Fallback: a.Fallback}).Command(context.Background(),
-		store.Context{BlobHash: c.BlobHash}, []string{"configure"}, nil); !d.Permit {
+		Request{Context: store.Context{BlobHash: c.BlobHash}, Vector: []string{"configure"}}); !d.Permit {
 		t.Fatalf("`**` permits configure: %+v", d)
 	}
 }
@@ -80,10 +80,10 @@ func TestAMissingOrCorruptBlobIsBlobUnavailable(t *testing.T) {
 	refused := c
 	refused.BlobHash = blob.HashOf(body)
 	for name, cc := range map[string]store.Context{"missing": missing, "corrupt": corrupt, "refused": refused} {
-		if d := a.Session(context.Background(), cc, nil); d.Permit || d.Reason != decision.BlobUnavailable {
+		if d := a.Session(context.Background(), Request{Context: cc}); d.Permit || d.Reason != decision.BlobUnavailable {
 			t.Errorf("%s: session %+v", name, d)
 		}
-		if d := a.Command(context.Background(), cc, []string{"show", "version"}, nil); d.Permit || d.Reason != decision.BlobUnavailable {
+		if d := a.Command(context.Background(), Request{Context: cc, Vector: []string{"show", "version"}}); d.Permit || d.Reason != decision.BlobUnavailable {
 			t.Errorf("%s: command %+v", name, d)
 		}
 	}
@@ -93,19 +93,19 @@ func TestAMissingOrCorruptBlobIsBlobUnavailable(t *testing.T) {
 func TestAContextWithNoBlobIsTheFallbacks(t *testing.T) {
 	a, _ := blobFixture(t)
 	c := store.Context{CtxID: "c", Username: "alice"}
-	if d := a.Session(context.Background(), c, nil); !d.Permit || d.Attributes[0] != "lab-attr=1" {
+	if d := a.Session(context.Background(), Request{Context: c}); !d.Permit || d.Attributes[0] != "lab-attr=1" {
 		t.Fatalf("session: %+v", d)
 	}
-	if d := a.Command(context.Background(), c, []string{"show", "clock"}, nil); d.Permit {
+	if d := a.Command(context.Background(), Request{Context: c, Vector: []string{"show", "clock"}}); d.Permit {
 		t.Fatalf("the lab's deny list applies to a seeded context: %+v", d)
 	}
 	// With no fallback configured, a context with no blob is denied, not
 	// permitted and not a panic.
 	a.Fallback = nil
-	if d := a.Session(context.Background(), c, nil); d.Permit || d.Reason != decision.NoRuleMatched {
+	if d := a.Session(context.Background(), Request{Context: c}); d.Permit || d.Reason != decision.NoRuleMatched {
 		t.Fatalf("nil fallback session: %+v", d)
 	}
-	if d := a.Command(context.Background(), c, []string{"show", "version"}, nil); d.Permit || d.Reason != decision.NoRuleMatched {
+	if d := a.Command(context.Background(), Request{Context: c, Vector: []string{"show", "version"}}); d.Permit || d.Reason != decision.NoRuleMatched {
 		t.Fatalf("nil fallback command: %+v", d)
 	}
 }

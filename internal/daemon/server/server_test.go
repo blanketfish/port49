@@ -529,11 +529,11 @@ func TestStoreErrorAnswersErrorEndToEnd(t *testing.T) {
 // outside the package: nothing in the daemon's own code is meant to panic.
 type panicAuthorizer struct{}
 
-func (panicAuthorizer) Session(context.Context, store.Context, []string) author.Decision {
+func (panicAuthorizer) Session(context.Context, author.Request) author.Decision {
 	panic("port49 test: deliberate panic inside an authorizer")
 }
 
-func (panicAuthorizer) Command(context.Context, store.Context, []string, []string) author.Decision {
+func (panicAuthorizer) Command(context.Context, author.Request) author.Decision {
 	panic("port49 test: deliberate panic inside an authorizer")
 }
 

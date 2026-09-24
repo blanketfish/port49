@@ -135,10 +135,10 @@ func TestVector(t *testing.T) {
 
 func TestLabCommandPrefixBoundary(t *testing.T) {
 	l := &Lab{DenyPrefixes: []string{"show"}}
-	if d := l.Command(context.Background(), store.Context{}, []string{"show", "version"}, nil); d.Permit {
+	if d := l.Command(context.Background(), Request{Vector: []string{"show", "version"}}); d.Permit {
 		t.Fatalf("expected \"show version\" to be denied by prefix \"show\": %+v", d)
 	}
-	if d := l.Command(context.Background(), store.Context{}, []string{"shower"}, nil); !d.Permit {
+	if d := l.Command(context.Background(), Request{Vector: []string{"shower"}}); !d.Permit {
 		t.Fatalf("expected \"shower\" to be permitted (no token boundary match): %+v", d)
 	}
 }
@@ -473,7 +473,7 @@ func TestLabCommandAttributes(t *testing.T) {
 		DenyPrefixes:      []string{"reload"},
 	}
 
-	d := l.Command(context.Background(), store.Context{}, []string{"show", "version"}, nil)
+	d := l.Command(context.Background(), Request{Vector: []string{"show", "version"}})
 	if !d.Permit {
 		t.Fatalf("expected a permit for \"show version\": %+v", d)
 	}
@@ -481,7 +481,7 @@ func TestLabCommandAttributes(t *testing.T) {
 		t.Fatalf("a permitted command reply should carry the configured command attributes, got %q", d.Attributes)
 	}
 
-	if d := l.Command(context.Background(), store.Context{}, []string{"reload"}, nil); d.Permit {
+	if d := l.Command(context.Background(), Request{Vector: []string{"reload"}}); d.Permit {
 		t.Fatalf("expected \"reload\" to be denied: %+v", d)
 	} else if len(d.Attributes) != 0 {
 		t.Fatalf("a DENIED command reply must carry no attributes, got %q", d.Attributes)
@@ -489,14 +489,14 @@ func TestLabCommandAttributes(t *testing.T) {
 
 	// The two lists are separate: a session reply does not pick up command
 	// attributes, which is what makes L18 able to vary one at a time.
-	s := l.Session(context.Background(), store.Context{}, nil)
+	s := l.Session(context.Background(), Request{})
 	if len(s.Attributes) != 1 || s.Attributes[0] != "priv-lvl=15" {
 		t.Fatalf("the session reply should carry only the session attributes, got %q", s.Attributes)
 	}
 
 	// Unset is the shipped shape and must stay a bare permit.
 	bare := &Lab{DenyPrefixes: []string{"reload"}}
-	if d := bare.Command(context.Background(), store.Context{}, []string{"show", "version"}, nil); len(d.Attributes) != 0 {
+	if d := bare.Command(context.Background(), Request{Vector: []string{"show", "version"}}); len(d.Attributes) != 0 {
 		t.Fatalf("with no command_attributes configured the reply must carry none, got %q", d.Attributes)
 	}
 }

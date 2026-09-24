@@ -52,6 +52,11 @@ type Metrics struct {
 	// compiled to a blob the daemon would refuse). Neither is a decision, so
 	// neither is in port49_decisions_total. The label is the code only.
 	BrokerItemErrors *prometheus.CounterVec
+	// port49_blob_cache_lookups_total{outcome}: the authorizer's per-replica
+	// blob cache, "hit" or "miss" (spec §5.1.1). A miss is one store read,
+	// counted again in port49_store_operations_total{op="get_blob"}; a hit
+	// during a store outage is a command still being answered.
+	BlobCache *prometheus.CounterVec
 }
 
 func New(reg prometheus.Registerer) *Metrics {
@@ -95,9 +100,11 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Accounting records accepted, by attribution."}, []string{"attribution"}),
 		BrokerItemErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_item_errors_total",
 			Help: "Mint items the broker could not decide, by API error code."}, []string{"error"}),
+		BlobCache: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_blob_cache_lookups_total",
+			Help: "Compiled-blob cache lookups by the authorizer, by outcome."}, []string{"outcome"}),
 	}
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors)
+		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache)
 	return m
 }

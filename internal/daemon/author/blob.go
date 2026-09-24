@@ -39,8 +39,6 @@ type Blob struct {
 	Fallback Authorizer
 }
 
-const blobUnavailableMsg = "port49: the policy for this session could not be read - run `port49 token` and log in again"
-
 func (b *Blob) load(ctx context.Context, c store.Context) (blob.Blob, bool) {
 	body, err := b.Store.GetBlob(ctx, c.BlobHash)
 	if err != nil {
@@ -50,26 +48,26 @@ func (b *Blob) load(ctx context.Context, c store.Context) (blob.Blob, bool) {
 	return bl, err == nil
 }
 
-func (b *Blob) Session(ctx context.Context, c store.Context, args []string) Decision {
-	if c.BlobHash == "" {
-		return b.fallback().Session(ctx, c, args)
+func (b *Blob) Session(ctx context.Context, r Request) Decision {
+	if r.Context.BlobHash == "" {
+		return b.fallback().Session(ctx, r)
 	}
-	bl, ok := b.load(ctx, c)
+	bl, ok := b.load(ctx, r.Context)
 	if !ok {
 		return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg}
 	}
 	return Decision{Permit: true, Reason: decision.ContextMatched, Attributes: append([]string(nil), bl.Attributes...)}
 }
 
-func (b *Blob) Command(ctx context.Context, c store.Context, vector []string, args []string) Decision {
-	if c.BlobHash == "" {
-		return b.fallback().Command(ctx, c, vector, args)
+func (b *Blob) Command(ctx context.Context, r Request) Decision {
+	if r.Context.BlobHash == "" {
+		return b.fallback().Command(ctx, r)
 	}
-	bl, ok := b.load(ctx, c)
+	bl, ok := b.load(ctx, r.Context)
 	if !ok {
 		return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg}
 	}
-	switch bl.Command(vector) {
+	switch bl.Command(r.Vector) {
 	case blob.Permitted:
 		return Decision{Permit: true, Reason: decision.PermitDominates}
 	case blob.Denied:
@@ -86,14 +84,4 @@ func (b *Blob) fallback() Authorizer {
 		return denyAll{}
 	}
 	return b.Fallback
-}
-
-type denyAll struct{}
-
-func (denyAll) Session(context.Context, store.Context, []string) Decision {
-	return Decision{Reason: decision.NoRuleMatched, ServerMsg: "port49: no policy for this session"}
-}
-
-func (denyAll) Command(context.Context, store.Context, []string, []string) Decision {
-	return Decision{Reason: decision.NoRuleMatched, ServerMsg: "port49: no policy for this session"}
 }

@@ -18,18 +18,35 @@ import (
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
-// Decision is what an Authorizer returns; the policy engine (plan 4)
-// implements Authorizer for real.
+// Decision is what an Authorizer returns. Engine is the one the daemon runs;
+// Lab is the lab's instrument for seeded contexts.
 type Decision struct {
 	Permit     bool
 	Reason     decision.Reason
 	ServerMsg  string
 	Attributes []string // session only, e.g. "priv-lvl=15"
+	// Policy is the record's policy block when the decision consulted a blob
+	// (spec §5.7): bundle and blob always, and the rules that matched.
+	Policy *decision.Policy
+	// Vector is the command vector the authorizer decided, when it normalized
+	// the request itself; Handle records it in place of its own parse, so the
+	// record and the decision never disagree (spec §3, §5.7).
+	Vector []string
+}
+
+// Request is one authorization after the §5.3 checks have passed: the context
+// they read, the device the request came from, and the request's AV pairs as
+// received. Vector is nil for a session authorization.
+type Request struct {
+	Context store.Context
+	Device  authen.Peer
+	Raw     []string
+	Vector  []string
 }
 
 type Authorizer interface {
-	Session(ctx context.Context, c store.Context, args []string) Decision
-	Command(ctx context.Context, c store.Context, vector []string, args []string) Decision
+	Session(ctx context.Context, r Request) Decision
+	Command(ctx context.Context, r Request) Decision
 }
 
 type Handler struct {
@@ -185,7 +202,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		return h.deny(rec, decision.ContextMissing, "port49: this session was not authenticated by port49")
 	}
 	if err != nil {
-		return h.deny(rec, decision.StoreUnavailable, "port49: authorization store unavailable")
+		return h.deny(rec, decision.StoreUnavailable, storeUnavailableMsg)
 	}
 	// The key already selected on the username; this re-checks what came back,
 	// for the same reason package authen re-checks the receipt hash after its
@@ -242,15 +259,25 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	}
 
 	var d Decision
+	ar := Request{Context: c, Device: peer, Raw: raw, Vector: vector}
 	if cmd == "" {
-		d = h.authz.Session(ctx, c, raw)
+		d = h.authz.Session(ctx, ar)
 	} else {
-		d = h.authz.Command(ctx, c, vector, raw)
+		d = h.authz.Command(ctx, ar)
+	}
+	rec.Policy = d.Policy
+	if d.Vector != nil {
+		rec.Request.Vector = d.Vector
 	}
 	if !d.Permit {
 		return h.deny(rec, d.Reason, d.ServerMsg)
 	}
 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason
+	// What the device is told goes on the record as sent, so a replay can
+	// re-derive a session's attributes and compare (spec §5.7).
+	if len(d.Attributes) > 0 {
+		rec.Reply = &decision.Reply{Attributes: d.Attributes}
+	}
 	h.emit(rec)
 
 	// `ctx.privilege` is the highest level port49 has GRANTED this user on this
