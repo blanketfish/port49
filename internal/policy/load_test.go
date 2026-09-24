@@ -132,7 +132,7 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a platform set this binary does not ship", "platform_set: 1.4.0\n" + roleOK + subjOK, "it ships 1.0.0"},
 		{"key_groups", "key_groups: []\n" + roleOK + subjOK, "inventory file"},
 		{"a role's max_session_age", "roles:\n  - {name: r, max_session_age: 8h}\n" + subjOK, "plan 7"},
-		{"an unknown key", scopeOK + roleOK + subjOK + "gratns: []\n", "field gratns not found"},
+		{"an unknown key", scopeOK + roleOK + subjOK + "gratns: []\n", "line 7: an unknown field in type policy.file"},
 		{"an acknowledgment of two shapes", scopeOK + roleOK + subjOK +
 			"acknowledge: [{role: r, rule: x, platform: arista_eos, field: supports, reason: y}]\n", "one of the two"},
 		{"an acknowledgment of no adapter key", scopeOK + roleOK + subjOK +
@@ -204,7 +204,7 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a test expecting maybe", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: x, expect: maybe}\n", "permit or deny"},
 		{"a test principal in no form", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {principal: alice, device: leaf-01, command: x, expect: deny}\n", "no recognized form"},
 		{"an upper-case test principal", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {principal: \"user:A@example.com\", device: leaf-01, command: x, expect: deny}\n", `write "user:a@example.com"`},
-		{"a test reason outside spec §5.7", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: deny, reason: no_grant_matched}\n", "not a reason"},
+		{"a test reason outside spec §5.7", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: deny, reason: no_grant_matched}\n", "the reason is not in spec §5.7's vocabulary"},
 		{"a test with no command and nothing asserted", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01}\n", "command is required, or a session test's level, max_privilege, priv_lvl, enable, reply or api"},
 		{"a session test with an expect", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, level: admin, expect: permit}\n", "a session test takes no expect"},
 		{"a test level that is not a level", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, level: root}\n", `level: "root" is not a privilege level`},
@@ -212,8 +212,8 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"an acknowledgment with no reason", "acknowledge:\n  - {role: guard, rule: \"reload **\"}\n" + subjOK, "acknowledge[0]: reason is required"},
 		{"an acknowledgment with a blank reason", "acknowledge:\n  - {role: guard, rule: \"reload **\", reason: \"  \"}\n" + subjOK, "reason is required"},
 		{"an acknowledgment with no rule", "acknowledge:\n  - {role: guard, reason: why}\n" + subjOK, "acknowledge[0]: role and rule are required"},
-		{"a test api right that is not a right", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, api: [root]}\n", `api: "root" is not a right`},
-		{"a test error names its row", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: maybe}\n", `tests[0] (subject s, device leaf-01, "reload"): `},
+		{"a test api right that is not a right", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, api: [root]}\n", `api[0] is not a right`},
+		{"a test error names its row", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: maybe}\n", `tests[0] (subject s, device leaf-01): `},
 		{"a grant error names its row", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [x]}\n", `grants[0] (subject s, scope all_devices): role "x"`},
 		{"the same grant twice", scopeOK + roleOK + "  - {name: q, permit: [show **]}\n" + subjOK +
 			"grants:\n  - {subject: s, scope: all_devices, roles: [r, q]}\n  - {subject: s, scope: all_devices, roles: [q, r], expires: 2026-12-01}\n",

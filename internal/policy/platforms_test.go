@@ -117,7 +117,7 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 		{"based_on a shipped name", "  cisco_nxos: {based_on: arista_eos}\n", "platforms.cisco_nxos: based_on declares a variant"},
 		{"based_on nothing shipped", "  x: {based_on: arista}\n", `platforms.x: based_on "arista" is not a platform in set 1.0.0`},
 		{"an invalid adapter", "  x: {entity_classes: {mgmt: ['(']}}\n", "platforms.x.entity_classes.mgmt"},
-		{"an unknown key", "  arista_eos: {entity_class: {}}\n", "field entity_class not found"},
+		{"an unknown key", "  arista_eos: {entity_class: {}}\n", "an unknown field in type policy.filePlatform"},
 		{"the attributes key", "  all: {supports: [session]}\n", "platforms.all: all is reserved"},
 		{"the redaction default", "  default: {supports: [session]}\n", "platforms.default: default is reserved"},
 		{"a verified claim", "  arista_eos: {verified: containerlab}\n", "platforms.arista_eos: verified is port49's own claim"},

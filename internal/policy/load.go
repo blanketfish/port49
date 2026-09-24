@@ -201,6 +201,8 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 		// may be a rule or a secret in it: the line and the types say where
 		// (spec §5.8).
 		msg := yamlValue.ReplaceAllString(err.Error(), "cannot unmarshal a $1 value")
+		msg = yamlField.ReplaceAllString(msg, "an unknown field in type $1")
+		msg = yamlKey.ReplaceAllString(msg, "a mapping key already defined at line $1")
 		if strings.Contains(msg, "time.Duration") {
 			return nil, fmt.Errorf("%s; durations need a unit, e.g. 60s", msg)
 		}
@@ -229,8 +231,13 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	return p, nil
 }
 
-// yamlValue is the value a YAML type error quotes.
-var yamlValue = regexp.MustCompile("cannot unmarshal (!!\\w+) `[^`]*`")
+// yamlValue is the value a YAML type error quotes; yamlField and yamlKey
+// the key an unknown-field or duplicate-key error does. Each names its line.
+var (
+	yamlValue = regexp.MustCompile("cannot unmarshal (!!\\w+) `[^`]*`")
+	yamlField = regexp.MustCompile(`field .* not found in type (\S+)`)
+	yamlKey   = regexp.MustCompile(`mapping key ".*" already defined at line (\d+)`)
+)
 
 // refusedKeys names the plan that reads a key this build does not, before the
 // strict decode can say only that the field is unknown. Spec §11's example
@@ -740,11 +747,12 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
 		if _, adapted := p.adapters[key]; key != "all" && !adapted && !p.inInventory(key) {
 			return fmt.Errorf("attributes: %q is neither `all` nor a platform port49 ships or the inventory names", key)
 		}
-		for _, a := range list {
+		for i, a := range list {
+			at := fmt.Sprintf("attributes.%s[%d]", key, i)
 			if err := engine.CheckAttribute(a); err != nil {
-				return fmt.Errorf("attributes.%s: %w", key, err)
+				return fmt.Errorf("%s: %w", at, err)
 			}
-			if err := p.checkPlaceholder(key, a); err != nil {
+			if err := p.checkPlaceholder(at, key, a); err != nil {
 				return err
 			}
 		}
@@ -757,15 +765,15 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
 // inventory names (spec §6). Anywhere else the device would get whatever the
 // mint fills in, which no review tool sees: a level, or a principal's text in
 // a session-only device's own allow-list.
-func (p *Policy) checkPlaceholder(key, a string) error {
+func (p *Policy) checkPlaceholder(at, key, a string) error {
 	if !slices.ContainsFunc(engine.Placeholders, func(v string) bool { return strings.Contains(a, v) }) {
 		return nil
 	}
 	name := a[:strings.IndexAny(a, "=*")]
 	if slices.Contains(platform.PrivilegeAttributeNames(), name) || slices.ContainsFunc(sortedKeys(p.adapters),
 		func(n string) bool { return slices.Contains(p.adapters[n].PrivilegeAttributes, name) }) {
-		return fmt.Errorf("attributes.%s: %s: %s carries privilege and takes no placeholder: the device would get "+
-			"whatever the mint fills in, which no review tool can see (spec §6)", key, a, name)
+		return fmt.Errorf("%s: %s carries privilege and takes no placeholder: the device would get "+
+			"whatever the mint fills in, which no review tool can see (spec §6)", at, name)
 	}
 	platforms := []string{key}
 	if key == "all" {
@@ -778,8 +786,8 @@ func (p *Policy) checkPlaceholder(key, a string) error {
 	}
 	for _, name2 := range platforms {
 		if p.dialect(name2).BearsPrivilege(name) {
-			return fmt.Errorf("attributes.%s: %s: %s is not listed inert on %s, so it takes no placeholder: only an "+
-				"attribute an adapter holds to carry no privilege may (spec §6)", key, a, name, platformName(name2))
+			return fmt.Errorf("%s: %s is not listed inert on %s, so it takes no placeholder: only an "+
+				"attribute an adapter holds to carry no privilege may (spec §6)", at, name, platformName(name2))
 		}
 	}
 	return nil
@@ -821,7 +829,8 @@ func (p *Policy) buildScopes(f file) error {
 				if op == "re" {
 					re, err := regexp.Compile(bound)
 					if err != nil {
-						return fmt.Errorf("scope %q: match.%s.re: %w", s.Name, key, err)
+						return fmt.Errorf("scope %q: match.%s.re does not compile: %s", s.Name, key,
+							platform.RegexpProblem(err))
 					}
 					sc.res[key] = re
 				} else if bound == "" {
@@ -853,7 +862,7 @@ func (p *Policy) buildScopes(f file) error {
 			}
 			sc.OnMissing = "exclude"
 		default:
-			return fmt.Errorf("scope %q: on_missing is include or exclude, not %q", s.Name, s.OnMissing)
+			return fmt.Errorf("scope %q: on_missing is include or exclude", s.Name)
 		}
 		p.scopes[s.Name] = sc
 	}
@@ -955,15 +964,15 @@ func (p *Policy) buildSubjects(f file) error {
 			sub.Enable = "none"
 		case "none", "token", "auto":
 		default:
-			return fmt.Errorf("subject %q: enable %q: it must be none, auto or token (spec §7)", s.Name, s.Enable)
+			return fmt.Errorf("subject %q: enable must be none, auto or token (spec §7)", s.Name)
 		}
 		if s.TokenTTL != 0 && (s.TokenTTL < minTokenTTL || s.TokenTTL > maxTokenTTL) {
 			return fmt.Errorf("subject %q: token_ttl must be between %s and %s (design §8); got %s",
 				s.Name, minTokenTTL, maxTokenTTL, s.TokenTTL)
 		}
-		for _, r := range s.API {
+		for i, r := range s.API {
 			if !slices.Contains(apiRights, r) {
-				return fmt.Errorf("subject %q: api: %q is not a right; the rights are %s", s.Name, r,
+				return fmt.Errorf("subject %q: api[%d] is not a right; the rights are %s", s.Name, i,
 					strings.Join(apiRights, ", "))
 			}
 		}
@@ -1046,7 +1055,7 @@ func (p *Policy) buildGrants(f file) error {
 		if g.Expires != "" {
 			t, err := parseExpires(g.Expires)
 			if err != nil {
-				return fmt.Errorf("%s: expires %q: a date (2026-12-01) or an RFC 3339 time", row, g.Expires)
+				return fmt.Errorf("%s: expires is a date (2026-12-01) or an RFC 3339 time", row)
 			}
 			grant.Expires = t
 		}
@@ -1086,7 +1095,10 @@ func (p *Policy) buildTests(f file) error {
 		if t.Subject == "" {
 			who = "principal " + t.Principal
 		}
-		row := fmt.Sprintf("tests[%d] (%s, device %s, %q)", i, who, t.Device, t.Command)
+		// The command is operator text and is never quoted: a test exercising
+		// a secret-bearing command is the test the shadow gate asks for
+		// beside such a deny (spec §5.8). The index finds it.
+		row := fmt.Sprintf("tests[%d] (%s, device %s)", i, who, t.Device)
 		switch {
 		case (t.Subject == "") == (t.Principal == ""):
 			return fmt.Errorf("%s: name a subject or a principal, one of the two", row)
@@ -1102,9 +1114,9 @@ func (p *Policy) buildTests(f file) error {
 			return fmt.Errorf("%s: a session test takes no expect or reason: it passes where the subject is "+
 				"minted a token with the level and ceiling it names", row)
 		case strings.TrimSpace(t.Command) != "" && t.Expect != "permit" && t.Expect != "deny":
-			return fmt.Errorf("%s: expect is permit or deny, not %q", row, t.Expect)
+			return fmt.Errorf("%s: expect is permit or deny", row)
 		case t.Reason != "" && !decision.Known(decision.Reason(t.Reason)):
-			return fmt.Errorf("%s: %q is not a reason in spec §5.7's vocabulary", row, t.Reason)
+			return fmt.Errorf("%s: the reason is not in spec §5.7's vocabulary", row)
 		}
 		// A principal no verifier could produce resolves to no subject, and
 		// an `expect: deny` test on it passes without testing anything.
@@ -1125,10 +1137,10 @@ func (p *Policy) buildTests(f file) error {
 			}
 		}
 		if n, err := strconv.Atoi(t.PrivLvl); t.PrivLvl != "" && t.PrivLvl != NoCeiling && (err != nil || n < 0 || n > 15) {
-			return fmt.Errorf("%s: priv_lvl is a number from 0 to 15, or none, not %q", row, t.PrivLvl)
+			return fmt.Errorf("%s: priv_lvl is a number from 0 to 15, or none", row)
 		}
 		if t.Enable != "" && t.Enable != "none" && t.Enable != "auto" && t.Enable != "token" {
-			return fmt.Errorf("%s: enable is none, auto or token, not %q", row, t.Enable)
+			return fmt.Errorf("%s: enable is none, auto or token", row)
 		}
 		test := Test{Subject: t.Subject, Principal: t.Principal, Device: t.Device, Command: t.Command,
 			Expect: t.Expect, Reason: t.Reason, Level: t.Level, MaxPrivilege: t.MaxPrivilege, PrivLvl: t.PrivLvl,
@@ -1137,9 +1149,9 @@ func (p *Policy) buildTests(f file) error {
 			test.Reply = append([]string{}, (*t.Reply)...)
 		}
 		if t.API != nil {
-			for _, r := range *t.API {
+			for j, r := range *t.API {
 				if !slices.Contains(apiRights, r) {
-					return fmt.Errorf("%s: api: %q is not a right; the rights are %s", row, r, strings.Join(apiRights, ", "))
+					return fmt.Errorf("%s: api[%d] is not a right; the rights are %s", row, j, strings.Join(apiRights, ", "))
 				}
 			}
 			test.API, test.AssertsAPI = slices.Clone(*t.API), true

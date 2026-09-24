@@ -170,7 +170,7 @@ func (m *matchValue) UnmarshalYAML(n *yaml.Node) error {
 			switch op {
 			case "lt", "lte", "gt", "gte", "re":
 			default:
-				return fmt.Errorf("line %d: %q is not a comparison; use lt, lte, gt, gte or re", n.Line, op)
+				return fmt.Errorf("line %d: a key is not a comparison; use lt, lte, gt, gte or re", n.Line)
 			}
 		}
 	default:
