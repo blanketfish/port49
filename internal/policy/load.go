@@ -57,6 +57,8 @@ type Policy struct {
 	grants  []*Grant
 	tests   []Test
 	env     Env
+	// quarantine is every device a joint check failed on, by name (Task 10).
+	quarantine map[string]*Quarantine
 }
 
 // Scope selects devices by their inventory attributes (spec §5.5).
@@ -172,6 +174,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	if len(p.subs) == 0 {
 		return nil, errors.New("declares no subjects, so nobody can mint; is this the right file?")
 	}
+	p.checkDevices()
 	return p, nil
 }
 
