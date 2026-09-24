@@ -25,9 +25,12 @@ var ErrSpoolFull = errors.New("acct: spool full")
 // durable, so its device was answered ERROR and will send it again, while a
 // record dropped at drain was durable, its device was answered SUCCESS, and
 // it is gone. Alerting on their sum hides the second inside the first.
+// A record set aside is a third event: durable, answered SUCCESS, never
+// deliverable, and kept in a file beside the spool for an operator.
 const (
 	dropOfferRefused     = "offer_refused"
 	dropDrainUnparseable = "drain_unparseable"
+	dropDrainSetAside    = "drain_set_aside"
 )
 
 // maxLineBytes bounds how much of a single spool line is held in memory. It
@@ -37,12 +40,26 @@ const (
 // it can never allocate more than roughly this many bytes.
 const maxLineBytes = 1 << 20 // 1 MiB
 
-// sinkRetryInterval paces Run after the sink refuses a record. Every refused
-// write is a log line and one more port49_decision_log_write_failures_total
-// in the decision package, so retrying on the drain's 100ms tick (or on every
-// Offer) would bury stderr and make that counter climb ten times a second
-// for records the spool still holds.
-const sinkRetryInterval = time.Second
+// sinkRetryInterval paces Run after the sink refuses a record, doubling with
+// each refusal in a row up to sinkRetryMax. Every refused write is a log line
+// and one more port49_decision_log_write_failures_total in the decision
+// package, so retrying on the drain's 100ms tick (or on every Offer) would
+// bury stderr and make that counter climb ten times a second for records the
+// spool still holds; a full disk for a day is then about 1,400 attempts, not
+// 86,000.
+const (
+	sinkRetryInterval = time.Second
+	sinkRetryMax      = time.Minute
+)
+
+// sinkBackoff is how long Run waits after the nth refusal in a row.
+func sinkBackoff(n int) time.Duration {
+	d := sinkRetryInterval
+	for i := 1; i < n && d < sinkRetryMax; i++ {
+		d *= 2
+	}
+	return min(d, sinkRetryMax)
+}
 
 // Spool is a durable, append-only file log (spec §5.8, §14): Offer returns nil
 // only after the record has been written to the file, fsynced, and (when the
@@ -61,11 +78,13 @@ const sinkRetryInterval = time.Second
 // duplicates. The contract reaches across the last hop: a record the sink
 // refuses stops the pass at that record, drainOffset stays at its first byte,
 // and the next pass offers it again (TestARefusedRecordIsOfferedAgain). A
-// refusal is not the file's fault, so it never counts toward quarantine. The
-// spool cannot tell a transient refusal from a permanent one, so a record the
-// sink will never take holds every record behind it; the signal is
-// port49_accounting_spool_depth rising with
-// port49_decision_log_write_failures_total.
+// refusal is not the file's fault, so it never counts toward quarantine, and
+// it is retried with a backoff (sinkBackoff). A record the sink can never
+// take — one that does not encode (decision.ErrUnencodable) — would hold
+// every record behind it forever, so it is set aside instead: appended to
+// <path>.unencodable for an operator, logged, and counted as
+// spool_drops_total{stage="drain_set_aside"}, and the drain goes on
+// (TestAnUnencodableRecordIsSetAside).
 // Every error on the drain path is logged (path and error, never record
 // contents), throttled to once a minute per failure kind once a condition
 // persists, so a stuck filesystem cannot flood the log.
@@ -130,7 +149,9 @@ type Spool struct {
 	lastQuarantineLog time.Time // throttles a failing quarantine rename's log
 	lastReadLog       time.Time // throttles the read-failure log
 	lastSinkLog       time.Time // throttles the sink-refusal log
+	sinkRefusals      int       // refusals since the last sink-refusal line
 	sinkRefused       bool      // the last pass stopped at a record the sink refused; Run paces the retry
+	refusedInARow     int       // passes in a row that stopped at a refusal; Run's backoff
 	drainOffset       int64     // bytes of .draining already forwarded; 0 for a file not yet started
 	offsetFailAt      int64     // drainOffset (or -1 for a structural failure) at the last failure
 	offsetFailCount   int       // consecutive failures at offsetFailAt
@@ -385,16 +406,18 @@ func (s *Spool) Run(ctx context.Context) {
 		s.drainOnce()
 		if s.sinkRefused {
 			// Neither the tick nor an Offer can help a sink that just
-			// refused, so wait out sinkRetryInterval; a pending signal
-			// stays buffered for the pass after.
+			// refused, so wait out the backoff; a pending signal stays
+			// buffered for the pass after.
+			s.refusedInARow++
 			select {
 			case <-ctx.Done():
 				s.drainUntilEmptyOrGiveUp()
 				return
-			case <-time.After(sinkRetryInterval):
+			case <-time.After(sinkBackoff(s.refusedInARow)):
 			}
 			continue
 		}
+		s.refusedInARow = 0
 		select {
 		case <-ctx.Done():
 			s.drainUntilEmptyOrGiveUp()
@@ -542,7 +565,18 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 				log.Printf("acct: dropping oversized spool line (over %d bytes)", maxLineBytes)
 				s.metrics.SpoolDrops.WithLabelValues(dropDrainUnparseable).Inc()
 			default:
-				if err := s.deliverLine(bytes.TrimRight(line, "\n")); err != nil {
+				err := s.deliverLine(bytes.TrimRight(line, "\n"))
+				if errors.Is(err, decision.ErrUnencodable) {
+					// No retry will ever write it: set it aside, or it
+					// holds every record behind it. If that fails, it is
+					// retried like any refusal.
+					if err = s.setAside(line); err == nil {
+						log.Printf("acct: an accounting record the decision log cannot encode was set aside in %s",
+							s.path+".unencodable")
+						s.metrics.SpoolDrops.WithLabelValues(dropDrainSetAside).Inc()
+					}
+				}
+				if err != nil {
 					// The sink refused this record. Nothing past it is
 					// forwarded and pos stays at its first byte, so the next
 					// pass starts with it: at-least-once holds across the
@@ -550,8 +584,13 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 					// is counted by the sink's own failure hook.
 					s.applyForwarded(forwarded, pos)
 					s.sinkRefused = true
-					s.logThrottled(&s.lastSinkLog, "acct: the decision log sink refused an accounting record; "+
-						"it stays in %s and is offered again: %v", draining, err)
+					s.sinkRefusals++
+					if time.Since(s.lastSinkLog) >= time.Minute {
+						log.Printf("acct: the decision log sink refused an accounting record (%d refusals since "+
+							"the last line); it stays in %s and is offered again, backing off to %s: %v",
+							s.sinkRefusals, draining, sinkRetryMax, err)
+						s.lastSinkLog, s.sinkRefusals = time.Now(), 0
+					}
 					return false, forwarded
 				}
 			}
@@ -581,6 +620,26 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 	}
 	s.drainOffset = 0
 	return true, forwarded
+}
+
+// setAside appends one spool line to <path>.unencodable and syncs it, so a
+// record the log will never take is kept for an operator, not lost.
+func (s *Spool) setAside(line []byte) error {
+	f, err := os.OpenFile(s.path+".unencodable", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	if !bytes.HasSuffix(line, []byte("\n")) {
+		line = append(line, '\n')
+	}
+	_, err = f.Write(line)
+	if serr := f.Sync(); err == nil {
+		err = serr
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // deliverLine unmarshals one record and forwards it, or logs and counts a

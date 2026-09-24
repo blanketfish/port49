@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"sync"
@@ -222,6 +224,11 @@ type Sink interface {
 	Write(Record) error
 }
 
+// ErrUnencodable is a record the log can never write, whatever the retry: it
+// does not encode. A caller that keeps records for another attempt (the
+// accounting spool) sets such a record aside rather than retry it forever.
+var ErrUnencodable = errors.New("decision: record does not encode")
+
 type jsonLines struct {
 	mu        sync.Mutex
 	w         io.Writer
@@ -261,9 +268,9 @@ func (j *jsonLines) Write(r Record) error {
 	if err != nil {
 		// Not "dropping": a caller of Write (the accounting spool) keeps the
 		// record and offers it again; only an Emit caller loses it.
-		log.Printf("decision: refused a record that failed to marshal (lost unless its caller retries it): %v", err)
+		log.Printf("decision: refused a record that failed to marshal (lost unless its caller keeps it): %v", err)
 		j.failed()
-		return err
+		return fmt.Errorf("%w: %v", ErrUnencodable, err)
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()

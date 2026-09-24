@@ -3,7 +3,11 @@ package acct
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -196,4 +200,95 @@ func (r *refuseAfter) Write(rec decision.Record) error {
 		return errors.New("sink: refused once")
 	}
 	return r.next.Write(rec)
+}
+
+// unencodable refuses one task's record as the decision log refuses a record
+// it can never encode, and passes the rest.
+type unencodable struct {
+	next decision.Sink
+	bad  string
+}
+
+func (u *unencodable) Emit(rec decision.Record) { _ = u.Write(rec) }
+
+func (u *unencodable) Write(rec decision.Record) error {
+	if rec.TaskID == u.bad {
+		return fmt.Errorf("%w: json: unsupported value", decision.ErrUnencodable)
+	}
+	return u.next.Write(rec)
+}
+
+// A record the decision log can never encode is set aside, never retried
+// forever: it would hold every accounting record behind it. It goes to a file
+// beside the spool for an operator, counted and logged, and the drain goes on.
+// A transient refusal is still retried (TestARefusedRecordIsOfferedAgain).
+func TestAnUnencodableRecordIsSetAside(t *testing.T) {
+	sink := &flakySink{}
+	m := metrics.New(prometheus.NewRegistry())
+	path := filepath.Join(t.TempDir(), "o.jsonl")
+	sp, err := NewSpool(4, path, &unencodable{next: sink, bad: "b"}, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, n := sp.drainOnce(); !ok || n != 3 {
+		t.Fatalf("ok=%v forwarded=%d", ok, n)
+	}
+	if len(sink.got) != 2 || sink.got[0] != "a" || sink.got[1] != "c" {
+		t.Fatalf("delivered %q, want a c", sink.got)
+	}
+	aside, err := os.ReadFile(path + ".unencodable")
+	if err != nil || strings.Count(string(aside), "\n") != 1 || !strings.Contains(string(aside), `"task_id":"b"`) {
+		t.Fatalf("set aside %q, %v", aside, err)
+	}
+	if n := testutil.ToFloat64(m.SpoolDrops.WithLabelValues(dropDrainSetAside)); n != 1 {
+		t.Fatalf("set aside counted %v", n)
+	}
+	if d := testutil.ToFloat64(m.SpoolDepth); d != 0 {
+		t.Fatalf("depth %v", d)
+	}
+}
+
+// A sink that keeps refusing is retried with a backoff from
+// sinkRetryInterval, doubling to sinkRetryMax, and the refusal is logged at
+// most once a minute with how many refusals it stands for.
+func TestARefusingSinkBacksOffAndLogsACount(t *testing.T) {
+	var want []time.Duration
+	for d := sinkRetryInterval; len(want) < 10; d = min(2*d, sinkRetryMax) {
+		want = append(want, d)
+	}
+	for i, w := range want {
+		if got := sinkBackoff(i + 1); got != w {
+			t.Errorf("refusal %d: %v, want %v", i+1, got, w)
+		}
+	}
+	if sinkRetryMax != time.Minute {
+		t.Errorf("cap %v", sinkRetryMax)
+	}
+	var logged strings.Builder
+	defer log.SetOutput(log.Writer())
+	log.SetOutput(&logged)
+	sink := &flakySink{down: true}
+	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "o.jsonl"), sink, metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		sp.drainOnce()
+	}
+	if n := strings.Count(logged.String(), "sink refused"); n != 1 {
+		t.Fatalf("%d refusal lines in a minute:\n%s", n, logged.String())
+	}
+	sp.lastSinkLog = time.Now().Add(-time.Minute)
+	sp.drainOnce()
+	if !strings.Contains(logged.String(), "3 refusals since the last line") {
+		t.Fatalf("log:\n%s", logged.String())
+	}
 }

@@ -25,11 +25,14 @@ type Metrics struct {
 	ConnectionEvents *prometheus.CounterVec
 	AuthFailures     prometheus.Counter // port49_authentication_failures_total
 	SpoolDepth       prometheus.Gauge   // port49_accounting_spool_depth
-	// port49_accounting_spool_drops_total{stage}. The two stages are not the
+	// port49_accounting_spool_drops_total{stage}. The stages are not the
 	// same event and must not be alerted on together: "offer_refused" means
 	// the record never became durable, so its device was answered ERROR and
 	// will retry — nothing is lost. "drain_unparseable" means the record was
 	// durable, its device was answered SUCCESS, and it is gone.
+	// "drain_set_aside" means the decision log can never encode it, so it was
+	// moved to <spool>.unencodable for an operator rather than hold every
+	// record behind it.
 	SpoolDrops *prometheus.CounterVec
 	// port49_accounting_spool_quarantines_total: .draining files set aside for
 	// an operator after three consecutive read failures. Not a record count —
