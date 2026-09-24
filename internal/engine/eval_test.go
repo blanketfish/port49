@@ -243,42 +243,64 @@ func TestTheDominatingPermitDecidesEvenWhenAnotherSortsFirst(t *testing.T) {
 	}
 }
 
-// A request with no command is not a command authorization (spec §5.2 owns
-// it), so Command denies it rather than let `**` permit an empty vector —
-// replay and explain call Command on a record's raw directly.
+// A request with no command, or only whitespace for one, is not a command
+// authorization (spec §5.2 owns it), so Command denies it rather than let
+// `**` permit it — replay and explain call Command on a record's raw directly.
 func TestACommandWithNoWordsIsDenied(t *testing.T) {
 	p := program(t, true, "admin:permit **")
 	for _, raw := range [][]string{
 		{"service=shell"},
 		{"service=shell", "cmd="},
 		{"service=shell", "cmd= ", "cmd-arg=<cr>"},
+		{"service=shell", "cmd=\t", "cmd-arg=x", "cmd-arg=<cr>"},
 	} {
-		if o := p.Command(raw); o.Permit || o.Reason != decision.NoRuleMatched || len(o.Vector) != 0 || o.Decided != nil {
+		if o := p.Command(raw); o.Permit || o.Reason != decision.NoRuleMatched || o.Decided != nil {
 			t.Errorf("%q: %+v", raw, o)
 		}
 	}
 }
 
-// Whitespace inside or around an argument cannot change what matches: every
-// argument is split on whitespace runs before matching, so `reload ` is the
-// deny's `reload`, and a pipe token inside an argument is a stage like any
-// other.
-func TestWhitespaceInAnArgumentCannotSlipPastADeny(t *testing.T) {
-	p := program(t, true, "admin:permit **", "no_disruptive:deny reload **")
+// Whitespace around an argument is compared both as received and trimmed, so
+// it only ever makes a rule match more: `reload ` is still the deny's
+// `reload`, and the vector is left exactly as received.
+func TestWhitespaceAroundAnArgumentCannotSlipPastADeny(t *testing.T) {
+	p := program(t, true, "admin:permit **", "no_disruptive:deny reload **", "no_exfil:deny copy * /^tftp:/")
 	for _, raw := range [][]string{
 		{"service=shell", "cmd=reload ", "cmd-arg=<cr>"},
 		{"service=shell", "cmd= reload", "cmd-arg=<cr>"},
-		{"service=shell", "cmd=reload\tnow", "cmd-arg=<cr>"},
-		{"service=shell", "cmd=reload", "cmd-arg= now ", "cmd-arg=<cr>"},
+		{"service=shell", "cmd=reload\t", "cmd-arg= now ", "cmd-arg=<cr>"},
+		{"service=shell", "cmd=copy", "cmd-arg=running-config", "cmd-arg= tftp://x", "cmd-arg=<cr>"},
 	} {
-		if o := p.Command(raw); o.Permit || o.Reason != decision.NoPermitDominatesDeny || o.Vector[0] != "reload" {
-			t.Errorf("%q: permit=%v %s on %q", raw, o.Permit, o.Reason, o.Vector)
+		o := p.Command(raw)
+		if o.Permit || o.Reason != decision.NoPermitDominatesDeny {
+			t.Errorf("%q: permit=%v %s", raw, o.Permit, o.Reason)
+		}
+		if want, _ := p.Blob.Normalize.Normalize(raw); !reflect.DeepEqual(o.Vector, want) || o.Vector[0] != strings.TrimPrefix(raw[1], "cmd=") {
+			t.Errorf("%q: the vector must be left as received: %q", raw, o.Vector)
 		}
 	}
-	o := p.Command([]string{"service=shell", "cmd=show", "cmd-arg=run  |  redirect x", "cmd-arg=<cr>"})
-	if o.Reason != decision.PipeStageDenied || !reflect.DeepEqual(o.Vector, []string{"show", "run"}) ||
-		!reflect.DeepEqual(o.Pipeline, [][]string{{"redirect", "x"}}) {
-		t.Errorf("a pipe inside an argument: %s %q %q", o.Reason, o.Vector, o.Pipeline)
+}
+
+// An argument with whitespace inside it is one argument (spec §3: never split
+// or re-joined), so a fixed-length deny still matches it by position. These
+// were denied at 2bf2fe9, permitted when c571cc0 split on whitespace, and are
+// denied again.
+func TestAnArgumentWithSpacesInsideIsOneArgument(t *testing.T) {
+	secret := program(t, true, "admin:permit username **", "no_secrets:deny username * secret *")
+	o := secret.Command([]string{"service=shell", "cmd=username", "cmd-arg=bob", "cmd-arg=secret", `cmd-arg="a b"`, "cmd-arg=<cr>"})
+	if o.Permit || o.Reason != decision.NoPermitDominatesDeny || len(o.Vector) != 4 {
+		t.Errorf("username bob secret \"a b\": permit=%v %s on %q", o.Permit, o.Reason, o.Vector)
+	}
+	copyTFTP := program(t, true, "admin:permit copy **", "no_exfil:deny * /tftp/")
+	o = copyTFTP.Command([]string{"service=shell", "cmd=copy", "cmd-arg=running-config tftp://x", "cmd-arg=<cr>"})
+	if o.Permit || o.Reason != decision.NoPermitDominatesDeny || len(o.Vector) != 2 {
+		t.Errorf("copy \"running-config tftp://x\": permit=%v %s on %q", o.Permit, o.Reason, o.Vector)
+	}
+	// A pipe token inside an argument is not the pipe token: the split is at
+	// an argument equal to it, and nothing else.
+	o = copyTFTP.Command([]string{"service=shell", "cmd=show", "cmd-arg=run | redirect x", "cmd-arg=<cr>"})
+	if !reflect.DeepEqual(o.Vector, []string{"show", "run | redirect x"}) || len(o.Pipeline) != 0 {
+		t.Errorf("split inside an argument: %q %q", o.Vector, o.Pipeline)
 	}
 }
 

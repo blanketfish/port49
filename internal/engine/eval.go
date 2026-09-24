@@ -102,17 +102,21 @@ func (c compiled) match(vector []string, abbrev bool) ([]int, bool) {
 		if i >= len(vector) {
 			return nil, false
 		}
-		arg := vector[i]
+		// Whitespace around an argument is compared both ways, as received
+		// and trimmed, so it can only make a rule match more: `reload ` is
+		// still denied by `deny reload **`, and no position moves.
+		arg, trimmed := vector[i], strings.TrimSpace(vector[i])
 		switch t.kind {
 		case Any:
 		case Word:
-			if !strings.EqualFold(t.word, arg) && !(abbrev && abbreviates(arg, t.word)) {
+			if !strings.EqualFold(t.word, arg) && !strings.EqualFold(t.word, trimmed) &&
+				!(abbrev && abbreviates(trimmed, t.word)) {
 				return nil, false
 			}
 		case Class, Regex:
 			hit := false
 			for _, re := range t.res {
-				if re.MatchString(arg) {
+				if re.MatchString(arg) || re.MatchString(trimmed) {
 					hit = true
 					break
 				}
@@ -189,11 +193,9 @@ type Outcome struct {
 // Normalize turns an authorization request's AV pairs into the command
 // vector and its pipeline stages (spec §3): `cmd` then every `cmd-arg`, in
 // order, the trailing `<cr>` dropped where the platform sends one, split at
-// every argument equal to the pipe token. Each value is split on runs of
-// whitespace first, so a space inside or around an argument cannot change
-// what matches — `reload ` is `reload`. Arguments are never re-joined and
-// their case is never changed. It is exported so a record's `raw` can be
-// normalized by the same code that decided it.
+// every argument equal to the pipe token. Arguments are never split or
+// re-joined and their case and whitespace are never changed. It is exported
+// so a record's `raw` can be normalized by the same code that decided it.
 func (n Normalize) Normalize(raw []string) (vector []string, pipeline [][]string) {
 	var cmd string
 	var args []string
@@ -209,14 +211,12 @@ func (n Normalize) Normalize(raw []string) (vector []string, pipeline [][]string
 			args = append(args, a[i+1:])
 		}
 	}
-	if n.StripCR && len(args) > 0 && strings.TrimSpace(args[len(args)-1]) == "<cr>" {
+	if n.StripCR && len(args) > 0 && args[len(args)-1] == "<cr>" {
 		args = args[:len(args)-1]
 	}
-	words := strings.Fields(cmd)
-	if len(words) > 0 {
-		for _, a := range args {
-			words = append(words, strings.Fields(a)...)
-		}
+	var words []string
+	if cmd != "" {
+		words = append([]string{cmd}, args...)
 	}
 	segments := [][]string{{}}
 	for _, w := range words {
@@ -238,7 +238,7 @@ func (n Normalize) Normalize(raw []string) (vector []string, pipeline [][]string
 func (p *Program) Command(raw []string) Outcome {
 	vector, pipeline := p.Blob.Normalize.Normalize(raw)
 	out := Outcome{Vector: vector, Pipeline: pipeline}
-	if len(vector) == 0 {
+	if len(vector) == 0 || strings.TrimSpace(vector[0]) == "" {
 		// No command is not a command authorization (spec §5.2 owns it), and
 		// `**` must not permit it: replay and explain call Command on a
 		// record's raw directly, whatever the record was.
