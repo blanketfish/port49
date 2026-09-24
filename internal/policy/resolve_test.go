@@ -357,3 +357,48 @@ grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: readonly}]
 		t.Fatalf("elsewhere the ceiling stands: %+v %v", r, err)
 	}
 }
+
+// A shuffled policy file compiles to the same blob: rules in Encode's
+// canonical order, as the pipe list already is, so the blob Resolve hands
+// explain and a test is the one the hash names, and moving a line mints no new
+// blob and churns no refresh. The bundle names the file's bytes and so differs; it is
+// held fixed to compare the rest.
+func TestAShuffledFileIsTheSameBlob(t *testing.T) {
+	a := mustParse(t, `
+scopes: [{name: all_devices, match: {}}, {name: dc, match: {site: dc1}, on_missing: exclude}]
+roles:
+  - {name: ops, permit: [show **, "terminal length *", ping *], deny: [reload **, write erase **]}
+  - {name: net, permit: [configure **, show running-config], deny: [show tech-support **]}
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants:
+  - {subject: s, scope: all_devices, roles: [ops]}
+  - {subject: s, scope: dc, roles: [net, ops]}
+`)
+	b := mustParse(t, `
+grants:
+  - {subject: s, scope: dc, roles: [ops, net]}
+  - {subject: s, scope: all_devices, roles: [ops]}
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+roles:
+  - {name: net, deny: [show tech-support **], permit: [show running-config, configure **]}
+  - {name: ops, deny: [write erase **, reload **], permit: [ping *, "terminal length *", show **]}
+scopes: [{name: dc, match: {site: dc1}, on_missing: exclude}, {name: all_devices, match: {}}]
+`)
+	ra, err := a.Resolve("user:s@example.com", deviceNamed(t, "leaf-01"), noon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rb, err := b.Resolve("user:s@example.com", deviceNamed(t, "leaf-01"), noon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ra.Blob.Rules, rb.Blob.Rules) {
+		t.Fatalf("a shuffled file compiled to other rules:\n%+v\n%+v", ra.Blob.Rules, rb.Blob.Rules)
+	}
+	ra.Blob.Bundle, rb.Blob.Bundle = "sha256:fixed", "sha256:fixed"
+	ba, ha, err1 := engine.Encode(ra.Blob)
+	bb, hb, err2 := engine.Encode(rb.Blob)
+	if err1 != nil || err2 != nil || ha != hb || string(ba) != string(bb) {
+		t.Fatalf("a shuffled file compiled to another blob:\n%s\n%s", ba, bb)
+	}
+}

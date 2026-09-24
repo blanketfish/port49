@@ -169,6 +169,13 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
 		b.Pipe = append(b.Pipe, rule)
 	}
 	sort.Strings(b.Pipe)
+	// Rules take Encode's canonical order too, so the blob explain and a test
+	// read is the one the hash names, whatever order the file lists roles and
+	// rules in. Evaluation is order-independent (spec §5.4).
+	slices.SortFunc(b.Rules, func(x, y engine.Rule) int {
+		return strings.Compare(x.Verdict+"\x00"+x.Rule+"\x00"+x.Role, y.Verdict+"\x00"+y.Rule+"\x00"+y.Role)
+	})
+	b.Rules = slices.Compact(b.Rules)
 	attrs, err := p.layerAttributes(c, d.Platform, dialect)
 	if err != nil {
 		return engine.Blob{}, nil, err
