@@ -62,6 +62,7 @@ type Policy struct {
 	byID    map[string]string // identity → subject
 	grants  []*Grant
 	tests   []Test
+	acked   []Acknowledgment
 	env     Env
 	// quarantine is every device a joint check failed on, by name (Task 10).
 	quarantine map[string]*Quarantine
@@ -125,6 +126,13 @@ type Test struct {
 	Level, MaxPrivilege, PrivLvl, Enable string
 }
 
+// Acknowledgment is one `acknowledge:` entry (spec §12): a removed or
+// rewritten deny, named by its role and exact rule text, that the author
+// acknowledges in writing, with why.
+type Acknowledgment struct {
+	Role, Rule, Reason string
+}
+
 // NoCeiling is how a test asserts that the grants compose to no ceiling.
 const NoCeiling = "none"
 
@@ -180,7 +188,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	}
 	p := &Policy{Bundle: engine.HashOf(raw), env: env}
 	for _, step := range []func(file) error{p.buildLevels, p.buildRoles, p.buildScopes, p.buildSubjects,
-		p.buildGrants, p.checkMinters, p.buildTests} {
+		p.buildGrants, p.checkMinters, p.buildTests, p.buildAcknowledgments} {
 		if err := step(f); err != nil {
 			return nil, err
 		}
@@ -739,6 +747,34 @@ func (p *Policy) buildTests(f file) error {
 			Enable: t.Enable})
 	}
 	return nil
+}
+
+func (p *Policy) buildAcknowledgments(f file) error {
+	for i, a := range f.Acknowledge {
+		switch {
+		case a.Role == "" || a.Rule == "":
+			return fmt.Errorf("acknowledge[%d]: role and rule are required: the entry names the exact deny it "+
+				"acknowledges (spec §12)", i)
+		case strings.TrimSpace(a.Reason) == "":
+			return fmt.Errorf("acknowledge[%d]: reason is required: review reads it beside the change it "+
+				"acknowledges (spec §12)", i)
+		}
+		p.acked = append(p.acked, Acknowledgment(a))
+	}
+	return nil
+}
+
+// Acknowledgments returns the file's acknowledge: entries.
+func (p *Policy) Acknowledgments() []Acknowledgment { return p.acked }
+
+// acknowledgment is the entry naming a deny, if any.
+func (p *Policy) acknowledgment(role, rule string) (Acknowledgment, bool) {
+	for _, a := range p.acked {
+		if a.Role == role && a.Rule == rule {
+			return a, true
+		}
+	}
+	return Acknowledgment{}, false
 }
 
 func (p *Policy) device(name string) (admission.Device, bool) {

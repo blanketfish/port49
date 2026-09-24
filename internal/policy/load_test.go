@@ -192,6 +192,9 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a session test with an expect", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, level: admin, expect: permit}\n", "a session test takes no expect"},
 		{"a test level that is not a level", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, level: root}\n", `level: "root" is not a privilege level`},
 		{"a test max_privilege that is not a level", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, max_privilege: root}\n", `max_privilege: "root" is not a privilege level`},
+		{"an acknowledgment with no reason", "acknowledge:\n  - {role: guard, rule: \"reload **\"}\n" + subjOK, "acknowledge[0]: reason is required"},
+		{"an acknowledgment with a blank reason", "acknowledge:\n  - {role: guard, rule: \"reload **\", reason: \"  \"}\n" + subjOK, "reason is required"},
+		{"an acknowledgment with no rule", "acknowledge:\n  - {role: guard, reason: why}\n" + subjOK, "acknowledge[0]: role and rule are required"},
 		{"a test error names its row", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: maybe}\n", `tests[0] (subject s, device leaf-01, "reload"): `},
 		{"a grant error names its row", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [x]}\n", `grants[0] (subject s, scope all_devices): role "x"`},
 		{"the same grant twice", scopeOK + roleOK + "  - {name: q, permit: [show **]}\n" + subjOK +

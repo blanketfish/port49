@@ -111,8 +111,10 @@ type RegexChange struct {
 	// Gated is a widening, which fails spec §12's gate: a constrained permit
 	// added, a constrained deny removed, or a constrained permit meeting a
 	// deny the change removed. Acknowledged is a passing policy test in the
-	// new version that exercises it (regexAcked).
+	// new version that exercises it, or an acknowledge: entry naming the
+	// removed deny, whose reason is AcknowledgedBy (regexAcked).
 	Gated, Acknowledged bool
+	AcknowledgedBy      string
 }
 
 // MintRefusal is one subject the new version's broker would refuse to mint
@@ -504,60 +506,69 @@ func (c *comparison) change(subject string, devices []string, at time.Time, v []
 	}
 }
 
-// regexAcked marks a regex-constrained widening and whether a policy test in
-// the new version exercises it (spec §12): an added permit, by a test it
-// decides; a removed deny, or a permit meeting one, by a test on a command
-// that deny refused before, whatever the test expects — a test of the permit
-// over the deny is one, and a deny rewritten wider, which no permit test can
-// get past, is acknowledged by a test it still refuses. A narrowing is
-// reported and not gated.
+// regexAcked marks a regex-constrained widening and whether it is
+// acknowledged in the new version, on a device of its group at its instant
+// (spec §12): an added permit, by a permit test it decides; a removed or
+// rewritten deny, by a permit test on a command it refused before and the
+// new version permits; a permit meeting such a deny, by a permit test that
+// permit decides on a command that deny refused before. A removed deny, and
+// every permit meeting it, is also acknowledged by an acknowledge: entry
+// naming it. A test expecting deny acknowledges nothing: it cannot tell a
+// narrower rewrite from a wider one. A narrowing is reported and not gated.
 func (c *comparison) regexAcked(r RegexChange) RegexChange {
+	tested := func(parts ...string) bool {
+		return slices.ContainsFunc(r.Devices, func(device string) bool {
+			return c.acks[instantKey(r.At, append([]string{r.Subject, device, "regex"}, parts...)...)]
+		})
+	}
+	var deny engine.Rule
 	switch {
 	case r.Deny.Rule != "":
-		r.Gated = !r.Added
-		r.Acknowledged = c.acks[regexKey(r.Subject, engine.Deny, r.Deny.Role, r.Deny.Rule)]
+		r.Gated, deny = !r.Added, r.Deny
+		r.Acknowledged = tested("pair", r.Deny.Role, r.Deny.Rule, r.Rule.Role, r.Rule.Rule)
 	case r.Rule.Verdict == engine.Permit:
 		r.Gated = r.Added
-		r.Acknowledged = c.acks[regexKey(r.Subject, engine.Permit, r.Rule.Role, r.Rule.Rule)]
+		r.Acknowledged = tested("permit", r.Rule.Role, r.Rule.Rule)
 	default:
-		r.Gated = !r.Added
-		r.Acknowledged = c.acks[regexKey(r.Subject, engine.Deny, r.Rule.Role, r.Rule.Rule)]
+		r.Gated, deny = !r.Added, r.Rule
+		r.Acknowledged = tested("flip", r.Rule.Role, r.Rule.Rule)
+	}
+	if a, ok := c.after.acknowledgment(deny.Role, deny.Rule); ok && deny.Rule != "" && !r.Acknowledged {
+		r.Acknowledged, r.AcknowledgedBy = true, a.Reason
 	}
 	if !r.Gated {
-		r.Acknowledged = false
+		r.Acknowledged, r.AcknowledgedBy = false, ""
 	}
 	return r
 }
 
-func regexKey(subject, verdict, role, rule string) string {
-	return shadowKey(subject, "regex", verdict, role, rule)
-}
-
-// regexAcks is what each passing command test in p acknowledges of a
-// regex-constrained change, at each of instants: the permit that decides a
-// test expecting permit, and the deny before refused the test's command with,
-// whatever the test expects (spec §12).
+// regexAcks is what each passing permit test in p acknowledges of a
+// regex-constrained change, at each of instants, on its device: the permit
+// that decides it; where before refused its command with a deny, that deny's
+// flip, and the pair of that deny and the permit (spec §12). A test expecting
+// deny acknowledges nothing here.
 func (p *Policy) regexAcks(before *Policy, instants []time.Time) map[string]bool {
 	acks := map[string]bool{}
 	for _, at := range instants {
 		for _, r := range p.RunTests(at) {
-			if !r.Pass || r.Test.Session() || r.MintError != "" {
+			if !r.Pass || !r.Permit || r.Test.Session() || r.MintError != "" || r.Outcome.Decided == nil {
 				continue
 			}
 			subject := r.Test.Subject
 			if subject == "" {
 				subject = p.byID[r.Test.Principal]
 			}
-			if r.Permit && r.Outcome.Decided != nil {
-				acks[regexKey(subject, engine.Permit, r.Outcome.Decided.Role, r.Outcome.Decided.Rule)] = true
-			}
 			dev, ok := p.device(r.Test.Device)
-			if !ok {
+			if !ok || subject == "" {
 				continue
 			}
+			win := r.Outcome.Decided
+			acks[instantKey(at, subject, dev.Name, "regex", "permit", win.Role, win.Rule)] = true
 			if _, was, err := before.Decide(subject, "", dev, r.Test.Command, at); err == nil && !was.Permit &&
 				was.Deny != nil {
-				acks[regexKey(subject, engine.Deny, was.Deny.Role, was.Deny.Rule)] = true
+				acks[instantKey(at, subject, dev.Name, "regex", "flip", was.Deny.Role, was.Deny.Rule)] = true
+				acks[instantKey(at, subject, dev.Name, "regex", "pair", was.Deny.Role, was.Deny.Rule, win.Role,
+					win.Rule)] = true
 			}
 		}
 	}

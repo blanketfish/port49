@@ -135,6 +135,11 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	for _, f := range p.Lint(now) {
 		fmt.Fprintf(stdout, "report: %s: %s\n", f.Kind, f.Message)
 	}
+	// An acknowledge: entry is the author's written word for a widening no
+	// test can show (spec §12); review reads each one.
+	for _, a := range p.Acknowledgments() {
+		fmt.Fprintf(stdout, "acknowledge: %s %q: %s\n", a.Role, a.Rule, a.Reason)
+	}
 	// The shadowed-deny report is what replaces the guarantee deny-overrides
 	// gave (spec §12): every deny a more specific permit beats, for whom, and
 	// by what, now and once any grant expires. One no policy test exercises
@@ -369,6 +374,8 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		}
 		label, tail := "regex-constrained", ""
 		switch {
+		case r.Gated && r.AcknowledgedBy != "":
+			label = "regex-constrained (acknowledged: " + r.AcknowledgedBy + ")"
 		case r.Gated && r.Acknowledged:
 			label = "regex-constrained (a policy test exercises it)"
 		case r.Gated:

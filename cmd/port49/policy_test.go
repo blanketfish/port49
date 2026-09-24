@@ -635,3 +635,37 @@ func TestPolicyDiffSaysWhatARaisedCeilingLetsEnableDo(t *testing.T) {
 		}
 	}
 }
+
+// An acknowledge: entry is printed by `policy test`, and by `policy diff`
+// beside the change it acknowledges (review I1; spec §12).
+func TestPolicyToolsPrintAnAcknowledgment(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := strings.Replace(string(readFile(t, oldPol)), "deny: [reload **]}", `deny: ["/^(rel|wri)/ **"]}`, 1)
+	if err := os.WriteFile(oldPol, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	narrowed := strings.Replace(raw, `"/^(rel|wri)/ **"`, `"/^wri/ **"`, 1)
+	narrowed = strings.Replace(narrowed, `command: "reload", expect: deny`, `command: "write", expect: deny`, 1)
+	if err := os.WriteFile(newPol, []byte(narrowed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 {
+		t.Fatalf("a deny test acknowledges nothing: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := narrowed + "acknowledge:\n  - {role: no_reload, rule: \"/^(rel|wri)/ **\", reason: \"reload moves to the change window\"}\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `regex-constrained (acknowledged: reload moves to the change window): noc on leaf-01: deny "/^(rel|wri)/ **" (no_reload) removed`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `acknowledge: no_reload "/^(rel|wri)/ **": reload moves to the change window`) {
+		t.Fatalf("policy test: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

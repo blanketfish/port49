@@ -347,8 +347,14 @@ func TestTheGateFailsARegexConstrainedWidening(t *testing.T) {
 		}
 		return gated, open
 	}
+	// An acknowledgment holds on its own device group (review M1), so the
+	// test runs on one device of each.
 	test := func(command, expect string) string {
-		return "tests:\n  - {subject: noc, device: leaf-01, command: \"" + command + "\", expect: " + expect + "}\n"
+		out := "tests:\n"
+		for _, device := range []string{"leaf-01", "nx-01", "xe-01", "srx-lab-01"} {
+			out += "  - {subject: noc, device: " + device + ", command: \"" + command + "\", expect: " + expect + "}\n"
+		}
+		return out
 	}
 	// A permit carrying a regex, added.
 	added := strings.Replace(regexBase, `permit: ["copy /^scp:/ *"]`, `permit: ["copy /^scp:/ *", "copy /^sftp:/ *"]`, 1)
@@ -373,16 +379,30 @@ func TestTheGateFailsARegexConstrainedWidening(t *testing.T) {
 	if _, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, freed+test("copy scp://h/f startup-config", "permit")), noon)); o != 0 {
 		t.Fatal("a test of that permit over that deny acknowledges it")
 	}
-	// A deny carrying a regex, removed or rewritten wider: a test on a command
-	// it refused before acknowledges it, whether the new version permits the
-	// command or still refuses it.
+	// A deny carrying a regex, rewritten wider: no command flips, so a test it
+	// still refuses acknowledges nothing (review I1), and an acknowledge:
+	// entry naming the old rule with a reason does.
 	regexDeny := strings.Replace(regexBase, "copy * startup-config", "copy * /^start/", 1)
 	wider := strings.Replace(regexBase, "copy * startup-config", "copy * /^(start|run)/", 1)
 	if g, o := unacked(Compare(mustParse(t, regexDeny), mustParse(t, wider), noon)); g == 0 || o != g {
 		t.Fatalf("a rewritten regex deny: %d gated, %d unacknowledged", g, o)
 	}
-	if _, o := unacked(Compare(mustParse(t, regexDeny), mustParse(t, wider+test("copy scp://h/f startup-config", "deny")), noon)); o != 0 {
-		t.Fatal("a test the old deny refused acknowledges its rewrite")
+	if _, o := unacked(Compare(mustParse(t, regexDeny), mustParse(t, wider+test("copy scp://h/f startup-config", "deny")), noon)); o == 0 {
+		t.Fatal("a test expecting deny never acknowledges a widening")
+	}
+	written := wider + "acknowledge:\n  - {role: guard, rule: \"copy * /^start/\", reason: \"rewritten wider as /^(start|run)/\"}\n"
+	if d := Compare(mustParse(t, regexDeny), mustParse(t, written), noon); d.UnacknowledgedRegex() != 0 {
+		t.Fatalf("an acknowledge: entry naming the old rule acknowledges it: %+v", d.Regex)
+	} else {
+		for _, r := range d.Regex {
+			if r.Gated && r.AcknowledgedBy != "rewritten wider as /^(start|run)/" {
+				t.Fatalf("the diff carries the entry's reason: %+v", r)
+			}
+		}
+	}
+	stale := wider + "acknowledge:\n  - {role: guard, rule: \"copy * /^stort/\", reason: \"typo\"}\n"
+	if _, o := unacked(Compare(mustParse(t, regexDeny), mustParse(t, stale), noon)); o == 0 {
+		t.Fatal("an entry naming another rule acknowledges nothing")
 	}
 	// Added, it is a narrowing: replacing the word deny with a regex one gates
 	// only the word deny's removal where it meets the regex permit, once per
@@ -469,5 +489,39 @@ func TestASessionAckHoldsOnlyAtItsInstant(t *testing.T) {
 	}
 	if atNoon != 4 || afterwards != 4 {
 		t.Fatalf("levels %+v: %d unacknowledged at noon, %d acknowledged after the expiry", d.Levels, atNoon, afterwards)
+	}
+}
+
+// The review's probe (I1): narrowing `/^(wri|rel)/` to `/^wri/` frees reload
+// fleet-wide, and a test that `write erase` is still refused must not
+// acknowledge it. A test that reload is now permitted does, on its own
+// group; an acknowledge: entry does everywhere.
+func TestNarrowingARegexDenyIsNotAcknowledgedByADenyTest(t *testing.T) {
+	base := `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: ops, privilege: readonly, permit: ["**"]}
+  - {name: guard, deny: ["/^(wri|rel)/ **"]}
+subjects:
+  - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
+grants:
+  - {subject: noc, scope: all_devices, roles: [ops, guard]}
+`
+	narrowed := strings.Replace(base, "/^(wri|rel)/ **", "/^wri/ **", 1)
+	gate := func(after string) int {
+		d := Compare(mustParse(t, base), mustParse(t, after), noon)
+		return d.Unacknowledged() + d.UnacknowledgedLevels() + d.UnacknowledgedRegex() + len(d.Quarantined) + len(d.Refused)
+	}
+	if n := gate(narrowed); n != 4 {
+		t.Fatalf("no test: gate %d, want 4 groups", n)
+	}
+	if n := gate(narrowed + "tests:\n  - {subject: noc, device: leaf-01, command: \"write erase\", expect: deny}\n"); n != 4 {
+		t.Fatalf("a deny test acknowledges nothing: gate %d", n)
+	}
+	if n := gate(narrowed + "tests:\n  - {subject: noc, device: leaf-01, command: \"reload now\", expect: permit}\n"); n != 3 {
+		t.Fatalf("a permit flip acknowledges its own group alone (review M1): gate %d", n)
+	}
+	if n := gate(narrowed + "acknowledge:\n  - {role: guard, rule: \"/^(wri|rel)/ **\", reason: \"reload moves to the change window\"}\n"); n != 0 {
+		t.Fatalf("an acknowledge: entry: gate %d", n)
 	}
 }

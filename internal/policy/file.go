@@ -17,6 +17,15 @@ type file struct {
 	Subjects        []fileSubject `yaml:"subjects"`
 	Grants          []fileGrant   `yaml:"grants"`
 	Tests           []fileTest    `yaml:"tests"`
+	Acknowledge     []fileAck     `yaml:"acknowledge"`
+}
+
+// fileAck is one acknowledge: entry (spec §12): the author's written word for
+// a removed or rewritten deny no test can flip.
+type fileAck struct {
+	Role   string `yaml:"role"`
+	Rule   string `yaml:"rule"`
+	Reason string `yaml:"reason"`
 }
 
 type fileLevel struct {
