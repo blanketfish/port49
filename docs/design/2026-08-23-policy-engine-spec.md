@@ -2032,8 +2032,9 @@ transitively up the chain. A level with `parent:` MUST be listed after its paren
 a level that renders lower than one it passed over, so doing so is a policy load error.
 
 This also turns an existing wart into declared behavior. NX-OS is role-native with two
-built-in roles, so `readonly` and `operator` render identically there — with `parent:` that
-is visible and intentional rather than a surprise. Usually it is exactly right:
+built-in roles, so two of its levels render identically there — `operator` as `admin`, since
+the owner's ruling of 2026-09-24 (decision 23) — and with `parent:` that is visible and
+intentional rather than a surprise. Usually it is exactly right:
 `read_only_limited` differs from `readonly` in *which commands port49 permits*, not in what
 the device needs to be told. Platforms may still override where the distinction is real.
 On a session-only platform that distinction has to reach the device anyway, because nothing
@@ -2160,9 +2161,31 @@ Defaulting to optional means adding a custom attribute cannot take down a fleet;
 one mandatory is then a deliberate, reviewable act.
 
 **Not every level is natively representable.** NX-OS is role-native with two built-in roles,
-so `readonly` and `operator` render identically and the distinction is carried entirely by
-command authorization. That is acceptable, but it MUST be visible in the platform file
+so two levels render identically — `operator` as `admin` (decision 23) — and the distinction
+is carried entirely by command authorization. That is acceptable, but it MUST be visible in the platform file
 rather than silently surprising.
+
+**On `arista_eos` and `cisco_nxos`, `operator` gets the device privilege `admin` gets**
+(owner's ruling 2026-09-24, decision 23). Neither device can draw the operator line itself
+while command authorization points at port49: vEOS at level 15 ran `clear counters`, `clear
+ip bgp *` and `configure` as `network-operator`, and at level 1 its parser refused even
+`clear counters`; on the N9Kv every role, `network-operator` included, ran all three and
+changed configuration (`tests/lab/results/ceiling-arista_eos.md`, `ceiling-cisco_nxos.md`).
+So `operator` renders as `priv-lvl=15` on EOS, as `admin` does, and on NX-OS, which renders
+no level today, it carries admin's ceiling number, 15. **The difference between an operator
+and an admin there is entirely port49's command rules.** An operator reading `show privilege`
+sees 15; that is expected, and the rules are the fence. Two things follow for whoever writes
+the device configuration:
+
+- The device's command method list MUST NOT fall back to `none` or `if-authenticated`. Where
+  port49 cannot answer, an operator session at 15 then runs everything; `local` is the only
+  safe fallback, and there the device's local role is the policy (§15, L4).
+- `readonly` still renders `priv-lvl=1` on EOS, where the parser enforces it (level 1 refused
+  all three), so a readonly session is fenced by the device and by port49 both.
+
+IOS-XE is not in this rule: its level 7, given commands with `privilege exec level 7 ...`,
+is exactly the operator rung, so the device can enforce it (`ceiling-cisco_iosxe.md`). Its
+rendering is plan 5's adapter work.
 
 **Platforms that are not `priv-lvl`-native** (Junos maps to `local-user-name`) MUST declare
 a mapping for every level. A missing mapping is a **policy load error in CI**, not a broken
@@ -2324,7 +2347,7 @@ platforms:
     supports: [session, commands, config_commands]
     privilege:
       readonly: ["priv-lvl=1",  "shell:roles*network-operator"]
-      operator: ["priv-lvl=7"]
+      operator: ["priv-lvl=15"]      # admin's level; port49's rules are the fence (§6)
       admin:    ["priv-lvl=15", "shell:roles*network-admin"]
     entity_classes:
       management: ['^Management[0-9]+$']
@@ -2343,6 +2366,14 @@ port49 for authorization as `show clock` alone (`tests/lab/results/L2-arista_eos
 `L2-cisco_nxos.md`, `L2-cisco_iosxe.md`, "Truncation length"). The device applied the modifier
 itself, so on those images a pipe rule protects nothing and `explain` says so. Whether any
 modifier ever reaches port49 on any platform is unmeasured.
+
+The example's `operator` said `priv-lvl=7` until 2026-09-24. No lab run measured a vEOS session
+at 7, and at 15 the device fences nothing port49 permits (`tests/lab/results/ceiling-arista_eos.md`),
+so the owner ruled `operator` onto `admin`'s level on `arista_eos` and `cisco_nxos` (§6, decision
+23). **Operator note:** on those two platforms an operator and an admin get the same device
+privilege, and the whole difference is port49's per-command rules. A device command method list
+that falls back to `none` or `if-authenticated` therefore runs an operator's every command when
+port49 cannot answer; end it in `local` (§15, L4).
 
 Most devices need far less. A time server or a BMC that does authentication plus one
 attribute is complete in four lines:
@@ -3909,6 +3940,15 @@ where a deployment provisions classes. A permit narrower than the bits with a de
 it is refused at load; the `-regexps` family's documented deny-precedence may lift that once
 measured. The choice is made from the composed grant, never per role. (§8, §15)
 
+**23. Where the device cannot draw the operator line, `operator` renders as `admin`'s level.**
+*Owner's ruling 2026-09-24.* On `arista_eos` and `cisco_nxos`, with command authorization
+pointed at port49, no role or level between readonly and admin narrows what port49 permits
+(`tests/lab/results/ceiling-arista_eos.md`, `ceiling-cisco_nxos.md`), so rendering `operator`
+lower would only make it readonly on EOS, and refusing it quarantined every EOS device a
+policy landed there. `operator` gets level 15 on both, port49's per-command rules are the
+fence, and the device's method list must not fall back to `none` or `if-authenticated`.
+IOS-XE, whose level 7 can carry the rung, is left to plan 5's adapters. (§6, §8)
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -4636,8 +4676,8 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
     (`privilege exec level 7 clear counters`) gives level 7 exactly the operator rung; vEOS
     refuses all three at level 1 and runs all three as `network-operator` at 15; on the N9Kv
     every role runs all three. So on EOS and NX-OS the operator rung is port49's per-command
-    policy alone. `operator` on `arista_eos` stays unmapped, quarantining the devices it
-    reaches, until the owner decides its rendering.
+    policy alone. *Owner's ruling 2026-09-24:* `operator` renders as level 15 on both, with
+    port49's rules as the only fence (§6, decision 23); it no longer quarantines an EOS device.
 - **L5** — EOS 2026-09-17 and Junos 2026-09-20: no WATCHDOG at all on any of the three, over a
   2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`,
   `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, and the N9Kv and Catalyst 8000V both join them with
