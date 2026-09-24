@@ -2,9 +2,12 @@ package policy
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math/rand"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +15,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 )
 
@@ -69,8 +73,12 @@ func TestTheCompletePolicyExamplePassesItsOwnTests(t *testing.T) {
 				r.Test.Command, r.Permit, r.Reason, r.Err, r.Test.Expect)
 		}
 	}
-	// The pipeline test passes on port49's evaluation, and says the device
-	// would never have sent the pipeline (tests/lab/results/L2-arista_eos.md).
+	// The pipeline test passes on port49's evaluation, denied at the redirect
+	// stage and not for want of a permit, and says the device would never
+	// have sent the pipeline (tests/lab/results/L2-arista_eos.md).
+	if results[2].Reason != decision.PipeStageDenied || results[2].Outcome.Stage != 1 {
+		t.Errorf("the redirect test is denied at its pipe stage: %s stage %d", results[2].Reason, results[2].Outcome.Stage)
+	}
 	if c := results[2].Caveats; len(c) != 1 || !strings.Contains(c[0], "pipe_authorized: false") {
 		t.Errorf("caveats on the redirect test: %q", c)
 	}
@@ -87,41 +95,51 @@ func TestTheCompletePolicyExampleShowsWhatItSays(t *testing.T) {
 	campus, _ := p.Device("campus-sw-7")
 	srx, _ := p.Device("srx-fw-04")
 	patched, _ := p.Device("srx-fw-05")
-	for _, tt := range []struct {
+	type claim struct {
 		subject string
 		device  admission.Device
 		line    string
 		permit  bool
 		reason  decision.Reason
-	}{
+		deny    string // the matched deny, role/rule, where the claim names one
+	}
+	for _, tt := range []claim{
 		// "interface @management carries all the platform-specific knowledge".
-		{"noc_tier1", leaf, "interface Ethernet3", true, decision.PermitDominates},
-		{"noc_tier1", leaf, "interface Management1", false, decision.NoRuleMatched},
-		{"noc_tier1", campus, "interface Ethernet3", false, decision.NoRuleMatched}, // dc_fabric only
-		{"noc_tier1", leaf, "clear counters", false, decision.NoRuleMatched},
+		{"noc_tier1", leaf, "interface Ethernet3", true, decision.PermitDominates, ""},
+		{"noc_tier1", leaf, "interface Management1", false, decision.NoRuleMatched, "interface_tech/interface @management"},
+		{"noc_tier1", campus, "interface Ethernet3", false, decision.NoRuleMatched, ""}, // dc_fabric only
+		{"noc_tier1", leaf, "clear counters", false, decision.NoRuleMatched, ""},
+		{"noc_tier1", leaf, "reload", false, decision.NoRuleMatched, "no_disruptive/reload **"},
 		// svc_oxidized composes two roles: commands from one, level from the other.
-		{"svc_oxidized", leaf, "configure terminal", false, decision.NoRuleMatched},
+		{"svc_oxidized", leaf, "configure terminal", false, decision.NoRuleMatched, ""},
 		// The mitigation lifts per device as it is remediated.
-		{"noc_tier1", patched, "show chassis cluster status", true, decision.PermitDominates},
-		{"noc_tier1", srx, "show chassis cluster", false, decision.NoPermitDominatesDeny},
-		{"netops_admins", srx, "show chassis cluster status", false, decision.NoPermitDominatesDeny},
-		{"netops_admins", leaf, "show run | redirect ftp://x", true, decision.PermitDominates},
-		{"security_ir", leaf, "show version", false, decision.NoGrantsMatched},
+		{"noc_tier1", patched, "show chassis cluster status", true, decision.PermitDominates, ""},
+		{"noc_tier1", srx, "show chassis cluster", false, decision.NoPermitDominatesDeny, "cve_2026_xxxx/show chassis cluster **"},
+		{"netops_admins", srx, "show chassis cluster status", false, decision.NoPermitDominatesDeny, "cve_2026_xxxx/show chassis cluster **"},
+		{"netops_admins", leaf, "show run | redirect ftp://x", true, decision.PermitDominates, ""},
+		{"security_ir", leaf, "show version", false, decision.NoGrantsMatched, ""},
 	} {
-		_, o, err := p.Decide(tt.subject, "", tt.device, tt.line, noon)
-		if tt.reason == decision.NoGrantsMatched {
-			if err != ErrNoGrants {
-				t.Errorf("%s on %s: %v, want no grants", tt.subject, tt.device.Name, err)
-			}
-			continue
-		}
-		if err != nil || o.Permit != tt.permit || o.Reason != tt.reason {
-			t.Errorf("%s on %s %q: permit=%v %s %v, want %v %s", tt.subject, tt.device.Name, tt.line,
-				o.Permit, o.Reason, err, tt.permit, tt.reason)
-		}
+		checkClaim(t, p, tt.subject, tt.device, tt.line, tt.permit, tt.reason, tt.deny)
+	}
+	// The denies above that decide nothing on §11 as written, because no
+	// permit reaches their commands, decide once one does: noc_tier1 also
+	// holding network_admin's `**`, which dominates none of them.
+	broad, err := Parse([]byte(strings.Replace(string(spec11Raw(t)),
+		"roles: [read_only, no_disruptive]}", "roles: [read_only, no_disruptive, network_admin]}", 1)), spec11Env(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []claim{
+		{"noc_tier1", leaf, "interface Ethernet3", true, decision.PermitDominates, ""},
+		{"noc_tier1", leaf, "interface Management1", false, decision.NoPermitDominatesDeny, "interface_tech/interface @management"},
+		{"noc_tier1", leaf, "reload", false, decision.NoPermitDominatesDeny, "no_disruptive/reload **"},
+		{"noc_tier1", leaf, "write erase startup-config", false, decision.NoPermitDominatesDeny, "no_disruptive/write erase **"},
+		{"noc_tier1", srx, "show chassis cluster status", false, decision.NoPermitDominatesDeny, "cve_2026_xxxx/show chassis cluster **"},
+	} {
+		checkClaim(t, broad, tt.subject, tt.device, tt.line, tt.permit, tt.reason, tt.deny)
 	}
 	res, err := p.ResolveSubject("svc_oxidized", leaf, noon)
-	if err != nil || res.Level != "admin" || res.Blob.Attributes[0] != "priv-lvl=15" {
+	if err != nil || res.Level != "admin" || len(res.Blob.Attributes) == 0 || res.Blob.Attributes[0] != "priv-lvl=15" {
 		t.Fatalf("svc_oxidized lands at admin, from elevated_session: %+v %v", res, err)
 	}
 	limited, err := Parse([]byte(strings.Replace(string(spec11Raw(t)),
@@ -129,8 +147,34 @@ func TestTheCompletePolicyExampleShowsWhatItSays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r, _ := limited.ResolveSubject("noc_tier1", campus, noon); r.Blob.Attributes[0] != "priv-lvl=1" {
-		t.Fatalf("read_only_limited renders as its parent readonly: %+v", r.Blob.Attributes)
+	r, err := limited.ResolveSubject("noc_tier1", campus, noon)
+	if err != nil || len(r.Blob.Attributes) == 0 || r.Blob.Attributes[0] != "priv-lvl=1" {
+		t.Fatalf("read_only_limited renders as its parent readonly: %+v %v", r.Blob.Attributes, err)
+	}
+}
+
+// checkClaim decides one line and checks the verdict, the reason and, where
+// deny is set, the deny the record names as role/rule.
+func checkClaim(t *testing.T, p *Policy, subject string, d admission.Device, line string, permit bool,
+	reason decision.Reason, deny string) {
+	t.Helper()
+	_, o, err := p.Decide(subject, "", d, line, noon)
+	if reason == decision.NoGrantsMatched {
+		if !errors.Is(err, ErrNoGrants) {
+			t.Errorf("%s on %s: %v, want no grants", subject, d.Name, err)
+		}
+		return
+	}
+	if err != nil || o.Permit != permit || o.Reason != reason {
+		t.Errorf("%s on %s %q: permit=%v %s %v, want %v %s", subject, d.Name, line, o.Permit, o.Reason, err,
+			permit, reason)
+		return
+	}
+	if deny == "" {
+		return
+	}
+	if o.Deny == nil || o.Deny.Role+"/"+o.Deny.Rule != deny {
+		t.Errorf("%s on %s %q: matched deny %+v, want %s", subject, d.Name, line, o.Deny, deny)
 	}
 }
 
@@ -158,10 +202,12 @@ func TestTheCompletePolicyExampleReportsWhatItShould(t *testing.T) {
 
 // Order independence (spec §5.4; §14): the same policy with its roles, scopes,
 // subjects, grants and every rule list shuffled decides every test identically,
-// down to which rule and role each decision names.
+// down to which rule and role each decision names, and compiles every subject
+// on every device to the same level and the same blob bytes.
 func TestShufflingThePolicyChangesNoDecision(t *testing.T) {
 	raw := spec11Raw(t)
 	want := decisions(t, spec11(t, raw))
+	wantBlobs := blobs(t, spec11(t, raw))
 	r := rand.New(rand.NewSource(49))
 	for i := 0; i < 10; i++ {
 		var doc yaml.Node
@@ -173,8 +219,12 @@ func TestShufflingThePolicyChangesNoDecision(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := decisions(t, spec11(t, out)); !reflect.DeepEqual(got, want) {
+		shuffled := spec11(t, out)
+		if got := decisions(t, shuffled); !reflect.DeepEqual(got, want) {
 			t.Fatalf("shuffle %d changed a decision:\n got %s\nwant %s\npolicy:\n%s", i, got, want, out)
+		}
+		if got := blobs(t, shuffled); !reflect.DeepEqual(got, wantBlobs) {
+			t.Fatalf("shuffle %d changed a blob:\n got %s\nwant %s\npolicy:\n%s", i, got, wantBlobs, out)
 		}
 	}
 }
@@ -196,6 +246,35 @@ func decisions(t *testing.T, p *Policy) []string {
 			t.Fatal(err)
 		}
 		out = append(out, string(b))
+	}
+	return out
+}
+
+// blobs renders every subject on every device as its level, its encoded blob
+// and its rules as Resolve returns them (what explain reads), with the bundle
+// fixed: it names the file's bytes, which a shuffle changes by design.
+func blobs(t *testing.T, p *Policy) []string {
+	t.Helper()
+	names := make([]string, 0, len(p.subs))
+	for name := range p.subs {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	var out []string
+	for _, name := range names {
+		for _, d := range p.env.Devices {
+			res, err := p.ResolveSubject(name, d, noon)
+			if err != nil {
+				out = append(out, fmt.Sprintf("%s on %s: %v", name, d.Name, err))
+				continue
+			}
+			res.Blob.Bundle = "sha256:fixed"
+			body, _, err := engine.Encode(res.Blob)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, fmt.Sprintf("%s on %s: %s %s %v", name, d.Name, res.Level, body, res.Blob.Rules))
+		}
 	}
 	return out
 }

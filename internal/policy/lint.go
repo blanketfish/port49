@@ -88,6 +88,8 @@ func (p *Policy) Lint() []Finding {
 		for _, d := range p.env.Devices {
 			res, err := p.resolve(sub, d, time.Time{})
 			if err != nil {
+				// No grant here means nothing to shadow, and any other error
+				// quarantines the device, which Quarantined reports.
 				continue
 			}
 			for _, a := range res.Attributes {

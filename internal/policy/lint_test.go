@@ -18,7 +18,11 @@ tests:
   - {subject: s, device: leaf-01, command: "show version", expect: deny, reason: device_quarantined}
   - {subject: s, device: nx-01, command: "show version", expect: permit}
 `)
-	for _, r := range p.RunTests(noon) {
+	results := p.RunTests(noon)
+	if len(results) != 2 {
+		t.Fatalf("%d results, want 2", len(results))
+	}
+	for _, r := range results {
 		if !r.Pass {
 			t.Errorf("%s on %s: permit=%v %s %v", r.Test.Subject, r.Test.Device, r.Permit, r.Reason, r.Err)
 		}
