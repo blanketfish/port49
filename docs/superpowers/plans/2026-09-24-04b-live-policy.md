@@ -202,6 +202,44 @@ decision log to stdout.
 - **An inventory edit followed by `SIGHUP`:** `port49d: inventory_file … has changed since start
   and is not reloaded (plan 6); … restart port49d to apply it`.
 
+## Rebase on `feature/gate-rulings` before executing
+
+A small rulings PR (`feature/gate-rulings`) merges to `main` before this plan runs. It renders
+`operator` as level 15 on `arista_eos` and `cisco_nxos`, adds a `level:` field to session tests and
+two `policy diff` gates, a `report: no_tests` warning, and a `LAB MODE` start-up line for a `lab:`
+block. This plan depends on none of those behaviours either way — its one quarantine test lands a
+subject at a declared level no platform renders, not at `operator` — but it touches three of the
+same places, and the blocks below are written against `main` at `11f02c0`. **Rebase this branch on
+`main` once that PR has merged, then apply each task's blocks; where a hunk does not apply, resolve
+it as below.** Each resolution was made on a scratch branch rebased on `feature/gate-rulings`
+(`7383758`), and the result passed `go test -race ./internal/... ./cmd/...`, `make vet` and
+`go vet -tags lab ./tests/lab/...`.
+
+- **This plan's commit (`README.md` status line).** Both change the same status sentence. Keep
+  the gate-rulings text and replace its closing "**Plan 4b (live policy) is the next plan to
+  write.**" with this plan's "**4b written 2026-09-24** (…) and is the next plan to execute".
+- **Task 1 (spec §13).** Gate-rulings takes decision **23** (`operator` renders as `admin`'s
+  level). This plan's decision becomes **24**: renumber it in the patch, and read "decision 24"
+  wherever this plan says decision 23 (the Spec line, Task 1's Interfaces, and Step 2's grep,
+  which becomes `^\*\*24\. `).
+- **Task 4 (`cmd/port49d/broker_test.go`).** Gate-rulings rewrote
+  `TestAQuarantinedDeviceDoesNotStopTheStart` and `TestTheDaemonsQuarantineFollowsTheClock` to
+  quarantine through `unmappedLevel` and `privilege: unmapped`. Keep its policies and apply only
+  this plan's renames: `_, pol, err := buildBroker(` becomes `_, b, err := buildBroker(`,
+  `pol.Quarantined(` becomes `b.Policy.Quarantined(`, and `watchQuarantine(pol,` becomes
+  `watchQuarantine(b.Policy,`.
+- **Task 6 (`cmd/port49d/main.go` imports).** Gate-rulings adds `"strings"`; this task removes
+  `"slices"`. The import block keeps `"strings"` and drops `"slices"`.
+- **Task 7 (`cmd/port49d/main.go`).** Gate-rulings adds `labWarning` just above the `stderr`
+  declaration and prints it first thing in `run`. Keep both; replace only the `stderr`
+  declaration with this task's `stderr`/`stdout` block, and keep `fmt.Fprint(stderr,
+  labWarning(cfg.Lab))` right after `config.Load` in the new `run(parent context.Context, …)`.
+  `writeRunConfig` has no `lab:` block, so the end-to-end test never prints the `LAB MODE` line.
+- **Task 8** applies cleanly on top.
+
+Nothing in this plan touches the policy tests' grammar (`level:`, `report:`), `policy diff`, or
+the dialect table.
+
 ## Global Constraints
 
 Copied verbatim from `CLAUDE.md`, "Code conventions":
@@ -1948,12 +1986,15 @@ func TestALoweredCeilingClampsTheHeldLevel(t *testing.T) {
 
 // A context on a device the new policy quarantines is left as it is: the
 // daemon answers nothing from that device now, and the refresh that lifts the
-// quarantine reaches it. The record says so. leaf1 is arista_eos, which renders
-// no operator (spec §10).
+// quarantine reaches it. The record says so. The edit lands alice at a level
+// the policy declares and no built-in platform renders, which quarantines
+// every device she reaches (spec §10), whatever the dialect table renders
+// for the reserved levels.
 func TestARefreshLeavesAQuarantinedDevicesContextAlone(t *testing.T) {
 	f := newFixture(t, 8)
 	before := f.login(t, alice, "leaf1", "alice")
-	priors := f.reload(t, edit(t, "{name: network_admin, privilege: admin,", "{name: network_admin, privilege: operator,"))
+	priors := f.reload(t, "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"+
+		edit(t, "{name: network_admin, privilege: admin,", "{name: network_admin, privilege: unmapped,"))
 	f.log.Reset()
 	rep, err := f.b.Refresh(context.Background(), priors)
 	if err != nil {
