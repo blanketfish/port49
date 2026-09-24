@@ -265,7 +265,9 @@ entire class.
    declares only `session` and is widened on purpose) the term matches **any argument** in
    its position: an over-denial of the commands the deny's other terms reach, and no device
    is quarantined or login refused for it. `port49 policy test` reports each such term and
-   platform as `deny_widened`, and `port49d` says it at start. A platform measured sending no
+   platform as `deny_widened`, naming the term by its position (`term 3 (a regex)`, `term 3
+   (@bad pattern #1)`), never its text, which may spell a secret out (§5.8), and `port49d` says
+   it at start. A platform measured sending no
    per-command authorization (Junos, decision 21) widens nothing. The cost is an over-denial
    of a full word that is a prefix of a deny's word — `show ip` against `deny: show ipv6 **`
    — reported by name in the `server_msg`. `arista_eos`, `cisco_nxos` and `cisco_iosxe` are
@@ -532,6 +534,7 @@ blob:a3f9c1…
   privilege:        operator
   max_privilege:    admin
   attributes:       ['shell:roles*"network-operator"']
+  accepted_attributes: [priv-lvl]    # the merged adapter's, where set (§6); omitted otherwise
 ```
 
 The daemon becomes a pure executor: it normalizes with the given parameters and matches
@@ -1555,8 +1558,10 @@ require disjoint namespaces for break-glass and local accounts and MUST NOT put 
 the enable method list, and port49 SHOULD warn when it observes a local fallback succeed for a
 username it knows. The detection that exists is accounting: such a session's exec records carry a
 discriminator port49 never saw begin and are attributed `foreign` (§5.8), counted in
-`port49_accounting_attributions_total{attribution="foreign"}`. Plan 5's adapters owe a
-configuration check that warns when a port49-served username exists as a device-local account.
+`port49_accounting_attributions_total{attribution="foreign"}`. The configuration check is
+`port49 devices check-config` (§12): it reads a device's configuration against its adapter and
+fails on a device-local account named as a username port49 serves there, on an enable list
+that falls back to a local secret, and on a `device_config` line the configuration lacks.
 
 #### Gated on the lab
 
@@ -1743,7 +1748,7 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
-| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a composition the load quarantines (§7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
+| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
 | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
 | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed. On `refresh`, a deny recorded once per context per policy version (bundle): the live context is left as it was until the quarantine lifts |
 
@@ -1763,6 +1768,29 @@ The log MUST NOT contain a token, a password, a CHAP challenge or response, or a
 which a credential can be recovered. The credential is identified by `credential_sha256`
 only — the same hash the receipt binds (§5.1.1), which is what lets a retransmission be
 recognized in the log as one decision retried rather than two decisions made.
+
+A secret an operator types into a command — `username bob secret Hunter2` — reaches port49 on
+the command's authorization request as well as its accounting record, so both are redacted
+before they are written, by the platform's `redact` patterns (§5.8). The decision is made on
+the command as sent; only the record loses the secret. A redacted record carries
+`"redacted": true` in its `request` (an `authorize_command`) or its `record` (an `account`),
+and `port49 policy replay` reports it `unverifiable` rather than replaying the redacted words:
+the command it decided is not in the log, by design.
+
+The same rule applies to every other place port49 writes a command it received from a device,
+a debug log included. That place writes the redacted form, or it does not write the command.
+A denial's `server_msg` (§5.3) names the rule that decided and does not echo the command, and it
+goes only to the session that typed the command. `port49 policy test` reads commands from the
+policy's own test cases, not from a device.
+
+A rule's text is redacted by the same patterns wherever it is echoed: a record's
+`matched_deny` and `matched_permits`, and a denial's `server_msg`, which shows the value as
+`<redacted>` because a console takes ASCII. A policy literal is no safer in a log than a typed
+one — `deny snmp-server community public **` is a legitimate rule, and its value is a
+community. A record whose echoed rules were redacted carries `"redacted": true` in its
+`request` as well, and replay reports it `unverifiable`: the rules it logged are not the blob's.
+Wildcards are not values and are echoed as written. The `blob` event is redacted the same way
+(§5.8).
 
 #### Replay
 
@@ -1907,24 +1935,159 @@ record keeps it.
 logs fill with plaintext passwords, and it is worse here than in a conventional deployment
 because port49's stream is designed to be shipped and retained.
 
-Platform adapters therefore declare redaction patterns, applied before emit:
+Platform adapters therefore declare redaction patterns, applied before the record reaches the
+spool — which is on disk — and before an authorization record is emitted (§5.7):
 
 ```yaml
-# platforms/arista_eos.yaml
-redact:
-  - {match: ['username', '*', 'secret', '**'],        from: 3}
-  - {match: ['username', '*', 'password', '**'],      from: 3}
-  - {match: ['enable', 'secret', '**'],               from: 2}
-  - {match: ['**', 'key', '*'],                       from: -1}
+# platforms/redact.yaml — the built-in patterns (abridged)
+default:
+  - {match: ['**'], after: secret}
+  - {match: ['**'], after: password}
+  - {match: ['**'], after: key}
+  - {match: ['**'], after: key-string}
+  - {match: ['**'], after: authentication-key}
+  - {match: ['**'], after: message-digest-key}
+  - {match: ['**'], after: pre-shared-key}
+  - {match: ['**', snmp-server, community, '**'], after: community}
+  - {match: ['**', snmp-server, host, '**'], after: host}
+  - {match: ['**', snmp-server, user, '**'], after: auth}
+  - {match: ['**', authentication, text, '**'], after: text}
+  - {match: ['**'], after: area-password}
+  - {match: ['**', ipsec, spi, '**'], after: spi}
+  # ... HSRP, IS-IS, BGP, PIM and NHRP keywords; the file is the list
+juniper_junos:
+  - {match: ['**'], after: encrypted-password}
+  - {match: ['**'], after: plain-text-password-value}
+  - {match: ['**'], after: authentication-password}
+  - {match: ['**'], after: privacy-password}
 ```
 
-Redaction replaces argument *values* with `«redacted»` and preserves the vector's shape and
+A pattern's `match` is words, `*` for one word and `**` for any number, anchored at both ends
+as a rule is. Words are compared ignoring case, in `match` and `after` alike, as §4's rules are,
+so a difference in case makes a pattern remove more and never less. A command it matches loses
+every word after the first word equal to `after`, the command word included, or
+every word from position `from` on (0 is the command word and is never removed; a negative
+`from` counts from the end). A pattern's word matches its abbreviations too — any shorter
+prefix of it, ignoring case — on every platform, whatever `expands_abbreviations` says, so
+`usern x sec 0 X` and `snmp comm X` are redacted. That removes more rather than less, and it
+does not trust the flag: L21 measured expansion for interactive SSH only, and a flag that is
+wrong where redaction relies on it leaks a secret into a log that cannot take it back.
+That holds for every argument: `tacacs-server k X`, `enable s 0 X`, `username bob pa X` are
+redacted. The **command word** — the first word, or the word after a leading `do` — matches
+a secret keyword's abbreviation only where it is three characters or more, one character (`k
+X` in a key chain), or two characters followed by a bare digit, an encryption type (`sh 7 X` in
+an EOS IPsec profile); the whole keyword always matches. So `sh ip int br`, `sh run` and `do sh
+run` keep their arguments, where every exec `sh` would otherwise read as `shared-key`. The cost
+is named: a two-character submode command word that is a secret keyword and is followed by
+something other than a digit — `sh X` in an IPsec profile — is not redacted, where a device
+sends it as typed; EOS and IOS-XE over interactive SSH send it expanded (L21). `idtoken` is
+scoped to `license`, so `| i hostname` is not read as it; `token` is not scoped, because a
+token need not be the last word (`management api gnmi token X vrf mgmt`, `token 0 X`), and an
+argument `to` loses what follows it, an accepted cost.
+Redaction therefore errs toward hiding: some non-secret arguments — `aaa authentication login
+… none`, `area 0 …`, `ip domain name …` — are redacted, because a word that begins a secret
+keyword (`authentication-key`, `area-password`, `domain-password`) counts as its
+abbreviation. The record still carries the command word, so an auditor sees that an `aaa
+authentication` change happened and can read the rest from the device.
+Junos sends a whole command line as one `cmd`, so each element is split into words first.
+Whatever the patterns say, a word holding a URL with a password in its userinfo —
+`copy running-config scp://admin:X@10.0.0.9/r.cfg`, an archive `path`, in any scheme — has
+the password replaced and keeps its scheme, user and host, so the record still shows where
+a configuration went: no `after:` pattern can hide part of a word. So has a credential in its
+query string — `X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`, `sig`,
+`signature`, `token`, `access_token`, `password`, `passwd`, `key` or `secret`, any case — its
+name kept: a presigned URL's signature is a bearer credential until it expires. A WLC's
+`security wpa psk set-key ...` and `wpa-psk ...` are redacted by the default list (`wpa-psk`
+matches `wpa` as its abbreviation), though no 5a platform is a WLC.
+The built-in patterns lead with `**`, because a secret sits anywhere in a line and NX-OS's
+accounting `cmd` is the configuration path joined with ` ; ` and a result — `configure
+terminal ; username bob password ... (SUCCESS)` (`tests/lab/results/L21-cisco_nxos.md`) — which
+a pattern anchored at the command word never matches. A pattern whose `match` is `*` and `**`
+alone matches every command, and with `from` it would remove the arguments of every record: it
+is refused, and a secret is named by the word it follows, with `after`. Where a pattern removes
+words from a record's `raw` pairs and not its vector, or the other way round, the form it
+missed loses every argument, so a secret is never left in one of the two. Each pattern is
+judged on its own: another pattern matching both forms does not excuse this one.
+
+A value glued to its keyword, `key=X` or `password:X`, is matched as the keyword and the word
+after it, and a keyword ending in the separator, `password: X`, as the keyword; a keyword's
+leading `-` and `/` are not part of it, so `--password=X`, `/password:X` and `--password X` are
+too; the word keeps its keyword, `key=«redacted»`. The cost is a single-letter option read as a
+keyword's abbreviation: `ping -c 5 1.1.1.1` is recorded `ping -c «redacted» «redacted»`, and
+`-s`, `-d`, `-a`, `-t`, `-h`, `-w` likewise, while `sshpass -p X` must stay redacted; it is
+accepted. Redaction replaces argument *values* with `«redacted»` and preserves the vector's shape and
 length, so the reconciliation join still works on a redacted record. It applies to `raw` as
 well — a rule that redacted only the normalized form would defeat itself.
 
+**A policy's own rule text is redacted too** (§5.7). A rule or pipe permit may legitimately
+carry a value a pattern hides — `deny snmp-server community public **` — and it loads; `port49
+policy test` and `port49d` at start report it as `rule_secret_literal`, naming the role and the
+rule in its redacted form, so the operator knows the value lives in the policy file and reads
+`«redacted»` everywhere else. Everywhere else means: every line `port49d` and its broker write
+about a policy that loaded, and what `port49 policy test`, `policy diff`, `platform upgrade` and
+`explain` print for one, since CI keeps it. Those redact every quoted value by every pattern that
+applies anywhere under the policy, the file's own `platforms:` patterns included, erring toward
+hiding; a quoted value is split as prose is, by whitespace and then by punctuation and a
+regex's operators, an escape such as `\s` one separator, so the `"^snmp-server community X"` a
+diff prints of a config check is read as its words, and text a built-in set ships as adapter
+text prints as written (final review I3). `policy diff` and `platform upgrade` print an adapter
+key's two values with a block's text redacted as `platform show` prints it (below); the sha256
+an `acknowledge:` entry names is still taken over the value as written. A policy
+that does not load is refused **closed**: its patterns never loaded, so the refusal — at start,
+on a reload, or from those tools — quotes no value from the file. It names where and what: a rule
+by its role, list and position and a term by its position, e.g. `role "admin": deny #2: term 3
+is a regex that is one word; write the word instead`; a test row as `tests[N]` with its subject
+and device, never its command; an adapter or redaction-pattern value, an attribute or an entity
+class pattern by its key and index (`platforms.arista_eos.entity_classes.bad_comm[0] does not
+compile: missing closing )`); a YAML type error, unknown field or repeated key by its line, and
+an explicitly tagged scalar that does not decode (`!!int "…"`) or an alias to no anchor
+(`deny: [*secret]`) by what it is, never the value. Names
+the file declares or refers to — a role, a subject, a scope, a level, a device, a class, an
+attribute name — are named. The operator finds the rest in the file. The `blob` event
+(§5.7, "Replay") is logged with such rules and pipe permits redacted, and with the patterns of
+an entity class a rule names where a value is redacted (`snmp-server community @bad **`)
+replaced by `«redacted»`; it carries `"redacted": true`. The store keeps the blob verbatim, and
+the hash beside it still names which blob it was. A redacted body does not hash to its name, so replay reports every record
+naming it `unverifiable` — never a divergence, and never an agreement — until replay can read
+the verbatim blob from outside the log. A blob with no such rule is logged byte for byte.
+
+**A block's `device_config` line is redacted too.** An operator may hold a device to a line
+that carries a value a pattern hides — `snmp-server community X ro` — and it loads; `port49
+policy test` reports it as `device_config_secret_literal`, naming the line by its platform key
+and index in its redacted form, and `port49 platform show` and `platform export` print it
+redacted, as they do a block's `config_checks` `match` and `says`: export's output goes upstream,
+and the operator restores the value from the policy file. A `device_config` line or a
+`config_checks` `match` that holds the marker `«redacted»` is refused at load, naming the
+platform, key and index — an export pasted back would otherwise hold the device to a line
+nobody wrote, or run a check that matches nothing — and says to re-enter the value from the
+policy. The rest of a block's text is printed the same way (final review I2): its `unreachable`
+rules redacted as a rule is, its `fallback` text and note as prose, and its entity classes'
+patterns as prose, every pattern of a class a rule names where a value is redacted reading
+`«redacted»`, as the `blob` event writes it; and an `unreachable` rule, a `fallback` text or an
+entity class pattern that holds the marker is refused at load the same way (an `unreachable`
+rule named by its level alone, since a block's list merges into the set's). A regex escape, `\s` or `\S`, is not read as a word when a `match` is redacted, so a
+check with no secret is exported as written. A block's `config_checks[i].match`
+that carries such a value is reported the same way, as `device_config_secret_literal` naming
+`platforms.<p>.config_checks[i].match`; its `says` is prose, redacted wherever it is printed
+and never reported, since ordinary wording — "falls back to a local secret" — would trip it.
+A line or a check a
+built-in set ships is lab text and printed as written, though abbreviation matching reads its
+`authentication` as `authentication-key`. `port49 devices check-config` redacts every
+configuration line it prints the same way (§12).
+
+**The built-in patterns are not part of a pinned platform set** (§8). Redaction changes what
+the log keeps and never what anyone may do, so a pattern a release adds applies at upgrade.
+They live in `platforms/redact.yaml` beside the sets: a `default` list every platform gets, and
+per platform a list that **adds** to it and never replaces it. A policy file's
+`platforms.<name>.redact` adds patterns too and never removes one, `replace: true` included;
+because a pattern changes what the audit keeps, an edit to it is gated (§12). `port49 platform
+show` prints both.
+
 Redaction is best-effort by nature and MUST NOT be presented otherwise: a pattern that misses
-leaks. It is strictly better than emitting verbatim, and the honest mitigation is that
-port49's own credentials are never typed at a device prompt in the first place.
+leaks, and no keyword pattern catches a secret typed as a search term, so `show
+running-config | include <secret>` is logged as typed. It is strictly better than emitting
+verbatim, and the honest mitigation is that port49's own credentials are never typed at a
+device prompt in the first place.
 
 **Trim an accounting AV pair's key and value.** An accounting argument is not reliably
 `key=value` with no spaces. Measured, vSRX 21.4R3.15 and vJunos-router 23.4R2-S2.1 send
@@ -2297,7 +2460,8 @@ defaults to the non-breaking choice.
 ### Where attributes are declared
 
 **Platform file**, for anything tied to a level. Operators may extend a shipped platform or
-define their own in the policy repository, with no upstream change required:
+define their own in the policy file's `platforms:` block, with no upstream change required
+(§8, "User-editable, day one"):
 
 ```yaml
 platforms:
@@ -2347,13 +2511,38 @@ can carry it, on `cisco_nxos` (L16); `local-user-name` and `user-permissions` on
 `juniper_junos` (L18, decision 22), with the Junos command and configuration regexes
 `allow-commands`, `deny-commands`, `allow-configuration`, `deny-configuration` and their
 `-regexps` forms (vendor-documented, unmeasured, L18) — and the names it holds to carry none.
-The inert list is seeded with this section's own motivating case, `home-directory`, on every
-shipped adapter; it is unmeasured on any lab image. A placeholder is allowed only in an attribute
-listed inert on its platform key, or under `all` on every platform in the inventory; anywhere
-else — a privilege-bearing attribute or one no adapter lists — it is refused at load. A
-substitution refuses only `=`, `*` and control characters, so `priv-lvl={username}` would hide
-the level from every review tool, and `allow-commands={principal}` would let a principal's
-text widen a session-only device's own allow-list.
+The inert list is seeded with this section's own motivating case, `home-directory`, and holds
+what else the lab measured inert: `home-directory`, `idletime` and `timeout` on `arista_eos` and
+`cisco_nxos`. vEOS and the N9Kv leave a session with any of the three beside admin's reply
+unchanged — the same level or role, both ceiling commands still sent to port49, `show version`
+still permitted (`tests/lab/results/L22-*.md`, "Inert candidates"). `cisco_iosxe` lists nothing
+inert. The C8000V refuses the session for `home-directory`, `% Authorization failed.`
+(`L22-cisco_iosxe.md`), so on IOS-XE it bears privilege like every other name, and a policy
+that sends it there quarantines the device. It left a session unchanged for `idletime*30` and
+`timeout*480`, and takes both (below), but a refused session there, repeated, stops it
+answering SSH, break-glass included (L18), so both are held bearing on IOS-XE and a change to
+either is gated. On `juniper_junos` all three are unmeasured, and only `home-directory` is
+listed. A placeholder is allowed only in an attribute listed inert on its platform key, or
+under `all` on every platform in the inventory, every platform the pinned set ships and every
+platform a `platforms:` block declares: the inventory is not diffed, so the day a device of one
+of those arrives it would be sent the placeholder with no review (final review M6), and since
+`cisco_iosxe` ships holding `home-directory` bearing, `home-directory*/home/{username}` goes
+under each platform's own key, never `all`; anywhere else — a privilege-bearing attribute
+or one no adapter lists — it is refused at load. A substitution refuses only `=`, `*` and
+control characters, so `priv-lvl={username}` would hide the level from every review tool, and
+`allow-commands={principal}` would let a principal's text widen a session-only device's own
+allow-list.
+
+**`idletime` and `timeout` are numbers** (owner's ruling 2026-09-24, task 18 review I1). A
+placeholder in either is refused at load on every platform, inert or not: a mint fills in an
+identity, never a number a device takes. Only `home-directory` keeps placeholders. The lab
+measured exactly `idletime*30` and `timeout*480`, so a literal value that is not a plain
+decimal — no sign, no leading zero, 0 to 65535 — fails the joint check and quarantines the
+device on every platform (§10), and on a platform that sets `accepted_attributes`
+(`cisco_iosxe`) so does either attribute in the mandatory `=` form (`idletime=30`), which is
+unmeasured there: it takes them only in the optional `*` form, as measured.
+What a device makes of `0` is unmeasured: `timeout*0` passes the check, and it is no escalation, since per-command authorization still reaches the session
+and on `cisco_iosxe` a change to either is gated (task 18 review N2).
 
 ### Validation without semantics
 
@@ -2366,6 +2555,44 @@ port49 cannot check what an attribute means. It MUST check everything else:
   the failure is never truncation on the device (L11); it is a refusal at policy load, which
   is where this MUST be caught.
 - Mandatory versus optional, with a warning on any mandatory attribute not recognized.
+- **What the device takes.** An adapter MAY list `accepted_attributes`, every attribute name
+  the platform's session reply may carry. IOS-XE refused the session for every other
+  attribute L18 tried, under either flag, and a run of refusals stops it answering SSH for
+  about a minute, break-glass included (`tests/lab/results/L18-cisco_iosxe.md`). L22 saw the
+  same for `home-directory`. It also found `idletime*30` and `timeout*480` accepted beside
+  `priv-lvl=15` and inert (`tests/lab/results/L22-cisco_iosxe.md`), so the adapter lists
+  `priv-lvl`, which is what port49 renders, and those two. Only those two values, optional,
+  were measured; their values and form are held to that (above). A composition whose reply carries
+  any other attribute fails the joint check and quarantines the device (§10): closed without a
+  reply, it falls to local at once. Where an adapter sets
+  `accepted_attributes`, a `priv-lvl` in the reply must also be one of the levels that
+  adapter's `privilege` renders (1, 7 and 15 on `cisco_iosxe`): what the device lets any other
+  level run is unmeasured, so a role or grant layering another fails the joint check the same
+  way. The list rides in the blob (§5.1.2), omitted where the adapter sets none, so a blob
+  written before it reads as no restriction; the daemon refuses a reply carrying a name the
+  blob's list does not take (`blob_unavailable`, nothing sent), under whatever adapter the
+  policy merged.
+- **`priv-lvl`'s value is a level.** On every platform, a `priv-lvl` a level renders or a role
+  or grant layers MUST be a decimal integer from 0 to 15, written plainly: no sign, no leading
+  zero, since what a device makes of `07` is unmeasured. IOS-XE refused the session for
+  `priv-lvl=99` rather than clamp or ignore it (`tests/lab/results/L18-cisco_iosxe.md`,
+  variant 7). An adapter whose rendering sends another value is refused at load, and a
+  composition whose reply carries one fails the joint check and quarantines the device (§10).
+  The daemon refuses such a reply too (`blob_unavailable`, nothing sent).
+- **An attribute name's case never loosens a check** (re-review 2, RR2-M1). What a device makes
+  of a name's case is unmeasured, so a comparison that makes an attribute bear privilege, count
+  toward the ceiling or read as `priv-lvl`, `idletime` or `timeout` ignores case, and one that
+  exempts it — inert, or accepted — is exact: `PRIV-LVL=15` is judged as `priv-lvl=15`, and
+  `f5-ltm-user-role*0` as the `F5-LTM-User-Role` a level renders. An adapter that spells one name
+  in two cases across `privilege_attributes`, `inert_attributes`, `accepted_attributes`, its
+  renderings and `priv-lvl` is refused at load, naming the platform, the key and both spellings.
+- **No `priv-lvl` where the levels render a role and no `priv-lvl`** (task 4 review M4). On
+  `cisco_nxos` a `priv-lvl` beside `shell:roles` is ignored, and alone it picks a role nobody
+  named out of a per-release table, 15 to `network-admin` and 6 to `vdc-operator`
+  (`tests/lab/results/L16-cisco_nxos.md`, findings 1 and 6). So on a platform whose adapter
+  renders levels and none of them with `priv-lvl`, a composition whose reply carries one, from a
+  role or a grant, under the platform's key or `all`, fails the joint check and quarantines the
+  device (§10); key the attribute to the platforms that read it.
 
 **Unknown attributes default to optional (`*`).** A mandatory attribute a device cannot
 parse causes it to reject the entire session, breaking every login on that platform.
@@ -2374,8 +2601,8 @@ one mandatory is then a deliberate, reviewable act.
 
 **Not every level is natively representable.** NX-OS is role-native with two built-in roles,
 so two levels render identically — `operator` as `admin` (decision 23) — and the distinction
-is carried entirely by command authorization. That is acceptable, but it MUST be visible in the platform file
-rather than silently surprising.
+is carried entirely by command authorization. That is acceptable, but it MUST be visible in the
+platform file rather than silently surprising.
 
 **On `arista_eos` and `cisco_nxos`, `operator` gets the device privilege `admin` gets**
 (owner's ruling 2026-09-24, decision 23). Neither device can draw the operator line itself
@@ -2399,16 +2626,41 @@ the device configuration:
   `ceiling_indistinct`.
 
 IOS-XE is not in this rule: its level 7, given commands with `privilege exec level 7 ...`,
-is exactly the operator rung, so the device can enforce it (`ceiling-cisco_iosxe.md`). Its
-rendering is plan 5's adapter work.
+is exactly the operator rung, so the device can enforce it (`ceiling-cisco_iosxe.md`).
+`operator` renders `priv-lvl=7` there, and the adapter's reference configuration carries
+the lines level 7 depends on — a command method list for level 7, so the device asks port49
+about a level-7 command at all, and `privilege exec level 7 clear counters`, the one command
+the measured rung runs. The reference configuration MUST carry both. Without the `privilege
+exec` line, operator is readonly (`ceiling-cisco_iosxe.md`, "Reading"). Without the level-7
+command method list, the device runs a level-7 command without asking port49: with the
+`privilege exec` line and no `aaa authorization commands 7`, operator's `clear counters` ran
+and port49 saw no authorization request for it (`tests/lab/results/L22-carried-cisco_iosxe.md`).
+With both in place, L22 measured `priv-lvl=7` as the rung: level 7, `clear counters` sent to
+port49, `configure terminal` refused in the parser (`L22-cisco_iosxe.md`; decision 25).
+`port49 devices check-config` catches the missing list: it requires every
+`device_config` line of the adapter, and fails on one the configuration lacks (§12).
+
+**The device role is the other half, and it is what binds when port49 cannot answer.** With
+command authorization pointed at port49 no EOS or NX-OS role narrows anything (above); with
+the method list fallen back to `local`, the role delivered at login is the policy — on vEOS
+`network-operator` is refused `configure` and `network-admin` is not, and on the N9Kv
+`network-operator` is refused a configuration command (`L16-arista_eos.md`,
+`L16-cisco_nxos.md`, command authorization LOCAL). So where `operator` gets admin's level, it
+gets readonly's role: `priv-lvl=15`, `roles=network-operator` on EOS and
+`shell:roles*network-operator` on NX-OS, and an outage never hands an operator configuration
+(decision 25). `admin` gets `network-admin`, `readonly` `network-operator` and, on EOS,
+`priv-lvl=1`.
 
 **Platforms that are not `priv-lvl`-native** (Junos maps to `local-user-name`) MUST declare
 a mapping for every level. A missing mapping is a **policy load error in CI**, not a broken
 login at 3am.
 
 **Exact attribute spellings are lab-verified, not asserted.** The shipped adapters use bare
-`priv-lvl` for the TACACS+ shell-service reply and `shell:roles` for EOS and NX-OS roles.
-Those spellings — and every other attribute name in a shipped platform file — MUST be
+`priv-lvl` for the TACACS+ shell-service reply, the bare `roles=` for EOS roles and
+`shell:roles*` for NX-OS roles, and nothing but `priv-lvl` on IOS-XE. This paragraph said
+`shell:roles` for EOS until plan 5: the lab shows vEOS ignores `shell:roles*` and refuses the
+session on `shell:roles=`, and reads the bare `roles=` (`tests/lab/results/L16-arista_eos.md`,
+2026-09-22). Those spellings — and every other attribute name in a shipped platform file — MUST be
 confirmed against a real image in the containerlab matrix before that adapter is marked
 `VERIFIED` (§8). A wrong attribute name fails silently as an ignored optional attribute, or
 loudly as a rejected session if declared mandatory, and neither outcome should be discovered
@@ -2497,6 +2749,31 @@ the joint check and quarantines the device on that platform (§10), naming the r
 and the attribute; and the daemon refuses a session reply above the context's ceiling
 (`blob_unavailable`) rather than sending it and holding the session lower.
 
+`priv-lvl` is not the only attribute the ceiling bounds (final review I1, 2026-09-24). On
+`cisco_nxos` and `juniper_junos` the role *is* the privilege, and on `arista_eos` the role is
+what the device's local authorization reads when port49 cannot answer (L22). The ceiling bounds
+every attribute of the reply that can carry privilege on the platform: one its adapter or any
+shipped set lists in `privilege_attributes`, one any of its levels renders there — that attribute
+is the level (§6), whatever `accepted_attributes` lists (re-review RR-I1) — and one nobody
+measured there, which counts as the highest. Otherwise it does not bound one the adapter lists
+inert, or one a platform with
+`accepted_attributes` accepts and does not list as bearing privilege — `idletime` and `timeout`
+on `cisco_iosxe`, measured changing nothing and held to plain decimals (§6). A change to those
+is still gated in the diff (§12): "gated in the diff" and "raises the ceiling" are separate
+properties (owner's ruling 2026-09-24). A bounded attribute must be one the ceiling's level
+renders there with the same value, or one whose value that attribute's `role_order` ranks
+strictly below it, the reply rendered at the session's own level; a value `role_order` does not
+rank counts as the highest, and an attribute the ceiling's level does not render at all is
+above it. So `shell:roles*network-admin` from a readonly role under `max_privilege: readonly`
+quarantines `cisco_nxos`, as `roles=network-admin` does `arista_eos` and any `local-user-name`
+or unmeasured `idletime` does `juniper_junos`, which renders no level yet. **Under a ceiling at
+the highest level in `privilege_levels` nothing is bounded**: no level sits above it, so no
+attribute can exceed it. The judgment of whether a value went up is the policy diff's (§12): the
+joint check asks the one function the diff gate asks of a changed reply, so the two cannot
+disagree about what raises a session. The daemon holds only `priv-lvl` to the context's
+ceiling, which is all the token carries; the load's joint check is what holds every other
+attribute, and a blob is minted only from a composition that passed it.
+
 **The ceiling is a cap on the level, not only on its number.** A composition whose roles land
 above its grants' `max_privilege` in `privilege_levels` fails the joint check on every platform,
 however the platform numbers the two: a role at `admin` capped at `operator` is quarantined on
@@ -2566,13 +2843,15 @@ A platform adapter is a small declarative file. Adapters ship built in, are veri
 containerlab matrix where an image exists, and are both overridable and contributable.
 
 ```yaml
+# platforms/1.0.0/arista_eos.yaml, abridged
 platforms:
   arista_eos:
-    supports: [session, commands, config_commands]
+    verified: containerlab         # tests/lab/results/L22-arista_eos.md
+    supports: [session, commands]  # config_commands is unmeasured (§9)
     privilege:
-      readonly: ["priv-lvl=1",  "shell:roles*network-operator"]
-      operator: ["priv-lvl=15"]      # admin's level; port49's rules are the fence (§6)
-      admin:    ["priv-lvl=15", "shell:roles*network-admin"]
+      readonly: ["priv-lvl=1",  "roles=network-operator"]
+      operator: ["priv-lvl=15", "roles=network-operator"]  # admin's level, readonly's role (§6)
+      admin:    ["priv-lvl=15", "roles=network-admin"]
     entity_classes:
       management: ['^Management[0-9]+$']
       loopback:   ['^Loopback[0-9]+$']
@@ -2617,18 +2896,27 @@ attribute is complete in four lines:
 | `privilege` | level → attributes at session authorization | always |
 | `supports` | capability declaration (see §9) | always |
 | `entity_classes` | named sets of device entity names, referenced as `@class` in rules | if rules use classes |
-| `enable_username` | `principal`, or a template such as `$enab{level}$` | if enable is supported |
+| `enable_username` | `principal`, or a template such as `$enab{level}$` (refused at load until a lab note shows a device sending it, §7) | if enable is supported |
 | `expands_abbreviations` | whether the device sends resolved command words | if `commands` |
 | `splits_interface_names` | whether the device sends an interface name and its index as two arguments (§3 rule 5); `true` on `cisco_iosxe` only (L21) | optional |
 | `pipe_token` / `pipe_authorized` | modifier separator; whether it reaches us | if `commands` |
 | `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
 | `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |
-| `redact` | patterns whose argument values are removed before an accounting record is emitted (§5.8) | if the platform sends command accounting — session-only platforms included |
+| `redact` | patterns whose argument values are removed before an accounting or authorization record is written (§5.7, §5.8); a block **adds** to the built-in patterns in `platforms/redact.yaml` and never removes one, and an edit to it is gated (§12) | if the platform sends command accounting — session-only platforms included |
 | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
 | `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
 | `exec_commands` | the `cmd` values that mark an exec record rather than a per-command one; empty means "the exec record carries no `cmd` at all" (§5.8) | defaults per platform |
 | `system_users` | usernames this platform's own machinery writes accounting under, attributed `system` (§5.8); `juniper_junos` ships `root`, every other adapter ships empty | optional |
 | `port_pattern` | expected `port` shape, used only for drift detection | optional |
+| `ceiling_levels` | the priv-lvl number each level stands for where the rendering sends no `priv-lvl` (NX-OS is sent a role and no level, L16), for the token's ceiling | if `privilege` sends no `priv-lvl` |
+| `strip_cr` / `shows_server_msg` | whether commands end in `<cr>` (§3 rule 1); whether the device displays a denial's `server_msg` (L2) | defaults from the generic adapter |
+| `privilege_attributes` / `inert_attributes` | the attribute names that carry privilege on the platform, and those held to carry none: the only names a placeholder may go in (§6), and the only ones whose change the diff does not gate (§12) | defaults from the generic adapter |
+| `accepted_attributes` | where set, every attribute name the session reply may carry, and the reply's `priv-lvl` limited to the levels `privilege` renders; any other quarantines the device, and the list rides in the blob for the daemon to enforce (§6, "What the device takes") | optional |
+| `role_order` | per attribute that names a role, its values lowest first, where the lab measured one fencing less than another: `roles` on `arista_eos` and `shell:roles` on `cisco_nxos` rank `network-operator` below `network-admin` (L16, command authorization LOCAL). A value it does not list is unranked and ranks above every value. The reply gate (§12) and the monotone rule (§8) read it | optional |
+| `device_config` | the device configuration the adapter's renderings depend on, one line each, printed by `platform show` | optional |
+| `unreachable` / `fallback` | per level, the commands the device refuses in its own parser, and what it gives a session on its own when port49 cannot answer: the dead-rule and fallback-exposure reports read them (§12) | optional |
+| `local_accounts` / `config_checks` | patterns that find a device-local account in the device's configuration, and lines the configuration must not carry: `port49 devices check-config` reads them (§5.6) | optional |
+| `verified` | `containerlab` or `community`; a built-in adapter's own claim, refused in a policy file | optional |
 
 ### `session_services`
 
@@ -2902,19 +3190,30 @@ Operators MUST be able to define and override platforms without an upstream chan
 containing Supermicro BMCs, Meinberg time servers, and HPE gear cannot wait on releases —
 that is the ticket-queue bottleneck the design exists to remove.
 
-Built-ins ship embedded in the binary; user files live in the policy repository and merge
-over them, per top-level key:
+Built-ins ship embedded in the binary; an operator's blocks live in the policy file, under
+its `platforms:` key, and merge over them per top-level key. A key whose value is a map —
+`privilege`, `ceiling_levels`, `entity_classes` — merges per entry, so a block that adds one
+class keeps the rest; a list or a value replaces the built-in's whole; `redact` adds and never
+removes (§5.8); `unreachable` and `fallback` add and never remove what the set measured (§12):
 
 ```yaml
-# platforms/arista_eos.yaml — adds one class, inherits everything else
+# in the policy file — adds one class, inherits everything else
 platforms:
   arista_eos:
     entity_classes:
       uplink: ['^Ethernet(49|50|51|52)$']
 ```
 
-`replace: true` on a platform block discards the built-in and starts clean. `based_on:`
-declares a variant, using the same vocabulary as `parent:` on privilege levels:
+`replace: true` on a platform block discards the built-in and starts from the generic adapter
+(below), save what the set measured about the device, which the block must restate (below). `based_on:` declares a variant of a platform the pinned set ships, under a new name,
+using the same vocabulary as `parent:` on privilege levels; a name the set does not ship starts
+from the generic adapter. What port49d reads off the wire — `session_services`, the exec
+records' commands and the system users — is still keyed by the platform's name until plan 6
+carries it to a variant, so a variant would get an unknown platform's; `based_on:` a platform
+whose facts differ from those — `juniper_junos`, whose sessions arrive as `junos-exec` and whose
+exec records carry `cmd=login` — is refused at load, naming them (final review M8). A variant
+of a platform whose only such fact is its session discriminator loads: without one the daemon
+binds a record by username alone, the safe direction (§5.8).
 
 ```yaml
   whitebox_nos:
@@ -2923,8 +3222,67 @@ declares a variant, using the same vocabulary as `parent:` on privilege levels:
       management: ['^ma1$']
 ```
 
-User files receive identical structural validation to shipped ones: required fields,
-attribute syntax, the 255-byte limit, and entity-class patterns must compile under RE2.
+The blocks are in the policy file, not a file beside it, so `port49 policy test` and `policy
+diff` read exactly what the broker renders from, and a block goes through the same review.
+They receive identical structural validation to shipped ones: required fields, attribute
+syntax, the 255-byte limit, entity-class patterns compiling under RE2, a rendering the platform
+accepts (`accepted_attributes`), and `enable_username` (§7). A block may not claim `verified`,
+may not list inert an attribute one of its levels renders — that attribute is the level (§6)
+— and may not be named `all` or `default`, which name every platform in `attributes:` and in
+the redaction table. An explicitly empty `accepted_attributes: []` is refused, on any adapter:
+the joint check would read it as "accept nothing" and a blob, which omits an empty list, as
+"accept anything"; list the names, or remove the key.
+
+A block's merged adapter renders **monotone** in the policy's `privilege_levels` order, by value,
+because the reply gate lets a level's rendering go down only where its values did (§12): for
+every two levels it renders or numbers, the lower one's `priv-lvl` (or `ceiling_levels` number)
+is no higher than the higher one's, every attribute the lower one renders the higher one renders
+too, and where their values differ the lower one's ranks below the higher one's in `role_order`
+— an unranked value ranks above every value, so a higher level may render one and a lower level
+may not. A block may add values to a `role_order` the set ships, anywhere in it, and may not
+rank two values the set ranks the other way round — under `replace: true` and `based_on:`
+included, since the device behind the name is the same device and the set's ranking is its lab
+note's.
+
+The rest of what the set measured about a device is likewise a floor or a ceiling a block only
+tightens, for a platform the set ships and for a `based_on:` variant of one, `replace: true`
+included; a block that would loosen one is refused at load, naming the key:
+
+- `privilege_attributes` is a floor: a block may add a name and never remove one the set lists.
+- `inert_attributes` is a ceiling: a block may drop a name and never list one the set does not
+  hold inert (final review M5). A name the set lists in neither list bears privilege there, and
+  one it holds bearing — `home-directory`, `idletime` and `timeout` on `cisco_iosxe` (§6) — is
+  bearing for a reason; `replace: true` on `cisco_iosxe` restates `inert_attributes: []`, or it
+  inherits the generic adapter's `home-directory` and the load fails.
+- `accepted_attributes` is a ceiling: a block may narrow it and never widen or drop it, so
+  `replace: true` on `cisco_iosxe` restates `[priv-lvl]` or the load fails — the device refuses
+  the session for any other name and then stops answering SSH (L18).
+- `supports` is a ceiling: a capability the set did not measure would make a rule read as
+  enforced where the device never asks (§9).
+- `pipe_authorized` and `expands_abbreviations` may not be set `true` where the set measured
+  `false`, and `splits_interface_names` and `strip_cr` may not be set `false` where it measured
+  `true`: each would let a command past a deny, or claim a rule the device does not enforce.
+- `pipe_token` must equal the set's: the token cuts a command into stages before any rule reads
+  it, so another one splits a deny's vector apart — `pipe_token: running-config` on
+  `arista_eos` would let `copy running-config tftp:x` past `deny copy running-config **` — and
+  there is no tighter value. With `supports`, these are every field of the normalization a blob
+  carries (§5.1.2).
+
+And on every block, a new platform's included, `inert_attributes` may not name an attribute any
+shipped adapter lists in `privilege_attributes`: listed inert, a later change to it would pass
+the diff ungated and take a placeholder, so one reviewed edit would blind the gate to it for
+good. A `privilege` or `ceiling_levels` entry for a level `privilege_levels` does not declare is
+refused by name: it renders nothing, and reads as a change.
+A class pattern a deny names may not turn case-insensitivity off (`(?-i)`), on any platform: a
+differently-cased interface name would walk past the deny (§4).
+
+Four adapter fields are the daemon's rather than the policy's — `session_services`,
+`session_discriminator`, `exec_commands` and `system_users` are read on the wire, including by
+a daemon with no policy — and stay built in, `session_services` settable in `port49d.yaml` as
+before, until plan 6's bundle carries adapters to the daemon. `enable_username` moved the other
+way in plan 5, to the policy file, where the offline tools see it: `port49d.yaml` still loads
+`principal`, the only value it ever took, with a notice saying where the key went, and
+refuses any other value by name.
 
 ### Knowing what is shipped
 
@@ -2936,19 +3294,33 @@ diffable across tags without running anything.
 **They are introspectable**, and honest about verification:
 
 ```
-$ port49 platform list
-PLATFORM           SOURCE     VERIFIED       SUPPORTS
-arista_eos         built-in   containerlab   session,commands,config_commands
-cisco_nxos         built-in   containerlab   session,commands,config_commands
-juniper_junos      built-in   containerlab   session
-f5_bigip           built-in   community      session
-meinberg_lantime   local      —              session
+$ port49 platform list --policy policy.yaml --inventory inventory.yaml
+PLATFORM           SOURCE       VERIFIED       SUPPORTS
+arista_eos         overridden   —              session,commands
+cisco_iosxe        built-in     containerlab   session,commands
+cisco_nxos         built-in     containerlab   session,commands
+juniper_junos      built-in     —              session
+meinberg_lantime   local        —              session
+whitebox_nos       variant      —              session,commands
 ```
 
+(`containerlab` where `tests/lab/results/L22-<platform>.md` shows the adapter's replies
+applied as it says; the 2026-09 lab run is plan 5a's Task 17.)
+
 A community-contributed adapter nobody has run against a real image MUST say so rather than
-appearing identical to one verified on every commit. `platform show <name>` prints a
-definition, `--effective` the merged result after overrides, and `platform export --all`
-writes them to disk.
+appearing identical to one verified on every commit, and so must a built-in adapter a block
+changed: SOURCE says `overridden`, `variant` or `local`, and VERIFIED `—`. `platform show
+<name>` prints a definition — the built-in, or with `--policy` the merged result — headed by
+where it came from and followed by the built-in redaction patterns; `platform export <name>`
+prints the file alone, as a block that pastes back into a policy — without `verified`, which a
+block may not claim — and `platform export --all --dir DIR` writes one per platform, a
+directory `platforms/` would accept. A set carries only
+what the lab measured, so `--all` writes each `fallback` as the set measured it and drops a
+block's note; `export <name>` writes the note under `fallback`, where the block wrote it, with
+the comment `# operator note, not measured` on its line (§12). A block's `unreachable` rules the
+set did not measure go the same way: `show` prints them apart as `unreachable_note`, `export
+<name>` writes them back under `unreachable` commented `# operator-listed, not measured`, and
+`--all` drops them (task 14 review M7).
 
 **Published documentation is generated from the embedded files** at release time, so it
 cannot drift from the binary.
@@ -2958,30 +3330,50 @@ release, upgrading the binary silently changes what every EOS admin session rece
 **binary upgrade becomes an unreviewed policy change**. Policy therefore pins a version:
 
 ```yaml
-platform_set: 1.4.0
+platform_set: 1.0.0
 ```
 
-Upgrading the binary changes nothing about rendering. `port49 platform upgrade` moves the pin
-and reports exactly what changes:
+The sets are directories, `platforms/<version>/`, and a released one is never edited; nor is
+the generic adapter each set's files are laid over, which a `replace:` block and a platform no
+set ships start from — a change to either ships as a new set. **A
+policy that pins none renders with 1.0.0, the first set, on every binary** — so a policy
+written before pinning existed never changes on upgrade, and moves forward only by pinning a
+newer set. A set the binary does not ship is refused at load, by name. Upgrading the binary
+changes nothing about rendering. It can change two things the pin does not hold. The first is
+the four daemon fields above (`session_services`, `session_discriminator`, `exec_commands` and
+`system_users`). They are built in and in no set, so they are unpinned until plan 6. A release
+that changes `system_users` changes how accounting is attributed, and its release notes MUST
+say so. The second is the redaction patterns (§5.8), which are unpinned by design.
+`port49 platform upgrade --to V` moves the pin (with
+`--write`, in the file, touching nothing else) and reports exactly what changes:
 
 ```
-platform_set 1.4.0 → 1.5.0
-
-  arista_eos.privilege.admin
-    + shell:roles*network-admin        (was absent)
-    affects 4,412 devices, 6 subjects
-
-  juniper_junos.supports
-    + config_commands                  ⚠ 2 roles have config rules
-                                         that were previously dead
+platform_set 1.0.0 -> 1.1.0
+  platforms.arista_eos.privilege
+    {"admin":["priv-lvl=15","roles=network-admin"],...} -> {...}
+    affects 4412 devices, 6 subjects
+    gated: add {platform: arista_eos, field: privilege, sha256: <64 hex digits>, reason: "..."} under acknowledge:
+  generic.strip_cr
+    true -> false
+    affects 3 devices, 1 subjects
+    gated: add {platform: generic, field: strip_cr, sha256: <64 hex digits>, reason: "..."} under acknowledge:
+  shadowed: platforms.arista_eos.entity_classes: set 1.1.0 changes the built-in value and the policy's block keeps its own; compare the two
+  port49 policy diff fails on the move until every gated entry above is under acknowledge: (spec §12); it also shows the replies the move changes
 ```
 
-CI SHOULD also report override drift — an override that now matches the built-in and can be
-removed, or a built-in change an override shadows — so local platform files do not rot
-silently as upstream improves.
+Every gated key the move changes, the generic adapter's included (§12), is printed with the
+`acknowledge:` entry that clears it, ready to paste: the change that moves the pin carries them.
+
+`port49 policy diff` on the file before and after is the gate: a pin move is an adapter edit
+like any other (§12). CI also reports override drift — `platform_override_redundant`, a block
+key that says what the pinned set already says and can be removed; and at upgrade, a built-in
+change a block shadows — so local platform files do not rot silently as upstream improves.
 
 **`port49 platform export <name>`** emits a file suitable for an upstream pull request:
-written for one fleet on day one, contributed once proven.
+written for one fleet on day one, contributed once proven. An upstream set takes measured text
+only: a `fallback` line commented `# operator note, not measured`, or an `unreachable` rule
+commented `# operator-listed, not measured`, is the operator's word, and is measured in the lab,
+or removed, before the file is contributed.
 
 ### Unknown platforms
 
@@ -3121,14 +3513,15 @@ They are therefore published as **one versioned bundle**:
 bundle v2291
   inventory      device records, addresses, platforms, attributes
   policy         compiled roles, scopes, subjects, grants
-  platform_set   1.4.0, as pinned by the policy repository
+  platform_set   1.0.0, as pinned by the policy repository
 ```
 
 **A sync can make a valid policy invalid, and the bundle builder quarantines rather than
 refuses.** Several load checks are joint over policy and inventory — a privilege level with no
-mapping on a platform present in inventory (§6), a session reply whose `priv-lvl` exceeds
-the grants' `max_privilege` there, or roles landing above the ceiling's level (§7), `enable: auto` reaching a platform whose enable
-exchange carries no principal (§5.6). A device racked tomorrow with a new platform can
+mapping on a platform present in inventory (§6), a session reply whose `priv-lvl`, or any
+other attribute that bears privilege there, exceeds the grants' `max_privilege` (§7), roles
+landing above the ceiling's level (§7), `enable: auto` reaching a platform whose enable exchange
+carries no principal (§5.6). A device racked tomorrow with a new platform can
 fail them against a policy that was valid today. Refusing the whole bundle would block every
 inventory change fleet-wide until someone edits policy, including the leaf racked in another
 site — a ticket-queue bottleneck created by the safety mechanism. Instead the offending
@@ -3598,7 +3991,7 @@ Mitigations, designed in rather than documented afterward:
 ## 11. Complete policy example
 
 ```yaml
-platform_set: 1.4.0
+platform_set: 1.0.0
 
 privilege_levels:
   - {name: readonly}
@@ -3772,19 +4165,88 @@ the device offers and what port49 permits (§6), CI MUST report where the two di
 system, and both are ordinary review questions once surfaced:
 
 ```
-⚠ DEAD RULES — interface_tech permits commands its privilege cannot reach
-    privilege: readonly  →  arista_eos priv-lvl=1
-    unreachable: configure **, interface /^(ethernet|port-channel)/, shutdown
-    the device will never submit these for authorization
+report: dead_rule: role "interface_tech": permit "configure terminal" cannot be reached at
+  readonly (priv-lvl=1, roles=network-operator) on arista_eos: the device refuses every command
+  it matches in its own parser and never asks port49 (unreachable: clear counters **, clear ip
+  bgp **, configure terminal **, show users detail **; tests/lab/results/ceiling-arista_eos.md)
 
-⚠ FALLBACK EXPOSURE — svc_oxidized
-    port49 rules confine it to:  show **
-    device role on failure:      network-admin  (full administrative access)
-    if port49 is unreachable, this subject has more access than policy grants
+report: fallback_exposure: subject "svc_oxidized" at admin (priv-lvl=15, roles=network-admin)
+  on arista_eos: port49's rules confine it to show **, terminal length *, and if port49 cannot
+  answer and the device falls back to local it gets network-admin, of the commands measured:
+  clear counters ran, clear ip bgp * passed authorization (BGP inactive on the lab node),
+  configuration changed: more than the policy grants (spec §6, §12)
 ```
+
+Both read the adapter (§8), and only what the lab measured. A **dead rule** is a permit every
+command of which is in the adapter's `unreachable` list for the level the session renders at:
+the commands the device refused in its parser at that level with port49 permitting everything
+(`tests/lab/results/ceiling-*.md`). A **fallback exposure** is a subject whose composed rules
+deny something, at a level whose adapter `fallback` says what the device gives a session on its
+own when the method list falls back to `local`. The level is the one the reply *delivers*, not
+the one the roles name: the lowest level, from the session's own up, whose rendering the reply
+does not exceed as the ceiling check reads it (§7), so a readonly role that sends
+`shell:roles*network-admin` is exposed as admin is (final review I1): `network-admin` at admin on EOS and NX-OS,
+and on EOS `network-operator` at operator. `operator` gets readonly's role for this reason (§6), so it never gets
+configuration where its device role binds. L16 measured that `network-operator` under LOCAL
+command authorization refuses configuration. L22 measured what else it runs with port49d
+stopped under an open session (`tests/lab/results/L22-*.md`):
+- On vEOS it still ran `clear counters`, and `clear ip bgp *` passed authorization (`% BGP
+  inactive`: the lab node runs no BGP). That is operator's EOS entry, which names only the
+  commands measured.
+- On the N9Kv it was refused both (`% Permission denied for the role`).
+- On IOS-XE, local authorization refused every command a token session typed, at 15 and at 7,
+  because a token user had no local account. That holds on a device that passes `port49
+  devices check-config`'s local-account check (§5.6). A local account named like a port49
+  username would authorize from its own privilege. So IOS-XE has no entry.
+
+The report has no exemption for `operator`. It judges every level by that level's adapter
+`fallback` entry. A level with no entry is not reported. That silence is measured for IOS-XE
+at 7 and 15 and for NX-OS's `clear` commands. It is unmeasured elsewhere, which is not the
+same as safe.
+A `platforms:` block adds to both and takes nothing away, `replace: true` and `based_on:`
+included: its `unreachable` rules are kept apart from the set's for the level, as the
+adapter's `unreachable_note`, and its `fallback` text as its `fallback_note`, both of which only
+port49 writes and a block may not set (task 14 review M7). A permit the set's rules make dead
+is reported citing the lab note, as above; one only the block's rules make dead is reported as
+the block's word, `(operator-listed unreachable, not measured: ...)`, citing no note. The report prints the set's text, or `what no platform set measured` for
+a level the set measured nothing for, and then the block's text as `(operator note:
+"...")`, quoted, so nothing in it can close the note or read as a measurement. An entry for a
+level the policy does not declare is refused. The rules and the set's text are printed
+unquoted, so the report redacts them itself (§5.8), and fallback text is prose: punctuation
+beside a word separates it as whitespace does, so a value glued to `community)` is still
+redacted.
+Each is reported by `port49 policy test` and does not fail it: the answer is a review question,
+not a wrong policy.
 
 **Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
 the same name (§6), CI MUST name both so the override is deliberate.
+
+**`port49 devices check-config`** reads a device's configuration, as `show running-config`
+prints it, against the policy's adapter for its platform, and exits non-zero on a device-local
+account named as a username port49 serves on that device — the collision §5.6 forbids — or on a
+line the adapter's `config_checks` name: a command method list falling back to `none` or
+`if-authenticated` (§6), an enable list falling back to a local secret (§5.6), a Junos
+`authentication-order` with `password` in it (L4) — or on a `device_config` line the
+configuration does not carry as a top-level line of its own, the absence no `config_checks`
+entry can see: IOS-XE's level-7 command method list, without which a level-7 command is never
+asked about (§6). A `platforms:` block adds to the set's `device_config`, `local_accounts` and
+`config_checks` and never takes one away, `replace: true` and `based_on:` included: a block
+that rewrites the set's line ending in `local` to end in `none` still has the set's line
+required and its own reported by the set's check. A device configuration is full of secrets,
+so every line of it the check prints, and every `device_config` line, is redacted by every
+pattern that applies under the policy (§5.8), and a text it could not read to the end fails
+the check without quoting it. The patterns are best-effort, so the check echoes a line only
+for a check a set ships, which reads a method list or an authentication order: a block's check
+may match any line, and its finding names the check by key and index,
+`platforms.arista_eos.config_checks[2]`, with its `says` redacted, never the line. A device-local
+account collides in any form the daemon reads as the served username — `NOC`, `CORP\noc`,
+`noc@corp`, a quoted name (§2) — and a Junos account under `protect:` or `inactive:` is read.
+The check never reports a device clean when it looked for nothing (final review I4): where the
+adapter in force, resolved as the daemon resolves it, the set's generic adapter for a platform
+with none included, has no `local_accounts`, `device_config` or `config_checks`, it exits 2,
+`nothing checked: <platform> has no config checks`; where it lacks only `local_accounts`, or
+only the lines, it says which was not checked beside the summary. port49 never logs into a
+device; this reads a file a compliance tool fetched.
 
 **`port49 devices capabilities`** reports the `supports`-versus-`observed` matrix from §9.
 
@@ -3833,6 +4295,19 @@ each instant. Any of these is a raise:
   only refusal, and without `local-user-name` it falls back to the device's template user (owner's
   ruling 2026-09-24, review C4). The gate cannot read the direction of such a change, so it fails
   closed.
+
+One change's direction the gate can read: a level's own rendering moving down `role_order`
+(§8). Where an attribute is the old level's rendering in the old reply and the new level's in
+the new reply, one value each, and the new value ranks strictly below the old one in
+`role_order` under both versions' adapters, it is a lowering: a subject moved from admin to
+readonly on EOS is lowered because `network-operator` ranks below `network-admin`
+(L16-arista_eos.md, command authorization LOCAL), not because readonly is below admin. The
+level order proves nothing about what is rendered — a custom level's parent can put a level
+above one whose rendering is stronger — so it is never read here. An unranked value, a changed
+separator, an attribute gained or lost, and any attribute a role or grant layers are judged as
+above: a raise. Which attributes bear privilege is read from both versions' adapters, the
+stricter winning, so an edit that lists an attribute inert cannot hide a change to it in the
+same diff.
 
 Each fails unless a passing session test in the new policy, at that instant, on a device of the
 group reported, asserts the new value of every dimension that rose: `priv_lvl:` for the device
@@ -3901,6 +4376,56 @@ broker refuses to mint for (`attribute_too_long`, `attribute_unsafe`) is locked 
 device the refusal covers; a test cannot make that intended, so the change must fix the attribute
 (owner's ruling 2026-09-24, confirming plan 4's behaviour).
 
+**An adapter edit fails the gate** (review M8, 2026-09-24). Once an operator can edit an
+adapter (§8), the diff compares each platform's adapter key by key, for every platform either
+version has an adapter for, whether or not the inventory has a device of it yet — the inventory
+is not diffed, so the day a device arrives is no review — and whether the change is a
+`platforms:` block or a moved `platform_set`. It compares the **effective** adapter, after
+`replace:` and `based_on:` have been merged, so a block cannot change a key by changing where
+the key is inherited from. A version with no adapter for a platform has the generic one, whose
+`supports` is compared as no claim at all: the generic `session` is assumed, not measured, and an
+unmeasured platform is not session-only. So a block that says only what the generic adapter
+says still shows as an edit to `supports`, which makes the platform session-only and turns off
+abbreviation matching on its denies (task 9 review I2). **The generic adapter is compared too,
+as platform `generic`,** whether or not any device stands on it: it is what every device of a
+platform with no adapter receives, and what a `replace:` block or a new platform starts from, so a
+moved pin that changes it is gated key by key like any platform's, and acknowledged by
+`{platform: generic, field: ..., sha256: ..., reason: ...}`. `generic` is therefore reserved as a
+block name (owner's ruling 2026-09-24).
+
+**Every adapter key is gated, fail closed, unless it is on a closed list of report-only keys.**
+A gated key fails unless an `acknowledge:` entry names the platform, the key and the sha256 of
+the key's new value with a reason, `{platform: arista_eos, field: entity_classes, sha256: <64 hex
+digits>, reason: ...}`: a diff cannot vouch for its own reading when the change is to the
+reading. The digest is taken over the value as `policy diff` prints it (canonical JSON), and the
+diff prints the entry ready to paste. It binds the entry to that one edit: left in the file, it
+names a value a later edit to the key does not write, so it acknowledges nothing and is reported
+`acknowledge_stale`, like a deny's entry once its rule is gone (task 9 review C1). A key a later plan adds is gated until it is added
+to that list. The gated keys therefore include:
+
+- `supports`, `privilege`, `ceiling_levels` and `entity_classes`.
+- The normalization keys, which change the vector rules match against: `expands_abbreviations`,
+  `splits_interface_names`, `strip_cr`, `pipe_token` and `pipe_authorized`.
+- The rendering keys of session-only platforms, which decide what the device enforces:
+  `command_projection`, `bits` and `bit_delivery`.
+- The keys the gate reads: `privilege_attributes`, `inert_attributes` and
+  `accepted_attributes`.
+- `enable_username`, `shows_server_msg`, and `redact`, which changes what the audit keeps.
+- `local_accounts` and `config_checks`: an edit to either can silence `devices check-config`,
+  which is the only detection §5.6 names.
+- `device_config`: it is the configuration a device is held to, so a block that rewrites a line
+  ending in `local` to end in `none` has the device authorize every command itself whenever
+  port49 is unreachable, and would have check-config require the unsafe line (task 7 review H6,
+  2026-09-24).
+
+The report-only keys are reported and never fail:
+
+- `port_pattern`: drift detection only.
+- `verified`: the adapter's claim about the lab. A block may not set it.
+- `unreachable`, `unreachable_note`, `fallback` and `fallback_note`: they feed only the dead-rule and fallback-exposure reports,
+  which do not fail `policy test` either. An edit to one is reported in the diff, where the
+  reviewer sees it.
+
 **`port49 platform upgrade`** reports what a platform-set bump changes, so a binary upgrade
 is never an unreviewed policy change (§8).
 
@@ -3922,7 +4447,10 @@ since a group key is shared across the devices in its group.
 **Access review** is a rendering of the flat grant table, not an investigation:
 `port49 access review --subject <name>` lists every grant row the subject appears in, with
 scope size and expiry, and `port49 grants remove --subject <name>` produces the pull request
-that deletes them all — and, when no grant on the subject remains, the subject block itself,
+that deletes them all (`--pr` opens it: a branch off the base as the remote has it, carrying the
+edit and nothing else, pushed, and the review opened with `gh`, leaving the operator's checkout
+untouched; a policy file that differs from the base's is refused, since the removal would be
+computed from a file the pull request does not merge into) — and, when no grant on the subject remains, the subject block itself,
 so nothing is left behind to match. Directory-driven humans are offboarded by group removal;
 these two commands are the offboarding path for machine subjects and literal identities,
 which is the cost decision 2 accepted. A subject block with no grants is reported by CI.
@@ -4144,7 +4672,8 @@ the requirement to handle it if some other train does.
 
 **Superseded 2026-09-22.** Plan 2 builds neither the index nor the reason code. `$enab{level}$`
 becomes an explicit `platforms.<name>.enable_username: enab` option that `config.Load`
-**refuses**, with an error naming what would lift the refusal: a `tests/lab/results/` note
+**refuses** (moved to `platform.Validate`, in the policy file's `platforms:` block, in plan 5,
+§8), with an error naming what would lift the refusal: a `tests/lab/results/` note
 showing a device sending that username form. Until such a note exists, the `(nas, rem_addr)`
 secondary index, its ambiguity refusal and the §5.7 row that refusal would need are all
 **deferred** — §5.6's bound-attributes table and teardown row 4, and §7's "How an enable token is
@@ -4282,7 +4811,8 @@ pointed at port49, no role or level between readonly and admin narrows what port
 lower would only make it readonly on EOS, and refusing it quarantined every EOS device a
 policy landed there. `operator` gets level 15 on both, port49's per-command rules are the
 fence, and the device's method list must not fall back to `none` or `if-authenticated`.
-IOS-XE, whose level 7 can carry the rung, is left to plan 5's adapters. (§6, §8)
+IOS-XE, whose level 7 can carry the rung, is left to plan 5's adapters; decision 25 renders it
+there, and gives `operator` readonly's device role on EOS and NX-OS. (§6, §8)
 
 **24. A policy edit reaches live sessions without a logout.** A restart ends every live
 context and every unspent token, so without a live reload the only way to narrow an operator's
@@ -4292,6 +4822,27 @@ not load, and carried into every live context by compare-and-set: a narrowing or
 applies from the next command, and a principal with no grant left on a device has that context
 revoked. Unspent tokens whose answer changed are deleted, because a redemption would otherwise
 write the superseded answer into a fresh context. (§5.1.3)
+
+**25. A level renders as a device level and a device role, and each fences a different
+failure.** *Plan 5, 2026-09.* While port49 answers, the device level is what the device
+enforces below port49: level 1 refuses the disruptive commands in the parser on EOS and
+IOS-XE, and nothing between 1 and 15 does on EOS or NX-OS (`tests/lab/results/ceiling-*.md`).
+When port49 cannot answer and the method list falls back to `local`, the device role is the
+policy (`L16-arista_eos.md`, `L16-cisco_nxos.md`, command authorization LOCAL). So `operator`
+gets admin's level where the device cannot draw the line (decision 23) and readonly's role
+everywhere a role binds — `roles=network-operator` beside `priv-lvl=15` on EOS,
+`shell:roles*network-operator` on NX-OS — and an outage never hands an operator
+configuration. On IOS-XE, whose level 7 is the operator rung once the device is told what 7
+runs, `operator` is `priv-lvl=7`, the adapter carries the reference configuration it depends
+on, and the device takes `priv-lvl` and, of the other attributes measured, only `idletime`
+and `timeout`, so any other attribute quarantines it (`L18-cisco_iosxe.md`,
+`L22-cisco_iosxe.md`). L22 measured each adapter's reply at every level applied as rendered,
+and with port49 stopped under an open session on a method list falling back to `local`,
+operator's reply refused a configuration change on all three platforms
+(`tests/lab/results/L22-*.md`). On vEOS and the N9Kv admin's control configured, so there the
+role is what fenced operator. On IOS-XE admin's control was refused too — every command, at 7
+and at 15, since a token user has no local account (`L22-carried-cisco_iosxe.md`) — so there
+it shows that a token session gets nothing from local, not that local fences level 7. (§6, §8)
 
 ### Deferred, with reasons
 
@@ -4386,7 +4937,8 @@ Beyond those already listed in the design document's §14:
 - **Placeholders only in inert attributes**: `priv-lvl={username}`,
   `allow-commands={principal}`, `allow-configuration={username}` and a placeholder in an
   attribute no adapter lists (`note*{device}`) each fail at load; `home-directory*/home/{username}`
-  loads under `all` and under each platform.
+  loads under each platform that holds it inert and fails under `cisco_iosxe` and `all`
+  (L22-cisco_iosxe.md).
 - **The gate sees broker rights**: `api: [explain_others, revoke_others, replay]` added to a
   subject fails `port49 policy diff` until a test asserts the whole list with `api:`; a
   principal moved to a subject with more rights needs that assertion in its own test; a right
@@ -4744,7 +5296,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | closed — measured 2026-09-24; `tests/lab/results/L7-arista_eos.md`, `L7-login-arista_eos.md`, `L7-cisco_nxos.md`, `L7-nxapi-cookie-cisco_nxos.md`. eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. Both cookies measured: eAPI `/login` 2026-09-23 and NX-API `nxapi_auth` 2026-09-24 — a request carrying the cookie runs no authentication and no session authorization, only its command authorizations (NX-API: the command plus `end`; `configure terminal` too for `cli_conf`). The `nxapi_auth` cookie expires after 10 minutes idle (`NXAPI timeout 10`), ends on `POST /logout`, and wins over a wrong Basic password sent beside it; NAPALM `nxos` never uses it (21 authentications for a six-call job) while Ansible `httpapi` does (one); see below |
 | **L8** | The maximum password length each platform accepts at an interactive prompt. (PAP was split out to L19 on 2026-09-23.) | The 30-character handle (design document §8) | all | closed — measured 2026-09-23; `tests/lab/results/L8-cisco_nxos.md`, `L8-cisco_iosxe.md`; and 2026-09-20, `L8-arista_eos.md`, `L8-juniper_vjunos-router.md`, `L8-juniper_vsrx.md`. The 30-character handle logs in on all five images. Longest intact: **127 on the N9Kv**, which refuses 128 and above locally and never asks port49; at least 1024 on IOS-XE; at least 138 on vEOS and both Junos images, where nothing longer was tried; see below |
 | **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. | Projection generator constraints (§8) | Junos | open |
-| **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos. **Reading 3's conclusion is corrected by L17 (2026-09-21):** a denied Junos session authorization is advisory under the configuration this lab deploys, not on this vendor — `tacplus-options strict-authorization` makes the same denial refuse the login; see below |
+| **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos. **Reading 3's conclusion is corrected by L17 (2026-09-21):** a denied Junos session authorization is advisory under the configuration this lab deploys, not on this vendor — `tacplus-options strict-authorization` makes the same denial refuse the login; see below. The three per-command adapters' spellings are measured by plan 5a (tests/lab/results/L22-*.md); Junos's wait on L12 (plan 5b), so the row stays open |
 | **L11** | Junos precedence, repetition, and length behavior for wire and class rules. | The projection model (§8) | Junos (SRX) | **closed** — measured 2026-09-03; results in `port49-junos-lab-tests-results.md` |
 | **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
 | **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 2s**, which is the "answered with increasing delay" of design document §11. The ceiling was 5s until this row measured device reply timeouts; **2026-09-21 it was lowered to 2s**, which is under every timeout measured here, so a FAIL is always delivered inside it (`tests/lab/results/L13-*.md`). A ceiling above a device's timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX, vEOS, N9Kv and Catalyst 8000V: about 3s on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, which also retransmits, and above 12s on IOS-XE, which this sweep does not bound from above; past that timeout every platform that reached it takes the fall-through branch; other transports and the next-server case unmeasured; see below |
@@ -4756,6 +5308,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L19** | The maximum password length each platform accepts via PAP, on every login path where the device uses PAP. | The 30-character handle (design document §8): an authentication START carries a PAP password in `data`, whose length field is one byte, so PAP can bound the handle where the ASCII prompt does not — and NX-OS uses PAP for every SSH login by default | all | open — added 2026-09-23, split from L8. On the N9Kv an SSH login is carried as PAP and 127 characters arrive (`tests/lab/results/L8-cisco_nxos.md`); PAP on any other path, and on EOS, Junos and IOS-XE, which this lab does not configure for it, is unmeasured; see below |
 | **L20** | Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a **wrong password** for the same user inside that window is also accepted; and whether a credential port49 would now refuse is re-checked inside it. | Whether a revocation in port49 reaches an API client at all (§5.1.4), and decision 15's bound on how long a spent token works — the receipt's `receipt_idle_ttl` and `receipt_max_age` act only on exchanges the device sends | IOS-XE; then every HTTP API transport | open — added 2026-09-23. IOS-XE RESTCONF answered a repeat of an already-spent token, 3s later, with `200 OK` and **zero** TACACS+ traffic (`tests/lab/results/L1-restconf-cisco_iosxe.md`), so a revocation in port49 cannot reach that repeat. **Measured 2026-09-24 on IOS-XE** (`tests/lab/results/L20-cisco_iosxe.md`): the cache is per credential (username and password), not per username or client address; a wrong password inside it goes to port49 and is refused; it lasts about 10s fixed from the authentication that filled it; and a cached credential is not re-checked, even with port49 answering every authentication ERROR. Open: every other HTTP API transport, so the row stays open; see below |
 | **L21** | Whether each platform sends the command words the operator typed (`sh run`) or the resolved ones (`show running-config`) on a per-command authorization request, and on the accounting record for it. | `expands_abbreviations` per platform (§3 rule 4, §8): where it is `false` a deny's word matches its own abbreviations, which over-denies, and where it is wrongly `true` an abbreviation slips past a deny | EOS, NX-OS, IOS-XE | closed — measured 2026-09-24; `tests/lab/results/L21-arista_eos.md`, `L21-cisco_nxos.md`, `L21-cisco_iosxe.md`. All three images send the **resolved** words, on the request and on the accounting record, over interactive SSH: `sh ver` arrives as `cmd=show cmd-arg=version`, and `sh clock` was denied by a `show clock` deny on all three. Interface names differ: IOS-XE splits `Gi1` into `GigabitEthernet`, `1`; vEOS and the N9Kv join it (`Ethernet1`, `Ethernet1/1`). Other transports and releases are outside what was measured; see below |
+| **L22** | What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of `clear counters`, `clear ip bgp *` and `configure terminal` it runs, refuses in its own parser, or sends port49 — and which level or role it reports, for the exact reply each built-in adapter sends; and, with port49 stopped under an open session on a command method list ending in `local`, whether operator's reply can change the configuration where admin's can, and whether it runs `clear counters` and `clear ip bgp *`; and, on IOS-XE with `privilege exec level 7 clear counters` configured and no `aaa authorization commands 7` list, whether a level-7 session runs `clear counters` without asking port49. | Decision 25; the adapters' `privilege`, `unreachable` and `fallback` (§8); the dead-rule and fallback-exposure reports (§12) | EOS, NX-OS, IOS-XE | closed — measured 2026-09-24; tests/lab/results/L22-arista_eos.md, L22-cisco_nxos.md, L22-cisco_iosxe.md. Each built-in adapter's reply at readonly, operator and admin was applied as the adapter says: on vEOS level 1 then 15 with network-operator, network-operator and network-admin; on the N9Kv network-operator, network-operator, network-admin, `clear counters` and `configure terminal` both sent to port49 at every level; on IOS-XE 17.13.01a levels 1, 7 and 15, level 7 sending `clear counters` and refusing `configure terminal` in the parser. With port49d stopped under an open session and the method list falling back to local, operator's reply could not change the configuration on any of the three, and admin's could on vEOS and the N9Kv. Beside it (`L22-carried-*.md`): vEOS's network-operator still ran `clear counters` and passed `clear ip bgp *` through authorization, the N9Kv's was refused both, and IOS-XE refused a token session every command at 7 and at 15, admin's included; on IOS-XE with no `aaa authorization commands 7` list, operator's `clear counters` ran without asking port49. Inert beside admin's reply: `home-directory`, `idletime` and `timeout` on vEOS and the N9Kv; `idletime*30` and `timeout*480` on IOS-XE, where they are accepted but held bearing (§6), and which refused the session for `home-directory`. By hand 2026-09-24: tests/lab/results/ceiling-*.md |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was

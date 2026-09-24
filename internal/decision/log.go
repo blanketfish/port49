@@ -117,6 +117,11 @@ type Request struct {
 	Service string   `json:"service,omitempty"`
 	Raw     []string `json:"raw"`
 	Vector  []string `json:"vector"`
+	// Redacted says words were replaced with «redacted» before the record
+	// was written (spec §5.8) — of Raw and Vector, or of a rule the record
+	// echoes in its policy block: a secret is never logged, and a replay
+	// cannot see what was decided.
+	Redacted bool `json:"redacted,omitempty"`
 }
 
 // Reply is what a permitted authorization returned to the device, as sent: a
@@ -127,12 +132,15 @@ type Reply struct {
 }
 
 type AcctRecord struct {
-	Raw         []string `json:"raw"`
-	Vector      []string `json:"vector"`
-	PrivLvl     uint8    `json:"priv_lvl"`
-	StartTime   int64    `json:"start_time,omitempty"`
-	StopTime    int64    `json:"stop_time,omitempty"`
-	ElapsedTime int64    `json:"elapsed_time,omitempty"`
+	Raw    []string `json:"raw"`
+	Vector []string `json:"vector"`
+	// Redacted is Request.Redacted's twin: words were replaced before the
+	// record reached the spool, so no secret is ever on disk (spec §5.8).
+	Redacted    bool  `json:"redacted,omitempty"`
+	PrivLvl     uint8 `json:"priv_lvl"`
+	StartTime   int64 `json:"start_time,omitempty"`
+	StopTime    int64 `json:"stop_time,omitempty"`
+	ElapsedTime int64 `json:"elapsed_time,omitempty"`
 }
 
 // Mint is the audit trail for authority (spec §5.7): which tokens were issued,
@@ -193,6 +201,10 @@ type PolicyRule struct {
 type Blob struct {
 	Hash string          `json:"hash"`
 	Body json.RawMessage `json:"body"`
+	// Redacted says rule text in Body was redacted before it was logged
+	// (spec §5.8), so Body is not the blob Hash names and replay reports
+	// every record naming it unverifiable. The store keeps the blob verbatim.
+	Redacted bool `json:"redacted,omitempty"`
 }
 
 // Unvalidated is what is recorded for a packet no key validated: cleartext header

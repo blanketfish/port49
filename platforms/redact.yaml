@@ -1,0 +1,89 @@
+# Redaction patterns (spec §5.8): the words of a command that are removed
+# before an accounting or authorization record is written, because a typed
+# secret — `username bob secret Hunter2` — arrives in full.
+#
+# These are NOT part of a pinned platform set. Redaction changes what the log
+# keeps and never what anyone may do, so a pattern a release adds applies at
+# upgrade, and a policy file's `platforms.<name>.redact` adds to these; it
+# never removes one.
+#
+# Best-effort, and said so: a pattern that misses leaks. Every pattern here is
+# vendor syntax, unmeasured in the lab. Each is `{match: [...], after: <word>}`
+# — a command the pattern matches loses every word after the first word equal
+# to <word> — or `{match: [...], from: N}`, every word from position N on (0 is
+# the command word and is never removed; a negative N counts from the end).
+# `*` is one word and `**` any number, as in a rule. A pattern's word also
+# matches any abbreviation of it on every platform, whatever
+# expands_abbreviations says, so a pattern removes more rather than less.
+#
+# `default` applies to every platform, an unmodeled one included; a
+# platform's own list adds to it and never replaces it.
+#
+# The patterns lead with `**` because a secret can sit anywhere in a line, and
+# NX-OS's accounting `cmd` is the configuration path joined with ` ; ` and a
+# result, `configure terminal ; username bob password ... (SUCCESS)`
+# (tests/lab/results/L21-cisco_nxos.md): a pattern anchored at the command
+# word would never match it.
+default:
+  - {match: ['**'], after: secret}
+  - {match: ['**'], after: password}
+  - {match: ['**'], after: key}
+  - {match: ['**'], after: key-string}
+  - {match: ['**'], after: authentication-key}
+  - {match: ['**'], after: message-digest-key}
+  # IKE pre-shared keys: IOS-XE's IKEv2 keyring `pre-shared-key [local|remote]
+  # <key>` and Junos's `pre-shared-key ascii-text <key>`.
+  - {match: ['**'], after: pre-shared-key}
+  # SNMPv1/v2c communities: `snmp-server community <c>`, and a trap or inform
+  # host's, `snmp-server host h [traps|informs] [version 1|2c] <c>`, which IOS
+  # also takes with no version, so everything after `host` goes. Scoped to the
+  # command, so a BGP community in routing policy is kept (task 10 review C1,
+  # M1).
+  - {match: ['**', snmp-server, community, '**'], after: community}
+  - {match: ['**', snmp-server, host, '**'], after: host}
+  # SNMPv3 passphrases: `snmp-server user u g v3 auth sha <pass> priv aes 128
+  # <pass>`. Scoped to the command, so `auth` elsewhere is left alone.
+  - {match: ['**', snmp-server, user, '**'], after: auth}
+  # HSRP and VRRP text authentication: `vrrp 1 authentication text <s>`, NX-OS
+  # `hsrp 1 ; authentication text <s>`, and HSRP's bare `standby [1]
+  # authentication <s>`.
+  - {match: ['**', authentication, text, '**'], after: text}
+  - {match: ['**', standby, '*', authentication, '**'], after: authentication}
+  - {match: ['**', standby, authentication, '**'], after: authentication}
+  # IS-IS, BGP, PIM and NHRP keywords that carry a secret.
+  - {match: ['**'], after: area-password}
+  - {match: ['**'], after: domain-password}
+  - {match: ['**'], after: auth-password}
+  - {match: ['**'], after: password-encrypt}
+  - {match: ['**'], after: ah-md5}
+  - {match: ['**', nhrp, authentication, '**'], after: authentication}
+  # EOS IPsec profile `shared-key [0|7] <key>`, IOS-XE smart licensing
+  # `license smart trust|register idtoken <token>`, and IOS manually keyed
+  # IPsec `set session-key inbound|outbound esp|ah <spi> ... <key>`.
+  - {match: ['**'], after: shared-key}
+  - {match: ['**', license, '**'], after: idtoken}
+  - {match: ['**'], after: session-key}
+  # OSPFv3 IPsec: `ospfv3 authentication ipsec spi 256 sha1 <key>`; the SPI
+  # goes with the key, because the key's position after it varies.
+  - {match: ['**', ipsec, spi, '**'], after: spi}
+  # A Junos SNMP community in hierarchical form, `community <c> {`, as `show
+  # configuration` prints it; the `set snmp community <c>` form is the
+  # snmp-server-free `community` below it in the tree, and a BGP community
+  # defined as `community <name> {` under policy-options loses its name too:
+  # over-redaction is the accepted cost (task 15 review I4).
+  - {match: ['**', community, '*', '{'], after: community}
+  # Wireless pre-shared keys (`wpa-psk ascii 0 <key>`), API tokens (`management
+  # api gnmi ... token <t> vrf <v>`, unscoped: a token need not be the last
+  # word), and RADIUS and OAuth secrets (`shared-secret <s>`, `client-secret
+  # <s>`). An argument matches a keyword's every abbreviation, so an argument
+  # `to` loses what follows it, accepted; the command word only in a key's
+  # shape (spec §5.8).
+  - {match: ['**'], after: wpa-psk}
+  - {match: ['**'], after: token}
+  - {match: ['**'], after: shared-secret}
+  - {match: ['**'], after: client-secret}
+juniper_junos:
+  - {match: ['**'], after: encrypted-password}
+  - {match: ['**'], after: plain-text-password-value}
+  - {match: ['**'], after: authentication-password}
+  - {match: ['**'], after: privacy-password}

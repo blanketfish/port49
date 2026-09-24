@@ -1,0 +1,18 @@
+aaa new-model
+aaa group server tacacs+ port49
+ server name port49-host
+ ip vrf forwarding clab-mgmt
+ ip tacacs source-interface GigabitEthernet1
+aaa authentication login default group port49 local
+aaa authentication login CONSOLE local
+aaa authentication enable default group port49 enable
+aaa authorization config-commands
+aaa authorization exec default group port49 local 
+aaa authorization commands 1 default group port49 local 
+aaa authorization commands 7 default group port49 local 
+aaa authorization commands 15 default group port49 local 
+aaa accounting exec default start-stop group port49
+aaa accounting commands 1 default start-stop group port49
+aaa accounting commands 7 default start-stop group port49
+aaa accounting commands 15 default start-stop group port49
+aaa session-id common

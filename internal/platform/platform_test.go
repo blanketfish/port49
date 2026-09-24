@@ -2,6 +2,7 @@ package platform
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -54,20 +55,25 @@ func TestNamesIsSortedAndComplete(t *testing.T) {
 	}
 }
 
-// TestEnableUsernamesNamesEveryKnownPlatformAsPrincipal pins the built-in
-// enable-username table: every platform this package knows, mapped to
-// EnablePrincipal, because no platform in the lab has been measured sending
-// anything else (tests/lab/results/L3-arista_eos.md, L3-cisco_iosxe.md,
-// L3-nxos-cisco_nxos.md).
-func TestEnableUsernamesNamesEveryKnownPlatformAsPrincipal(t *testing.T) {
-	got := EnableUsernames()
-	for _, name := range Names() {
-		if got[name] != EnablePrincipal {
-			t.Errorf("%s: enable username is %q, want %q", name, got[name], EnablePrincipal)
+// TestEveryAdapterSaysTheEnableSTARTCarriesThePrincipal pins the built-in
+// adapters' enable username: every platform this package knows, and the
+// generic adapter, says EnablePrincipal, because no platform in the lab has
+// been measured sending anything else (tests/lab/results/L3-arista_eos.md,
+// L3-cisco_iosxe.md, L3-nxos-cisco_nxos.md). `enab` is refused wherever it is
+// written.
+func TestEveryAdapterSaysTheEnableSTARTCarriesThePrincipal(t *testing.T) {
+	for _, name := range append(Names(), "no_such_platform") {
+		if d, _ := DialectFor(name); d.EnableUsername != EnablePrincipal {
+			t.Errorf("%s: enable username is %q, want %q", name, d.EnableUsername, EnablePrincipal)
 		}
 	}
-	if len(got) != len(Names()) {
-		t.Fatalf("EnableUsernames() has %d entries, want %d", len(got), len(Names()))
+	d, _ := DialectFor("arista_eos")
+	for v, want := range map[string]string{EnableEnab: "tests/lab/results", "princpal": `must be "principal"`} {
+		d.EnableUsername = v
+		if err := Validate("arista_eos", d); err == nil || !strings.Contains(err.Error(),
+			"platforms.arista_eos.enable_username") || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", v, err)
+		}
 	}
 }
 
@@ -200,5 +206,23 @@ func TestCallersCannotEditTheTable(t *testing.T) {
 	}
 	if !Known("cisco_nxos") {
 		t.Fatal("Defaults handed out the table itself: deleting from it removed a platform")
+	}
+}
+
+// A variant under a new name gets an unknown platform's wire facts from the
+// daemon, which keys them by name (spec §8, plan 6): WireFactsDiffer names
+// the facts a base platform has that an unknown one does not, where losing
+// them breaks the variant or misreads its records (final review M8). A
+// session discriminator is not among them: without one the daemon takes the
+// username-only branch, the safe direction.
+func TestWireFactsDiffer(t *testing.T) {
+	for _, name := range []string{"arista_eos", "cisco_nxos", "cisco_iosxe", "acme_os"} {
+		if got := WireFactsDiffer(name); len(got) != 0 {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	if got := WireFactsDiffer("juniper_junos"); strings.Join(got, ", ") != "session service junos-exec, exec records "+
+		"cmd=login and cmd=logout, system users root" {
+		t.Errorf("juniper_junos: %q", got)
 	}
 }

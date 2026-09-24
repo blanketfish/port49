@@ -66,21 +66,18 @@ func TestAMintRecordNamesItsBundle(t *testing.T) {
 
 // A device a joint check failed on is quarantined at load, and a mint for it
 // is refused device_quarantined, by name, while every other device mints
-// (spec §10; §13 decision 20). leaf1 is arista_eos, which renders no custom level
-// `unmapped` (`operator` renders there since spec §13 decision 23).
+// (spec §10; §13 decision 20). nx1 is cisco_nxos, which defines no @loopback.
 func TestAQuarantinedDeviceIsRefusedAtMint(t *testing.T) {
 	f := newFixture(t, 8)
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	body := `
-privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]
-scopes: [{name: all_devices, match: {}}]
-roles: [{name: r, privilege: unmapped, permit: ["**"]}]
-subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: nx, roles: [r]}]
+scopes: [{name: all_devices, match: {}}, {name: eos, match: {platform: arista_eos}, on_missing: exclude}]
+roles: [{name: r, permit: ["**"], deny: [interface @loopback]}]
+subjects:
+  - {name: c, identity: "user:carol@example.com", username: carol, token_ttl: 60s}
+  - {name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}
+grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: eos, roles: [r]}]
 `
-	body = strings.Replace(body, "scopes: [{name: all_devices, match: {}}]",
-		"scopes: [{name: all_devices, match: {}}, {name: nx, match: {platform: cisco_nxos}}]", 1)
-	body = strings.Replace(body, "subjects: [", `subjects: [{name: c, identity: "user:carol@example.com", username: carol, token_ttl: 60s}, `, 1)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +91,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: nx, r
 	for _, it := range resp.Results {
 		byDevice[it.Device] = it.Verdict + " " + it.Reason
 	}
-	if byDevice["leaf1"] != "deny device_quarantined" || !strings.HasPrefix(byDevice["nx1"], "permit") {
+	if byDevice["nx1"] != "deny device_quarantined" || !strings.HasPrefix(byDevice["leaf1"], "permit") {
 		t.Fatalf("%+v", resp.Results)
 	}
 	// A principal with no grant on the quarantined device hears
@@ -102,7 +99,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: nx, r
 	// tell a caller which devices exist (design §17).
 	carol := f.client(t, "carol@example.com", f.now.Add(24*time.Hour))
 	f.log.Reset()
-	resp = decodeMint(t, f.post(context.Background(), f.state(carol), `{"devices":["leaf1"]}`, ""))
+	resp = decodeMint(t, f.post(context.Background(), f.state(carol), `{"devices":["nx1"]}`, ""))
 	if it := resp.Results[0]; it.Verdict != "deny" || it.Reason != "no_grants_matched" {
 		t.Fatalf("carol: %+v", it)
 	}
@@ -121,7 +118,7 @@ func TestASessionReplyThatWillNotFitIsRefusedAtMint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	body := `
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: r, privilege: admin, permit: ["**"], attributes: {all: ["home-directory*` + strings.Repeat("x", 225) + ` {principal}"]}}]
+roles: [{name: r, privilege: admin, permit: ["**"], attributes: {arista_eos: ["home-directory*` + strings.Repeat("x", 225) + ` {principal}"]}}]
 subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 `
@@ -150,7 +147,7 @@ func TestASessionReplyThatWouldCarryASeparatorIsRefusedAtMint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	body := `
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: r, privilege: admin, permit: ["**"], attributes: {all: ["home-directory*{device}"]}}]
+roles: [{name: r, privilege: admin, permit: ["**"], attributes: {arista_eos: ["home-directory*{device}"]}}]
 subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 `

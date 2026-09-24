@@ -1,0 +1,45 @@
+# juniper_junos — vSRX 21.4R3.15 and vJunos-router 23.4R2-S2.1 in the port49 lab.
+# Every value is measured and cited, or marked unmeasured and chosen in the
+# direction that fails closed (spec §8, §15).
+platforms:
+  juniper_junos:
+    # Session authorization only: no per-command request in 26 sessions on two
+    # images (L18; decision 21). The projection that carries port49's rules
+    # onto the session reply is decision 22, provisional on L12 (plan 5b), so
+    # no level is rendered yet.
+    supports: [session]
+    # fxp0 is the interface the lab reaches both images on
+    # (tests/lab/configs/vjunos-startup.conf); em0 is spec §8's example and no
+    # lab image uses it.
+    entity_classes:
+      management: ['^(fxp0|em0)$']
+    # Junos sends no command to expand; unmeasured, so false, the direction
+    # that fails closed.
+    expands_abbreviations: false
+    splits_interface_names: false
+    # Junos never authorizes a command (L18; decision 21), so no modifier
+    # reaches port49.
+    pipe_token: "|"
+    pipe_authorized: false
+    # Unmeasured for a command request, which Junos never sends; its
+    # accounting records end `<cr>` (tests/lab/results/L17-juniper_vjunos-router.md), and
+    # true is every measured platform's value.
+    strip_cr: true
+    # No command request to carry one; unmeasured, so false.
+    shows_server_msg: false
+    # local-user-name is applied (L18-juniper_*.md); user-permissions is
+    # measured inert on these releases (L18-juniper_vsrx.md, variants 9 and
+    # 10) and a permission carrier by design (decision 22); the command and
+    # configuration regexes are vendor-documented and unmeasured (L18).
+    privilege_attributes: [local-user-name, user-permissions, allow-commands, deny-commands, allow-configuration,
+      deny-configuration, allow-commands-regexps, deny-commands-regexps, allow-configuration-regexps,
+      deny-configuration-regexps]
+    inert_attributes: [home-directory]
+    # `port49 devices check-config` (spec §5.6), set or hierarchical form: a
+    # name quoted or bare, and an account `show configuration` prints under a
+    # protect: or inactive: prefix, which is still an account (an inactive one
+    # is read too, failing closed: one `activate` brings it back).
+    local_accounts: ['^set\s+system\s+login\s+user\s+"?([^\s"]+)', '^\s*(?:(?:protect|inactive):\s+)*user\s+"?([^\s"{]+)"?\s*\{']
+    config_checks:
+      - match: 'authentication-order .*\bpassword\b'
+        says: "a FAIL from port49 falls through to the local password on this platform (tests/lab/results/L4-juniper_vsrx.md, L4-juniper_vjunos-router.md): a denied operator logs in locally"

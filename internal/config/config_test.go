@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/rhwendt/port49/internal/platform"
 )
 
 // The sample config is assembled from three pieces rather than written twice,
@@ -448,28 +446,33 @@ platforms:
 	}
 }
 
-// TestEnableUsernameEnabIsRefusedUntilTheLabShowsIt: `$enab{level}$` is not a
-// username form any measured platform sends on the enable START (vEOS and
-// Catalyst 8000V both send the operator's own username; NX-OS 10.x has no
-// enable exchange at all — tests/lab/results/L3-arista_eos.md,
-// L3-cisco_iosxe.md, L3-nxos-cisco_nxos.md), so the option exists to be
-// refused, not to be used, until a lab note says otherwise.
-func TestEnableUsernameEnabIsRefusedUntilTheLabShowsIt(t *testing.T) {
+// TestEnableUsernameMovedToThePolicyFile: the enable username is an adapter
+// fact, and adapters live in the policy file since plan 5, where the offline
+// tools read it as port49d does (plan 4 pre-flight N5). `principal`, the only
+// value config.Load ever accepted, still starts, with a notice saying where
+// the key went: refusing it would turn the upgrade into an outage for no
+// gain. Any other value is refused and told the same.
+func TestEnableUsernameMovedToThePolicyFile(t *testing.T) {
 	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
-	body := fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: enab}}\n"
-	_, err := Load(write(t, "c.yaml", body))
-	if err == nil || !strings.Contains(err.Error(), "tests/lab/results") {
-		t.Fatalf("enable_username: enab must be refused and say what would unlock it: %v", err)
+	body := fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: principal}}\n"
+	c, err := Load(write(t, "c.yaml", body))
+	if err != nil || len(c.Notices) != 1 ||
+		!strings.Contains(c.Notices[0], "platforms.cisco_iosxe.enable_username moved to the policy file") {
+		t.Fatalf("principal: %q %v", c.Notices, err)
 	}
-	body = fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: principal}}\n"
-	c, err := Load(write(t, "d.yaml", body))
-	if err != nil || c.EnableUsernames["cisco_iosxe"] != platform.EnablePrincipal {
-		t.Fatalf("%v %v", c.EnableUsernames, err)
-	}
-	body = fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: princpal}}\n"
-	if _, err := Load(write(t, "e.yaml", body)); err == nil {
-		t.Fatal("a mistyped enable_username must be a load error")
+	for i, v := range []string{"enab", "princpal"} {
+		body := fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: " + v + "}}\n"
+		_, err := Load(write(t, fmt.Sprintf("c%d.yaml", i), body))
+		if err == nil || !strings.Contains(err.Error(), "platforms.cisco_iosxe.enable_username moved to the policy file") {
+			t.Fatalf("%s: %v", v, err)
+		}
+		// Told to move it, the operator is told too that the value is refused
+		// there, rather than learning it on the second try (task 8 review
+		// minor 1).
+		if refused := strings.Contains(err.Error(), "enab is refused there too"); refused != (v == "enab") {
+			t.Errorf("%s: %v", v, err)
+		}
 	}
 }
 

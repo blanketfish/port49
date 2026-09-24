@@ -22,7 +22,11 @@ start; PR #11); **4b merged 2026-09-24** (PR #12;
 and whole-branch;
 its three "Questions for Ryan" were decided security-first: delete unspent tokens whose answer
 changed, rewrite every live context on every reload, leave a quarantined device's contexts);
-5–13 not yet. **Plan 5 (platform adapters) is the next plan to write.**
+**5a built 2026-09-24** (`2026-09-24-05a-platform-adapters.md`, eighteen tasks: one docs,
+fifteen code, one lab, one lab-and-docs; reviewed per task, on `feature/platform-adapters`, its
+pull request not yet merged; L22 closed, and the EOS, NX-OS and IOS-XE adapters `verified:
+containerlab`); plan 5 is split at the seam below, and 5b is the next plan to write, once 5a
+merges. 6–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -472,6 +476,59 @@ rest at fleet size here.
 
 ## Plan 5 — Platform adapters (§19 step 5)
 
+**Split into 5a and 5b (2026-09-24),** because the brief below and every plan-4 hand-off is more
+than 25 tasks. The seam is the kind of platform:
+
+- **Plan 5a — `2026-09-24-05a-platform-adapters.md`. As built (`feature/platform-adapters`; PR
+  number at merge):** The
+  adapters as data and every platform that authorizes per command: the built-in adapters as files
+  in a pinned set (`platforms/1.0.0/`; a policy that pins none renders with 1.0.0 forever),
+  operator overrides in the policy file's `platforms:` block (merge per key, `replace`,
+  `based_on`), EOS, NX-OS and IOS-XE rendering under a new decision 25 (a level is a device level
+  and a device role; `operator` gets admin's level and readonly's role on EOS and NX-OS, and
+  `priv-lvl=7` on IOS-XE with its reference configuration), IOS-XE's closed attribute list
+  (anything else quarantines), redaction (built in, unpinned, before the spool), N5, the
+  adapter-edit gate and the stricter `BearsPrivilege`, the `(?-i)` check on operator classes,
+  `port49 platform list/show/export/upgrade`, the dead-rule and fallback-exposure reports, `port49
+  devices check-config` (plan 2b's owed check), `grants remove --pr`, and a lab task that
+  measures each adapter's reply level by level (new register row L22) and three candidate inert
+  attributes.
+
+  Where it differs from the plan's Decided list: L22 (`tests/lab/results/L22-*.md`, closed
+  2026-09-24) measured every level on every platform as rendered and operator's configuration
+  change refused at fallback on all three, so the EOS, NX-OS and IOS-XE adapters ship `verified:
+  containerlab`, and any `platforms:` block over one of them clears it (`platform list` prints
+  `—`, `policy diff` reports the change, `platform export <name>` leaves the key out so the
+  block pastes back). Inert as measured: `home-directory`, `idletime` and `timeout` on EOS and
+  NX-OS. IOS-XE lists nothing inert: it refused the session for `home-directory`, and a refused
+  session there locks out SSH, so `idletime` and `timeout`, measured inert and now accepted
+  (`accepted_attributes: [priv-lvl, idletime, timeout]`, not Decided 6's `priv-lvl` alone), are
+  held bearing. Both are numbers everywhere: a placeholder in either is refused at load, and a
+  value that is not a plain decimal 0 to 65535 quarantines the device, and so on IOS-XE does
+  either attribute sent in the mandatory `=` form (`idletime=30`): only the optional `*` form,
+  `idletime*30` and `timeout*480`, was measured there. `fallback`
+  entries say what L22 measured: EOS operator names the commands that still ran, NX-OS operator
+  and IOS-XE have none (IOS-XE refused a token session every command at 7 and 15). Beyond the
+  plan: an operator's fallback text is kept apart as `fallback_note`, a block's `unreachable`
+  rules are kept apart from the set's as the operator's (`unreachable_note`), a change to the generic adapter is gated (`platform: generic`), an
+  `acknowledge:` entry names the sha256 of the value it covers and a stale one is reported, a
+  load error quotes no rule text, and `grants remove --pr` targets the repository the push URL
+  names. Carried: Junos's inert list and every Junos spelling to 5b (L10, L12, both open); L22's
+  inert candidates (`home-directory`, `idletime`, `timeout`) re-measured beside readonly's reply
+  (`priv-lvl=1`, network-operator) on EOS and NX-OS to 5b, since beside admin's a raise is
+  invisible (5a final review M3); a replay-verifiable blob whose rules redaction hides, and a
+  `based_on:` variant's wire facts, to plan 6 (below), which lifts the load's refusal of
+  `based_on: juniper_junos` once port49d reads a variant's session service, exec-record commands
+  and system users (5a final review M8).
+- **Plan 5b — the session-only half and capability inference; written after 5a merges.** Junos's
+  projection under decision 22 (`bits`, `bit_delivery`, `command_projection`, `local-user-name`
+  templates, the generator constraints and the refused shape), gated on L12 and L9, with its own
+  containerlab differential tests and `platform export` of the reference classes; decision 21's
+  class `idle-timeout` from `max_session_age`; spec §9's capability inference (`port49 devices
+  capabilities`, the supports-versus-observed matrix, accounting reconciliation); and an NX-OS
+  `vsh.bin` system user if a note measures it. 5a leaves Junos rendering nothing, as today, so 5b
+  reworks nothing 5a builds.
+
 Spec §8 in full: built-in adapters, entity classes, user overrides and layering, pinned
 platform set, `redact` patterns (accounting redaction was deferred from plan 1 and MUST land
 here), `capability`/`bits`/`bit_delivery`, the **Junos projection** under decision 22
@@ -592,6 +649,15 @@ Spec §10: file inventory in full, NetBox and Nautobot connectors, the versioned
 admission snapshot refresh in the daemon, key rotation reporting (`keys status`,
 `keys diagnose`, unvalidated-source report), device records, address-added-as-security-event.
 Design §10 "Device inventory".
+
+**Owed from plan 5a (owner's ruling 2026-09-24):** a blob whose rule text carries a value the
+redaction patterns hide is logged with that text redacted and `"redacted": true` (spec §5.8), so
+`port49 policy replay` reports every record naming it `unverifiable`. Verification comes back
+when replay can take the verbatim blob from outside the log: from the versioned bundle this plan
+publishes, from the store, or from `--policy <file>`, checked against the hash the log carries.
+Also owed: a `based_on:` variant's wire facts. port49d keys `session_services`, the exec records'
+commands and the system users by platform name, so 5a refuses `based_on: juniper_junos` at load
+(spec §8; 5a final review M8). This plan carries those facts to a variant and lifts the refusal.
 
 ## Plan 7 — Broker in full (§19 step 7)
 

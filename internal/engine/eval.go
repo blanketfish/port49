@@ -474,13 +474,20 @@ func (m Match) record() decision.PolicyRule {
 func (o Outcome) ServerMsg() string {
 	switch o.Reason {
 	case decision.NoPermitDominatesDeny:
-		return printable("port49: denied by " + o.Deny.Role + " (" + o.Deny.Rule + ") - see 'port49 explain'")
+		return DenyMsg(o.Deny.Role, o.Deny.Rule)
 	case decision.PipeStageDenied:
 		return "port49: an output modifier in this command is not permitted - see 'port49 explain'"
 	case decision.NoRuleMatched:
 		return "port49: no rule permits this command - see 'port49 explain'"
 	}
 	return ""
+}
+
+// DenyMsg is the server_msg of a no_permit_dominates_deny: the role and the
+// rule's text. The daemon rebuilds it with the rule redacted where the rule
+// carries a secret (spec §5.8).
+func DenyMsg(role, rule string) string {
+	return printable("port49: denied by " + role + " (" + rule + ") - see 'port49 explain'")
 }
 
 // printable replaces every byte outside printable ASCII, so a rule written

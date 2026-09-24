@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
-	"github.com/rhwendt/port49/internal/platform"
 )
 
 // unmappedLevel declares a level no built-in platform renders: a role landing
@@ -105,11 +104,13 @@ func TestPolicyToolsExitTwoOnAUsageError(t *testing.T) {
 }
 
 // `port49 policy test` passes a policy whose tests pass, and fails one whose
-// test does not, naming it.
+// test does not, naming it. It says first which platform set the policy
+// renders with (spec §8).
 func TestPolicyTestIsACIGate(t *testing.T) {
 	pol, inv := policyFixture(t)
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.HasPrefix(out.String(), "platform_set: 1.0.0\n") ||
 		!strings.Contains(out.String(), "PASS noc on leaf-01: \"reload\" -> deny no_rule_matched") ||
 		!strings.Contains(out.String(), "2 tests, 0 failed; 0 shadowed denies, 0 unacknowledged") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
@@ -191,7 +192,7 @@ func TestPolicyTestAndDiffAnswerAsTheBrokerMints(t *testing.T) {
 	oldPol, inv := policyFixture(t)
 	raw := readFile(t, oldPol)
 	refused := strings.Replace(string(raw), "{name: read_only, privilege: readonly, permit: [show **]}",
-		`{name: read_only, privilege: readonly, permit: [show **], attributes: {all: ["home-directory*/`+strings.Repeat("h", 227)+`/{principal}"]}}`, 1)
+		`{name: read_only, privilege: readonly, permit: [show **], attributes: {arista_eos: ["home-directory*/`+strings.Repeat("h", 227)+`/{principal}"]}}`, 1)
 	newPol := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(newPol, []byte(refused), 0o600); err != nil {
 		t.Fatal(err)
@@ -261,7 +262,7 @@ func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
-		!strings.Contains(errb.String(), "@uplinks, which no platform defines") || out.Len() != 0 {
+		!strings.Contains(errb.String(), "permit #1: term 2 names a class which no platform defines") || out.Len() != 0 {
 		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
 	}
 	if err := os.WriteFile(pol, []byte(unmappedLevel+strings.Replace(string(raw), "privilege: readonly", "privilege: unmapped", 1)), 0o600); err != nil {
@@ -458,11 +459,22 @@ func TestGrantsRemoveFailsWhenStdoutFails(t *testing.T) {
 	}
 }
 
-// The offline tools load a policy with the enable-username table port49d
-// resolves, so the `enable: auto` joint check answers the same offline.
-func TestOfflineToolsLoadWithTheEnableUsernameTable(t *testing.T) {
-	if got := offlineEnv(nil).EnableUsernames; !reflect.DeepEqual(got, platform.EnableUsernames()) {
-		t.Fatalf("%v", got)
+// The offline tools load a policy as port49d does: the inventory, and every
+// adapter fact from the policy file itself, so an enable-username the file
+// declares refuses the load in CI exactly as it refuses port49d's start.
+func TestOfflineToolsReadTheAdaptersFromThePolicyFile(t *testing.T) {
+	if e := offlineEnv(nil); e.Dialects != nil || !e.Now.IsZero() {
+		t.Fatalf("%+v", e)
+	}
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	if err := os.WriteFile(pol, append([]byte("platforms: {arista_eos: {enable_username: enab}}\n"), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "platforms.arista_eos.enable_username") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
 
@@ -543,8 +555,9 @@ func TestPolicyDiffGatesALevelRaise(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
 		!strings.Contains(out.String(), "RAISES: noc on leaf-01: level readonly -> admin, max_privilege none -> none, "+
-			"priv_lvl 1 -> 15, enable none -> none, reply [\"priv-lvl=1\"] -> [\"priv-lvl=15\"]; no session test asserts it: add {subject: noc, device: leaf-01, "+
-			"priv_lvl: 15, level: admin}") ||
+			"priv_lvl 1 -> 15, enable none -> none, reply [\"priv-lvl=1\", \"roles=network-operator\"] -> "+
+			"[\"priv-lvl=15\", \"roles=network-admin\"]; no session test asserts it: add {subject: noc, device: leaf-01, "+
+			"priv_lvl: 15, level: admin, reply: [\"priv-lvl=15\", \"roles=network-admin\"]}") ||
 		!strings.Contains(out.String(), "1 unacknowledged privilege raises") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
@@ -553,7 +566,8 @@ func TestPolicyDiffGatesALevelRaise(t *testing.T) {
 		!strings.Contains(out.String(), "privilege: noc on leaf-01: level admin -> readonly") {
 		t.Fatalf("a lowering: code %d\n%s%s", code, out.String(), errb.String())
 	}
-	if err := os.WriteFile(newPol, []byte(raised+"  - {subject: noc, device: leaf-01, level: admin, priv_lvl: 15}\n"), 0o600); err != nil {
+	if err := os.WriteFile(newPol, []byte(raised+"  - {subject: noc, device: leaf-01, level: admin, priv_lvl: 15, "+
+		`reply: ["priv-lvl=15", "roles=network-admin"]}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -688,7 +702,7 @@ func TestPolicyDiffGatesAPrivilegeAttributeInTheReply(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
-		!strings.Contains(out.String(), `reply ["priv-lvl=1"] -> ["priv-lvl=1", "roles=network-admin"]; no session test asserts it: `+
+		!strings.Contains(out.String(), `reply ["priv-lvl=1", "roles=network-operator"] -> ["priv-lvl=1", "roles=network-admin"]; no session test asserts it: `+
 			`add {subject: noc, device: leaf-01, reply: ["priv-lvl=1", "roles=network-admin"]}`) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
@@ -754,5 +768,190 @@ func TestPolicyDiffGatesABrokerRightGained(t *testing.T) {
 	if code := run([]string{"policy", "diff", "--old", newPol, "--new", oldPol, "--inventory", inv}, &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), `api: subject noc's broker rights ["revoke_others"] -> []`) {
 		t.Fatalf("a right lost: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// An edit to a key of an adapter the gate reads fails `port49 policy diff`
+// until an acknowledge: entry names the platform and the key, and `policy
+// test` prints the entry beside the others (review M8; spec §12).
+func TestPolicyDiffGatesAnAdapterEdit(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	edited := "platforms: {arista_eos: {entity_classes: {management: ['^Management1$']}}}\n" + raw
+	if err := os.WriteFile(newPol, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `ADAPTER: platforms.arista_eos.entity_classes {"loopback":`) ||
+		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits\n") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// The entry is printed ready to paste, bound by digest to this edit.
+	entry := regexp.MustCompile(`add (\{platform: arista_eos, field: entity_classes, sha256: [0-9a-f]{64}, reason: )"\.\.\."\}` +
+		` under acknowledge:`).FindStringSubmatch(out.String())
+	if entry == nil {
+		t.Fatalf("no paste-ready entry\n%s", out.String())
+	}
+	acked := edited + "acknowledge:\n  - " + entry[1] + "only Management1 is out of band}\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "adapter (acknowledged: only Management1 is out of band): platforms.arista_eos.entity_classes") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "acknowledge: platforms.arista_eos.entity_classes: only Management1 is out of band\n") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A policy's rules and its tests' commands are printed by `policy test`,
+// `policy diff` and `explain`, whose output lands in CI logs: a value the
+// redaction patterns hide reads «redacted» there as everywhere else (spec
+// §5.8; task 11 review I1). A load error that quotes the rule is redacted
+// too.
+func TestThePolicyToolsNeverPrintARuleSecret(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	withDeny := strings.Replace(raw, "deny: [reload **]}", `deny: [reload **, "snmp-server community Hunter2 **"]}`, 1)
+	if err := os.WriteFile(oldPol, []byte(withDeny), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	shadowed := strings.Replace(withDeny, "permit: [show **]}", `permit: [show **, "snmp-server community Hunter2 ro"]}`, 1)
+	if err := os.WriteFile(newPol, []byte(shadowed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check := func(what string, args ...string) string {
+		t.Helper()
+		var out, errb bytes.Buffer
+		run(args, &out, &errb)
+		if strings.Contains(out.String()+errb.String(), "Hunter2") {
+			t.Fatalf("%s printed the secret:\n%s%s", what, out.String(), errb.String())
+		}
+		return out.String()
+	}
+	if out := check("policy test", "policy", "test", "--policy", newPol, "--inventory", inv); !strings.Contains(out,
+		`shadowed: "snmp-server community «redacted» **" (no_reload)`) {
+		t.Fatalf("policy test: %s", out)
+	}
+	if out := check("policy diff", "policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv); !strings.Contains(
+		out, "EXPANDS: noc on leaf-01") {
+		t.Fatalf("policy diff: %s", out)
+	}
+	if out := check("explain", "explain", "--policy", newPol, "--inventory", inv, "--subject", "noc", "--device",
+		"leaf-01", "--command", "snmp-server community Hunter2 ro"); !strings.Contains(out, "snmp-server community «redacted»") {
+		t.Fatalf("explain: %s", out)
+	}
+	broken := strings.Replace(withDeny, `"snmp-server community Hunter2 **"`, `"snmp-server community Hunter2 /^rw$/"`, 1)
+	if err := os.WriteFile(oldPol, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check("a load error", "policy", "test", "--policy", oldPol, "--inventory", inv)
+	check("a load error", "explain", "--policy", oldPol, "--inventory", inv, "--subject", "noc", "--device", "leaf-01")
+	check("a load error", "policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv)
+}
+
+// policy diff's adapter lines print a block's values as JSON, which lands in
+// CI logs: a config check's match, a class pattern and every other block
+// text print redacted as platform show prints them, and the digest an
+// acknowledgment binds is still taken over the value as written (final review
+// I3).
+func TestPolicyDiffAdapterLinesNeverPrintABlockSecret(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	block := "platforms:\n  arista_eos:\n" +
+		"    config_checks:\n      - {match: '^snmp-server community Hunter2a', says: a check}\n" +
+		"    entity_classes: {secret_pattern: ['^snmp-server community Hunter2b$'], bad_comm: ['^Hunter2c$']}\n" +
+		"    unreachable: {readonly: [\"snmp-server community Hunter2d **\"]}\n" +
+		"    fallback: {readonly: \"a local user, password Hunter2e\"}\n"
+	withClass := strings.Replace(raw, "roles:\n", "roles:\n  - {name: snmp, deny: [snmp-server community @bad_comm **]}\n", 1)
+	if err := os.WriteFile(newPol, []byte(block+withClass), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "ADAPTER: platforms.arista_eos.config_checks") ||
+		!strings.Contains(out.String(), "ADAPTER: platforms.arista_eos.entity_classes") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	for _, probe := range []string{"Hunter2a", "Hunter2b", "Hunter2c", "Hunter2d", "Hunter2e"} {
+		if strings.Contains(out.String()+errb.String(), probe) {
+			t.Errorf("policy diff prints %s:\n%s%s", probe, out.String(), errb.String())
+		}
+	}
+	// A set's own check prints as written, and the entry binds the value as
+	// written: acknowledged with it, the diff passes.
+	if !strings.Contains(out.String(), `\\b(local|enable)\\s*$`) {
+		t.Errorf("a shipped match is printed as written:\n%s", out.String())
+	}
+	var acks []string
+	for _, m := range regexp.MustCompile(`add (\{platform: arista_eos, field: \w+, sha256: [0-9a-f]{64}, reason: )"\.\.\."\}`).
+		FindAllStringSubmatch(out.String(), -1) {
+		acks = append(acks, "  - "+m[1]+"a test}")
+	}
+	acked := block + withClass + "acknowledge:\n" + strings.Join(acks, "\n") + "\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// Moving a subject from admin to readonly lowers it on every per-command
+// platform, end to end through the command: the reply's role goes down
+// role_order on EOS and NX-OS and priv-lvl goes down on IOS-XE, so the diff
+// passes; the reverse is gated on each (task 3 review, carried to the final
+// wave).
+func TestPolicyDiffPassesAnAdminToReadonlyMoveOnEveryPlatform(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: nx-01, platform: cisco_nxos, addresses: [10.0.0.2]}
+  - {name: xe-01, platform: cisco_iosxe, addresses: [10.0.0.3]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := string(readFile(t, oldPol))
+	lowered := strings.Replace(raw, "roles: [admin]}", "roles: [read_only]}", 1)
+	if lowered == raw {
+		t.Fatal("the fixture's ops grant moved")
+	}
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(newPol, []byte(lowered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("admin -> readonly: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if !strings.Contains(out.String(), "privilege: ops on ") {
+		t.Fatalf("the lowering is not reported:\n%s", out.String())
+	}
+	for _, device := range []string{"leaf-01", "nx-01", "xe-01"} {
+		if !strings.Contains(out.String(), device) {
+			t.Errorf("%s: the lowering is not reported:\n%s", device, out.String())
+		}
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", newPol, "--new", oldPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "RAISES: ops on ") {
+		t.Fatalf("readonly -> admin: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	for _, device := range []string{"leaf-01", "nx-01", "xe-01"} {
+		if !strings.Contains(out.String(), device) {
+			t.Errorf("%s: the raise is not reported:\n%s", device, out.String())
+		}
 	}
 }

@@ -1,8 +1,11 @@
 package policy
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -12,6 +15,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // Diff is the effective-permission diff between two versions of a policy
@@ -48,6 +52,57 @@ type Diff struct {
 	// widening in the diff is the one they name. They acknowledge nothing and
 	// are reported, acknowledge_stale (spec §12).
 	StaleAcknowledgments []Acknowledgment
+	// Adapters are the keys of a platform's adapter that differ between the
+	// versions, on every platform either version has an adapter for or the
+	// inventory has devices of: a platform_set moved, or a `platforms:` block
+	// edited (spec §8, §12).
+	Adapters []AdapterChange
+}
+
+// AdapterChange is one key of one platform's adapter that the two versions
+// say differently. A key that changes what port49 decides — a rendering, a
+// class, how a command is normalized — or what this gate reads — which
+// attributes bear privilege, which the device takes, how its roles rank — is
+// Gated: a diff cannot vouch for its own reading when the change is to the
+// reading, so it is acknowledged only in writing, by an acknowledge: entry
+// naming the platform, the key and New's Sha256 (review M8, 2026-09-24;
+// task 9 review C1). Old and New are the key's value as JSON, `null` where
+// the adapter leaves it unset.
+type AdapterChange struct {
+	Platform, Field string
+	Old, New        string
+	// OldShown and NewShown are Old and New as port49 may print them, a
+	// block's text redacted (platform.RedactAdapter): what the diff prints
+	// lands in CI logs (spec §5.8; final review I3).
+	OldShown, NewShown  string
+	Sha256              string // hex sha256 of New: what an acknowledge: entry names
+	Gated, Acknowledged bool
+	AcknowledgedBy      string
+}
+
+// reportedAdapterKeys are the only adapter keys an edit to is reported and
+// not gated: each changes what explain says, and nothing port49 decides or
+// this gate reads. Every other key is gated, one a later plan adds included,
+// until it is listed here, so the list fails closed (task 1 review I3).
+// device_config is not on it: it is the configuration check-config holds a
+// device to, and a block that ends a line in `none` instead of `local` has the
+// device authorize every command itself whenever port49 is unreachable
+// (task 7 review H6).
+var reportedAdapterKeys = []string{"port_pattern", "verified", "unreachable", "unreachable_note", "fallback", "fallback_note"}
+
+// adapterKeyGated reports whether an edit to an adapter key is gated.
+func adapterKeyGated(key string) bool { return !slices.Contains(reportedAdapterKeys, key) }
+
+// UnacknowledgedAdapters counts the gated adapter edits no acknowledge: entry
+// names.
+func (d Diff) UnacknowledgedAdapters() int {
+	n := 0
+	for _, a := range d.Adapters {
+		if a.Gated && !a.Acknowledged {
+			n++
+		}
+	}
+	return n
 }
 
 // PrincipalChange is a principal that resolves to another subject in the new
@@ -336,6 +391,7 @@ func Compare(before, after *Policy, now time.Time) Diff {
 		c.at(at)
 	}
 	c.principals(now)
+	c.adapters()
 	for _, a := range after.acked {
 		if !c.usedAcks[a] {
 			c.d.StaleAcknowledgments = append(c.d.StaleAcknowledgments, a)
@@ -773,18 +829,10 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 	if enableRank[is.enable] > enableRank[was.enable] {
 		l.Raised = append(l.Raised, "enable")
 	}
-	// An attribute the reply gained, changed or lost, other than priv-lvl,
-	// which priv_lvl judges, changes what the device lets the session do in a
-	// direction the gate cannot read, unless its adapter lists it inert: on a
-	// session-only platform losing deny-commands widens access (spec §12).
-	dialect := c.after.dialect(is.platform)
-	moved := func(from, to []string) bool {
-		return slices.ContainsFunc(from, func(a string) bool {
-			name := a[:strings.IndexAny(a, "=*")]
-			return name != "priv-lvl" && !slices.Contains(to, a) && dialect.BearsPrivilege(name)
-		})
-	}
-	if moved(l.NewReply, l.OldReply) || moved(l.OldReply, l.NewReply) {
+	before, after := c.before.dialect(was.platform), c.after.dialect(is.platform)
+	oldRendered, _, _ := c.before.render(before, was.level)
+	newRendered, _, _ := c.after.render(after, is.level)
+	if replyRose(l.OldReply, l.NewReply, oldRendered, newRendered, before, after) {
 		l.Raised = append(l.Raised, "reply")
 	}
 	l.Raise = len(l.Raised) > 0
@@ -800,6 +848,70 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 		return true
 	})
 	return l
+}
+
+// replyRose reports whether the session reply gained, changed or lost an
+// attribute, other than priv-lvl, which priv_lvl judges, that bears privilege
+// under either version's adapter or any shipped set, other than by provably
+// going down (attributeRose; spec §12).
+func replyRose(old, new, oldRendered, newRendered []string, before, after platform.Dialect) bool {
+	was, is := attributesByName(old), attributesByName(new)
+	names := sortedKeys(was)
+	for _, n := range sortedKeys(is) {
+		if !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	for _, name := range names {
+		if attributeRose(name, was[name], is[name], oldRendered, newRendered, before, after) {
+			return true
+		}
+	}
+	return false
+}
+
+// attributeRose is whether a privilege-bearing attribute went up in the
+// diff: priv-lvl aside, which each caller judges as a number, and only for an
+// attribute that bears privilege under either adapter or any shipped set
+// (bearsPrivilege), by the one judgment the ceiling check shares (rose).
+func attributeRose(name string, from, to, fromRendered, toRendered []string, before, after platform.Dialect) bool {
+	return !strings.EqualFold(name, "priv-lvl") && bearsPrivilege(name, before, after) &&
+		rose(from, to, fromRendered, toRendered, before, after)
+}
+
+// rose is the one judgment of whether an attribute's values went up: from
+// its values in one reply to its values in another, each read beside what the
+// level it came from renders. The diff gate asks it of a reply's old and new
+// values (attributeRose), and the joint check asks it of the ceiling's
+// rendering and the reply sent under the ceiling (exceeds), so the two cannot
+// disagree about what raises a session (final review I1). Which attributes
+// each asks about differs: the diff gates every change it cannot read, and the
+// ceiling bounds only what can carry privilege (raisesCeiling).
+//
+// A change rises unless it provably goes down: one value a level renders
+// replaced by one value the other level renders, which role_order ranks
+// strictly below under both adapters. A subject moved from admin to readonly
+// on EOS is lowered because network-operator ranks below network-admin (L16),
+// not because readonly is below admin, which a custom level's parent can make
+// untrue of what it renders. Anything else changes what the device lets the
+// session do in a direction nobody can read: a role's or grant's attribute
+// either way (on a session-only platform losing deny-commands widens access),
+// and a role no adapter ranks, which ranks above every role.
+func rose(from, to, fromRendered, toRendered []string, before, after platform.Dialect) bool {
+	if slices.Equal(from, to) {
+		return false
+	}
+	return len(from) != 1 || len(to) != 1 || !slices.Contains(fromRendered, from[0]) ||
+		!slices.Contains(toRendered, to[0]) || !before.Lowers(from[0], to[0]) || !after.Lowers(from[0], to[0])
+}
+
+// attributesByName is a reply's attributes keyed by name.
+func attributesByName(reply []string) map[string][]string {
+	out := map[string][]string{}
+	for _, a := range reply {
+		out[engine.AttributeName(a)] = append(out[engine.AttributeName(a)], a)
+	}
+	return out
 }
 
 // enableRank orders the mechanisms by what they ask of an escalation: none
@@ -973,4 +1085,111 @@ func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]
 		}
 	}
 	return acks
+}
+
+// bearsPrivilege reports whether the gate reads an attribute as bearing
+// privilege: under the stricter of the two versions' adapters, and always
+// where any platform set port49 ships lists it as bearing privilege. Which
+// attributes bear privilege is itself read from the adapters, so an edit that
+// lists an attribute inert cannot hide a change to that attribute in the same
+// diff, and no adapter, however it was loaded, unlists a shipped one (review
+// M8, 2026-09-24).
+func bearsPrivilege(name string, before, after platform.Dialect) bool {
+	return before.BearsPrivilege(name) || after.BearsPrivilege(name) ||
+		platform.ContainsName(platform.PrivilegeAttributeNames(), name)
+}
+
+// adapters compares each platform's adapter, key by key, for every platform
+// the inventory has devices of and every platform either version has an
+// adapter for. A block for a platform no device has yet is compared too: the
+// inventory is not diffed, so the day a device of it arrives is no review
+// (pre-flight B2). Each side is the platform's effective adapter
+// (adapterSpec), the generic one where the version has none.
+func (c *comparison) adapters() {
+	platforms := map[string]bool{}
+	for _, p := range []*Policy{c.before, c.after} {
+		for _, d := range p.Devices() {
+			platforms[d.Platform] = true
+		}
+		for name := range p.adapters {
+			platforms[name] = true
+		}
+	}
+	// The generic adapter is what every device of a platform with no adapter
+	// receives, the first device of one the inventory does not yet have
+	// included, so a moved pin that changes it is gated like any adapter
+	// (owner's ruling 2026-09-24, task 13).
+	platforms[genericPlatform] = true
+	keys := platform.SpecKeys()
+	// A secret either version's text holds is hidden on both sides: an edit
+	// that removes a block's pattern still prints the old text.
+	patterns := slices.Concat(c.before.Redactions(), c.after.Redactions())
+	secret := c.before.SecretClasses()
+	for class := range c.after.SecretClasses() {
+		secret[class] = true
+	}
+	shown := func(p *Policy, name string) reflect.Value {
+		return reflect.ValueOf(p.shownSpec(name, patterns, secret))
+	}
+	for _, name := range sortedKeys(platforms) {
+		was := reflect.ValueOf(c.before.adapterSpec(name))
+		is := reflect.ValueOf(c.after.adapterSpec(name))
+		wasShown, isShown := shown(c.before, name), shown(c.after, name)
+		for i, key := range keys {
+			if reflect.DeepEqual(was.Field(i).Interface(), is.Field(i).Interface()) {
+				continue
+			}
+			a := AdapterChange{Platform: name, Field: key, Old: canonical(was.Field(i).Interface()),
+				New: canonical(is.Field(i).Interface()), OldShown: canonical(wasShown.Field(i).Interface()),
+				NewShown: canonical(isShown.Field(i).Interface()), Gated: adapterKeyGated(key)}
+			a.Sha256 = fmt.Sprintf("%x", sha256.Sum256([]byte(a.New)))
+			for _, ack := range c.after.acked {
+				// The digest binds the entry to this edit: one left in the file
+				// from an earlier edit to the key names another value, and
+				// acknowledges nothing (task 9 review C1).
+				if a.Gated && ack.Platform == name && ack.Field == key && ack.Sha256 == a.Sha256 {
+					a.Acknowledged, a.AcknowledgedBy = true, ack.Reason
+					c.usedAcks[ack] = true
+				}
+			}
+			c.d.Adapters = append(c.d.Adapters, a)
+		}
+	}
+}
+
+// adapterSpec is the platform's effective adapter in this version as the diff
+// compares it. Where the version has no adapter for the name, supports is
+// unset (save on the generic adapter itself, compared whole): the generic
+// adapter's `session` is assumed, not measured, and an
+// unmeasured platform is not treated as session-only (normalizeFor). So a
+// block equal to the generic adapter still shows as an edit to supports, the
+// key that makes the platform session-only and turns off abbreviation
+// matching on its denies (task 9 review I2).
+func (p *Policy) adapterSpec(name string) platform.Spec {
+	s := platform.SpecOf(p.dialect(name))
+	if _, known := p.platforms()[name]; !known && name != genericPlatform {
+		s.Supports = nil
+	}
+	return s
+}
+
+// shownSpec is adapterSpec with a block's text as port49 may print it
+// (platform.RedactAdapter).
+func (p *Policy) shownSpec(name string, patterns []platform.Redaction, secret map[string]bool) platform.Spec {
+	s := platform.SpecOf(platform.RedactAdapter(patterns, secret, p.dialect(name)))
+	if _, known := p.platforms()[name]; !known && name != genericPlatform {
+		s.Supports = nil
+	}
+	return s
+}
+
+// canonical is an adapter value as JSON, the text an acknowledgment's digest
+// is taken over. Every Spec field marshals; were one not to, the change is
+// still shown, and gated like any other.
+func canonical(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "unrenderable: " + err.Error()
+	}
+	return string(b)
 }

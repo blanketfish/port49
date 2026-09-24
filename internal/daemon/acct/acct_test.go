@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -692,5 +693,62 @@ func TestASystemRecordCarriesItsPort(t *testing.T) {
 	}
 	if m["attribution"] != "system" || m["session"].(map[string]any)["port"] != "ttyd0" {
 		t.Fatalf("a system record must stay system and carry the port it arrived on: %v", m)
+	}
+}
+
+// Command accounting carries typed text verbatim, so a secret is replaced
+// before the record reaches the spool, which is on disk (spec §5.8). The
+// record keeps its shape and says it was redacted, and the attribution was
+// read from the record as sent.
+func TestAccountingNeverWritesASecret(t *testing.T) {
+	h, _, out, stop := setup(t)
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=44", "service=shell",
+		"cmd=enable", "cmd-arg=secret", "cmd-arg=0", "cmd-arg=Hunter2", "cmd-arg=<cr>"))
+	junos := authen.Peer{NAS: "srx-01", NASAddr: "10.20.0.8", Platform: "juniper_junos"}
+	h.Handle(context.Background(), junos, acct(wire.AcctFlagStop, "alice", "0", "task_id=2", "service=shell",
+		"session_pid = 31050", `cmd=set system root-authentication encrypted-password "$6$abc" <cr>`))
+	stop()
+	if strings.Contains(out.String(), "Hunter2") || strings.Contains(out.String(), "$6$abc") {
+		t.Fatalf("a secret reached the sink: %s", out.String())
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	var m map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &m); err != nil {
+		t.Fatal(err)
+	}
+	rec := m["record"].(map[string]any)
+	vec := rec["vector"].([]any)
+	if m["attribution"] != "resolved" || rec["redacted"] != true || len(vec) != 4 || vec[2] != platform.Redacted ||
+		vec[3] != platform.Redacted {
+		t.Fatalf("%v", m)
+	}
+}
+
+// The spool is a file, and it is written before the sink ever sees the
+// record: a secret must be gone by then, not only by the time the record is
+// forwarded (spec §5.8). A redactor the daemon is given applies in place of
+// the built-in one.
+func TestTheSpoolFileNeverHoldsASecret(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "spool.jsonl")
+	sp, err := NewSpool(16, path, decision.NewJSONLines(&bytes.Buffer{}), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No Run: nothing drains, so every record stays in the file.
+	h := New(memory.New(time.Now), sp, metrics.New(prometheus.NewRegistry()), time.Now, nil)
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=45", "service=shell",
+		"cmd=username", "cmd-arg=bob", "cmd-arg=secret", "cmd-arg=Hunter2", "cmd-arg=<cr>"))
+	h.WithRedactor(func(string) []platform.Redaction {
+		return []platform.Redaction{{Match: []string{"**"}, After: "psk"}}
+	})
+	h.Handle(context.Background(), peer, acct(wire.AcctFlagStop, "alice", "vty0", "task_id=46", "service=shell",
+		"cmd=crypto", "cmd-arg=psk", "cmd-arg=s3cret", "cmd-arg=<cr>"))
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "Hunter2") || strings.Contains(string(b), "s3cret") ||
+		strings.Count(string(b), `"redacted":true`) != 2 {
+		t.Fatalf("the spool file: %s", b)
 	}
 }

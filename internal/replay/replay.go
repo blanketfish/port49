@@ -29,7 +29,8 @@ const (
 	// Diverge: it does not, or the blob in the log is not the one its hash
 	// names.
 	Diverge Status = "diverge"
-	// Unverifiable: the log does not carry the blob the record names.
+	// Unverifiable: the log does not carry the blob the record names, or the
+	// record was redacted before it was written (spec §5.8).
 	Unverifiable Status = "unverifiable"
 	// Skipped: an authorization denied for a reason decided before any policy
 	// ran. It is counted, so a record cannot leave the replay unseen.
@@ -123,12 +124,27 @@ type program struct {
 	blob    engine.Blob
 	prog    *engine.Program
 	failure string
+	// redacted is set for a blob event logged with its rule text redacted
+	// (spec §5.8): not the blob its hash names, and no divergence either.
+	redacted bool
+}
+
+// rank orders two copies of one blob event: a verbatim one that compiles,
+// then a redacted one, then one that failed.
+func (p *program) rank() int {
+	switch {
+	case p.failure != "":
+		return 2
+	case p.redacted:
+		return 1
+	}
+	return 0
 }
 
 func (rp *replayer) read(n int, rec decision.Record) {
 	switch {
 	case rec.Event == decision.EventBlob && rec.Blob != nil:
-		rp.blob(n, rec.Blob.Hash, rec.Blob.Body)
+		rp.blob(n, rec.Blob.Hash, rec.Blob.Body, rec.Blob.Redacted)
 	case rec.Event == decision.EventAuthorizeCommand || rec.Event == decision.EventAuthorizeSession:
 		if rp.only != 0 && rp.only != n {
 			return
@@ -162,10 +178,15 @@ func (rp *replayer) read(n int, rec decision.Record) {
 // it. Every blob event is checked against its name whether or not a record
 // names it: a bad one is a divergence on its own line, and does not displace
 // a good copy read earlier.
-func (rp *replayer) blob(n int, hash string, body []byte) {
-	p := &program{}
+func (rp *replayer) blob(n int, hash string, body []byte, redacted bool) {
+	p := &program{redacted: redacted}
 	b, err := engine.Decode(hash, body)
 	switch {
+	case redacted:
+		// Its body does not hash to its name, by design: the rules it
+		// carries are not the ones that decided, so nothing is compiled from
+		// them. Flipping the flag on a verbatim event only makes its
+		// records unverifiable, never agree.
 	case errors.Is(err, engine.ErrHashMismatch):
 		p.failure = "the blob event for " + hash + " does not hash to its name: the log was altered"
 	case err != nil:
@@ -179,7 +200,7 @@ func (rp *replayer) blob(n int, hash string, body []byte) {
 	if p.failure != "" && (rp.only == 0 || rp.only == n) {
 		rp.emit(numbered{n, decision.Record{Event: decision.EventBlob}}, Diverge, p.failure)
 	}
-	if prev, ok := rp.programs[hash]; ok && (prev.failure == "" || p.failure != "") {
+	if prev, ok := rp.programs[hash]; ok && prev.rank() <= p.rank() {
 		return
 	}
 	rp.programs[hash] = p
@@ -217,6 +238,10 @@ func one(rec decision.Record, p *program) (Status, string) {
 	if p.failure != "" {
 		return Diverge, p.failure
 	}
+	if p.redacted {
+		return Unverifiable, "the blob event for " + rec.Policy.Blob + " was redacted before it was written (spec " +
+			"§5.8): the log does not carry the blob the hash names"
+	}
 	hash, b, prog := rec.Policy.Blob, p.blob, p.prog
 	if rec.Policy.Bundle != b.Bundle {
 		return Diverge, fmt.Sprintf("the record names bundle %s; its blob was compiled from %s", rec.Policy.Bundle, b.Bundle)
@@ -247,6 +272,12 @@ func one(rec decision.Record, p *program) (Status, string) {
 	case rec.Event == decision.EventAuthorizeCommand:
 		if rec.Request == nil {
 			return Diverge, "the record has no request to replay"
+		}
+		if rec.Request.Redacted {
+			// The command it decided is not in the log, by design: replaying
+			// the redacted words would claim an agreement nobody can check.
+			return Unverifiable, "the record was redacted before it was written (spec §5.8), so the command it " +
+				"decided is not in the log"
 		}
 		o := prog.Command(rec.Request.Raw)
 		reason = o.Reason

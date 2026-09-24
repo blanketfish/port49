@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -238,3 +239,93 @@ func field(m *yaml.Node, key string) string {
 	}
 	return ""
 }
+
+// SetPlatformSet is the policy file pinned to version, for `port49 platform
+// upgrade` (spec §8): the `platform_set:` line rewritten where the file has
+// one, or a line added where it pins none, at the top or just after a leading
+// `---` so the file stays one document. Every other byte is the operator's,
+// line endings included, so the pull request shows only the pin; and the
+// result is read back, so a pin the rewrite did not produce exactly is refused
+// rather than written.
+func SetPlatformSet(raw []byte, version string) ([]byte, error) {
+	if !setVersionShape.MatchString(version) {
+		return nil, fmt.Errorf("%q is not a platform set version: dotted numbers, as 1.0.0", version)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, errors.New("the policy file is not a YAML mapping")
+	}
+	if doc.Content[0].Style&yaml.FlowStyle != 0 {
+		// One line holds every key: rewriting it would drop the rest.
+		return nil, errors.New("the policy file is one flow mapping; write it in block style to move the pin")
+	}
+	// YAML ends a line at a bare CR too, and the split below does not: the
+	// node's line numbers would point past its lines (task 13 review).
+	if bytes.Contains(bytes.ReplaceAll(raw, []byte("\r\n"), nil), []byte("\r")) {
+		return nil, errors.New("the policy file ends a line with a bare CR; save it with LF or CRLF line endings " +
+			"to move the pin")
+	}
+	lines := bytes.SplitAfter(raw, []byte("\n"))
+	eol := "\n"
+	if bytes.HasSuffix(lines[0], []byte("\r\n")) {
+		eol = "\r\n"
+	}
+	top := doc.Content[0]
+	at, pinned := 0, false
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		key, value := top.Content[i], top.Content[i+1]
+		if key.Value != "platform_set" {
+			continue
+		}
+		if value.Kind != yaml.ScalarNode || value.Line != key.Line || value.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0 {
+			return nil, errors.New("platform_set is not a one-line value; write it as `platform_set: 1.0.0`")
+		}
+		if bytes.HasSuffix(lines[key.Line-1], []byte("\r\n")) {
+			eol = "\r\n"
+		}
+		lines[key.Line-1], at, pinned = nil, key.Line-1, true
+		break
+	}
+	if !pinned && len(top.Content) > 0 {
+		// A pin the file lacks goes after the document marker, where the
+		// document starts.
+		for i := 0; i < top.Content[0].Line-1 && i < len(lines); i++ {
+			if l := bytes.TrimRight(lines[i], "\r\n"); bytes.Equal(l, []byte("---")) || bytes.HasPrefix(l, []byte("--- ")) {
+				at = i + 1
+			}
+		}
+	}
+	out := bytes.Join(lines[:at], nil)
+	out = append(out, "platform_set: "+version+eol...)
+	out = append(out, bytes.Join(lines[at:], nil)...)
+	if err := pinnedOnce(out, version); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// pinnedOnce checks a rewritten policy file is one document whose pin is
+// version exactly.
+func pinnedOnce(raw []byte, version string) error {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	var f struct {
+		PlatformSet string `yaml:"platform_set"`
+	}
+	if err := dec.Decode(&f); err != nil {
+		return fmt.Errorf("the pinned file does not read back: %v", err)
+	}
+	if f.PlatformSet != version {
+		return fmt.Errorf("the pinned file reads back platform_set %q, not %s; write it as `platform_set: %s`",
+			f.PlatformSet, version, version)
+	}
+	if err := dec.Decode(new(yaml.Node)); err != io.EOF {
+		return errors.New("the pinned file is not one YAML document")
+	}
+	return nil
+}
+
+// setVersionShape is a platform set version as a pin writes it.
+var setVersionShape = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*$`)

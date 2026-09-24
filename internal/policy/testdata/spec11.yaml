@@ -2,8 +2,8 @@
 # are not here, and two values are, each corrected in the spec by the same
 # plan:
 #
-#   - `platform_set` is plan 5's and `key_groups` live in the inventory file
-#     until plan 6 (spec11-inventory.yaml carries §11's two groups).
+#   - `platform_set` is left to its default, 1.0.0, and `key_groups` live in the
+#     inventory file until plan 6 (spec11-inventory.yaml carries both groups).
 #   - svc_oxidized declares the username spec §2 gives it. A machine subject
 #     with no username fails at load (spec §14, "Username resolution"), and
 #     §11 as printed omitted it.

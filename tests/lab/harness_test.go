@@ -1533,6 +1533,166 @@ func (l *lab) login(user, password string, commands ...string) ([]string, error)
 	return outs, nil
 }
 
+// notObserved is loginWithin's error when a session opened and some of its
+// commands did not finish: each such command, with why ("deadline", or "not
+// run" for one after a connection that had to be closed). What such a
+// command did on the device is not observed, never a refusal: a caller that
+// reads a missing authorization record as "refused by the device" must check
+// for this first (task 17 review I1).
+type notObserved struct {
+	commands []string          // in the order sent
+	why      map[string]string // command → reason
+}
+
+func (e *notObserved) add(cmd, why string) {
+	if e.why == nil {
+		e.why = map[string]string{}
+	}
+	e.commands = append(e.commands, cmd)
+	e.why[cmd] = why
+}
+
+func (e *notObserved) Error() string {
+	var parts []string
+	for _, c := range e.commands {
+		parts = append(parts, c+": "+e.why[c])
+	}
+	return "not observed (" + strings.Join(parts, "; ") + ")"
+}
+
+// loginWithin is login with a deadline on each command: a channel the device
+// never answers is closed at per, rather than a run that waits forever. The
+// first NX-OS run of TestAdapterReplies hung for 76 minutes on an exec
+// channel the device opened no command on. If closing the channel does not
+// free it within 10s, the whole connection is closed and the commands after
+// it are not run. Either way the error is a *notObserved naming each command
+// that did not finish; outs holds what arrived, one entry per command sent.
+func (l *lab) loginWithin(user, password string, per time.Duration, commands ...string) ([]string, error) {
+	if l.p.name == "cisco_iosxe" {
+		return l.ptyCommands(user, password, per, commands...)
+	}
+	c, err := l.dial(user, password, 45*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	var outs []string
+	var missed notObserved
+	for i, cmd := range commands {
+		var buf syncBuf
+		done := make(chan error, 1)
+		var s *ssh.Session
+		var smu sync.Mutex
+		go func() {
+			sess, err := c.NewSession()
+			if err != nil {
+				done <- err
+				return
+			}
+			smu.Lock()
+			s = sess
+			smu.Unlock()
+			sess.Stdout, sess.Stderr = &buf, &buf
+			_ = sess.Run(cmd)
+			sess.Close()
+			done <- nil
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				for _, rest := range commands[i:] {
+					missed.add(rest, "not run: "+oneLine(err.Error()))
+				}
+				return outs, &missed
+			}
+			outs = append(outs, buf.String())
+			continue
+		case <-time.After(per):
+		}
+		smu.Lock()
+		if s != nil {
+			s.Close()
+		}
+		smu.Unlock()
+		missed.add(cmd, "deadline")
+		select {
+		case <-done:
+			outs = append(outs, buf.String())
+			continue
+		case <-time.After(10 * time.Second):
+		}
+		c.Close()
+		outs = append(outs, buf.String())
+		for _, rest := range commands[i+1:] {
+			missed.add(rest, "not run")
+		}
+		return outs, &missed
+	}
+	if len(missed.commands) > 0 {
+		return outs, &missed
+	}
+	return outs, nil
+}
+
+// ptyCommands is loginWithin for IOS-XE: the C8000V 17.13.01a runs one exec
+// channel per SSH connection and answers the second with EOF (this task's
+// first IOS-XE pass), so each command is typed at the prompt of one pty
+// session instead, paging off first. A `[confirm]` is answered `n`: the
+// command's authorization has already happened by then. A command that
+// reaches configuration mode is followed by `end`. Each output is the
+// command's reply without its echo or the prompt after it. A command whose
+// prompt does not return within per ends the session: it and the rest are
+// returned as *notObserved.
+func (l *lab) ptyCommands(user, password string, per time.Duration, commands ...string) ([]string, error) {
+	c, err := l.sshCLI(user, password)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	prompts := []string{l.p.node + "#", l.p.node + ">"}
+	if _, err := c.expect(60*time.Second, prompts...); err != nil {
+		return nil, err
+	}
+	if _, err := c.sendExpect("terminal length 0", per, prompts...); err != nil {
+		return nil, err
+	}
+	// A command that enters configuration mode ends at the configuration
+	// prompt, and `end` leaves it again so the next command runs in exec.
+	cfg := l.p.node + "(config"
+	var outs []string
+	for _, cmd := range commands {
+		out, err := c.sendExpect(cmd, per, append([]string{"[confirm]", cfg}, prompts...)...)
+		if err == nil && strings.Contains(out, "[confirm]") {
+			var more string
+			more, err = c.sendExpect("n", per, prompts...)
+			out += more
+		}
+		if err == nil && strings.Contains(out, cfg) {
+			_, err = c.sendExpect("end", per, prompts...)
+		}
+		lines := strings.Split(strings.ReplaceAll(out, "\r", ""), "\n")
+		if len(lines) > 0 {
+			lines = lines[1:]
+		}
+		for len(lines) > 0 && (strings.TrimSpace(lines[len(lines)-1]) == "" ||
+			strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), l.p.node)) {
+			lines = lines[:len(lines)-1]
+		}
+		outs = append(outs, strings.Join(lines, "\n"))
+		if err != nil {
+			// The prompt never came back, so this command and every one
+			// after it are not observed.
+			var missed notObserved
+			missed.add(cmd, "deadline")
+			for _, rest := range commands[len(outs):] {
+				missed.add(rest, "not run")
+			}
+			return outs, &missed
+		}
+	}
+	return outs, nil
+}
+
 // holdSession opens an interactive shell with a pty and holds it idle for d.
 // That is the session shape a WATCHDOG is sent for: a logged-in operator who is
 // not typing.

@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -46,10 +47,11 @@ func mustParse(t *testing.T, body string) *Policy {
 }
 
 // unmappedLevel declares a level, between operator and admin, that no
-// built-in platform renders or numbers: a role landing an arista_eos session
-// there quarantines the device, and a ceiling naming it loads nowhere. Since
-// the owner's ruling of 2026-09-24 `operator` renders on EOS (spec §6,
-// decision 23), so it is the tests' stand-in for a level with no mapping.
+// built-in platform renders or numbers: a role landing a session there
+// quarantines every device whose platform renders levels — arista_eos,
+// cisco_nxos and cisco_iosxe since plan 5 — and a ceiling naming it loads
+// nowhere. juniper_junos renders nothing until plan 5b's projection, so its
+// devices are the tests' devices that still mint.
 const unmappedLevel = "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"
 
 // good is spec §11's shape, cut to what every platform in inventory() can
@@ -127,11 +129,20 @@ const grantOK = "grants:\n  - {subject: s, scope: all_devices, roles: [r]}\n"
 // plan lifts it.
 func TestLoadRefusesByName(t *testing.T) {
 	for _, tt := range []struct{ name, yaml, want string }{
-		{"platform_set", "platform_set: 1.4.0\n" + roleOK + subjOK, "plan 5"},
+		{"a platform set this binary does not ship", "platform_set: 1.4.0\n" + roleOK + subjOK, "it ships 1.0.0"},
 		{"key_groups", "key_groups: []\n" + roleOK + subjOK, "inventory file"},
-		{"platforms", "platforms: {arista_eos: {}}\n" + roleOK + subjOK, "plan 5"},
 		{"a role's max_session_age", "roles:\n  - {name: r, max_session_age: 8h}\n" + subjOK, "plan 7"},
-		{"an unknown key", scopeOK + roleOK + subjOK + "gratns: []\n", "field gratns not found"},
+		{"an unknown key", scopeOK + roleOK + subjOK + "gratns: []\n", "line 7: an unknown field in type policy.file"},
+		{"an acknowledgment of two shapes", scopeOK + roleOK + subjOK +
+			"acknowledge: [{role: r, rule: x, platform: arista_eos, field: supports, reason: y}]\n", "one of the two"},
+		{"an acknowledgment of no adapter key", scopeOK + roleOK + subjOK +
+			"acknowledge: [{platform: arista_eos, field: suports, reason: y}]\n", "field is one of an adapter's keys"},
+		{"an adapter acknowledgment with no digest", scopeOK + roleOK + subjOK +
+			"acknowledge: [{platform: arista_eos, field: supports, reason: y}]\n", "sha256 is required"},
+		{"an adapter acknowledgment with a short digest", scopeOK + roleOK + subjOK +
+			"acknowledge: [{platform: arista_eos, field: supports, sha256: abc123, reason: y}]\n", "sha256 is required"},
+		{"a deny acknowledgment with a digest", scopeOK + roleOK + subjOK + "acknowledge: [{role: r, rule: x, sha256: " +
+			strings.Repeat("0", 64) + ", reason: y}]\n", "one of the two"},
 		{"a second document", scopeOK + roleOK + subjOK + grantOK + "---\nscopes: []\n", "one YAML document"},
 		{"an empty file", "", "declares no subjects"},
 		{"a duration with no unit", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, token_ttl: 60}\n", "need a unit"},
@@ -143,7 +154,7 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a duplicate role", "roles:\n  - {name: r}\n  - {name: r}\n" + subjOK, "declared twice"},
 		{"a non-trailing **", "roles:\n  - {name: r, permit: [\"show ** detail\"]}\n" + subjOK, "trailing-only"},
 		{"a regex that is *", "roles:\n  - {name: r, permit: [\"show /^.*$/\"]}\n" + subjOK, "is `*`"},
-		{"a regex that is a word", "roles:\n  - {name: r, deny: [\"/^reload$/ **\"]}\n" + subjOK, "the word `reload`"},
+		{"a regex that is a word", "roles:\n  - {name: r, deny: [\"/^reload$/ **\"]}\n" + subjOK, "deny #1: term 1 is a regex that is one word"},
 		{"a case-sensitive regex", "roles:\n  - {name: r, deny: [\"* * /(?-i)^TFTP:/\"]}\n" + subjOK, "case-insensitively"},
 		{"a case-sensitive group", "roles:\n  - {name: r, deny: [\"interface /(?s-i:^Mgmt)/\"]}\n" + subjOK, "case-insensitively"},
 		{"a class no platform defines", "roles:\n  - {name: r, permit: [\"interface @uplinks\"]}\n" + subjOK, "which no platform defines"},
@@ -193,7 +204,7 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a test expecting maybe", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: x, expect: maybe}\n", "permit or deny"},
 		{"a test principal in no form", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {principal: alice, device: leaf-01, command: x, expect: deny}\n", "no recognized form"},
 		{"an upper-case test principal", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {principal: \"user:A@example.com\", device: leaf-01, command: x, expect: deny}\n", `write "user:a@example.com"`},
-		{"a test reason outside spec §5.7", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: deny, reason: no_grant_matched}\n", "not a reason"},
+		{"a test reason outside spec §5.7", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: deny, reason: no_grant_matched}\n", "the reason is not in spec §5.7's vocabulary"},
 		{"a test with no command and nothing asserted", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01}\n", "command is required, or a session test's level, max_privilege, priv_lvl, enable, reply or api"},
 		{"a session test with an expect", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, level: admin, expect: permit}\n", "a session test takes no expect"},
 		{"a test level that is not a level", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, level: root}\n", `level: "root" is not a privilege level`},
@@ -201,8 +212,8 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"an acknowledgment with no reason", "acknowledge:\n  - {role: guard, rule: \"reload **\"}\n" + subjOK, "acknowledge[0]: reason is required"},
 		{"an acknowledgment with a blank reason", "acknowledge:\n  - {role: guard, rule: \"reload **\", reason: \"  \"}\n" + subjOK, "reason is required"},
 		{"an acknowledgment with no rule", "acknowledge:\n  - {role: guard, reason: why}\n" + subjOK, "acknowledge[0]: role and rule are required"},
-		{"a test api right that is not a right", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, api: [root]}\n", `api: "root" is not a right`},
-		{"a test error names its row", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: maybe}\n", `tests[0] (subject s, device leaf-01, "reload"): `},
+		{"a test api right that is not a right", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, api: [root]}\n", `api[0] is not a right`},
+		{"a test error names its row", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: maybe}\n", `tests[0] (subject s, device leaf-01): `},
 		{"a grant error names its row", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [x]}\n", `grants[0] (subject s, scope all_devices): role "x"`},
 		{"the same grant twice", scopeOK + roleOK + "  - {name: q, permit: [show **]}\n" + subjOK +
 			"grants:\n  - {subject: s, scope: all_devices, roles: [r, q]}\n  - {subject: s, scope: all_devices, roles: [q, r], expires: 2026-12-01}\n",
@@ -431,11 +442,91 @@ func TestAScopeErrorIsTheSameEveryLoad(t *testing.T) {
 }
 
 // A placeholder goes only in an attribute listed inert: home-directory, spec
-// §6's motivating case, on every platform (review I4).
+// §6's motivating case, on every platform that holds it inert (review I4).
+// IOS-XE does not: the C8000V refused a session for it
+// (tests/lab/results/L22-cisco_iosxe.md), so there, and under `all`, which
+// reaches IOS-XE, a placeholder in it is refused.
 func TestAPlaceholderGoesOnlyInAnInertAttribute(t *testing.T) {
-	for _, key := range []string{"all", "arista_eos", "juniper_junos"} {
-		if _, err := Parse([]byte("roles:\n  - {name: r, attributes: {"+key+": [\"home-directory*/home/{username}\"]}}\n"+subjOK), env()); err != nil {
+	parse := func(key string) error {
+		_, err := Parse([]byte("roles:\n  - {name: r, attributes: {"+key+": [\"home-directory*/home/{username}\"]}}\n"+subjOK), env())
+		return err
+	}
+	for _, key := range []string{"arista_eos", "cisco_nxos", "juniper_junos"} {
+		if err := parse(key); err != nil {
 			t.Errorf("%s: %v", key, err)
+		}
+	}
+	for _, key := range []string{"all", "cisco_iosxe"} {
+		if err := parse(key); err == nil || !strings.Contains(err.Error(),
+			"home-directory is not listed inert on cisco_iosxe, so it takes no placeholder") {
+			t.Errorf("%s: %v", key, err)
+		}
+	}
+}
+
+// A policy pins the platform set it renders with (spec §8). One that pins none
+// renders with 1.0.0, the first set, on every binary; a set this binary does
+// not ship is refused by name (TestLoadRefusesByName).
+func TestAPolicyPinsItsPlatformSet(t *testing.T) {
+	body := scopeOK + roleOK + subjOK + grantOK
+	if p := mustParse(t, body); p.PlatformSet() != platform.UnpinnedSet || p.PlatformSet() != "1.0.0" {
+		t.Fatalf("unpinned: %q", p.PlatformSet())
+	}
+	p := mustParse(t, "platform_set: 1.0.0\n"+body)
+	if p.PlatformSet() != "1.0.0" {
+		t.Fatalf("pinned: %q", p.PlatformSet())
+	}
+	want, _ := platform.Set("1.0.0")
+	if got := p.Dialect("cisco_iosxe"); !reflect.DeepEqual(got, want["cisco_iosxe"]) {
+		t.Fatalf("the pinned set's adapter: %+v", got)
+	}
+}
+
+// A refused policy's error is printed by port49d at start and on every
+// reload, and by policy test, diff and explain, and it goes to logs. It
+// quotes no rule text and no term: it names the role, the list, the rule's
+// position and the problem, and the operator finds the rule in the file.
+// Redacting the quote is not enough: the refused file's own redaction
+// patterns never loaded (spec §5.8; task 11 review C2, fail closed).
+func TestALoadErrorQuotesNoRuleText(t *testing.T) {
+	for _, tt := range []struct{ name, yaml, want string }{
+		{"a regex that is a word", `deny: [reload, "snmp-server community /^Hunter2$/"]`,
+			`role "r": deny #2: term 3 is a regex that is one word; write the word instead`},
+		{"a case-sensitive deny", `deny: ["snmp-server community /(?-i)Hunter2/"]`,
+			`role "r": deny #1: term 3 turns case-insensitivity off`},
+		{"a regex that does not compile", `permit: [show, "crypto psk /Hunter2(/"]`,
+			`role "r": permit #2: term 3 is a regex that does not compile`},
+		{"a class no platform defines", `permit: ["snmp-server community @hunter2_list"]`,
+			`role "r": permit #1: term 3 names a class which no platform defines`},
+		{"a term that is not a class name", `deny: ["snmp-server community @Hunter2"]`,
+			`role "r": deny #1: term 3 is not a class name`},
+		{"a wildcard inside a word", `deny: ["snmp-server community Hunt*er2"]`,
+			`role "r": deny #1: term 3 puts a wildcard inside a word`},
+		{"a non-trailing **", `permit: ["crypto psk ** Hunter2"]`, `role "r": permit #1: term 3: `},
+		{"a pipe permit", `pipe: {permit: ["include /^Hunter2$/"]}`,
+			`role "r": pipe #1: term 2 is a regex that is one word`},
+		{"a string where a list goes", `deny: "snmp-server community Hunter2"`, "cannot unmarshal"},
+		{"a short string where a list goes", `deny: Hunter2`, "cannot unmarshal"},
+	} {
+		_, err := Parse([]byte("roles:\n  - {name: r, "+tt.yaml+"}\n"+subjOK), env())
+		if err == nil || !strings.Contains(err.Error(), tt.want) || strings.Contains(strings.ToLower(err.Error()), "hunt") {
+			t.Errorf("%s: %v", tt.name, err)
+		}
+	}
+}
+
+// A block with two bad keys names the same one every run, the first in name
+// order: a map's order is random, and a refusal that changes from run to run
+// reads as a flaky check (final review M10).
+func TestAnAttributeRefusalNamesTheSameKeyEveryRun(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {zz_os: ["a=1"], mm_os: ["b=2"], aa_os: ["c=3"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]`
+	for range 30 {
+		if _, err := Parse([]byte(body), env()); err == nil || !strings.Contains(err.Error(), `"aa_os"`) {
+			t.Fatalf("%v", err)
 		}
 	}
 }

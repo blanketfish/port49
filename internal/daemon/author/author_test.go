@@ -15,6 +15,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
@@ -968,4 +969,85 @@ type countingTouchStore struct {
 func (c *countingTouchStore) TouchContext(ctx context.Context, k store.ContextKey, ttl time.Duration) error {
 	c.touches++
 	return c.Store.TouchContext(ctx, k, ttl)
+}
+
+// A typed secret is authorized like any command and never written: the
+// record's raw pairs and vector carry «redacted» where it was, keep their
+// shape, and say they were redacted (spec §5.7, §5.8). A redactor the daemon
+// is given — the policy in force's — applies in place of the built-in one.
+func TestASecretIsDecidedButNeverWritten(t *testing.T) {
+	h, _, log := setup(t)
+	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=username",
+		"cmd-arg=bob", "cmd-arg=secret", "cmd-arg=Hunter2", "cmd-arg=<cr>"))
+	if resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("%+v", resp)
+	}
+	if strings.Contains(log.String(), "Hunter2") {
+		t.Fatalf("the secret reached the log: %s", log.String())
+	}
+	r := lastRecord(t, log)["request"].(map[string]any)
+	raw, vec := r["raw"].([]any), r["vector"].([]any)
+	if r["redacted"] != true || len(raw) != 6 || raw[4] != "cmd-arg="+platform.Redacted || raw[5] != "cmd-arg=<cr>" ||
+		len(vec) != 4 || vec[3] != platform.Redacted || vec[2] != "secret" {
+		t.Fatalf("%v", r)
+	}
+	// A command with nothing to redact says nothing about it.
+	h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show", "cmd-arg=version"))
+	if r := lastRecord(t, log)["request"].(map[string]any); r["redacted"] != nil {
+		t.Fatalf("%v", r)
+	}
+	h.WithRedactor(func(string) []platform.Redaction {
+		return []platform.Redaction{{Match: []string{"**"}, After: "psk"}}
+	})
+	h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=crypto", "cmd-arg=psk",
+		"cmd-arg=s3cret"))
+	if strings.Contains(log.String(), "s3cret") {
+		t.Fatalf("the redactor the daemon was given did not apply: %s", log.String())
+	}
+}
+
+// ruleAuthz denies every command on a rule whose text carries a literal
+// secret, as the engine would report it.
+type ruleAuthz struct{ *Lab }
+
+func (ruleAuthz) Command(context.Context, Request) Decision {
+	rule := []string{"username", "*", "secret", "Hunter2"}
+	return Decision{Reason: decision.NoPermitDominatesDeny,
+		ServerMsg: engine.DenyMsg("no_backdoor", strings.Join(rule, " ")),
+		Policy: &decision.Policy{MatchedDeny: &decision.PolicyRule{Rule: rule, Specificity: []int{3, 0, 0},
+			Role: "no_backdoor"}}}
+}
+
+// A rule written with a secret in it is echoed wherever the rule is — the
+// denial's server_msg and the record's matched rules — so the echo is
+// redacted as the command is: a policy literal is no safer in a log than a
+// typed one (task 10 note).
+func TestARuleLiteralSecretIsNeverEchoed(t *testing.T) {
+	log := &bytes.Buffer{}
+	st := memory.New(time.Now)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "ctx1", Username: "alice", PrivLvl: 15}, time.Hour)
+	h := New(st, ruleAuthz{&Lab{}}, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now,
+		platform.Defaults(), time.Hour, time.Minute, time.Hour)
+	// The command carries no secret: the echo alone must be redacted, and
+	// the record says so, since its matched rules are not the blob's.
+	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show",
+		"cmd-arg=version"))
+	if resp.Status != wire.AuthorStatusFail || strings.Contains(string(resp.ServerMsg), "Hunter2") ||
+		!strings.Contains(string(resp.ServerMsg), "no_backdoor (username * secret <redacted>)") {
+		t.Fatalf("server_msg %q", resp.ServerMsg)
+	}
+	for _, c := range resp.ServerMsg {
+		if c < 0x20 || c > 0x7e {
+			t.Fatalf("server_msg is not printable ASCII: %q", resp.ServerMsg)
+		}
+	}
+	if strings.Contains(log.String(), "Hunter2") {
+		t.Fatalf("the rule's secret reached the log: %s", log.String())
+	}
+	m := lastRecord(t, log)
+	deny := m["policy"].(map[string]any)["matched_deny"].(map[string]any)["rule"].([]any)
+	if m["request"].(map[string]any)["redacted"] != true || deny[3] != platform.Redacted || deny[2] != "secret" {
+		t.Fatalf("%v", m)
+	}
 }

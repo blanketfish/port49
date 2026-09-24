@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -199,6 +200,13 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
 	}
 	for _, a := range attrs {
 		b.Attributes = append(b.Attributes, a.Attribute)
+	}
+	// The daemon's twin of the joint check below: it refuses a reply the
+	// device would refuse, under the adapter this policy merged.
+	if len(dialect.AcceptedAttributes) > 0 {
+		b.AcceptedAttributes = slices.Clone(dialect.AcceptedAttributes)
+		slices.Sort(b.AcceptedAttributes)
+		b.AcceptedAttributes = slices.Compact(b.AcceptedAttributes)
 	}
 	return b, attrs, nil
 }
@@ -420,6 +428,97 @@ func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []
 	return out
 }
 
+// rendersRoleOnly reports whether d renders levels and none of them with a
+// priv-lvl: the platform expresses a level by its role.
+func rendersRoleOnly(d platform.Dialect) bool {
+	if len(d.Levels) == 0 {
+		return false
+	}
+	for _, attrs := range d.Levels {
+		if slices.ContainsFunc(attrs, func(a string) bool { return engine.AttributeName(a) == "priv-lvl" }) {
+			return false
+		}
+	}
+	return true
+}
+
+// exceeds finds the first attribute of reply, priv-lvl aside, that goes
+// above what level bound renders on the platform, as the diff gate judges a
+// raise (attributeRose): bound's rendering is the reply it is held to, and
+// level, the one the reply was rendered at, says which of its values are a
+// level's own. A reply's attribute bound does not render at all is above it,
+// and a value no role_order ranks is above every value. What bound renders
+// but the reply lacks is not a raise here: a role or grant only adds and
+// overrides, so the reply lacks it because its own level does, and Monotone
+// keeps a level below bound from rendering more than bound does.
+func (p *Policy) exceeds(dialect platform.Dialect, bound, level string, reply []string) (int, bool) {
+	// Nothing sits above the top level (owner's ruling on the fix wave).
+	if len(p.levels) > 0 && bound == p.levels[len(p.levels)-1] {
+		return 0, false
+	}
+	ceiling, _, _ := p.render(dialect, bound)
+	rendered, _, _ := p.render(dialect, level)
+	held, sent := attributesByName(ceiling), attributesByName(reply)
+	for i, a := range reply {
+		name := engine.AttributeName(a)
+		if !strings.EqualFold(name, "priv-lvl") && raisesCeiling(name, dialect) &&
+			rose(held[name], sent[name], ceiling, rendered, dialect, dialect) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// raisesCeiling reports whether an attribute can carry privilege on the
+// platform, and so is bounded by a ceiling: one the adapter or any shipped
+// set lists as bearing privilege, one any level renders there, and one
+// nobody measured, which counts as the highest. Otherwise an attribute the
+// adapter lists inert, or one a closed
+// platform accepts and does not list as bearing privilege — IOS-XE's
+// idletime and timeout, measured changing nothing and held to plain decimals
+// (L22-cisco_iosxe.md) — is not. The diff still gates a change to the second
+// (bearsPrivilege): "gated in the diff" and "raises the ceiling" are separate
+// properties (owner's ruling on the fix wave).
+func raisesCeiling(name string, d platform.Dialect) bool {
+	if platform.ContainsName(d.PrivilegeAttributes, name) || platform.ContainsName(platform.PrivilegeAttributeNames(), name) {
+		return true
+	}
+	// What a level renders is the level (spec §6, as Validate reads it),
+	// whatever accepted_attributes lists: checked before either exemption
+	// (re-review RR-I1).
+	for _, attrs := range d.Levels {
+		if slices.ContainsFunc(attrs, func(a string) bool { return strings.EqualFold(engine.AttributeName(a), name) }) {
+			return true
+		}
+	}
+	if !d.BearsPrivilege(name) {
+		return false
+	}
+	return !slices.Contains(d.AcceptedAttributes, name)
+}
+
+// deliveredLevel is the level a reply delivers on the platform: the lowest,
+// from the session's own level up, that it does not exceed, its priv-lvl
+// included. A reply that exceeds every level, such as one sending a role no
+// role_order ranks, delivers the highest. The fallback exposure reads it, so
+// a readonly role that sends admin's device role is exposed as admin is
+// (final review I1).
+func (p *Policy) deliveredLevel(dialect platform.Dialect, level string, reply []string) string {
+	sent, _, hasPrivLvl := engine.GrantedPrivLvl(reply)
+	for _, l := range p.levels[max(p.levelIndex(level), 0):] {
+		if _, _, ok := p.render(dialect, l); !ok {
+			continue
+		}
+		if n, ok := p.privLvl(dialect, l); hasPrivLvl && (!ok || sent > n) {
+			continue
+		}
+		if _, over := p.exceeds(dialect, l, level, reply); !over {
+			return l
+		}
+	}
+	return p.levels[len(p.levels)-1]
+}
+
 // checkDeviceAt is one subject's joint checks on one device at one instant.
 func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) string {
 	res, err := p.resolve(sub, d, at)
@@ -464,13 +563,123 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 				"blob_unavailable; raise max_privilege or remove the attribute", d.Platform,
 				res.Attributes[at].Attribute, res.Attributes[at].Source, res.Ceiling, res.MaxPrivilege)
 		}
+		// Every other attribute that bears privilege is bounded too: on NX-OS
+		// and Junos the role is the privilege, and on EOS the role is what the
+		// fallback to local reads (final review I1).
+		if at, ok := p.exceeds(p.dialect(d.Platform), res.Ceiling, res.Level, res.Blob.Attributes); ok {
+			return fmt.Sprintf("on %s its session reply sends %s (%s), which is not what max_privilege %s renders "+
+				"there or a role its role_order ranks below that: the ceiling bounds every attribute the reply sends "+
+				"that bears privilege, and a role no role_order ranks counts as the highest (spec §7); raise "+
+				"max_privilege or remove the attribute", d.Platform, res.Attributes[at].Attribute,
+				res.Attributes[at].Source, res.Ceiling)
+		}
+	}
+	// A platform that refuses a session for any attribute it does not take
+	// is never sent one: the device would refuse every login, and on IOS-XE a
+	// run of refusals stops it answering SSH for about a minute, break-glass
+	// included (tests/lab/results/L18-cisco_iosxe.md). Quarantined, the
+	// device is closed without a reply and falls to local at once.
+	lockout := ""
+	if d.Platform == "cisco_iosxe" {
+		lockout = ", and a run of refusals stops it answering SSH, break-glass included " +
+			"(tests/lab/results/L18-cisco_iosxe.md)"
+	}
+	// priv-lvl's values are closed on every platform: a device sent one it
+	// cannot use refuses the session, as IOS-XE did for priv-lvl=99 rather
+	// than clamp or ignore it (L18-cisco_iosxe.md, variant 7).
+	for _, a := range res.Attributes {
+		if engine.NotALevel(a.Attribute) {
+			return fmt.Sprintf("on %s its session reply sends %s (%s), which is not a privilege level: priv-lvl "+
+				"runs 0 to 15, and a device sent a value it cannot use refuses the session (IOS-XE did for "+
+				"priv-lvl=99, tests/lab/results/L18-cisco_iosxe.md, variant 7)%s; fix the value", d.Platform,
+				a.Attribute, a.Source, lockout)
+		}
+	}
+	// Where the levels render a role and no priv-lvl, NX-OS, a priv-lvl is
+	// ignored beside the role and alone picks one by a per-release table
+	// (tests/lab/results/L16-cisco_nxos.md, findings 1 and 6; task 4 review
+	// M4).
+	if dialect := p.dialect(d.Platform); rendersRoleOnly(dialect) {
+		for _, a := range res.Attributes {
+			if strings.EqualFold(engine.AttributeName(a.Attribute), "priv-lvl") {
+				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s's levels render a role and no "+
+					"priv-lvl: the device ignores a priv-lvl beside a role, and alone it picks a role nobody named by a "+
+					"per-release table (tests/lab/results/L16-cisco_nxos.md); key the attribute to the platforms "+
+					"that read it", d.Platform, a.Attribute, a.Source, d.Platform)
+			}
+		}
+	}
+	// idletime's and timeout's values are numbers on every platform, and
+	// only `idletime*30` and `timeout*480` were measured
+	// (tests/lab/results/L22-*.md, "Inert candidates").
+	for _, a := range res.Attributes {
+		if engine.NotANumber(a.Attribute) {
+			return fmt.Sprintf("on %s its session reply sends %s (%s), which is not a plain decimal 0 to 65535: "+
+				"a device sent a value it cannot use may refuse the session%s; fix the value", d.Platform,
+				a.Attribute, a.Source, lockout)
+		}
+	}
+	if dialect := p.dialect(d.Platform); dialect.AcceptedAttributes != nil {
+		// A closed platform is sent only the levels its adapter renders: what
+		// the device lets any other level run is unmeasured. A ceiling_levels
+		// number is the token's, never a rendering (task 5 review, parked).
+		var rendered []uint8
+		for _, level := range sortedKeys(dialect.Levels) {
+			for _, a := range dialect.Levels[level] {
+				if engine.AttributeName(a) != "priv-lvl" {
+					continue
+				}
+				if n, ok := engine.PrivLvlValue(a[len("priv-lvl")+1:]); ok && !slices.Contains(rendered, n) {
+					rendered = append(rendered, n)
+				}
+			}
+		}
+		slices.Sort(rendered)
+		for _, a := range res.Attributes {
+			name := engine.AttributeName(a.Attribute)
+			if !slices.Contains(dialect.AcceptedAttributes, name) {
+				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s takes no attribute but %s: the "+
+					"device refuses the whole session for any other%s; key the attribute to the platforms that "+
+					"read it", d.Platform, a.Attribute, a.Source, d.Platform, strings.Join(dialect.AcceptedAttributes, ", "),
+					lockout)
+			}
+			// A closed platform took these optional, `*`; the mandatory `=` is
+			// unmeasured there (L22-cisco_iosxe.md).
+			if platform.ContainsName(engine.NumericAttributes, name) && engine.Mandatory(a.Attribute) {
+				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s was measured taking %s only as "+
+					"%s*<number>: the mandatory form is unmeasured, and the device refuses the whole session for "+
+					"what it does not take%s; send it optional", d.Platform, a.Attribute, a.Source, d.Platform,
+					name, name, lockout)
+			}
+			if !strings.EqualFold(name, "priv-lvl") {
+				continue
+			}
+			// Not a level was refused above, so the value parses.
+			if n, _ := engine.PrivLvlValue(a.Attribute[len(name)+1:]); !slices.Contains(rendered, n) {
+				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s's adapter renders priv-lvl %s only: "+
+					"what the device lets another level run is unmeasured, so it is not sent; use a level's own "+
+					"rendering", d.Platform, a.Attribute, a.Source, d.Platform, levelList(rendered))
+			}
+		}
 	}
 	if sub.Enable == "auto" {
-		if eu := p.env.EnableUsernames[d.Platform]; eu != "" && eu != platform.EnablePrincipal {
+		if p.dialect(d.Platform).EnableUsername != platform.EnablePrincipal {
 			return fmt.Sprintf("enable: auto reaches this device, whose platform %s does not put the operator's "+
 				"own username on the enable exchange; use token or none (spec §5.6, \"Why enable: auto is "+
 				"restricted\")", d.Platform)
 		}
 	}
 	return ""
+}
+
+// levelList reads levels as a sentence does: "1, 7 and 15".
+func levelList(levels []uint8) string {
+	s := make([]string, len(levels))
+	for i, n := range levels {
+		s[i] = strconv.Itoa(int(n))
+	}
+	if len(s) < 2 {
+		return strings.Join(s, "")
+	}
+	return strings.Join(s[:len(s)-1], ", ") + " and " + s[len(s)-1]
 }

@@ -292,3 +292,35 @@ func TestARefusingSinkBacksOffAndLogsACount(t *testing.T) {
 		t.Fatalf("log:\n%s", logged.String())
 	}
 }
+
+// The set-aside file is on disk like the spool and never takes a secret: a
+// record an earlier build spooled unredacted is redacted before it is set
+// aside, and a line that cannot be read back as a record is kept only as its
+// length and sha256 (spec §5.8; task 11 re-review).
+func TestTheSetAsideFileNeverHoldsASecret(t *testing.T) {
+	sink := &flakySink{}
+	path := filepath.Join(t.TempDir(), "o.jsonl")
+	sp, err := NewSpool(4, path, &unencodable{next: sink, bad: "b"}, metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := &decision.Device{NAS: "10.20.0.7", Name: "leaf-01", Platform: "arista_eos"}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "b", Device: dev,
+		AcctRecord: &decision.AcctRecord{Raw: []string{"cmd=username", "cmd-arg=bob", "cmd-arg=secret", "cmd-arg=Hunter2"},
+			Vector: []string{"username", "bob", "secret", "Hunter2"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, n := sp.drainOnce(); !ok || n != 1 {
+		t.Fatalf("ok=%v forwarded=%d", ok, n)
+	}
+	aside, err := os.ReadFile(path + ".unencodable")
+	if err != nil || strings.Contains(string(aside), "Hunter2") || !strings.Contains(string(aside), `"task_id":"b"`) ||
+		!strings.Contains(string(aside), `"redacted":true`) {
+		t.Fatalf("set aside %q, %v", aside, err)
+	}
+	line := []byte(`{"event":"account","record":{"raw":["cmd=username","cmd-arg=Hunter2"`)
+	if got := string(sp.setAsideForm(line)); strings.Contains(got, "Hunter2") || !strings.Contains(got, `"sha256":"`) ||
+		!strings.Contains(got, fmt.Sprintf(`"length":%d`, len(line))) {
+		t.Fatalf("an unreadable line: %s", got)
+	}
+}

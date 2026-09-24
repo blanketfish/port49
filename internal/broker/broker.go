@@ -31,6 +31,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/token"
@@ -65,6 +66,10 @@ type Broker struct {
 	Now           func() time.Time
 	MaxSessionAge time.Duration
 	BatchMax      int
+	// Redact is the redaction the blob event's rule text passes through
+	// before it is logged (spec §5.8): port49d passes the policy in force's.
+	// It is the one optional field; nil is the built-in patterns.
+	Redact platform.Redactor
 
 	mu        sync.Mutex
 	blobsSeen map[string]bool
@@ -280,7 +285,7 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		// The policy's load-time checks compile every subject on every device
 		// in inventory and quarantine the ones that fail, so this is a broker
 		// defect, not a refusal.
-		log.Printf("broker: resolving %s on %q: %v", principal, name, err)
+		b.logf("broker: resolving %s on %q: %v", principal, name, err)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
 	// The daemon fills the session reply's placeholders from the context, at
@@ -306,12 +311,12 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		// Policy load checks every rule and compiles every device's blob, so
 		// this is a broker defect, not a refusal. The error names policy
 		// content and is the operator's.
-		log.Printf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %s", principal, name, detail)
+		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %s", principal, name, detail)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
 	body, hash, err := engine.Encode(res.Blob)
 	if err != nil {
-		log.Printf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
+		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
 	if err := b.putBlob(ctx, hash, body); err != nil {
@@ -388,7 +393,7 @@ func (b *Broker) putBlob(ctx context.Context, hash string, body []byte) error {
 		b.blobsSeen = map[string]bool{}
 	}
 	if !b.blobsSeen[hash] {
-		rec := decision.Record{TS: b.Now(), Event: decision.EventBlob, Blob: &decision.Blob{Hash: hash, Body: body}}
+		rec := decision.Record{TS: b.Now(), Event: decision.EventBlob, Blob: b.blobEvent(hash, body)}
 		if sink, ok := b.Log.(decision.Sink); ok {
 			b.blobsSeen[hash] = sink.Write(rec) == nil
 		} else {
@@ -397,6 +402,76 @@ func (b *Broker) putBlob(ctx context.Context, hash string, body []byte) error {
 		}
 	}
 	return nil
+}
+
+// blobEvent is the blob event's body: the blob as stored, unless a rule's
+// text carries a value the platform's redaction patterns hide — a policy
+// literal is no safer in a log than a typed one (spec §5.8). Then the rules
+// are logged redacted and the event says so. The body no longer hashes to
+// its name, so replay reports every record naming it unverifiable rather
+// than reading the change as tampering; the store and the policy file keep
+// the blob verbatim, and the hash beside it still names which one it was.
+func (b *Broker) blobEvent(hash string, body []byte) *decision.Blob {
+	ev := &decision.Blob{Hash: hash, Body: body}
+	var blob engine.Blob
+	if err := json.Unmarshal(body, &blob); err != nil {
+		// The minter encoded it a moment ago; a body that does not decode
+		// has no rule text to redact that this could find, and is logged
+		// as it is for replay to report.
+		return ev
+	}
+	redact := b.Redact
+	if redact == nil {
+		redact = platform.BuiltInRedactor
+	}
+	patterns, redacted := redact(blob.Platform), false
+	// An entity class a rule names where a value is redacted holds those
+	// values: `snmp-server community @bad **` lists bad communities.
+	secretClasses := map[string]bool{}
+	for i, r := range blob.Rules {
+		orig := strings.Fields(r.Rule)
+		if words, ok := platform.RedactRule(patterns, orig); ok {
+			blob.Rules[i].Rule, redacted = strings.Join(words, " "), true
+			for k, w := range words {
+				if w == platform.Redacted && strings.HasPrefix(orig[k], "@") {
+					secretClasses[orig[k][1:]] = true
+				}
+			}
+		}
+	}
+	// A pipe permit is a rule over an output modifier, redacted as one.
+	for i, p := range blob.Pipe {
+		if words, ok := platform.RedactRule(patterns, strings.Fields(p)); ok {
+			blob.Pipe[i], redacted = strings.Join(words, " "), true
+		}
+	}
+	for name := range secretClasses {
+		for i := range blob.Classes[name] {
+			blob.Classes[name][i] = platform.Redacted
+		}
+	}
+	if !redacted {
+		return ev
+	}
+	out, err := json.Marshal(blob)
+	if err != nil {
+		// Never the verbatim body in place of a redacted one.
+		out = []byte("{}")
+	}
+	ev.Body, ev.Redacted = out, true
+	return ev
+}
+
+// logf is log.Printf for a line that may quote policy text — a resolve or
+// compile error names the rule it failed on — with every quoted value
+// redacted by every pattern the policy in force applies: the process log is
+// a log like any other (spec §5.8).
+func (b *Broker) logf(format string, args ...any) {
+	redact := platform.AllRedactions()
+	if b.Policy != nil {
+		redact = b.Policy.Load().Redactions()
+	}
+	log.Print(platform.RedactQuoted(redact, fmt.Sprintf(format, args...)))
 }
 
 // emit writes a refusal the broker decided itself, and counts it.

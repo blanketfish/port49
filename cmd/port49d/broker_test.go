@@ -140,7 +140,7 @@ func TestAWidenedDenyIsSaidAtStart(t *testing.T) {
 	if _, ok := b.Policy.Quarantined("ntp1", time.Now()); ok {
 		t.Fatal("a widened deny quarantines nothing")
 	}
-	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "* * /tftp/" on meinberg_lantime: /tftp/:`) ||
+	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "* * /tftp/" on meinberg_lantime: term 3 (a regex):`) ||
 		!strings.Contains(out.String(), "matches any argument") {
 		t.Fatalf("stderr: %s", out.String())
 	}
@@ -159,6 +159,28 @@ func TestAJoinedInterfacePermitIsSaidAtStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), `port49d: broker: role "r": permit "interface Gi1 **" on cisco_iosxe: `+"`Gi1`"+` never matches`) {
+		t.Fatalf("stderr: %s", out.String())
+	}
+}
+
+// A rule with a value redaction hides loads, and the start says so with the
+// value redacted: stderr is a log like any other (spec §5.8).
+func TestARuleSecretLiteralIsSaidAtStartRedacted(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`,
+		`permit: ["**"], deny: ["snmp-server community Hunter2 **"]}`, 1))
+	_, b, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Redact == nil {
+		t.Fatal("the broker's blob event must redact with the policy in force's patterns")
+	}
+	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "snmp-server community «redacted» **" carries`) ||
+		strings.Contains(out.String(), "Hunter2") {
 		t.Fatalf("stderr: %s", out.String())
 	}
 }

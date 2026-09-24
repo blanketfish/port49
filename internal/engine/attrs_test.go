@@ -21,6 +21,11 @@ func TestGrantedPrivLvl(t *testing.T) {
 		{[]string{"priv-lvl=16"}, 0, false},
 		{[]string{"priv-lvl=-1"}, 0, false},
 		{[]string{"priv-lvl=300"}, 0, false},
+		// Decimal as a device prints it, nothing else: what a device does with
+		// a leading zero or a sign is unmeasured (task 7 review M4).
+		{[]string{"priv-lvl=07"}, 0, false},
+		{[]string{"priv-lvl=00"}, 0, false},
+		{[]string{"priv-lvl=+7"}, 0, false},
 		{[]string{"priv-lvlx=15"}, 0, false},
 		// The last one wins, as it does on a device reading them in order.
 		{[]string{"priv-lvl=1", "priv-lvl=15"}, 15, true},
@@ -54,5 +59,17 @@ func TestSplitName(t *testing.T) {
 		if ok != (want[0] != "") || head != want[0] || index != want[1] {
 			t.Errorf("SplitName(%q) = %q %q %v", word, head, index, ok)
 		}
+	}
+}
+
+// A priv-lvl, idletime or timeout spelled in another case is read as the
+// attribute: what a device makes of the name's case is unmeasured, so the
+// checks read it the way that holds it to more (re-review 2, RR2-M1).
+func TestPrivLvlIsReadInAnyCase(t *testing.T) {
+	if n, _, ok := GrantedPrivLvl([]string{"PRIV-LVL=15"}); !ok || n != 15 {
+		t.Errorf("GrantedPrivLvl: %d %v", n, ok)
+	}
+	if !NotALevel("Priv-Lvl*99") || !NotANumber("IDLETIME*abc") {
+		t.Error("a bad value in another case passes")
 	}
 }

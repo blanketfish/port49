@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -87,6 +88,25 @@ type Handler struct {
 	// context to. It is an idle clock, not a session clock — session_expires
 	// is the session clock — so activity slides it forward (spec §5.6).
 	contextIdleTTL time.Duration
+	// redact is the redaction every record passes through before it is
+	// written (spec §5.8); nil is the built-in patterns.
+	redact platform.Redactor
+}
+
+// WithRedactor sets the redaction applied to every record before it is
+// written: port49d passes the policy in force's, so a `platforms:` block's
+// patterns reach the log. Without it the built-in patterns apply.
+func (h *Handler) WithRedactor(r platform.Redactor) *Handler {
+	h.redact = r
+	return h
+}
+
+// redactions is the patterns that apply to a platform's records.
+func (h *Handler) redactions(platformName string) []platform.Redaction {
+	if h.redact == nil {
+		return platform.BuiltInRedactor(platformName)
+	}
+	return h.redact(platformName)
 }
 
 // New builds an authorization handler. stalenessCeiling, graceWindow and
@@ -253,12 +273,13 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		rec.Request.Vector = d.Vector
 	}
 	if !d.Permit {
+		msg := h.serverMsg(peer.Platform, d)
 		if d.Error {
-			resp := h.deny(rec, d.Reason, d.ServerMsg)
+			resp := h.deny(rec, d.Reason, msg)
 			resp.Status = wire.AuthorStatusError
 			return resp
 		}
-		return h.deny(rec, d.Reason, d.ServerMsg)
+		return h.deny(rec, d.Reason, msg)
 	}
 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason
 	// What the device is told goes on the record as sent, so a replay can
@@ -348,9 +369,63 @@ func (h *Handler) deny(rec decision.Record, reason decision.Reason, msg string) 
 	return wire.AuthorResponse{Status: wire.AuthorStatusFail, ServerMsg: []byte(msg)}
 }
 
+// serverMsg is the decision's server_msg, rebuilt when the rule it names
+// carries a secret: a rule written with a literal secret in it is echoed with
+// the secret redacted, as the record echoes it (spec §5.8). The placeholder
+// is ASCII, because a server_msg lands on a console.
+func (h *Handler) serverMsg(platformName string, d Decision) string {
+	if d.Reason != decision.NoPermitDominatesDeny || d.Policy == nil || d.Policy.MatchedDeny == nil {
+		return d.ServerMsg
+	}
+	rule, ok := platform.RedactRule(h.redactions(platformName), d.Policy.MatchedDeny.Rule)
+	if !ok {
+		return d.ServerMsg
+	}
+	text := strings.ReplaceAll(strings.Join(rule, " "), platform.Redacted, "<redacted>")
+	return engine.DenyMsg(d.Policy.MatchedDeny.Role, text)
+}
+
 func (h *Handler) emit(rec decision.Record) {
+	// The decision was made on the command as sent; only the record loses
+	// its secret. A typed `username bob secret Hunter2` is authorized like
+	// any command and is never written (spec §5.7, §5.8). The rules the
+	// record echoes lose theirs too, and a record either touched says it was
+	// redacted: what it carries is no longer what was decided.
+	if rec.Request != nil && rec.Device != nil {
+		rules := h.redactions(rec.Device.Platform)
+		req := *rec.Request
+		if raw, vector, ok := platform.RedactRecord(rules, req.Raw, req.Vector); ok {
+			req.Raw, req.Vector, req.Redacted = raw, vector, true
+		}
+		if pol, ok := redactPolicy(rules, rec.Policy); ok {
+			rec.Policy, req.Redacted = pol, true
+		}
+		rec.Request = &req
+	}
 	h.log.Emit(rec)
 	h.metrics.Decisions.WithLabelValues(rec.Event, rec.Verdict, string(rec.Reason)).Inc()
+}
+
+// redactPolicy is pol with every matched rule's text redacted, and whether
+// any was. pol itself is the authorizer's and is not changed.
+func redactPolicy(rules []platform.Redaction, pol *decision.Policy) (*decision.Policy, bool) {
+	if pol == nil {
+		return nil, false
+	}
+	out, redacted := *pol, false
+	out.MatchedPermits = slices.Clone(pol.MatchedPermits)
+	if pol.MatchedDeny != nil {
+		if words, ok := platform.RedactRule(rules, pol.MatchedDeny.Rule); ok {
+			deny := *pol.MatchedDeny
+			deny.Rule, out.MatchedDeny, redacted = words, &deny, true
+		}
+	}
+	for i, m := range out.MatchedPermits {
+		if words, ok := platform.RedactRule(rules, m.Rule); ok {
+			out.MatchedPermits[i].Rule, redacted = words, true
+		}
+	}
+	return &out, redacted
 }
 
 // storeOutcome maps a store error to the StoreOps metric's outcome label.

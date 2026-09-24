@@ -28,8 +28,9 @@ import (
 // authorization is answered from the blob the mint compiled. A second window
 // asks for a second token and gets a fresh one.
 //
-// vEOS only: the slice renders session attributes for arista_eos alone (plan 3,
-// Decided 6), and a login elsewhere would measure plan 5's missing adapter.
+// The per-command platforms: plan 5a's adapters render a level on vEOS, the
+// N9Kv and IOS-XE (tests/lab/results/L22-*.md). Junos renders nothing
+// until plan 5b's projection, so a login there would measure a missing adapter.
 
 const (
 	sliceUser      = "slice01"
@@ -37,8 +38,13 @@ const (
 	slicePrincipal = "user:" + sliceEmail
 	slicePKIDir    = "tests/lab/logs/slice-pki"
 	sliceBrokerURL = "https://127.0.0.1:8449"
-	sliceDenied    = "show hostname"
 )
+
+// sliceDenied is the command the slice's policy denies and nothing else does,
+// per platform: IOS-XE has no `show hostname`, and an unknown word there is
+// refused in the parser without asking port49 (ceiling-cisco_iosxe.md).
+var sliceDenied = map[string]string{"arista_eos": "show hostname", "cisco_nxos": "show hostname",
+	"cisco_iosxe": "show users"}
 
 const sliceClaim = "The vertical slice end to end: an operator's client certificate, validated by the broker " +
 	"against one trust anchor, mints a device token over a held mTLS connection (`port49 login`, `port49 token`); " +
@@ -49,8 +55,9 @@ var agentPID = regexp.MustCompile(`agent pid (\d+)`)
 
 func TestSliceEndToEnd(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
-		if l.p.name != "arista_eos" {
-			t.Skipf("the slice renders session attributes for arista_eos only (plan 3, Decided 6); %s waits for plan 5", l.p.name)
+		denied, ok := sliceDenied[l.p.name]
+		if !ok {
+			t.Skipf("%s renders no level until plan 5b's projection", l.p.name)
 		}
 		port49 := filepath.Join(root, "bin", "port49")
 		if _, err := os.Stat(port49); err != nil {
@@ -73,6 +80,9 @@ func TestSliceEndToEnd(t *testing.T) {
 		}
 		if err := l.startDaemonWith(cfg, true); err != nil {
 			t.Fatalf("port49d would not start with the broker block, so nothing was measured: %v", err)
+		}
+		if err := l.awaitTACACS(); err != nil {
+			t.Fatal(err)
 		}
 		defer func() {
 			if err := l.stopDaemon(); err != nil {
@@ -106,18 +116,18 @@ func TestSliceEndToEnd(t *testing.T) {
 		}
 		defer stopSliceAgent(t, string(out))
 
-		tok1 := sliceToken(t, port49, sock)
-		outs, err := l.login(sliceUser, tok1, "show version", sliceDenied)
+		tok1 := sliceToken(t, port49, sock, l.p.node)
+		outs, err := l.loginWithin(sliceUser, tok1, 150*time.Second, "show version", denied)
 		if err != nil {
 			t.Fatalf("SSH login as %s with the broker-minted token failed: %v\nrecords:%s", sliceUser, err, summarize(l.recordsSince(off)))
 		}
 		// A second window is a second device connection, and it gets a fresh
 		// mint (plan 3, Decided 11).
-		tok2 := sliceToken(t, port49, sock)
+		tok2 := sliceToken(t, port49, sock, l.p.node)
 		if tok2 == tok1 {
 			t.Fatal("port49 token handed back a token it had already handed out")
 		}
-		if _, err := l.login(sliceUser, tok2, "show version"); err != nil {
+		if _, err := l.loginWithin(sliceUser, tok2, 150*time.Second, "show version"); err != nil {
 			t.Fatalf("the second window's login failed: %v\nrecords:%s", err, summarize(l.recordsSince(off)))
 		}
 
@@ -135,7 +145,7 @@ func TestSliceEndToEnd(t *testing.T) {
 				t.Fatalf("a minted token is in %s", path)
 			}
 		}
-		obs, err := sliceObservation(recs, []string{tok1, tok2}, outs)
+		obs, err := sliceObservation(recs, []string{tok1, tok2}, outs, denied, l.p.node)
 		if err != nil {
 			t.Fatalf("%v\nrecords:%s", err, summarize(recs))
 		}
@@ -144,15 +154,15 @@ func TestSliceEndToEnd(t *testing.T) {
 	})
 }
 
-func sliceToken(t *testing.T, port49, sock string) string {
+func sliceToken(t *testing.T, port49, sock, device string) string {
 	t.Helper()
-	cmd := exec.Command(port49, "token", "--socket", sock, "leaf1")
+	cmd := exec.Command(port49, "token", "--socket", sock, device)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	tok := strings.TrimSpace(string(out))
 	if err != nil || len(tok) != labcreds.TokenLen {
-		t.Fatalf("port49 token leaf1: %v, %d characters on stdout; stderr: %s", err, len(tok), stderr.String())
+		t.Fatalf("port49 token %s: %v, %d characters on stdout; stderr: %s", device, err, len(tok), stderr.String())
 	}
 	return tok
 }
@@ -192,7 +202,7 @@ func sha(s string) string {
 // sliceObservation checks the chain the slice exists to show and renders it.
 // Every link is read off a record; a missing link fails the test, because a
 // run that did not produce it measured something else.
-func sliceObservation(recs []map[string]any, tokens []string, outs []string) (string, error) {
+func sliceObservation(recs []map[string]any, tokens []string, outs []string, sliceDenied, device string) (string, error) {
 	mints := sliceRecords(recs, "mint", "grants_matched")
 	if len(mints) < 2 {
 		return "", fmt.Errorf("want two permitted mints for %s, got %d", slicePrincipal, len(mints))
@@ -241,9 +251,9 @@ func sliceObservation(recs []map[string]any, tokens []string, outs []string) (st
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Two `port49 token leaf1` calls over one `port49 login` session minted two different tokens for "+
+	fmt.Fprintf(&b, "Two `port49 token %s` calls over one `port49 login` session minted two different tokens for "+
 		"principal `%s`, username `%s`, each on its own `mint` record naming blob `%s`. The `blob` event carried it:\n\n"+
-		"```json\n%s\n```\n\n", slicePrincipal, sliceUser, hash, blobBody)
+		"```json\n%s\n```\n\n", device, slicePrincipal, sliceUser, hash, blobBody)
 	b.WriteString("Every record for `slice01` in the run, in order (tokens appear as the hash the log carries):\n\n")
 	b.WriteString("| event | verdict | reason | ctx_id | port | credential_sha256 / vector |\n|---|---|---|---|---|---|\n")
 	for _, r := range recs {

@@ -280,8 +280,8 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		}
 		// `auto` PASSes on the context alone, any password accepted (spec §7).
 		// That is only safe because `enable_username: enab` cannot load
-		// (config.Load), so this context is always the operator's own and never
-		// a shared `$enab15$` pseudo-user's.
+		// (platform.Validate), so this context is always the operator's own and
+		// never a shared `$enab15$` pseudo-user's.
 		if c.Enable == "auto" {
 			return s.escalate(ctx, rec, ck, decision.EscalationGranted)
 		}

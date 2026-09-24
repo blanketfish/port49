@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -107,7 +108,7 @@ func TestTheBlobIsWrittenAndEmittedOncePerHash(t *testing.T) {
 			t.Fatal(err)
 		}
 		dev, _ := m["device"].(map[string]any)
-		if dev["name"] == "leaf1" && (len(b.Attributes) != 1 || b.Attributes[0] != "priv-lvl=15") {
+		if dev["name"] == "leaf1" && !slices.Equal(b.Attributes, []string{"priv-lvl=15", "roles=network-admin"}) {
 			t.Fatalf("leaf1's blob: %+v", b)
 		}
 	}

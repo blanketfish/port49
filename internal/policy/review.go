@@ -37,3 +37,28 @@ func (p *Policy) Review(subject string, now time.Time) ([]ReviewRow, error) {
 	}
 	return out, nil
 }
+
+// ServedUsernames is every username port49 would mint a token under for the
+// device at now, by the subject that claims it: each identity-list subject a
+// grant reaches the device with. A group subject's usernames come from the
+// directory one per member (plan 7), so groups names the group subjects that
+// reach it, whose members the check cannot list.
+func (p *Policy) ServedUsernames(device string, now time.Time) (usernames map[string]string, groups []string, err error) {
+	d, ok := p.device(device)
+	if !ok {
+		return nil, nil, fmt.Errorf("device %q is not in the inventory", device)
+	}
+	usernames = map[string]string{}
+	for _, name := range sortedKeys(p.subs) {
+		s := p.subs[name]
+		if len(p.compose(s, d, now).grants) == 0 {
+			continue
+		}
+		if s.Group != "" {
+			groups = append(groups, name)
+			continue
+		}
+		usernames[s.Username] = name
+	}
+	return usernames, groups, nil
+}

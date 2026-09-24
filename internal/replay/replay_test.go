@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/rhwendt/port49/internal/daemon/acct"
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/author"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -223,5 +227,131 @@ func TestALineThatIsNotARecordDivergesAndTheRestReplays(t *testing.T) {
 	}
 	if one, err := Replay(strings.NewReader(strings.Join(lines, "\n")), 3); err != nil || len(one) != 1 || one[0].Status != Diverge {
 		t.Fatalf("--line on the torn line: %+v %v", one, err)
+	}
+}
+
+// A record redacted before it was written (spec §5.8) does not carry the
+// command it decided, so the replay says so rather than claim an agreement
+// over the redacted words.
+func TestARedactedRecordIsUnverifiable(t *testing.T) {
+	log, _ := daemonLog(t)
+	lines := strings.Split(strings.TrimSpace(log), "\n")
+	var rec map[string]any
+	if err := json.Unmarshal([]byte(lines[2]), &rec); err != nil {
+		t.Fatal(err)
+	}
+	rec["request"].(map[string]any)["redacted"] = true
+	edited, _ := json.Marshal(rec)
+	lines[2] = string(edited)
+	res := replayAll(t, strings.Join(lines, "\n"))
+	if r := res[1]; r.Status != Unverifiable || !strings.Contains(r.Detail, "redacted before it was written") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// A secret typed into a command is decided as sent and written nowhere: not
+// in the accounting spool file, not in the decision log, not in the denial's
+// server_msg, and not in what a replay of that log reports (spec §5.7, §5.8).
+func TestATypedSecretIsWrittenNowhere(t *testing.T) {
+	const secret = "Hunter2"
+	b := engine.Blob{Bundle: "sha256:policy", Platform: "arista_eos",
+		Normalize: engine.Normalize{PipeToken: "|", StripCR: true}, Privilege: "admin",
+		Rules: []engine.Rule{
+			{Verdict: engine.Permit, Rule: "username **", Role: "net_admin"},
+			{Verdict: engine.Permit, Rule: "enable **", Role: "net_admin"},
+			{Verdict: engine.Deny, Rule: "username * secret **", Role: "no_backdoor"},
+		}}
+	body, hash, err := engine.Encode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	sink := decision.NewJSONLines(&log)
+	sink.Emit(decision.Record{TS: time.Now(), Event: decision.EventBlob, Blob: &decision.Blob{Hash: hash, Body: body}})
+	st := memory.New(time.Now)
+	st.PutBlob(context.Background(), hash, body, time.Hour)
+	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "ctx1", Username: "alice", Principal: "user:alice@example.com", PrivLvl: 15,
+			BlobHash: hash}, time.Hour)
+	m := metrics.New(prometheus.NewRegistry())
+	h := author.New(st, &author.Engine{Store: st, Metrics: m}, sink, m, time.Now, platform.Defaults(),
+		time.Hour, time.Minute, time.Hour)
+	spoolPath := filepath.Join(t.TempDir(), "spool.jsonl")
+	sp, err := acct.NewSpool(16, spoolPath, decision.NewJSONLines(&bytes.Buffer{}), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ah := acct.New(st, sp, m, time.Now, nil)
+	peer := authen.Peer{NAS: "leaf-01", NASAddr: "10.20.0.7", Platform: "arista_eos"}
+
+	var msgs []string
+	for _, line := range []string{"username bob secret 0 " + secret, "enable secret 0 " + secret} {
+		args := []string{"service=shell"}
+		for i, w := range strings.Fields(line) {
+			if i == 0 {
+				args = append(args, "cmd="+w)
+			} else {
+				args = append(args, "cmd-arg="+w)
+			}
+		}
+		args = append(args, "cmd-arg=<cr>")
+		r := wire.AuthorRequest{PrivLvl: 15, User: []byte("alice"), Port: []byte("vty0")}
+		a := wire.AcctRequest{Flags: wire.AcctFlagStop, PrivLvl: 15, User: []byte("alice"), Port: []byte("vty0")}
+		for _, arg := range args {
+			r.Args, a.Args = append(r.Args, []byte(arg)), append(a.Args, []byte(arg))
+		}
+		msgs = append(msgs, string(h.Handle(context.Background(), peer, r).ServerMsg))
+		ah.Handle(context.Background(), peer, a)
+	}
+
+	if msgs[0] == "" || strings.Contains(strings.Join(msgs, "\n"), secret) {
+		t.Fatalf("server_msg: %q", msgs)
+	}
+	lines := strings.Split(strings.TrimSpace(log.String()), "\n")
+	if len(lines) != 3 || strings.Contains(strings.Join(lines[1:], "\n"), secret) {
+		t.Fatalf("the decision log: %s", log.String())
+	}
+	spooled, err := os.ReadFile(spoolPath)
+	if err != nil || strings.Contains(string(spooled), secret) || strings.Count(string(spooled), "\n") != 2 {
+		t.Fatalf("the spool file: %s %v", spooled, err)
+	}
+	res := replayAll(t, log.String())
+	if len(res) != 2 {
+		t.Fatalf("%+v", res)
+	}
+	for _, r := range res {
+		if r.Status != Unverifiable || strings.Contains(fmt.Sprintf("%+v", r), secret) {
+			t.Fatalf("replay: %+v", r)
+		}
+	}
+}
+
+// A blob event whose rule text was redacted before it was logged (spec §5.8)
+// is not the blob its hash names: every record naming it is unverifiable,
+// the event itself is no divergence, and a verbatim copy of the blob read
+// before them, where the log has one, replays them as ever.
+func TestARedactedBlobEventLeavesItsRecordsUnverifiable(t *testing.T) {
+	log, hash := daemonLog(t)
+	lines := strings.Split(strings.TrimSpace(log), "\n")
+	var rec decision.Record
+	if err := rec.UnmarshalJSON([]byte(lines[0])); err != nil {
+		t.Fatal(err)
+	}
+	verbatim := lines[0]
+	rec.Blob.Body = []byte(strings.Replace(string(rec.Blob.Body), "tftp", platform.Redacted, 1))
+	rec.Blob.Redacted = true
+	edited, _ := json.Marshal(rec)
+	lines[0] = string(edited)
+	res := replayAll(t, strings.Join(lines, "\n"))
+	for _, r := range res[:len(res)-1] {
+		if r.Event == decision.EventBlob || r.Status != Unverifiable || !strings.Contains(r.Detail, "redacted") ||
+			!strings.Contains(r.Detail, hash) {
+			t.Fatalf("%+v", r)
+		}
+	}
+	for _, r := range replayAll(t, strings.Join(append([]string{verbatim}, lines...), "\n"))[:len(res)-1] {
+		if r.Status != Agree {
+			t.Fatalf("a verbatim copy replays: %+v", r)
+		}
 	}
 }

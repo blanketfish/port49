@@ -230,7 +230,8 @@ func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 	if st := dev.login("alice", mint(t, addrs[1][1], pkiDir, "leaf1")); st != wire.AuthenStatusPass {
 		t.Fatalf("login: status %d; decision log %s", st, log.String())
 	}
-	if r := dev.authorize("alice"); r.Status != wire.AuthorStatusPassAdd || len(r.Args) != 1 || string(r.Args[0]) != "priv-lvl=15" {
+	if r := dev.authorize("alice"); r.Status != wire.AuthorStatusPassAdd || len(r.Args) != 2 || string(r.Args[0]) != "priv-lvl=15" ||
+		string(r.Args[1]) != "roles=network-admin" {
 		t.Fatalf("session authorization: %+v", r)
 	}
 	if !dev.permits("alice", "configure") {

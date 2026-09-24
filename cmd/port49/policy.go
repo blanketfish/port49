@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -26,11 +27,12 @@ import (
 type policyFiles struct{ policy, inventory string }
 
 // offlineEnv is the environment the offline tools load a policy in: the
-// inventory, and the built-in enable-username table port49d resolves from
-// config, so a joint check port49d runs (`enable: auto`) runs here too.
-// Config accepts no override of it today (config.resolveEnableUsernames).
+// inventory, and nothing else. Every adapter fact a joint check reads — the
+// enable username that `enable: auto` needs included — is in the policy
+// file's platform set and `platforms:` blocks, which port49d loads the same
+// way, so CI answers what port49d answers (plan 4 pre-flight N5).
 func offlineEnv(devices []admission.Device) policy.Env {
-	return policy.Env{Devices: devices, EnableUsernames: platform.EnableUsernames()}
+	return policy.Env{Devices: devices}
 }
 
 func (f *policyFiles) register(fs *flag.FlagSet) {
@@ -69,17 +71,23 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	// What explain prints may be kept: every rule and command it names is
+	// redacted as the daemon's records are (spec §5.8).
+	out, errOut, flush := redactOutput(stdout, stderr)
+	defer flush()
+	stdout, stderr = out, errOut
 	p, err := files.load()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 explain:", err)
 		return 1
 	}
+	out.rules, errOut.rules = p.Redactions(), p.Redactions()
 	e, err := p.Explain(*subject, *principal, *device, *command, time.Now())
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 explain:", err)
 		return 1
 	}
-	e.Render(stdout, *attrs)
+	e.Redacted(p.Redactions()).Render(stdout, *attrs)
 	return 0
 }
 
@@ -118,12 +126,22 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	// CI keeps what this prints: every rule and command it quotes is
+	// redacted as the daemon's records are (spec §5.8).
+	out, errOut, flush := redactOutput(stdout, stderr)
+	defer flush()
+	stderr = errOut
 	p, err := files.load()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy test:", err)
 		return 1
 	}
+	out.rules, errOut.rules = p.Redactions(), p.Redactions()
+	stdout = out
 	now := time.Now()
+	// The set the policy renders with, first: a reviewer reading a rendering
+	// change needs to know which adapters produced it (spec §8).
+	fmt.Fprintf(stdout, "platform_set: %s\n", p.PlatformSet())
 	// A quarantined device is reported, not a failure of its own: the policy
 	// loaded, and decision 20 exists so one device cannot block the rest. A
 	// test on it fails in the ordinary way, as device_quarantined. An entry an
@@ -139,7 +157,7 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	// An acknowledge: entry is the author's written word for a widening no
 	// test can show (spec §12); review reads each one.
 	for _, a := range p.Acknowledgments() {
-		fmt.Fprintf(stdout, "acknowledge: %s %q: %s\n", a.Role, a.Rule, a.Reason)
+		fmt.Fprintf(stdout, "acknowledge: %s: %s\n", ackName(a), a.Reason)
 	}
 	// The shadowed-deny report is what replaces the guarantee deny-overrides
 	// gave (spec §12): every deny a more specific permit beats, for whom, and
@@ -269,6 +287,11 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	// CI keeps what this prints: every rule and command it quotes is
+	// redacted as the daemon's records are (spec §5.8).
+	out, errOut, flush := redactOutput(stdout, stderr)
+	defer flush()
+	stderr = errOut
 	inv, err := admission.LoadFile(*inventory)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy diff:", err)
@@ -284,6 +307,9 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 policy diff: --new:", err)
 		return 1
 	}
+	out.rules = append(before.Redactions(), after.Redactions()...)
+	errOut.rules = out.rules
+	stdout = out
 	now := time.Now()
 	d := policy.Compare(before, after, now)
 	// A change that first holds at a later grant expiry says when.
@@ -310,8 +336,21 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			"permits there is an expansion\n", r.Device, r.Platform, from(r.At))
 	}
 	for _, a := range d.StaleAcknowledgments {
-		fmt.Fprintf(stdout, "report: acknowledge_stale: %s %q (%s): no widening in this diff is the one it names, so "+
-			"it acknowledges nothing; delete it (spec §12)\n", a.Role, a.Rule, a.Reason)
+		fmt.Fprintf(stdout, "report: acknowledge_stale: %s (%s): no change in this diff is the one it names, so "+
+			"it acknowledges nothing; delete it (spec §12)\n", ackName(a), a.Reason)
+	}
+	for _, a := range d.Adapters {
+		change := fmt.Sprintf("%s %s -> %s", adapterKey(a), a.OldShown, a.NewShown)
+		switch {
+		case !a.Gated:
+			fmt.Fprintf(stdout, "adapter: %s\n", change)
+		case a.Acknowledged:
+			fmt.Fprintf(stdout, "adapter (acknowledged: %s): %s\n", a.AcknowledgedBy, change)
+		default:
+			fmt.Fprintf(stdout, "ADAPTER: %s: the key changes what port49 decides or what this gate reads, so the "+
+				"diff cannot vouch for it; add {platform: %s, field: %s, sha256: %s, reason: \"...\"} under acknowledge: "+
+				"(spec §12)\n", change, a.Platform, a.Field, a.Sha256)
+		}
 	}
 	for _, p := range d.Principals {
 		switch {
@@ -459,11 +498,12 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
 		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d unacknowledged "+
 		"principal or username changes; %d devices newly quarantined, %d released; %d mints newly refused; "+
-		"%d unresolved\n", len(d.Changes), widen, narrow, d.Unacknowledged(), d.UnacknowledgedLevels(),
-		d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(), len(d.Quarantined), len(d.Released), len(d.Refused),
-		len(d.Unresolved))
+		"%d unresolved; %d unacknowledged adapter edits\n", len(d.Changes), widen, narrow, d.Unacknowledged(),
+		d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(), len(d.Quarantined),
+		len(d.Released), len(d.Refused), len(d.Unresolved), d.UnacknowledgedAdapters())
 	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
-		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 {
+		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 ||
+		d.UnacknowledgedAdapters() > 0 {
 		return 1
 	}
 	return 0
@@ -477,6 +517,15 @@ func yamlList(items []string) string {
 		quoted[i] = strconv.Quote(it)
 	}
 	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
+// ackName is an acknowledge: entry as review reads it: the deny by role and
+// rule, or the adapter key by platform and field.
+func ackName(a policy.Acknowledgment) string {
+	if a.Platform != "" {
+		return "platforms." + a.Platform + "." + a.Field
+	}
+	return fmt.Sprintf("%s %q", a.Role, a.Rule)
 }
 
 // quarantineLine is an entry after a label that already says quarantine:
@@ -625,9 +674,9 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
 // grantsRemove is the offboarding path for machine subjects and literal
 // identities (spec §12): the policy file with every grant row naming the
 // subject deleted, and the subject block with them. It prints the new file on
-// stdout for a pull request, or with --write replaces the file in place; the
-// result must load against the inventory before anything is written. What it
-// removed goes to stderr.
+// stdout, or with --write replaces the file in place, or with --pr opens the
+// pull request that carries it (removalPR); the result must load against the
+// inventory before anything is written. What it removed goes to stderr.
 func grantsRemove(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 grants remove", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -635,10 +684,13 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 	files.register(fs)
 	subject := fs.String("subject", "", "the subject to offboard, by its name in the policy")
 	write := fs.Bool("write", false, "replace the policy file instead of printing the result")
+	pr := fs.Bool("pr", false, "open a pull request that carries the removal, leaving the checkout alone")
+	remote := fs.String("remote", "origin", "the remote --pr pushes its branch to")
+	base := fs.String("base", "main", "the branch --pr asks to merge into")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *subject == "" || files.missing() || fs.NArg() != 0 {
+	if *subject == "" || files.missing() || fs.NArg() != 0 || (*write && *pr) {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -657,19 +709,37 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 grants remove:", err)
 		return 1
 	}
-	if _, err := policy.Parse(out, offlineEnv(inv.Devices)); err != nil {
+	after, err := policy.Parse(out, offlineEnv(inv.Devices))
+	if err != nil {
 		fmt.Fprintf(stderr, "port49 grants remove: the policy without %s does not load, so nothing was written: %v\n",
 			*subject, err)
 		return 1
 	}
-	if *write {
+	switch {
+	case *pr:
+		// The pull request and git's errors quote the policy; both are
+		// redacted as `policy diff`'s output is (spec §5.8).
+		url, err := removalPR(files.policy, *subject, out, removed, *remote, *base, after.Redactions())
+		if url != "" {
+			// Open, even if what followed failed: the error says what is
+			// left to clear up.
+			fmt.Fprintln(stdout, url)
+		}
+		if err != nil {
+			errOut := &redacting{w: stderr, rules: after.Redactions()}
+			fmt.Fprintln(errOut, "port49 grants remove:", err)
+			return 1
+		}
+	case *write:
 		if err := replaceFile(files.policy, out); err != nil {
 			fmt.Fprintln(stderr, "port49 grants remove:", err)
 			return 1
 		}
-	} else if _, err := stdout.Write(out); err != nil {
-		fmt.Fprintln(stderr, "port49 grants remove:", err)
-		return 1
+	default:
+		if _, err := stdout.Write(out); err != nil {
+			fmt.Fprintln(stderr, "port49 grants remove:", err)
+			return 1
+		}
 	}
 	fmt.Fprintf(stderr, "port49 grants remove: %s: %d grant row(s), the subject block, and %d test(s) removed\n",
 		*subject, removed.Grants, removed.Tests)
@@ -738,4 +808,43 @@ func writeSynced(tmp *os.File, data []byte, old os.FileInfo) error {
 		}
 	}
 	return tmp.Sync()
+}
+
+// redacting passes what is written through to w a line at a time, with every
+// quoted value in each line redacted by rules (platform.RedactQuoted). Until
+// a policy loads there are none: a load error quotes no rule text (policy.Parse
+// names a rule by role, list and position), and the file's own patterns never
+// loaded (spec §5.8).
+type redacting struct {
+	w     io.Writer
+	rules []platform.Redaction
+	buf   []byte
+}
+
+func (r *redacting) Write(p []byte) (int, error) {
+	r.buf = append(r.buf, p...)
+	for {
+		i := bytes.IndexByte(r.buf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		if _, err := io.WriteString(r.w, platform.RedactQuoted(r.rules, string(r.buf[:i+1]))); err != nil {
+			return 0, err
+		}
+		r.buf = r.buf[i+1:]
+	}
+}
+
+// redactOutput wraps stdout and stderr in redacting writers; flush writes
+// what is left of an unfinished line.
+func redactOutput(stdout, stderr io.Writer) (out, errOut *redacting, flush func()) {
+	out, errOut = &redacting{w: stdout}, &redacting{w: stderr}
+	return out, errOut, func() {
+		for _, r := range []*redacting{out, errOut} {
+			if len(r.buf) > 0 {
+				io.WriteString(r.w, platform.RedactQuoted(r.rules, string(r.buf)))
+				r.buf = nil
+			}
+		}
+	}
 }

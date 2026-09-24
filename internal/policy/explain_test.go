@@ -104,7 +104,7 @@ grants: [{subject: s, scope: all_devices, roles: [op]}]`)
 	_, out := explained(t, p, "s", "", "leaf-01", "show version", false)
 	mustContain(t, out, "deny device_quarantined", "leaf-01 (arista_eos) fails a joint check now",
 		"level unmapped has no rendering on arista_eos")
-	_, out = explained(t, p, "s", "", "nx-01", "show version", false)
+	_, out = explained(t, p, "s", "", "srx-fw-04", "show version", false)
 	mustContain(t, out, "permit permit_dominates")
 }
 
@@ -170,7 +170,7 @@ func TestExplainNamesTheMintItemError(t *testing.T) {
 	policy := func(attr string) *Policy {
 		p, err := Parse([]byte(`
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: r, privilege: admin, permit: ["**"], attributes: {all: ["`+attr+`"]}}]
+roles: [{name: r, privilege: admin, permit: ["**"], attributes: {arista_eos: ["`+attr+`"]}}]
 subjects: [{name: s, identity: "user:s@example.com", username: a_rather_long_username, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]`), Env{Devices: append(inventory(),
 			admission.Device{Name: "sw=1", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("10.9.9.9")}})})
@@ -256,7 +256,7 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}, {subject: other, scope: 
 func TestExplainSaysAGroupSubjectIsCheckedWithoutAPrincipal(t *testing.T) {
 	p := mustParse(t, `
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {all: ["home-directory*{principal}"]}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {cisco_nxos: ["home-directory*{principal}"]}}]
 subjects:
   - {name: g, group: "CN=g,OU=Groups,DC=example,DC=com", token_ttl: 60s}
   - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}

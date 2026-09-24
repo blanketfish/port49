@@ -520,7 +520,7 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 	// blob_unavailable, the process log names the ctx_id and the fault, and it
 	// is counted failed (spec §5.1.3).
 	fault := func(what string, err any) refreshStep {
-		log.Printf("broker: refresh: %s for %s on %q: %v; revoking the context (ctx_id %s)", what, principal,
+		b.logf("broker: refresh: %s for %s on %q: %v; revoking the context (ctx_id %s)", what, principal,
 			ref.NAS, err, c.CtxID)
 		rec.Verdict, rec.Reason = decision.VerdictDeny, decision.BlobUnavailable
 		return refreshStep{revoke: true, rec: rec, outcome: "failed"}

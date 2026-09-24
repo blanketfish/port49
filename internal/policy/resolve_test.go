@@ -33,7 +33,7 @@ func TestResolveComposesAndCompiles(t *testing.T) {
 	}
 	b := r.Blob
 	if b.Platform != "arista_eos" || b.Bundle != p.Bundle || b.Privilege != "readonly" ||
-		!reflect.DeepEqual(b.Attributes, []string{"priv-lvl=1"}) || !reflect.DeepEqual(b.Pipe, sortedCopy(DefaultPipe)) ||
+		!reflect.DeepEqual(b.Attributes, []string{"priv-lvl=1", "roles=network-operator"}) || !reflect.DeepEqual(b.Pipe, sortedCopy(DefaultPipe)) ||
 		b.Normalize.PipeToken != "|" || b.Normalize.PipeAuthorized || !b.Normalize.ExpandsAbbreviations {
 		t.Fatalf("blob: %+v", b)
 	}
@@ -58,20 +58,26 @@ func sortedCopy(s []string) []string {
 }
 
 // A platform that renders no level sends no attributes, and still numbers the
-// ceiling for the token (plan 3's table); a group subject resolves by name
-// only, since matching a person to a group is the directory's (plan 7).
+// ceiling for the token (plan 3's table), as one that renders a role and no
+// priv-lvl numbers it from its own; a group subject resolves by name only,
+// since matching a person to a group is the directory's (plan 7).
 func TestAPlatformThatRendersNothingStillHasACeiling(t *testing.T) {
 	p := mustParse(t, good)
-	if _, err := p.Resolve("CN=netops-admins,OU=Groups,DC=example,DC=com", deviceNamed(t, "nx-01"), noon); !errors.Is(err, ErrNoGrants) {
+	if _, err := p.Resolve("CN=netops-admins,OU=Groups,DC=example,DC=com", deviceNamed(t, "srx-fw-04"), noon); !errors.Is(err, ErrNoGrants) {
 		t.Fatalf("a group is never a principal: %v", err)
 	}
-	r, err := p.ResolveSubject("netops_admins", deviceNamed(t, "nx-01"), noon)
+	r, err := p.ResolveSubject("netops_admins", deviceNamed(t, "srx-fw-04"), noon)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.MaxPrivilege != 15 || !r.HasCeiling || r.Level != "admin" || len(r.Blob.Attributes) != 0 ||
 		!reflect.DeepEqual(r.Blob.Pipe, []string{"**"}) {
-		t.Fatalf("netops_admins on NX-OS: %+v", r)
+		t.Fatalf("netops_admins on Junos: %+v", r)
+	}
+	r, err = p.ResolveSubject("netops_admins", deviceNamed(t, "nx-01"), noon)
+	if err != nil || r.MaxPrivilege != 15 || !r.HasCeiling ||
+		!reflect.DeepEqual(r.Blob.Attributes, []string{"shell:roles*network-admin"}) {
+		t.Fatalf("netops_admins on NX-OS: %+v %v", r, err)
 	}
 	if _, err := p.ResolveSubject("nobody", deviceNamed(t, "nx-01"), noon); err == nil {
 		t.Fatal("an undeclared subject is an error")
@@ -117,7 +123,7 @@ scopes: [{name: all_devices, match: {}}, {name: dc_fabric, match: {site: dc1}}]
 roles:
   - {name: limited, privilege: read_only_limited, permit: [show version],
      attributes: {all: ["idletime*30", "timeout*480"], arista_eos: ["priv-lvl=2"]}}
-  - {name: homes, attributes: {all: ["home-directory*/home/{username}", "idletime*10"]}}
+  - {name: homes, attributes: {arista_eos: ["home-directory*/home/{username}"], all: ["idletime*10"]}}
 subjects:
   - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}
 grants:
@@ -128,9 +134,12 @@ grants:
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Order is first appearance — platform, then roles by name, then grants —
-	// with an override taking the place of what it shadows.
-	want := []string{"priv-lvl=2", "home-directory*/home/{username}", "idletime*30", "timeout*60"}
+	// Order is first appearance — platform, then roles by name, then grants,
+	// a role's `all` list before its platform's — with an override taking the
+	// place of what it shadows. home-directory is keyed to arista_eos: IOS-XE
+	// holds it bearing privilege (L22-cisco_iosxe.md), so under `all` its
+	// placeholder is refused.
+	want := []string{"priv-lvl=2", "roles=network-operator", "idletime*30", "home-directory*/home/{username}", "timeout*60"}
 	if !reflect.DeepEqual(r.Blob.Attributes, want) {
 		t.Fatalf("attributes %q, want %q", r.Blob.Attributes, want)
 	}
@@ -170,8 +179,8 @@ grants: [{subject: s, scope: all_devices, roles: [tech]}]`, `role "tech" names @
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: op, privilege: unmapped, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [op]}]`, "level unmapped has no rendering on arista_eos",
-			[]string{"campus-sw-7", "leaf-01"}},
+grants: [{subject: s, scope: all_devices, roles: [op]}]`, "level unmapped has no rendering on",
+			[]string{"campus-sw-7", "leaf-01", "nx-01", "xe-01"}},
 		{"a landing level above the ceiling", `
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: adm, privilege: admin, permit: ["**"]}]
@@ -276,7 +285,11 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	if p, err := Parse([]byte(body), e); err != nil || len(p.Quarantines(noon)) != 0 {
 		t.Fatalf("every shipped platform carries the principal: %v", err)
 	}
-	e.EnableUsernames = map[string]string{"arista_eos": platform.EnableEnab}
+	// Validate refuses `enab` in any adapter a file writes, so only an
+	// environment's own table can stand one up.
+	eos, _ := platform.DialectFor("arista_eos")
+	eos.EnableUsername = platform.EnableEnab
+	e.Dialects = map[string]platform.Dialect{"arista_eos": eos}
 	p, err := Parse([]byte(body), e)
 	if err != nil {
 		t.Fatal(err)
@@ -352,7 +365,7 @@ grants:
   - {subject: s, scope: all_devices, roles: [op], expires: 2026-11-01}
   - {subject: s, scope: dc, roles: [adm], expires: 2026-10-01}`, env())
 	leaf, campus := got["leaf-01"], got["campus-sw-7"]
-	if len(got) != 2 || len(leaf) != 1 || len(campus) != 1 ||
+	if len(got) != 4 || len(leaf) != 1 || len(campus) != 1 || len(got["nx-01"]) != 1 || len(got["xe-01"]) != 1 ||
 		!strings.HasPrefix(leaf[0], "will be quarantined from 2026-10-01T00:00:00.000Z, when grant dc [adm] expires: ") ||
 		!strings.Contains(leaf[0], "level unmapped has no rendering on arista_eos") ||
 		!strings.HasPrefix(campus[0], `quarantined: subject "s": level unmapped`) {
@@ -545,5 +558,405 @@ grants: [{subject: s, scope: all_devices, roles: [adm], max_privilege: operator}
 		if d.Platform == "arista_eos" && !strings.Contains(cause, "land it at admin, above its grants' max_privilege operator") {
 			t.Errorf("%s: cause %q", d.Name, cause)
 		}
+	}
+}
+
+// IOS-XE refuses the whole session for an attribute it does not take, under
+// either flag, and a run of refusals stops it answering SSH, break-glass
+// included (tests/lab/results/L18-cisco_iosxe.md, variant 5's
+// p49-nonsense*1). A composition whose reply
+// would carry one quarantines the device, naming the attribute and where it
+// came from; one keyed to other platforms leaves IOS-XE alone.
+func TestAnAttributeIOSXEDoesNotTakeQuarantinesIt(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {KEY: ["p49-nonsense*1"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`
+	p := mustParse(t, strings.Replace(body, "KEY", "all", 1))
+	q := p.Quarantines(noon)
+	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
+		"its session reply sends p49-nonsense*1 (role ro), and cisco_iosxe takes no attribute but priv-lvl, idletime, timeout") {
+		t.Fatalf("quarantines: %+v", q)
+	}
+	for _, key := range []string{"arista_eos", "cisco_nxos"} {
+		if q := mustParse(t, strings.Replace(body, "KEY", key, 1)).Quarantines(noon); len(q) != 0 {
+			t.Errorf("%s: %+v", key, q)
+		}
+	}
+	// priv-lvl is what it takes, from the level or from a role, and idletime
+	// and timeout, which it left a session unchanged for
+	// (tests/lab/results/L22-cisco_iosxe.md, "Inert candidates").
+	for _, attr := range []string{"priv-lvl=1", "idletime*30", "timeout*480"} {
+		ok := strings.Replace(strings.Replace(body, "KEY", "cisco_iosxe", 1), "p49-nonsense*1", attr, 1)
+		if q := mustParse(t, ok).Quarantines(noon); len(q) != 0 {
+			t.Fatalf("%s: %+v", attr, q)
+		}
+	}
+}
+
+// home-directory is no exception on IOS-XE: beside admin's reply the C8000V
+// refused the session for it, `% Authorization failed.`
+// (tests/lab/results/L22-cisco_iosxe.md). A policy that sends it there
+// quarantines the device, so no login is locked out by it, and a placeholder
+// in it is refused at load, since nothing is inert on IOS-XE.
+func TestHomeDirectoryIsRefusedOnIOSXE(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {KEY: ["VALUE"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`
+	parse := func(key, value string) (*Policy, error) {
+		return Parse([]byte(strings.NewReplacer("KEY", key, "VALUE", value).Replace(body)), env())
+	}
+	p, err := parse("cisco_iosxe", "home-directory*/home/port49")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := p.Quarantines(noon)
+	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
+		"its session reply sends home-directory*/home/port49 (role ro), and cisco_iosxe takes no attribute but priv-lvl, idletime, timeout") {
+		t.Fatalf("quarantines: %+v", q)
+	}
+	for _, key := range []string{"cisco_iosxe", "all"} {
+		if _, err := parse(key, "home-directory*/home/{username}"); err == nil || !strings.Contains(err.Error(),
+			"home-directory is not listed inert on cisco_iosxe, so it takes no placeholder") {
+			t.Errorf("%s: %v", key, err)
+		}
+	}
+}
+
+// idletime and timeout are numbers, and L22 measured exactly `idletime*30`
+// and `timeout*480` (tests/lab/results/L22-*.md, "Inert candidates"). A
+// placeholder in either is refused at load on every platform, inert or not:
+// what a mint fills in is an identity, never a number the device takes. A
+// literal that is not a plain decimal 0 to 65535 quarantines the device on
+// every platform, and on IOS-XE, whose refusals lock out SSH, break-glass
+// included (L18-cisco_iosxe.md), so does the unmeasured mandatory `=`.
+func TestIdletimeAndTimeoutAreNumbers(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {KEY: [ATTR]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`
+	parse := func(key, attr string) (*Policy, error) {
+		return Parse([]byte(strings.NewReplacer("KEY", key, "ATTR", `"`+attr+`"`).Replace(body)), env())
+	}
+	for _, attr := range []string{"idletime*{principal}", "timeout={privilege}", "idletime*{username}"} {
+		for _, key := range []string{"arista_eos", "cisco_nxos", "cisco_iosxe", "all"} {
+			if _, err := parse(key, attr); err == nil || !strings.Contains(err.Error(),
+				"is a number and takes no placeholder") {
+				t.Errorf("%s under %s: %v", attr, key, err)
+			}
+		}
+	}
+	for _, attr := range []string{"idletime*forever", "idletime=-1", "idletime*030", "timeout*99999", "timeout*",
+		"timeout*+5"} {
+		p, err := parse("all", attr)
+		if err != nil {
+			t.Fatalf("%s: %v", attr, err)
+		}
+		if q := p.Quarantines(noon); len(q) != len(inventory()) {
+			t.Errorf("%s: %d of %d devices quarantined: %+v", attr, len(q), len(inventory()), q)
+		} else if !strings.Contains(causesOf(q[0])[0], "sends "+attr+" (role ro), which is not a plain decimal "+
+			"0 to 65535") {
+			t.Errorf("%s: %v", attr, causesOf(q[0]))
+		}
+	}
+	// The mandatory form is unmeasured on IOS-XE, and quarantines it alone.
+	p, err := parse("all", "idletime=30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := p.Quarantines(noon); len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
+		"sends idletime=30 (role ro), and cisco_iosxe was measured taking idletime only as idletime*") {
+		t.Fatalf("quarantines: %+v", q)
+	}
+	// What L22 measured passes everywhere.
+	for _, attr := range []string{"idletime*30", "timeout*480"} {
+		if p, err := parse("all", attr); err != nil {
+			t.Errorf("%s: %v", attr, err)
+		} else if q := p.Quarantines(noon); len(q) != 0 {
+			t.Errorf("%s: %+v", attr, q)
+		}
+	}
+}
+
+// priv-lvl's values are closed, 0 to 15, and IOS-XE refused the session for
+// priv-lvl=99 rather than clamp or ignore it (L18-cisco_iosxe.md, variant 7).
+// A role or grant that layers any other value fails the joint check on every
+// device it reaches, whatever the platform, and on IOS-XE a level the adapter
+// does not render fails it too.
+func TestAPrivLvlThatIsNotALevelQuarantines(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {KEY: [ATTR]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`
+	parse := func(key, attr string) []Quarantine {
+		return mustParse(t, strings.NewReplacer("KEY", key, "ATTR", `"`+attr+`"`).Replace(body)).Quarantines(noon)
+	}
+	for _, attr := range []string{"priv-lvl=99", "priv-lvl=16", "priv-lvl=abc", "priv-lvl=", "priv-lvl*99", "priv-lvl=-1"} {
+		q := parse("all", attr)
+		if len(q) != len(inventory()) {
+			t.Errorf("%s: %d of %d devices quarantined: %+v", attr, len(q), len(inventory()), q)
+		}
+		for _, d := range q {
+			if !strings.Contains(causesOf(d)[0], "sends "+attr+" (role ro), which is not a privilege level") {
+				t.Errorf("%s on %s: %v", attr, d.Device, causesOf(d))
+			}
+		}
+	}
+	// A level IOS-XE's adapter does not render: the device's own ladder there
+	// is unmeasured, so the reply is not sent.
+	q := parse("cisco_iosxe", "priv-lvl=5")
+	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
+		"sends priv-lvl=5 (role ro), and cisco_iosxe's adapter renders priv-lvl 1, 7 and 15 only") {
+		t.Fatalf("quarantines: %+v", q)
+	}
+	// Elsewhere 5 is a level, and the rendered ones pass on IOS-XE.
+	for _, tt := range []struct{ key, attr string }{{"arista_eos", "priv-lvl=5"}, {"cisco_iosxe", "priv-lvl=7"},
+		{"cisco_iosxe", "priv-lvl*15"}} {
+		if q := parse(tt.key, tt.attr); len(q) != 0 {
+			t.Errorf("%s %s: %+v", tt.key, tt.attr, q)
+		}
+	}
+}
+
+// The blob carries the merged adapter's accepted_attributes, so the daemon
+// refuses what the device would; a platform that takes any name carries none.
+func TestTheBlobCarriesWhatItsPlatformTakes(t *testing.T) {
+	p := mustParse(t, good)
+	r, err := p.ResolveSubject("netops_admins", deviceNamed(t, "xe-01"), noon)
+	if err != nil || !reflect.DeepEqual(r.Blob.AcceptedAttributes, []string{"idletime", "priv-lvl", "timeout"}) {
+		t.Fatalf("IOS-XE: %+v %v", r.Blob.AcceptedAttributes, err)
+	}
+	for _, name := range []string{"nx-01", "srx-fw-04"} {
+		if r, err := p.ResolveSubject("netops_admins", deviceNamed(t, name), noon); err != nil || r.Blob.AcceptedAttributes != nil {
+			t.Fatalf("%s: %+v %v", name, r.Blob.AcceptedAttributes, err)
+		}
+	}
+}
+
+// A grant's attribute is layered like a role's, and the check names it.
+func TestAGrantsAttributeIOSXEDoesNotTakeQuarantinesIt(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro], attributes: {cisco_iosxe: ["p49-nonsense*1"]}}]`)
+	q := p.Quarantines(noon)
+	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
+		"sends p49-nonsense*1 (grant all_devices [ro])") {
+		t.Fatalf("quarantines: %+v", q)
+	}
+}
+
+// The ceiling bounds every attribute of the reply that bears privilege, not
+// only priv-lvl (spec §7): on NX-OS and Junos the role is the privilege, and
+// on EOS the role is what the fallback to local reads. A role or grant that
+// sends one above what the ceiling's level renders, or one no role_order
+// ranks, which counts as the highest, quarantines the device, judged as the
+// diff gate judges a raised reply (final review I1).
+func TestARoleAttributeAboveTheCeilingQuarantines(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {KEY: ["ATTR"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r], max_privilege: readonly}]`
+	for _, tt := range []struct {
+		key, attr string
+		devices   []string
+	}{
+		{"cisco_nxos", "shell:roles*network-admin", []string{"nx-01"}},
+		{"arista_eos", "roles=network-admin", []string{"campus-sw-7", "leaf-01"}},
+		{"juniper_junos", "local-user-name*super-user", []string{"srx-fw-04", "srx-fw-05", "srx-fw-22", "srx-lab-01"}},
+		// Unranked, so above every role.
+		{"arista_eos", "roles=p49-custom", []string{"campus-sw-7", "leaf-01"}},
+	} {
+		p := mustParse(t, strings.NewReplacer("KEY", tt.key, "ATTR", tt.attr).Replace(body))
+		var got []string
+		for _, q := range p.Quarantines(noon) {
+			got = append(got, q.Device)
+			if c := causesOf(q)[0]; !strings.Contains(c, "its session reply sends "+tt.attr+" (role r)") ||
+				!strings.Contains(c, "max_privilege readonly") {
+				t.Errorf("%s: cause %q", q.Device, c)
+			}
+		}
+		if strings.Join(got, ",") != strings.Join(tt.devices, ",") {
+			t.Errorf("%s: quarantined %v, want %v", tt.attr, got, tt.devices)
+		}
+	}
+	// A grant's attribute is judged the same.
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r], max_privilege: readonly, attributes: {cisco_nxos: ["shell:roles*network-admin"]}}]`)
+	if q := p.Quarantines(noon); len(q) != 1 || q[0].Device != "nx-01" {
+		t.Errorf("a grant's role: %+v", q)
+	}
+	// idletime and timeout are accepted on IOS-XE and measured carrying no
+	// privilege (L22-cisco_iosxe.md): gated in the diff, but no raise above a
+	// ceiling (owner's ruling on the fix wave).
+	for _, ceiling := range []string{"operator", "admin"} {
+		p := mustParse(t, strings.NewReplacer("KEY", "cisco_iosxe", "ATTR", "idletime*30", "max_privilege: readonly",
+			"max_privilege: "+ceiling).Replace(body))
+		// Junos numbers no operator (plan 3's table), which quarantines it on
+		// its own; IOS-XE is what is asked here.
+		if cause, q := p.Quarantined("xe-01", noon); q {
+			t.Errorf("IOS-XE idletime under %s: %s", ceiling, cause)
+		}
+	}
+	// Nothing sits above the top level: under admin no attribute quarantines,
+	// Junos's local-user-name and an unranked role included.
+	for _, tt := range []struct{ key, attr string }{
+		{"juniper_junos", "local-user-name*super-user"}, {"arista_eos", "roles=p49-custom"}, {"all", "idletime*30"},
+	} {
+		p := mustParse(t, strings.NewReplacer("KEY", tt.key, "ATTR", tt.attr, "max_privilege: readonly",
+			"max_privilege: admin").Replace(body))
+		if q := p.Quarantines(noon); len(q) != 0 {
+			t.Errorf("%s under admin: %+v", tt.attr, q)
+		}
+	}
+	// Unmeasured on Junos, idletime counts as the highest under any lower
+	// ceiling.
+	p = mustParse(t, strings.NewReplacer("KEY", "juniper_junos", "ATTR", "idletime*30").Replace(body))
+	if q := p.Quarantines(noon); len(q) != 4 {
+		t.Errorf("Junos idletime under readonly: %+v", q)
+	}
+	// What the ceiling's level renders, or provably less, is within it.
+	for _, tt := range []struct{ key, attr, ceiling string }{
+		{"arista_eos", "roles=network-operator", "readonly"},
+		{"cisco_nxos", "shell:roles*network-admin", "admin"},
+		{"cisco_nxos", "shell:roles*network-operator", "admin"},
+	} {
+		body := strings.NewReplacer("KEY", tt.key, "ATTR", tt.attr, "max_privilege: readonly",
+			"max_privilege: "+tt.ceiling).Replace(body)
+		if q := mustParse(t, body).Quarantines(noon); len(q) != 0 {
+			t.Errorf("%s under %s: %+v", tt.attr, tt.ceiling, q)
+		}
+	}
+}
+
+// On a closed platform the reply's priv-lvl must be one a level's rendering
+// sends: a ceiling_levels number stands for a level only in the token, and
+// the device was never measured taking it (task 5 review, parked).
+func TestAClosedPlatformTakesOnlyARenderedPrivLvl(t *testing.T) {
+	p, err := Parse([]byte(`
+platforms:
+  acme_os:
+    supports: [session]
+    accepted_attributes: [priv-lvl, x-role]
+    privilege_attributes: [priv-lvl, x-role]
+    role_order: {x-role: [a]}
+    privilege: {readonly: ["x-role=a"], operator: ["x-role=a"], admin: ["priv-lvl=15", "x-role=a"]}
+    ceiling_levels: {readonly: 3, operator: 5}
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {acme_os: ["priv-lvl=5"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]`), withDevice("acme-01", "acme_os"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cause, q := p.Quarantined("acme-01", noon); !q || !strings.Contains(cause, "acme_os's adapter renders priv-lvl 15 only") {
+		t.Fatalf("%v %q", q, cause)
+	}
+}
+
+// A platform whose levels render a role and no priv-lvl, NX-OS, is never sent
+// one: beside a role the device ignores it, and alone it picks a role by a
+// per-release table nobody named, 15 to network-admin and 6 to vdc-operator
+// (tests/lab/results/L16-cisco_nxos.md, findings 1 and 6). A reply carrying
+// one quarantines the device (task 4 review M4).
+func TestAPrivLvlToAPlatformThatRendersARoleQuarantines(t *testing.T) {
+	for _, key := range []string{"cisco_nxos", "all"} {
+		p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {`+key+`: ["priv-lvl=1"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]`)
+		var got []string
+		for _, q := range p.Quarantines(noon) {
+			got = append(got, q.Device)
+			if !strings.Contains(causesOf(q)[0], "its session reply sends priv-lvl=1 (role r), and cisco_nxos's "+
+				"levels render a role and no priv-lvl") {
+				t.Errorf("%s: %q", q.Device, causesOf(q))
+			}
+		}
+		if strings.Join(got, ",") != "nx-01" {
+			t.Errorf("%s: quarantined %v", key, got)
+		}
+	}
+}
+
+// An attribute a level renders is the level on that platform, whatever
+// accepted_attributes says: listed there it is still bounded by the ceiling,
+// and the fallback exposure reads it (re-review RR-I1).
+func TestARenderedAttributeIsAlwaysBoundedByTheCeiling(t *testing.T) {
+	const block = `
+platforms:
+  f5_bigip:
+    supports: [session]
+    accepted_attributes: [F5-LTM-User-Role, priv-lvl]
+    role_order: {F5-LTM-User-Role: ["700", "0"]}
+    privilege: {readonly: ["F5-LTM-User-Role*700"], operator: ["F5-LTM-User-Role*700"], admin: ["F5-LTM-User-Role*0"]}
+    ceiling_levels: {readonly: 1, operator: 7, admin: 15}
+    fallback: {admin: "every partition, configuration included"}
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {f5_bigip: ["F5-LTM-User-Role*0"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]GRANT}]`
+	parse := func(grant string) *Policy {
+		t.Helper()
+		p, err := Parse([]byte(strings.Replace(block, "GRANT", grant, 1)), withDevice("bigip-01", "f5_bigip"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if cause, q := parse(", max_privilege: readonly").Quarantined("bigip-01", noon); !q ||
+		!strings.Contains(cause, "its session reply sends F5-LTM-User-Role*0 (role r)") {
+		t.Errorf("quarantined %v: %q", q, cause)
+	}
+	var got []string
+	for _, f := range findings(parse(""), FindingFallbackExposure) {
+		if strings.Contains(f, "on f5_bigip") {
+			got = append(got, f)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], "reaches admin") {
+		t.Errorf("exposure: %q", got)
+	}
+}
+
+// An attribute name is compared with a rendered or privilege-bearing name
+// without regard to case, the way that bounds more: a role sending
+// `f5-ltm-user-role*0` where a level renders `F5-LTM-User-Role` is the level,
+// whatever case accepted_attributes spells it in (re-review 2, RR2-M1).
+func TestARenderedNameIsMatchedInAnyCase(t *testing.T) {
+	d := platform.Dialect{Levels: map[string][]string{"admin": {"F5-LTM-User-Role*0"}},
+		AcceptedAttributes: []string{"F5-LTM-User-Role", "f5-ltm-user-role"}, InertAttributes: []string{"x-label"}}
+	for _, name := range []string{"f5-ltm-user-role", "F5-LTM-USER-ROLE", "PRIV-LVL", "Shell:Roles"} {
+		if !raisesCeiling(name, d) {
+			t.Errorf("%s does not raise the ceiling", name)
+		}
+	}
+	// The block the probe needs is refused at load: two spellings of one name.
+	_, err := Parse([]byte(`
+platforms:
+  f5_bigip:
+    supports: [session]
+    accepted_attributes: [F5-LTM-User-Role, f5-ltm-user-role, priv-lvl]
+    role_order: {F5-LTM-User-Role: ["700", "0"]}
+    privilege: {readonly: ["F5-LTM-User-Role*700"], operator: ["F5-LTM-User-Role*700"], admin: ["F5-LTM-User-Role*0"]}
+    ceiling_levels: {readonly: 1, operator: 7, admin: 15}
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {f5_bigip: ["f5-ltm-user-role*0"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r], max_privilege: readonly}]`), withDevice("bigip-01", "f5_bigip"))
+	if err == nil || !strings.Contains(err.Error(), "platforms.f5_bigip.accepted_attributes") ||
+		!strings.Contains(err.Error(), "F5-LTM-User-Role") || !strings.Contains(err.Error(), "f5-ltm-user-role") {
+		t.Errorf("%v", err)
 	}
 }

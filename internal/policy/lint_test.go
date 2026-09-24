@@ -17,7 +17,7 @@ subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s
 grants: [{subject: s, scope: all_devices, roles: [op]}]
 tests:
   - {subject: s, device: leaf-01, command: "show version", expect: deny, reason: device_quarantined}
-  - {subject: s, device: nx-01, command: "show version", expect: permit}
+  - {subject: s, device: srx-fw-04, command: "show version", expect: permit}
 `)
 	results := p.RunTests(noon)
 	if len(results) != 2 {
@@ -150,5 +150,89 @@ grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: operator}]
 		return f.Kind == FindingCeilingIndistinct
 	}) {
 		t.Fatal("no ceiling, nothing to report")
+	}
+}
+
+// A rule written with a value redaction hides — a deny on a known-bad SNMP
+// community, say — is legitimate and loads, but the value will read
+// «redacted» wherever the rule is echoed, and the operator is told so
+// without the report itself printing it (spec §5.8).
+func TestARuleSecretLiteralIsReportedRedacted(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: no_public, deny: ["snmp-server community public **"]}
+  - {name: admin, permit: ["username * secret **", "show **"]}
+  - {name: piped, permit: ["show **"], pipe: {permit: ["include key Pipe5ecret"]}}
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [admin, no_public, piped]}]
+`)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingRuleSecretLiteral {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 2 || !strings.Contains(got[0], `role "no_public": deny "snmp-server community «redacted» **"`) ||
+		strings.Contains(got[0], "public ") || !strings.Contains(got[1], `role "piped": pipe permit "include key «redacted»"`) {
+		t.Fatalf("%q", got)
+	}
+	if !slices.ContainsFunc(p.RuleSecretLiterals(), func(f Finding) bool { return f.Message == got[0] }) {
+		t.Fatal("port49d says what policy test says")
+	}
+}
+
+// A device_config line a `platforms:` block writes with a value redaction
+// hides is reported, and named redacted (spec §5.8): the value is in the
+// policy file, and `platform show` and `devices check-config` print it
+// «redacted». A line a set ships never trips it, though abbreviation matching
+// reads NX-OS's `aaa authentication login` as `authentication-key`.
+func TestADeviceConfigSecretLiteralIsReportedRedacted(t *testing.T) {
+	p := mustParse(t, "platforms:\n  arista_eos:\n    device_config: [\"aaa authorization exec default group port49 local\", "+
+		"\"snmp-server community Hunter2 ro\"]\n"+
+		"  cisco_nxos:\n    device_config: [\"aaa authentication login default group port49 local\"]\n"+good)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingDeviceConfigSecretLiteral {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], `platforms.arista_eos.device_config[1] "snmp-server community «redacted» «redacted»"`) ||
+		strings.Contains(got[0], "Hunter2") {
+		t.Fatalf("%q", got)
+	}
+	for _, f := range mustParse(t, good).Lint(noon) {
+		if f.Kind == FindingDeviceConfigSecretLiteral {
+			t.Errorf("a set's line: %s", f.Message)
+		}
+	}
+}
+
+// A block's config check whose match carries a value redaction hides is
+// reported as a device_config line is, named by its key; its says is prose,
+// redacted where printed and never reported, and a check a set ships never is
+// (spec §5.8).
+func TestAConfigCheckSecretLiteralIsReportedRedacted(t *testing.T) {
+	p := mustParse(t, "platforms:\n  arista_eos:\n    config_checks:\n"+
+		"      - {match: '^snmp-server community Hunter2', says: 'falls back to a local secret: x'}\n"+
+		"      - {match: '^aaa authentication enable default .*\\b(local|enable)\\s*$', says: \"enable falls back to a local "+
+		"secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)\"}\n"+
+		"      - {match: '^logging host', says: 'the secret word in prose'}\n"+
+		// A regex's escapes are not words: none of these carries a secret
+		// (task 15 re-review 2, R1).
+		"      - {match: '^aaa authorization exec default\\s+group \\S+ none$', says: x}\n"+
+		"      - {match: '^aaa authorization commands \\S+ default .*\\b(none|if-authenticated)\\s*$', says: x}\n"+
+		"      - {match: '^aaa authentication enable default .*\\b(local|enable)\\s*$', says: x}\n"+
+		"      - {match: 'authentication-order .*\\bpassword\\b', says: x}\n"+
+		"      - {match: '^username\\s+\\S+\\s+privilege\\s+\\d+$', says: x}\n"+good)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingDeviceConfigSecretLiteral {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], `platforms.arista_eos.config_checks[0].match "^snmp-server community «redacted»"`) ||
+		strings.Contains(got[0], "Hunter2") {
+		t.Fatalf("%q", got)
 	}
 }

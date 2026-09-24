@@ -5,27 +5,45 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // The policy file's schema (spec §11), snake_case throughout. Every key is
 // declared: the decoder refuses one it does not know rather than ignoring it,
 // because an ignored key is a policy that reads one way and runs another.
 type file struct {
-	PrivilegeLevels []fileLevel   `yaml:"privilege_levels"`
-	Scopes          []fileScope   `yaml:"scopes"`
-	Roles           []fileRole    `yaml:"roles"`
-	Subjects        []fileSubject `yaml:"subjects"`
-	Grants          []fileGrant   `yaml:"grants"`
-	Tests           []fileTest    `yaml:"tests"`
-	Acknowledge     []fileAck     `yaml:"acknowledge"`
+	PlatformSet     string                  `yaml:"platform_set"`
+	Platforms       map[string]filePlatform `yaml:"platforms"`
+	PrivilegeLevels []fileLevel             `yaml:"privilege_levels"`
+	Scopes          []fileScope             `yaml:"scopes"`
+	Roles           []fileRole              `yaml:"roles"`
+	Subjects        []fileSubject           `yaml:"subjects"`
+	Grants          []fileGrant             `yaml:"grants"`
+	Tests           []fileTest              `yaml:"tests"`
+	Acknowledge     []fileAck               `yaml:"acknowledge"`
+}
+
+// filePlatform is one block under `platforms:` (spec §8, "User-editable, day
+// one"): the adapter keys of platform.Spec, merged per key over the pinned
+// set's adapter of that name, or over another's with based_on, or over
+// nothing with replace.
+type filePlatform struct {
+	platform.Spec `yaml:",inline"`
+	Replace       bool   `yaml:"replace"`
+	BasedOn       string `yaml:"based_on"`
 }
 
 // fileAck is one acknowledge: entry (spec §12): the author's written word for
-// a removed or rewritten deny no test can flip.
+// a removed or rewritten deny no test can flip, or for an edit to a
+// platform's adapter the gate reads (Diff.Adapters).
 type fileAck struct {
-	Role   string `yaml:"role"`
-	Rule   string `yaml:"rule"`
-	Reason string `yaml:"reason"`
+	Role     string `yaml:"role"`
+	Rule     string `yaml:"rule"`
+	Platform string `yaml:"platform"`
+	Field    string `yaml:"field"`
+	Sha256   string `yaml:"sha256"`
+	Reason   string `yaml:"reason"`
 }
 
 type fileLevel struct {
@@ -152,7 +170,7 @@ func (m *matchValue) UnmarshalYAML(n *yaml.Node) error {
 			switch op {
 			case "lt", "lte", "gt", "gte", "re":
 			default:
-				return fmt.Errorf("line %d: %q is not a comparison; use lt, lte, gt, gte or re", n.Line, op)
+				return fmt.Errorf("line %d: a key is not a comparison; use lt, lte, gt, gte or re", n.Line)
 			}
 		}
 	default:

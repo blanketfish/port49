@@ -227,6 +227,64 @@ func TestASessionReplyAboveTheCeilingIsRefused(t *testing.T) {
 	}
 }
 
+// A blob whose reply carries a priv-lvl that is not a level is refused, never
+// sent: IOS-XE refused the session for priv-lvl=99 (L18-cisco_iosxe.md,
+// variant 7). The load's joint check quarantines such a composition, so a
+// blob carrying one was minted before that check or under another adapter.
+func TestASessionReplyWithAPrivLvlThatIsNotALevelIsRefused(t *testing.T) {
+	for _, a := range []string{"priv-lvl=99", "priv-lvl=16", "priv-lvl=abc", "priv-lvl=", "priv-lvl*-1"} {
+		b := eosBlob()
+		b.Attributes = []string{a, "home-directory*/home/{username}"}
+		f := newEngineFixture(t, b)
+		c := store.Context{Username: "alice", Principal: "user:alice@example.com", BlobHash: f.hash}
+		d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(), Request{Context: c, Device: peer})
+		if d.Permit || d.Reason != decision.BlobUnavailable || len(d.Attributes) != 0 || d.ServerMsg != blobUnavailableMsg {
+			t.Errorf("%s: %+v", a, d)
+		}
+	}
+}
+
+// A blob whose reply carries an idletime or timeout that is not a plain
+// decimal is refused, never sent, as the load's joint check quarantines it
+// (resolve.go, engine.NotANumber): a device sent a value it cannot use may
+// refuse the session, and on IOS-XE a run of refusals locks out SSH
+// (final review M2).
+func TestASessionReplyWithANumberThatIsNotOneIsRefused(t *testing.T) {
+	for _, a := range []string{"idletime*abc", "timeout*-1", "idletime*030", "timeout*99999"} {
+		b := eosBlob()
+		b.Attributes = []string{"priv-lvl=1", a}
+		f := newEngineFixture(t, b)
+		c := store.Context{Username: "alice", Principal: "user:alice@example.com", BlobHash: f.hash}
+		d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(), Request{Context: c, Device: peer})
+		if d.Permit || d.Reason != decision.BlobUnavailable || len(d.Attributes) != 0 || d.ServerMsg != blobUnavailableMsg {
+			t.Errorf("%s: %+v", a, d)
+		}
+	}
+}
+
+// A blob that says which attributes its platform takes is never answered with
+// another: the device would refuse the session, and on IOS-XE a run of
+// refusals stops it answering SSH (L18-cisco_iosxe.md). The load's joint check
+// quarantines such a composition, so a blob carrying one was minted before
+// that check or under another adapter.
+func TestASessionReplyTheBlobsPlatformDoesNotTakeIsRefused(t *testing.T) {
+	b := eosBlob()
+	b.AcceptedAttributes = []string{"priv-lvl"}
+	f := newEngineFixture(t, b)
+	c := store.Context{Username: "alice", Principal: "user:alice@example.com", BlobHash: f.hash}
+	e := &Engine{Store: f.st, Metrics: f.m}
+	d := e.Session(context.Background(), Request{Context: c, Device: peer})
+	if d.Permit || d.Reason != decision.BlobUnavailable || len(d.Attributes) != 0 || d.ServerMsg != blobUnavailableMsg {
+		t.Fatalf("%+v", d)
+	}
+	b.AcceptedAttributes = []string{"home-directory", "priv-lvl"}
+	f = newEngineFixture(t, b)
+	c.BlobHash = f.hash
+	if d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(), Request{Context: c, Device: peer}); !d.Permit {
+		t.Fatalf("every name accepted: %+v", d)
+	}
+}
+
 // A blob compiled for another platform than the device's is never answered
 // from: its attributes and its dialect are another vendor's (roadmap, plan 4,
 // carried from plan 3).
@@ -342,5 +400,26 @@ func TestTheEngineNeverAnswersError(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The engine's vector drops the pipeline and the raw pairs keep it, so a
+// pattern anchored at the end — one a `platforms:` block may add — matches
+// the vector and not the raw pairs, while a built-in one matches both. Each
+// pattern is judged on its own: the form it missed loses every argument,
+// whatever another pattern did there (spec §5.8; task 11 review C1).
+func TestASecretOneFormMissesIsRedactedInBoth(t *testing.T) {
+	f := newEngineFixture(t, eosBlob())
+	f.h.WithRedactor(func(name string) []platform.Redaction {
+		return append(platform.Redactions(name),
+			platform.Redaction{Match: []string{"tunnel", "psk", "*", "key", "*"}, After: "psk"})
+	})
+	_, rec := f.authorize(t, "cmd=tunnel", "cmd-arg=psk", "cmd-arg=S3cret", "cmd-arg=key", "cmd-arg=K1",
+		"cmd-arg=|", "cmd-arg=no-more", "cmd-arg=<cr>")
+	if strings.Contains(f.log.String(), "S3cret") || strings.Contains(f.log.String(), "K1") {
+		t.Fatalf("a secret reached the log: %s", f.log.String())
+	}
+	if r := rec["request"].(map[string]any); r["redacted"] != true {
+		t.Fatalf("%v", r)
 	}
 }

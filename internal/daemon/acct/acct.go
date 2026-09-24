@@ -33,6 +33,17 @@ type Handler struct {
 	// production state in the production binary, and an unlocked map read by
 	// parallel requests.
 	systemUsers map[string][]string
+	// redact is the redaction every record passes through before it reaches
+	// the spool (spec §5.8); nil is the built-in patterns.
+	redact platform.Redactor
+}
+
+// WithRedactor sets the redaction applied to every record before it reaches
+// the spool: port49d passes the policy in force's. Without it the built-in
+// patterns apply.
+func (h *Handler) WithRedactor(r platform.Redactor) *Handler {
+	h.redact = r
+	return h
 }
 
 // New builds the accounting handler.
@@ -143,6 +154,10 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 		rec.Principal = c.Principal
 		rec.Session.CtxID = c.CtxID
 	}
+	// Before the spool, which is on disk: command accounting carries typed
+	// text verbatim, and a secret must not reach the disk any more than the
+	// sink (spec §5.8). The attribution above read the record as sent.
+	redactAccount(h.redact, &rec)
 
 	if err := h.spool.Offer(rec); err != nil {
 		h.metrics.Requests.WithLabelValues("acct", "error").Inc()

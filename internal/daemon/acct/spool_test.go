@@ -16,6 +16,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 func TestSpoolDrainsInOrder(t *testing.T) {
@@ -781,4 +782,44 @@ func TestDrainResumesAtOffsetWithoutDuplicates(t *testing.T) {
 			t.Fatalf("want SpoolDepth == 0, got %v", got)
 		}
 	})
+}
+
+// A spool file an earlier build left holds records it never redacted, and
+// the drain forwards them after the upgrade that promises no secret reaches
+// the sink: the drain redacts them too, with the redactor the daemon gives
+// it (spec §5.8; task 11 review M1).
+func TestTheDrainRedactsARecordSpooledBeforeTheUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	old, err := NewSpool(4, path, decision.NewJSONLines(&bytes.Buffer{}), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := &decision.Device{NAS: "10.20.0.7", Name: "leaf-01", Platform: "arista_eos"}
+	for _, args := range [][]string{{"username", "bob", "secret", "Hunter2"}, {"crypto", "psk", "s3cret"}} {
+		raw := []string{"cmd=" + args[0]}
+		for _, a := range args[1:] {
+			raw = append(raw, "cmd-arg="+a)
+		}
+		if err := old.Offer(decision.Record{Event: decision.EventAccount, Device: dev,
+			AcctRecord: &decision.AcctRecord{Raw: raw, Vector: args}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := &bytes.Buffer{}
+	sp, err := NewSpool(4, path, decision.NewJSONLines(out), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.WithRedactor(func(name string) []platform.Redaction {
+		return append(platform.Redactions(name), platform.Redaction{Match: []string{"**"}, After: "psk"})
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sp.Run(ctx); close(done) }()
+	cancel()
+	<-done
+	if strings.Contains(out.String(), "Hunter2") || strings.Contains(out.String(), "s3cret") ||
+		strings.Count(out.String(), `"redacted":true`) != 2 {
+		t.Fatalf("%s", out.String())
+	}
 }

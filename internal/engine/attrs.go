@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -40,21 +41,26 @@ func Mandatory(a string) bool {
 // cannot check what an attribute means: a non-empty name before the first `=`
 // or `*`, no whitespace in the name, at most MaxAttribute bytes as written,
 // no placeholder in the name, and none outside the vocabulary.
+//
+// An error quotes nothing of the attribute but a valid name: it is policy
+// text, and a refusal goes to logs where the refused file's redaction
+// patterns never loaded (spec §5.8).
 func CheckAttribute(a string) error {
 	i := strings.IndexAny(a, "=*")
 	switch {
 	case i < 0:
-		return fmt.Errorf("attribute %q has no `=` (mandatory) or `*` (optional) separator", a)
+		return errors.New("an attribute has no `=` (mandatory) or `*` (optional) separator")
 	case i == 0:
-		return fmt.Errorf("attribute %q has an empty name", a)
+		return errors.New("an attribute has an empty name")
 	case strings.ContainsAny(a[:i], " \t"):
-		return fmt.Errorf("attribute %q: the name contains whitespace", a)
+		return errors.New("an attribute's name contains whitespace")
 	case len(a) > MaxAttribute:
 		return fmt.Errorf("attribute %q is %d bytes; RFC 8907 carries at most %d", AttributeName(a), len(a), MaxAttribute)
 	case placeholder.MatchString(a[:i]):
 		// A substitution in the name would let a username rewrite which
 		// attribute is sent, and whether it is mandatory.
-		return fmt.Errorf("attribute %q: a placeholder may appear only in the value (spec §6)", a)
+		return errors.New("an attribute's name carries a placeholder; a placeholder may appear only in the value " +
+			"(spec §6)")
 	}
 	for _, p := range placeholder.FindAllString(a, -1) {
 		known := false
@@ -62,8 +68,8 @@ func CheckAttribute(a string) error {
 			known = known || p == v
 		}
 		if !known {
-			return fmt.Errorf("attribute %q: %s is not a substitution; the vocabulary is %s",
-				a, p, strings.Join(Placeholders, " "))
+			return fmt.Errorf("attribute %s: a placeholder in the value is not a substitution; the vocabulary is %s",
+				AttributeName(a), strings.Join(Placeholders, " "))
 		}
 	}
 	return nil
@@ -131,14 +137,59 @@ func GrantedPrivLvl(attrs []string) (level uint8, at int, ok bool) {
 	at = -1
 	for i, a := range attrs {
 		j := strings.IndexAny(a, "=*")
-		if j < 0 || a[:j] != "priv-lvl" {
+		// Any case: what a device makes of the name's case is unmeasured,
+		// and read as priv-lvl it is held to more (re-review 2, RR2-M1).
+		if j < 0 || !strings.EqualFold(a[:j], "priv-lvl") {
 			continue
 		}
-		n, err := strconv.ParseUint(a[j+1:], 10, 8)
-		if err != nil || n > 15 {
+		n, valid := PrivLvlValue(a[j+1:])
+		if !valid {
 			continue
 		}
-		level, at, ok = uint8(n), i, true
+		level, at, ok = n, i, true
 	}
 	return level, at, ok
+}
+
+// PrivLvlValue reads a priv-lvl attribute's value as a level: decimal as
+// written plainly, 0 to 15, no sign and no leading zero. ok is false for
+// anything else, which no device is measured to take:
+// IOS-XE refused the session for priv-lvl=99 rather than clamp or ignore it
+// (tests/lab/results/L18-cisco_iosxe.md, variant 7).
+func PrivLvlValue(v string) (level uint8, ok bool) {
+	n, err := strconv.ParseUint(v, 10, 8)
+	if err != nil || n > 15 || strconv.FormatUint(n, 10) != v {
+		return 0, false
+	}
+	return uint8(n), true
+}
+
+// NumericAttributes are the session attributes whose value is a number: L22
+// measured `idletime*30` and `timeout*480` leaving a session unchanged
+// (tests/lab/results/L22-*.md, "Inert candidates"), and no other value. A
+// placeholder never goes in one, since a mint fills in an identity, and a
+// value that is not a plain decimal is never sent (spec §6).
+var NumericAttributes = []string{"idletime", "timeout"}
+
+// NotANumber reports whether a is one of NumericAttributes, in either form,
+// whose value is not decimal as written plainly, 0 to 65535, no sign and no
+// leading zero.
+func NotANumber(a string) bool {
+	i := strings.IndexAny(a, "=*")
+	if i < 0 || !slices.ContainsFunc(NumericAttributes, func(n string) bool { return strings.EqualFold(n, a[:i]) }) {
+		return false
+	}
+	n, err := strconv.ParseUint(a[i+1:], 10, 16)
+	return err != nil || strconv.FormatUint(n, 10) != a[i+1:]
+}
+
+// NotALevel reports whether a is a priv-lvl attribute, in either form, whose
+// value PrivLvlValue refuses.
+func NotALevel(a string) bool {
+	i := strings.IndexAny(a, "=*")
+	if i < 0 || !strings.EqualFold(a[:i], "priv-lvl") {
+		return false
+	}
+	_, ok := PrivLvlValue(a[i+1:])
+	return !ok
 }

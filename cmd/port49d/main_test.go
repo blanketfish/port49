@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"io"
@@ -122,5 +123,16 @@ func TestALabBlockIsAnnouncedAtStart(t *testing.T) {
 	if strings.Contains(bare, "seed token") || strings.Contains(bare, "fault file") ||
 		!strings.Contains(bare, "lab fallback authorizer") {
 		t.Errorf("a bare lab block enables the fallback authorizer alone: %q", bare)
+	}
+}
+
+// The start says what the configuration file itself carries that moved:
+// `enable_username: principal` in port49d.yaml loads, and the start tells
+// the operator the key lives in the policy file now (task 8 review minor 2).
+func TestTheStartSaysAKeyMoved(t *testing.T) {
+	var out bytes.Buffer
+	announce(&out, &config.Config{Notices: []string{"platforms.cisco_iosxe.enable_username moved to the policy file"}})
+	if out.String() != "port49d: platforms.cisco_iosxe.enable_username moved to the policy file\n" {
+		t.Fatalf("%q", out.String())
 	}
 }

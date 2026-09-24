@@ -1,0 +1,55 @@
+! Command: show running-config
+! device: leaf1 (vEOS-lab, EOS-4.31.2F)
+!
+! boot system flash:/vEOS-lab.swi
+!
+no aaa root
+!
+username admin role network-admin secret sha512 <removed>
+username breakglass privilege 15 role network-admin secret sha512 <removed>
+!
+transceiver qsfp default-mode 4x10G
+!
+service routing protocols model multi-agent
+!
+hostname leaf1
+!
+spanning-tree mode mstp
+!
+system l1
+   unsupported speed action error
+   unsupported error-correction action error
+!
+management api http-commands
+   protocol unix-socket
+   no shutdown
+!
+management api gnmi
+   transport grpc default
+!
+management api netconf
+   transport ssh default
+!
+tacacs-server host 172.100.100.1 key 7 <removed>
+!
+aaa group server tacacs+ port49
+   server 172.100.100.1
+!
+aaa authentication login default group port49 local
+aaa authentication enable default group port49 local
+aaa authorization exec default group port49 local
+aaa authorization commands all default group port49 local
+aaa accounting exec default start-stop group port49
+aaa accounting commands all default start-stop group port49
+!
+interface Management1
+   ip address 10.0.0.15/24
+!
+no ip routing
+!
+ip route 0.0.0.0/0 10.0.0.2
+!
+management ssh
+   idle-timeout 60
+!
+end

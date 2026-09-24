@@ -1,0 +1,121 @@
+# cisco_iosxe — Catalyst 8000V 17.13.01a in the port49 lab.
+# Every value is measured and cited, or marked unmeasured and chosen in the
+# direction that fails closed (spec §8, §15).
+platforms:
+  cisco_iosxe:
+    # Every reply this adapter renders was applied by the lab image as the
+    # adapter says, at readonly, operator and admin
+    # (tests/lab/results/L22-cisco_iosxe.md; spec §15, L22).
+    verified: containerlab
+    # Session and per-command authorization (L1, L10). Config-command
+    # authorization is unmeasured, so it is not claimed.
+    supports: [session, commands]
+    # priv-lvl alone: this image refuses the session for any attribute it does
+    # not recognise, under either flag, and a run of refusals stops it
+    # answering SSH for about a minute, break-glass included
+    # (tests/lab/results/L18-cisco_iosxe.md).
+    #
+    # The device draws its own ladder: level 1 refuses `clear counters`,
+    # `clear ip bgp *` and `configure terminal` in the parser without asking
+    # port49; level 7 does the same until the device is told what level 7
+    # may run, and `privilege exec level 7 clear counters` makes it exactly
+    # the operator rung (ceiling-cisco_iosxe.md). So operator is 7 here, not
+    # admin's 15 (decision 25), and the reference configuration carries both
+    # lines the rung was measured with: the level-7 command authorization
+    # list, `aaa authorization commands 7 default group port49 local`, and
+    # `privilege exec level 7 clear counters` (device_config, below).
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=7"]
+      admin: ["priv-lvl=15"]
+    # priv-lvl is what port49 renders. L18 saw the session refused for every
+    # other attribute it tried, under either flag (L18-cisco_iosxe.md), and
+    # L22 saw the same for home-directory. L22 found idletime*30 and
+    # timeout*480 accepted beside priv-lvl=15 and inert (L22-cisco_iosxe.md,
+    # "Inert candidates"), so they are listed too; only those two values, in
+    # the optional `*` form, were measured. A policy whose reply would carry
+    # anything else quarantines the device (decision 25). So does a priv-lvl
+    # no level here renders, and on every platform one that is not 0 to 15
+    # (L18, variant 7); an idletime or timeout sent mandatory, `=`; and on
+    # every platform one whose value is not a plain decimal 0 to 65535.
+    accepted_attributes: [priv-lvl, idletime, timeout]
+    # What the renderings above depend on, as the lab device carries it
+    # (tests/lab/configs/iosxe-startup.cfg). The group name is the lab's.
+    # The request carries the command's level, not the session's
+    # (ceiling-cisco_iosxe.md), so there is a command list for each level
+    # port49 renders; the operator rung was measured with all three present.
+    # Without the commands 7 list a level-7 command is never sent to port49:
+    # operator's `clear counters` ran with no authorization request, so
+    # check-config's MISSING for that line is load-bearing
+    # (tests/lab/results/L22-carried-cisco_iosxe.md).
+    device_config:
+      # Required: the session reply, and with it priv-lvl, is asked for here.
+      - aaa authorization exec default group port49 local
+      # Required: port49 decides each command at the level it runs at.
+      - aaa authorization commands 1 default group port49 local
+      - aaa authorization commands 7 default group port49 local
+      - aaa authorization commands 15 default group port49 local
+      # Required: without it commands typed in configuration mode are not
+      # sent for authorization, and port49's denies do not reach them.
+      - aaa authorization config-commands
+      # Required for operator: the one command the measured operator rung
+      # runs (ceiling-cisco_iosxe.md).
+      - privilege exec level 7 clear counters
+      # Recommended, not required: command accounting at every level port49
+      # renders.
+      - aaa accounting commands 1 default start-stop group port49
+      - aaa accounting commands 7 default start-stop group port49
+      - aaa accounting commands 15 default start-stop group port49
+    # The parser refuses these without asking port49 (ceiling-cisco_iosxe.md),
+    # at 7 with `privilege exec level 7 clear counters` in place.
+    unreachable:
+      readonly: [clear counters **, clear ip bgp **, configure terminal **]
+      operator: [clear ip bgp **, configure terminal **]
+    # No fallback exposure: with port49d down under an open session, local
+    # authorization refused every command a token session typed, `%
+    # Authorization failed.`, at 15 (`clear counters`, `clear ip bgp *`,
+    # `configure terminal`) and at 7 (`clear counters`), because a token user
+    # had no local account (tests/lab/results/L22-cisco_iosxe.md,
+    # L22-carried-cisco_iosxe.md). That holds on a device whose configuration
+    # passes check-config's local_accounts check (spec §5.6). A local account
+    # named like a port49 username would authorize from its own privilege. A
+    # fallback entry names more than the policy grants, so none is listed.
+    # readonly's level 1 was not measured.
+    # `port49 devices check-config` (spec §5.6).
+    local_accounts: ['^username\s+(\S+)']
+    config_checks:
+      - match: '^aaa authorization commands \d+ default .*\b(none|if-authenticated)\s*$'
+        says: "the command method list falls back to none or if-authenticated: an ERROR or an outage then permits every command at that level (tests/lab/results/L4-error-cisco_iosxe.md); end it in local"
+      - match: '^aaa authentication enable default .*\b(local|enable)\s*$'
+        says: "enable falls back to a local secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)"
+    # No entity class is defined: the lab's management interface is
+    # GigabitEthernet1, a physical port by name.
+    #
+    # `sh ver` arrived as `show version` over SSH (L21-cisco_iosxe.md);
+    # RESTCONF and NETCONF are unmeasured.
+    expands_abbreviations: true
+    # `int Gi1` arrived as `cmd-arg=GigabitEthernet cmd-arg=1`
+    # (L21-cisco_iosxe.md). Other interface types and subinterfaces are
+    # unmeasured.
+    splits_interface_names: true
+    # A typed `show clock | include ...` reached port49 as `show clock` alone
+    # (L2-cisco_iosxe.md, "Truncation length"). Whether any other modifier reaches
+    # port49 is unmeasured.
+    pipe_token: "|"
+    pipe_authorized: false
+    # Every command authorization ends `cmd-arg=<cr>` (L10-cisco_iosxe.md).
+    strip_cr: true
+    # A 61-character server_msg was displayed in full (L2-cisco_iosxe.md).
+    shows_server_msg: true
+    # `priv-lvl` sets the level (L16, ceiling-cisco_iosxe.md).
+    privilege_attributes: [priv-lvl]
+    # Nothing is inert here. home-directory*/home/port49 beside admin's reply
+    # got the session refused, `% Authorization failed.`
+    # (tests/lab/results/L22-cisco_iosxe.md), so it bears on the session like
+    # any other name and takes no placeholder. idletime*30 and timeout*480
+    # left admin's session unchanged (L22-cisco_iosxe.md, "Inert
+    # candidates"), but they are held bearing: a refused session here, run
+    # of them, stops the device answering SSH, break-glass included (L18),
+    # so a change to either is gated like priv-lvl. The empty list is what
+    # overrides the generic adapter's home-directory.
+    inert_attributes: []

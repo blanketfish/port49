@@ -49,6 +49,13 @@ type Blob struct {
 	// grant layer already applied, in wire order. They may carry the four
 	// substitutions of spec §6, which the daemon fills per session.
 	Attributes []string `json:"attributes"`
+	// AcceptedAttributes is the merged adapter's accepted_attributes: every
+	// attribute name the platform's session reply may carry, sorted, or nil
+	// for any name. The daemon refuses a reply carrying another (IOS-XE
+	// refuses the session for one, L18-cisco_iosxe.md). Written only when
+	// set, so a v2 blob written before it decodes as no restriction and
+	// keeps its hash.
+	AcceptedAttributes []string `json:"accepted_attributes,omitempty"`
 	// Rules are every permit and deny of the composed roles. Pipe is the
 	// output-modifier allowlist (spec §4, "Pipeline stages").
 	Rules []Rule   `json:"rules"`
@@ -112,6 +119,11 @@ func Encode(b Blob) ([]byte, string, error) {
 	c := Blob{Version: Version, Bundle: b.Bundle, Platform: b.Platform, Normalize: b.Normalize,
 		Privilege: b.Privilege, Attributes: append([]string{}, b.Attributes...),
 		Rules: []Rule{}, Pipe: []string{}, Classes: map[string][]string{}}
+	if len(b.AcceptedAttributes) > 0 {
+		c.AcceptedAttributes = slices.Clone(b.AcceptedAttributes)
+		slices.Sort(c.AcceptedAttributes)
+		c.AcceptedAttributes = slices.Compact(c.AcceptedAttributes)
+	}
 	for _, r := range b.Rules {
 		c.Rules = append(c.Rules, Rule{Verdict: r.Verdict, Rule: CanonicalRule(r.Rule), Role: r.Role})
 	}
@@ -191,20 +203,22 @@ func (b Blob) check() error {
 	if b.Normalize.PipeToken == "" {
 		return errors.New("engine: blob has no pipe token")
 	}
-	for _, r := range b.Rules {
+	// A rule is named by its position, never quoted: replay prints this, and
+	// a rule may carry a value redaction hides (spec §5.8).
+	for i, r := range b.Rules {
 		if r.Verdict != Permit && r.Verdict != Deny {
-			return fmt.Errorf("engine: rule %q: verdict %q is neither permit nor deny", r.Rule, r.Verdict)
+			return fmt.Errorf("engine: rule #%d: verdict %q is neither permit nor deny", i+1, r.Verdict)
 		}
 		if r.Role == "" {
-			return fmt.Errorf("engine: rule %q names no role", r.Rule)
+			return fmt.Errorf("engine: rule #%d names no role", i+1)
 		}
 		if _, err := ParseRule(r.Rule); err != nil {
-			return fmt.Errorf("engine: %w", err)
+			return fmt.Errorf("engine: rule #%d: %w", i+1, err)
 		}
 	}
-	for _, p := range b.Pipe {
+	for i, p := range b.Pipe {
 		if _, err := ParseRule(p); err != nil {
-			return fmt.Errorf("engine: pipe %w", err)
+			return fmt.Errorf("engine: pipe rule #%d: %w", i+1, err)
 		}
 	}
 	for name := range referencedClasses(b) {
@@ -237,7 +251,18 @@ func (b Blob) check() error {
 		}
 		names[AttributeName(a)] = true
 	}
+	for _, n := range b.AcceptedAttributes {
+		if n == "" || strings.ContainsAny(n, "=* \t") {
+			return fmt.Errorf("engine: accepted attribute %q is not an attribute name", n)
+		}
+	}
 	return nil
+}
+
+// Accepts reports whether the blob's platform takes a's name in a session
+// reply: any name, where the blob carries no list.
+func (b Blob) Accepts(a string) bool {
+	return len(b.AcceptedAttributes) == 0 || slices.Contains(b.AcceptedAttributes, AttributeName(a))
 }
 
 // invalidUTF8 finds a string in b that is not valid UTF-8. json.Marshal would
@@ -246,6 +271,7 @@ func (b Blob) check() error {
 func invalidUTF8(b Blob) (string, bool) {
 	all := []string{b.Bundle, b.Platform, b.Normalize.PipeToken, b.Privilege}
 	all = append(all, b.Attributes...)
+	all = append(all, b.AcceptedAttributes...)
 	all = append(all, b.Pipe...)
 	for _, r := range b.Rules {
 		all = append(all, r.Verdict, r.Rule, r.Role)

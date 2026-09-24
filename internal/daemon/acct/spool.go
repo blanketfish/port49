@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +14,12 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 var ErrSpoolFull = errors.New("acct: spool full")
@@ -139,6 +143,11 @@ type Spool struct {
 	lastOfferLog time.Time
 
 	signal chan struct{}
+
+	// redact is the redaction a drained record passes through before the
+	// sink (WithRedactor); unset is the built-in patterns. Atomic because
+	// port49d sets it once the policy is known, with the drain running.
+	redact atomic.Pointer[platform.Redactor]
 
 	// The rest belong exclusively to the single goroutine that calls
 	// drainOnce (Run, or a test calling it directly with nothing else
@@ -623,8 +632,10 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 }
 
 // setAside appends one spool line to <path>.unencodable and syncs it, so a
-// record the log will never take is kept for an operator, not lost.
+// record the log will never take is kept for an operator, not lost. What is
+// written is setAsideForm's, never the line as read.
 func (s *Spool) setAside(line []byte) error {
+	line = s.setAsideForm(line)
 	f, err := os.OpenFile(s.path+".unencodable", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
@@ -640,6 +651,52 @@ func (s *Spool) setAside(line []byte) error {
 		err = cerr
 	}
 	return err
+}
+
+// WithRedactor sets the redaction a drained record passes through before it
+// reaches the sink: port49d passes the policy in force's.
+func (s *Spool) WithRedactor(r platform.Redactor) *Spool {
+	s.redact.Store(&r)
+	return s
+}
+
+// redactAccount replaces the secrets of an account record's raw pairs and
+// vector with «redacted» and says so (spec §5.8). nil is the built-in
+// patterns.
+func redactAccount(redact platform.Redactor, r *decision.Record) {
+	if r.AcctRecord == nil || r.Device == nil {
+		return
+	}
+	if redact == nil {
+		redact = platform.BuiltInRedactor
+	}
+	if raw, v, ok := platform.RedactRecord(redact(r.Device.Platform), r.AcctRecord.Raw, r.AcctRecord.Vector); ok {
+		a := *r.AcctRecord
+		a.Raw, a.Vector, a.Redacted = raw, v, true
+		r.AcctRecord = &a
+	}
+}
+
+// setAsideForm is what the set-aside file keeps of a line: the record with
+// its secrets redacted, as the drain would forward it, since a spool file an
+// earlier build left holds records it never redacted; or, for a line that
+// does not read back as a record or does not encode again, only its length
+// and sha256 — never its bytes (spec §5.8).
+func (s *Spool) setAsideForm(line []byte) []byte {
+	line = bytes.TrimRight(line, "\n")
+	var r decision.Record
+	if err := r.UnmarshalJSON(line); err == nil {
+		var redact platform.Redactor
+		if p := s.redact.Load(); p != nil {
+			redact = *p
+		}
+		redactAccount(redact, &r)
+		if b, err := json.Marshal(r); err == nil {
+			return b
+		}
+	}
+	sum := sha256.Sum256(line)
+	return []byte(fmt.Sprintf(`{"unreadable":true,"length":%d,"sha256":"%s"}`, len(line), hex.EncodeToString(sum[:])))
 }
 
 // deliverLine unmarshals one record and forwards it, or logs and counts a
@@ -658,6 +715,14 @@ func (s *Spool) deliverLine(line []byte) error {
 		s.metrics.SpoolDrops.WithLabelValues(dropDrainUnparseable).Inc()
 		return nil
 	}
+	// Offer took the record already redacted, but a spool file an earlier
+	// build left holds records it never redacted: the sink gets none of
+	// them as they were.
+	var redact platform.Redactor
+	if p := s.redact.Load(); p != nil {
+		redact = *p
+	}
+	redactAccount(redact, &r)
 	return s.sink.Write(r)
 }
 

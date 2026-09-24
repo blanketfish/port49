@@ -3,8 +3,9 @@ package platform
 import (
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
+
+	"github.com/rhwendt/port49/internal/engine"
 )
 
 // Dialect is what the policy engine compiles into a blob about one platform
@@ -14,10 +15,8 @@ import (
 // the broker compiles it into the blob, so a daemon and a broker cannot
 // disagree about a rule.
 //
-// BORROWED AHEAD from plan 5, which builds the adapters in full — user
-// overrides and layering, the pinned platform set, `redact`, projection — and
-// replaces this table. Every value here is either measured and cited, or
-// marked unmeasured and chosen in the direction that fails closed.
+// The built-in dialects are files, platforms/<set>/<platform>.yaml (spec §8,
+// "Knowing what is shipped"), parsed by LoadSets into this type.
 type Dialect struct {
 	// PipeToken is the argument that separates a command from its output
 	// modifiers (spec §3 rule 2). Only a whole argument equal to it splits.
@@ -61,9 +60,10 @@ type Dialect struct {
 	// Question 2) — and is not a load error; an entry missing from a non-nil
 	// map is, unless the level's parent chain reaches one.
 	Levels map[string][]string
-	// CeilingLevels is the priv-lvl number each level stands for on a
-	// platform that renders none (Levels nil), where the token's ceiling still
-	// needs one. nil is plan 3's table, ceilingLevels.
+	// CeilingLevels is the priv-lvl number each level stands for where the
+	// platform's rendering sends no priv-lvl — NX-OS is sent a role and no
+	// level (L16) — and the token's ceiling still needs one. nil on a platform
+	// with no Levels is plan 3's table, ceilingLevels.
 	CeilingLevels map[string]uint8
 	// PrivilegeAttributes are the attribute names measured to carry privilege
 	// on this platform (spec §6): none takes a placeholder, and the policy
@@ -74,121 +74,119 @@ type Dialect struct {
 	// diff does not gate. An attribute in neither list bears privilege: the
 	// gate and the load fail closed on what nobody listed.
 	InertAttributes []string
+	// AcceptedAttributes, where it is not nil, is every attribute name this
+	// platform's session reply may carry: the device refuses the whole session
+	// for any other (IOS-XE, L18), so a composition whose reply carries one
+	// fails the joint check and quarantines the device. nil takes any name.
+	// Where it is set, a priv-lvl the reply carries must also be one of the
+	// levels this adapter renders: what the device lets another level run is
+	// unmeasured.
+	AcceptedAttributes []string
+	// RoleOrder ranks the values of an attribute that names a role, lowest
+	// first, where the lab measured one fencing less than another (spec §8):
+	// the diff gate lets a change to such an attribute through only where
+	// its value provably went down (spec §12), and a level renders no role
+	// above the one a higher level renders. A value it does not list is
+	// unranked, and ranks above every value, failing closed.
+	RoleOrder map[string][]string
+	// DeviceConfig is the device configuration this adapter's renderings
+	// depend on, one line each: `port49 platform show` prints it, and a device
+	// without it does not get what the level promises (IOS-XE's level 7 is
+	// level 1 until it is given commands, ceiling-cisco_iosxe.md).
+	DeviceConfig []string
+	// EnableUsername is what the platform's enable START carries in `user`:
+	// EnablePrincipal, the operator's own username, on every platform
+	// measured. It lives in the adapter, where the offline tools read it as
+	// port49d does, so the `enable: auto` joint check answers the same in CI
+	// (spec §5.6, §7).
+	EnableUsername string
+	// Redact are the redaction patterns an operator's `platforms:` block adds
+	// to the platform's built-in ones (Redactions). A block adds; it never
+	// removes a built-in pattern (spec §5.8).
+	Redact []Redaction
+	// Verified is how the adapter's spellings were confirmed (spec §8):
+	// "containerlab" where a tests/lab/results/ note shows every attribute it
+	// sends applied by a lab image, "community" for a contributed adapter
+	// nobody here has run, and empty where neither is true. Only a built-in
+	// adapter may say it.
+	Verified string
+	// Unreachable maps a level to the rules the device refuses at that level
+	// in its own parser, never asking port49 (tests/lab/results/ceiling-*.md):
+	// a permit every command of which is here is dead there (spec §12).
+	// Only measured commands are listed; a level with none lists nothing.
+	Unreachable map[string][]string
+	// UnreachableNote maps a level to a `platforms:` block's unreachable
+	// rules that the set did not measure: the operator's word, kept apart
+	// from the measurement as FallbackNote is, so the dead-rule report names
+	// it operator-listed and cites no lab note for it, and `platform export
+	// --all` does not write it into a set (spec §8, §12; task 14 review M7).
+	// Its Spec key, unreachable_note, is set only by SpecOf; a block may not
+	// write it.
+	UnreachableNote map[string][]string
+	// Fallback maps a level to what the device gives a session at it on its
+	// own when port49 cannot answer and the command method list falls back to
+	// local, where that is more than a confined role: a subject port49
+	// confines at that level has more access in an outage than the policy
+	// grants (spec §6, §12, "Fallback exposure"). It is only what the lab
+	// measured, or what a block wrote for a level no set measured anything
+	// for: a block's text for a level the set did measure is FallbackNote.
+	Fallback map[string]string
+	// FallbackNote maps a level to a `platforms:` block's fallback text where
+	// the set measured its own: the operator's word, kept apart from the
+	// measurement so the report prints it as a note no text in it can close
+	// or forge (spec §12). Its Spec key, fallback_note, is set only by
+	// SpecOf; a block may not write it.
+	FallbackNote map[string]string
+	// LocalAccounts are RE2 patterns, one capture group each, that find a
+	// device-local account's name in the device's configuration: `port49
+	// devices check-config` warns where one is a username port49 serves
+	// there, which the spec forbids (§5.6, "Local account names MUST NOT
+	// collide").
+	LocalAccounts []string
+	// ConfigChecks are configuration lines the spec says a device must not
+	// carry (§5.6, §6), each with what it costs: the same check names them.
+	ConfigChecks []ConfigCheck
 }
 
-// dialects are the built-in platforms. Each value is cited or marked
-// unmeasured:
-//
-//   - PipeAuthorized is false on every platform with a command path, and that
-//     is measured: typing `show clock | include AAAA…` sent port49 `show clock`
-//     alone on vEOS 4.31.2F, NX-OS 10.4(2)F and IOS-XE 17.13.01a
-//     (tests/lab/results/L2-arista_eos.md, L2-cisco_nxos.md,
-//     L2-cisco_iosxe.md). Whether any other modifier reaches port49 anywhere
-//     is unmeasured. Junos never authorizes a command.
-//   - ShowsServerMsg: a 61-character server_msg on a denied command was
-//     displayed in full on vEOS 4.31.2F and IOS-XE 17.13.01a and not at all on
-//     NX-OS 10.4(2)F, which printed its own error (tests/lab/results/
-//     L2-arista_eos.md, L2-cisco_iosxe.md, L2-cisco_nxos.md). Junos makes no
-//     command request to carry one and is unmeasured, so false.
-//   - StripCR: every command authorization measured ends `cmd-arg=<cr>`
-//     (L10-arista_eos.md, L10-cisco_nxos.md, L10-cisco_iosxe.md).
-//   - ExpandsAbbreviations is true on EOS, NX-OS and IOS-XE, set from L21:
-//     typed `sh ver`, `sho run` and `sh clock` arrived as the full keywords on
-//     the authorization request and the accounting record on vEOS 4.31.2F,
-//     NX-OS 10.4(2)F and IOS-XE 17.13.01a, and `sh clock` was denied by a
-//     `show clock` deny on all three (tests/lab/results/L21-arista_eos.md,
-//     L21-cisco_nxos.md, L21-cisco_iosxe.md). That was interactive SSH; eAPI,
-//     NX-API and NETCONF are unmeasured. Junos sends no command to expand and
-//     is unmeasured, so false, the direction that fails closed.
-//   - SplitsInterfaceNames is true on IOS-XE alone: a typed `int Gi1` arrived
-//     as `cmd-arg=GigabitEthernet cmd-arg=1` on IOS-XE 17.13.01a, while vEOS
-//     and the N9Kv sent one argument, `Ethernet1` and `Ethernet1/1`
-//     (tests/lab/results/L21-cisco_iosxe.md, L21-arista_eos.md,
-//     L21-cisco_nxos.md). Other interface types and subinterfaces are
-//     unmeasured; an index is read as digits and `/ . :`.
-//   - Supports: EOS, NX-OS and IOS-XE send per-command authorization (L1, L10);
-//     Junos sends none, in 26 sessions on two images (L18; decision 21).
-//     Config-command authorization is unmeasured, so no platform claims it.
-//   - EntityClasses: interface NAMES, not device behaviour. `management` is the
-//     interface the lab reaches each image on (fxp0 and mgmt0 in
-//     tests/lab/configs/vjunos-startup.conf and nxos-startup.cfg; Management1
-//     is spec §8's EOS example, and `em0` spec §8's Junos one, which no lab
-//     image uses); `loopback` and `physical` are spec §8's EOS example. IOS-XE defines none: its lab management interface is
-//     GigabitEthernet1, which is a physical port by name.
-//   - Levels: arista_eos renders `priv-lvl` for readonly and admin, applied by
-//     vEOS on every lab run since 2026-09-20 (L16-arista_eos.md). `operator`
-//     renders as admin does, on the owner's ruling of 2026-09-24 (spec §6,
-//     decision 23): at level 15 vEOS ran `clear counters`, `clear ip bgp *`
-//     and `configure` for a `network-operator` session, and at level 1 refused
-//     even `clear counters` (ceiling-arista_eos.md), so no level fences an
-//     operator there and port49's command rules are the fence. Every other
-//     platform renders nothing, as in plan 3; plan 5 fills them.
-//   - CeilingLevels: cisco_nxos numbers `operator` 15, admin's number, on the
-//     same ruling: every N9Kv role ran all three commands and
-//     `network-operator` changed configuration (ceiling-cisco_nxos.md).
-//     IOS-XE, whose level 7 can carry the operator rung (ceiling-cisco_iosxe.md),
-//     keeps plan 3's table until plan 5 renders it.
-//   - PrivilegeAttributes: `priv-lvl` sets the level on EOS, NX-OS and IOS-XE
-//     (L16, ceiling-*.md); EOS applies a bare `roles=<name>` and NX-OS
-//     `shell:roles`, bare or inside `cisco-av-pair` (L16-arista_eos.md,
-//     L16-cisco_nxos.md); Junos applies `local-user-name` and decision 22
-//     names `user-permissions`, measured inert on these releases but a
-//     permission carrier by design (L18-juniper_*.md), and its command and
-//     configuration regexes, `allow-commands`, `deny-commands`,
-//     `allow-configuration`, `deny-configuration` and their `-regexps` forms,
-//     vendor-documented and unmeasured (L18; decision 22). The generic
-//     adapter lists `priv-lvl`, what an unknown TACACS+ device most likely
-//     reads.
-//   - InertAttributes: `home-directory` everywhere, spec §6's motivating case
-//     for a placeholder; unmeasured on any lab image.
-var dialects = map[string]Dialect{
-	"arista_eos": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
-		Supports: []string{"session", "commands"},
-		EntityClasses: map[string][]string{
-			"management": {`^Management[0-9]+$`},
-			"loopback":   {`^Loopback[0-9]+$`},
-			"physical":   {`^Ethernet[0-9/.]+$`, `^Port-Channel[0-9]+$`},
-		},
-		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=15"}, "admin": {"priv-lvl=15"}},
-		PrivilegeAttributes: []string{"priv-lvl", "roles"},
-		InertAttributes:     inert,
-	},
-	"cisco_nxos": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: false,
-		Supports:            []string{"session", "commands"},
-		EntityClasses:       map[string][]string{"management": {`^mgmt[0-9]+$`}},
-		CeilingLevels:       map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
-		PrivilegeAttributes: []string{"priv-lvl", "shell:roles", "cisco-av-pair"},
-		InertAttributes:     inert,
-	},
-	"cisco_iosxe": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
-		SplitsInterfaceNames: true,
-		Supports:             []string{"session", "commands"},
-		PrivilegeAttributes:  []string{"priv-lvl"},
-		InertAttributes:      inert,
-	},
-	"juniper_junos": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false,
-		Supports:      []string{"session"},
-		EntityClasses: map[string][]string{"management": {`^(fxp0|em0)$`}},
-		PrivilegeAttributes: []string{"local-user-name", "user-permissions", "allow-commands", "deny-commands",
-			"allow-configuration", "deny-configuration", "allow-commands-regexps", "deny-commands-regexps",
-			"allow-configuration-regexps", "deny-configuration-regexps"},
-		InertAttributes: inert,
-	},
+// ConfigCheck is one line a device's configuration must not carry: an RE2
+// pattern over each line, and what the line costs, as the check says it.
+type ConfigCheck struct {
+	Match string `yaml:"match" json:"match"`
+	Says  string `yaml:"says" json:"says"`
 }
 
-// inert is every shipped adapter's InertAttributes.
+// builtin is the default set's adapters, platforms/<DefaultSet>/*.yaml, where
+// every value is cited to the lab note that measured it or marked unmeasured
+// and chosen in the direction that fails closed.
+func builtin() map[string]Dialect { return sets[DefaultSet] }
+
+// inert is the generic adapter's InertAttributes, and every shipped adapter's
+// but cisco_iosxe's, which is empty: the C8000V refused a session for
+// home-directory (tests/lab/results/L22-cisco_iosxe.md).
 var inert = []string{"home-directory"}
 
-// generic is the dialect of a platform port49 ships no adapter for (spec §8,
-// "Unknown platforms"): the device still logs in, nothing is rendered for it,
-// no modifier is claimed to reach port49, and the device is assumed to send
-// abbreviations as typed.
-var generic = Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session"},
-	PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert}
+// generics is each set's generic adapter, by version: the dialect of a
+// platform the set ships no adapter for (spec §8, "Unknown platforms"). The
+// device still logs in, nothing is rendered for it, no modifier is claimed to
+// reach port49, and the device is assumed to send abbreviations as typed.
+// Each of the set's files is laid over it, so it is frozen with its set: a
+// device on a platform missing from a pinned set renders the same on every
+// later binary. A new set that changes it adds its own entry; one that does
+// not repeats the last, and LoadSets refuses a set with none.
+//
+// Its PrivilegeAttributes lists priv-lvl, what an unknown TACACS+ device most
+// likely reads.
+var generics = map[string]Dialect{
+	"1.0.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
+		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
+}
+
+// Generic returns set version's generic adapter, copied, and whether the
+// binary has one for that version.
+func Generic(version string) (Dialect, bool) {
+	d, ok := generics[version]
+	return d.clone(), ok
+}
 
 // ceilingLevels is the priv-lvl number a level stands for on a platform that
 // renders no level, where the number is still needed: the token's
@@ -198,21 +196,21 @@ var generic = Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session
 // on IOS-XE and Junos.
 var ceilingLevels = map[string]uint8{"readonly": 1, "admin": 15}
 
-// DialectFor returns name's dialect and whether port49 ships one. An unknown
-// platform gets the generic dialect. The maps are copies: a caller cannot edit
-// the table through them.
+// DialectFor returns name's dialect in the default set and whether port49
+// ships one. An unknown platform gets the default set's generic dialect. The
+// maps are copies: a caller cannot edit the table through them.
 func DialectFor(name string) (Dialect, bool) {
-	d, ok := dialects[name]
+	d, ok := builtin()[name]
 	if !ok {
-		d = generic
+		d = generics[DefaultSet]
 	}
 	return d.clone(), ok
 }
 
 // Dialects is the whole built-in table, copied.
 func Dialects() map[string]Dialect {
-	out := make(map[string]Dialect, len(dialects))
-	for name, d := range dialects {
+	out := make(map[string]Dialect, len(builtin()))
+	for name, d := range builtin() {
 		out[name] = d.clone()
 	}
 	return out
@@ -222,6 +220,16 @@ func (d Dialect) clone() Dialect {
 	d.Supports = append([]string(nil), d.Supports...)
 	d.PrivilegeAttributes = slices.Clone(d.PrivilegeAttributes)
 	d.InertAttributes = slices.Clone(d.InertAttributes)
+	d.AcceptedAttributes = slices.Clone(d.AcceptedAttributes)
+	d.DeviceConfig = slices.Clone(d.DeviceConfig)
+	d.Redact = slices.Clone(d.Redact)
+	if d.RoleOrder != nil {
+		order := make(map[string][]string, len(d.RoleOrder))
+		for k, v := range d.RoleOrder {
+			order[k] = slices.Clone(v)
+		}
+		d.RoleOrder = order
+	}
 	if d.EntityClasses != nil {
 		classes := make(map[string][]string, len(d.EntityClasses))
 		for k, v := range d.EntityClasses {
@@ -239,6 +247,28 @@ func (d Dialect) clone() Dialect {
 	if d.CeilingLevels != nil {
 		d.CeilingLevels = maps.Clone(d.CeilingLevels)
 	}
+	if d.Unreachable != nil {
+		unreachable := make(map[string][]string, len(d.Unreachable))
+		for k, v := range d.Unreachable {
+			unreachable[k] = slices.Clone(v)
+		}
+		d.Unreachable = unreachable
+	}
+	if d.UnreachableNote != nil {
+		note := make(map[string][]string, len(d.UnreachableNote))
+		for k, v := range d.UnreachableNote {
+			note[k] = slices.Clone(v)
+		}
+		d.UnreachableNote = note
+	}
+	if d.Fallback != nil {
+		d.Fallback = maps.Clone(d.Fallback)
+	}
+	if d.FallbackNote != nil {
+		d.FallbackNote = maps.Clone(d.FallbackNote)
+	}
+	d.LocalAccounts = slices.Clone(d.LocalAccounts)
+	d.ConfigChecks = slices.Clone(d.ConfigChecks)
 	return d
 }
 
@@ -246,20 +276,48 @@ func (d Dialect) clone() Dialect {
 // this platform: every name but one measured inert (InertAttributes).
 func (d Dialect) BearsPrivilege(name string) bool { return !slices.Contains(d.InertAttributes, name) }
 
-// PrivilegeAttributeNames is every built-in platform's PrivilegeAttributes,
-// sorted: the names no attribute value may put a placeholder in, whatever
-// platform key it is written under (spec §6).
+// ContainsName reports whether list holds name in any case: a comparison
+// that makes more of an attribute bear privilege reads it this way, since
+// what a device makes of a name's case is unmeasured (re-review 2, RR2-M1).
+// A comparison that exempts one, inert or accepted, stays exact.
+func ContainsName(list []string, name string) bool {
+	return slices.ContainsFunc(list, func(n string) bool { return strings.EqualFold(n, name) })
+}
+
+// PrivilegeAttributeNames is the PrivilegeAttributes of every platform in
+// every built-in set, sorted: the names no attribute value may put a
+// placeholder in, whatever platform key it is written under (spec §6).
 func PrivilegeAttributeNames() []string {
-	out := slices.Clone(generic.PrivilegeAttributes)
-	for _, d := range dialects {
+	var out []string
+	for _, d := range generics {
 		for _, n := range d.PrivilegeAttributes {
 			if !slices.Contains(out, n) {
 				out = append(out, n)
 			}
 		}
 	}
+	for _, set := range sets {
+		for _, d := range set {
+			for _, n := range d.PrivilegeAttributes {
+				if !slices.Contains(out, n) {
+					out = append(out, n)
+				}
+			}
+		}
+	}
 	slices.Sort(out)
 	return out
+}
+
+// RoleRank is value's place in the role_order of attribute name, lowest
+// first. ok is false for a value it does not rank, which ranks above every
+// value it does.
+func (d Dialect) RoleRank(name, value string) (rank int, ok bool) {
+	rank = slices.Index(d.RoleOrder[name], value)
+	if rank < 0 {
+		return 0, false
+	}
+	return rank, true
 }
 
 // Authorizes reports whether the platform declares capability c.
@@ -285,26 +343,28 @@ func (d Dialect) Render(level string) (attrs []string, ok bool) {
 }
 
 // PrivLvl is the priv-lvl number this platform gives exactly this level: the
-// value of a `priv-lvl` attribute in its rendering, or, where the platform
-// renders none, its CeilingLevels or plan 3's table. ok is false where none
-// says.
+// value of a `priv-lvl` attribute in its rendering; where the rendering sends
+// none, its CeilingLevels (NX-OS renders a role and no level, L16); and where
+// the platform renders nothing at all and declares no table, plan 3's. ok is
+// false where none says.
 func (d Dialect) PrivLvl(level string) (uint8, bool) {
-	if d.Levels == nil {
-		table := d.CeilingLevels
-		if table == nil {
-			table = ceilingLevels
-		}
-		n, ok := table[level]
-		return n, ok
-	}
 	for _, a := range d.Levels[level] {
 		i := strings.IndexAny(a, "=*")
 		if i < 0 || a[:i] != "priv-lvl" {
 			continue
 		}
-		if n, err := strconv.ParseUint(a[i+1:], 10, 8); err == nil && n <= 15 {
-			return uint8(n), true
-		}
+		// A rendered priv-lvl that is not a level is no number at all, never
+		// CeilingLevels' instead: the device is sent the value, not the table
+		// (Validate refuses it; this is the belt to that).
+		return engine.PrivLvlValue(a[i+1:])
 	}
-	return 0, false
+	table := d.CeilingLevels
+	if table == nil {
+		if d.Levels != nil {
+			return 0, false
+		}
+		table = ceilingLevels
+	}
+	n, ok := table[level]
+	return n, ok
 }

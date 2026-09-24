@@ -146,6 +146,16 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (lo
 	return logins, enables, nil
 }
 
+// announce is what the start says about the configuration file itself: the
+// lab block's warning, and each notice config.Load left, such as a key that
+// moved to the policy file (task 8 review minor 2).
+func announce(w io.Writer, cfg *config.Config) {
+	fmt.Fprint(w, labWarning(cfg.Lab))
+	for _, n := range cfg.Notices {
+		fmt.Fprintln(w, "port49d:", n)
+	}
+}
+
 // labWarning is the line port49d prints at start when its config has a
 // `lab:` block (owner's ruling 2026-09-24; design §13): what the block
 // enables, and that it must never be in production. The block is the lab's
@@ -227,6 +237,9 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	}
 	b := &broker.Broker{Policy: policy.NewLive(pol), Devices: devices, Minter: minter, Store: st, Log: log, Metrics: m,
 		Now: time.Now, MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax}
+	// The blob event's rule text is redacted as the daemon's records are,
+	// with the policy in force's patterns (spec §5.8).
+	b.Redact = redactorFor(b.Policy)
 	srv, err := b.Server(cfg.Broker.Listen, cert, anchor)
 	if err != nil {
 		return nil, nil, fmt.Errorf("broker.client_ca_file %s: %w", cfg.Broker.ClientCAFile, err)
@@ -258,7 +271,7 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
 // bytes it hashed, so the version it remembers refusing is the version it
 // refused, and the version the watch saw agree twice is the version loaded.
 func parsePolicy(cfg config.Config, raw []byte) (*policy.Policy, error) {
-	pol, err := policy.Parse(raw, policy.Env{Devices: cfg.Inventory.Devices, EnableUsernames: cfg.EnableUsernames})
+	pol, err := policy.Parse(raw, policy.Env{Devices: cfg.Inventory.Devices})
 	if err != nil {
 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, quotesCut{err})
 	}
@@ -278,6 +291,9 @@ func (q quotesCut) Unwrap() error { return q.err }
 
 func (q quotesCut) Error() string {
 	var out strings.Builder
+	// A load error quotes no rule text and no term (policy.Parse names a rule
+	// by role, list and position), so there is nothing here to redact: a
+	// refused file's own redaction patterns never loaded (spec §5.8).
 	s := []rune(q.err.Error())
 	for i := 0; i < len(s); i++ {
 		out.WriteRune(s[i])
@@ -317,25 +333,49 @@ func (q quotesCut) Error() string {
 // the line names what to fix. Quarantine is time-scoped: one a grant's
 // expiry will bring on is said too, with when, while the device still mints.
 func sayPolicy(pol *policy.Policy, now time.Time) {
+	// Every line quotes the policy's own text, and stderr is a log: a rule's
+	// secret value is redacted in it (spec §5.8).
+	redact := pol.Redactions()
+	say := func(format string, args ...any) {
+		fmt.Fprintln(stderr, platform.RedactQuoted(redact, fmt.Sprintf(format, args...)))
+	}
 	for _, q := range pol.Quarantines(now) {
 		for _, e := range q.Entries {
 			msg := e.Message(now)
 			if e.Current(now) {
 				msg = "is " + msg
 			}
-			fmt.Fprintf(stderr, "port49d: broker: device %s (%s) %s\n", q.Device, q.Platform, msg)
+			say("port49d: broker: device %s (%s) %s", q.Device, q.Platform, msg)
 		}
 	}
 	// A deny term that matches any argument, because its platform may send
 	// what was typed and its abbreviations cannot be read, over-denies
 	// rather than refusing the device (spec §3 rule 4); say which.
 	for _, f := range pol.WidenedDenies() {
-		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
+		say("port49d: broker: %s", f.Message)
 	}
 	// A permit naming an interface joined never matches where the platform
 	// sends the name and the index apart (spec §3 rule 5); say which.
 	for _, f := range pol.JoinedNamePermits() {
-		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
+		say("port49d: broker: %s", f.Message)
+	}
+	// A rule with a value redaction hides is echoed redacted everywhere
+	// (spec §5.8); say which, in its redacted form.
+	for _, f := range pol.RuleSecretLiterals() {
+		say("port49d: broker: %s", f.Message)
+	}
+}
+
+// redactorFor is the redaction port49d applies before any record is written
+// (spec §5.8): the built-in patterns and, where a policy is in force, the
+// ones its `platforms:` blocks add, read at each record so a reload reaches
+// them. With no policy the built-in patterns apply alone.
+func redactorFor(live *policy.Live) platform.Redactor {
+	if live == nil {
+		return platform.BuiltInRedactor
+	}
+	return func(name string) []platform.Redaction {
+		return append(platform.Redactions(name), live.Load().Dialect(name).Redact...)
 	}
 }
 
@@ -375,7 +415,7 @@ func run(parent context.Context, cfgPath string) error {
 	// The inventory as loaded, hashed now rather than when the reloader
 	// starts: an edit in between would otherwise never be said (checkInventory).
 	_, inventoryAtStart, _ := fileVersion(cfg.InventoryFile)
-	fmt.Fprint(stderr, labWarning(cfg.Lab))
+	announce(stderr, &cfg)
 
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
@@ -497,6 +537,9 @@ func run(parent context.Context, cfgPath string) error {
 	if brk != nil {
 		live = brk.Policy
 	}
+	// The drain redacts too: a spool file an earlier build left holds records
+	// it never redacted (spec §5.8).
+	spool.WithRedactor(redactorFor(live))
 	deps := server.Deps{Admission: cfg.Admission, Quarantined: watchQuarantine(live, m, time.Now), Keys: cfg.Keyring(),
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
@@ -513,13 +556,13 @@ func run(parent context.Context, cfgPath string) error {
 		// The grace window is carried for plan 7's sweep and read by nothing
 		// today.
 		Author: author.New(handlerStore, authz, log, m, time.Now, cfg.SessionServices,
-			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL),
+			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL).WithRedactor(redactorFor(live)),
 		// The system-user table is injected rather than looked up through a
 		// package global, so nothing can mutate a security rule at run time.
 		// It carries `root` for juniper_junos and nothing else
 		// (internal/platform). No idle TTL: accounting does not extend one
 		// (spec §5.8).
-		Acct:   acct.New(handlerStore, spool, m, time.Now, platform.SystemUsers()),
+		Acct:   acct.New(handlerStore, spool, m, time.Now, platform.SystemUsers()).WithRedactor(redactorFor(live)),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}
 
 	// A dead metrics listener is not a detail: without it nobody can see the

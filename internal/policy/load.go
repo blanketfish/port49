@@ -37,12 +37,15 @@ type Env struct {
 	// Devices is the inventory: the file inventory the daemon admits from,
 	// until plan 6's bundle.
 	Devices []admission.Device
-	// Dialects replaces the built-in platform table when non-nil. Tests use it;
-	// plan 5's layered adapters will too.
+	// Dialects replaces platforms of the pinned set when non-nil: tests use
+	// it to stand a platform up with other behaviour.
 	Dialects map[string]platform.Dialect
-	// EnableUsernames is config's resolved table (config.Config); a platform
-	// with no entry is `principal`.
-	EnableUsernames map[string]string
+	// Sets and Generics replace the built-in platform sets and their generic
+	// adapters, by version, when Sets is non-nil: tests use them to stand up
+	// a second set, since this build ships one. A set Generics leaves out
+	// has the unpinned set's generic adapter.
+	Sets     map[string]map[string]platform.Dialect
+	Generics map[string]platform.Dialect
 	// Now is the present the joint checks start from: a grant already expired
 	// by then is not checked. Zero is the clock at load; tests fix it.
 	Now time.Time
@@ -53,6 +56,14 @@ type Policy struct {
 	// Bundle names this policy on every blob and record: the sha256 of the
 	// file's bytes, until plan 6 publishes versioned bundles (spec §5.7).
 	Bundle string
+
+	// set is the platform set the policy pins (spec §8), and adapters its
+	// platforms: the built-in set, the file's `platforms:` blocks over it,
+	// Env.Dialects over those. overrides are the blocks as written, for the
+	// drift report.
+	set       string
+	adapters  map[string]platform.Dialect
+	overrides map[string]filePlatform
 
 	levels  []string          // the declared ordering, lowest first
 	parents map[string]string // level → parent, for rendering
@@ -136,10 +147,13 @@ type Test struct {
 }
 
 // Acknowledgment is one `acknowledge:` entry (spec §12): a removed or
-// rewritten deny, named by its role and exact rule text, that the author
-// acknowledges in writing, with why.
+// rewritten deny, named by its role and exact rule text, or an edited key of a
+// platform's adapter, named by the platform, the key and the sha256 of the
+// key's new value, that the author acknowledges in writing, with why. The
+// digest binds the entry to the one edit it was written for: left in the
+// file, it acknowledges no later edit to the same key (spec §12).
 type Acknowledgment struct {
-	Role, Rule, Reason string
+	Role, Rule, Platform, Field, Sha256, Reason string
 }
 
 // NoCeiling is how a test asserts that the grants compose to no ceiling.
@@ -183,10 +197,18 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		if strings.Contains(err.Error(), "time.Duration") {
-			return nil, fmt.Errorf("%w; durations need a unit, e.g. 60s", err)
+		// A type error quotes the value it could not decode, and the value
+		// may be a rule or a secret in it: the line and the types say where
+		// (spec §5.8).
+		msg := yamlValue.ReplaceAllString(err.Error(), "cannot unmarshal a $1 value")
+		msg = yamlTagged.ReplaceAllString(msg, "cannot decode a $1 value")
+		msg = yamlAnchor.ReplaceAllString(msg, "an unknown anchor was referenced; quote a rule that starts with *")
+		msg = yamlField.ReplaceAllString(msg, "an unknown field in type $1")
+		msg = yamlKey.ReplaceAllString(msg, "a mapping key already defined at line $1")
+		if strings.Contains(msg, "time.Duration") {
+			return nil, fmt.Errorf("%s; durations need a unit, e.g. 60s", msg)
 		}
-		return nil, err
+		return nil, errors.New(msg)
 	}
 	// A second document would be ignored by a single Decode, and an ignored
 	// `---` followed by a `scopes:` block is a policy that reads as scoped and
@@ -196,7 +218,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 			"everything after it, or merge it into the first document")
 	}
 	p := &Policy{Bundle: engine.HashOf(raw), env: env}
-	for _, step := range []func(file) error{p.buildLevels, p.buildRoles, p.buildScopes, p.buildSubjects,
+	for _, step := range []func(file) error{p.buildPlatforms, p.buildLevels, p.checkBlockOrder, p.buildRoles, p.buildScopes, p.buildSubjects,
 		p.buildGrants, p.checkMinters, p.buildTests, p.buildAcknowledgments} {
 		if err := step(f); err != nil {
 			return nil, err
@@ -211,27 +233,46 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	return p, nil
 }
 
+// yamlValue is the value a YAML type error quotes, yamlTagged the one an
+// explicitly tagged scalar's does and yamlAnchor the name an alias does
+// (`deny: [*secret]`); yamlField and yamlKey the key an unknown-field or
+// duplicate-key error does. Each is replaced by what it is.
+var (
+	yamlValue  = regexp.MustCompile("cannot unmarshal (!!\\w+) `[^`]*`")
+	yamlTagged = regexp.MustCompile("cannot decode (!!\\w+) `[^`]*`")
+	yamlAnchor = regexp.MustCompile(`unknown anchor '.*' referenced`)
+	yamlField  = regexp.MustCompile(`field .* not found in type (\S+)`)
+	yamlKey    = regexp.MustCompile(`mapping key ".*" already defined at line (\d+)`)
+)
+
 // refusedKeys names the plan that reads a key this build does not, before the
 // strict decode can say only that the field is unknown. Spec §11's example
 // carries two of them.
 func refusedKeys(raw []byte) error {
 	var loose struct {
-		PlatformSet any              `yaml:"platform_set"`
-		KeyGroups   any              `yaml:"key_groups"`
-		Platforms   any              `yaml:"platforms"`
-		Roles       []map[string]any `yaml:"roles"`
+		KeyGroups any              `yaml:"key_groups"`
+		Roles     []map[string]any `yaml:"roles"`
+		Platforms map[string]any   `yaml:"platforms"`
 	}
 	if err := yaml.Unmarshal(raw, &loose); err != nil {
 		return nil // the strict decode reports it, with a line number
 	}
 	switch {
-	case loose.PlatformSet != nil:
-		return errors.New("platform_set: pinning the platform set is plan 5's; remove the key until it lands")
 	case loose.KeyGroups != nil:
 		return errors.New("key_groups: key groups live in the inventory file (inventory_file) until plan 6 " +
 			"moves them to the policy repository; move the block there")
-	case loose.Platforms != nil:
-		return errors.New("platforms: user platform definitions are plan 5's; the built-in adapters apply")
+	}
+	// A block key written with no value, or null, decodes as unset and
+	// inherits the set's value: it reads as set and means the opposite
+	// (task 2 review minor 3). The key names are the file's identifiers.
+	for _, name := range sortedKeys(loose.Platforms) {
+		block, _ := loose.Platforms[name].(map[string]any)
+		for _, key := range sortedKeys(block) {
+			if block[key] == nil {
+				return fmt.Errorf("platforms.%s.%s is null: give it a value, or remove the key to take the set's "+
+					"(spec §8)", name, key)
+			}
+		}
 	}
 	for i, r := range loose.Roles {
 		if _, ok := r["max_session_age"]; ok {
@@ -244,6 +285,363 @@ func refusedKeys(raw []byte) error {
 		}
 	}
 	return nil
+}
+
+// buildPlatforms resolves the platform set the policy pins, or UnpinnedSet
+// where it pins none (spec §8): a binary upgrade never changes what a policy
+// renders, and a set this binary does not ship is refused by name. Each
+// `platforms:` block then merges over the set per top-level key, or starts
+// from another platform (`based_on:`) or from nothing (`replace: true`), and
+// is validated exactly as a built-in is.
+func (p *Policy) buildPlatforms(f file) error {
+	p.set = f.PlatformSet
+	if p.set == "" {
+		p.set = platform.UnpinnedSet
+	}
+	set, ok := p.builtinSet(p.set)
+	if !ok {
+		return fmt.Errorf("platform_set: %s is not a set this binary ships; it ships %s. Pin one of those, or run "+
+			"a binary that ships %s (spec §8)", p.set, strings.Join(platform.Sets(), ", "), p.set)
+	}
+	builtin, _ := p.builtinSet(p.set)
+	generic, _ := p.builtinGeneric(p.set)
+	p.overrides = f.Platforms
+	for _, name := range sortedKeys(f.Platforms) {
+		b := f.Platforms[name]
+		at := "platforms." + name
+		_, shipped := builtin[name]
+		var base platform.Dialect
+		switch {
+		case !platformNameShape.MatchString(name):
+			return fmt.Errorf("%s: a platform name is lower case, digits and _, starting with a letter, as an "+
+				"inventory's platform: field writes it", at)
+		case name == "all" || name == "default":
+			// `all` keys an attribute to every platform (§6) and `default` is
+			// the redaction list of every platform with none (§5.8): a platform
+			// of either name would be read as the other.
+			return fmt.Errorf("%s: %s is reserved: attributes.all names every platform and the built-in redaction "+
+				"table's default list every unlisted one; name the platform as the inventory does", at, name)
+		case name == genericPlatform:
+			// An acknowledge: entry names the generic adapter as platform
+			// generic (§12), so a block of that name would be read as it.
+			return fmt.Errorf("%s: generic is reserved: it names the generic adapter a platform with no adapter "+
+				"gets, which a set ships and a block does not change; name the platform as the inventory does", at)
+		case b.Verified != nil:
+			return fmt.Errorf("%s: verified is port49's own claim about its lab (spec §8); an adapter written "+
+				"here is unverified until it is contributed and measured, so remove the key", at)
+		case b.UnreachableNote != nil:
+			return fmt.Errorf("%s: unreachable_note is port49's own record of a block's unreachable rules the set "+
+				"did not measure (spec §12); write the rules under unreachable", at)
+		case b.FallbackNote != nil:
+			return fmt.Errorf("%s: fallback_note is port49's own record of a block's fallback text over the set's "+
+				"(spec §12); write the text under fallback", at)
+		case b.Replace && b.BasedOn != "":
+			return fmt.Errorf("%s: replace starts from nothing and based_on from another platform; use one", at)
+		case b.BasedOn != "" && shipped:
+			return fmt.Errorf("%s: based_on declares a variant under a new name, and %s is a platform this set "+
+				"ships; set the keys to change on it directly, or name the variant", at, name)
+		case b.BasedOn != "":
+			d, ok := builtin[b.BasedOn]
+			if !ok {
+				return fmt.Errorf("%s: based_on %q is not a platform in set %s; it ships %s", at, b.BasedOn, p.set,
+					strings.Join(sortedKeys(builtin), ", "))
+			}
+			// port49d keys what it reads off the wire by platform name, so the
+			// variant would get an unknown platform's (plan 6; final review
+			// M8).
+			if facts := platform.WireFactsDiffer(b.BasedOn); len(facts) > 0 {
+				return fmt.Errorf("%s: based_on %s is refused: port49d reads %s's %s by the platform's name, and a "+
+					"variant named %s would get an unknown platform's instead, so its sessions would be refused "+
+					"service_unsupported and its records misread; use %s itself until plan 6 carries these to a "+
+					"variant (spec §8)", at, b.BasedOn, b.BasedOn, strings.Join(facts, ", "), name, b.BasedOn)
+			}
+			base = d
+		case b.Replace || !shipped:
+			// A new platform, or one discarded whole, starts from what an
+			// unmodeled device gets (spec §8, "Unknown platforms").
+			base = generic
+		default:
+			base = builtin[name]
+		}
+		d := b.Spec.Over(base)
+		// The lab verified the set's adapter, not this one: `platform show`
+		// and `export` print the claim only where nothing changed it (spec §8).
+		d.Verified = ""
+		shippedAs := name
+		if b.BasedOn != "" {
+			shippedAs = b.BasedOn
+		}
+		// What the set measured the device refuses, and gives a session on
+		// its own, the reports keep whatever the block says (spec §12); text
+		// the block gives a level the set measured nothing for is the
+		// operator's note, never read as a measurement.
+		ref, measured := builtin[shippedAs]
+		if measured {
+			d = platform.KeepMeasured(d, ref)
+		}
+		// A block's unreachable rule the set did not measure is the
+		// operator's word: kept apart, so the dead-rule report never cites a
+		// lab note for it (task 14 review M7).
+		if b.Spec.Unreachable != nil {
+			for _, level := range sortedKeys(*b.Spec.Unreachable) {
+				for _, rule := range (*b.Spec.Unreachable)[level] {
+					if slices.Contains(ref.Unreachable[level], rule) {
+						continue
+					}
+					d.Unreachable[level] = slices.DeleteFunc(d.Unreachable[level], func(r string) bool { return r == rule })
+					if len(d.Unreachable[level]) == 0 {
+						delete(d.Unreachable, level)
+					}
+					if d.UnreachableNote == nil {
+						d.UnreachableNote = map[string][]string{}
+					}
+					if !slices.Contains(d.UnreachableNote[level], rule) {
+						d.UnreachableNote[level] = append(d.UnreachableNote[level], rule)
+					}
+				}
+			}
+			if len(d.Unreachable) == 0 {
+				d.Unreachable = nil
+			}
+		}
+		if b.Spec.Fallback != nil {
+			for _, level := range sortedKeys(*b.Spec.Fallback) {
+				if ref.Fallback[level] == "" {
+					if d.FallbackNote == nil {
+						d.FallbackNote = map[string]string{}
+					}
+					d.FallbackNote[level] = d.Fallback[level]
+					delete(d.Fallback, level)
+				}
+			}
+			if len(d.Fallback) == 0 {
+				d.Fallback = nil
+			}
+		}
+		if err := platform.Validate(name, d); err != nil {
+			return err
+		}
+		// What the set measured about the device is the lab's (spec §8): a
+		// block tightens it and never loosens it, `replace: true` and
+		// `based_on:` included, since the device behind the name is the same
+		// device. A new platform has no measurement to keep, save that no
+		// set's privilege attribute is inert anywhere.
+		if err := inertBearsNoPrivilege(at, d); err != nil {
+			return err
+		}
+		if measured {
+			if err := keepsSetClaims(at, shippedAs, d, ref, p.set); err != nil {
+				return err
+			}
+		}
+		set[name] = d
+	}
+	for name, d := range p.env.Dialects {
+		set[name] = d
+	}
+	p.adapters = set
+	return nil
+}
+
+// inertBearsNoPrivilege refuses an inert attribute that any adapter port49
+// ships lists as bearing privilege (task 7 review C1). Listed inert, a later
+// change to it passes the diff ungated and takes a placeholder, so one
+// acknowledged edit would blind the gate to it for good.
+func inertBearsNoPrivilege(at string, d platform.Dialect) error {
+	for _, n := range d.InertAttributes {
+		if platform.ContainsName(platform.PrivilegeAttributeNames(), n) {
+			return fmt.Errorf("%s.inert_attributes: %s bears privilege in a platform set port49 ships, so no block "+
+				"may list it inert (spec §8)", at, n)
+		}
+	}
+	return nil
+}
+
+// keepsSetClaims refuses a merged adapter that loosens what the set's
+// adapter it stands for measured about the device (spec §8; task 7 review
+// C1, I1): the attributes that bear privilege are a floor, the attributes the
+// device takes and the capabilities it authorizes a ceiling; a normalization
+// that makes a deny match more is kept, and a claim that makes a rule look
+// enforced where the lab found it is not is refused; and the set's
+// role_order keeps its order. A block may tighten each.
+func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version string) error {
+	if err := keepsRoleOrder(at, d, ref, version); err != nil {
+		return err
+	}
+	for _, n := range ref.PrivilegeAttributes {
+		if !slices.Contains(d.PrivilegeAttributes, n) {
+			return fmt.Errorf("%s.privilege_attributes: %s is missing, and platform set %s lists it as bearing "+
+				"privilege on %s; a block may add to the list, not remove from it (spec §8)", at, n, version, shippedAs)
+		}
+	}
+	if ref.AcceptedAttributes != nil {
+		if d.AcceptedAttributes == nil {
+			return fmt.Errorf("%s.accepted_attributes: platform set %s lists what %s takes (%s), and the device "+
+				"refuses a session for any other; restate the list, or narrow it (spec §8)", at, version, shippedAs,
+				strings.Join(ref.AcceptedAttributes, ", "))
+		}
+		for _, n := range d.AcceptedAttributes {
+			if !slices.Contains(ref.AcceptedAttributes, n) {
+				return fmt.Errorf("%s.accepted_attributes: %s is not in platform set %s's list for %s (%s); a block "+
+					"may narrow it, not widen it (spec §8)", at, n, version, shippedAs,
+					strings.Join(ref.AcceptedAttributes, ", "))
+			}
+		}
+	}
+	// A name the set does not hold inert bears privilege on the device, by
+	// measurement or because nobody measured it (spec §6, §8; final review M5).
+	for _, n := range d.InertAttributes {
+		if !slices.Contains(ref.InertAttributes, n) {
+			return fmt.Errorf("%s.inert_attributes: %s is not listed inert by platform set %s on %s, so it bears "+
+				"privilege there; a block may drop a name from the list, not add one (spec §8)", at, n, version,
+				shippedAs)
+		}
+	}
+	for _, c := range d.Supports {
+		if !slices.Contains(ref.Supports, c) {
+			return fmt.Errorf("%s.supports: %s is not a capability platform set %s measured on %s; a rule would read "+
+				"as enforced where the device never asks (spec §8, §9)", at, c, version, shippedAs)
+		}
+	}
+	// The token cuts a command into its stages before any rule reads it, so a
+	// different one splits a deny's vector apart: the set measured what the
+	// device sends, and there is no tighter value.
+	if d.PipeToken != ref.PipeToken {
+		return fmt.Errorf("%s.pipe_token: platform set %s measured %q on %s, and another token would split a "+
+			"command where the device does not, walking it past a deny; a block may not change it (spec §8)", at,
+			version, ref.PipeToken, shippedAs)
+	}
+	for _, f := range []struct {
+		key           string
+		set, is, weak bool
+	}{
+		// true claims a pipe rule or an abbreviation reaches port49 as typed
+		{"pipe_authorized", ref.PipeAuthorized, d.PipeAuthorized, true},
+		{"expands_abbreviations", ref.ExpandsAbbreviations, d.ExpandsAbbreviations, true},
+		// false stops a deny matching the split name or the <cr>-ended vector
+		{"splits_interface_names", ref.SplitsInterfaceNames, d.SplitsInterfaceNames, false},
+		{"strip_cr", ref.StripCR, d.StripCR, false},
+	} {
+		if f.is != f.set && f.is == f.weak {
+			return fmt.Errorf("%s.%s: platform set %s measured %v on %s, and %v would let a command past a deny "+
+				"or a rule the device does not enforce; a block may not loosen it (spec §8)", at, f.key, version,
+				f.set, shippedAs, f.is)
+		}
+	}
+	return nil
+}
+
+// keepsRoleOrder refuses a merged adapter that ranks two values of a role
+// attribute the other way round from the set's adapter it stands for: the
+// diff gate reads a move down role_order as a lowering (spec §12), so a
+// reversed order would pass a raise as one.
+func keepsRoleOrder(at string, d, set platform.Dialect, version string) error {
+	for _, attr := range sortedKeys(set.RoleOrder) {
+		ranked := set.RoleOrder[attr]
+		for i, lower := range ranked {
+			for _, higher := range ranked[i+1:] {
+				rl, okl := d.RoleRank(attr, lower)
+				rh, okh := d.RoleRank(attr, higher)
+				if okl && okh && rl > rh {
+					return fmt.Errorf("%s.role_order.%s: %s is ranked above %s, and platform set %s ranks it below "+
+						"(its lab note); a block may rank a value the set does not, not reorder the set's (spec §8)",
+						at, attr, lower, higher, version)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// mapKeys is a block map's keys, sorted; none where the block leaves it out.
+func mapKeys[V any](m *map[string]V) []string {
+	if m == nil {
+		return nil
+	}
+	return sortedKeys(*m)
+}
+
+// genericPlatform is the name the diff and an acknowledge: entry give the
+// generic adapter (spec §12).
+const genericPlatform = "generic"
+
+// builtinSet is a built-in platform set by version, copied: the environment's
+// where it gives sets, the binary's otherwise.
+func (p *Policy) builtinSet(version string) (map[string]platform.Dialect, bool) {
+	if p.env.Sets == nil {
+		return platform.Set(version)
+	}
+	set, ok := p.env.Sets[version]
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string]platform.Dialect, len(set))
+	for name, d := range set {
+		out[name] = d
+	}
+	return out, true
+}
+
+// builtinGeneric is a set's generic adapter by version: the environment's
+// where it gives sets, and there the unpinned set's where it gives no generic
+// for the version, so a test's second set changes the generic adapter only
+// where it says so; the binary's otherwise.
+func (p *Policy) builtinGeneric(version string) (platform.Dialect, bool) {
+	if p.env.Sets == nil {
+		return platform.Generic(version)
+	}
+	if d, ok := p.env.Generics[version]; ok {
+		return d, true
+	}
+	if _, ok := p.env.Sets[version]; !ok {
+		return platform.Dialect{}, false
+	}
+	return platform.Generic(platform.UnpinnedSet)
+}
+
+// platformNameShape is how an inventory writes a platform.
+var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// PlatformSet is the platform set the policy renders with.
+func (p *Policy) PlatformSet() string { return p.set }
+
+// PlatformNames is every platform the policy renders, sorted: its set's, its
+// `platforms:` blocks', and each inventory platform neither adapts, which the
+// daemon renders with the set's generic adapter (dialect).
+func (p *Policy) PlatformNames() []string {
+	names := map[string]bool{}
+	for name := range p.adapters {
+		names[name] = true
+	}
+	for _, d := range p.env.Devices {
+		if d.Platform != "" {
+			names[d.Platform] = true
+		}
+	}
+	return sortedKeys(names)
+}
+
+// PlatformSource says where a platform's adapter comes from, as `port49
+// platform list` prints it: `built-in`, `overridden` (a block over a built-in,
+// or one that replaced it), `variant` (based_on), `local` (a platform the set
+// does not ship), or `generic` (an inventory platform nothing adapts, rendered
+// with the set's generic adapter).
+func (p *Policy) PlatformSource(name string) string {
+	b, written := p.overrides[name]
+	builtin, _ := p.builtinSet(p.set)
+	_, shipped := builtin[name]
+	_, adapted := p.adapters[name]
+	switch {
+	case !adapted:
+		return "generic"
+	case !written:
+		return "built-in"
+	case b.BasedOn != "":
+		return "variant"
+	case shipped:
+		return "overridden"
+	}
+	return "local"
 }
 
 func (p *Policy) buildLevels(f file) error {
@@ -308,6 +706,35 @@ func (p *Policy) buildLevels(f file) error {
 	return nil
 }
 
+// checkBlockOrder refuses a `platforms:` block whose merged adapter does not
+// render monotone in the policy's level order (platform.Monotone), which is
+// known only once the levels are built. The pinned set's own adapters are
+// monotone as shipped; a block is the operator's word, and the diff gate's
+// lowering exemption rests on it.
+func (p *Policy) checkBlockOrder(file) error {
+	for _, name := range sortedKeys(p.overrides) {
+		// An entry for a level nobody declared renders nothing: a typo that
+		// reads as a change and runs as none (task 7 review I2).
+		b := p.overrides[name].Spec
+		for _, entries := range []struct {
+			key    string
+			levels []string
+		}{{"privilege", mapKeys(b.Privilege)}, {"ceiling_levels", mapKeys(b.CeilingLevels)},
+			{"unreachable", mapKeys(b.Unreachable)}, {"fallback", mapKeys(b.Fallback)}} {
+			for _, l := range entries.levels {
+				if !slices.Contains(p.levels, l) {
+					return fmt.Errorf("platforms.%s.%s.%s: level %s is not declared; the levels are %s", name,
+						entries.key, l, l, strings.Join(p.levels, ", "))
+				}
+			}
+		}
+		if err := platform.Monotone(name, p.adapters[name], p.levels); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (p *Policy) checkLevel(name string) error {
 	if name == "" || slices.Contains(p.levels, name) {
 		return nil
@@ -328,29 +755,38 @@ func (p *Policy) buildRoles(f file) error {
 			return fmt.Errorf("role %q: privilege: %w", r.Name, err)
 		}
 		role := &Role{Name: r.Name, Privilege: r.Privilege, Reason: r.Reason, Attributes: r.Attributes}
+		// A rule is named by its list and position, never quoted: a refusal
+		// goes to logs, and the refused file's own redaction patterns never
+		// loaded (spec §5.8).
 		for _, list := range []struct {
+			name string
 			in   []string
 			out  *[]string
 			deny bool
-		}{{r.Permit, &role.Permit, false}, {r.Deny, &role.Deny, true}} {
-			for _, rule := range list.in {
+		}{{"permit", r.Permit, &role.Permit, false}, {"deny", r.Deny, &role.Deny, true}} {
+			for i, rule := range list.in {
 				if err := checkRule(rule, list.deny); err != nil {
-					return fmt.Errorf("role %q: %w", r.Name, err)
+					return fmt.Errorf("role %q: %s #%d: %w", r.Name, list.name, i+1, err)
 				}
 				if err := p.checkClasses(rule); err != nil {
-					return fmt.Errorf("role %q: %w", r.Name, err)
+					return fmt.Errorf("role %q: %s #%d: %w", r.Name, list.name, i+1, err)
+				}
+				if list.deny {
+					if err := p.checkDenyClasses(rule); err != nil {
+						return fmt.Errorf("role %q: %s #%d: %w", r.Name, list.name, i+1, err)
+					}
 				}
 				*list.out = append(*list.out, engine.CanonicalRule(rule))
 			}
 		}
 		if r.Pipe != nil {
 			role.Pipe = []string{}
-			for _, rule := range r.Pipe.Permit {
+			for i, rule := range r.Pipe.Permit {
 				if err := checkRule(rule, false); err != nil {
-					return fmt.Errorf("role %q: pipe: %w", r.Name, err)
+					return fmt.Errorf("role %q: pipe #%d: %w", r.Name, i+1, err)
 				}
 				if err := p.checkClasses(rule); err != nil {
-					return fmt.Errorf("role %q: pipe: %w", r.Name, err)
+					return fmt.Errorf("role %q: pipe #%d: %w", r.Name, i+1, err)
 				}
 				role.Pipe = append(role.Pipe, engine.CanonicalRule(rule))
 			}
@@ -375,16 +811,20 @@ func checkRule(rule string, deny bool) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range terms {
+	for i, t := range terms {
 		if t.Kind != engine.Regex {
 			continue
 		}
 		if deny && caseSensitive(t.Text) {
-			return fmt.Errorf("deny %q: /%s/ turns case-insensitivity off; port49 matches case-insensitively, "+
-				"and a case-sensitive deny could be walked past by changing case (spec §4)", rule, t.Text)
+			return fmt.Errorf("term %d turns case-insensitivity off; port49 matches case-insensitively, and a "+
+				"case-sensitive deny could be walked past by changing case (spec §4)", i+1)
 		}
 		if simpler, ok := rankLint(t.Text); ok {
-			return fmt.Errorf("rule %q: /%s/ is %s; write that instead (spec §4)", rule, t.Text, simpler)
+			if simpler != anyTerm {
+				// The word itself is the term's text: not quoted.
+				return fmt.Errorf("term %d is a regex that is one word; write the word instead (spec §4)", i+1)
+			}
+			return fmt.Errorf("term %d is a regex that is %s; write that instead (spec §4)", i+1, simpler)
 		}
 	}
 	return nil
@@ -392,17 +832,20 @@ func checkRule(rule string, deny bool) error {
 
 // checkAttributes validates an attribute block: keyed by `all` or by a
 // platform port49 ships or the inventory names, each attribute structurally
-// valid (engine.CheckAttribute).
+// valid (engine.CheckAttribute). Keys are read in name order, so a block with
+// two bad keys names the same one every run (final review M10).
 func (p *Policy) checkAttributes(attrs map[string][]string) error {
-	for key, list := range attrs {
-		if key != "all" && !platform.Known(key) && !p.inInventory(key) {
+	for _, key := range sortedKeys(attrs) {
+		list := attrs[key]
+		if _, adapted := p.adapters[key]; key != "all" && !adapted && !p.inInventory(key) {
 			return fmt.Errorf("attributes: %q is neither `all` nor a platform port49 ships or the inventory names", key)
 		}
-		for _, a := range list {
+		for i, a := range list {
+			at := fmt.Sprintf("attributes.%s[%d]", key, i)
 			if err := engine.CheckAttribute(a); err != nil {
-				return fmt.Errorf("attributes.%s: %w", key, err)
+				return fmt.Errorf("%s: %w", at, err)
 			}
-			if err := p.checkPlaceholder(key, a); err != nil {
+			if err := p.checkPlaceholder(at, key, a); err != nil {
 				return err
 			}
 		}
@@ -415,14 +858,19 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
 // inventory names (spec §6). Anywhere else the device would get whatever the
 // mint fills in, which no review tool sees: a level, or a principal's text in
 // a session-only device's own allow-list.
-func (p *Policy) checkPlaceholder(key, a string) error {
+func (p *Policy) checkPlaceholder(at, key, a string) error {
 	if !slices.ContainsFunc(engine.Placeholders, func(v string) bool { return strings.Contains(a, v) }) {
 		return nil
 	}
 	name := a[:strings.IndexAny(a, "=*")]
-	if slices.Contains(platform.PrivilegeAttributeNames(), name) {
-		return fmt.Errorf("attributes.%s: %s: %s carries privilege and takes no placeholder: the device would get "+
-			"whatever the mint fills in, which no review tool can see (spec §6)", key, a, name)
+	if platform.ContainsName(engine.NumericAttributes, name) {
+		return fmt.Errorf("%s: %s is a number and takes no placeholder: a mint fills in an identity, which is "+
+			"never a value the device takes, and on IOS-XE a refused session locks out SSH (spec §6)", at, name)
+	}
+	if platform.ContainsName(platform.PrivilegeAttributeNames(), name) || slices.ContainsFunc(sortedKeys(p.adapters),
+		func(n string) bool { return platform.ContainsName(p.adapters[n].PrivilegeAttributes, name) }) {
+		return fmt.Errorf("%s: %s carries privilege and takes no placeholder: the device would get "+
+			"whatever the mint fills in, which no review tool can see (spec §6)", at, name)
 	}
 	platforms := []string{key}
 	if key == "all" {
@@ -435,8 +883,8 @@ func (p *Policy) checkPlaceholder(key, a string) error {
 	}
 	for _, name2 := range platforms {
 		if p.dialect(name2).BearsPrivilege(name) {
-			return fmt.Errorf("attributes.%s: %s: %s is not listed inert on %s, so it takes no placeholder: only an "+
-				"attribute an adapter holds to carry no privilege may (spec §6)", key, a, name, platformName(name2))
+			return fmt.Errorf("%s: %s is not listed inert on %s, so it takes no placeholder: only an "+
+				"attribute an adapter holds to carry no privilege may (spec §6)", at, name, platformName(name2))
 		}
 	}
 	return nil
@@ -478,7 +926,8 @@ func (p *Policy) buildScopes(f file) error {
 				if op == "re" {
 					re, err := regexp.Compile(bound)
 					if err != nil {
-						return fmt.Errorf("scope %q: match.%s.re: %w", s.Name, key, err)
+						return fmt.Errorf("scope %q: match.%s.re does not compile: %s", s.Name, key,
+							platform.RegexpProblem(err))
 					}
 					sc.res[key] = re
 				} else if bound == "" {
@@ -510,7 +959,7 @@ func (p *Policy) buildScopes(f file) error {
 			}
 			sc.OnMissing = "exclude"
 		default:
-			return fmt.Errorf("scope %q: on_missing is include or exclude, not %q", s.Name, s.OnMissing)
+			return fmt.Errorf("scope %q: on_missing is include or exclude", s.Name)
 		}
 		p.scopes[s.Name] = sc
 	}
@@ -612,15 +1061,15 @@ func (p *Policy) buildSubjects(f file) error {
 			sub.Enable = "none"
 		case "none", "token", "auto":
 		default:
-			return fmt.Errorf("subject %q: enable %q: it must be none, auto or token (spec §7)", s.Name, s.Enable)
+			return fmt.Errorf("subject %q: enable must be none, auto or token (spec §7)", s.Name)
 		}
 		if s.TokenTTL != 0 && (s.TokenTTL < minTokenTTL || s.TokenTTL > maxTokenTTL) {
 			return fmt.Errorf("subject %q: token_ttl must be between %s and %s (design §8); got %s",
 				s.Name, minTokenTTL, maxTokenTTL, s.TokenTTL)
 		}
-		for _, r := range s.API {
+		for i, r := range s.API {
 			if !slices.Contains(apiRights, r) {
-				return fmt.Errorf("subject %q: api: %q is not a right; the rights are %s", s.Name, r,
+				return fmt.Errorf("subject %q: api[%d] is not a right; the rights are %s", s.Name, i,
 					strings.Join(apiRights, ", "))
 			}
 		}
@@ -703,7 +1152,7 @@ func (p *Policy) buildGrants(f file) error {
 		if g.Expires != "" {
 			t, err := parseExpires(g.Expires)
 			if err != nil {
-				return fmt.Errorf("%s: expires %q: a date (2026-12-01) or an RFC 3339 time", row, g.Expires)
+				return fmt.Errorf("%s: expires is a date (2026-12-01) or an RFC 3339 time", row)
 			}
 			grant.Expires = t
 		}
@@ -743,7 +1192,10 @@ func (p *Policy) buildTests(f file) error {
 		if t.Subject == "" {
 			who = "principal " + t.Principal
 		}
-		row := fmt.Sprintf("tests[%d] (%s, device %s, %q)", i, who, t.Device, t.Command)
+		// The command is operator text and is never quoted: a test exercising
+		// a secret-bearing command is the test the shadow gate asks for
+		// beside such a deny (spec §5.8). The index finds it.
+		row := fmt.Sprintf("tests[%d] (%s, device %s)", i, who, t.Device)
 		switch {
 		case (t.Subject == "") == (t.Principal == ""):
 			return fmt.Errorf("%s: name a subject or a principal, one of the two", row)
@@ -759,9 +1211,9 @@ func (p *Policy) buildTests(f file) error {
 			return fmt.Errorf("%s: a session test takes no expect or reason: it passes where the subject is "+
 				"minted a token with the level and ceiling it names", row)
 		case strings.TrimSpace(t.Command) != "" && t.Expect != "permit" && t.Expect != "deny":
-			return fmt.Errorf("%s: expect is permit or deny, not %q", row, t.Expect)
+			return fmt.Errorf("%s: expect is permit or deny", row)
 		case t.Reason != "" && !decision.Known(decision.Reason(t.Reason)):
-			return fmt.Errorf("%s: %q is not a reason in spec §5.7's vocabulary", row, t.Reason)
+			return fmt.Errorf("%s: the reason is not in spec §5.7's vocabulary", row)
 		}
 		// A principal no verifier could produce resolves to no subject, and
 		// an `expect: deny` test on it passes without testing anything.
@@ -782,10 +1234,10 @@ func (p *Policy) buildTests(f file) error {
 			}
 		}
 		if n, err := strconv.Atoi(t.PrivLvl); t.PrivLvl != "" && t.PrivLvl != NoCeiling && (err != nil || n < 0 || n > 15) {
-			return fmt.Errorf("%s: priv_lvl is a number from 0 to 15, or none, not %q", row, t.PrivLvl)
+			return fmt.Errorf("%s: priv_lvl is a number from 0 to 15, or none", row)
 		}
 		if t.Enable != "" && t.Enable != "none" && t.Enable != "auto" && t.Enable != "token" {
-			return fmt.Errorf("%s: enable is none, auto or token, not %q", row, t.Enable)
+			return fmt.Errorf("%s: enable is none, auto or token", row)
 		}
 		test := Test{Subject: t.Subject, Principal: t.Principal, Device: t.Device, Command: t.Command,
 			Expect: t.Expect, Reason: t.Reason, Level: t.Level, MaxPrivilege: t.MaxPrivilege, PrivLvl: t.PrivLvl,
@@ -794,9 +1246,9 @@ func (p *Policy) buildTests(f file) error {
 			test.Reply = append([]string{}, (*t.Reply)...)
 		}
 		if t.API != nil {
-			for _, r := range *t.API {
+			for j, r := range *t.API {
 				if !slices.Contains(apiRights, r) {
-					return fmt.Errorf("%s: api: %q is not a right; the rights are %s", row, r, strings.Join(apiRights, ", "))
+					return fmt.Errorf("%s: api[%d] is not a right; the rights are %s", row, j, strings.Join(apiRights, ", "))
 				}
 			}
 			test.API, test.AssertsAPI = slices.Clone(*t.API), true
@@ -809,10 +1261,21 @@ func (p *Policy) buildTests(f file) error {
 
 func (p *Policy) buildAcknowledgments(f file) error {
 	for i, a := range f.Acknowledge {
+		byRule, byAdapter := a.Role != "" || a.Rule != "", a.Platform != "" || a.Field != "" || a.Sha256 != ""
 		switch {
-		case a.Role == "" || a.Rule == "":
+		case byRule == byAdapter:
+			return fmt.Errorf("acknowledge[%d]: name a deny by role and rule, or an adapter edit by platform and "+
+				"field, one of the two (spec §12)", i)
+		case byRule && (a.Role == "" || a.Rule == ""):
 			return fmt.Errorf("acknowledge[%d]: role and rule are required: the entry names the exact deny it "+
 				"acknowledges (spec §12)", i)
+		case byAdapter && (a.Platform == "" || !slices.Contains(platform.SpecKeys(), a.Field)):
+			return fmt.Errorf("acknowledge[%d]: platform and field are required, and field is one of an adapter's "+
+				"keys: %s (spec §8, §12)", i, strings.Join(platform.SpecKeys(), ", "))
+		case byAdapter && !sha256Hex.MatchString(a.Sha256):
+			return fmt.Errorf("acknowledge[%d]: sha256 is required: the digest `port49 policy diff` prints for the "+
+				"key's new value, 64 lower-case hex digits, so the entry acknowledges that edit and no later one "+
+				"(spec §12)", i)
 		case strings.TrimSpace(a.Reason) == "":
 			return fmt.Errorf("acknowledge[%d]: reason is required: review reads it beside the change it "+
 				"acknowledges (spec §12)", i)
@@ -821,6 +1284,9 @@ func (p *Policy) buildAcknowledgments(f file) error {
 	}
 	return nil
 }
+
+// sha256Hex is the shape of an adapter acknowledgment's digest.
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // hasDeny reports whether any role in the policy denies rule as written:
 // an acknowledge: entry naming it removed nothing (spec §12).
@@ -855,15 +1321,10 @@ func (p *Policy) device(name string) (admission.Device, bool) {
 	return admission.Device{}, false
 }
 
-// platforms is every dialect this policy can meet: the built-in table with
-// the environment's own table over it.
-func (p *Policy) platforms() map[string]platform.Dialect {
-	out := platform.Dialects()
-	for name, d := range p.env.Dialects {
-		out[name] = d
-	}
-	return out
-}
+// platforms is every dialect this policy can meet: its pinned set, the
+// environment's own table over it. The map is the policy's own; callers read
+// it and never write it.
+func (p *Policy) platforms() map[string]platform.Dialect { return p.adapters }
 
 // checkClasses refuses a rule naming a class no platform defines. That is
 // the policy's own error, a typo, rather than a device's: no inventory could
@@ -874,7 +1335,7 @@ func (p *Policy) checkClasses(rule string) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range terms {
+	for i, t := range terms {
 		if t.Kind != engine.Class {
 			continue
 		}
@@ -885,8 +1346,38 @@ func (p *Policy) checkClasses(rule string) error {
 			}
 		}
 		if !defined {
-			return fmt.Errorf("rule %q names @%s, which no platform defines; a class is a platform's (spec §4, §8)",
-				rule, t.Text)
+			return fmt.Errorf("term %d names a class which no platform defines; a class is a platform's (spec §4, §8)",
+				i+1)
+		}
+	}
+	return nil
+}
+
+// checkDenyClasses refuses a deny naming a class whose pattern turns
+// case-insensitivity off on any platform: a class pattern is compiled
+// case-insensitively (engine.compileTerm), and one that opts out lets a
+// differently-cased interface name walk past the deny (spec §3 rule 3, §4).
+// A deny's own regex term is checkRule's; a class's patterns are an
+// adapter's, the operator's since plan 5, so they are checked here where the
+// adapters are known. A permit may opt out, since that only narrows it.
+func (p *Policy) checkDenyClasses(rule string) error {
+	terms, err := engine.ParseRule(rule)
+	if err != nil {
+		return err
+	}
+	for i, t := range terms {
+		if t.Kind != engine.Class {
+			continue
+		}
+		for _, name := range sortedKeys(p.adapters) {
+			for _, pattern := range p.adapters[name].EntityClasses[t.Text] {
+				if caseSensitive(pattern) {
+					return fmt.Errorf("term %d names a class whose pattern on %s turns case-insensitivity off; "+
+						"port49 matches case-insensitively, and a differently-cased name would walk past the deny "+
+						"(spec §4); remove the (?-i) from that class under platforms.%s.entity_classes", i+1, name,
+						name)
+				}
+			}
 		}
 	}
 	return nil
@@ -930,15 +1421,40 @@ func (p *Policy) privLvl(dialect platform.Dialect, level string) (uint8, bool) {
 	return 0, false
 }
 
-// dialect is the platform's dialect under this policy's environment.
+// dialect is the platform's dialect in this policy's set, or that set's
+// generic adapter for a platform it has none for (spec §8, "Unknown
+// platforms").
 func (p *Policy) dialect(name string) platform.Dialect {
-	if p.env.Dialects != nil {
-		if d, ok := p.env.Dialects[name]; ok {
-			return d
-		}
+	if d, ok := p.adapters[name]; ok {
+		return d
 	}
-	d, _ := platform.DialectFor(name)
+	d, _ := p.builtinGeneric(p.set)
 	return d
+}
+
+// ConfigDialect is the adapter `port49 devices check-config` holds a device of
+// the platform to: the policy's, over the set's adapter the platform stands
+// for — its own, or the one its block is based_on — as the floor
+// (platform.ConfigFloor). A block's device_config is what `platform show`
+// prints, and a block that rewrote a set line to end in `none` would
+// otherwise have the check require the unsafe line; the set's lines and
+// checks apply whatever the block says. A platform no set ships has no floor.
+// A set that cannot be read is an error, never an adapter without its floor.
+func (p *Policy) ConfigDialect(platformName string) (platform.Dialect, error) {
+	d := p.dialect(platformName)
+	shippedAs := platformName
+	if b, ok := p.overrides[platformName]; ok && b.BasedOn != "" {
+		shippedAs = b.BasedOn
+	}
+	builtin, ok := p.builtinSet(p.set)
+	if !ok {
+		return platform.Dialect{}, fmt.Errorf("platform set %s cannot be read, so the lines and checks it holds a "+
+			"device to are unknown", p.set)
+	}
+	if ref, ok := builtin[shippedAs]; ok {
+		return platform.ConfigFloor(d, ref), nil
+	}
+	return d, nil
 }
 
 // SubjectOf names the subject a principal resolves to, by its identity lists.

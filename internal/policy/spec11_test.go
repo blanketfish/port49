@@ -172,20 +172,34 @@ func checkClaim(t *testing.T, p *Policy, subject string, d admission.Device, lin
 	}
 }
 
-// What CI reports about §11: three group subjects nobody can mint for until
-// plan 7, and the SRX whose version the comparator could not order, included
-// in the mitigation and named (spec §5.5).
+// What CI reports about §11: svc_oxidized's fallback exposure, which is spec
+// §12's own example — port49 confines it to show commands, and elevated_session
+// lands it at admin, network-admin on the device when port49 cannot answer —
+// three group subjects nobody can mint for until plan 7, and the SRX whose
+// version the comparator could not order, included in the mitigation and
+// named (spec §5.5).
 func TestTheCompletePolicyExampleReportsWhatItShould(t *testing.T) {
 	p := spec11(t, spec11Raw(t))
 	var kinds []string
-	var incomparable string
+	var incomparable, exposure string
 	for _, f := range p.Lint(noon) {
 		kinds = append(kinds, f.Kind)
-		if f.Kind == FindingIncomparableVersion {
+		switch f.Kind {
+		case FindingIncomparableVersion:
 			incomparable = f.Message
+		case FindingFallbackExposure:
+			exposure = f.Message
 		}
 	}
-	want := []string{FindingGroupSubject, FindingGroupSubject, FindingGroupSubject, FindingIncomparableVersion}
+	if !strings.HasPrefix(exposure, `subject "svc_oxidized" at admin (priv-lvl=15, roles=network-admin) on arista_eos: `+
+		`port49's rules confine it to show **, terminal length *, and if port49 cannot answer`) {
+		t.Fatalf("the exposure: %s", exposure)
+	}
+	// Two exposures on EOS: svc_oxidized at admin, and noc_tier1 at operator,
+	// whose network-operator still ran clear counters and clear ip bgp * with
+	// port49 down (tests/lab/results/L22-arista_eos.md).
+	want := []string{FindingFallbackExposure, FindingFallbackExposure, FindingGroupSubject, FindingGroupSubject,
+		FindingGroupSubject, FindingIncomparableVersion}
 	if !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("findings %q, want %q", kinds, want)
 	}
