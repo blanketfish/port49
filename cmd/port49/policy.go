@@ -84,6 +84,8 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
 		return policyTest(args[1:], stdout, stderr)
 	case "replay":
 		return policyReplay(args[1:], stdout, stderr)
+	case "diff":
+		return policyDiff(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
@@ -178,6 +180,104 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// policyDiff is the effective-permission diff and the privilege-expansion
+// gate (spec §12): both versions of a policy, loaded against one inventory,
+// compared for every subject on every device over every command shape their
+// rules distinguish. It prints each change and exits 1 on a command a deny
+// refused that the new version permits and no policy test in it exercises,
+// and on a device the new version quarantines.
+func policyDiff(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("port49 policy diff", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	oldPath := fs.String("old", "", "the policy file as it is")
+	newPath := fs.String("new", "", "the policy file as the change would leave it")
+	inventory := fs.String("inventory", "", "the inventory file the daemon admits from (inventory_file)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *oldPath == "" || *newPath == "" || *inventory == "" || fs.NArg() != 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	inv, err := admission.LoadFile(*inventory)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 policy diff:", err)
+		return 1
+	}
+	before, err := policy.Load(*oldPath, policy.Env{Devices: inv.Devices})
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 policy diff: --old:", err)
+		return 1
+	}
+	after, err := policy.Load(*newPath, policy.Env{Devices: inv.Devices})
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 policy diff: --new:", err)
+		return 1
+	}
+	d := policy.Compare(before, after)
+	now := time.Now()
+	for _, q := range d.Quarantined {
+		for _, e := range q.Entries {
+			fmt.Fprintf(stdout, "QUARANTINES: %s (%s): %s\n", q.Device, q.Platform, e.Message(now))
+		}
+	}
+	for _, a := range d.Access {
+		verb := "loses"
+		if a.Gained {
+			verb = "gains"
+		}
+		fmt.Fprintf(stdout, "access: %s %s every grant on %s\n", a.Subject, verb, strings.Join(a.Devices, ", "))
+	}
+	for _, l := range d.Levels {
+		fmt.Fprintf(stdout, "privilege: %s on %s: level %s -> %s, max_privilege %s -> %s\n", l.Subject,
+			strings.Join(l.Devices, ", "), orNone(l.OldLevel), orNone(l.NewLevel), orNone(l.OldCeiling),
+			orNone(l.NewCeiling))
+	}
+	widen, narrow := 0, 0
+	for _, c := range d.Changes {
+		on := c.Subject + " on " + strings.Join(c.Devices, ", ")
+		switch {
+		case c.New.Permit && c.Gated:
+			widen++
+			label := "EXPANDS"
+			if c.Acknowledged {
+				label = "expands (a policy test exercises it)"
+			}
+			fmt.Fprintf(stdout, "%s: %s: %q was denied by %q (%s), now permitted by %q (%s)\n", label, on, c.Command,
+				c.Old.Deny.Rule, c.Old.Deny.Role, c.New.Decided.Rule, c.New.Decided.Role)
+		case c.New.Permit:
+			widen++
+			fmt.Fprintf(stdout, "widens: %s: %q was %s, now permitted by %q (%s)\n", on, c.Command, c.Old.Reason,
+				c.New.Decided.Rule, c.New.Decided.Role)
+		default:
+			narrow++
+			fmt.Fprintf(stdout, "narrows: %s: %q was permitted by %q (%s), now %s\n", on, c.Command,
+				c.Old.Decided.Rule, c.Old.Decided.Role, c.New.Reason)
+		}
+	}
+	for _, r := range d.Regex {
+		verb := "removed"
+		if r.Added {
+			verb = "added"
+		}
+		fmt.Fprintf(stdout, "regex-constrained: %s on %s: %s %q (%s) %s; the commands it matches are not "+
+			"enumerated (spec §12)\n", r.Subject, strings.Join(r.Devices, ", "), r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb)
+	}
+	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
+		"%d devices newly quarantined\n", len(d.Changes), widen, narrow, d.Unacknowledged(), len(d.Quarantined))
+	if d.Unacknowledged() > 0 || len(d.Quarantined) > 0 {
+		return 1
+	}
+	return 0
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "none"
+	}
+	return s
 }
 
 // policyReplay re-evaluates a decision log against the blobs it carries

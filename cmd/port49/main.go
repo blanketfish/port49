@@ -36,6 +36,7 @@ const usage = `usage:
                  [--command "LINE"] [--show-attributes]
   port49 policy test --policy FILE --inventory FILE
   port49 policy replay [--line N] LOGFILE|-
+  port49 policy diff --old FILE --new FILE --inventory FILE
   port49 access review --policy FILE --inventory FILE --subject NAME
   port49 grants remove --policy FILE --inventory FILE --subject NAME [--write]
 `

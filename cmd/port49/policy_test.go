@@ -125,6 +125,37 @@ func TestPolicyTestFailsAnUnacknowledgedShadow(t *testing.T) {
 	}
 }
 
+// `port49 policy diff` is the privilege-expansion gate (spec §12): a command
+// a deny refused that the new version permits fails it, until a policy test
+// in the new version exercises that permit over that deny.
+func TestPolicyDiffGatesAnExpansionPastADeny(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw, _ := os.ReadFile(oldPol)
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	expanded := strings.Replace(string(raw), "permit: [show **]}", "permit: [show **, reload now]}", 1)
+	if err := os.WriteFile(newPol, []byte(expanded), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `EXPANDS: noc on leaf-01: "reload now" was denied by "reload **" (no_reload), now permitted by "reload now" (read_only)`) ||
+		!strings.Contains(out.String(), "1 unacknowledged expansions past a deny") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := expanded + "  - {subject: noc, device: leaf-01, command: \"reload now\", expect: permit}\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "expands (a policy test exercises it)") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--inventory", inv}, &out, &errb); code != 2 {
+		t.Fatalf("no --new: code %d", code)
+	}
+}
+
 // A policy that fails a load-time check fails the gate, with the check's
 // message, before any test runs: here, a class no platform defines (spec §4).
 // A policy that loads with a device quarantined names it (spec §10).
