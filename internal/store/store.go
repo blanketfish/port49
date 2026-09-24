@@ -306,6 +306,28 @@ type ContextRefresh struct {
 	BlobHash string
 }
 
+// ContextPolicy is what a policy refresh writes into a live context (spec
+// §5.1.3): the policy's answer for this principal on this device, re-resolved
+// against the policy now in force. It is a struct for the reason
+// ContextRefresh is: what SetContextPolicy may write is a closed list, and
+// naming that list in one type is what keeps it closed.
+type ContextPolicy struct {
+	// RevokedAt, when non-zero, is the whole write: the principal has no grant
+	// on this device any more, and the context is marked revoked at this
+	// instant. The fields below are then ignored — a revoked context's policy
+	// is never read again (spec §5.3).
+	RevokedAt time.Time
+	// BlobHash replaces the context's policy blob hash. It is never empty on
+	// a write that does not revoke.
+	BlobHash string
+	// MaxPrivilege replaces the context's privilege ceiling; zero is none,
+	// as on the token (Context.PrivilegeCeiling). A held level above a new
+	// ceiling is lowered to it.
+	MaxPrivilege uint8
+	// Enable replaces the enable mechanism: none | auto | token (spec §7).
+	Enable string
+}
+
 // ContextRef is what the indexes hold: the context key, nothing more.
 type ContextRef struct {
 	NAS      string
@@ -476,6 +498,36 @@ type Store interface {
 	//
 	// ErrNotFound if the key is absent or already expired.
 	SetRevokedAt(ctx context.Context, k ContextKey, at time.Time) error
+	// SetContextPolicy writes a policy refresh's answer into this context, in
+	// place and under the store's own lock, and only if the record is still
+	// the one the caller read: rev is the Rev GetContext returned, and a
+	// revision that moved is ErrConflict with nothing written (spec §5.1.3).
+	//
+	// It is the fifth narrow setter, and the only one that is also a
+	// compare-and-set. The others write a value that is right whoever the
+	// record belongs to; this one writes a value computed from who it belongs
+	// to. The refresher reads the context's principal — sealed, so the inner
+	// store cannot check it — resolves that principal on this device, and
+	// writes the answer. A login that replaced the record with another
+	// principal's in between, or joined it with a token minted under the
+	// previous policy, would otherwise be handed the wrong principal's policy
+	// or keep the superseded one. Conflict, read again, decide again.
+	//
+	// It writes a closed list: with RevokedAt set, RevokedAt alone; otherwise
+	// BlobHash, MaxPrivilege and Enable, and PrivLvl lowered to the new
+	// ceiling when it is above it — the join's rule (spec §5.3), so a lowered
+	// max_privilege reaches the next command as privilege_exceeded. It never
+	// raises PrivLvl: a widened level reaches the device only through the next
+	// session authorization or enable, which is where a level is granted.
+	//
+	// It does not extend the expiry or stamp LastTouchedAt: a policy edit is
+	// not activity, or every reload would keep every idle context alive. It
+	// does not touch AuthTime, SessionExpires or RefreshedAt: nothing about
+	// the operator's authentication or the directory was re-verified. And it
+	// never clears RevokedAt, for the reason RefreshContext never does.
+	//
+	// ErrNotFound if the key is absent or already expired.
+	SetContextPolicy(ctx context.Context, k ContextKey, rev uint64, p ContextPolicy) error
 	// DeleteContext has no production caller today: the caller it had was
 	// author's `username_mismatch` branch, which under the old `(nas, port)`
 	// key could delete a live operator's context on an uncredentialed request.

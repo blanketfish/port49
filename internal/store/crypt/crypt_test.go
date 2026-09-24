@@ -384,3 +384,37 @@ func TestUnindexRefPassesThrough(t *testing.T) {
 		t.Fatalf("UnindexRef did not reach the inner store: %v", r)
 	}
 }
+
+// SetContextPolicy's compare-and-set survives the sealing layer: the
+// revision read through GetContext, with the principal opened, is the one the
+// inner store compares, and the fields it writes are plaintext, so the sealed
+// ones are untouched.
+func TestSetContextPolicyThroughTheSealingLayer(t *testing.T) {
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	ctx := context.Background()
+	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	if err := s.PutContext(ctx, ck, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com",
+		Username: "alice", PrivLvl: 15, BlobHash: "sha256:old"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetContext(ctx, ck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRevokedAt(ctx, ck, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetContextPolicy(ctx, ck, got.Rev, store.ContextPolicy{BlobHash: "sha256:new"}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("the revision read through the sealing layer must be the one compared: %v", err)
+	}
+	got, _ = s.GetContext(ctx, ck)
+	if err := s.SetContextPolicy(ctx, ck, got.Rev, store.ContextPolicy{BlobHash: "sha256:new", MaxPrivilege: 1}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.GetContext(ctx, ck)
+	if err != nil || after.Principal != "user:alice@example.com" || after.CtxID != "ctx1" ||
+		after.BlobHash != "sha256:new" || after.PrivLvl != 1 {
+		t.Fatalf("%+v %v", after, err)
+	}
+}

@@ -661,6 +661,33 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 	return nil
 }
 
+// SetContextPolicy is the refresher's setter: the compare, the write and the
+// clamp are one critical section (store.Store). It moves the revision and
+// nothing about the expiry: a policy edit is not activity.
+func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, rev uint64, p store.ContextPolicy) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(s.now()) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	if e.rev != rev {
+		return store.ErrConflict
+	}
+	if !p.RevokedAt.IsZero() {
+		e.c.RevokedAt = p.RevokedAt
+	} else {
+		e.c.BlobHash, e.c.MaxPrivilege, e.c.Enable = p.BlobHash, p.MaxPrivilege, p.Enable
+		if ceiling, ok := e.c.PrivilegeCeiling(); ok && e.c.PrivLvl > ceiling {
+			e.c.PrivLvl = ceiling
+		}
+	}
+	e.rev = s.nextRevLocked()
+	s.contexts[k] = e
+	return nil
+}
+
 func (s *Store) DeleteContext(_ context.Context, k store.ContextKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

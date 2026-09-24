@@ -1064,6 +1064,10 @@ func TestEveryContextWriteMovesTheRevision(t *testing.T) {
 			return s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now}, time.Hour)
 		}},
 		{"SetRevokedAt", func() error { return s.SetRevokedAt(ctx, k, now) }},
+		{"SetContextPolicy", func() error {
+			c, _ := s.GetContext(ctx, k)
+			return s.SetContextPolicy(ctx, k, c.Rev, store.ContextPolicy{BlobHash: "sha256:b", Enable: "none"})
+		}},
 	} {
 		before, _ := s.GetContext(ctx, k)
 		if err := w.write(); err != nil {
@@ -1252,5 +1256,81 @@ func TestUnindexRefClearsEveryKeyRecordedForTheRef(t *testing.T) {
 	}
 	if r, _ := s.ContextsBySid(ctx, "sid-1"); len(r) != 1 || r[0] != other {
 		t.Fatalf("another ref under the same sid must be left alone: %v", r)
+	}
+}
+
+// SetContextPolicy is the refresher's setter (spec §5.1.3): a compare-and-set
+// on the revision the refresher read, writing its closed list and nothing
+// else. The seed carries a field of every other writer's — the annotation,
+// the discriminators, the clocks — so a write that strayed shows.
+func TestSetContextPolicyWritesItsListOnlyIfTheRecordIsTheOneRead(t *testing.T) {
+	now := time.Unix(1000, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "n", Username: "u"}
+	seed := store.Context{CtxID: "c", Principal: "p", Username: "u", PrivLvl: 15, MaxPrivilege: 15,
+		Enable: "token", BlobHash: "sha256:old", AuthTime: now.Add(-time.Hour),
+		SessionExpires: now.Add(7 * time.Hour), RefreshedAt: now.Add(-time.Hour),
+		SessionDiscriminators: []string{"h"}, AccountingState: store.AccountingStateOpen}
+	s.PutContext(ctx, k, seed, time.Minute)
+	read, _ := s.GetContext(ctx, k)
+
+	// A write that lands between the read and the refresh moves the revision,
+	// and the refresh is refused with nothing written.
+	if err := s.AnnotateContext(ctx, k, "", store.AccountingStateClosing); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetContextPolicy(ctx, k, read.Rev, store.ContextPolicy{BlobHash: "sha256:new", Enable: "none"}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a revision that moved must conflict: %v", err)
+	}
+	if got, _ := s.GetContext(ctx, k); got.BlobHash != "sha256:old" {
+		t.Fatalf("a refused refresh wrote: %+v", got)
+	}
+
+	// Read again, write again: the three fields land, and a held level above
+	// the new ceiling comes down to it.
+	stamped := now
+	now = now.Add(30 * time.Second)
+	read, _ = s.GetContext(ctx, k)
+	if err := s.SetContextPolicy(ctx, k, read.Rev, store.ContextPolicy{BlobHash: "sha256:new", MaxPrivilege: 7, Enable: "none"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BlobHash != "sha256:new" || got.MaxPrivilege != 7 || got.Enable != "none" || got.PrivLvl != 7 {
+		t.Fatalf("the refresh did not land, or did not clamp: %+v", got)
+	}
+	if got.CtxID != "c" || got.Principal != "p" || !got.AuthTime.Equal(seed.AuthTime) ||
+		!got.SessionExpires.Equal(seed.SessionExpires) || !got.RefreshedAt.Equal(seed.RefreshedAt) ||
+		!got.RevokedAt.IsZero() || len(got.SessionDiscriminators) != 1 || got.AccountingState != store.AccountingStateClosing {
+		t.Fatalf("SetContextPolicy wrote a field that is not its own: %+v", got)
+	}
+	// Not activity: the expiry and its stamp stay where they were.
+	if !got.LastTouchedAt.Equal(stamped) {
+		t.Fatalf("SetContextPolicy must not stamp LastTouchedAt: %+v", got)
+	}
+
+	// A ceiling lifted does not raise the held level: a level is granted at a
+	// session authorization or an enable, never by a refresh.
+	if err := s.SetContextPolicy(ctx, k, got.Rev, store.ContextPolicy{BlobHash: "sha256:wide", Enable: "token"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.GetContext(ctx, k); got.PrivLvl != 7 || got.MaxPrivilege != 0 {
+		t.Fatalf("a lifted ceiling must leave the level alone: %+v", got)
+	}
+
+	// A revocation writes RevokedAt and nothing else.
+	if err := s.SetContextPolicy(ctx, k, got.Rev, store.ContextPolicy{RevokedAt: now, BlobHash: "sha256:ignored"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = s.GetContext(ctx, k); !got.RevokedAt.Equal(now) || got.BlobHash != "sha256:wide" {
+		t.Fatalf("a revoking refresh must write the mark and only the mark: %+v", got)
+	}
+
+	now = now.Add(31 * time.Second) // past the original expiry: nothing extended it
+	if err := s.SetContextPolicy(ctx, k, got.Rev, store.ContextPolicy{BlobHash: "sha256:x"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("an expired context must be ErrNotFound, not resurrected: %v", err)
 	}
 }

@@ -460,6 +460,10 @@ func (noStore) SetRevokedAt(context.Context, store.ContextKey, time.Time) error 
 	panic("store called")
 }
 
+func (noStore) SetContextPolicy(context.Context, store.ContextKey, uint64, store.ContextPolicy) error {
+	panic("store called")
+}
+
 var _ store.Store = noStore{}
 
 func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {
