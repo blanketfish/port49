@@ -3206,6 +3206,11 @@ tightens, for a platform the set ships and for a `based_on:` variant of one, `re
 included; a block that would loosen one is refused at load, naming the key:
 
 - `privilege_attributes` is a floor: a block may add a name and never remove one the set lists.
+- `inert_attributes` is a ceiling: a block may drop a name and never list one the set does not
+  hold inert (final review M5). A name the set lists in neither list bears privilege there, and
+  one it holds bearing — `home-directory`, `idletime` and `timeout` on `cisco_iosxe` (§6) — is
+  bearing for a reason; `replace: true` on `cisco_iosxe` restates `inert_attributes: []`, or it
+  inherits the generic adapter's `home-directory` and the load fails.
 - `accepted_attributes` is a ceiling: a block may narrow it and never widen or drop it, so
   `replace: true` on `cisco_iosxe` restates `[priv-lvl]` or the load fails — the device refuses
   the session for any other name and then stops answering SSH (L18).
