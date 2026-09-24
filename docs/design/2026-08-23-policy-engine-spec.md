@@ -1774,6 +1774,12 @@ the command as sent; only the record loses the secret. A redacted record carries
 and `port49 policy replay` reports it `unverifiable` rather than replaying the redacted words:
 the command it decided is not in the log, by design.
 
+The same rule applies to every other place port49 writes a command it received from a device,
+a debug log included. That place writes the redacted form, or it does not write the command.
+A denial's `server_msg` (§5.3) names the rule that decided and does not echo the command, and it
+goes only to the session that typed the command. `port49 policy test` reads commands from the
+policy's own test cases, not from a device.
+
 #### Replay
 
 `port49 policy replay <record>` re-evaluates a record against the blob it names and reports
@@ -1926,12 +1932,23 @@ default:
   - {match: ['**'], after: secret}
   - {match: ['**'], after: password}
   - {match: ['**'], after: key}
+  - {match: ['**'], after: key-string}
+  - {match: ['**'], after: authentication-key}
+  - {match: ['**'], after: message-digest-key}
+  - {match: ['**'], after: community}
+  - {match: ['**', snmp-server, user, '**'], after: auth}
 juniper_junos:
   - {match: ['**'], after: encrypted-password}
+  - {match: ['**'], after: plain-text-password-value}
+  - {match: ['**'], after: pre-shared-key}
+  - {match: ['**'], after: authentication-password}
+  - {match: ['**'], after: privacy-password}
 ```
 
 A pattern's `match` is words, `*` for one word and `**` for any number, anchored at both ends
-as a rule is. A command it matches loses every word after the first word equal to `after`, or
+as a rule is. Words are compared ignoring case, in `match` and `after` alike, as §4's rules are,
+so a difference in case makes a pattern remove more and never less. A command it matches loses
+every word after the first word equal to `after`, or
 every word from position `from` on (0 is the command word and is never removed; a negative
 `from` counts from the end). A platform that may send what was typed (`expands_abbreviations:
 false`) has a pattern's word match its abbreviations too, which removes more rather than less.
@@ -2445,7 +2462,14 @@ is exactly the operator rung, so the device can enforce it (`ceiling-cisco_iosxe
 `operator` renders `priv-lvl=7` there, and the adapter's reference configuration carries
 the lines level 7 depends on — a command method list for level 7, so the device asks port49
 about a level-7 command at all, and `privilege exec level 7 clear counters`, the one command
-the measured rung runs. Without them level 7 is level 1, which fails closed (decision 25).
+the measured rung runs. The reference configuration MUST carry both. Without the `privilege
+exec` line, operator is readonly (`ceiling-cisco_iosxe.md`, "Reading"). Without the level-7
+command method list, what the device does is unmeasured: the request carries the command's
+level, and the measured run configured `aaa authorization commands 7`. A device that has the
+`privilege exec` line and no level-7 list may run `clear counters` without asking port49.
+That case is an open question of L22, and until it closes, IOS-XE's `operator` rendering is
+*provisional on L22* (decision 25). `port49 devices check-config` does not catch the missing
+list: a `config_checks` entry reads one line, and this is the absence of a line.
 
 **The device role is the other half, and it is what binds when port49 cannot answer.** With
 command authorization pointed at port49 no EOS or NX-OS role narrows anything (above); with
@@ -3031,15 +3055,12 @@ arista_eos         overridden   —              session,commands
 cisco_iosxe        built-in     containerlab   session,commands
 cisco_nxos         built-in     containerlab   session,commands
 juniper_junos      built-in     —              session
+meinberg_lantime   local        —              session
+whitebox_nos       variant      —              session,commands
 ```
 
 (`containerlab` where `tests/lab/results/L22-<platform>.md` shows the adapter's replies
 applied as it says; the 2026-09 lab run is plan 5a's Task 17.)
-
-```
-meinberg_lantime   local        —              session
-whitebox_nos       variant      —              session,commands
-```
 
 A community-contributed adapter nobody has run against a real image MUST say so rather than
 appearing identical to one verified on every commit, and so must a built-in adapter a block
@@ -3066,7 +3087,12 @@ set ships start from — a change to either ships as a new set. **A
 policy that pins none renders with 1.0.0, the first set, on every binary** — so a policy
 written before pinning existed never changes on upgrade, and moves forward only by pinning a
 newer set. A set the binary does not ship is refused at load, by name. Upgrading the binary
-changes nothing about rendering. `port49 platform upgrade --to V` moves the pin (with
+changes nothing about rendering. It can change two things the pin does not hold. The first is
+the four daemon fields above (`session_services`, `session_discriminator`, `exec_commands` and
+`system_users`). They are built in and in no set, so they are unpinned until plan 6. A release
+that changes `system_users` changes how accounting is attributed, and its release notes MUST
+say so. The second is the redaction patterns (§5.8), which are unpinned by design.
+`port49 platform upgrade --to V` moves the pin (with
 `--write`, in the file, touching nothing else) and reports exactly what changes:
 
 ```
@@ -3891,9 +3917,14 @@ the commands the device refused in its parser at that level with port49 permitti
 (`tests/lab/results/ceiling-*.md`). A **fallback exposure** is a subject whose composed rules
 deny something, at a level whose adapter `fallback` says what the device gives a session on its
 own when the method list falls back to `local` — `network-admin` at admin on EOS and NX-OS,
-level 15 on IOS-XE. `operator` gets readonly's role for this reason (§6), so it is never
-exposed where its device role binds. Each is reported by `port49 policy test` and does not fail
-it: the answer is a review question, not a wrong policy.
+level 15 on IOS-XE. `operator` gets readonly's role for this reason (§6), so it never gets
+configuration where its device role binds. That is all L16 measured: `network-operator` under
+LOCAL command authorization refused configuration. Whether it also refuses `clear counters` and
+`clear ip bgp *` is an open question of L22. The report has no exemption for `operator`. It
+judges every level by that level's adapter `fallback` entry. A level with no entry, which is
+operator's case until L22 closes, is not reported, and that silence is unmeasured, not safe.
+Each is reported by `port49 policy test` and does not fail it: the answer is a review question,
+not a wrong policy.
 
 **Attribute shadowing.** Where a role or grant attribute overrides a platform attribute of
 the same name (§6), CI MUST name both so the override is deliberate.
@@ -4032,13 +4063,35 @@ device the refusal covers; a test cannot make that intended, so the change must 
 adapter (§8), the diff compares each platform's adapter key by key, for every platform either
 version has an adapter for, whether or not the inventory has a device of it yet — the inventory
 is not diffed, so the day a device arrives is no review — and whether the change is a
-`platforms:` block or a moved `platform_set`. A key that changes what port49 decides, what the
-gate itself reads or what the audit keeps — `supports`, `privilege`, `ceiling_levels`,
-`entity_classes`, the normalization keys, `privilege_attributes`, `inert_attributes`,
-`accepted_attributes`, `enable_username`, `redact` — fails unless an `acknowledge:`
-entry names the platform and the key with a reason, `{platform: arista_eos, field:
-entity_classes, reason: ...}`: a diff cannot vouch for its own reading when the change is to
-the reading. Every other key is reported.
+`platforms:` block or a moved `platform_set`. It compares the **effective** adapter, after
+`replace:` and `based_on:` have been merged, so a block cannot change a key by changing where
+the key is inherited from.
+
+**Every adapter key is gated, fail closed, unless it is on a closed list of report-only keys.**
+A gated key fails unless an `acknowledge:` entry names the platform and the key with a reason,
+`{platform: arista_eos, field: entity_classes, reason: ...}`: a diff cannot vouch for its own
+reading when the change is to the reading. A key a later plan adds is gated until it is added
+to that list. The gated keys therefore include:
+
+- `supports`, `privilege`, `ceiling_levels` and `entity_classes`.
+- The normalization keys, which change the vector rules match against: `expands_abbreviations`,
+  `splits_interface_names`, `strip_cr`, `pipe_token` and `pipe_authorized`.
+- The rendering keys of session-only platforms, which decide what the device enforces:
+  `command_projection`, `bits` and `bit_delivery`.
+- The keys the gate reads: `privilege_attributes`, `inert_attributes` and
+  `accepted_attributes`.
+- `enable_username`, `shows_server_msg`, and `redact`, which changes what the audit keeps.
+- `local_accounts` and `config_checks`: an edit to either can silence `devices check-config`,
+  which is the only detection §5.6 names.
+
+The report-only keys are reported and never fail:
+
+- `device_config`: text that `platform show` prints. It decides nothing.
+- `port_pattern`: drift detection only.
+- `verified`: the adapter's claim about the lab. A block may not set it.
+- `unreachable` and `fallback`: they feed only the dead-rule and fallback-exposure reports,
+  which do not fail `policy test` either. An edit to one is reported in the diff, where the
+  reviewer sees it.
 
 **`port49 platform upgrade`** reports what a platform-set bump changes, so a binary upgrade
 is never an unreviewed policy change (§8).
@@ -4915,8 +4968,8 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L18** | How each platform treats a reply attribute it did not ask for: applied, ignored, or the session killed. Another vendor's attribute, an invented one, and a known attribute carrying a value the device cannot use, each in the OPTIONAL and the MANDATORY spelling. Per variant: whether the session opens and, when it does not, what the device says verbatim; what role or privilege the session ends up with; and whether the device still sends per-command authorization. | Whether an adapter may send one attribute list to a mixed fleet at all (§8). RFC 8907 §8.2 says an OPTIONAL argument a device does not understand SHOULD be ignored and a MANDATORY one MUST fail the authorization; `lab.session_attributes` in `tests/lab/port49d-lab.yaml` rested on the first half until IOS-XE disproved it (L10), and what an operator's typo costs (§6) rests on the same answer. Also decision 22's two Junos attributes (§13, gated on L12). | EOS, NX-OS, IOS-XE, Junos | open — added and measured 2026-09-22 on all five images, `tests/lab/l18_test.go`. **Three vendors answer three different ways, so §8 cannot have one rule.** vEOS follows §8.2 in both directions. The N9Kv and both Junos images honour neither half and ignore everything, mandatory included. IOS-XE refuses the session for anything it does not recognise under either flag — and a run of those refusals stops it answering SSH at all for about a minute, without sending port49 a packet. On Junos `local-user-name` is applied under either flag and **`user-permissions` does nothing**, which is decision 22's second attribute measured for the first time. **The per-command reply is measured too, 2026-09-22, and it does not follow the session reply:** the C8000V refuses EVERY command in the session — `Command authorization failed.` — for any of the three attributes under either flag, on authorizations port49 answered `permit`; vEOS ignores an optional unknown there and refuses every command on a MANDATORY one; the N9Kv ignores all of them. Junos has no per-command reply to ask it of (L10, L14; decision 21). Open: every non-SSH transport, and whether IOS-XE's SSH condition is the vty pool; see below |
 | **L19** | The maximum password length each platform accepts via PAP, on every login path where the device uses PAP. | The 30-character handle (design document §8): an authentication START carries a PAP password in `data`, whose length field is one byte, so PAP can bound the handle where the ASCII prompt does not — and NX-OS uses PAP for every SSH login by default | all | open — added 2026-09-23, split from L8. On the N9Kv an SSH login is carried as PAP and 127 characters arrive (`tests/lab/results/L8-cisco_nxos.md`); PAP on any other path, and on EOS, Junos and IOS-XE, which this lab does not configure for it, is unmeasured; see below |
 | **L20** | Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a **wrong password** for the same user inside that window is also accepted; and whether a credential port49 would now refuse is re-checked inside it. | Whether a revocation in port49 reaches an API client at all (§5.1.4), and decision 15's bound on how long a spent token works — the receipt's `receipt_idle_ttl` and `receipt_max_age` act only on exchanges the device sends | IOS-XE; then every HTTP API transport | open — added 2026-09-23. IOS-XE RESTCONF answered a repeat of an already-spent token, 3s later, with `200 OK` and **zero** TACACS+ traffic (`tests/lab/results/L1-restconf-cisco_iosxe.md`), so a revocation in port49 cannot reach that repeat. **Measured 2026-09-24 on IOS-XE** (`tests/lab/results/L20-cisco_iosxe.md`): the cache is per credential (username and password), not per username or client address; a wrong password inside it goes to port49 and is refused; it lasts about 10s fixed from the authentication that filled it; and a cached credential is not re-checked, even with port49 answering every authentication ERROR. Open: every other HTTP API transport, so the row stays open; see below |
-| **L22** | What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of `clear counters`, `clear ip bgp *` and `configure terminal` it runs, refuses in its own parser, or sends port49 — and which level or role it reports, for the exact reply each built-in adapter sends; and, with port49 stopped under an open session on a command method list ending in `local`, whether operator's reply can change the configuration where admin's can. | Decision 25; the adapters' `privilege`, `unreachable` and `fallback` (§8); the dead-rule and fallback-exposure reports (§12) | EOS, NX-OS, IOS-XE | open — added by plan 5. Measured by hand 2026-09-24 with single attributes (`tests/lab/results/ceiling-arista_eos.md`, `ceiling-cisco_nxos.md`, `ceiling-cisco_iosxe.md`): level 1 refuses all three in the parser on vEOS and IOS-XE; IOS-XE level 7 with `privilege exec level 7 clear counters` runs `clear counters` alone; at 15 on vEOS and under every N9Kv role, all three reach port49. The adapters' exact replies and the fallback are plan 5a's Task 17 (`tests/lab/results/L22-*.md`) |
 | **L21** | Whether each platform sends the command words the operator typed (`sh run`) or the resolved ones (`show running-config`) on a per-command authorization request, and on the accounting record for it. | `expands_abbreviations` per platform (§3 rule 4, §8): where it is `false` a deny's word matches its own abbreviations, which over-denies, and where it is wrongly `true` an abbreviation slips past a deny | EOS, NX-OS, IOS-XE | closed — measured 2026-09-24; `tests/lab/results/L21-arista_eos.md`, `L21-cisco_nxos.md`, `L21-cisco_iosxe.md`. All three images send the **resolved** words, on the request and on the accounting record, over interactive SSH: `sh ver` arrives as `cmd=show cmd-arg=version`, and `sh clock` was denied by a `show clock` deny on all three. Interface names differ: IOS-XE splits `Gi1` into `GigabitEthernet`, `1`; vEOS and the N9Kv join it (`Ethernet1`, `Ethernet1/1`). Other transports and releases are outside what was measured; see below |
+| **L22** | What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of `clear counters`, `clear ip bgp *` and `configure terminal` it runs, refuses in its own parser, or sends port49 — and which level or role it reports, for the exact reply each built-in adapter sends; and, with port49 stopped under an open session on a command method list ending in `local`, whether operator's reply can change the configuration where admin's can, and whether it runs `clear counters` and `clear ip bgp *`; and, on IOS-XE with `privilege exec level 7 clear counters` configured and no `aaa authorization commands 7` list, whether a level-7 session runs `clear counters` without asking port49. | Decision 25; the adapters' `privilege`, `unreachable` and `fallback` (§8); the dead-rule and fallback-exposure reports (§12) | EOS, NX-OS, IOS-XE | open — added by plan 5. Measured by hand 2026-09-24 with single attributes (`tests/lab/results/ceiling-arista_eos.md`, `ceiling-cisco_nxos.md`, `ceiling-cisco_iosxe.md`): level 1 refuses all three in the parser on vEOS and IOS-XE; IOS-XE level 7 with `privilege exec level 7 clear counters` runs `clear counters` alone; at 15 on vEOS and under every N9Kv role, all three reach port49. The adapters' exact replies and the fallback are plan 5a's Task 17 (`tests/lab/results/L22-*.md`) |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
