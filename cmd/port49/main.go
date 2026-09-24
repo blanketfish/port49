@@ -36,6 +36,7 @@ const usage = `usage:
                  [--command "LINE"] [--show-attributes]
   port49 policy test --policy FILE --inventory FILE
   port49 policy replay [--line N] LOGFILE|-
+  port49 access review --policy FILE --inventory FILE --subject NAME
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -57,6 +58,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return explainCmd(args[1:], stdout, stderr)
 	case "policy":
 		return policyCmd(args[1:], stdout, stderr)
+	case "access":
+		if len(args) > 1 && args[1] == "review" {
+			return accessReview(args[2:], stdout, stderr)
+		}
 	}
 	fmt.Fprint(stderr, usage)
 	return 2

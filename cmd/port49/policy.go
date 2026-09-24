@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
@@ -221,5 +222,62 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
 	if counts[replay.Diverge]+counts[replay.Unverifiable] > 0 {
 		return 1
 	}
+	return 0
+}
+
+// accessReview renders the flat grant table for one subject (spec §12): every
+// row it appears in, with the scope's size against the inventory and the
+// row's expiry. It is the report an access review signs, and `port49 grants
+// remove` is what acts on it.
+func accessReview(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("port49 access review", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var files policyFiles
+	files.register(fs)
+	subject := fs.String("subject", "", "the subject, by its name in the policy")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *subject == "" || fs.NArg() != 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	p, err := files.load()
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 access review:", err)
+		return 1
+	}
+	now := time.Now()
+	rows, err := p.Review(*subject, now)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 access review:", err)
+		return 1
+	}
+	s, _ := p.Subject(*subject)
+	who := "group " + s.Group
+	if s.Group == "" {
+		who = "identity " + strings.Join(s.Identity, ", ")
+	}
+	fmt.Fprintf(stdout, "%s (%s; %s)\n", *subject, s.Domain, who)
+	if len(rows) == 0 {
+		fmt.Fprintln(stdout, "no grant rows: the subject matches nothing; `port49 grants remove` deletes the block")
+		return 0
+	}
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "SCOPE\tROLES\tMAX_PRIVILEGE\tEXPIRES\tDEVICES")
+	for _, r := range rows {
+		ceiling, expires := r.MaxPrivilege, "never"
+		if ceiling == "" {
+			ceiling = "-"
+		}
+		if !r.Expires.IsZero() {
+			expires = r.Expires.UTC().Format(time.RFC3339)
+			if r.Expired {
+				expires += " (expired)"
+			}
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\n", r.Scope, strings.Join(r.Roles, " "), ceiling, expires, r.Devices)
+	}
+	tw.Flush()
 	return 0
 }

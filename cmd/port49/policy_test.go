@@ -179,3 +179,22 @@ func TestPolicyReplayFindsAnEditedRecord(t *testing.T) {
 		t.Fatalf("code %d\n%s", code, out.String())
 	}
 }
+
+// `port49 access review` prints every grant row of one subject with the scope
+// size, from the files alone.
+func TestAccessReviewPrintsTheGrantRows(t *testing.T) {
+	pol, inv := policyFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "noc"}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	for _, want := range []string{"noc (humans; identity user:noc@example.com)", "SCOPE", "all_devices  no_reload read_only  -",
+		"never", "1"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "nobody"}, &out, &errb); code != 1 {
+		t.Fatalf("an undeclared subject: code %d", code)
+	}
+}
