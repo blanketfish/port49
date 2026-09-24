@@ -3581,9 +3581,29 @@ that subject on that device — `level:` for a level raise, `max_privilege:` for
 Higher is later in `privilege_levels` as the new policy orders it; a level the new policy no
 longer declares counts as raised from. The devices a raise is reported on hold the same blobs
 and ceiling, so a test on any one of them is the assertion for all. A lowering is reported and
-does not fail. Regex and class terms are matched only
-against the words the rules name, so a rule that carries one and changed, or a permit that carries one and
-meets a deny that changed, is reported as regex-constrained rather than enumerated (§4).
+does not fail.
+
+**A regex-constrained change fails the gate too** (owner's ruling 2026-09-24). Regex and class
+terms are matched only against the words the rules name, so a rule that carries one and changed,
+or a permit that carries one and meets a deny that changed, is reported as regex-constrained
+rather than enumerated (§4) — and because the diff cannot see which commands moved, the author's
+test has to. Each of these widenings fails unless a passing policy test in the new policy
+exercises it, the acknowledgment the shadowed-deny report and a deny-to-permit change use:
+
+- a permit carrying a regex or class term that the new policy added — by a test that expects
+  `permit` on a command that permit decides;
+- a permit carrying one that meets a deny the new policy removed — by a test that expects
+  `permit` on a command that deny refused before and that permit wins now;
+- a deny carrying one that the new policy removed — by a test, `permit` or `deny`, on a command
+  that deny refused before, so a deny rewritten wider is acknowledged by a test it still refuses.
+
+The narrowings — such a permit removed, such a deny added, or a permit meeting a deny the change
+added — are reported and do not fail.
+
+**A newly refused mint fails the gate, and no test acknowledges it.** A subject the new policy's
+broker refuses to mint for (`attribute_too_long`, `attribute_unsafe`) is locked out of every
+device the refusal covers; a test cannot make that intended, so the change must fix the attribute
+(owner's ruling 2026-09-24, confirming plan 4's behaviour).
 
 **`port49 platform upgrade`** reports what a platform-set bump changes, so a binary upgrade
 is never an unreviewed policy change (§8).
