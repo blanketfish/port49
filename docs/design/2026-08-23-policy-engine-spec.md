@@ -2147,6 +2147,14 @@ inventory name and `{privilege}` the abstract level the roles compose to (`admin
 An attribute is at most 255 bytes as written, checked at load, and again once filled in, at
 mint, where the broker holds the same values the daemon will substitute.
 
+**Privilege-bearing attributes take no substitution** (owner's ruling 2026-09-24, review I3).
+Each platform's adapter lists the attribute names that carry privilege on it, from the lab:
+`priv-lvl` everywhere; `roles` on `arista_eos` and `shell:roles`, and `cisco-av-pair` which can
+carry it, on `cisco_nxos` (L16); `local-user-name` and `user-permissions` on `juniper_junos`
+(L18, decision 22). A placeholder in the value of any attribute with one of those names, on any
+platform key, is refused at load: `priv-lvl={username}` would hide the level the device gets from
+every review tool and hand it to whatever the mint fills in.
+
 ### Validation without semantics
 
 port49 cannot check what an attribute means. It MUST check everything else:
@@ -3612,13 +3620,32 @@ each instant. Any of these is a raise:
   reordering that lifts a level is a raise even when the name did not change; a level one
   version does not declare counts as below every level it does;
 - **`enable` was switched on** — from unset or `none` to `auto` or `token`, which lets the
-  session escalate to its ceiling, or with none to anything.
+  session escalate to its ceiling, or with none to anything;
+- **the session reply gained or changed a privilege-bearing attribute** — the whole rendered
+  reply is compared (placeholders empty), so any change to it is at least a reported line, and
+  one that adds or changes an attribute other than `priv-lvl` (which the first item judges) is a
+  raise unless that attribute is one the platform's adapter lists as carrying no privilege. No
+  shipped adapter lists one yet, so today every such attribute counts: `local-user-name` on
+  Junos, `shell:roles` on NX-OS and `roles` on EOS each change what the device lets the session
+  do (§6; L16, L18), and on a session-only platform the reply is the only fence. Removing an
+  attribute is reported and does not fail.
 
 Each fails unless a passing session test in the new policy, at that instant, on a device of the
 group reported, asserts the new value of every dimension that rose: `priv_lvl:` for the device
-privilege, `max_privilege:` for the ceiling, `level:` for the level, `enable:` for the mechanism.
-The devices a raise is reported on hold the same blobs, levels, numbers and `enable`, so a test
-on any one of them is the assertion for all. A lowering is reported and does not fail.
+privilege, `max_privilege:` for the ceiling, `level:` for the level, `enable:` for the mechanism,
+`reply:` — the exact attribute list, in order, placeholders empty — for the session reply.
+The devices a raise is reported on hold the same blobs, levels, numbers, `enable` and reply, so a
+test on any one of them is the assertion for all. A lowering is reported and does not fail.
+
+**The gate also compares principals, not only subjects** (owner's ruling 2026-09-24, review C3):
+a subject is a name, and who holds its access is its `identity:` list and what the device sees
+is its `username:`. For every principal either version lists, the diff reports one that now
+resolves to a subject it did not (added to a subject, or moved from another), and a subject whose
+`username:` changed. Each fails the gate unless a passing session test naming that `principal:`
+in the new policy asserts the access it resolves to; for a `username:` change, a session test
+naming one of the subject's principals. A principal removed from every subject is reported and
+does not fail. A subject's `group:` changing is reported; group subjects mint for no one until the
+directory arrives (plan 7), and the gate on them is that plan's.
 
 **A regex-constrained change fails the gate too** (owner's ruling 2026-09-24). Regex and class
 terms are matched only against the words the rules name, so a rule that carries one and changed,
@@ -3649,7 +3676,9 @@ acknowledge:
 
 which acknowledges that rule's removal and every permit meeting it. The entry is keyed to the
 removed rule's text, so it matches nothing once that rule is gone from the old policy too, and
-cannot quietly cover a later change. `port49 policy test` prints every entry and `policy diff`
+cannot quietly cover a later change. **A stale entry acknowledges nothing and is reported,**
+`report: acknowledge_stale`: by `policy test` where the rule it names is still in the policy (so
+it removed nothing), and by `policy diff` where no widening in the diff is the one it names. `port49 policy test` prints every entry and `policy diff`
 prints the entry beside the change it acknowledges, so review sees the reason. An entry with no
 reason is refused at load.
 
