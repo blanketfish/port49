@@ -184,14 +184,28 @@ func TestPlatformUpgradeMovesThePin(t *testing.T) {
 	raw := readFile(t, pol)
 	var out, errb bytes.Buffer
 	if code := run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv, "--to", "1.0.0", "--write"},
-		&out, &errb); code != 0 || out.String() != "platform_set 1.0.0 -> 1.0.0\n  no adapter the inventory uses changes\n" {
+		&out, &errb); code != 0 || out.String() != "platform_set 1.0.0 -> 1.0.0\n  no adapter changes\n" {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
-	if got := readFile(t, pol); string(got) != "platform_set: 1.0.0\n"+string(raw) {
-		t.Fatalf("%s", got)
+	pinned := readFile(t, pol)
+	if string(pinned) != "platform_set: 1.0.0\n"+string(raw) {
+		t.Fatalf("%s", pinned)
 	}
 	if code := run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv, "--to", "9.9.9", "--write"},
 		&out, &errb); code != 1 || !strings.Contains(errb.String(), "does not load on platform set 9.9.9, so nothing was written") {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if got := readFile(t, pol); !bytes.Equal(got, pinned) {
+		t.Fatalf("a refused move wrote the file: %s", got)
+	}
+	// A pin this binary no longer ships leaves nothing to compare against;
+	// the operator is told which binary to run.
+	if err := os.WriteFile(pol, append([]byte("platform_set: 0.9.0\n"), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	errb.Reset()
+	if code := run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv, "--to", "1.0.0"}, &out,
+		&errb); code != 1 || !strings.Contains(errb.String(), "run the upgrade with a binary that ships both sets") {
 		t.Fatalf("code %d %s", code, errb.String())
 	}
 	if code := run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv}, &out, &errb); code != 2 {
@@ -258,7 +272,8 @@ func TestTheUpgradeReportPrintsPasteReadyAcknowledgments(t *testing.T) {
 	out.Reset()
 	upgradeReport(&out, before, acked, now)
 	if strings.Count(out.String(), "    gated, acknowledged: set 1.1.0 adds exec accounting\n") != 2 ||
-		strings.Contains(out.String(), "policy diff fails") {
+		strings.Contains(out.String(), "policy diff fails") ||
+		!strings.Contains(out.String(), "  port49 policy diff on the move also shows the replies it changes\n") {
 		t.Fatalf("%s", out.String())
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/platform"
 )
@@ -386,6 +388,15 @@ func TestReachCountsOnlyTheSubjectsAChangeTouches(t *testing.T) {
 	if devices, subjects := p.Reach("acme_os", noon); devices != 0 || subjects != 0 {
 		t.Fatalf("acme_os: %d devices, %d subjects", devices, subjects)
 	}
+	// The generic adapter reaches a device of a platform with no adapter and
+	// no block (task 13 review M5).
+	q, err := Parse([]byte(scopeOK+roleOK+subjOK+grantOK), withDevice("x-01", "acme_os"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if devices, subjects := q.Reach("generic", noon); devices != 1 || subjects != 1 {
+		t.Fatalf("generic: %d devices, %d subjects", devices, subjects)
+	}
 }
 
 // A pin move changes the generic adapter too, which every device of a
@@ -487,5 +498,33 @@ func TestSetPlatformSetTouchesOnlyThePin(t *testing.T) {
 	}
 	if _, err := SetPlatformSet([]byte("roles: []\n"), "1.1.0\nroles: [x]"); err == nil {
 		t.Fatal("a version that is not dotted numbers is refused")
+	}
+	// A pin the file lacks goes after a leading document marker, so the file
+	// stays one document; one it has is rewritten where it is, its line
+	// ending kept (task 13 review I1, M7).
+	for raw, want := range map[string]string{
+		"---\nroles: []\n":                      "---\nplatform_set: 1.1.0\nroles: []\n",
+		"# c\n---\nroles: []\n":                 "# c\n---\nplatform_set: 1.1.0\nroles: []\n",
+		"--- # doc\n# roles\nroles: []\n":       "--- # doc\nplatform_set: 1.1.0\n# roles\nroles: []\n",
+		"---\nplatform_set: 1.0.0\nroles: []\n": "---\nplatform_set: 1.1.0\nroles: []\n",
+		"roles: []\r\nplatform_set: 1.0.0\r\n":  "roles: []\r\nplatform_set: 1.1.0\r\n",
+		"roles: []\r\n":                         "platform_set: 1.1.0\r\nroles: []\r\n",
+	} {
+		got, err := SetPlatformSet([]byte(raw), "1.1.0")
+		if err != nil || string(got) != want {
+			t.Errorf("%q: %v %q", raw, err, got)
+			continue
+		}
+		var f file
+		if err := yaml.Unmarshal(got, &f); err != nil || f.PlatformSet != "1.1.0" {
+			t.Errorf("%q does not read back pinned: %v %+v", got, err, f.PlatformSet)
+		}
+	}
+	// A value that spans lines is refused, not half rewritten (review M1).
+	for _, raw := range []string{"platform_set: >-\n  1.0.0\n", "platform_set: |\n  1.0.0\n",
+		"platform_set: 1.0.0\n  continued\nroles: []\n"} {
+		if got, err := SetPlatformSet([]byte(raw), "1.1.0"); err == nil {
+			t.Errorf("%q: %q", raw, got)
+		}
 	}
 }

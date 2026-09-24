@@ -240,7 +240,11 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 	}
 	before, err := policy.Parse(raw, offlineEnv(inv.Devices))
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 platform upgrade:", err)
+		// Nothing to compare against: a pin this binary no longer ships is
+		// moved by the binary that still ships it (spec §8).
+		fmt.Fprintf(stderr, "port49 platform upgrade: the policy as it is does not load, so there is nothing to "+
+			"compare the move against: %v; if its platform_set is one this binary no longer ships, run the upgrade "+
+			"with a binary that ships both sets\n", err)
 		return 1
 	}
 	moved, err := policy.SetPlatformSet(raw, *to)
@@ -252,6 +256,11 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 platform upgrade: the policy does not load on platform set %s, so nothing was "+
 			"written: %v\n", *to, err)
+		return 1
+	}
+	if after.PlatformSet() != *to {
+		fmt.Fprintf(stderr, "port49 platform upgrade: the rewritten file pins %s, not %s, so nothing was written\n",
+			after.PlatformSet(), *to)
 		return 1
 	}
 	upgradeReport(stdout, before, after, time.Now())
@@ -296,12 +305,14 @@ func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
 		fmt.Fprintf(w, "  shadowed: %s: set %s changes the built-in value and the policy's block keeps its "+
 			"own; compare the two\n", key, after.PlatformSet())
 	}
-	if len(d.Adapters) == 0 {
-		fmt.Fprintln(w, "  no adapter the inventory uses changes")
-	}
-	if d.UnacknowledgedAdapters() > 0 {
+	switch {
+	case len(d.Adapters) == 0:
+		fmt.Fprintln(w, "  no adapter changes")
+	case d.UnacknowledgedAdapters() > 0:
 		fmt.Fprintf(w, "  port49 policy diff fails on the move until every gated entry above is under acknowledge: "+
 			"(spec §12); it also shows the replies the move changes\n")
+	default:
+		fmt.Fprintln(w, "  port49 policy diff on the move also shows the replies it changes")
 	}
 }
 
