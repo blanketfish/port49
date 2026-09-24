@@ -3623,16 +3623,35 @@ on any one of them is the assertion for all. A lowering is reported and does not
 **A regex-constrained change fails the gate too** (owner's ruling 2026-09-24). Regex and class
 terms are matched only against the words the rules name, so a rule that carries one and changed,
 or a permit that carries one and meets a deny that changed, is reported as regex-constrained
-rather than enumerated (§4) — and because the diff cannot see which commands moved, the author's
-test has to. Each of these widenings fails unless a passing policy test in the new policy
-exercises it, the acknowledgment the shadowed-deny report and a deny-to-permit change use:
+rather than enumerated (§4) — and because the diff cannot see which commands moved, the author
+has to show it. Each of these widenings fails unless it is acknowledged, on a device of the group
+it is reported on, at the instant it is reported:
 
-- a permit carrying a regex or class term that the new policy added — by a test that expects
-  `permit` on a command that permit decides;
-- a deny carrying one that the new policy removed, or a permit carrying one that meets a deny
-  the new policy removed — by a test, `permit` or `deny`, on a command that deny refused before.
-  A test of the permit over the deny is one; a deny rewritten wider, which no permit test can
-  get past, is acknowledged by a test it still refuses.
+- a permit carrying a regex or class term that the new policy added — by a passing test that
+  expects `permit` on a command that permit decides;
+- a deny carrying one that the new policy removed or rewrote — by a passing test that expects
+  `permit` on a command that deny refused in the old policy and the new one permits;
+- a permit carrying one that meets a deny the new policy removed or rewrote — by a passing test
+  that expects `permit` on a command that deny refused in the old policy and that permit decides
+  in the new one, keyed to that (permit, deny) pair.
+
+**A test expecting `deny` never acknowledges a widening:** it cannot tell a rewrite that narrowed
+the deny from one that widened it (owner's ruling 2026-09-24, on review I1: `/^(wri|rel)/ **`
+rewritten as `/^wri/ **` frees `reload`, and a test that `write erase` is still refused says
+nothing about it). A deny rewritten wider has no command to flip, so it is acknowledged the only
+other way, **by the author in writing**: a top-level entry naming the exact removed or rewritten
+rule, with its role and a reason,
+
+```yaml
+acknowledge:
+  - {role: guard, rule: "/^(wri|rel)/ **", reason: "rewritten wider as /^(wri|rel|rep)/"}
+```
+
+which acknowledges that rule's removal and every permit meeting it. The entry is keyed to the
+removed rule's text, so it matches nothing once that rule is gone from the old policy too, and
+cannot quietly cover a later change. `port49 policy test` prints every entry and `policy diff`
+prints the entry beside the change it acknowledges, so review sees the reason. An entry with no
+reason is refused at load.
 
 The narrowings — such a permit removed, such a deny added, or a permit meeting a deny the change
 added — are reported and do not fail.
