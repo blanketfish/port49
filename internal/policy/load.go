@@ -302,15 +302,22 @@ func (p *Policy) buildPlatforms(f file) error {
 		if err := platform.Validate(name, d); err != nil {
 			return err
 		}
-		// The set's ranking is the lab's (spec §8): a block may rank a value
-		// the set does not, and never reorder two it does, `replace: true`
-		// included, since the device behind the name is the same device.
+		// What the set measured about the device is the lab's (spec §8): a
+		// block tightens it and never loosens it, `replace: true` and
+		// `based_on:` included, since the device behind the name is the same
+		// device. A new platform has no measurement to keep, save that no
+		// set's privilege attribute is inert anywhere.
+		if err := inertBearsNoPrivilege(at, d); err != nil {
+			return err
+		}
 		shippedAs := name
 		if b.BasedOn != "" {
 			shippedAs = b.BasedOn
 		}
-		if err := keepsRoleOrder(at, d, builtin[shippedAs], p.set); err != nil {
-			return err
+		if ref, ok := builtin[shippedAs]; ok {
+			if err := keepsSetClaims(at, shippedAs, d, ref, p.set); err != nil {
+				return err
+			}
 		}
 		set[name] = d
 	}
@@ -318,6 +325,77 @@ func (p *Policy) buildPlatforms(f file) error {
 		set[name] = d
 	}
 	p.adapters = set
+	return nil
+}
+
+// inertBearsNoPrivilege refuses an inert attribute that any adapter port49
+// ships lists as bearing privilege (task 7 review C1). Listed inert, a later
+// change to it passes the diff ungated and takes a placeholder, so one
+// acknowledged edit would blind the gate to it for good.
+func inertBearsNoPrivilege(at string, d platform.Dialect) error {
+	for _, n := range d.InertAttributes {
+		if slices.Contains(platform.PrivilegeAttributeNames(), n) {
+			return fmt.Errorf("%s.inert_attributes: %s bears privilege in a platform set port49 ships, so no block "+
+				"may list it inert (spec §8)", at, n)
+		}
+	}
+	return nil
+}
+
+// keepsSetClaims refuses a merged adapter that loosens what the set's
+// adapter it stands for measured about the device (spec §8; task 7 review
+// C1, I1): the attributes that bear privilege are a floor, the attributes the
+// device takes and the capabilities it authorizes a ceiling; a normalization
+// that makes a deny match more is kept, and a claim that makes a rule look
+// enforced where the lab found it is not is refused; and the set's
+// role_order keeps its order. A block may tighten each.
+func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version string) error {
+	if err := keepsRoleOrder(at, d, ref, version); err != nil {
+		return err
+	}
+	for _, n := range ref.PrivilegeAttributes {
+		if !slices.Contains(d.PrivilegeAttributes, n) {
+			return fmt.Errorf("%s.privilege_attributes: %s is missing, and platform set %s lists it as bearing "+
+				"privilege on %s; a block may add to the list, not remove from it (spec §8)", at, n, version, shippedAs)
+		}
+	}
+	if ref.AcceptedAttributes != nil {
+		if d.AcceptedAttributes == nil {
+			return fmt.Errorf("%s.accepted_attributes: platform set %s lists what %s takes (%s), and the device "+
+				"refuses a session for any other; restate the list, or narrow it (spec §8)", at, version, shippedAs,
+				strings.Join(ref.AcceptedAttributes, ", "))
+		}
+		for _, n := range d.AcceptedAttributes {
+			if !slices.Contains(ref.AcceptedAttributes, n) {
+				return fmt.Errorf("%s.accepted_attributes: %s is not in platform set %s's list for %s (%s); a block "+
+					"may narrow it, not widen it (spec §8)", at, n, version, shippedAs,
+					strings.Join(ref.AcceptedAttributes, ", "))
+			}
+		}
+	}
+	for _, c := range d.Supports {
+		if !slices.Contains(ref.Supports, c) {
+			return fmt.Errorf("%s.supports: %s is not a capability platform set %s measured on %s; a rule would read "+
+				"as enforced where the device never asks (spec §8, §9)", at, c, version, shippedAs)
+		}
+	}
+	for _, f := range []struct {
+		key           string
+		set, is, weak bool
+	}{
+		// true claims a pipe rule or an abbreviation reaches port49 as typed
+		{"pipe_authorized", ref.PipeAuthorized, d.PipeAuthorized, true},
+		{"expands_abbreviations", ref.ExpandsAbbreviations, d.ExpandsAbbreviations, true},
+		// false stops a deny matching the split name or the <cr>-ended vector
+		{"splits_interface_names", ref.SplitsInterfaceNames, d.SplitsInterfaceNames, false},
+		{"strip_cr", ref.StripCR, d.StripCR, false},
+	} {
+		if f.is != f.set && f.is == f.weak {
+			return fmt.Errorf("%s.%s: platform set %s measured %v on %s, and %v would let a command past a deny "+
+				"or a rule the device does not enforce; a block may not loosen it (spec §8)", at, f.key, version,
+				f.set, shippedAs, f.is)
+		}
+	}
 	return nil
 }
 

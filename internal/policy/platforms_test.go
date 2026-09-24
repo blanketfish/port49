@@ -67,6 +67,8 @@ platforms:
       admin: ["priv-lvl=15"]
   cisco_iosxe:
     replace: true
+    accepted_attributes: [priv-lvl]
+    splits_interface_names: true
     privilege:
       readonly: ["priv-lvl=1"]
       operator: ["priv-lvl=1"]
@@ -94,8 +96,10 @@ platforms:
 		t.Fatalf("meinberg_lantime starts from the generic adapter: %+v", lantime)
 	}
 	xe := p.Dialect("cisco_iosxe")
-	if xe.AcceptedAttributes != nil || xe.SplitsInterfaceNames || xe.DeviceConfig != nil ||
-		!reflect.DeepEqual(xe.Supports, []string{"session"}) {
+	// replace discards the built-in, save what the set measured about the
+	// device, which the block restates (spec §8; task 7 review I1).
+	if !reflect.DeepEqual(xe.AcceptedAttributes, []string{"priv-lvl"}) || !xe.SplitsInterfaceNames ||
+		xe.DeviceConfig != nil || xe.EntityClasses != nil || !reflect.DeepEqual(xe.Supports, []string{"session"}) {
 		t.Fatalf("replace discards the built-in: %+v", xe)
 	}
 }
@@ -143,6 +147,36 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 				"1.0.0 ranks it below"},
 		{"a variant's role_order reversed", "  wb: {based_on: cisco_nxos, role_order: {shell:roles: [network-admin, network-operator]}}\n",
 			"platforms.wb.role_order.shell:roles: network-operator is ranked above network-admin"},
+		// What the set measured about a device is a floor or a ceiling a block
+		// only tightens, in every mode (task 7 review C1, I1).
+		{"a set's privilege attribute demoted to inert", "  cisco_nxos: {privilege_attributes: [priv-lvl, shell:roles], " +
+			"inert_attributes: [home-directory, cisco-av-pair]}\n",
+			"platforms.cisco_nxos.inert_attributes: cisco-av-pair bears privilege in a platform set port49 ships"},
+		{"a role demoted to inert where no level renders it", "  arista_eos: {privilege_attributes: [priv-lvl], " +
+			"inert_attributes: [home-directory, roles], privilege: {readonly: [priv-lvl=1], operator: [priv-lvl=15], " +
+			"admin: [priv-lvl=15]}}\n",
+			"platforms.arista_eos.inert_attributes: roles bears privilege in a platform set port49 ships"},
+		{"a new platform listing a set's privilege attribute inert", "  x: {inert_attributes: [home-directory, shell:roles]}\n",
+			"platforms.x.inert_attributes: shell:roles bears privilege"},
+		{"a set's privilege attribute dropped", "  cisco_nxos: {privilege_attributes: [priv-lvl, shell:roles]}\n",
+			"platforms.cisco_nxos.privilege_attributes: cisco-av-pair is missing"},
+		{"accepted_attributes widened", "  cisco_iosxe: {accepted_attributes: [priv-lvl, roles]}\n",
+			"platforms.cisco_iosxe.accepted_attributes: roles is not in platform set 1.0.0's"},
+		{"accepted_attributes widened on a variant", "  wb: {based_on: cisco_iosxe, accepted_attributes: [priv-lvl, roles]}\n",
+			"platforms.wb.accepted_attributes: roles is not in platform set 1.0.0's"},
+		{"accepted_attributes dropped by replace", "  cisco_iosxe: {replace: true, supports: [session, commands], " +
+			"privilege: {readonly: [priv-lvl=1], operator: [priv-lvl=7], admin: [priv-lvl=15]}}\n",
+			"platforms.cisco_iosxe.accepted_attributes: platform set 1.0.0 lists what cisco_iosxe takes"},
+		{"a capability the set did not measure", "  juniper_junos: {supports: [session, commands]}\n",
+			"platforms.juniper_junos.supports: commands is not"},
+		{"pipe_authorized claimed", "  arista_eos: {pipe_authorized: true}\n",
+			"platforms.arista_eos.pipe_authorized: platform set 1.0.0 measured false"},
+		{"expands_abbreviations claimed", "  juniper_junos: {expands_abbreviations: true}\n",
+			"platforms.juniper_junos.expands_abbreviations: platform set 1.0.0 measured false"},
+		{"splits_interface_names dropped", "  cisco_iosxe: {splits_interface_names: false}\n",
+			"platforms.cisco_iosxe.splits_interface_names: platform set 1.0.0 measured true"},
+		{"strip_cr dropped", "  cisco_iosxe: {strip_cr: false}\n",
+			"platforms.cisco_iosxe.strip_cr: platform set 1.0.0 measured true"},
 		{"the set's role_order reversed under replace", "  cisco_nxos: {replace: true, role_order: {shell:roles: [network-admin, network-operator]}}\n",
 			"platforms.cisco_nxos.role_order.shell:roles: network-operator is ranked above network-admin"},
 	} {
@@ -183,6 +217,19 @@ func TestAPlatformBlockMayRankNewRoles(t *testing.T) {
 	}
 	if r, ok := p.Dialect("f5_bigip").RoleRank("F5-LTM-User-Role", "admin"); !ok || r != 1 {
 		t.Fatalf("f5: %d %v", r, ok)
+	}
+}
+
+// A block tightens what the set measured and may say anything the set is
+// silent on: a new platform lists inert a name no set calls privileged.
+func TestAPlatformBlockMayTightenTheSet(t *testing.T) {
+	body := "platforms:\n  cisco_iosxe:\n    accepted_attributes: [priv-lvl]\n    strip_cr: true\n" +
+		"  arista_eos:\n    supports: [session]\n    privilege_attributes: [priv-lvl, roles, idletime]\n" +
+		"  juniper_junos:\n    expands_abbreviations: false\n" +
+		"  x:\n    inert_attributes: [home-directory, idletime]\n" + scopeOK + roleOK + subjOK + grantOK
+	p := mustParse(t, body)
+	if !p.Dialect("x").BearsPrivilege("roles") || p.Dialect("x").BearsPrivilege("idletime") {
+		t.Fatalf("x: %+v", p.Dialect("x"))
 	}
 }
 
