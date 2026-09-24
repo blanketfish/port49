@@ -357,7 +357,11 @@ func (c *comparison) principals(now time.Time) {
 		who := "subject:" + r.Test.Subject
 		if r.Test.Principal != "" {
 			who = "principal:" + r.Test.Principal
-			tested[r.Test.Principal] = true
+			// A test asserting API rights alone needs no mint, so it says
+			// nothing about the access a principal holds.
+			if !r.Test.onlyAPI() {
+				tested[r.Test.Principal] = true
+			}
 		}
 		if r.Test.AssertsAPI {
 			apiTested[who] = true

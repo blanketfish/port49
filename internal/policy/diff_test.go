@@ -737,3 +737,14 @@ func TestTheGateComparesAPIRights(t *testing.T) {
 		t.Fatalf("one asserting them does: %d", n)
 	}
 }
+
+// An api:-only principal test needs no mint, so it proves nothing about the
+// access an identity move hands over, and does not acknowledge one (review
+// M7).
+func TestAnAPIOnlyTestDoesNotAcknowledgeAnIdentityMove(t *testing.T) {
+	mallory := strings.Replace(diffBase, "user:noc@example.com", "user:mallory@example.com", 1) +
+		"tests:\n  - {principal: \"user:mallory@example.com\", device: leaf-01, api: []}\n"
+	if n := Compare(mustParse(t, diffBase), mustParse(t, mallory), noon).UnacknowledgedPrincipals(); n != 1 {
+		t.Fatalf("an api:-only test acknowledged the move: %d unacknowledged", n)
+	}
+}
