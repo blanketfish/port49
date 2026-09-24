@@ -108,6 +108,10 @@ type matchValue struct {
 func (m *matchValue) UnmarshalYAML(n *yaml.Node) error {
 	switch n.Kind {
 	case yaml.ScalarNode:
+		// A null would otherwise match the literal string "null".
+		if n.ShortTag() == "!!null" {
+			return fmt.Errorf("line %d: a match value is a string, a list or a comparison, not null", n.Line)
+		}
 		m.Equal = []string{n.Value}
 	case yaml.SequenceNode:
 		if err := n.Decode(&m.Equal); err != nil {

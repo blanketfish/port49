@@ -156,7 +156,8 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"an identity in no form", roleOK + "subjects:\n  - {name: s, identity: [\"alice\"], username: a, token_ttl: 60s}\n", "no recognized form"},
 		{"an upper-case identity", roleOK + "subjects:\n  - {name: s, identity: [\"user:Alice@Example.com\"], username: a, token_ttl: 60s}\n", `write "user:alice@example.com"`},
 		{"one identity, two subjects", roleOK + subjOK + "  - {name: t, identity: [\"user:a@example.com\"], username: b, token_ttl: 60s}\n", "listed by both"},
-		{"a machine without a username", roleOK + "subjects:\n  - {name: s, identity: \"app:ci\", token_ttl: 60s}\n", "username is required"},
+		{"a machine without a username", scopeOK + roleOK + "subjects:\n  - {name: s, identity: \"app:ci\", token_ttl: 60s}\n" + grantOK, "username is required"},
+		{"a minting subject with no token_ttl", scopeOK + roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a}\n" + grantOK, "token_ttl is required"},
 		{"a non-canonical username", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: 'CORP\\alice', token_ttl: 60s}\n", "already canonical"},
 		{"a shared username", roleOK + subjOK + "  - {name: t, identity: [\"user:b@example.com\"], username: a, token_ttl: 60s}\n", "unique across"},
 		{"enable nonsense", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, enable: maybe, token_ttl: 60s}\n", "none, auto or token"},
@@ -172,6 +173,15 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a test with both", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, principal: p, device: leaf-01, command: x, expect: permit}\n", "one of the two"},
 		{"a test on no device", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: nowhere, command: x, expect: permit}\n", "not in the inventory"},
 		{"a test expecting maybe", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: x, expect: maybe}\n", "permit or deny"},
+		{"a test principal in no form", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {principal: alice, device: leaf-01, command: x, expect: deny}\n", "no recognized form"},
+		{"an upper-case test principal", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {principal: \"user:A@example.com\", device: leaf-01, command: x, expect: deny}\n", `write "user:a@example.com"`},
+		{"a test reason outside spec §5.7", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: deny, reason: no_grant_matched}\n", "not a reason"},
+		{"a test error names its row", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: maybe}\n", `tests[0] (subject s, device leaf-01, "reload"): `},
+		{"a grant error names its row", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [x]}\n", `grants[0] (subject s, scope all_devices): role "x"`},
+		{"a role twice in one grant", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r, r]}\n", "listed twice"},
+		{"a null match value", "scopes:\n  - {name: x, match: {site: null}}\n" + subjOK, "a match value is a string"},
+		{"an unnamed role's max_session_age", "roles:\n  - {max_session_age: 8h}\n" + subjOK, "roles[0]: max_session_age"},
+		{"a level ordered before its parent", "privilege_levels: [{name: readonly}, {name: x, parent: operator}, {name: operator}, {name: admin}]\n" + subjOK, "after its parent"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Parse([]byte(tt.yaml), env())
@@ -184,6 +194,47 @@ func TestLoadRefusesByName(t *testing.T) {
 
 // Declaring privilege_levels replaces the ordering, and a custom level may
 // hang off a reserved one (spec §6).
+// Spec §2's own example loads: a subject no grant names mints nothing, so it
+// needs neither a username nor a token_ttl.
+func TestSpecSection2ExamplesLoad(t *testing.T) {
+	p := mustParse(t, `
+subjects:
+  - name: netops_oncall
+    group: NetOps-OnCall
+    api: [revoke_others, explain_others]
+  - name: ci_policy_bot
+    identity: ["app:port49-ci"]
+    api: [sync, replay]
+`)
+	if s, _ := p.Subject("ci_policy_bot"); s.Domain != "machines" || len(s.API) != 2 {
+		t.Fatalf("ci_policy_bot: %+v", s)
+	}
+}
+
+// A test's reason is one of spec §5.7's.
+func TestATestReasonFromTheVocabularyLoads(t *testing.T) {
+	p := mustParse(t, scopeOK+roleOK+subjOK+grantOK+
+		"tests:\n  - {subject: s, device: leaf-01, command: reload, expect: permit, reason: permit_dominates}\n")
+	if got := p.Tests()[0].Reason; got != "permit_dominates" {
+		t.Fatalf("reason %q", got)
+	}
+}
+
+// The rank lint catches the usual spellings of `*` and of a word, and leaves
+// alone a regex that constrains something a simpler term cannot say.
+func TestRankLint(t *testing.T) {
+	for body, want := range map[string]bool{
+		`^.*$`: true, `.*`: true, `.+`: true, `^.+$`: true, `(.*)`: true, `^(.*)$`: true,
+		`^show$`: true, `^(show)$`: true, `^[s]how$`: true, `(^show$)`: true,
+		`^sh(ow|ut)$`: false, `(?-i)^show$`: false, `^[st]how$`: false, `eth[0-9]+`: false, `^show`: false,
+		`^tftp:`: false,
+	} {
+		if _, got := rankLint(body); got != want {
+			t.Errorf("rankLint(%q) = %v, want %v", body, got, want)
+		}
+	}
+}
+
 func TestCustomLevelsReplaceTheOrdering(t *testing.T) {
 	p := mustParse(t, `
 privilege_levels:

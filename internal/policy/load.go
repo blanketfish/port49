@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/token"
@@ -161,7 +162,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	}
 	p := &Policy{Bundle: engine.HashOf(raw), env: env}
 	for _, step := range []func(file) error{p.buildLevels, p.buildRoles, p.buildScopes, p.buildSubjects,
-		p.buildGrants, p.buildTests} {
+		p.buildGrants, p.checkMinters, p.buildTests} {
 		if err := step(f); err != nil {
 			return nil, err
 		}
@@ -196,10 +197,14 @@ func refusedKeys(raw []byte) error {
 	case loose.Platforms != nil:
 		return errors.New("platforms: user platform definitions are plan 5's; the built-in adapters apply")
 	}
-	for _, r := range loose.Roles {
+	for i, r := range loose.Roles {
 		if _, ok := r["max_session_age"]; ok {
-			return fmt.Errorf("role %v: max_session_age per role is plan 7's; session.max_session_age_default "+
-				"in port49d.yaml applies to every role until then", r["name"])
+			role := fmt.Sprintf("roles[%d]", i)
+			if name, ok := r["name"].(string); ok && name != "" {
+				role = fmt.Sprintf("role %q", name)
+			}
+			return fmt.Errorf("%s: max_session_age per role is plan 7's; session.max_session_age_default "+
+				"in port49d.yaml applies to every role until then", role)
 		}
 	}
 	return nil
@@ -245,6 +250,15 @@ func (p *Policy) buildLevels(f file) error {
 			if hops++; hops > len(p.levels) {
 				return fmt.Errorf("privilege level %q: its parent chain is a cycle", name)
 			}
+		}
+	}
+	// A child ordered below its parent renders higher than levels the
+	// max-join ranks above it, so the join stops being monotone in what it
+	// renders (spec §6).
+	for name, parent := range p.parents {
+		if slices.Index(p.levels, name) < slices.Index(p.levels, parent) {
+			return fmt.Errorf("privilege level %q must be listed after its parent %q in privilege_levels (spec §6)",
+				name, parent)
 		}
 	}
 	return nil
@@ -366,6 +380,9 @@ func (p *Policy) buildScopes(f file) error {
 			if key == "" {
 				return fmt.Errorf("scope %q: a match key is empty", s.Name)
 			}
+			if v.Equal == nil && v.Cmp == nil {
+				return fmt.Errorf("scope %q: match.%s: a match value is a string, a list or a comparison", s.Name, key)
+			}
 			for op, bound := range v.Cmp {
 				if op == "re" {
 					re, err := regexp.Compile(bound)
@@ -485,14 +502,9 @@ func (p *Policy) buildSubjects(f file) error {
 			}
 			p.byID[id] = s.Name
 		}
-		if len(s.Identity) > 0 {
-			// A machine has no directory entry, so it declares its username
-			// (spec §2). A literal human identity declares one too until plan 7
-			// derives it through the certificate-to-directory mapping.
-			if s.Username == "" {
-				return fmt.Errorf("subject %q: username is required: an identity-list subject has no directory to "+
-					"derive one from (spec §2; §14, \"Username resolution\")", s.Name)
-			}
+		// Whether a username is required depends on whether a grant names the
+		// subject, which checkMinters settles once the grants are read.
+		if len(s.Identity) > 0 && s.Username != "" {
 			if !token.CanonicalUsername(s.Username) {
 				return fmt.Errorf("subject %q: username %q must be printable ASCII and already canonical — lower "+
 					"case, no DOMAIN\\ prefix, no @suffix — because the daemon looks tokens up by the canonical form "+
@@ -511,7 +523,7 @@ func (p *Policy) buildSubjects(f file) error {
 		default:
 			return fmt.Errorf("subject %q: enable %q: it must be none, auto or token (spec §7)", s.Name, s.Enable)
 		}
-		if s.TokenTTL < minTokenTTL || s.TokenTTL > maxTokenTTL {
+		if s.TokenTTL != 0 && (s.TokenTTL < minTokenTTL || s.TokenTTL > maxTokenTTL) {
 			return fmt.Errorf("subject %q: token_ttl must be between %s and %s (design §8); got %s",
 				s.Name, minTokenTTL, maxTokenTTL, s.TokenTTL)
 		}
@@ -538,30 +550,36 @@ func parseExpires(s string) (time.Time, error) {
 
 func (p *Policy) buildGrants(f file) error {
 	for i, g := range f.Grants {
+		// Grants have no name, and an index alone means counting rows by hand
+		// in a file of hundreds; the row names what it grants.
+		row := fmt.Sprintf("grants[%d] (subject %s, scope %s)", i, g.Subject, g.Scope)
 		if _, ok := p.subs[g.Subject]; !ok {
-			return fmt.Errorf("grants[%d]: subject %q is not declared", i, g.Subject)
+			return fmt.Errorf("%s: subject %q is not declared", row, g.Subject)
 		}
 		if _, ok := p.scopes[g.Scope]; !ok {
 			if g.Scope == "all_devices" {
-				return fmt.Errorf("grants[%d]: scope all_devices is not declared; it is an ordinary scope since "+
-					"plan 4 (spec §5.5) — add `scopes: [{name: all_devices, match: {}}]`", i)
+				return fmt.Errorf("%s: scope all_devices is not declared; it is an ordinary scope since "+
+					"plan 4 (spec §5.5) — add `scopes: [{name: all_devices, match: {}}]`", row)
 			}
-			return fmt.Errorf("grants[%d]: scope %q is not declared", i, g.Scope)
+			return fmt.Errorf("%s: scope %q is not declared", row, g.Scope)
 		}
 		if len(g.Roles) == 0 {
-			return fmt.Errorf("grants[%d]: a grant needs at least one role", i)
+			return fmt.Errorf("%s: a grant needs at least one role", row)
 		}
-		for _, r := range g.Roles {
+		for j, r := range g.Roles {
 			if _, ok := p.roles[r]; !ok {
-				return fmt.Errorf("grants[%d]: role %q is not declared", i, r)
+				return fmt.Errorf("%s: role %q is not declared", row, r)
+			}
+			if slices.Contains(g.Roles[:j], r) {
+				return fmt.Errorf("%s: role %q is listed twice; list it once", row, r)
 			}
 		}
 		if err := p.checkLevel(g.MaxPrivilege); err != nil {
-			return fmt.Errorf("grants[%d]: max_privilege: %w", i, err)
+			return fmt.Errorf("%s: max_privilege: %w", row, err)
 		}
 		if g.MaxPrivilege != "" && !p.numberedAnywhere(g.MaxPrivilege) {
-			return fmt.Errorf("grants[%d]: max_privilege %s has no priv-lvl number on any platform, so no token "+
-				"could carry it; use a level a platform numbers (spec §5.3, §6)", i, g.MaxPrivilege)
+			return fmt.Errorf("%s: max_privilege %s has no priv-lvl number on any platform, so no token "+
+				"could carry it; use a level a platform numbers (spec §5.3, §6)", row, g.MaxPrivilege)
 		}
 		// A deny reaches a scope through a grant as surely as through
 		// attached_roles, and a broken sync that drops the device from the
@@ -569,9 +587,9 @@ func (p *Policy) buildGrants(f file) error {
 		if sc := p.scopes[g.Scope]; len(sc.Match) > 0 && !sc.onMissingDeclared {
 			for _, r := range g.Roles {
 				if len(p.roles[r].Deny) > 0 {
-					return fmt.Errorf("grants[%d]: role %q carries a deny onto scope %q: declare on_missing on the "+
+					return fmt.Errorf("%s: role %q carries a deny onto scope %q: declare on_missing on the "+
 						"scope (include assumes a device with no data for the match is affected, the safe direction "+
-						"for a mitigation; exclude says the grant must be earned by data; spec §5.5)", i, r, g.Scope)
+						"for a mitigation; exclude says the grant must be earned by data; spec §5.5)", row, r, g.Scope)
 				}
 			}
 		}
@@ -584,34 +602,70 @@ func (p *Policy) buildGrants(f file) error {
 		if g.Expires != "" {
 			t, err := parseExpires(g.Expires)
 			if err != nil {
-				return fmt.Errorf("grants[%d]: expires %q: a date (2026-12-01) or an RFC 3339 time", i, g.Expires)
+				return fmt.Errorf("%s: expires %q: a date (2026-12-01) or an RFC 3339 time", row, g.Expires)
 			}
 			grant.Expires = t
 		}
 		if err := p.checkAttributes(g.Attributes); err != nil {
-			return fmt.Errorf("grants[%d]: %w", i, err)
+			return fmt.Errorf("%s: %w", row, err)
 		}
 		p.grants = append(p.grants, grant)
 	}
 	return nil
 }
 
+// checkMinters requires what minting needs of every subject a grant names: a
+// username for an identity-list subject, which has no directory to derive one
+// from, and a token_ttl. A subject no grant names mints nothing — spec §2's
+// API-only subjects — and needs neither.
+func (p *Policy) checkMinters(file) error {
+	for _, g := range p.grants {
+		s := p.subs[g.Subject]
+		if len(s.Identity) > 0 && s.Username == "" {
+			// A machine has no directory entry, so it declares its username
+			// (spec §2). A literal human identity declares one too until plan 7
+			// derives it through the certificate-to-directory mapping.
+			return fmt.Errorf("subject %q: username is required: a grant names it, and an identity-list subject "+
+				"has no directory to derive one from (spec §2; §14, \"Username resolution\")", s.Name)
+		}
+		if s.TokenTTL == 0 {
+			return fmt.Errorf("subject %q: token_ttl is required: a grant names it, so it mints device tokens, "+
+				"which live %s to %s (design §8)", s.Name, minTokenTTL, maxTokenTTL)
+		}
+	}
+	return nil
+}
+
 func (p *Policy) buildTests(f file) error {
 	for i, t := range f.Tests {
+		who := "subject " + t.Subject
+		if t.Subject == "" {
+			who = "principal " + t.Principal
+		}
+		row := fmt.Sprintf("tests[%d] (%s, device %s, %q)", i, who, t.Device, t.Command)
 		switch {
 		case (t.Subject == "") == (t.Principal == ""):
-			return fmt.Errorf("tests[%d]: name a subject or a principal, one of the two", i)
+			return fmt.Errorf("%s: name a subject or a principal, one of the two", row)
 		case t.Subject != "" && p.subs[t.Subject] == nil:
-			return fmt.Errorf("tests[%d]: subject %q is not declared", i, t.Subject)
+			return fmt.Errorf("%s: subject %q is not declared", row, t.Subject)
 		case t.Device == "":
-			return fmt.Errorf("tests[%d]: device is required", i)
+			return fmt.Errorf("%s: device is required", row)
 		case strings.TrimSpace(t.Command) == "":
-			return fmt.Errorf("tests[%d]: command is required", i)
+			return fmt.Errorf("%s: command is required", row)
 		case t.Expect != "permit" && t.Expect != "deny":
-			return fmt.Errorf("tests[%d]: expect is permit or deny, not %q", i, t.Expect)
+			return fmt.Errorf("%s: expect is permit or deny, not %q", row, t.Expect)
+		case t.Reason != "" && !decision.Known(decision.Reason(t.Reason)):
+			return fmt.Errorf("%s: %q is not a reason in spec §5.7's vocabulary", row, t.Reason)
+		}
+		// A principal no verifier could produce resolves to no subject, and
+		// an `expect: deny` test on it passes without testing anything.
+		if t.Principal != "" {
+			if _, err := identityDomain(t.Principal); err != nil {
+				return fmt.Errorf("%s: principal: %w", row, err)
+			}
 		}
 		if _, ok := p.device(t.Device); !ok {
-			return fmt.Errorf("tests[%d]: device %q is not in the inventory", i, t.Device)
+			return fmt.Errorf("%s: device %q is not in the inventory", row, t.Device)
 		}
 		p.tests = append(p.tests, Test(t))
 	}

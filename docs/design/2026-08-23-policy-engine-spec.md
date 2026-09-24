@@ -1978,7 +1978,9 @@ privilege_levels:
 `parent:` is the escape hatch that makes custom levels practical. A new level would
 otherwise need a mapping for every platform in the fleet; `parent: operator` says *render as
 `operator` on any platform that does not define this level explicitly*, resolved
-transitively up the chain.
+transitively up the chain. A level with `parent:` MUST be listed after its parent in
+`privilege_levels`. If a level were ordered before the level it renders as, the max-join could pick
+a level that renders lower than one it passed over, so doing so is a policy load error.
 
 This also turns an existing wart into declared behavior. NX-OS is role-native with two
 built-in roles, so `readonly` and `operator` render identically there — with `parent:` that
