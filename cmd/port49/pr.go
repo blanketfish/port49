@@ -61,7 +61,8 @@ var openPR = func(dir, branch, base, title, body string) (string, error) {
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("gh pr create: %v: %s", err, withoutCredentials(strings.TrimSpace(errb.String())))
+		return "", errors.New(withoutCredentials(fmt.Sprintf("gh pr create: %v: %s", err,
+			strings.TrimSpace(errb.String()))))
 	}
 	return strings.TrimSpace(out.String()), nil
 }
