@@ -4143,10 +4143,13 @@ to that list. The gated keys therefore include:
 - `enable_username`, `shows_server_msg`, and `redact`, which changes what the audit keeps.
 - `local_accounts` and `config_checks`: an edit to either can silence `devices check-config`,
   which is the only detection §5.6 names.
+- `device_config`: it is the configuration a device is held to, so a block that rewrites a line
+  ending in `local` to end in `none` has the device authorize every command itself whenever
+  port49 is unreachable, and would have check-config require the unsafe line (task 7 review H6,
+  2026-09-24).
 
 The report-only keys are reported and never fail:
 
-- `device_config`: text that `platform show` prints. It decides nothing.
 - `port_pattern`: drift detection only.
 - `verified`: the adapter's claim about the lab. A block may not set it.
 - `unreachable` and `fallback`: they feed only the dead-rule and fallback-exposure reports,
