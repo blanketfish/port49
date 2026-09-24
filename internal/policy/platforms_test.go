@@ -389,40 +389,83 @@ func TestReachCountsOnlyTheSubjectsAChangeTouches(t *testing.T) {
 	}
 }
 
-// A pin move changes the generic adapter too, which a platform the set does
-// not ship stands on: a block over it that keeps its own value hides the
-// change and is named for it, and the diff gates the keys the block leaves to
-// the generic adapter on a platform the inventory has.
-func TestAPinMoveComparesTheGenericAdapter(t *testing.T) {
+// A pin move changes the generic adapter too, which every device of a
+// platform with no adapter receives: the diff gates each of its keys that
+// moves, as platform generic, whether or not the inventory has such a device
+// yet (owner's ruling 2026-09-24); a block over it that keeps its own value
+// hides the change and is named for it; and the acknowledge: entries clear it.
+func TestAPinMoveGatesTheGenericAdapter(t *testing.T) {
 	first, _ := platform.Set("1.0.0")
 	g1, _ := platform.Generic("1.0.0")
 	g2, _ := platform.Generic("1.0.0")
 	g2.EntityClasses = map[string][]string{"management": {"^mgmt$"}}
 	g2.DeviceConfig = []string{"aaa authorization exec default group port49 local"}
-	e := withDevice("acme-01", "acme_os")
-	e.Sets = map[string]map[string]platform.Dialect{"1.0.0": first, "1.1.0": first}
-	e.Generics = map[string]platform.Dialect{"1.0.0": g1, "1.1.0": g2}
-	body := "platforms:\n  acme_os:\n    entity_classes: {management: ['^oob$']}\n" + scopeOK + roleOK + subjOK + grantOK
-	before, err := Parse([]byte("platform_set: 1.0.0\n"+body), e)
-	if err != nil {
-		t.Fatal(err)
+	g2.Supports = []string{"session", "commands"}
+	sets := map[string]map[string]platform.Dialect{"1.0.0": first, "1.1.0": first}
+	generics := map[string]platform.Dialect{"1.0.0": g1, "1.1.0": g2}
+	type change struct{ platform, field string }
+	for _, c := range []struct {
+		name  string
+		env   Env
+		block string
+		want  []change
+	}{
+		{"no device and no block", env(), "", []change{{"generic", "supports"}, {"generic", "entity_classes"},
+			{"generic", "device_config"}}},
+		{"a block over it", withDevice("acme-01", "acme_os"),
+			"platforms:\n  acme_os:\n    entity_classes: {management: ['^oob$']}\n",
+			[]change{{"acme_os", "supports"}, {"acme_os", "device_config"}, {"generic", "supports"},
+				{"generic", "entity_classes"}, {"generic", "device_config"}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := c.env
+			e.Sets, e.Generics = sets, generics
+			body := c.block + scopeOK + roleOK + subjOK + grantOK
+			before, err := Parse([]byte("platform_set: 1.0.0\n"+body), e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			moved, _ := SetPlatformSet([]byte("platform_set: 1.0.0\n"+body), "1.1.0")
+			after, err := Parse(moved, e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := Compare(before, after, noon)
+			var got []change
+			acks := "acknowledge:\n"
+			for _, a := range d.Adapters {
+				if !a.Gated || a.Acknowledged {
+					t.Fatalf("every change is gated and unacknowledged: %+v", a)
+				}
+				got = append(got, change{a.Platform, a.Field})
+				acks += fmt.Sprintf("  - {platform: %s, field: %s, sha256: %s, reason: set 1.1.0}\n", a.Platform,
+					a.Field, a.Sha256)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("changes %v, want %v", got, c.want)
+			}
+			acked, err := Parse(append(moved, acks...), e)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d := Compare(before, acked, noon); d.UnacknowledgedAdapters() != 0 || len(d.StaleAcknowledgments) != 0 {
+				t.Fatalf("acknowledged: %+v stale %+v", d.Adapters, d.StaleAcknowledgments)
+			}
+			if c.block == "" {
+				return
+			}
+			if got := after.ShadowedBuiltIns("1.0.0"); !reflect.DeepEqual(got,
+				[]string{"platforms.acme_os.entity_classes"}) {
+				t.Fatalf("shadowed: %q", got)
+			}
+			if devices, subjects := before.Reach("generic", noon); devices != 1 || subjects != 1 {
+				t.Fatalf("the generic adapter reaches acme-01: %d devices, %d subjects", devices, subjects)
+			}
+		})
 	}
-	moved, _ := SetPlatformSet([]byte("platform_set: 1.0.0\n"+body), "1.1.0")
-	after, err := Parse(moved, e)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := after.ShadowedBuiltIns("1.0.0"); !reflect.DeepEqual(got, []string{"platforms.acme_os.entity_classes"}) {
-		t.Fatalf("shadowed: %q", got)
-	}
-	if got := after.GenericChanges("1.0.0"); !reflect.DeepEqual(got, []string{"generic.entity_classes",
-		"generic.device_config"}) {
-		t.Fatalf("generic: %q", got)
-	}
-	d := Compare(before, after, noon)
-	if len(d.Adapters) != 1 || d.Adapters[0].Platform != "acme_os" || d.Adapters[0].Field != "device_config" ||
-		!d.Adapters[0].Gated {
-		t.Fatalf("acme_os's device_config comes from the generic adapter and is gated: %+v", d.Adapters)
+	if _, err := Parse([]byte("platforms:\n  generic: {}\n"+scopeOK+roleOK+subjOK+grantOK), env()); err == nil ||
+		!strings.Contains(err.Error(), "generic is reserved") {
+		t.Fatalf("a block named generic: %v", err)
 	}
 }
 

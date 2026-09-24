@@ -150,10 +150,10 @@ func TestPlatformUpgradeMovesThePin(t *testing.T) {
 	}
 }
 
-// The upgrade report prints, for a gated key the move changes, the
-// acknowledge: entry that clears it, bound to the new value's sha256; pasted
-// into the moved file, it acknowledges the move. This build ships one set, so
-// the environment stands up a second.
+// The upgrade report prints, for a gated key the move changes, the generic
+// adapter's included, the acknowledge: entry that clears it, bound to the new
+// value's sha256; pasted into the moved file, it acknowledges the move. This
+// build ships one set, so the environment stands up a second.
 func TestTheUpgradeReportPrintsPasteReadyAcknowledgments(t *testing.T) {
 	pol, inv := policyFixture(t)
 	devices, err := admission.LoadFile(inv)
@@ -165,8 +165,11 @@ func TestTheUpgradeReportPrintsPasteReadyAcknowledgments(t *testing.T) {
 	eos := second["arista_eos"]
 	eos.DeviceConfig = append(eos.DeviceConfig, "aaa accounting exec default start-stop group port49")
 	second["arista_eos"] = eos
+	g1, _ := platform.Generic("1.0.0")
+	g2, _ := platform.Generic("1.0.0")
+	g2.StripCR = !g2.StripCR
 	e := policy.Env{Devices: devices.Devices, Sets: map[string]map[string]platform.Dialect{"1.0.0": first,
-		"1.1.0": second}}
+		"1.1.0": second}, Generics: map[string]platform.Dialect{"1.0.0": g1, "1.1.0": g2}}
 	raw := readFile(t, pol)
 	before, err := policy.Parse(raw, e)
 	if err != nil {
@@ -188,20 +191,24 @@ func TestTheUpgradeReportPrintsPasteReadyAcknowledgments(t *testing.T) {
 		sha256.Sum256(newValue))
 	for _, want := range []string{"platform_set 1.0.0 -> 1.1.0\n  platforms.arista_eos.device_config\n",
 		"    affects 1 devices, 2 subjects\n", "    gated: add " + entry + " under acknowledge:\n",
+		"  generic.strip_cr\n", "    affects 0 devices, 0 subjects\n",
+		"    gated: add {platform: generic, field: strip_cr, sha256: ",
 		"  port49 policy diff fails on the move until"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("missing %q:\n%s", want, out.String())
 		}
 	}
-	pasted := regexp.MustCompile(`add (\{.*\}) under acknowledge:`).FindStringSubmatch(out.String())[1]
-	acked, err := policy.Parse(append(moved, []byte("acknowledge:\n  - "+strings.Replace(pasted, "...",
-		"set 1.1.0 adds exec accounting", 1)+"\n")...), e)
+	acks := "acknowledge:\n"
+	for _, m := range regexp.MustCompile(`add (\{.*\}) under acknowledge:`).FindAllStringSubmatch(out.String(), -1) {
+		acks += "  - " + strings.Replace(m[1], "...", "set 1.1.0 adds exec accounting", 1) + "\n"
+	}
+	acked, err := policy.Parse(append(moved, acks...), e)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
 	upgradeReport(&out, before, acked, now)
-	if !strings.Contains(out.String(), "    gated, acknowledged: set 1.1.0 adds exec accounting\n") ||
+	if strings.Count(out.String(), "    gated, acknowledged: set 1.1.0 adds exec accounting\n") != 2 ||
 		strings.Contains(out.String(), "policy diff fails") {
 		t.Fatalf("%s", out.String())
 	}

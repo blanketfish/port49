@@ -248,15 +248,20 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 // each adapter key, with what it reaches and, where the gate reads it, the
 // acknowledge: entry that clears it, ready to paste (spec §12: the entry names
 // the new value's sha256, so it acknowledges this move and no later edit);
-// each key a block keeps over a built-in that moved; each key of the generic
-// adapter that moved.
+// each key a block keeps over a built-in that moved. The generic adapter's
+// keys are among the changes, gated like any platform's.
 func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
 	fmt.Fprintf(w, "platform_set %s -> %s\n", before.PlatformSet(), after.PlatformSet())
 	d := policy.Compare(before, after, now)
 	for _, a := range d.Adapters {
 		devices, subjects := before.Reach(a.Platform, now)
-		fmt.Fprintf(w, "  platforms.%s.%s\n    %s -> %s\n    affects %d devices, %d subjects\n", a.Platform, a.Field,
-			a.Old, a.New, devices, subjects)
+		key := "platforms." + a.Platform + "." + a.Field
+		if a.Platform == "generic" {
+			// What every device of a platform with no adapter receives.
+			key = "generic." + a.Field
+		}
+		fmt.Fprintf(w, "  %s\n    %s -> %s\n    affects %d devices, %d subjects\n", key, a.Old, a.New, devices,
+			subjects)
 		switch {
 		case !a.Gated:
 			fmt.Fprintln(w, "    reported")
@@ -270,10 +275,6 @@ func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
 	for _, key := range after.ShadowedBuiltIns(before.PlatformSet()) {
 		fmt.Fprintf(w, "  shadowed: %s: set %s changes the built-in value and the policy's block keeps its "+
 			"own; compare the two\n", key, after.PlatformSet())
-	}
-	for _, key := range after.GenericChanges(before.PlatformSet()) {
-		fmt.Fprintf(w, "  %s: set %s changes what a platform it does not ship gets; the first device of a "+
-			"platform no block names takes the new value unreviewed\n", key, after.PlatformSet())
 	}
 	if len(d.Adapters) == 0 {
 		fmt.Fprintln(w, "  no adapter the inventory uses changes")

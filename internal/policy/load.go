@@ -42,7 +42,8 @@ type Env struct {
 	Dialects map[string]platform.Dialect
 	// Sets and Generics replace the built-in platform sets and their generic
 	// adapters, by version, when Sets is non-nil: tests use them to stand up
-	// a second set, since this build ships one.
+	// a second set, since this build ships one. A set Generics leaves out
+	// has the unpinned set's generic adapter.
 	Sets     map[string]map[string]platform.Dialect
 	Generics map[string]platform.Dialect
 	// Now is the present the joint checks start from: a grant already expired
@@ -287,6 +288,11 @@ func (p *Policy) buildPlatforms(f file) error {
 			// of either name would be read as the other.
 			return fmt.Errorf("%s: %s is reserved: attributes.all names every platform and the built-in redaction "+
 				"table's default list every unlisted one; name the platform as the inventory does", at, name)
+		case name == genericPlatform:
+			// An acknowledge: entry names the generic adapter as platform
+			// generic (§12), so a block of that name would be read as it.
+			return fmt.Errorf("%s: generic is reserved: it names the generic adapter a platform with no adapter "+
+				"gets, which a set ships and a block does not change; name the platform as the inventory does", at)
 		case b.Verified != nil:
 			return fmt.Errorf("%s: verified is port49's own claim about its lab (spec §8); an adapter written "+
 				"here is unverified until it is contributed and measured, so remove the key", at)
@@ -451,6 +457,10 @@ func mapKeys[V any](m *map[string]V) []string {
 	return sortedKeys(*m)
 }
 
+// genericPlatform is the name the diff and an acknowledge: entry give the
+// generic adapter (spec §12).
+const genericPlatform = "generic"
+
 // builtinSet is a built-in platform set by version, copied: the environment's
 // where it gives sets, the binary's otherwise.
 func (p *Policy) builtinSet(version string) (map[string]platform.Dialect, bool) {
@@ -469,13 +479,20 @@ func (p *Policy) builtinSet(version string) (map[string]platform.Dialect, bool) 
 }
 
 // builtinGeneric is a set's generic adapter by version: the environment's
-// where it gives sets (the binary's where it gives no generic for the
-// version), the binary's otherwise.
+// where it gives sets, and there the unpinned set's where it gives no generic
+// for the version, so a test's second set changes the generic adapter only
+// where it says so; the binary's otherwise.
 func (p *Policy) builtinGeneric(version string) (platform.Dialect, bool) {
-	if d, ok := p.env.Generics[version]; ok && p.env.Sets != nil {
+	if p.env.Sets == nil {
+		return platform.Generic(version)
+	}
+	if d, ok := p.env.Generics[version]; ok {
 		return d, true
 	}
-	return platform.Generic(version)
+	if _, ok := p.env.Sets[version]; !ok {
+		return platform.Dialect{}, false
+	}
+	return platform.Generic(platform.UnpinnedSet)
 }
 
 // platformNameShape is how an inventory writes a platform.

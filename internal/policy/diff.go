@@ -1088,6 +1088,11 @@ func (c *comparison) adapters() {
 			platforms[name] = true
 		}
 	}
+	// The generic adapter is what every device of a platform with no adapter
+	// receives, the first device of one the inventory does not yet have
+	// included, so a moved pin that changes it is gated like any adapter
+	// (owner's ruling 2026-09-24, task 13).
+	platforms[genericPlatform] = true
 	keys := platform.SpecKeys()
 	for _, name := range sortedKeys(platforms) {
 		was := reflect.ValueOf(c.before.adapterSpec(name))
@@ -1115,14 +1120,15 @@ func (c *comparison) adapters() {
 
 // adapterSpec is the platform's effective adapter in this version as the diff
 // compares it. Where the version has no adapter for the name, supports is
-// unset: the generic adapter's `session` is assumed, not measured, and an
+// unset (save on the generic adapter itself, compared whole): the generic
+// adapter's `session` is assumed, not measured, and an
 // unmeasured platform is not treated as session-only (normalizeFor). So a
 // block equal to the generic adapter still shows as an edit to supports, the
 // key that makes the platform session-only and turns off abbreviation
 // matching on its denies (task 9 review I2).
 func (p *Policy) adapterSpec(name string) platform.Spec {
 	s := platform.SpecOf(p.dialect(name))
-	if _, known := p.platforms()[name]; !known {
+	if _, known := p.platforms()[name]; !known && name != genericPlatform {
 		s.Supports = nil
 	}
 	return s

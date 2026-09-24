@@ -378,27 +378,6 @@ func (p *Policy) ShadowedBuiltIns(from string) []string {
 	return out
 }
 
-// GenericChanges names every key of the generic adapter that differs between
-// set from and the policy's own set, as `generic.<key>`. The diff compares
-// the generic adapter only on a platform the inventory has or a block names,
-// so a move that changes it reaches an unmodeled platform's first device
-// unreviewed; `port49 platform upgrade` says so (task 9 review M2).
-func (p *Policy) GenericChanges(from string) []string {
-	was, ok1 := p.builtinGeneric(from)
-	is, ok2 := p.builtinGeneric(p.set)
-	if !ok1 || !ok2 {
-		return nil
-	}
-	var out []string
-	old, now := reflect.ValueOf(platform.SpecOf(was)), reflect.ValueOf(platform.SpecOf(is))
-	for i, key := range platform.SpecKeys() {
-		if !reflect.DeepEqual(old.Field(i).Interface(), now.Field(i).Interface()) {
-			out = append(out, "generic."+key)
-		}
-	}
-	return out
-}
-
 // baseUnder is the adapter set version gives the block for name to merge
 // over, as buildPlatforms picks it.
 func (p *Policy) baseUnder(name string, b filePlatform, version string) (platform.Dialect, bool) {
@@ -418,11 +397,14 @@ func (p *Policy) baseUnder(name string, b filePlatform, version string) (platfor
 
 // Reach is how many devices of a platform the inventory has, and how many
 // subjects hold a grant on one of them at now: what a change to that
-// platform's adapter affects.
+// platform's adapter affects. The generic adapter's are the devices whose
+// adapter stands on it: a platform the policy has no adapter for, or one a
+// block adds or replaces.
 func (p *Policy) Reach(platformName string, now time.Time) (devices, subjects int) {
 	holds := map[string]bool{}
 	for _, d := range p.env.Devices {
-		if d.Platform != platformName {
+		if platformName == genericPlatform && !p.onGeneric(d.Platform) ||
+			platformName != genericPlatform && d.Platform != platformName {
 			continue
 		}
 		devices++
@@ -433,4 +415,19 @@ func (p *Policy) Reach(platformName string, now time.Time) (devices, subjects in
 		}
 	}
 	return devices, len(holds)
+}
+
+// onGeneric reports whether a platform's adapter is the generic one, or a
+// block merged over it.
+func (p *Policy) onGeneric(name string) bool {
+	if _, adapted := p.adapters[name]; !adapted {
+		return true
+	}
+	b, written := p.overrides[name]
+	if !written || b.BasedOn != "" {
+		return false
+	}
+	builtin, _ := p.builtinSet(p.set)
+	_, shipped := builtin[name]
+	return b.Replace || !shipped
 }
