@@ -181,11 +181,11 @@ grants: [{subject: s, scope: all_devices, roles: [adm], max_privilege: readonly}
 		t.Run(tt.name, func(t *testing.T) {
 			p := mustParse(t, tt.yaml)
 			var got []string
-			for _, q := range p.Quarantined() {
+			for _, q := range p.Quarantines(noon) {
 				got = append(got, q.Device)
-				if len(q.Causes) != 1 || !strings.Contains(q.Causes[0], tt.want) ||
-					!strings.Contains(q.Causes[0], `subject "s"`) || !strings.Contains(q.Causes[0], q.Platform) {
-					t.Errorf("%s: causes %q, want one naming subject s, %s and %q", q.Device, q.Causes, q.Platform, tt.want)
+				if len(causesOf(q)) != 1 || !strings.Contains(causesOf(q)[0], tt.want) ||
+					!strings.Contains(causesOf(q)[0], `subject "s"`) || !strings.Contains(causesOf(q)[0], q.Platform) {
+					t.Errorf("%s: causes %q, want one naming subject s, %s and %q", q.Device, causesOf(q), q.Platform, tt.want)
 				}
 			}
 			if strings.Join(got, ",") != strings.Join(tt.devices, ",") {
@@ -205,8 +205,8 @@ grants: [{subject: s, scope: all_devices, roles: [adm], max_privilege: readonly}
 scopes: [{name: eos, match: {platform: arista_eos}}]
 roles: [{name: tech, permit: [interface @physical]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: eos, roles: [tech]}]`); len(p.Quarantined()) != 0 {
-		t.Fatalf("quarantined %+v", p.Quarantined())
+grants: [{subject: s, scope: eos, roles: [tech]}]`); len(p.Quarantines(noon)) != 0 {
+		t.Fatalf("quarantined %+v", p.Quarantines(noon))
 	}
 	// A ceiling no platform can number is the policy's own error: no inventory
 	// could make it load, so it is refused rather than quarantining the fleet.
@@ -230,7 +230,7 @@ roles: [{name: ro, privilege: readonly, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, enable: auto, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	e := env()
-	if p, err := Parse([]byte(body), e); err != nil || len(p.Quarantined()) != 0 {
+	if p, err := Parse([]byte(body), e); err != nil || len(p.Quarantines(noon)) != 0 {
 		t.Fatalf("every shipped platform carries the principal: %v", err)
 	}
 	e.EnableUsernames = map[string]string{"arista_eos": platform.EnableEnab}
@@ -238,9 +238,9 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	if err != nil {
 		t.Fatal(err)
 	}
-	q := p.Quarantined()
+	q := p.Quarantines(noon)
 	if len(q) != 2 || q[0].Device != "campus-sw-7" || q[1].Device != "leaf-01" ||
-		!strings.Contains(q[0].Causes[0], "enable: auto reaches this device") {
+		!strings.Contains(causesOf(q[0])[0], "enable: auto reaches this device") {
 		t.Fatalf("quarantined %+v", q)
 	}
 }
@@ -254,8 +254,10 @@ func quarantinedAt(t *testing.T, body string, e Env) (*Policy, map[string][]stri
 		t.Fatal(err)
 	}
 	got := map[string][]string{}
-	for _, q := range p.Quarantined() {
-		got[q.Device] = q.Causes
+	for _, q := range p.Quarantines(noon) {
+		for _, e := range q.Entries {
+			got[q.Device] = append(got[q.Device], e.Message(noon))
+		}
 	}
 	return p, got
 }
@@ -279,11 +281,24 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`, e)
 	}
 }
 
+// causesOf is a quarantine's causes, in entry order.
+func causesOf(q Quarantine) []string {
+	var out []string
+	for _, e := range q.Entries {
+		out = append(out, e.Cause)
+	}
+	return out
+}
+
 // A composition changes when a grant expires, so the joint checks run again at
-// every later expiry: a device that fails once the admin grant lapses — the
-// operator level left has no EOS rendering, or a lower ceiling is left under
-// the landing level — is quarantined up front, naming when and why.
-func TestAnExpiryThatBreaksTheCompositionQuarantinesUpFront(t *testing.T) {
+// every later expiry. Quarantine is time-scoped: a device that will fail once
+// the admin grant lapses — the operator level left has no EOS rendering, or a
+// lower ceiling is left under the landing level — keeps working until then,
+// is scheduled for then, and says so; a load-time failure is quarantined from
+// load, whatever time is asked.
+func TestAnExpiryThatBreaksTheCompositionIsQuarantinedFromTheExpiry(t *testing.T) {
+	before, lapse := time.Date(2026, 9, 30, 23, 59, 59, 0, time.UTC), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	after, lastLapse := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	p, got := quarantinedAt(t, `
 scopes: [{name: all_devices, match: {}}, {name: dc, match: {site: dc1}}]
 roles:
@@ -291,20 +306,43 @@ roles:
   - {name: adm, privilege: admin, permit: ["**"]}
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
 grants:
-  - {subject: s, scope: all_devices, roles: [op]}
+  - {subject: s, scope: all_devices, roles: [op], expires: 2026-11-01}
   - {subject: s, scope: dc, roles: [adm], expires: 2026-10-01}`, env())
-	leaf := got["leaf-01"]
-	if len(got) != 2 || len(leaf) != 1 ||
-		!strings.Contains(leaf[0], "from 2026-10-01T00:00:00.000Z, when grant dc [adm] expires: ") ||
+	leaf, campus := got["leaf-01"], got["campus-sw-7"]
+	if len(got) != 2 || len(leaf) != 1 || len(campus) != 1 ||
+		!strings.HasPrefix(leaf[0], "will be quarantined from 2026-10-01T00:00:00.000Z, when grant dc [adm] expires: ") ||
 		!strings.Contains(leaf[0], "level operator has no rendering on arista_eos") ||
-		strings.Contains(got["campus-sw-7"][0], "expires") {
-		t.Fatalf("quarantined %q", got)
+		!strings.HasPrefix(campus[0], `quarantined: subject "s": level operator`) {
+		t.Fatalf("quarantines at noon: %q", got)
 	}
-	if _, err := p.Resolve("user:s@example.com", deviceNamed(t, "leaf-01"), noon); !errors.Is(err, ErrDeviceQuarantined) {
-		t.Fatalf("Resolve before the expiry: %v", err)
+	leaf01 := deviceNamed(t, "leaf-01")
+	for _, tt := range []struct {
+		at          time.Time
+		quarantined bool
+	}{{noon, false}, {before, false}, {lapse, true}, {after, true}, {lastLapse, false}} {
+		cause, ok := p.Quarantined("leaf-01", tt.at)
+		_, err := p.Resolve("user:s@example.com", leaf01, tt.at)
+		if ok != tt.quarantined || errors.Is(err, ErrDeviceQuarantined) != tt.quarantined {
+			t.Errorf("leaf-01 at %s: Quarantined = %q %v, Resolve = %v", tt.at, cause, ok, err)
+		}
+	}
+	if _, err := p.Resolve("user:s@example.com", leaf01, noon); err != nil {
+		t.Fatalf("access that works today keeps working: %v", err)
+	}
+	// Quarantined from load: the campus switch fails now, and still does at a
+	// time before the load's present; its span ends when the op grant does.
+	e := p.Quarantines(noon)[0].Entries[0]
+	if !e.From.Equal(noon) || e.Lapsing != "" || !e.Until.Equal(lastLapse) {
+		t.Fatalf("campus-sw-7's entry: %+v", e)
+	}
+	if _, ok := p.Quarantined("campus-sw-7", noon.Add(-time.Hour)); !ok {
+		t.Fatal("a load-time failure holds whatever time is asked")
+	}
+	if q := p.Quarantines(lastLapse); len(q) != 0 {
+		t.Fatalf("once every grant has lapsed nothing is quarantined: %+v", q)
 	}
 
-	_, got = quarantinedAt(t, `
+	p, got = quarantinedAt(t, `
 scopes: [{name: all_devices, match: {}}, {name: dc, match: {site: dc1}}]
 roles:
   - {name: adm, privilege: admin, permit: ["**"]}
@@ -314,9 +352,15 @@ grants:
   - {subject: s, scope: all_devices, roles: [adm], max_privilege: admin, expires: 2026-10-01}
   - {subject: s, scope: dc, roles: [adm2], max_privilege: readonly}`, env())
 	if len(got) != 1 || len(got["leaf-01"]) != 1 ||
-		!strings.Contains(got["leaf-01"][0], "from 2026-10-01T00:00:00.000Z, when grant all_devices [adm] expires: ") ||
+		!strings.HasPrefix(got["leaf-01"][0], "will be quarantined from 2026-10-01T00:00:00.000Z, when grant all_devices [adm] expires: ") ||
 		!strings.Contains(got["leaf-01"][0], "above its grants' max_privilege readonly") {
 		t.Fatalf("the lower ceiling left behind: %q", got)
+	}
+	if _, ok := p.Quarantined("leaf-01", noon); ok {
+		t.Fatal("not before the expiry")
+	}
+	if cause, ok := p.Quarantined("leaf-01", after); !ok || !strings.Contains(cause, "above its grants' max_privilege") {
+		t.Fatalf("after the expiry: %q %v", cause, ok)
 	}
 }
 
@@ -400,5 +444,23 @@ scopes: [{name: dc, match: {site: dc1}, on_missing: exclude}, {name: all_devices
 	bb, hb, err2 := engine.Encode(rb.Blob)
 	if err1 != nil || err2 != nil || ha != hb || string(ba) != string(bb) {
 		t.Fatalf("a shuffled file compiled to another blob:\n%s\n%s", ba, bb)
+	}
+}
+
+// A ceiling that numbers 0 wherever it numbers at all can pass no device's
+// check, so it is the policy's own error, like a class no platform defines.
+func TestACeilingNumberedOnlyZeroIsRefused(t *testing.T) {
+	e := env()
+	eos, _ := platform.DialectFor("arista_eos")
+	eos.Levels = map[string][]string{"readonly": {"priv-lvl=1"}, "admin": {"priv-lvl=15"}, "floor": {"priv-lvl=0"}}
+	e.Dialects = map[string]platform.Dialect{"arista_eos": eos}
+	if _, err := Parse([]byte(`
+privilege_levels: [{name: floor}, {name: readonly}, {name: operator}, {name: admin}]
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: floor, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: floor}]`), e); err == nil ||
+		!strings.Contains(err.Error(), "no priv-lvl number on any platform") {
+		t.Fatalf("Parse = %v", err)
 	}
 }

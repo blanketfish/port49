@@ -60,7 +60,7 @@ func spec11Raw(t *testing.T) []byte {
 // grant expires 2026-12-01.
 func TestTheCompletePolicyExamplePassesItsOwnTests(t *testing.T) {
 	p := spec11(t, spec11Raw(t))
-	if q := p.Quarantined(); len(q) != 0 {
+	if q := p.Quarantines(noon); len(q) != 0 {
 		t.Fatalf("§11 quarantines nothing on its own inventory: %+v", q)
 	}
 	results := p.RunTests(noon)

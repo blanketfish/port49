@@ -739,11 +739,12 @@ func (p *Policy) checkClasses(rule string) error {
 }
 
 // numberedAnywhere reports whether some platform gives level a priv-lvl
-// number, following the parent chain: a ceiling none can number is the
+// number above 0, following the parent chain: a ceiling none can number is the
 // policy's own error, like a class none defines.
 func (p *Policy) numberedAnywhere(level string) bool {
 	for _, d := range p.platforms() {
-		if _, ok := p.privLvl(d, level); ok {
+		// The token reads priv-lvl 0 as no ceiling (resolve), so 0 numbers nothing.
+		if n, ok := p.privLvl(d, level); ok && n > 0 {
 			return true
 		}
 	}

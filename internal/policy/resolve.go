@@ -64,7 +64,7 @@ func (p *Policy) Resolve(principal string, d admission.Device, now time.Time) (R
 	if !ok {
 		return Resolution{}, ErrNoGrants
 	}
-	if err := p.quarantined(d); err != nil {
+	if err := p.quarantined(d, now); err != nil {
 		return Resolution{}, err
 	}
 	return p.resolve(p.subs[name], d, now)
@@ -78,7 +78,7 @@ func (p *Policy) ResolveSubject(subject string, d admission.Device, now time.Tim
 	if !ok {
 		return Resolution{}, fmt.Errorf("policy: subject %q is not declared", subject)
 	}
-	if err := p.quarantined(d); err != nil {
+	if err := p.quarantined(d, now); err != nil {
 		return Resolution{}, err
 	}
 	return p.resolve(sub, d, now)
@@ -169,9 +169,12 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
 		b.Pipe = append(b.Pipe, rule)
 	}
 	sort.Strings(b.Pipe)
-	// Rules take Encode's canonical order too, so the blob explain and a test
+	// Rules take Encode's canonical form and order too, so the blob explain and a test
 	// read is the one the hash names, whatever order the file lists roles and
 	// rules in. Evaluation is order-independent (spec §5.4).
+	for i := range b.Rules {
+		b.Rules[i].Rule = engine.CanonicalRule(b.Rules[i].Rule)
+	}
 	slices.SortFunc(b.Rules, func(x, y engine.Rule) int {
 		return strings.Compare(x.Verdict+"\x00"+x.Rule+"\x00"+x.Role, y.Verdict+"\x00"+y.Rule+"\x00"+y.Role)
 	})
@@ -251,29 +254,80 @@ func (p *Policy) render(dialect platform.Dialect, level string) ([]string, strin
 // §13 decision 20). The wrapped message names the cause.
 var ErrDeviceQuarantined = errors.New("policy: the device is quarantined")
 
-// Quarantine is one device that failed a joint check at load, and every
-// cause: the subjects whose composition on it would not compile or would
-// contradict itself.
+// Quarantine is one device a joint check fails on, now or once a grant
+// expires, and every entry: which subject's composition fails, from when,
+// until when, and why (spec §10). Quarantine is time-scoped: a check that
+// will fail after an expiry has not failed yet, so access that works today
+// keeps working until then.
 type Quarantine struct {
 	Device, Platform string
-	Causes           []string
+	// Entries are in subject order, then time order.
+	Entries []QuarantineEntry
 }
 
-// Quarantined lists the quarantined devices by name.
-func (p *Policy) Quarantined() []Quarantine {
-	out := make([]Quarantine, 0, len(p.quarantine))
-	for _, q := range p.quarantine {
-		out = append(out, *q)
+// QuarantineEntry is one subject's failing composition on a device, over
+// [From, Until). A load-time failure has From the load's present and Lapsing
+// empty, and holds for any time asked; one an expiry brings on has From that
+// instant and Lapsing the grants whose expiry it is. Until is the next expiry
+// that clears it, zero when none does.
+type QuarantineEntry struct {
+	From, Until time.Time
+	Lapsing     string
+	// Cause names the subject and the failure.
+	Cause string
+}
+
+// Current reports whether the entry quarantines the device at now.
+func (e QuarantineEntry) Current(now time.Time) bool {
+	return (e.Lapsing == "" || !now.Before(e.From)) && (e.Until.IsZero() || now.Before(e.Until))
+}
+
+// Message is the entry as the start-up log and explain state it at now.
+func (e QuarantineEntry) Message(now time.Time) string {
+	if e.Current(now) {
+		return "quarantined: " + e.Cause
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Device < out[j].Device })
+	return fmt.Sprintf("will be quarantined from %s, when %s expires: %s", decision.FormatTime(e.From), e.Lapsing,
+		e.Cause)
+}
+
+// Quarantines lists every device with an entry current or scheduled at now,
+// by name, each carrying only those entries: the start-up log's list and the
+// quarantine gauge's source.
+func (p *Policy) Quarantines(now time.Time) []Quarantine {
+	var out []Quarantine
+	for _, name := range sortedKeys(p.quarantine) {
+		q := p.quarantine[name]
+		var entries []QuarantineEntry
+		for _, e := range q.Entries {
+			if e.Current(now) || now.Before(e.From) {
+				entries = append(entries, e)
+			}
+		}
+		if len(entries) > 0 {
+			out = append(out, Quarantine{Device: q.Device, Platform: q.Platform, Entries: entries})
+		}
+	}
 	return out
 }
 
-// quarantined is Resolve's refusal for a quarantined device, naming its first
-// cause.
-func (p *Policy) quarantined(d admission.Device) error {
-	if q, ok := p.quarantine[d.Name]; ok {
-		return fmt.Errorf("%w: %s", ErrDeviceQuarantined, q.Causes[0])
+// Quarantined reports whether device is quarantined at now, and its first
+// current cause: what the daemon and the broker ask before a mint or a reply.
+func (p *Policy) Quarantined(device string, now time.Time) (cause string, ok bool) {
+	if q, found := p.quarantine[device]; found {
+		for _, e := range q.Entries {
+			if e.Current(now) {
+				return e.Cause, true
+			}
+		}
+	}
+	return "", false
+}
+
+// quarantined is Resolve's refusal for a device quarantined at now.
+func (p *Policy) quarantined(d admission.Device, now time.Time) error {
+	if cause, ok := p.Quarantined(d.Name, now); ok {
+		return fmt.Errorf("%w: %s", ErrDeviceQuarantined, cause)
 	}
 	return nil
 }
@@ -284,48 +338,43 @@ func (p *Policy) quarantined(d admission.Device) error {
 // render, a ceiling it cannot number, a landing level above the ceiling, a
 // blob the engine refuses, and `enable: auto` where its enable exchange does
 // not carry the principal (spec §4, §5.6, §6, §7). A composition changes only
-// when a grant expires, so each is checked now and again at every later
-// expiry: a device that fails once a grant lapses is quarantined from the
-// start, not left to fail at a mint. A quarantined device is skipped —
-// refused at mint, closed without a reply by the daemon — and the rest of the
-// fleet loads (spec §10, §13 decision 20); refusing the policy instead would
-// take every device down for one. A check no platform could pass is the
-// policy's own error and refused at load (checkClasses, numberedAnywhere).
-// Plan 6 moves quarantine into the bundle the inventory service publishes.
+// when a grant expires, so each is checked at the load's present and again at
+// every later expiry, and a failure is quarantined over the span it holds: a
+// device that will fail once a grant lapses is scheduled for then, not
+// quarantined now. A quarantined device is skipped — refused at mint, closed
+// without a reply by the daemon — and the rest of the fleet loads (spec §10,
+// §13 decision 20); refusing the policy instead would take every device down
+// for one. A check no platform could pass is the policy's own error and
+// refused at load (checkClasses, numberedAnywhere). Plan 6 moves quarantine
+// into the bundle the inventory service publishes.
 func (p *Policy) checkDevices() {
 	p.quarantine = map[string]*Quarantine{}
 	now := p.env.Now
 	if now.IsZero() {
 		now = time.Now()
 	}
-	names := make([]string, 0, len(p.subs))
-	for name := range p.subs {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 	for _, d := range p.env.Devices {
-		for _, name := range names {
-			if cause := p.checkDevice(p.subs[name], d, now); cause != "" {
-				q, ok := p.quarantine[d.Name]
-				if !ok {
-					q = &Quarantine{Device: d.Name, Platform: d.Platform}
-					p.quarantine[d.Name] = q
-				}
-				q.Causes = append(q.Causes, fmt.Sprintf("subject %q: %s", name, cause))
+		for _, name := range sortedKeys(p.subs) {
+			entries := p.checkDevice(p.subs[name], d, now)
+			if len(entries) == 0 {
+				continue
 			}
+			q, ok := p.quarantine[d.Name]
+			if !ok {
+				q = &Quarantine{Device: d.Name, Platform: d.Platform}
+				p.quarantine[d.Name] = q
+			}
+			q.Entries = append(q.Entries, entries...)
 		}
 	}
 }
 
 // checkDevice is one subject's joint checks on one device, at now and at
-// every later instant one of its grants expires; "" is none failed. A cause
-// found after an expiry names the instant and the grants that lapse at it.
-func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) string {
-	if cause := p.checkDeviceAt(sub, d, now); cause != "" {
-		return cause
-	}
+// every later instant one of its grants expires, as the spans each failure
+// holds over; none is none failed.
+func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []QuarantineEntry {
 	lapsing := map[time.Time][]string{}
-	var instants []time.Time
+	instants := []time.Time{now}
 	for _, g := range p.grants {
 		if g.Subject != sub.Name || !g.Expires.After(now) {
 			continue
@@ -335,14 +384,26 @@ func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) st
 		}
 		lapsing[g.Expires] = append(lapsing[g.Expires], "grant "+g.Scope+" ["+strings.Join(g.Roles, " ")+"]")
 	}
-	sort.Slice(instants, func(i, j int) bool { return instants[i].Before(instants[j]) })
+	sort.Slice(instants[1:], func(i, j int) bool { return instants[1+i].Before(instants[1+j]) })
+	var out []QuarantineEntry
+	open := false // whether the last entry is still failing
 	for _, at := range instants {
-		if cause := p.checkDeviceAt(sub, d, at); cause != "" {
-			return fmt.Sprintf("from %s, when %s expires: %s", decision.FormatTime(at),
-				strings.Join(lapsing[at], " and "), cause)
+		cause := p.checkDeviceAt(sub, d, at)
+		if cause != "" {
+			cause = fmt.Sprintf("subject %q: %s", sub.Name, cause)
+		}
+		if open && cause == out[len(out)-1].Cause {
+			continue
+		}
+		if open {
+			out[len(out)-1].Until = at
+		}
+		open = cause != ""
+		if open {
+			out = append(out, QuarantineEntry{From: at, Lapsing: strings.Join(lapsing[at], " and "), Cause: cause})
 		}
 	}
-	return ""
+	return out
 }
 
 // checkDeviceAt is one subject's joint checks on one device at one instant.
