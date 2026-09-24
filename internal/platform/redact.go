@@ -512,9 +512,11 @@ func redactURL(word string) (string, bool) {
 
 // proseWord is a word of prose as redaction reads it: punctuation separates
 // words as whitespace does, so a value glued to `community)` or `community:`
-// is still the word after `community` (spec §5.8). Over-redaction is the
-// accepted cost.
-var proseWord = regexp.MustCompile("[^\\s()\\[\\]{}<>,;:!?\"'=`]+")
+// is still the word after `community` (spec §5.8). A regex's anchors and
+// operators, `^`, `$`, `|`, `\`, `*` and `+`, separate too, so a block's
+// config check match `^snmp-server community X` is read as its words.
+// Over-redaction is the accepted cost.
+var proseWord = regexp.MustCompile("[^\\s()\\[\\]{}<>,;:!?\"'=`^$|\\\\*+]+")
 
 // RedactProse is text redacted as a rule is, first by whitespace, which is
 // where a URL's password is found whole, and then by proseWord, with the

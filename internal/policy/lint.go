@@ -306,11 +306,28 @@ func (p *Policy) RuleSecretLiterals() []Finding {
 // and `devices check-config` print it «redacted», so the operator is told the
 // value lives in the policy file. The line is named by its key and index, in
 // its redacted form, by every pattern that applies under the policy; a line a
-// set ships is lab text and never reported (platform.RedactConfigLine).
+// set ships is lab text and never reported (platform.RedactConfigLine). A
+// block's config check whose match carries such a value is reported the same
+// way.
 func (p *Policy) DeviceConfigSecretLiterals() []Finding {
 	patterns := p.Redactions()
 	var out []Finding
 	for _, name := range sortedKeys(p.overrides) {
+		if checks := p.overrides[name].ConfigChecks; checks != nil {
+			// A check's says is prose, redacted wherever it is printed and
+			// not reported: ordinary wording, "falls back to a local secret",
+			// would trip it.
+			for i, c := range *checks {
+				if platform.ShippedConfigCheck(c) {
+					continue
+				}
+				if shown := platform.RedactProse(patterns, c.Match); shown != c.Match {
+					out = append(out, Finding{Kind: FindingDeviceConfigSecretLiteral, Message: fmt.Sprintf(
+						"platforms.%s.config_checks[%d].match %q carries a value redaction hides: the value is in the "+
+							"policy file, and platform show and export print the check redacted", name, i, shown)})
+				}
+			}
+		}
 		lines := p.overrides[name].DeviceConfig
 		if lines == nil {
 			continue

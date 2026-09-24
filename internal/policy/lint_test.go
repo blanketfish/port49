@@ -207,3 +207,25 @@ func TestADeviceConfigSecretLiteralIsReportedRedacted(t *testing.T) {
 		}
 	}
 }
+
+// A block's config check whose match carries a value redaction hides is
+// reported as a device_config line is, named by its key; its says is prose,
+// redacted where printed and never reported, and a check a set ships never is
+// (spec §5.8).
+func TestAConfigCheckSecretLiteralIsReportedRedacted(t *testing.T) {
+	p := mustParse(t, "platforms:\n  arista_eos:\n    config_checks:\n"+
+		"      - {match: '^snmp-server community Hunter2', says: 'falls back to a local secret: x'}\n"+
+		"      - {match: '^aaa authentication enable default .*\\b(local|enable)\\s*$', says: \"enable falls back to a local "+
+		"secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)\"}\n"+
+		"      - {match: '^logging host', says: 'the secret word in prose'}\n"+good)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingDeviceConfigSecretLiteral {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], `platforms.arista_eos.config_checks[0].match "^snmp-server community «redacted»"`) ||
+		strings.Contains(got[0], "Hunter2") {
+		t.Fatalf("%q", got)
+	}
+}

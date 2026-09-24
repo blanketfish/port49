@@ -191,4 +191,9 @@ func TestABlocksConfigCheckIsRedacted(t *testing.T) {
 	if ShippedConfigCheck(ConfigCheck{Match: "x", Says: "y"}) || strings.Contains(got.Match+got.Says, "Hunter2") {
 		t.Fatalf("%+v", got)
 	}
+	// A regex's anchors separate words, so an anchored match is read too.
+	if got := RedactConfigCheck(AllRedactions(), ConfigCheck{Match: `^snmp-server community Hunter2$`, Says: "x"}); got.Match !=
+		`^snmp-server community «redacted»$` {
+		t.Fatalf("%q", got.Match)
+	}
 }
