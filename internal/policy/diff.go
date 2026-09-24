@@ -870,27 +870,35 @@ func replyRose(old, new, oldRendered, newRendered []string, before, after platfo
 	return false
 }
 
-// attributeRose is the one judgment of whether a privilege-bearing attribute
-// went up: from its values in one reply to its values in another, each read
-// beside what the level it came from renders. The diff gate asks it of a
-// reply's old and new values (replyRose), and the joint check asks it of the
-// ceiling's rendering and the reply sent under the ceiling (exceeds), so the
-// two cannot disagree about what raises a session (final review I1).
-//
-// priv-lvl is judged as a number by each caller, and an attribute that bears
-// no privilege under either adapter or any shipped set (bearsPrivilege)
-// never rises. Otherwise a change rises unless it provably goes down: one
-// value a level renders replaced by one value the other level renders, which
-// role_order ranks strictly below under both adapters. A subject moved from
-// admin to readonly on EOS is lowered because network-operator ranks below
-// network-admin (L16), not because readonly is below admin, which a custom
-// level's parent can make untrue of what it renders. Anything else changes
-// what the device lets the session do in a direction the gate cannot read: a
-// role's or grant's attribute either way (on a session-only platform losing
-// deny-commands widens access), and a role no adapter ranks, which ranks
-// above every role.
+// attributeRose is whether a privilege-bearing attribute went up in the
+// diff: priv-lvl aside, which each caller judges as a number, and only for an
+// attribute that bears privilege under either adapter or any shipped set
+// (bearsPrivilege), by the one judgment the ceiling check shares (rose).
 func attributeRose(name string, from, to, fromRendered, toRendered []string, before, after platform.Dialect) bool {
-	if name == "priv-lvl" || slices.Equal(from, to) || !bearsPrivilege(name, before, after) {
+	return name != "priv-lvl" && bearsPrivilege(name, before, after) &&
+		rose(from, to, fromRendered, toRendered, before, after)
+}
+
+// rose is the one judgment of whether an attribute's values went up: from
+// its values in one reply to its values in another, each read beside what the
+// level it came from renders. The diff gate asks it of a reply's old and new
+// values (attributeRose), and the joint check asks it of the ceiling's
+// rendering and the reply sent under the ceiling (exceeds), so the two cannot
+// disagree about what raises a session (final review I1). Which attributes
+// each asks about differs: the diff gates every change it cannot read, and the
+// ceiling bounds only what can carry privilege (raisesCeiling).
+//
+// A change rises unless it provably goes down: one value a level renders
+// replaced by one value the other level renders, which role_order ranks
+// strictly below under both adapters. A subject moved from admin to readonly
+// on EOS is lowered because network-operator ranks below network-admin (L16),
+// not because readonly is below admin, which a custom level's parent can make
+// untrue of what it renders. Anything else changes what the device lets the
+// session do in a direction nobody can read: a role's or grant's attribute
+// either way (on a session-only platform losing deny-commands widens access),
+// and a role no adapter ranks, which ranks above every role.
+func rose(from, to, fromRendered, toRendered []string, before, after platform.Dialect) bool {
+	if slices.Equal(from, to) {
 		return false
 	}
 	return len(from) != 1 || len(to) != 1 || !slices.Contains(fromRendered, from[0]) ||

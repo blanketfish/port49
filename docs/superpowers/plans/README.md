@@ -516,8 +516,9 @@ than 25 tasks. The seam is the kind of platform:
   inert candidates (`home-directory`, `idletime`, `timeout`) re-measured beside readonly's reply
   (`priv-lvl=1`, network-operator) on EOS and NX-OS to 5b, since beside admin's a raise is
   invisible (5a final review M3); a replay-verifiable blob whose rules redaction hides, and a
-  `based_on:` variant's wire facts (refused at load for `juniper_junos` until then), to plan 6
-  (below).
+  `based_on:` variant's wire facts, to plan 6 (below), which lifts the load's refusal of
+  `based_on: juniper_junos` once port49d reads a variant's session service, exec-record commands
+  and system users (5a final review M8).
 - **Plan 5b — the session-only half and capability inference; written after 5a merges.** Junos's
   projection under decision 22 (`bits`, `bit_delivery`, `command_projection`, `local-user-name`
   templates, the generator constraints and the refused shape), gated on L12 and L9, with its own
@@ -653,6 +654,9 @@ redaction patterns hide is logged with that text redacted and `"redacted": true`
 `port49 policy replay` reports every record naming it `unverifiable`. Verification comes back
 when replay can take the verbatim blob from outside the log: from the versioned bundle this plan
 publishes, from the store, or from `--policy <file>`, checked against the hash the log carries.
+Also owed: a `based_on:` variant's wire facts. port49d keys `session_services`, the exec records'
+commands and the system users by platform name, so 5a refuses `based_on: juniper_junos` at load
+(spec §8; 5a final review M8). This plan carries those facts to a variant and lifts the refusal.
 
 ## Plan 7 — Broker in full (§19 step 7)
 

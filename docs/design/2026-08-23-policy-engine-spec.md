@@ -2743,21 +2743,26 @@ and the attribute; and the daemon refuses a session reply above the context's ce
 
 `priv-lvl` is not the only attribute the ceiling bounds (final review I1, 2026-09-24). On
 `cisco_nxos` and `juniper_junos` the role *is* the privilege, and on `arista_eos` the role is
-what the device's local authorization reads when port49 cannot answer (L22). Every other
-attribute of the reply that bears privilege on the platform (§6: not listed inert, or listed
-as bearing by a shipped set) must be one the ceiling's level renders there with the same
-value, or one whose value that attribute's `role_order` ranks strictly below it, the reply
-rendered at the session's own level. A value `role_order` does not rank counts as the highest;
-an attribute the ceiling's level does not render at all is above it. So
-`shell:roles*network-admin` from a readonly role under `max_privilege: readonly` quarantines
-`cisco_nxos`, as `roles=network-admin` does `arista_eos` and any `local-user-name` does
-`juniper_junos`, which renders no level yet; so do `idletime` and `timeout` under any ceiling
-on `cisco_iosxe`, where they are held bearing, and on `juniper_junos`, where they are
-unmeasured (§6). The judgment is the policy
-diff's (§12): the joint check asks the one function the diff gate asks of a changed reply, so
-the two cannot disagree about what raises a session. The daemon holds only `priv-lvl` to the
-context's ceiling, which is all the token carries; the load's joint check is what holds every
-other attribute, and a blob is minted only from a composition that passed it.
+what the device's local authorization reads when port49 cannot answer (L22). The ceiling bounds
+every attribute of the reply that can carry privilege on the platform: one its adapter or any
+shipped set lists in `privilege_attributes`, and one nobody measured there, which counts as the
+highest. It does not bound one the adapter lists inert, or one a platform with
+`accepted_attributes` accepts and does not list as bearing privilege — `idletime` and `timeout`
+on `cisco_iosxe`, measured changing nothing and held to plain decimals (§6). A change to those
+is still gated in the diff (§12): "gated in the diff" and "raises the ceiling" are separate
+properties (owner's ruling 2026-09-24). A bounded attribute must be one the ceiling's level
+renders there with the same value, or one whose value that attribute's `role_order` ranks
+strictly below it, the reply rendered at the session's own level; a value `role_order` does not
+rank counts as the highest, and an attribute the ceiling's level does not render at all is
+above it. So `shell:roles*network-admin` from a readonly role under `max_privilege: readonly`
+quarantines `cisco_nxos`, as `roles=network-admin` does `arista_eos` and any `local-user-name`
+or unmeasured `idletime` does `juniper_junos`, which renders no level yet. **Under a ceiling at
+the highest level in `privilege_levels` nothing is bounded**: no level sits above it, so no
+attribute can exceed it. The judgment of whether a value went up is the policy diff's (§12): the
+joint check asks the one function the diff gate asks of a changed reply, so the two cannot
+disagree about what raises a session. The daemon holds only `priv-lvl` to the context's
+ceiling, which is all the token carries; the load's joint check is what holds every other
+attribute, and a blob is minted only from a composition that passed it.
 
 **The ceiling is a cap on the level, not only on its number.** A composition whose roles land
 above its grants' `max_privilege` in `privilege_levels` fails the joint check on every platform,

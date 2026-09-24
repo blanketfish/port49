@@ -452,16 +452,40 @@ func rendersRoleOnly(d platform.Dialect) bool {
 // overrides, so the reply lacks it because its own level does, and Monotone
 // keeps a level below bound from rendering more than bound does.
 func (p *Policy) exceeds(dialect platform.Dialect, bound, level string, reply []string) (int, bool) {
+	// Nothing sits above the top level (owner's ruling on the fix wave).
+	if len(p.levels) > 0 && bound == p.levels[len(p.levels)-1] {
+		return 0, false
+	}
 	ceiling, _, _ := p.render(dialect, bound)
 	rendered, _, _ := p.render(dialect, level)
 	held, sent := attributesByName(ceiling), attributesByName(reply)
 	for i, a := range reply {
 		name := engine.AttributeName(a)
-		if attributeRose(name, held[name], sent[name], ceiling, rendered, dialect, dialect) {
+		if name != "priv-lvl" && raisesCeiling(name, dialect) &&
+			rose(held[name], sent[name], ceiling, rendered, dialect, dialect) {
 			return i, true
 		}
 	}
 	return 0, false
+}
+
+// raisesCeiling reports whether an attribute can carry privilege on the
+// platform, and so is bounded by a ceiling: one the adapter or any shipped
+// set lists as bearing privilege, and one nobody measured, which counts as
+// the highest. An attribute the adapter lists inert, or one a closed
+// platform accepts and does not list as bearing privilege — IOS-XE's
+// idletime and timeout, measured changing nothing and held to plain decimals
+// (L22-cisco_iosxe.md) — is not. The diff still gates a change to the second
+// (bearsPrivilege): "gated in the diff" and "raises the ceiling" are separate
+// properties (owner's ruling on the fix wave).
+func raisesCeiling(name string, d platform.Dialect) bool {
+	if slices.Contains(d.PrivilegeAttributes, name) || slices.Contains(platform.PrivilegeAttributeNames(), name) {
+		return true
+	}
+	if !d.BearsPrivilege(name) {
+		return false
+	}
+	return !slices.Contains(d.AcceptedAttributes, name)
 }
 
 // deliveredLevel is the level a reply delivers on the platform: the lowest,

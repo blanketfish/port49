@@ -796,17 +796,34 @@ grants: [{subject: s, scope: all_devices, roles: [r], max_privilege: readonly, a
 	if q := p.Quarantines(noon); len(q) != 1 || q[0].Device != "nx-01" {
 		t.Errorf("a grant's role: %+v", q)
 	}
-	// idletime is held bearing on IOS-XE and unmeasured on Junos (spec §6),
-	// so under a ceiling there it is bounded like a role; where it is inert
-	// it is not.
-	p = mustParse(t, strings.NewReplacer("KEY", "all", "ATTR", "idletime*30", "max_privilege: readonly",
-		"max_privilege: admin").Replace(body))
-	var got []string
-	for _, q := range p.Quarantines(noon) {
-		got = append(got, q.Device)
+	// idletime and timeout are accepted on IOS-XE and measured carrying no
+	// privilege (L22-cisco_iosxe.md): gated in the diff, but no raise above a
+	// ceiling (owner's ruling on the fix wave).
+	for _, ceiling := range []string{"operator", "admin"} {
+		p := mustParse(t, strings.NewReplacer("KEY", "cisco_iosxe", "ATTR", "idletime*30", "max_privilege: readonly",
+			"max_privilege: "+ceiling).Replace(body))
+		// Junos numbers no operator (plan 3's table), which quarantines it on
+		// its own; IOS-XE is what is asked here.
+		if cause, q := p.Quarantined("xe-01", noon); q {
+			t.Errorf("IOS-XE idletime under %s: %s", ceiling, cause)
+		}
 	}
-	if strings.Join(got, ",") != "srx-fw-04,srx-fw-05,srx-fw-22,srx-lab-01,xe-01" {
-		t.Errorf("idletime under a ceiling: %v", got)
+	// Nothing sits above the top level: under admin no attribute quarantines,
+	// Junos's local-user-name and an unranked role included.
+	for _, tt := range []struct{ key, attr string }{
+		{"juniper_junos", "local-user-name*super-user"}, {"arista_eos", "roles=p49-custom"}, {"all", "idletime*30"},
+	} {
+		p := mustParse(t, strings.NewReplacer("KEY", tt.key, "ATTR", tt.attr, "max_privilege: readonly",
+			"max_privilege: admin").Replace(body))
+		if q := p.Quarantines(noon); len(q) != 0 {
+			t.Errorf("%s under admin: %+v", tt.attr, q)
+		}
+	}
+	// Unmeasured on Junos, idletime counts as the highest under any lower
+	// ceiling.
+	p = mustParse(t, strings.NewReplacer("KEY", "juniper_junos", "ATTR", "idletime*30").Replace(body))
+	if q := p.Quarantines(noon); len(q) != 4 {
+		t.Errorf("Junos idletime under readonly: %+v", q)
 	}
 	// What the ceiling's level renders, or provably less, is within it.
 	for _, tt := range []struct{ key, attr, ceiling string }{
