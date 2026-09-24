@@ -796,6 +796,10 @@ func (p *Policy) checkPlaceholder(at, key, a string) error {
 		return nil
 	}
 	name := a[:strings.IndexAny(a, "=*")]
+	if slices.Contains(engine.NumericAttributes, name) {
+		return fmt.Errorf("%s: %s is a number and takes no placeholder: a mint fills in an identity, which is "+
+			"never a value the device takes, and on IOS-XE a refused session locks out SSH (spec §6)", at, name)
+	}
 	if slices.Contains(platform.PrivilegeAttributeNames(), name) || slices.ContainsFunc(sortedKeys(p.adapters),
 		func(n string) bool { return slices.Contains(p.adapters[n].PrivilegeAttributes, name) }) {
 		return fmt.Errorf("%s: %s carries privilege and takes no placeholder: the device would get "+

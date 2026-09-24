@@ -494,6 +494,16 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 				a.Attribute, a.Source, lockout)
 		}
 	}
+	// idletime's and timeout's values are numbers on every platform, and
+	// only `idletime*30` and `timeout*480` were measured
+	// (tests/lab/results/L22-*.md, "Inert candidates").
+	for _, a := range res.Attributes {
+		if engine.NotANumber(a.Attribute) {
+			return fmt.Sprintf("on %s its session reply sends %s (%s), which is not a plain decimal 0 to 65535: "+
+				"a device sent a value it cannot use may refuse the session%s; fix the value", d.Platform,
+				a.Attribute, a.Source, lockout)
+		}
+	}
 	if dialect := p.dialect(d.Platform); dialect.AcceptedAttributes != nil {
 		// A closed platform is sent only the levels its adapter renders: what
 		// the device lets any other level run is unmeasured.
@@ -511,6 +521,14 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 					"device refuses the whole session for any other%s; key the attribute to the platforms that "+
 					"read it", d.Platform, a.Attribute, a.Source, d.Platform, strings.Join(dialect.AcceptedAttributes, ", "),
 					lockout)
+			}
+			// A closed platform took these optional, `*`; the mandatory `=` is
+			// unmeasured there (L22-cisco_iosxe.md).
+			if slices.Contains(engine.NumericAttributes, name) && engine.Mandatory(a.Attribute) {
+				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s was measured taking %s only as "+
+					"%s*<number>: the mandatory form is unmeasured, and the device refuses the whole session for "+
+					"what it does not take%s; send it optional", d.Platform, a.Attribute, a.Source, d.Platform,
+					name, name, lockout)
 			}
 			if name != "priv-lvl" {
 				continue

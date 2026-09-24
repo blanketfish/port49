@@ -83,8 +83,9 @@ var shipped = map[string]Dialect{
 		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=7"}, "admin": {"priv-lvl=15"}},
 		PrivilegeAttributes: []string{"priv-lvl"},
 		// L22-cisco_iosxe.md, "Inert candidates": home-directory refused the
-		// session, idletime and timeout left admin's unchanged.
-		InertAttributes:    []string{"idletime", "timeout"},
+		// session; idletime and timeout are accepted and held bearing, since
+		// a refused session here locks out SSH (L18-cisco_iosxe.md).
+		InertAttributes:    []string{},
 		EnableUsername:     EnablePrincipal,
 		AcceptedAttributes: []string{"priv-lvl", "idletime", "timeout"},
 		DeviceConfig: []string{"aaa authorization exec default group port49 local",

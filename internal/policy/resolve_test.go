@@ -626,6 +626,62 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	}
 }
 
+// idletime and timeout are numbers, and L22 measured exactly `idletime*30`
+// and `timeout*480` (tests/lab/results/L22-*.md, "Inert candidates"). A
+// placeholder in either is refused at load on every platform, inert or not:
+// what a mint fills in is an identity, never a number the device takes. A
+// literal that is not a plain decimal 0 to 65535 quarantines the device on
+// every platform, and on IOS-XE, whose refusals lock out SSH, break-glass
+// included (L18-cisco_iosxe.md), so does the unmeasured mandatory `=`.
+func TestIdletimeAndTimeoutAreNumbers(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {KEY: [ATTR]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`
+	parse := func(key, attr string) (*Policy, error) {
+		return Parse([]byte(strings.NewReplacer("KEY", key, "ATTR", `"`+attr+`"`).Replace(body)), env())
+	}
+	for _, attr := range []string{"idletime*{principal}", "timeout={privilege}", "idletime*{username}"} {
+		for _, key := range []string{"arista_eos", "cisco_nxos", "cisco_iosxe", "all"} {
+			if _, err := parse(key, attr); err == nil || !strings.Contains(err.Error(),
+				"is a number and takes no placeholder") {
+				t.Errorf("%s under %s: %v", attr, key, err)
+			}
+		}
+	}
+	for _, attr := range []string{"idletime*forever", "idletime=-1", "idletime*030", "timeout*99999", "timeout*",
+		"timeout*+5"} {
+		p, err := parse("all", attr)
+		if err != nil {
+			t.Fatalf("%s: %v", attr, err)
+		}
+		if q := p.Quarantines(noon); len(q) != len(inventory()) {
+			t.Errorf("%s: %d of %d devices quarantined: %+v", attr, len(q), len(inventory()), q)
+		} else if !strings.Contains(causesOf(q[0])[0], "sends "+attr+" (role ro), which is not a plain decimal "+
+			"0 to 65535") {
+			t.Errorf("%s: %v", attr, causesOf(q[0]))
+		}
+	}
+	// The mandatory form is unmeasured on IOS-XE, and quarantines it alone.
+	p, err := parse("all", "idletime=30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := p.Quarantines(noon); len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
+		"sends idletime=30 (role ro), and cisco_iosxe was measured taking idletime only as idletime*") {
+		t.Fatalf("quarantines: %+v", q)
+	}
+	// What L22 measured passes everywhere.
+	for _, attr := range []string{"idletime*30", "timeout*480"} {
+		if p, err := parse("all", attr); err != nil {
+			t.Errorf("%s: %v", attr, err)
+		} else if q := p.Quarantines(noon); len(q) != 0 {
+			t.Errorf("%s: %+v", attr, q)
+		}
+	}
+}
+
 // priv-lvl's values are closed, 0 to 15, and IOS-XE refused the session for
 // priv-lvl=99 rather than clamp or ignore it (L18-cisco_iosxe.md, variant 7).
 // A role or grant that layers any other value fails the joint check on every

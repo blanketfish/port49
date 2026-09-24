@@ -740,17 +740,37 @@ func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
 }
 
 // What the lab measured inert passes the gate where it is listed inert, and
-// only there: idletime and timeout on EOS, NX-OS and IOS-XE
-// (tests/lab/results/L22-*.md, "Inert candidates"), home-directory on EOS and
-// NX-OS. (home-directory keyed to IOS-XE quarantines the device:
-// TestHomeDirectoryIsRefusedOnIOSXE.)
+// only there: home-directory, idletime and timeout on EOS and NX-OS
+// (tests/lab/results/L22-*.md, "Inert candidates"). IOS-XE lists nothing
+// inert, since its refusals lock out SSH (L18-cisco_iosxe.md), so the same
+// idletime and timeout there fail the gate on its group.
 func TestTheGatePassesWhatTheLabMeasuredInert(t *testing.T) {
+	reply := func(d Diff, device, attr string) (changed, gated bool) {
+		for _, l := range d.Levels {
+			if slices.Contains(l.Devices, device) && slices.Contains(l.NewReply, attr) &&
+				!slices.Contains(l.OldReply, attr) {
+				changed, gated = true, gated || (l.Raise && !l.Acknowledged)
+			}
+		}
+		return changed, gated
+	}
 	attrs := `{arista_eos: ["idletime*30", "timeout*480", "home-directory*/home/noc"], ` +
-		`cisco_nxos: ["idletime*30", "timeout*480", "home-directory*/home/noc"], cisco_iosxe: ["idletime*30", "timeout*480"]}`
+		`cisco_nxos: ["idletime*30", "timeout*480", "home-directory*/home/noc"]}`
 	after := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: "+attrs+"}", 1)
-	if d := Compare(mustParse(t, diffBase), mustParse(t, after), noon); d.UnacknowledgedLevels() != 0 ||
-		d.UnacknowledgedAdapters() != 0 {
+	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
+	for _, device := range []string{"leaf-01", "nx-01"} {
+		if changed, _ := reply(d, device, "idletime*30"); !changed {
+			t.Fatalf("%s's reply did not change: %+v", device, d.Levels)
+		}
+	}
+	if d.UnacknowledgedLevels() != 0 || d.UnacknowledgedAdapters() != 0 {
 		t.Fatalf("levels %+v adapters %+v", d.Levels, d.Adapters)
+	}
+	after = strings.Replace(diffBase, "roles: [read_only, cve]}",
+		`roles: [read_only, cve], attributes: {cisco_iosxe: ["idletime*30"]}}`, 1)
+	d = Compare(mustParse(t, diffBase), mustParse(t, after), noon)
+	if changed, gated := reply(d, "xe-01", "idletime*30"); !changed || !gated {
+		t.Fatalf("idletime on IOS-XE: levels %+v", d.Levels)
 	}
 }
 

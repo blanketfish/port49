@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -159,6 +160,25 @@ func PrivLvlValue(v string) (level uint8, ok bool) {
 		return 0, false
 	}
 	return uint8(n), true
+}
+
+// NumericAttributes are the session attributes whose value is a number: L22
+// measured `idletime*30` and `timeout*480` leaving a session unchanged
+// (tests/lab/results/L22-*.md, "Inert candidates"), and no other value. A
+// placeholder never goes in one, since a mint fills in an identity, and a
+// value that is not a plain decimal is never sent (spec §6).
+var NumericAttributes = []string{"idletime", "timeout"}
+
+// NotANumber reports whether a is one of NumericAttributes, in either form,
+// whose value is not decimal as written plainly, 0 to 65535, no sign and no
+// leading zero.
+func NotANumber(a string) bool {
+	i := strings.IndexAny(a, "=*")
+	if i < 0 || !slices.Contains(NumericAttributes, a[:i]) {
+		return false
+	}
+	n, err := strconv.ParseUint(a[i+1:], 10, 16)
+	return err != nil || strconv.FormatUint(n, 10) != a[i+1:]
 }
 
 // NotALevel reports whether a is a priv-lvl attribute, in either form, whose

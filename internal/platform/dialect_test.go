@@ -187,13 +187,13 @@ func TestPrivilegeAttributesArePerPlatformAndFailClosed(t *testing.T) {
 		if !reflect.DeepEqual(d.PrivilegeAttributes, want) {
 			t.Errorf("%s: %v", name, d.PrivilegeAttributes)
 		}
-		// Inert is what tests/lab/results/L22-<platform>.md measured inert:
-		// IOS-XE refused a session for home-directory and left one unchanged
-		// for idletime and timeout; Junos and the generic adapter keep the
-		// seeded home-directory alone.
+		// Inert is what tests/lab/results/L22-<platform>.md measured inert,
+		// save IOS-XE, which refused a session for home-directory and whose
+		// refusals lock out SSH, so nothing is inert there; Junos and the
+		// generic adapter keep the seeded home-directory alone.
 		inert := map[string][]string{"arista_eos": {"home-directory", "idletime", "timeout"},
 			"cisco_nxos":  {"home-directory", "idletime", "timeout"},
-			"cisco_iosxe": {"idletime", "timeout"}}[name]
+			"cisco_iosxe": {}}[name]
 		if inert == nil {
 			inert = []string{"home-directory"}
 		}
