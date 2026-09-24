@@ -28,37 +28,41 @@ type ShadowedDeny struct {
 }
 
 // ShadowedDenies computes the shadowed-deny report over every subject on every
-// device the policy loaded against, with every grant in force (a zero time
-// expires nothing, as the load-time checks read them). A device quarantined
-// with every grant in force is skipped: nothing is minted for it. One row per
-// subject and rule pair, in name order.
-func (p *Policy) ShadowedDenies() []ShadowedDeny {
-	acks := p.shadowAcks()
+// device the policy loaded against, for every composition reachable from now:
+// the one in force now, and the one left at each later instant a grant
+// expires. A device is skipped only at an instant it is quarantined, since
+// nothing is minted for it then; one an expiry brings back is read with what
+// that expiry leaves. One row per subject and rule pair, in name order.
+func (p *Policy) ShadowedDenies(now time.Time) []ShadowedDeny {
+	instants := p.expiryInstants(now)
+	acks := p.shadowAcks(instants)
 	rows := map[string]*ShadowedDeny{}
-	for name, sub := range p.subs {
+	for _, at := range instants {
 		for _, d := range p.env.Devices {
-			if _, q := p.Quarantined(d.Name, time.Time{}); q {
+			if _, q := p.Quarantined(d.Name, at); q {
 				continue
 			}
-			res, err := p.resolve(sub, d, time.Time{})
-			if err != nil {
-				continue
-			}
-			prog, err := engine.Compile(res.Blob)
-			if err != nil {
-				continue
-			}
-			for _, s := range prog.Shadows() {
-				key := shadowKey(name, s.Deny.Role, s.Deny.Rule, s.Permit.Role, s.Permit.Rule)
-				row, ok := rows[key]
-				if !ok {
-					row = &ShadowedDeny{Subject: name, Deny: s.Deny.Rule, DenyRole: s.Deny.Role, Permit: s.Permit.Rule,
-						PermitRole: s.Permit.Role, Possible: s.Possible, Acknowledged: acks[key]}
-					rows[key] = row
+			for name, sub := range p.subs {
+				res, err := p.resolve(sub, d, at)
+				if err != nil {
+					continue
 				}
-				if !slices.Contains(row.Platforms, d.Platform) {
-					row.Platforms = append(row.Platforms, d.Platform)
-					slices.Sort(row.Platforms)
+				prog, err := engine.Compile(res.Blob)
+				if err != nil {
+					continue
+				}
+				for _, s := range prog.Shadows() {
+					key := shadowKey(name, s.Deny.Role, s.Deny.Rule, s.Permit.Role, s.Permit.Rule)
+					row, ok := rows[key]
+					if !ok {
+						row = &ShadowedDeny{Subject: name, Deny: s.Deny.Rule, DenyRole: s.Deny.Role,
+							Permit: s.Permit.Rule, PermitRole: s.Permit.Role, Possible: s.Possible, Acknowledged: acks[key]}
+						rows[key] = row
+					}
+					if !slices.Contains(row.Platforms, d.Platform) {
+						row.Platforms = append(row.Platforms, d.Platform)
+						slices.Sort(row.Platforms)
+					}
 				}
 			}
 		}
@@ -75,21 +79,41 @@ func (p *Policy) ShadowedDenies() []ShadowedDeny {
 	return out
 }
 
-// shadowAcks is every (subject, deny, permit) a passing permit test
-// exercises: on a permit, every deny that matched is one the deciding permit
-// overrode (engine.Outcome.Denies), so the author has seen it happen.
-func (p *Policy) shadowAcks() map[string]bool {
+// expiryInstants is now and every later instant a grant expires, in order:
+// the only instants at which a composition, and so a quarantine, can change.
+func (p *Policy) expiryInstants(now time.Time) []time.Time {
+	instants := []time.Time{now}
+	for _, g := range p.grants {
+		if g.Expires.After(now) && !slices.ContainsFunc(instants, g.Expires.Equal) {
+			instants = append(instants, g.Expires)
+		}
+	}
+	slices.SortFunc(instants[1:], func(a, b time.Time) int { return a.Compare(b) })
+	return instants
+}
+
+// shadowAcks is every (subject, deny, permit) a passing permit test exercises
+// at one of instants: on a permit, every matching permit whose tuple
+// dominates a matching deny's wins over that deny on the tested command, so
+// the author has seen each of those pairs happen (spec §12).
+func (p *Policy) shadowAcks(instants []time.Time) map[string]bool {
 	acks := map[string]bool{}
-	for _, r := range p.RunTests(time.Time{}) {
-		if !r.Pass || !r.Permit || r.Outcome.Decided == nil {
-			continue
-		}
-		subject := r.Test.Subject
-		if subject == "" {
-			subject = p.byID[r.Test.Principal]
-		}
-		for _, d := range r.Outcome.Denies {
-			acks[shadowKey(subject, d.Role, d.Rule, r.Outcome.Decided.Role, r.Outcome.Decided.Rule)] = true
+	for _, at := range instants {
+		for _, r := range p.RunTests(at) {
+			if !r.Pass || !r.Permit {
+				continue
+			}
+			subject := r.Test.Subject
+			if subject == "" {
+				subject = p.byID[r.Test.Principal]
+			}
+			for _, pm := range r.Outcome.Permits {
+				for _, d := range r.Outcome.Denies {
+					if engine.Dominates(pm.Specificity, d.Specificity) {
+						acks[shadowKey(subject, d.Role, d.Rule, pm.Role, pm.Rule)] = true
+					}
+				}
+			}
 		}
 	}
 	return acks

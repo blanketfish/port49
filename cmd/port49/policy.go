@@ -124,23 +124,27 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	}
 	// The shadowed-deny report is what replaces the guarantee deny-overrides
 	// gave (spec §12): every deny a more specific permit beats, for whom, and
-	// by what. One no policy test exercises fails the gate; a possible one,
-	// which two regex or class terms decide, is reported and does not.
-	shadows := p.ShadowedDenies()
+	// by what, now and once any grant expires. One no policy test exercises
+	// fails the gate; a possible one, which two regex or class terms decide,
+	// is reported and does not, until a test proves the two meet.
+	shadows := p.ShadowedDenies(now)
 	unacknowledged := 0
 	for _, s := range shadows {
 		line := fmt.Sprintf("%q (%s) does not bind %s where %q (%s) is more specific, on %s", s.Deny, s.DenyRole,
 			s.Subject, s.Permit, s.PermitRole, strings.Join(s.Platforms, ", "))
 		switch {
+		case s.Acknowledged:
+			fmt.Fprintf(stdout, "shadowed: %s; a policy test exercises it\n", line)
 		case s.Possible:
 			fmt.Fprintf(stdout, "possibly shadowed: %s; two regex or class terms decide it, which is not "+
 				"decidable cheaply\n", line)
-		case s.Acknowledged:
-			fmt.Fprintf(stdout, "shadowed: %s; a policy test exercises it\n", line)
 		default:
+			// The pair is judged alone: another deny may stop the permit on
+			// every command it meets this one, and then no test can pass.
 			unacknowledged++
 			fmt.Fprintf(stdout, "shadowed: %s; no policy test exercises it: add one that expects permit on a "+
-				"command it covers, or narrow the permit\n", line)
+				"command where this permit wins, or narrow the permit (a permit another deny always stops "+
+				"cannot win: narrow it)\n", line)
 		}
 	}
 	results := p.RunTests(now)

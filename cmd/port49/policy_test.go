@@ -156,6 +156,32 @@ func TestPolicyDiffGatesAnExpansionPastADeny(t *testing.T) {
 	}
 }
 
+// A possible shadow a test exercises is a shadow: the test proved the two
+// patterns meet.
+func TestPolicyTestReportsAPossibleShadowATestProves(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw, _ := os.ReadFile(pol)
+	body := strings.Replace(string(raw), "permit: [show **]}", `permit: [show **, "show /^ver/ detail"]}`, 1)
+	body = strings.Replace(body, "deny: [reload **]}", `deny: [reload **, "show /^v/ *"]}`, 1)
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `possibly shadowed: "show /^v/ *" (no_reload) does not bind noc`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	body += "  - {subject: noc, device: leaf-01, command: \"show version detail\", expect: permit}\n"
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `shadowed: "show /^v/ *" (no_reload) does not bind noc where "show /^ver/ detail" (read_only) is more specific, on arista_eos; a policy test exercises it`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
 // A policy that fails a load-time check fails the gate, with the check's
 // message, before any test runs: here, a class no platform defines (spec §4).
 // A policy that loads with a device quarantined names it (spec §10).
