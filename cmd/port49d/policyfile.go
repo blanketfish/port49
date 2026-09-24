@@ -39,6 +39,21 @@ var fileOwner = func(fi fs.FileInfo) (uint32, bool) {
 	return st.Uid, true
 }
 
+// stRdonly is ST_RDONLY in statfs's flags, which package syscall does not
+// name.
+const stRdonly = 0x1
+
+// readOnlyFS reports whether the filesystem holding the open file f is
+// mounted read-only, from fstatfs on the descriptor, never a path. Swapped in
+// tests: CI has no read-only mount to hand.
+var readOnlyFS = func(f *os.File) (bool, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Fstatfs(int(f.Fd()), &st); err != nil {
+		return false, err
+	}
+	return st.Flags&stRdonly != 0, nil
+}
+
 // readPolicyFile reads broker.policy_file, refusing a file anyone but the user
 // port49d runs as, or root, could have written (spec §5.1.3). port49d reloads
 // the file live (plan 4b), so whoever can write it decides every operator's
@@ -52,7 +67,9 @@ var fileOwner = func(fi fs.FileInfo) (uint32, bool) {
 // can re-point it at any file that passes — a root-owned policy.yaml.bak from
 // before a grant was withdrawn — so the directory holding every link the path
 // passes through, the configured name's own and any standing for a directory
-// included, is held to the same rule (resolvePolicyPath). The directory
+// included, is held to the same rule (resolvePolicyPath). A directory's mode
+// is excused on a read-only mount, which is how a ConfigMap passes
+// (dirWritableByUsAlone). The directory
 // holding the final target is then opened, without following a link in its
 // place, and the file is opened relative to that descriptor, without following
 // one either; both checks are fstats of the descriptors, and the bytes come
@@ -90,7 +107,7 @@ func readPolicyFile(path string) ([]byte, error) {
 	if err := writableByUsAlone("the file "+target, fi); err != nil {
 		return nil, err
 	}
-	if err := writableByUsAlone("the directory "+dir, di); err != nil {
+	if err := dirWritableByUsAlone("the directory "+dir, d, di); err != nil {
 		return nil, err
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxPolicySize+1))
@@ -143,8 +160,9 @@ func resolvePolicyPath(path string) (string, error) {
 			if err != nil {
 				return "", err
 			}
+			err = dirWritableByUsAlone("the directory "+resolved+", holding the symbolic link "+next, d, di)
 			d.Close()
-			if err := writableByUsAlone("the directory "+resolved+", holding the symbolic link "+next, di); err != nil {
+			if err != nil {
 				return "", err
 			}
 			checked[resolved] = true
@@ -179,6 +197,31 @@ func openDir(dir string) (*os.File, fs.FileInfo, error) {
 // writableByUsAlone refuses what port49d's user or root is not the only one
 // able to write.
 func writableByUsAlone(what string, fi fs.FileInfo) error {
+	if err := ownedByUsOrRoot(what, fi); err != nil {
+		return err
+	}
+	return notWritableByOthers(what, fi)
+}
+
+// dirWritableByUsAlone is writableByUsAlone for a directory open as d, whose
+// mode is excused on a read-only mount. A Kubernetes ConfigMap or Secret
+// volume's root holds the policy's two links at mode 0777 (01777, 02777 with
+// fsGroup) and is mounted read-only: nobody in the pod, root included, can
+// write it (tests/lab/results/configmap-mounts.md). Read-only is asked of the
+// descriptor opened, not a path, and the owner is still checked.
+func dirWritableByUsAlone(what string, d *os.File, fi fs.FileInfo) error {
+	if err := ownedByUsOrRoot(what, fi); err != nil {
+		return err
+	}
+	if err := notWritableByOthers(what, fi); err == nil {
+		return nil
+	} else if ro, rerr := readOnlyFS(d); rerr != nil || !ro {
+		return err
+	}
+	return nil
+}
+
+func ownedByUsOrRoot(what string, fi fs.FileInfo) error {
 	uid, ok := fileOwner(fi)
 	if !ok {
 		return fmt.Errorf("%s: cannot read its owner", what)
@@ -187,6 +230,10 @@ func writableByUsAlone(what string, fi fs.FileInfo) error {
 		return fmt.Errorf("%s is owned by uid %d; whoever can write the policy decides every operator's access, "+
 			"so it must belong to the user port49d runs as (uid %d) or to root - chown it", what, uid, euid)
 	}
+	return nil
+}
+
+func notWritableByOthers(what string, fi fs.FileInfo) error {
 	if perm := fi.Mode().Perm(); perm&0o022 != 0 {
 		return fmt.Errorf("%s is mode %v, writable by others than its owner; whoever can write the policy "+
 			"decides every operator's access - chmod go-w it", what, perm)

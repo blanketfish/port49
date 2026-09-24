@@ -160,6 +160,56 @@ func TestALinkInADirectoryOthersCanWriteIsRefused(t *testing.T) {
 	}
 }
 
+// A real ConfigMap or Secret mount root holds both links at mode 0777 (01777,
+// 02777 with fsGroup) and is mounted read-only, so nobody in the pod can
+// write it (tests/lab/results/configmap-mounts.md). A directory others could
+// write by its mode is accepted when its filesystem is read-only, and only
+// then; its owner must still be port49d's user or root.
+func TestAWritableDirectoryOnAReadOnlyMountIsAccepted(t *testing.T) {
+	dir := configMap(t)
+	for _, p := range []string{dir, filepath.Join(dir, "..2026_09_24_07_00_00.123456789")} {
+		if err := os.Chmod(p, 0o777); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(dir, "policy.yaml")
+	defer func(f func(*os.File) (bool, error)) { readOnlyFS = f }(readOnlyFS)
+
+	readOnlyFS = func(*os.File) (bool, error) { return false, nil }
+	if _, err := readPolicyFile(path); err == nil || !strings.Contains(err.Error(), "chmod go-w") {
+		t.Fatalf("a 0777 directory on a writable mount is refused: %v", err)
+	}
+
+	readOnlyFS = func(*os.File) (bool, error) { return true, nil }
+	if raw, err := readPolicyFile(path); err != nil || string(raw) != minimalPolicy {
+		t.Fatalf("a 0777 directory on a read-only mount is accepted: %v", err)
+	}
+
+	if os.Geteuid() != 0 {
+		defer func(f func(fs.FileInfo) (uint32, bool)) { fileOwner = f }(fileOwner)
+		real := fileOwner
+		fileOwner = func(fi fs.FileInfo) (uint32, bool) {
+			if fi.IsDir() {
+				return uint32(os.Geteuid() + 1), true
+			}
+			return real(fi)
+		}
+		if _, err := readPolicyFile(path); err == nil || !strings.Contains(err.Error(), "chown it") {
+			t.Fatalf("a read-only mount does not excuse another owner: %v", err)
+		}
+	}
+}
+
+// A file others could write is refused even on a read-only mount: only a
+// directory's mode is excused, and a ConfigMap's file is 0644 or narrower.
+func TestAWritableFileOnAReadOnlyMountIsRefused(t *testing.T) {
+	defer func(f func(*os.File) (bool, error)) { readOnlyFS = f }(readOnlyFS)
+	readOnlyFS = func(*os.File) (bool, error) { return true, nil }
+	if _, err := readPolicyFile(policyAt(t, 0o666, 0o755)); err == nil || !strings.Contains(err.Error(), "the file") {
+		t.Fatalf("%v", err)
+	}
+}
+
 // A chain of links that never ends is refused, not followed forever.
 func TestALinkLoopIsRefused(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "etc")
