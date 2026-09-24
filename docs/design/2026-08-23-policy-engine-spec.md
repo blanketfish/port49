@@ -2576,6 +2576,13 @@ port49 cannot check what an attribute means. It MUST check everything else:
   variant 7). An adapter whose rendering sends another value is refused at load, and a
   composition whose reply carries one fails the joint check and quarantines the device (§10).
   The daemon refuses such a reply too (`blob_unavailable`, nothing sent).
+- **No `priv-lvl` where the levels render a role and no `priv-lvl`** (task 4 review M4). On
+  `cisco_nxos` a `priv-lvl` beside `shell:roles` is ignored, and alone it picks a role nobody
+  named out of a per-release table, 15 to `network-admin` and 6 to `vdc-operator`
+  (`tests/lab/results/L16-cisco_nxos.md`, findings 1 and 6). So on a platform whose adapter
+  renders levels and none of them with `priv-lvl`, a composition whose reply carries one, from a
+  role or a grant, under the platform's key or `all`, fails the joint check and quarantines the
+  device (§10); key the attribute to the platforms that read it.
 
 **Unknown attributes default to optional (`*`).** A mandatory attribute a device cannot
 parse causes it to reject the entire session, breaking every login on that platform.
