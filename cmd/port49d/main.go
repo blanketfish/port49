@@ -29,7 +29,6 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
-	"github.com/rhwendt/port49/internal/broker/policy"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/acct"
 	"github.com/rhwendt/port49/internal/daemon/authen"
@@ -39,6 +38,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/server"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
@@ -157,9 +157,29 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	if cfg.Broker == nil {
 		return nil, nil
 	}
-	pol, err := policy.Load(cfg.Broker.PolicyFile)
+	// The policy is checked against the inventory the daemon admits from: a
+	// class a platform in it does not define, or a level it cannot render, is
+	// found here rather than at the first mint for that device (spec §4, §6).
+	pol, err := policy.Load(cfg.Broker.PolicyFile, policy.Env{Devices: cfg.Inventory.Devices,
+		EnableUsernames: cfg.EnableUsernames})
 	if err != nil {
 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
+	}
+	// A device a joint check failed on is quarantined rather than the policy
+	// refused: its mints are refused device_quarantined and the rest of the
+	// fleet loads (spec §10; §13 decision 20). Each is said here, with its
+	// cause, so the line at start names what to fix. Quarantine is
+	// time-scoped: one a grant's expiry will bring on is said now too, with
+	// when, while the device still mints.
+	now := time.Now()
+	for _, q := range pol.Quarantines(now) {
+		for _, e := range q.Entries {
+			msg := e.Message(now)
+			if e.Current(now) {
+				msg = "is " + msg
+			}
+			fmt.Fprintf(stderr, "port49d: broker: device %s (%s) %s\n", q.Device, q.Platform, msg)
+		}
 	}
 	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
 	if err != nil {
@@ -170,7 +190,6 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	// refusing would take device AAA down with the broker. It is said now, in
 	// one line, rather than first showing up as every operator's failed login.
 	if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
-		now := time.Now()
 		switch {
 		case now.After(leaf.NotAfter):
 			fmt.Fprintf(stderr, "port49d: broker: server certificate expired at %s (tls_cert_file %s); logins will fail\n",
@@ -273,12 +292,12 @@ func run(cfgPath string) error {
 	spoolDone := make(chan struct{})
 	go func() { defer close(spoolDone); spool.Run(spoolCtx) }()
 
-	// A context the broker minted names a compiled blob and is answered from
-	// it (plan 3). A context with no blob — the lab's seeds — is answered by
-	// the lab authorizer, which stays until the policy engine lands (plan 4);
-	// config.Load refuses a config without it, so the fallback is never nil and
-	// port49 never falls back to permitting everything.
-	authz := &author.Blob{Store: st, Fallback: &author.Lab{
+	// A context the broker minted names a compiled blob and is answered from it
+	// by the policy engine (plan 4). A context with no blob — the lab's seeds —
+	// is answered by the lab authorizer; config.Load refuses a config without
+	// it, so the fallback is never nil and port49 never falls back to
+	// permitting everything.
+	authz := &author.Engine{Store: st, Metrics: m, Fallback: &author.Lab{
 		SessionAttributes: cfg.Lab.SessionAttributes,
 		CommandAttributes: cfg.Lab.CommandAttributes,
 		DenyPrefixes:      cfg.Lab.DenyPrefixes,

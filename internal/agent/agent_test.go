@@ -592,6 +592,15 @@ func TestAnItemErrorReachesTheOperator(t *testing.T) {
 	}
 }
 
+// attribute_too_long (plan 4) is the broker refusing a session reply that
+// would not fit on the wire; the operator is told that, not "could not answer".
+func TestAnAttributeTooLongItemSaysWhy(t *testing.T) {
+	err := &ItemError{Device: "leaf1", Code: "attribute_too_long", Detail: "tell the operator"}
+	if !strings.Contains(err.Error(), "too long once filled in") || !strings.Contains(err.Error(), "leaf1") {
+		t.Fatalf("%v", err)
+	}
+}
+
 // An item with neither a verdict nor an error is a broker this agent does not
 // understand, and is an error rather than a silent empty answer.
 func TestAnItemWithNoVerdictIsAnError(t *testing.T) {

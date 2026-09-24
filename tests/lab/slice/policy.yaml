@@ -6,6 +6,10 @@
 #
 # `slice01` is a username no seed uses, so nothing but a broker-minted token can
 # log in under it.
+#
+# `all_devices` is declared: since plan 4 it is an ordinary scope (spec §5.5).
+scopes:
+  - {name: all_devices, match: {}}
 roles:
   - {name: network_admin, privilege: admin, permit: ["**"]}
   - {name: slice_denies, deny: ["show hostname"]}

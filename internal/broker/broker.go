@@ -1,6 +1,6 @@
 // Package broker is the vertical slice's broker (design §19 step 3): POST
 // /v1/tokens and GET /v1/config, over a held mutual-TLS connection, against
-// one trust anchor and the file policy of internal/broker/policy, minting
+// one trust anchor and the policy engine (internal/policy, plan 4), minting
 // through plan 2's token.Minter. It runs inside port49d because the only store
 // is in-process (plan 3, Decided 1). Plan 7 builds the broker in full: OIDC,
 // the directory, the rest of §17, and the api: rights model — until then a
@@ -27,11 +27,11 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
-	"github.com/rhwendt/port49/internal/blob"
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/broker/policy"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/token"
 )
@@ -221,27 +221,60 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 		// device and no platform, which is what tells an operator which.
 		return deny(decision.NoGrantsMatched, ""), nil
 	}
-	res, ok := b.Policy.Resolve(principal, dev.Platform)
-	if !ok {
+	res, err := b.Policy.Resolve(principal, dev, b.Now())
+	switch {
+	case errors.Is(err, policy.ErrNoGrants):
 		return deny(decision.NoGrantsMatched, dev.Platform), nil
-	}
-	// Inventory may name a device with no platform (admission.LoadFile does
-	// not require one), and no blob can be compiled for it. That is the
-	// operator's inventory to fix, not a refusal of the caller, so it is this
-	// item's error and no decision record. It is checked after Resolve so
-	// that a caller with no grant is answered no_grants_matched and learns
-	// nothing about which devices exist.
-	if dev.Platform == "" {
+	case dev.Platform == "":
+		// Inventory may name a device with no platform (admission.LoadFile
+		// does not require one), and no blob can be compiled for it. That is
+		// the operator's inventory to fix, not a refusal of the caller, so it
+		// is this item's error and no decision record. The policy quarantines
+		// such a device at load, so it is named here, as the inventory fault
+		// it is, before the quarantine. It is checked after the grants so
+		// that a caller with no grant on it is answered no_grants_matched and
+		// learns nothing about which devices exist.
 		log.Printf("broker: inventory names device %q with no platform; refusing to mint for it until it has one", name)
 		return b.fault(name, "device_unconfigured",
 			"inventory gives this device no platform, so the broker cannot compile its policy; tell the operator"), nil
+	case errors.Is(err, policy.ErrDeviceQuarantined):
+		// A joint check fails on this device now: nothing correct can be
+		// compiled for it, and the daemon closes its connections without a
+		// reply, so no token is minted to present there (spec §10).
+		return deny(decision.DeviceQuarantined, dev.Platform), nil
+	case err != nil:
+		// The policy's load-time checks compile every subject on every device
+		// in inventory and quarantine the ones that fail, so this is a broker
+		// defect, not a refusal.
+		log.Printf("broker: resolving %s on %q: %v", principal, name, err)
+		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
-	body, hash, err := blob.Encode(res.Blob)
+	body, hash, err := engine.Encode(res.Blob)
 	if err != nil {
 		// Policy load checks every rule, so this is a broker defect, not a
 		// refusal. The error names policy content and is the operator's.
 		log.Printf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
+	}
+	// The daemon fills the session reply's placeholders from the context, at
+	// each session authorization (spec §5.2), with the values the broker holds
+	// now. An attribute they would push past 255 bytes is refused here, where
+	// the operator can be told, rather than there, where the device can only
+	// be refused.
+	//
+	// A value carrying a separator is refused the same way, as broker_error:
+	// the daemon would refuse the reply it builds (blob_unavailable), and the
+	// fix is the operator's, in the policy or the identity it names.
+	_, err = res.Blob.SessionAttributes(engine.Values{Username: res.Username, Principal: principal, Device: name})
+	switch {
+	case errors.Is(err, engine.ErrAttributeTooLong):
+		log.Printf("broker: the session reply for %s on %q does not fit the wire: %v", principal, name, err)
+		return b.fault(name, "attribute_too_long",
+			"a session attribute for this device is longer than 255 bytes once filled in; tell the operator"), nil
+	case err != nil:
+		log.Printf("broker: the session reply for %s on %q cannot carry a substitution: %v", principal, name, err)
+		return b.fault(name, "broker_error",
+			"a session attribute for this device cannot carry a value it substitutes; tell the operator"), nil
 	}
 	if err := b.putBlob(ctx, hash, body); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil
@@ -253,7 +286,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
 		TTL:            time.Duration(req.TTLSeconds) * time.Second,
 		IdempotencyKey: key, BodyHash: bodyHash,
-		Policy: &decision.Policy{Subject: res.Subject, Grants: res.Grants}})
+		Policy: &decision.Policy{Bundle: b.Policy.Bundle, Subject: res.Subject, Grants: res.Grants}})
 	var capped *token.ErrTooManyOutstanding
 	switch {
 	case errors.Is(err, token.ErrIdempotencyConflict):
@@ -299,10 +332,11 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
 // hash's blob record. Emit is one buffered line write, so that is all the lock
 // holds.
 //
-// A record the sink drops is still marked emitted: Emit returns no error. The
-// drop is counted by port49_decision_log_write_failures_total, which is the
-// operator's cue that replay from the log is incomplete. Re-emitting a
-// dropped blob is plan 4's, with per-replica emission.
+// A blob record the sink refuses is not marked emitted, so the next mint that
+// writes the hash emits it again (roadmap, plan 4): replay reads the log alone,
+// and a mint record naming a blob the log never carried cannot be replayed.
+// The refusal is counted by port49_decision_log_write_failures_total. An
+// Emitter that cannot report a refusal is trusted, as before.
 func (b *Broker) putBlob(ctx context.Context, hash string, body []byte) error {
 	if err := b.Store.PutBlob(ctx, hash, body, b.MaxSessionAge); err != nil {
 		return err
@@ -313,8 +347,13 @@ func (b *Broker) putBlob(ctx context.Context, hash string, body []byte) error {
 		b.blobsSeen = map[string]bool{}
 	}
 	if !b.blobsSeen[hash] {
-		b.blobsSeen[hash] = true
-		b.Log.Emit(decision.Record{TS: b.Now(), Event: decision.EventBlob, Blob: &decision.Blob{Hash: hash, Body: body}})
+		rec := decision.Record{TS: b.Now(), Event: decision.EventBlob, Blob: &decision.Blob{Hash: hash, Body: body}}
+		if sink, ok := b.Log.(decision.Sink); ok {
+			b.blobsSeen[hash] = sink.Write(rec) == nil
+		} else {
+			b.Log.Emit(rec)
+			b.blobsSeen[hash] = true
+		}
 	}
 	return nil
 }

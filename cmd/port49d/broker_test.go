@@ -43,6 +43,7 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 }
 
 const minimalPolicy = `
+scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
@@ -83,14 +84,30 @@ func TestABrokerBuildsFromItsFiles(t *testing.T) {
 
 // Everything that can fail on a typo fails before a listener opens.
 func TestABrokerThatCannotLoadFailsTheStart(t *testing.T) {
-	if err := buildWith(brokerConfig(t, "roles: [{name: r, privilege: operator}]\n")); err == nil ||
-		!strings.Contains(err.Error(), "operator") {
+	if err := buildWith(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: root", 1))); err == nil ||
+		!strings.Contains(err.Error(), `"root" is not a privilege level`) {
 		t.Fatalf("a bad policy: %v", err)
 	}
 	cfg := brokerConfig(t, minimalPolicy)
 	cfg.Broker.ClientCAFile = cfg.Broker.TLSKeyFile
 	if err := buildWith(cfg); err == nil {
 		t.Fatal("a trust anchor file with no certificate must fail the start")
+	}
+}
+
+// A device the policy cannot be compiled for is quarantined, not a reason to
+// stay down: the start goes on, and names the device and the cause (spec §10;
+// §13 decision 20). leaf1 is arista_eos, which renders no `operator`.
+func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	if err := buildWith(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1))); err != nil {
+		t.Fatalf("a quarantined device must not stop the start: %v", err)
+	}
+	if !strings.Contains(out.String(), "device leaf1 (arista_eos) is quarantined") ||
+		!strings.Contains(out.String(), "level operator has no rendering on arista_eos") {
+		t.Fatalf("stderr: %s", out.String())
 	}
 }
 
