@@ -3288,7 +3288,10 @@ block may not claim — and `platform export --all --dir DIR` writes one per pla
 directory `platforms/` would accept. A set carries only
 what the lab measured, so `--all` writes each `fallback` as the set measured it and drops a
 block's note; `export <name>` writes the note under `fallback`, where the block wrote it, with
-the comment `# operator note, not measured` on its line (§12).
+the comment `# operator note, not measured` on its line (§12). A block's `unreachable` rules the
+set did not measure go the same way: `show` prints them apart as `unreachable_note`, `export
+<name>` writes them back under `unreachable` commented `# operator-listed, not measured`, and
+`--all` drops them (task 14 review M7).
 
 **Published documentation is generated from the embedded files** at release time, so it
 cannot drift from the binary.
@@ -3339,8 +3342,9 @@ change a block shadows — so local platform files do not rot silently as upstre
 
 **`port49 platform export <name>`** emits a file suitable for an upstream pull request:
 written for one fleet on day one, contributed once proven. An upstream set takes measured text
-only: a `fallback` line commented `# operator note, not measured` is the operator's word, and is
-measured in the lab, or removed, before the file is contributed.
+only: a `fallback` line commented `# operator note, not measured`, or an `unreachable` rule
+commented `# operator-listed, not measured`, is the operator's word, and is measured in the lab,
+or removed, before the file is contributed.
 
 ### Unknown platforms
 
@@ -4170,9 +4174,11 @@ The report has no exemption for `operator`. It judges every level by that level'
 at 7 and 15 and for NX-OS's `clear` commands. It is unmeasured elsewhere, which is not the
 same as safe.
 A `platforms:` block adds to both and takes nothing away, `replace: true` and `based_on:`
-included: its `unreachable` rules join the set's for the level, and its `fallback` text is
-kept apart from the set's, as the adapter's `fallback_note`, which only port49 writes and a
-block may not set. The report prints the set's text, or `what no platform set measured` for
+included: its `unreachable` rules are kept apart from the set's for the level, as the
+adapter's `unreachable_note`, and its `fallback` text as its `fallback_note`, both of which only
+port49 writes and a block may not set (task 14 review M7). A permit the set's rules make dead
+is reported citing the lab note, as above; one only the block's rules make dead is reported as
+the block's word, `(operator-listed unreachable, not measured: ...)`, citing no note. The report prints the set's text, or `what no platform set measured` for
 a level the set measured nothing for, and then the block's text as `(operator note:
 "...")`, quoted, so nothing in it can close the note or read as a measurement. An entry for a
 level the policy does not declare is refused. The rules and the set's text are printed
@@ -4386,7 +4392,7 @@ The report-only keys are reported and never fail:
 
 - `port_pattern`: drift detection only.
 - `verified`: the adapter's claim about the lab. A block may not set it.
-- `unreachable`, `fallback` and `fallback_note`: they feed only the dead-rule and fallback-exposure reports,
+- `unreachable`, `unreachable_note`, `fallback` and `fallback_note`: they feed only the dead-rule and fallback-exposure reports,
   which do not fail `policy test` either. An edit to one is reported in the diff, where the
   reviewer sees it.
 
