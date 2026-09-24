@@ -98,15 +98,18 @@ type Metrics struct {
 	// however many times it reads it; each SIGHUP is an attempt of its own.
 	PolicyReloads *prometheus.CounterVec
 	// port49_policy_file_refused: 1 while the file on disk is one port49d
-	// refused, so the policy serving is not the one in the file; 0 once a
-	// file loads or the file is put back. It is the alert: an edit someone
-	// believes is live, and is not.
+	// refused, or one that has changed at every read for six reads running
+	// and so never loads, so the policy serving is not the one in the file;
+	// 0 once a file loads or the file is put back. It is the alert: an edit
+	// someone believes is live, and is not.
 	PolicyFileRefused prometheus.Gauge
-	// port49_policy_refresh_pending: 1 from a policy swap, or a refresh pass
-	// the store stopped, until a pass completes. While it is 1 a live login
-	// context may still hold a policy no longer in force — a withdrawn grant
-	// included. It is the alert beside port49_policy_file_refused: an edit that
-	// loaded, and has not yet reached every live session.
+	// port49_policy_refresh_pending: 1 from a policy swap or a grant's
+	// expiry until the settle pass 30s after it completes, and while a pass
+	// the store stopped, or that left a context still changing, is owed a
+	// retry. While it is 1 a live login context may still hold a policy no
+	// longer in force — a withdrawn or expired grant included. It is the alert
+	// beside port49_policy_file_refused: an edit that loaded, and has not yet
+	// reached every live session.
 	PolicyRefreshPending prometheus.Gauge
 }
 
@@ -163,9 +166,9 @@ func New(reg prometheus.Registerer) *Metrics {
 		PolicyReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_policy_reloads_total",
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
-			Help: "1 while the policy file on disk is one port49d refused and an older policy is serving."}),
+			Help: "1 while the policy file on disk is one port49d refused, or has not stopped changing, and an older policy is serving."}),
 		PolicyRefreshPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_refresh_pending",
-			Help: "1 from a policy swap until a refresh pass has carried it into every live login context."}),
+			Help: "1 from a policy swap or grant expiry until its settle pass has carried it into every live login context."}),
 	}
 	m.DevicesQuarantined = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_quarantined",
 		Help: "Inventory devices the loaded policy quarantines now."}, func() float64 {

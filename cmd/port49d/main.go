@@ -330,6 +330,9 @@ func run(parent context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
+	// The inventory as loaded, hashed now rather than when the reloader
+	// starts: an edit in between would otherwise never be said (checkInventory).
+	_, inventoryAtStart, _ := fileVersion(cfg.InventoryFile)
 	fmt.Fprint(stderr, labWarning(cfg.Lab))
 
 	ctx, cancel := context.WithCancel(parent)
@@ -529,11 +532,13 @@ func run(parent context.Context, cfgPath string) error {
 				case <-ctx.Done():
 					return
 				case <-hup:
-					fmt.Fprintln(stderr, "port49d: SIGHUP: no broker: block, so there is no policy to reload")
+					fmt.Fprintln(stderr, "port49d: SIGHUP: no `broker:` block in the config, so there is no policy to reload")
 				}
 			}
 		}
-		newReloader(cfg, brk, m, time.Now).run(ctx, hup)
+		r := newReloader(cfg, brk, m, time.Now)
+		r.inventory = inventoryAtStart
+		r.run(ctx, hup)
 	}()
 
 	serveErr := make(chan error, 1)

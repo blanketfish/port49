@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -401,4 +402,136 @@ func TestTheReloaderRunsOnSIGHUPUntilCancelled(t *testing.T) {
 	if !strings.Contains(rig.out.String(), "port49d: policy reload (SIGHUP)") {
 		t.Fatalf("stderr: %q", rig.out.String())
 	}
+}
+
+// conflictingStore loses every compare-and-set a refresh makes, as a context
+// a login writes to on every attempt would.
+type conflictingStore struct{ store.Store }
+
+func (conflictingStore) SetContextPolicy(context.Context, store.ContextKey, uint64, store.ContextPolicy) error {
+	return store.ErrConflict
+}
+
+// A pass that visited every context but found one still changing did not
+// stop, and the store is not down: the line says which, so it is not read at
+// 3am as an outage.
+func TestABusyContextIsSaidAsBusyNotAsAStop(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.aliceLoggedIn(t)
+	rig.b.Store = conflictingStore{rig.st}
+	rig.write(t, showOnly)
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	out := rig.out.String()
+	if strings.Contains(out, "stopped") || !strings.Contains(out, "1 context(s) still changing after every attempt") ||
+		!strings.Contains(out, "trying them again in 30s") || !rig.r.due.Equal(rig.now.Add(refreshRetry)) ||
+		testutil.ToFloat64(rig.m.PolicyRefreshPending) != 1 {
+		t.Fatalf("due %v, stderr %q", rig.r.due, out)
+	}
+}
+
+// A pass cut short because port49d is shutting down says nothing: "trying
+// again in 30s" from a process that is exiting is a line to chase for nothing.
+func TestAPassCancelledAtShutdownSaysNothing(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.b.Store = failingStore{rig.st}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rig.with(func() { rig.r.refresh(ctx) })
+	if rig.out.String() != "" {
+		t.Fatalf("stderr: %q", rig.out.String())
+	}
+}
+
+// A file that changes at every read — two tools fighting over it, or a
+// templater stamping the time — never has two reads agree, so it never
+// loads. That is said, once, and held in port49_policy_file_refused, rather
+// than left for an operator to believe the edit is live.
+func TestAFileThatNeverStopsChangingIsSaid(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	for i := 0; i < 2*stillChangingAfter; i++ {
+		rig.write(t, fmt.Sprintf("# written %d\n%s", i, showOnly))
+		rig.with(func() { rig.r.poll(context.Background()) })
+	}
+	if n := strings.Count(rig.out.String(), "has changed at each of the last"); n != 1 ||
+		testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 {
+		t.Fatalf("said %d times: %q", n, rig.out.String())
+	}
+	for i := 0; i < 2; i++ {
+		rig.with(func() { rig.r.poll(context.Background()) })
+	}
+	if rig.b.Policy.Load().Bundle == engine.HashOf([]byte(minimalPolicy)) || testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
+		t.Fatalf("a file that settles loads and clears the alarm: %q", rig.out.String())
+	}
+}
+
+// A policy file deleted — or missing for a moment under a careless symlink
+// swap — is refused like one that does not load: the policy in force keeps
+// serving, and the refusal is said once.
+func TestADeletedPolicyFileIsRefusedAndTheOldOneServes(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	before := rig.b.Policy.Load().Bundle
+	if err := os.Remove(rig.cfg.Broker.PolicyFile); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		rig.with(func() { rig.r.poll(context.Background()) })
+	}
+	if rig.b.Policy.Load().Bundle != before || testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 ||
+		strings.Count(rig.out.String(), "refused") != 1 || !strings.Contains(rig.out.String(), "no such file") {
+		t.Fatalf("stderr: %q", rig.out.String())
+	}
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	if rig.b.Policy.Load().Bundle != before || testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("refused")) != 2 {
+		t.Fatalf("a SIGHUP with the file gone is refused too: %q", rig.out.String())
+	}
+}
+
+// A file made unsafe with its content unchanged is refused all the same: it
+// is the mode that says who could write the next edit.
+func TestAPolicyFileMadeUnsafeInPlaceIsRefused(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	if err := os.Chmod(rig.cfg.Broker.PolicyFile, 0o622); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		rig.with(func() { rig.r.poll(context.Background()) })
+	}
+	if testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 || strings.Count(rig.out.String(), "writable by others") != 1 {
+		t.Fatalf("stderr: %q", rig.out.String())
+	}
+	if err := os.Chmod(rig.cfg.Broker.PolicyFile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.with(func() { rig.r.poll(context.Background()) })
+	if testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 || !strings.Contains(rig.out.String(), "is the policy in force again") {
+		t.Fatalf("stderr: %q", rig.out.String())
+	}
+}
+
+// With no broker: block SIGHUP still does not end port49d — its default
+// action would take device AAA down — and says it has nothing to reload.
+func TestRunWithNoBrokerSaysSIGHUPDoesNothing(t *testing.T) {
+	var out syncBuffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfgPath := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, raw[:strings.Index(string(raw), "\nbroker:")+1], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	waitFor(t, &out, "port49d: listening on ")
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, &out, "port49d: SIGHUP: no `broker:` block in the config, so there is no policy to reload")
 }

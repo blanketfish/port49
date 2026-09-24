@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/store"
 )
 
 // After a reload, and after a grant's expiry, the refresh runs twice: at
@@ -24,6 +26,9 @@ import (
 const (
 	settleAfterReload = 30 * time.Second
 	refreshRetry      = 30 * time.Second
+	// stillChangingAfter is how many reads in a row the policy file may
+	// differ at before the watch says it is not settling (reloader.poll).
+	stillChangingAfter = 6
 )
 
 // reloader keeps the broker's policy the one in broker.policy_file (plan 4b).
@@ -65,6 +70,9 @@ type reloader struct {
 	pending string
 	// refused is the version last refused, so a refusal is said once.
 	refused string
+	// changing counts the reads in a row that found a version differing from
+	// the one before, so a file that never settles is said once.
+	changing int
 	// inventory is the inventory file's version as loaded at start, and
 	// inventorySaid the changed version last said.
 	inventory, inventorySaid string
@@ -150,15 +158,26 @@ func (r *reloader) poll(ctx context.Context) {
 	switch {
 	case v == r.broker.Policy.Load().Bundle:
 		r.pending = ""
-		if r.refused != "" {
-			r.refused = ""
+		if r.refused != "" || r.changing >= stillChangingAfter {
+			r.refused, r.changing = "", 0
 			r.metrics.PolicyFileRefused.Set(0)
 			fmt.Fprintf(stderr, "port49d: policy: broker.policy_file %s is the policy in force again (%s)\n",
 				r.cfg.Broker.PolicyFile, v)
 		}
 	case v == r.refused:
+		r.pending, r.changing = "", 0
 	case v != r.pending:
+		// A file that changes at every read never has two agree, so it
+		// never loads: two tools fighting over it, or a templater stamping
+		// the time. Say so once, and hold the alarm, rather than leave an
+		// operator believing the edit is live.
 		r.pending = v
+		if r.changing++; r.changing == stillChangingAfter {
+			r.metrics.PolicyFileRefused.Set(1)
+			fmt.Fprintf(stderr, "port49d: policy: broker.policy_file %s has changed at each of the last %d reads, "+
+				"%s apart, so it is not loaded; still serving %s; write it once, atomically\n",
+				r.cfg.Broker.PolicyFile, stillChangingAfter, r.interval, r.broker.Policy.Load().Bundle)
+		}
 	default:
 		r.pending = ""
 		r.load(ctx, "file changed", raw, v, err)
@@ -177,6 +196,7 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 // (err), changes nothing.
 func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v string, err error) {
 	r.checkInventory()
+	r.changing = 0
 	old := r.broker.Policy.Load()
 	var pol *policy.Policy
 	if err == nil {
@@ -229,11 +249,21 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 // expired grant included.
 func (r *reloader) refresh(ctx context.Context) {
 	rep, err := r.broker.Refresh(ctx, r.priors)
+	if err != nil && ctx.Err() != nil {
+		return // port49d is shutting down: there is no retry to announce
+	}
 	if err != nil {
 		r.stopped = true
 		r.metrics.PolicyRefreshPending.Set(1)
-		fmt.Fprintf(stderr, "port49d: policy refresh stopped (%s so far): %v; the contexts not reached keep their "+
-			"previous policy; trying again in %s\n", summary(rep), err, refreshRetry)
+		if errors.Is(err, store.ErrConflict) {
+			// Every context was visited and the store answered: only the busy
+			// ones, counted failed, are left.
+			fmt.Fprintf(stderr, "port49d: policy refresh: %d context(s) still changing after every attempt keep "+
+				"their previous policy (%s); trying them again in %s\n", rep.Failed, summary(rep), refreshRetry)
+		} else {
+			fmt.Fprintf(stderr, "port49d: policy refresh stopped (%s so far): %v; the contexts not reached keep "+
+				"their previous policy; trying again in %s\n", summary(rep), err, refreshRetry)
+		}
 		r.retry = r.now().Add(refreshRetry)
 		r.reschedule()
 		return
