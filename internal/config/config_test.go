@@ -802,3 +802,27 @@ func TestSeedTokensRequireANASAndAUsername(t *testing.T) {
 		}
 	}
 }
+
+// The lab fault switch is read only from the `lab:` block and is off unless
+// named: a config that does not mention it must load with no fault file.
+func TestLabFaultFileIsOptionalAndLabOnly(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	c, err := Load(write(t, "a.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Lab.FaultFile != "" {
+		t.Fatalf("fault_file defaulted to %q; it must be off unless named", c.Lab.FaultFile)
+	}
+	c, err = Load(write(t, "b.yaml", fmt.Sprintf(sample, invPath)+"  fault_file: /tmp/p49-fault\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Lab.FaultFile != "/tmp/p49-fault" {
+		t.Fatalf("fault_file = %q", c.Lab.FaultFile)
+	}
+	if _, err := Load(write(t, "c.yaml", fmt.Sprintf(sample, invPath)+"fault_file: /tmp/p49-fault\n")); err == nil {
+		t.Fatal("a top-level fault_file loaded; the switch belongs to the lab block only")
+	}
+}

@@ -288,10 +288,7 @@ func run(cfgPath string) error {
 	// The request handlers see the store through the lab's fault switch; the
 	// minter, the broker and the seeding below do not, so a fault can never
 	// stop the daemon starting. With no fault_file this is the store itself.
-	var handlerStore store.Store = st
-	if cfg.Lab.FaultFile != "" {
-		handlerStore = &author.FaultStore{Store: st, Fault: fault}
-	}
+	handlerStore := labHandlerStore(st, fault)
 	minter := token.NewMinter(st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
 	// Plan 7's broker exposes Refresh, RevokeByPrincipal and RevokeBySID over
 	// HTTP; plan 3's serves /v1/tokens and /v1/config only, so nothing in this
@@ -426,4 +423,13 @@ func run(cfgPath string) error {
 	<-spoolDone
 	fmt.Fprintln(stderr, "port49d: accounting spool drained, exiting")
 	return runErr
+}
+
+// labHandlerStore is the store the request handlers see: st itself unless the
+// lab's fault switch is configured, and then st behind author.FaultStore.
+func labHandlerStore(st store.Store, fault author.LabFault) store.Store {
+	if fault.Path == "" {
+		return st
+	}
+	return &author.FaultStore{Store: st, Fault: fault}
 }
