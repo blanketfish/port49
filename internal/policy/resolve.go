@@ -428,6 +428,20 @@ func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []
 	return out
 }
 
+// rendersRoleOnly reports whether d renders levels and none of them with a
+// priv-lvl: the platform expresses a level by its role.
+func rendersRoleOnly(d platform.Dialect) bool {
+	if len(d.Levels) == 0 {
+		return false
+	}
+	for _, attrs := range d.Levels {
+		if slices.ContainsFunc(attrs, func(a string) bool { return engine.AttributeName(a) == "priv-lvl" }) {
+			return false
+		}
+	}
+	return true
+}
+
 // exceeds finds the first attribute of reply, priv-lvl aside, that goes
 // above what level bound renders on the platform, as the diff gate judges a
 // raise (attributeRose): bound's rendering is the reply it is held to, and
@@ -546,6 +560,20 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 				"runs 0 to 15, and a device sent a value it cannot use refuses the session (IOS-XE did for "+
 				"priv-lvl=99, tests/lab/results/L18-cisco_iosxe.md, variant 7)%s; fix the value", d.Platform,
 				a.Attribute, a.Source, lockout)
+		}
+	}
+	// Where the levels render a role and no priv-lvl, NX-OS, a priv-lvl is
+	// ignored beside the role and alone picks one by a per-release table
+	// (tests/lab/results/L16-cisco_nxos.md, findings 1 and 6; task 4 review
+	// M4).
+	if dialect := p.dialect(d.Platform); rendersRoleOnly(dialect) {
+		for _, a := range res.Attributes {
+			if engine.AttributeName(a.Attribute) == "priv-lvl" {
+				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s's levels render a role and no "+
+					"priv-lvl: the device ignores a priv-lvl beside a role, and alone it picks a role nobody named by a "+
+					"per-release table (tests/lab/results/L16-cisco_nxos.md); key the attribute to the platforms "+
+					"that read it", d.Platform, a.Attribute, a.Source, d.Platform)
+			}
 		}
 	}
 	// idletime's and timeout's values are numbers on every platform, and

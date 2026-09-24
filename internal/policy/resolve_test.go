@@ -846,3 +846,29 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]`), withDevice("acme-01", 
 		t.Fatalf("%v %q", q, cause)
 	}
 }
+
+// A platform whose levels render a role and no priv-lvl, NX-OS, is never sent
+// one: beside a role the device ignores it, and alone it picks a role by a
+// per-release table nobody named, 15 to network-admin and 6 to vdc-operator
+// (tests/lab/results/L16-cisco_nxos.md, findings 1 and 6). A reply carrying
+// one quarantines the device (task 4 review M4).
+func TestAPrivLvlToAPlatformThatRendersARoleQuarantines(t *testing.T) {
+	for _, key := range []string{"cisco_nxos", "all"} {
+		p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {`+key+`: ["priv-lvl=1"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]`)
+		var got []string
+		for _, q := range p.Quarantines(noon) {
+			got = append(got, q.Device)
+			if !strings.Contains(causesOf(q)[0], "its session reply sends priv-lvl=1 (role r), and cisco_nxos's "+
+				"levels render a role and no priv-lvl") {
+				t.Errorf("%s: %q", q.Device, causesOf(q))
+			}
+		}
+		if strings.Join(got, ",") != "nx-01" {
+			t.Errorf("%s: quarantined %v", key, got)
+		}
+	}
+}

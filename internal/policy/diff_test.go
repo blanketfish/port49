@@ -446,9 +446,11 @@ func TestTheGateFailsEveryKindOfPrivilegeRaise(t *testing.T) {
 		// replies is what a raise the role names also asserts, per device.
 		replies map[string]string
 	}{
+		// Under all it quarantines NX-OS, whose levels render a role and no
+		// priv-lvl (task 4 review M4), so three groups are raised.
 		{"a grant attribute priv-lvl=15", diffBase,
 			strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: {all: [priv-lvl=15]}}", 1),
-			4, "priv_lvl", "priv_lvl: 15", nil},
+			3, "priv_lvl", "priv_lvl: 15", nil},
 		{"a role attribute priv-lvl=15 on one platform", diffBase,
 			strings.Replace(diffBase, "{name: read_only, privilege: readonly, permit: [show **]}",
 				"{name: read_only, privilege: readonly, permit: [show **], attributes: {arista_eos: [priv-lvl=15]}}", 1),
