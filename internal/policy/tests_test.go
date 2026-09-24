@@ -121,7 +121,7 @@ tests:
 		t.Fatalf("explain: %+v %v", e.Outcome, err)
 	}
 	var found []string
-	for _, f := range p.Lint() {
+	for _, f := range p.Lint(noon) {
 		if f.Kind == FindingPermitJoinedName {
 			found = append(found, f.Message)
 		}

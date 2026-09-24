@@ -119,7 +119,7 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "quarantine: %s (%s): %s\n", q.Device, q.Platform, e.Message(now))
 		}
 	}
-	for _, f := range p.Lint() {
+	for _, f := range p.Lint(now) {
 		fmt.Fprintf(stdout, "report: %s: %s\n", f.Kind, f.Message)
 	}
 	// The shadowed-deny report is what replaces the guarantee deny-overrides

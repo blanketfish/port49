@@ -331,7 +331,7 @@ func TestAnUnreadableDenyPatternMatchesAnythingWhereAbbreviationsAreAssumed(t *t
 
 func findings(p *Policy, kind string) []string {
 	var out []string
-	for _, f := range p.Lint() {
+	for _, f := range p.Lint(noon) {
 		if f.Kind == kind {
 			out = append(out, f.Message)
 		}

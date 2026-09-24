@@ -185,7 +185,7 @@ func TestTheCompletePolicyExampleReportsWhatItShould(t *testing.T) {
 	p := spec11(t, spec11Raw(t))
 	var kinds []string
 	var incomparable string
-	for _, f := range p.Lint() {
+	for _, f := range p.Lint(noon) {
 		kinds = append(kinds, f.Kind)
 		if f.Kind == FindingIncomparableVersion {
 			incomparable = f.Message

@@ -47,7 +47,7 @@ grants:
   - {subject: s, scope: all_devices, roles: [ro]}
 `)
 	got := map[string][]string{}
-	for _, f := range p.Lint() {
+	for _, f := range p.Lint(noon) {
 		got[f.Kind] = append(got[f.Kind], f.Message)
 	}
 	for kind, want := range map[string]string{
@@ -69,5 +69,36 @@ grants:
 		if strings.Contains(m, "deny_only") {
 			t.Errorf("a deny-only attached role was reported: %s", m)
 		}
+	}
+}
+
+// Lint reads the compositions reachable from now, as the shadowed-deny
+// report does: a grant that has already lapsed shadows nothing, and one that
+// is live, or lapses later, does.
+func TestLintReadsOnlyLiveGrants(t *testing.T) {
+	const body = `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: ro, privilege: readonly, permit: [show **]}
+  - {name: ir, permit: [show version]}
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants:
+  - {subject: s, scope: all_devices, roles: [ro]}
+  - {subject: s, scope: all_devices, roles: [ir], attributes: {arista_eos: ["priv-lvl*0"]}, expires: EXPIRES}
+`
+	shadowed := func(expires string) int {
+		n := 0
+		for _, f := range mustParse(t, strings.Replace(body, "EXPIRES", expires, 1)).Lint(noon) {
+			if f.Kind == FindingAttributeShadowed {
+				n++
+			}
+		}
+		return n
+	}
+	if n := shadowed("2026-01-01"); n != 0 {
+		t.Errorf("a lapsed grant shadows %d", n)
+	}
+	if n := shadowed("2027-01-01"); n == 0 {
+		t.Error("a live grant shadows nothing")
 	}
 }

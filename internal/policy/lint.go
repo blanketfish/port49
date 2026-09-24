@@ -32,9 +32,11 @@ const (
 	FindingPermitJoinedName    = "permit_joined_name"
 )
 
-// Lint computes the findings, ordered by kind and then message so two runs
-// over one policy print the same report.
-func (p *Policy) Lint() []Finding {
+// Lint computes the findings at now, ordered by kind and then message so two
+// runs over one policy print the same report. A composition is read at now
+// and at every later grant expiry, as the shadowed-deny report reads it, so a
+// grant that has lapsed reports nothing.
+func (p *Policy) Lint(now time.Time) []Finding {
 	var out []Finding
 	add := func(kind, format string, args ...any) {
 		out = append(out, Finding{Kind: kind, Message: fmt.Sprintf(format, args...)})
@@ -86,21 +88,24 @@ func (p *Policy) Lint() []Finding {
 		}
 	}
 	seen := map[string]bool{}
+	instants := p.expiryInstants(now)
 	for name, sub := range p.subs {
 		for _, d := range p.env.Devices {
-			res, err := p.resolve(sub, d, time.Time{})
-			if err != nil {
-				// No grant here means nothing to shadow, and any other error
-				// quarantines the device, which Quarantined reports.
-				continue
-			}
-			for _, a := range res.Attributes {
-				for _, shadowed := range a.Shadows {
-					msg := fmt.Sprintf("subject %q on %s: %s (%s) shadows %s", name, d.Platform, a.Attribute,
-						a.Source, shadowed)
-					if !seen[msg] {
-						seen[msg] = true
-						add(FindingAttributeShadowed, "%s", msg)
+			for _, at := range instants {
+				res, err := p.resolve(sub, d, at)
+				if err != nil {
+					// No grant here means nothing to shadow, and any other
+					// error quarantines the device, which Quarantined reports.
+					continue
+				}
+				for _, a := range res.Attributes {
+					for _, shadowed := range a.Shadows {
+						msg := fmt.Sprintf("subject %q on %s: %s (%s) shadows %s", name, d.Platform, a.Attribute,
+							a.Source, shadowed)
+						if !seen[msg] {
+							seen[msg] = true
+							add(FindingAttributeShadowed, "%s", msg)
+						}
 					}
 				}
 			}
