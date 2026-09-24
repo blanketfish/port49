@@ -889,3 +889,43 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]`)
 		}
 	}
 }
+
+// An attribute a level renders is the level on that platform, whatever
+// accepted_attributes says: listed there it is still bounded by the ceiling,
+// and the fallback exposure reads it (re-review RR-I1).
+func TestARenderedAttributeIsAlwaysBoundedByTheCeiling(t *testing.T) {
+	const block = `
+platforms:
+  f5_bigip:
+    supports: [session]
+    accepted_attributes: [F5-LTM-User-Role, priv-lvl]
+    role_order: {F5-LTM-User-Role: ["700", "0"]}
+    privilege: {readonly: ["F5-LTM-User-Role*700"], operator: ["F5-LTM-User-Role*700"], admin: ["F5-LTM-User-Role*0"]}
+    ceiling_levels: {readonly: 1, operator: 7, admin: 15}
+    fallback: {admin: "every partition, configuration included"}
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {f5_bigip: ["F5-LTM-User-Role*0"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]GRANT}]`
+	parse := func(grant string) *Policy {
+		t.Helper()
+		p, err := Parse([]byte(strings.Replace(block, "GRANT", grant, 1)), withDevice("bigip-01", "f5_bigip"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	if cause, q := parse(", max_privilege: readonly").Quarantined("bigip-01", noon); !q ||
+		!strings.Contains(cause, "its session reply sends F5-LTM-User-Role*0 (role r)") {
+		t.Errorf("quarantined %v: %q", q, cause)
+	}
+	var got []string
+	for _, f := range findings(parse(""), FindingFallbackExposure) {
+		if strings.Contains(f, "on f5_bigip") {
+			got = append(got, f)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], "reaches admin") {
+		t.Errorf("exposure: %q", got)
+	}
+}

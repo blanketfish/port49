@@ -2745,8 +2745,10 @@ and the attribute; and the daemon refuses a session reply above the context's ce
 `cisco_nxos` and `juniper_junos` the role *is* the privilege, and on `arista_eos` the role is
 what the device's local authorization reads when port49 cannot answer (L22). The ceiling bounds
 every attribute of the reply that can carry privilege on the platform: one its adapter or any
-shipped set lists in `privilege_attributes`, and one nobody measured there, which counts as the
-highest. It does not bound one the adapter lists inert, or one a platform with
+shipped set lists in `privilege_attributes`, one any of its levels renders there — that attribute
+is the level (§6), whatever `accepted_attributes` lists (re-review RR-I1) — and one nobody
+measured there, which counts as the highest. Otherwise it does not bound one the adapter lists
+inert, or one a platform with
 `accepted_attributes` accepts and does not list as bearing privilege — `idletime` and `timeout`
 on `cisco_iosxe`, measured changing nothing and held to plain decimals (§6). A change to those
 is still gated in the diff (§12): "gated in the diff" and "raises the ceiling" are separate

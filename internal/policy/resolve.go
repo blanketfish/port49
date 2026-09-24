@@ -471,8 +471,9 @@ func (p *Policy) exceeds(dialect platform.Dialect, bound, level string, reply []
 
 // raisesCeiling reports whether an attribute can carry privilege on the
 // platform, and so is bounded by a ceiling: one the adapter or any shipped
-// set lists as bearing privilege, and one nobody measured, which counts as
-// the highest. An attribute the adapter lists inert, or one a closed
+// set lists as bearing privilege, one any level renders there, and one
+// nobody measured, which counts as the highest. Otherwise an attribute the
+// adapter lists inert, or one a closed
 // platform accepts and does not list as bearing privilege — IOS-XE's
 // idletime and timeout, measured changing nothing and held to plain decimals
 // (L22-cisco_iosxe.md) — is not. The diff still gates a change to the second
@@ -481,6 +482,14 @@ func (p *Policy) exceeds(dialect platform.Dialect, bound, level string, reply []
 func raisesCeiling(name string, d platform.Dialect) bool {
 	if slices.Contains(d.PrivilegeAttributes, name) || slices.Contains(platform.PrivilegeAttributeNames(), name) {
 		return true
+	}
+	// What a level renders is the level (spec §6, as Validate reads it),
+	// whatever accepted_attributes lists: checked before either exemption
+	// (re-review RR-I1).
+	for _, attrs := range d.Levels {
+		if slices.ContainsFunc(attrs, func(a string) bool { return engine.AttributeName(a) == name }) {
+			return true
+		}
 	}
 	if !d.BearsPrivilege(name) {
 		return false
