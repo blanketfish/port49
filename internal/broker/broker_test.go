@@ -15,9 +15,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/rhwendt/port49/internal/blob"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/token"
 )
@@ -84,10 +84,10 @@ func TestTheBlobIsWrittenAndEmittedOncePerHash(t *testing.T) {
 	}
 	logged := map[string]bool{}
 	for _, bl := range blobs {
-		if blob.HashOf(bl.Body) != bl.Hash {
+		if engine.HashOf(bl.Body) != bl.Hash {
 			t.Fatalf("the logged body does not hash to its name %q", bl.Hash)
 		}
-		if _, err := blob.Decode(bl.Hash, bl.Body); err != nil {
+		if _, err := engine.Decode(bl.Hash, bl.Body); err != nil {
 			t.Fatalf("the logged blob cannot be replayed: %v", err)
 		}
 		logged[bl.Hash] = true
@@ -102,7 +102,7 @@ func TestTheBlobIsWrittenAndEmittedOncePerHash(t *testing.T) {
 		if err != nil {
 			t.Fatalf("mint names blob %q the store does not hold: %v", hash, err)
 		}
-		b, err := blob.Decode(hash, body)
+		b, err := engine.Decode(hash, body)
 		if err != nil {
 			t.Fatal(err)
 		}

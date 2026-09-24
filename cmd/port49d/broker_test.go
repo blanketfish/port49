@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/config"
@@ -43,26 +44,27 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 }
 
 const minimalPolicy = `
+scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 `
 
 func buildWith(cfg config.Config) error {
-	_, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+	_, _, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
 		metrics.New(prometheus.NewRegistry()))
 	return err
 }
 
 func TestNoBrokerBlockBuildsNoBroker(t *testing.T) {
-	srv, err := buildBroker(config.Config{}, nil, nil, nil, nil)
-	if srv != nil || err != nil {
-		t.Fatalf("%v %v", srv, err)
+	srv, pol, err := buildBroker(config.Config{}, nil, nil, nil, nil)
+	if srv != nil || pol != nil || err != nil {
+		t.Fatalf("%v %v %v", srv, pol, err)
 	}
 }
 
 func TestABrokerBuildsFromItsFiles(t *testing.T) {
-	srv, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
+	srv, _, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
 		decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
@@ -83,14 +85,117 @@ func TestABrokerBuildsFromItsFiles(t *testing.T) {
 
 // Everything that can fail on a typo fails before a listener opens.
 func TestABrokerThatCannotLoadFailsTheStart(t *testing.T) {
-	if err := buildWith(brokerConfig(t, "roles: [{name: r, privilege: operator}]\n")); err == nil ||
-		!strings.Contains(err.Error(), "operator") {
+	if err := buildWith(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: root", 1))); err == nil ||
+		!strings.Contains(err.Error(), `"root" is not a privilege level`) {
 		t.Fatalf("a bad policy: %v", err)
 	}
 	cfg := brokerConfig(t, minimalPolicy)
 	cfg.Broker.ClientCAFile = cfg.Broker.TLSKeyFile
 	if err := buildWith(cfg); err == nil {
 		t.Fatal("a trust anchor file with no certificate must fail the start")
+	}
+}
+
+// A device the policy cannot be compiled for is quarantined, not a reason to
+// stay down: the start goes on, and names the device and the cause (spec §10;
+// §13 decision 20). leaf1 is arista_eos, which renders no `operator`.
+func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	_, pol, err := buildBroker(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1)),
+		memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatalf("a quarantined device must not stop the start: %v", err)
+	}
+	if _, ok := pol.Quarantined("leaf1", time.Now()); !ok {
+		t.Fatal("the daemon is handed the policy that quarantines leaf1")
+	}
+	if !strings.Contains(out.String(), "device leaf1 (arista_eos) is quarantined") ||
+		!strings.Contains(out.String(), "level operator has no rendering on arista_eos") {
+		t.Fatalf("stderr: %s", out.String())
+	}
+}
+
+// A deny term that matches any argument on a platform that may send what was
+// typed, because its abbreviations cannot be read, is said at start with the
+// term and the platform; the device is not quarantined (spec §3 rule 4).
+func TestAWidenedDenyIsSaidAtStart(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`, `permit: ["**"], deny: ["* * /tftp/"]}`, 1))
+	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "ntp1", Platform: "meinberg_lantime"})
+	_, pol, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := pol.Quarantined("ntp1", time.Now()); ok {
+		t.Fatal("a widened deny quarantines nothing")
+	}
+	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "* * /tftp/" on meinberg_lantime: /tftp/:`) ||
+		!strings.Contains(out.String(), "matches any argument") {
+		t.Fatalf("stderr: %s", out.String())
+	}
+}
+
+// A permit naming an interface joined never matches on IOS-XE, which sends
+// the name and the index apart (L21), and the start says so.
+func TestAJoinedInterfacePermitIsSaidAtStart(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`, `permit: ["**", "interface Gi1 **"]}`, 1))
+	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "xe1", Platform: "cisco_iosxe"})
+	if _, _, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+		metrics.New(prometheus.NewRegistry())); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `port49d: broker: role "r": permit "interface Gi1 **" on cisco_iosxe: `+"`Gi1`"+` never matches`) {
+		t.Fatalf("stderr: %s", out.String())
+	}
+}
+
+// The daemon asks the policy at the time of each packet, and the gauge counts
+// at the time of each scrape: a device an expiry will quarantine is neither
+// refused nor counted until then (spec §10).
+func TestTheDaemonsQuarantineFollowsTheClock(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	now := time.Now()
+	lapse := now.Add(48 * time.Hour).Truncate(time.Second)
+	_, pol, err := buildBroker(brokerConfig(t, `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: op, privilege: operator, permit: [show **]}
+  - {name: adm, privilege: admin, permit: ["**"]}
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants:
+  - {subject: s, scope: all_devices, roles: [op]}
+  - {subject: s, scope: all_devices, roles: [adm], expires: `+lapse.Format(time.RFC3339)+`}
+`), memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The start says it now, with when, while leaf1 still mints.
+	if !strings.Contains(out.String(), "port49d: broker: device leaf1 (arista_eos) will be quarantined from "+
+		decision.FormatTime(lapse)) || strings.Contains(out.String(), "is quarantined") {
+		t.Fatalf("stderr: %s", out.String())
+	}
+	m := metrics.New(prometheus.NewRegistry())
+	clock := now
+	quarantined := watchQuarantine(pol, m, func() time.Time { return clock })
+	if _, ok := quarantined("leaf1", now); ok || testutil.ToFloat64(m.DevicesQuarantined) != 0 {
+		t.Fatal("before the expiry leaf1 is neither refused nor counted")
+	}
+	clock = lapse
+	if _, ok := quarantined("leaf1", lapse); !ok || testutil.ToFloat64(m.DevicesQuarantined) != 1 {
+		t.Fatalf("from the expiry leaf1 is refused and counted: gauge %v", testutil.ToFloat64(m.DevicesQuarantined))
+	}
+	if watchQuarantine(nil, m, time.Now) != nil {
+		t.Fatal("with no broker there is no quarantine to ask")
 	}
 }
 
@@ -198,7 +303,7 @@ func TestBrokerTLSErrorsReachPort49dsLog(t *testing.T) {
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = &out
 
-	srv, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
+	srv, _, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
 		decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)

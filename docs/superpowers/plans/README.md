@@ -11,7 +11,9 @@ Plan 13 builds the user and admin documentation from these.
 
 Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
 fifteen tasks, reviewed per task and whole-branch); **3 merged 2026-09-23** (PR #8, below);
-4–13 not yet. Plan 4 (policy engine) is the next plan to write.
+**lab 2026-09-24 merged** (PR #9); **4 executed 2026-09-24 on `feature/policy-engine`**
+(`2026-09-23-04-policy-engine.md`, twenty-three tasks), not yet merged; 5–13 not yet. Plan 4b
+is next.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -200,7 +202,7 @@ hand.
 unmeasured is HTTP keep-alive and an idle-gap playbook run (spec §13); L1's RESTCONF
 clause measured on IOS-XE (`L1-restconf-cisco_iosxe.md`), and L1 open on the console.
 
-## Plan 4 — Policy engine (§19 step 4)
+## Plan 4 — Policy engine (§19 step 4) — `2026-09-23-04-policy-engine.md`
 
 Spec §3 (normalization), §4 (grammar, pipeline stages), §5.1–§5.5 (mint resolution, blob
 compilation, refresh, credential identity, scopes and `attached_roles`, version comparison),
@@ -232,6 +234,118 @@ the fault switch lab-only and say so.
   while the broker and the daemon share one inventory, so the slice does not check it; it
   becomes reachable when they stop sharing one.
 - **A `GetBlob` store error answers `store_unavailable`** once the store is remote.
+
+**As built:** the executor is `internal/engine` (the blob format and the one evaluator the
+daemon, `port49 policy replay` and `port49 explain` all run) and the authoring side is
+`internal/policy`; plan 3's `internal/blob`, `author.Blob` and `internal/broker/policy` are gone.
+`author.Engine` is the daemon's authorizer. `author.Lab` survives only as the lab's instrument
+for seeded contexts, behind an optional `lab:` block (plan 4, Decided 12). The accounting spool
+drains to a `decision.Sink` and stops at a refused record. Authorization answers
+`store_unavailable` FAIL, as plans 1–3 did, until L4 measures authorization fall-through (plan 4,
+Question 3, owner's ruling 2026-09-24). A device that fails a joint policy-and-inventory check is
+quarantined, not the policy refused: named at start, refused at mint `device_quarantined`, and
+closed at once without a reply by the daemon, never held silent, because the lab measured a
+silent server at about 5 s a command (spec §10, decision 20). Quarantine is time-scoped: a
+device is quarantined only while its check fails, so a grant's expiry schedules an entry from
+that instant (warned at start), and the daemon asks per connection and per packet with the
+current time. `port49 policy test` carries the
+shadowed-deny report and `port49 policy diff` the effective-permission diff and the
+privilege-expansion gate (spec §12), and replay re-derives a session's attributes.
+
+**Hands to plan 5:**
+
+- `internal/platform/dialect.go` is borrowed ahead and is plan 5's to replace with the layered
+  adapters: `pipe_authorized` is false on EOS, NX-OS and IOS-XE (measured,
+  `tests/lab/results/L2-*.md`); `expands_abbreviations` is true on EOS, NX-OS and IOS-XE, set
+  from L21 (closed 2026-09-24, interactive SSH; other transports unmeasured), and false on Junos
+  and the generic adapter; entity classes are names from spec §8 and the lab configs, unverified against a device;
+  only `arista_eos` renders levels, and `operator` renders nowhere (plan 4, Question 1), so a policy
+  landing an EOS session at `operator` quarantines those devices until plan 5 renders it (the
+  role-ceiling results below).
+- **The owner's level definitions (2026-09-24), binding on the adapters:** `readonly` is show and
+  info only; `operator` is non-disruptive state changes and no configuration (`clear counters`
+  yes, `clear bgp *` no); `admin` is everything. The device role is the ceiling, and port49's
+  command rules draw the line inside it.
+- **Three lab runs, added to spec §15 L4's *To measure* by plan 4 (owner's rulings 2026-09-24),
+  measured 2026-09-24 in the lab run merged as PR #9:** authentication `ERROR` does not give
+  break-glass anywhere measured, and an authorization `ERROR` is dangerous (NX-OS falls to its
+  local role checks and runs the command; IOS-XE `if-authenticated` runs everything), so FAIL
+  stands (`tests/lab/results/L4-error-*.md`); only an unreachable port49 gives break-glass,
+  which is plan 6's go-dark below.
+- **Role ceiling, measured 2026-09-24** (`tests/lab/results/ceiling-*.md`): on IOS-XE levels 1
+  and 7 refuse `clear counters`, `clear ip bgp *` and `configure` in the parser, and level 7 with
+  `privilege exec level 7 clear counters` is the `operator` rung, so the device can enforce it; on
+  EOS level 1 refuses all three and `network-operator` at 15 runs all three (L16 found the role binds only
+  under local authorization); on NX-OS every role runs all three. **On EOS and NX-OS the
+  `operator` rung is port49's per-command policy alone.** Open for the owner: how EOS and NX-OS
+  render `operator` (for example level 15 with port49's rules drawing the line).
+- **L21**, added by plan 4, closed 2026-09-24 (`tests/lab/results/L21-*.md`): all three
+  per-command platforms send resolved words over SSH; other transports are unmeasured.
+- The dead-rule and fallback-exposure intersection checks of spec §12 are this plan's; plan 4
+  built the shadowed-deny report, the effective-permission diff and the privilege-expansion gate,
+  because it is the plan that switched to dominance (plan 4, Question 4, owner's rulings
+  2026-09-24; listed in its section).
+- Opening the pull request `port49 grants remove` prepares: plan 4 edits the file (printed, or
+  `--write`), and plan 5 opens the review (owner's ruling 2026-09-24).
+- The offline tools (`port49 explain`, `policy test`, `access review`, `grants remove`) load a
+  policy without config's resolved `EnableUsernames`, so CI cannot see a `platforms:`
+  enable-username override the daemon applies. Harmless while `config.Load` refuses such an
+  override; plan 5's to close when its adapters bring the overrides (plan 4 pre-flight, N5).
+- Operator-supplied entity-class patterns, when adapters bring them, must be checked for `(?-i)`
+  where a deny uses them: plan 4 refuses a deny regex that turns case-insensitivity off, because
+  a case-sensitive deny can be walked past by case (spec §4), and permits keep the opt-in.
+- **Open for the owner:** should a level or ceiling raise (`readonly` to `admin`) fail `port49
+  policy diff`'s gate? Spec §12 only reports it, and plan 4 built it that way.
+
+**Hands to plan 6:** quarantine is applied by `port49d` when it loads the policy
+(`policy.checkDevices`); plan 6 publishes it in the bundle, `admission: quarantined`, from the
+inventory service (spec §10, decision 20). `security_log` is accepted and emits nothing until a
+sync can change a scope's membership. `bundle` on every blob and record is the policy file's
+`sha256:` until versioned bundles replace it. The remote store brings continuing active logins
+from a replica's warm context cache through a store outage (design §12).
+
+**Go-dark on a store outage (owner's ruling 2026-09-24; plan 6 or 7, whichever brings the
+remote store):** `port49d` health-checks the store, closes its TACACS+ listener after N
+consecutive failures and reopens it after M successes, with that hysteresis. The lab showed that
+only an unreachable port49 gives break-glass: an authentication `ERROR` does not, and an
+authorization `FAIL` refuses break-glass's commands (`tests/lab/results/L4-error-*.md`). The
+listener must be closed, so a device sees connection refused and moves on at once, never held
+silent, which costs about 5 s a command on IOS-XE, EOS and NX-OS. A per-username break-glass list
+was rejected (every site's break-glass account differs). Operator note: NX-OS with `deadtime 1`
+refuses token logins for about a minute after port49 returns.
+
+**Hands to plan 7:** group subjects load, and are evaluated by name in the offline tools, but mint
+for no one until the directory resolves membership; `api:` rights are validated and reported, not
+enforced; `max_session_age` per role is refused at load by name; `/v1/explain` over the API (the
+offline `port49 explain` exists). Policy reload is plan 4b's.
+
+## Plan 4b — Live policy (spec §5.1.3)
+
+The owner's core goal (2026-09-24): **a policy change reaches every live session without anyone
+logging out.** Today a policy edit needs a `port49d` restart, and a restart ends every live login
+context and every unspent token (plan 3, Question 3).
+
+- **Reload trigger:** a watch on `broker.policy_file` and `SIGHUP`, both.
+- **Validate or keep the old:** the new file is loaded against the current inventory exactly as
+  at start. A file that does not load leaves the running policy in force, logged with the error
+  and counted (`port49_policy_reloads_total{outcome}`); nothing half-applies.
+- **Atomic swap:** the broker's policy and the daemon's quarantine list change in one step, so
+  no mint sees one version's policy and another's quarantine.
+- **The joint check re-runs on every reload:** the new policy's quarantine schedule (the
+  time-scoped entries, grant expiries included) replaces the old one whole, so a fix releases a
+  device and a new failure quarantines one without a restart, and its connections close as plan
+  4's do.
+- **Refresh of live contexts (spec §5.1.3):** each principal with a live context is re-resolved
+  against the new policy, a new blob is written where the result differs, and `blob_hash` is
+  updated in each of that principal's live contexts; a principal left with no grant has its
+  contexts revoked (`revoked_at`). A policy-removed grant therefore reaches an
+  active session on its next command, **with no logout**. Blobs are immutable, so a replica's
+  cached copy of the old one is never wrong, only no longer referenced.
+- Carried here from plan 7: `(*broker.Broker).Server` returns an error instead of panicking, now
+  that a reload path exists.
+
+Plan 7 keeps the scheduled refresh through `active_principals` for directory changes, and the
+`staleness_ceiling` default that goes with it.
 
 ## Plan 5 — Platform adapters (§19 step 5)
 
@@ -333,6 +447,15 @@ NOT collide"). Such an account's commands arrive under the same username and mat
 context at its highest granted level; `foreign` attribution is the only detection until this check
 exists.
 
+**Owed from plan 4 (owner's rulings 2026-09-24):** spec §12's dead-rule and fallback-exposure
+intersection checks, which need the level and role data this plan's adapters bring. Plan 4 built
+the shadowed-deny report, the effective-permission diff and the privilege-expansion gate, because
+it is the plan that replaced deny-overrides with dominance. Also: opening the pull request `port49
+grants remove` prepares (plan 4 delivers the file edit). The rest of what plan 4 hands this
+plan — the borrowed dialect table, the role-ceiling results and the open `operator` rendering on
+EOS and NX-OS, the owner's level definitions, the `(?-i)` check on entity classes — is under plan
+4's "Hands to plan 5".
+
 **Possible later, not planned:** per-window contexts on the platforms that give a window its own
 stable identifier — EOS `vty<n>`, bound at session authorization
 (`tests/lab/results/L1-arista_eos.md`; again 2026-09-22), and IOS-XE `tty<n>`
@@ -361,21 +484,21 @@ grace window, `max_session_age` minimum across roles), the staleness ceiling end
 (design §19 step 2); the scheduled refresh and the `staleness_ceiling` default, together; PR #7's
 third follow-up — a join racing another principal's replace under one username can lose its sid or
 certificate index entry (revocation by principal still reaches it); the certificate-to-directory
-mapping replacing the slice's declared `username:`; policy reload. Also owed by plan 3's reviews:
+mapping replacing the slice's declared `username:`; go-dark on a store outage, if plan 6 has not
+built it (plan 4's "Hands to plan 6"). Also owed by plan 3's reviews:
 
 - An **atomic put-if-absent idempotency reservation**. Two concurrent requests under one key
   with different bodies can both pass the pre-check today, and the minter's read, mint and
   `PutIdempotency` are three steps, not one.
 - **Per-source limits or admission on the broker listener.** One client reconnecting every 30s
   can keep all of `broker.MaxConns` (256) slots full.
-- `(*broker.Broker).Server` **returns an error instead of panicking** once a reload path exists.
 - A **counter for broker TLS handshake failures**.
 - A **per-principal cap on held broker connections**, beside the per-source one. Any
   certificate the anchor signs can open all 256 slots and hold them for `max_session_age`,
   locking every other operator out of `port49 login`.
-- **A revocation must reach the held connection.** The slice has no revocation lever: to cut
-  someone off, remove their subject from the policy (or re-issue the CA) and restart
-  `port49d`, which logs everyone out. A revocation by principal or by certificate must also
+- **A revocation must reach the held connection.** Plan 4b makes a policy edit live: removing
+  a subject's grant revokes that principal's contexts with no restart and no logout. Revocation
+  by principal or by certificate (spec §5.1.4) is this plan's, and it must also
   refuse mints on, or close, that principal's held broker connections; otherwise a token
   minted after the revocation lifts it (decision 15).
 
@@ -389,6 +512,19 @@ config backup (Oxidized) as the day-one consumer.
 
 `port49 ssh` with host-key verification and `port49 devices trust`, the OIDC public client,
 the in-session re-auth flow, integration examples (design §17 "Integration examples").
+
+**Owed from plan 3 (owner's rulings 2026-09-24):**
+- **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,
+  `cert`, `key`) so `port49 login` needs no flags. `broker_ca` stays **required** — the file
+  supplies it, it never falls back to the system roots — and it pins the **CA**, not the
+  broker's leaf, so a broker certificate renewal does not break every client. Flags override
+  the file.
+- **Hardware-backed client keys**: YubiKey through its **PIV** applet (PKCS#11), and platform
+  keystores (TPM, macOS Secure Enclave), with touch/PIN policy. FIDO2 alone cannot sign a TLS
+  handshake; it belongs to the OIDC path. Plan 3's PEM file stays as the fallback.
+- **Optional CRL check of the broker's certificate** when it names a distribution point (the
+  CA is the operator's own, so this is defence in depth; revocation of *client* certificates
+  at the broker is plan 7's, spec §5.1.4).
 
 ## Plan 10 — Kubernetes path (§19 step 10)
 

@@ -1,0 +1,15 @@
+# A policy that quarantines every lab device (spec §10; §13 decision 20), for
+# the by-hand quarantine-close measurement (tests/lab/results/quarantine-*.md).
+# One role names a class only arista_eos defines, which quarantines every other
+# platform, and lands at `operator`, which arista_eos cannot render, which
+# quarantines leaf1. port49d answers every packet from a quarantined device by
+# closing the connection after the header.
+scopes:
+  - {name: all_devices, match: {}}
+roles:
+  - {name: quarantines_all, privilege: operator, permit: ["show interfaces @loopback"]}
+subjects:
+  - {name: quarantine_probe, identity: ["user:alice@slice.port49.test"], username: slice01,
+     enable: token, token_ttl: 60s}
+grants:
+  - {subject: quarantine_probe, scope: all_devices, roles: [quarantines_all], max_privilege: admin}

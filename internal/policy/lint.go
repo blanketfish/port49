@@ -1,0 +1,215 @@
+package policy
+
+import (
+	"fmt"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/engine"
+)
+
+// Finding is something CI reports about a policy that loads: not an error,
+// but a fact a reviewer should see stated rather than discover (spec §5.5,
+// §6, §12). `port49 policy test` prints them.
+type Finding struct {
+	Kind    string
+	Message string
+}
+
+// The finding kinds.
+const (
+	FindingAttachedPermit      = "attached_permit"
+	FindingGrantlessSubject    = "grantless_subject"
+	FindingAPIRights           = "api_rights"
+	FindingGroupSubject        = "group_subject"
+	FindingMandatoryAttribute  = "mandatory_attribute"
+	FindingAttributeShadowed   = "attribute_shadowed"
+	FindingIncomparableVersion = "incomparable_version"
+	FindingDenyWidened         = "deny_widened"
+	FindingPermitJoinedName    = "permit_joined_name"
+)
+
+// Lint computes the findings at now, ordered by kind and then message so two
+// runs over one policy print the same report. A composition is read at now
+// and at every later grant expiry, as the shadowed-deny report reads it, so a
+// grant that has lapsed reports nothing.
+func (p *Policy) Lint(now time.Time) []Finding {
+	var out []Finding
+	add := func(kind, format string, args ...any) {
+		out = append(out, Finding{Kind: kind, Message: fmt.Sprintf(format, args...)})
+	}
+	for name, s := range p.scopes {
+		for _, domain := range []string{"humans", "machines"} {
+			for _, r := range s.Attached[domain] {
+				if len(p.roles[r].Permit) > 0 {
+					add(FindingAttachedPermit, "scope %q attaches role %q to every %s grant that reaches its "+
+						"devices, and the role carries a permit (spec §5.5): a fleet-wide deny is routine, a "+
+						"fleet-wide permit rarely is", name, r, strings.TrimSuffix(domain, "s"))
+				}
+			}
+		}
+	}
+	for name, sub := range p.subs {
+		if len(p.Grants(name)) == 0 {
+			add(FindingGrantlessSubject, "subject %q has no grant and matches nothing; remove the block (spec §12)", name)
+		}
+		if len(sub.API) > 0 {
+			add(FindingAPIRights, "subject %q holds api: [%s], authority over other people's sessions (spec §2)",
+				name, strings.Join(sub.API, " "))
+		}
+		if sub.Group != "" {
+			add(FindingGroupSubject, "subject %q is a group: the broker matches a principal to a group through the "+
+				"directory, which is plan 7's, so until then it mints for no one; explain and policy tests "+
+				"evaluate it by name", name)
+		}
+	}
+	for name, r := range p.roles {
+		for key, list := range r.Attributes {
+			for _, a := range list {
+				if engine.Mandatory(a) {
+					add(FindingMandatoryAttribute, "role %q sends %s mandatory on %s: a device that cannot parse "+
+						"it refuses the whole session (spec §6); write it with `*` unless the device needs `=`",
+						name, a, key)
+				}
+			}
+		}
+	}
+	for _, g := range p.grants {
+		for key, list := range g.Attributes {
+			for _, a := range list {
+				if engine.Mandatory(a) {
+					add(FindingMandatoryAttribute, "the grant of %s on %s sends %s mandatory on %s: a device that "+
+						"cannot parse it refuses the whole session (spec §6)", g.Subject, g.Scope, a, key)
+				}
+			}
+		}
+	}
+	seen := map[string]bool{}
+	instants := p.expiryInstants(now)
+	for name, sub := range p.subs {
+		for _, d := range p.env.Devices {
+			for _, at := range instants {
+				res, err := p.resolve(sub, d, at)
+				if err != nil {
+					// No grant here means nothing to shadow, and any other
+					// error quarantines the device, which Quarantined reports.
+					continue
+				}
+				for _, a := range res.Attributes {
+					for _, shadowed := range a.Shadows {
+						msg := fmt.Sprintf("subject %q on %s: %s (%s) shadows %s", name, d.Platform, a.Attribute,
+							a.Source, shadowed)
+						if !seen[msg] {
+							seen[msg] = true
+							add(FindingAttributeShadowed, "%s", msg)
+						}
+					}
+				}
+			}
+		}
+	}
+	for name, s := range p.scopes {
+		for _, d := range p.env.Devices {
+			if ok, byIncomparable := s.selects(d); ok && byIncomparable {
+				add(FindingIncomparableVersion, "scope %q includes %s because its version could not be compared "+
+					"(%s); name the version explicitly, match it by regex, or exclude it by another attribute "+
+					"(spec §5.5)", name, d.Name, s.comparedValues(d))
+			}
+		}
+	}
+	out = append(out, p.WidenedDenies()...)
+	out = append(out, p.JoinedNamePermits()...)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Message < out[j].Message
+	})
+	return out
+}
+
+// comparedValues renders the device's values for every compared key against
+// the bound, e.g. `os_version 21.4X75-D40 lt 21.4R3-S5`.
+func (s *Scope) comparedValues(d admission.Device) string {
+	var parts []string
+	keys := make([]string, 0, len(s.Match))
+	for k := range s.Match {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		ops := make([]string, 0, len(s.Match[k].Cmp))
+		for op := range s.Match[k].Cmp {
+			if op != "re" {
+				ops = append(ops, op)
+			}
+		}
+		slices.Sort(ops)
+		for _, op := range ops {
+			parts = append(parts, fmt.Sprintf("%s %s %s %s", k, d.Attributes[k], op, s.Match[k].Cmp[op]))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// WidenedDenies names every deny term that matches any argument on a platform
+// in the inventory, because the platform may send what was typed and the
+// term's abbreviations cannot be read (spec §3 rule 4). It over-denies rather
+// than refuse the device, so the operator is told here, and by port49d at
+// start, which term and why.
+func (p *Policy) WidenedDenies() []Finding {
+	platforms := map[string]bool{}
+	for _, d := range p.env.Devices {
+		platforms[d.Platform] = true
+	}
+	var out []Finding
+	for _, name := range sortedKeys(p.roles) {
+		for _, rule := range p.roles[name].Deny {
+			for _, plat := range sortedKeys(platforms) {
+				for _, why := range engine.WidenedToAny(rule, p.dialect(plat).EntityClasses, p.normalizeFor(plat)) {
+					out = append(out, Finding{Kind: FindingDenyWidened, Message: fmt.Sprintf(
+						"role %q: deny %q on %s: %s", name, rule, plat, why)})
+				}
+			}
+		}
+	}
+	return out
+}
+
+// JoinedNamePermits names every permit word written as an interface name and
+// its index joined, on each platform in the inventory that sends the two
+// apart: IOS-XE sends a typed `Gi1` as `GigabitEthernet`, `1`
+// (tests/lab/results/L21-cisco_iosxe.md), and a permit matches only as
+// written (spec §3 rule 5), so the word never matches there. It is reported
+// here, and by port49d at start, rather than discovered as a denial.
+func (p *Policy) JoinedNamePermits() []Finding {
+	platforms := map[string]bool{}
+	for _, d := range p.env.Devices {
+		if p.dialect(d.Platform).SplitsInterfaceNames {
+			platforms[d.Platform] = true
+		}
+	}
+	var out []Finding
+	for _, name := range sortedKeys(p.roles) {
+		for _, rule := range p.roles[name].Permit {
+			terms, err := engine.ParseRule(rule)
+			if err != nil {
+				continue
+			}
+			for _, plat := range sortedKeys(platforms) {
+				for _, t := range terms {
+					if head, index, ok := engine.SplitName(t.Text); ok && t.Kind == engine.Word {
+						out = append(out, Finding{Kind: FindingPermitJoinedName, Message: fmt.Sprintf(
+							"role %q: permit %q on %s: `%s` never matches on %s, which sends it as two arguments "+
+								"(tests/lab/results/L21-cisco_iosxe.md); write `%s %s`", name, rule, plat, t.Text, plat,
+							head, index)})
+					}
+				}
+			}
+		}
+	}
+	return out
+}

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
@@ -160,6 +162,13 @@ func (ts *testServer) shutdown() {
 // a path the lab authorizer cannot produce.
 func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.Authorizer) *testServer {
 	t.Helper()
+	return newTestServerWith(t, log, st, authz, nil)
+}
+
+// newTestServerWith is newTestServer with a last word on the Deps, for a test
+// that needs one field the others do not.
+func newTestServerWith(t *testing.T, log *syncBuffer, st store.Store, authz author.Authorizer, adjust func(*Deps)) *testServer {
+	t.Helper()
 	if authz == nil {
 		authz = &author.Lab{SessionAttributes: []string{"priv-lvl=15"}, DenyPrefixes: []string{"reload"}}
 	}
@@ -195,6 +204,9 @@ func newTestServer(t *testing.T, log *syncBuffer, st store.Store, authz author.A
 		Author: author.New(st, authz, em, m, time.Now, platform.Defaults(), time.Hour, 10*time.Minute, time.Hour),
 		Acct:   acct.New(st, sp, m, time.Now, platform.SystemUsers()),
 		Limits: lim, Metrics: m, Log: em, Now: time.Now, IdleTimeout: time.Second}
+	if adjust != nil {
+		adjust(&d)
+	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -529,11 +541,11 @@ func TestStoreErrorAnswersErrorEndToEnd(t *testing.T) {
 // outside the package: nothing in the daemon's own code is meant to panic.
 type panicAuthorizer struct{}
 
-func (panicAuthorizer) Session(context.Context, store.Context, []string) author.Decision {
+func (panicAuthorizer) Session(context.Context, author.Request) author.Decision {
 	panic("port49 test: deliberate panic inside an authorizer")
 }
 
-func (panicAuthorizer) Command(context.Context, store.Context, []string, []string) author.Decision {
+func (panicAuthorizer) Command(context.Context, author.Request) author.Decision {
 	panic("port49 test: deliberate panic inside an authorizer")
 }
 
@@ -648,6 +660,153 @@ func TestUnadmittedSourceIsRecordedAndClosed(t *testing.T) {
 	if !log.contains(`"source":"127.0.0.2"`) {
 		t.Fatalf("the record must name the source: %s", log.String())
 	}
+}
+
+// quarantinePolicy is a policy under which leaf-01 (arista_eos) is quarantined
+// from adminUntil to opUntil: once the admin grant lapses, the operator level
+// left has no rendering on arista_eos, and once the operator grant lapses too
+// there is no composition to fail.
+func quarantinePolicy(t *testing.T, loaded, adminUntil, opUntil time.Time) *policy.Policy {
+	t.Helper()
+	p, err := policy.Parse([]byte(`
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: op, privilege: operator, permit: [show **]}
+  - {name: adm, privilege: admin, permit: ["**"]}
+subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
+grants:
+  - {subject: s, scope: all_devices, roles: [op], expires: `+opUntil.Format(time.RFC3339)+`}
+  - {subject: s, scope: all_devices, roles: [adm], expires: `+adminUntil.Format(time.RFC3339)+`}
+`), policy.Env{Now: loaded, Devices: []admission.Device{{Name: "leaf-01", Platform: "arista_eos",
+		Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// slowBackoff is a limiter whose malformed-packet delay is far longer than
+// any quarantine test waits, so a connection held for it is seen as held.
+func slowBackoff() *limits.Limiter {
+	return limits.New(limits.Config{PerNASConnections: 2, IdleTimeout: time.Second,
+		MalformedBackoffBase: 5 * time.Second, MalformedBackoffMax: 5 * time.Second, MalformedWindow: time.Minute,
+		AuthFailureDelayBase: time.Millisecond, AuthFailureDelayMax: time.Millisecond, AuthFailureWindow: time.Minute}, time.Now)
+}
+
+// closedAtOnce asserts the server hung up on c without a reply and without
+// holding the connection: a device waiting on a silent server costs ~5 s per
+// command (tests/lab/results/L4-error-*.md), and this close costs what a
+// refused connection does (tests/lab/results/quarantine-*.md).
+func closedAtOnce(t *testing.T, c *client) {
+	t.Helper()
+	start := time.Now()
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	// The unread body makes the close a reset rather than a FIN; either is
+	// the server gone, and a timeout is the connection held.
+	n, err := c.conn.Read(make([]byte, 1))
+	if n != 0 || !(errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET)) {
+		t.Fatalf("want the connection closed without a reply, got %d bytes, %v", n, err)
+	}
+	if held := time.Since(start); held > 500*time.Millisecond {
+		t.Fatalf("the connection was held %s before it was closed", held)
+	}
+}
+
+// A quarantined device gets silence, not FAIL (spec §10; §13 decision 20):
+// its connection is closed without a reply after one header, at once rather
+// than after the limiter's delay, and the record names the device and says
+// device_quarantined. The body, which carries the credential, is never read.
+func TestAQuarantinedDeviceIsClosedWithoutAReply(t *testing.T) {
+	log := &syncBuffer{}
+	now := time.Now()
+	pol := quarantinePolicy(t, now.Add(-time.Hour), now.Add(-time.Minute), now.Add(time.Hour))
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
+		d.Quarantined = pol.Quarantined
+		d.Limits = slowBackoff()
+	})
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	closedAtOnce(t, c)
+	if !waitFor(t, func() bool { return log.contains(`"reason":"device_quarantined"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	if !log.contains(`"name":"leaf-01"`) || !log.contains(`"diagnosis":"device_quarantined"`) || log.contains("p49_e2e") {
+		t.Fatalf("the record names the device, and never the credential: %s", log.String())
+	}
+	if n := testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")); n != 1 {
+		t.Fatalf("unvalidated{device_quarantined} = %v", n)
+	}
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("malformed_backoff")); n != 0 {
+		t.Fatalf("a quarantined device is not a malformed-packet strike: %v", n)
+	}
+}
+
+// Quarantine is decided at the time of each packet, not once at start: a
+// device is served until a grant's expiry quarantines it, then closed at once
+// — on a new connection and on a single-connection session opened before the
+// expiry — and served again once the quarantine's span ends.
+func TestAQuarantineTakesEffectAtTheExpiryAndEndsWithIt(t *testing.T) {
+	log := &syncBuffer{}
+	loaded := time.Now()
+	adminUntil, opUntil := loaded.Add(time.Hour), loaded.Add(2*time.Hour)
+	pol := quarantinePolicy(t, loaded, adminUntil, opUntil)
+	var clock atomic.Pointer[time.Time]
+	clock.Store(&loaded)
+	st := memory.New(time.Now)
+	for _, id := range []string{"a", "b", "c"} {
+		if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+			store.Token{ID: id, Secret: []byte("p49_" + id), Kind: store.KindLogin, Principal: "user:alice@example.com",
+				ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ts := newTestServerWith(t, log, st, nil, func(d *Deps) {
+		d.Quarantined = pol.Quarantined
+		d.Now = func() time.Time { return *clock.Load() }
+		d.Limits = slowBackoff()
+	})
+	login := func(c *client, sid uint32, tok string) {
+		c.sid, c.seq = sid, 1
+		c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+			Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte(tok)}.Encode(),
+			wire.FlagSingleConnect)
+	}
+	passes := func(c *client) {
+		t.Helper()
+		if _, body := c.recv(t); body == nil {
+			t.Fatal("no reply")
+		} else if r, _ := wire.DecodeAuthenReply(body); r.Status != wire.AuthenStatusPass {
+			t.Fatalf("%+v", r)
+		}
+	}
+
+	// Before the expiry: served, and the session stays open.
+	held := dial(t, ts.addr, []byte("k2"))
+	login(held, 1, "p49_a")
+	passes(held)
+
+	// After it: the open session's next packet is closed at once, and so is
+	// a new connection.
+	lapsed := adminUntil.Add(time.Second)
+	clock.Store(&lapsed)
+	login(held, 2, "p49_b")
+	closedAtOnce(t, held)
+	fresh := dial(t, ts.addr, []byte("k2"))
+	login(fresh, 3, "p49_b")
+	closedAtOnce(t, fresh)
+	if !waitFor(t, func() bool {
+		return testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")) == 2
+	}) {
+		t.Fatalf("unvalidated{device_quarantined} = %v", testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")))
+	}
+
+	// Once the quarantine's span ends the device is served again.
+	ended := opUntil.Add(time.Second)
+	clock.Store(&ended)
+	again := dial(t, ts.addr, []byte("k2"))
+	login(again, 4, "p49_c")
+	passes(again)
 }
 
 func TestPerNASCapRefusesThirdConnection(t *testing.T) {

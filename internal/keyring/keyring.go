@@ -32,6 +32,7 @@ const (
 	// Emitted by the connection layer for packets the keyring never sees; Resolve never returns them.
 	DiagUnadmittedSource         Diagnosis = "unadmitted_source"          // source address not in the inventory
 	DiagMalformedAfterValidation Diagnosis = "malformed_after_validation" // key validated, body did not decode
+	DiagDeviceQuarantined        Diagnosis = "device_quarantined"         // admitted, but quarantined by policy (spec §10)
 )
 
 type Result struct {

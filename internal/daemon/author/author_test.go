@@ -135,10 +135,10 @@ func TestVector(t *testing.T) {
 
 func TestLabCommandPrefixBoundary(t *testing.T) {
 	l := &Lab{DenyPrefixes: []string{"show"}}
-	if d := l.Command(context.Background(), store.Context{}, []string{"show", "version"}, nil); d.Permit {
+	if d := l.Command(context.Background(), Request{Vector: []string{"show", "version"}}); d.Permit {
 		t.Fatalf("expected \"show version\" to be denied by prefix \"show\": %+v", d)
 	}
-	if d := l.Command(context.Background(), store.Context{}, []string{"shower"}, nil); !d.Permit {
+	if d := l.Command(context.Background(), Request{Vector: []string{"shower"}}); !d.Permit {
 		t.Fatalf("expected \"shower\" to be permitted (no token boundary match): %+v", d)
 	}
 }
@@ -262,7 +262,7 @@ func TestGetContextStoreErrorIsNotContextMissing(t *testing.T) {
 		platform.Defaults(), time.Hour, time.Minute, time.Hour)
 
 	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
-	if resp.Status != wire.AuthorStatusFail || string(resp.ServerMsg) != "port49: authorization store unavailable" {
+	if resp.Status != wire.AuthorStatusFail || string(resp.ServerMsg) != storeUnavailableMsg {
 		t.Fatalf("%+v", resp)
 	}
 	r := lastRecord(t, log)
@@ -473,7 +473,7 @@ func TestLabCommandAttributes(t *testing.T) {
 		DenyPrefixes:      []string{"reload"},
 	}
 
-	d := l.Command(context.Background(), store.Context{}, []string{"show", "version"}, nil)
+	d := l.Command(context.Background(), Request{Vector: []string{"show", "version"}})
 	if !d.Permit {
 		t.Fatalf("expected a permit for \"show version\": %+v", d)
 	}
@@ -481,7 +481,7 @@ func TestLabCommandAttributes(t *testing.T) {
 		t.Fatalf("a permitted command reply should carry the configured command attributes, got %q", d.Attributes)
 	}
 
-	if d := l.Command(context.Background(), store.Context{}, []string{"reload"}, nil); d.Permit {
+	if d := l.Command(context.Background(), Request{Vector: []string{"reload"}}); d.Permit {
 		t.Fatalf("expected \"reload\" to be denied: %+v", d)
 	} else if len(d.Attributes) != 0 {
 		t.Fatalf("a DENIED command reply must carry no attributes, got %q", d.Attributes)
@@ -489,14 +489,14 @@ func TestLabCommandAttributes(t *testing.T) {
 
 	// The two lists are separate: a session reply does not pick up command
 	// attributes, which is what makes L18 able to vary one at a time.
-	s := l.Session(context.Background(), store.Context{}, nil)
+	s := l.Session(context.Background(), Request{})
 	if len(s.Attributes) != 1 || s.Attributes[0] != "priv-lvl=15" {
 		t.Fatalf("the session reply should carry only the session attributes, got %q", s.Attributes)
 	}
 
 	// Unset is the shipped shape and must stay a bare permit.
 	bare := &Lab{DenyPrefixes: []string{"reload"}}
-	if d := bare.Command(context.Background(), store.Context{}, []string{"show", "version"}, nil); len(d.Attributes) != 0 {
+	if d := bare.Command(context.Background(), Request{Vector: []string{"show", "version"}}); len(d.Attributes) != 0 {
 		t.Fatalf("with no command_attributes configured the reply must carry none, got %q", d.Attributes)
 	}
 }
@@ -958,36 +958,6 @@ func (v *vanishingContextStore) TouchContext(ctx context.Context, k store.Contex
 		return store.ErrNotFound
 	}
 	return v.Store.TouchContext(ctx, k, ttl)
-}
-
-func TestGrantedPrivLvl(t *testing.T) {
-	for _, tt := range []struct {
-		attrs []string
-		want  uint8
-		ok    bool
-	}{
-		{nil, 0, false},
-		{[]string{"shell:roles*network-admin"}, 0, false},
-		{[]string{"priv-lvl=15"}, 15, true},
-		{[]string{"priv-lvl*15"}, 15, true}, // the optional form a device reads just the same
-		{[]string{"priv-lvl=0"}, 0, true},
-		{[]string{"shell:roles*network-admin", "priv-lvl=1"}, 1, true},
-		// Not a level, so not a grant: the context keeps what it had rather
-		// than being moved to something the reply did not say.
-		{[]string{"priv-lvl="}, 0, false},
-		{[]string{"priv-lvl=fifteen"}, 0, false},
-		{[]string{"priv-lvl=16"}, 0, false},
-		{[]string{"priv-lvl=-1"}, 0, false},
-		{[]string{"priv-lvl=300"}, 0, false},
-		{[]string{"priv-lvlx=15"}, 0, false},
-		// The last one wins, as it does on a device reading them in order.
-		{[]string{"priv-lvl=1", "priv-lvl=15"}, 15, true},
-	} {
-		got, ok := grantedPrivLvl(tt.attrs)
-		if got != tt.want || ok != tt.ok {
-			t.Errorf("grantedPrivLvl(%q) = %d, %v; want %d, %v", tt.attrs, got, ok, tt.want, tt.ok)
-		}
-	}
 }
 
 type countingTouchStore struct {

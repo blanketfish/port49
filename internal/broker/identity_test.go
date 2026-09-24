@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rhwendt/port49/internal/broker/policy"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -152,6 +152,8 @@ func TestAPrincipalMatchesItsPolicyIdentity(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(path, []byte(`
+scopes:
+  - {name: all_devices, match: {}}
 roles:
   - {name: r, privilege: admin, permit: ["**"]}
 subjects:
@@ -161,7 +163,7 @@ grants:
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p, err := policy.Load(path)
+	p, err := policy.Load(path, policy.Env{})
 	if err != nil {
 		t.Fatal(err)
 	}

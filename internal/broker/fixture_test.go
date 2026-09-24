@@ -20,15 +20,17 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
-	"github.com/rhwendt/port49/internal/broker/policy"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/token"
 )
 
 const testPolicy = `
+scopes:
+  - {name: all_devices, match: {}}
 roles:
   - {name: network_admin, privilege: admin, permit: ["**"]}
   - {name: no_reload, deny: ["reload **"]}
@@ -65,7 +67,12 @@ func newFixture(t *testing.T, candidateCap int) *fixture {
 	if err := os.WriteFile(path, []byte(testPolicy), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pol, err := policy.Load(path)
+	devices := map[string]admission.Device{
+		"leaf1": {Name: "leaf1", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.11")}},
+		"nx1":   {Name: "nx1", Platform: "cisco_nxos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.31")}},
+		"bare":  {Name: "bare", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.41")}},
+	}
+	pol, err := policy.Load(path, policy.Env{Devices: []admission.Device{devices["leaf1"], devices["nx1"], devices["bare"]}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,12 +81,7 @@ func newFixture(t *testing.T, candidateCap int) *fixture {
 	}
 	f.alice = f.client(t, "alice@example.com", f.now.Add(24*time.Hour))
 	log := decision.NewJSONLines(f.log)
-	f.b = &Broker{Policy: pol,
-		Devices: map[string]admission.Device{
-			"leaf1": {Name: "leaf1", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.11")}},
-			"nx1":   {Name: "nx1", Platform: "cisco_nxos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.31")}},
-			"bare":  {Name: "bare", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.41")}},
-		},
+	f.b = &Broker{Policy: pol, Devices: devices,
 		Minter: token.NewMinter(f.st, log, rand.Reader, token.TagKey([]byte("k")), clock, candidateCap),
 		Store:  f.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: clock,
 		MaxSessionAge: 12 * time.Hour, BatchMax: 4}

@@ -6,38 +6,55 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
-// Decision is what an Authorizer returns; the policy engine (plan 4)
-// implements Authorizer for real.
+// Decision is what an Authorizer returns. Engine is the one the daemon runs;
+// Lab is the lab's instrument for seeded contexts.
 type Decision struct {
 	Permit     bool
 	Reason     decision.Reason
 	ServerMsg  string
 	Attributes []string // session only, e.g. "priv-lvl=15"
+	// Policy is the record's policy block when the decision consulted a blob
+	// (spec §5.7): bundle and blob always, and the rules that matched.
+	Policy *decision.Policy
+	// Vector is the command vector the authorizer decided, when it normalized
+	// the request itself; Handle records it in place of its own parse, so the
+	// record and the decision never disagree (spec §3, §5.7).
+	Vector []string
 	// Error answers a refusal ERROR rather than FAIL. It is lab-only: the
 	// lab's fault switch (LabFault) is the only thing that may set it, and it
 	// is ignored on a permit. A production Authorizer MUST leave it false —
 	// a store outage is FAIL `store_unavailable` (plan 4's ruling), because an
 	// ERROR here authorizes every command on an IOS-XE `if-authenticated`
 	// list and hands the N9Kv to local RBAC (tests/lab/results/L4-error-*.md).
-	// Plan 4 removes it with author.Lab or keeps it lab-only.
+	// Plan 4 keeps it lab-only: Engine never sets it.
 	Error bool
 }
 
+// Request is one authorization after the §5.3 checks have passed: the context
+// they read, the device the request came from, and the request's AV pairs as
+// received. Vector is nil for a session authorization.
+type Request struct {
+	Context store.Context
+	Device  authen.Peer
+	Raw     []string
+	Vector  []string
+}
+
 type Authorizer interface {
-	Session(ctx context.Context, c store.Context, args []string) Decision
-	Command(ctx context.Context, c store.Context, vector []string, args []string) Decision
+	Session(ctx context.Context, r Request) Decision
+	Command(ctx context.Context, r Request) Decision
 }
 
 type Handler struct {
@@ -129,31 +146,6 @@ func ParseArgs(args [][]byte) (kv map[string]string, cmd string, cmdArgs []strin
 	return kv, cmd, cmdArgs, raw
 }
 
-// grantedPrivLvl finds the level a session authorization reply grants, if it
-// grants one. The attribute is `priv-lvl`, in either the mandatory (`=`) or
-// optional (`*`) form, since a device reads both and so must the record of
-// what it was told.
-//
-// A value that is not a privilege level is no grant: ok is false and the
-// context keeps the level it had, rather than being moved to something the
-// reply did not say. The last occurrence wins, which is what a device reading
-// the arguments in order ends up applying.
-func grantedPrivLvl(attrs []string) (uint8, bool) {
-	level, ok := uint8(0), false
-	for _, a := range attrs {
-		i := strings.IndexAny(a, "=*")
-		if i < 0 || a[:i] != "priv-lvl" {
-			continue
-		}
-		n, err := strconv.ParseUint(a[i+1:], 10, 8)
-		if err != nil || n > 15 {
-			continue
-		}
-		level, ok = uint8(n), true
-	}
-	return level, ok
-}
-
 // Vector is the command vector authorization and accounting agree on: the
 // command followed by its arguments, or nil for a session request (cmd == "").
 func Vector(cmd string, cmdArgs []string) []string {
@@ -193,7 +185,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		return h.deny(rec, decision.ContextMissing, "port49: this session was not authenticated by port49")
 	}
 	if err != nil {
-		return h.deny(rec, decision.StoreUnavailable, "port49: authorization store unavailable")
+		return h.deny(rec, decision.StoreUnavailable, storeUnavailableMsg)
 	}
 	// The key already selected on the username; this re-checks what came back,
 	// for the same reason package authen re-checks the receipt hash after its
@@ -250,10 +242,15 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	}
 
 	var d Decision
+	ar := Request{Context: c, Device: peer, Raw: raw, Vector: vector}
 	if cmd == "" {
-		d = h.authz.Session(ctx, c, raw)
+		d = h.authz.Session(ctx, ar)
 	} else {
-		d = h.authz.Command(ctx, c, vector, raw)
+		d = h.authz.Command(ctx, ar)
+	}
+	rec.Policy = d.Policy
+	if d.Vector != nil {
+		rec.Request.Vector = d.Vector
 	}
 	if !d.Permit {
 		if d.Error {
@@ -264,6 +261,11 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		return h.deny(rec, d.Reason, d.ServerMsg)
 	}
 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason
+	// What the device is told goes on the record as sent, so a replay can
+	// re-derive a session's attributes and compare (spec §5.7).
+	if len(d.Attributes) > 0 {
+		rec.Reply = &decision.Reply{Attributes: d.Attributes}
+	}
 	h.emit(rec)
 
 	// `ctx.privilege` is the highest level port49 has GRANTED this user on this
@@ -284,16 +286,17 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	// SetPrivilege, never PutContext, and for the reason the extension below
 	// gives: `c` was read at the top of this request.
 	if cmd == "" {
-		if level, ok := grantedPrivLvl(d.Attributes); ok {
+		if level, _, ok := engine.GrantedPrivLvl(d.Attributes); ok {
 			// Clamped to the ceiling the token was minted with, the same bound
 			// the enable path refuses above (`ceiling_exceeded`, spec §7).
-			// What is granted here comes from port49's own Authorizer, so
-			// today this cannot fire; it is here so the invariant lives next
-			// to the field it protects rather than only in the policy engine
-			// (plan 4). A grant above the ceiling records the ceiling rather
-			// than being dropped: the device was told the higher level either
-			// way, and recording the lower one is what makes the next command
-			// denied instead of permitted.
+			// Engine refuses a blob whose reply exceeds the ceiling before it
+			// gets here, and the policy's joint check quarantines one at load,
+			// so only another Authorizer (the lab's) can reach it; the clamp
+			// keeps the invariant next to the field it protects. A grant above
+			// the ceiling records the ceiling rather than being dropped: the
+			// device was told the higher level either way, and recording the
+			// lower one is what makes the next command denied instead of
+			// permitted.
 			//
 			// A zero MaxPrivilege is a token minted with no ceiling, not a
 			// ceiling of zero — the same reading as a zero SessionExpires

@@ -10,9 +10,12 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 )
 
-// Lab is the authorizer used before the policy engine exists (plan 4). It
-// returns fixed session attributes and denies commands by prefix, with a
-// server_msg, which is exactly what lab register entries L2 and L10 need.
+// Lab is the lab's measurement instrument, not a policy: it returns fixed
+// session attributes and denies commands by prefix, with a server_msg, which
+// is exactly what lab register entries L2, L10, L16 and L18 vary one attribute
+// at a time. It answers only contexts with no blob — the tokens `lab.seed_tokens`
+// mints — and only where port49d.yaml carries a `lab:` block; Engine answers
+// everything else (plan 4, Decided 12).
 type Lab struct {
 	SessionAttributes []string
 	// CommandAttributes are returned on a PERMITTED per-command authorization,
@@ -38,18 +41,18 @@ type Lab struct {
 	Fault LabFault
 }
 
-func (l *Lab) Session(_ context.Context, _ store.Context, _ []string) Decision {
+func (l *Lab) Session(_ context.Context, _ Request) Decision {
 	return Decision{Permit: true, Reason: decision.ContextMatched, Attributes: l.SessionAttributes}
 }
 
-func (l *Lab) Command(_ context.Context, _ store.Context, vector []string, _ []string) Decision {
+func (l *Lab) Command(_ context.Context, r Request) Decision {
 	switch {
 	case l.Fault.Is(FaultCommandError):
 		return Decision{Error: true, Reason: decision.StoreUnavailable, ServerMsg: "port49: authorization store unavailable"}
 	case l.Fault.Is(FaultCommandFail):
 		return Decision{Reason: decision.NoRuleMatched, ServerMsg: "port49: denied by lab fault command_fail"}
 	}
-	line := strings.Join(vector, " ")
+	line := strings.Join(r.Vector, " ")
 	for _, p := range l.DenyPrefixes {
 		// A denial carries no attributes on purpose: its payload is the
 		// server_msg, and a FAIL with arguments hung off it is protocol

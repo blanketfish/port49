@@ -1,0 +1,485 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
+)
+
+// policyFixture writes a small policy and inventory and returns their paths.
+func policyFixture(t *testing.T) (pol, inv string) {
+	t.Helper()
+	dir := t.TempDir()
+	pol = filepath.Join(dir, "policy.yaml")
+	inv = filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(pol, []byte(`
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: read_only, privilege: readonly, permit: [show **]}
+  - {name: no_reload, deny: [reload **]}
+  - {name: admin, privilege: admin, permit: ["**"]}
+subjects:
+  - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
+  - {name: ops, identity: "user:ops@example.com", username: ops, token_ttl: 60s}
+grants:
+  - {subject: noc, scope: all_devices, roles: [read_only, no_reload]}
+  - {subject: ops, scope: all_devices, roles: [admin]}
+tests:
+  - {subject: noc, device: leaf-01, command: "show version", expect: permit}
+  - {subject: noc, device: leaf-01, command: "reload", expect: deny}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return pol, inv
+}
+
+// `port49 explain` prints the one reason and the roles that would permit a
+// denied command, from the files alone.
+func TestExplainPrintsTheDecision(t *testing.T) {
+	pol, inv := policyFixture(t)
+	var out, errb bytes.Buffer
+	code := run([]string{"explain", "--policy", pol, "--inventory", inv, "--subject", "noc", "--device", "leaf-01",
+		"--command", "reload now"}, &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "deny no_rule_matched") || !strings.Contains(out.String(), "permitted by admin") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	code = run([]string{"explain", "--policy", pol, "--inventory", inv, "--principal", "user:ops@example.com",
+		"--device", "leaf-01"}, &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "priv-lvl=15") {
+		t.Fatalf("session: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+func TestExplainRefusesAnIncompleteAsk(t *testing.T) {
+	pol, inv := policyFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"explain", "--policy", pol, "--inventory", inv, "--device", "leaf-01"}, &out, &errb); code != 2 {
+		t.Fatalf("no subject or principal: code %d", code)
+	}
+	if code := run([]string{"explain", "--policy", pol, "--subject", "noc", "--device", "leaf-01"}, &out, &errb); code != 2 ||
+		!strings.Contains(errb.String(), "--inventory") {
+		t.Fatalf("no inventory: code %d %s", code, errb.String())
+	}
+}
+
+// A usage error exits 2, so CI tells a misconfigured job from a policy that
+// does not load (1): a missing file flag, a stray argument, no subcommand, an
+// unknown one, a bad flag.
+func TestPolicyToolsExitTwoOnAUsageError(t *testing.T) {
+	pol, inv := policyFixture(t)
+	for _, args := range [][]string{
+		{"policy", "test", "--policy", pol},
+		{"policy", "test", "--policy", pol, "--inventory", inv, "extra"},
+		{"policy", "test", "--bogus"},
+		{"policy"},
+		{"policy", "lint"},
+		{"access", "review", "--inventory", inv, "--subject", "noc"},
+		{"explain", "--policy", pol, "--inventory", inv, "--subject", "noc", "--device", "leaf-01", "extra"},
+	} {
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != 2 || out.Len() != 0 {
+			t.Errorf("%q: code %d, stdout %q", args, code, out.String())
+		}
+	}
+}
+
+// `port49 policy test` passes a policy whose tests pass, and fails one whose
+// test does not, naming it.
+func TestPolicyTestIsACIGate(t *testing.T) {
+	pol, inv := policyFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "PASS noc on leaf-01: \"reload\" -> deny no_rule_matched") ||
+		!strings.Contains(out.String(), "2 tests, 0 failed; 0 shadowed denies, 0 unacknowledged") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	raw := readFile(t, pol)
+	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), `command: "reload", expect: deny`,
+		`command: "reload", expect: permit`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "FAIL noc on leaf-01: \"reload\" -> deny no_rule_matched, want permit") {
+		t.Fatalf("code %d\n%s", code, out.String())
+	}
+}
+
+// A deny a more specific permit beats fails the gate until a policy test
+// exercises it (spec §12): the report names the deny, the subject and the
+// permit, and the test is the acknowledgment.
+func TestPolicyTestFailsAnUnacknowledgedShadow(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	shadowed := strings.Replace(string(raw), "permit: [show **]}", "permit: [show **, reload now]}", 1)
+	if err := os.WriteFile(pol, []byte(shadowed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `shadowed: "reload **" (no_reload) does not bind noc where "reload now" (read_only) is more specific, on arista_eos; no policy test exercises it`) ||
+		!strings.Contains(out.String(), "1 shadowed denies, 1 unacknowledged") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := shadowed + "  - {subject: noc, device: leaf-01, command: \"reload now\", expect: permit}\n"
+	if err := os.WriteFile(pol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "a policy test exercises it") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// `port49 policy diff` is the privilege-expansion gate (spec §12): a command
+// a deny refused that the new version permits fails it, until a policy test
+// in the new version exercises that permit over that deny.
+func TestPolicyDiffGatesAnExpansionPastADeny(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := readFile(t, oldPol)
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	expanded := strings.Replace(string(raw), "permit: [show **]}", "permit: [show **, reload now]}", 1)
+	if err := os.WriteFile(newPol, []byte(expanded), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `EXPANDS: noc on leaf-01: "reload now" was denied by "reload **" (no_reload), now permitted by "reload now" (read_only)`) ||
+		!strings.Contains(out.String(), "1 unacknowledged expansions past a deny") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := expanded + "  - {subject: noc, device: leaf-01, command: \"reload now\", expect: permit}\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "expands (a policy test exercises it)") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--inventory", inv}, &out, &errb); code != 2 {
+		t.Fatalf("no --new: code %d", code)
+	}
+}
+
+// A mint the broker would refuse permits nothing, so `policy test` fails a
+// test that expects permit there and names the mint item error, and `policy
+// diff` fails a change that locks a subject out at the mint (spec §12).
+func TestPolicyTestAndDiffAnswerAsTheBrokerMints(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := readFile(t, oldPol)
+	refused := strings.Replace(string(raw), "{name: read_only, privilege: readonly, permit: [show **]}",
+		`{name: read_only, privilege: readonly, permit: [show **], attributes: {all: ["home*/`+strings.Repeat("h", 237)+`/{principal}"]}}`, 1)
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(newPol, []byte(refused), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `FAIL noc on leaf-01: "show version" -> deny: the broker refuses the mint, attribute_too_long`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "REFUSED: noc on leaf-01: the new version's broker refuses every mint there, attribute_too_long") ||
+		!strings.Contains(out.String(), "1 mints newly refused") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A possible shadow a test exercises is a shadow: the test proved the two
+// patterns meet.
+func TestPolicyTestReportsAPossibleShadowATestProves(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	body := strings.Replace(string(raw), "permit: [show **]}", `permit: [show **, "show /^ver/ detail"]}`, 1)
+	body = strings.Replace(body, "deny: [reload **]}", `deny: [reload **, "show /^v/ *"]}`, 1)
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `possibly shadowed: "show /^v/ *" (no_reload) does not bind noc`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	body += "  - {subject: noc, device: leaf-01, command: \"show version detail\", expect: permit}\n"
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `shadowed: "show /^v/ *" (no_reload) does not bind noc where "show /^ver/ detail" (read_only) is more specific, on arista_eos; a policy test exercises it`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A policy that fails a load-time check fails the gate, with the check's
+// message, before any test runs: here, a class no platform defines (spec §4).
+// A policy that loads with a device quarantined names it (spec §10).
+func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), "permit: [show **]", "permit: [interface @uplinks]", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "@uplinks, which no platform defines") || out.Len() != 0 {
+		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
+	}
+	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), "privilege: readonly", "privilege: operator", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "quarantine: leaf-01 (arista_eos): subject \"noc\": level operator has no rendering") ||
+		!strings.Contains(out.String(), "FAIL noc on leaf-01: \"show version\" -> deny device_quarantined, want permit") {
+		t.Fatalf("code %d\n%s", code, out.String())
+	}
+}
+
+// `port49 policy replay` agrees with a log the engine wrote and fails one
+// whose record was edited. The log here is written by the engine directly;
+// internal/replay's tests run the daemon's handler.
+func TestPolicyReplayFindsAnEditedRecord(t *testing.T) {
+	b := engine.Blob{Bundle: "sha256:p", Platform: "arista_eos", Normalize: engine.Normalize{PipeToken: "|"},
+		Rules: []engine.Rule{{Verdict: engine.Permit, Rule: "show **", Role: "read_only"}}}
+	body, hash, err := engine.Encode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := engine.Decode(hash, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := engine.Compile(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []string{"service=shell", "cmd=show", "cmd-arg=version"}
+	o := prog.Command(raw)
+	var log bytes.Buffer
+	sink := decision.NewJSONLines(&log)
+	sink.Emit(decision.Record{Event: decision.EventBlob, Blob: &decision.Blob{Hash: hash, Body: body}})
+	sink.Emit(decision.Record{Event: decision.EventAuthorizeCommand, Verdict: decision.VerdictPermit, Reason: o.Reason,
+		Device: &decision.Device{Name: "leaf-01", Platform: "arista_eos"}, Request: &decision.Request{Raw: raw},
+		Policy: o.Policy(b.Bundle, hash)})
+	// Decided before policy ran: counted, not replayed.
+	sink.Emit(decision.Record{Event: decision.EventAuthorizeCommand, Verdict: decision.VerdictDeny,
+		Reason: decision.StoreUnavailable, Request: &decision.Request{Raw: raw}})
+	path := filepath.Join(t.TempDir(), "decisions.jsonl")
+	if err := os.WriteFile(path, log.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "replay", path}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "replayed 1 records: 1 agree, 0 diverge, 0 unverifiable; 1 not replayed (store_unavailable 1)") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// A record replay passes over is not an answer to --line.
+	out.Reset()
+	if code := run([]string{"policy", "replay", "--line", "3", path}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "line 3 authorize_command: not_replayed store_unavailable is decided before policy runs") ||
+		!strings.Contains(errb.String(), "line 3 is not an authorization record that consulted a blob") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	edited := strings.Replace(log.String(), `"verdict":"permit","reason":"permit_dominates"`,
+		`"verdict":"deny","reason":"no_rule_matched"`, 1)
+	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "replay", "--line", "2", path}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "line 2 authorize_command: diverge logged deny no_rule_matched, replayed permit permit_dominates") {
+		t.Fatalf("code %d\n%s", code, out.String())
+	}
+}
+
+// `port49 access review` prints every grant row of one subject with the scope
+// size, from the files alone.
+func TestAccessReviewPrintsTheGrantRows(t *testing.T) {
+	pol, inv := policyFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "noc"}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	for _, want := range []string{"noc (humans; identity user:noc@example.com)", "SCOPE", "all_devices  no_reload read_only  -",
+		"never    1\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "nobody"}, &out, &errb); code != 1 {
+		t.Fatalf("an undeclared subject: code %d", code)
+	}
+	// A group subject, a lapsed row, and a subject with no rows at all.
+	body := strings.Replace(string(readFile(t, pol)), "subjects:\n",
+		"subjects:\n  - {name: oncall, group: NetOps-OnCall, token_ttl: 60s}\n"+
+			"  - {name: idle, identity: \"user:idle@example.com\", username: idle, token_ttl: 60s}\n", 1)
+	body = strings.Replace(body, "grants:\n", "grants:\n  - {subject: oncall, scope: all_devices, roles: [read_only], expires: 2020-01-01}\n", 1)
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "oncall"}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "oncall (humans; group NetOps-OnCall)") ||
+		!strings.Contains(out.String(), "2020-01-01T00:00:00Z (expired)") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "idle"}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "no grant rows: the subject reaches no device") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// `port49 grants remove` prints the policy without the subject, or replaces
+// the file with --write, and refuses a result that would not load.
+func TestGrantsRemoveOffboardsASubject(t *testing.T) {
+	pol, inv := policyFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops"}, &out, &errb); code != 0 ||
+		strings.Contains(out.String(), "ops@example.com") || !strings.Contains(out.String(), "noc@example.com") ||
+		!strings.Contains(errb.String(), "ops: 1 grant row(s), the subject block, and 0 test(s) removed") {
+		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
+	}
+	before := readFile(t, pol)
+	if !strings.Contains(string(before), "ops@example.com") {
+		t.Fatal("without --write the file is left alone")
+	}
+	out.Reset()
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops", "--write"}, &out, &errb); code != 0 || out.Len() != 0 {
+		t.Fatalf("--write: code %d %s", code, out.String())
+	}
+	after := readFile(t, pol)
+	if strings.Contains(string(after), "ops@example.com") {
+		t.Fatalf("--write replaced nothing:\n%s", after)
+	}
+	if info, _ := os.Stat(pol); info.Mode().Perm() != 0o600 {
+		t.Fatalf("the file's mode changed: %v", info.Mode())
+	}
+	// noc is the last subject: removing it leaves a policy that declares none,
+	// which does not load, so nothing is written.
+	errb.Reset()
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "noc", "--write"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "nothing was written") {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if kept := readFile(t, pol); string(kept) != string(after) {
+		t.Fatal("a refused removal must not touch the file")
+	}
+}
+
+// --write through a symlinked policy path replaces the file the link names,
+// not the link, so a checkout behind /etc/port49/policy.yaml is what changes.
+func TestGrantsRemoveWritesThroughASymlink(t *testing.T) {
+	pol, inv := policyFixture(t)
+	link := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.Symlink(pol, link); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"grants", "remove", "--policy", link, "--inventory", inv, "--subject", "ops", "--write"}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced: %v %v", info, err)
+	}
+	if after := readFile(t, pol); strings.Contains(string(after), "ops@example.com") {
+		t.Fatalf("the target was not changed:\n%s", after)
+	}
+}
+
+// A directory sync that fails after the rename leaves the file replaced, and
+// the message says so: the operator must not re-run the removal thinking
+// nothing happened, only make sure the change is durable.
+func TestGrantsRemoveSaysTheFileWasReplacedWhenTheDirSyncFails(t *testing.T) {
+	defer func(f func(string) error) { syncDir = f }(syncDir)
+	syncDir = func(string) error { return os.ErrPermission }
+	pol, inv := policyFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops", "--write"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "was replaced, but syncing its directory failed") {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if strings.Contains(string(readFile(t, pol)), "ops@example.com") {
+		t.Fatal("the file was not replaced")
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, os.ErrClosed }
+
+// A pull request that was never fully written is not a success.
+func TestGrantsRemoveFailsWhenStdoutFails(t *testing.T) {
+	pol, inv := policyFixture(t)
+	var errb bytes.Buffer
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops"}, failingWriter{}, &errb); code != 1 ||
+		strings.Contains(errb.String(), "removed") {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+}
+
+// The offline tools load a policy with the enable-username table port49d
+// resolves, so the `enable: auto` joint check answers the same offline.
+func TestOfflineToolsLoadWithTheEnableUsernameTable(t *testing.T) {
+	if got := offlineEnv(nil).EnableUsernames; !reflect.DeepEqual(got, platform.EnableUsernames()) {
+		t.Fatalf("%v", got)
+	}
+}
+
+// readFile is os.ReadFile that fails the test at the cause.
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// What the gate prints besides PASS and FAIL: a lint finding as a `report:`
+// line, a caveat under its test as a `note:` line, and a quarantine an expiry
+// will bring on as a `quarantine:` line that says when.
+func TestPolicyTestPrintsReportsNotesAndScheduledQuarantines(t *testing.T) {
+	pol, inv := policyFixture(t)
+	body := strings.Replace(string(readFile(t, pol)), "  - {name: admin, privilege: admin, permit: [\"**\"]}\n",
+		"  - {name: admin, privilege: admin, permit: [\"**\"]}\n  - {name: op, privilege: operator, permit: [show **]}\n", 1)
+	body = strings.Replace(body, "  - {subject: ops, scope: all_devices, roles: [admin]}\n",
+		"  - {subject: ops, scope: all_devices, roles: [admin], expires: 2099-01-01}\n"+
+			"  - {subject: ops, scope: all_devices, roles: [op]}\n", 1)
+	body = strings.Replace(body, "subjects:\n", "subjects:\n  - {name: gone, identity: \"user:gone@example.com\", username: gone, token_ttl: 60s}\n", 1)
+	body += "  - {subject: noc, device: leaf-01, command: \"show version | include x\", expect: permit}\n"
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+	for _, want := range []string{
+		`report: grantless_subject: subject "gone" has no grant`,
+		"     note: arista_eos applies output modifiers itself",
+		"quarantine: leaf-01 (arista_eos): will be quarantined from 2099-01-01T00:00:00.000Z, when grant all_devices [admin] expires",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
+		}
+	}
+}

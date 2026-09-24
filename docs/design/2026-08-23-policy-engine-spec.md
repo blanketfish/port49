@@ -231,8 +231,11 @@ entire class.
 3. **Comparison is case-insensitive; the vector is not altered.** Device CLIs accept
    mixed-case keywords, so a case-sensitive match is bypassable with `SHOW run`. Literal
    terms and entity-class patterns therefore compare case-insensitively, and regex terms
-   compile case-insensitive **by default**, with `(?-i)` available to opt into exactness
-   where a device object really is case-sensitive (IOS ACL names, for instance).
+   compile case-insensitive **by default**, with `(?-i)` available to a permit to opt into
+   exactness where a device object really is case-sensitive (IOS ACL names, for instance).
+   A deny may not opt out: its `(?-i)` is refused at load (§4), because a case-sensitive
+   deny is walked past by typing another case, while a case-sensitive permit only permits
+   less.
 
    Insensitive must be the default because a case-sensitive deny fails *open*: a rule
    reading `deny: interface /^Management/` would otherwise be evaded by typing
@@ -245,7 +248,51 @@ entire class.
    `show running-config` before matching, or `show **` is bypassable. Where port49 cannot
    expand reliably, the platform MUST be marked as such and the daemon MUST fail closed
    rather than match a possibly-abbreviated vector.
+
+   Failing closed is done in the matcher, with no expansion table (plan 4): on a platform
+   marked `expands_abbreviations: false`, a **deny's** literal word also matches any
+   non-empty proper prefix of itself, case-insensitively, so `rel` is denied by
+   `deny: reload **`; a **permit's** word matches only as written, so `sh run` is not
+   permitted by `permit: show **`. An abbreviation is therefore denied or matched as written
+   and never slips past a deny. A deny's `@class` or `/re/` term is widened the same way:
+   each branch of its pattern is read as `^`, a literal name and what follows the name, and
+   the term also matches any non-empty prefix of the name followed by the same tail, so
+   `int ma1` is denied by `deny: interface @management` where `@management` is
+   `^Management[0-9]+$`. A deny pattern that cannot be read that way — unanchored, starting
+   with anything but its literal name, or a name that runs on into a part that may be more
+   of it — cannot have the abbreviations it would miss listed, so on a platform marked
+   `expands_abbreviations: false` that is not measured session-only (the generic adapter
+   declares only `session` and is widened on purpose) the term matches **any argument** in
+   its position: an over-denial of the commands the deny's other terms reach, and no device
+   is quarantined or login refused for it. `port49 policy test` reports each such term and
+   platform as `deny_widened`, and `port49d` says it at start. A platform measured sending no
+   per-command authorization (Junos, decision 21) widens nothing. The cost is an over-denial
+   of a full word that is a prefix of a deny's word — `show ip` against `deny: show ipv6 **`
+   — reported by name in the `server_msg`. `arista_eos`, `cisco_nxos` and `cisco_iosxe` are
+   marked `true`, set from L21 (closed 2026-09-24): all three send the resolved words over interactive SSH (§15, L21;
+   `tests/lab/results/L21-arista_eos.md`, `L21-cisco_nxos.md`, `L21-cisco_iosxe.md`).
+   `juniper_junos`, which authorizes no command, and the generic adapter are unmeasured and
+   stay `false`.
 5. **Preserve argument boundaries.** Arguments are never re-joined.
+
+   IOS-XE splits an interface name from its index: a typed `int Gi1` arrives as
+   `GigabitEthernet`, `1`, where EOS and NX-OS send one argument (§15, L21;
+   `tests/lab/results/L21-cisco_iosxe.md`), so `deny: interface GigabitEthernet1 **` would
+   never match there. On a platform marked `splits_interface_names: true`, a **deny's** term at
+   one position also matches two arguments — an argument and the next, where the next is an
+   index (digits and `/ . :`) and the term matches the two joined — and the rest of the rule
+   continues after both. That holds for a word, an `@class` and a `/re/` alike and needs
+   nothing from a pattern's syntax, so nothing is refused for it; the decision names the deny
+   as written. A deny's `*` is "any one argument", and is written where the interface goes, so
+   it splits too: it also matches a name (letters and `-`) followed by an index, so
+   `deny: default interface *` binds `default interface GigabitEthernet 1`. A **permit**
+   matches only as written, so it is written as the device sends it: a permit word written
+   joined (`permit: interface GigabitEthernet1 **`) never matches there, and `port49 policy
+   test` reports it as `permit_joined_name` and `port49d` says it at start. `port49 explain`
+   and the policy tests evaluate what the device sends, so on such a platform a typed argument
+   of letters followed by an index is split in two before it is decided, with a note saying
+   so; a word that is not an interface name (`hostname xe1`) reaches the device whole and may
+   be decided otherwise.
 
 ---
 
@@ -299,6 +346,9 @@ rather than in the grammar.
 backtracking, and a leaf regex can never span argument boundaries, so its blast radius is
 one position. Regex terms are also the only construct that degrades the effective-permission
 diff (§12), which is a reason to prefer literals, `@class`, and `*` where any will do.
+A deny's regex that turns case-insensitivity off, with `(?-i)` or any flag group clearing
+`i`, is a **policy load error**: port49 matches case-insensitively, and a case-sensitive
+deny could be walked past by changing the case of what is typed. A permit may opt out.
 
 **Entity classes solve cross-platform naming.** A rule reading
 `deny: interface /^(management|mgmt)/` works on EOS and NX-OS and silently does nothing on
@@ -354,6 +404,10 @@ principal
   → effective rules     resolved permit/deny/pipe sets
   → av_pairs            rendered for this device's platform
 ```
+
+When some matching grants set `max_privilege` and others leave it unset, the ceiling is the
+max of the ones that set it: a grant that states no ceiling does not lift the ceiling another
+grant states. The result has no ceiling only when no matching grant sets one.
 
 Failure to match any grant means the device is unreachable for that principal, and the mint
 fails **before an SSH connection is opened**.
@@ -503,9 +557,9 @@ a 10,000-device fleet across four platforms yields a few dozen blobs.
 
 **One escape hatch.** If a platform is found to require genuine abbreviation expansion, its
 command vocabulary is too large to embed per blob; that table alone would ride in the
-inventory bundle while everything else stays compiled. Most platforms expand server-side and
-§3 already fails closed where expansion is unreliable, so this is recorded rather than
-designed for.
+inventory bundle while everything else stays compiled. EOS, NX-OS and IOS-XE send resolved
+words over SSH (§15, L21, closed), other transports are unmeasured, and §3 already fails closed
+where expansion is unreliable, so this is recorded rather than designed for.
 
 ### 5.1.3 Refreshing live context
 
@@ -742,8 +796,11 @@ that declines to rank incomparable rules is the only formulation that stays cons
 every case.
 
 **Ties and explain.** Where several rules of the same verdict match and `explain` must name
-one, the tie is broken by lexicographic comparison of the tuples, then by declaration order.
-This is presentation only and cannot change a decision.
+one, the tie is broken by lexicographic comparison of the tuples, then by role name, then by
+rule text. This is presentation only and cannot change a decision. It is not declaration
+order, because the rule a record names is part of the record, and a shuffled policy must
+produce byte-identical records (§14, "Order independence"). The permit a record names first is
+the one that dominated, even where another permit's tuple sorts above it.
 
 Specificity is a property of the rule and the command, never of position in a file, so
 **evaluation is order-independent**: reordering roles, grants, or rules within a role cannot
@@ -838,6 +895,7 @@ scopes:
       machines: [baseline_show]
   - name: dc_fabric
     match: {site: dc1}
+    on_missing: include
     attached_roles:
       humans: [dc_safety_denies]
 ```
@@ -883,7 +941,10 @@ decommissioning}` for read-only on the way out.
 `on_missing` MUST be explicit where an attribute is optional, and the safe direction differs
 by rule type: for a deny-bearing scope, a missing attribute means *include* (assume
 vulnerable); for a permit-bearing scope it means *exclude*. A broken inventory sync silently
-lifting a mitigation is the failure to design against.
+lifting a mitigation is the failure to design against. So a scope with at least one match
+key that delivers a deny — it attaches a role carrying one, or a grant on it holds one — MUST
+declare `on_missing`, and omitting it is a load error; any other scope defaults to `exclude`.
+A scope with no match key, `all_devices`, selects every device and needs neither (plan 4).
 
 `security_log: true` marks a scope whose membership changes are security events. This is
 required because a scope keyed on device state makes **source-of-truth write access
@@ -1373,7 +1434,10 @@ for `copy`, a deny matched the destination more specifically, and dominance fail
 **Log inputs and policy identity, not a narrative.** The matched rules are included because
 they make a record readable on its own, but the blob hash is what makes it provable. A replay
 that disagrees with the logged verdict is itself a finding — version skew, or tampering — so
-`bundle` and `blob` are mandatory on every record that consulted policy.
+`bundle` and `blob` are mandatory on every record that consulted policy. Until the inventory
+service publishes versioned bundles (§10), `bundle` is the `sha256:` of the policy file the
+blob was compiled from, a string; the blob carries it, so a daemon that never reads the policy
+still logs it.
 
 **Keep the raw arguments alongside the normalized vector.** Normalization (§3) is where
 matcher bugs live. A record holding only the vector erases the evidence of its own
@@ -1386,6 +1450,11 @@ fleet's devices actually ask under" is a field to group by rather than a string 
 of an array — the question an operator has after renaming `tacplus-options service-name` on
 half an SRX fleet, and the one a `service_unsupported` denial has to answer. It is recorded,
 never consulted for policy (§5.2).
+
+`reply.attributes` is what a permitted `authorize_session` returned, as sent — every
+placeholder filled (§6). A replay re-derives it from the blob and the record's own
+`session.username`, `principal` and `device.name` and compares, so an altered session reply is
+a divergence like an altered verdict (plan 4).
 
 **Never suppress permits.** Sampling, or logging denies only, looks thrifty and destroys the
 artifact: *what did Alice run on Tuesday* is answered entirely by permits. Volume is the cost
@@ -1460,7 +1529,7 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error. On `redeem` the reply is `ERROR`; on an authorization it is `FAIL` (plan 4, ruled 2026-09-24). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`) — the log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; arrives with the remote store, plan 6/7). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
@@ -1481,7 +1550,8 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
-| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) |
+| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a composition the load quarantines (§7) |
+| `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
 | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed |
 
 Every event has a success reason and at least one failure reason in this table, so
@@ -1928,7 +1998,8 @@ confines it once it is.
 - **When port49 is unreachable.** Under `aaa authorization commands … group tacacs+ local`,
   the device falls back to local authorization, and the role assigned at login is what
   remains. This is the "active login" column of the design document's failure matrix — the
-  device role *is* the degraded-mode policy.
+  device role *is* the degraded-mode policy. A reachable port49 whose store is down answers
+  `FAIL`, not `ERROR` (§5.7), so the device role does not take over then.
 - **Commands the device never submits.** With `aaa authorization commands 15` and no
   `commands 1`, everything below that tier is governed by the device role alone, always.
 
@@ -1956,7 +2027,9 @@ privilege_levels:
 `parent:` is the escape hatch that makes custom levels practical. A new level would
 otherwise need a mapping for every platform in the fleet; `parent: operator` says *render as
 `operator` on any platform that does not define this level explicitly*, resolved
-transitively up the chain.
+transitively up the chain. A level with `parent:` MUST be listed after its parent in
+`privilege_levels`. If a level were ordered before the level it renders as, the max-join could pick
+a level that renders lower than one it passed over, so doing so is a policy load error.
 
 This also turns an existing wart into declared behavior. NX-OS is role-native with two
 built-in roles, so `readonly` and `operator` render identically there — with `parent:` that
@@ -2064,7 +2137,10 @@ and CI MUST report the shadowing so an override never happens silently.
 
 Values support a **fixed** substitution vocabulary — `{username}`, `{principal}`,
 `{device}`, `{privilege}` — and nothing more. `home-directory*/home/{username}` is the
-motivating case; a general template language would be a footgun.
+motivating case; a general template language would be a footgun. `{device}` is the device's
+inventory name and `{privilege}` the abstract level the roles compose to (`admin`, not `15`).
+An attribute is at most 255 bytes as written, checked at load, and again once filled in, at
+mint, where the broker holds the same values the daemon will substitute.
 
 ### Validation without semantics
 
@@ -2176,6 +2252,13 @@ and lives on the subject, so two grants can never disagree about it.
 | `max_privilege` | grant | how far `enable` may *raise* it afterwards |
 | `enable` | subject | *how* the raise is authenticated: refused, automatic, or by token |
 
+The ceiling bounds what the session reply says, not only what the level renders to: §6
+layering lets a role or grant set `priv-lvl` itself, and the device applies the reply. A
+composition whose reply, after layering, sends a `priv-lvl` above its `max_privilege` fails
+the joint check and quarantines the device on that platform (§10), naming the role or grant
+and the attribute; and the daemon refuses a session reply above the context's ceiling
+(`blob_unavailable`) rather than sending it and holding the session lower.
+
 If the role's `privilege` already reaches what the subject needs, leave `max_privilege` and
 `enable` unset — the session lands there and nothing needs escalating. Set `max_privilege`
 only when a session should start low and be raised on demand, and then `enable` says how.
@@ -2248,11 +2331,18 @@ platforms:
       loopback:   ['^Loopback[0-9]+$']
       physical:   ['^Ethernet[0-9/.]+$', '^Port-Channel[0-9]+$']
     enable_username: principal
-    expands_abbreviations: true
+    expands_abbreviations: true    # measured: tests/lab/results/L21-arista_eos.md
     pipe_token: "|"
-    pipe_authorized: true
+    pipe_authorized: false         # measured: tests/lab/results/L2-arista_eos.md
     port_pattern: '^vty[0-9]+$'
 ```
+
+The example said `pipe_authorized: true` until 2026-09-23, and the lab says otherwise: on vEOS
+4.31.2F, NX-OS 10.4(2)F and IOS-XE 17.13.01a alike, a typed `show clock | include …` was sent to
+port49 for authorization as `show clock` alone (`tests/lab/results/L2-arista_eos.md`,
+`L2-cisco_nxos.md`, `L2-cisco_iosxe.md`, "Truncation length"). The device applied the modifier
+itself, so on those images a pipe rule protects nothing and `explain` says so. Whether any
+modifier ever reaches port49 on any platform is unmeasured.
 
 Most devices need far less. A time server or a BMC that does authentication plus one
 attribute is complete in four lines:
@@ -2274,6 +2364,7 @@ attribute is complete in four lines:
 | `entity_classes` | named sets of device entity names, referenced as `@class` in rules | if rules use classes |
 | `enable_username` | `principal`, or a template such as `$enab{level}$` | if enable is supported |
 | `expands_abbreviations` | whether the device sends resolved command words | if `commands` |
+| `splits_interface_names` | whether the device sends an interface name and its index as two arguments (§3 rule 5); `true` on `cisco_iosxe` only (L21) | optional |
 | `pipe_token` / `pipe_authorized` | modifier separator; whether it reaches us | if `commands` |
 | `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
 | `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |
@@ -2780,8 +2871,9 @@ bundle v2291
 
 **A sync can make a valid policy invalid, and the bundle builder quarantines rather than
 refuses.** Several load checks are joint over policy and inventory — a privilege level with no
-mapping on a platform present in inventory (§6), `enable: auto` reaching a platform whose
-enable exchange carries no principal (§5.6). A device racked tomorrow with a new platform can
+mapping on a platform present in inventory (§6), a session reply whose `priv-lvl` exceeds
+the grants' `max_privilege` there (§7), `enable: auto` reaching a platform whose enable
+exchange carries no principal (§5.6). A device racked tomorrow with a new platform can
 fail them against a policy that was valid today. Refusing the whole bundle would block every
 inventory change fleet-wide until someone edits policy, including the leaf racked in another
 site — a ticket-queue bottleneck created by the safety mechanism. Instead the offending
@@ -2790,12 +2882,24 @@ device is published with `admission: quarantined` and the reason; the daemon log
 change that would clear it, and `port49 devices capabilities` shows it. The rest of the fleet
 moves.
 
+A joint check that no platform could pass is the policy's own error, not a device's: a class
+no platform defines, or a `max_privilege` no platform can number, refuses the policy at load.
+One that fails for some platforms quarantines the devices on them. Until the inventory service
+publishes bundles (plan 6), `port49d` applies quarantine when it loads the policy: each
+quarantined device is logged at start with its cause, its mints are refused
+`device_quarantined`, and its connections are closed without a reply (plan 4).
+
 **A quarantined device gets silence, not FAIL.** The daemon closes the connection without a
 reply, exactly as for `device_unknown`. The device then declares the server dead and falls to
 its local method, which is the posture every platform documents for a port49 outage and the
 one the reference AAA configuration and the runbook already cover. Answering FAIL would be a
-new posture: the device believes AAA is healthy and refuses everyone, and whether it then
-tries local is L4, unmeasured and platform-dependent. Quarantine means port49 cannot compute a
+new posture: the device believes AAA is healthy and refuses everyone, and only Junos with
+`password` listed then tries local (§15, L4; `tests/lab/results/L4-*.md`). The close was
+measured on vEOS, the N9Kv, IOS-XE and vJunos-router on 2026-09-24: it costs the device what a
+refused connection does — break-glass logs in and runs its commands, a command in a session
+already open runs on the local fall-through, and nothing waits out a silent server's
+timeout; IOS-XE still asks per command and is told no at once, about 0.27s
+(`tests/lab/results/quarantine-*.md`). Quarantine means port49 cannot compute a
 correct policy for the device, not that the device is suspect, and port49 cannot block the
 console or a local account under either shape — so the choice is only whether the failure
 looks like a rejection or an outage, and the outage is the one whose consequences are known.
@@ -3253,7 +3357,7 @@ key_groups:
 
 scopes:
   - {name: all_devices, match: {}}
-  - {name: dc_fabric,   match: {site: [dc1, dc2], role: [leaf, spine]}}
+  - {name: dc_fabric,   match: {site: [dc1, dc2], role: [leaf, spine]}, on_missing: exclude}
   - name: srx_unpatched
     match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}
     on_missing: include
@@ -3330,7 +3434,7 @@ subjects:
   - {name: security_ir,   group: "CN=security-ir,OU=Groups,DC=example,DC=com",
      enable: token, token_ttl: 60s}
   - {name: svc_oxidized,  identity: "system:serviceaccount:netops:oxidized",
-     enable: token, token_ttl: 900s}
+     username: svc-config-backup, enable: token, token_ttl: 900s}
 
 grants:
   - {subject: netops_admins, scope: all_devices,   roles: [network_admin], max_privilege: admin}
@@ -3410,11 +3514,26 @@ the same name (§6), CI MUST name both so the override is deliberate.
 
 **Shadowed-deny report.** Because a more specific permit can override a deny (§5.4), CI MUST
 name every shadowed deny, the subject it fails to bind, and the permit that beats it. This is
-what replaces the guarantee deny-overrides would have provided.
+what replaces the guarantee deny-overrides would have provided. A shadow is acknowledged by
+a policy test (§11) for that subject that expects `permit` on a command where that permit wins
+over that deny — §11's `security_ir` test is one. `port49 policy test` names every shadowed
+deny and exits non-zero on one no test acknowledges. Where the overlap turns on two regex or
+class terms at one position it cannot be decided cheaply, and the shadow is reported as
+possible rather than failed.
 
 **Privilege-expansion gate.** The check that matters under most-specific semantics is not
 "did the permit set grow" but **"does this change make command C permitted where it was
-denied"** — computable exactly from the trie.
+denied"** — computable exactly from the trie. `port49 policy diff --old FILE --new FILE`
+evaluates both policies, for every subject on every device, over every command shape their
+rules distinguish — each word, `*`, `**`, and each deny word's abbreviations — and reports each
+command whose decision changed, each level or ceiling that changed (a privilege change, §6),
+and each device the new policy quarantines. It exits non-zero on a command a deny refused that
+the new policy permits, unless a policy test in the new policy exercises that permit over that
+deny, on a newly quarantined device, and on a subject whose mint the new policy's broker
+refuses (`attribute_too_long`, `attribute_unsafe`), since the diff, `policy test` and `explain`
+run the broker's mint checks and answer as it does. Regex and class terms are matched only
+against the words the rules name, so a rule that carries one and changed, or a permit that carries one and
+meets a deny that changed, is reported as regex-constrained rather than enumerated (§4).
 
 **`port49 platform upgrade`** reports what a platform-set bump changes, so a binary upgrade
 is never an unreviewed policy change (§8).
@@ -3822,8 +3941,9 @@ Beyond those already listed in the design document's §14:
 
 - **Full-vector matching**: `show bgp summary` does not match `show bgp summary detail`.
 - **Case insensitivity**: `SHOW RUN` matches `show run`; `interface MANAGEMENT1` matches
-  `@management` defined as `^Management[0-9]+$`; a `(?-i)` regex matches case-sensitively;
-  the vector reaching accounting is unaltered.
+  `@management` defined as `^Management[0-9]+$`; a permit's `(?-i)` regex matches
+  case-sensitively and a deny's is refused at load; the vector reaching accounting is
+  unaltered.
 - **Dominance, permitting**: a permit of `show chassis hardware` (3,3,3) beats a deny of
   `show chassis **` (3,3,0), while `show chassis hardware detail` remains denied.
 - **Dominance, denying**: each of these resolves to DENY because no permit dominates —
@@ -3833,7 +3953,11 @@ Beyond those already listed in the design document's §14:
   `* * /^tftp:/` (1,1,2) and permits, while `copy running-config *` (3,3,1) does not.
 - **Equal tuples do not dominate**, so an equally specific permit and deny resolve to deny.
 - **Class and regex are equally ranked**: neither dominates the other at a shared position.
-- **Rank lint**: a regex equivalent to `*` or to a literal is flagged at policy load.
+- **Rank lint**: a regex equivalent to `*` or to a literal is flagged at policy load, in the
+  spellings an author writes — `^.*$`, `.*`, `^show$` in any case, and what they simplify to.
+  Full regex equivalence is decidable but not cheaply: it takes building and comparing automata,
+  which Go's RE2 does not expose, so the lint recognizes the common spellings and stops there
+  (plan 4).
 - **Order independence**: a policy file with roles, grants, and rules shuffled produces
   byte-identical decisions across the full test corpus.
 - **Entity classes**: one rule using `@management` denies `Management1` on EOS, `mgmt0` on
@@ -4144,9 +4268,9 @@ implemented against a guess. This section is the one place the distinction is ke
 | ID | Claim to measure | What rests on it | Platforms | Status |
 |---|---|---|---|---|
 | **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE's RESTCONF measured 2026-09-23 (`tests/lab/results/L1-restconf-cisco_iosxe.md`); the console and IOS-XE's NETCONF unmeasured; see below |
-| **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below |
+| **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below. **Output modifiers (recorded 2026-09-23, plan 4):** in the truncation runs a typed `show clock \| include …` reached port49 as `show clock` alone on vEOS 4.31.2F, NX-OS 10.4(2)F and IOS-XE 17.13.01a (`tests/lab/results/L2-arista_eos.md`, `L2-cisco_nxos.md`, `L2-cisco_iosxe.md`, "Truncation length"), which is why no built-in platform's `pipe_authorized` is true (§8); whether any modifier reaches port49 anywhere is unmeasured |
 | **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | closed — measured 2026-09-21; `tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`, `L3-nxos-cisco_nxos.md`. Scope: NX-OS 10.x has no enable exchange (`feature privilege` was removed in 10.x; the owner confirmed the same on production Nexus 9000 hardware running 10.3(5)); NX-OS 9.x and earlier are unmeasured and out of scope. No measured image sends `$enab{level}$`. History: closed in error 2026-09-20 on a note with no transcript, reopened 2026-09-21. Measured: vEOS-lab 4.31.2F (image tagged 4.32.2F) and IOS-XE 17.13.01a both send the operator's own username with `service=enable` and a bare-address `rem_addr` (`tests/lab/results/L3-arista_eos.md`, re-measured 2026-09-22, which is where the image tag was found to overstate the running version; the image under the tag is `sha256:8ef33020ece8871b19ddfdddf7f3585b04d2ac3672845b0db88debe8e96ff9c9`, created 2026-09-15, the only one on the lab host; `L3-cisco_iosxe.md`). **NX-OS re-measured 2026-09-21 with the transcript it was missing** (`tests/lab/results/L3-nxos-cisco_nxos.md`): `disable`, `enable` and `enable 15` were each typed separately and each answered `% Invalid command at '^' marker.`, and `feature privilege` is itself refused by this image, so the conclusion the reopened note reached without evidence is confirmed with it |
-| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS, the N9Kv and IOS-XE over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS, the N9Kv and IOS-XE never do (`tests/lab/results/L4-cisco_iosxe.md`, which this cell omitted until 2026-09-23); `deadtime`, other transports and authorization fall-through unmeasured. **2026-09-21 (L17):** committing `tacplus-options strict-authorization` on both Junos images changes none of the unreachable-server cells — break-glass still logged in under both orders with port49d down — so making a port49 denial binding does not cost the fall-through this row measures. **2026-09-24, ERROR and `deadtime`, all five images** (`tests/lab/results/L4-error-*.md`): an authentication ERROR is final on IOS-XE and on Junos with `tacplus` alone and falls through elsewhere, but on vEOS and the N9Kv port49's authorization FAIL during a store outage then leaves break-glass useless; a per-command ERROR is final on vEOS, falls through to local RBAC on the N9Kv, and under IOS-XE's `if-authenticated` permits every command; a silent server costs 5s per command on the Cisco and Arista images and nothing on Junos; only the N9Kv offers a dead time, and `deadtime 1` locks token logins out for its minute after the server returns. Still open: other transports, a second server, the console; see below |
+| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS, the N9Kv and IOS-XE over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS, the N9Kv and IOS-XE never do (`tests/lab/results/L4-cisco_iosxe.md`, which this cell omitted until 2026-09-23); `deadtime`, other transports and authorization fall-through unmeasured. **2026-09-21 (L17):** committing `tacplus-options strict-authorization` on both Junos images changes none of the unreachable-server cells — break-glass still logged in under both orders with port49d down — so making a port49 denial binding does not cost the fall-through this row measures. **2026-09-24, ERROR and `deadtime`, all five images** (`tests/lab/results/L4-error-*.md`): an authentication ERROR is final on IOS-XE and on Junos with `tacplus` alone and falls through elsewhere, but on vEOS and the N9Kv port49's authorization FAIL during a store outage then leaves break-glass useless; a per-command ERROR is final on vEOS, falls through to local RBAC on the N9Kv, and under IOS-XE's `if-authenticated` permits every command; a silent server costs 5s per command on the Cisco and Arista images and nothing on Junos; only the N9Kv offers a dead time, and `deadtime 1` locks token logins out for its minute after the server returns. Plan 4 answers an authorization `store_unavailable` `FAIL`, never `ERROR`, for this reason (§5.7). Still open: other transports, a second server, the console; see below |
 | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | closed — measured 2026-09-20; `tests/lab/results/L5-arista_eos.md`, `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, `L5-cisco_nxos.md`, `L5-cisco_iosxe.md`. No image sends a WATCHDOG over a 2m30s idle interactive session under the lab's accounting config, which sets no periodic update; a device configured for periodic updates is outside what was measured |
 | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
 | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | closed — measured 2026-09-24; `tests/lab/results/L7-arista_eos.md`, `L7-login-arista_eos.md`, `L7-cisco_nxos.md`, `L7-nxapi-cookie-cisco_nxos.md`. eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. Both cookies measured: eAPI `/login` 2026-09-23 and NX-API `nxapi_auth` 2026-09-24 — a request carrying the cookie runs no authentication and no session authorization, only its command authorizations (NX-API: the command plus `end`; `configure terminal` too for `cli_conf`). The `nxapi_auth` cookie expires after 10 minutes idle (`NXAPI timeout 10`), ends on `POST /logout`, and wins over a wrong Basic password sent beside it; NAPALM `nxos` never uses it (21 authentications for a six-call job) while Ansible `httpapi` does (one); see below |
@@ -4496,6 +4620,24 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   true. Note also that both contradicted sentences are about *authorization* fall-through,
   which this row has not measured; what is measured is that the general principle they appeal
   to is false on Junos for authentication.
+
+  *Measured since* (added 2026-09-24 by plan 4, on the owner's rulings, and run the same day):
+
+  - **Authentication `ERROR` fall-through,** with port49d up and its store down: the table
+    above. It is final on IOS-XE and on Junos under `tacplus` alone; on vEOS and the N9Kv
+    break-glass logs in and is then refused by the authorization FAIL that follows
+    (`tests/lab/results/L4-error-*.md`).
+  - **Authorization `FAIL` vs `ERROR`:** the table above. `FAIL` is final everywhere; `ERROR`
+    runs every command under IOS-XE's `if-authenticated` and hands the N9Kv to local RBAC,
+    which is why plan 4 answers authorization `store_unavailable` `FAIL` (§5.7).
+  - **Role ceiling, per platform** (`tests/lab/results/ceiling-arista_eos.md`,
+    `ceiling-cisco_iosxe.md`, `ceiling-cisco_nxos.md`): IOS-XE's parser refuses `clear
+    counters`, `clear ip bgp *` and `configure` at levels 1 and 7, and one line
+    (`privilege exec level 7 clear counters`) gives level 7 exactly the operator rung; vEOS
+    refuses all three at level 1 and runs all three as `network-operator` at 15; on the N9Kv
+    every role runs all three. So on EOS and NX-OS the operator rung is port49's per-command
+    policy alone. `operator` on `arista_eos` stays unmapped, quarantining the devices it
+    reaches, until the owner decides its rendering.
 - **L5** — EOS 2026-09-17 and Junos 2026-09-20: no WATCHDOG at all on any of the three, over a
   2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`,
   `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, and the N9Kv and Catalyst 8000V both join them with
