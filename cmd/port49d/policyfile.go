@@ -67,9 +67,10 @@ var readOnlyFS = func(f *os.File) (bool, error) {
 // can re-point it at any file that passes — a root-owned policy.yaml.bak from
 // before a grant was withdrawn — so the directory holding every link the path
 // passes through, the configured name's own and any standing for a directory
-// included, is held to the same rule (resolvePolicyPath). A directory's mode
-// is excused on a read-only mount, which is how a ConfigMap passes
-// (dirWritableByUsAlone). The directory
+// included, is held to the same rule (resolvePolicyPath). A link's directory
+// has its mode excused on a read-only mount, which is how a ConfigMap passes
+// (dirWritableByUsAlone); the directory holding the file never does. The
+// directory
 // holding the final target is then opened, without following a link in its
 // place, and the file is opened relative to that descriptor, without following
 // one either; both checks are fstats of the descriptors, and the bytes come
@@ -107,7 +108,10 @@ func readPolicyFile(path string) ([]byte, error) {
 	if err := writableByUsAlone("the file "+target, fi); err != nil {
 		return nil, err
 	}
-	if err := dirWritableByUsAlone("the directory "+dir, d, di); err != nil {
+	// The directory holding the file is never excused by a read-only mount
+	// (dirWritableByUsAlone is for a link's directory alone): a read-only
+	// bind of a host directory others can write is writable on the host.
+	if err := writableByUsAlone("the directory "+dir, di); err != nil {
 		return nil, err
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxPolicySize+1))
@@ -203,12 +207,16 @@ func writableByUsAlone(what string, fi fs.FileInfo) error {
 	return notWritableByOthers(what, fi)
 }
 
-// dirWritableByUsAlone is writableByUsAlone for a directory open as d, whose
-// mode is excused on a read-only mount. A Kubernetes ConfigMap or Secret
-// volume's root holds the policy's two links at mode 0777 (01777, 02777 with
-// fsGroup) and is mounted read-only: nobody in the pod, root included, can
-// write it (tests/lab/results/configmap-mounts.md). Read-only is asked of the
-// descriptor opened, not a path, and the owner is still checked.
+// dirWritableByUsAlone is writableByUsAlone for a directory holding a link in
+// the chain, open as d, whose mode is excused on a read-only mount. A
+// Kubernetes ConfigMap or Secret volume's root holds the policy's two links at
+// mode 0777 (01777, 02777 with fsGroup) and is mounted read-only: nobody in
+// the pod, root included, can write it (tests/lab/results/configmap-mounts.md).
+// The excuse trusts whoever writes the mount's source — the kubelet, for a
+// ConfigMap — so it is never extended to the directory holding the file,
+// where a read-only bind of a host directory others can write would let them
+// rename a stale policy over it. Read-only is asked of the descriptor opened,
+// not a path, and the owner is still checked.
 func dirWritableByUsAlone(what string, d *os.File, fi fs.FileInfo) error {
 	if err := ownedByUsOrRoot(what, fi); err != nil {
 		return err

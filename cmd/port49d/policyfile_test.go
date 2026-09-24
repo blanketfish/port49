@@ -166,11 +166,9 @@ func TestALinkInADirectoryOthersCanWriteIsRefused(t *testing.T) {
 // write by its mode is accepted when its filesystem is read-only, and only
 // then; its owner must still be port49d's user or root.
 func TestAWritableDirectoryOnAReadOnlyMountIsAccepted(t *testing.T) {
-	dir := configMap(t)
-	for _, p := range []string{dir, filepath.Join(dir, "..2026_09_24_07_00_00.123456789")} {
-		if err := os.Chmod(p, 0o777); err != nil {
-			t.Fatal(err)
-		}
+	dir := configMap(t) // the timestamped directory holding the file stays 0755, as measured
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "policy.yaml")
 	defer func(f func(*os.File) (bool, error)) { readOnlyFS = f }(readOnlyFS)
@@ -197,6 +195,35 @@ func TestAWritableDirectoryOnAReadOnlyMountIsAccepted(t *testing.T) {
 		if _, err := readPolicyFile(path); err == nil || !strings.Contains(err.Error(), "chown it") {
 			t.Fatalf("a read-only mount does not excuse another owner: %v", err)
 		}
+	}
+}
+
+// The directory holding the file itself is never excused, read-only or not.
+// A read-only bind of a host directory others can write lets them rename a
+// stale root-owned policy over the file on the host, which a read-only mount
+// does not stop (re-review N1). A ConfigMap's file directory is root's 0755
+// in every case measured, so it needs no excuse. Here a ConfigMap layout
+// whose timestamped directory is 0777, and a plain bind of a 0777 directory,
+// are both refused on a read-only mount.
+func TestTheFilesOwnDirectoryIsNotExcusedByAReadOnlyMount(t *testing.T) {
+	defer func(f func(*os.File) (bool, error)) { readOnlyFS = f }(readOnlyFS)
+	readOnlyFS = func(*os.File) (bool, error) { return true, nil }
+
+	dir := configMap(t)
+	stamped := filepath.Join(dir, "..2026_09_24_07_00_00.123456789")
+	for _, p := range []string{dir, stamped} {
+		if err := os.Chmod(p, 0o777); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := readPolicyFile(filepath.Join(dir, "policy.yaml")); err == nil ||
+		!strings.Contains(err.Error(), "the directory "+stamped) || !strings.Contains(err.Error(), "chmod go-w") {
+		t.Fatalf("a ConfigMap whose file directory is 0777: %v", err)
+	}
+
+	bind := policyAt(t, 0o644, 0o777)
+	if _, err := readPolicyFile(bind); err == nil || !strings.Contains(err.Error(), "the directory "+filepath.Dir(bind)) {
+		t.Fatalf("a read-only bind of a 0777 host directory: %v", err)
 	}
 }
 
