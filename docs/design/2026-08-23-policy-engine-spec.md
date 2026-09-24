@@ -1970,6 +1970,17 @@ prefix of it, ignoring case — on every platform, whatever `expands_abbreviatio
 `usern x sec 0 X` and `snmp comm X` are redacted. That removes more rather than less, and it
 does not trust the flag: L21 measured expansion for interactive SSH only, and a flag that is
 wrong where redaction relies on it leaks a secret into a log that cannot take it back.
+That holds for every argument: `tacacs-server k X`, `enable s 0 X`, `username bob pa X` are
+redacted. The **command word** — the first word, or the word after a leading `do` — matches
+a secret keyword's abbreviation only where it is three characters or more, one character (`k
+X` in a key chain), or two characters followed by a bare digit, an encryption type (`sh 7 X` in
+an EOS IPsec profile); the whole keyword always matches. So `sh ip int br`, `sh run` and `do sh
+run` keep their arguments, where every exec `sh` would otherwise read as `shared-key`. The cost
+is named: a two-character submode command word that is a secret keyword and is followed by
+something other than a digit — `sh X` in an IPsec profile — is not redacted, where a device
+sends it as typed; EOS and IOS-XE over interactive SSH send it expanded (L21). Two broad
+keywords are scoped to their command so a short word elsewhere is not read as them:
+`idtoken` under `license`, and `token` as `token` followed by one word.
 Redaction therefore errs toward hiding: some non-secret arguments — `aaa authentication login
 … none`, `area 0 …`, `ip domain name …` — are redacted, because a word that begins a secret
 keyword (`authentication-key`, `area-password`, `domain-password`) counts as its
@@ -1991,8 +2002,9 @@ missed loses every argument, so a secret is never left in one of the two. Each p
 judged on its own: another pattern matching both forms does not excuse this one.
 
 A value glued to its keyword, `key=X` or `password:X`, is matched as the keyword and the word
-after it, and a keyword ending in the separator, `password: X`, as the keyword; the word keeps
-its keyword, `key=«redacted»`. Redaction replaces argument *values* with `«redacted»` and preserves the vector's shape and
+after it, and a keyword ending in the separator, `password: X`, as the keyword; a keyword's
+leading `-` and `/` are not part of it, so `--password=X` and `/password:X` are too; the word
+keeps its keyword, `key=«redacted»`. Redaction replaces argument *values* with `«redacted»` and preserves the vector's shape and
 length, so the reconciliation join still works on a redacted record. It applies to `raw` as
 well — a rule that redacted only the normalized form would defeat itself.
 
@@ -2025,7 +2037,11 @@ that carries a value a pattern hides — `snmp-server community X ro` — and it
 policy test` reports it as `device_config_secret_literal`, naming the line by its platform key
 and index in its redacted form, and `port49 platform show` and `platform export` print it
 redacted, as they do a block's `config_checks` `match` and `says`: export's output goes upstream,
-and the operator restores the value from the policy file. A line or a check a
+and the operator restores the value from the policy file. A block's `config_checks[i].match`
+that carries such a value is reported the same way, as `device_config_secret_literal` naming
+`platforms.<p>.config_checks[i].match`; its `says` is prose, redacted wherever it is printed
+and never reported, since ordinary wording — "falls back to a local secret" — would trip it.
+A line or a check a
 built-in set ships is lab text and printed as written, though abbreviation matching reads its
 `authentication` as `authentication-key`. `port49 devices check-config` redacts every
 configuration line it prints the same way (§12).
