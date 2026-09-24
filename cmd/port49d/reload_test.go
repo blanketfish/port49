@@ -548,3 +548,19 @@ func TestRunWithNoBrokerSaysSIGHUPDoesNothing(t *testing.T) {
 	}
 	waitFor(t, &out, "port49d: SIGHUP: no `broker:` block in the config, so there is no policy to reload")
 }
+
+// An operator withdrawing a compromised grant reads the summary line and
+// stops. On a platform that never asks about a command (Junos, spec §13
+// decision 21) the live shell keeps its access until logout, so the line says
+// how many contexts that is; with none, it says nothing extra.
+func TestTheSummarySaysWhatASessionOnlyPlatformKeeps(t *testing.T) {
+	got := summary(broker.RefreshReport{Revoked: 3, Unreached: 1})
+	if !strings.Contains(got, "3 revoked") ||
+		!strings.Contains(got, "1 of them on platforms that do not authorize commands keep their live session "+
+			"until logout (spec §13 decision 21)") {
+		t.Fatalf("summary: %q", got)
+	}
+	if got := summary(broker.RefreshReport{Revoked: 3}); strings.Contains(got, "until logout") {
+		t.Fatalf("summary: %q", got)
+	}
+}

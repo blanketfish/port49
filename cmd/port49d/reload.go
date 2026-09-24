@@ -307,10 +307,18 @@ func (r *reloader) reschedule() {
 	}
 }
 
+// summary is what a refresh did, in one clause per count. A context updated or
+// revoked on a platform that never asks about a command is counted, and said:
+// its live session keeps what it had at login until logout, and the broker's
+// process log names each one's ctx_id.
 func summary(rep broker.RefreshReport) string {
-	return fmt.Sprintf("%d live context(s) updated, %d revoked, %d unchanged, %d left on quarantined devices, "+
-		"%d failed; unspent tokens superseded on %d (device, username) key(s)", rep.Updated, rep.Revoked,
-		rep.Unchanged, rep.Quarantined, rep.Failed, rep.TokenKeys)
+	s := fmt.Sprintf("%d live context(s) updated, %d revoked, %d unchanged, %d left on quarantined devices, "+
+		"%d failed", rep.Updated, rep.Revoked, rep.Unchanged, rep.Quarantined, rep.Failed)
+	if rep.Unreached > 0 {
+		s += fmt.Sprintf("; %d of them on platforms that do not authorize commands keep their live session until "+
+			"logout (spec §13 decision 21)", rep.Unreached)
+	}
+	return s + fmt.Sprintf("; unspent tokens superseded on %d (device, username) key(s)", rep.TokenKeys)
 }
 
 // oneLine is err's text on one line, the way port49d's other lines are: a YAML

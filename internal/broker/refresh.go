@@ -55,6 +55,12 @@ type RefreshReport struct {
 	// deleted as superseded.
 	TokenKeys                                        int
 	Updated, Unchanged, Revoked, Quarantined, Failed int
+	// Unreached is how many of the contexts updated, revoked or failed are
+	// on a platform that does not authorize commands (Junos, spec §13
+	// decision 21): the context is written, for the next login and any
+	// receipt replay, but the live session keeps what it had at login until
+	// logout. It counts contexts the other counts already count.
+	Unreached int
 	// At is the instant the pass judged every token and context at. A caller
 	// schedules the next grant expiry from it (policy.NextChange(At)), not
 	// from its own clock after the pass, and runs another pass at once when
@@ -69,16 +75,11 @@ type RefreshReport struct {
 // grant expiry, and it can be run again: a pass that stopped part-way is
 // finished by the next.
 //
-// First the tokens. A token carries its blob hash, ceiling and enable
-// mechanism from the policy that minted it, and a redemption writes them into
-// the context it creates or joins. So an unspent token minted under a prior
-// policy whose answer the policy in force would not give is deleted, key by
-// key; otherwise a grant removed at 10:00 comes back at 10:05 on a device where
-// the operator had no context yet, from a token minted at 09:58. A token the
-// policy in force would mint identically is left alone: a reload is not a
-// reason to make everyone run `port49 token` again.
-//
-// Then the contexts: every live context of every active principal is
+// First the contexts, because revoking a live session is the security
+// priority and the token scan is the costlier half (principals × devices ×
+// instants compiles; plan 12 measures it). Either order needs the settle pass
+// for a redemption in flight, so nothing is lost by this one. Every live
+// context of every active principal is
 // re-resolved against the policy in force, for that principal on that device,
 // and the answer is written into it by compare-and-set on the policy revision
 // read (store.SetContextPolicy) — the blob, the ceiling (a held level above a
@@ -94,7 +95,20 @@ type RefreshReport struct {
 // from that device while it is quarantined, and the refresh at the reload or
 // expiry that lifts the quarantine reaches it. Nobody is logged out: a
 // narrowed rule denies the next command, a widened one permits it, and the
-// session goes on.
+// session goes on — on a platform that authorizes commands. One that does not
+// (Junos, spec §13 decision 21) never asks about a command, so its live
+// session keeps what it had at login until logout: the context is still
+// written, for the next login and any receipt replay, and it is counted
+// Unreached and named in the process log.
+//
+// Then the tokens. A token carries its blob hash, ceiling and enable
+// mechanism from the policy that minted it, and a redemption writes them into
+// the context it creates or joins. So an unspent token minted under a prior
+// policy whose answer the policy in force would not give is deleted, key by
+// key; otherwise a grant removed at 10:00 comes back at 10:05 on a device where
+// the operator had no context yet, from a token minted at 09:58. A token the
+// policy in force would mint identically is left alone: a reload is not a
+// reason to make everyone run `port49 token` again.
 //
 // Every context the refresh changes is one `refresh` decision record naming
 // the context's ctx_id, so the record before a command's changed answer says
@@ -116,17 +130,24 @@ type RefreshReport struct {
 // context, and the caller runs it again. A context still changing after every
 // attempt does not end it: it is counted failed and left for the retry, and
 // the pass goes on and returns store.ErrConflict at the end so the caller
-// runs it again.
+// runs it again. A cancelled ctx ends the pass at the next principal, in
+// either half, and is returned: port49d is shutting down.
 func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, error) {
 	cur := b.Policy.Load()
 	var rep RefreshReport
 	for {
 		rep.At = b.Now()
+		busy := b.refreshContexts(ctx, cur, rep.At, &rep)
+		if busy != nil && !errors.Is(busy, store.ErrConflict) {
+			return rep, fmt.Errorf("refreshing live contexts: %w", busy)
+		}
+		// A busy context is left for the retry, and the tokens are still
+		// superseded: a key whose answer changed is cleared either way.
 		if err := b.supersedeTokens(ctx, cur, rep.At, priors, &rep); err != nil {
 			return rep, fmt.Errorf("deleting superseded tokens: %w", err)
 		}
-		if err := b.refreshContexts(ctx, cur, rep.At, &rep); err != nil {
-			return rep, fmt.Errorf("refreshing live contexts: %w", err)
+		if busy != nil {
+			return rep, fmt.Errorf("refreshing live contexts: %w", busy)
 		}
 		// Every context was judged at At. A grant that expired while the
 		// pass ran was judged before its expiry, and a caller scheduling from
@@ -206,17 +227,25 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 	keys := map[store.TokenKey]bool{}
 	for _, pr := range priors {
 		instants := pr.instants(now)
+		if pr.Policy == cur && len(instants) == 1 {
+			// The policy in force, over a span with no expiry in it — a
+			// settle pass, or a retry: every answer is the one it gives now.
+			continue
+		}
 		for _, principal := range pr.Policy.Principals() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			for _, name := range names {
 				d := b.Devices[name]
 				for _, at := range instants {
-					was, ok := mintedBy(pr.Policy, principal, d, at)
+					was, ok := mintedFor(pr.Policy, principal, d, at)
 					if !ok {
 						continue // nothing was minted then, so nothing is superseded
 					}
 					is, seen := current[[2]string{principal, name}]
 					if !seen {
-						is.m, is.ok = mintedBy(cur, principal, d, now)
+						is.m, is.ok = mintedFor(cur, principal, d, now)
 						current[[2]string{principal, name}] = is
 					}
 					if is.ok && was.keeps(is.m) {
@@ -269,6 +298,9 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, now ti
 	quarantined := map[string]bool{} // the ctx_ids this pass left for a quarantine
 	var busy error
 	for _, principal := range principals {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		refs, err := b.Store.ContextsByPrincipal(ctx, principal)
 		if err != nil {
 			return err
@@ -330,7 +362,8 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now tim
 				Device:  &decision.Device{Name: ref.NAS, Platform: b.Devices[ref.NAS].Platform},
 				Session: &decision.Session{Username: ref.Username},
 				Policy:  &decision.Policy{Bundle: cur.Bundle}}
-			return b.revoke(ctx, k, now, refreshStep{revoke: true, rec: rec, outcome: "failed"}, rep)
+			return b.revoke(ctx, k, now, refreshStep{revoke: true, rec: rec, outcome: "failed",
+				sessionOnly: sessionOnly(cur, b.Devices[ref.NAS].Platform)}, rep)
 		case err != nil:
 			return err
 		}
@@ -341,6 +374,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now tim
 			return nil
 		}
 		step := b.decideRefresh(cur, now, principal, ref, c)
+		step.sessionOnly = sessionOnly(cur, b.Devices[ref.NAS].Platform)
 		switch {
 		case step.revoke:
 			return b.revoke(ctx, k, now, step, rep)
@@ -370,6 +404,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now tim
 		}
 		b.emit(step.rec)
 		b.count(rep, step.outcome)
+		b.unreached(step, rep)
 		return nil
 	}
 	// Still changing after every attempt: a login or a privilege change
@@ -398,7 +433,33 @@ func (b *Broker) revoke(ctx context.Context, k store.ContextKey, at time.Time, s
 	}
 	b.emit(step.rec)
 	b.count(rep, step.outcome)
+	b.unreached(step, rep)
 	return nil
+}
+
+// sessionOnly reports whether a platform never asks about a command (spec §13
+// decision 21), as explain judges it: a refresh cannot reach a live session
+// there.
+func sessionOnly(p *policy.Policy, platform string) bool {
+	return !p.Dialect(platform).Authorizes("commands")
+}
+
+// unreached counts a context the refresh changed on a platform that never
+// asks about a command, and names it in the process log: its live session
+// keeps what it had at login until logout, and the operator who withdrew a
+// grant must not read "revoked" and stop there.
+func (b *Broker) unreached(step refreshStep, rep *RefreshReport) {
+	if !step.sessionOnly {
+		return
+	}
+	rep.Unreached++
+	which := "ctx_id " + step.rec.Session.CtxID
+	if step.rec.Session.CtxID == "" {
+		which = fmt.Sprintf("username %q", step.rec.Session.Username)
+	}
+	log.Printf("broker: refresh: the context on %q (%s) was %s, but %s does not authorize commands: its live "+
+		"session keeps what it had at login until logout (spec §13 decision 21)", step.rec.Device.Name, which,
+		step.outcome, step.rec.Device.Platform)
 }
 
 // quarantineUnrecorded reports whether the context ctxID has no `refresh`
@@ -427,6 +488,9 @@ type refreshStep struct {
 	body    []byte
 	rec     decision.Record
 	outcome string
+	// sessionOnly is a context on a platform that never asks about a
+	// command: a change written to it does not reach its live session.
+	sessionOnly bool
 }
 
 // decideRefresh is what the policy in force says about principal on the
@@ -532,3 +596,7 @@ func (b *Broker) count(rep *RefreshReport, outcome string) {
 // resolveFor is how the refresh resolves a context's principal, swapped in
 // tests to stand in for a composition the load never compiled.
 var resolveFor = (*policy.Policy).Resolve
+
+// mintedFor is mintedBy for the token scan, swapped in tests to count what it
+// compiles.
+var mintedFor = mintedBy

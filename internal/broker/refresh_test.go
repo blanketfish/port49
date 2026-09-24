@@ -1,8 +1,11 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -789,5 +793,137 @@ func TestAChangedUsernameRevokesTheContext(t *testing.T) {
 	}
 	if p, _ := recs[0]["policy"].(map[string]any); p["grants"] != nil {
 		t.Fatalf("the record names no grant: %v", recs[0])
+	}
+}
+
+// cancellingStore cancels the pass's context as it reads the first
+// principal's contexts: SIGTERM arriving part-way through a long pass.
+type cancellingStore struct {
+	store.Store
+	cancel context.CancelFunc
+}
+
+func (s cancellingStore) ContextsByPrincipal(ctx context.Context, principal string) ([]store.ContextRef, error) {
+	s.cancel()
+	return s.Store.ContextsByPrincipal(ctx, principal)
+}
+
+// A cancelled pass stops at once: port49d waits for the reloader before it
+// flushes the accounting spool, and a pod killed at its grace period would
+// lose it. The contexts come first — revoking a live session is the security
+// priority — so the principal the pass was on is finished, the next is not
+// begun, and the token scan after them never runs.
+func TestACancelledPassStopsAtOnce(t *testing.T) {
+	f := newFixture(t, 8)
+	bg := context.Background()
+	f.login(t, alice, "leaf1", "alice")
+	decodeMint(t, f.post(bg, f.state(f.alice), `{"devices":["nx1"]}`, ""))
+	carol := "user:carol@example.com"
+	k := store.ContextKey{NAS: "leaf1", Username: "carol"}
+	if err := f.st.PutContext(bg, k, store.Context{CtxID: "carol", Principal: carol, Username: "carol",
+		BlobHash: "sha256:carol"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexContext(bg, carol, "", "", store.ContextRef{NAS: "leaf1", Username: "carol"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	priors := f.reload(t, edit(t, roleList, readOnly, aliceGrant, "roles: [read_only], max_privilege: admin"))
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	f.b.Store = cancellingStore{Store: f.st, cancel: cancel}
+	rep, err := f.b.Refresh(ctx, priors)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled pass returns the cancellation: %v", err)
+	}
+	if rep.Updated != 1 || f.decides(t, f.context(t, "leaf1", "alice"), "configure") {
+		t.Fatalf("the principal the pass was on is finished: %+v", rep)
+	}
+	if c := f.context(t, "leaf1", "carol"); !c.RevokedAt.IsZero() {
+		t.Fatalf("the principal after the cancellation is not begun: %+v", c)
+	}
+	if toks, _ := f.st.Candidates(bg, store.TokenKey{NAS: "nx1", Username: "alice"}); len(toks) != 1 {
+		t.Fatalf("the token scan after the contexts never runs: %d left", len(toks))
+	}
+}
+
+// The token scan stops at a cancellation too, before deleting anything.
+func TestACancelledTokenScanStops(t *testing.T) {
+	f := newFixture(t, 8)
+	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["nx1"]}`, ""))
+	priors := f.reload(t, edit(t, roleList, readOnly, aliceGrant, "roles: [read_only], max_privilege: admin"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var rep RefreshReport
+	if err := f.b.supersedeTokens(ctx, f.b.Policy.Load(), f.now, priors, &rep); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled scan returns the cancellation: %v", err)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "nx1", Username: "alice"}); len(toks) != 1 {
+		t.Fatalf("a cancelled scan deletes nothing: %d left", len(toks))
+	}
+}
+
+// A settle pass, or an expiry pass with no expiry since the last, compares
+// the policy in force with itself over a span where no answer can change:
+// the token scan skips it rather than compile the fleet for nothing, every
+// 30s during retries.
+func TestASettlePassComparesNoPolicyWithItself(t *testing.T) {
+	f := newFixture(t, 8)
+	mints := 0
+	was := mintedFor
+	mintedFor = func(p *policy.Policy, principal string, d admission.Device, at time.Time) (minted, bool) {
+		mints++
+		return was(p, principal, d, at)
+	}
+	t.Cleanup(func() { mintedFor = was })
+	if _, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Load(), At: f.now}}); err != nil {
+		t.Fatal(err)
+	}
+	if mints != 0 {
+		t.Fatalf("the policy in force was compared with itself: %d mints compiled", mints)
+	}
+	if _, err := f.b.Refresh(context.Background(), f.reload(t, testPolicy+"# reviewed\n")); err != nil {
+		t.Fatal(err)
+	}
+	if mints == 0 {
+		t.Fatal("a reload's prior is still compared")
+	}
+}
+
+// Junos never sends a per-command authorization request (spec §13 decision
+// 21), so a refresh cannot reach a live shell there: the context is written,
+// for the next login and any receipt replay, but the session keeps what it
+// had at login until logout. The refresh counts those contexts and the
+// process log names each, so an operator withdrawing a compromised grant is
+// not told it is gone from a shell that is still open.
+func TestARefreshNamesTheContextsASessionOnlyPlatformKeeps(t *testing.T) {
+	f := newFixture(t, 8)
+	before := f.login(t, alice, "leaf1", "alice")
+	f.login(t, alice, "nx1", "alice")
+	sessionOnly, _ := platform.DialectFor("arista_eos")
+	sessionOnly.Supports = []string{"session"}
+	pol, err := policy.Parse([]byte(edit(t, "  - {subject: netops, scope: all_devices, "+aliceGrant+"}\n",
+		"  - {subject: idle, scope: all_devices, roles: [network_admin]}\n")), policy.Env{
+		Devices:  []admission.Device{f.b.Devices["leaf1"], f.b.Devices["nx1"], f.b.Devices["bare"]},
+		Dialects: map[string]platform.Dialect{"arista_eos": sessionOnly}, Now: f.b.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	priors := []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}}
+	var out bytes.Buffer
+	log.SetOutput(&out)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+		t.Fatalf("the context is still revoked, for the next login and any receipt replay: %+v", c)
+	}
+	if rep.Revoked != 2 || rep.Unreached != 1 {
+		t.Fatalf("two revoked, one of them on a session-only platform: %+v", rep)
+	}
+	if !strings.Contains(out.String(), before.CtxID) || !strings.Contains(out.String(), "until logout") ||
+		strings.Contains(out.String(), "ctx-nx1-alice") {
+		t.Fatalf("the process log names the unreached context, and only it: %q", out.String())
 	}
 }
