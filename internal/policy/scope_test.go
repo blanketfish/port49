@@ -154,3 +154,71 @@ func TestAnExpiredGrantMatchesNothing(t *testing.T) {
 		t.Fatalf("at expiry: %+v", c)
 	}
 }
+
+// mixed is one scope per way a key can combine comparisons, none attaching
+// anything, so every on_missing is a free choice.
+const mixed = `
+scopes:
+  - {name: re_lt_include, match: {os_version: {re: "^22", lt: "21.4R3-S5"}}, on_missing: include}
+  - {name: re_lt_exclude, match: {os_version: {re: "^22", lt: "21.4R3-S5"}}, on_missing: exclude}
+  - {name: re21_lt, match: {os_version: {re: "^21", lt: "21.4R3-S5"}}, on_missing: include}
+  - {name: gt_lt_include, match: {os_version: {gt: "22", lt: "21.4R3-S5"}}, on_missing: include}
+  - {name: gte_lt, match: {os_version: {gte: "21.1", lt: "21.4R3-S5"}}, on_missing: include}
+roles:
+  - {name: read_only, privilege: readonly, permit: [show **]}
+subjects:
+  - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
+`
+
+// Every comparison on a key is evaluated, so the order a map yields them in
+// cannot change a selection (spec §5.4): one that cannot be ordered sends the
+// key to on_missing, whatever the others say; otherwise all must hold.
+func TestAKeyWithSeveralComparisonsSelectsTheSameWayEveryTime(t *testing.T) {
+	p := mustParse(t, mixed)
+	version := func(v string) admission.Device {
+		d := deviceNamed(t, "srx-fw-04")
+		d.Attributes = map[string]string{"os_version": v}
+		return d
+	}
+	for _, tt := range []struct {
+		scope, version     string
+		selected, reported bool
+	}{
+		{"re_lt_include", "21.4X75-D40", true, true},   // re misses, lt cannot order: on_missing
+		{"re_lt_exclude", "21.4X75-D40", false, false}, // the same, excluded
+		{"re21_lt", "21.4R3-S4", true, false},          // both hold
+		{"re_lt_include", "21.4R3-S4", false, false},   // re misses, lt holds
+		{"re21_lt", "22.1X", false, false},             // re misses, and 22.1X orders above the bound
+		{"gt_lt_include", "21.4X75-D40", true, true},   // gt misses, lt cannot order: on_missing
+		{"gte_lt", "21.4X75-D40", true, true},          // gte holds, lt cannot order: on_missing
+		{"gte_lt", "21.4R3-S4", true, false},           // both hold
+		{"gte_lt", "20.4R1", false, false},             // gte misses
+	} {
+		for i := 0; i < 50; i++ {
+			sel, rep := p.scopes[tt.scope].selects(version(tt.version))
+			if sel != tt.selected || rep != tt.reported {
+				t.Fatalf("%s on %s (try %d): selected %v reported %v, want %v %v",
+					tt.scope, tt.version, i, sel, rep, tt.selected, tt.reported)
+			}
+		}
+	}
+}
+
+// A scope a principal's own grant is on is reported when it selected the
+// device on an incomparable version, even though it attaches nothing.
+func TestAGrantedScopeTakenInOnAnIncomparableVersionIsReported(t *testing.T) {
+	p := mustParse(t, `
+scopes:
+  - {name: junos_old, match: {os_version: {lt: "21.4R3-S5"}}, on_missing: include}
+roles:
+  - {name: read_only, privilege: readonly, permit: [show **]}
+subjects:
+  - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
+grants:
+  - {subject: noc, scope: junos_old, roles: [read_only]}
+`)
+	if c := composed(t, p, "noc", "srx-fw-22", time.Time{}); len(c.grants) != 1 ||
+		strings.Join(c.incomparable, ",") != "junos_old" {
+		t.Fatalf("the grant's own scope is reported: %+v", c)
+	}
+}

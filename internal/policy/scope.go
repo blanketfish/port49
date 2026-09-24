@@ -48,8 +48,11 @@ func (s *Scope) selects(d admission.Device) (selected, byIncomparable bool) {
 	return true, byIncomparable
 }
 
-// matches tests one present value against one match term. comparable is
-// false only when a version comparison could not order the two.
+// matches tests one present value against one match term. Every comparison
+// on the key is evaluated, so the answer never depends on the order they are
+// visited in (spec §5.4): if any version comparison cannot order the two,
+// comparable is false and the key goes to on_missing whatever the others say;
+// otherwise the key holds only if every comparison holds.
 //
 // A version-mitigation scope that attaches a deny should select the affected
 // devices with lt (or lte) on the patched boundary, as spec §11's
@@ -62,33 +65,32 @@ func (s *Scope) matches(key, value string) (hit, comparable bool) {
 	if m.Equal != nil {
 		return slices.Contains(m.Equal, value), true
 	}
+	hit, comparable = true, true
 	for op, bound := range m.Cmp {
 		if op == "re" {
-			if !s.res[key].MatchString(value) {
-				return false, true
-			}
+			hit = hit && s.res[key].MatchString(value)
 			continue
 		}
 		c, ok := CompareVersions(value, bound)
 		if !ok {
-			return false, false
+			comparable = false
+			continue
 		}
-		var holds bool
 		switch op {
 		case "lt":
-			holds = c < 0
+			hit = hit && c < 0
 		case "lte":
-			holds = c <= 0
+			hit = hit && c <= 0
 		case "gt":
-			holds = c > 0
+			hit = hit && c > 0
 		case "gte":
-			holds = c >= 0
-		}
-		if !holds {
-			return false, true
+			hit = hit && c >= 0
 		}
 	}
-	return true, true
+	if !comparable {
+		return false, false
+	}
+	return hit, true
 }
 
 // composition is what one subject holds on one device (spec §5.1, §5.5): the
