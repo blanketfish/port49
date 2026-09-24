@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -80,6 +81,13 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	case errors.Is(err, ErrNoGrants):
 		e.NoGrants = true
 		return e, nil
+	case d.Platform == "":
+		// The broker names an inventory device with no platform as the
+		// inventory fault it is, after the grants and before the quarantine
+		// the policy put it in at load (internal/broker, mintOne).
+		e.MintError, e.MintDetail = "device_unconfigured",
+			"inventory gives this device no platform, so the broker cannot compile its policy; give it one"
+		return e, nil
 	case errors.Is(err, ErrDeviceQuarantined):
 		e.Quarantined = true
 		e.Quarantine, e.Caveats = p.quarantineAt(d.Name, now)
@@ -97,6 +105,13 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	}
 	if e.MintError, e.MintDetail, err = mintCheck(res, principals, device); err != nil || e.MintError != "" {
 		return e, err
+	}
+	if len(principals) == 0 && slices.ContainsFunc(res.Blob.Attributes, func(a string) bool {
+		return strings.Contains(a, "{principal}")
+	}) {
+		e.Caveats = append(e.Caveats, fmt.Sprintf("%s is a group subject, so {principal} was filled in empty when "+
+			"the session reply was checked: a member's principal is filled in at mint, and a long one may still be "+
+			"refused attribute_too_long; ask with --principal to check one", subject))
 	}
 	if !dialect.ShowsServerMsg && dialect.Authorizes("commands") {
 		e.Caveats = append(e.Caveats, fmt.Sprintf("%s never displays port49's server_msg: it prints its own error "+
@@ -147,7 +162,8 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 // (internal/broker, mintOne): the blob must encode, and the session reply must
 // fill in within the wire's limits with each principal's values. It mirrors
 // the broker's mint item errors; a change to one is a change to both. With no
-// principal to try (a group subject), {principal} is filled in empty.
+// principal to try (a group subject), {principal} is filled in empty, and
+// Explain says so.
 func mintCheck(res Resolution, principals []string, device string) (code, detail string, err error) {
 	if _, _, err := engine.Encode(res.Blob); err != nil {
 		return "broker_error", err.Error(), nil
@@ -257,7 +273,7 @@ func (e Explanation) Render(w io.Writer, showAttributes bool) {
 	}
 	if e.MintError != "" {
 		fmt.Fprintf(w, "refused %s: the broker mints no token for %s on %s (%s), so there is no session to "+
-			"decide\n  %s\n", e.MintError, e.Subject, e.Device, e.Platform, e.MintDetail)
+			"decide\n  %s\n", e.MintError, e.Subject, e.Device, platformName(e.Platform), e.MintDetail)
 		for _, c := range e.Caveats {
 			fmt.Fprintf(w, "note: %s\n", c)
 		}

@@ -222,3 +222,48 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`)
 		t.Errorf("a pipe denial printed permitted by:\n%s", out)
 	}
 }
+
+// An inventory device with no platform is answered as the broker answers it,
+// device_unconfigured, after the grants and before the quarantine; a subject
+// with no grant there still hears no_grants_matched.
+func TestExplainNamesADeviceWithNoPlatform(t *testing.T) {
+	p, err := Parse([]byte(`
+scopes: [{name: all_devices, match: {}}, {name: nx, match: {platform: cisco_nxos}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects:
+  - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}
+  - {name: other, identity: "user:o@example.com", username: o, token_ttl: 60s}
+grants: [{subject: s, scope: all_devices, roles: [ro]}, {subject: other, scope: nx, roles: [ro]}]`),
+		Env{Devices: append(inventory(), admission.Device{Name: "bare", Addresses: []netip.Addr{netip.MustParseAddr("10.9.9.8")}})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{"", "show version"} {
+		_, out := explained(t, p, "s", "", "bare", line, false)
+		mustContain(t, out, "refused device_unconfigured", "inventory gives this device no platform")
+		if strings.Contains(out, "device_quarantined") {
+			t.Errorf("the broker answers device_unconfigured, not the quarantine:\n%s", out)
+		}
+		_, out = explained(t, p, "other", "", "bare", line, false)
+		mustContain(t, out, "deny no_grants_matched")
+	}
+}
+
+// A group subject has no principal until plan 7 reads the directory, so a
+// session attribute naming {principal} is checked with it empty, and explain
+// says so rather than promise a member's longer principal fits.
+func TestExplainSaysAGroupSubjectIsCheckedWithoutAPrincipal(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {all: ["who*{principal}"]}}]
+subjects:
+  - {name: g, group: "CN=g,OU=Groups,DC=example,DC=com", token_ttl: 60s}
+  - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}
+grants: [{subject: g, scope: all_devices, roles: [ro]}, {subject: s, scope: all_devices, roles: [ro]}]`)
+	_, out := explained(t, p, "g", "", "nx-01", "", false)
+	mustContain(t, out, "note: g is a group subject", "{principal} was filled in empty", "--principal")
+	_, out = explained(t, p, "s", "", "nx-01", "", false)
+	if strings.Contains(out, "filled in empty") {
+		t.Errorf("a subject with an identity is checked with it:\n%s", out)
+	}
+}
