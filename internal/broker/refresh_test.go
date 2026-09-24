@@ -261,6 +261,31 @@ func TestARefreshLeavesAQuarantinedDevicesContextAlone(t *testing.T) {
 	}
 }
 
+// A withdrawn grant is revoked even on a device the new policy quarantines:
+// the quarantine leaves a context on the answer it had, and a context whose
+// principal has no grant has no answer to keep. This pins the order in
+// resolution — no grant is answered before the quarantine is asked — which
+// a reorder would silently turn into a withdrawn grant kept alive on every
+// quarantined device (final review m9).
+func TestAWithdrawnGrantOnAQuarantinedDeviceIsRevoked(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	priors := f.reload(t, "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"+
+		edit(t, "{name: network_admin, privilege: admin,", "{name: network_admin, privilege: unmapped,",
+			"  - {subject: netops, scope: all_devices, "+aliceGrant+"}\n",
+			"  - {subject: idle, scope: all_devices, roles: [network_admin]}\n"))
+	if _, quarantined := f.b.Policy.Load().Quarantined("leaf1", f.now); !quarantined {
+		t.Fatal("the edit must quarantine leaf1 for this test to mean anything")
+	}
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.Revoked != 1 || rep.Quarantined != 0 {
+		t.Fatalf("report %+v, err %v", rep, err)
+	}
+	if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+		t.Fatalf("the withdrawn grant's context must be revoked, not left: %+v", c)
+	}
+}
+
 // An edit that changes no one's answer — here a comment — deletes no token: a
 // reload is not a reason to make everyone mint again. Every live context still
 // takes the new bundle's blob, so the records after the reload name the policy
