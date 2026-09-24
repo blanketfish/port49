@@ -64,10 +64,7 @@ func (p *Policy) Resolve(principal string, d admission.Device, now time.Time) (R
 	if !ok {
 		return Resolution{}, ErrNoGrants
 	}
-	if err := p.quarantined(d, now); err != nil {
-		return Resolution{}, err
-	}
-	return p.resolve(p.subs[name], d, now)
+	return p.resolveNow(p.subs[name], d, now)
 }
 
 // ResolveSubject is Resolve for a subject named directly, as the offline
@@ -77,6 +74,17 @@ func (p *Policy) ResolveSubject(subject string, d admission.Device, now time.Tim
 	sub, ok := p.subs[subject]
 	if !ok {
 		return Resolution{}, fmt.Errorf("policy: subject %q is not declared", subject)
+	}
+	return p.resolveNow(sub, d, now)
+}
+
+// resolveNow is resolve behind the quarantine at now. A subject with no grant
+// on the device is answered ErrNoGrants before the quarantine is asked: the
+// mint API must not tell a caller which devices exist (design §17), and a
+// quarantine names one.
+func (p *Policy) resolveNow(sub *Subject, d admission.Device, now time.Time) (Resolution, error) {
+	if len(p.compose(sub, d, now).grants) == 0 {
+		return Resolution{}, ErrNoGrants
 	}
 	if err := p.quarantined(d, now); err != nil {
 		return Resolution{}, err

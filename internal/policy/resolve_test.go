@@ -220,6 +220,35 @@ grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: operator}]
 	}
 }
 
+// A principal with no grant on a quarantined device hears no_grants_matched,
+// not the quarantine: the mint API must not tell a caller which devices exist
+// (design §17). Only a principal with a grant there hears the quarantine.
+func TestAPrincipalWithNoGrantThereDoesNotHearTheQuarantine(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}, {name: nx, match: {platform: cisco_nxos}}]
+roles: [{name: op, privilege: operator, permit: [show **]}]
+subjects:
+  - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}
+  - {name: other, identity: "user:o@example.com", username: o, token_ttl: 60s}
+grants: [{subject: s, scope: all_devices, roles: [op]}, {subject: other, scope: nx, roles: [op]}]`)
+	leaf, ok := p.Device("leaf-01")
+	if !ok {
+		t.Fatal("inventory has no leaf-01")
+	}
+	if _, q := p.Quarantined("leaf-01", noon); !q {
+		t.Fatal("leaf-01 renders no operator, so it is quarantined")
+	}
+	if _, err := p.Resolve("user:s@example.com", leaf, noon); !errors.Is(err, ErrDeviceQuarantined) {
+		t.Fatalf("the granted principal: %v", err)
+	}
+	if _, err := p.Resolve("user:o@example.com", leaf, noon); !errors.Is(err, ErrNoGrants) {
+		t.Fatalf("Resolve for a principal with no grant there: %v", err)
+	}
+	if _, err := p.ResolveSubject("other", leaf, noon); !errors.Is(err, ErrNoGrants) {
+		t.Fatalf("ResolveSubject for a subject with no grant there: %v", err)
+	}
+}
+
 // `enable: auto` quarantines a device whose enable exchange does not carry the
 // principal (spec §5.6; §14). config.Load refuses such a platform today, so
 // the check is exercised with a table that says otherwise.
