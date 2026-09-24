@@ -47,8 +47,13 @@ func (t cterm) takes(arg string, abbrev bool) bool {
 }
 
 // joins reports whether a split tail matches arg after prev: arg is an index
-// and the term matches the two joined.
+// and the term matches the two joined. A `*` takes any argument, so joined it
+// takes a name: prev must be one (nameShape), or every pair of arguments
+// ending in a number would be one to it.
 func (t cterm) joins(prev, arg string, abbrev bool) bool {
+	if t.kind == Any {
+		return nameShape.MatchString(prev) && indexShape.MatchString(arg)
+	}
 	return indexShape.MatchString(arg) && t.takes(prev+arg, abbrev)
 }
 
@@ -128,10 +133,10 @@ func compileRule(verdict, rule, role string, classes map[string][]string, n Norm
 }
 
 // joinable reports whether a term may match a name and an index joined: a
-// class or regex may, and a word that ends in an index.
+// `*`, a class or regex may, and a word that ends in an index.
 func joinable(t cterm) bool {
 	switch t.kind {
-	case Class, Regex:
+	case Any, Class, Regex:
 		return true
 	case Word:
 		return len(splitsOf(t.word)) > 0

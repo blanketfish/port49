@@ -315,6 +315,32 @@ func TestAnyDenyTermMatchesTheSplitName(t *testing.T) {
 	}
 }
 
+// A deny's `*` is "any one argument", and authors write it where the
+// interface goes; on IOS-XE that argument arrives as a name and an index
+// (tests/lab/results/L21-cisco_iosxe.md), so the `*` also takes a letters
+// name followed by an index-shaped argument, or the deny stops binding and
+// the daemon permits what explain denies (spec §3 rule 5).
+func TestADenyAnyTermMatchesTheSplitName(t *testing.T) {
+	b := testBlob(true, "admin:permit **", "d:deny default interface *", "c:deny show interfaces * counters")
+	b.Normalize.SplitsInterfaceNames = true
+	xe := compileBlob(t, b)
+	for _, line := range []string{"default interface GigabitEthernet 1", "default interface Loopback0",
+		"show interfaces GigabitEthernet 1 counters", "show interfaces Port-channel 10 counters",
+		"show interfaces Gi1 counters"} {
+		expect(t, xe, line, false, decision.NoPermitDominatesDeny)
+	}
+	// Only a name and an index join: two words, or a number and an index,
+	// are two arguments the `*` does not take.
+	for _, line := range []string{"default interface GigabitEthernet x", "default interface 1 1",
+		"show interfaces GigabitEthernet 1 2 counters"} {
+		expect(t, xe, line, true, decision.PermitDominates)
+	}
+	// A permit's `*` is never split: it matches only as written.
+	pb := testBlob(true, "net:permit default interface *")
+	pb.Normalize.SplitsInterfaceNames = true
+	expect(t, compileBlob(t, pb), "default interface GigabitEthernet 1", false, decision.NoRuleMatched)
+}
+
 // A platform measured sending no per-command authorization (Junos; spec §13
 // decision 21) has no command to widen for, so no deny is widened or refused
 // for it: a command that did arrive is matched as written.

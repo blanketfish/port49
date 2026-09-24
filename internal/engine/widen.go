@@ -266,6 +266,10 @@ func denyPatterns(pattern string, n Normalize) ([]string, error) {
 // channel separators, which are unmeasured.
 var indexShape = regexp.MustCompile(`^[0-9][0-9/.:]*$`)
 
+// nameShape is the name a deny's split `*` takes before an index: letters,
+// with the hyphen `Port-channel` carries.
+var nameShape = regexp.MustCompile(`^[A-Za-z][A-Za-z-]*$`)
+
 // splitsOf lists every way word is a name and an index joined: each non-empty
 // head with an index-shaped rest.
 func splitsOf(word string) [][2]string {

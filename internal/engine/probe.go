@@ -13,6 +13,9 @@ import (
 // term, which is tested against it as against any other word.
 const OtherArgument = "port49-other-argument"
 
+// anyJoined is what a deny's split `*` is tried as: a name and an index.
+const anyJoined = "Name1"
+
 // probeRule is one rule as Probes walks it.
 type probeRule struct {
 	c      compiled
@@ -169,7 +172,10 @@ func candidates(rules []probeRule, i int) []string {
 			// A split term is tried as each name and index its joined
 			// candidates divide into.
 			joined := []string{t.word}
-			if t.kind != Word {
+			switch t.kind {
+			case Any:
+				joined = []string{anyJoined}
+			case Class, Regex:
 				joined = witnesses(t.res)
 			}
 			for _, w := range joined {

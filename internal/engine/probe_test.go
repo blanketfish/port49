@@ -128,6 +128,27 @@ func TestProbesModelTheSplitInterfaceName(t *testing.T) {
 	crossCheck(t, before, compileBlob(t, b), []string{"interface", "Gig", "Gigabit", "Gigabit1", "1", "x"}, 3)
 }
 
+// A deny's `*` splits too: adding `default interface *` turns the split
+// `default interface GigabitEthernet 1` from permitted to denied, and the
+// probes find it.
+func TestProbesModelTheSplitAnyTerm(t *testing.T) {
+	b := testBlob(true, "any:permit **")
+	b.Normalize.SplitsInterfaceNames = true
+	before := compileBlob(t, b)
+	b.Rules = append(b.Rules, Rule{Verdict: Deny, Rule: "default interface *", Role: "d"})
+	after := compileBlob(t, b)
+	crossCheck(t, before, after, []string{"default", "interface", "GigabitEthernet", "1", "x"}, 4)
+	split := false
+	for _, v := range Probes(before, after) {
+		if len(v) == 4 && verdictOf(before, v) != verdictOf(after, v) {
+			split = true
+		}
+	}
+	if !split {
+		t.Errorf("no probe splits the name: %q", Probes(before, after))
+	}
+}
+
 // A regex term is tried against an argument it matches, not only against the
 // words the rules name: narrowing the deny `copy * startup-config` frees
 // `copy scp:x startup-config` for the unchanged `copy /^scp:/ *`.

@@ -282,7 +282,9 @@ entire class.
    index (digits and `/ . :`) and the term matches the two joined — and the rest of the rule
    continues after both. That holds for a word, an `@class` and a `/re/` alike and needs
    nothing from a pattern's syntax, so nothing is refused for it; the decision names the deny
-   as written. A **permit** matches only as written, so it is written as the device sends it.
+   as written. A deny's `*` is "any one argument", and is written where the interface goes, so
+   it splits too: it also matches a name (letters and `-`) followed by an index, so
+   `deny: default interface *` binds `default interface GigabitEthernet 1`. A **permit** matches only as written, so it is written as the device sends it.
 
 ---
 

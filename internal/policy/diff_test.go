@@ -216,3 +216,25 @@ func TestTheGateSeesAReleaseAndANewCause(t *testing.T) {
 		t.Fatalf("newly quarantined %+v", q)
 	}
 }
+
+// On IOS-XE a deny's `*` in the interface position also covers the name and
+// index the device sends apart (spec §3 rule 5), so the diff finds adding
+// `default interface *` a narrowing on `default interface <name> <index>`
+// there and nowhere else, as the daemon would decide it.
+func TestTheDiffSeesASplitAnyDeny(t *testing.T) {
+	base := strings.Replace(diffBase, "permit: [show **]}", "permit: [show **, default **]}", 1)
+	after := strings.Replace(base, "deny: [show chassis **]}", "deny: [show chassis **, default interface *]}", 1)
+	d := Compare(mustParse(t, base), mustParse(t, after), time.Now())
+	split := false
+	for _, c := range d.Changes {
+		if len(strings.Fields(c.Command)) == 4 && strings.HasPrefix(c.Command, "default interface ") {
+			if !slices.Equal(c.Devices, []string{"xe-01"}) || !c.Old.Permit || c.New.Permit {
+				t.Errorf("%+v", c)
+			}
+			split = true
+		}
+	}
+	if !split {
+		t.Fatalf("no split change: %+v", d.Changes)
+	}
+}
