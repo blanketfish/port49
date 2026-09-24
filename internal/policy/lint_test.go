@@ -152,3 +152,31 @@ grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: operator}]
 		t.Fatal("no ceiling, nothing to report")
 	}
 }
+
+// A rule written with a value redaction hides — a deny on a known-bad SNMP
+// community, say — is legitimate and loads, but the value will read
+// «redacted» wherever the rule is echoed, and the operator is told so
+// without the report itself printing it (spec §5.8).
+func TestARuleSecretLiteralIsReportedRedacted(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: no_public, deny: ["snmp-server community public **"]}
+  - {name: admin, permit: ["username * secret **", "show **"]}
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [admin, no_public]}]
+`)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingRuleSecretLiteral {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], `role "no_public": deny "snmp-server community «redacted» **"`) ||
+		strings.Contains(got[0], "public ") {
+		t.Fatalf("%q", got)
+	}
+	if !slices.ContainsFunc(p.RuleSecretLiterals(), func(f Finding) bool { return f.Message == got[0] }) {
+		t.Fatal("port49d says what policy test says")
+	}
+}

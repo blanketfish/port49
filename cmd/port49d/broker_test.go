@@ -163,6 +163,24 @@ func TestAJoinedInterfacePermitIsSaidAtStart(t *testing.T) {
 	}
 }
 
+// A rule with a value redaction hides loads, and the start says so with the
+// value redacted: stderr is a log like any other (spec §5.8).
+func TestARuleSecretLiteralIsSaidAtStartRedacted(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`,
+		`permit: ["**"], deny: ["snmp-server community Hunter2 **"]}`, 1))
+	if _, _, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+		metrics.New(prometheus.NewRegistry())); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "snmp-server community «redacted» **" carries`) ||
+		strings.Contains(out.String(), "Hunter2") {
+		t.Fatalf("stderr: %s", out.String())
+	}
+}
+
 // The daemon asks the policy at the time of each packet, and the gauge counts
 // at the time of each scrape: a device an expiry will quarantine is neither
 // refused nor counted until then (spec §10).

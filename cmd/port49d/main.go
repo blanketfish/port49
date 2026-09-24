@@ -337,6 +337,11 @@ func sayPolicy(pol *policy.Policy, now time.Time) {
 	for _, f := range pol.JoinedNamePermits() {
 		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
 	}
+	// A rule with a value redaction hides is echoed redacted everywhere
+	// (spec §5.8); say which, in its redacted form.
+	for _, f := range pol.RuleSecretLiterals() {
+		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
+	}
 }
 
 // redactorFor is the redaction port49d applies before any record is written

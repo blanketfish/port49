@@ -36,6 +36,7 @@ const (
 	FindingCeilingIndistinct   = "ceiling_indistinct"
 	FindingAcknowledgeStale    = "acknowledge_stale"
 	FindingPlatformOverride    = "platform_override_redundant"
+	FindingRuleSecretLiteral   = "rule_secret_literal"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -142,6 +143,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
 	}
 	out = append(out, p.WidenedDenies()...)
 	out = append(out, p.JoinedNamePermits()...)
+	out = append(out, p.RuleSecretLiterals()...)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind < out[j].Kind
@@ -227,6 +229,49 @@ func (p *Policy) JoinedNamePermits() []Finding {
 								"(tests/lab/results/L21-cisco_iosxe.md); write `%s %s`", name, rule, plat, t.Text, plat,
 							head, index)})
 					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// RuleSecretLiterals names every rule with a value the redaction patterns of
+// a platform in the inventory hide (spec §5.8): the rule loads — a deny on a
+// known-bad community is legitimate — but wherever it is echoed, a record's
+// matched rules, a denial's server_msg, the blob event, the value reads
+// «redacted». The rule is named in its redacted form, because this report
+// is printed by port49d at start, to a log like any other.
+func (p *Policy) RuleSecretLiterals() []Finding {
+	platforms := map[string]bool{}
+	for _, d := range p.env.Devices {
+		platforms[d.Platform] = true
+	}
+	if len(platforms) == 0 {
+		platforms["default"] = true
+	}
+	var out []Finding
+	for _, name := range sortedKeys(p.roles) {
+		r := p.roles[name]
+		for _, verdict := range []string{"deny", "permit"} {
+			rules := r.Deny
+			if verdict == "permit" {
+				rules = r.Permit
+			}
+			for _, rule := range rules {
+				var on []string
+				var shown []string
+				for _, plat := range sortedKeys(platforms) {
+					patterns := append(platform.Redactions(plat), p.dialect(plat).Redact...)
+					if words, ok := platform.RedactRule(patterns, strings.Fields(rule)); ok {
+						on, shown = append(on, plat), words
+					}
+				}
+				if len(on) > 0 {
+					out = append(out, Finding{Kind: FindingRuleSecretLiteral, Message: fmt.Sprintf(
+						"role %q: %s %q carries a value redaction hides on %s: the value is in the policy file, "+
+							"and every log, record and server_msg that echoes the rule shows it redacted",
+						name, verdict, strings.Join(shown, " "), strings.Join(on, ", "))})
 				}
 			}
 		}
