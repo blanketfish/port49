@@ -935,34 +935,44 @@ func TestAnAPIOnlyTestDoesNotAcknowledgeAnIdentityMove(t *testing.T) {
 // lists an attribute inert is judged under the stricter of the two versions:
 // it cannot hide a change to that attribute in the same diff. The list edit is
 // gated in its own right, and acknowledged only in writing (review M8). The
-// attribute is one no shipped set lists: listing a shipped one inert, such as
-// NX-OS's cisco-av-pair, is refused at load (task 7 review C1). The block
-// also costs the adapter the lab's verification, which is reported.
+// platform is an operator's own: on a platform a set ships, a block may not
+// list inert a name the set does not (final review M5), and listing a shipped
+// privilege attribute inert is refused anywhere (task 7 review C1).
 func TestAnInertListingCannotHideItsOwnEdit(t *testing.T) {
-	after := "platforms:\n  cisco_nxos:\n    inert_attributes: [home-directory, idletime, timeout, x-label]\n" +
+	e := env()
+	e.Devices = append(e.Devices, admission.Device{Name: "acme-01", Platform: "acme_os",
+		Addresses: []netip.Addr{netip.MustParseAddr("10.0.9.1")}})
+	parse := func(body string) *Policy {
+		t.Helper()
+		p, err := Parse([]byte(body), e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	before := "platforms:\n  acme_os:\n    supports: [session]\n" + diffBase
+	after := "platforms:\n  acme_os:\n    supports: [session]\n    inert_attributes: [home-directory, x-label]\n" +
 		strings.Replace(diffBase,
-			"roles: [read_only, cve]}", `roles: [read_only, cve], attributes: {cisco_nxos: ["x-label=network-admin"]}}`, 1)
-	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
+			"roles: [read_only, cve]}", `roles: [read_only, cve], attributes: {acme_os: ["x-label=network-admin"]}}`, 1)
+	d := Compare(parse(before), parse(after), noon)
 	raised := false
 	for _, l := range d.Levels {
-		if slices.Contains(l.Devices, "nx-01") && slices.Contains(l.Raised, "reply") && !l.Acknowledged {
+		if slices.Contains(l.Devices, "acme-01") && slices.Contains(l.Raised, "reply") && !l.Acknowledged {
 			raised = true
 		}
 	}
 	if !raised {
-		t.Fatalf("x-label changed on NX-OS, which the old adapter says bears privilege: %+v", d.Levels)
+		t.Fatalf("x-label changed on acme_os, which the old adapter says bears privilege: %+v", d.Levels)
 	}
-	listed := `["home-directory","idletime","timeout","x-label"]`
-	if len(d.Adapters) != 2 || d.Adapters[0] != (AdapterChange{Platform: "cisco_nxos", Field: "inert_attributes",
-		Old: `["home-directory","idletime","timeout"]`, New: listed, OldShown: `["home-directory","idletime","timeout"]`,
-		NewShown: listed, Sha256: digest(listed), Gated: true}) ||
-		d.Adapters[1] != (AdapterChange{Platform: "cisco_nxos", Field: "verified", Old: `"containerlab"`, New: "null",
-			OldShown: `"containerlab"`, NewShown: "null", Sha256: digest("null")}) || d.UnacknowledgedAdapters() != 1 {
+	listed := `["home-directory","x-label"]`
+	if len(d.Adapters) != 1 || d.Adapters[0] != (AdapterChange{Platform: "acme_os", Field: "inert_attributes",
+		Old: `["home-directory"]`, New: listed, OldShown: `["home-directory"]`, NewShown: listed, Sha256: digest(listed),
+		Gated: true}) || d.UnacknowledgedAdapters() != 1 {
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
-	acked := after + "acknowledge:\n  - {platform: cisco_nxos, field: inert_attributes, sha256: " + d.Adapters[0].Sha256 +
+	acked := after + "acknowledge:\n  - {platform: acme_os, field: inert_attributes, sha256: " + d.Adapters[0].Sha256 +
 		", reason: \"a label here\"}\n"
-	d = Compare(mustParse(t, diffBase), mustParse(t, acked), noon)
+	d = Compare(parse(before), parse(acked), noon)
 	if d.UnacknowledgedAdapters() != 0 || d.Adapters[0].AcknowledgedBy != "a label here" ||
 		len(d.StaleAcknowledgments) != 0 {
 		t.Fatalf("adapters %+v stale %+v", d.Adapters, d.StaleAcknowledgments)
@@ -971,7 +981,7 @@ func TestAnInertListingCannotHideItsOwnEdit(t *testing.T) {
 		t.Fatal("the entry acknowledges the list edit, not the reply the edit would have hidden")
 	}
 	// The same entry against a diff with no such edit acknowledges nothing.
-	if d := Compare(mustParse(t, diffBase), mustParse(t, diffBase+"acknowledge:\n  - {platform: cisco_nxos, "+
+	if d := Compare(parse(before), parse(before+"acknowledge:\n  - {platform: acme_os, "+
 		"field: inert_attributes, sha256: "+digest("x")+", reason: x}\n"), noon); len(d.StaleAcknowledgments) != 1 {
 		t.Fatalf("stale %+v", d.StaleAcknowledgments)
 	}

@@ -72,6 +72,7 @@ platforms:
   cisco_iosxe:
     replace: true
     accepted_attributes: [priv-lvl]
+    inert_attributes: []
     splits_interface_names: true
     privilege:
       readonly: ["priv-lvl=1"]
@@ -127,6 +128,7 @@ platforms:
   cisco_iosxe:
     replace: true
     accepted_attributes: [priv-lvl]
+    inert_attributes: []
     splits_interface_names: true
     privilege:
       readonly: ["priv-lvl=1"]
@@ -206,6 +208,19 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 			"platforms.arista_eos.inert_attributes: roles bears privilege in a platform set port49 ships"},
 		{"a new platform listing a set's privilege attribute inert", "  x: {inert_attributes: [home-directory, shell:roles]}\n",
 			"platforms.x.inert_attributes: shell:roles bears privilege"},
+		// inert_attributes is a ceiling: a name the set does not hold inert
+		// bears privilege there, as home-directory and idletime do on IOS-XE
+		// (spec §6), and replace would inherit the generic adapter's
+		// home-directory (final review M5).
+		{"an inert name the set holds bearing", "  cisco_iosxe: {inert_attributes: [idletime]}\n",
+			"platforms.cisco_iosxe.inert_attributes: idletime is not listed inert by platform set 1.0.0 on cisco_iosxe"},
+		{"an inert name the set does not list", "  cisco_nxos: {inert_attributes: [home-directory, x-label]}\n",
+			"platforms.cisco_nxos.inert_attributes: x-label is not listed inert by platform set 1.0.0 on cisco_nxos"},
+		{"an inert name a variant's base holds bearing", "  wb: {based_on: cisco_iosxe, inert_attributes: [home-directory]}\n",
+			"platforms.wb.inert_attributes: home-directory is not listed inert by platform set 1.0.0 on cisco_iosxe"},
+		{"generic's inert list inherited by replace", "  cisco_iosxe: {replace: true, supports: [session, commands], " +
+			"accepted_attributes: [priv-lvl], privilege: {readonly: [priv-lvl=1], operator: [priv-lvl=7], admin: [priv-lvl=15]}}\n",
+			"platforms.cisco_iosxe.inert_attributes: home-directory is not listed inert by platform set 1.0.0 on cisco_iosxe"},
 		{"a set's privilege attribute dropped", "  cisco_nxos: {privilege_attributes: [priv-lvl, shell:roles]}\n",
 			"platforms.cisco_nxos.privilege_attributes: cisco-av-pair is missing"},
 		{"accepted_attributes widened", "  cisco_iosxe: {accepted_attributes: [priv-lvl, roles]}\n",

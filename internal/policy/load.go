@@ -432,6 +432,15 @@ func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version strin
 			}
 		}
 	}
+	// A name the set does not hold inert bears privilege on the device, by
+	// measurement or because nobody measured it (spec §6, §8; final review M5).
+	for _, n := range d.InertAttributes {
+		if !slices.Contains(ref.InertAttributes, n) {
+			return fmt.Errorf("%s.inert_attributes: %s is not listed inert by platform set %s on %s, so it bears "+
+				"privilege there; a block may drop a name from the list, not add one (spec §8)", at, n, version,
+				shippedAs)
+		}
+	}
 	for _, c := range d.Supports {
 		if !slices.Contains(ref.Supports, c) {
 			return fmt.Errorf("%s.supports: %s is not a capability platform set %s measured on %s; a rule would read "+
