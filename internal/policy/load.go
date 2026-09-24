@@ -254,6 +254,14 @@ func (p *Policy) buildLevels(f file) error {
 				"be removed, so every shipped platform keeps working (spec §6); put them where they belong in the order", r)
 		}
 	}
+	// The reserved levels keep their relative order, or "higher" would mean
+	// one thing in the shipped adapters and another in this file (spec §6).
+	for i := 1; i < len(reservedLevels); i++ {
+		if slices.Index(p.levels, reservedLevels[i-1]) > slices.Index(p.levels, reservedLevels[i]) {
+			return fmt.Errorf("privilege_levels: the reserved levels keep their order: readonly, then operator, then " +
+				"admin; custom levels may go anywhere their parent allows (spec §6)")
+		}
+	}
 	for name, parent := range p.parents {
 		if !seen[parent] {
 			return fmt.Errorf("privilege level %q: parent %q is not declared", name, parent)

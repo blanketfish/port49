@@ -200,6 +200,8 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a role twice in one grant", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r, r]}\n", "listed twice"},
 		{"a null match value", "scopes:\n  - {name: x, match: {site: null}}\n" + subjOK, "a match value is a string"},
 		{"an unnamed role's max_session_age", "roles:\n  - {max_session_age: 8h}\n" + subjOK, "roles[0]: max_session_age"},
+		{"the reserved levels reordered", "privilege_levels: [{name: admin}, {name: operator}, {name: readonly}]\n" + subjOK, "keep their order: readonly, then operator, then admin"},
+		{"two reserved levels swapped", "privilege_levels: [{name: readonly}, {name: admin}, {name: x}, {name: operator}]\n" + subjOK, "keep their order"},
 		{"a level ordered before its parent", "privilege_levels: [{name: readonly}, {name: x, parent: operator}, {name: operator}, {name: admin}]\n" + subjOK, "after its parent"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
