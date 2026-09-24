@@ -452,6 +452,9 @@ func TestGHRepoReadsWhatGitHubServes(t *testing.T) {
 		"origin":                                        "",
 		"C:/repos/o/p":                                  "",
 		"https://-oProxyCommand=x/o/p":                  "",
+		"https://github.com/-o/p":                       "",
+		"https://github.com/o/-p":                       "",
+		"git@github.com:-o/p":                           "",
 	} {
 		got, ok := ghRepo(in)
 		if got != want || ok != (want != "") {

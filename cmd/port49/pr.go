@@ -58,10 +58,11 @@ func withoutCredentials(s string) string {
 	return credentialInSCP.ReplaceAllString(s, "${1}«redacted»@")
 }
 
-// ghName is a host, owner or repository name as it stands in a GitHub URL.
+// ghName is an owner or repository name as it stands in a GitHub URL: never
+// one starting with `-`, which GitHub does not serve.
 var (
 	ghHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
-	ghName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	ghName = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9._-]*$`)
 	scpURL = regexp.MustCompile(`^(?:[^@/:]+@)?([^@/:]+):(.*)$`)
 )
 
