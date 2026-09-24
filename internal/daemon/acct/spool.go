@@ -12,10 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 var ErrSpoolFull = errors.New("acct: spool full")
@@ -139,6 +141,11 @@ type Spool struct {
 	lastOfferLog time.Time
 
 	signal chan struct{}
+
+	// redact is the redaction a drained record passes through before the
+	// sink (WithRedactor); unset is the built-in patterns. Atomic because
+	// port49d sets it once the policy is known, with the drain running.
+	redact atomic.Pointer[platform.Redactor]
 
 	// The rest belong exclusively to the single goroutine that calls
 	// drainOnce (Run, or a test calling it directly with nothing else
@@ -642,6 +649,30 @@ func (s *Spool) setAside(line []byte) error {
 	return err
 }
 
+// WithRedactor sets the redaction a drained record passes through before it
+// reaches the sink: port49d passes the policy in force's.
+func (s *Spool) WithRedactor(r platform.Redactor) *Spool {
+	s.redact.Store(&r)
+	return s
+}
+
+// redactAccount replaces the secrets of an account record's raw pairs and
+// vector with «redacted» and says so (spec §5.8). nil is the built-in
+// patterns.
+func redactAccount(redact platform.Redactor, r *decision.Record) {
+	if r.AcctRecord == nil || r.Device == nil {
+		return
+	}
+	if redact == nil {
+		redact = platform.BuiltInRedactor
+	}
+	if raw, v, ok := platform.RedactRecord(redact(r.Device.Platform), r.AcctRecord.Raw, r.AcctRecord.Vector); ok {
+		a := *r.AcctRecord
+		a.Raw, a.Vector, a.Redacted = raw, v, true
+		r.AcctRecord = &a
+	}
+}
+
 // deliverLine unmarshals one record and forwards it, or logs and counts a
 // drop for a line that is empty or fails to unmarshal. An oversized line
 // never reaches here — drainOnce handles that case itself, since
@@ -658,6 +689,14 @@ func (s *Spool) deliverLine(line []byte) error {
 		s.metrics.SpoolDrops.WithLabelValues(dropDrainUnparseable).Inc()
 		return nil
 	}
+	// Offer took the record already redacted, but a spool file an earlier
+	// build left holds records it never redacted: the sink gets none of
+	// them as they were.
+	var redact platform.Redactor
+	if p := s.redact.Load(); p != nil {
+		redact = *p
+	}
+	redactAccount(redact, &r)
 	return s.sink.Write(r)
 }
 

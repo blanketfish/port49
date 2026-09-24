@@ -157,13 +157,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 	// Before the spool, which is on disk: command accounting carries typed
 	// text verbatim, and a secret must not reach the disk any more than the
 	// sink (spec §5.8). The attribution above read the record as sent.
-	redact := h.redact
-	if redact == nil {
-		redact = platform.BuiltInRedactor
-	}
-	if r, v, ok := platform.RedactRecord(redact(peer.Platform), raw, vector); ok {
-		rec.AcctRecord.Raw, rec.AcctRecord.Vector, rec.AcctRecord.Redacted = r, v, true
-	}
+	redactAccount(h.redact, &rec)
 
 	if err := h.spool.Offer(rec); err != nil {
 		h.metrics.Requests.WithLabelValues("acct", "error").Inc()

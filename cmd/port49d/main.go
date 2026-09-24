@@ -529,6 +529,9 @@ func run(parent context.Context, cfgPath string) error {
 	if brk != nil {
 		live = brk.Policy
 	}
+	// The drain redacts too: a spool file an earlier build left holds records
+	// it never redacted (spec §5.8).
+	spool.WithRedactor(redactorFor(live))
 	deps := server.Deps{Admission: cfg.Admission, Quarantined: watchQuarantine(live, m, time.Now), Keys: cfg.Keyring(),
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
