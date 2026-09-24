@@ -532,6 +532,7 @@ blob:a3f9c1…
   privilege:        operator
   max_privilege:    admin
   attributes:       ['shell:roles*"network-operator"']
+  accepted_attributes: [priv-lvl]    # the merged adapter's, where set (§6); omitted otherwise
 ```
 
 The daemon becomes a pure executor: it normalizes with the given parameters and matches
@@ -1745,7 +1746,7 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
-| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a composition the load quarantines (§7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
+| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
 | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
 | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed. On `refresh`, a deny recorded once per context per policy version (bundle): the live context is left as it was until the quarantine lifts |
 
@@ -2424,7 +2425,20 @@ port49 cannot check what an attribute means. It MUST check everything else:
   either flag, and a run of refusals stops it answering SSH for about a minute, break-glass
   included (`tests/lab/results/L18-cisco_iosxe.md`), so its adapter lists `priv-lvl` alone and
   a composition whose reply carries another attribute fails the joint check and quarantines
-  the device (§10): closed without a reply, it falls to local at once.
+  the device (§10): closed without a reply, it falls to local at once. Where an adapter sets
+  `accepted_attributes`, a `priv-lvl` in the reply must also be one of the levels that
+  adapter's `privilege` renders (1, 7 and 15 on `cisco_iosxe`): what the device lets any other
+  level run is unmeasured, so a role or grant layering another fails the joint check the same
+  way. The list rides in the blob (§5.1.2), omitted where the adapter sets none, so a blob
+  written before it reads as no restriction; the daemon refuses a reply carrying a name the
+  blob's list does not take (`blob_unavailable`, nothing sent), under whatever adapter the
+  policy merged.
+- **`priv-lvl`'s value is a level.** On every platform, a `priv-lvl` a level renders or a role
+  or grant layers MUST be a decimal integer from 0 to 15. IOS-XE refused the session for
+  `priv-lvl=99` rather than clamp or ignore it (`tests/lab/results/L18-cisco_iosxe.md`,
+  variant 7). An adapter whose rendering sends another value is refused at load, and a
+  composition whose reply carries one fails the joint check and quarantines the device (§10).
+  The daemon refuses such a reply too (`blob_unavailable`, nothing sent).
 
 **Unknown attributes default to optional (`*`).** A mandatory attribute a device cannot
 parse causes it to reject the entire session, breaking every login on that platform.
@@ -2716,7 +2730,7 @@ attribute is complete in four lines:
 | `ceiling_levels` | the priv-lvl number each level stands for where the rendering sends no `priv-lvl` (NX-OS is sent a role and no level, L16), for the token's ceiling | if `privilege` sends no `priv-lvl` |
 | `strip_cr` / `shows_server_msg` | whether commands end in `<cr>` (§3 rule 1); whether the device displays a denial's `server_msg` (L2) | defaults from the generic adapter |
 | `privilege_attributes` / `inert_attributes` | the attribute names that carry privilege on the platform, and those held to carry none: the only names a placeholder may go in (§6), and the only ones whose change the diff does not gate (§12) | defaults from the generic adapter |
-| `accepted_attributes` | where set, every attribute name the session reply may carry; any other quarantines the device (§6, "What the device takes") | optional |
+| `accepted_attributes` | where set, every attribute name the session reply may carry, and the reply's `priv-lvl` limited to the levels `privilege` renders; any other quarantines the device, and the list rides in the blob for the daemon to enforce (§6, "What the device takes") | optional |
 | `device_config` | the device configuration the adapter's renderings depend on, one line each, printed by `platform show` | optional |
 | `unreachable` / `fallback` | per level, the commands the device refuses in its own parser, and what it gives a session on its own when port49 cannot answer: the dead-rule and fallback-exposure reports read them (§12) | optional |
 | `local_accounts` / `config_checks` | patterns that find a device-local account in the device's configuration, and lines the configuration must not carry: `port49 devices check-config` reads them (§5.6) | optional |
