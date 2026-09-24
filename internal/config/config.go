@@ -132,8 +132,11 @@ type TokenConfig struct {
 // memory, so a restart ends every live login context and every unspent token.
 //
 // To cut someone off, remove their grants from the policy: their live
-// contexts are revoked at the next reload, with no restart. Certificate
-// revocation is plan 7.
+// contexts are revoked at the next reload, with no restart, and the next
+// command is denied on a platform that authorizes commands. On one that does
+// not (Junos, spec §13 decision 21) the live shell keeps its access until
+// logout: the refresh line counts those and the process log names each
+// ctx_id, so close them on the device. Certificate revocation is plan 7.
 //
 // A relative path resolves against port49d's working directory, not the
 // config file's, as inventory_file does.

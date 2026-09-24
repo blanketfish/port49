@@ -278,6 +278,12 @@ decision log to stdout.
 - **A narrowed or lowered operator:** the next command outside the new rules is denied as any
   denial is; a lowered `max_privilege` shows as `privilege_exceeded`, and the `refresh` record
   before it carries `session.privilege_clamped` from and to.
+- **A withdrawn or narrowed operator on Junos (final-review I1):** Junos never asks port49 about
+  a command (spec §13 decision 21), so the live shell keeps the access it had at login until
+  logout. The context is still revoked or rewritten, for the next login, and the refresh line
+  says so: `… 1 revoked, …; 1 of them on platforms that do not authorize commands keep their
+  live session until logout (spec §13 decision 21); …`, with a `broker: refresh:` line naming the
+  device and `ctx_id`. Close that session on the device itself.
 - **An inventory edit followed by `SIGHUP`:** `port49d: inventory_file … has changed since start
   and is not reloaded (plan 6); … restart port49d to apply it`.
 
@@ -4938,6 +4944,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   narrowed rule denies the next command, a widened one permits it, a lowered `max_privilege`
   lowers the held level, and a withdrawn grant revokes that operator's context on that device
   (`credential_revoked` at the next command).
+- **Not on Junos.** Junos never asks port49 about a command (spec §13 decision 21), so a live
+  Junos shell keeps the access it had at login until logout, whatever the edit. The context is
+  still revoked or rewritten for the next login, and the refresh line says how many such
+  sessions there are (`N of them on platforms that do not authorize commands keep their live
+  session until logout`), with each `ctx_id` in the process log: close those sessions on the
+  device.
 - **A policy that does not load is refused** and the old one keeps serving; one stderr line says
   why. New metrics: `port49_policy_reloads_total{outcome}` (`applied`, `unchanged`, `refused`) and
   `port49_policy_file_refused` (alert on 1).

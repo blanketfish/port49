@@ -664,7 +664,14 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    until the refresh that lifts the quarantine, and is recorded once per policy version
    (bundle), not at every pass. A narrowed rule denies the next command and a widened one
    permits it; a widened *level* reaches the device only at the next session authorization
-   or `enable`, where levels are granted. `auth_time`, `session_expires`, `refreshed_at` and the
+   or `enable`, where levels are granted. That is on a platform that authorizes commands. One
+   that does not (Junos, §13 decision 21) never asks port49 about a command, so a refresh
+   cannot reach its live session: the context is still written or revoked, for the next login
+   and any receipt replay, but the session keeps what it had at login until logout. The
+   refresh counts those contexts on its process-log summary ("N of them on platforms that do
+   not authorize commands keep their live session until logout") and names each one's
+   `ctx_id` in the process log; the `refresh` record carries no field for it yet (plan 7's
+   revocation by identity adds one, §5.7 first). `auth_time`, `session_expires`, `refreshed_at` and the
    idle TTL are not touched: nothing about the operator's authentication or the directory was
    re-verified, and a reload is not activity.
 
@@ -738,7 +745,9 @@ that; the settle pass follows 30s later. It is delayed past that only where a lo
 `enable` or a revocation on that same context lands inside the refresh's read-to-write window
 on all eight attempts, and then by 30s for each pass that happens in — an operator holds a
 narrowed grant only by logging in or enabling continuously, on the one device. A withdrawal
-is not delayed by a busy context at all.
+is not delayed by a busy context at all. None of this bounds a live session on a platform that
+does not authorize commands (step 4): there a narrowing or a withdrawal reaches the next login,
+and the session in progress keeps its access until logout.
 
 **A superseded policy's tokens are judged across the whole time it was in force.** A token
 it minted carries the answer at the instant of the mint, and that answer changes at each grant
@@ -4493,8 +4502,8 @@ Beyond those already listed in the design document's §14:
   without a reconnect, and the next command authorizes.
 - **Refresh re-resolves policy**: a principal whose grant was withdrawn cannot extend a
   session into continued access.
-- **Policy reload reaches a live session with no logout**: an edit narrowing a role denies the
-  next command in the same context, `ctx_id` unchanged; one widening it permits the next
+- **Policy reload reaches a live session with no logout**, on a platform that authorizes
+  commands: an edit narrowing a role denies the next command in the same context, `ctx_id` unchanged; one widening it permits the next
   command; one withdrawing the principal's grant on the device marks the context revoked and
   the next command is denied `credential_revoked`; a lowered `max_privilege` lowers the held
   level, and the next command above it is denied `privilege_exceeded`.
@@ -4542,6 +4551,11 @@ Beyond those already listed in the design document's §14:
 - **Revocation does not reach a session-only platform, and says so**: the same events against
   a live Junos login leave the device session running, the revocation record names that
   context as unreached, and `explain` reports the limit for that platform.
+- **A policy refresh does not reach a session-only platform either, and says so**: an edit
+  withdrawing a grant or narrowing a role, with a live Junos login open, revokes or rewrites
+  that context, leaves the device session running with the access it had at login, and the
+  refresh's process-log summary counts that context as keeping its live session until logout
+  while the process log names its `ctx_id`.
 - **Blob lifetime follows the context**: a command three hours into a login, on a replica that
   has restarted since redemption, resolves the blob; a `blob` event exists in the log for every
   hash any record names.
