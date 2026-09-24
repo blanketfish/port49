@@ -2003,10 +2003,14 @@ about a policy that loaded, and what `port49 policy test`, `policy diff` and `ex
 one, since CI keeps it. Those redact every quoted value by every pattern that applies anywhere
 under the policy, the file's own `platforms:` patterns included, erring toward hiding. A policy
 that does not load is refused **closed**: its patterns never loaded, so the refusal — at start,
-on a reload, or from those tools — quotes no rule text and no term. It names the role, the list,
-the rule's and the term's positions, and the problem, e.g. `role "admin": deny #2: term 3 is a
-regex that is one word; write the word instead`, and the operator finds the rule in the file. A
-YAML type error names the line and the types, not the value. The `blob` event
+on a reload, or from those tools — quotes no value from the file. It names where and what: a rule
+by its role, list and position and a term by its position, e.g. `role "admin": deny #2: term 3
+is a regex that is one word; write the word instead`; a test row as `tests[N]` with its subject
+and device, never its command; an adapter or redaction-pattern value, an attribute or an entity
+class pattern by its key and index (`platforms.arista_eos.entity_classes.bad_comm[0] does not
+compile: missing closing )`); a YAML type error, unknown field or repeated key by its line. Names
+the file declares or refers to — a role, a subject, a scope, a level, a device, a class, an
+attribute name — are named. The operator finds the rest in the file. The `blob` event
 (§5.7, "Replay") is logged with such rules and pipe permits redacted, and with the patterns of
 an entity class a rule names where a value is redacted (`snmp-server community @bad **`)
 replaced by `«redacted»`; it carries `"redacted": true`. The store keeps the blob verbatim, and
