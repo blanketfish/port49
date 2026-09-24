@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // inventory is the devices the policy tests load against: one of each
@@ -227,10 +228,9 @@ func TestATestReasonFromTheVocabularyLoads(t *testing.T) {
 
 // A deny regex that sets flags without turning case-insensitivity off loads,
 // and a permit or pipe entry may opt out with (?-i): that only narrows what
-// it permits, so it fails closed (spec §3 rule 3). Each deny is anchored, as
-// a deny's pattern must be where abbreviations are read (spec §3 rule 4).
+// it permits, so it fails closed (spec §3 rule 3).
 func TestOnlyADenyMustStayCaseInsensitive(t *testing.T) {
-	mustParse(t, "roles:\n  - {name: r, deny: [\"* * /(?i)^tftp:/\", \"* * /(?s)^ftp:/\", \"* * /^0[(?-i)]/\"]}\n"+subjOK)
+	mustParse(t, "roles:\n  - {name: r, deny: [\"* * /(?i)^tftp:/\", \"* * /(?s)^ftp:/\", \"* * /[(?-i)]/\"]}\n"+subjOK)
 	p := mustParse(t, scopeOK+`roles:
   - {name: r, privilege: readonly, permit: ["show ip access-list /(?-i)^MGMT$/"], pipe: {permit: ["include /(?U-i)x/"]}}
 `+subjOK+grantOK)
@@ -264,6 +264,49 @@ func TestAnAbbreviatedNameIsDeniedWhereAbbreviationsAreAssumed(t *testing.T) {
 		if _, o, err := p.Decide("s", "", tt.d, tt.command, noon); err != nil || o.Permit != tt.want {
 			t.Errorf("%s %q: permit %v (%s), err %v; want %v", tt.d.Platform, tt.command, o.Permit, o.Reason, err, tt.want)
 		}
+	}
+}
+
+// A deny pattern whose abbreviations port49 cannot list is a joint check that
+// fails only where abbreviations are assumed: spec-style exfiltration denies
+// load with EOS, NX-OS, IOS-XE and Junos devices and quarantine nothing, and a
+// device on the generic adapter, the one platform that may send what was typed,
+// is quarantined with a cause naming the term while the rest of the fleet
+// loads (spec §3 rule 4, §10, §13 decision 20).
+func TestAnUnreadableDenyPatternQuarantinesOnlyWhereAbbreviationsAreAssumed(t *testing.T) {
+	body := scopeOK + `roles:
+  - {name: r, privilege: admin, permit: ["**"]}
+  - {name: no_exfil, deny: ["* * /tftp/", "copy * /^tftp:/"]}
+` + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r, no_exfil]}\n"
+	p := mustParse(t, body)
+	if q := p.Quarantines(noon); len(q) != 0 {
+		t.Fatalf("quarantined %+v", q)
+	}
+	if _, o, err := p.Decide("s", "", deviceNamed(t, "xe-01"), "copy running-config tftp://x/y", noon); err != nil || o.Permit {
+		t.Fatalf("the deny binds on IOS-XE: %+v %v", o, err)
+	}
+	generic := admission.Device{Name: "ntp-01", Platform: "meinberg_lantime", Addresses: []netip.Addr{netip.MustParseAddr("10.0.9.1")}}
+	p, err := Parse([]byte(body), Env{Devices: append(inventory(), generic)})
+	if err != nil {
+		t.Fatalf("the policy loads with a generic device present: %v", err)
+	}
+	q := p.Quarantines(noon)
+	if len(q) != 1 || q[0].Device != "ntp-01" {
+		t.Fatalf("only the generic device is quarantined: %+v", q)
+	}
+	if cause, ok := p.Quarantined("ntp-01", noon); !ok || !strings.Contains(cause, `/tftp/`) || !strings.Contains(cause, "meinberg_lantime") {
+		t.Errorf("the cause names the term and the platform: %q", cause)
+	}
+	// A platform the operator marks as sending what was typed is the same
+	// joint check: its devices are quarantined, and the policy still loads.
+	xe, _ := platform.DialectFor("cisco_iosxe")
+	xe.ExpandsAbbreviations = false
+	p, err = Parse([]byte(body), Env{Devices: inventory(), Dialects: map[string]platform.Dialect{"cisco_iosxe": xe}})
+	if err != nil {
+		t.Fatalf("an operator's dialect does not refuse the policy: %v", err)
+	}
+	if q := p.Quarantines(noon); len(q) != 1 || q[0].Device != "xe-01" {
+		t.Fatalf("only the IOS-XE device is quarantined: %+v", q)
 	}
 }
 

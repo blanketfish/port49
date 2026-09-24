@@ -303,11 +303,6 @@ func (p *Policy) buildRoles(f file) error {
 				if err := p.checkClasses(rule); err != nil {
 					return fmt.Errorf("role %q: %w", r.Name, err)
 				}
-				if list.deny {
-					if err := p.checkWidening(rule); err != nil {
-						return fmt.Errorf("role %q: %w", r.Name, err)
-					}
-				}
 				*list.out = append(*list.out, engine.CanonicalRule(rule))
 			}
 		}
@@ -747,23 +742,6 @@ func (p *Policy) checkClasses(rule string) error {
 		if !defined {
 			return fmt.Errorf("rule %q names @%s, which no platform defines; a class is a platform's (spec §4, §8)",
 				rule, t.Text)
-		}
-	}
-	return nil
-}
-
-// checkWidening refuses a deny whose regex or class patterns some platform
-// needs widened and port49 cannot widen: on a platform that may send what
-// was typed, a pattern whose abbreviations cannot be listed would let one
-// slip past the deny (spec §3 rule 4). It is the policy's own error rather
-// than a device's, since the platform's dialect does not change with
-// inventory, so the policy is refused and never goes live.
-func (p *Policy) checkWidening(rule string) error {
-	platforms := p.platforms()
-	for _, name := range sortedKeys(platforms) {
-		d := platforms[name]
-		if err := engine.CheckDeny(rule, d.EntityClasses, p.normalizeFor(name)); err != nil {
-			return fmt.Errorf("on %s, %w", name, err)
 		}
 	}
 	return nil

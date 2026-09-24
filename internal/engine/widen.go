@@ -27,7 +27,9 @@ import (
 // class or a wildcard that may be a letter, or a stem that runs on into
 // something that may be a letter — is refused, because the abbreviations it
 // would miss cannot be listed (spec §3 rule 4: fail closed rather than match a
-// possibly-abbreviated vector).
+// possibly-abbreviated vector). The refusal is the blob's, so it quarantines
+// the devices on that platform and no other; the policy still loads (spec
+// §10, §13 decision 20).
 //
 // A split is read at match time instead, and needs nothing from a pattern's
 // syntax: the vector is never re-joined (spec §3 rule 5), so a deny term that

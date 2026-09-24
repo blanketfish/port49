@@ -342,7 +342,9 @@ func (p *Policy) quarantined(d admission.Device, now time.Time) error {
 // inventory, and quarantines a device where one would not compile or would
 // contradict itself: a class its platform does not define, a level it cannot
 // render, a ceiling it cannot number, a landing level above the ceiling, a
-// blob the engine refuses, and `enable: auto` where its enable exchange does
+// blob the engine refuses (among them a deny pattern whose abbreviations it
+// cannot list, on a platform that may send what was typed; spec §3 rule 4),
+// and `enable: auto` where its enable exchange does
 // not carry the principal (spec §4, §5.6, §6, §7). A composition changes only
 // when a grant expires, so each is checked at the load's present and again at
 // every later expiry, and a failure is quarantined over the span it holds: a
