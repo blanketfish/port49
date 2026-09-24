@@ -376,14 +376,18 @@ func (p *Policy) buildScopes(f file) error {
 		sc := &Scope{Name: s.Name, Match: s.Match, OnMissing: s.OnMissing, SecurityLog: s.SecurityLog,
 			Attached: map[string][]string{"humans": s.AttachedRoles.Humans, "machines": s.AttachedRoles.Machines},
 			res:      map[string]*regexp.Regexp{}, onMissingDeclared: s.OnMissing != ""}
-		for key, v := range s.Match {
+		// Keys and comparisons in a fixed order, so a scope with several
+		// faults is refused for the same one on every load.
+		for _, key := range sortedKeys(s.Match) {
+			v := s.Match[key]
 			if key == "" {
 				return fmt.Errorf("scope %q: a match key is empty", s.Name)
 			}
 			if v.Equal == nil && v.Cmp == nil {
 				return fmt.Errorf("scope %q: match.%s: a match value is a string, a list or a comparison", s.Name, key)
 			}
-			for op, bound := range v.Cmp {
+			for _, op := range sortedKeys(v.Cmp) {
+				bound := v.Cmp[op]
 				if op == "re" {
 					re, err := regexp.Compile(bound)
 					if err != nil {
@@ -549,6 +553,7 @@ func parseExpires(s string) (time.Time, error) {
 }
 
 func (p *Policy) buildGrants(f file) error {
+	seen := map[string]int{} // subject, scope and sorted roles → first row
 	for i, g := range f.Grants {
 		// Grants have no name, and an index alone means counting rows by hand
 		// in a file of hundreds; the row names what it grants.
@@ -597,6 +602,15 @@ func (p *Policy) buildGrants(f file) error {
 		// record, explain, access review — depends on how the file lists them.
 		roles := slices.Clone(g.Roles)
 		slices.Sort(roles)
+		// Two grants that differ only in ceiling, expiry or attributes would
+		// leave file order to decide which one an attribute comes from, and
+		// reordering grants must not change a decision (spec §5.4).
+		key := g.Subject + "\x00" + g.Scope + "\x00" + strings.Join(roles, "\x00")
+		if first, dup := seen[key]; dup {
+			return fmt.Errorf("%s repeats grants[%d]: the same subject, scope and roles; merge the two rows "+
+				"into one", row, first)
+		}
+		seen[key] = i
 		grant := &Grant{Subject: g.Subject, Scope: g.Scope, Roles: roles, MaxPrivilege: g.MaxPrivilege,
 			Attributes: g.Attributes}
 		if g.Expires != "" {
@@ -782,3 +796,14 @@ func (p *Policy) Devices() []admission.Device { return p.env.Devices }
 
 // Tests returns the file's tests.
 func (p *Policy) Tests() []Test { return p.tests }
+
+// sortedKeys is a map's keys in order, for walking a map where the order can
+// show: which of several faults is reported.
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}

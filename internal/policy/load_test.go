@@ -178,6 +178,9 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a test reason outside spec §5.7", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: deny, reason: no_grant_matched}\n", "not a reason"},
 		{"a test error names its row", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: reload, expect: maybe}\n", `tests[0] (subject s, device leaf-01, "reload"): `},
 		{"a grant error names its row", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [x]}\n", `grants[0] (subject s, scope all_devices): role "x"`},
+		{"the same grant twice", scopeOK + roleOK + "  - {name: q, permit: [show **]}\n" + subjOK +
+			"grants:\n  - {subject: s, scope: all_devices, roles: [r, q]}\n  - {subject: s, scope: all_devices, roles: [q, r], expires: 2026-12-01}\n",
+			"grants[1] (subject s, scope all_devices) repeats grants[0]"},
 		{"a role twice in one grant", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r, r]}\n", "listed twice"},
 		{"a null match value", "scopes:\n  - {name: x, match: {site: null}}\n" + subjOK, "a match value is a string"},
 		{"an unnamed role's max_session_age", "roles:\n  - {max_session_age: 8h}\n" + subjOK, "roles[0]: max_session_age"},
@@ -249,5 +252,17 @@ roles:
 	if strings.Join(p.levels, " ") != "readonly read_only_limited operator senior_operator admin" ||
 		p.parents["senior_operator"] != "operator" {
 		t.Fatalf("levels %q parents %v", p.levels, p.parents)
+	}
+}
+
+// A scope with several faults is refused for the same one every time, so an
+// operator fixing a file sees a stable error, not whichever the map yielded.
+func TestAScopeErrorIsTheSameEveryLoad(t *testing.T) {
+	body := "scopes:\n  - {name: x, match: {zone: {re: \"(?!z)\"}, site: {re: \"(?!s)\", lt: \"\"}}}\n" + subjOK
+	for i := 0; i < 50; i++ {
+		_, err := Parse([]byte(body), env())
+		if err == nil || !strings.Contains(err.Error(), "match.site.lt needs a version") {
+			t.Fatalf("load %d: %v", i, err)
+		}
 	}
 }
