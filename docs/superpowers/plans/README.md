@@ -22,11 +22,11 @@ start; PR #11); **4b merged 2026-09-24** (PR #12;
 and whole-branch;
 its three "Questions for Ryan" were decided security-first: delete unspent tokens whose answer
 changed, rewrite every live context on every reload, leave a quarantined device's contexts);
-**5a built 2026-09-24** (`2026-09-24-05a-platform-adapters.md`, eighteen tasks: one docs,
-fifteen code, one lab, one lab-and-docs; reviewed per task, on `feature/platform-adapters`, its
-pull request not yet merged; L22 closed, and the EOS, NX-OS and IOS-XE adapters `verified:
-containerlab`); plan 5 is split at the seam below, and 5b is the next plan to write, once 5a
-merges. 6–13 not yet.
+**5a merged 2026-09-24** (PR #13; `2026-09-24-05a-platform-adapters.md`, eighteen tasks: one
+docs, fifteen code, one lab, one lab-and-docs; reviewed per task, then a final whole-branch
+review, one fix wave and two scoped re-reviews; L22 closed, and the EOS, NX-OS and IOS-XE
+adapters `verified: containerlab`); plan 5 is split at the seam below, and 5b is the next plan
+to write. 6–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -479,8 +479,8 @@ rest at fleet size here.
 **Split into 5a and 5b (2026-09-24),** because the brief below and every plan-4 hand-off is more
 than 25 tasks. The seam is the kind of platform:
 
-- **Plan 5a — `2026-09-24-05a-platform-adapters.md`. As built (`feature/platform-adapters`; PR
-  number at merge):** The
+- **Plan 5a — `2026-09-24-05a-platform-adapters.md`. As built (merged 2026-09-24, PR
+  #13):** The
   adapters as data and every platform that authorizes per command: the built-in adapters as files
   in a pinned set (`platforms/1.0.0/`; a policy that pins none renders with 1.0.0 forever),
   operator overrides in the policy file's `platforms:` block (merge per key, `replace`,
