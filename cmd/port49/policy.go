@@ -309,19 +309,24 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			label = "raises (a session test asserts it)"
 		case l.Raise:
 			// The test that acknowledges it, on the first device, asserting
-			// each value that moved.
+			// each value that rose.
 			hint := "{subject: " + l.Subject + ", device: " + l.Devices[0]
-			if l.NewLevel != l.OldLevel {
-				hint += ", level: " + orNone(l.NewLevel)
-			}
-			if l.NewCeiling != l.OldCeiling {
-				hint += ", max_privilege: " + orNone(l.NewCeiling)
+			for _, field := range l.Raised {
+				hint += ", " + field + ": " + orNone(l.NewValue(field))
 			}
 			label, tail = "RAISES", "; no session test asserts it: add "+hint+"}"
+			if slices.Contains(l.Raised, "max_privilege") {
+				// The ceiling is how far enable may take the session.
+				if l.NewEnable == "none" {
+					tail += " (enable is none, so nothing escalates to the ceiling today; setting enable later would)"
+				} else {
+					tail += " (enable: " + l.NewEnable + " can now escalate the session to the new ceiling)"
+				}
+			}
 		}
-		fmt.Fprintf(stdout, "%s: %s on %s%s: level %s -> %s, max_privilege %s -> %s%s\n", label, l.Subject,
-			strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel), orNone(l.OldCeiling),
-			orNone(l.NewCeiling), tail)
+		fmt.Fprintf(stdout, "%s: %s on %s%s: level %s -> %s, max_privilege %s -> %s, priv_lvl %s -> %s, enable %s -> %s%s\n",
+			label, l.Subject, strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel),
+			orNone(l.OldCeiling), orNone(l.NewCeiling), l.OldPrivLvl, l.NewPrivLvl, l.OldEnable, l.NewEnable, tail)
 	}
 	widen, narrow := 0, 0
 	for _, c := range d.Changes {

@@ -77,16 +77,22 @@ type AccessChange struct {
 	Gained  bool
 }
 
-// LevelChange is a privilege change (spec §6): the level the roles compose
-// to, or the ceiling the grants do.
+// LevelChange is a privilege change (spec §6, §12): the level the roles
+// compose to, the ceiling the grants do, the device privilege the session
+// lands at, or the subject's enable.
 type LevelChange struct {
 	Subject                                    string
 	Devices                                    []string
 	At                                         time.Time
 	OldLevel, NewLevel, OldCeiling, NewCeiling string
-	// Raise is spec §12's gate on privilege: the level rose, or the ceiling
-	// rose or went. Acknowledged is a passing session test in the new
-	// version, on one of Devices, asserting each new value that rose.
+	// OldPrivLvl and NewPrivLvl are the device privilege, a number or `none`
+	// (Policy.devicePrivLvl); OldEnable and NewEnable the mechanism.
+	OldPrivLvl, NewPrivLvl, OldEnable, NewEnable string
+	// Raised names each dimension that rose, as a session test asserts it:
+	// priv_lvl, max_privilege, level, enable. Raise is spec §12's gate on
+	// privilege, any of them. Acknowledged is a passing session test in the
+	// new version, at At, on one of Devices, asserting the new value of each.
+	Raised              []string
 	Raise, Acknowledged bool
 }
 
@@ -173,6 +179,24 @@ type side struct {
 	// with why: nothing is minted, so nothing is permitted.
 	refused, refusedDetail string
 	err                    error
+	priv                   privilege
+}
+
+// privilege is what one side gives the device and what port49 enforces there
+// (spec §12): the level and its ceiling by name, the ceiling's number, the
+// device privilege the session lands at, and the subject's enable.
+type privilege struct {
+	level, ceiling string
+	hasMax         bool
+	max            uint8
+	// device is the device privilege as a session test asserts it: a number
+	// or NoCeiling's `none`.
+	device, enable string
+}
+
+func (v privilege) key() string {
+	return strings.Join([]string{v.level, v.ceiling, strconv.FormatBool(v.hasMax), strconv.Itoa(int(v.max)), v.device,
+		v.enable}, "/")
 }
 
 func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
@@ -203,7 +227,12 @@ func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
 	if err != nil {
 		return side{err: err}
 	}
-	return side{prog: prog, res: res, hash: hash}
+	priv := privilege{level: res.Level, ceiling: res.Ceiling, hasMax: res.HasCeiling, max: res.MaxPrivilege,
+		device: NoCeiling, enable: res.Enable}
+	if n, ok := p.devicePrivLvl(res, d.Platform); ok {
+		priv.device = strconv.Itoa(int(n))
+	}
+	return side{prog: prog, res: res, hash: hash, priv: priv}
 }
 
 // decide is the side's answer to one command vector, each argument sent as
@@ -328,10 +357,11 @@ func (c *comparison) at(at time.Time) {
 			if was.refused != "" && is.prog == nil {
 				continue
 			}
-			// The ceiling is the grants', not the blob's, so it is part of
+			// The ceiling, the device privilege and enable are the grants'
+			// and the subject's, not only the blob's, so they are part of
 			// what makes two devices alike.
-			key := strconv.FormatBool(was.quarantined) + "|" + was.refused + "|" + was.hash + "|" + was.res.Ceiling + "|" + is.hash +
-				"|" + is.res.Ceiling
+			key := strconv.FormatBool(was.quarantined) + "|" + was.refused + "|" + was.hash + "|" + was.priv.key() + "|" +
+				is.hash + "|" + is.priv.key()
 			if _, ok := groups[key]; !ok {
 				groups[key] = &group{was: was, is: is}
 				order = append(order, key)
@@ -394,10 +424,11 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 		return
 	}
 	wr, ir := was.res, is.res
-	if (wr.Level != ir.Level || wr.Ceiling != ir.Ceiling) &&
-		c.once("level", subject, on, wr.Level, ir.Level, wr.Ceiling, ir.Ceiling) {
+	if was.priv != is.priv && c.once("level", subject, on, was.priv.key(), is.priv.key()) {
 		c.d.Levels = append(c.d.Levels, c.levelChange(LevelChange{Subject: subject, Devices: devices, At: at,
-			OldLevel: wr.Level, NewLevel: ir.Level, OldCeiling: wr.Ceiling, NewCeiling: ir.Ceiling}))
+			OldLevel: wr.Level, NewLevel: ir.Level, OldCeiling: wr.Ceiling, NewCeiling: ir.Ceiling,
+			OldPrivLvl: was.priv.device, NewPrivLvl: is.priv.device, OldEnable: was.priv.enable,
+			NewEnable: is.priv.enable}, was.priv, is.priv))
 	}
 	if was.hash == is.hash {
 		return
@@ -534,35 +565,87 @@ func (p *Policy) regexAcks(before *Policy, instants []time.Time) map[string]bool
 }
 
 // levelChange marks a raise and whether a session test asserts it (spec
-// §12). Higher is later in the new version's privilege_levels; a level it no
-// longer declares is below every level it does, so moving off one is a
-// raise, and a ceiling removed is a raise from any.
-func (c *comparison) levelChange(l LevelChange) LevelChange {
-	idx := c.after.levelIndex
-	levelUp := l.NewLevel != "" && idx(l.NewLevel) > idx(l.OldLevel)
-	ceilingUp := l.OldCeiling != "" && (l.NewCeiling == "" || idx(l.NewCeiling) > idx(l.OldCeiling))
-	l.Raise = levelUp || ceilingUp
+// §12). The gate compares what the device gets and what port49 enforces, not
+// level names:
+//
+//   - priv_lvl: the device privilege rose, or became unknown;
+//   - max_privilege: the ceiling went away, or rose by its number or by its
+//     place in either version's privilege_levels;
+//   - level: the level rose under either version's order; a level a version
+//     does not declare is below every level it does;
+//   - enable: the mechanism went from none to token, or to auto, which asks
+//     for nothing more than a login.
+func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
+	rose := func(from, to string) bool {
+		return from != to && to != "" && (c.before.levelIndex(to) > c.before.levelIndex(from) ||
+			c.after.levelIndex(to) > c.after.levelIndex(from))
+	}
+	if was.device != is.device {
+		from, errFrom := strconv.Atoi(was.device)
+		to, errTo := strconv.Atoi(is.device)
+		if errTo != nil || (errFrom == nil && to > from) || (errFrom != nil && errTo == nil) {
+			l.Raised = append(l.Raised, "priv_lvl")
+		}
+	}
+	if was.ceiling != "" && (is.ceiling == "" || (was.hasMax && is.hasMax && is.max > was.max) ||
+		rose(was.ceiling, is.ceiling)) {
+		l.Raised = append(l.Raised, "max_privilege")
+	}
+	if rose(was.level, is.level) {
+		l.Raised = append(l.Raised, "level")
+	}
+	if enableRank[is.enable] > enableRank[was.enable] {
+		l.Raised = append(l.Raised, "enable")
+	}
+	l.Raise = len(l.Raised) > 0
 	if !l.Raise {
 		return l
 	}
-	newCeiling := l.NewCeiling
-	if newCeiling == "" {
-		newCeiling = NoCeiling
-	}
 	l.Acknowledged = slices.ContainsFunc(l.Devices, func(device string) bool {
-		return (!levelUp || c.acks[levelKey(l.Subject, device, "level", l.NewLevel)]) &&
-			(!ceilingUp || c.acks[levelKey(l.Subject, device, "max_privilege", newCeiling)])
+		for _, field := range l.Raised {
+			if !c.acks[levelKey(l.At, l.Subject, device, field, l.NewValue(field))] {
+				return false
+			}
+		}
+		return true
 	})
 	return l
 }
 
-func levelKey(subject, device, field, value string) string {
-	return shadowKey(subject, "session", device, field, value)
+// enableRank orders the mechanisms by what they ask of an escalation: none
+// refuses it, token asks for a second credential, auto for nothing more.
+var enableRank = map[string]int{"none": 0, "": 0, "token": 1, "auto": 2}
+
+// NewValue is the new version's value of a raised dimension, as a session
+// test asserts it.
+func (l LevelChange) NewValue(field string) string {
+	switch field {
+	case "priv_lvl":
+		return l.NewPrivLvl
+	case "max_privilege":
+		if l.NewCeiling == "" {
+			return NoCeiling
+		}
+		return l.NewCeiling
+	case "level":
+		return l.NewLevel
+	}
+	return l.NewEnable
 }
 
-// sessionAcks is what each passing test in p asserting a level or ceiling
-// acknowledges, at each of instants: that value, for its subject on its
-// device (spec §12).
+func levelKey(at time.Time, subject, device, field, value string) string {
+	return instantKey(at, subject, "session", device, field, value)
+}
+
+// instantKey is an acknowledgment key that holds at one instant: a test
+// acknowledges what it asserts only where it passes (spec §12).
+func instantKey(at time.Time, parts ...string) string {
+	return shadowKey(append([]string{at.UTC().Format(time.RFC3339Nano)}, parts...)...)
+}
+
+// sessionAcks is what each passing test in p asserting a session value
+// acknowledges, at each of instants: the value it resolved, for its subject
+// on its device, at that instant (spec §12).
 func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
 	acks := map[string]bool{}
 	for _, at := range instants {
@@ -574,11 +657,14 @@ func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
 			if subject == "" {
 				subject = p.byID[r.Test.Principal]
 			}
-			if r.Test.Level != "" {
-				acks[levelKey(subject, r.Test.Device, "level", r.Test.Level)] = true
-			}
-			if r.Test.MaxPrivilege != "" {
-				acks[levelKey(subject, r.Test.Device, "max_privilege", r.Test.MaxPrivilege)] = true
+			for field, asserted := range map[string]bool{"level": r.Test.Level != "",
+				"max_privilege": r.Test.MaxPrivilege != "", "priv_lvl": r.Test.PrivLvl != "", "enable": r.Test.Enable != ""} {
+				if !asserted {
+					continue
+				}
+				value := map[string]string{"level": r.Level, "max_privilege": r.Ceiling, "priv_lvl": r.PrivLvl,
+					"enable": r.Enable}[field]
+				acks[levelKey(at, subject, r.Test.Device, field, value)] = true
 			}
 		}
 	}

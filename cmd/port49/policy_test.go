@@ -542,8 +542,9 @@ func TestPolicyDiffGatesALevelRaise(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
-		!strings.Contains(out.String(), "RAISES: noc on leaf-01: level readonly -> admin, max_privilege none -> none; "+
-			"no session test asserts it: add {subject: noc, device: leaf-01, level: admin}") ||
+		!strings.Contains(out.String(), "RAISES: noc on leaf-01: level readonly -> admin, max_privilege none -> none, "+
+			"priv_lvl 1 -> 15, enable none -> none; no session test asserts it: add {subject: noc, device: leaf-01, "+
+			"priv_lvl: 15, level: admin}") ||
 		!strings.Contains(out.String(), "1 unacknowledged privilege raises") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
@@ -552,7 +553,7 @@ func TestPolicyDiffGatesALevelRaise(t *testing.T) {
 		!strings.Contains(out.String(), "privilege: noc on leaf-01: level admin -> readonly") {
 		t.Fatalf("a lowering: code %d\n%s%s", code, out.String(), errb.String())
 	}
-	if err := os.WriteFile(newPol, []byte(raised+"  - {subject: noc, device: leaf-01, level: admin}\n"), 0o600); err != nil {
+	if err := os.WriteFile(newPol, []byte(raised+"  - {subject: noc, device: leaf-01, level: admin, priv_lvl: 15}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -607,5 +608,30 @@ func TestPolicyTestPassesAPolicyWithNoTestsAndSaysSo(t *testing.T) {
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), "report: no_tests: ") || !strings.Contains(out.String(), "0 tests, 0 failed") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A ceiling raise says what it lets enable do (review M4).
+func TestPolicyDiffSaysWhatARaisedCeilingLetsEnableDo(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := strings.Replace(string(readFile(t, oldPol)), "roles: [read_only, no_reload]}",
+		"roles: [read_only, no_reload], max_privilege: readonly}", 1)
+	for _, tt := range []struct{ enable, want string }{
+		{"", "(enable is none, so nothing escalates to the ceiling today; setting enable later would)"},
+		{", enable: token", "(enable: token can now escalate the session to the new ceiling)"},
+	} {
+		capped := strings.Replace(raw, `username: noc, token_ttl: 60s}`, `username: noc, token_ttl: 60s`+tt.enable+`}`, 1)
+		if err := os.WriteFile(oldPol, []byte(capped), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		newPol := filepath.Join(t.TempDir(), "policy.yaml")
+		if err := os.WriteFile(newPol, []byte(strings.Replace(capped, ", max_privilege: readonly}", "}", 1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+			!strings.Contains(out.String(), "max_privilege: none} "+tt.want) {
+			t.Fatalf("enable %q: code %d\n%s%s", tt.enable, code, out.String(), errb.String())
+		}
 	}
 }

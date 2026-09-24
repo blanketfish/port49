@@ -300,22 +300,28 @@ func TestTheGateFailsALevelOrCeilingRaise(t *testing.T) {
 	// A session test on one device of each group asserting the new value is
 	// the acknowledgment; one asserting the old value, or on another subject,
 	// is not.
-	levelTest := func(level, ceiling string) string {
+	levelTest := func(assert string) string {
 		out := "tests:\n"
 		for _, device := range []string{"campus-sw-7", "nx-01", "xe-01", "srx-lab-01"} {
-			out += "  - {subject: noc, device: " + device + ", level: " + level + ", max_privilege: " + ceiling + "}\n"
+			out += "  - {subject: noc, device: " + device + ", " + assert + "}\n"
 		}
 		return out
 	}
-	d := Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("admin", "none")), noon)
+	// readonly to admin raises the level and the device privilege, 1 to 15:
+	// the test asserts both.
+	d := Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("level: admin, max_privilege: none, priv_lvl: 15")), noon)
 	if d.UnacknowledgedLevels() != 0 {
 		t.Fatalf("a session test acknowledges the raise: %+v", d.Levels)
 	}
-	d = Compare(mustParse(t, diffBase), mustParse(t, raised+"tests:\n  - {subject: noc, device: leaf-01, level: admin}\n"), noon)
+	d = Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("level: admin")), noon)
+	if d.UnacknowledgedLevels() != 4 {
+		t.Fatalf("the level alone does not acknowledge the device privilege's rise: %+v", d.Levels)
+	}
+	d = Compare(mustParse(t, diffBase), mustParse(t, raised+"tests:\n  - {subject: noc, device: leaf-01, level: admin, priv_lvl: 15}\n"), noon)
 	if d.UnacknowledgedLevels() != 3 {
 		t.Fatalf("a test on one group acknowledges that group alone: %+v", d.Levels)
 	}
-	d = Compare(mustParse(t, ceilinged), mustParse(t, diffBase+levelTest("readonly", "none")), noon)
+	d = Compare(mustParse(t, ceilinged), mustParse(t, diffBase+levelTest("level: readonly, max_privilege: none")), noon)
 	if d.UnacknowledgedLevels() != 0 {
 		t.Fatalf("a session test asserting no ceiling acknowledges its removal: %+v", d.Levels)
 	}
@@ -383,5 +389,85 @@ func TestTheGateFailsARegexConstrainedWidening(t *testing.T) {
 	// platform group.
 	if g, _ := unacked(Compare(mustParse(t, regexBase), mustParse(t, regexDeny), noon)); g != 4 {
 		t.Fatalf("replacing a word deny with a regex one gates only the removal's exposure: %d", g)
+	}
+}
+
+// The privilege gate compares what the device gets, not level names (review
+// C1; spec §12): each probe the review ran raised privilege with the gate
+// silent, and each now fails it until a session test asserts the new value.
+func TestTheGateFailsEveryKindOfPrivilegeRaise(t *testing.T) {
+	custom := "privilege_levels: [{name: readonly}, {name: operator}, {name: admin}, {name: netops, parent: readonly}]\n" +
+		strings.Replace(diffBase, "privilege: readonly", "privilege: netops", 1)
+	ceilinged := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], max_privilege: admin}", 1)
+	for _, tt := range []struct {
+		name, before, after string
+		groups              int
+		dimension           string
+		ack                 string
+	}{
+		{"a grant attribute priv-lvl=15", diffBase,
+			strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: {all: [priv-lvl=15]}}", 1),
+			4, "priv_lvl", "priv_lvl: 15"},
+		{"a role attribute priv-lvl=15 on one platform", diffBase,
+			strings.Replace(diffBase, "{name: read_only, privilege: readonly, permit: [show **]}",
+				"{name: read_only, privilege: readonly, permit: [show **], attributes: {arista_eos: [priv-lvl=15]}}", 1),
+			1, "priv_lvl", "priv_lvl: 15"},
+		{"a custom level's parent moved up", custom, strings.Replace(custom, "parent: readonly", "parent: admin", 1),
+			4, "priv_lvl", "priv_lvl: 15"},
+		{"enable switched on under a ceiling", ceilinged,
+			strings.Replace(ceilinged, "token_ttl: 60s}", "token_ttl: 60s, enable: token}", 1), 4, "enable", "enable: token"},
+		{"enable switched on with no ceiling", diffBase,
+			strings.Replace(diffBase, "token_ttl: 60s}", "token_ttl: 60s, enable: token}", 1), 4, "enable", "enable: token"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Compare(mustParse(t, tt.before), mustParse(t, tt.after), noon)
+			if d.UnacknowledgedLevels() != tt.groups {
+				t.Fatalf("levels %+v: %d unacknowledged, want %d", d.Levels, d.UnacknowledgedLevels(), tt.groups)
+			}
+			for _, l := range d.Levels {
+				if l.Raise && !slices.Contains(l.Raised, tt.dimension) {
+					t.Errorf("%+v does not name %s", l, tt.dimension)
+				}
+			}
+			tests := "tests:\n"
+			for _, device := range []string{"leaf-01", "nx-01", "xe-01", "srx-lab-01"} {
+				tests += "  - {subject: noc, device: " + device + ", " + tt.ack + "}\n"
+			}
+			// A test on a group that did not rise may fail; it acknowledges
+			// nothing there and nothing there needs it.
+			d = Compare(mustParse(t, tt.before), mustParse(t, tt.after+tests), noon)
+			if n := d.UnacknowledgedLevels(); n != 0 {
+				t.Fatalf("session tests on every group: %d unacknowledged, %+v", n, d.Levels)
+			}
+		})
+	}
+}
+
+// A session test acknowledges a raise only at the instant it passes: one that
+// passes only after a grant expires does not acknowledge the raise before it
+// (review M2). At noon the ceiling is admin, from the grant that expires;
+// after it, none. The test asserts none.
+func TestASessionAckHoldsOnlyAtItsInstant(t *testing.T) {
+	after := strings.Replace(diffBase, "  - {name: cve, deny: [show chassis **]}\n",
+		"  - {name: cve, deny: [show chassis **]}\n  - {name: adm, privilege: admin, permit: [show **]}\n", 1)
+	after = strings.Replace(after, "  - {subject: noc, scope: all_devices, roles: [read_only, cve]}\n",
+		"  - {subject: noc, scope: all_devices, roles: [read_only, cve, adm], max_privilege: admin, expires: 2026-10-01}\n"+
+			"  - {subject: noc, scope: all_devices, roles: [read_only, adm]}\n", 1)
+	later := "tests:\n"
+	for _, device := range []string{"leaf-01", "nx-01", "xe-01", "srx-lab-01"} {
+		later += "  - {subject: noc, device: " + device + ", level: admin, max_privilege: none, priv_lvl: 15}\n"
+	}
+	d := Compare(mustParse(t, diffBase), mustParse(t, after+later), noon)
+	atNoon, afterwards := 0, 0
+	for _, l := range d.Levels {
+		switch {
+		case l.At.Equal(noon) && l.Raise && !l.Acknowledged:
+			atNoon++
+		case !l.At.Equal(noon) && l.Raise && l.Acknowledged:
+			afterwards++
+		}
+	}
+	if atNoon != 4 || afterwards != 4 {
+		t.Fatalf("levels %+v: %d unacknowledged at noon, %d acknowledged after the expiry", d.Levels, atNoon, afterwards)
 	}
 }
