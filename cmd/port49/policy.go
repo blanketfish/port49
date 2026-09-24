@@ -674,9 +674,9 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
 // grantsRemove is the offboarding path for machine subjects and literal
 // identities (spec §12): the policy file with every grant row naming the
 // subject deleted, and the subject block with them. It prints the new file on
-// stdout for a pull request, or with --write replaces the file in place; the
-// result must load against the inventory before anything is written. What it
-// removed goes to stderr.
+// stdout, or with --write replaces the file in place, or with --pr opens the
+// pull request that carries it (removalPR); the result must load against the
+// inventory before anything is written. What it removed goes to stderr.
 func grantsRemove(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 grants remove", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -684,10 +684,13 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 	files.register(fs)
 	subject := fs.String("subject", "", "the subject to offboard, by its name in the policy")
 	write := fs.Bool("write", false, "replace the policy file instead of printing the result")
+	pr := fs.Bool("pr", false, "open a pull request that carries the removal, leaving the checkout alone")
+	remote := fs.String("remote", "origin", "the remote --pr pushes its branch to")
+	base := fs.String("base", "main", "the branch --pr asks to merge into")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *subject == "" || files.missing() || fs.NArg() != 0 {
+	if *subject == "" || files.missing() || fs.NArg() != 0 || (*write && *pr) {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -706,19 +709,33 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 grants remove:", err)
 		return 1
 	}
-	if _, err := policy.Parse(out, offlineEnv(inv.Devices)); err != nil {
+	after, err := policy.Parse(out, offlineEnv(inv.Devices))
+	if err != nil {
 		fmt.Fprintf(stderr, "port49 grants remove: the policy without %s does not load, so nothing was written: %v\n",
 			*subject, err)
 		return 1
 	}
-	if *write {
+	switch {
+	case *pr:
+		// The pull request and git's errors quote the policy; both are
+		// redacted as `policy diff`'s output is (spec §5.8).
+		url, err := removalPR(files.policy, *subject, out, removed, *remote, *base, after.Redactions())
+		if err != nil {
+			errOut := &redacting{w: stderr, rules: after.Redactions()}
+			fmt.Fprintln(errOut, "port49 grants remove:", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, url)
+	case *write:
 		if err := replaceFile(files.policy, out); err != nil {
 			fmt.Fprintln(stderr, "port49 grants remove:", err)
 			return 1
 		}
-	} else if _, err := stdout.Write(out); err != nil {
-		fmt.Fprintln(stderr, "port49 grants remove:", err)
-		return 1
+	default:
+		if _, err := stdout.Write(out); err != nil {
+			fmt.Fprintln(stderr, "port49 grants remove:", err)
+			return 1
+		}
 	}
 	fmt.Fprintf(stderr, "port49 grants remove: %s: %d grant row(s), the subject block, and %d test(s) removed\n",
 		*subject, removed.Grants, removed.Tests)

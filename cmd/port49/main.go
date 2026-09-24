@@ -38,7 +38,7 @@ const usage = `usage:
   port49 policy replay [--line N] LOGFILE|-
   port49 policy diff --old FILE --new FILE --inventory FILE
   port49 access review --policy FILE --inventory FILE --subject NAME
-  port49 grants remove --policy FILE --inventory FILE --subject NAME [--write]
+  port49 grants remove --policy FILE --inventory FILE --subject NAME [--write | --pr [--remote R] [--base B]]
   port49 platform list [--set VERSION | --policy FILE --inventory FILE]
   port49 platform show [--set VERSION | --policy FILE --inventory FILE] PLATFORM
   port49 platform export [--set VERSION | --policy FILE --inventory FILE] (PLATFORM | --all --dir EMPTY_DIR)
