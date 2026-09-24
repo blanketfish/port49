@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -187,8 +188,10 @@ func TestTheIntersectionReportsRedactBlockText(t *testing.T) {
 	if len(dead) != 2 {
 		t.Fatalf("%q", dead)
 	}
+	// The block's rule is the operator's, listed apart from the set's.
 	for _, f := range dead {
-		if strings.Contains(f, "public") || !strings.Contains(f, "snmp-server community «redacted» **;") {
+		if strings.Contains(f, "public") || strings.Contains(f, `"snmp-server community`) &&
+			!strings.Contains(f, "(operator-listed unreachable, not measured: snmp-server community «redacted» **)") {
 			t.Errorf("%q", f)
 		}
 	}
@@ -273,5 +276,44 @@ grants:
 			!strings.Contains(got[i], "network-admin") || !strings.Contains(got[i], "reaches admin") {
 			t.Errorf("%q", got[i])
 		}
+	}
+}
+
+// A block's unreachable rules are the operator's word, kept apart from what
+// the lab measured as fallback text is (spec §8, §12; task 14 review M7): a
+// permit only they make dead is reported as operator-listed and cites no lab
+// note, and one the set's own rules make dead cites the note as before.
+func TestABlocksUnreachableRulesAreTheOperators(t *testing.T) {
+	p := mustParse(t, `platforms:
+  arista_eos:
+    unreachable: {readonly: ["show tech-support **"]}
+`+strings.Replace(intersectBody, "clear counters]", "clear counters, show tech-support **]", 1))
+	if d := p.Dialect("arista_eos"); slices.Contains(d.Unreachable["readonly"], "show tech-support **") ||
+		!slices.Equal(d.UnreachableNote["readonly"], []string{"show tech-support **"}) {
+		t.Fatalf("unreachable %q, note %q", d.Unreachable, d.UnreachableNote)
+	}
+	dead := onPlatform(findings(p, FindingDeadRule), "arista_eos")
+	if len(dead) != 2 {
+		t.Fatalf("%q", dead)
+	}
+	for _, f := range dead {
+		switch {
+		case strings.HasPrefix(f, `role "noc": permit "clear counters"`):
+			if !strings.Contains(f, "tests/lab/results/ceiling-arista_eos.md") || strings.Contains(f, "tech-support") {
+				t.Errorf("the set's: %q", f)
+			}
+		case strings.HasPrefix(f, `role "noc": permit "show tech-support **"`):
+			if strings.Contains(f, "tests/lab/results") ||
+				!strings.Contains(f, "(operator-listed unreachable, not measured: show tech-support **)") {
+				t.Errorf("the operator's: %q", f)
+			}
+		default:
+			t.Errorf("%q", f)
+		}
+	}
+	// A block may not write the note itself.
+	if _, err := Parse([]byte("platforms:\n  arista_eos: {unreachable_note: {readonly: [x]}}\n"+intersectBody), env()); err == nil ||
+		!strings.Contains(err.Error(), "platforms.arista_eos: unreachable_note is port49's own record") {
+		t.Errorf("%v", err)
 	}
 }

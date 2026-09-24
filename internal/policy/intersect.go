@@ -47,17 +47,26 @@ func (p *Policy) intersections(now time.Time) []Finding {
 					continue
 				}
 				on := fmt.Sprintf("%s (%s) on %s", level, strings.Join(attrs, ", "), d.Platform)
-				if unreachable := dialect.Unreachable[level]; len(unreachable) > 0 {
-					for _, role := range res.Roles {
-						for _, rule := range p.roles[role].Permit {
-							if p.dead(rule, unreachable, d.Platform, dialect) {
-								add(FindingDeadRule, role+"\x00"+rule+"\x00"+d.Platform+"\x00"+level,
-									"role %q: permit %q cannot be reached at %s: the device refuses every command it "+
-										"matches in its own parser and never asks port49 (unreachable: %s; "+
-										"tests/lab/results/ceiling-%s.md)", role, rule, on,
-									strings.Join(redacted(redact, unreachable), ", "),
-									d.Platform)
-							}
+				// What the set measured cites its lab note; what a block added is
+				// the operator's word and says so (task 14 review M7).
+				unreachable, operator := dialect.Unreachable[level], dialect.UnreachableNote[level]
+				for _, role := range res.Roles {
+					for _, rule := range p.roles[role].Permit {
+						key := role + "\x00" + rule + "\x00" + d.Platform + "\x00" + level
+						switch {
+						case len(unreachable) > 0 && p.dead(rule, unreachable, d.Platform, dialect):
+							add(FindingDeadRule, key,
+								"role %q: permit %q cannot be reached at %s: the device refuses every command it "+
+									"matches in its own parser and never asks port49 (unreachable: %s; "+
+									"tests/lab/results/ceiling-%s.md)", role, rule, on,
+								strings.Join(redacted(redact, unreachable), ", "),
+								d.Platform)
+						case len(operator) > 0 && p.dead(rule, slices.Concat(unreachable, operator), d.Platform, dialect):
+							add(FindingDeadRule, key,
+								"role %q: permit %q cannot be reached at %s: the policy's platforms: block says the "+
+									"device refuses every command it matches in its own parser (operator-listed "+
+									"unreachable, not measured: %s)", role, rule, on,
+								strings.Join(redacted(redact, operator), ", "))
 						}
 					}
 				}

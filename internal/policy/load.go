@@ -316,6 +316,9 @@ func (p *Policy) buildPlatforms(f file) error {
 		case b.Verified != nil:
 			return fmt.Errorf("%s: verified is port49's own claim about its lab (spec §8); an adapter written "+
 				"here is unverified until it is contributed and measured, so remove the key", at)
+		case b.UnreachableNote != nil:
+			return fmt.Errorf("%s: unreachable_note is port49's own record of a block's unreachable rules the set "+
+				"did not measure (spec §12); write the rules under unreachable", at)
 		case b.FallbackNote != nil:
 			return fmt.Errorf("%s: fallback_note is port49's own record of a block's fallback text over the set's "+
 				"(spec §12); write the text under fallback", at)
@@ -362,6 +365,31 @@ func (p *Policy) buildPlatforms(f file) error {
 		ref, measured := builtin[shippedAs]
 		if measured {
 			d = platform.KeepMeasured(d, ref)
+		}
+		// A block's unreachable rule the set did not measure is the
+		// operator's word: kept apart, so the dead-rule report never cites a
+		// lab note for it (task 14 review M7).
+		if b.Spec.Unreachable != nil {
+			for _, level := range sortedKeys(*b.Spec.Unreachable) {
+				for _, rule := range (*b.Spec.Unreachable)[level] {
+					if slices.Contains(ref.Unreachable[level], rule) {
+						continue
+					}
+					d.Unreachable[level] = slices.DeleteFunc(d.Unreachable[level], func(r string) bool { return r == rule })
+					if len(d.Unreachable[level]) == 0 {
+						delete(d.Unreachable, level)
+					}
+					if d.UnreachableNote == nil {
+						d.UnreachableNote = map[string][]string{}
+					}
+					if !slices.Contains(d.UnreachableNote[level], rule) {
+						d.UnreachableNote[level] = append(d.UnreachableNote[level], rule)
+					}
+				}
+			}
+			if len(d.Unreachable) == 0 {
+				d.Unreachable = nil
+			}
 		}
 		if b.Spec.Fallback != nil {
 			for _, level := range sortedKeys(*b.Spec.Fallback) {

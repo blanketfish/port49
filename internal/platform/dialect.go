@@ -115,6 +115,14 @@ type Dialect struct {
 	// a permit every command of which is here is dead there (spec §12).
 	// Only measured commands are listed; a level with none lists nothing.
 	Unreachable map[string][]string
+	// UnreachableNote maps a level to a `platforms:` block's unreachable
+	// rules that the set did not measure: the operator's word, kept apart
+	// from the measurement as FallbackNote is, so the dead-rule report names
+	// it operator-listed and cites no lab note for it, and `platform export
+	// --all` does not write it into a set (spec §8, §12; task 14 review M7).
+	// Its Spec key, unreachable_note, is set only by SpecOf; a block may not
+	// write it.
+	UnreachableNote map[string][]string
 	// Fallback maps a level to what the device gives a session at it on its
 	// own when port49 cannot answer and the command method list falls back to
 	// local, where that is more than a confined role: a subject port49
@@ -242,6 +250,13 @@ func (d Dialect) clone() Dialect {
 			unreachable[k] = slices.Clone(v)
 		}
 		d.Unreachable = unreachable
+	}
+	if d.UnreachableNote != nil {
+		note := make(map[string][]string, len(d.UnreachableNote))
+		for k, v := range d.UnreachableNote {
+			note[k] = slices.Clone(v)
+		}
+		d.UnreachableNote = note
 	}
 	if d.Fallback != nil {
 		d.Fallback = maps.Clone(d.Fallback)

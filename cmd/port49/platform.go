@@ -350,8 +350,8 @@ func adapterKey(a policy.AdapterChange) string {
 type exportMode int
 
 const (
-	// exportShow prints fallback and fallback_note apart, as port49 holds
-	// them.
+	// exportShow prints fallback and fallback_note, and unreachable and
+	// unreachable_note, apart, as port49 holds them.
 	exportShow exportMode = iota
 	// exportBlock writes the note under fallback, where the block wrote it,
 	// commented as the operator's, so the file pastes back as a block:
@@ -368,12 +368,36 @@ const (
 // into.
 const notMeasured = "operator note, not measured"
 
+// operatorListed is the comment on an unreachable rule exportBlock folded
+// back from the operator's list.
+const operatorListed = "operator-listed, not measured"
+
 // adapterFile is d as an adapter file: `platforms: {name: ...}`, with a
 // block's fallback note written as mode says (spec §8, §12).
 func adapterFile(name string, d platform.Dialect, mode exportMode) ([]byte, error) {
 	spec := platform.SpecOf(d)
 	if mode == exportBlock {
 		spec.Verified = nil
+	}
+	// A block's unreachable rules the set did not measure go back under
+	// unreachable, commented as the operator's, and a set carries none of
+	// them (task 14 review M7).
+	var listed map[string][]string
+	if mode != exportShow && spec.UnreachableNote != nil {
+		if mode == exportBlock {
+			listed = *spec.UnreachableNote
+			unreachable := map[string][]string{}
+			if spec.Unreachable != nil {
+				for level, rules := range *spec.Unreachable {
+					unreachable[level] = slices.Clone(rules)
+				}
+			}
+			for level, rules := range listed {
+				unreachable[level] = append(unreachable[level], rules...)
+			}
+			spec.Unreachable = &unreachable
+		}
+		spec.UnreachableNote = nil
 	}
 	var folded []string
 	if mode != exportShow && spec.FallbackNote != nil {
@@ -393,6 +417,17 @@ func adapterFile(name string, d platform.Dialect, mode exportMode) ([]byte, erro
 	var doc yaml.Node
 	if err := doc.Encode(map[string]map[string]platform.Spec{"platforms": {name: spec}}); err != nil {
 		return nil, err
+	}
+	if unreachable := mappingValue(mappingValue(mappingValue(&doc, "platforms"), name), "unreachable"); unreachable != nil {
+		for level, rules := range listed {
+			if v := mappingValue(unreachable, level); v != nil && v.Kind == yaml.SequenceNode {
+				for _, item := range v.Content {
+					if slices.Contains(rules, item.Value) {
+						item.LineComment = operatorListed
+					}
+				}
+			}
+		}
 	}
 	if fallback := mappingValue(mappingValue(mappingValue(&doc, "platforms"), name), "fallback"); fallback != nil {
 		for _, level := range folded {

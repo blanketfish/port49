@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -538,9 +537,9 @@ func TestAPastedBackRedactedValueIsRefused(t *testing.T) {
 	}
 }
 
-// A set move that changes a key a block merges into prints the block's part
-// of it, and the report goes to CI logs like policy diff's: it prints the
-// block's text redacted (final review I3).
+// A set move that changes a key a block merges into, here entity_classes,
+// prints the block's part of it, and the report goes to CI logs like policy
+// diff's: it prints the block's text redacted (final review I3).
 func TestTheUpgradeReportNeverPrintsABlockSecret(t *testing.T) {
 	pol, inv := policyFixture(t)
 	devices, err := admission.LoadFile(inv)
@@ -550,12 +549,13 @@ func TestTheUpgradeReportNeverPrintsABlockSecret(t *testing.T) {
 	first, _ := platform.Set("1.0.0")
 	second, _ := platform.Set("1.0.0")
 	eos := second["arista_eos"]
-	eos.Unreachable = map[string][]string{"readonly": append(slices.Clone(eos.Unreachable["readonly"]), "show tech-support **")}
+	eos.EntityClasses = map[string][]string{"management": {"^Management[0-9]+$"}, "loopback": {"^Loopback[0-9]+$"},
+		"physical": {"^Ethernet[0-9/.]+$"}}
 	second["arista_eos"] = eos
 	g, _ := platform.Generic("1.0.0")
 	e := policy.Env{Devices: devices.Devices, Sets: map[string]map[string]platform.Dialect{"1.0.0": first,
 		"1.1.0": second}, Generics: map[string]platform.Dialect{"1.0.0": g, "1.1.0": g}}
-	raw := append([]byte("platforms:\n  arista_eos:\n    unreachable: {readonly: [\"snmp-server community Hunter2 **\"]}\n"),
+	raw := append([]byte("platforms:\n  arista_eos:\n    entity_classes: {secret_pattern: ['^snmp-server community Hunter2$']}\n"),
 		readFile(t, pol)...)
 	before, err := policy.Parse(raw, e)
 	if err != nil {
@@ -571,8 +571,8 @@ func TestTheUpgradeReportNeverPrintsABlockSecret(t *testing.T) {
 	}
 	var out bytes.Buffer
 	upgradeReport(&out, before, after, time.Now())
-	if strings.Contains(out.String(), "Hunter2") || !strings.Contains(out.String(), "platforms.arista_eos.unreachable") ||
-		!strings.Contains(out.String(), "snmp-server community «redacted» **") {
+	if strings.Contains(out.String(), "Hunter2") || !strings.Contains(out.String(), "platforms.arista_eos.entity_classes") ||
+		!strings.Contains(out.String(), "snmp-server community «redacted»") {
 		t.Fatalf("%s", out.String())
 	}
 }
@@ -591,5 +591,46 @@ func TestDiffAndUpgradeNameAnAdapterKeyAlike(t *testing.T) {
 		if got := adapterKey(tt.a); got != tt.want {
 			t.Errorf("%+v: %s, want %s", tt.a, got, tt.want)
 		}
+	}
+}
+
+// A block's unreachable rules the set did not measure are the operator's:
+// show prints them apart, as unreachable_note, export writes them back under
+// unreachable commented as the operator's, so the file pastes back, and
+// export --all leaves them out of the set (task 14 review M7).
+func TestAnOperatorsUnreachableRulesExportAsTheOperators(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	block := "platforms:\n  arista_eos:\n    unreachable: {readonly: [\"show tech-support **\"]}\n"
+	if err := os.WriteFile(pol, append([]byte(block), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	show := func(args ...string) string {
+		t.Helper()
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != 0 {
+			t.Fatalf("%q: code %d %s", args, code, errb.String())
+		}
+		return out.String()
+	}
+	if out := show("platform", "show", "--policy", pol, "--inventory", inv, "arista_eos"); !strings.Contains(out,
+		"    unreachable_note:\n      readonly:\n        - show tech-support **\n") {
+		t.Errorf("show:\n%s", out)
+	}
+	exported := show("platform", "export", "--policy", pol, "--inventory", inv, "arista_eos")
+	if !strings.Contains(exported, "        - show tech-support ** # operator-listed, not measured\n") ||
+		strings.Contains(exported, "unreachable_note") {
+		t.Errorf("export:\n%s", exported)
+	}
+	if err := os.WriteFile(pol, append([]byte(exported), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if again := show("platform", "export", "--policy", pol, "--inventory", inv, "arista_eos"); again != exported {
+		t.Errorf("pasted back, the export changed:\n%s\nwas\n%s", again, exported)
+	}
+	dir := t.TempDir()
+	show("platform", "export", "--all", "--dir", dir, "--policy", pol, "--inventory", inv)
+	if file := string(readFile(t, filepath.Join(dir, "arista_eos.yaml"))); strings.Contains(file, "tech-support") {
+		t.Errorf("--all:\n%s", file)
 	}
 }

@@ -325,15 +325,18 @@ func RedactAdapter(patterns []Redaction, secret map[string]bool, d Dialect) Dial
 		}
 		d.ConfigChecks = checks
 	}
-	if d.Unreachable != nil {
-		unreachable := make(map[string][]string, len(d.Unreachable))
-		for level, rules := range d.Unreachable {
-			unreachable[level] = make([]string, len(rules))
+	for _, lists := range []*map[string][]string{&d.Unreachable, &d.UnreachableNote} {
+		if *lists == nil {
+			continue
+		}
+		out := make(map[string][]string, len(*lists))
+		for level, rules := range *lists {
+			out[level] = make([]string, len(rules))
 			for i, rule := range rules {
-				unreachable[level][i] = RedactUnreachable(patterns, rule)
+				out[level][i] = RedactUnreachable(patterns, rule)
 			}
 		}
-		d.Unreachable = unreachable
+		*lists = out
 	}
 	for _, texts := range []*map[string]string{&d.Fallback, &d.FallbackNote} {
 		if *texts == nil {

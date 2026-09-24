@@ -40,6 +40,7 @@ type Spec struct {
 	Redact               *[]Redaction         `yaml:"redact,omitempty"`
 	Verified             *string              `yaml:"verified,omitempty"`
 	Unreachable          *map[string][]string `yaml:"unreachable,omitempty"`
+	UnreachableNote      *map[string][]string `yaml:"unreachable_note,omitempty"`
 	Fallback             *map[string]string   `yaml:"fallback,omitempty"`
 	FallbackNote         *map[string]string   `yaml:"fallback_note,omitempty"`
 	LocalAccounts        *[]string            `yaml:"local_accounts,omitempty"`
@@ -138,6 +139,9 @@ func (s Spec) Over(base Dialect) Dialect {
 	}
 	if s.Unreachable != nil {
 		d.Unreachable = unionLists(d.Unreachable, *s.Unreachable)
+	}
+	if s.UnreachableNote != nil {
+		d.UnreachableNote = unionLists(d.UnreachableNote, *s.UnreachableNote)
 	}
 	if s.Fallback != nil {
 		if d.Fallback == nil {
@@ -403,6 +407,16 @@ func Validate(name string, d Dialect) error {
 			}
 		}
 	}
+	for _, level := range sortedKeys(d.UnreachableNote) {
+		for i, rule := range d.UnreachableNote[level] {
+			if strings.Contains(rule, Redacted) {
+				return pastedBack(field("unreachable." + level))
+			}
+			if _, err := engine.ParseRule(rule); err != nil {
+				return fmt.Errorf("%s[%d]: %w", field("unreachable."+level), i, err)
+			}
+		}
+	}
 	for _, level := range sortedKeys(d.Fallback) {
 		if strings.Contains(d.Fallback[level], Redacted) {
 			return pastedBack(field("fallback." + level))
@@ -617,6 +631,9 @@ func SpecOf(d Dialect) Spec {
 	}
 	if d.Unreachable != nil {
 		s.Unreachable = &d.Unreachable
+	}
+	if d.UnreachableNote != nil {
+		s.UnreachableNote = &d.UnreachableNote
 	}
 	if d.Fallback != nil {
 		s.Fallback = &d.Fallback
