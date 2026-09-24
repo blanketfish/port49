@@ -39,6 +39,45 @@ type Diff struct {
 	// Unresolved are compositions the diff could not compare. The gate
 	// cannot vouch for them, so each fails it.
 	Unresolved []string
+	// Principals are principals that resolve to another subject, or none,
+	// and Subjects subjects whose username or group changed: who holds an
+	// access, which no subject's own diff shows (spec §12).
+	Principals []PrincipalChange
+	Subjects   []SubjectChange
+}
+
+// PrincipalChange is a principal that resolves to another subject in the new
+// version, or to none. Gated where it now resolves to a subject it did not:
+// Acknowledged is a passing session test in the new version naming it.
+type PrincipalChange struct {
+	Principal, OldSubject, NewSubject string
+	Gated, Acknowledged               bool
+}
+
+// SubjectChange is a subject in both versions whose username or group
+// changed. A username change is gated, and acknowledged by a passing session
+// test naming one of the subject's principals; a group change is reported,
+// since a group subject mints for no one until plan 7.
+type SubjectChange struct {
+	Subject, OldUsername, NewUsername, OldGroup, NewGroup string
+	Gated, Acknowledged                                   bool
+}
+
+// UnacknowledgedPrincipals counts the gated principal and username changes
+// no session test asserts.
+func (d Diff) UnacknowledgedPrincipals() int {
+	n := 0
+	for _, p := range d.Principals {
+		if p.Gated && !p.Acknowledged {
+			n++
+		}
+	}
+	for _, s := range d.Subjects {
+		if s.Gated && !s.Acknowledged {
+			n++
+		}
+	}
+	return n
 }
 
 // Change is one command whose verdict moved.
@@ -284,7 +323,48 @@ func Compare(before, after *Policy, now time.Time) Diff {
 	for _, at := range instants {
 		c.at(at)
 	}
+	c.principals(now)
 	return c.d
+}
+
+// principals compares who holds each subject's access (spec §12): every
+// principal either version lists, by the subject it resolves to, and every
+// subject in both by its username and group. A principal session test is the
+// acknowledgment, at now: it names the person and asserts what they get.
+func (c *comparison) principals(now time.Time) {
+	tested := map[string]bool{}
+	for _, r := range c.after.RunTests(now) {
+		if r.Pass && r.Test.Session() && r.Test.Principal != "" {
+			tested[r.Test.Principal] = true
+		}
+	}
+	ids := map[string]bool{}
+	for id := range c.before.byID {
+		ids[id] = true
+	}
+	for id := range c.after.byID {
+		ids[id] = true
+	}
+	for _, id := range sortedKeys(ids) {
+		was, is := c.before.byID[id], c.after.byID[id]
+		if was == is {
+			continue
+		}
+		gated := is != ""
+		c.d.Principals = append(c.d.Principals, PrincipalChange{Principal: id, OldSubject: was, NewSubject: is,
+			Gated: gated, Acknowledged: gated && tested[id]})
+	}
+	for _, name := range sortedKeys(c.after.subs) {
+		was, ok := c.before.subs[name]
+		is := c.after.subs[name]
+		if !ok || (was.Username == is.Username && was.Group == is.Group) {
+			continue
+		}
+		ch := SubjectChange{Subject: name, OldUsername: was.Username, NewUsername: is.Username, OldGroup: was.Group,
+			NewGroup: is.Group, Gated: was.Username != is.Username}
+		ch.Acknowledged = ch.Gated && slices.ContainsFunc(is.Identity, func(id string) bool { return tested[id] })
+		c.d.Subjects = append(c.d.Subjects, ch)
+	}
 }
 
 // comparison is one Compare in progress.

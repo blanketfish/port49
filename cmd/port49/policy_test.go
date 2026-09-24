@@ -694,3 +694,30 @@ func TestPolicyDiffGatesAPrivilegeAttributeInTheReply(t *testing.T) {
 		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// An identity handed to another person fails the diff until a session test
+// names the new principal (review C3).
+func TestPolicyDiffGatesAPrincipalWhoGainsASubject(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	swapped := strings.Replace(raw, "user:ops@example.com", "user:mallory@example.com", 1)
+	if err := os.WriteFile(newPol, []byte(swapped), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "PRINCIPAL: user:mallory@example.com now resolves to subject ops (was none): that person now holds ops's access") ||
+		!strings.Contains(out.String(), "principal: user:ops@example.com no longer resolves to a subject (was ops)") ||
+		!strings.Contains(out.String(), "1 unacknowledged principal or username changes") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := swapped + `  - {principal: "user:mallory@example.com", device: leaf-01, level: admin}` + "\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

@@ -247,7 +247,8 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 // pipeline stage, or by quarantining the device) that the new version
 // permits and no policy test in it exercises, on a level or ceiling raise no
 // session test in it asserts, on a regex-constrained widening no policy test
-// in it exercises, on a device the new version quarantines for a
+// in it exercises, on a principal who gains a subject or a username change no
+// principal session test in it asserts, on a device the new version quarantines for a
 // new cause, on a subject whose mint the new version's
 // broker refuses where the old did not, and on a composition it could not
 // compare.
@@ -303,6 +304,34 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	for _, r := range d.Released {
 		fmt.Fprintf(stdout, "RELEASES: %s (%s)%s: the old version quarantines it, so every command the new one "+
 			"permits there is an expansion\n", r.Device, r.Platform, from(r.At))
+	}
+	for _, p := range d.Principals {
+		switch {
+		case !p.Gated:
+			fmt.Fprintf(stdout, "principal: %s no longer resolves to a subject (was %s)\n", p.Principal, p.OldSubject)
+		case p.Acknowledged:
+			fmt.Fprintf(stdout, "principal (a session test asserts it): %s now resolves to subject %s (was %s)\n",
+				p.Principal, p.NewSubject, orNone(p.OldSubject))
+		default:
+			fmt.Fprintf(stdout, "PRINCIPAL: %s now resolves to subject %s (was %s): that person now holds %s's access; "+
+				"no session test names the principal: add {principal: %q, device: <a device %s reaches>, level: ...}\n",
+				p.Principal, p.NewSubject, orNone(p.OldSubject), p.NewSubject, p.Principal, p.NewSubject)
+		}
+	}
+	for _, s := range d.Subjects {
+		if s.OldGroup != s.NewGroup {
+			fmt.Fprintf(stdout, "subject: %s's group %q -> %q; a group subject mints for no one until plan 7\n", s.Subject,
+				s.OldGroup, s.NewGroup)
+		}
+		if !s.Gated {
+			continue
+		}
+		label, tail := "USERNAME", "; no session test names one of its principals: add one"
+		if s.Acknowledged {
+			label, tail = "username (a session test asserts it)", ""
+		}
+		fmt.Fprintf(stdout, "%s: subject %s's username %s -> %s: what every device sees and logs for it%s\n", label,
+			s.Subject, s.OldUsername, s.NewUsername, tail)
 	}
 	for _, a := range d.Access {
 		verb := "loses"
@@ -404,12 +433,13 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			"enumerated (spec §12)%s\n", label, on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb, tail)
 	}
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
-		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d devices newly "+
-		"quarantined, %d released; %d mints newly refused; %d unresolved\n", len(d.Changes), widen, narrow,
-		d.Unacknowledged(), d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), len(d.Quarantined), len(d.Released),
-		len(d.Refused), len(d.Unresolved))
+		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d unacknowledged "+
+		"principal or username changes; %d devices newly quarantined, %d released; %d mints newly refused; "+
+		"%d unresolved\n", len(d.Changes), widen, narrow, d.Unacknowledged(), d.UnacknowledgedLevels(),
+		d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(), len(d.Quarantined), len(d.Released), len(d.Refused),
+		len(d.Unresolved))
 	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
-		len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 {
+		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 {
 		return 1
 	}
 	return 0

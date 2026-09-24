@@ -580,3 +580,66 @@ func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
 		}
 	}
 }
+
+// The gate compares principals, not only subjects (review C3): an identity
+// moved to another person, identities swapped between subjects, and a
+// username changed each hand access over with no subject's access changing.
+// Each fails until a session test naming the principal asserts it; a
+// principal taken away is reported and passes.
+func TestTheGateComparesPrincipals(t *testing.T) {
+	gated := func(d Diff) (n int) {
+		for _, p := range d.Principals {
+			if p.Gated && !p.Acknowledged {
+				n++
+			}
+		}
+		for _, s := range d.Subjects {
+			if s.Gated && !s.Acknowledged {
+				n++
+			}
+		}
+		return n
+	}
+	mallory := strings.Replace(diffBase, "user:noc@example.com", "user:mallory@example.com", 1)
+	d := Compare(mustParse(t, diffBase), mustParse(t, mallory), noon)
+	if gated(d) != 1 || len(d.Principals) != 2 {
+		t.Fatalf("mallory: %+v", d.Principals)
+	}
+	for _, p := range d.Principals {
+		if (p.Principal == "user:mallory@example.com") != p.Gated {
+			t.Errorf("only the principal who gained a subject is gated: %+v", p)
+		}
+	}
+	acked := mallory + "tests:\n  - {principal: \"user:mallory@example.com\", device: leaf-01, level: readonly}\n"
+	if n := gated(Compare(mustParse(t, diffBase), mustParse(t, acked), noon)); n != 0 {
+		t.Fatalf("a session test naming the principal acknowledges it: %d", n)
+	}
+	subjectTest := mallory + "tests:\n  - {subject: noc, device: leaf-01, level: readonly}\n"
+	if n := gated(Compare(mustParse(t, diffBase), mustParse(t, subjectTest), noon)); n != 1 {
+		t.Fatalf("a subject test does not: %d", n)
+	}
+
+	two := diffBase + "  - {subject: adm, scope: all_devices, roles: [boss]}\n"
+	two = strings.Replace(two, "subjects:\n", "subjects:\n  - {name: adm, identity: \"user:adm@example.com\", username: adm, token_ttl: 60s}\n", 1)
+	two = strings.Replace(two, "roles:\n", "roles:\n  - {name: boss, privilege: admin, permit: [\"**\"]}\n", 1)
+	swapped := strings.Replace(strings.Replace(two, "user:adm@example.com", "user:TMP", 1), "user:noc@example.com", "user:adm@example.com", 1)
+	swapped = strings.Replace(swapped, "user:TMP", "user:noc@example.com", 1)
+	if n := gated(Compare(mustParse(t, two), mustParse(t, swapped), noon)); n != 2 {
+		t.Fatalf("swapped identities: %d gated", n)
+	}
+
+	renamed := strings.Replace(diffBase, "username: noc", "username: admin", 1)
+	d = Compare(mustParse(t, diffBase), mustParse(t, renamed), noon)
+	if gated(d) != 1 || len(d.Subjects) != 1 || d.Subjects[0].NewUsername != "admin" {
+		t.Fatalf("username: %+v", d.Subjects)
+	}
+	if n := gated(Compare(mustParse(t, diffBase), mustParse(t, renamed+
+		"tests:\n  - {principal: \"user:noc@example.com\", device: leaf-01, level: readonly}\n"), noon)); n != 0 {
+		t.Fatalf("a principal session test acknowledges a username change: %d", n)
+	}
+
+	removed := strings.Replace(diffBase, "identity: \"user:noc@example.com\"", "identity: [\"user:noc@example.com\", \"user:old@example.com\"]", 1)
+	if d := Compare(mustParse(t, removed), mustParse(t, diffBase), noon); gated(d) != 0 || len(d.Principals) != 1 {
+		t.Fatalf("a removal is reported and passes: %+v", d.Principals)
+	}
+}
