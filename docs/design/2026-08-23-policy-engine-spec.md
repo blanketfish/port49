@@ -3503,9 +3503,10 @@ bundle v2291
 
 **A sync can make a valid policy invalid, and the bundle builder quarantines rather than
 refuses.** Several load checks are joint over policy and inventory — a privilege level with no
-mapping on a platform present in inventory (§6), a session reply whose `priv-lvl` exceeds
-the grants' `max_privilege` there, or roles landing above the ceiling's level (§7), `enable: auto` reaching a platform whose enable
-exchange carries no principal (§5.6). A device racked tomorrow with a new platform can
+mapping on a platform present in inventory (§6), a session reply whose `priv-lvl`, or any
+other attribute that bears privilege there, exceeds the grants' `max_privilege` (§7), roles
+landing above the ceiling's level (§7), `enable: auto` reaching a platform whose enable exchange
+carries no principal (§5.6). A device racked tomorrow with a new platform can
 fail them against a policy that was valid today. Refusing the whole bundle would block every
 inventory change fleet-wide until someone edits policy, including the leaf racked in another
 site — a ticket-queue bottleneck created by the safety mechanism. Instead the offending
