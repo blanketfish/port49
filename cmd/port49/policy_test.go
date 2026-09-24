@@ -207,6 +207,21 @@ func TestPolicyTestAndDiffAnswerAsTheBrokerMints(t *testing.T) {
 		!strings.Contains(out.String(), "1 mints newly refused") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
+	// No test acknowledges a lockout (owner's ruling 2026-09-24): with every
+	// test in the new version passing, the refusal still fails the gate.
+	allPass := strings.Replace(refused, `command: "show version", expect: permit`, `command: "show version", expect: deny`, 1)
+	if err := os.WriteFile(newPol, []byte(allPass), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("the new version's own tests pass: code %d\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "1 mints newly refused") {
+		t.Fatalf("a refused mint fails whatever the tests say: code %d\n%s%s", code, out.String(), errb.String())
+	}
 }
 
 // A possible shadow a test exercises is a shadow: the test proved the two
