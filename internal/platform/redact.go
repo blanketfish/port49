@@ -114,7 +114,8 @@ func Redactions(platformName string) []Redaction {
 // whatever expands_abbreviations says: L21 measured expansion for interactive
 // SSH only, and a flag that is wrong here leaks a secret into a log that
 // cannot take it back, where matching an abbreviation only removes more
-// (task 10 review I1). An element no pattern touches comes back as it was.
+// (task 10 review I1). A URL's password is replaced whatever the patterns
+// say (redactURL). An element nothing touches comes back as it was.
 func Redact(rules []Redaction, elements []string) ([]string, bool) {
 	var words []string
 	var owner []int
@@ -125,6 +126,12 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 	}
 	hide := make([]bool, len(words))
 	redacted := false
+	rewritten := make([]bool, len(words))
+	for i, w := range words {
+		if u, ok := redactURL(w); ok {
+			words[i], rewritten[i], redacted = u, true, true
+		}
+	}
 	for _, r := range rules {
 		if !matchWords(r.Match, words) {
 			continue
@@ -157,7 +164,7 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 	out := slices.Clone(elements)
 	touched := map[int]bool{}
 	for i, h := range hide {
-		if h {
+		if h || rewritten[i] {
 			touched[owner[i]] = true
 		}
 	}
@@ -233,4 +240,27 @@ func sameWord(word, sent string) bool {
 		return true
 	}
 	return sent != "" && len(sent) < len(word) && strings.EqualFold(word[:len(sent)], sent)
+}
+
+// redactURL replaces the password in a URL's userinfo,
+// `scheme://user:password@host...` in any scheme, and keeps the scheme, user
+// and host, so the audit still shows where a configuration was copied (task 10
+// re-review C3). No `after:` pattern can hide part of a word. The userinfo
+// ends at the last `@`, so a password holding one, or a path after it,
+// removes more rather than less.
+func redactURL(word string) (string, bool) {
+	i := strings.Index(word, "://")
+	if i < 0 {
+		return word, false
+	}
+	rest := word[i+3:]
+	at := strings.LastIndex(rest, "@")
+	if at < 0 {
+		return word, false
+	}
+	colon := strings.Index(rest[:at], ":")
+	if colon < 0 {
+		return word, false
+	}
+	return word[:i+3] + rest[:colon+1] + Redacted + rest[at:], true
 }

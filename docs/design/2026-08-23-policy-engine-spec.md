@@ -1967,6 +1967,10 @@ keyword (`authentication-key`, `area-password`, `domain-password`) counts as its
 abbreviation. The record still carries the command word, so an auditor sees that an `aaa
 authentication` change happened and can read the rest from the device.
 Junos sends a whole command line as one `cmd`, so each element is split into words first.
+Whatever the patterns say, a word holding a URL with a password in its userinfo —
+`copy running-config scp://admin:X@10.0.0.9/r.cfg`, an archive `path`, in any scheme — has
+the password replaced and keeps its scheme, user and host, so the record still shows where
+a configuration went: no `after:` pattern can hide part of a word.
 The built-in patterns lead with `**`, because a secret sits anywhere in a line and NX-OS's
 accounting `cmd` is the configuration path joined with ` ; ` and a result — `configure
 terminal ; username bob password ... (SUCCESS)` (`tests/lab/results/L21-cisco_nxos.md`) — which

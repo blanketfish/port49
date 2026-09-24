@@ -232,6 +232,13 @@ func TestTheSecretKeywordsAreRedactedOnEveryPlatform(t *testing.T) {
 		"ip pim hello-authentication ah-md5 SECRET1",
 		// NHRP.
 		"ip nhrp authentication SECRET1",
+		// EOS IPsec profiles, IOS-XE smart licensing, IOS manual IPsec keys,
+		// and siblings (task 10 re-review C4).
+		"shared-key 7 SECRET1",
+		"license smart trust idtoken SECRET1 all",
+		"license smart register idtoken SECRET1",
+		"set session-key inbound esp 256 cipher SECRET1",
+		"set session-key outbound ah 256 SECRET1",
 		// Siblings the default list covers.
 		"ntp authentication-key 1 md5 SECRET1",
 		"radius-server key 7 SECRET1",
@@ -267,6 +274,48 @@ func TestARoutingCommunityIsKept(t *testing.T) {
 		in := strings.Fields(line)
 		if got, redacted := Redact(Redactions("cisco_iosxe"), in); redacted {
 			t.Errorf("%q: %q", line, got)
+		}
+	}
+}
+
+// A password in a URL's userinfo is replaced whatever the patterns say, on
+// every platform, and the scheme, user and host stay so the audit still shows
+// where a configuration went (task 10 re-review C3). No `after:` pattern can
+// hide part of a word, and `after: copy` would blank every copy.
+func TestAURLPasswordIsRedacted(t *testing.T) {
+	for _, tt := range []struct{ line, want string }{
+		{"copy running-config scp://admin:SECRET1@10.0.0.9/r.cfg",
+			"copy running-config scp://admin:" + Redacted + "@10.0.0.9/r.cfg"},
+		{"copy ftp://admin:SECRET1@h/img.bin flash:", "copy ftp://admin:" + Redacted + "@h/img.bin flash:"},
+		{"copy http://u:SECRET1@h:8080/x bootflash:", "copy http://u:" + Redacted + "@h:8080/x bootflash:"},
+		{"copy running-config SFTP://u:SECRET1@h/x", "copy running-config SFTP://u:" + Redacted + "@h/x"},
+		{"copy tftp://u:SECRET1@h/x startup-config", "copy tftp://u:" + Redacted + "@h/x startup-config"},
+		{"copy https://u:SEC:RET1@h/x flash:", "copy https://u:" + Redacted + "@h/x flash:"},
+		{"path scp://admin:SECRET1@h/arch", "path scp://admin:" + Redacted + "@h/arch"},
+		{"configure terminal ; archive ; path scp://admin:SECRET1@h/arch (SUCCESS)",
+			"configure terminal ; archive ; path scp://admin:" + Redacted + "@h/arch (SUCCESS)"},
+	} {
+		for _, platform := range []string{"arista_eos", "cisco_nxos", "cisco_iosxe"} {
+			words := strings.Fields(tt.line)
+			got, redacted := Redact(Redactions(platform), words)
+			if joined := strings.Join(got, " "); !redacted || joined != tt.want {
+				t.Errorf("%s vector %q: %q", platform, tt.line, joined)
+			}
+			raw := []string{"cmd=" + words[0]}
+			for _, w := range words[1:] {
+				raw = append(raw, "cmd-arg="+w)
+			}
+			gotRaw, redacted := RedactRaw(Redactions(platform), append(raw, "cmd-arg=<cr>"))
+			if joined := strings.Join(gotRaw, " "); !redacted || strings.Contains(joined, "SEC") ||
+				!strings.Contains(joined, "://") || !strings.Contains(joined, ":"+Redacted+"@") {
+				t.Errorf("%s raw %q: %q", platform, tt.line, gotRaw)
+			}
+		}
+	}
+	for _, line := range []string{"copy scp://admin@h/x flash:", "copy running-config flash:backup",
+		"ping 10.0.0.1"} {
+		if got, redacted := Redact(Redactions("cisco_iosxe"), strings.Fields(line)); redacted {
+			t.Errorf("no password in %q: %q", line, got)
 		}
 	}
 }

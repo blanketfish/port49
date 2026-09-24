@@ -57,6 +57,12 @@ default:
   - {match: ['**'], after: password-encrypt}
   - {match: ['**'], after: ah-md5}
   - {match: ['**', nhrp, authentication, '**'], after: authentication}
+  # EOS IPsec profile `shared-key [0|7] <key>`, IOS-XE smart licensing
+  # `license smart trust|register idtoken <token>`, and IOS manually keyed
+  # IPsec `set session-key inbound|outbound esp|ah <spi> ... <key>`.
+  - {match: ['**'], after: shared-key}
+  - {match: ['**'], after: idtoken}
+  - {match: ['**'], after: session-key}
   # OSPFv3 IPsec: `ospfv3 authentication ipsec spi 256 sha1 <key>`; the SPI
   # goes with the key, because the key's position after it varies.
   - {match: ['**', ipsec, spi, '**'], after: spi}
