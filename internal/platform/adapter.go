@@ -39,6 +39,8 @@ type Spec struct {
 	EnableUsername       *string              `yaml:"enable_username,omitempty"`
 	Redact               *[]Redaction         `yaml:"redact,omitempty"`
 	Verified             *string              `yaml:"verified,omitempty"`
+	Unreachable          *map[string][]string `yaml:"unreachable,omitempty"`
+	Fallback             *map[string]string   `yaml:"fallback,omitempty"`
 }
 
 // ParseSpecs reads an adapter file: one YAML document whose one key is
@@ -130,6 +132,17 @@ func (s Spec) Over(base Dialect) Dialect {
 	}
 	if s.Verified != nil {
 		d.Verified = *s.Verified
+	}
+	if s.Unreachable != nil {
+		d.Unreachable = mergeLists(d.Unreachable, *s.Unreachable)
+	}
+	if s.Fallback != nil {
+		if d.Fallback == nil {
+			d.Fallback = map[string]string{}
+		}
+		for k, v := range *s.Fallback {
+			d.Fallback[k] = v
+		}
 	}
 	return d
 }
@@ -301,6 +314,19 @@ func Validate(name string, d Dialect) error {
 			return fmt.Errorf("%s[%d]: %w", field("redact"), i, err)
 		}
 	}
+	for _, level := range sortedKeys(d.Unreachable) {
+		for i, rule := range d.Unreachable[level] {
+			if _, err := engine.ParseRule(rule); err != nil {
+				return fmt.Errorf("%s[%d]: %w", field("unreachable."+level), i, err)
+			}
+		}
+	}
+	for _, level := range sortedKeys(d.Fallback) {
+		if strings.TrimSpace(d.Fallback[level]) == "" {
+			return fmt.Errorf("%s is empty: say what the device gives a session at %s on its own", field("fallback."+level),
+				level)
+		}
+	}
 	if !slices.Contains(verifications, d.Verified) {
 		return fmt.Errorf("%s is not containerlab, community, or unset", field("verified"))
 	}
@@ -466,6 +492,12 @@ func SpecOf(d Dialect) Spec {
 	}
 	if d.Verified != "" {
 		s.Verified = &d.Verified
+	}
+	if d.Unreachable != nil {
+		s.Unreachable = &d.Unreachable
+	}
+	if d.Fallback != nil {
+		s.Fallback = &d.Fallback
 	}
 	return s
 }

@@ -45,6 +45,11 @@ platforms:
       # decision 23).
       - aaa authorization commands default group port49 local
       - aaa authorization config-commands default group port49 local
+    # No role refuses a command while port49 answers (ceiling-cisco_nxos.md),
+    # so nothing is unreachable. Under local authorization network-admin
+    # changed configuration (L16-cisco_nxos.md, command authorization LOCAL).
+    fallback:
+      admin: "network-admin: every command, configuration included"
     # No priv-lvl is rendered, so the token's ceiling takes its number here:
     # operator numbers 15, admin's, on the owner's ruling of 2026-09-24
     # (spec §6, decision 23).

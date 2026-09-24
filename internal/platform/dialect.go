@@ -110,6 +110,17 @@ type Dialect struct {
 	// nobody here has run, and empty where neither is true. Only a built-in
 	// adapter may say it.
 	Verified string
+	// Unreachable maps a level to the rules the device refuses at that level
+	// in its own parser, never asking port49 (tests/lab/results/ceiling-*.md):
+	// a permit every command of which is here is dead there (spec §12).
+	// Only measured commands are listed; a level with none lists nothing.
+	Unreachable map[string][]string
+	// Fallback maps a level to what the device gives a session at it on its
+	// own when port49 cannot answer and the command method list falls back to
+	// local, where that is more than a confined role: a subject port49
+	// confines at that level has more access in an outage than the policy
+	// grants (spec §6, §12, "Fallback exposure").
+	Fallback map[string]string
 }
 
 // builtin is the default set's adapters, platforms/<DefaultSet>/*.yaml, where
@@ -198,6 +209,16 @@ func (d Dialect) clone() Dialect {
 	}
 	if d.CeilingLevels != nil {
 		d.CeilingLevels = maps.Clone(d.CeilingLevels)
+	}
+	if d.Unreachable != nil {
+		unreachable := make(map[string][]string, len(d.Unreachable))
+		for k, v := range d.Unreachable {
+			unreachable[k] = slices.Clone(v)
+		}
+		d.Unreachable = unreachable
+	}
+	if d.Fallback != nil {
+		d.Fallback = maps.Clone(d.Fallback)
 	}
 	return d
 }

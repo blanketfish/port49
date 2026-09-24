@@ -43,6 +43,15 @@ platforms:
       # What `if-authenticated` does on EOS is unmeasured (L4 measured it
       # on IOS-XE, where every command ran); do not use it either.
       - aaa authorization commands all default group port49 local
+    # At 1 the parser refuses these without asking port49
+    # (ceiling-arista_eos.md): a permit for nothing else is dead there.
+    unreachable:
+      readonly: [clear counters **, clear ip bgp **, configure terminal **, show users detail **]
+    # Under `aaa authorization commands ... local`, network-admin configures
+    # and network-operator is refused (L16-arista_eos.md, command
+    # authorization LOCAL).
+    fallback:
+      admin: "network-admin: every command, configuration included"
     # Interface names, not device behaviour: spec §8's example.
     entity_classes:
       management: ['^Management[0-9]+$']

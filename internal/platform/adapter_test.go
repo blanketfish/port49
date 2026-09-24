@@ -32,6 +32,10 @@ var shipped = map[string]Dialect{
 		RoleOrder: map[string][]string{"roles": {"network-operator", "network-admin"}},
 		DeviceConfig: []string{"aaa authorization exec default group port49 local",
 			"aaa authorization commands all default group port49 local"},
+		// ceiling-arista_eos.md; L16-arista_eos.md, command authorization LOCAL.
+		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **",
+			"show users detail **"}},
+		Fallback: map[string]string{"admin": "network-admin: every command, configuration included"},
 	},
 	"cisco_nxos": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true,
@@ -49,6 +53,7 @@ var shipped = map[string]Dialect{
 		DeviceConfig: []string{"aaa authentication login default group port49 local",
 			"aaa authorization commands default group port49 local",
 			"aaa authorization config-commands default group port49 local"},
+		Fallback: map[string]string{"admin": "network-admin: every command, configuration included"},
 	},
 	"cisco_iosxe": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true, SplitsInterfaceNames: true,
@@ -67,6 +72,9 @@ var shipped = map[string]Dialect{
 			"aaa accounting commands 1 default start-stop group port49",
 			"aaa accounting commands 7 default start-stop group port49",
 			"aaa accounting commands 15 default start-stop group port49"},
+		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **"},
+			"operator": {"clear ip bgp **", "configure terminal **"}},
+		Fallback: map[string]string{"admin": "level 15: every command, configuration included"},
 	},
 	"juniper_junos": {
 		PipeToken: "|", StripCR: true,
@@ -270,7 +278,9 @@ func TestValidateNamesTheField(t *testing.T) {
 		"role_order.roles[2] is ranked twice": with(ok, func(d *Dialect) {
 			d.RoleOrder = map[string][]string{"roles": {"x", "y", "x"}}
 		}),
-		"role_order.roles[0]": with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"roles": {""}} }),
+		"role_order.roles[0]":     with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"roles": {""}} }),
+		"unreachable.readonly[0]": with(ok, func(d *Dialect) { d.Unreachable = map[string][]string{"readonly": {"/(/"}} }),
+		"fallback.admin is empty": with(ok, func(d *Dialect) { d.Fallback = map[string]string{"admin": " "} }),
 	} {
 		err := Validate("x", d)
 		if err == nil || !strings.Contains(err.Error(), field) || !strings.Contains(err.Error(), "platforms.x.") {

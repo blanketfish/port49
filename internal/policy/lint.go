@@ -137,6 +137,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
 		}
 	}
 	out = append(out, p.redundantOverrides()...)
+	out = append(out, p.intersections(now)...)
 	if len(p.tests) == 0 {
 		add(FindingNoTests, "the policy has no tests: nothing in it acknowledges a shadowed deny, an expansion or "+
 			"a privilege raise, so the gates fail on the first one; add tests (spec §12, \"Policy tests\")")

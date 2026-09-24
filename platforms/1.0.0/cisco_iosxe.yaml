@@ -53,6 +53,17 @@ platforms:
       - aaa accounting commands 1 default start-stop group port49
       - aaa accounting commands 7 default start-stop group port49
       - aaa accounting commands 15 default start-stop group port49
+    # The parser refuses these without asking port49 (ceiling-cisco_iosxe.md),
+    # at 7 with the reference line above in place.
+    unreachable:
+      readonly: [clear counters **, clear ip bgp **, configure terminal **]
+      operator: [clear ip bgp **, configure terminal **]
+    # Local authorization runs a command at or below the session's level
+    # (the lab's break-glass account, tests/lab/configs/iosxe-startup.cfg); a
+    # token session at 15 falling back is unmeasured, and reported as the
+    # exposure it would be.
+    fallback:
+      admin: "level 15: every command, configuration included"
     # No entity class is defined: the lab's management interface is
     # GigabitEthernet1, a physical port by name.
     #
