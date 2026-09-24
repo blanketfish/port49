@@ -407,6 +407,23 @@ func TestGrantsRemoveWritesThroughASymlink(t *testing.T) {
 	}
 }
 
+// A directory sync that fails after the rename leaves the file replaced, and
+// the message says so: the operator must not re-run the removal thinking
+// nothing happened, only make sure the change is durable.
+func TestGrantsRemoveSaysTheFileWasReplacedWhenTheDirSyncFails(t *testing.T) {
+	defer func(f func(string) error) { syncDir = f }(syncDir)
+	syncDir = func(string) error { return os.ErrPermission }
+	pol, inv := policyFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops", "--write"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "was replaced, but syncing its directory failed") {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if strings.Contains(string(readFile(t, pol)), "ops@example.com") {
+		t.Fatal("the file was not replaced")
+	}
+}
+
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, os.ErrClosed }

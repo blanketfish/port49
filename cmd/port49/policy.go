@@ -564,6 +564,15 @@ func replaceFile(path string, data []byte) error {
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err
 	}
+	if err := syncDir(dir); err != nil {
+		return fmt.Errorf("%s was replaced, but syncing its directory failed, so a power cut may still bring the "+
+			"old file back; check it is on disk: %w", path, err)
+	}
+	return nil
+}
+
+// syncDir makes a rename in dir durable. A test swaps it to fail.
+var syncDir = func(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
 		return err

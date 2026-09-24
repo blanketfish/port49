@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -107,7 +108,49 @@ func RemoveSubject(raw []byte, subject string) ([]byte, Removal, error) {
 			out.Write(line)
 		}
 	}
+	// The cut is by line, so check it: what is left must parse, and hold
+	// nothing that names the subject. A shape the cut does not model (a flow
+	// mapping wrapped so its brace sits at the dash) is refused here rather
+	// than left to the caller's load check.
+	if stillNamed(out.Bytes(), subject, ids) {
+		return nil, Removal{}, fmt.Errorf("the lines around %s could not be cut cleanly; remove it by hand", subject)
+	}
 	return out.Bytes(), r, nil
+}
+
+// stillNamed reports whether raw fails to parse as one mapping, or still has
+// a subject, grant or test item RemoveSubject would have removed.
+func stillNamed(raw []byte, subject string, ids map[string]bool) bool {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return true
+	}
+	if len(doc.Content) == 0 {
+		return false
+	}
+	top := doc.Content[0]
+	if top.Kind != yaml.MappingNode {
+		return true
+	}
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		for _, m := range top.Content[i+1].Content {
+			switch top.Content[i].Value {
+			case "subjects":
+				if field(m, "name") == subject {
+					return true
+				}
+			case "grants":
+				if field(m, "subject") == subject {
+					return true
+				}
+			case "tests":
+				if field(m, "subject") == subject || ids[field(m, "principal")] {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // itemStart is the 1-based line of a block sequence item's dash: the item's
@@ -124,11 +167,20 @@ func itemStart(lines [][]byte, item *yaml.Node) int {
 // cutItem marks a block sequence item's lines, from its dash to its last line
 // of content before bound (the next item's dash, or the next top-level key):
 // continuation lines, a block scalar's blank lines and a trailing comment go
-// with it, the comment lines and blank lines after it stay. An item cut from
-// between two blank lines takes the second, so no double gap is left.
+// with it, the comment lines and blank lines after it stay. The comment lines
+// directly above the dash are the item's label (its head comment) and go too,
+// or they would label the item that follows; one set off by a blank line
+// stays. An item cut from between two blank lines takes the second, so no
+// double gap is left.
 func cutItem(lines [][]byte, cut []bool, item *yaml.Node, bound int) {
 	first := itemStart(lines, item)
 	dash := indent(lines[first-1])
+	if item.HeadComment != "" {
+		for k := strings.Count(item.HeadComment, "\n") + 1; k > 0 && first > 1 &&
+			bytes.HasPrefix(bytes.TrimSpace(lines[first-2]), []byte("#")); k-- {
+			first--
+		}
+	}
 	last := lastLine(item)
 	for n := last + 1; n < bound && n <= len(lines); n++ {
 		text := bytes.TrimSpace(lines[n-1])

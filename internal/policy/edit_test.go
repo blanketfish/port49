@@ -149,3 +149,46 @@ func onlyDeletions(in, out string) bool {
 	}
 	return true
 }
+
+// A comment directly above a removed item is the item's label and goes with
+// it: left, it would label the row that follows, or dangle at the end of the
+// list. A comment set off by a blank line is the section's and stays.
+func TestRemoveSubjectTakesTheCommentAboveAnItem(t *testing.T) {
+	const raw = `subjects:
+  # everyone's subjects
+  - {name: y, identity: "app:y", username: y, token_ttl: 60s}
+  # robots below
+
+  # the backup robot
+  - {name: x, identity: "app:x", username: x, token_ttl: 60s}
+  - {name: z, identity: "app:z", username: z, token_ttl: 60s}
+grants:
+  - {subject: y, scope: all_devices, roles: [r]}
+  # x's row, ticket 12
+  - {subject: x, scope: all_devices, roles: [r]}
+`
+	out, _, err := RemoveSubject([]byte(raw), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "backup robot") || strings.Contains(string(out), "ticket 12") ||
+		!strings.Contains(string(out), "# everyone's subjects") || !strings.Contains(string(out), "# robots below") ||
+		!onlyDeletions(raw, string(out)) {
+		t.Fatalf("\n%s", out)
+	}
+}
+
+// A flow mapping wrapped so its closing brace sits at the dash's indent
+// cannot be cut by line, and RemoveSubject says so rather than hand back a
+// file with a stray brace in it.
+func TestRemoveSubjectRefusesWhatItCannotCutCleanly(t *testing.T) {
+	const raw = `subjects:
+  - {name: x, identity: "app:x", username: x,
+    token_ttl: 60s
+  }
+  - {name: y, identity: "app:y", username: y, token_ttl: 60s}
+`
+	if out, _, err := RemoveSubject([]byte(raw), "x"); err == nil || !strings.Contains(err.Error(), "by hand") {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
