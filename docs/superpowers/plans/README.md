@@ -22,9 +22,11 @@ start; PR #11); **4b merged 2026-09-24** (PR #12;
 and whole-branch;
 its three "Questions for Ryan" were decided security-first: delete unspent tokens whose answer
 changed, rewrite every live context on every reload, leave a quarantined device's contexts);
-**5a written 2026-09-24** (`2026-09-24-05a-platform-adapters.md`, eighteen tasks: one docs,
-fifteen code, one lab, one lab-and-docs; not yet executed); plan 5 is split at the seam below, and
-5b is written after 5a merges. 6–13 not yet.
+**5a built 2026-09-24** (`2026-09-24-05a-platform-adapters.md`, eighteen tasks: one docs,
+fifteen code, one lab, one lab-and-docs; reviewed per task, on `feature/platform-adapters`, its
+pull request not yet merged; L22 closed, and the EOS, NX-OS and IOS-XE adapters `verified:
+containerlab`); plan 5 is split at the seam below, and 5b is the next plan to write, once 5a
+merges. 6–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -477,7 +479,8 @@ rest at fleet size here.
 **Split into 5a and 5b (2026-09-24),** because the brief below and every plan-4 hand-off is more
 than 25 tasks. The seam is the kind of platform:
 
-- **Plan 5a — `2026-09-24-05a-platform-adapters.md`. Written 2026-09-24; not yet executed.** The
+- **Plan 5a — `2026-09-24-05a-platform-adapters.md`. As built (`feature/platform-adapters`; PR
+  number at merge):** The
   adapters as data and every platform that authorizes per command: the built-in adapters as files
   in a pinned set (`platforms/1.0.0/`; a policy that pins none renders with 1.0.0 forever),
   operator overrides in the policy file's `platforms:` block (merge per key, `replace`,
@@ -490,6 +493,24 @@ than 25 tasks. The seam is the kind of platform:
   devices check-config` (plan 2b's owed check), `grants remove --pr`, and a lab task that
   measures each adapter's reply level by level (new register row L22) and three candidate inert
   attributes.
+
+  Where it differs from the plan's Decided list: L22 (`tests/lab/results/L22-*.md`, closed
+  2026-09-24) measured every level on every platform as rendered and operator's configuration
+  change refused at fallback on all three, so the EOS, NX-OS and IOS-XE adapters ship `verified:
+  containerlab`, and any `platforms:` block over one of them clears it (`platform list` prints
+  `—`, `policy diff` reports the change, `platform export <name>` leaves the key out so the
+  block pastes back). Inert as measured: `home-directory`, `idletime` and `timeout` on EOS and
+  NX-OS; `idletime` and `timeout` on IOS-XE, whose `accepted_attributes` is `[priv-lvl,
+  idletime, timeout]` rather than Decided 6's `priv-lvl` alone. IOS-XE refused the session for
+  `home-directory`, so it is not inert there and a placeholder in it is refused. `fallback`
+  entries say what L22 measured: EOS operator names the commands that still ran, NX-OS operator
+  and IOS-XE have none (IOS-XE refused a token session every command at 7 and 15). Beyond the
+  plan: an operator's fallback text is kept apart as `fallback_note`, a block's `unreachable`
+  joins the set's, a change to the generic adapter is gated (`platform: generic`), an
+  `acknowledge:` entry names the sha256 of the value it covers and a stale one is reported, a
+  load error quotes no rule text, and `grants remove --pr` targets the repository the push URL
+  names. Carried: Junos's inert list and every Junos spelling to 5b (L10, L12, both open); a
+  replay-verifiable blob whose rules redaction hides to plan 6 (below).
 - **Plan 5b — the session-only half and capability inference; written after 5a merges.** Junos's
   projection under decision 22 (`bits`, `bit_delivery`, `command_projection`, `local-user-name`
   templates, the generator constraints and the refused shape), gated on L12 and L9, with its own

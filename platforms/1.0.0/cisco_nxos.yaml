@@ -3,6 +3,10 @@
 # direction that fails closed (spec §8, §15).
 platforms:
   cisco_nxos:
+    # Every reply this adapter renders was applied by the lab image as the
+    # adapter says, at readonly, operator and admin
+    # (tests/lab/results/L22-cisco_nxos.md; spec §15, L22).
+    verified: containerlab
     # Session and per-command authorization (L1, L10). Config-command
     # authorization is unmeasured, so it is not claimed.
     supports: [session, commands]
@@ -94,4 +98,8 @@ platforms:
     # `priv-lvl` picks a role by a per-release table, and `shell:roles`, bare
     # or inside `cisco-av-pair`, names one (L16-cisco_nxos.md).
     privilege_attributes: [priv-lvl, shell:roles, cisco-av-pair]
-    inert_attributes: [home-directory]
+    # home-directory: spec §6's case. home-directory, idletime and timeout:
+    # admin's session unchanged beside its reply, the same role, both
+    # ceiling commands sent to port49 and `show version` permitted
+    # (tests/lab/results/L22-cisco_nxos.md, "Inert candidates").
+    inert_attributes: [home-directory, idletime, timeout]

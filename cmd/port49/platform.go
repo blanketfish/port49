@@ -342,7 +342,8 @@ const (
 	// exportBlock writes the note under fallback, where the block wrote it,
 	// commented as the operator's, so the file pastes back as a block:
 	// fallback_note is port49's own record, which a block may not set, and
-	// the set's measured text a block cannot change goes with it.
+	// the set's measured text a block cannot change goes with it. verified,
+	// port49's claim about its lab, is left out for the same reason.
 	exportBlock
 	// exportSet writes a platform set, which carries only what the lab
 	// measured: the note is dropped (spec §8).
@@ -377,6 +378,9 @@ const notMeasured = "operator note, not measured"
 // block's fallback note written as mode says (spec §8, §12).
 func adapterFile(name string, d platform.Dialect, mode exportMode) ([]byte, error) {
 	spec := platform.SpecOf(d)
+	if mode == exportBlock {
+		spec.Verified = nil
+	}
 	var folded []string
 	if mode != exportShow && spec.FallbackNote != nil {
 		if mode == exportBlock {

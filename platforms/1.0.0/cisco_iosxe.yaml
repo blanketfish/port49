@@ -3,6 +3,10 @@
 # direction that fails closed (spec §8, §15).
 platforms:
   cisco_iosxe:
+    # Every reply this adapter renders was applied by the lab image as the
+    # adapter says, at readonly, operator and admin
+    # (tests/lab/results/L22-cisco_iosxe.md; spec §15, L22).
+    verified: containerlab
     # Session and per-command authorization (L1, L10). Config-command
     # authorization is unmeasured, so it is not claimed.
     supports: [session, commands]
@@ -22,16 +26,15 @@ platforms:
       readonly: ["priv-lvl=1"]
       operator: ["priv-lvl=7"]
       admin: ["priv-lvl=15"]
-    # The only attribute listed, which is what port49 needs here. L18 saw
-    # the session refused for every other attribute it tried, under either
-    # flag (L18-cisco_iosxe.md), and L22 saw the same for home-directory.
-    # L22 also found idletime*30 and timeout*480 accepted beside priv-lvl=15
-    # and inert (L22-cisco_iosxe.md). They are not listed: the list is kept
-    # to what port49 renders, and a policy whose reply would carry anything
-    # else quarantines the device (decision 25). So does a priv-lvl no level
-    # here renders, and on every platform one that is not 0 to 15 (L18,
-    # variant 7).
-    accepted_attributes: [priv-lvl]
+    # priv-lvl is what port49 renders. L18 saw the session refused for every
+    # other attribute it tried, under either flag (L18-cisco_iosxe.md), and
+    # L22 saw the same for home-directory. L22 found idletime*30 and
+    # timeout*480 accepted beside priv-lvl=15 and inert (L22-cisco_iosxe.md,
+    # "Inert candidates"), so they are listed too. A policy whose reply would
+    # carry anything else quarantines the device (decision 25). So does a
+    # priv-lvl no level here renders, and on every platform one that is not
+    # 0 to 15 (L18, variant 7).
+    accepted_attributes: [priv-lvl, idletime, timeout]
     # What the renderings above depend on, as the lab device carries it
     # (tests/lab/configs/iosxe-startup.cfg). The group name is the lab's.
     # The request carries the command's level, not the session's
@@ -98,11 +101,14 @@ platforms:
     strip_cr: true
     # A 61-character server_msg was displayed in full (L2-cisco_iosxe.md).
     shows_server_msg: true
-    # `priv-lvl` sets the level (L16, ceiling-cisco_iosxe.md). No attribute is
-    # inert here: `home-directory*/home/port49` beside admin's reply got the
-    # session refused, `% Authorization failed.` (tests/lab/results/
-    # L22-cisco_iosxe.md), so it bears on the session like any other name
-    # and takes no placeholder. The empty list is what overrides the generic
-    # adapter's home-directory.
+    # `priv-lvl` sets the level (L16, ceiling-cisco_iosxe.md).
     privilege_attributes: [priv-lvl]
-    inert_attributes: []
+    # idletime and timeout: admin's session unchanged beside its reply, level
+    # 15, both ceiling commands sent to port49 and `show version` permitted
+    # (tests/lab/results/L22-cisco_iosxe.md, "Inert candidates").
+    # home-directory is not inert here: `home-directory*/home/port49` beside
+    # admin's reply got the session refused, `% Authorization failed.`
+    # (L22-cisco_iosxe.md), so it bears on the session like any other name
+    # and takes no placeholder. Listing the key is what overrides the generic
+    # adapter's home-directory.
+    inert_attributes: [idletime, timeout]

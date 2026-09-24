@@ -26,7 +26,10 @@ func TestPlatformListSaysWhereEachAdapterComesFrom(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"platform", "list"}, &out, &errb); code != 0 ||
 		!strings.HasPrefix(out.String(), "PLATFORM") || strings.Count(out.String(), "built-in") != 4 ||
-		listRow(out.String(), "juniper_junos") != "juniper_junos built-in — session" {
+		listRow(out.String(), "juniper_junos") != "juniper_junos built-in — session" ||
+		listRow(out.String(), "arista_eos") != "arista_eos built-in containerlab session,commands" ||
+		listRow(out.String(), "cisco_nxos") != "cisco_nxos built-in containerlab session,commands" ||
+		listRow(out.String(), "cisco_iosxe") != "cisco_iosxe built-in containerlab session,commands" {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 	pol, inv := policyFixture(t)
@@ -96,6 +99,7 @@ func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
 	}
 	for _, want := range []string{"# cisco_iosxe: built-in, platform set 1.0.0\n", "      operator:\n        - priv-lvl=7\n",
 		"    accepted_attributes:\n      - priv-lvl\n", "      - privilege exec level 7 clear counters\n",
+		"    verified: containerlab\n",
 		"#   {match: ['**'], after: secret}\n"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in\n%s", want, out.String())
@@ -105,7 +109,10 @@ func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
 		t.Errorf("the footer does not say a URL's password is removed:\n%s", out.String())
 	}
 	for _, name := range platform.Names() {
+		// export writes a block, and a block never claims the lab's
+		// verification (spec §8): the one key it leaves out.
 		want, _ := platform.DialectFor(name)
+		want.Verified = ""
 		if got := parseExport(t, name); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s:\n got %+v\nwant %+v", name, got, want)
 		}
@@ -113,6 +120,37 @@ func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
 	if code := run([]string{"platform", "show", "junos"}, &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), `"junos" has no adapter here; the platforms are arista_eos,`) {
 		t.Fatalf("code %d %s", code, errb.String())
+	}
+}
+
+// A verified adapter exported is a block that pastes back into a policy: it
+// leaves out `verified`, which a block may not set, and pasted back it is an
+// override the list prints unverified (spec §8). The set export --all writes
+// keeps it.
+func TestPlatformExportOfAVerifiedAdapterPastesBack(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "cisco_iosxe"}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if strings.Contains(out.String(), "verified") {
+		t.Fatalf("export claims the lab's verification:\n%s", out.String())
+	}
+	if err := os.WriteFile(pol, append(out.Bytes(), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"platform", "list", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		listRow(out.String(), "cisco_iosxe") != "cisco_iosxe overridden — session,commands" {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	dir := t.TempDir()
+	if code := run([]string{"platform", "export", "--all", "--dir", dir}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if file := string(readFile(t, filepath.Join(dir, "cisco_iosxe.yaml"))); !strings.Contains(file, "    verified: containerlab\n") {
+		t.Errorf("the set's file drops verified:\n%s", file)
 	}
 }
 

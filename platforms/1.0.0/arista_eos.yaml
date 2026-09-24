@@ -3,6 +3,10 @@
 # direction that fails closed (spec §8, §15).
 platforms:
   arista_eos:
+    # Every reply this adapter renders was applied by the lab image as the
+    # adapter says, at readonly, operator and admin
+    # (tests/lab/results/L22-arista_eos.md; spec §15, L22).
+    verified: containerlab
     # Session and per-command authorization (L1, L10). Config-command
     # authorization is unmeasured, so it is not claimed.
     supports: [session, commands]
@@ -87,7 +91,10 @@ platforms:
     # A 61-character server_msg was displayed in full (L2-arista_eos.md).
     shows_server_msg: true
     # `priv-lvl` sets the level and a bare `roles=<name>` the role
-    # (L16-arista_eos.md). home-directory is spec §6's motivating case for a
-    # placeholder, unmeasured on any lab image.
+    # (L16-arista_eos.md).
     privilege_attributes: [priv-lvl, roles]
-    inert_attributes: [home-directory]
+    # home-directory: spec §6's case. home-directory, idletime and timeout:
+    # admin's session unchanged beside its reply, the same level, both
+    # ceiling commands sent to port49 and `show version` permitted
+    # (tests/lab/results/L22-arista_eos.md, "Inert candidates").
+    inert_attributes: [home-directory, idletime, timeout]

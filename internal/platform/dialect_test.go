@@ -187,17 +187,21 @@ func TestPrivilegeAttributesArePerPlatformAndFailClosed(t *testing.T) {
 		if !reflect.DeepEqual(d.PrivilegeAttributes, want) {
 			t.Errorf("%s: %v", name, d.PrivilegeAttributes)
 		}
-		// IOS-XE refused a session for home-directory
-		// (tests/lab/results/L22-cisco_iosxe.md), so nothing is inert there.
-		inert := []string{"home-directory"}
-		if name == "cisco_iosxe" {
-			inert = []string{}
+		// Inert is what tests/lab/results/L22-<platform>.md measured inert:
+		// IOS-XE refused a session for home-directory and left one unchanged
+		// for idletime and timeout; Junos and the generic adapter keep the
+		// seeded home-directory alone.
+		inert := map[string][]string{"arista_eos": {"home-directory", "idletime", "timeout"},
+			"cisco_nxos":  {"home-directory", "idletime", "timeout"},
+			"cisco_iosxe": {"idletime", "timeout"}}[name]
+		if inert == nil {
+			inert = []string{"home-directory"}
 		}
 		if !reflect.DeepEqual(d.InertAttributes, inert) {
 			t.Errorf("%s inert: %v", name, d.InertAttributes)
 		}
-		if !d.BearsPrivilege("idletime") || !d.BearsPrivilege(want[0]) ||
-			d.BearsPrivilege("home-directory") != (name == "cisco_iosxe") {
+		if d.BearsPrivilege("idletime") != !slices.Contains(inert, "idletime") || !d.BearsPrivilege(want[0]) ||
+			d.BearsPrivilege("home-directory") != (name == "cisco_iosxe") || !d.BearsPrivilege("note") {
 			t.Errorf("%s: only an attribute listed inert bears no privilege", name)
 		}
 	}

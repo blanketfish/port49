@@ -700,7 +700,9 @@ func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
 		{`{juniper_junos: [local-user-name=super-user]}`, "srx-lab-01", `["local-user-name=super-user"]`},
 		{`{cisco_nxos: ["shell:roles=network-admin"]}`, "nx-01", `["shell:roles=network-admin"]`},
 		{`{arista_eos: ["roles=network-admin"]}`, "leaf-01", `["priv-lvl=1", "roles=network-admin"]`},
-		{`{all: ["idletime*30"]}`, "nx-01", `["shell:roles*network-operator", "idletime*30"]`},
+		// idletime is inert on EOS, NX-OS and IOS-XE (tests/lab/results/L22-*.md)
+		// and listed on no Junos adapter, so it bears privilege there.
+		{`{all: ["idletime*30"]}`, "srx-lab-01", `["idletime*30"]`},
 	} {
 		after := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: "+tt.attrs+"}", 1)
 		d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
@@ -734,6 +736,21 @@ func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
 		if back.UnacknowledgedLevels() != raised-1 {
 			t.Fatalf("%s: a reply: test acknowledges the removal: %+v", tt.attrs, back.Levels)
 		}
+	}
+}
+
+// What the lab measured inert passes the gate where it is listed inert, and
+// only there: idletime and timeout on EOS, NX-OS and IOS-XE
+// (tests/lab/results/L22-*.md, "Inert candidates"), home-directory on EOS and
+// NX-OS. (home-directory keyed to IOS-XE quarantines the device:
+// TestHomeDirectoryIsRefusedOnIOSXE.)
+func TestTheGatePassesWhatTheLabMeasuredInert(t *testing.T) {
+	attrs := `{arista_eos: ["idletime*30", "timeout*480", "home-directory*/home/noc"], ` +
+		`cisco_nxos: ["idletime*30", "timeout*480", "home-directory*/home/noc"], cisco_iosxe: ["idletime*30", "timeout*480"]}`
+	after := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: "+attrs+"}", 1)
+	if d := Compare(mustParse(t, diffBase), mustParse(t, after), noon); d.UnacknowledgedLevels() != 0 ||
+		d.UnacknowledgedAdapters() != 0 {
+		t.Fatalf("levels %+v adapters %+v", d.Levels, d.Adapters)
 	}
 }
 
@@ -899,10 +916,12 @@ func TestAnAPIOnlyTestDoesNotAcknowledgeAnIdentityMove(t *testing.T) {
 // it cannot hide a change to that attribute in the same diff. The list edit is
 // gated in its own right, and acknowledged only in writing (review M8). The
 // attribute is one no shipped set lists: listing a shipped one inert, such as
-// NX-OS's cisco-av-pair, is refused at load (task 7 review C1).
+// NX-OS's cisco-av-pair, is refused at load (task 7 review C1). The block
+// also costs the adapter the lab's verification, which is reported.
 func TestAnInertListingCannotHideItsOwnEdit(t *testing.T) {
-	after := "platforms:\n  cisco_nxos:\n    inert_attributes: [home-directory, x-label]\n" + strings.Replace(diffBase,
-		"roles: [read_only, cve]}", `roles: [read_only, cve], attributes: {cisco_nxos: ["x-label=network-admin"]}}`, 1)
+	after := "platforms:\n  cisco_nxos:\n    inert_attributes: [home-directory, idletime, timeout, x-label]\n" +
+		strings.Replace(diffBase,
+			"roles: [read_only, cve]}", `roles: [read_only, cve], attributes: {cisco_nxos: ["x-label=network-admin"]}}`, 1)
 	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
 	raised := false
 	for _, l := range d.Levels {
@@ -913,9 +932,11 @@ func TestAnInertListingCannotHideItsOwnEdit(t *testing.T) {
 	if !raised {
 		t.Fatalf("x-label changed on NX-OS, which the old adapter says bears privilege: %+v", d.Levels)
 	}
-	if len(d.Adapters) != 1 || d.Adapters[0] != (AdapterChange{Platform: "cisco_nxos", Field: "inert_attributes",
-		Old: `["home-directory"]`, New: `["home-directory","x-label"]`, Sha256: digest(`["home-directory","x-label"]`),
-		Gated: true}) || d.UnacknowledgedAdapters() != 1 {
+	listed := `["home-directory","idletime","timeout","x-label"]`
+	if len(d.Adapters) != 2 || d.Adapters[0] != (AdapterChange{Platform: "cisco_nxos", Field: "inert_attributes",
+		Old: `["home-directory","idletime","timeout"]`, New: listed, Sha256: digest(listed), Gated: true}) ||
+		d.Adapters[1] != (AdapterChange{Platform: "cisco_nxos", Field: "verified", Old: `"containerlab"`, New: "null",
+			Sha256: digest("null")}) || d.UnacknowledgedAdapters() != 1 {
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
 	acked := after + "acknowledge:\n  - {platform: cisco_nxos, field: inert_attributes, sha256: " + d.Adapters[0].Sha256 +
@@ -952,17 +973,23 @@ func TestTheGateReadsAShippedPrivilegeNameAsBearing(t *testing.T) {
 // An edit to any key of an adapter is gated, on every platform either version
 // has an adapter for, a device or not (spec §8, §12). A block for a platform
 // no device has yet is gated too: the inventory is not diffed, so the day a
-// device of it arrives is not a review.
+// device of it arrives is not a review. A block on a verified adapter also
+// clears verified, which is reported and not gated.
 func TestAnAdapterEditIsGated(t *testing.T) {
 	after := "platforms:\n  cisco_iosxe:\n    privilege: {operator: [\"priv-lvl=15\"]}\n  cisco_nxos:\n" +
 		"    shows_server_msg: true\n  f5_bigip:\n    supports: [session]\n    privilege: {admin: [\"priv-lvl=15\"]}\n" +
 		diffBase
 	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
-	if len(d.Adapters) != 4 || d.UnacknowledgedAdapters() != 4 {
+	if len(d.Adapters) != 6 || d.UnacknowledgedAdapters() != 4 {
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
+	for _, i := range []int{1, 3} {
+		if v := d.Adapters[i]; v.Field != "verified" || v.Gated || v.Old != `"containerlab"` || v.New != "null" {
+			t.Fatalf("adapters %+v", d.Adapters)
+		}
+	}
 	// f5_bigip's supports goes from no claim to [session] (adapterSpec).
-	xe, nx, f5s, f5 := d.Adapters[0], d.Adapters[1], d.Adapters[2], d.Adapters[3]
+	xe, nx, f5s, f5 := d.Adapters[0], d.Adapters[2], d.Adapters[4], d.Adapters[5]
 	if f5s.Platform != "f5_bigip" || f5s.Field != "supports" || !f5s.Gated || f5s.Old != "null" {
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
@@ -980,8 +1007,8 @@ func TestAnAdapterEditIsGated(t *testing.T) {
 func TestARedactionEditIsGated(t *testing.T) {
 	after := "platforms:\n  arista_eos:\n    redact: [{match: ['**'], after: interface}]\n" + diffBase
 	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
-	if len(d.Adapters) != 1 || d.Adapters[0].Field != "redact" || !d.Adapters[0].Gated ||
-		d.UnacknowledgedAdapters() != 1 {
+	if len(d.Adapters) != 2 || d.Adapters[0].Field != "redact" || !d.Adapters[0].Gated ||
+		d.Adapters[1].Field != "verified" || d.Adapters[1].Gated || d.UnacknowledgedAdapters() != 1 {
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
 }
@@ -1058,12 +1085,21 @@ func TestTheHandOffBlocksFailTheGate(t *testing.T) {
 			before := mustParse(t, tc.before+hbase)
 			d := Compare(before, mustParse(t, tc.after+hbase), noon)
 			// A block on a platform the set does not ship also changes its
-			// supports, from no claim to a claim (adapterSpec): every change
-			// is gated, and the named key is one of them.
+			// supports, from no claim to a claim (adapterSpec), and one on a
+			// verified adapter clears verified, which is reported: every
+			// other change is gated, and the named key is one of them.
 			target := slices.IndexFunc(d.Adapters, func(a AdapterChange) bool {
 				return a.Platform == tc.platform && a.Field == tc.field
 			})
-			if target < 0 || !d.Adapters[target].Gated || d.UnacknowledgedAdapters() != len(d.Adapters) {
+			gated := 0
+			for _, a := range d.Adapters {
+				if a.Gated {
+					gated++
+				} else if a.Field != "verified" {
+					t.Fatalf("%s is reported: %+v", a.Field, d.Adapters)
+				}
+			}
+			if target < 0 || !d.Adapters[target].Gated || d.UnacknowledgedAdapters() != gated {
 				t.Fatalf("adapters %+v", d.Adapters)
 			}
 			// acks acknowledges every change, the target by entry instead.
@@ -1072,6 +1108,9 @@ func TestTheHandOffBlocksFailTheGate(t *testing.T) {
 				for i, a := range d.Adapters {
 					if i == target {
 						body += entry
+						continue
+					}
+					if !a.Gated {
 						continue
 					}
 					body += "  - {platform: " + a.Platform + ", field: " + a.Field + ", sha256: " + a.Sha256 +
@@ -1121,7 +1160,7 @@ func TestALeftoverAdapterAcknowledgmentCoversNoLaterEdit(t *testing.T) {
 			"\"aaa authorization commands all default group port49 " + commands + "\", \"logging host 192.0.2.1\"]\n"
 	}
 	d := Compare(mustParse(t, diffBase), mustParse(t, block("local")+diffBase), noon)
-	if len(d.Adapters) != 1 || d.UnacknowledgedAdapters() != 1 {
+	if len(d.Adapters) != 2 || d.Adapters[0].Field != "device_config" || d.UnacknowledgedAdapters() != 1 {
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
 	entry := "acknowledge:\n  - {platform: arista_eos, field: device_config, sha256: " + d.Adapters[0].Sha256 +

@@ -563,19 +563,20 @@ grants: [{subject: s, scope: all_devices, roles: [adm], max_privilege: operator}
 
 // IOS-XE refuses the whole session for an attribute it does not take, under
 // either flag, and a run of refusals stops it answering SSH, break-glass
-// included (tests/lab/results/L18-cisco_iosxe.md). A composition whose reply
+// included (tests/lab/results/L18-cisco_iosxe.md, variant 5's
+// p49-nonsense*1). A composition whose reply
 // would carry one quarantines the device, naming the attribute and where it
 // came from; one keyed to other platforms leaves IOS-XE alone.
 func TestAnAttributeIOSXEDoesNotTakeQuarantinesIt(t *testing.T) {
 	body := `
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {KEY: ["idletime*30"]}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {KEY: ["p49-nonsense*1"]}}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	p := mustParse(t, strings.Replace(body, "KEY", "all", 1))
 	q := p.Quarantines(noon)
 	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
-		"its session reply sends idletime*30 (role ro), and cisco_iosxe takes no attribute but priv-lvl") {
+		"its session reply sends p49-nonsense*1 (role ro), and cisco_iosxe takes no attribute but priv-lvl, idletime, timeout") {
 		t.Fatalf("quarantines: %+v", q)
 	}
 	for _, key := range []string{"arista_eos", "cisco_nxos"} {
@@ -583,10 +584,14 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 			t.Errorf("%s: %+v", key, q)
 		}
 	}
-	// priv-lvl is what it takes, from the level or from a role.
-	ok := strings.Replace(strings.Replace(body, "KEY", "cisco_iosxe", 1), "idletime*30", "priv-lvl=1", 1)
-	if q := mustParse(t, ok).Quarantines(noon); len(q) != 0 {
-		t.Fatalf("%+v", q)
+	// priv-lvl is what it takes, from the level or from a role, and idletime
+	// and timeout, which it left a session unchanged for
+	// (tests/lab/results/L22-cisco_iosxe.md, "Inert candidates").
+	for _, attr := range []string{"priv-lvl=1", "idletime*30", "timeout*480"} {
+		ok := strings.Replace(strings.Replace(body, "KEY", "cisco_iosxe", 1), "p49-nonsense*1", attr, 1)
+		if q := mustParse(t, ok).Quarantines(noon); len(q) != 0 {
+			t.Fatalf("%s: %+v", attr, q)
+		}
 	}
 }
 
@@ -610,7 +615,7 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	}
 	q := p.Quarantines(noon)
 	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
-		"its session reply sends home-directory*/home/port49 (role ro), and cisco_iosxe takes no attribute but priv-lvl") {
+		"its session reply sends home-directory*/home/port49 (role ro), and cisco_iosxe takes no attribute but priv-lvl, idletime, timeout") {
 		t.Fatalf("quarantines: %+v", q)
 	}
 	for _, key := range []string{"cisco_iosxe", "all"} {
@@ -667,7 +672,7 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 func TestTheBlobCarriesWhatItsPlatformTakes(t *testing.T) {
 	p := mustParse(t, good)
 	r, err := p.ResolveSubject("netops_admins", deviceNamed(t, "xe-01"), noon)
-	if err != nil || !reflect.DeepEqual(r.Blob.AcceptedAttributes, []string{"priv-lvl"}) {
+	if err != nil || !reflect.DeepEqual(r.Blob.AcceptedAttributes, []string{"idletime", "priv-lvl", "timeout"}) {
 		t.Fatalf("IOS-XE: %+v %v", r.Blob.AcceptedAttributes, err)
 	}
 	for _, name := range []string{"nx-01", "srx-fw-04"} {
@@ -683,10 +688,10 @@ func TestAGrantsAttributeIOSXEDoesNotTakeQuarantinesIt(t *testing.T) {
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: ro, privilege: readonly, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [ro], attributes: {cisco_iosxe: ["idletime*30"]}}]`)
+grants: [{subject: s, scope: all_devices, roles: [ro], attributes: {cisco_iosxe: ["p49-nonsense*1"]}}]`)
 	q := p.Quarantines(noon)
 	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
-		"sends idletime*30 (grant all_devices [ro])") {
+		"sends p49-nonsense*1 (grant all_devices [ro])") {
 		t.Fatalf("quarantines: %+v", q)
 	}
 }

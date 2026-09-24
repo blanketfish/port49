@@ -26,12 +26,14 @@ var shipped = map[string]Dialect{
 		Levels: map[string][]string{"readonly": {"priv-lvl=1", "roles=network-operator"},
 			"operator": {"priv-lvl=15", "roles=network-operator"}, "admin": {"priv-lvl=15", "roles=network-admin"}},
 		PrivilegeAttributes: []string{"priv-lvl", "roles"},
-		InertAttributes:     []string{"home-directory"},
-		EnableUsername:      EnablePrincipal,
+		// L22-arista_eos.md, "Inert candidates".
+		InertAttributes: []string{"home-directory", "idletime", "timeout"},
+		EnableUsername:  EnablePrincipal,
 		// L16-arista_eos.md, command authorization LOCAL.
 		RoleOrder: map[string][]string{"roles": {"network-operator", "network-admin"}},
 		DeviceConfig: []string{"aaa authorization exec default group port49 local",
 			"aaa authorization commands all default group port49 local"},
+		Verified: "containerlab", // tests/lab/results/L22-arista_eos.md
 		// ceiling-arista_eos.md; L16-arista_eos.md, command authorization LOCAL.
 		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **",
 			"show users detail **"}},
@@ -57,13 +59,15 @@ var shipped = map[string]Dialect{
 			"operator": {"shell:roles*network-operator"}, "admin": {"shell:roles*network-admin"}},
 		CeilingLevels:       map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
 		PrivilegeAttributes: []string{"priv-lvl", "shell:roles", "cisco-av-pair"},
-		InertAttributes:     []string{"home-directory"},
-		EnableUsername:      EnablePrincipal,
+		// L22-cisco_nxos.md, "Inert candidates".
+		InertAttributes: []string{"home-directory", "idletime", "timeout"},
+		EnableUsername:  EnablePrincipal,
 		// L16-cisco_nxos.md, command authorization LOCAL.
 		RoleOrder: map[string][]string{"shell:roles": {"network-operator", "network-admin"}},
 		DeviceConfig: []string{"aaa authentication login default group port49 local",
 			"aaa authorization commands default group port49 local",
 			"aaa authorization config-commands default group port49 local"},
+		Verified:      "containerlab", // tests/lab/results/L22-cisco_nxos.md
 		Fallback:      map[string]string{"admin": "network-admin: every command, configuration included"},
 		LocalAccounts: []string{`^username\s+(\S+)`},
 		ConfigChecks: []ConfigCheck{
@@ -78,9 +82,11 @@ var shipped = map[string]Dialect{
 		// L18-cisco_iosxe.md, ceiling-cisco_iosxe.md; decision 25.
 		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=7"}, "admin": {"priv-lvl=15"}},
 		PrivilegeAttributes: []string{"priv-lvl"},
-		InertAttributes:     []string{},
-		EnableUsername:      EnablePrincipal,
-		AcceptedAttributes:  []string{"priv-lvl"},
+		// L22-cisco_iosxe.md, "Inert candidates": home-directory refused the
+		// session, idletime and timeout left admin's unchanged.
+		InertAttributes:    []string{"idletime", "timeout"},
+		EnableUsername:     EnablePrincipal,
+		AcceptedAttributes: []string{"priv-lvl", "idletime", "timeout"},
 		DeviceConfig: []string{"aaa authorization exec default group port49 local",
 			"aaa authorization commands 1 default group port49 local",
 			"aaa authorization commands 7 default group port49 local",
@@ -89,6 +95,7 @@ var shipped = map[string]Dialect{
 			"aaa accounting commands 1 default start-stop group port49",
 			"aaa accounting commands 7 default start-stop group port49",
 			"aaa accounting commands 15 default start-stop group port49"},
+		Verified: "containerlab", // tests/lab/results/L22-cisco_iosxe.md
 		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **"},
 			"operator": {"clear ip bgp **", "configure terminal **"}},
 		LocalAccounts: []string{`^username\s+(\S+)`},

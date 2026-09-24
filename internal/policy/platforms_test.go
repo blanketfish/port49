@@ -108,6 +108,45 @@ platforms:
 	}
 }
 
+// The lab verified the set's adapter, not what a block makes of it: an
+// override, a variant and a replace each lose `verified`, whatever key they
+// change, and an adapter no block touches keeps it (spec §8, "Knowing what is
+// verified").
+func TestABlockNeverInheritsVerified(t *testing.T) {
+	for _, name := range []string{"arista_eos", "cisco_nxos", "cisco_iosxe"} {
+		if d, _ := platform.DialectFor(name); d.Verified != "containerlab" {
+			t.Fatalf("%s: the set's adapter is verified %q, want containerlab (L22-%s.md)", name, d.Verified, name)
+		}
+	}
+	body := `
+platforms:
+  arista_eos:
+    inert_attributes: [home-directory]
+  whitebox_nos:
+    based_on: cisco_nxos
+  cisco_iosxe:
+    replace: true
+    accepted_attributes: [priv-lvl]
+    splits_interface_names: true
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=1"]
+      admin: ["priv-lvl=15"]
+` + scopeOK + roleOK + subjOK + grantOK
+	p, err := Parse([]byte(body), withDevice("wb-01", "whitebox_nos"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"arista_eos", "whitebox_nos", "cisco_iosxe"} {
+		if v := p.Dialect(name).Verified; v != "" {
+			t.Errorf("%s: a block's adapter is verified %q", name, v)
+		}
+	}
+	if v := p.Dialect("cisco_nxos").Verified; v != "containerlab" {
+		t.Errorf("cisco_nxos: no block touches it, and it is verified %q", v)
+	}
+}
+
 // Every refusal names the block.
 func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 	rest := scopeOK + roleOK + subjOK + grantOK
@@ -265,6 +304,7 @@ func TestAPipeTokenThatSplitsADenyIsRefused(t *testing.T) {
 func TestAPlatformBlockMayTightenTheSet(t *testing.T) {
 	body := "platforms:\n  cisco_iosxe:\n    accepted_attributes: [priv-lvl]\n    strip_cr: true\n" +
 		"  arista_eos:\n    supports: [session]\n    privilege_attributes: [priv-lvl, roles, idletime]\n" +
+		"    inert_attributes: [home-directory, timeout]\n" +
 		"  juniper_junos:\n    expands_abbreviations: false\n" +
 		"  x:\n    inert_attributes: [home-directory, idletime]\n" + scopeOK + roleOK + subjOK + grantOK
 	p := mustParse(t, body)
