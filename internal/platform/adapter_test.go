@@ -465,6 +465,11 @@ func TestSpecOfRoundTrips(t *testing.T) {
 			t.Errorf("%s:\n got %+v\nwant %+v", name, got, d)
 		}
 	}
+	// A Dialect field with no Spec key would be one no block sets and the
+	// diff never compares (task 9 review M1).
+	if n, m := reflect.TypeOf(Dialect{}).NumField(), reflect.TypeOf(Spec{}).NumField(); n != m {
+		t.Fatalf("Dialect has %d fields and Spec %d keys", n, m)
+	}
 	keys := SpecKeys()
 	if len(keys) != reflect.TypeOf(Spec{}).NumField() || keys[0] != "supports" || !slices.Contains(keys, "enable_username") {
 		t.Fatalf("keys %v", keys)
