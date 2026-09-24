@@ -332,3 +332,30 @@ func TestCheckConfigPointsAMissingLineAtWhereItIsWritten(t *testing.T) {
 		}
 	}
 }
+
+// A partial capture, `show running-config | section aaa`, lacks every line
+// outside the section, so a line the adapter requires may read as MISSING
+// when the device carries it. A configuration with no hostname line is not
+// a whole running-config, and the check says so beside the MISSING lines
+// (task 17 review, parked).
+func TestCheckConfigWarnsOnAPartialCapture(t *testing.T) {
+	pol, inv := policyFixture(t)
+	cfg := filepath.Join(t.TempDir(), "leaf-01.cfg")
+	run1 := func(body string) string {
+		t.Helper()
+		if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "leaf-01", cfg}, &out, &errb)
+		return out.String()
+	}
+	const warning = "note: the configuration has no hostname line, so it may be a partial capture"
+	if out := run1("aaa authorization exec default group port49 local\n"); !strings.Contains(out, "MISSING: ") ||
+		!strings.Contains(out, warning) {
+		t.Errorf("partial:\n%s", out)
+	}
+	if out := run1("hostname leaf-01\naaa authorization exec default group port49 local\n"); strings.Contains(out, warning) {
+		t.Errorf("whole:\n%s", out)
+	}
+}

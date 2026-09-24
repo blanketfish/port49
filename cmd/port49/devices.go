@@ -131,6 +131,13 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 			"renderings depend on it: without it a level is not what the adapter says it is (spec §6; %s)\n",
 			fs.Arg(0), redact(line), d.Platform, whereWritten(files, p.PlatformSet(), d.Platform, line))
 	}
+	// A partial capture, `| section aaa`, reads every line outside it as
+	// missing (task 17 review, parked). A whole running-config names its
+	// host; one that does not is said to be possibly partial.
+	if len(missing) > 0 && !hasHostname(config) {
+		fmt.Fprintf(stdout, "note: the configuration has no hostname line, so it may be a partial capture (| section "+
+			"...): a MISSING line may be in the part left out; check-config reads the whole show running-config\n")
+	}
 	// Half an adapter checks half: what it could not look for is said, so
 	// the summary line is not read as covering it.
 	if len(dialect.LocalAccounts) == 0 {
@@ -171,4 +178,18 @@ func whereWritten(files policyFiles, version, platformName, line string) string 
 	}
 	return fmt.Sprintf("the policy's platforms: block's line: port49 platform show --policy %s --inventory %s %s",
 		files.policy, files.inventory, platformName)
+}
+
+// hasHostname reports whether config has a top-level hostname line, as a
+// whole running-config on every platform with an adapter prints one set in
+// the lab: `hostname leaf1`, or Junos's `host-name`.
+func hasHostname(config []byte) bool {
+	for _, line := range strings.Split(string(config), "\n") {
+		f := strings.Fields(line)
+		if len(f) > 0 && (f[0] == "hostname" || f[0] == "host-name" || len(f) > 3 && f[0] == "set" &&
+			f[1] == "system" && f[2] == "host-name") {
+			return true
+		}
+	}
+	return false
 }
