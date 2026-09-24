@@ -41,7 +41,7 @@ const usage = `usage:
   port49 grants remove --policy FILE --inventory FILE --subject NAME [--write]
   port49 platform list [--set VERSION | --policy FILE --inventory FILE]
   port49 platform show [--set VERSION | --policy FILE --inventory FILE] PLATFORM
-  port49 platform export [--set VERSION | --policy FILE --inventory FILE] (PLATFORM | --all --dir DIR)
+  port49 platform export [--set VERSION | --policy FILE --inventory FILE] (PLATFORM | --all --dir EMPTY_DIR)
   port49 platform upgrade --policy FILE --inventory FILE --to VERSION [--write]
 `
 

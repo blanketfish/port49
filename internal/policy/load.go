@@ -501,19 +501,35 @@ var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // PlatformSet is the platform set the policy renders with.
 func (p *Policy) PlatformSet() string { return p.set }
 
-// PlatformNames is every platform the policy has an adapter for, sorted: its
-// set's and its `platforms:` blocks'.
-func (p *Policy) PlatformNames() []string { return sortedKeys(p.adapters) }
+// PlatformNames is every platform the policy renders, sorted: its set's, its
+// `platforms:` blocks', and each inventory platform neither adapts, which the
+// daemon renders with the set's generic adapter (dialect).
+func (p *Policy) PlatformNames() []string {
+	names := map[string]bool{}
+	for name := range p.adapters {
+		names[name] = true
+	}
+	for _, d := range p.env.Devices {
+		if d.Platform != "" {
+			names[d.Platform] = true
+		}
+	}
+	return sortedKeys(names)
+}
 
 // PlatformSource says where a platform's adapter comes from, as `port49
 // platform list` prints it: `built-in`, `overridden` (a block over a built-in,
-// or one that replaced it), `variant` (based_on), or `local` (a platform the
-// set does not ship).
+// or one that replaced it), `variant` (based_on), `local` (a platform the set
+// does not ship), or `generic` (an inventory platform nothing adapts, rendered
+// with the set's generic adapter).
 func (p *Policy) PlatformSource(name string) string {
 	b, written := p.overrides[name]
 	builtin, _ := p.builtinSet(p.set)
 	_, shipped := builtin[name]
+	_, adapted := p.adapters[name]
 	switch {
+	case !adapted:
+		return "generic"
 	case !written:
 		return "built-in"
 	case b.BasedOn != "":

@@ -50,13 +50,23 @@ type adapters struct {
 
 func (a *adapters) register(fs *flag.FlagSet) {
 	a.files.register(fs)
-	fs.StringVar(&a.set, "set", platform.DefaultSet, "the built-in platform set, when no --policy is given")
+	fs.StringVar(&a.set, "set", "", "the built-in platform set, when no --policy is given (default "+
+		platform.DefaultSet+")")
+}
+
+// conflicting reports --set given with --policy or --inventory: the policy
+// pins its own set, and the usage line offers one or the other.
+func (a *adapters) conflicting() bool {
+	return a.set != "" && (a.files.policy != "" || a.files.inventory != "")
 }
 
 // load returns the policy, nil without --policy, and a lookup for the
 // adapters in force.
 func (a *adapters) load() (*policy.Policy, map[string]platform.Dialect, error) {
 	if a.files.policy == "" && a.files.inventory == "" {
+		if a.set == "" {
+			a.set = platform.DefaultSet
+		}
 		set, ok := platform.Set(a.set)
 		if !ok {
 			return nil, nil, fmt.Errorf("--set %s is not a set this binary ships; it ships %s", a.set,
@@ -89,7 +99,7 @@ func platformList(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 0 {
+	if fs.NArg() != 0 || a.conflicting() {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -135,7 +145,8 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		return 2
 	}
 	switch {
-	case *all && (!export || *dir == "" || fs.NArg() != 0), !*all && (*dir != "" || fs.NArg() != 1):
+	case *all && (!export || *dir == "" || fs.NArg() != 0), !*all && (*dir != "" || fs.NArg() != 1),
+		a.conflicting():
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -145,6 +156,14 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		return 1
 	}
 	if *all {
+		// A file already there would be read back as part of the set.
+		if entries, err := os.ReadDir(*dir); err != nil || len(entries) != 0 {
+			if err == nil {
+				err = fmt.Errorf("%s is not empty; export --all writes a whole set into an empty directory", *dir)
+			}
+			fmt.Fprintf(stderr, "%s: %v\n", name, err)
+			return 1
+		}
 		for _, platformName := range sortedNames(set) {
 			body, err := adapterFile(platformName, set[platformName])
 			if err == nil {
@@ -182,6 +201,7 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		for _, r := range platform.Redactions(platformName) {
 			fmt.Fprintf(stdout, "#   %s\n", redactionLine(r))
 		}
+		fmt.Fprintln(stdout, "# and a URL's password (scheme://user:password@host), in any word, whatever the patterns say")
 	}
 	return 0
 }

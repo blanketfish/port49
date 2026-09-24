@@ -36,15 +36,49 @@ func TestPlatformListSaysWhereEachAdapterComesFrom(t *testing.T) {
 	if err := os.WriteFile(pol, append([]byte(blocks), raw...), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A device on a platform nothing adapts is rendered with the pinned set's
+	// generic adapter, and the tools say so rather than that it has none.
+	fortinet := "devices:\n  - {name: fw-01, platform: fortinet_fortios, addresses: [10.0.0.2]}\n"
+	if err := os.WriteFile(inv, []byte(strings.Replace(string(readFile(t, inv)), "devices:\n", fortinet, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	out.Reset()
 	if code := run([]string{"platform", "list", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 	for name, want := range map[string]string{"arista_eos": "overridden — session,commands",
-		"meinberg_lantime": "local — session", "whitebox_nos": "variant — session,commands"} {
+		"meinberg_lantime": "local — session", "whitebox_nos": "variant — session,commands",
+		"fortinet_fortios": "generic — session"} {
 		if got := listRow(out.String(), name); got != name+" "+want {
 			t.Errorf("%s: %q in\n%s", name, got, out.String())
 		}
+	}
+	// show prints what the daemon renders: the block merged over the set, a
+	// variant's inherited keys, and the generic adapter for the rest.
+	for name, wants := range map[string][]string{
+		"arista_eos":       {"# arista_eos: overridden, platform set 1.0.0\n", "      uplink:\n        - ^Ethernet49$\n", "      physical:\n"},
+		"whitebox_nos":     {"# whitebox_nos: variant, platform set 1.0.0\n", "      physical:\n"},
+		"fortinet_fortios": {"# fortinet_fortios: generic, platform set 1.0.0\n", "    supports:\n      - session\n"},
+	} {
+		out.Reset()
+		if code := run([]string{"platform", "show", "--policy", pol, "--inventory", inv, name}, &out, &errb); code != 0 {
+			t.Fatalf("%s: code %d %s", name, code, errb.String())
+		}
+		for _, want := range wants {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("%s: missing %q in\n%s", name, want, out.String())
+			}
+		}
+	}
+	generic, _ := platform.Generic(platform.DefaultSet)
+	if got := parseExport(t, "fortinet_fortios", "--policy", pol, "--inventory", inv); !reflect.DeepEqual(got, generic) {
+		t.Errorf("fortinet_fortios exports\n%+v\nwant the generic adapter\n%+v", got, generic)
+	}
+	if code := run([]string{"platform", "show", "--policy", pol, "--inventory", inv, "junos"}, &out, &errb); code != 1 {
+		t.Errorf("a platform neither adapted nor in the inventory: code %d", code)
+	}
+	if code := run([]string{"platform", "list", "--set", "1.0.0", "--policy", pol, "--inventory", inv}, &out, &errb); code != 2 {
+		t.Errorf("--set with --policy: code %d", code)
 	}
 	if code := run([]string{"platform", "list", "--set", "0.1.0"}, &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "it ships 1.0.0") {
@@ -67,17 +101,12 @@ func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
 			t.Errorf("missing %q in\n%s", want, out.String())
 		}
 	}
+	if !strings.Contains(out.String(), "a URL's password") {
+		t.Errorf("the footer does not say a URL's password is removed:\n%s", out.String())
+	}
 	for _, name := range platform.Names() {
-		out.Reset()
-		if code := run([]string{"platform", "export", name}, &out, &errb); code != 0 {
-			t.Fatalf("%s: code %d %s", name, code, errb.String())
-		}
-		specs, err := platform.ParseSpecs(out.Bytes())
-		if err != nil {
-			t.Fatalf("%s: %v\n%s", name, err, out.String())
-		}
 		want, _ := platform.DialectFor(name)
-		if got := specs[name].Over(platform.Dialect{}); !reflect.DeepEqual(got, want) {
+		if got := parseExport(t, name); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s:\n got %+v\nwant %+v", name, got, want)
 		}
 	}
@@ -108,12 +137,32 @@ func TestPlatformExportAllWritesASet(t *testing.T) {
 	if !reflect.DeepEqual(sets["1.0.0"], want) {
 		t.Fatalf("the exported set reads back differently:\n%+v", sets["1.0.0"])
 	}
+	// A directory already holding files would read back as a different set.
+	if code := run([]string{"platform", "export", "--all", "--dir", dir}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "is not empty") {
+		t.Errorf("a second export into %s: code %d %s", dir, code, errb.String())
+	}
 	for _, args := range [][]string{{"platform", "show", "--all", "--dir", dir}, {"platform", "export", "--all"},
 		{"platform", "export"}, {"platform", "list", "extra"}, {"platform"}, {"platform", "upgrad"}} {
 		if code := run(args, &out, &errb); code != 2 {
 			t.Errorf("%q: code %d", args, code)
 		}
 	}
+}
+
+// parseExport runs `platform export` for name and reads what it prints back
+// as an adapter file, laid over nothing.
+func parseExport(t *testing.T, name string, flags ...string) platform.Dialect {
+	t.Helper()
+	var out, errb bytes.Buffer
+	if code := run(append(append([]string{"platform", "export"}, flags...), name), &out, &errb); code != 0 {
+		t.Fatalf("%s: code %d %s", name, code, errb.String())
+	}
+	specs, err := platform.ParseSpecs(out.Bytes())
+	if err != nil {
+		t.Fatalf("%s: %v\n%s", name, err, out.String())
+	}
+	return specs[name].Over(platform.Dialect{})
 }
 
 // listRow is the `platform list` line for name, its columns joined by one
