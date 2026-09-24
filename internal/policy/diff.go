@@ -1114,8 +1114,19 @@ func (c *comparison) adapters() {
 }
 
 // adapterSpec is the platform's effective adapter in this version as the diff
-// compares it.
-func (p *Policy) adapterSpec(name string) platform.Spec { return platform.SpecOf(p.dialect(name)) }
+// compares it. Where the version has no adapter for the name, supports is
+// unset: the generic adapter's `session` is assumed, not measured, and an
+// unmeasured platform is not treated as session-only (normalizeFor). So a
+// block equal to the generic adapter still shows as an edit to supports, the
+// key that makes the platform session-only and turns off abbreviation
+// matching on its denies (task 9 review I2).
+func (p *Policy) adapterSpec(name string) platform.Spec {
+	s := platform.SpecOf(p.dialect(name))
+	if _, known := p.platforms()[name]; !known {
+		s.Supports = nil
+	}
+	return s
+}
 
 // canonical is an adapter value as JSON, the text an acknowledgment's digest
 // is taken over. Every Spec field marshals; were one not to, the change is

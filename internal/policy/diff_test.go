@@ -3,11 +3,13 @@ package policy
 import (
 	"crypto/sha256"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/platform"
 )
@@ -956,10 +958,14 @@ func TestAnAdapterEditIsGated(t *testing.T) {
 		"    shows_server_msg: true\n  f5_bigip:\n    supports: [session]\n    privilege: {admin: [\"priv-lvl=15\"]}\n" +
 		diffBase
 	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
-	if len(d.Adapters) != 3 || d.UnacknowledgedAdapters() != 3 {
+	if len(d.Adapters) != 4 || d.UnacknowledgedAdapters() != 4 {
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
-	xe, nx, f5 := d.Adapters[0], d.Adapters[1], d.Adapters[2]
+	// f5_bigip's supports goes from no claim to [session] (adapterSpec).
+	xe, nx, f5s, f5 := d.Adapters[0], d.Adapters[1], d.Adapters[2], d.Adapters[3]
+	if f5s.Platform != "f5_bigip" || f5s.Field != "supports" || !f5s.Gated || f5s.Old != "null" {
+		t.Fatalf("adapters %+v", d.Adapters)
+	}
 	if xe.Platform != "cisco_iosxe" || xe.Field != "privilege" || !xe.Gated ||
 		!strings.Contains(xe.New, `"operator":["priv-lvl=15"]`) ||
 		nx.Platform != "cisco_nxos" || nx.Field != "shows_server_msg" || !nx.Gated ||
@@ -1048,7 +1054,9 @@ func TestTheHandOffBlocksFailTheGate(t *testing.T) {
 			}
 			before := mustParse(t, tc.before+hbase)
 			d := Compare(before, mustParse(t, tc.after+hbase), noon)
-			// Every change is gated, and the named key is one of them.
+			// A block on a platform the set does not ship also changes its
+			// supports, from no claim to a claim (adapterSpec): every change
+			// is gated, and the named key is one of them.
 			target := slices.IndexFunc(d.Adapters, func(a AdapterChange) bool {
 				return a.Platform == tc.platform && a.Field == tc.field
 			})
@@ -1122,5 +1130,45 @@ func TestALeftoverAdapterAcknowledgmentCoversNoLaterEdit(t *testing.T) {
 	d = Compare(v1, mustParse(t, block("none")+diffBase+entry), noon)
 	if d.UnacknowledgedAdapters() != 1 || d.Adapters[0].Acknowledged || len(d.StaleAcknowledgments) != 1 {
 		t.Fatalf("v2: adapters %+v stale %+v", d.Adapters, d.StaleAcknowledgments)
+	}
+}
+
+// A block that says what the generic adapter already says still changes the
+// platform: an adapted platform whose supports lacks commands is session-only,
+// and abbreviation matching on its denies is off. The diff shows it as an edit
+// to supports, gated (task 9 review I2).
+func TestABlockEqualToGenericIsAnAdapterEdit(t *testing.T) {
+	acme := admission.Device{Name: "acme-01", Platform: "acme_os", Addresses: []netip.Addr{netip.MustParseAddr("10.0.9.1")}}
+	e := env()
+	e.Devices = append(e.Devices, acme)
+	base := `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: rw, privilege: readonly, permit: ["**"], deny: ["reload **", "configure **"]}
+subjects:
+  - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
+grants:
+  - {subject: noc, scope: all_devices, roles: [rw]}
+`
+	parse := func(body string) *Policy {
+		t.Helper()
+		p, err := Parse([]byte(body), e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	before, after := parse(base), parse("platforms: {acme_os: {}}\n"+base)
+	for _, cmd := range []string{"rel", "conf t"} {
+		_, was, err := before.Decide("noc", "", acme, cmd, noon)
+		_, is, err2 := after.Decide("noc", "", acme, cmd, noon)
+		if err != nil || err2 != nil || was.Permit || !is.Permit {
+			t.Fatalf("%s: the probe no longer shows the flip: %v -> %v (%v, %v)", cmd, was.Permit, is.Permit, err, err2)
+		}
+	}
+	d := Compare(before, after, noon)
+	if len(d.Adapters) != 1 || d.Adapters[0] != (AdapterChange{Platform: "acme_os", Field: "supports", Old: "null",
+		New: `["session"]`, Sha256: digest(`["session"]`), Gated: true}) || d.UnacknowledgedAdapters() != 1 {
+		t.Fatalf("adapters %+v", d.Adapters)
 	}
 }
