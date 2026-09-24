@@ -821,3 +821,28 @@ grants: [{subject: s, scope: all_devices, roles: [r], max_privilege: readonly, a
 		}
 	}
 }
+
+// On a closed platform the reply's priv-lvl must be one a level's rendering
+// sends: a ceiling_levels number stands for a level only in the token, and
+// the device was never measured taking it (task 5 review, parked).
+func TestAClosedPlatformTakesOnlyARenderedPrivLvl(t *testing.T) {
+	p, err := Parse([]byte(`
+platforms:
+  acme_os:
+    supports: [session]
+    accepted_attributes: [priv-lvl, x-role]
+    privilege_attributes: [priv-lvl, x-role]
+    role_order: {x-role: [a]}
+    privilege: {readonly: ["x-role=a"], operator: ["x-role=a"], admin: ["priv-lvl=15", "x-role=a"]}
+    ceiling_levels: {readonly: 3, operator: 5}
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {acme_os: ["priv-lvl=5"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]`), withDevice("acme-01", "acme_os"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cause, q := p.Quarantined("acme-01", noon); !q || !strings.Contains(cause, "acme_os's adapter renders priv-lvl 15 only") {
+		t.Fatalf("%v %q", q, cause)
+	}
+}

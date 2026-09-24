@@ -560,11 +560,17 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 	}
 	if dialect := p.dialect(d.Platform); dialect.AcceptedAttributes != nil {
 		// A closed platform is sent only the levels its adapter renders: what
-		// the device lets any other level run is unmeasured.
+		// the device lets any other level run is unmeasured. A ceiling_levels
+		// number is the token's, never a rendering (task 5 review, parked).
 		var rendered []uint8
 		for _, level := range sortedKeys(dialect.Levels) {
-			if n, ok := dialect.PrivLvl(level); ok && !slices.Contains(rendered, n) {
-				rendered = append(rendered, n)
+			for _, a := range dialect.Levels[level] {
+				if engine.AttributeName(a) != "priv-lvl" {
+					continue
+				}
+				if n, ok := engine.PrivLvlValue(a[len("priv-lvl")+1:]); ok && !slices.Contains(rendered, n) {
+					rendered = append(rendered, n)
+				}
 			}
 		}
 		slices.Sort(rendered)
