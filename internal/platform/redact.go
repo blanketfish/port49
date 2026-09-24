@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -190,6 +191,58 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 		out[e] = strings.Join(rebuilt, " ")
 	}
 	return out, true
+}
+
+// AllRedactions is every built-in pattern, the default list and every
+// platform's: what redacts text that belongs to no one platform, such as a
+// line quoting a policy the daemon refused.
+func AllRedactions() []Redaction {
+	var all []Redaction
+	for _, name := range sortedKeys(redactions) {
+		all = append(all, redactions[name]...)
+	}
+	return all
+}
+
+// RedactQuoted is line with every quoted value in it — "…" as %q writes one,
+// or `…` — redacted word by word as a rule is (RedactRule), and the rest
+// left as it was. A line that quotes policy text, an error or a report,
+// goes to a log like any other (spec §5.8).
+func RedactQuoted(rules []Redaction, line string) string {
+	var out strings.Builder
+	for i := 0; i < len(line); {
+		var quoted, value string
+		switch line[i] {
+		case '"':
+			q, err := strconv.QuotedPrefix(line[i:])
+			if err != nil {
+				break
+			}
+			quoted = q
+			value, _ = strconv.Unquote(q)
+		case '`':
+			if end := strings.IndexByte(line[i+1:], '`'); end >= 0 {
+				quoted = line[i : i+end+2]
+				value = quoted[1 : len(quoted)-1]
+			}
+		}
+		if quoted == "" {
+			out.WriteByte(line[i])
+			i++
+			continue
+		}
+		words, redacted := RedactRule(rules, strings.Fields(value))
+		switch {
+		case !redacted:
+			out.WriteString(quoted)
+		case quoted[0] == '"':
+			out.WriteString(strconv.Quote(strings.Join(words, " ")))
+		default:
+			out.WriteString("`" + strings.Join(words, " ") + "`")
+		}
+		i += len(quoted)
+	}
+	return out.String()
 }
 
 // RedactRecord applies rules to a record's raw pairs and its vector, which are

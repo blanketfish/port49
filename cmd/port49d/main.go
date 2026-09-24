@@ -281,7 +281,9 @@ func (q quotesCut) Unwrap() error { return q.err }
 
 func (q quotesCut) Error() string {
 	var out strings.Builder
-	s := []rune(q.err.Error())
+	// A quoted rule's secret value is redacted before anything is cut: the
+	// policy did not load, so every built-in pattern applies (spec §5.8).
+	s := []rune(platform.RedactQuoted(platform.AllRedactions(), q.err.Error()))
 	for i := 0; i < len(s); i++ {
 		out.WriteRune(s[i])
 		if s[i] != '"' && s[i] != '`' {
@@ -320,30 +322,36 @@ func (q quotesCut) Error() string {
 // the line names what to fix. Quarantine is time-scoped: one a grant's
 // expiry will bring on is said too, with when, while the device still mints.
 func sayPolicy(pol *policy.Policy, now time.Time) {
+	// Every line quotes the policy's own text, and stderr is a log: a rule's
+	// secret value is redacted in it (spec §5.8).
+	redact := pol.Redactions()
+	say := func(format string, args ...any) {
+		fmt.Fprintln(stderr, platform.RedactQuoted(redact, fmt.Sprintf(format, args...)))
+	}
 	for _, q := range pol.Quarantines(now) {
 		for _, e := range q.Entries {
 			msg := e.Message(now)
 			if e.Current(now) {
 				msg = "is " + msg
 			}
-			fmt.Fprintf(stderr, "port49d: broker: device %s (%s) %s\n", q.Device, q.Platform, msg)
+			say("port49d: broker: device %s (%s) %s", q.Device, q.Platform, msg)
 		}
 	}
 	// A deny term that matches any argument, because its platform may send
 	// what was typed and its abbreviations cannot be read, over-denies
 	// rather than refusing the device (spec §3 rule 4); say which.
 	for _, f := range pol.WidenedDenies() {
-		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
+		say("port49d: broker: %s", f.Message)
 	}
 	// A permit naming an interface joined never matches where the platform
 	// sends the name and the index apart (spec §3 rule 5); say which.
 	for _, f := range pol.JoinedNamePermits() {
-		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
+		say("port49d: broker: %s", f.Message)
 	}
 	// A rule with a value redaction hides is echoed redacted everywhere
 	// (spec §5.8); say which, in its redacted form.
 	for _, f := range pol.RuleSecretLiterals() {
-		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
+		say("port49d: broker: %s", f.Message)
 	}
 }
 

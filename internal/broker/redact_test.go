@@ -3,6 +3,9 @@ package broker
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -48,5 +51,19 @@ func TestABlobEventNeverCarriesARuleSecret(t *testing.T) {
 	_, body = put(b, engine.Rule{Verdict: engine.Deny, Rule: "snmp-server community Other **", Role: "no_public"})
 	if !strings.Contains(log.String(), string(body)) || strings.Contains(log.String(), "redacted") {
 		t.Fatalf("nothing to hide, logged verbatim: %s", log.String())
+	}
+}
+
+// A broker line that names policy content — a resolve or compile error
+// quotes the rule it failed on — is redacted before the process log gets it
+// (task 11 review C2).
+func TestABrokerLogLineNeverQuotesARuleSecret(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { log.SetOutput(w) }(log.Writer())
+	log.SetOutput(&out)
+	(&Broker{}).logf("broker: resolving %s on %q: %v", "user:a", "leaf1",
+		fmt.Errorf("rule %q: bad", "snmp-server community Hunter2 ro"))
+	if strings.Contains(out.String(), "Hunter2") || !strings.Contains(out.String(), "snmp-server community") {
+		t.Fatalf("%s", out.String())
 	}
 }

@@ -285,7 +285,7 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		// The policy's load-time checks compile every subject on every device
 		// in inventory and quarantine the ones that fail, so this is a broker
 		// defect, not a refusal.
-		log.Printf("broker: resolving %s on %q: %v", principal, name, err)
+		b.logf("broker: resolving %s on %q: %v", principal, name, err)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
 	// The daemon fills the session reply's placeholders from the context, at
@@ -311,12 +311,12 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		// Policy load checks every rule and compiles every device's blob, so
 		// this is a broker defect, not a refusal. The error names policy
 		// content and is the operator's.
-		log.Printf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %s", principal, name, detail)
+		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %s", principal, name, detail)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
 	body, hash, err := engine.Encode(res.Blob)
 	if err != nil {
-		log.Printf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
+		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
 	if err := b.putBlob(ctx, hash, body); err != nil {
@@ -440,6 +440,18 @@ func (b *Broker) blobEvent(hash string, body []byte) *decision.Blob {
 	}
 	ev.Body, ev.Redacted = out, true
 	return ev
+}
+
+// logf is log.Printf for a line that may quote policy text — a resolve or
+// compile error names the rule it failed on — with every quoted value
+// redacted by every pattern the policy in force applies: the process log is
+// a log like any other (spec §5.8).
+func (b *Broker) logf(format string, args ...any) {
+	redact := platform.AllRedactions()
+	if b.Policy != nil {
+		redact = b.Policy.Load().Redactions()
+	}
+	log.Print(platform.RedactQuoted(redact, fmt.Sprintf(format, args...)))
 }
 
 // emit writes a refusal the broker decided itself, and counts it.

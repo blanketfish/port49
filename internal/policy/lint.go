@@ -236,6 +236,18 @@ func (p *Policy) JoinedNamePermits() []Finding {
 	return out
 }
 
+// Redactions is every pattern that applies anywhere under this policy: the
+// built-in ones of every platform and every `platforms:` block's. It redacts
+// text that belongs to no one platform — a report, a line quoting a rule —
+// so it errs toward hiding (spec §5.8).
+func (p *Policy) Redactions() []platform.Redaction {
+	all := platform.AllRedactions()
+	for _, name := range sortedKeys(p.adapters) {
+		all = append(all, p.adapters[name].Redact...)
+	}
+	return all
+}
+
 // RuleSecretLiterals names every rule with a value the redaction patterns of
 // a platform in the inventory hide (spec §5.8): the rule loads — a deny on a
 // known-bad community is legitimate — but wherever it is echoed, a record's

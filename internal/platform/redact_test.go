@@ -2,6 +2,7 @@ package platform
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -353,5 +354,30 @@ func TestEachPatternIsJudgedOnBothForms(t *testing.T) {
 		strings.Contains(strings.Join(r, " ")+strings.Join(v, " "), "K1") || r[0] != "cmd=tunnel" || v[0] != "tunnel" ||
 		len(r) != len(raw) || len(v) != len(vector) {
 		t.Fatalf("raw %q vector %q", r, v)
+	}
+}
+
+// A line that quotes policy text — an error, a report — has every quoted
+// value redacted as a rule is, "…" and `…` alike, and nothing else changed
+// (task 11 review C2, I1).
+func TestAQuotedRuleIsRedactedInALine(t *testing.T) {
+	all := AllRedactions()
+	line := "role \"r\": rule \"snmp-server community Hunter2 /^rw$/\": `snmp-server community Hunter2 ro` and \"show **\""
+	got := RedactQuoted(all, line)
+	if strings.Contains(got, "Hunter2") || !strings.Contains(got, `"snmp-server community «redacted» «redacted»"`) ||
+		!strings.Contains(got, "`snmp-server community «redacted» «redacted»`") || !strings.Contains(got, `"show **"`) ||
+		!strings.HasPrefix(got, `role "r": rule `) {
+		t.Fatalf("%s", got)
+	}
+	if RedactQuoted(all, `an "unclosed quote`) != `an "unclosed quote` {
+		t.Fatal("an unclosed quote is left alone")
+	}
+	// Every platform's built-in list is in the union, not only the default.
+	for name := range redactions {
+		for _, r := range redactions[name] {
+			if !slices.ContainsFunc(all, func(a Redaction) bool { return reflect.DeepEqual(a, r) }) {
+				t.Fatalf("%s: %+v missing", name, r)
+			}
+		}
 	}
 }
