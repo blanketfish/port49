@@ -418,3 +418,21 @@ func containsField(fields []string, want string) bool {
 	}
 	return false
 }
+
+// TestVerifyAcceptsAPasswordThatIsAlreadyFill: an operator who types a wrong
+// password of all Fill bytes puts the redaction's own output on the wire.
+// Overwriting it changes nothing and it can leak nothing, so the verifier must
+// not refuse the file because the input "carried" what the output holds.
+func TestVerifyAcceptsAPasswordThatIsAlreadyFill(t *testing.T) {
+	s := newSynth()
+	papLogin(s, 50002, 0x22222222, "alice02", strings.Repeat(string(rune(Fill)), 30), false)
+	asciiLogin(s, 50001, 0x11111111, "alice01", synthToken, false)
+	opt := synthOptions()
+	out, _, err := Redact(s.buf, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(s.buf, out, opt); err != nil {
+		t.Fatal(err)
+	}
+}

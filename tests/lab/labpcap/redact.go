@@ -324,11 +324,16 @@ func Verify(raw, out []byte, opt Options) error {
 	}
 
 	// Every credential the input carried, so the output can be searched for it
-	// whether or not it is still in the field it came from.
+	// whether or not it is still in the field it came from. A value that is
+	// already all Fill is skipped: it is what redaction writes, so it cannot
+	// leak anything, and searching for it would fail every file in which an
+	// operator typed such a password (a lab run's deliberate wrong one).
 	var carried []string
 	for _, fd := range inFields {
 		if fd.Credential && fd.Len >= minCarriedLen {
-			carried = append(carried, string(fd.Bytes(inD.Packets[fd.Packet].Body)))
+			if v := fd.Bytes(inD.Packets[fd.Packet].Body); !labcreds.Redacted(v) {
+				carried = append(carried, string(v))
+			}
 		}
 	}
 

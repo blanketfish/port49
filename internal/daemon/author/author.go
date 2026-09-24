@@ -25,6 +25,14 @@ type Decision struct {
 	Reason     decision.Reason
 	ServerMsg  string
 	Attributes []string // session only, e.g. "priv-lvl=15"
+	// Error answers a refusal ERROR rather than FAIL. It is lab-only: the
+	// lab's fault switch (LabFault) is the only thing that may set it, and it
+	// is ignored on a permit. A production Authorizer MUST leave it false —
+	// a store outage is FAIL `store_unavailable` (plan 4's ruling), because an
+	// ERROR here authorizes every command on an IOS-XE `if-authenticated`
+	// list and hands the N9Kv to local RBAC (tests/lab/results/L4-error-*.md).
+	// Plan 4 removes it with author.Lab or keeps it lab-only.
+	Error bool
 }
 
 type Authorizer interface {
@@ -248,6 +256,11 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		d = h.authz.Command(ctx, c, vector, raw)
 	}
 	if !d.Permit {
+		if d.Error {
+			resp := h.deny(rec, d.Reason, d.ServerMsg)
+			resp.Status = wire.AuthorStatusError
+			return resp
+		}
 		return h.deny(rec, d.Reason, d.ServerMsg)
 	}
 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason

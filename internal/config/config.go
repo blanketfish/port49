@@ -70,6 +70,10 @@ type LabConfig struct {
 	// separately; see author.Lab.
 	CommandAttributes []string `yaml:"command_attributes"`
 	DenyPrefixes      []string `yaml:"deny_prefixes"`
+	// FaultFile is the lab's fault switch (author.LabFault): a file naming the
+	// fault in force, re-read on every request. Absent is no fault, and the
+	// shipped lab config leaves it absent; a derivation adds it.
+	FaultFile string `yaml:"fault_file"`
 
 	// SeedTokenFile is where port49d writes the pairs it mints for SeedTokens,
 	// one JSON object per line, mode 0600. It is required when SeedTokens is
