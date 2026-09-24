@@ -47,7 +47,7 @@ func TestRemoveSubjectTakesTestsNamingItsIdentities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Tests != 3 || strings.Contains(string(out), "system:serviceaccount") {
+	if r.Tests != 3 || strings.Contains(string(out), "system:serviceaccount") || !onlyDeletions(raw, string(out)) {
 		t.Fatalf("removed %+v:\n%s", r, out)
 	}
 }
@@ -56,4 +56,96 @@ func TestRemoveSubjectRefusesAnUndeclaredSubject(t *testing.T) {
 	if _, _, err := RemoveSubject(spec11Raw(t), "svc_nobody"); err == nil || !strings.Contains(err.Error(), "not declared") {
 		t.Fatalf("%v", err)
 	}
+}
+
+// The output is the pull request, so it differs from the input only by the
+// removed items' lines: every other byte, blank lines and column alignment
+// included, is the operator's (review of Task 19, I1).
+func TestRemoveSubjectCutsOnlyTheRemovedLines(t *testing.T) {
+	raw := spec11Raw(t)
+	out, _, err := RemoveSubject(raw, "svc_oxidized")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// spec11.yaml lines 98-99 (the subject block), 105 (its grant row), and
+	// 113-116 (its two tests, wrapped, one with a trailing comment).
+	var want []string
+	for i, line := range strings.SplitAfter(string(raw), "\n") {
+		if n := i + 1; (n >= 98 && n <= 99) || n == 105 || (n >= 113 && n <= 116) {
+			continue
+		}
+		want = append(want, line)
+	}
+	if string(out) != strings.Join(want, "") {
+		t.Fatalf("the output is not the input less the removed lines:\n%s", out)
+	}
+	for _, name := range []string{"netops_admins", "noc_tier1", "security_ir"} {
+		if out, _, err := RemoveSubject(raw, name); err != nil || !onlyDeletions(string(raw), string(out)) {
+			t.Fatalf("%s: %v\n%s", name, err, out)
+		}
+	}
+}
+
+// A block item removed from between blank lines takes one of them with it, so
+// the file does not grow a double gap; the dash on a line of its own and a
+// block scalar's blank line go with the item too.
+func TestRemoveSubjectCutsABlockItemWhole(t *testing.T) {
+	raw := `subjects:
+  - {name: a, identity: "user:a", username: a, token_ttl: 60s}
+
+  -
+    name: b
+    identity:
+      - "user:b"
+    note: |
+      first
+
+      second
+
+  - {name: c, identity: "user:c", username: c, token_ttl: 60s}
+grants: []
+`
+	out, _, err := RemoveSubject([]byte(raw), "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `subjects:
+  - {name: a, identity: "user:a", username: a, token_ttl: 60s}
+
+  - {name: c, identity: "user:c", username: c, token_ttl: 60s}
+grants: []
+`
+	if string(out) != want {
+		t.Fatalf("got:\n%s", out)
+	}
+}
+
+// A flow sequence cannot lose an item by deleting lines, and a second YAML
+// document would be dropped silently: both are refused, so the operator edits
+// by hand rather than receive a file that is not theirs.
+func TestRemoveSubjectRefusesWhatItCannotCutByLine(t *testing.T) {
+	for name, raw := range map[string]string{
+		"flow sequence": "subjects: [{name: a, identity: \"user:a\"}]\n",
+		"two documents": "subjects:\n  - {name: a, identity: \"user:a\"}\n---\nfoo: bar\n",
+	} {
+		if _, _, err := RemoveSubject([]byte(raw), "a"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// onlyDeletions says whether out's lines are a subsequence of in's.
+func onlyDeletions(in, out string) bool {
+	inLines := strings.SplitAfter(in, "\n")
+	i := 0
+	for _, line := range strings.SplitAfter(out, "\n") {
+		for i < len(inLines) && inLines[i] != line {
+			i++
+		}
+		if i == len(inLines) {
+			return false
+		}
+		i++
+	}
+	return true
 }

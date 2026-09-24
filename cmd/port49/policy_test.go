@@ -235,3 +235,37 @@ func TestGrantsRemoveOffboardsASubject(t *testing.T) {
 		t.Fatal("a refused removal must not touch the file")
 	}
 }
+
+// --write through a symlinked policy path replaces the file the link names,
+// not the link, so a checkout behind /etc/port49/policy.yaml is what changes.
+func TestGrantsRemoveWritesThroughASymlink(t *testing.T) {
+	pol, inv := policyFixture(t)
+	link := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.Symlink(pol, link); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"grants", "remove", "--policy", link, "--inventory", inv, "--subject", "ops", "--write"}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced: %v %v", info, err)
+	}
+	if after, _ := os.ReadFile(pol); strings.Contains(string(after), "ops@example.com") {
+		t.Fatalf("the target was not changed:\n%s", after)
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, os.ErrClosed }
+
+// A pull request that was never fully written is not a success.
+func TestGrantsRemoveFailsWhenStdoutFails(t *testing.T) {
+	pol, inv := policyFixture(t)
+	var errb bytes.Buffer
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops"}, failingWriter{}, &errb); code != 1 ||
+		strings.Contains(errb.String(), "removed") {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+}

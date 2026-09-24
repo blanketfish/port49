@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 
 	"gopkg.in/yaml.v3"
 )
@@ -19,14 +20,20 @@ type Removal struct {
 // file's tests naming the subject go too; left, they would name a subject
 // that is no longer declared and the file would not load. So do tests naming
 // one of its identities as `principal`, which would otherwise load and quietly
-// turn into no_grants_matched denies. It edits the YAML
-// tree rather than re-rendering the policy, so comments and the order of
-// everything else survive; indentation is re-rendered at two spaces. The
-// caller writes the result where a pull request will review it.
+// turn into no_grants_matched denies. It reads the YAML tree only to find the
+// removed items and cuts their lines from raw, so every other byte, comments,
+// blank lines and alignment included, is the operator's and the pull request
+// shows only the removal. A flow sequence or a second document cannot be cut
+// that way and is refused. The caller writes the result where a pull request
+// will review it.
 func RemoveSubject(raw []byte, subject string) ([]byte, Removal, error) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	var doc, next yaml.Node
+	if err := dec.Decode(&doc); err != nil {
 		return nil, Removal{}, err
+	}
+	if err := dec.Decode(&next); err != io.EOF {
+		return nil, Removal{}, errors.New("the policy file holds more than one YAML document")
 	}
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return nil, Removal{}, errors.New("the policy file is not a YAML mapping")
@@ -45,52 +52,110 @@ func RemoveSubject(raw []byte, subject string) ([]byte, Removal, error) {
 			}
 		}
 	}
+	lines := bytes.SplitAfter(raw, []byte("\n"))
+	cut := make([]bool, len(lines))
 	var r Removal
 	declared := false
 	for i := 0; i+1 < len(top.Content); i += 2 {
-		list := top.Content[i+1]
-		if list.Kind != yaml.SequenceNode {
+		key, list := top.Content[i].Value, top.Content[i+1]
+		var drop func(*yaml.Node) bool
+		switch key {
+		case "grants":
+			drop = func(m *yaml.Node) bool { return field(m, "subject") == subject }
+		case "tests":
+			drop = func(m *yaml.Node) bool { return field(m, "subject") == subject || ids[field(m, "principal")] }
+		case "subjects":
+			drop = func(m *yaml.Node) bool { return field(m, "name") == subject }
+		}
+		if drop == nil || list.Kind != yaml.SequenceNode {
 			continue
 		}
-		switch top.Content[i].Value {
-		case "grants":
-			r.Grants += filter(list, func(m *yaml.Node) bool { return field(m, "subject") == subject })
-		case "tests":
-			r.Tests += filter(list, func(m *yaml.Node) bool {
-				return field(m, "subject") == subject || ids[field(m, "principal")]
-			})
-		case "subjects":
-			declared = filter(list, func(m *yaml.Node) bool { return field(m, "name") == subject }) > 0
+		// The section ends before the next top-level key, or at the end of
+		// the file.
+		end := len(lines) + 1
+		if i+2 < len(top.Content) {
+			end = top.Content[i+2].Line
+		}
+		for j, item := range list.Content {
+			if item.Kind != yaml.MappingNode || !drop(item) {
+				continue
+			}
+			if list.Style&yaml.FlowStyle != 0 {
+				return nil, Removal{}, fmt.Errorf("%s is a flow sequence: remove %s from it by hand", key, subject)
+			}
+			bound := end
+			if j+1 < len(list.Content) {
+				bound = itemStart(lines, list.Content[j+1])
+			}
+			cutItem(lines, cut, item, bound)
+			switch key {
+			case "grants":
+				r.Grants++
+			case "tests":
+				r.Tests++
+			case "subjects":
+				declared = true
+			}
 		}
 	}
 	if !declared {
 		return nil, Removal{}, fmt.Errorf("subject %q is not declared", subject)
 	}
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(&doc); err != nil {
-		return nil, Removal{}, err
+	var out bytes.Buffer
+	for n, line := range lines {
+		if !cut[n] {
+			out.Write(line)
+		}
 	}
-	if err := enc.Close(); err != nil {
-		return nil, Removal{}, err
-	}
-	return buf.Bytes(), r, nil
+	return out.Bytes(), r, nil
 }
 
-// filter drops every mapping in list that drop selects, and says how many.
-func filter(list *yaml.Node, drop func(*yaml.Node) bool) int {
-	kept := list.Content[:0]
-	removed := 0
-	for _, item := range list.Content {
-		if item.Kind == yaml.MappingNode && drop(item) {
-			removed++
-			continue
-		}
-		kept = append(kept, item)
+// itemStart is the 1-based line of a block sequence item's dash: the item's
+// own line, or the line before when the dash stands alone.
+func itemStart(lines [][]byte, item *yaml.Node) int {
+	n := item.Line
+	if n > 1 && !bytes.HasPrefix(bytes.TrimSpace(lines[n-1]), []byte("-")) &&
+		string(bytes.TrimSpace(lines[n-2])) == "-" {
+		n--
 	}
-	list.Content = kept
-	return removed
+	return n
+}
+
+// cutItem marks a block sequence item's lines, from its dash to its last line
+// of content before bound (the next item's dash, or the next top-level key):
+// continuation lines, a block scalar's blank lines and a trailing comment go
+// with it, the comment lines and blank lines after it stay. An item cut from
+// between two blank lines takes the second, so no double gap is left.
+func cutItem(lines [][]byte, cut []bool, item *yaml.Node, bound int) {
+	first := itemStart(lines, item)
+	dash := indent(lines[first-1])
+	last := lastLine(item)
+	for n := last + 1; n < bound && n <= len(lines); n++ {
+		text := bytes.TrimSpace(lines[n-1])
+		if len(text) > 0 && text[0] != '#' && indent(lines[n-1]) > dash {
+			last = n
+		}
+	}
+	for n := first; n <= last; n++ {
+		cut[n-1] = true
+	}
+	blank := func(n int) bool { return n >= 1 && n <= len(lines) && len(bytes.TrimSpace(lines[n-1])) == 0 }
+	if blank(first-1) && !cut[first-2] && blank(last+1) && last+1 < len(lines) {
+		cut[last] = true
+	}
+}
+
+func indent(line []byte) int { return len(line) - len(bytes.TrimLeft(line, " ")) }
+
+// lastLine is the last line any node under n starts on.
+func lastLine(n *yaml.Node) int {
+	last := n.Line
+	for _, c := range n.Content {
+		if l := lastLine(c); l > last {
+			last = l
+		}
+	}
+	return last
 }
 
 // identities is a subject mapping's identity list, written as one string or

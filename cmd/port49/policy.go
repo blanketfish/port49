@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -328,8 +329,9 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "port49 grants remove:", err)
 			return 1
 		}
-	} else {
-		stdout.Write(out)
+	} else if _, err := stdout.Write(out); err != nil {
+		fmt.Fprintln(stderr, "port49 grants remove:", err)
+		return 1
 	}
 	fmt.Fprintf(stderr, "port49 grants remove: %s: %d grant row(s), the subject block, and %d test(s) removed\n",
 		*subject, removed.Grants, removed.Tests)
@@ -337,27 +339,56 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 }
 
 // replaceFile writes data beside path and renames it over path, so a policy
-// file is never left half-written, and keeps path's mode.
+// file is never left half-written: the data is synced before the rename and
+// the directory after it, so a power cut leaves the old file or the new one.
+// A symlinked path is followed, so the file it names is what changes, and the
+// new file keeps the old one's mode and, where the caller may set them, its
+// owner and group, so a daemon that reads it on reload still can.
 func replaceFile(path string, data []byte) error {
+	path, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+	if err := writeSynced(tmp, data, info); err != nil {
 		tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+
+// writeSynced writes data to tmp with old's mode and ownership and syncs it.
+func writeSynced(tmp *os.File, data []byte, old os.FileInfo) error {
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Chmod(old.Mode().Perm()); err != nil {
+		return err
+	}
+	if st, ok := old.Sys().(*syscall.Stat_t); ok && (int(st.Uid) != os.Geteuid() || int(st.Gid) != os.Getegid()) {
+		if err := tmp.Chown(int(st.Uid), int(st.Gid)); err != nil {
+			return fmt.Errorf("keeping %s's owner: %w", old.Name(), err)
+		}
+	}
+	return tmp.Sync()
 }
