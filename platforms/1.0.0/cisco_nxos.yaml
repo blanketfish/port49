@@ -24,10 +24,17 @@ platforms:
       readonly: ["shell:roles*network-operator"]
       operator: ["shell:roles*network-operator"]
       admin: ["shell:roles*network-admin"]
-    # The command method list must end in local, where the delivered role
-    # binds (L16-cisco_nxos.md, command authorization LOCAL; spec §6,
-    # decision 23). The group name is the lab's.
+    # What the renderings above depend on, as the lab device carries it
+    # (tests/lab/configs/nxos-startup.cfg). The group name is the lab's.
     device_config:
+      # Required: the lab device carries no exec authorization list, and
+      # asks for the session reply, and with it the role, at a login through
+      # this one: L16-cisco_nxos.md measured the role delivered under that
+      # configuration.
+      - aaa authentication login default group port49 local
+      # Required, and they must end in local, where the delivered role binds
+      # (L16-cisco_nxos.md, command authorization LOCAL; spec §6,
+      # decision 23).
       - aaa authorization commands default group port49 local
       - aaa authorization config-commands default group port49 local
     # No priv-lvl is rendered, so the token's ceiling takes its number here:

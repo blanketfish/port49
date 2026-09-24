@@ -582,3 +582,58 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 		t.Fatalf("%+v", q)
 	}
 }
+
+// priv-lvl's values are closed, 0 to 15, and IOS-XE refused the session for
+// priv-lvl=99 rather than clamp or ignore it (L18-cisco_iosxe.md, variant 7).
+// A role or grant that layers any other value fails the joint check on every
+// device it reaches, whatever the platform, and on IOS-XE a level the adapter
+// does not render fails it too.
+func TestAPrivLvlThatIsNotALevelQuarantines(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {KEY: [ATTR]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`
+	parse := func(key, attr string) []Quarantine {
+		return mustParse(t, strings.NewReplacer("KEY", key, "ATTR", `"`+attr+`"`).Replace(body)).Quarantines(noon)
+	}
+	for _, attr := range []string{"priv-lvl=99", "priv-lvl=16", "priv-lvl=abc", "priv-lvl=", "priv-lvl*99", "priv-lvl=-1"} {
+		q := parse("all", attr)
+		if len(q) != len(inventory()) {
+			t.Errorf("%s: %d of %d devices quarantined: %+v", attr, len(q), len(inventory()), q)
+		}
+		for _, d := range q {
+			if !strings.Contains(causesOf(d)[0], "sends "+attr+" (role ro), which is not a privilege level") {
+				t.Errorf("%s on %s: %v", attr, d.Device, causesOf(d))
+			}
+		}
+	}
+	// A level IOS-XE's adapter does not render: the device's own ladder there
+	// is unmeasured, so the reply is not sent.
+	q := parse("cisco_iosxe", "priv-lvl=5")
+	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
+		"sends priv-lvl=5 (role ro), and cisco_iosxe's adapter renders priv-lvl 1, 7 and 15 only") {
+		t.Fatalf("quarantines: %+v", q)
+	}
+	// Elsewhere 5 is a level, and the rendered ones pass on IOS-XE.
+	for _, tt := range []struct{ key, attr string }{{"arista_eos", "priv-lvl=5"}, {"cisco_iosxe", "priv-lvl=7"},
+		{"cisco_iosxe", "priv-lvl*15"}} {
+		if q := parse(tt.key, tt.attr); len(q) != 0 {
+			t.Errorf("%s %s: %+v", tt.key, tt.attr, q)
+		}
+	}
+}
+
+// A grant's attribute is layered like a role's, and the check names it.
+func TestAGrantsAttributeIOSXEDoesNotTakeQuarantinesIt(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro], attributes: {cisco_iosxe: ["idletime*30"]}}]`)
+	q := p.Quarantines(noon)
+	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
+		"sends idletime*30 (grant all_devices [ro])") {
+		t.Fatalf("quarantines: %+v", q)
+	}
+}

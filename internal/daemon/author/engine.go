@@ -129,6 +129,15 @@ func (e *Engine) Session(ctx context.Context, r Request) Decision {
 		// minted for. Nothing partial is sent.
 		return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg, Policy: pol}
 	}
+	for _, a := range attrs {
+		// A priv-lvl that is not a level refuses the session on the device
+		// (IOS-XE, L18-cisco_iosxe.md, variant 7), and GrantedPrivLvl skips it,
+		// so the ceiling below never sees it. The load's joint check
+		// quarantines such a composition: refused here, never sent.
+		if engine.NotALevel(a) {
+			return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg, Policy: pol}
+		}
+	}
 	if level, _, ok := engine.GrantedPrivLvl(attrs); ok {
 		// A reply above the ceiling the token was minted with would tell the
 		// device a level port49 then holds the session under (spec §7). The

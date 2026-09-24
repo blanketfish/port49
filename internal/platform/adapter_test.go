@@ -1,7 +1,9 @@
 package platform
 
 import (
+	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -25,7 +27,8 @@ var shipped = map[string]Dialect{
 			"operator": {"priv-lvl=15", "roles=network-operator"}, "admin": {"priv-lvl=15", "roles=network-admin"}},
 		PrivilegeAttributes: []string{"priv-lvl", "roles"},
 		InertAttributes:     []string{"home-directory"},
-		DeviceConfig:        []string{"aaa authorization commands all default group port49 local"},
+		DeviceConfig: []string{"aaa authorization exec default group port49 local",
+			"aaa authorization commands all default group port49 local"},
 	},
 	"cisco_nxos": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true,
@@ -37,7 +40,8 @@ var shipped = map[string]Dialect{
 		CeilingLevels:       map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
 		PrivilegeAttributes: []string{"priv-lvl", "shell:roles", "cisco-av-pair"},
 		InertAttributes:     []string{"home-directory"},
-		DeviceConfig: []string{"aaa authorization commands default group port49 local",
+		DeviceConfig: []string{"aaa authentication login default group port49 local",
+			"aaa authorization commands default group port49 local",
 			"aaa authorization config-commands default group port49 local"},
 	},
 	"cisco_iosxe": {
@@ -48,10 +52,14 @@ var shipped = map[string]Dialect{
 		PrivilegeAttributes: []string{"priv-lvl"},
 		InertAttributes:     []string{"home-directory"},
 		AcceptedAttributes:  []string{"priv-lvl"},
-		DeviceConfig: []string{"aaa authorization commands 1 default group port49 local",
+		DeviceConfig: []string{"aaa authorization exec default group port49 local",
+			"aaa authorization commands 1 default group port49 local",
 			"aaa authorization commands 7 default group port49 local",
 			"aaa authorization commands 15 default group port49 local",
-			"aaa accounting commands 7 default start-stop group port49", "privilege exec level 7 clear counters"},
+			"aaa authorization config-commands", "privilege exec level 7 clear counters",
+			"aaa accounting commands 1 default start-stop group port49",
+			"aaa accounting commands 7 default start-stop group port49",
+			"aaa accounting commands 15 default start-stop group port49"},
 	},
 	"juniper_junos": {
 		PipeToken: "|", StripCR: true,
@@ -229,6 +237,79 @@ func TestValidateNamesTheField(t *testing.T) {
 	}
 	if err := Validate("x", ok); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A rendered priv-lvl is a level, 0 to 15: IOS-XE refused the session for
+// priv-lvl=99 (L18-cisco_iosxe.md, variant 7), and PrivLvl never numbers such
+// a level from ceiling_levels instead.
+func TestValidateRefusesARenderedPrivLvlThatIsNotALevel(t *testing.T) {
+	ok := Dialect{PipeToken: "|", Supports: []string{"session"}, CeilingLevels: map[string]uint8{"admin": 15}}
+	for _, a := range []string{"priv-lvl=16", "priv-lvl=99", "priv-lvl=abc", "priv-lvl=", "priv-lvl*-1"} {
+		d := with(ok, func(d *Dialect) { d.Levels = map[string][]string{"admin": {a}} })
+		if err := Validate("x", d); err == nil || !strings.Contains(err.Error(), "platforms.x.privilege.admin: "+a+
+			": not a privilege level; they run 0 to 15") {
+			t.Errorf("%s: %v", a, err)
+		}
+		if n, ok := d.PrivLvl("admin"); ok {
+			t.Errorf("%s: PrivLvl = %d, want none", a, n)
+		}
+	}
+	d := with(ok, func(d *Dialect) { d.Levels = map[string][]string{"admin": {"priv-lvl*0"}} })
+	if err := Validate("x", d); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A device_config line is one printable ASCII line, so an operator's adapter
+// cannot slip a second line, or a byte a terminal acts on, into what is pasted.
+func TestValidateRefusesADeviceConfigLineThatIsNotOneLine(t *testing.T) {
+	ok := Dialect{PipeToken: "|", Supports: []string{"session"}}
+	for _, line := range []string{"", "  ", "a\tb", "a\rb", "a\x1bb", "café", "a\x7fb"} {
+		d := with(ok, func(d *Dialect) { d.DeviceConfig = []string{"aaa new-model", line} })
+		if err := Validate("x", d); err == nil || !strings.Contains(err.Error(), "platforms.x.device_config[1]") {
+			t.Errorf("%q: %v", line, err)
+		}
+	}
+}
+
+// Every line a shipped adapter says its renderings depend on is one the lab
+// device carries, so what the lab measured is what the adapter hands out.
+func TestTheDeviceConfigIsTheLabs(t *testing.T) {
+	for name, cfg := range map[string]string{"arista_eos": "eos", "cisco_nxos": "nxos", "cisco_iosxe": "iosxe"} {
+		body, err := os.ReadFile("../../tests/lab/configs/" + cfg + "-startup.cfg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(string(body), "\n")
+		d, _ := DialectFor(name)
+		if len(d.DeviceConfig) == 0 {
+			t.Errorf("%s: no device_config", name)
+		}
+		for _, l := range d.DeviceConfig {
+			if !slices.Contains(lines, l) {
+				t.Errorf("%s: %q is not in %s-startup.cfg", name, l, cfg)
+			}
+		}
+	}
+}
+
+// An override's accepted_attributes and device_config replace the base's.
+func TestOverReplacesTheAcceptedAttributesAndDeviceConfig(t *testing.T) {
+	specs, err := ParseSpecs([]byte("platforms:\n  cisco_iosxe:\n    accepted_attributes: [priv-lvl, idletime]\n" +
+		"    device_config: [aaa new-model]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, _ := DialectFor("cisco_iosxe")
+	d := specs["cisco_iosxe"].Over(base)
+	if !reflect.DeepEqual(d.AcceptedAttributes, []string{"priv-lvl", "idletime"}) ||
+		!reflect.DeepEqual(d.DeviceConfig, []string{"aaa new-model"}) {
+		t.Fatalf("%v %v", d.AcceptedAttributes, d.DeviceConfig)
+	}
+	d = Spec{}.Over(base)
+	if !reflect.DeepEqual(d.AcceptedAttributes, base.AcceptedAttributes) || !reflect.DeepEqual(d.DeviceConfig, base.DeviceConfig) {
+		t.Fatalf("unset keys keep the base's: %v %v", d.AcceptedAttributes, d.DeviceConfig)
 	}
 }
 

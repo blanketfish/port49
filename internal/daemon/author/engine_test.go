@@ -227,6 +227,23 @@ func TestASessionReplyAboveTheCeilingIsRefused(t *testing.T) {
 	}
 }
 
+// A blob whose reply carries a priv-lvl that is not a level is refused, never
+// sent: IOS-XE refused the session for priv-lvl=99 (L18-cisco_iosxe.md,
+// variant 7). The load's joint check quarantines such a composition, so a
+// blob carrying one was minted before that check or under another adapter.
+func TestASessionReplyWithAPrivLvlThatIsNotALevelIsRefused(t *testing.T) {
+	for _, a := range []string{"priv-lvl=99", "priv-lvl=16", "priv-lvl=abc", "priv-lvl=", "priv-lvl*-1"} {
+		b := eosBlob()
+		b.Attributes = []string{a, "home-directory*/home/{username}"}
+		f := newEngineFixture(t, b)
+		c := store.Context{Username: "alice", Principal: "user:alice@example.com", BlobHash: f.hash}
+		d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(), Request{Context: c, Device: peer})
+		if d.Permit || d.Reason != decision.BlobUnavailable || len(d.Attributes) != 0 || d.ServerMsg != blobUnavailableMsg {
+			t.Errorf("%s: %+v", a, d)
+		}
+	}
+}
+
 // A blob compiled for another platform than the device's is never answered
 // from: its attributes and its dialect are another vendor's (roadmap, plan 4,
 // carried from plan 3).

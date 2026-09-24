@@ -3,8 +3,9 @@ package platform
 import (
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
+
+	"github.com/rhwendt/port49/internal/engine"
 )
 
 // Dialect is what the policy engine compiles into a blob about one platform
@@ -77,6 +78,9 @@ type Dialect struct {
 	// platform's session reply may carry: the device refuses the whole session
 	// for any other (IOS-XE, L18), so a composition whose reply carries one
 	// fails the joint check and quarantines the device. nil takes any name.
+	// Where it is set, a priv-lvl the reply carries must also be one of the
+	// levels this adapter renders: what the device lets another level run is
+	// unmeasured.
 	AcceptedAttributes []string
 	// DeviceConfig is the device configuration this adapter's renderings
 	// depend on, one line each: `port49 platform show` prints it, and a device
@@ -209,9 +213,10 @@ func (d Dialect) PrivLvl(level string) (uint8, bool) {
 		if i < 0 || a[:i] != "priv-lvl" {
 			continue
 		}
-		if n, err := strconv.ParseUint(a[i+1:], 10, 8); err == nil && n <= 15 {
-			return uint8(n), true
-		}
+		// A rendered priv-lvl that is not a level is no number at all, never
+		// CeilingLevels' instead: the device is sent the value, not the table
+		// (Validate refuses it; this is the belt to that).
+		return engine.PrivLvlValue(a[i+1:])
 	}
 	table := d.CeilingLevels
 	if table == nil {

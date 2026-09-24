@@ -24,19 +24,35 @@ platforms:
       admin: ["priv-lvl=15"]
     # The only attribute this image takes: anything else refuses the session,
     # and a policy whose reply would carry one quarantines the device instead
-    # (L18-cisco_iosxe.md; decision 25).
+    # (L18-cisco_iosxe.md; decision 25). So does a priv-lvl no level here
+    # renders, and on every platform one that is not 0 to 15 (L18, variant 7).
     accepted_attributes: [priv-lvl]
-    # What level 7 needs from the device: a command list for each level
-    # port49 renders, so the device asks port49 about level-7 commands, and
-    # the one command the measured operator rung runs. The request carries the
-    # command's level, not the session's (ceiling-cisco_iosxe.md). The group
-    # name is the lab's.
+    # What the renderings above depend on, as the lab device carries it
+    # (tests/lab/configs/iosxe-startup.cfg). The group name is the lab's.
+    # The request carries the command's level, not the session's
+    # (ceiling-cisco_iosxe.md), so there is a command list for each level
+    # port49 renders; the operator rung was measured with all three present.
+    # What the device does with a level-7 command when no commands 7 list
+    # exists is unmeasured, provisional on L22 (Task 17): carry the line
+    # either way.
     device_config:
+      # Required: the session reply, and with it priv-lvl, is asked for here.
+      - aaa authorization exec default group port49 local
+      # Required: port49 decides each command at the level it runs at.
       - aaa authorization commands 1 default group port49 local
       - aaa authorization commands 7 default group port49 local
       - aaa authorization commands 15 default group port49 local
-      - aaa accounting commands 7 default start-stop group port49
+      # Required: without it commands typed in configuration mode are not
+      # sent for authorization, and port49's denies do not reach them.
+      - aaa authorization config-commands
+      # Required for operator: the one command the measured operator rung
+      # runs (ceiling-cisco_iosxe.md).
       - privilege exec level 7 clear counters
+      # Recommended, not required: command accounting at every level port49
+      # renders.
+      - aaa accounting commands 1 default start-stop group port49
+      - aaa accounting commands 7 default start-stop group port49
+      - aaa accounting commands 15 default start-stop group port49
     # No entity class is defined: the lab's management interface is
     # GigabitEthernet1, a physical port by name.
     #

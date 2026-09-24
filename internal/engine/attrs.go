@@ -134,11 +134,34 @@ func GrantedPrivLvl(attrs []string) (level uint8, at int, ok bool) {
 		if j < 0 || a[:j] != "priv-lvl" {
 			continue
 		}
-		n, err := strconv.ParseUint(a[j+1:], 10, 8)
-		if err != nil || n > 15 {
+		n, valid := PrivLvlValue(a[j+1:])
+		if !valid {
 			continue
 		}
-		level, at, ok = uint8(n), i, true
+		level, at, ok = n, i, true
 	}
 	return level, at, ok
+}
+
+// PrivLvlValue reads a priv-lvl attribute's value as a level: decimal, 0 to
+// 15. ok is false for anything else, which no device is measured to take:
+// IOS-XE refused the session for priv-lvl=99 rather than clamp or ignore it
+// (tests/lab/results/L18-cisco_iosxe.md, variant 7).
+func PrivLvlValue(v string) (level uint8, ok bool) {
+	n, err := strconv.ParseUint(v, 10, 8)
+	if err != nil || n > 15 {
+		return 0, false
+	}
+	return uint8(n), true
+}
+
+// NotALevel reports whether a is a priv-lvl attribute, in either form, whose
+// value PrivLvlValue refuses.
+func NotALevel(a string) bool {
+	i := strings.IndexAny(a, "=*")
+	if i < 0 || a[:i] != "priv-lvl" {
+		return false
+	}
+	_, ok := PrivLvlValue(a[i+1:])
+	return !ok
 }

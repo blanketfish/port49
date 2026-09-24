@@ -155,6 +155,11 @@ func Validate(name string, d Dialect) error {
 				return fmt.Errorf("%s: %s: a level's rendering takes no placeholder (spec §6)", field("privilege."+level), a)
 			}
 			n := engine.AttributeName(a)
+			if engine.NotALevel(a) {
+				// A value the device cannot use refuses the session: IOS-XE
+				// did for priv-lvl=99 (L18-cisco_iosxe.md, variant 7).
+				return fmt.Errorf("%s: %s: not a privilege level; they run 0 to 15", field("privilege."+level), a)
+			}
 			if seen[n] {
 				// A device keeps the first of two and drops the second, silently
 				// (spec §8, "Generator constraints").

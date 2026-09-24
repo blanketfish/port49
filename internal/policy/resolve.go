@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -470,13 +471,48 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 	// run of refusals stops it answering SSH for about a minute, break-glass
 	// included (tests/lab/results/L18-cisco_iosxe.md). Quarantined, the
 	// device is closed without a reply and falls to local at once.
-	if accepted := p.dialect(d.Platform).AcceptedAttributes; accepted != nil {
+	lockout := ""
+	if d.Platform == "cisco_iosxe" {
+		lockout = ", and a run of refusals stops it answering SSH, break-glass included " +
+			"(tests/lab/results/L18-cisco_iosxe.md)"
+	}
+	// priv-lvl's values are closed on every platform: a device sent one it
+	// cannot use refuses the session, as IOS-XE did for priv-lvl=99 rather
+	// than clamp or ignore it (L18-cisco_iosxe.md, variant 7).
+	for _, a := range res.Attributes {
+		if engine.NotALevel(a.Attribute) {
+			return fmt.Sprintf("on %s its session reply sends %s (%s), which is not a privilege level: priv-lvl "+
+				"runs 0 to 15, and a device sent a value it cannot use refuses the session (IOS-XE did for "+
+				"priv-lvl=99, tests/lab/results/L18-cisco_iosxe.md, variant 7)%s; fix the value", d.Platform,
+				a.Attribute, a.Source, lockout)
+		}
+	}
+	if dialect := p.dialect(d.Platform); dialect.AcceptedAttributes != nil {
+		// A closed platform is sent only the levels its adapter renders: what
+		// the device lets any other level run is unmeasured.
+		var rendered []uint8
+		for _, level := range sortedKeys(dialect.Levels) {
+			if n, ok := dialect.PrivLvl(level); ok && !slices.Contains(rendered, n) {
+				rendered = append(rendered, n)
+			}
+		}
+		slices.Sort(rendered)
 		for _, a := range res.Attributes {
-			if name := engine.AttributeName(a.Attribute); !slices.Contains(accepted, name) {
+			name := engine.AttributeName(a.Attribute)
+			if !slices.Contains(dialect.AcceptedAttributes, name) {
 				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s takes no attribute but %s: the "+
-					"device refuses the whole session for any other, and a run of refusals stops it answering SSH, "+
-					"break-glass included (tests/lab/results/L18-cisco_iosxe.md); key the attribute to the platforms "+
-					"that read it", d.Platform, a.Attribute, a.Source, d.Platform, strings.Join(accepted, ", "))
+					"device refuses the whole session for any other%s; key the attribute to the platforms that "+
+					"read it", d.Platform, a.Attribute, a.Source, d.Platform, strings.Join(dialect.AcceptedAttributes, ", "),
+					lockout)
+			}
+			if name != "priv-lvl" {
+				continue
+			}
+			// Not a level was refused above, so the value parses.
+			if n, _ := engine.PrivLvlValue(a.Attribute[len(name)+1:]); !slices.Contains(rendered, n) {
+				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s's adapter renders priv-lvl %s only: "+
+					"what the device lets another level run is unmeasured, so it is not sent; use a level's own "+
+					"rendering", d.Platform, a.Attribute, a.Source, d.Platform, levelList(rendered))
 			}
 		}
 	}
@@ -488,4 +524,16 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 		}
 	}
 	return ""
+}
+
+// levelList reads levels as a sentence does: "1, 7 and 15".
+func levelList(levels []uint8) string {
+	s := make([]string, len(levels))
+	for i, n := range levels {
+		s[i] = strconv.Itoa(int(n))
+	}
+	if len(s) < 2 {
+		return strings.Join(s, "")
+	}
+	return strings.Join(s[:len(s)-1], ", ") + " and " + s[len(s)-1]
 }

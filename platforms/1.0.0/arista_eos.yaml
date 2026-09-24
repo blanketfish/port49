@@ -25,10 +25,17 @@ platforms:
       readonly: ["priv-lvl=1", "roles=network-operator"]
       operator: ["priv-lvl=15", "roles=network-operator"]
       admin: ["priv-lvl=15", "roles=network-admin"]
-    # The command method list must end in local, never none or
-    # if-authenticated: an operator session at 15 would run every command when
-    # port49 cannot answer (spec §6, decision 23). The group name is the lab's.
+    # What the renderings above depend on, as the lab device carries it
+    # (tests/lab/configs/eos-startup.cfg). The group name is the lab's.
     device_config:
+      # Required: the session reply, and with it the level and the role, is
+      # asked for here.
+      - aaa authorization exec default group port49 local
+      # Required, and it must end in local: `none` always succeeds
+      # (L4-error-arista_eos.md), so an operator session at 15 would run
+      # every command when port49 cannot answer (spec §6, decision 23).
+      # What `if-authenticated` does on EOS is unmeasured (L4 measured it
+      # on IOS-XE, where every command ran); do not use it either.
       - aaa authorization commands all default group port49 local
     # Interface names, not device behaviour: spec §8's example.
     entity_classes:
