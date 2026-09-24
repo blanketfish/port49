@@ -2017,9 +2017,15 @@ carry a value a pattern hides — `deny snmp-server community public **` — and
 policy test` and `port49d` at start report it as `rule_secret_literal`, naming the role and the
 rule in its redacted form, so the operator knows the value lives in the policy file and reads
 `«redacted»` everywhere else. Everywhere else means: every line `port49d` and its broker write
-about a policy that loaded, and what `port49 policy test`, `policy diff` and `explain` print for
-one, since CI keeps it. Those redact every quoted value by every pattern that applies anywhere
-under the policy, the file's own `platforms:` patterns included, erring toward hiding. A policy
+about a policy that loaded, and what `port49 policy test`, `policy diff`, `platform upgrade` and
+`explain` print for one, since CI keeps it. Those redact every quoted value by every pattern that
+applies anywhere under the policy, the file's own `platforms:` patterns included, erring toward
+hiding; a quoted value is split as prose is, by whitespace and then by punctuation and a
+regex's operators, an escape such as `\s` one separator, so the `"^snmp-server community X"` a
+diff prints of a config check is read as its words, and text a built-in set ships as adapter
+text prints as written (final review I3). `policy diff` and `platform upgrade` print an adapter
+key's two values with a block's text redacted as `platform show` prints it (below); the sha256
+an `acknowledge:` entry names is still taken over the value as written. A policy
 that does not load is refused **closed**: its patterns never loaded, so the refusal — at start,
 on a reload, or from those tools — quotes no value from the file. It names where and what: a rule
 by its role, list and position and a term by its position, e.g. `role "admin": deny #2: term 3
