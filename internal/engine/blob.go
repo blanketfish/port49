@@ -64,6 +64,7 @@ type Normalize struct {
 	PipeAuthorized       bool   `json:"pipe_authorized"`
 	StripCR              bool   `json:"strip_cr"`
 	ExpandsAbbreviations bool   `json:"expands_abbreviations"`
+	SplitsInterfaceNames bool   `json:"splits_interface_names"`
 }
 
 // Rule is one command rule and the role that carries it. The role is on the

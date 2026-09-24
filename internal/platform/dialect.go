@@ -32,6 +32,12 @@ type Dialect struct {
 	// also match any abbreviation of them, so `rel` cannot slip past
 	// `deny reload **` (spec §3 rule 4; engine.Normalize).
 	ExpandsAbbreviations bool
+	// SplitsInterfaceNames says the device sends an interface name and its
+	// index as two arguments, `GigabitEthernet` and `1` for a typed `Gi1`.
+	// Where it is true, a deny's term naming an interface with its index also
+	// matches the two, so `deny interface GigabitEthernet1 **` still binds
+	// (spec §3 rule 5; engine.Normalize).
+	SplitsInterfaceNames bool
 	// ShowsServerMsg says the device displays the server_msg of an
 	// authorization reply to the operator. Where it does not, nothing spec §5.6
 	// says through server_msg — the session-ceiling warning, context_stale,
@@ -79,6 +85,12 @@ type Dialect struct {
 //     L21-cisco_nxos.md, L21-cisco_iosxe.md). That was interactive SSH; eAPI,
 //     NX-API and NETCONF are unmeasured. Junos sends no command to expand and
 //     is unmeasured, so false, the direction that fails closed.
+//   - SplitsInterfaceNames is true on IOS-XE alone: a typed `int Gi1` arrived
+//     as `cmd-arg=GigabitEthernet cmd-arg=1` on IOS-XE 17.13.01a, while vEOS
+//     and the N9Kv sent one argument, `Ethernet1` and `Ethernet1/1`
+//     (tests/lab/results/L21-cisco_iosxe.md, L21-arista_eos.md,
+//     L21-cisco_nxos.md). Other interface types and subinterfaces are
+//     unmeasured; an index is read as digits and `/ . :`.
 //   - Supports: EOS, NX-OS and IOS-XE send per-command authorization (L1, L10);
 //     Junos sends none, in 26 sessions on two images (L18; decision 21).
 //     Config-command authorization is unmeasured, so no platform claims it.
@@ -111,7 +123,8 @@ var dialects = map[string]Dialect{
 	},
 	"cisco_iosxe": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
-		Supports: []string{"session", "commands"},
+		SplitsInterfaceNames: true,
+		Supports:             []string{"session", "commands"},
 	},
 	"juniper_junos": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false,

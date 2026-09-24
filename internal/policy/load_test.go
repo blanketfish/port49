@@ -136,8 +136,10 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a regex that is a word", "roles:\n  - {name: r, deny: [\"/^reload$/ **\"]}\n" + subjOK, "the word `reload`"},
 		{"a case-sensitive regex", "roles:\n  - {name: r, deny: [\"* * /(?-i)^TFTP:/\"]}\n" + subjOK, "case-insensitively"},
 		{"a case-sensitive group", "roles:\n  - {name: r, deny: [\"interface /(?s-i:^Mgmt)/\"]}\n" + subjOK, "case-insensitively"},
-		{"a deny pattern whose abbreviations cannot be read", "roles:\n  - {name: r, deny: [\"interface /Management/\"]}\n" + subjOK,
-			"on juniper_junos, deny \"interface /Management/\": /Management/: the platform may send it abbreviated"},
+		{"an unanchored deny pattern", "roles:\n  - {name: r, deny: [\"interface /Management/\"]}\n" + subjOK,
+			"deny \"interface /Management/\": /Management/: the platform"},
+		{"a deny pattern whose split cannot be read", "roles:\n  - {name: r, deny: [\"interface /^Gig[a-z]*[0-9]+$/\"]}\n" + subjOK,
+			"on cisco_iosxe, deny \"interface /^Gig[a-z]*[0-9]+$/\": /^Gig[a-z]*[0-9]+$/: the platform sends an interface name and its index as two arguments (spec §3 rule 5)"},
 		{"a class no platform defines", "roles:\n  - {name: r, permit: [\"interface @uplinks\"]}\n" + subjOK, "which no platform defines"},
 		{"a ceiling no platform numbers", scopeOK + roleOK + subjOK +
 			"grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: operator}\n", "no priv-lvl number on any platform"},
@@ -265,6 +267,28 @@ func TestAnAbbreviatedNameIsDeniedWhereAbbreviationsAreAssumed(t *testing.T) {
 	} {
 		if _, o, err := p.Decide("s", "", tt.d, tt.command, noon); err != nil || o.Permit != tt.want {
 			t.Errorf("%s %q: permit %v (%s), err %v; want %v", tt.d.Platform, tt.command, o.Permit, o.Reason, err, tt.want)
+		}
+	}
+}
+
+// IOS-XE sends a typed `int Gi1` as `GigabitEthernet`, `1`
+// (tests/lab/results/L21-cisco_iosxe.md), so a deny written with the name
+// joined still binds there, and EOS, which sends one argument, is unchanged
+// (spec §3 rule 5).
+func TestADenyBindsTheSplitInterfaceOnIOSXE(t *testing.T) {
+	p := mustParse(t, scopeOK+`roles:
+  - {name: r, privilege: admin, permit: ["**"]}
+  - {name: no_gi1, deny: ["interface GigabitEthernet1 **"]}
+`+subjOK+"grants:\n  - {subject: s, scope: all_devices, roles: [r, no_gi1]}\n")
+	for _, tt := range []struct {
+		device, command string
+		want            bool
+	}{
+		{"xe-01", "interface GigabitEthernet 1", false}, {"xe-01", "interface GigabitEthernet 2", true},
+		{"leaf-01", "interface GigabitEthernet1", false}, {"leaf-01", "interface GigabitEthernet 1", true},
+	} {
+		if _, o, err := p.Decide("s", "", deviceNamed(t, tt.device), tt.command, noon); err != nil || o.Permit != tt.want {
+			t.Errorf("%s %q: permit %v (%s), err %v; want %v", tt.device, tt.command, o.Permit, o.Reason, err, tt.want)
 		}
 	}
 }

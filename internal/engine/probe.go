@@ -295,7 +295,7 @@ func (r probeRule) matchesAt(i int, arg string) bool {
 		return strings.EqualFold(t.word, arg) || strings.EqualFold(t.word, trimmed) ||
 			(r.abbrev && abbreviates(trimmed, t.word))
 	default:
-		return anyMatch(t.res, arg) || anyMatch(t.res, trimmed)
+		return t.takes(arg) || t.takes(trimmed)
 	}
 }
 
@@ -337,8 +337,12 @@ func Exposures(before, after *Program) []Exposure {
 				if pm.verdict != Permit || !pm.constrained() || !meets(pm, d, abbrev) {
 					continue
 				}
-				out = append(out, Exposure{Permit: Rule{Verdict: Permit, Rule: pm.rule, Role: pm.role},
-					Deny: Rule{Verdict: Deny, Rule: d.rule, Role: d.role}, Added: v.added})
+				e := Exposure{Permit: Rule{Verdict: Permit, Rule: pm.rule, Role: pm.role},
+					Deny: Rule{Verdict: Deny, Rule: d.rule, Role: d.role}, Added: v.added}
+				// A deny compiled as written and split is one rule here.
+				if !slices.Contains(out, e) {
+					out = append(out, e)
+				}
 			}
 		}
 	}

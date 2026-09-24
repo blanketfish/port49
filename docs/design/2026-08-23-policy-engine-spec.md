@@ -270,6 +270,16 @@ entire class.
    stay `false`.
 5. **Preserve argument boundaries.** Arguments are never re-joined.
 
+   IOS-XE splits an interface name from its index: a typed `int Gi1` arrives as
+   `GigabitEthernet`, `1`, where EOS and NX-OS send one argument (§15, L21;
+   `tests/lab/results/L21-cisco_iosxe.md`), so `deny: interface GigabitEthernet1 **` would
+   never match there. On a platform marked `splits_interface_names: true`, a **deny's** word,
+   `@class` or `/re/` term that names an interface with its index — a name, then digits and
+   `/ . :` — also matches the name and the index as two arguments, and the decision names the
+   deny as written; a **permit** matches only as written, so it is written as the device
+   sends it. A deny pattern whose split cannot be read, as in rule 4, is a policy load error
+   naming the term and the platform.
+
 ---
 
 ## 4. Matching
@@ -2333,6 +2343,7 @@ attribute is complete in four lines:
 | `entity_classes` | named sets of device entity names, referenced as `@class` in rules | if rules use classes |
 | `enable_username` | `principal`, or a template such as `$enab{level}$` | if enable is supported |
 | `expands_abbreviations` | whether the device sends resolved command words | if `commands` |
+| `splits_interface_names` | whether the device sends an interface name and its index as two arguments (§3 rule 5); `true` on `cisco_iosxe` only (L21) | optional |
 | `pipe_token` / `pipe_authorized` | modifier separator; whether it reaches us | if `commands` |
 | `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
 | `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |

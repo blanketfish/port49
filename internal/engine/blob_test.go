@@ -111,7 +111,7 @@ func TestDecodeRefusesWhatItCannotDecideWith(t *testing.T) {
 	if _, err := Decode(hash, tampered); !errors.Is(err, ErrHashMismatch) {
 		t.Fatalf("a tampered body must be refused as a hash mismatch: %v", err)
 	}
-	const head = `{"version":2,"bundle":"b","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":false},"privilege":"","attributes":[],`
+	const head = `{"version":2,"bundle":"b","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":false,"splits_interface_names":false},"privilege":"","attributes":[],`
 	for name, tt := range map[string]struct{ body, want string }{
 		"plan 3's slice blob": {`{"platform":"arista_eos","privilege":15,"attributes":[],"permit":["**"],"deny":[]}`, "plan 3's"},
 		"a newer version":     {strings.Replace(head, `"version":2`, `"version":3`, 1) + `"rules":[],"pipe":[],"classes":{}}`, "format version 3"},

@@ -246,6 +246,68 @@ func TestADenyPatternWithUnreadableAbbreviationsIsRefused(t *testing.T) {
 	}
 }
 
+// L21 on IOS-XE: `int Gi1` arrives as two arguments, `GigabitEthernet` and
+// `1` (tests/lab/results/L21-cisco_iosxe.md), so a deny written with the name
+// joined would never match what the device sends. Where the platform splits
+// names, a deny's word, class or regex naming an interface with its index also
+// matches the name and the index as two arguments, and the record names the
+// deny as written. A permit matches only as written, and the vector is never
+// re-joined (spec §3 rule 5).
+func TestADenyNamingAnInterfaceMatchesItSplit(t *testing.T) {
+	lines := []string{"admin:permit **", "no_gi1:deny interface GigabitEthernet1 **", "no_mgmt:deny interface @management",
+		"no_lo:deny interface /^Loopback[0-9]+$/"}
+	b := testBlob(true, lines...)
+	b.Normalize.SplitsInterfaceNames = true
+	xe := compileBlob(t, b)
+	o := expect(t, xe, "interface GigabitEthernet 1", false, decision.NoPermitDominatesDeny)
+	if o.Deny == nil || o.Deny.Rule != "interface GigabitEthernet1 **" || o.Deny.Role != "no_gi1" || !reflect.DeepEqual(o.Deny.Specificity, []int{3, 3, 3}) {
+		t.Errorf("the split name is denied by the rule as written: %+v", o.Deny)
+	}
+	for _, line := range []string{"interface GigabitEthernet1", "interface gigabitethernet 1 shutdown",
+		"interface Management 1", "interface loopback 0", "interface Loopback 10"} {
+		expect(t, xe, line, false, decision.NoPermitDominatesDeny)
+	}
+	// Only an index splits off: a second word, another number, or a name
+	// with nothing after it is not the name the deny wrote.
+	for _, line := range []string{"interface GigabitEthernet 2", "interface GigabitEthernet x1", "interface Loopback 0/1",
+		"interface Loopback x",
+		"interface Loopback", "interface Management"} {
+		expect(t, xe, line, true, decision.PermitDominates)
+	}
+	pb := testBlob(true, "net:permit interface GigabitEthernet1", "net:permit interface @management")
+	pb.Normalize.SplitsInterfaceNames = true
+	expect(t, compileBlob(t, pb), "interface GigabitEthernet 1", false, decision.NoRuleMatched)
+	expect(t, compileBlob(t, pb), "interface Management 1", false, decision.NoRuleMatched)
+	expect(t, program(t, true, lines...), "interface GigabitEthernet 1", true, decision.PermitDominates)
+}
+
+// A deny that matches a command both as written and split is recorded once.
+func TestADenyMatchingTwoWaysIsNamedOnce(t *testing.T) {
+	b := testBlob(true, "admin:permit **", "no_gi:deny interface /^Gig.*/ **")
+	b.Normalize.SplitsInterfaceNames = true
+	o := expect(t, compileBlob(t, b), "interface GigabitEthernet 1", false, decision.NoPermitDominatesDeny)
+	if len(o.Denies) != 1 {
+		t.Errorf("denies %+v", o.Denies)
+	}
+}
+
+// Where the platform splits names, a deny pattern whose split cannot be read
+// is refused, as one whose abbreviations cannot be (spec §3 rule 5).
+func TestADenyPatternWithAnUnreadableSplitIsRefused(t *testing.T) {
+	b := testBlob(true, "d:deny interface /^Gig[a-z]*[0-9]+$/")
+	if _, _, err := Encode(b); err != nil {
+		t.Fatalf("a platform that joins names reads it as written: %v", err)
+	}
+	b.Normalize.SplitsInterfaceNames = true
+	if _, _, err := Encode(b); err == nil || !strings.Contains(err.Error(), "index as two arguments") {
+		t.Errorf("%v, want a refusal naming the split", err)
+	}
+	b.Rules[0].Verdict = Permit
+	if _, _, err := Encode(b); err != nil {
+		t.Errorf("a permit is matched as written: %v", err)
+	}
+}
+
 // Specificity is a property of the rule and the command, never of position, so
 // shuffling the rules changes no outcome, not even which rule is named
 // (spec §5.4; §14, "Order independence").

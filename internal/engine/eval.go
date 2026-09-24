@@ -28,6 +28,14 @@ type cterm struct {
 	kind Kind
 	word string
 	res  []*regexp.Regexp // a regex term's one pattern, or a class's patterns
+	// index is a split's tail (splits): it takes only an argument shaped as
+	// an interface index.
+	index bool
+}
+
+// takes reports whether a regex or class term matches arg.
+func (t cterm) takes(arg string) bool {
+	return anyMatch(t.res, arg) && (!t.index || indexShape.MatchString(arg))
 }
 
 // Compile readies b for evaluation. It fails only where Decode would have, so a
@@ -38,50 +46,102 @@ func Compile(b Blob) (*Program, error) {
 	}
 	p := &Program{Blob: b}
 	for _, r := range b.Rules {
-		c, err := compileRule(r.Verdict, r.Rule, r.Role, b.Classes, b.Normalize)
+		cs, err := compileRule(r.Verdict, r.Rule, r.Role, b.Classes, b.Normalize)
 		if err != nil {
 			return nil, err
 		}
-		p.rules = append(p.rules, c)
+		p.rules = append(p.rules, cs...)
 	}
 	for _, r := range b.Pipe {
-		c, err := compileRule(Permit, r, "", b.Classes, b.Normalize)
+		cs, err := compileRule(Permit, r, "", b.Classes, b.Normalize)
 		if err != nil {
 			return nil, err
 		}
-		p.pipe = append(p.pipe, c)
+		p.pipe = append(p.pipe, cs...)
 	}
 	return p, nil
 }
 
-// compileRule compiles one rule. A deny's regex and class patterns are widened
-// as the dialect n calls for (denyPatterns); a permit's never are.
-func compileRule(verdict, rule, role string, classes map[string][]string, n Normalize) (compiled, error) {
+// compileRule compiles one rule: the rule as written and, for a deny on a
+// platform that splits interface names, one sibling per way of splitting it
+// (splits). A deny's regex and class patterns are widened as the dialect n
+// calls for (denyPatterns); a permit is never widened.
+func compileRule(verdict, rule, role string, classes map[string][]string, n Normalize) ([]compiled, error) {
 	terms, err := ParseRule(rule)
 	if err != nil {
-		return compiled{}, err
+		return nil, err
 	}
-	c := compiled{verdict: verdict, rule: CanonicalRule(rule), role: role}
+	canon := CanonicalRule(rule)
+	// Each term's shapes: the term as written, then each split of it.
+	shapes := make([][][]cterm, 0, len(terms))
 	for _, t := range terms {
 		ct := cterm{kind: t.Kind, word: t.Text}
 		for _, pat := range termPatterns(t, classes) {
 			patterns := []string{pat}
 			if verdict == Deny {
 				if patterns, err = denyPatterns(pat, n); err != nil {
-					return compiled{}, fmt.Errorf("deny %q: %s: %w", c.rule, termName(t, pat), err)
+					return nil, fmt.Errorf("deny %q: %s: %w", canon, termName(t, pat), err)
 				}
 			}
 			for _, p := range patterns {
 				re, err := compileTerm(p)
 				if err != nil {
-					return compiled{}, err
+					return nil, err
 				}
 				ct.res = append(ct.res, re)
 			}
 		}
-		c.terms = append(c.terms, ct)
+		shape := [][]cterm{{ct}}
+		if verdict == Deny {
+			ss, err := splits(t, classes, n)
+			if err != nil {
+				return nil, fmt.Errorf("deny %q: %w", canon, err)
+			}
+			for _, sp := range ss {
+				pair, err := sp.terms()
+				if err != nil {
+					return nil, err
+				}
+				shape = append(shape, pair)
+			}
+		}
+		shapes = append(shapes, shape)
 	}
-	return c, nil
+	// Every combination of shapes is one rule; the first is the rule as
+	// written.
+	out := []compiled{{verdict: verdict, rule: canon, role: role}}
+	for _, shape := range shapes {
+		if len(out)*len(shape) > maxBranches {
+			return nil, fmt.Errorf("deny %q: it splits more than %d ways; write it as one rule per interface", canon, maxBranches)
+		}
+		var next []compiled
+		for _, c := range out {
+			for _, ts := range shape {
+				next = append(next, compiled{verdict: verdict, rule: canon, role: role,
+					terms: append(slices.Clone(c.terms), ts...)})
+			}
+		}
+		out = next
+	}
+	return out, nil
+}
+
+// terms compiles a split into the two terms it matches as. A word splits into
+// two words; a pattern into two patterns of a regex's rank, whose tail takes
+// only an index.
+func (sp split) terms() ([]cterm, error) {
+	if sp.word {
+		return []cterm{{kind: Word, word: sp.head}, {kind: Word, word: sp.tail}}, nil
+	}
+	head, err := compileTerm(sp.head)
+	if err != nil {
+		return nil, err
+	}
+	tail, err := compileTerm(sp.tail)
+	if err != nil {
+		return nil, err
+	}
+	return []cterm{{kind: Regex, res: []*regexp.Regexp{head}}, {kind: Regex, res: []*regexp.Regexp{tail}, index: true}}, nil
 }
 
 // match reports whether the rule matches the whole vector and, when it does,
@@ -127,14 +187,7 @@ func (c compiled) match(vector []string, abbrev bool) ([]int, bool) {
 				return nil, false
 			}
 		case Class, Regex:
-			hit := false
-			for _, re := range t.res {
-				if re.MatchString(arg) || re.MatchString(trimmed) {
-					hit = true
-					break
-				}
-			}
-			if !hit {
+			if !t.takes(arg) && !t.takes(trimmed) {
 				return nil, false
 			}
 		}
@@ -288,7 +341,9 @@ func (p *Program) Command(raw []string) Outcome {
 	}
 	sortMatches(permits)
 	sortMatches(denies)
-	out.Permits, out.Denies = permits, denies
+	// A deny that matched as written and split is one rule to a record; the
+	// decision below still weighs every way it matched.
+	out.Permits, out.Denies = permits, uniqueMatches(denies)
 	if len(permits) == 0 {
 		out.Reason = decision.NoRuleMatched
 		if len(denies) > 0 {
@@ -353,6 +408,17 @@ func (p *Program) pipePermits(stage []string) bool {
 		}
 	}
 	return false
+}
+
+// uniqueMatches keeps the first, most specific, match of each rule and role.
+func uniqueMatches(ms []Match) []Match {
+	var out []Match
+	for _, m := range ms {
+		if !slices.ContainsFunc(out, func(o Match) bool { return o.Rule == m.Rule && o.Role == m.Role }) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // sortMatches orders matches most specific first — lexicographically greatest

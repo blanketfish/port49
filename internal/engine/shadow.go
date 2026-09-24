@@ -40,11 +40,21 @@ func (p *Program) Shadows() []Shadow {
 			}
 		}
 	}
-	slices.SortFunc(out, func(a, b Shadow) int {
-		return strings.Compare(a.Deny.Role+"\x00"+a.Deny.Rule+"\x00"+a.Permit.Role+"\x00"+a.Permit.Rule,
-			b.Deny.Role+"\x00"+b.Deny.Rule+"\x00"+b.Permit.Role+"\x00"+b.Permit.Rule)
-	})
-	return out
+	key := func(s Shadow) string {
+		return s.Deny.Role + "\x00" + s.Deny.Rule + "\x00" + s.Permit.Role + "\x00" + s.Permit.Rule
+	}
+	slices.SortFunc(out, func(a, b Shadow) int { return strings.Compare(key(a), key(b)) })
+	// A deny compiled as written and split (compileRule) is one rule to the
+	// report, and overridden for certain if any of its shapes is.
+	var merged []Shadow
+	for _, s := range out {
+		if last := len(merged) - 1; last >= 0 && key(merged[last]) == key(s) {
+			merged[last].Possible = merged[last].Possible && s.Possible
+			continue
+		}
+		merged = append(merged, s)
+	}
+	return merged
 }
 
 // overrides reports whether some command is matched by both rules with the
@@ -125,7 +135,7 @@ func overlap(a, b cterm, abbrev bool) (meet, possible bool) {
 		// The permit's word matches every case-fold of itself, and a pattern
 		// compiles case-insensitive, so testing the literal tests them all.
 		// A policy refuses a deny regex that turns that off (spec §4).
-		return anyMatch(b.res, a.word), false
+		return b.takes(a.word), false
 	case b.kind == Word:
 		if anyMatch(a.res, b.word) {
 			return true, false

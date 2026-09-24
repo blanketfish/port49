@@ -14,6 +14,12 @@ var expandsMeasured = map[string]bool{
 	"cisco_iosxe": true, // tests/lab/results/L21-cisco_iosxe.md
 }
 
+// splitsMeasured is every platform measured sending an interface name and its
+// index as two arguments. EOS and NX-OS sent one (`Ethernet1`, `Ethernet1/1`).
+var splitsMeasured = map[string]bool{
+	"cisco_iosxe": true, // tests/lab/results/L21-cisco_iosxe.md: `int Gi1` as `GigabitEthernet`, `1`
+}
+
 // Every built-in platform has a dialect, and every dialect's pipe claim is the
 // measured one: on each platform with a command path, a typed output modifier
 // never reached port49 (tests/lab/results/L2-*.md). A dialect that claimed
@@ -35,6 +41,10 @@ func TestEveryBuiltInPlatformHasAMeasuredDialect(t *testing.T) {
 		if d.ExpandsAbbreviations != expandsMeasured[name] {
 			t.Errorf("%s: ExpandsAbbreviations %v, want %v: true only where L21 measured resolved words (spec §15, L21)",
 				name, d.ExpandsAbbreviations, expandsMeasured[name])
+		}
+		if d.SplitsInterfaceNames != splitsMeasured[name] {
+			t.Errorf("%s: SplitsInterfaceNames %v, want %v: true only where L21 measured the split", name,
+				d.SplitsInterfaceNames, splitsMeasured[name])
 		}
 		for class, patterns := range d.EntityClasses {
 			for _, p := range patterns {

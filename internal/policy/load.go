@@ -772,7 +772,7 @@ func (p *Policy) checkWidening(rule string) error {
 // normalizeOf is the part of a dialect a blob carries (spec §5.1.2).
 func normalizeOf(d platform.Dialect) engine.Normalize {
 	return engine.Normalize{PipeToken: d.PipeToken, PipeAuthorized: d.PipeAuthorized,
-		StripCR: d.StripCR, ExpandsAbbreviations: d.ExpandsAbbreviations}
+		StripCR: d.StripCR, ExpandsAbbreviations: d.ExpandsAbbreviations, SplitsInterfaceNames: d.SplitsInterfaceNames}
 }
 
 // numberedAnywhere reports whether some platform gives level a priv-lvl

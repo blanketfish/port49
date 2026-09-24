@@ -73,3 +73,21 @@ func TestShadowsAreOrdered(t *testing.T) {
 		t.Fatalf("%+v", sa)
 	}
 }
+
+// A permit naming the split interface a deny names joined overrides it where
+// the platform splits names, and is a shadow there only.
+func TestASplitNameIsAShadowWhereThePlatformSplits(t *testing.T) {
+	b := testBlob(true, "p:permit interface GigabitEthernet 1 shutdown", "d:deny interface GigabitEthernet1 **")
+	if got := compileBlob(t, b).Shadows(); len(got) != 0 {
+		t.Fatalf("joined: %+v", got)
+	}
+	b.Normalize.SplitsInterfaceNames = true
+	if got := compileBlob(t, b).Shadows(); len(got) != 1 || got[0].Deny.Rule != "interface GigabitEthernet1 **" || got[0].Possible {
+		t.Fatalf("split: %+v", got)
+	}
+	// A deny the permit overrides both as written and split is one shadow.
+	b.Rules[1].Rule = "interface /^Gig.*/ **"
+	if got := compileBlob(t, b).Shadows(); len(got) != 1 || got[0].Possible {
+		t.Fatalf("both ways: %+v", got)
+	}
+}

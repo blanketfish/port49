@@ -110,6 +110,20 @@ func TestProbesModelTheDenyAbbreviations(t *testing.T) {
 	crossCheck(t, before, after, []string{"reload", "reset", "re", "rel", "now", "x"}, 2)
 }
 
+// Where the platform splits interface names, the probes try the name and the
+// index a deny names joined, as two arguments: adding the deny turns
+// `interface GigabitEthernet 1` and `interface Loopback 0` from permitted to
+// denied.
+func TestProbesModelTheSplitInterfaceName(t *testing.T) {
+	b := testBlob(true, "any:permit * * *", "any:permit * *")
+	b.Normalize.SplitsInterfaceNames = true
+	before := compileBlob(t, b)
+	b.Rules = append(b.Rules, Rule{Verdict: Deny, Rule: "interface GigabitEthernet1", Role: "gi"},
+		Rule{Verdict: Deny, Rule: "interface /^Loopback[0-9]+$/", Role: "lo"})
+	after := compileBlob(t, b)
+	crossCheck(t, before, after, []string{"interface", "GigabitEthernet", "GigabitEthernet1", "Loopback", "Loopback0", "1", "0", "x"}, 3)
+}
+
 // A regex term is tried against an argument it matches, not only against the
 // words the rules name: narrowing the deny `copy * startup-config` frees
 // `copy scp:x startup-config` for the unchanged `copy /^scp:/ *`.
@@ -166,6 +180,19 @@ func TestExposuresNameARegexPermitAChangedDenyMeets(t *testing.T) {
 	got := Exposures(before, after)
 	if len(got) != 2 || got[0].Deny.Rule != "copy * startup-config" || got[0].Added ||
 		got[1].Deny.Rule != "copy * running-config" || !got[1].Added || got[0].Permit.Rule != "copy /^scp:/ *" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// A removed deny that meets a regex permit both as written and split is one
+// exposure.
+func TestExposuresNameASplitDenyOnce(t *testing.T) {
+	b := testBlob(true, "gi:permit interface /^Gig/ * **", "nd:deny interface /^Gig.*/ **")
+	b.Normalize.SplitsInterfaceNames = true
+	before := compileBlob(t, b)
+	b.Rules = b.Rules[:1]
+	after := compileBlob(t, b)
+	if got := Exposures(before, after); len(got) != 1 || got[0].Deny.Rule != "interface /^Gig.*/ **" {
 		t.Fatalf("%+v", got)
 	}
 }
