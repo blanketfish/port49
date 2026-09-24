@@ -12,7 +12,9 @@
 # — a command the pattern matches loses every word after the first word equal
 # to <word> — or `{match: [...], from: N}`, every word from position N on (0 is
 # the command word and is never removed; a negative N counts from the end).
-# `*` is one word and `**` any number, as in a rule.
+# `*` is one word and `**` any number, as in a rule. A pattern's word also
+# matches any abbreviation of it on every platform, whatever
+# expands_abbreviations says, so a pattern removes more rather than less.
 #
 # `default` applies to every platform, an unmodeled one included; a
 # platform's own list adds to it and never replaces it.
@@ -29,13 +31,35 @@ default:
   - {match: ['**'], after: key-string}
   - {match: ['**'], after: authentication-key}
   - {match: ['**'], after: message-digest-key}
-  - {match: ['**'], after: community}
   # IKE pre-shared keys: IOS-XE's IKEv2 keyring `pre-shared-key [local|remote]
   # <key>` and Junos's `pre-shared-key ascii-text <key>`.
   - {match: ['**'], after: pre-shared-key}
+  # SNMPv1/v2c communities: `snmp-server community <c>`, and a trap or inform
+  # host's, `snmp-server host h [traps|informs] [version 1|2c] <c>`, which IOS
+  # also takes with no version, so everything after `host` goes. Scoped to the
+  # command, so a BGP community in routing policy is kept (task 10 review C1,
+  # M1).
+  - {match: ['**', snmp-server, community, '**'], after: community}
+  - {match: ['**', snmp-server, host, '**'], after: host}
   # SNMPv3 passphrases: `snmp-server user u g v3 auth sha <pass> priv aes 128
   # <pass>`. Scoped to the command, so `auth` elsewhere is left alone.
   - {match: ['**', snmp-server, user, '**'], after: auth}
+  # HSRP and VRRP text authentication: `vrrp 1 authentication text <s>`, NX-OS
+  # `hsrp 1 ; authentication text <s>`, and HSRP's bare `standby [1]
+  # authentication <s>`.
+  - {match: ['**', authentication, text, '**'], after: text}
+  - {match: ['**', standby, '*', authentication, '**'], after: authentication}
+  - {match: ['**', standby, authentication, '**'], after: authentication}
+  # IS-IS, BGP, PIM and NHRP keywords that carry a secret.
+  - {match: ['**'], after: area-password}
+  - {match: ['**'], after: domain-password}
+  - {match: ['**'], after: auth-password}
+  - {match: ['**'], after: password-encrypt}
+  - {match: ['**'], after: ah-md5}
+  - {match: ['**', nhrp, authentication, '**'], after: authentication}
+  # OSPFv3 IPsec: `ospfv3 authentication ipsec spi 256 sha1 <key>`; the SPI
+  # goes with the key, because the key's position after it varies.
+  - {match: ['**', ipsec, spi, '**'], after: spi}
 juniper_junos:
   - {match: ['**'], after: encrypted-password}
   - {match: ['**'], after: plain-text-password-value}

@@ -44,18 +44,18 @@ func TestASecretIsRemovedAndTheShapeKept(t *testing.T) {
 			[]string{"tacacs-server", "host", "10.0.0.1", "key", Redacted, Redacted}},
 		{[]string{"snmp-server", "community", "s3cret", "RO"}, []string{"snmp-server", "community", Redacted, Redacted}},
 	} {
-		got, redacted := Redact(rules, false, tt.in)
+		got, redacted := Redact(rules, tt.in)
 		if !redacted || !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("%q: %q %v, want %q", tt.in, got, redacted, tt.want)
 		}
 	}
 	in := []string{"show", "running-config"}
-	if got, redacted := Redact(rules, false, in); redacted || !reflect.DeepEqual(got, in) {
+	if got, redacted := Redact(rules, in); redacted || !reflect.DeepEqual(got, in) {
 		t.Fatalf("a command with no secret is untouched: %q", got)
 	}
 	raw := []string{"task_id=43", "service=shell", "cmd=username", "cmd-arg=bob", "cmd-arg=secret", "cmd-arg=Hunter2",
 		"cmd-arg=<cr>"}
-	got, redacted := RedactRaw(rules, false, raw)
+	got, redacted := RedactRaw(rules, raw)
 	want := []string{"task_id=43", "service=shell", "cmd=username", "cmd-arg=bob", "cmd-arg=secret",
 		"cmd-arg=" + Redacted, "cmd-arg=<cr>"}
 	if !redacted || !reflect.DeepEqual(got, want) {
@@ -101,8 +101,7 @@ func TestEachVendorsSecretsAreRedacted(t *testing.T) {
 		{"juniper_junos", []string{"cmd=set security ike policy p pre-shared-key ascii-text SECRET1"}},
 		{"juniper_junos", []string{"cmd=set system login user bob authentication plain-text-password-value SECRET1"}},
 	} {
-		d, _ := DialectFor(tt.platform)
-		got, redacted := RedactRaw(Redactions(tt.platform), !d.ExpandsAbbreviations, tt.raw)
+		got, redacted := RedactRaw(Redactions(tt.platform), tt.raw)
 		if joined := strings.Join(got, " "); !redacted || strings.Contains(joined, "SECRET") {
 			t.Errorf("%s %q: %q", tt.platform, tt.raw, got)
 		}
@@ -110,19 +109,39 @@ func TestEachVendorsSecretsAreRedacted(t *testing.T) {
 }
 
 // Junos sends a whole command line as one `cmd`, so each element is split
-// into words; and a platform that may send what was typed has a pattern's word
-// match its abbreviations too, which removes more rather than less.
+// into words; and a pattern's word matches its abbreviations on every
+// platform, whatever expands_abbreviations says, because L21 measured
+// expansion for interactive SSH only and a missed abbreviation leaks a secret
+// the log cannot take back (task 10 review I1).
 func TestJunosLinesAndAbbreviationsAreRedacted(t *testing.T) {
-	got, redacted := RedactRaw(Redactions("juniper_junos"), true,
+	got, redacted := RedactRaw(Redactions("juniper_junos"),
 		[]string{"task_id=2", "cmd=set system root-authentication encrypted-password \"$6$abc\" <cr>"})
 	if !redacted || got[1] != "cmd=set system root-authentication encrypted-password "+Redacted+" "+Redacted {
 		t.Fatalf("%q", got)
 	}
-	if got, _ := Redact(Redactions(""), true, []string{"usern", "bob", "sec", "0", "Hunter2"}); got[4] != Redacted {
-		t.Fatalf("abbreviated: %q", got)
+	for _, platform := range []string{"arista_eos", "cisco_nxos", "cisco_iosxe"} {
+		for _, line := range []string{"usern x sec 0 SECRET1", "snmp comm SECRET1 ro", "snmp us u g v3 au sha SECRET1",
+			"ena sec SECRET1", "tacacs-server k 7 SECRET1", "snmp host 10.0.0.1 vers 2c SECRET1"} {
+			if got, redacted := Redact(Redactions(platform), strings.Fields(line)); !redacted ||
+				strings.Contains(strings.Join(got, " "), "SECRET") {
+				t.Errorf("%s %q: %q", platform, line, got)
+			}
+		}
 	}
-	if got, redacted := Redact(Redactions(""), false, []string{"usern", "bob", "sec", "0", "Hunter2"}); redacted {
-		t.Fatalf("a platform that expands abbreviations sends `secret`, never `sec`: %q", got)
+}
+
+// A command whose own word is the one the secret follows, as a submode's is,
+// keeps that word and loses what follows it: the join needs the command word.
+func TestTheCommandWordSurvives(t *testing.T) {
+	for _, tt := range []struct{ in, want []string }{
+		{[]string{"key-string", "X"}, []string{"key-string", Redacted}},
+		{[]string{"pre-shared-key", "local", "X"}, []string{"pre-shared-key", Redacted, Redacted}},
+		{[]string{"password", "7", "X"}, []string{"password", Redacted, Redacted}},
+		{[]string{"area-password", "X"}, []string{"area-password", Redacted}},
+	} {
+		if got, _ := Redact(Redactions("cisco_iosxe"), tt.in); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("%q: %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
 
@@ -138,7 +157,7 @@ func TestMatchAndFrom(t *testing.T) {
 		{[]string{"x", "psk"}, []string{"x", Redacted}},
 		{[]string{"psk"}, []string{"psk"}},
 	} {
-		if got, _ := Redact(rules, false, tt.in); !reflect.DeepEqual(got, tt.want) {
+		if got, _ := Redact(rules, tt.in); !reflect.DeepEqual(got, tt.want) {
 			t.Errorf("%q: %q, want %q", tt.in, got, tt.want)
 		}
 	}
@@ -177,5 +196,77 @@ func TestABlockAddsRedactions(t *testing.T) {
 	d := specs["x"].Over(base)
 	if len(d.Redact) != 2 || d.Redact[0].After != "secret" || d.Redact[1].After != "psk" || len(base.Redact) != 1 {
 		t.Fatalf("%+v", d.Redact)
+	}
+}
+
+// Every secret keyword the 5a platforms' syntax carries, one line per pattern
+// and each sibling the default list already covers, on all three: the secret
+// is not in what is written, in the vector or the raw pairs (task 10 review
+// C1, C2). The NX-OS line is its ` ; `-joined path and result.
+func TestTheSecretKeywordsAreRedactedOnEveryPlatform(t *testing.T) {
+	lines := []string{
+		// SNMPv1/v2c trap and inform hosts carry the community.
+		"snmp-server host 10.0.0.1 version 2c SECRET1 udp-port 162",
+		"snmp-server host 10.0.0.1 traps version 2c SECRET1",
+		"snmp-server host 10.0.0.1 informs version 2c SECRET1",
+		"snmp-server host 10.0.0.1 SECRET1",
+		"snmp-server host 10.0.0.1 version 1 SECRET1",
+		// HSRP and VRRP text authentication.
+		"standby 1 authentication text SECRET1",
+		"standby 1 authentication SECRET1",
+		"standby authentication SECRET1",
+		"vrrp 1 authentication text SECRET1",
+		"configure terminal ; interface Ethernet1/1 ; hsrp 1 ; authentication text SECRET1 (SUCCESS)",
+		// IS-IS.
+		"area-password SECRET1",
+		"domain-password SECRET1",
+		"isis password SECRET1",
+		// OSPFv3 IPsec: the SPI and the key after it.
+		"ospfv3 authentication ipsec spi 256 sha1 SECRET1",
+		"ipv6 ospf authentication ipsec spi 256 md5 SECRET1",
+		// BGP.
+		"bgp auth-password SECRET1",
+		"neighbor 10.0.0.1 password-encrypt SECRET1",
+		"neighbor 10.0.0.1 password 7 SECRET1",
+		// PIM.
+		"ip pim hello-authentication ah-md5 SECRET1",
+		// NHRP.
+		"ip nhrp authentication SECRET1",
+		// Siblings the default list covers.
+		"ntp authentication-key 1 md5 SECRET1",
+		"radius-server key 7 SECRET1",
+		"key 7 SECRET1",
+		"crypto ca import tp pkcs12 flash:tp.p12 password SECRET1",
+		"enrollment password SECRET1",
+		"snmp-server community SECRET1 ro",
+	}
+	for _, platform := range []string{"arista_eos", "cisco_nxos", "cisco_iosxe"} {
+		for _, line := range lines {
+			words := strings.Fields(line)
+			got, redacted := Redact(Redactions(platform), words)
+			if joined := strings.Join(got, " "); !redacted || strings.Contains(joined, "SECRET") {
+				t.Errorf("%s vector %q: %q", platform, line, got)
+			}
+			raw := []string{"cmd=" + words[0]}
+			for _, w := range words[1:] {
+				raw = append(raw, "cmd-arg="+w)
+			}
+			gotRaw, redacted := RedactRaw(Redactions(platform), append(raw, "cmd-arg=<cr>"))
+			if joined := strings.Join(gotRaw, " "); !redacted || strings.Contains(joined, "SECRET") {
+				t.Errorf("%s raw %q: %q", platform, line, gotRaw)
+			}
+		}
+	}
+}
+
+// A BGP community is routing policy, not a secret: it is removed only from
+// the snmp-server command that makes one a password (task 10 review M1).
+func TestARoutingCommunityIsKept(t *testing.T) {
+	for _, line := range []string{"set community 65000:1 additive", "match community C1",
+		"show ip bgp community 65000:1"} {
+		in := strings.Fields(line)
+		if got, redacted := Redact(Redactions("cisco_iosxe"), in); redacted {
+			t.Errorf("%q: %q", line, got)
+		}
 	}
 }

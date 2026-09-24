@@ -109,11 +109,13 @@ func Redactions(platformName string) []Redaction {
 // Redact applies rules to a command's elements — a vector, or the values of
 // a record's cmd and cmd-arg pairs — and returns them with every removed word
 // replaced by Redacted, and whether any was. Each element is split into words,
-// because Junos sends a whole command line as one `cmd`. Where abbrev is set,
-// the platform may send what was typed, so a pattern's word also matches any
-// abbreviation of it — `sec` for `secret` — which removes more rather than
-// less. An element no pattern touches comes back as it was.
-func Redact(rules []Redaction, abbrev bool, elements []string) ([]string, bool) {
+// because Junos sends a whole command line as one `cmd`. A pattern's word also
+// matches any abbreviation of it — `sec` for `secret` — on every platform,
+// whatever expands_abbreviations says: L21 measured expansion for interactive
+// SSH only, and a flag that is wrong here leaks a secret into a log that
+// cannot take it back, where matching an abbreviation only removes more
+// (task 10 review I1). An element no pattern touches comes back as it was.
+func Redact(rules []Redaction, elements []string) ([]string, bool) {
 	var words []string
 	var owner []int
 	for i, e := range elements {
@@ -124,7 +126,7 @@ func Redact(rules []Redaction, abbrev bool, elements []string) ([]string, bool) 
 	hide := make([]bool, len(words))
 	redacted := false
 	for _, r := range rules {
-		if !matchWords(r.Match, words, abbrev) {
+		if !matchWords(r.Match, words) {
 			continue
 		}
 		start := len(words)
@@ -135,7 +137,7 @@ func Redact(rules []Redaction, abbrev bool, elements []string) ([]string, bool) 
 			// `pre-shared-key local X` in an IKEv2 keyring. The command
 			// word is still never removed.
 			for i := 0; i < len(words); i++ {
-				if sameWord(r.After, words[i], abbrev) {
+				if sameWord(r.After, words[i]) {
 					start = i + 1
 					break
 				}
@@ -178,7 +180,7 @@ func Redact(rules []Redaction, abbrev bool, elements []string) ([]string, bool) 
 // RedactRaw applies rules to a record's raw AV pairs: the values of its cmd
 // and cmd-arg pairs are the command's elements, a trailing `<cr>` aside, and
 // each keeps its own key and separator.
-func RedactRaw(rules []Redaction, abbrev bool, raw []string) ([]string, bool) {
+func RedactRaw(rules []Redaction, raw []string) ([]string, bool) {
 	var at []int
 	var elements []string
 	for i, a := range raw {
@@ -191,7 +193,7 @@ func RedactRaw(rules []Redaction, abbrev bool, raw []string) ([]string, bool) {
 	if n := len(elements); n > 0 && elements[n-1] == "<cr>" {
 		at, elements = at[:n-1], elements[:n-1]
 	}
-	redactedElements, redacted := Redact(rules, abbrev, elements)
+	redactedElements, redacted := Redact(rules, elements)
 	if !redacted {
 		return raw, false
 	}
@@ -204,31 +206,31 @@ func RedactRaw(rules []Redaction, abbrev bool, raw []string) ([]string, bool) {
 }
 
 // matchWords reports whether pattern matches every word, anchored at both
-// ends: a word matches itself case-insensitively, `*` one word, `**` any
-// number.
-func matchWords(pattern, words []string, abbrev bool) bool {
+// ends: a word matches itself or an abbreviation of it (sameWord), `*` one
+// word, `**` any number.
+func matchWords(pattern, words []string) bool {
 	if len(pattern) == 0 {
 		return len(words) == 0
 	}
 	switch pattern[0] {
 	case "**":
 		for i := 0; i <= len(words); i++ {
-			if matchWords(pattern[1:], words[i:], abbrev) {
+			if matchWords(pattern[1:], words[i:]) {
 				return true
 			}
 		}
 		return false
 	case "*":
-		return len(words) > 0 && matchWords(pattern[1:], words[1:], abbrev)
+		return len(words) > 0 && matchWords(pattern[1:], words[1:])
 	}
-	return len(words) > 0 && sameWord(pattern[0], words[0], abbrev) && matchWords(pattern[1:], words[1:], abbrev)
+	return len(words) > 0 && sameWord(pattern[0], words[0]) && matchWords(pattern[1:], words[1:])
 }
 
 // sameWord reports whether word, as a pattern writes it, is the word sent:
-// equal ignoring case, or where abbrev is set a shorter prefix of it.
-func sameWord(word, sent string, abbrev bool) bool {
+// equal ignoring case, or a shorter prefix of it, as an abbreviation is.
+func sameWord(word, sent string) bool {
 	if strings.EqualFold(word, sent) {
 		return true
 	}
-	return abbrev && sent != "" && len(sent) < len(word) && strings.EqualFold(word[:len(sent)], sent)
+	return sent != "" && len(sent) < len(word) && strings.EqualFold(word[:len(sent)], sent)
 }
