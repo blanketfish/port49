@@ -260,3 +260,44 @@ func TestCheckConfigPrintsAMissingSetLineAsWritten(t *testing.T) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// A platform whose adapter, as the daemon resolves it, holds nothing to read
+// a configuration against — no local_accounts, no device_config, no
+// config_checks, as the generic adapter an unknown platform gets — is never
+// reported clean: the check exits 2 and says nothing was checked (final
+// review I4).
+func TestCheckConfigSaysNothingWasCheckedOnAPlatformItCannotRead(t *testing.T) {
+	pol, inv := policyFixture(t)
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: fw-01, platform: fortinet_fortios, addresses: [10.0.0.2]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(t.TempDir(), "fw-01.cfg")
+	if err := os.WriteFile(cfg, []byte("username noc privilege 15 secret 5 x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "fw-01", cfg}, &out, &errb)
+	if code != 2 || !strings.Contains(out.String()+errb.String(), "nothing checked: fortinet_fortios has no config checks") ||
+		strings.Contains(out.String(), "0 findings") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// Half an adapter checks half, and says which half it could not.
+	raw := readFile(t, pol)
+	block := "platforms:\n  fortinet_fortios:\n    config_checks: [{match: '^set admin-lockout', says: a test check}]\n"
+	if err := os.WriteFile(pol, append([]byte(block), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errb.Reset()
+	code = run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "fw-01", cfg}, &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "note: local-account collisions were not checked: the "+
+		"fortinet_fortios adapter has no local_accounts") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

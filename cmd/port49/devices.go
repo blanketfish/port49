@@ -75,6 +75,17 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 devices check-config:", err)
 		return 1
 	}
+	// An adapter with nothing to read a configuration against — the generic
+	// one an unknown platform gets, as the daemon resolves it — would report
+	// every device clean: at 3am "0 findings" reads as no collision, where
+	// nothing was looked for (final review I4).
+	if len(dialect.LocalAccounts) == 0 && len(dialect.DeviceConfig) == 0 && len(dialect.ConfigChecks) == 0 {
+		fmt.Fprintf(stderr, "port49 devices check-config: nothing checked: %s has no config checks: its adapter has "+
+			"no local_accounts, device_config or config_checks, so no collision or forbidden line could be found; "+
+			"give the platform a platforms: block that says how its configuration names an account (spec §5.6)\n",
+			d.Platform)
+		return 2
+	}
 	accounts, findings, err := dialect.ReadConfig(config)
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
@@ -119,6 +130,16 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "MISSING: %s: %s: the configuration does not carry this line, and the %s adapter's "+
 			"renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 "+
 			"platform show %s)\n", fs.Arg(0), redact(line), d.Platform, d.Platform)
+	}
+	// Half an adapter checks half: what it could not look for is said, so
+	// the summary line is not read as covering it.
+	if len(dialect.LocalAccounts) == 0 {
+		fmt.Fprintf(stdout, "note: local-account collisions were not checked: the %s adapter has no local_accounts, "+
+			"so how its configuration names an account is unknown\n", d.Platform)
+	}
+	if len(dialect.DeviceConfig) == 0 && len(dialect.ConfigChecks) == 0 {
+		fmt.Fprintf(stdout, "note: no configuration line was checked: the %s adapter has no device_config or "+
+			"config_checks\n", d.Platform)
 	}
 	for _, g := range groups {
 		fmt.Fprintf(stdout, "note: group subject %s reaches %s; its members' usernames come from the directory "+
