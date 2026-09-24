@@ -1,9 +1,11 @@
-// Command port49 is the operator's CLI for the vertical slice (design §17,
-// "Client libraries"; §19 step 3). `port49 login` starts the agent that holds
-// the session — one mutual-TLS connection to the broker — and `port49 token
-// DEVICE` mints through it, fresh every time. Plan 9 builds the rest: `port49
-// ssh` with host-key verification, the OIDC client, and a key held on a
-// hardware token.
+// Command port49 is the operator's CLI (design §17, "Client libraries"; §19
+// step 3). `port49 login` starts the agent that holds the session — one
+// mutual-TLS connection to the broker — and `port49 token DEVICE` mints
+// through it, fresh every time. The policy tools of spec §12 (`explain`,
+// `policy test`, `policy replay`, `access review`, `grants remove`) read a
+// policy file and an inventory file offline and need no broker. Plan 9 builds
+// the rest: `port49 ssh` with host-key verification, the OIDC client, and a
+// key held on a hardware token.
 package main
 
 import (
@@ -30,6 +32,8 @@ import (
 const usage = `usage:
   port49 login --broker URL --cert FILE --key FILE --broker-ca FILE [--socket PATH]
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
+  port49 explain --policy FILE --inventory FILE (--subject NAME | --principal ID) --device NAME
+                 [--command "LINE"] [--show-attributes]
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -47,6 +51,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "agent":
 		// What login starts; not for typing.
 		return agentMain(args[1:], stderr)
+	case "explain":
+		return explainCmd(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
