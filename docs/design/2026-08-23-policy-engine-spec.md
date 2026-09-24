@@ -1987,19 +1987,25 @@ a pattern anchored at the command word never matches. A pattern whose `match` is
 alone matches every command, and with `from` it would remove the arguments of every record: it
 is refused, and a secret is named by the word it follows, with `after`. Where a pattern removes
 words from a record's `raw` pairs and not its vector, or the other way round, the form it
-missed loses every argument, so a secret is never left in one of the two.
+missed loses every argument, so a secret is never left in one of the two. Each pattern is
+judged on its own: another pattern matching both forms does not excuse this one.
 
 Redaction replaces argument *values* with `«redacted»` and preserves the vector's shape and
 length, so the reconciliation join still works on a redacted record. It applies to `raw` as
 well — a rule that redacted only the normalized form would defeat itself.
 
-**A policy's own rule text is redacted too** (§5.7). A rule may legitimately carry a value a
-pattern hides — `deny snmp-server community public **` — and it loads; `port49 policy test`
-and `port49d` at start report it as `rule_secret_literal`, naming the role and the rule in its
-redacted form, so the operator knows the value lives in the policy file and reads `«redacted»`
-everywhere else. The `blob` event (§5.7, "Replay") is logged with such rule text redacted and
-carries `"redacted": true`; the store keeps the blob verbatim, and the hash beside it still names
-which blob it was. A redacted body does not hash to its name, so replay reports every record
+**A policy's own rule text is redacted too** (§5.7). A rule or pipe permit may legitimately
+carry a value a pattern hides — `deny snmp-server community public **` — and it loads; `port49
+policy test` and `port49d` at start report it as `rule_secret_literal`, naming the role and the
+rule in its redacted form, so the operator knows the value lives in the policy file and reads
+`«redacted»` everywhere else. Everywhere else means: every line `port49d` and its broker write
+that quotes policy text (a refused policy at start or reload included), and what `port49 policy
+test`, `policy diff` and `explain` print, since CI keeps it. Those redact every quoted value by
+every pattern that applies anywhere under the policy, erring toward hiding. The `blob` event
+(§5.7, "Replay") is logged with such rules and pipe permits redacted, and with the patterns of
+an entity class a rule names where a value is redacted (`snmp-server community @bad **`)
+replaced by `«redacted»`; it carries `"redacted": true`. The store keeps the blob verbatim, and
+the hash beside it still names which blob it was. A redacted body does not hash to its name, so replay reports every record
 naming it `unverifiable` — never a divergence, and never an agreement — until replay can read
 the verbatim blob from outside the log. A blob with no such rule is logged byte for byte.
 
