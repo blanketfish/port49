@@ -379,6 +379,14 @@ func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version strin
 				"as enforced where the device never asks (spec §8, §9)", at, c, version, shippedAs)
 		}
 	}
+	// The token cuts a command into its stages before any rule reads it, so a
+	// different one splits a deny's vector apart: the set measured what the
+	// device sends, and there is no tighter value.
+	if d.PipeToken != ref.PipeToken {
+		return fmt.Errorf("%s.pipe_token: platform set %s measured %q on %s, and another token would split a "+
+			"command where the device does not, walking it past a deny; a block may not change it (spec §8)", at,
+			version, ref.PipeToken, shippedAs)
+	}
 	for _, f := range []struct {
 		key           string
 		set, is, weak bool

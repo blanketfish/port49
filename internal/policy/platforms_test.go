@@ -179,6 +179,12 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 			"platforms.cisco_iosxe.splits_interface_names: platform set 1.0.0 measured true"},
 		{"strip_cr dropped", "  cisco_iosxe: {strip_cr: false}\n",
 			"platforms.cisco_iosxe.strip_cr: platform set 1.0.0 measured true"},
+		// The token cuts a command before any rule reads it, so a different one
+		// splits a deny's vector apart (task 7 re-review): no tighter value.
+		{"pipe_token changed", "  arista_eos: {pipe_token: running-config}\n",
+			"platforms.arista_eos.pipe_token: platform set 1.0.0 measured \"|\" on arista_eos"},
+		{"pipe_token changed on a variant", "  wb: {based_on: cisco_nxos, pipe_token: \"||\"}\n",
+			"platforms.wb.pipe_token: platform set 1.0.0 measured \"|\" on cisco_nxos"},
 		// A typo is a level nobody has (task 7 review I2).
 		{"a privilege entry for an undeclared level", "  cisco_iosxe: {privilege: {admn: [\"priv-lvl=7\"]}}\n",
 			"platforms.cisco_iosxe.privilege.admn: level admn is not declared"},
@@ -224,6 +230,21 @@ func TestAPlatformBlockMayRankNewRoles(t *testing.T) {
 	}
 	if r, ok := p.Dialect("f5_bigip").RoleRank("F5-LTM-User-Role", "admin"); !ok || r != 1 {
 		t.Fatalf("f5: %d %v", r, ok)
+	}
+}
+
+// The re-review's probe: a pipe_token that is a deny's word would cut the
+// deny's vector before it forms, and let the command through.
+func TestAPipeTokenThatSplitsADenyIsRefused(t *testing.T) {
+	body := "platforms:\n  arista_eos:\n    pipe_token: running-config\n" + scopeOK + "roles:\n" +
+		"  - {name: r, privilege: admin, permit: [\"**\"], pipe: {permit: [\"**\"]}, deny: [\"copy running-config **\"]}\n" +
+		subjOK + grantOK
+	if _, err := Parse([]byte(body), env()); err == nil || !strings.Contains(err.Error(), "platforms.arista_eos.pipe_token") {
+		t.Fatalf("%v", err)
+	}
+	same := "platforms:\n  arista_eos:\n    pipe_token: \"|\"\n" + scopeOK + roleOK + subjOK + grantOK
+	if _, err := Parse([]byte(same), env()); err != nil {
+		t.Fatalf("the set's own token: %v", err)
 	}
 }
 
