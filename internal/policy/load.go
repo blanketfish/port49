@@ -786,6 +786,17 @@ func (p *Policy) buildAcknowledgments(f file) error {
 	return nil
 }
 
+// hasDeny reports whether any role in the policy denies rule as written:
+// an acknowledge: entry naming it removed nothing (spec §12).
+func (p *Policy) hasDeny(rule string) bool {
+	for _, r := range p.roles {
+		if slices.Contains(r.Deny, rule) {
+			return true
+		}
+	}
+	return false
+}
+
 // Acknowledgments returns the file's acknowledge: entries.
 func (p *Policy) Acknowledgments() []Acknowledgment { return p.acked }
 

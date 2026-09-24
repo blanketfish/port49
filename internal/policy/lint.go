@@ -32,6 +32,7 @@ const (
 	FindingPermitJoinedName    = "permit_joined_name"
 	FindingNoTests             = "no_tests"
 	FindingCeilingIndistinct   = "ceiling_indistinct"
+	FindingAcknowledgeStale    = "acknowledge_stale"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -124,6 +125,12 @@ func (p *Policy) Lint(now time.Time) []Finding {
 	}
 	for _, f := range p.indistinctCeilings() {
 		add(FindingCeilingIndistinct, "%s", f)
+	}
+	for _, a := range p.acked {
+		if p.hasDeny(a.Rule) {
+			add(FindingAcknowledgeStale, "acknowledge: %s %q: the policy still denies %q, so the entry removed nothing "+
+				"and acknowledges nothing; delete it (spec §12)", a.Role, a.Rule, a.Rule)
+		}
 	}
 	if len(p.tests) == 0 {
 		add(FindingNoTests, "the policy has no tests: nothing in it acknowledges a shadowed deny, an expansion or "+

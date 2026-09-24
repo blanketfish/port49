@@ -663,6 +663,12 @@ func TestPolicyToolsPrintAnAcknowledgment(t *testing.T) {
 		!strings.Contains(out.String(), `regex-constrained (acknowledged: reload moves to the change window): noc on leaf-01: deny "/^(rel|wri)/ **" (no_reload) removed`) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
+	// The same entry against a diff that removes nothing is stale.
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", newPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `report: acknowledge_stale: no_reload "/^(rel|wri)/ **"`) {
+		t.Fatalf("stale: code %d\n%s%s", code, out.String(), errb.String())
+	}
 	out.Reset()
 	if code := run([]string{"policy", "test", "--policy", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), `acknowledge: no_reload "/^(rel|wri)/ **": reload moves to the change window`) {

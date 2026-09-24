@@ -643,3 +643,33 @@ func TestTheGateComparesPrincipals(t *testing.T) {
 		t.Fatalf("a removal is reported and passes: %+v", d.Principals)
 	}
 }
+
+// A stale acknowledge: entry acknowledges nothing and is reported (review
+// M5): one whose rule is still in the new policy removed nothing, and one no
+// widening in the diff names is left over from an earlier change.
+func TestAStaleAcknowledgmentAcknowledgesNothing(t *testing.T) {
+	regexDeny := strings.Replace(regexBase, "copy * startup-config", "copy * /^start/", 1)
+	wider := strings.Replace(regexBase, "copy * startup-config", "copy * /^(start|run)/", 1)
+	// The old rule is kept under another role in the new policy: the entry
+	// names a rule the new policy still has, so it removed nothing.
+	kept := strings.Replace(wider, "  - {name: guard,", "  - {name: keep, deny: [\"copy * /^start/\"]}\n  - {name: guard,", 1) +
+		"acknowledge:\n  - {role: keep, rule: \"copy * /^start/\", reason: \"still here\"}\n"
+	p := mustParse(t, kept)
+	if !slices.ContainsFunc(p.Lint(noon), func(f Finding) bool { return f.Kind == FindingAcknowledgeStale }) {
+		t.Fatal("policy test reports an entry whose rule the policy still has")
+	}
+	leftover := wider + "acknowledge:\n  - {role: guard, rule: \"copy * /^start/\", reason: \"rewritten wider\"}\n" +
+		"  - {role: guard, rule: \"reload **\", reason: \"from last quarter\"}\n"
+	d := Compare(mustParse(t, regexDeny), mustParse(t, leftover), noon)
+	if d.UnacknowledgedRegex() != 0 || len(d.StaleAcknowledgments) != 1 || d.StaleAcknowledgments[0].Rule != "reload **" {
+		t.Fatalf("stale %+v, regex %+v", d.StaleAcknowledgments, d.Regex)
+	}
+	// An entry naming a rule the new policy still has, under the role it is
+	// removed from elsewhere, acknowledges nothing.
+	still := strings.Replace(wider, "  - {name: guard, deny: [copy * /^(start|run)/]}",
+		"  - {name: guard, deny: [copy * /^(start|run)/]}\n  - {name: spare, deny: [\"copy * /^start/\"]}", 1)
+	still += "acknowledge:\n  - {role: spare, rule: \"copy * /^start/\", reason: \"x\"}\n"
+	if d := Compare(mustParse(t, regexDeny), mustParse(t, still), noon); d.UnacknowledgedRegex() == 0 {
+		t.Fatalf("an entry for another role's rule acknowledges nothing: %+v", d.Regex)
+	}
+}

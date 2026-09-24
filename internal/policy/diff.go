@@ -44,6 +44,10 @@ type Diff struct {
 	// access, which no subject's own diff shows (spec §12).
 	Principals []PrincipalChange
 	Subjects   []SubjectChange
+	// StaleAcknowledgments are the new version's acknowledge: entries no
+	// widening in the diff is the one they name. They acknowledge nothing and
+	// are reported, acknowledge_stale (spec §12).
+	StaleAcknowledgments []Acknowledgment
 }
 
 // PrincipalChange is a principal that resolves to another subject in the new
@@ -313,7 +317,8 @@ func Compare(before, after *Policy, now time.Time) Diff {
 		}
 	}
 	slices.SortFunc(instants, func(a, b time.Time) int { return a.Compare(b) })
-	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{}}
+	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{},
+		usedAcks: map[Acknowledgment]bool{}}
 	for k := range after.sessionAcks(instants) {
 		c.acks[k] = true
 	}
@@ -324,6 +329,11 @@ func Compare(before, after *Policy, now time.Time) Diff {
 		c.at(at)
 	}
 	c.principals(now)
+	for _, a := range after.acked {
+		if !c.usedAcks[a] {
+			c.d.StaleAcknowledgments = append(c.d.StaleAcknowledgments, a)
+		}
+	}
 	return c.d
 }
 
@@ -374,7 +384,9 @@ type comparison struct {
 	// seen holds what has been reported, so an instant repeats nothing an
 	// earlier one found.
 	seen map[string]bool
-	d    Diff
+	// usedAcks are the acknowledge: entries that acknowledged a widening.
+	usedAcks map[Acknowledgment]bool
+	d        Diff
 }
 
 func (c *comparison) once(parts ...string) bool {
@@ -623,8 +635,14 @@ func (c *comparison) regexAcked(r RegexChange) RegexChange {
 		r.Gated, deny = !r.Added, r.Rule
 		r.Acknowledged = tested("flip", r.Rule.Role, r.Rule.Rule)
 	}
-	if a, ok := c.after.acknowledgment(deny.Role, deny.Rule); ok && deny.Rule != "" && !r.Acknowledged {
-		r.Acknowledged, r.AcknowledgedBy = true, a.Reason
+	// An entry naming a rule the new version still has removed nothing: it
+	// is stale, and acknowledges nothing.
+	if a, ok := c.after.acknowledgment(deny.Role, deny.Rule); ok && deny.Rule != "" && r.Gated &&
+		!c.after.hasDeny(deny.Rule) {
+		c.usedAcks[a] = true
+		if !r.Acknowledged {
+			r.Acknowledged, r.AcknowledgedBy = true, a.Reason
+		}
 	}
 	if !r.Gated {
 		r.Acknowledged, r.AcknowledgedBy = false, ""

@@ -305,6 +305,10 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "RELEASES: %s (%s)%s: the old version quarantines it, so every command the new one "+
 			"permits there is an expansion\n", r.Device, r.Platform, from(r.At))
 	}
+	for _, a := range d.StaleAcknowledgments {
+		fmt.Fprintf(stdout, "report: acknowledge_stale: %s %q (%s): no widening in this diff is the one it names, so "+
+			"it acknowledges nothing; delete it (spec §12)\n", a.Role, a.Rule, a.Reason)
+	}
 	for _, p := range d.Principals {
 		switch {
 		case !p.Gated:
