@@ -373,6 +373,19 @@ config backup (Oxidized) as the day-one consumer.
 `port49 ssh` with host-key verification and `port49 devices trust`, the OIDC public client,
 the in-session re-auth flow, integration examples (design §17 "Integration examples").
 
+**Owed from plan 3 (owner's rulings 2026-09-24):**
+- **A per-user config file** (e.g. `~/.config/port49/config.yaml`: `broker`, `broker_ca`,
+  `cert`, `key`) so `port49 login` needs no flags. `broker_ca` stays **required** — the file
+  supplies it, it never falls back to the system roots — and it pins the **CA**, not the
+  broker's leaf, so a broker certificate renewal does not break every client. Flags override
+  the file.
+- **Hardware-backed client keys**: YubiKey through its **PIV** applet (PKCS#11), and platform
+  keystores (TPM, macOS Secure Enclave), with touch/PIN policy. FIDO2 alone cannot sign a TLS
+  handshake; it belongs to the OIDC path. Plan 3's PEM file stays as the fallback.
+- **Optional CRL check of the broker's certificate** when it names a distribution point (the
+  CA is the operator's own, so this is defence in depth; revocation of *client* certificates
+  at the broker is plan 7's, spec §5.1.4).
+
 ## Plan 10 — Kubernetes path (§19 step 10)
 
 Projected ServiceAccount token validation against the cluster JWKS; identity
