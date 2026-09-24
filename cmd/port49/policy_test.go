@@ -546,3 +546,36 @@ func TestPolicyDiffGatesALevelRaise(t *testing.T) {
 		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// A regex-constrained widening fails `port49 policy diff` until a policy test
+// in the new version exercises it (owner's ruling 2026-09-24; spec §12).
+func TestPolicyDiffGatesARegexConstrainedWidening(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := readFile(t, oldPol)
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	widened := strings.Replace(string(raw), "permit: [show **]}", `permit: [show **, "copy /^scp:/ *"]}`, 1)
+	if err := os.WriteFile(newPol, []byte(widened), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `REGEX-CONSTRAINED: noc on leaf-01: permit "copy /^scp:/ *" (read_only) added; `+
+			`the commands it matches are not enumerated (spec §12), and no policy test exercises it`) ||
+		!strings.Contains(out.String(), "1 unacknowledged regex-constrained widenings") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := widened + "  - {subject: noc, device: leaf-01, command: \"copy scp://h/f flash:\", expect: permit}\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `regex-constrained (a policy test exercises it): noc on leaf-01: permit "copy /^scp:/ *"`) {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", newPol, "--new", oldPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), `regex-constrained: noc on leaf-01: permit "copy /^scp:/ *" (read_only) removed`) {
+		t.Fatalf("a narrowing: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

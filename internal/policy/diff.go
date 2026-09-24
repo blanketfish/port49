@@ -102,6 +102,11 @@ type RegexChange struct {
 	Rule    engine.Rule
 	Deny    engine.Rule
 	Added   bool
+	// Gated is a widening, which fails spec §12's gate: a constrained permit
+	// added, a constrained deny removed, or a constrained permit meeting a
+	// deny the change removed. Acknowledged is a passing policy test in the
+	// new version that exercises it (regexAcked).
+	Gated, Acknowledged bool
 }
 
 // MintRefusal is one subject the new version's broker would refuse to mint
@@ -126,6 +131,18 @@ func (d Diff) UnacknowledgedLevels() int {
 	n := 0
 	for _, l := range d.Levels {
 		if l.Raise && !l.Acknowledged {
+			n++
+		}
+	}
+	return n
+}
+
+// UnacknowledgedRegex counts the regex-constrained widenings no test
+// exercises.
+func (d Diff) UnacknowledgedRegex() int {
+	n := 0
+	for _, r := range d.Regex {
+		if r.Gated && !r.Acknowledged {
 			n++
 		}
 	}
@@ -219,6 +236,9 @@ func Compare(before, after *Policy, now time.Time) Diff {
 	slices.SortFunc(instants, func(a, b time.Time) int { return a.Compare(b) })
 	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{}}
 	for k := range after.sessionAcks(instants) {
+		c.acks[k] = true
+	}
+	for k := range after.regexAcks(before, instants) {
 		c.acks[k] = true
 	}
 	for _, at := range instants {
@@ -386,14 +406,14 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 		if c.once("regex", subject, on, r.Rule.Verdict, r.Rule.Role, r.Rule.Rule, r.Deny.Role, r.Deny.Rule,
 			strconv.FormatBool(r.Added)) {
 			r.Subject, r.Devices, r.At = subject, devices, at
-			c.d.Regex = append(c.d.Regex, r)
+			c.d.Regex = append(c.d.Regex, c.regexAcked(r))
 		}
 	}
 	for _, e := range engine.Exposures(was.prog, is.prog) {
 		if c.once("exposure", subject, on, e.Permit.Role, e.Permit.Rule, e.Deny.Role, e.Deny.Rule,
 			strconv.FormatBool(e.Added)) {
-			c.d.Regex = append(c.d.Regex, RegexChange{Subject: subject, Devices: devices, At: at, Rule: e.Permit,
-				Deny: e.Deny, Added: e.Added})
+			c.d.Regex = append(c.d.Regex, c.regexAcked(RegexChange{Subject: subject, Devices: devices, At: at,
+				Rule: e.Permit, Deny: e.Deny, Added: e.Added}))
 		}
 	}
 	var base []string
@@ -451,6 +471,66 @@ func (c *comparison) change(subject string, devices []string, at time.Time, v []
 		string(to.Reason), oldRule, newRule}, v...)...) {
 		c.d.Changes = append(c.d.Changes, ch)
 	}
+}
+
+// regexAcked marks a regex-constrained widening and whether a policy test in
+// the new version exercises it (spec §12): an added permit, by a test it
+// decides; a removed deny, or a permit meeting one, by a test on a command
+// that deny refused before, whatever the test expects — a test of the permit
+// over the deny is one, and a deny rewritten wider, which no permit test can
+// get past, is acknowledged by a test it still refuses. A narrowing is
+// reported and not gated.
+func (c *comparison) regexAcked(r RegexChange) RegexChange {
+	switch {
+	case r.Deny.Rule != "":
+		r.Gated = !r.Added
+		r.Acknowledged = c.acks[regexKey(r.Subject, engine.Deny, r.Deny.Role, r.Deny.Rule)]
+	case r.Rule.Verdict == engine.Permit:
+		r.Gated = r.Added
+		r.Acknowledged = c.acks[regexKey(r.Subject, engine.Permit, r.Rule.Role, r.Rule.Rule)]
+	default:
+		r.Gated = !r.Added
+		r.Acknowledged = c.acks[regexKey(r.Subject, engine.Deny, r.Rule.Role, r.Rule.Rule)]
+	}
+	if !r.Gated {
+		r.Acknowledged = false
+	}
+	return r
+}
+
+func regexKey(subject, verdict, role, rule string) string {
+	return shadowKey(subject, "regex", verdict, role, rule)
+}
+
+// regexAcks is what each passing command test in p acknowledges of a
+// regex-constrained change, at each of instants: the permit that decides a
+// test expecting permit, and the deny before refused the test's command with,
+// whatever the test expects (spec §12).
+func (p *Policy) regexAcks(before *Policy, instants []time.Time) map[string]bool {
+	acks := map[string]bool{}
+	for _, at := range instants {
+		for _, r := range p.RunTests(at) {
+			if !r.Pass || r.Test.Session() || r.MintError != "" {
+				continue
+			}
+			subject := r.Test.Subject
+			if subject == "" {
+				subject = p.byID[r.Test.Principal]
+			}
+			if r.Permit && r.Outcome.Decided != nil {
+				acks[regexKey(subject, engine.Permit, r.Outcome.Decided.Role, r.Outcome.Decided.Rule)] = true
+			}
+			dev, ok := p.device(r.Test.Device)
+			if !ok {
+				continue
+			}
+			if _, was, err := before.Decide(subject, "", dev, r.Test.Command, at); err == nil && !was.Permit &&
+				was.Deny != nil {
+				acks[regexKey(subject, engine.Deny, was.Deny.Role, was.Deny.Rule)] = true
+			}
+		}
+	}
+	return acks
 }
 
 // levelChange marks a raise and whether a session test asserts it (spec

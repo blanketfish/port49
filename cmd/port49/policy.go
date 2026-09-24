@@ -228,7 +228,8 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 // change and exits 1 on a command the old version refused (by a deny, at a
 // pipeline stage, or by quarantining the device) that the new version
 // permits and no policy test in it exercises, on a level or ceiling raise no
-// session test in it asserts, on a device the new version quarantines for a
+// session test in it asserts, on a regex-constrained widening no policy test
+// in it exercises, on a device the new version quarantines for a
 // new cause, on a subject whose mint the new version's
 // broker refuses where the old did not, and on a composition it could not
 // compare.
@@ -353,21 +354,29 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		if r.Added {
 			verb = "added"
 		}
+		label, tail := "regex-constrained", ""
+		switch {
+		case r.Gated && r.Acknowledged:
+			label = "regex-constrained (a policy test exercises it)"
+		case r.Gated:
+			label, tail = "REGEX-CONSTRAINED", ", and no policy test exercises it"
+		}
 		if r.Deny.Rule != "" {
-			fmt.Fprintf(stdout, "regex-constrained: %s: permit %q (%s) meets deny %q (%s), which the change %s; "+
-				"the commands they share are not enumerated (spec §12)\n", on, r.Rule.Rule, r.Rule.Role, r.Deny.Rule,
-				r.Deny.Role, verb)
+			fmt.Fprintf(stdout, "%s: %s: permit %q (%s) meets deny %q (%s), which the change %s; "+
+				"the commands they share are not enumerated (spec §12)%s\n", label, on, r.Rule.Rule, r.Rule.Role,
+				r.Deny.Rule, r.Deny.Role, verb, tail)
 			continue
 		}
-		fmt.Fprintf(stdout, "regex-constrained: %s: %s %q (%s) %s; the commands it matches are not "+
-			"enumerated (spec §12)\n", on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb)
+		fmt.Fprintf(stdout, "%s: %s: %s %q (%s) %s; the commands it matches are not "+
+			"enumerated (spec §12)%s\n", label, on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb, tail)
 	}
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
-		"%d unacknowledged privilege raises; %d devices newly quarantined, %d released; %d mints newly refused; "+
-		"%d unresolved\n", len(d.Changes), widen, narrow, d.Unacknowledged(), d.UnacknowledgedLevels(),
-		len(d.Quarantined), len(d.Released), len(d.Refused), len(d.Unresolved))
-	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 ||
-		len(d.Unresolved) > 0 {
+		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d devices newly "+
+		"quarantined, %d released; %d mints newly refused; %d unresolved\n", len(d.Changes), widen, narrow,
+		d.Unacknowledged(), d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), len(d.Quarantined), len(d.Released),
+		len(d.Refused), len(d.Unresolved))
+	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
+		len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 {
 		return 1
 	}
 	return 0

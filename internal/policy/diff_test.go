@@ -325,3 +325,63 @@ func TestTheGateFailsALevelOrCeilingRaise(t *testing.T) {
 		t.Fatalf("a level alone does not acknowledge a ceiling's removal: %+v", d.Levels)
 	}
 }
+
+// A regex-constrained widening fails the gate unless a passing policy test in
+// the new version exercises it; a narrowing is reported and does not (owner's
+// ruling 2026-09-24; spec §12).
+func TestTheGateFailsARegexConstrainedWidening(t *testing.T) {
+	unacked := func(d Diff) (gated, open int) {
+		for _, r := range d.Regex {
+			if r.Gated {
+				gated++
+				if !r.Acknowledged {
+					open++
+				}
+			}
+		}
+		return gated, open
+	}
+	test := func(command, expect string) string {
+		return "tests:\n  - {subject: noc, device: leaf-01, command: \"" + command + "\", expect: " + expect + "}\n"
+	}
+	// A permit carrying a regex, added.
+	added := strings.Replace(regexBase, `permit: ["copy /^scp:/ *"]`, `permit: ["copy /^scp:/ *", "copy /^sftp:/ *"]`, 1)
+	if g, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, added), noon)); g == 0 || o != g {
+		t.Fatalf("an added regex permit: %d gated, %d unacknowledged", g, o)
+	}
+	if _, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, added+test("copy sftp://h/f flash:", "permit")), noon)); o != 0 {
+		t.Fatal("a test the added permit decides acknowledges it")
+	}
+	if _, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, added+test("copy scp://h/f flash:", "permit")), noon)); o == 0 {
+		t.Fatal("a test another permit decides does not")
+	}
+	// Removed, it is a narrowing.
+	if g, _ := unacked(Compare(mustParse(t, added), mustParse(t, regexBase), noon)); g != 0 {
+		t.Fatalf("a removed regex permit is not gated: %d", g)
+	}
+	// A regex permit meeting a deny the change removed.
+	freed := strings.Replace(regexBase, "copy * startup-config", "copy * running-config", 1)
+	if g, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, freed), noon)); g == 0 || o != g {
+		t.Fatalf("a regex permit a removed deny frees: %d gated, %d unacknowledged", g, o)
+	}
+	if _, o := unacked(Compare(mustParse(t, regexBase), mustParse(t, freed+test("copy scp://h/f startup-config", "permit")), noon)); o != 0 {
+		t.Fatal("a test of that permit over that deny acknowledges it")
+	}
+	// A deny carrying a regex, removed or rewritten wider: a test on a command
+	// it refused before acknowledges it, whether the new version permits the
+	// command or still refuses it.
+	regexDeny := strings.Replace(regexBase, "copy * startup-config", "copy * /^start/", 1)
+	wider := strings.Replace(regexBase, "copy * startup-config", "copy * /^(start|run)/", 1)
+	if g, o := unacked(Compare(mustParse(t, regexDeny), mustParse(t, wider), noon)); g == 0 || o != g {
+		t.Fatalf("a rewritten regex deny: %d gated, %d unacknowledged", g, o)
+	}
+	if _, o := unacked(Compare(mustParse(t, regexDeny), mustParse(t, wider+test("copy scp://h/f startup-config", "deny")), noon)); o != 0 {
+		t.Fatal("a test the old deny refused acknowledges its rewrite")
+	}
+	// Added, it is a narrowing: replacing the word deny with a regex one gates
+	// only the word deny's removal where it meets the regex permit, once per
+	// platform group.
+	if g, _ := unacked(Compare(mustParse(t, regexBase), mustParse(t, regexDeny), noon)); g != 4 {
+		t.Fatalf("replacing a word deny with a regex one gates only the removal's exposure: %d", g)
+	}
+}
