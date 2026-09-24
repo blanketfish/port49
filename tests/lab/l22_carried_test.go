@@ -70,7 +70,8 @@ func TestAdapterCarried(t *testing.T) {
 			fmt.Fprintf(&obs, "\n### EOS: `home-directory*/home/port49` beside admin's reply, again\n\n"+
 				"| reply | session | identity | `clear counters` | `configure terminal` | `show version` |\n"+
 				"|---|---|---|---|---|---|\n| `%s` | %s | `%s` | %s | %s | %s |\n", strings.Join(attrs, "`, `"),
-				row.session, row.identity, reached(row.clear), reached(row.cfg), permitted(row.showVersion))
+				row.session, row.identity, row.reach("clear counters", row.clear),
+				row.reach("configure terminal", row.cfg), row.permit(row.showVersion))
 		case "cisco_nxos":
 			obs.WriteString("\n### NX-OS: the role alone, quoted optional spelling\n\n" +
 				"| reply | session | identity | `clear counters` | `configure terminal` | `show version` |\n" +
@@ -79,7 +80,8 @@ func TestAdapterCarried(t *testing.T) {
 				attrs := []string{`shell:roles*"` + role + `"`}
 				row := l.adapterVariant(t, "quoted-"+role, attrs)
 				fmt.Fprintf(&obs, "| `%s` | %s | `%s` | %s | %s | %s |\n", attrs[0], row.session, row.identity,
-					reached(row.clear), reached(row.cfg), permitted(row.showVersion))
+					row.reach("clear counters", row.clear), row.reach("configure terminal", row.cfg),
+					row.permit(row.showVersion))
 			}
 		}
 

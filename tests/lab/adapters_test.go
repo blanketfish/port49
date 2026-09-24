@@ -5,6 +5,7 @@ package lab
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -106,11 +107,13 @@ func TestAdapterReplies(t *testing.T) {
 			attrs, _ := d.Render(level)
 			row := l.adapterVariant(t, level, attrs)
 			fmt.Fprintf(&obs, "| %s | `%s` | %s | %s | %s | %s | %s |\n", level, strings.Join(attrs, "`, `"), row.session,
-				row.identity, reached(row.clear), reached(row.cfg), row.showIf)
+				row.identity, row.reach("clear counters", row.clear), row.reach("configure terminal", row.cfg), row.showIf)
 			want := expect[level]
 			switch {
 			case row.err != nil:
 				t.Errorf("%s: the adapter's reply %q did not open a session: %v", level, attrs, row.err)
+			case len(row.unobserved) > 0:
+				t.Errorf("%s: %s; a command that did not finish is no measurement", level, row.session)
 			case !strings.Contains(row.identity, want.identity):
 				t.Errorf("%s: the device reports %q, the adapter promises %q", level, row.identity, want.identity)
 			case row.clear != want.clearReached || row.cfg != want.cfgReached:
@@ -127,10 +130,11 @@ func TestAdapterReplies(t *testing.T) {
 			row := l.adapterVariant(t, "inert-"+strings.SplitN(a, "*", 2)[0], append(slices.Clone(admin), a))
 			// Inert only where nothing about the session moved: opened, admin's
 			// identity, admin's reach, and a command still authorized.
-			inert := row.err == nil && row.identity == adminRow.identity && row.clear == adminRow.clear &&
-				row.cfg == adminRow.cfg && row.showVersion
+			inert := row.err == nil && len(row.unobserved) == 0 && len(adminRow.unobserved) == 0 &&
+				row.identity == adminRow.identity && row.clear == adminRow.clear && row.cfg == adminRow.cfg && row.showVersion
 			fmt.Fprintf(&obs, "| `%s` | %s | %s | %s | %s | %s | %s |\n", a, row.session, row.identity,
-				reached(row.clear), reached(row.cfg), permitted(row.showVersion), yesNo(inert))
+				row.reach("clear counters", row.clear), row.reach("configure terminal", row.cfg), row.permit(row.showVersion),
+				yesNo(inert))
 			if row.err != nil && l.p.name == "cisco_iosxe" {
 				// A refused session stops this image answering SSH for about a
 				// minute (L18); wait it out before the next variant.
@@ -146,7 +150,7 @@ func TestAdapterReplies(t *testing.T) {
 			attrs, _ := d.Render(level)
 			fb := l.fallbackVariant(t, level, attrs)
 			fmt.Fprintf(&obs, "| %s | `%s` | %s | `%s` |\n", level, strings.Join(attrs, "`, `"), fb.outcome(),
-				strings.ReplaceAll(fb.transcript, "\n", " ⏎ "))
+				oneLine(strings.ReplaceAll(strings.ReplaceAll(fb.transcript, "\r", ""), "\n", " ⏎ ")))
 			switch {
 			case fb.err != nil:
 				t.Errorf("fallback %s: %v", level, fb.err)
@@ -177,6 +181,9 @@ type adapterRow struct {
 	clear, cfg       bool
 	showVersion      bool // a `show version` authorize_command was permitted
 	clearOut, cfgOut string
+	// unobserved is each command that did not finish, with why: its cells
+	// read "not observed", and a level with any fails (review I1).
+	unobserved map[string]string
 	// showIf is the first line of NX-OS's reply to a bare `show interface`,
 	// "—" elsewhere.
 	showIf string
@@ -231,27 +238,48 @@ func (l *lab) adapterVariant(t *testing.T, name string, attrs []string) adapterR
 	// clears that.
 	outs, err := l.loginWithin(user, secret, 150*time.Second, commands...)
 	recs := l.drainRecords(off, 3*time.Second)
-	row := adapterRow{session: "opened", showIf: "—"}
-	if err != nil && len(outs) == 0 {
+	return adapterRowFrom(l.p.name, commands, outs, err, recs)
+}
+
+// adapterRowFrom builds a variant's row from what the session returned and
+// the records port49 wrote for it. A command that did not finish, or never
+// ran because the session did not open, is not observed: its reach is read
+// off a record where one exists and is otherwise "not observed", never
+// "refused by the device", and the row says which (task 17 review I1).
+func adapterRowFrom(platformName string, commands, outs []string, err error, recs []map[string]any) adapterRow {
+	row := adapterRow{session: "opened", showIf: "—", unobserved: map[string]string{}}
+	var missed *notObserved
+	switch {
+	case err == nil:
+	case errors.As(err, &missed):
+		for _, c := range missed.commands {
+			row.unobserved[c] = missed.why[c]
+		}
+		row.session = oneLine(missed.Error())
+	default:
+		// The session never opened: nothing in it was observed.
 		row.err = err
 		row.session = "refused: " + oneLine(err.Error())
+		for _, c := range commands {
+			row.unobserved[c] = "session did not open"
+		}
 		return row
 	}
-	if err != nil {
-		row.session = "opened, then: " + oneLine(err.Error())
-	}
-	if len(outs) == 5 {
+	observed := func(i int) bool { return i < len(outs) && row.unobserved[commands[i]] == "" }
+	if len(commands) == 5 && observed(4) {
 		row.showIf = "`" + strings.TrimSpace(strings.Split(strings.TrimSpace(outs[4])+"\n", "\n")[0]) + "`"
 	}
-	if len(outs) >= 3 {
+	if observed(0) {
 		row.identity = strings.TrimSpace(strings.Split(strings.TrimSpace(outs[0]), "\n")[0])
-		if l.p.name == "cisco_nxos" {
+		if platformName == "cisco_nxos" {
 			for _, line := range strings.Split(outs[0], "\n") {
 				if strings.Contains(line, "roles:") {
 					row.identity = strings.TrimSpace(line)
 				}
 			}
 		}
+	}
+	if len(outs) >= 3 {
 		row.clearOut, row.cfgOut = outs[1], outs[2]
 	}
 	for _, r := range recs {
@@ -269,6 +297,30 @@ func (l *lab) adapterVariant(t *testing.T, name string, attrs []string) adapterR
 		}
 	}
 	return row
+}
+
+// reach is a ceiling command's cell: sent to port49 where a record says so,
+// not observed where the command did not finish, and otherwise refused by
+// the device, which never asked.
+func (r adapterRow) reach(cmd string, sent bool) string {
+	switch {
+	case sent:
+		return reached(true)
+	case r.unobserved[cmd] != "":
+		return "not observed"
+	}
+	return reached(false)
+}
+
+// permit is the `show version` cell, read the same way.
+func (r adapterRow) permit(sent bool) string {
+	switch {
+	case sent:
+		return permitted(true)
+	case r.unobserved["show version"] != "":
+		return "not observed"
+	}
+	return permitted(false)
 }
 
 // restart runs port49d on cfg.

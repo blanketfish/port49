@@ -1533,12 +1533,40 @@ func (l *lab) login(user, password string, commands ...string) ([]string, error)
 	return outs, nil
 }
 
+// notObserved is loginWithin's error when a session opened and some of its
+// commands did not finish: each such command, with why ("deadline", or "not
+// run" for one after a connection that had to be closed). What such a
+// command did on the device is not observed, never a refusal: a caller that
+// reads a missing authorization record as "refused by the device" must check
+// for this first (task 17 review I1).
+type notObserved struct {
+	commands []string          // in the order sent
+	why      map[string]string // command → reason
+}
+
+func (e *notObserved) add(cmd, why string) {
+	if e.why == nil {
+		e.why = map[string]string{}
+	}
+	e.commands = append(e.commands, cmd)
+	e.why[cmd] = why
+}
+
+func (e *notObserved) Error() string {
+	var parts []string
+	for _, c := range e.commands {
+		parts = append(parts, c+": "+e.why[c])
+	}
+	return "not observed (" + strings.Join(parts, "; ") + ")"
+}
+
 // loginWithin is login with a deadline on each command: a channel the device
-// never answers is closed at per, and its output is what arrived plus a note
-// saying so, rather than a run that waits forever. The first NX-OS run of
-// TestAdapterReplies hung for 76 minutes on an exec channel the device opened
-// no command on. If closing the channel does not free it within 10s, the
-// whole connection is closed and the commands after it are reported not run.
+// never answers is closed at per, rather than a run that waits forever. The
+// first NX-OS run of TestAdapterReplies hung for 76 minutes on an exec
+// channel the device opened no command on. If closing the channel does not
+// free it within 10s, the whole connection is closed and the commands after
+// it are not run. Either way the error is a *notObserved naming each command
+// that did not finish; outs holds what arrived, one entry per command sent.
 func (l *lab) loginWithin(user, password string, per time.Duration, commands ...string) ([]string, error) {
 	if l.p.name == "cisco_iosxe" {
 		return l.ptyCommands(user, password, per, commands...)
@@ -1549,6 +1577,7 @@ func (l *lab) loginWithin(user, password string, per time.Duration, commands ...
 	}
 	defer c.Close()
 	var outs []string
+	var missed notObserved
 	for i, cmd := range commands {
 		var buf syncBuf
 		done := make(chan error, 1)
@@ -1571,7 +1600,10 @@ func (l *lab) loginWithin(user, password string, per time.Duration, commands ...
 		select {
 		case err := <-done:
 			if err != nil {
-				return outs, err
+				for _, rest := range commands[i:] {
+					missed.add(rest, "not run: "+oneLine(err.Error()))
+				}
+				return outs, &missed
 			}
 			outs = append(outs, buf.String())
 			continue
@@ -1582,17 +1614,22 @@ func (l *lab) loginWithin(user, password string, per time.Duration, commands ...
 			s.Close()
 		}
 		smu.Unlock()
+		missed.add(cmd, "deadline")
 		select {
 		case <-done:
-			outs = append(outs, buf.String()+fmt.Sprintf("\n(no end of output within %v; the channel was closed)", per))
+			outs = append(outs, buf.String())
 			continue
 		case <-time.After(10 * time.Second):
 		}
 		c.Close()
-		outs = append(outs, buf.String()+fmt.Sprintf("\n(no end of output within %v, and closing the channel "+
-			"did not free it; the connection was closed)", per))
-		return outs, fmt.Errorf("%q did not finish within %v and the connection had to be closed; %d command(s) "+
-			"after it were not run", cmd, per, len(commands)-i-1)
+		outs = append(outs, buf.String())
+		for _, rest := range commands[i+1:] {
+			missed.add(rest, "not run")
+		}
+		return outs, &missed
+	}
+	if len(missed.commands) > 0 {
+		return outs, &missed
 	}
 	return outs, nil
 }
@@ -1603,7 +1640,9 @@ func (l *lab) loginWithin(user, password string, per time.Duration, commands ...
 // session instead, paging off first. A `[confirm]` is answered `n`: the
 // command's authorization has already happened by then. A command that
 // reaches configuration mode is followed by `end`. Each output is the
-// command's reply without its echo or the prompt after it.
+// command's reply without its echo or the prompt after it. A command whose
+// prompt does not return within per ends the session: it and the rest are
+// returned as *notObserved.
 func (l *lab) ptyCommands(user, password string, per time.Duration, commands ...string) ([]string, error) {
 	c, err := l.sshCLI(user, password)
 	if err != nil {
@@ -1641,7 +1680,14 @@ func (l *lab) ptyCommands(user, password string, per time.Duration, commands ...
 		}
 		outs = append(outs, strings.Join(lines, "\n"))
 		if err != nil {
-			return outs, fmt.Errorf("%q: %w", cmd, err)
+			// The prompt never came back, so this command and every one
+			// after it are not observed.
+			var missed notObserved
+			missed.add(cmd, "deadline")
+			for _, rest := range commands[len(outs):] {
+				missed.add(rest, "not run")
+			}
+			return outs, &missed
 		}
 	}
 	return outs, nil
