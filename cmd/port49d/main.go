@@ -227,6 +227,9 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 	}
 	b := &broker.Broker{Policy: policy.NewLive(pol), Devices: devices, Minter: minter, Store: st, Log: log, Metrics: m,
 		Now: time.Now, MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax}
+	// The blob event's rule text is redacted as the daemon's records are,
+	// with the policy in force's patterns (spec §5.8).
+	b.Redact = redactorFor(b.Policy)
 	srv, err := b.Server(cfg.Broker.Listen, cert, anchor)
 	if err != nil {
 		return nil, nil, fmt.Errorf("broker.client_ca_file %s: %w", cfg.Broker.ClientCAFile, err)

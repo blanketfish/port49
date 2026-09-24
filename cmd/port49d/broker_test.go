@@ -171,9 +171,13 @@ func TestARuleSecretLiteralIsSaidAtStartRedacted(t *testing.T) {
 	stderr = &out
 	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`,
 		`permit: ["**"], deny: ["snmp-server community Hunter2 **"]}`, 1))
-	if _, _, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
-		metrics.New(prometheus.NewRegistry())); err != nil {
+	_, b, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
 		t.Fatal(err)
+	}
+	if b.Redact == nil {
+		t.Fatal("the broker's blob event must redact with the policy in force's patterns")
 	}
 	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "snmp-server community «redacted» **" carries`) ||
 		strings.Contains(out.String(), "Hunter2") {

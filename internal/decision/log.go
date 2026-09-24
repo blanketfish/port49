@@ -201,6 +201,10 @@ type PolicyRule struct {
 type Blob struct {
 	Hash string          `json:"hash"`
 	Body json.RawMessage `json:"body"`
+	// Redacted says rule text in Body was redacted before it was logged
+	// (spec §5.8), so Body is not the blob Hash names and replay reports
+	// every record naming it unverifiable. The store keeps the blob verbatim.
+	Redacted bool `json:"redacted,omitempty"`
 }
 
 // Unvalidated is what is recorded for a packet no key validated: cleartext header

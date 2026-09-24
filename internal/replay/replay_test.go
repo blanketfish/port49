@@ -325,3 +325,33 @@ func TestATypedSecretIsWrittenNowhere(t *testing.T) {
 		}
 	}
 }
+
+// A blob event whose rule text was redacted before it was logged (spec §5.8)
+// is not the blob its hash names: every record naming it is unverifiable,
+// the event itself is no divergence, and a verbatim copy of the blob read
+// before them, where the log has one, replays them as ever.
+func TestARedactedBlobEventLeavesItsRecordsUnverifiable(t *testing.T) {
+	log, hash := daemonLog(t)
+	lines := strings.Split(strings.TrimSpace(log), "\n")
+	var rec decision.Record
+	if err := rec.UnmarshalJSON([]byte(lines[0])); err != nil {
+		t.Fatal(err)
+	}
+	verbatim := lines[0]
+	rec.Blob.Body = []byte(strings.Replace(string(rec.Blob.Body), "tftp", platform.Redacted, 1))
+	rec.Blob.Redacted = true
+	edited, _ := json.Marshal(rec)
+	lines[0] = string(edited)
+	res := replayAll(t, strings.Join(lines, "\n"))
+	for _, r := range res[:len(res)-1] {
+		if r.Event == decision.EventBlob || r.Status != Unverifiable || !strings.Contains(r.Detail, "redacted") ||
+			!strings.Contains(r.Detail, hash) {
+			t.Fatalf("%+v", r)
+		}
+	}
+	for _, r := range replayAll(t, strings.Join(append([]string{verbatim}, lines...), "\n"))[:len(res)-1] {
+		if r.Status != Agree {
+			t.Fatalf("a verbatim copy replays: %+v", r)
+		}
+	}
+}
