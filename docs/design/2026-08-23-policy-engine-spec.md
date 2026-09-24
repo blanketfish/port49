@@ -1993,7 +1993,12 @@ Junos sends a whole command line as one `cmd`, so each element is split into wor
 Whatever the patterns say, a word holding a URL with a password in its userinfo —
 `copy running-config scp://admin:X@10.0.0.9/r.cfg`, an archive `path`, in any scheme — has
 the password replaced and keeps its scheme, user and host, so the record still shows where
-a configuration went: no `after:` pattern can hide part of a word.
+a configuration went: no `after:` pattern can hide part of a word. So has a credential in its
+query string — `X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`, `sig`,
+`signature`, `token`, `access_token`, `password`, `passwd`, `key` or `secret`, any case — its
+name kept: a presigned URL's signature is a bearer credential until it expires. A WLC's
+`security wpa psk set-key ...` and `wpa-psk ...` are redacted by the default list (`wpa-psk`
+matches `wpa` as its abbreviation), though no 5a platform is a WLC.
 The built-in patterns lead with `**`, because a secret sits anywhere in a line and NX-OS's
 accounting `cmd` is the configuration path joined with ` ; ` and a result — `configure
 terminal ; username bob password ... (SUCCESS)` (`tests/lab/results/L21-cisco_nxos.md`) — which
