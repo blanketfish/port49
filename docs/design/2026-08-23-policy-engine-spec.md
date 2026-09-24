@@ -462,6 +462,9 @@ ctx:(nas, username)
   session_expires   1757070295           auth_time + max_session_age
   refreshed_at      1757041495           last broker refresh (5.1.3); the staleness clock
   revoked_at        —                    set by revocation (5.6); denies until idle TTL reclaims
+  policy_rev        7                    advanced only by a write to what the refresh decides
+                                         (5.1.3): a join or replace, a revocation, a privilege
+                                         change, a policy write. Accounting does not move it
   session_discriminators                 the platform's own per-session values, hashed, from
     [sha256(31048)[:16], …]              exec accounting (5.8). A SET, capped at 8: one
                                          context covers every concurrent session of one user
@@ -594,22 +597,32 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
 
 1. **Validate or keep the old.** The new file is loaded against the inventory exactly as at
    start. A file that does not load is refused: the policy in force keeps serving, the refusal
-   is logged once with the reason and the bundle still serving, and
+   is logged once with the reason and the bundle still serving, counted in
+   `port49_policy_reloads_total{outcome}` as `refused` (`applied` and `unchanged` beside it), and
    `port49_policy_file_refused` holds at 1 until a file loads or the old one is put back. A typo
-   never takes the fleet down. Nothing is half-applied. A change the timer finds is loaded once
-   two reads in a row agree, and what is loaded is the bytes those two reads agreed on; a
-   `SIGHUP` loads what is on disk at once. Either way a file must be written atomically (a
+   never takes the fleet down. Nothing is half-applied. The timer is
+   `broker.policy_watch_interval` (default 5s, 1s to 5m). A change it finds is loaded once
+   two reads in a row agree, and what is loaded is the bytes those two reads agreed on, so an
+   edit is in force within two intervals of its write; a `SIGHUP` loads what is on disk at
+   once. Either way a file must be written atomically (a
    temporary file renamed over it): a writer stalled part-way for two intervals, or a `SIGHUP`
    sent mid-write, loads what is there, and a list cut short can load wider than the one
    intended.
 
    **Whoever can write the policy decides every operator's access,** so a policy file anyone
    else could have written is refused like one that does not load, at start as at a reload: a
-   file that is group- or world-writable, or whose directory is, or that is owned by neither
-   the user `port49d` runs as nor root. At start `port49d` does not start; at a reload the
-   policy in force keeps serving. The check follows symlinks — it is the file actually read,
-   and the directory holding it, that must be safe — so a Kubernetes ConfigMap mount, whose
-   files and the directory holding them are root's and not group- or world-writable, passes.
+   file, or the directory holding it, that is group- or world-writable or that is owned by
+   neither the user `port49d` runs as nor root. A directory another user owns is refused even
+   at mode 0755, because its owner can rename any file over the policy or change the mode. At
+   start `port49d` does not start; at a reload the policy in force keeps serving. The check
+   follows symlinks — it is the file actually read, and the directory holding it, that must be
+   safe — so a Kubernetes ConfigMap mount, whose files and the directory holding them are
+   root's and not group- or world-writable, passes. The file's owner and mode are taken from
+   the descriptor the policy is read through (`fstat`), not from a path checked beforehand, so
+   a rename between the check and the read cannot put another file in its place. The check
+   reads owners and mode bits alone: a POSIX ACL granting someone else write, or a writable
+   directory further up the path, is not seen, and keeping those closed is the deployment's
+   part (design document §13).
 2. **Swap.** The loaded policy replaces the one in force in one step, so no mint sees one
    version's grants and another's quarantine. A mint in flight finishes on the policy it
    started with, and the swap waits for it.
@@ -618,21 +631,38 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    with no restart, and the daemon closes a newly quarantined device's connections without a
    reply as it does at start.
 4. **Refresh.** Every live context is re-resolved against the new policy for its principal on
-   its device, and the answer is written into it by compare-and-set on the revision that was
-   read: the blob hash, the privilege ceiling (a held level above a lowered ceiling comes down
-   to it, as at a join, §5.3) and the `enable` mechanism. A principal left with no grant on
-   the device has that context **revoked** instead (§5.6 row 2), and its next command is
-   denied `credential_revoked`. A context on a device quarantined now is left as it is until
-   the refresh that lifts the quarantine. A narrowed rule denies the next command and a widened
+   its device, and the answer is written into it by compare-and-set on the `policy_rev` that
+   was read: the blob hash, the privilege ceiling (a held level above a lowered ceiling comes
+   down to it, as at a join, §5.3) and the `enable` mechanism. A principal left with no grant
+   on the device has that context **revoked** instead (§5.6 row 2), and its next command is
+   denied `credential_revoked`. A context the policy in force cannot be resolved or compiled
+   for is revoked too, failing closed: that is a broker defect, since the load's joint checks
+   compile every subject on every device (§10), so the process log names the `ctx_id` and the
+   fault and the context is counted `failed`, and the pass goes on to the next context. A
+   context on a device quarantined now is left as it is until the refresh that lifts the
+   quarantine. A narrowed rule denies the next command and a widened
    one permits it; a widened *level* reaches the device only at the next session authorization
    or `enable`, where levels are granted. `auth_time`, `session_expires`, `refreshed_at` and the
    idle TTL are not touched: nothing about the operator's authentication or the directory was
    re-verified, and a reload is not activity.
 
 Every edit changes the bundle (§5.7), so every live context takes a new blob at a reload and
-the records decided after it name the policy that was in force. A change the refresh makes is a
-`refresh` decision record (§5.7) naming the context's `ctx_id`, so the record before a
-command's changed answer says why.
+the records decided after it name the policy that was in force. The one exception is a login
+redeeming a token kept across the reload (below): its context takes the superseded bundle's
+blob, whose answer is the same, and whose `blob` record is already in the log (§5.1.1), so its
+records still replay. A change the refresh makes is a `refresh` decision record (§5.7) naming
+the context's `ctx_id`, so the record before a command's changed answer says why:
+
+| The refresh | `verdict` | `reason` |
+|---|---|---|
+| wrote the policy in force into the context | `permit` | `grants_matched` |
+| revoked it: no grant left on the device | `deny` | `no_grants_matched` |
+| revoked it: the policy in force could not be resolved or compiled for it | `deny` | `blob_unavailable` |
+| left it as it was: the device is quarantined (recorded at each pass) | `deny` | `device_quarantined` |
+
+Each context is counted once per pass in `port49_context_refreshes_total{outcome}`: `updated`,
+`unchanged`, `revoked`, `quarantined`, `failed`. A context already on the answer, and one a
+store error stopped the pass at, has no record (§5.7).
 
 **Unspent tokens are the other half.** A token carries the blob, ceiling and `enable`
 mechanism of the policy that minted it, and a redemption writes them into the context it
@@ -641,8 +671,8 @@ superseded policy minted and the policy in force would not mint identically — 
 removed at 10:00 returns at 10:05 on a device where the operator had no context yet, from a
 token minted at 09:58. A token whose answer is unchanged, the bundle aside, is kept: a reload is
 not a reason to make everyone mint again. A login in flight across the swap may still write the
-superseded answer after the refresh has passed its context, so the refresh runs again a short
-settle interval after every reload.
+superseded answer after the refresh has passed its context, so the refresh runs again a
+settle interval (30s) after every reload.
 
 **A grant's expiry is a scheduled edit.** A resolution changes with no edit to the file when a
 grant expires (§5.1), so the refresh also runs at every expiry instant; otherwise a live context
@@ -650,17 +680,32 @@ would keep an expired grant's rules until the next edit.
 
 **The store down during a reload** does not stop the swap: the new policy is in force for every
 mint at once (and every mint fails `store_unavailable` until the store answers). The refresh
-stops at its first store error, says how far it got, and runs again until it finishes; a
-context not yet reached keeps its previous policy until then, and
-`port49_policy_refresh_pending` holds at 1 from the swap until a pass completes — the alert for
-a policy in force that has not yet reached every live session. The directory-driven scheduled
+stops at its first store error, says how far it got, and runs again every 30s until it
+finishes; a context not yet reached keeps its previous policy until then, and
+`port49_policy_refresh_pending` holds at 1 from the swap until a pass reaches every live
+context and leaves none behind — a context skipped as busy or failed, or a pass stopped by a
+store error, keeps it at 1 until a later pass reaches that context — the alert for a policy in
+force that has not yet reached every live session. The directory-driven scheduled
 refresh through `active_principals` is plan 7's.
 
-**A context that keeps changing does not stop the pass.** A write landing between the
-refresh's read and its compare-and-set sends it back to read again, a bounded number of times.
-A context still changing after that is left for the retry and the pass goes on to the next,
+**A context that keeps changing does not stop the pass.** The compare-and-set is on
+`policy_rev`, which only a write to what the refresh decides advances: a login's join or
+replace, a revocation, a privilege raise or clamp, and a policy write (blob hash, ceiling,
+`enable` mechanism). Accounting, which writes only `accounting_state` and the session
+discriminators (§5.8), does not advance it, so a session running commands on a device that
+reports every one never makes the refresh lose. A write that does advance it between the
+refresh's read and its compare-and-set sends it back to read again, up to eight times. A
+context still changing after that is left for the retry and the pass goes on to the next,
 so one busy session cannot hold every session after it on the superseded policy. A
 revocation is not left: it is written unconditionally (`revoked_at` alone), failing closed.
+
+**The bound.** A narrowing is in force for every mint within two `broker.policy_watch_interval`s
+of the file's write (10s at the default), and reaches a live context in the first pass after
+that; the settle pass follows 30s later. It is delayed past that only where a login, an
+`enable` or a revocation on that same context lands inside the refresh's read-to-write window
+on all eight attempts, and then by 30s for each pass that happens in — an operator holds a
+narrowed grant only by logging in or enabling continuously, on the one device. A withdrawal
+is not delayed by a busy context at all.
 
 **A superseded policy's tokens are judged across the whole time it was in force.** A token
 it minted carries the answer at the instant of the mint, and that answer changes at each grant
@@ -1265,7 +1310,7 @@ did not generate and cannot verify MUST NOT delete state.
 | | Trigger | Authority |
 |---|---|---|
 | 1 | **Login redemption** on the same `(nas, username)` | port49 performed it — joins the same principal's live context and replaces another principal's, logging the replace (above). An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7). **That is a requirement on plan 2's escalate path, not a description of the tree** — see below |
-| 2 | **Revocation** — OIDC back-channel logout by `sid` or `sub`; a certificate appearing on a CRL or OCSP response by issuer and serial; a policy change withdrawing every grant on the device (§5.1.3, "Policy reload") | authoritative, from the identity layer (§5.1.4). Sets `revoked_at` rather than deleting, so the next command is denied `credential_revoked` with a `server_msg` saying so — distinguishable from a session port49 never saw. Row 6 reclaims the state |
+| 2 | **Revocation** — OIDC back-channel logout by `sid` or `sub`; a certificate appearing on a CRL or OCSP response by issuer and serial; a policy change withdrawing every grant on the device, or leaving a policy in force that cannot be resolved or compiled for the context (§5.1.3, "Policy reload") | authoritative: from the identity layer (§5.1.4), or, for a policy change, from the policy in force, with a `refresh` record saying which (§5.7). Sets `revoked_at` rather than deleting, so the next command is denied `credential_revoked` with a `server_msg` saying so — distinguishable from a session port49 never saw. Row 6 reclaims the state |
 | 3 | **Session ceiling** — `session_expires` reached and the grace window elapsed | local, needs no external signal |
 | 3a | **Staleness ceiling** — `now - refreshed_at` beyond `staleness_ceiling` because the broker has been unreachable that long (design document §9) | local; denies `context_stale` with a `server_msg` naming the broker outage, retains the context so recovery resumes it |
 | 4 | **Username mismatch** on an enable exchange resolved through `(nas, rem_addr)` | a genuine conflict — denies and invalidates. On the command path this cannot arise: the username is the key |
@@ -1473,12 +1518,13 @@ component that made the decision, and it is distinct from the accounting records
 sends — those report what a device *did*, after the fact, only for the tiers it was
 configured to report. The decision log records what port49 *decided*, for whom, and against
 which rule. It is complete by construction, because every decision passes through us.
-Two carve-outs, both on the `refresh` event (§5.1.3): a refresh that finds a context already
-on the answer the policy in force gives writes nothing and records nothing — at every reload
-that is one record per live session saved, and there is nothing to explain — and a refresh
-that revokes a context because the broker could not resolve or compile its policy is a fault,
-not a decision: the process log names the context's `ctx_id` and the fault, and it is counted
-`failed`, as a mint item error is.
+Two carve-outs, both on the `refresh` event (§5.1.3). A refresh that finds a context already
+on the answer the policy in force gives writes nothing and records nothing: every edit changes
+the bundle, so a reload's first pass records every live context, but the settle pass after it,
+the retries and the pass at a grant's expiry find most contexts unchanged, and there is
+nothing to explain. And a pass a store error stops records nothing for the context it stopped
+at: nothing was written, the process log says how far the pass got, and
+`port49_policy_refresh_pending` stays at 1. Every revocation a refresh makes is recorded.
 
 > **A decision record must be replayable.**
 
@@ -1634,12 +1680,12 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `privilege_exceeded` | the request is above the session's granted level |
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `max_session_age`, and the caller must authenticate again (§13, decision 17) |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
-| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant on the device withdrawn (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
+| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, or the policy in force not compiling for the context, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
-| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a composition the load quarantines (§7) |
+| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a composition the load quarantines (§7). On `refresh`: the policy in force could not be resolved or compiled for this context — a broker defect, since the load compiles every subject on every device (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed` |
 | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
-| `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed. On `refresh`, the live context is left as it was until the quarantine lifts |
+| `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed. On `refresh`, a deny recorded at each pass: the live context is left as it was until the quarantine lifts |
 
 Every event has a success reason and at least one failure reason in this table, so
 "decisions by event, verdict, and reason" (design document §15) is a complete metric. A
@@ -4341,8 +4387,8 @@ Beyond those already listed in the design document's §14:
 - **One record per evaluation**, at each of the six decision events, permits included — a corpus
   exercising the matcher produces exactly as many records as decisions. The two `refresh`
   carve-outs (§5.7) hold: a refresh that finds a context already on the answer the policy in
-  force gives writes no record, and one that revokes because the broker could not resolve or
-  compile the policy is a fault in the process log, counted `failed`, not a decision record.
+  force gives writes no record, and nor does a pass a store error stops, for the context it
+  stopped at. Every revocation a refresh makes has its record.
 - **Replay agreement**: every record in the corpus replays against its named blob and
   reproduces the logged verdict and reason.
 - **Replay divergence is detected**: a record whose blob is substituted, or whose verdict is
@@ -4425,16 +4471,23 @@ Beyond those already listed in the design document's §14:
 - **A refresh loses a race safely**: a write landing on a context between the refresh's read
   and its write is kept, and the refresh reads again and writes the new policy beside it.
 - **A grant's expiry reaches a live context** at the expiry instant, with no edit.
-- **A policy file someone else could have written is refused**: group- or world-writable, a
-  group- or world-writable directory, or an owner other than `port49d`'s user or root refuses
-  the start, and at a reload keeps the policy in force serving, logged once and counted
-  `refused`; the check follows a symlink to the file it reads.
+- **A policy file someone else could have written is refused**: a group- or world-writable
+  file or directory, or a file or directory owned by someone other than `port49d`'s user or
+  root, refuses the start, and at a reload keeps the policy in force serving, logged once and
+  counted in `port49_policy_reloads_total{outcome="refused"}`; the check follows a symlink to
+  the file it reads, and is made on the descriptor the policy is read through.
 - **A superseded token is judged at every instant it could have been minted**: a token minted
   after a grant's expiry under the policy since replaced is deleted when its answer differs,
   though the answer before the expiry did not.
 - **A busy context does not stop a refresh**: a context whose every compare-and-set conflicts
-  is counted failed, or revoked unconditionally where the answer is a revocation, and every
-  context after it is still refreshed.
+  is counted `failed`, or revoked unconditionally where the answer is a revocation, and every
+  context after it is still refreshed; `port49_policy_refresh_pending` stays 1 until a later
+  pass reaches the busy context. An accounting record landing between the refresh's read and
+  its write does not conflict.
+- **A refresh that cannot compile revokes, and records it**: a context the policy in force
+  cannot be resolved or compiled for is revoked, its `refresh` record is a deny
+  `blob_unavailable` naming its `ctx_id`, the process log names the fault, it is counted
+  `failed`, and every context after it is still refreshed.
 - **Grace window**: a command past the ceiling is denied with `session_expired` while context
   is retained; a re-auth inside the grace window resumes the same session; past it, context is
   gone and the reason becomes `context_missing`.
