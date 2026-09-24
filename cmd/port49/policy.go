@@ -227,8 +227,9 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 // rules distinguish, now and at every later grant expiry. It prints each
 // change and exits 1 on a command the old version refused (by a deny, at a
 // pipeline stage, or by quarantining the device) that the new version
-// permits and no policy test in it exercises, on a device the new version
-// quarantines for a new cause, on a subject whose mint the new version's
+// permits and no policy test in it exercises, on a level or ceiling raise no
+// session test in it asserts, on a device the new version quarantines for a
+// new cause, on a subject whose mint the new version's
 // broker refuses where the old did not, and on a composition it could not
 // compare.
 func policyDiff(args []string, stdout, stderr io.Writer) int {
@@ -293,9 +294,25 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			from(a.At))
 	}
 	for _, l := range d.Levels {
-		fmt.Fprintf(stdout, "privilege: %s on %s%s: level %s -> %s, max_privilege %s -> %s\n", l.Subject,
+		label, tail := "privilege", ""
+		switch {
+		case l.Raise && l.Acknowledged:
+			label = "raises (a session test asserts it)"
+		case l.Raise:
+			// The test that acknowledges it, on the first device, asserting
+			// each value that moved.
+			hint := "{subject: " + l.Subject + ", device: " + l.Devices[0]
+			if l.NewLevel != l.OldLevel {
+				hint += ", level: " + orNone(l.NewLevel)
+			}
+			if l.NewCeiling != l.OldCeiling {
+				hint += ", max_privilege: " + orNone(l.NewCeiling)
+			}
+			label, tail = "RAISES", "; no session test asserts it: add "+hint+"}"
+		}
+		fmt.Fprintf(stdout, "%s: %s on %s%s: level %s -> %s, max_privilege %s -> %s%s\n", label, l.Subject,
 			strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel), orNone(l.OldCeiling),
-			orNone(l.NewCeiling))
+			orNone(l.NewCeiling), tail)
 	}
 	widen, narrow := 0, 0
 	for _, c := range d.Changes {
@@ -346,9 +363,11 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			"enumerated (spec §12)\n", on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb)
 	}
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
-		"%d devices newly quarantined, %d released; %d mints newly refused; %d unresolved\n", len(d.Changes), widen,
-		narrow, d.Unacknowledged(), len(d.Quarantined), len(d.Released), len(d.Refused), len(d.Unresolved))
-	if d.Unacknowledged() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 {
+		"%d unacknowledged privilege raises; %d devices newly quarantined, %d released; %d mints newly refused; "+
+		"%d unresolved\n", len(d.Changes), widen, narrow, d.Unacknowledged(), d.UnacknowledgedLevels(),
+		len(d.Quarantined), len(d.Released), len(d.Refused), len(d.Unresolved))
+	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 ||
+		len(d.Unresolved) > 0 {
 		return 1
 	}
 	return 0

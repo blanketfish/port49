@@ -262,3 +262,66 @@ func TestTheDiffSeesTheBrokersMintChecks(t *testing.T) {
 		t.Fatalf("a test acknowledges it: %+v", d.Changes)
 	}
 }
+
+// A level raise, or a ceiling raised or removed, fails the gate unless a
+// session test in the new version asserts the new value for that subject on
+// that device; a lowering is reported and does not (owner's ruling
+// 2026-09-24; spec §12).
+func TestTheGateFailsALevelOrCeilingRaise(t *testing.T) {
+	ceilinged := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], max_privilege: readonly}", 1)
+	raised := strings.Replace(diffBase, "privilege: readonly, permit", "privilege: admin, permit", 1)
+	for _, tt := range []struct {
+		name, before, after string
+		raises              int
+	}{
+		// The inventory's four platforms are four groups of devices.
+		{"a level raise", diffBase, raised, 1},
+		{"a level lowering", raised, diffBase, 0},
+		{"a ceiling removed", ceilinged, diffBase, 1},
+		{"a ceiling added", diffBase, ceilinged, 0},
+		{"a ceiling raised", ceilinged, strings.Replace(ceilinged, "max_privilege: readonly", "max_privilege: admin", 1), 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Compare(mustParse(t, tt.before), mustParse(t, tt.after), noon)
+			if len(d.Levels) == 0 {
+				t.Fatal("the change is reported")
+			}
+			raises := 0
+			for _, l := range d.Levels {
+				if l.Raise {
+					raises++
+				}
+			}
+			if raises != tt.raises*4 || d.UnacknowledgedLevels() != tt.raises*4 {
+				t.Fatalf("levels %+v: %d raises, %d unacknowledged", d.Levels, raises, d.UnacknowledgedLevels())
+			}
+		})
+	}
+	// A session test on one device of each group asserting the new value is
+	// the acknowledgment; one asserting the old value, or on another subject,
+	// is not.
+	levelTest := func(level, ceiling string) string {
+		out := "tests:\n"
+		for _, device := range []string{"campus-sw-7", "nx-01", "xe-01", "srx-lab-01"} {
+			out += "  - {subject: noc, device: " + device + ", level: " + level + ", max_privilege: " + ceiling + "}\n"
+		}
+		return out
+	}
+	d := Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("admin", "none")), noon)
+	if d.UnacknowledgedLevels() != 0 {
+		t.Fatalf("a session test acknowledges the raise: %+v", d.Levels)
+	}
+	d = Compare(mustParse(t, diffBase), mustParse(t, raised+"tests:\n  - {subject: noc, device: leaf-01, level: admin}\n"), noon)
+	if d.UnacknowledgedLevels() != 3 {
+		t.Fatalf("a test on one group acknowledges that group alone: %+v", d.Levels)
+	}
+	d = Compare(mustParse(t, ceilinged), mustParse(t, diffBase+levelTest("readonly", "none")), noon)
+	if d.UnacknowledgedLevels() != 0 {
+		t.Fatalf("a session test asserting no ceiling acknowledges its removal: %+v", d.Levels)
+	}
+	d = Compare(mustParse(t, ceilinged), mustParse(t, diffBase+"tests:\n  - {subject: noc, device: leaf-01, level: readonly}\n"+
+		"  - {subject: noc, device: nx-01, level: readonly}\n"), noon)
+	if d.UnacknowledgedLevels() != 4 {
+		t.Fatalf("a level alone does not acknowledge a ceiling's removal: %+v", d.Levels)
+	}
+}

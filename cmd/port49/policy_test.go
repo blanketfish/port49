@@ -513,3 +513,36 @@ func TestPolicyTestPrintsASessionTest(t *testing.T) {
 		t.Fatalf("code %d", code)
 	}
 }
+
+// A level raise fails `port49 policy diff` until a session test in the new
+// version asserts the new level there; the lowering back is reported and
+// passes (owner's ruling 2026-09-24; spec §12).
+func TestPolicyDiffGatesALevelRaise(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := readFile(t, oldPol)
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	raised := strings.Replace(string(raw), "privilege: readonly", "privilege: admin", 1)
+	if err := os.WriteFile(newPol, []byte(raised), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "RAISES: noc on leaf-01: level readonly -> admin, max_privilege none -> none; "+
+			"no session test asserts it: add {subject: noc, device: leaf-01, level: admin}") ||
+		!strings.Contains(out.String(), "1 unacknowledged privilege raises") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", newPol, "--new", oldPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "privilege: noc on leaf-01: level admin -> readonly") {
+		t.Fatalf("a lowering: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if err := os.WriteFile(newPol, []byte(raised+"  - {subject: noc, device: leaf-01, level: admin}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "raises (a session test asserts it): noc on leaf-01: level readonly -> admin") {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

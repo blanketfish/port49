@@ -84,6 +84,10 @@ type LevelChange struct {
 	Devices                                    []string
 	At                                         time.Time
 	OldLevel, NewLevel, OldCeiling, NewCeiling string
+	// Raise is spec §12's gate on privilege: the level rose, or the ceiling
+	// rose or went. Acknowledged is a passing session test in the new
+	// version, on one of Devices, asserting each new value that rose.
+	Raise, Acknowledged bool
 }
 
 // RegexChange is a rule carrying a regex or class term whose commands are not
@@ -114,6 +118,18 @@ type MintRefusal struct {
 type Release struct {
 	Device, Platform string
 	At               time.Time
+}
+
+// UnacknowledgedLevels counts the level and ceiling raises no session test
+// asserts.
+func (d Diff) UnacknowledgedLevels() int {
+	n := 0
+	for _, l := range d.Levels {
+		if l.Raise && !l.Acknowledged {
+			n++
+		}
+	}
+	return n
 }
 
 // Unacknowledged counts the gated changes no test exercises.
@@ -202,6 +218,9 @@ func Compare(before, after *Policy, now time.Time) Diff {
 	}
 	slices.SortFunc(instants, func(a, b time.Time) int { return a.Compare(b) })
 	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{}}
+	for k := range after.sessionAcks(instants) {
+		c.acks[k] = true
+	}
 	for _, at := range instants {
 		c.at(at)
 	}
@@ -357,8 +376,8 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 	wr, ir := was.res, is.res
 	if (wr.Level != ir.Level || wr.Ceiling != ir.Ceiling) &&
 		c.once("level", subject, on, wr.Level, ir.Level, wr.Ceiling, ir.Ceiling) {
-		c.d.Levels = append(c.d.Levels, LevelChange{Subject: subject, Devices: devices, At: at, OldLevel: wr.Level,
-			NewLevel: ir.Level, OldCeiling: wr.Ceiling, NewCeiling: ir.Ceiling})
+		c.d.Levels = append(c.d.Levels, c.levelChange(LevelChange{Subject: subject, Devices: devices, At: at,
+			OldLevel: wr.Level, NewLevel: ir.Level, OldCeiling: wr.Ceiling, NewCeiling: ir.Ceiling}))
 	}
 	if was.hash == is.hash {
 		return
@@ -432,6 +451,58 @@ func (c *comparison) change(subject string, devices []string, at time.Time, v []
 		string(to.Reason), oldRule, newRule}, v...)...) {
 		c.d.Changes = append(c.d.Changes, ch)
 	}
+}
+
+// levelChange marks a raise and whether a session test asserts it (spec
+// §12). Higher is later in the new version's privilege_levels; a level it no
+// longer declares is below every level it does, so moving off one is a
+// raise, and a ceiling removed is a raise from any.
+func (c *comparison) levelChange(l LevelChange) LevelChange {
+	idx := c.after.levelIndex
+	levelUp := l.NewLevel != "" && idx(l.NewLevel) > idx(l.OldLevel)
+	ceilingUp := l.OldCeiling != "" && (l.NewCeiling == "" || idx(l.NewCeiling) > idx(l.OldCeiling))
+	l.Raise = levelUp || ceilingUp
+	if !l.Raise {
+		return l
+	}
+	newCeiling := l.NewCeiling
+	if newCeiling == "" {
+		newCeiling = NoCeiling
+	}
+	l.Acknowledged = slices.ContainsFunc(l.Devices, func(device string) bool {
+		return (!levelUp || c.acks[levelKey(l.Subject, device, "level", l.NewLevel)]) &&
+			(!ceilingUp || c.acks[levelKey(l.Subject, device, "max_privilege", newCeiling)])
+	})
+	return l
+}
+
+func levelKey(subject, device, field, value string) string {
+	return shadowKey(subject, "session", device, field, value)
+}
+
+// sessionAcks is what each passing test in p asserting a level or ceiling
+// acknowledges, at each of instants: that value, for its subject on its
+// device (spec §12).
+func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
+	acks := map[string]bool{}
+	for _, at := range instants {
+		for _, r := range p.RunTests(at) {
+			if !r.Pass {
+				continue
+			}
+			subject := r.Test.Subject
+			if subject == "" {
+				subject = p.byID[r.Test.Principal]
+			}
+			if r.Test.Level != "" {
+				acks[levelKey(subject, r.Test.Device, "level", r.Test.Level)] = true
+			}
+			if r.Test.MaxPrivilege != "" {
+				acks[levelKey(subject, r.Test.Device, "max_privilege", r.Test.MaxPrivilege)] = true
+			}
+		}
+	}
+	return acks
 }
 
 // display is a probe vector as a person reads it.
