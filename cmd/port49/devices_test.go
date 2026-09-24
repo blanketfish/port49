@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // A device-local account named as a username port49 serves on the device is
@@ -238,5 +240,23 @@ func TestCheckConfigFindsACollisionInAnyForm(t *testing.T) {
 			strings.Contains(out.String(), `"breakglass"`) {
 			t.Errorf("%s: code %d, %d collisions, want %d\n%s%s", device, code, n, tt.want, out.String(), errb.String())
 		}
+	}
+}
+
+// A missing line a set ships prints as written, though abbreviation matching
+// reads NX-OS's `aaa authentication login` as `authentication-key`: the
+// operator is told which line the device lacks (task 15 review M4).
+func TestCheckConfigPrintsAMissingSetLineAsWritten(t *testing.T) {
+	pol, inv := checkConfigFixture(t, "")
+	cfg := filepath.Join(t.TempDir(), "nx-01.cfg")
+	if err := os.WriteFile(cfg, []byte("aaa authorization commands default group port49 local\n"+
+		"aaa authorization config-commands default group port49 local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "nx-01", cfg}, &out, &errb)
+	if code != 1 || !strings.Contains(out.String(), "MISSING: "+cfg+": aaa authentication login default group port49 local: ") ||
+		strings.Contains(out.String(), platform.Redacted) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
