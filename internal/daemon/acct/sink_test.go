@@ -1,0 +1,139 @@
+package acct
+
+import (
+	"errors"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/decision"
+)
+
+// flakySink refuses every record while down, and records what it took.
+type flakySink struct {
+	mu   sync.Mutex
+	down bool
+	got  []string
+}
+
+func (f *flakySink) Emit(r decision.Record) { _ = f.Write(r) }
+
+func (f *flakySink) Write(r decision.Record) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.down {
+		return errors.New("sink: connection refused")
+	}
+	f.got = append(f.got, r.TaskID)
+	return nil
+}
+
+// The spool's at-least-once contract reaches across the sink (roadmap, plan
+// 4): a record the sink refuses is neither deleted nor skipped. The pass stops
+// at it, the depth still counts it, and the next pass after the sink recovers
+// delivers it, and everything after it, exactly once and in order.
+func TestARefusedRecordIsOfferedAgain(t *testing.T) {
+	sink := &flakySink{}
+	m := metrics.New(prometheus.NewRegistry())
+	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "o.jsonl"), sink, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sink.down = true
+	if ok, n := sp.drainOnce(); ok || n != 0 {
+		t.Fatalf("a refused first record is no progress: ok=%v forwarded=%d", ok, n)
+	}
+	if d := testutil.ToFloat64(m.SpoolDepth); d != 3 {
+		t.Fatalf("depth after a refusal: %v, want 3", d)
+	}
+	sink.down = false
+	if ok, n := sp.drainOnce(); !ok || n != 3 {
+		t.Fatalf("after recovery: ok=%v forwarded=%d", ok, n)
+	}
+	if len(sink.got) != 3 || sink.got[0] != "a" || sink.got[2] != "c" {
+		t.Fatalf("delivered %q, want a b c once each", sink.got)
+	}
+	if d := testutil.ToFloat64(m.SpoolDepth); d != 0 {
+		t.Fatalf("depth after the drain: %v", d)
+	}
+}
+
+// A refusal part-way through a file keeps what was already delivered
+// delivered: the next pass resumes at the refused record, not at the start.
+func TestARefusalMidFileResumesAtTheRefusedRecord(t *testing.T) {
+	sink := &flakySink{}
+	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "o.jsonl"), &refuseAfter{next: sink, n: 1},
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ok, n := sp.drainOnce(); ok || n != 1 {
+		t.Fatalf("one delivered, then a refusal: ok=%v forwarded=%d", ok, n)
+	}
+	if ok, n := sp.drainOnce(); !ok || n != 2 {
+		t.Fatalf("the rest: ok=%v forwarded=%d", ok, n)
+	}
+	if len(sink.got) != 3 || sink.got[0] != "a" || sink.got[1] != "b" || sink.got[2] != "c" {
+		t.Fatalf("delivered %q, want a b c once each", sink.got)
+	}
+}
+
+// A sink that is down for good never gets a file quarantined: the records are
+// fine, and quarantine is for a file the spool cannot read.
+func TestARefusingSinkNeverQuarantines(t *testing.T) {
+	sink := &flakySink{down: true}
+	m := metrics.New(prometheus.NewRegistry())
+	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "o.jsonl"), sink, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		sp.drainOnce()
+	}
+	if q := testutil.ToFloat64(m.SpoolQuarantines); q != 0 {
+		t.Fatalf("quarantined %v files over a sink outage", q)
+	}
+	sink.down = false
+	if ok, n := sp.drainOnce(); !ok || n != 1 || len(sink.got) != 1 {
+		t.Fatalf("after the outage: ok=%v forwarded=%d got=%q", ok, n, sink.got)
+	}
+}
+
+// refuseAfter passes n records to next, then refuses exactly one, then passes
+// everything.
+type refuseAfter struct {
+	next    decision.Sink
+	n       int
+	refused bool
+}
+
+func (r *refuseAfter) Emit(rec decision.Record) { _ = r.Write(rec) }
+
+func (r *refuseAfter) Write(rec decision.Record) error {
+	if r.n > 0 {
+		r.n--
+		return r.next.Write(rec)
+	}
+	if !r.refused {
+		r.refused = true
+		return errors.New("sink: refused once")
+	}
+	return r.next.Write(rec)
+}

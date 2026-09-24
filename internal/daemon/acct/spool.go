@@ -51,9 +51,13 @@ const maxLineBytes = 1 << 20 // 1 MiB
 // Delivery is at-least-once: a crash between forwarding a record to the sink
 // and removing the .draining file re-forwards that record the next time Run
 // starts (TestSpoolResumesDrainingFile). Consumers of the sink must tolerate
-// duplicates. Every error on the drain path is logged (path and error, never
-// record contents), throttled to once a minute per failure kind once a
-// condition persists, so a stuck filesystem cannot flood the log.
+// duplicates. The contract reaches across the last hop: a record the sink
+// refuses stops the pass at that record, drainOffset stays at its first byte,
+// and the next pass offers it again (TestARefusedRecordIsOfferedAgain). A
+// refusal is not the file's fault, so it never counts toward quarantine.
+// Every error on the drain path is logged (path and error, never record
+// contents), throttled to once a minute per failure kind once a condition
+// persists, so a stuck filesystem cannot flood the log.
 //
 // A read error partway through .draining does not lose or repeat the prefix
 // already forwarded: the spool remembers how many bytes of the file it has
@@ -87,7 +91,7 @@ const maxLineBytes = 1 << 20 // 1 MiB
 // first.
 type Spool struct {
 	path     string
-	sink     decision.Emitter
+	sink     decision.Sink
 	metrics  *metrics.Metrics
 	capacity int
 
@@ -114,6 +118,7 @@ type Spool struct {
 	lastStructLog     time.Time // throttles stat/open/seek/rename failure logs
 	lastQuarantineLog time.Time // throttles a failing quarantine rename's log
 	lastReadLog       time.Time // throttles the read-failure log
+	lastSinkLog       time.Time // throttles the sink-refusal log
 	drainOffset       int64     // bytes of .draining already forwarded; 0 for a file not yet started
 	offsetFailAt      int64     // drainOffset (or -1 for a structural failure) at the last failure
 	offsetFailCount   int       // consecutive failures at offsetFailAt
@@ -129,7 +134,7 @@ type Spool struct {
 // at start with one actionable line instead of becoming an ERROR reply per
 // record once devices are live, and it notes whether the existing file ends
 // mid-record so the first Offer does not append onto a fragment.
-func NewSpool(capacity int, overflowPath string, sink decision.Emitter, m *metrics.Metrics) (*Spool, error) {
+func NewSpool(capacity int, overflowPath string, sink decision.Sink, m *metrics.Metrics) (*Spool, error) {
 	if capacity < 1 {
 		return nil, errors.New("acct: spool capacity must be at least 1")
 	}
@@ -512,7 +517,17 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 				log.Printf("acct: dropping oversized spool line (over %d bytes)", maxLineBytes)
 				s.metrics.SpoolDrops.WithLabelValues(dropDrainUnparseable).Inc()
 			default:
-				s.deliverLine(bytes.TrimRight(line, "\n"))
+				if err := s.deliverLine(bytes.TrimRight(line, "\n")); err != nil {
+					// The sink refused this record. Nothing past it is
+					// forwarded and pos stays at its first byte, so the next
+					// pass starts with it: at-least-once holds across the
+					// sink, not only up to it (roadmap, plan 4). The record
+					// is counted by the sink's own failure hook.
+					s.applyForwarded(forwarded, pos)
+					s.logThrottled(&s.lastSinkLog, "acct: the decision log sink refused an accounting record; "+
+						"it stays in %s and is offered again: %v", draining, err)
+					return false, forwarded
+				}
 			}
 			forwarded++
 			pos += n
@@ -545,18 +560,20 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 // deliverLine unmarshals one record and forwards it, or logs and counts a
 // drop for a line that is empty or fails to unmarshal. An oversized line
 // never reaches here — drainOnce handles that case itself, since
-// readBoundedLine already discarded its content.
-func (s *Spool) deliverLine(line []byte) {
+// readBoundedLine already discarded its content. The only error it returns
+// is the sink's refusal: a line that will never parse is dropped, not
+// retried, and a record the sink would not take is retried, not dropped.
+func (s *Spool) deliverLine(line []byte) error {
 	if len(line) == 0 {
-		return
+		return nil
 	}
 	var r decision.Record
 	if err := r.UnmarshalJSON(line); err != nil {
 		log.Printf("acct: dropping spool line that failed to unmarshal: %v", err)
 		s.metrics.SpoolDrops.WithLabelValues(dropDrainUnparseable).Inc()
-		return
+		return nil
 	}
-	s.sink.Emit(r)
+	return s.sink.Write(r)
 }
 
 // applyForwarded records this pass's progress: depth drops by the records
