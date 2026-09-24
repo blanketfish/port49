@@ -421,6 +421,14 @@ func keepsRoleOrder(at string, d, set platform.Dialect, version string) error {
 	return nil
 }
 
+// mapKeys is a block map's keys, sorted; none where the block leaves it out.
+func mapKeys[V any](m *map[string]V) []string {
+	if m == nil {
+		return nil
+	}
+	return sortedKeys(*m)
+}
+
 // platformNameShape is how an inventory writes a platform.
 var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
@@ -496,6 +504,20 @@ func (p *Policy) buildLevels(f file) error {
 // lowering exemption rests on it.
 func (p *Policy) checkBlockOrder(file) error {
 	for _, name := range sortedKeys(p.overrides) {
+		// An entry for a level nobody declared renders nothing: a typo that
+		// reads as a change and runs as none (task 7 review I2).
+		b := p.overrides[name].Spec
+		for _, entries := range []struct {
+			key    string
+			levels []string
+		}{{"privilege", mapKeys(b.Privilege)}, {"ceiling_levels", mapKeys(b.CeilingLevels)}} {
+			for _, l := range entries.levels {
+				if !slices.Contains(p.levels, l) {
+					return fmt.Errorf("platforms.%s.%s.%s: level %s is not declared; the levels are %s", name,
+						entries.key, l, l, strings.Join(p.levels, ", "))
+				}
+			}
+		}
 		if err := platform.Monotone(name, p.adapters[name], p.levels); err != nil {
 			return err
 		}

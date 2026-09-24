@@ -177,6 +177,11 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 			"platforms.cisco_iosxe.splits_interface_names: platform set 1.0.0 measured true"},
 		{"strip_cr dropped", "  cisco_iosxe: {strip_cr: false}\n",
 			"platforms.cisco_iosxe.strip_cr: platform set 1.0.0 measured true"},
+		// A typo is a level nobody has (task 7 review I2).
+		{"a privilege entry for an undeclared level", "  cisco_iosxe: {privilege: {admn: [\"priv-lvl=7\"]}}\n",
+			"platforms.cisco_iosxe.privilege.admn: level admn is not declared"},
+		{"a ceiling entry for an undeclared level", "  cisco_nxos: {ceiling_levels: {superuser: 15}}\n",
+			"platforms.cisco_nxos.ceiling_levels.superuser: level superuser is not declared"},
 		{"the set's role_order reversed under replace", "  cisco_nxos: {replace: true, role_order: {shell:roles: [network-admin, network-operator]}}\n",
 			"platforms.cisco_nxos.role_order.shell:roles: network-operator is ranked above network-admin"},
 	} {
