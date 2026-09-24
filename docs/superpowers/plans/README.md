@@ -298,6 +298,12 @@ privilege-expansion gate (spec §12), and replay re-derives a session's attribut
   policy without config's resolved `EnableUsernames`, so CI cannot see a `platforms:`
   enable-username override the daemon applies. Harmless while `config.Load` refuses such an
   override; plan 5's to close when its adapters bring the overrides (plan 4 pre-flight, N5).
+- **When adapters become editable (review M8, 2026-09-24):** the policy diff reads which reply
+  attributes bear privilege (`Dialect.PrivilegeAttributes`, `InertAttributes`) from the new
+  version's dialect today, which is sound only while the table is built in. Once an operator can
+  edit an adapter, judge `BearsPrivilege` under the stricter of the before and after dialects, so
+  listing an attribute inert in the same change cannot hide its own edit, and gate any edit to an
+  adapter's privilege-bearing or inert lists as a privilege change in its own right.
 - Operator-supplied entity-class patterns, when adapters bring them, must be checked for `(?-i)`
   where a deny uses them: plan 4 refuses a deny regex that turns case-insensitivity off, because
   a case-sensitive deny can be walked past by case (spec §4), and permits keep the opt-in.
