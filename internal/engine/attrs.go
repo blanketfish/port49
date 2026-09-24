@@ -40,21 +40,26 @@ func Mandatory(a string) bool {
 // cannot check what an attribute means: a non-empty name before the first `=`
 // or `*`, no whitespace in the name, at most MaxAttribute bytes as written,
 // no placeholder in the name, and none outside the vocabulary.
+//
+// An error quotes nothing of the attribute but a valid name: it is policy
+// text, and a refusal goes to logs where the refused file's redaction
+// patterns never loaded (spec §5.8).
 func CheckAttribute(a string) error {
 	i := strings.IndexAny(a, "=*")
 	switch {
 	case i < 0:
-		return fmt.Errorf("attribute %q has no `=` (mandatory) or `*` (optional) separator", a)
+		return errors.New("an attribute has no `=` (mandatory) or `*` (optional) separator")
 	case i == 0:
-		return fmt.Errorf("attribute %q has an empty name", a)
+		return errors.New("an attribute has an empty name")
 	case strings.ContainsAny(a[:i], " \t"):
-		return fmt.Errorf("attribute %q: the name contains whitespace", a)
+		return errors.New("an attribute's name contains whitespace")
 	case len(a) > MaxAttribute:
 		return fmt.Errorf("attribute %q is %d bytes; RFC 8907 carries at most %d", AttributeName(a), len(a), MaxAttribute)
 	case placeholder.MatchString(a[:i]):
 		// A substitution in the name would let a username rewrite which
 		// attribute is sent, and whether it is mandatory.
-		return fmt.Errorf("attribute %q: a placeholder may appear only in the value (spec §6)", a)
+		return errors.New("an attribute's name carries a placeholder; a placeholder may appear only in the value " +
+			"(spec §6)")
 	}
 	for _, p := range placeholder.FindAllString(a, -1) {
 		known := false
@@ -62,8 +67,8 @@ func CheckAttribute(a string) error {
 			known = known || p == v
 		}
 		if !known {
-			return fmt.Errorf("attribute %q: %s is not a substitution; the vocabulary is %s",
-				a, p, strings.Join(Placeholders, " "))
+			return fmt.Errorf("attribute %s: a placeholder in the value is not a substitution; the vocabulary is %s",
+				AttributeName(a), strings.Join(Placeholders, " "))
 		}
 	}
 	return nil

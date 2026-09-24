@@ -31,13 +31,14 @@ type Redaction struct {
 // command word the join needs.
 func (r Redaction) check() error {
 	stars := 0
-	for _, w := range r.Match {
+	// An error names a word by its position, never quotes it (spec §5.8).
+	for i, w := range r.Match {
 		switch {
 		case w == "**":
 			stars++
 		case w == "*":
 		case w == "" || strings.ContainsAny(w, " \t/@"):
-			return fmt.Errorf("match word %q: a pattern is words, * and **, with no regex or class", w)
+			return fmt.Errorf("match word #%d: a pattern is words, * and **, with no regex or class", i+1)
 		}
 	}
 	switch {
@@ -48,7 +49,7 @@ func (r Redaction) check() error {
 	case (r.After == "") == (r.From == nil):
 		return errors.New("give after or from, one of the two")
 	case r.After != "" && strings.ContainsAny(r.After, " \t"):
-		return fmt.Errorf("after %q is one word", r.After)
+		return errors.New("after is one word")
 	case r.From != nil && *r.From == 0:
 		return errors.New("from: 0 is the command word, which the reconciliation join needs; the first argument is 1")
 	case r.From != nil && !slices.ContainsFunc(r.Match, func(w string) bool { return w != "*" && w != "**" }):

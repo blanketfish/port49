@@ -68,7 +68,7 @@ func TestEveryAdapterSaysTheEnableSTARTCarriesThePrincipal(t *testing.T) {
 		}
 	}
 	d, _ := DialectFor("arista_eos")
-	for v, want := range map[string]string{EnableEnab: "tests/lab/results", "princpal": `it must be "principal"`} {
+	for v, want := range map[string]string{EnableEnab: "tests/lab/results", "princpal": `must be "principal"`} {
 		d.EnableUsername = v
 		if err := Validate("arista_eos", d); err == nil || !strings.Contains(err.Error(),
 			"platforms.arista_eos.enable_username") || !strings.Contains(err.Error(), want) {

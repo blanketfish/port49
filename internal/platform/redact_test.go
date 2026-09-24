@@ -168,13 +168,13 @@ func TestMatchAndFrom(t *testing.T) {
 func TestARedactionIsValidated(t *testing.T) {
 	zero, one := 0, 1
 	for want, r := range map[string]Redaction{
-		"match is required":         {After: "x"},
-		"no regex or class":         {Match: []string{"/secret/"}, After: "x"},
-		"more than two **":          {Match: []string{"**", "a", "**", "b", "**"}, After: "x"},
-		"one of the two":            {Match: []string{"**"}, After: "x", From: &one},
-		"from: 0 is the command":    {Match: []string{"**"}, From: &zero},
-		"after \"a b\" is one word": {Match: []string{"**"}, After: "a b"},
-		"matches every command":     {Match: []string{"*", "**"}, From: &one},
+		"match is required":      {After: "x"},
+		"no regex or class":      {Match: []string{"/secret/"}, After: "x"},
+		"more than two **":       {Match: []string{"**", "a", "**", "b", "**"}, After: "x"},
+		"one of the two":         {Match: []string{"**"}, After: "x", From: &one},
+		"from: 0 is the command": {Match: []string{"**"}, From: &zero},
+		"after is one word":      {Match: []string{"**"}, After: "a b"},
+		"matches every command":  {Match: []string{"*", "**"}, From: &one},
 	} {
 		if err := r.check(); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: %v", want, err)

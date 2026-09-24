@@ -242,19 +242,19 @@ func TestOverMergesPerTopLevelKey(t *testing.T) {
 func TestValidateNamesTheField(t *testing.T) {
 	ok := Dialect{PipeToken: "|", Supports: []string{"session"}, EnableUsername: EnablePrincipal}
 	for field, d := range map[string]Dialect{
-		"supports":                  {PipeToken: "|"},
-		"supports: \"telnet\"":      {PipeToken: "|", Supports: []string{"telnet"}},
-		"must include session":      {PipeToken: "|", Supports: []string{"commands"}},
-		"privilege.admin":           with(ok, func(d *Dialect) { d.Levels = map[string][]string{"admin": {"priv-lvl"}} }),
-		"takes no placeholder":      with(ok, func(d *Dialect) { d.Levels = map[string][]string{"admin": {"x*{username}"}} }),
-		"is sent twice":             with(ok, func(d *Dialect) { d.Levels = map[string][]string{"admin": {"a=1", "a*2"}} }),
-		"ceiling_levels.admin":      with(ok, func(d *Dialect) { d.CeilingLevels = map[string]uint8{"admin": 16} }),
-		"not a class name":          with(ok, func(d *Dialect) { d.EntityClasses = map[string][]string{"Mgmt": {"x"}} }),
-		"matches nothing":           with(ok, func(d *Dialect) { d.EntityClasses = map[string][]string{"mgmt": {}} }),
-		"does not compile":          with(ok, func(d *Dialect) { d.EntityClasses = map[string][]string{"mgmt": {"("}} }),
-		"pipe_token":                with(ok, func(d *Dialect) { d.PipeToken = "" }),
-		"not an attribute name":     with(ok, func(d *Dialect) { d.InertAttributes = []string{"a=b"} }),
-		"also in privilege_attribu": with(ok, func(d *Dialect) { d.PrivilegeAttributes, d.InertAttributes = []string{"a"}, []string{"a"} }),
+		"supports":                        {PipeToken: "|"},
+		"supports[0] is not a capability": {PipeToken: "|", Supports: []string{"telnet"}},
+		"must include session":            {PipeToken: "|", Supports: []string{"commands"}},
+		"privilege.admin":                 with(ok, func(d *Dialect) { d.Levels = map[string][]string{"admin": {"priv-lvl"}} }),
+		"takes no placeholder":            with(ok, func(d *Dialect) { d.Levels = map[string][]string{"admin": {"x*{username}"}} }),
+		"is sent twice":                   with(ok, func(d *Dialect) { d.Levels = map[string][]string{"admin": {"a=1", "a*2"}} }),
+		"ceiling_levels.admin":            with(ok, func(d *Dialect) { d.CeilingLevels = map[string]uint8{"admin": 16} }),
+		"not a class name":                with(ok, func(d *Dialect) { d.EntityClasses = map[string][]string{"Mgmt": {"x"}} }),
+		"matches nothing":                 with(ok, func(d *Dialect) { d.EntityClasses = map[string][]string{"mgmt": {}} }),
+		"does not compile":                with(ok, func(d *Dialect) { d.EntityClasses = map[string][]string{"mgmt": {"("}} }),
+		"pipe_token":                      with(ok, func(d *Dialect) { d.PipeToken = "" }),
+		"not an attribute name":           with(ok, func(d *Dialect) { d.InertAttributes = []string{"a=b"} }),
+		"also in privilege_attribu":       with(ok, func(d *Dialect) { d.PrivilegeAttributes, d.InertAttributes = []string{"a"}, []string{"a"} }),
 		"a level renders it": with(ok, func(d *Dialect) {
 			d.Levels, d.InertAttributes = map[string][]string{"admin": {"roles=x"}}, []string{"roles"}
 		}),
@@ -262,12 +262,12 @@ func TestValidateNamesTheField(t *testing.T) {
 		"not in accepted_attributes": with(ok, func(d *Dialect) {
 			d.Levels, d.AcceptedAttributes = map[string][]string{"admin": {"roles=x"}}, []string{"priv-lvl"}
 		}),
-		"device_config[0]":          with(ok, func(d *Dialect) { d.DeviceConfig = []string{"line one\nline two"} }),
-		"role_order: \"a=b\"":       with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"a=b": {"x"}} }),
-		"role_order.priv-lvl":       with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"priv-lvl": {"1"}} }),
-		"role_order.roles is empty": with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"roles": {}} }),
-		"verified is \"lab\"":       with(ok, func(d *Dialect) { d.Verified = "lab" }),
-		"role_order.roles: \"x\" is ranked twice": with(ok, func(d *Dialect) {
+		"device_config[0]":                with(ok, func(d *Dialect) { d.DeviceConfig = []string{"line one\nline two"} }),
+		"role_order: key 1 in name order": with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"a=b": {"x"}} }),
+		"role_order.priv-lvl":             with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"priv-lvl": {"1"}} }),
+		"role_order.roles is empty":       with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"roles": {}} }),
+		"verified is not containerlab":    with(ok, func(d *Dialect) { d.Verified = "lab" }),
+		"role_order.roles[2] is ranked twice": with(ok, func(d *Dialect) {
 			d.RoleOrder = map[string][]string{"roles": {"x", "y", "x"}}
 		}),
 		"role_order.roles[0]": with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"roles": {""}} }),
@@ -290,8 +290,7 @@ func TestValidateRefusesARenderedPrivLvlThatIsNotALevel(t *testing.T) {
 		EnableUsername: EnablePrincipal}
 	for _, a := range []string{"priv-lvl=16", "priv-lvl=99", "priv-lvl=abc", "priv-lvl=", "priv-lvl*-1"} {
 		d := with(ok, func(d *Dialect) { d.Levels = map[string][]string{"admin": {a}} })
-		if err := Validate("x", d); err == nil || !strings.Contains(err.Error(), "platforms.x.privilege.admin: "+a+
-			": not a privilege level; they run 0 to 15") {
+		if err := Validate("x", d); err == nil || !strings.Contains(err.Error(), "platforms.x.privilege.admin[0]: not a privilege level; they run 0 to 15") || strings.Contains(err.Error(), a) {
 			t.Errorf("%s: %v", a, err)
 		}
 		if n, ok := d.PrivLvl("admin"); ok {

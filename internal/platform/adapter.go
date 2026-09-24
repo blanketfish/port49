@@ -7,6 +7,7 @@ import (
 	"io"
 	"reflect"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strings"
 
@@ -161,15 +162,20 @@ var className = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // Validate is the structural validation spec §8 requires of every adapter,
 // built-in or not: port49 cannot check what an attribute means, so it checks
 // everything else. Each error names the field.
+//
+// An error names a value by its key and index and never quotes it: an adapter
+// is policy text, and a refusal goes to logs where the refused file's
+// redaction patterns never loaded (spec §5.8). Names — of a level, a class,
+// an attribute that passed its own check — are named.
 func Validate(name string, d Dialect) error {
 	field := func(f string) string { return "platforms." + name + "." + f }
 	if len(d.Supports) == 0 {
 		return fmt.Errorf("%s is required: which of %s the platform authorizes (spec §9)", field("supports"),
 			strings.Join(capabilities, ", "))
 	}
-	for _, c := range d.Supports {
+	for i, c := range d.Supports {
 		if !slices.Contains(capabilities, c) {
-			return fmt.Errorf("%s: %q is not a capability; the capabilities are %s", field("supports"), c,
+			return fmt.Errorf("%s[%d] is not a capability; the capabilities are %s", field("supports"), i,
 				strings.Join(capabilities, ", "))
 		}
 	}
@@ -179,20 +185,21 @@ func Validate(name string, d Dialect) error {
 	}
 	for _, level := range sortedKeys(d.Levels) {
 		seen := map[string]bool{}
-		for _, a := range d.Levels[level] {
+		for i, a := range d.Levels[level] {
+			at := fmt.Sprintf("%s[%d]", field("privilege."+level), i)
 			if err := engine.CheckAttribute(a); err != nil {
-				return fmt.Errorf("%s: %w", field("privilege."+level), err)
+				return fmt.Errorf("%s: %w", at, err)
 			}
 			// A level's rendering is the level: a placeholder in it would let a
 			// principal's name decide what the device is told (spec §6).
 			if slices.ContainsFunc(engine.Placeholders, func(p string) bool { return strings.Contains(a, p) }) {
-				return fmt.Errorf("%s: %s: a level's rendering takes no placeholder (spec §6)", field("privilege."+level), a)
+				return fmt.Errorf("%s: a level's rendering takes no placeholder (spec §6)", at)
 			}
 			n := engine.AttributeName(a)
 			if engine.NotALevel(a) {
 				// A value the device cannot use refuses the session: IOS-XE
 				// did for priv-lvl=99 (L18-cisco_iosxe.md, variant 7).
-				return fmt.Errorf("%s: %s: not a privilege level; they run 0 to 15", field("privilege."+level), a)
+				return fmt.Errorf("%s: not a privilege level; they run 0 to 15", at)
 			}
 			if seen[n] {
 				// A device keeps the first of two and drops the second, silently
@@ -207,31 +214,32 @@ func Validate(name string, d Dialect) error {
 			return fmt.Errorf("%s: %d is not a privilege level; they run 0 to 15", field("ceiling_levels."+level), n)
 		}
 	}
-	for _, class := range sortedKeys(d.EntityClasses) {
+	for k, class := range sortedKeys(d.EntityClasses) {
 		if !className.MatchString(class) {
-			return fmt.Errorf("%s: %q is not a class name: lower case, digits and _, starting with a letter",
-				field("entity_classes"), class)
+			// Not a name, so not named: its place in name order finds it.
+			return fmt.Errorf("%s: class %d in name order is not a class name: lower case, digits and _, "+
+				"starting with a letter", field("entity_classes"), k+1)
 		}
 		if len(d.EntityClasses[class]) == 0 {
 			return fmt.Errorf("%s is empty, which matches nothing; remove the class instead", field("entity_classes."+class))
 		}
-		for _, p := range d.EntityClasses[class] {
+		for i, p := range d.EntityClasses[class] {
 			if _, err := regexp.Compile(p); err != nil {
-				return fmt.Errorf("%s: %q does not compile under RE2: %w", field("entity_classes."+class), p, err)
+				return fmt.Errorf("%s[%d] does not compile: %s", field("entity_classes."+class), i, RegexpProblem(err))
 			}
 		}
 	}
 	if d.PipeToken == "" || strings.ContainsAny(d.PipeToken, " \t") {
-		return fmt.Errorf("%s is %q: one argument with no whitespace, e.g. \"|\"", field("pipe_token"), d.PipeToken)
+		return fmt.Errorf("%s is not one argument with no whitespace, e.g. \"|\"", field("pipe_token"))
 	}
 	for _, list := range []struct {
 		name  string
 		names []string
 	}{{"privilege_attributes", d.PrivilegeAttributes}, {"inert_attributes", d.InertAttributes},
 		{"accepted_attributes", d.AcceptedAttributes}} {
-		for _, n := range list.names {
+		for i, n := range list.names {
 			if n == "" || strings.ContainsAny(n, "=* \t") {
-				return fmt.Errorf("%s: %q is not an attribute name", field(list.name), n)
+				return fmt.Errorf("%s[%d] is not an attribute name", field(list.name), i)
 			}
 		}
 	}
@@ -270,10 +278,10 @@ func Validate(name string, d Dialect) error {
 			}
 		}
 	}
-	for _, attr := range sortedKeys(d.RoleOrder) {
+	for k, attr := range sortedKeys(d.RoleOrder) {
 		switch {
 		case attr == "" || strings.ContainsAny(attr, "=* \t"):
-			return fmt.Errorf("%s: %q is not an attribute name", field("role_order"), attr)
+			return fmt.Errorf("%s: key %d in name order is not an attribute name", field("role_order"), k+1)
 		case attr == "priv-lvl":
 			return fmt.Errorf("%s: priv-lvl ranks by its number; remove it", field("role_order.priv-lvl"))
 		case len(d.RoleOrder[attr]) == 0:
@@ -283,8 +291,8 @@ func Validate(name string, d Dialect) error {
 			if v == "" || strings.ContainsFunc(v, func(r rune) bool { return r < 0x20 || r > 0x7e }) {
 				return fmt.Errorf("%s[%d]: a value is printable ASCII and not empty", field("role_order."+attr), i)
 			}
-			if slices.Index(d.RoleOrder[attr], v) != i {
-				return fmt.Errorf("%s: %q is ranked twice; rank it once", field("role_order."+attr), v)
+			if j := slices.Index(d.RoleOrder[attr], v); j != i {
+				return fmt.Errorf("%s[%d] is ranked twice, as [%d]; rank it once", field("role_order."+attr), i, j)
 			}
 		}
 	}
@@ -294,7 +302,7 @@ func Validate(name string, d Dialect) error {
 		}
 	}
 	if !slices.Contains(verifications, d.Verified) {
-		return fmt.Errorf("%s is %q; it is containerlab, community, or unset", field("verified"), d.Verified)
+		return fmt.Errorf("%s is not containerlab, community, or unset", field("verified"))
 	}
 	switch d.EnableUsername {
 	case EnablePrincipal:
@@ -308,7 +316,7 @@ func Validate(name string, d Dialect) error {
 			"To enable it, add a tests/lab/results/ note showing a device sending it and lift this refusal with "+
 			"the code that reads it", field("enable_username"), EnableEnab)
 	default:
-		return fmt.Errorf("%s is %q; it must be %q", field("enable_username"), d.EnableUsername, EnablePrincipal)
+		return fmt.Errorf("%s must be %q", field("enable_username"), EnablePrincipal)
 	}
 	for i, line := range d.DeviceConfig {
 		if strings.TrimSpace(line) == "" || strings.ContainsFunc(line, func(r rune) bool { return r < 0x20 || r > 0x7e }) {
@@ -316,6 +324,17 @@ func Validate(name string, d Dialect) error {
 		}
 	}
 	return nil
+}
+
+// RegexpProblem is what a pattern RE2 refuses has wrong, without the
+// pattern: a syntax error's code, e.g. "missing closing )". Its text quotes
+// the pattern, which may be a value redaction hides (spec §5.8).
+func RegexpProblem(err error) string {
+	var serr *syntax.Error
+	if errors.As(err, &serr) {
+		return string(serr.Code)
+	}
+	return "RE2 refuses it"
 }
 
 // Monotone refuses an adapter whose renderings do not rise with order, the
