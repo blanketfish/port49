@@ -222,6 +222,9 @@ func TestALoweredCeilingClampsTheHeldLevel(t *testing.T) {
 		t.Fatalf("the held level must come down to readonly's priv-lvl 1: %+v", after)
 	}
 	recs := eventsOf(f.records(t), "refresh")
+	if len(recs) != 1 {
+		t.Fatalf("one refresh record: %v", recs)
+	}
 	s, _ := recs[0]["session"].(map[string]any)
 	clamp, _ := s["privilege_clamped"].(map[string]any)
 	if clamp["from"] != 15.0 || clamp["to"] != 1.0 || s["privilege"] != 1.0 {
@@ -287,14 +290,20 @@ func TestARefreshSkipsWhatIsNotItsToChange(t *testing.T) {
 	f := newFixture(t, 8)
 	ctx := context.Background()
 	f.login(t, alice, "leaf1", "alice")
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	lab := store.ContextKey{NAS: "nx1", Username: "alice"}
-	f.st.PutContext(ctx, lab, store.Context{CtxID: "lab", Principal: alice, Username: "alice", PrivLvl: 15}, time.Hour)
-	f.st.IndexContext(ctx, alice, "", "", store.ContextRef{NAS: "nx1", Username: "alice"}, time.Hour)
-	f.st.SetRevokedAt(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"}, f.now.Add(-time.Minute))
+	must(f.st.PutContext(ctx, lab, store.Context{CtxID: "lab", Principal: alice, Username: "alice", PrivLvl: 15}, time.Hour))
+	must(f.st.IndexContext(ctx, alice, "", "", store.ContextRef{NAS: "nx1", Username: "alice"}, time.Hour))
+	must(f.st.SetRevokedAt(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"}, f.now.Add(-time.Minute)))
 	taken := store.ContextKey{NAS: "leaf1", Username: "al"}
-	f.st.PutContext(ctx, taken, store.Context{CtxID: "carol", Principal: "user:carol@example.com", Username: "al",
-		BlobHash: "sha256:carol"}, time.Hour)
-	f.st.IndexContext(ctx, alice, "", "", store.ContextRef{NAS: "leaf1", Username: "al"}, time.Hour)
+	must(f.st.PutContext(ctx, taken, store.Context{CtxID: "carol", Principal: "user:carol@example.com", Username: "al",
+		BlobHash: "sha256:carol"}, time.Hour))
+	must(f.st.IndexContext(ctx, alice, "", "", store.ContextRef{NAS: "leaf1", Username: "al"}, time.Hour))
 	priors := f.reload(t, edit(t, aliceGrant, "roles: [no_reload], max_privilege: admin"))
 	rep, err := f.b.Refresh(ctx, priors)
 	if err != nil {
@@ -737,5 +746,48 @@ func TestAnExpiryInsideAPassIsApplied(t *testing.T) {
 	}
 	if _, more := f.b.Policy.Load().NextChange(rep.At); more {
 		t.Fatal("no expiry is left before At for the caller to miss")
+	}
+}
+
+// A shortened token_ttl is a changed answer: a token minted under the longer
+// one would outlive what the policy now allows, so it is superseded. A
+// lengthened one is not: the token lives less than the policy allows.
+func TestAShortenedTokenTTLSupersedesTokens(t *testing.T) {
+	f := newFixture(t, 8)
+	tk := store.TokenKey{NAS: "nx1", Username: "alice"}
+	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["nx1"]}`, ""))
+	if _, err := f.b.Refresh(context.Background(), f.reload(t, edit(t, "token_ttl: 60s}", "token_ttl: 120s}"))); err != nil {
+		t.Fatal(err)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), tk); len(toks) != 1 {
+		t.Fatalf("a lengthened token_ttl keeps the token: %d left", len(toks))
+	}
+	rep, err := f.b.Refresh(context.Background(), f.reload(t, edit(t, "token_ttl: 60s}", "token_ttl: 30s}")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), tk); len(toks) != 0 || rep.TokenKeys != 1 {
+		t.Fatalf("a shortened token_ttl supersedes the token: %d left, report %+v", len(toks), rep)
+	}
+}
+
+// A subject whose username changed can no longer mint under the name the
+// context is keyed by, so the context is revoked, and the record names no
+// grant: none selects this key any more.
+func TestAChangedUsernameRevokesTheContext(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	priors := f.reload(t, edit(t, "username: alice,", "username: alice2,"))
+	f.log.Reset()
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.Revoked != 1 {
+		t.Fatalf("report %+v, err %v", rep, err)
+	}
+	recs := eventsOf(f.records(t), "refresh")
+	if len(recs) != 1 || recs[0]["reason"] != "no_grants_matched" {
+		t.Fatalf("one refresh deny no_grants_matched: %v", recs)
+	}
+	if p, _ := recs[0]["policy"].(map[string]any); p["grants"] != nil {
+		t.Fatalf("the record names no grant: %v", recs[0])
 	}
 }

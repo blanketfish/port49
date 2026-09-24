@@ -105,6 +105,10 @@ type RefreshReport struct {
 // grant that expires while it runs sends it round again at once, so the
 // report's counts can sum more than one pass, and At is the last pass's.
 //
+// It is not meant to run concurrently with itself: port49d runs one pass at a
+// time, and two at once could each forget the other's quarantine records and
+// write one twice.
+//
 // It returns nil only when every live context is on the policy in force —
 // written, unchanged, revoked, or left for a quarantine — which is what
 // port49d clears port49_policy_refresh_pending on. A store error ends the pass
@@ -140,12 +144,14 @@ func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, er
 
 // minted is what a token for one principal on one device carries of its
 // policy, the bundle aside: every policy file has its own bundle, so comparing
-// it would supersede every token at every edit.
+// it would supersede every token at every edit. ttl is the subject's
+// token_ttl, the longest the token can live.
 type minted struct {
 	username string
 	blob     []byte
 	ceiling  uint8
 	enable   string
+	ttl      time.Duration
 }
 
 // mintedBy is what p would mint for principal on d at at, and false when it
@@ -165,11 +171,17 @@ func mintedBy(p *policy.Policy, principal string, d admission.Device, at time.Ti
 	if err != nil {
 		return minted{}, false
 	}
-	return minted{username: res.Username, blob: body, ceiling: res.MaxPrivilege, enable: res.Enable}, true
+	return minted{username: res.Username, blob: body, ceiling: res.MaxPrivilege, enable: res.Enable,
+		ttl: res.TokenTTL}, true
 }
 
-func (m minted) same(o minted) bool {
-	return m.username == o.username && bytes.Equal(m.blob, o.blob) && m.ceiling == o.ceiling && m.enable == o.enable
+// keeps reports whether a token m describes is one o would have minted: the
+// same answer, and a life no longer than o allows. A shortened token_ttl — an
+// incident's response, say — supersedes the tokens minted under the longer
+// one; a lengthened one does not, since those tokens live less than allowed.
+func (m minted) keeps(o minted) bool {
+	return m.username == o.username && bytes.Equal(m.blob, o.blob) && m.ceiling == o.ceiling &&
+		m.enable == o.enable && m.ttl <= o.ttl
 }
 
 // supersedeTokens deletes the unspent tokens of every (device, username) where
@@ -207,7 +219,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 						is.m, is.ok = mintedBy(cur, principal, d, now)
 						current[[2]string{principal, name}] = is
 					}
-					if is.ok && was.same(is.m) {
+					if is.ok && was.keeps(is.m) {
 						continue
 					}
 					keys[store.TokenKey{NAS: name, Username: was.username}] = true
@@ -465,7 +477,9 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 		return fault("resolving the policy in force", err)
 	case res.Username != c.Username:
 		// The subject's username changed: the principal can no longer mint
-		// under the name this context is keyed by.
+		// under the name this context is keyed by. No grant selects this
+		// context's key, so the record names none.
+		rec.Policy.Grants = nil
 		return revoke()
 	}
 	body, hash, err := engine.Encode(res.Blob)
