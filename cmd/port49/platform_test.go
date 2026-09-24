@@ -137,7 +137,7 @@ func TestPlatformExportPastesBackWithTheFallbackNote(t *testing.T) {
 		return out.String()
 	}
 	first := export()
-	if strings.Contains(first, "fallback_note") || !strings.Contains(first, "    fallback:\n      admin: read-only in practice\n") {
+	if strings.Contains(first, "fallback_note") || !strings.Contains(first, "    fallback:\n      admin: read-only in practice # operator note, not measured\n") {
 		t.Fatalf("export:\n%s", first)
 	}
 	if err := os.WriteFile(pol, append([]byte(first), raw...), 0o600); err != nil {
@@ -154,6 +154,45 @@ func TestPlatformExportPastesBackWithTheFallbackNote(t *testing.T) {
 		"    fallback_note:\n      admin: read-only in practice\n"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("show: missing %q in\n%s", want, out.String())
+		}
+	}
+}
+
+// `export --all` writes a platform set, which carries only what the lab
+// measured: a policy block's note is not written into it, and the set's text
+// is (spec §8).
+func TestPlatformExportAllWritesNoOperatorNote(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	block := "platforms:\n  arista_eos: {fallback: {admin: \"read-only in practice\"}}\n"
+	if err := os.WriteFile(pol, append([]byte(block), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "--all", "--dir", dir, "--policy", pol, "--inventory", inv}, &out,
+		&errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	file := string(readFile(t, filepath.Join(dir, "arista_eos.yaml")))
+	if strings.Contains(file, "read-only in practice") || strings.Contains(file, "fallback_note") ||
+		!strings.Contains(file, "      admin: 'network-admin: every command, configuration included'\n") {
+		t.Errorf("arista_eos.yaml:\n%s", file)
+	}
+}
+
+// Exporting reads the adapter and changes nothing in it: the fold writes a
+// copy of the fallback map.
+func TestAdapterFileLeavesTheAdapterAlone(t *testing.T) {
+	d, _ := platform.DialectFor("arista_eos")
+	d.FallbackNote = map[string]string{"admin": "read-only in practice"}
+	want := platform.SpecOf(d).Over(platform.Dialect{})
+	for _, mode := range []exportMode{exportShow, exportBlock, exportSet} {
+		if _, err := adapterFile("arista_eos", d, mode); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(d, want) {
+			t.Fatalf("mode %d changed the adapter: %+v", mode, d.Fallback)
 		}
 	}
 }

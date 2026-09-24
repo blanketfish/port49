@@ -3174,8 +3174,11 @@ appearing identical to one verified on every commit, and so must a built-in adap
 changed: SOURCE says `overridden`, `variant` or `local`, and VERIFIED `—`. `platform show
 <name>` prints a definition — the built-in, or with `--policy` the merged result — headed by
 where it came from and followed by the built-in redaction patterns; `platform export <name>`
-prints the file alone, and `platform export --all --dir DIR` writes one per platform, a
-directory `platforms/` would accept.
+prints the file alone, as a block that pastes back into a policy, and `platform export --all
+--dir DIR` writes one per platform, a directory `platforms/` would accept. A set carries only
+what the lab measured, so `--all` writes each `fallback` as the set measured it and drops a
+block's note; `export <name>` writes the note under `fallback`, where the block wrote it, with
+the comment `# operator note, not measured` on its line (§12).
 
 **Published documentation is generated from the embedded files** at release time, so it
 cannot drift from the binary.
@@ -3225,7 +3228,9 @@ key that says what the pinned set already says and can be removed; and at upgrad
 change a block shadows — so local platform files do not rot silently as upstream improves.
 
 **`port49 platform export <name>`** emits a file suitable for an upstream pull request:
-written for one fleet on day one, contributed once proven.
+written for one fleet on day one, contributed once proven. An upstream set takes measured text
+only: a `fallback` line commented `# operator note, not measured` is the operator's word, and is
+measured in the lab, or removed, before the file is contributed.
 
 ### Unknown platforms
 

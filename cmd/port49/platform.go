@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -165,7 +166,7 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 			return 1
 		}
 		for _, platformName := range sortedNames(set) {
-			body, err := adapterFile(platformName, set[platformName], true)
+			body, err := adapterFile(platformName, set[platformName], exportSet)
 			if err == nil {
 				err = os.WriteFile(filepath.Join(*dir, platformName+".yaml"), body, 0o644)
 			}
@@ -183,7 +184,11 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 			strings.Join(sortedNames(set), ", "))
 		return 1
 	}
-	body, err := adapterFile(platformName, d, export)
+	mode := exportShow
+	if export {
+		mode = exportBlock
+	}
+	body, err := adapterFile(platformName, d, mode)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", name, err)
 		return 1
@@ -316,33 +321,83 @@ func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
 	}
 }
 
-// adapterFile is d as an adapter file: `platforms: {name: ...}`. Exported, a
-// block's fallback note is written under fallback, where the block wrote it,
-// so the file pastes back as a block: fallback_note is port49's own record,
-// which a block may not set, and the set's measured text a block cannot
-// change goes with it (spec §8, §12). show prints both apart.
-func adapterFile(name string, d platform.Dialect, export bool) ([]byte, error) {
+// exportMode is what adapterFile writes a block's fallback note as.
+type exportMode int
+
+const (
+	// exportShow prints fallback and fallback_note apart, as port49 holds
+	// them.
+	exportShow exportMode = iota
+	// exportBlock writes the note under fallback, where the block wrote it,
+	// commented as the operator's, so the file pastes back as a block:
+	// fallback_note is port49's own record, which a block may not set, and
+	// the set's measured text a block cannot change goes with it.
+	exportBlock
+	// exportSet writes a platform set, which carries only what the lab
+	// measured: the note is dropped (spec §8).
+	exportSet
+)
+
+// notMeasured is the comment on a fallback level exportBlock folded a note
+// into.
+const notMeasured = "operator note, not measured"
+
+// adapterFile is d as an adapter file: `platforms: {name: ...}`, with a
+// block's fallback note written as mode says (spec §8, §12).
+func adapterFile(name string, d platform.Dialect, mode exportMode) ([]byte, error) {
 	spec := platform.SpecOf(d)
-	if export && spec.FallbackNote != nil {
-		fallback := map[string]string{}
-		if spec.Fallback != nil {
-			fallback = *spec.Fallback
+	var folded []string
+	if mode != exportShow && spec.FallbackNote != nil {
+		if mode == exportBlock {
+			fallback := map[string]string{}
+			if spec.Fallback != nil {
+				fallback = maps.Clone(*spec.Fallback)
+			}
+			for level, note := range *spec.FallbackNote {
+				fallback[level] = note
+				folded = append(folded, level)
+			}
+			spec.Fallback = &fallback
 		}
-		for level, note := range *spec.FallbackNote {
-			fallback[level] = note
+		spec.FallbackNote = nil
+	}
+	var doc yaml.Node
+	if err := doc.Encode(map[string]map[string]platform.Spec{"platforms": {name: spec}}); err != nil {
+		return nil, err
+	}
+	if fallback := mappingValue(mappingValue(mappingValue(&doc, "platforms"), name), "fallback"); fallback != nil {
+		for _, level := range folded {
+			if v := mappingValue(fallback, level); v != nil {
+				v.LineComment = notMeasured
+			}
 		}
-		spec.Fallback, spec.FallbackNote = &fallback, nil
 	}
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
-	if err := enc.Encode(map[string]map[string]platform.Spec{"platforms": {name: spec}}); err != nil {
+	if err := enc.Encode(&doc); err != nil {
 		return nil, err
 	}
 	if err := enc.Close(); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// mappingValue is the value under key in a mapping node, or nil.
+func mappingValue(n *yaml.Node, key string) *yaml.Node {
+	if n != nil && n.Kind == yaml.DocumentNode && len(n.Content) == 1 {
+		n = n.Content[0]
+	}
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if n.Content[i].Value == key {
+			return n.Content[i+1]
+		}
+	}
+	return nil
 }
 
 // redactionLine is a pattern as redact.yaml writes it.

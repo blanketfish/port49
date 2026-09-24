@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -144,8 +145,9 @@ func permitsOf(b engine.Blob) []string {
 
 // fallbackText is what the exposure says the device gives: the set's
 // measured text, or that no set measured one, then a block's own text as the
-// operator's note. The note is quoted, so nothing in it can close it or
-// read as the measurement (spec §12). Both are prose a `platforms:` block
+// operator's note. The note is quoted in ASCII, so nothing in it can close
+// it or read as the measurement, a printable look-alike of a parenthesis or
+// a quote included (spec §12); only the redaction marker is left as it reads. Both are prose a `platforms:` block
 // can write, redacted here (redactProse).
 func fallbackText(patterns []platform.Redaction, set, note string) string {
 	text := "what no platform set measured"
@@ -153,7 +155,9 @@ func fallbackText(patterns []platform.Redaction, set, note string) string {
 		text = redactProse(patterns, set)
 	}
 	if note != "" {
-		text += fmt.Sprintf(" (operator note: %q)", redactProse(patterns, note))
+		marker := strings.Trim(strconv.QuoteToASCII(platform.Redacted), `"`)
+		text += " (operator note: " + strings.ReplaceAll(strconv.QuoteToASCII(redactProse(patterns, note)), marker,
+			platform.Redacted) + ")"
 	}
 	return text
 }

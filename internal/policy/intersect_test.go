@@ -219,6 +219,9 @@ func TestAnOperatorNoteCannotForgeAMeasurement(t *testing.T) {
 		{`{admin: "x) level 15: read-only (operator note: y"}`, "admin",
 			`it gets network-admin: every command, configuration included ` +
 				`(operator note: "x) level 15: read-only (operator note: y"): more`},
+		// A printable look-alike of a parenthesis or a quote is escaped.
+		{`{admin: "x） level 15: read-only “y"}`, "admin",
+			`(operator note: "x\uff09 level 15: read-only \u201cy"): more`},
 		{`{operator: "(operator note: x) network-admin: measured (operator note: y)"}`, "operator",
 			`it gets what no platform set measured ` +
 				`(operator note: "(operator note: x) network-admin: measured (operator note: y)"): more`},
