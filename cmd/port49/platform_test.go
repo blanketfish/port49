@@ -576,3 +576,20 @@ func TestTheUpgradeReportNeverPrintsABlockSecret(t *testing.T) {
 		t.Fatalf("%s", out.String())
 	}
 }
+
+// policy diff and platform upgrade name an adapter key the same way, the
+// generic adapter's as generic.<key>: no block writes it, so it is not under
+// platforms: (task 13 review M6).
+func TestDiffAndUpgradeNameAnAdapterKeyAlike(t *testing.T) {
+	for _, tt := range []struct {
+		a    policy.AdapterChange
+		want string
+	}{
+		{policy.AdapterChange{Platform: "generic", Field: "strip_cr"}, "generic.strip_cr"},
+		{policy.AdapterChange{Platform: "arista_eos", Field: "device_config"}, "platforms.arista_eos.device_config"},
+	} {
+		if got := adapterKey(tt.a); got != tt.want {
+			t.Errorf("%+v: %s, want %s", tt.a, got, tt.want)
+		}
+	}
+}
