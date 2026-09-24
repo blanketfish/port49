@@ -482,16 +482,25 @@ func run(parent context.Context, cfgPath string) error {
 
 	// A dead metrics listener is not a detail: without it nobody can see the
 	// daemon at all, so its error ends the process rather than disappearing.
+	// It binds first, as the others do, so a port taken ends the start and
+	// the line below names the address bound.
+	mln, err := net.Listen("tcp", cfg.MetricsListen)
+	if err != nil {
+		stopSpool()
+		<-spoolDone
+		return fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
+	}
 	metricsErr := make(chan error, 1)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		metricsErr <- http.ListenAndServe(cfg.MetricsListen, mux)
+		metricsErr <- http.Serve(mln, mux)
 	}()
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
+		mln.Close()
 		stopSpool()
 		<-spoolDone
 		return err
@@ -503,6 +512,7 @@ func run(parent context.Context, cfgPath string) error {
 	if brokerSrv != nil {
 		if bln, err = net.Listen("tcp", brokerSrv.Addr); err != nil {
 			ln.Close()
+			mln.Close()
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
@@ -511,7 +521,7 @@ func run(parent context.Context, cfgPath string) error {
 	// The bound address, not the configured one: `:49` says nothing about
 	// which address answered, and `:0` says nothing about which port.
 	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
-		ln.Addr(), cfg.MetricsListen, len(cfg.Inventory.Devices))
+		ln.Addr(), mln.Addr(), len(cfg.Inventory.Devices))
 
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {
@@ -574,6 +584,7 @@ func run(parent context.Context, cfgPath string) error {
 	stopSpool()
 	<-spoolDone
 	fmt.Fprintln(stderr, "port49d: accounting spool drained, exiting")
+	mln.Close()
 	return runErr
 }
 

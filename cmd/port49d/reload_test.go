@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -530,6 +532,17 @@ func TestRunWithNoBrokerSaysSIGHUPDoesNothing(t *testing.T) {
 		<-done
 	}()
 	waitFor(t, &out, "port49d: listening on ")
+	// The metrics address said is the one bound, as for the other listeners:
+	// `:0` says nothing about which port to scrape.
+	m := regexp.MustCompile(`metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())
+	if m == nil || strings.HasSuffix(m[1], ":0") {
+		t.Fatalf("stderr: %q", out.String())
+	}
+	resp, err := http.Get("http://" + m[1] + "/healthz")
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("the metrics address said is not the one serving: %v %v", resp, err)
+	}
+	resp.Body.Close()
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
