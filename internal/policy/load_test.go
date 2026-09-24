@@ -442,10 +442,23 @@ func TestAScopeErrorIsTheSameEveryLoad(t *testing.T) {
 }
 
 // A placeholder goes only in an attribute listed inert: home-directory, spec
-// §6's motivating case, on every platform (review I4).
+// §6's motivating case, on every platform that holds it inert (review I4).
+// IOS-XE does not: the C8000V refused a session for it
+// (tests/lab/results/L22-cisco_iosxe.md), so there, and under `all`, which
+// reaches IOS-XE, a placeholder in it is refused.
 func TestAPlaceholderGoesOnlyInAnInertAttribute(t *testing.T) {
-	for _, key := range []string{"all", "arista_eos", "juniper_junos"} {
-		if _, err := Parse([]byte("roles:\n  - {name: r, attributes: {"+key+": [\"home-directory*/home/{username}\"]}}\n"+subjOK), env()); err != nil {
+	parse := func(key string) error {
+		_, err := Parse([]byte("roles:\n  - {name: r, attributes: {"+key+": [\"home-directory*/home/{username}\"]}}\n"+subjOK), env())
+		return err
+	}
+	for _, key := range []string{"arista_eos", "cisco_nxos", "juniper_junos"} {
+		if err := parse(key); err != nil {
+			t.Errorf("%s: %v", key, err)
+		}
+	}
+	for _, key := range []string{"all", "cisco_iosxe"} {
+		if err := parse(key); err == nil || !strings.Contains(err.Error(),
+			"home-directory is not listed inert on cisco_iosxe, so it takes no placeholder") {
 			t.Errorf("%s: %v", key, err)
 		}
 	}

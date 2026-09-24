@@ -2492,7 +2492,10 @@ can carry it, on `cisco_nxos` (L16); `local-user-name` and `user-permissions` on
 `allow-commands`, `deny-commands`, `allow-configuration`, `deny-configuration` and their
 `-regexps` forms (vendor-documented, unmeasured, L18) — and the names it holds to carry none.
 The inert list is seeded with this section's own motivating case, `home-directory`, on every
-shipped adapter; it is unmeasured on any lab image. A placeholder is allowed only in an attribute
+shipped adapter but `cisco_iosxe`. vEOS and the N9Kv leave a session with it beside admin's
+reply unchanged. The C8000V refuses the session for it, `% Authorization failed.`
+(`tests/lab/results/L22-*.md`), so on IOS-XE it bears privilege like every other name, and a
+policy that sends it there quarantines the device. A placeholder is allowed only in an attribute
 listed inert on its platform key, or under `all` on every platform in the inventory; anywhere
 else — a privilege-bearing attribute or one no adapter lists — it is refused at load. A
 substitution refuses only `=`, `*` and control characters, so `priv-lvl={username}` would hide
@@ -4804,7 +4807,8 @@ Beyond those already listed in the design document's §14:
 - **Placeholders only in inert attributes**: `priv-lvl={username}`,
   `allow-commands={principal}`, `allow-configuration={username}` and a placeholder in an
   attribute no adapter lists (`note*{device}`) each fail at load; `home-directory*/home/{username}`
-  loads under `all` and under each platform.
+  loads under each platform that holds it inert and fails under `cisco_iosxe` and `all`
+  (L22-cisco_iosxe.md).
 - **The gate sees broker rights**: `api: [explain_others, revoke_others, replay]` added to a
   subject fails `port49 policy diff` until a test asserts the whole list with `api:`; a
   principal moved to a subject with more rights needs that assertion in its own test; a right

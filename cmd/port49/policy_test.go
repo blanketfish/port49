@@ -192,7 +192,7 @@ func TestPolicyTestAndDiffAnswerAsTheBrokerMints(t *testing.T) {
 	oldPol, inv := policyFixture(t)
 	raw := readFile(t, oldPol)
 	refused := strings.Replace(string(raw), "{name: read_only, privilege: readonly, permit: [show **]}",
-		`{name: read_only, privilege: readonly, permit: [show **], attributes: {all: ["home-directory*/`+strings.Repeat("h", 227)+`/{principal}"]}}`, 1)
+		`{name: read_only, privilege: readonly, permit: [show **], attributes: {arista_eos: ["home-directory*/`+strings.Repeat("h", 227)+`/{principal}"]}}`, 1)
 	newPol := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(newPol, []byte(refused), 0o600); err != nil {
 		t.Fatal(err)

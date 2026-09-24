@@ -170,8 +170,8 @@ func TestUnknownPlatformsAreGenericAndTheTableIsCopied(t *testing.T) {
 
 // Each platform lists the attribute names that carry privilege on it, from
 // the lab (L16, L18; spec §6), and the names it holds inert, seeded with spec
-// §6's home-directory; every other attribute bears privilege for the gate
-// (spec §12).
+// §6's home-directory everywhere but IOS-XE; every other attribute bears
+// privilege for the gate (spec §12).
 func TestPrivilegeAttributesArePerPlatformAndFailClosed(t *testing.T) {
 	junos := []string{"local-user-name", "user-permissions", "allow-commands", "deny-commands", "allow-configuration",
 		"deny-configuration", "allow-commands-regexps", "deny-commands-regexps", "allow-configuration-regexps",
@@ -187,10 +187,17 @@ func TestPrivilegeAttributesArePerPlatformAndFailClosed(t *testing.T) {
 		if !reflect.DeepEqual(d.PrivilegeAttributes, want) {
 			t.Errorf("%s: %v", name, d.PrivilegeAttributes)
 		}
-		if !reflect.DeepEqual(d.InertAttributes, []string{"home-directory"}) {
+		// IOS-XE refused a session for home-directory
+		// (tests/lab/results/L22-cisco_iosxe.md), so nothing is inert there.
+		inert := []string{"home-directory"}
+		if name == "cisco_iosxe" {
+			inert = []string{}
+		}
+		if !reflect.DeepEqual(d.InertAttributes, inert) {
 			t.Errorf("%s inert: %v", name, d.InertAttributes)
 		}
-		if !d.BearsPrivilege("idletime") || !d.BearsPrivilege(want[0]) || d.BearsPrivilege("home-directory") {
+		if !d.BearsPrivilege("idletime") || !d.BearsPrivilege(want[0]) ||
+			d.BearsPrivilege("home-directory") != (name == "cisco_iosxe") {
 			t.Errorf("%s: only an attribute listed inert bears no privilege", name)
 		}
 	}

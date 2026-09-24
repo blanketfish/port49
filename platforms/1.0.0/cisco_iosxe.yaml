@@ -88,6 +88,11 @@ platforms:
     strip_cr: true
     # A 61-character server_msg was displayed in full (L2-cisco_iosxe.md).
     shows_server_msg: true
-    # `priv-lvl` sets the level (L16, ceiling-cisco_iosxe.md).
+    # `priv-lvl` sets the level (L16, ceiling-cisco_iosxe.md). No attribute is
+    # inert here: `home-directory*/home/port49` beside admin's reply got the
+    # session refused, `% Authorization failed.` (tests/lab/results/
+    # L22-cisco_iosxe.md), so it bears on the session like any other name
+    # and takes no placeholder. The empty list is what overrides the generic
+    # adapter's home-directory.
     privilege_attributes: [priv-lvl]
-    inert_attributes: [home-directory]
+    inert_attributes: []

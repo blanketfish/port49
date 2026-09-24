@@ -152,7 +152,9 @@ type ConfigCheck struct {
 // and chosen in the direction that fails closed.
 func builtin() map[string]Dialect { return sets[DefaultSet] }
 
-// inert is the generic adapter's InertAttributes, as every shipped adapter's.
+// inert is the generic adapter's InertAttributes, and every shipped adapter's
+// but cisco_iosxe's, which is empty: the C8000V refused a session for
+// home-directory (tests/lab/results/L22-cisco_iosxe.md).
 var inert = []string{"home-directory"}
 
 // generics is each set's generic adapter, by version: the dialect of a

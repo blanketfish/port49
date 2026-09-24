@@ -123,7 +123,7 @@ scopes: [{name: all_devices, match: {}}, {name: dc_fabric, match: {site: dc1}}]
 roles:
   - {name: limited, privilege: read_only_limited, permit: [show version],
      attributes: {all: ["idletime*30", "timeout*480"], arista_eos: ["priv-lvl=2"]}}
-  - {name: homes, attributes: {all: ["home-directory*/home/{username}", "idletime*10"]}}
+  - {name: homes, attributes: {arista_eos: ["home-directory*/home/{username}"], all: ["idletime*10"]}}
 subjects:
   - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}
 grants:
@@ -134,9 +134,12 @@ grants:
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Order is first appearance — platform, then roles by name, then grants —
-	// with an override taking the place of what it shadows.
-	want := []string{"priv-lvl=2", "roles=network-operator", "home-directory*/home/{username}", "idletime*30", "timeout*60"}
+	// Order is first appearance — platform, then roles by name, then grants,
+	// a role's `all` list before its platform's — with an override taking the
+	// place of what it shadows. home-directory is keyed to arista_eos: IOS-XE
+	// holds it bearing privilege (L22-cisco_iosxe.md), so under `all` its
+	// placeholder is refused.
+	want := []string{"priv-lvl=2", "roles=network-operator", "idletime*30", "home-directory*/home/{username}", "timeout*60"}
 	if !reflect.DeepEqual(r.Blob.Attributes, want) {
 		t.Fatalf("attributes %q, want %q", r.Blob.Attributes, want)
 	}
@@ -584,6 +587,37 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	ok := strings.Replace(strings.Replace(body, "KEY", "cisco_iosxe", 1), "idletime*30", "priv-lvl=1", 1)
 	if q := mustParse(t, ok).Quarantines(noon); len(q) != 0 {
 		t.Fatalf("%+v", q)
+	}
+}
+
+// home-directory is no exception on IOS-XE: beside admin's reply the C8000V
+// refused the session for it, `% Authorization failed.`
+// (tests/lab/results/L22-cisco_iosxe.md). A policy that sends it there
+// quarantines the device, so no login is locked out by it, and a placeholder
+// in it is refused at load, since nothing is inert on IOS-XE.
+func TestHomeDirectoryIsRefusedOnIOSXE(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {KEY: ["VALUE"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`
+	parse := func(key, value string) (*Policy, error) {
+		return Parse([]byte(strings.NewReplacer("KEY", key, "VALUE", value).Replace(body)), env())
+	}
+	p, err := parse("cisco_iosxe", "home-directory*/home/port49")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := p.Quarantines(noon)
+	if len(q) != 1 || q[0].Device != "xe-01" || !strings.Contains(causesOf(q[0])[0],
+		"its session reply sends home-directory*/home/port49 (role ro), and cisco_iosxe takes no attribute but priv-lvl") {
+		t.Fatalf("quarantines: %+v", q)
+	}
+	for _, key := range []string{"cisco_iosxe", "all"} {
+		if _, err := parse(key, "home-directory*/home/{username}"); err == nil || !strings.Contains(err.Error(),
+			"home-directory is not listed inert on cisco_iosxe, so it takes no placeholder") {
+			t.Errorf("%s: %v", key, err)
+		}
 	}
 }
 

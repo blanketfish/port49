@@ -118,7 +118,7 @@ func TestASessionReplyThatWillNotFitIsRefusedAtMint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	body := `
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: r, privilege: admin, permit: ["**"], attributes: {all: ["home-directory*` + strings.Repeat("x", 225) + ` {principal}"]}}]
+roles: [{name: r, privilege: admin, permit: ["**"], attributes: {arista_eos: ["home-directory*` + strings.Repeat("x", 225) + ` {principal}"]}}]
 subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 `
@@ -147,7 +147,7 @@ func TestASessionReplyThatWouldCarryASeparatorIsRefusedAtMint(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	body := `
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: r, privilege: admin, permit: ["**"], attributes: {all: ["home-directory*{device}"]}}]
+roles: [{name: r, privilege: admin, permit: ["**"], attributes: {arista_eos: ["home-directory*{device}"]}}]
 subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 `

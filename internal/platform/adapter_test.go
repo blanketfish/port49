@@ -75,7 +75,7 @@ var shipped = map[string]Dialect{
 		// L18-cisco_iosxe.md, ceiling-cisco_iosxe.md; decision 25.
 		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=7"}, "admin": {"priv-lvl=15"}},
 		PrivilegeAttributes: []string{"priv-lvl"},
-		InertAttributes:     []string{"home-directory"},
+		InertAttributes:     []string{},
 		EnableUsername:      EnablePrincipal,
 		AcceptedAttributes:  []string{"priv-lvl"},
 		DeviceConfig: []string{"aaa authorization exec default group port49 local",
