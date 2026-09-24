@@ -59,26 +59,47 @@ What the roadmap owes, and nothing past it:
 1. **The policy in force is one pointer, `policy.Live`.** A loaded `*policy.Policy` is never
    edited, so a reader holds one version throughout; the swap is the only thing that changes the
    version. The daemon's per-packet quarantine question and the quarantine gauge `Load` it with no
-   lock. A mint `Hold`s it — a read lock across the resolution and the token write, for the whole
-   request — so that once `Swap` returns no mint is still writing a token resolved against the
-   policy it replaced. The token supersede (Decided 7) depends on that. A batch is one version: a
-   request never mints device 1 from one policy and device 2 from the next.
+   lock. A mint `Hold`s it — a read lock from its first resolution to its last token write — so
+   that once `Swap` returns no mint is still writing a token resolved against the policy it
+   replaced. The token supersede (Decided 7) depends on that. A batch is one version: a request
+   never mints device 1 from one policy and device 2 from the next. The hold is released before
+   the response is written (pre-flight S1): a client that stops reading, or a peer that vanishes
+   mid-response, would otherwise hold a reload — and, behind it, every mint and every refresh —
+   until TCP gave up, with nothing said. A deferred release still covers a panic, which net/http
+   recovers.
 2. **The watch is a content-hash poll, and a change is loaded when two reads in a row agree.**
    `broker.policy_watch_interval` (default 5s, 1s to 5m) reads the file and compares its sha256
    — which is also the bundle the file loads as (plan 4, Decided 3) — with the policy in force. A
    poll sees an in-place write, an editor's rename-and-replace and a Kubernetes ConfigMap's
    symlink swap alike, where inotify would need a new dependency and per-editor care. Two
    agreeing reads mean a file caught half-written is neither loaded nor refused: without them an
-   editor's in-place save would log a spurious refusal and page someone. `SIGHUP` loads at once,
-   with no second read, because the operator asked. `SIGHUP` is caught with no `broker:` block
-   too, and said to do nothing: its default action ends the process, and a reload habit must never
-   take device AAA down.
+   editor's in-place save would log a spurious refusal and page someone. What is loaded is the
+   bytes the two reads agreed on, never a third read (pre-flight S2): a list cut short can load
+   *wider* than the one intended — a block-style `deny:` list cut after its first item loses the
+   rest. `SIGHUP` loads at once, with no second read, because the operator asked. Neither guards a
+   writer stalled part-way for two intervals, or a `SIGHUP` sent mid-write, so the file is to be
+   written atomically (a temporary file renamed over it); the config comment, the spec and the
+   operator notes say so. `SIGHUP` is caught with no `broker:` block too, and said to do nothing:
+   its default action ends the process, and a reload habit must never take device AAA down. It is
+   caught first thing in `run` (pre-flight N5), so a HUP sent during start does not end it either.
 3. **A file that does not load is refused whole, with the start's own words.** One loader serves
    the start and every reload, so the error an operator reads after an edit is the one a restart
    would have printed. The refusal is said once per distinct content (a SIGHUP always answers),
    counted in `port49_policy_reloads_total{outcome}` (`applied`, `unchanged`, `refused`), and held
    in `port49_policy_file_refused`, 1 while the file on disk is not the policy serving — the alert
-   for an edit someone believes is live and is not. Putting the old file back clears it.
+   for an edit someone believes is live and is not. Putting the old file back clears it. The
+   refusal is one line: a YAML error's own lines are joined into it (pre-flight N7). It echoes
+   values from the file quoted, exactly as the start does; the policy holds no credential.
+   **A file anyone but `port49d`'s user or root could have written is refused the same way**
+   (pre-flight N6, the owner's security-first ruling): the file group- or world-writable, its
+   directory group- or world-writable, or either owned by another uid. At start `port49d` does not
+   start; at a reload the policy in force serves, the refusal is said once and counted `refused`.
+   With a live reload, whoever can write the file decides every operator's access within
+   seconds. It is `internal/keyfile`'s rule for a private key, for writing rather than reading;
+   unlike keyfile a symlink is followed — a Kubernetes ConfigMap mounts the policy as a chain of
+   them — and what is checked is the final target, opened with `O_NOFOLLOW`, and the directory
+   holding it. The lab harness gives `port49d` a private copy of its policy, since a checkout
+   under a umask of 002 is group-writable.
 4. **The refresh writes through a new narrow setter, `SetContextPolicy`, and it is a
    compare-and-set.** It writes a closed list — the blob hash, the ceiling (lowering a held level
    above a lowered ceiling, the join's rule, spec §5.3) and the `enable` mechanism; or, to revoke,
@@ -106,14 +127,24 @@ What the roadmap owes, and nothing past it:
    context revoked), `device_quarantined` (deny: the context left as it was). A resolution that
    fails on a device the load did not quarantine is a broker defect, as it is at mint: the context
    is revoked — it is serving a policy no longer in force, and fail closed says it stops — and the
-   process log says why, with no decision record, as a mint item error has none. An unchanged
-   context writes nothing and logs nothing.
+   process log says why, naming the `ctx_id` so the `credential_revoked` after it can be joined,
+   with no decision record, as a mint item error has none. An unchanged context writes nothing and
+   logs nothing. Both are carve-outs from §5.7's "every evaluation emits exactly one record", and
+   Task 1 writes them into §5.7 beside that sentence (pre-flight S6). The process-log lines go
+   through `log.Printf`, as the broker's other process-log lines do, not port49d's swappable
+   `stderr`: the same stream in production, and not asserted by a test (pre-flight N8, accepted as
+   is).
 7. **Unspent tokens whose answer changed are deleted** (Question 1). A token carries the blob,
    ceiling and `enable` of the policy that minted it, and a redemption writes them into the
    context it creates or joins. Without the delete a grant withdrawn at 10:00 comes back at 10:05
    on a device where the operator had no context, from a token minted at 09:58 — exactly the edit
    this plan exists for. Design §8 already puts deleting tokens on revoke by `(device, username)`
    on the broker. A token the policy in force would mint identically, the bundle aside, is kept.
+   A superseded policy is judged across its whole span, not at one instant (pre-flight S5): a
+   token carries the answer at the moment of its mint, and the answer changes at each grant expiry
+   in the span, so the answers are read at the span's start and at every expiry inside it
+   (`broker.Prior`'s `At` and `Until`). Read only at the start, a pass the store stopped at an
+   expiry would leave a token minted after it that a withdrawing edit ought to clear.
 8. **A context on a quarantined device is left as it is** (Question 3). The daemon answers nothing
    from that device while it is quarantined, and the refresh at the reload or expiry that lifts
    the quarantine brings the context forward.
@@ -125,7 +156,13 @@ What the roadmap owes, and nothing past it:
    it is a scheduled refresh (`policy.NextChange`); without it a live context keeps an expired
    grant's rules until the next edit. The reloader remembers every policy in force since the last
    complete pass (`broker.Prior`), so a pass the store stopped compares against all of them when
-   it runs again.
+   it runs again. **A busy context does not stop a pass** (pre-flight S3): every accounting
+   record moves a context's revision, so a session busy enough can make every compare-and-set
+   stale. After `store.MaxJoinAttempts` a revocation is written anyway through `SetRevokedAt`,
+   the setter that writes the mark alone — fail closed, at worst revoking a login another
+   principal made a moment ago, whose owner logs in again — and any other answer is counted
+   `failed` and left for the retry; the pass goes on to the next context and returns the
+   conflict at the end, so the reloader retries in 30s.
 10. **The inventory is not reloaded, and a reload after an inventory edit says so.** Reading the
     inventory file again is cheap; applying it is not: admission's trie, the key ring, the
     per-source limits and the broker's device table are built from it once, and spec §10's
@@ -138,7 +175,10 @@ What the roadmap owes, and nothing past it:
     every mint at once — and every mint fails `store_unavailable` until the store answers, as it
     would have anyway. The refresh stops at its first store error, says how far it got, and is run
     again every 30s; a context not reached keeps its previous policy until then. Nothing is
-    half-written to any one context: each is one compare-and-set.
+    half-written to any one context: each is one compare-and-set. `port49_policy_refresh_pending`
+    is 1 from the swap, or a stopped pass, until a pass completes (pre-flight S4) — the alert for
+    a policy that loaded and has not yet reached every live session, a withdrawn grant included —
+    and the pass that completes after a stop always says so in one line (pre-flight N9).
 12. **`run` takes a context.** `main` makes it from `SIGINT` and `SIGTERM`, a test from its own;
     `stdout` is swappable like `stderr`, and the listening lines print the bound addresses, so a
     test can start `port49d` on port 0 and find it.
@@ -150,6 +190,33 @@ What the roadmap owes, and nothing past it:
 14. **No lab task.** Nothing a device sees changes: the daemon's answers — a narrowed command's
     denial, `credential_revoked`, a quarantined device closed without a reply — are the ones
     plans 2–4 built and measured. No register row opens or closes.
+
+## Pre-flight rulings folded in
+
+The pre-flight (`.superpowers/sdd/2026-09-24-04b-live-policy/preflight-report.md`) found no
+blocking item. Every ruling below was accepted and is in the tasks as written, and all were
+dry-run together. Every code ruling but N5 (where `SIGHUP` is caught) has a test; the tests for
+S1, S3 and S5 were run against the code without their fix and failed, which is how S5 went from
+suspected to shown.
+
+| Ruling | Where |
+|---|---|
+| S1 the mint's hold ends before its response is written | Decided 1; Task 4 (`broker.go`; `TestASwapDoesNotWaitForAResponseWrite`) |
+| S2 the watch loads the bytes its two reads agreed on; write atomically | Decided 2; Task 6 (`poll`, `load`; `TestTheWatchLoadsTheBytesItsReadsAgreedOn`); `BrokerConfig`; spec §5.1.3; operator notes |
+| S3 a busy context is revoked anyway or left for the retry, and the pass goes on | Decided 9; Task 5 (`refreshContext`, `refreshContexts`; `TestABusyContextDoesNotStopTheRefresh`, `TestABusyContextIsRevokedAnyway`); spec §5.1.3 and §14 |
+| S4 `port49_policy_refresh_pending` | Decided 11; Task 6; design §12; spec §5.1.3; operator notes |
+| S5 a superseded policy is judged at every expiry in its span | Decided 7; Task 5 (`Prior.Until`, `instants`; `TestASupersededPolicyIsJudgedAtEveryExpiryItSpanned`); Task 6 (the reloader closes a span at the swap); spec §5.1.3 and §14 |
+| S6 §5.7's two `refresh` carve-outs; the fault line names the `ctx_id` | Decided 6; Task 1; Task 5 |
+| N1, N2 the `SetContextPolicy` comment; `crypt.go`'s hunk keeps `DeleteContext`'s doc | Task 2 |
+| N4 a login whose index write failed is invisible to the refresh | Task 8, handed to plan 6 |
+| N5 `SIGHUP` is caught first thing in `run` | Decided 2; Task 6 |
+| N6 a policy file someone else could have written is refused, at start and at a reload | Decided 3; Task 1 (spec §5.1.3, §14; design §12, §13); Task 4 (`readPolicyFile`, the lab harness); Task 6 (`policyVersion`); operator notes |
+| N7 a refusal is one line | Decided 3; Task 6 (`oneLine`; `TestARefusalIsOneLine`) |
+| N8 the refresh's process-log lines stay on `log.Printf` | Decided 6 (accepted as is) |
+| N9 the pass after a stop says it finished | Decided 11; Task 6 |
+| N10 the whole §14 clamp assertion, end to end | Task 7 (a lowered `max_privilege`, then `privilege_exceeded` at 15 and a permit at 1) |
+| N11 `credential_revoked` from a routine edit | What the operator sees; operator notes |
+| D5 design §12 rows for a refused file and an incomplete refresh | Task 1 |
 
 ## Questions for Ryan
 
@@ -189,14 +256,25 @@ decision log to stdout.
   level…` — once, however long the file stays broken. `port49_policy_file_refused` is 1; alert on
   it. Fix the file or put it back: `port49d: policy: broker.policy_file … is the policy in force
   again`, and the gauge returns to 0.
+- **A policy file someone else could have written:** at start, `port49d: broker.policy_file
+  /etc/port49/policy.yaml: the file /etc/port49/policy.yaml is mode -rw-rw-rw-, writable by others
+  than its owner; whoever can write the policy decides every operator's access - chmod go-w it`,
+  and `port49d` does not start. At a reload the same words follow `refused; still serving
+  sha256:<old>:`, once, with `port49_policy_file_refused` at 1; `chmod go-w` is a change the watch
+  sees, and the file then loads.
 - **The store down during a reload, or failing half-way through a refresh:** `port49d: policy
   refresh stopped (3 live context(s) updated, … so far): refreshing live contexts: <error>; the
-  contexts not reached keep their previous policy; trying again in 30s`. The new policy is in
-  force for every mint; the retry finishes the job once the store answers.
+  contexts not reached keep their previous policy; trying again in 30s`, and
+  `port49_policy_refresh_pending` is 1 — alert on it. The new policy is in force for every mint;
+  the retry finishes the job once the store answers, says `port49d: policy refresh finished: …`,
+  and the gauge returns to 0.
 - **An operator whose grant was withdrawn, at their next command:** `% port49: this session was
   revoked - log in again` on the device; in the log, `authorize_command deny credential_revoked`
   naming their `ctx_id`, and before it `refresh deny no_grants_matched` naming the same `ctx_id`
   and the bundle that withdrew it. `port49 token` for that device answers `no_grants_matched`.
+  `credential_revoked` is alertable as an incident signal (spec §5.7), and a routine edit now
+  produces it too: the `refresh deny no_grants_matched` record naming the same `ctx_id` is what
+  tells a withdrawn grant from a revoked credential, so an alert rule can leave those out.
 - **A narrowed or lowered operator:** the next command outside the new rules is denied as any
   denial is; a lowered `max_privilege` shows as `privilege_exceeded`, and the `refresh` record
   before it carries `session.privilege_clamped` from and to.
@@ -269,7 +347,8 @@ New in this plan:
 ## File Structure
 
 ```
-docs/design/2026-08-23-policy-engine-spec.md    MOD  §5.1.3 "Policy reload"; §5.6 row 2; §5.7 refresh event + four rows; §13 decision 24; §14 (Task 1)
+docs/design/2026-08-23-policy-engine-spec.md    MOD  §5.1.3 "Policy reload"; §5.6 row 2; §5.7 refresh event, carve-outs + four rows; §13 decision 24; §14 (Task 1)
+docs/design/2026-08-21-port49-design.md         MOD  §12 two failure rows; §13 the policy file is a privilege (Task 1)
 internal/store/store.go                         MOD  ContextPolicy; Store.SetContextPolicy (Task 2)
 internal/store/memory/memory.go                 MOD  SetContextPolicy
 internal/store/memory/memory_test.go            MOD
@@ -281,12 +360,16 @@ internal/policy/live_test.go                    NEW
 internal/broker/broker.go                       MOD  Broker.Policy is a *policy.Live; a request holds one version (Task 4)
 internal/broker/server.go                       MOD  Server returns its refusal
 internal/broker/{engine,fixture,server}_test.go MOD
-cmd/port49d/main.go                             MOD  buildBroker returns the broker; loadPolicy, sayPolicy (Task 4); SIGHUP, the reloader (Task 6); run(ctx), stdout, bound addresses (Task 7)
+cmd/port49d/main.go                             MOD  buildBroker returns the broker; loadPolicy, parsePolicy, sayPolicy (Task 4); SIGHUP, the reloader (Task 6); run(ctx), stdout, bound addresses (Task 7)
 cmd/port49d/broker_test.go                      MOD  (Tasks 4, 7)
+cmd/port49d/policyfile.go                       NEW  readPolicyFile: refuse a policy file others could write (Task 4)
+cmd/port49d/policyfile_test.go                  NEW
+tests/lab/harness_test.go                       MOD  port49d gets a private copy of its policy file (Task 4)
+tests/lab/README.md                             MOD  the by-hand run makes the policy file safe (Task 4)
 internal/decision/reasons.go                    MOD  EventRefresh (Task 5)
-internal/daemon/metrics/metrics.go              MOD  ContextRefreshes, TokensSuperseded (Task 5); PolicyReloads, PolicyFileRefused (Task 6)
+internal/daemon/metrics/metrics.go              MOD  ContextRefreshes, TokensSuperseded (Task 5); PolicyReloads, PolicyFileRefused, PolicyRefreshPending (Task 6)
 internal/daemon/metrics/metrics_test.go         MOD
-internal/broker/refresh.go                      NEW  Prior, RefreshReport, Refresh (Task 5)
+internal/broker/refresh.go                      NEW  Prior (At, Until), RefreshReport, Refresh (Task 5)
 internal/broker/refresh_test.go                 NEW
 internal/config/config.go                       MOD  broker.policy_watch_interval (Task 6)
 internal/config/broker_test.go                  MOD
@@ -306,27 +389,32 @@ live sessions; Task 7 proves it end to end through `run`. Every task leaves `mak
 ### Task 1: The spec says what a live reload does, before the code does
 
 **Files:**
-- Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§5.1.3, §5.6 teardown row 2, §5.7 events
-  and four reason rows, §13 decision 24, §14 "Session lifetime and revocation")
+- Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§5.1.3, §5.6 teardown row 2, §5.7 events,
+  the two `refresh` carve-outs from "every evaluation emits exactly one record" and four reason
+  rows, §13 decision 24, §14 "Session lifetime and revocation")
+- Modify: `docs/design/2026-08-21-port49-design.md` (§12 "Policy file refused" and "Policy refresh
+  incomplete" rows; §13 "The policy file is a privilege")
 
 **Interfaces:**
 - Produces: the §5.7 `refresh` event Task 5 emits, and the reason rows it emits under; §5.1.3's
-  "Policy reload", which every later task implements a paragraph of; decision 24; the §14
-  assertions Tasks 2–7 test.
+  "Policy reload", which every later task implements a paragraph of — including the agreed-bytes
+  rule and atomic writes (Task 6), the policy file's permissions (Tasks 4 and 6), the busy
+  context and the span a superseded policy is judged over (Task 5), and
+  `port49_policy_refresh_pending` (Task 6); decision 24; the §14 assertions Tasks 2–7 test.
 
 Why first: a new event is added to the spec table before any code names it (`CLAUDE.md`, and plan
 4's practice for `blob_platform_mismatch`), and §5.1.3 as written describes only plan 7's
 directory refresh.
 
-- [ ] **Step 1: Apply the spec edit**
+- [ ] **Step 1: Apply the spec and design edits**
 
 <!-- patch: docs/design/2026-08-23-policy-engine-spec.md -->
 ```diff
 diff --git a/docs/design/2026-08-23-policy-engine-spec.md b/docs/design/2026-08-23-policy-engine-spec.md
-index d604973..9660a2b 100644
+index d604973..503d60a 100644
 --- a/docs/design/2026-08-23-policy-engine-spec.md
 +++ b/docs/design/2026-08-23-policy-engine-spec.md
-@@ -587,6 +587,60 @@ This also makes **policy-driven revocation reach active sessions**, not only dir
+@@ -587,6 +587,86 @@ This also makes **policy-driven revocation reach active sessions**, not only dir
  revocation. A policy change that removes a grant produces a different blob, and live contexts
  pick it up on the next refresh.
  
@@ -339,7 +427,20 @@ index d604973..9660a2b 100644
 +   start. A file that does not load is refused: the policy in force keeps serving, the refusal
 +   is logged once with the reason and the bundle still serving, and
 +   `port49_policy_file_refused` holds at 1 until a file loads or the old one is put back. A typo
-+   never takes the fleet down. Nothing is half-applied.
++   never takes the fleet down. Nothing is half-applied. A change the timer finds is loaded once
++   two reads in a row agree, and what is loaded is the bytes those two reads agreed on; a
++   `SIGHUP` loads what is on disk at once. Either way a file must be written atomically (a
++   temporary file renamed over it): a writer stalled part-way for two intervals, or a `SIGHUP`
++   sent mid-write, loads what is there, and a list cut short can load wider than the one
++   intended.
++
++   **Whoever can write the policy decides every operator's access,** so a policy file anyone
++   else could have written is refused like one that does not load, at start as at a reload: a
++   file that is group- or world-writable, or whose directory is, or that is owned by neither
++   the user `port49d` runs as nor root. At start `port49d` does not start; at a reload the
++   policy in force keeps serving. The check follows symlinks — it is the file actually read,
++   and the directory holding it, that must be safe — so a Kubernetes ConfigMap mount, whose
++   files and the directory holding them are root's and not group- or world-writable, passes.
 +2. **Swap.** The loaded policy replaces the one in force in one step, so no mint sees one
 +   version's grants and another's quarantine. A mint in flight finishes on the policy it
 +   started with, and the swap waits for it.
@@ -381,13 +482,26 @@ index d604973..9660a2b 100644
 +**The store down during a reload** does not stop the swap: the new policy is in force for every
 +mint at once (and every mint fails `store_unavailable` until the store answers). The refresh
 +stops at its first store error, says how far it got, and runs again until it finishes; a
-+context not yet reached keeps its previous policy until then. The directory-driven scheduled
++context not yet reached keeps its previous policy until then, and
++`port49_policy_refresh_pending` holds at 1 from the swap until a pass completes — the alert for
++a policy in force that has not yet reached every live session. The directory-driven scheduled
 +refresh through `active_principals` is plan 7's.
++
++**A context that keeps changing does not stop the pass.** A write landing between the
++refresh's read and its compare-and-set sends it back to read again, a bounded number of times.
++A context still changing after that is left for the retry and the pass goes on to the next,
++so one busy session cannot hold every session after it on the superseded policy. A
++revocation is not left: it is written unconditionally (`revoked_at` alone), failing closed.
++
++**A superseded policy's tokens are judged across the whole time it was in force.** A token
++it minted carries the answer at the instant of the mint, and that answer changes at each grant
++expiry inside the span, so the comparison is made at the start of the span and at every expiry
++within it; a key is cleared if any of those answers differs from the policy in force.
 +
  ### 5.1.4 Credential identity and revocation
  
  Login context records which credential authorized it. Not to re-verify — **the daemon never
-@@ -1185,7 +1239,7 @@ did not generate and cannot verify MUST NOT delete state.
+@@ -1185,7 +1265,7 @@ did not generate and cannot verify MUST NOT delete state.
  | | Trigger | Authority |
  |---|---|---|
  | 1 | **Login redemption** on the same `(nas, username)` | port49 performed it — joins the same principal's live context and replaces another principal's, logging the replace (above). An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7). **That is a requirement on plan 2's escalate path, not a description of the tree** — see below |
@@ -396,7 +510,20 @@ index d604973..9660a2b 100644
  | 3 | **Session ceiling** — `session_expires` reached and the grace window elapsed | local, needs no external signal |
  | 3a | **Staleness ceiling** — `now - refreshed_at` beyond `staleness_ceiling` because the broker has been unreachable that long (design document §9) | local; denies `context_stale` with a `server_msg` naming the broker outage, retains the context so recovery resumes it |
  | 4 | **Username mismatch** on an enable exchange resolved through `(nas, rem_addr)` | a genuine conflict — denies and invalidates. On the command path this cannot arise: the username is the key |
-@@ -1462,7 +1516,7 @@ of the product, not a problem to optimize away.
+@@ -1393,6 +1473,12 @@ component that made the decision, and it is distinct from the accounting records
+ sends — those report what a device *did*, after the fact, only for the tiers it was
+ configured to report. The decision log records what port49 *decided*, for whom, and against
+ which rule. It is complete by construction, because every decision passes through us.
++Two carve-outs, both on the `refresh` event (§5.1.3): a refresh that finds a context already
++on the answer the policy in force gives writes nothing and records nothing — at every reload
++that is one record per live session saved, and there is nothing to explain — and a refresh
++that revokes a context because the broker could not resolve or compile its policy is a fault,
++not a decision: the process log names the context's `ctx_id` and the fault, and it is counted
++`failed`, as a mint item error is.
+ 
+ > **A decision record must be replayable.**
+ 
+@@ -1462,7 +1548,7 @@ of the product, not a problem to optimize away.
  
  #### Events
  
@@ -405,7 +532,7 @@ index d604973..9660a2b 100644
  events (`account`, `blob`) that share the envelope and carry no verdict:
  
  | `event` | Emitted by | Decides |
-@@ -1472,6 +1526,7 @@ events (`account`, `blob`) that share the envelope and carry no verdict:
+@@ -1472,6 +1558,7 @@ events (`account`, `blob`) that share the envelope and carry no verdict:
  | `authorize_session` | daemon | the session and its returned attributes (§6) |
  | `authorize_command` | daemon | one command vector |
  | `escalate` | daemon | an `enable` exchange, attributed to the principal (§7) |
@@ -413,7 +540,7 @@ index d604973..9660a2b 100644
  | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
  
  Device accounting shares this envelope as the seventh event, `account`, and is specified in
-@@ -1519,8 +1574,8 @@ not an unvalidated body. A connection with no verified chain names no one.
+@@ -1519,8 +1606,8 @@ not an unvalidated body. A connection with no verified chain names no one.
  
  | `reason` | Meaning |
  |---|---|
@@ -424,7 +551,7 @@ index d604973..9660a2b 100644
  | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2) |
  | `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7) |
  | `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
-@@ -1547,12 +1602,12 @@ not an unvalidated body. A connection with no verified chain names no one.
+@@ -1547,12 +1634,12 @@ not an unvalidated body. A connection with no verified chain names no one.
  | `privilege_exceeded` | the request is above the session's granted level |
  | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `max_session_age`, and the caller must authenticate again (§13, decision 17) |
  | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
@@ -439,7 +566,7 @@ index d604973..9660a2b 100644
  
  Every event has a success reason and at least one failure reason in this table, so
  "decisions by event, verdict, and reason" (design document §15) is a complete metric. A
-@@ -4091,6 +4146,15 @@ policy landed there. `operator` gets level 15 on both, port49's per-command rule
+@@ -4091,6 +4178,15 @@ policy landed there. `operator` gets level 15 on both, port49's per-command rule
  fence, and the device's method list must not fall back to `none` or `if-authenticated`.
  IOS-XE, whose level 7 can carry the rung, is left to plan 5's adapters. (§6, §8)
  
@@ -455,7 +582,7 @@ index d604973..9660a2b 100644
  ### Deferred, with reasons
  
  Neither of these is an open question about the design. Both are closed for v1 on the
-@@ -4313,6 +4377,19 @@ Beyond those already listed in the design document's §14:
+@@ -4313,6 +4409,29 @@ Beyond those already listed in the design document's §14:
    without a reconnect, and the next command authorizes.
  - **Refresh re-resolves policy**: a principal whose grant was withdrawn cannot extend a
    session into continued access.
@@ -472,27 +599,78 @@ index d604973..9660a2b 100644
 +- **A refresh loses a race safely**: a write landing on a context between the refresh's read
 +  and its write is kept, and the refresh reads again and writes the new policy beside it.
 +- **A grant's expiry reaches a live context** at the expiry instant, with no edit.
++- **A policy file someone else could have written is refused**: group- or world-writable, a
++  group- or world-writable directory, or an owner other than `port49d`'s user or root refuses
++  the start, and at a reload keeps the policy in force serving, logged once and counted
++  `refused`; the check follows a symlink to the file it reads.
++- **A superseded token is judged at every instant it could have been minted**: a token minted
++  after a grant's expiry under the policy since replaced is deleted when its answer differs,
++  though the answer before the expiry did not.
++- **A busy context does not stop a refresh**: a context whose every compare-and-set conflicts
++  is counted failed, or revoked unconditionally where the answer is a revocation, and every
++  context after it is still refreshed.
  - **Grace window**: a command past the ceiling is denied with `session_expired` while context
    is retained; a re-auth inside the grace window resumes the same session; past it, context is
    gone and the reason becomes `context_missing`.
 ```
 
+<!-- patch: docs/design/2026-08-21-port49-design.md -->
+```diff
+diff --git a/docs/design/2026-08-21-port49-design.md b/docs/design/2026-08-21-port49-design.md
+index 8c68a8e..03e6673 100644
+--- a/docs/design/2026-08-21-port49-design.md
++++ b/docs/design/2026-08-21-port49-design.md
+@@ -1108,6 +1108,8 @@ silently engages is indistinguishable from a bug.
+ | **Operator credential lost** | ✗ | ✗ | ✓ existing logins persist | ✗ |
+ | **Inventory service unavailable** | ✓ | ✓ last good snapshot | ✓ | ✓ |
+ | **Device presents a retired or wrong key** | ✗ that device only | ✗ → device-local break-glass | ✗ | ✗ |
++| **Policy file refused** (does not load, or someone else could have written it; policy engine spec §5.1.3) | ✓ | ✓ on the policy in force | ✓ on the policy in force | ✓ on the policy in force. The edit is not live: `port49_policy_file_refused` is 1 and one line says why |
++| **Policy refresh incomplete** (the store failed part-way through carrying a reload into live sessions) | ✓ | ✓ on the new policy, once the store answers | ⚠ a context not yet reached keeps its previous policy — a withdrawn grant included — until the refresh, retried every 30s, reaches it; `port49_policy_refresh_pending` is 1 | ✓ on the new policy |
+ 
+ ### Consequences
+ 
+@@ -1266,6 +1268,12 @@ than per login; and contexts are small, so caching them is cheap. But a cold rep
+ the first command of a login will see the round trip, and the target should be understood as
+ holding in steady state rather than at every instant.
+ 
++**The policy file is a privilege.** `port49d` reloads `broker.policy_file` live, so whoever can
++write it decides every operator's access within seconds. The file and the directory holding it
++MUST be writable by `port49d`'s user or root alone; `port49d` refuses one that is not, at start
++and at every reload (policy engine spec §5.1.3). Write it atomically, by renaming a complete
++file over it.
++
+ **Independently upgradeable server groups.** Deployments SHOULD present two server groups
+ that are independently deployed and independently upgraded, with devices configured to use
+ both. Network-layer failover cannot detect a build that passes health checks but fails
+```
+
 - [ ] **Step 2: Check it landed**
 
-Run: `grep -n '^#### Policy reload\|^| .refresh. | broker\|^\*\*24\. \|Policy reload reaches a live session' docs/design/2026-08-23-policy-engine-spec.md`
-Expected: four lines — the §5.1.3 heading, the §5.7 event row, decision 24, the §14 assertion.
+Run: `grep -n '^#### Policy reload\|^| .refresh. | broker\|^\*\*24\. \|Policy reload reaches a live session\|^Two carve-outs, both on\|Whoever can write the policy decides' docs/design/2026-08-23-policy-engine-spec.md`
+Expected: six lines — the §5.1.3 heading, the permissions paragraph, the §5.7 carve-outs, the
+§5.7 event row, decision 24, the §14 assertion.
+
+Run: `grep -n '^| \*\*Policy file refused\*\*\|^| \*\*Policy refresh incomplete\*\*\|^\*\*The policy file is a privilege\.\*\*' docs/design/2026-08-21-port49-design.md`
+Expected: three lines — the two §12 rows and the §13 requirement.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/design/2026-08-23-policy-engine-spec.md
+git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
 git commit -m "docs: the spec says what a live policy reload does, before the code does
 
 Spec §5.1.3 gains 'Policy reload': validate or keep the old, swap, re-run
 the joint checks, refresh every live context by compare-and-set, revoke
 where no grant is left, and delete unspent tokens whose answer changed.
-§5.7 gains the refresh event; four reason rows say what they mean on it.
-§5.6 row 2, §13 decision 24 and §14's assertions follow.
+A change is loaded from the bytes two reads agreed on, and the file must
+be written atomically; a policy file anyone but port49d's user or root
+could have written is refused, at start and at a reload. A busy context
+does not stop a pass, and a superseded policy is judged across its span.
+§5.7 gains the refresh event, its two carve-outs from 'every evaluation
+emits exactly one record', and four reason rows say what they mean on it.
+§5.6 row 2, §13 decision 24 and §14's assertions follow. Design §12
+gains the refused-file and incomplete-refresh rows; §13 says the policy
+file is a privilege.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -702,7 +880,7 @@ Expected: FAIL to build — `undefined: store.ContextPolicy`, `s.SetContextPolic
 <!-- patch: internal/store/store.go -->
 ```diff
 diff --git a/internal/store/store.go b/internal/store/store.go
-index bc8486a..d3373b5 100644
+index bc8486a..92e0950 100644
 --- a/internal/store/store.go
 +++ b/internal/store/store.go
 @@ -306,6 +306,28 @@ type ContextRefresh struct {
@@ -734,15 +912,14 @@ index bc8486a..d3373b5 100644
  // ContextRef is what the indexes hold: the context key, nothing more.
  type ContextRef struct {
  	NAS      string
-@@ -476,6 +498,37 @@ type Store interface {
+@@ -476,6 +498,36 @@ type Store interface {
  	//
  	// ErrNotFound if the key is absent or already expired.
  	SetRevokedAt(ctx context.Context, k ContextKey, at time.Time) error
 +	// SetContextPolicy writes a policy refresh's answer into this context, in
 +	// place and under the store's own lock, and only if the record is still
 +	// the one the caller read: rev is the Rev GetContext returned, and a
-+	// revision that moved, or a record that expired, is ErrConflict with
-+	// nothing written (spec §5.1.3).
++	// revision that moved is ErrConflict with nothing written (spec §5.1.3).
 +	//
 +	// It is the fifth narrow setter, and the only one that is also a
 +	// compare-and-set. The others write a value that is right whoever the
@@ -819,13 +996,13 @@ index ff41935..215ea75 100644
 <!-- patch: internal/store/crypt/crypt.go -->
 ```diff
 diff --git a/internal/store/crypt/crypt.go b/internal/store/crypt/crypt.go
-index e50b0d1..42664e4 100644
+index e50b0d1..7f435d2 100644
 --- a/internal/store/crypt/crypt.go
 +++ b/internal/store/crypt/crypt.go
-@@ -379,6 +379,17 @@ func (w *wrapped) SetRevokedAt(ctx context.Context, k store.ContextKey, at time.
+@@ -378,6 +378,17 @@ func (w *wrapped) SetRevokedAt(ctx context.Context, k store.ContextKey, at time.
+ 	return w.inner.SetRevokedAt(ctx, k, at)
  }
  
- // DeleteContext is addressed by key alone.
 +// SetContextPolicy passes through: every field it writes or compares is
 +// plaintext — a revision, a timestamp, a blob hash, a ceiling, an enable
 +// mechanism and the level it clamps — so the inner store can hold the
@@ -837,9 +1014,9 @@ index e50b0d1..42664e4 100644
 +	return w.inner.SetContextPolicy(ctx, k, rev, p)
 +}
 +
+ // DeleteContext is addressed by key alone.
  func (w *wrapped) DeleteContext(ctx context.Context, k store.ContextKey) error {
  	return w.inner.DeleteContext(ctx, k)
- }
 ```
 
 - [ ] **Step 4: Run the store and authen packages**
@@ -1118,24 +1295,31 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ### Task 4: The broker mints from the policy in force; `Server` returns its refusal
 
 **Files:**
-- Modify: `internal/broker/broker.go`, `internal/broker/server.go`, `cmd/port49d/main.go`
-- Test: modify `internal/broker/engine_test.go`, `internal/broker/fixture_test.go`,
-  `internal/broker/server_test.go`, `cmd/port49d/broker_test.go`
+- Create: `cmd/port49d/policyfile.go`
+- Modify: `internal/broker/broker.go`, `internal/broker/server.go`, `cmd/port49d/main.go`,
+  `tests/lab/harness_test.go`, `tests/lab/README.md`
+- Test: create `cmd/port49d/policyfile_test.go`; modify `internal/broker/engine_test.go`,
+  `internal/broker/fixture_test.go`, `internal/broker/server_test.go`, `cmd/port49d/broker_test.go`
 
 **Interfaces:**
 - Consumes: `policy.Live`, `NewLive`, `Hold`, `Swap`, `Load`, `Quarantined` (Task 3).
 - Produces:
-  - `broker.Broker.Policy` is a `*policy.Live`. `tokens` holds one version for the whole request
-    and passes it to `mintOne`, whose signature gains `pol *policy.Policy` after `ctx`.
+  - `broker.Broker.Policy` is a `*policy.Live`. `tokens` holds one version from its first
+    resolution to its last token write, releases it before writing the response (Decided 1), and
+    passes it to `mintOne`, whose signature gains `pol *policy.Policy` after `ctx`.
   - `func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool) (*http.Server, error)`
     — a nil or empty anchor pool is an error, not a panic (carried from plan 7).
   - In `cmd/port49d`: `buildBroker(...) (*http.Server, *broker.Broker, error)`;
     `loadPolicy(cfg config.Config) (*policy.Policy, error)` and
     `parsePolicy(cfg config.Config, raw []byte) (*policy.Policy, error)` — the one load, at start and
-    at every reload (Decided 3); `sayPolicy(pol *policy.Policy, now time.Time)` — the quarantine
-    and rule lines, at start and after every reload;
+    at every reload (Decided 3); `readPolicyFile(path string) ([]byte, error)`, which refuses a file
+    anyone but port49d's user or root could have written, and its test seam `geteuid`
+    (Decided 3); `sayPolicy(pol *policy.Policy, now time.Time)` — the quarantine and rule lines, at
+    start and after every reload;
     `watchQuarantine(live *policy.Live, m *metrics.Metrics, now func() time.Time)`, which asks the
     `Live` at the moment of asking.
+  - In `tests/lab`: `privatePolicy(cfg, dir string) (string, error)`, which `derivedConfigCmd`
+    runs so the daemon a lab run starts reads a policy only this user can write.
 
 Nothing swaps the policy yet; this task makes every reader read the pointer, so Task 6's swap is
 seen everywhere at once. `watchQuarantine`'s count moves into `quarantinedAt` in Task 6, where the
@@ -1146,14 +1330,27 @@ reload's line uses it too; here it is written inline as before.
 `TestTheNextMintAnswersFromASwappedPolicy` swaps a policy that withdraws alice's grant and expects
 the very next mint to be refused `no_grants_matched`, naming the new bundle.
 `TestServerRefusesAMissingAnchor` expects an error where it recovered a panic.
+`TestASwapDoesNotWaitForAResponseWrite` stalls a mint's response write and expects a swap to
+return regardless (Decided 1). `policyfile_test.go` refuses a group- or world-writable file or
+directory, a file another uid owns, and a symlink to an unsafe file, and refuses the start with
+one (Decided 3).
 
 <!-- patch: internal/broker/engine_test.go -->
 ```diff
 diff --git a/internal/broker/engine_test.go b/internal/broker/engine_test.go
-index 1213337..a4c2404 100644
+index 1213337..c5a8f56 100644
 --- a/internal/broker/engine_test.go
 +++ b/internal/broker/engine_test.go
-@@ -56,7 +56,7 @@ func TestAMintRecordNamesItsBundle(t *testing.T) {
+@@ -3,6 +3,8 @@ package broker
+ import (
+ 	"context"
+ 	"errors"
++	"net/http"
++	"net/http/httptest"
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
+@@ -56,7 +58,7 @@ func TestAMintRecordNamesItsBundle(t *testing.T) {
  	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, ""))
  	mints := eventsOf(f.records(t), "mint")
  	pol, _ := mints[len(mints)-1]["policy"].(map[string]any)
@@ -1162,7 +1359,7 @@ index 1213337..a4c2404 100644
  		t.Fatalf("mint record policy: %v", pol)
  	}
  }
-@@ -85,7 +85,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: nx, r
+@@ -85,7 +87,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: nx, r
  	if err != nil {
  		t.Fatal(err)
  	}
@@ -1171,7 +1368,7 @@ index 1213337..a4c2404 100644
  	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","nx1"]}`, ""))
  	byDevice := map[string]string{}
  	for _, it := range resp.Results {
-@@ -129,7 +129,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
+@@ -129,7 +131,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
  	if err != nil {
  		t.Fatal(err)
  	}
@@ -1180,7 +1377,7 @@ index 1213337..a4c2404 100644
  	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, ""))
  	if it := resp.Results[0]; it.Error != "attribute_too_long" || it.Login != "" {
  		t.Fatalf("%+v", it)
-@@ -158,7 +158,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
+@@ -158,7 +160,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
  	if err != nil {
  		t.Fatal(err)
  	}
@@ -1189,7 +1386,7 @@ index 1213337..a4c2404 100644
  	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["sw=1"]}`, ""))
  	if it := resp.Results[0]; it.Error != "attribute_unsafe" || it.Login != "" {
  		t.Fatalf("%+v", it)
-@@ -177,3 +177,30 @@ func (f *fixture) assertItemErrorOnly(t *testing.T, code string) {
+@@ -177,3 +179,67 @@ func (f *fixture) assertItemErrorOnly(t *testing.T, code string) {
  		t.Errorf("an item error wrote a decision record: %v", mints)
  	}
  }
@@ -1218,6 +1415,43 @@ index 1213337..a4c2404 100644
 +	mints := eventsOf(f.records(t), "mint")
 +	if pol0, _ := mints[len(mints)-1]["policy"].(map[string]any); pol0["bundle"] != pol.Bundle {
 +		t.Fatalf("the mint after the swap names the new bundle: %v", mints[len(mints)-1])
++	}
++}
++
++// stalledWriter is a response writer whose Write blocks until released: a
++// client that stopped reading, or a peer that vanished mid-response.
++type stalledWriter struct {
++	header  http.Header
++	writing chan struct{}
++	release chan struct{}
++}
++
++func (w *stalledWriter) Header() http.Header { return w.header }
++func (w *stalledWriter) WriteHeader(int)     {}
++func (w *stalledWriter) Write(p []byte) (int, error) {
++	close(w.writing)
++	<-w.release
++	return len(p), nil
++}
++
++// A mint holds the policy until its last token is written, not until its
++// response is: a response the client never reads must not hold a reload, or
++// every mint queued behind the reload, and every refresh after it (pre-flight
++// S1).
++func TestASwapDoesNotWaitForAResponseWrite(t *testing.T) {
++	f := newFixture(t, 8)
++	w := &stalledWriter{header: http.Header{}, writing: make(chan struct{}), release: make(chan struct{})}
++	defer close(w.release)
++	r := httptest.NewRequest("POST", "/v1/tokens", strings.NewReader(`{"devices":["leaf1"]}`))
++	r.TLS = f.state(f.alice)
++	go f.b.Handler().ServeHTTP(w, r)
++	<-w.writing
++	swapped := make(chan struct{})
++	go func() { f.b.Policy.Swap(f.b.Policy.Load()); close(swapped) }()
++	select {
++	case <-swapped:
++	case <-time.After(2 * time.Second):
++		t.Fatal("a swap waited for a response write")
 +	}
 +}
 ```
@@ -1363,6 +1597,110 @@ index 6a895ca..f43e08a 100644
  	}
 ```
 
+<!-- write: cmd/port49d/policyfile_test.go -->
+```go
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// policyAt writes a policy file with mode perm in a fresh directory of mode
+// dirPerm, and returns its path.
+func policyAt(t *testing.T, perm, dirPerm os.FileMode) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "etc")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(path, []byte(minimalPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Chmod, not the create mode: the umask would narrow that.
+	if err := os.Chmod(path, perm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// Whoever can write the policy decides every operator's access (spec
+// §5.1.3), so a file or a directory anyone but port49d's user could write is
+// refused, naming what to fix.
+func TestAPolicyFileOthersCouldWriteIsRefused(t *testing.T) {
+	for name, c := range map[string]struct {
+		perm, dirPerm os.FileMode
+		want          string
+	}{
+		"group-writable file":      {0o620, 0o755, "the file"},
+		"world-writable file":      {0o602, 0o755, "the file"},
+		"group-writable directory": {0o644, 0o775, "the directory"},
+		"world-writable directory": {0o644, 0o1777, "the directory"},
+	} {
+		path := policyAt(t, c.perm, c.dirPerm)
+		if _, err := readPolicyFile(path); err == nil || !strings.Contains(err.Error(), c.want) ||
+			!strings.Contains(err.Error(), "chmod go-w") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if raw, err := readPolicyFile(policyAt(t, 0o644, 0o755)); err != nil || string(raw) != minimalPolicy {
+		t.Fatalf("a file only its owner can write is read: %v", err)
+	}
+}
+
+// A file owned by neither port49d's user nor root is refused.
+func TestAPolicyFileAnotherUserOwnsIsRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root every file is owned by an accepted uid")
+	}
+	defer func(f func() int) { geteuid = f }(geteuid)
+	geteuid = func() int { return os.Geteuid() + 1 }
+	if _, err := readPolicyFile(policyAt(t, 0o600, 0o700)); err == nil || !strings.Contains(err.Error(), "chown it") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A symlink is followed, and the target and its directory are what is
+// checked: a ConfigMap's chain of links to a safe file passes, and a link to
+// a file others could write does not.
+func TestAPolicySymlinkIsJudgedByItsTarget(t *testing.T) {
+	link := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.Symlink(policyAt(t, 0o644, 0o755), link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPolicyFile(link); err != nil {
+		t.Fatalf("a link to a safe file is read: %v", err)
+	}
+	unsafe := filepath.Join(t.TempDir(), "policy.yaml")
+	target := policyAt(t, 0o666, 0o755)
+	if err := os.Symlink(target, unsafe); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPolicyFile(unsafe); err == nil || !strings.Contains(err.Error(), target) {
+		t.Fatalf("a link to a world-writable file names the target: %v", err)
+	}
+}
+
+// At start an unsafe policy file refuses the start, as a policy that does not
+// load does, naming the config key and the file.
+func TestAnUnsafePolicyFileRefusesTheStart(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	if err := os.Chmod(cfg.Broker.PolicyFile, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := buildWith(cfg); err == nil || !strings.Contains(err.Error(), "broker.policy_file "+cfg.Broker.PolicyFile) ||
+		!strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("%v", err)
+	}
+}
+```
+
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `go vet ./internal/broker/ ./cmd/port49d/`
@@ -1375,7 +1713,7 @@ in the broker, and `b.Policy undefined (type *policy.Policy has no field or meth
 <!-- patch: internal/broker/broker.go -->
 ```diff
 diff --git a/internal/broker/broker.go b/internal/broker/broker.go
-index cd9a44f..332ad9c 100644
+index cd9a44f..05929a2 100644
 --- a/internal/broker/broker.go
 +++ b/internal/broker/broker.go
 @@ -50,7 +50,10 @@ const (
@@ -1390,14 +1728,25 @@ index cd9a44f..332ad9c 100644
  	// Devices is the inventory by name: the admission snapshot the daemon
  	// admits from (plan 3, Decided 15). A target is named, never addressed,
  	// and a name inventory does not know is refused (design §17).
-@@ -189,10 +192,15 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
+@@ -189,25 +192,43 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
  			return
  		}
  	}
-+	// Held until the last token is written, so a reload's swap waits for this
-+	// request and the refresh after it sees every token the old policy minted
-+	// (policy.Live).
-+	pol, release := b.Policy.Hold()
++	// Held from the first resolution to the last token write, so a reload's
++	// swap waits for this request's mints and the refresh after it sees every
++	// token the old policy minted (policy.Live). Released before the response
++	// is written: a client that stops reading, or a peer that vanishes
++	// mid-response, must not hold a reload — and, behind it, every mint and
++	// every refresh — until TCP gives up. The deferred call is for a panic,
++	// which net/http recovers: a hold it leaked would stop every reload.
++	pol, hold := b.Policy.Hold()
++	held := true
++	release := func() {
++		if held {
++			held = false
++			hold()
++		}
++	}
 +	defer release()
  	resp := api.MintResponse{Principal: principal}
 -	resp.Subject, _ = b.Policy.SubjectOf(principal)
@@ -1408,7 +1757,15 @@ index cd9a44f..332ad9c 100644
  		if errors.Is(err, token.ErrIdempotencyConflict) {
  			// Only a concurrent request on the same key, between the check
  			// above and this mint, reaches here.
-@@ -206,8 +214,8 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
++			release()
+ 			writeConflict(w)
+ 			return
+ 		}
+ 		resp.Results = append(resp.Results, item)
+ 	}
++	release()
+ 	writeJSON(w, http.StatusOK, resp)
+ }
  
  // mintOne answers one device. The only error it returns is an idempotency
  // conflict, which is the whole request's; every other refusal is an item.
@@ -1419,7 +1776,7 @@ index cd9a44f..332ad9c 100644
  	deny := func(reason decision.Reason, platform string) api.MintItem {
  		b.emit(decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
  			Principal: principal, Auth: &decision.Auth{Method: cred.Method},
-@@ -221,7 +229,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
+@@ -221,7 +242,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
  		// device and no platform, which is what tells an operator which.
  		return deny(decision.NoGrantsMatched, ""), nil
  	}
@@ -1428,7 +1785,7 @@ index cd9a44f..332ad9c 100644
  	switch {
  	case errors.Is(err, policy.ErrNoGrants):
  		return deny(decision.NoGrantsMatched, dev.Platform), nil
-@@ -290,7 +298,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
+@@ -290,7 +311,7 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
  		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
  		TTL:            time.Duration(req.TTLSeconds) * time.Second,
  		IdempotencyKey: key, BodyHash: bodyHash,
@@ -1489,7 +1846,7 @@ index 8ef99a2..1aadf3e 100644
 <!-- patch: cmd/port49d/main.go -->
 ```diff
 diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
-index ced655a..efcf689 100644
+index ced655a..e20defa 100644
 --- a/cmd/port49d/main.go
 +++ b/cmd/port49d/main.go
 @@ -172,52 +172,23 @@ func labWarning(lab *config.LabConfig) string {
@@ -1552,7 +1909,7 @@ index ced655a..efcf689 100644
  	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
  	if err != nil {
  		return nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
-@@ -250,41 +221,87 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
+@@ -250,41 +221,99 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
  		}
  		devices[d.Name] = d
  	}
@@ -1582,10 +1939,22 @@ index ced655a..efcf689 100644
 +// daemon admits from: a class a platform in it does not define, or a level it
 +// cannot render, is found here rather than at the first mint for that device
 +// (spec §4, §6). It is the one load, at start and at every reload, so a file
-+// the start would refuse is a file a reload refuses, with the same words.
++// the start would refuse is a file a reload refuses, with the same words. A
++// file anyone but port49d's user or root could have written is one of them
++// (readPolicyFile).
 +func loadPolicy(cfg config.Config) (*policy.Policy, error) {
-+	pol, err := policy.Load(cfg.Broker.PolicyFile, policy.Env{Devices: cfg.Inventory.Devices,
-+		EnableUsernames: cfg.EnableUsernames})
++	raw, err := readPolicyFile(cfg.Broker.PolicyFile)
++	if err != nil {
++		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
++	}
++	return parsePolicy(cfg, raw)
++}
++
++// parsePolicy is loadPolicy for bytes already read: a reload loads exactly the
++// bytes it hashed, so the version it remembers refusing is the version it
++// refused, and the version the watch saw agree twice is the version loaded.
++func parsePolicy(cfg config.Config, raw []byte) (*policy.Policy, error) {
++	pol, err := policy.Parse(raw, policy.Env{Devices: cfg.Inventory.Devices, EnableUsernames: cfg.EnableUsernames})
 +	if err != nil {
 +		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
 +	}
@@ -1653,7 +2022,7 @@ index ced655a..efcf689 100644
  }
  
  func run(cfgPath string) error {
-@@ -380,7 +397,7 @@ func run(cfgPath string) error {
+@@ -380,7 +409,7 @@ func run(cfgPath string) error {
  	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
  	_ = sessions
  
@@ -1662,7 +2031,7 @@ index ced655a..efcf689 100644
  	if err != nil {
  		stopSpool()
  		<-spoolDone
-@@ -412,7 +429,11 @@ func run(cfgPath string) error {
+@@ -412,7 +441,11 @@ func run(cfgPath string) error {
  	// A quarantined device is closed without a reply, as for an unknown
  	// source, so it falls to its local method exactly as in an outage.
  	// buildBroker has already named each one and its cause.
@@ -1677,23 +2046,196 @@ index ced655a..efcf689 100644
  		// nothing the context does not.
 ```
 
+<!-- write: cmd/port49d/policyfile.go -->
+```go
+package main
+
+import (
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"syscall"
+)
+
+// geteuid is os.Geteuid, swapped in tests: CI has no second uid to own a file.
+var geteuid = os.Geteuid
+
+// readPolicyFile reads broker.policy_file, refusing a file anyone but the user
+// port49d runs as, or root, could have written (spec §5.1.3). port49d reloads
+// the file live (plan 4b), so whoever can write it decides every operator's
+// access within seconds: the file must not be group- or world-writable, nor
+// its directory, and the file must be owned by port49d's user or by root. It
+// is keyfile's rule for a private key, for writing rather than reading.
+//
+// A symlink is followed, unlike keyfile's: a Kubernetes ConfigMap mounts the
+// policy as a chain of them. What is checked is what is read — the final
+// target, opened without following a link planted after the path was
+// resolved, and the directory holding it, which is what decides who could
+// replace it. The directories above that are not walked; keep the policy
+// where only root can rename its directory.
+//
+// It is opened non-blocking, so a named pipe is refused rather than hanging a
+// start or a reload until something writes to it.
+func readPolicyFile(path string) ([]byte, error) {
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(target, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", target)
+	}
+	if err := writableByUsAlone("the file "+target, fi); err != nil {
+		return nil, err
+	}
+	dir := filepath.Dir(target)
+	di, err := os.Stat(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := writableByUsAlone("the directory "+dir, di); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(f)
+}
+
+// writableByUsAlone refuses what port49d's user or root is not the only one
+// able to write.
+func writableByUsAlone(what string, fi fs.FileInfo) error {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("%s: cannot read its owner", what)
+	}
+	if euid := geteuid(); st.Uid != uint32(euid) && st.Uid != 0 {
+		return fmt.Errorf("%s is owned by uid %d; whoever can write the policy decides every operator's access, "+
+			"so it must belong to the user port49d runs as (uid %d) or to root - chown it", what, st.Uid, euid)
+	}
+	if perm := fi.Mode().Perm(); perm&0o022 != 0 {
+		return fmt.Errorf("%s is mode %v, writable by others than its owner; whoever can write the policy "+
+			"decides every operator's access - chmod go-w it", what, perm)
+	}
+	return nil
+}
+```
+
+The lab harness starts `port49d` from a checkout, whose policy files and directories a umask of
+002 leaves group-writable; `port49d` would now refuse them. The harness gives it a private copy,
+and the by-hand run in the lab README makes the checkout's file safe.
+
+<!-- patch: tests/lab/harness_test.go -->
+```diff
+diff --git a/tests/lab/harness_test.go b/tests/lab/harness_test.go
+index 8fb816c..4b6183d 100644
+--- a/tests/lab/harness_test.go
++++ b/tests/lab/harness_test.go
+@@ -836,6 +836,10 @@ func (l *lab) derivedConfigCmd(suffix, attrs, cmdAttrs, extra string) (string, e
+ 	if suffix != "" {
+ 		name += "-" + suffix
+ 	}
++	out, err = privatePolicy(out, filepath.Join(dir, name+"-policy"))
++	if err != nil {
++		return "", err
++	}
+ 	path := filepath.Join(dir, name+".yaml")
+ 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+ 		return "", err
+@@ -843,6 +847,46 @@ func (l *lab) derivedConfigCmd(suffix, attrs, cmdAttrs, extra string) (string, e
+ 	return path, nil
+ }
+ 
++// privatePolicy copies the file a `policy_file:` line names into dir, a
++// directory only this user can write, and points the line at the copy.
++// port49d refuses a policy file anyone else could have written, or one in a
++// directory they could (spec §5.1.3), and a checkout under a umask of 002 —
++// the usual one on a desktop distribution — leaves the repository's policy
++// files and their directories group-writable.
++func privatePolicy(cfg, dir string) (string, error) {
++	const anchor = "  policy_file: "
++	i := strings.Index(cfg, anchor)
++	if i < 0 {
++		return cfg, nil
++	}
++	j := strings.Index(cfg[i:], "\n")
++	if j < 0 {
++		j = len(cfg) - i
++	}
++	src := strings.TrimSpace(cfg[i+len(anchor) : i+j])
++	if !filepath.IsAbs(src) {
++		src = filepath.Join(root, src)
++	}
++	raw, err := os.ReadFile(src)
++	if err != nil {
++		return "", err
++	}
++	if err := os.MkdirAll(dir, 0o700); err != nil {
++		return "", err
++	}
++	if err := os.Chmod(dir, 0o700); err != nil {
++		return "", err
++	}
++	dst := filepath.Join(dir, "policy.yaml")
++	if err := os.WriteFile(dst, raw, 0o600); err != nil {
++		return "", err
++	}
++	if err := os.Chmod(dst, 0o600); err != nil {
++		return "", err
++	}
++	return cfg[:i] + anchor + dst + cfg[i+j:], nil
++}
++
+ // startDaemonWith starts port49d against cfgPath. resume appends to this
+ // platform's log files instead of truncating them, which is what a test that
+ // stops and restarts the daemon mid-run needs: a truncated decision log would
+```
+
+<!-- patch: tests/lab/README.md -->
+```diff
+diff --git a/tests/lab/README.md b/tests/lab/README.md
+index b27d599..96b15aa 100644
+--- a/tests/lab/README.md
++++ b/tests/lab/README.md
+@@ -217,6 +217,9 @@ do sleep 10; done
+ # any device configuration the run needs (plan 3 Task 17's RESTCONF AAA) goes here, as breakglass
+ # the daemon config: the lab file, plus the broker block where the run needs a broker
+ cat tests/lab/port49d-lab.yaml tests/lab/slice/broker.yaml > tests/lab/logs/port49d-byhand.yaml
++# a broker run only: port49d refuses a policy file, or a directory holding one, that others could
++# write (spec §5.1.3), and a checkout under a umask of 002 is group-writable
++chmod go-w tests/lab/slice tests/lab/slice/policy.yaml
+ # a broker run only: its certificates, written before the daemon that loads them at start
+ go run ./tests/lab/cmd/slice-pki
+ PORT49_LAB_KEY=labsecret PORT49_LAB_ENC_KEY=port49-lab-encryption-key-32byte \
+```
+
 - [ ] **Step 4: Run the broker and port49d**
 
-Run: `go test -race ./internal/broker/ ./cmd/port49d/ && make test && make vet`
+Run: `go test -race ./internal/broker/ ./cmd/port49d/ && make test && make vet && go vet -tags lab ./tests/lab/...`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/broker cmd/port49d
+git add internal/broker cmd/port49d tests/lab/harness_test.go tests/lab/README.md
 git commit -m "feat: the broker mints from the policy in force; Server returns its refusal
 
 Broker.Policy is a policy.Live, and a mint request holds one version from
-its first device to its last. The daemon's quarantine question and gauge
-ask the Live at the moment of asking. Server returns an error for a nil
-or empty anchor pool instead of panicking (carried from plan 7).
-buildBroker's load and start-up lines become loadPolicy and sayPolicy,
-which a reload will call.
+its first device to its last token write, released before the response
+is written. The daemon's quarantine question and gauge ask the Live at
+the moment of asking. Server returns an error for a nil or empty anchor
+pool instead of panicking (carried from plan 7). buildBroker's load and
+start-up lines become loadPolicy, parsePolicy and sayPolicy, which a
+reload will call. A policy file anyone but port49d's user or root could
+have written is refused, and the lab harness gives port49d a private
+copy of its policy.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -1713,12 +2255,16 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `Policy.Resolve`, `Policy.SubjectOf`, `engine.Encode` (plan 4); the broker's own `putBlob` and
   `emit`.
 - Produces:
-  - `type Prior struct { Policy *policy.Policy; At time.Time }` — a policy in force since the last
-    complete refresh, read at `At`.
+  - `type Prior struct { Policy *policy.Policy; At, Until time.Time }` — a policy in force since
+    the last complete refresh, over the span it minted in: from `At` to `Until` (zero for the policy
+    still in force); its answers are read at `At` and at every grant expiry in the span
+    (`Prior.instants`, Decided 7).
   - `type RefreshReport struct { TokenKeys, Updated, Unchanged, Revoked, Quarantined, Failed int }`.
   - `func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, error)` — the
     token supersede, then every live context; a store error ends the pass and is returned with the
-    report so far.
+    report so far; a context still changing after every attempt is revoked anyway where that is
+    the answer, left for the retry otherwise, and the pass goes on and returns `store.ErrConflict`
+    at the end (Decided 9).
   - `decision.EventRefresh = "refresh"`.
   - `metrics.Metrics.ContextRefreshes` — `port49_context_refreshes_total{outcome}`: `updated`,
     `unchanged`, `revoked`, `quarantined`, `failed`; `metrics.Metrics.TokensSuperseded` —
@@ -1729,6 +2275,11 @@ daemon keeps for exactly this — `active_principals`, then `contexts_by_princip
 scans the keyspace. Each context is read, decided with no store access (`decideRefresh`), its
 blob put and emitted before any context names it, and written by compare-and-set; a conflict reads
 again, up to `store.MaxJoinAttempts`.
+
+Three tests pin the pre-flight rulings: `TestASupersededPolicyIsJudgedAtEveryExpiryItSpanned` (a
+token minted after an expiry the old policy spanned is superseded, though the answer at the span's
+start matched), `TestABusyContextDoesNotStopTheRefresh` and `TestABusyContextIsRevokedAnyway`.
+Each fails against the refresh without its ruling.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2157,6 +2708,88 @@ func TestAGrantsExpiryReachesALiveContext(t *testing.T) {
 		t.Fatalf("at the expiry the context is revoked: %+v %v", rep, err)
 	}
 }
+
+// A superseded policy's tokens are judged at every instant it could have
+// minted them, not only where its span began (spec §5.1.3). Here alice also
+// holds read_only until a lapse, and the pass that would have run at the lapse
+// never completed, so her prior's span starts before it. Her token minted
+// after the lapse carries no read_only; the new policy gives read_only for
+// good, which is what the old one said at the start of its span — and not
+// what it minted.
+func TestASupersededPolicyIsJudgedAtEveryExpiryItSpanned(t *testing.T) {
+	f := newFixture(t, 8)
+	start := f.now
+	lapse := f.now.Add(time.Hour)
+	extra := "  - {subject: netops, scope: all_devices, roles: [read_only]"
+	f.reload(t, edit(t, roleList, readOnly)+extra+", expires: "+lapse.UTC().Format(time.RFC3339)+"}\n")
+	f.advance(2 * time.Hour)
+	if it := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")).Results[0]; it.Verdict != "permit" {
+		t.Fatalf("mint after the lapse: %+v", it)
+	}
+	pol, err := policy.Parse([]byte(edit(t, roleList, readOnly)+extra+"}\n"), policy.Env{Devices: []admission.Device{
+		f.b.Devices["leaf1"], f.b.Devices["nx1"], f.b.Devices["bare"]}, Now: f.b.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	priors := []Prior{{Policy: f.b.Policy.Swap(pol), At: start, Until: f.b.Now()}}
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 || rep.TokenKeys != 1 {
+		t.Fatalf("the token minted after the lapse must be superseded: %d left, report %+v", len(toks), rep)
+	}
+}
+
+// stuckStore conflicts every compare-and-set on one context: a session busy
+// enough that every read the refresh makes is stale by its write.
+type stuckStore struct {
+	store.Store
+	stuck store.ContextKey
+}
+
+func (s stuckStore) SetContextPolicy(ctx context.Context, k store.ContextKey, rev uint64, p store.ContextPolicy) error {
+	if k == s.stuck {
+		return store.ErrConflict
+	}
+	return s.Store.SetContextPolicy(ctx, k, rev, p)
+}
+
+// One busy context does not hold every context after it on the superseded
+// policy: it is counted failed and left for the retry, the pass goes on, and
+// the error it returns is the conflict, so port49d runs it again.
+func TestABusyContextDoesNotStopTheRefresh(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.login(t, alice, "nx1", "alice")
+	f.b.Store = stuckStore{Store: f.st, stuck: store.ContextKey{NAS: "leaf1", Username: "alice"}}
+	priors := f.reload(t, edit(t, roleList, readOnly, aliceGrant, "roles: [read_only], max_privilege: admin"))
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if !errors.Is(err, store.ErrConflict) || rep.Failed != 1 || rep.Updated != 1 {
+		t.Fatalf("report %+v, err %v", rep, err)
+	}
+	if f.decides(t, f.context(t, "nx1", "alice"), "configure") {
+		t.Fatal("the context after the busy one must still be refreshed")
+	}
+}
+
+// A revocation is not left for the retry: where the answer is no grant, a
+// context whose every compare-and-set conflicts is marked revoked anyway, by
+// the setter that writes the mark alone (fail closed).
+func TestABusyContextIsRevokedAnyway(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.b.Store = stuckStore{Store: f.st, stuck: store.ContextKey{NAS: "leaf1", Username: "alice"}}
+	priors := f.reload(t, edit(t, "  - {subject: netops, scope: all_devices, "+aliceGrant+"}\n",
+		"  - {subject: idle, scope: all_devices, roles: [network_admin]}\n"))
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.Revoked != 1 {
+		t.Fatalf("report %+v, err %v", rep, err)
+	}
+	if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+		t.Fatalf("the busy context must be revoked: %+v", c)
+	}
+}
 ```
 
 <!-- patch: internal/daemon/metrics/metrics_test.go -->
@@ -2216,10 +2849,10 @@ index 78d8863..e4aa1a1 100644
 <!-- patch: internal/daemon/metrics/metrics.go -->
 ```diff
 diff --git a/internal/daemon/metrics/metrics.go b/internal/daemon/metrics/metrics.go
-index 0064a9e..3a13125 100644
+index 0064a9e..9014b56 100644
 --- a/internal/daemon/metrics/metrics.go
 +++ b/internal/daemon/metrics/metrics.go
-@@ -75,6 +75,20 @@ type Metrics struct {
+@@ -75,6 +75,21 @@ type Metrics struct {
  	// leave; the gauge is what an alert watches, and it names no device.
  	DevicesQuarantined prometheus.GaugeFunc
  	quarantined        atomic.Pointer[func() int]
@@ -2227,8 +2860,9 @@ index 0064a9e..3a13125 100644
 +	// refresh visited, by what it did to each (spec §5.1.3) — "updated" (the
 +	// policy in force written into it), "unchanged", "revoked" (no grant left
 +	// on that device), "quarantined" (the device is quarantined; the context
-+	// is left as it was), or "failed" (a context that could not be read, or a
-+	// policy that could not be compiled for it; the process log says which).
++	// is left as it was), or "failed" (a context that could not be read, a
++	// policy that could not be compiled for it, or a context still changing
++	// after every compare-and-set attempt; the process log says which).
 +	// A context the refresh skipped — another principal's since, the lab's,
 +	// already revoked — is not counted. The label is the outcome only.
 +	ContextRefreshes *prometheus.CounterVec
@@ -2240,7 +2874,7 @@ index 0064a9e..3a13125 100644
  }
  
  // CountQuarantined sets what port49_devices_quarantined reports at each scrape.
-@@ -123,6 +137,10 @@ func New(reg prometheus.Registerer) *Metrics {
+@@ -123,6 +138,10 @@ func New(reg prometheus.Registerer) *Metrics {
  			Help: "Mint items the broker could not decide, by API error code."}, []string{"error"}),
  		BlobCache: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_blob_cache_lookups_total",
  			Help: "Compiled-blob cache lookups by the authorizer, by outcome."}, []string{"outcome"}),
@@ -2251,7 +2885,7 @@ index 0064a9e..3a13125 100644
  	}
  	m.DevicesQuarantined = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_quarantined",
  		Help: "Inventory devices the loaded policy quarantines now."}, func() float64 {
-@@ -134,6 +152,6 @@ func New(reg prometheus.Registerer) *Metrics {
+@@ -134,6 +153,6 @@ func New(reg prometheus.Registerer) *Metrics {
  	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
  		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
  		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
@@ -2282,13 +2916,35 @@ import (
 )
 
 // Prior is a policy that has been in force since the last complete refresh,
-// and the instant its resolutions are read at: when the last complete refresh
-// ran, or when it came into force if that was later. A token it minted in that
-// span carries its answer at At, because a resolution changes only at a grant's
-// expiry and a refresh runs at every expiry (policy.NextChange).
+// and the span it minted in: from At — when the last complete refresh ran, or
+// when it came into force if that was later — to Until, when it was replaced;
+// zero for the policy still in force, whose span runs to the refresh. A token
+// it minted carries its answer at the instant of the mint, and a resolution
+// changes only at a grant's expiry, so its answers are read at At and at every
+// expiry in the span (instants). The refresh that runs at each expiry would
+// otherwise close the span there, but one the store stopped does not.
 type Prior struct {
 	Policy *policy.Policy
 	At     time.Time
+	Until  time.Time
+}
+
+// instants are the times at which pr's answers are read: At, and every grant
+// expiry after it up to Until (now, for the policy still in force).
+func (pr Prior) instants(now time.Time) []time.Time {
+	until := pr.Until
+	if until.IsZero() {
+		until = now
+	}
+	out := []time.Time{pr.At}
+	for t := pr.At; ; {
+		next, ok := pr.Policy.NextChange(t)
+		if !ok || next.After(until) {
+			return out
+		}
+		out = append(out, next)
+		t = next
+	}
 }
 
 // RefreshReport counts what one refresh did, for the line port49d writes after
@@ -2332,7 +2988,10 @@ type RefreshReport struct {
 // before a command's changed answer says why.
 //
 // A store error ends the pass and is returned with the report so far; nothing
-// is half-written to any one context, and the caller runs it again.
+// is half-written to any one context, and the caller runs it again. A context
+// still changing after every attempt does not end it: it is revoked anyway
+// where that is the answer, left for the retry otherwise, and the pass returns
+// store.ErrConflict at the end so the caller runs it again.
 func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, error) {
 	cur, now := b.Policy.Load(), b.Now()
 	var rep RefreshReport
@@ -2380,7 +3039,8 @@ func (m minted) same(o minted) bool {
 }
 
 // supersedeTokens deletes the unspent tokens of every (device, username) where
-// a prior policy minted something the policy in force would not. A key is
+// a prior policy minted something, at any instant of its span, that the policy
+// in force would not. A key is
 // cleared whole: tokens are keyed by it, and every principal minting under one
 // username is one subject, whose answer changed. That includes a token minted
 // under the policy in force between the swap and this pass — the operator runs
@@ -2400,22 +3060,25 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 	current := map[[2]string]answer{} // the policy in force's, by (principal, device), computed once
 	keys := map[store.TokenKey]bool{}
 	for _, pr := range priors {
+		instants := pr.instants(now)
 		for _, principal := range pr.Policy.Principals() {
 			for _, name := range names {
 				d := b.Devices[name]
-				was, ok := mintedBy(pr.Policy, principal, d, pr.At)
-				if !ok {
-					continue // nothing was minted, so nothing is superseded
+				for _, at := range instants {
+					was, ok := mintedBy(pr.Policy, principal, d, at)
+					if !ok {
+						continue // nothing was minted then, so nothing is superseded
+					}
+					is, seen := current[[2]string{principal, name}]
+					if !seen {
+						is.m, is.ok = mintedBy(cur, principal, d, now)
+						current[[2]string{principal, name}] = is
+					}
+					if is.ok && was.same(is.m) {
+						continue
+					}
+					keys[store.TokenKey{NAS: name, Username: was.username}] = true
 				}
-				is, seen := current[[2]string{principal, name}]
-				if !seen {
-					is.m, is.ok = mintedBy(cur, principal, d, now)
-					current[[2]string{principal, name}] = is
-				}
-				if is.ok && was.same(is.m) {
-					continue
-				}
-				keys[store.TokenKey{NAS: name, Username: was.username}] = true
 			}
 		}
 	}
@@ -2449,24 +3112,33 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 
 // refreshContexts visits every live context through the indexes the daemon
 // keeps for exactly this (spec §5.1.3): active_principals, then each one's
-// contexts_by_principal.
+// contexts_by_principal. A store error ends the pass. A context still changing
+// after every attempt does not: it is left for the retry, the pass goes on,
+// and the conflict is returned at the end so the caller runs it again — one
+// busy session must not hold every session after it on the superseded policy.
 func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, now time.Time, rep *RefreshReport) error {
 	principals, err := b.Store.ActivePrincipals(ctx)
 	if err != nil {
 		return err
 	}
+	var busy error
 	for _, principal := range principals {
 		refs, err := b.Store.ContextsByPrincipal(ctx, principal)
 		if err != nil {
 			return err
 		}
 		for _, ref := range refs {
-			if err := b.refreshContext(ctx, cur, now, principal, ref, rep); err != nil {
+			switch err := b.refreshContext(ctx, cur, now, principal, ref, rep); {
+			case errors.Is(err, store.ErrConflict):
+				if busy == nil {
+					busy = err
+				}
+			case err != nil:
 				return err
 			}
 		}
 	}
-	return nil
+	return busy
 }
 
 // refreshContext re-resolves one context and writes the answer, reading again
@@ -2475,6 +3147,7 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, now ti
 func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now time.Time, principal string,
 	ref store.ContextRef, rep *RefreshReport) error {
 	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
+	var step refreshStep
 	for attempt := 0; attempt < store.MaxJoinAttempts; attempt++ {
 		c, err := b.Store.GetContext(ctx, k)
 		var unreadable *store.UnreadableContextError
@@ -2498,7 +3171,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now tim
 		if c.Principal != principal || c.BlobHash == "" || !c.RevokedAt.IsZero() {
 			return nil
 		}
-		step := b.decideRefresh(cur, now, principal, ref, c)
+		step = b.decideRefresh(cur, now, principal, ref, c)
 		if step.write == nil {
 			if step.outcome != "unchanged" {
 				b.emit(step.rec)
@@ -2527,6 +3200,28 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now tim
 		b.count(rep, step.outcome)
 		return nil
 	}
+	// Still changing after every attempt: a session busy enough that every
+	// read was stale by its write. A revocation is not left for the retry. It
+	// is the one answer that is safe without the read, so it lands now
+	// through SetRevokedAt, which writes the mark alone: fail closed, at the
+	// worst revoking a login another principal made a moment ago, whose owner
+	// logs in again. Anything else is counted failed and left for the retry.
+	if step.write != nil && !step.write.RevokedAt.IsZero() {
+		switch err := b.Store.SetRevokedAt(ctx, k, step.write.RevokedAt); {
+		case errors.Is(err, store.ErrNotFound):
+			return nil
+		case err != nil:
+			return err
+		}
+		if step.rec.Event != "" {
+			b.emit(step.rec)
+		}
+		b.count(rep, step.outcome)
+		return nil
+	}
+	log.Printf("broker: refresh: the context for %q on %q was still changing after %d attempts; left for the retry",
+		ref.Username, ref.NAS, store.MaxJoinAttempts)
+	b.count(rep, "failed")
 	return fmt.Errorf("the context for %q on %q was still changing after %d attempts: %w", ref.Username, ref.NAS,
 		store.MaxJoinAttempts, store.ErrConflict)
 }
@@ -2578,7 +3273,8 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 		// defect, as it is at mint. The context is revoked rather than left
 		// on a policy that is no longer in force; the process log says why,
 		// and no decision record does, because no decision was made.
-		log.Printf("broker: refresh: resolving %s on %q: %v; revoking the context", principal, ref.NAS, err)
+		log.Printf("broker: refresh: resolving %s on %q: %v; revoking the context (ctx_id %s)", principal, ref.NAS,
+			err, c.CtxID)
 		return refreshStep{write: &store.ContextPolicy{RevokedAt: now}, outcome: "failed"}
 	case res.Username != c.Username:
 		// The subject's username changed: the principal can no longer mint
@@ -2588,7 +3284,7 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 	body, hash, err := engine.Encode(res.Blob)
 	if err != nil {
 		log.Printf("broker: refresh: the policy for %s on %q compiled to a blob the daemon would refuse: %v; "+
-			"revoking the context", principal, ref.NAS, err)
+			"revoking the context (ctx_id %s)", principal, ref.NAS, err, c.CtxID)
 		return refreshStep{write: &store.ContextPolicy{RevokedAt: now}, outcome: "failed"}
 	}
 	if code, detail := policy.MintCheck(res, principal, ref.NAS); code != "" {
@@ -2634,7 +3330,7 @@ func (b *Broker) count(rep *RefreshReport, outcome string) {
 
 Run: `go test -race ./internal/broker/ ./internal/daemon/metrics/ ./internal/decision/ && make test && make vet`
 Expected: PASS — the narrowing, widening, revocation, clamp, quarantine, unchanged-edit, skip, race,
-store-error and expiry tests among them.
+store-error, expiry, span and busy-context tests among them.
 
 - [ ] **Step 5: Commit**
 
@@ -2669,19 +3365,30 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `config.BrokerConfig.PolicyWatchInterval` — `broker.policy_watch_interval`, default 5s, refused
     outside 1s to 5m.
   - `metrics.Metrics.PolicyReloads` — `port49_policy_reloads_total{outcome}`: `applied`,
-    `unchanged`, `refused`; `metrics.Metrics.PolicyFileRefused` — `port49_policy_file_refused`.
+    `unchanged`, `refused`; `metrics.Metrics.PolicyFileRefused` — `port49_policy_file_refused`;
+    `metrics.Metrics.PolicyRefreshPending` — `port49_policy_refresh_pending` (Decided 11).
   - In `cmd/port49d`: `type reloader struct`, `newReloader(cfg config.Config, b *broker.Broker,
     m *metrics.Metrics, now func() time.Time) *reloader`, and its methods `run(ctx, hup <-chan os.Signal)`,
-    `poll(ctx)`, `reload(ctx, trigger string)`, `refresh(ctx)`; `fileVersion(path string) ([]byte, string, error)`;
-    `quarantinedAt(p *policy.Policy, now time.Time) int`, which `watchQuarantine` now calls;
-    constants `settleAfterReload` and `refreshRetry`, both 30s.
-  - `run` takes `SIGHUP` in every configuration: with a broker the reloader runs until `run`'s
-    context ends, and `run` waits for it before shutting the broker down; with none, SIGHUP is
-    said to do nothing.
+    `poll(ctx)`, `reload(ctx, trigger string)` (SIGHUP's: one read, then `load`),
+    `load(ctx, trigger string, raw []byte, v string, err error)` (puts what was read in force; the
+    poll passes the bytes its two reads agreed on, Decided 2), `refresh(ctx)`;
+    `fileVersion(path string) ([]byte, string, error)` (the inventory's);
+    `policyVersion(path string) ([]byte, string, error)` (the policy's, through `readPolicyFile`, so
+    an unsafe file is a version of its own and putting its mode right is a change);
+    `oneLine(err error) string`; `quarantinedAt(p *policy.Policy, now time.Time) int`, which
+    `watchQuarantine` now calls; constants `settleAfterReload` and `refreshRetry`, both 30s. A swap
+    closes the replaced policy's span (`Prior.Until`).
+  - `run` catches `SIGHUP` first thing, in every configuration: with a broker the reloader runs
+    until `run`'s context ends, and `run` waits for it before shutting the broker down; with none,
+    SIGHUP is said to do nothing.
 
 **This is the switch.** Decided 2, 3, 9, 10 and 11 are this task. The reloader is one goroutine,
 so a poll, a reload and a scheduled refresh never run at once, and its tests drive each method
-directly on a clock they move.
+directly on a clock they move. `loadPolicy` and `parsePolicy` are Task 4's already, so this task's
+`main.go` change is the SIGHUP catch and the reloader's start. The pre-flight tests here:
+`TestTheWatchLoadsTheBytesItsReadsAgreedOn`, `TestAPolicyFileOthersCouldWriteIsRefusedAtAReload`,
+`TestARefusalIsOneLine`, and the pending gauge, the span's end and the "finished" line in
+`TestARefreshTheStoreStopsIsRetried`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2876,6 +3583,9 @@ func TestAReloadRefreshesLiveContextsAndSchedulesTheSettlePass(t *testing.T) {
 	if !strings.Contains(rig.out.String(), "port49d: policy refresh: 1 live context(s) updated, 0 revoked") {
 		t.Fatalf("stderr: %q", rig.out.String())
 	}
+	if testutil.ToFloat64(rig.m.PolicyRefreshPending) != 0 {
+		t.Fatal("a pass that completed leaves nothing pending")
+	}
 }
 
 // failingStore stops a refresh at its first index read.
@@ -2901,11 +3611,82 @@ func TestARefreshTheStoreStopsIsRetried(t *testing.T) {
 		!strings.Contains(rig.out.String(), "trying again in 30s") || !rig.r.due.Equal(rig.now.Add(refreshRetry)) {
 		t.Fatalf("due %v, stderr %q", rig.r.due, rig.out.String())
 	}
+	if testutil.ToFloat64(rig.m.PolicyRefreshPending) != 1 {
+		t.Fatal("port49_policy_refresh_pending must be 1 while a context may hold the old policy")
+	}
+	// The policy it replaced was in force until the swap; the retry judges
+	// its tokens over that span and no further (broker.Prior).
+	if len(rig.r.priors) != 2 || !rig.r.priors[0].Until.Equal(rig.now) || !rig.r.priors[1].Until.IsZero() {
+		t.Fatalf("priors: %+v", rig.r.priors)
+	}
 	rig.b.Store = rig.st
 	rig.now = rig.now.Add(refreshRetry)
 	rig.with(func() { rig.r.refresh(context.Background()) })
 	if c, _ := rig.st.GetContext(context.Background(), k); c.BlobHash == "sha256:before" {
 		t.Fatalf("the retry refreshes the context: %+v", c)
+	}
+	if testutil.ToFloat64(rig.m.PolicyRefreshPending) != 0 ||
+		!strings.Contains(rig.out.String(), "port49d: policy refresh finished: 1 live context(s) updated") {
+		t.Fatalf("the pass that completes after a stop says so and clears the gauge: %q", rig.out.String())
+	}
+}
+
+// The watch loads the bytes its two reads agreed on, not a third read: an
+// editor that begins writing again between them must not have its half-written
+// file loaded (pre-flight S2). Here the file on disk is already torn by the
+// time the agreed version is loaded.
+func TestTheWatchLoadsTheBytesItsReadsAgreedOn(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.write(t, showOnly[:len(showOnly)/2])
+	rig.with(func() {
+		rig.r.load(context.Background(), "file changed", []byte(showOnly), engine.HashOf([]byte(showOnly)), nil)
+	})
+	if got := rig.b.Policy.Load().Bundle; got != engine.HashOf([]byte(showOnly)) {
+		t.Fatalf("bundle %s: the agreed bytes are what is loaded", got)
+	}
+}
+
+// Whoever can write the policy decides every operator's access, so a file
+// someone else could have written is refused at a reload as at start: the
+// policy in force keeps serving, the refusal is said once and counted, and
+// putting the mode right is a change the watch sees (spec §5.1.3).
+func TestAPolicyFileOthersCouldWriteIsRefusedAtAReload(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	before := rig.b.Policy.Load().Bundle
+	rig.write(t, showOnly)
+	if err := os.Chmod(rig.cfg.Broker.PolicyFile, 0o622); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		rig.with(func() { rig.r.poll(context.Background()) })
+	}
+	if rig.b.Policy.Load().Bundle != before || testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 ||
+		testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("refused")) != 1 {
+		t.Fatalf("an unsafe file is refused once and the policy in force serves: %q", rig.out.String())
+	}
+	if strings.Count(rig.out.String(), "writable by others") != 1 {
+		t.Fatalf("stderr: %q", rig.out.String())
+	}
+	if err := os.Chmod(rig.cfg.Broker.PolicyFile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		rig.with(func() { rig.r.poll(context.Background()) })
+	}
+	if rig.b.Policy.Load().Bundle != engine.HashOf([]byte(showOnly)) || testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
+		t.Fatalf("the file with its mode put right loads: %q", rig.out.String())
+	}
+}
+
+// A refusal is one line, as every port49d line is: a YAML error's own lines
+// are joined into it.
+func TestARefusalIsOneLine(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.write(t, strings.Replace(minimalPolicy, "token_ttl: 60s", "token_ttl: nope", 1))
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	out := strings.TrimSuffix(rig.out.String(), "\n")
+	if strings.Contains(out, "\n") || !strings.Contains(out, "refused;") || !strings.Contains(out, "cannot unmarshal") {
+		t.Fatalf("stderr: %q", rig.out.String())
 	}
 }
 
@@ -3009,24 +3790,26 @@ index 72616cd..5c9602c 100644
 <!-- patch: internal/daemon/metrics/metrics_test.go -->
 ```diff
 diff --git a/internal/daemon/metrics/metrics_test.go b/internal/daemon/metrics/metrics_test.go
-index 53c559b..ad015c9 100644
+index 53c559b..61d28aa 100644
 --- a/internal/daemon/metrics/metrics_test.go
 +++ b/internal/daemon/metrics/metrics_test.go
-@@ -33,6 +33,8 @@ func TestNewRegistersEveryMetric(t *testing.T) {
+@@ -33,6 +33,9 @@ func TestNewRegistersEveryMetric(t *testing.T) {
  	m.CountQuarantined(func() int { return 1 })
  	m.ContextRefreshes.WithLabelValues("updated").Inc()
  	m.TokensSuperseded.Inc()
 +	m.PolicyReloads.WithLabelValues("applied").Inc()
 +	m.PolicyFileRefused.Set(0)
++	m.PolicyRefreshPending.Set(0)
  
  	// Gather all metrics from registry.
  	families, err := reg.Gather()
-@@ -61,6 +63,8 @@ func TestNewRegistersEveryMetric(t *testing.T) {
+@@ -61,6 +64,9 @@ func TestNewRegistersEveryMetric(t *testing.T) {
  		"port49_devices_quarantined":               false,
  		"port49_context_refreshes_total":           false,
  		"port49_tokens_superseded_total":           false,
 +		"port49_policy_reloads_total":              false,
 +		"port49_policy_file_refused":               false,
++		"port49_policy_refresh_pending":            false,
  	}
  
  	// Check that all expected metrics are present and all gathered metrics are snake_case.
@@ -3043,7 +3826,7 @@ undefined` in config, `undefined: reloader` in `cmd/port49d`.
 <!-- patch: internal/config/config.go -->
 ```diff
 diff --git a/internal/config/config.go b/internal/config/config.go
-index ba412c7..c679430 100644
+index ba412c7..8264a3f 100644
 --- a/internal/config/config.go
 +++ b/internal/config/config.go
 @@ -124,15 +124,16 @@ type TokenConfig struct {
@@ -3071,19 +3854,24 @@ index ba412c7..c679430 100644
  //
  // A relative path resolves against port49d's working directory, not the
  // config file's, as inventory_file does.
-@@ -152,6 +153,11 @@ type BrokerConfig struct {
+@@ -152,6 +153,16 @@ type BrokerConfig struct {
  	// BatchMax caps the devices in one mint request; a larger sweep pages
  	// (design §17). Default 100.
  	BatchMax int `yaml:"batch_max"`
 +	// PolicyWatchInterval is how often port49d reads policy_file for a
-+	// change (plan 4b). A change is loaded once two reads in a row agree, so
-+	// an edit is in force within two intervals, and a file caught half-written
-+	// is never loaded. Default 5s; 1s to 5m. SIGHUP loads at once.
++	// change (plan 4b). A change is loaded once two reads in a row agree, and
++	// what is loaded is the bytes they agreed on, so an edit is in force
++	// within two intervals and a write in progress is not loaded part-way.
++	// Default 5s; 1s to 5m. SIGHUP loads what is on disk at once. Write the
++	// file atomically — a temporary file renamed over it: a writer stalled
++	// part-way for two intervals, or a SIGHUP sent mid-write, loads what is
++	// there. The file and its directory must be writable by port49d's user or
++	// root alone, or it is refused (spec §5.1.3).
 +	PolicyWatchInterval time.Duration `yaml:"policy_watch_interval"`
  }
  
  // encKeyYAML names one encryption-at-rest key: the id that travels with every
-@@ -403,6 +409,11 @@ func Load(path string) (Config, error) {
+@@ -403,6 +414,11 @@ func Load(path string) (Config, error) {
  		if b.BatchMax < 1 || b.BatchMax > 1000 {
  			return Config{}, fmt.Errorf("config: broker.batch_max must be between 1 and 1000; got %d", b.BatchMax)
  		}
@@ -3100,10 +3888,10 @@ index ba412c7..c679430 100644
 <!-- patch: internal/daemon/metrics/metrics.go -->
 ```diff
 diff --git a/internal/daemon/metrics/metrics.go b/internal/daemon/metrics/metrics.go
-index 3a13125..09e24c2 100644
+index 9014b56..e8ded7f 100644
 --- a/internal/daemon/metrics/metrics.go
 +++ b/internal/daemon/metrics/metrics.go
-@@ -89,6 +89,17 @@ type Metrics struct {
+@@ -90,6 +90,23 @@ type Metrics struct {
  	// not mint what they carry. Each is one operator's `port49 token` to run
  	// again; none is a session ended.
  	TokensSuperseded prometheus.Counter
@@ -3118,10 +3906,16 @@ index 3a13125..09e24c2 100644
 +	// file loads or the file is put back. It is the alert: an edit someone
 +	// believes is live, and is not.
 +	PolicyFileRefused prometheus.Gauge
++	// port49_policy_refresh_pending: 1 from a policy swap, or a refresh pass
++	// the store stopped, until a pass completes. While it is 1 a live login
++	// context may still hold a policy no longer in force — a withdrawn grant
++	// included. It is the alert beside port49_policy_file_refused: an edit that
++	// loaded, and has not yet reached every live session.
++	PolicyRefreshPending prometheus.Gauge
  }
  
  // CountQuarantined sets what port49_devices_quarantined reports at each scrape.
-@@ -141,6 +152,10 @@ func New(reg prometheus.Registerer) *Metrics {
+@@ -142,6 +159,12 @@ func New(reg prometheus.Registerer) *Metrics {
  			Help: "Live login contexts a policy refresh visited, by outcome."}, []string{"outcome"}),
  		TokensSuperseded: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_tokens_superseded_total",
  			Help: "(device, username) keys whose unspent tokens a policy change deleted."}),
@@ -3129,15 +3923,18 @@ index 3a13125..09e24c2 100644
 +			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 +		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
 +			Help: "1 while the policy file on disk is one port49d refused and an older policy is serving."}),
++		PolicyRefreshPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_refresh_pending",
++			Help: "1 from a policy swap until a refresh pass has carried it into every live login context."}),
  	}
  	m.DevicesQuarantined = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_quarantined",
  		Help: "Inventory devices the loaded policy quarantines now."}, func() float64 {
-@@ -152,6 +167,6 @@ func New(reg prometheus.Registerer) *Metrics {
+@@ -153,6 +176,7 @@ func New(reg prometheus.Registerer) *Metrics {
  	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
  		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
  		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
 -		m.DevicesQuarantined, m.ContextRefreshes, m.TokensSuperseded)
-+		m.DevicesQuarantined, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused)
++		m.DevicesQuarantined, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
++		m.PolicyRefreshPending)
  	return m
  }
 ```
@@ -3150,6 +3947,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker"
@@ -3179,10 +3977,13 @@ const (
 // would print, and one line saying what the refresh did to live contexts. A
 // file that does not: one line saying it was refused, why, and which bundle
 // is still serving, once per distinct content, with port49_policy_file_refused
-// at 1 until the file loads or is put back. A refresh the store stopped: one
-// line with how far it got and when it will try again; the policy is in force
-// for every mint regardless, and the contexts not yet reached keep their
-// previous policy until then.
+// at 1 until the file loads or is put back. A file someone else could have
+// written is refused the same way (readPolicyFile). A refresh the store
+// stopped: one line with how far it got and when it will try again, and
+// port49_policy_refresh_pending at 1 until a pass completes; the policy is in
+// force for every mint regardless, and the contexts not yet reached keep their
+// previous policy until then. The pass that completes after a stop always
+// says so.
 type reloader struct {
 	cfg      config.Config
 	broker   *broker.Broker
@@ -3203,6 +4004,9 @@ type reloader struct {
 	// inventory is the inventory file's version as loaded at start, and
 	// inventorySaid the changed version last said.
 	inventory, inventorySaid string
+	// stopped is set while the last refresh pass did not complete, so the
+	// one that does says so whatever it found.
+	stopped bool
 }
 
 func newReloader(cfg config.Config, b *broker.Broker, m *metrics.Metrics, now func() time.Time) *reloader {
@@ -3215,10 +4019,22 @@ func newReloader(cfg config.Config, b *broker.Broker, m *metrics.Metrics, now fu
 }
 
 // fileVersion is a file's content and a string that changes when it does: its
-// sha256 — for a policy file, the bundle it loads as — or why it could not be
-// read.
+// sha256, or why it could not be read.
 func fileVersion(path string) ([]byte, string, error) {
 	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "unreadable: " + err.Error(), err
+	}
+	return raw, engine.HashOf(raw), nil
+}
+
+// policyVersion is fileVersion for the policy file, read as the start reads it
+// (readPolicyFile): the version of a file that loads is the bundle it loads
+// as, and a file someone else could have written is a version of its own —
+// refused, and said once — so putting its mode right is a change the watch
+// sees.
+func policyVersion(path string) ([]byte, string, error) {
+	raw, err := readPolicyFile(path)
 	if err != nil {
 		return nil, "unreadable: " + err.Error(), err
 	}
@@ -3260,10 +4076,12 @@ func arm(timer *time.Timer, due, now time.Time) {
 	}
 }
 
-// poll reads the policy file and reloads it once two reads in a row agree on
-// a version that is neither the one in force nor one already refused.
+// poll reads the policy file and loads it once two reads in a row agree on a
+// version that is neither the one in force nor one already refused. What it
+// loads is the second read's bytes, the ones the two reads agreed on: read
+// again, a file an editor began writing in between would be loaded half-way.
 func (r *reloader) poll(ctx context.Context) {
-	_, v, _ := fileVersion(r.cfg.Broker.PolicyFile)
+	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
 	switch {
 	case v == r.broker.Policy.Load().Bundle:
 		r.pending = ""
@@ -3278,16 +4096,23 @@ func (r *reloader) poll(ctx context.Context) {
 		r.pending = v
 	default:
 		r.pending = ""
-		r.reload(ctx, "file changed")
+		r.load(ctx, "file changed", raw, v, err)
 	}
 }
 
-// reload loads the policy file and, if it loads, puts it in force and
-// refreshes. A file that does not load changes nothing.
+// reload reads the policy file once and loads what it read: SIGHUP's path,
+// with no second read, because the operator asked.
 func (r *reloader) reload(ctx context.Context, trigger string) {
+	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
+	r.load(ctx, trigger, raw, v, err)
+}
+
+// load puts raw, the policy file's content read as version v, in force and
+// refreshes, if it loads. A file that does not load, or could not be read
+// (err), changes nothing.
+func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v string, err error) {
 	r.checkInventory()
 	old := r.broker.Policy.Load()
-	raw, v, err := fileVersion(r.cfg.Broker.PolicyFile)
 	var pol *policy.Policy
 	if err == nil {
 		pol, err = parsePolicy(r.cfg, raw)
@@ -3298,7 +4123,8 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 		r.metrics.PolicyReloads.WithLabelValues("refused").Inc()
 		r.metrics.PolicyFileRefused.Set(1)
 		r.refused = v
-		fmt.Fprintf(stderr, "port49d: policy reload (%s) refused; still serving %s: %v\n", trigger, old.Bundle, err)
+		fmt.Fprintf(stderr, "port49d: policy reload (%s) refused; still serving %s: %s\n", trigger, old.Bundle,
+			oneLine(err))
 		return
 	}
 	r.refused = ""
@@ -3311,7 +4137,10 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 	}
 	now := r.now()
 	r.broker.Policy.Swap(pol)
+	// The last prior is the policy that was in force; its span ends here.
+	r.priors[len(r.priors)-1].Until = now
 	r.priors = append(r.priors, broker.Prior{Policy: pol, At: now})
+	r.metrics.PolicyRefreshPending.Set(1)
 	r.metrics.PolicyReloads.WithLabelValues("applied").Inc()
 	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s; %d device(s) quarantined now, %d before\n",
 		trigger, pol.Bundle, old.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
@@ -3323,18 +4152,28 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 }
 
 // refresh runs one refresh pass and schedules the next: at the next grant
-// expiry when it finished, or refreshRetry from now when the store stopped it.
+// expiry when it finished, or refreshRetry from now when the store stopped it
+// or a context was still changing. port49_policy_refresh_pending is 1 from a
+// swap or a stopped pass until a pass completes: while it is, a live context
+// may still hold a policy no longer in force — a withdrawn grant included.
 func (r *reloader) refresh(ctx context.Context) {
 	rep, err := r.broker.Refresh(ctx, r.priors)
 	now := r.now()
 	if err != nil {
+		r.stopped = true
+		r.metrics.PolicyRefreshPending.Set(1)
 		fmt.Fprintf(stderr, "port49d: policy refresh stopped (%s so far): %v; the contexts not reached keep their "+
 			"previous policy; trying again in %s\n", summary(rep), err, refreshRetry)
 		r.due = now.Add(refreshRetry)
 		return
 	}
 	r.priors = []broker.Prior{{Policy: r.broker.Policy.Load(), At: now}}
-	if rep.Updated+rep.Revoked+rep.Quarantined+rep.Failed+rep.TokenKeys > 0 {
+	r.metrics.PolicyRefreshPending.Set(0)
+	switch {
+	case r.stopped:
+		r.stopped = false
+		fmt.Fprintf(stderr, "port49d: policy refresh finished: %s\n", summary(rep))
+	case rep.Updated+rep.Revoked+rep.Quarantined+rep.Failed+rep.TokenKeys > 0:
 		fmt.Fprintf(stderr, "port49d: policy refresh: %s\n", summary(rep))
 	}
 	r.schedule(now)
@@ -3352,6 +4191,16 @@ func summary(rep broker.RefreshReport) string {
 	return fmt.Sprintf("%d live context(s) updated, %d revoked, %d unchanged, %d left on quarantined devices, "+
 		"%d failed; unspent tokens superseded on %d (device, username) key(s)", rep.Updated, rep.Revoked,
 		rep.Unchanged, rep.Quarantined, rep.Failed, rep.TokenKeys)
+}
+
+// oneLine is err's text on one line, the way port49d's other lines are: a YAML
+// error lists what it found on lines of its own.
+func oneLine(err error) string {
+	lines := strings.Split(err.Error(), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSpace(lines[i])
+	}
+	return strings.ReplaceAll(strings.Join(lines, "; "), ":; ", ": ")
 }
 
 // quarantinedAt counts the devices p quarantines at now.
@@ -3389,7 +4238,7 @@ func (r *reloader) checkInventory() {
 <!-- patch: cmd/port49d/main.go -->
 ```diff
 diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
-index efcf689..1bed677 100644
+index e20defa..3e9ebe6 100644
 --- a/cmd/port49d/main.go
 +++ b/cmd/port49d/main.go
 @@ -21,7 +21,6 @@ import (
@@ -3400,28 +4249,7 @@ index efcf689..1bed677 100644
  	"strings"
  	"syscall"
  	"time"
-@@ -241,8 +240,18 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
- // (spec §4, §6). It is the one load, at start and at every reload, so a file
- // the start would refuse is a file a reload refuses, with the same words.
- func loadPolicy(cfg config.Config) (*policy.Policy, error) {
--	pol, err := policy.Load(cfg.Broker.PolicyFile, policy.Env{Devices: cfg.Inventory.Devices,
--		EnableUsernames: cfg.EnableUsernames})
-+	raw, err := os.ReadFile(cfg.Broker.PolicyFile)
-+	if err != nil {
-+		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
-+	}
-+	return parsePolicy(cfg, raw)
-+}
-+
-+// parsePolicy is loadPolicy for bytes already read: the reload hashes what it
-+// read and loads exactly that, so the version it remembers refusing is the
-+// version it refused.
-+func parsePolicy(cfg config.Config, raw []byte) (*policy.Policy, error) {
-+	pol, err := policy.Parse(raw, policy.Env{Devices: cfg.Inventory.Devices, EnableUsernames: cfg.EnableUsernames})
- 	if err != nil {
- 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
- 	}
-@@ -292,15 +301,7 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
+@@ -304,19 +303,21 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
  	if live == nil {
  		return nil
  	}
@@ -3438,16 +4266,26 @@ index efcf689..1bed677 100644
  	return live.Quarantined
  }
  
-@@ -497,6 +498,28 @@ func run(cfgPath string) error {
- 		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", brokerSrv.Addr)
- 	}
- 
-+	// The policy file is watched and SIGHUP reloads it (plan 4b). SIGHUP is
-+	// taken with no broker too, and said to do nothing: its default action
-+	// ends the process, and a reload habit must not take device AAA down.
+ func run(cfgPath string) error {
++	// SIGHUP reloads the policy (plan 4b), and is taken with no broker too,
++	// where it is said to do nothing: its default action ends the process, and
++	// a reload habit must not take device AAA down. It is caught first, before
++	// anything else, so a HUP sent while port49d starts — by the tool that
++	// just wrote the file, say — does not end it either; one that arrives
++	// before the reloader runs waits in the channel.
 +	hup := make(chan os.Signal, 1)
 +	signal.Notify(hup, syscall.SIGHUP)
 +	defer signal.Stop(hup)
++
+ 	cfg, err := config.Load(cfgPath)
+ 	if err != nil {
+ 		return err
+@@ -509,6 +510,24 @@ func run(cfgPath string) error {
+ 		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", brokerSrv.Addr)
+ 	}
+ 
++	// The policy file is watched and SIGHUP reloads it (plan 4b); hup was
++	// caught at the top of run.
 +	reloadDone := make(chan struct{})
 +	go func() {
 +		defer close(reloadDone)
@@ -3467,7 +4305,7 @@ index efcf689..1bed677 100644
  	serveErr := make(chan error, 1)
  	go func() { serveErr <- server.Serve(ctx, ln, deps) }()
  
-@@ -518,6 +541,7 @@ func run(cfgPath string) error {
+@@ -530,6 +549,7 @@ func run(cfgPath string) error {
  		<-serveErr
  	}
  	cancel()
@@ -3489,13 +4327,15 @@ git add cmd/port49d internal/config internal/daemon/metrics
 git commit -m "feat: port49d watches the policy file and reloads it live
 
 broker.policy_file is read every broker.policy_watch_interval (default
-5s) and loaded once two reads agree; SIGHUP loads at once. A file that
-does not load is refused whole, said once, counted in
-port49_policy_reloads_total and held in port49_policy_file_refused, and
-the policy in force keeps serving. One that loads is swapped in and
-refreshed into every live context, again 30s later, at every grant
-expiry, and every 30s after a store error until done. An inventory edit
-is said, not applied: that is plan 6's snapshot refresh.
+5s) and the bytes two agreeing reads saw are loaded; SIGHUP loads at
+once, and is caught first thing in run. A file that does not load, or
+that someone else could have written, is refused whole, said once on
+one line, counted in port49_policy_reloads_total and held in
+port49_policy_file_refused, and the policy in force keeps serving. One
+that loads is swapped in and refreshed into every live context, again
+30s later, at every grant expiry, and every 30s after a store error
+until done, with port49_policy_refresh_pending at 1 until it is. An
+inventory edit is said, not applied: that is plan 6's snapshot refresh.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3520,10 +4360,13 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 The end-to-end test plan 4 carried here, and the owner's goal as a test: `port49d` as it ships —
 no `lab:` block, the broker in the process — started by `run`, a real mint over mutual TLS, a real
-TACACS+ login and authorizations over TCP, and three edits to the policy file on disk: a narrowing
-(`configure` denied in the same session), a typo (refused; nothing changes), and a withdrawn grant
-(the context revoked; `credential_revoked` at the next command). One login, one `ctx_id` for every
-record, and `run` returns when its context ends.
+TACACS+ login and authorizations over TCP, and four edits to the policy file on disk: a narrowing
+(`configure` denied in the same session), a lowered `max_privilege` (the held level comes down: a
+command asked at 15 is denied `privilege_exceeded`, and at 1 permitted — spec §14's clamp
+assertion whole, pre-flight N10), a typo (refused; nothing changes), and a withdrawn grant (the
+context revoked; `credential_revoked` at the next command). One login, one `ctx_id` for every
+record, and `run` returns when its context ends. `authorizeAt` and `permitsAt` ask a command at a
+given level; `waitForCount` waits for a line's second appearance.
 
 - [ ] **Step 1: Write the failing test, and drop the lab block from the run config**
 
@@ -3600,8 +4443,13 @@ func (c tacacsClient) login(user, password string) uint8 {
 // reply has granted 15 (tests/lab/results/L1-arista_eos.md).
 func (c tacacsClient) authorize(user string, words ...string) wire.AuthorResponse {
 	c.t.Helper()
+	return c.authorizeAt(15, user, words...)
+}
+
+// authorizeAt is authorize with a command asked at priv.
+func (c tacacsClient) authorizeAt(priv uint8, user string, words ...string) wire.AuthorResponse {
+	c.t.Helper()
 	args := [][]byte{[]byte("service=shell")}
-	priv := uint8(15)
 	if len(words) == 0 {
 		args = append(args, []byte("cmd="))
 		priv = 1
@@ -3623,7 +4471,12 @@ func (c tacacsClient) authorize(user string, words ...string) wire.AuthorRespons
 
 func (c tacacsClient) permits(user string, words ...string) bool {
 	c.t.Helper()
-	s := c.authorize(user, words...).Status
+	return c.permitsAt(15, user, words...)
+}
+
+func (c tacacsClient) permitsAt(priv uint8, user string, words ...string) bool {
+	c.t.Helper()
+	s := c.authorizeAt(priv, user, words...).Status
 	return s == wire.AuthorStatusPassAdd || s == wire.AuthorStatusPassRepl
 }
 
@@ -3662,8 +4515,14 @@ func mint(t *testing.T, brokerAddr, pkiDir, device string) string {
 // waitFor polls buf until it holds want, or fails the test.
 func waitFor(t *testing.T, buf *syncBuffer, want string) {
 	t.Helper()
+	waitForCount(t, buf, want, 1)
+}
+
+// waitForCount polls buf until it holds want n times, or fails the test.
+func waitForCount(t *testing.T, buf *syncBuffer, want string, n int) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for !strings.Contains(buf.String(), want) {
+	for strings.Count(buf.String(), want) < n {
 		if time.Now().After(deadline) {
 			t.Fatalf("waited for %q; have %q", want, buf.String())
 		}
@@ -3692,10 +4551,12 @@ func ctxID(m map[string]any) any {
 // port49d as it ships — no lab: block, the broker in the process — end to end
 // through a live policy change (plan 4b; the end-to-end test plan 4 carried
 // here). alice mints and logs in once. Narrowing her role takes her next
-// `configure` away in the session she has; a policy that does not load leaves
-// her as she was; withdrawing her grant revokes the context, and her next
-// command is denied credential_revoked. She never logs in again, and every
-// command is decided in the one context her login created.
+// `configure` away in the session she has; lowering her max_privilege lowers
+// the level she holds, and her next command above it is denied
+// privilege_exceeded; a policy that does not load leaves her as she was;
+// withdrawing her grant revokes the context, and her next command is denied
+// credential_revoked. She never logs in again, and every command is decided in
+// the one context her login created.
 func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
@@ -3744,12 +4605,29 @@ func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 		t.Fatal("after the edit alice's configure is denied and show is permitted, in the same session")
 	}
 
+	// Lower the ceiling to readonly, priv-lvl 1 on EOS: the level alice holds
+	// comes down to it, and a command asked at 15 is above it (spec §14).
+	lowered := strings.Replace(showOnly, "roles: [r]}", "roles: [r], max_privilege: readonly}", 1)
+	if err := os.WriteFile(b.PolicyFile, []byte(lowered), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waitForCount(t, &out, "port49d: policy refresh: 1 live context(s) updated", 2)
+	if dev.permits("alice", "show", "version") {
+		t.Fatal("after the ceiling is lowered a command at 15 is above the level alice holds")
+	}
+	if cmds := records(t, &log, "authorize_command"); cmds[len(cmds)-1]["reason"] != "privilege_exceeded" {
+		t.Fatalf("the command above the lowered level: %v", cmds[len(cmds)-1])
+	}
+	if !dev.permitsAt(1, "alice", "show", "version") {
+		t.Fatal("at the lowered level alice's show is still permitted")
+	}
+
 	// A typo is refused and the policy in force keeps serving.
-	if err := os.WriteFile(b.PolicyFile, []byte(strings.Replace(showOnly, "privilege: readonly", "privilege: root", 1)), 0o600); err != nil {
+	if err := os.WriteFile(b.PolicyFile, []byte(strings.Replace(lowered, "privilege: readonly", "privilege: root", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, &out, "refused; still serving ")
-	if !dev.permits("alice", "show", "version") {
+	if !dev.permitsAt(1, "alice", "show", "version") {
 		t.Fatal("a refused file changes nothing")
 	}
 
@@ -3761,7 +4639,7 @@ func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, &out, "1 revoked")
-	r := dev.authorize("alice", "show", "version")
+	r := dev.authorizeAt(1, "alice", "show", "version")
 	if r.Status != wire.AuthorStatusFail || !strings.Contains(string(r.ServerMsg), "revoked") {
 		t.Fatalf("after the grant is withdrawn: %+v", r)
 	}
@@ -3863,7 +4741,7 @@ Expected: FAIL to build — `too many arguments in call to run` (`have (context.
 <!-- patch: cmd/port49d/main.go -->
 ```diff
 diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
-index 1bed677..9ce993c 100644
+index 3e9ebe6..84e6988 100644
 --- a/cmd/port49d/main.go
 +++ b/cmd/port49d/main.go
 @@ -51,7 +51,9 @@ import (
@@ -3893,7 +4771,7 @@ index 1bed677..9ce993c 100644
  
  // buildBroker loads what the broker needs and returns its server and the
  // broker, or nils when no broker: block is configured. The daemon asks the
-@@ -305,21 +310,22 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
+@@ -307,7 +312,10 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
  	return live.Quarantined
  }
  
@@ -3902,9 +4780,10 @@ index 1bed677..9ce993c 100644
 +// main's is SIGINT or SIGTERM, a test's is its own — and then shuts down in
 +// the order the package comment gives, returning once the spool has drained.
 +func run(parent context.Context, cfgPath string) error {
- 	cfg, err := config.Load(cfgPath)
- 	if err != nil {
- 		return err
+ 	// SIGHUP reloads the policy (plan 4b), and is taken with no broker too,
+ 	// where it is said to do nothing: its default action ends the process, and
+ 	// a reload habit must not take device AAA down. It is caught first, before
+@@ -324,14 +332,12 @@ func run(cfgPath string) error {
  	}
  	fmt.Fprint(stderr, labWarning(cfg.Lab))
  
@@ -3921,7 +4800,7 @@ index 1bed677..9ce993c 100644
  	lim := limits.New(cfg.Limits, time.Now)
  
  	// Everything that holds a credential, a principal or a context is sealed
-@@ -487,15 +493,17 @@ func run(cfgPath string) error {
+@@ -499,15 +505,17 @@ func run(cfgPath string) error {
  			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
  		}
  	}
@@ -3940,13 +4819,13 @@ index 1bed677..9ce993c 100644
 +		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", bln.Addr())
  	}
  
- 	// The policy file is watched and SIGHUP reloads it (plan 4b). SIGHUP is
+ 	// The policy file is watched and SIGHUP reloads it (plan 4b); hup was
 ```
 
 - [ ] **Step 4: Run the whole verification**
 
 Run: `make test && make vet && go test -race ./internal/... ./cmd/... && go vet -tags lab ./tests/lab/... && make build`
-Expected: PASS; `TestRunServesAPolicyEditToALiveSessionWithNoLogout` takes about six seconds (three
+Expected: PASS; `TestRunServesAPolicyEditToALiveSessionWithNoLogout` takes about eight seconds (four
 edits, each read twice at a 1s interval).
 
 - [ ] **Step 5: Commit**
@@ -3958,8 +4837,9 @@ git commit -m "test: port49d with no lab: block carries a policy edit to a live 
 run takes a context, so a test can start and stop port49d; the decision
 log is swappable like stderr, and the listening lines name the bound
 addresses. The end-to-end test carried from plan 4 runs port49d with no
-lab: block, mints and logs in once, and drives a narrowing, a refused
-typo and a withdrawn grant through the policy file, all in one context.
+lab: block, mints and logs in once, and drives a narrowing, a lowered
+ceiling, a refused typo and a withdrawn grant through the policy file,
+all in one context.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3982,25 +4862,31 @@ The status line is the merge's to change (`docs: plan 4b merged`), as it was for
 <!-- patch: docs/superpowers/plans/README.md -->
 ```diff
 diff --git a/docs/superpowers/plans/README.md b/docs/superpowers/plans/README.md
-index 3d98a68..a986210 100644
+index 3d98a68..649ee10 100644
 --- a/docs/superpowers/plans/README.md
 +++ b/docs/superpowers/plans/README.md
-@@ -368,6 +368,33 @@ context and every unspent token (plan 3, Question 3).
+@@ -368,6 +368,43 @@ context and every unspent token (plan 3, Question 3).
  Plan 7 keeps the scheduled refresh through `active_principals` for directory changes, and the
  `staleness_ceiling` default that goes with it.
  
 +**As built** (`2026-09-24-04b-live-policy.md`): `policy.Live` holds the policy in force; the
 +broker mints from it and the daemon asks it about quarantine at every packet, so one swap changes
 +both. `port49d` reads `broker.policy_file` every `broker.policy_watch_interval` (default 5s) and
-+loads a change once two reads agree, and loads at once on `SIGHUP`; a file that does not load is
-+refused whole, said once, counted (`port49_policy_reloads_total{outcome}`) and alarmed
-+(`port49_policy_file_refused`). `(*broker.Broker).Refresh` carries the policy in force into every
++loads the bytes two agreeing reads saw, and loads at once on `SIGHUP`; a file that does not load,
++or that anyone but `port49d`'s user or root could have written (the file or its directory), is
++refused whole — at start `port49d` does not start — said once, counted
++(`port49_policy_reloads_total{outcome}`) and alarmed (`port49_policy_file_refused`). A mint holds
++the policy from its first resolution to its last token write, and not while its response is
++written. `(*broker.Broker).Refresh` carries the policy in force into every
 +live context through `store.SetContextPolicy`, the fifth narrow setter and the first that is a
 +compare-and-set, and revokes a context whose principal has no grant left on its device; each
 +change is a `refresh` decision record (spec §5.7). It also deletes the unspent tokens a
 +superseded policy minted and the policy in force would not mint identically. It runs at every
 +reload, again 30s after it for a login in flight across the swap, at every grant expiry, and
-+every 30s after a store error until it finishes. The inventory is not reloaded: a reload after an
++every 30s after a store error until it finishes, with `port49_policy_refresh_pending` at 1 until
++it does; a context still changing after every compare-and-set attempt is revoked anyway where that
++is the answer and left for the retry otherwise, and the pass goes on. A superseded policy's tokens
++are judged at the start of its span and at every grant expiry inside it. The inventory is not reloaded: a reload after an
 +inventory edit says so. `run` takes a context, so a test can stop it, and the end-to-end test of
 +`port49d` with no `lab:` block that plan 4 carried here drives a live edit through a real login.
 +
@@ -4008,7 +4894,11 @@ index 3d98a68..a986210 100644
 +must re-run the joint checks against the new inventory and call `Refresh` exactly as a policy
 +reload does, since a device leaving a scope is a narrowing like any other; `Refresh` already
 +revokes a context on a device inventory no longer names. The token supersede walks principals ×
-+devices × superseded policies, compiling each answer twice (plan 12 measures it at fleet size).
++devices × superseded policies × expiry instants, compiling each answer (plan 12 measures it at
++fleet size). With the remote store an `IndexContext` can fail, and a login whose index write
++failed is invisible to the policy refresh as it is to revocation (`authen`, the `index_error`
++record): plan 6 must close that, or at least extend the `index_error` wording to name the policy
++refresh too.
 +
 +**Hands to plan 7:** the scheduled directory refresh is `Refresh`'s context pass with group
 +membership re-read; a policy refresh does not stamp `refreshed_at`, because nothing about the
@@ -4042,19 +4932,35 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 - **A policy edit is live without a restart.** `port49d` reads `broker.policy_file` every
   `broker.policy_watch_interval` (new key, default `5s`, `1s`–`5m`) and loads a change once two
-  reads agree; `kill -HUP` loads at once. Nobody is logged out: a narrowed rule denies the next
-  command, a widened one permits it, a lowered `max_privilege` lowers the held level, and a
-  withdrawn grant revokes that operator's context on that device (`credential_revoked` at the next
-  command).
+  reads agree; `kill -HUP` loads at once. **Write the file atomically** — a temporary file renamed
+  over it, as editors, config management and a Kubernetes ConfigMap do: a write stalled part-way
+  for two intervals, or a `SIGHUP` sent mid-write, loads what is on disk. Nobody is logged out: a
+  narrowed rule denies the next command, a widened one permits it, a lowered `max_privilege`
+  lowers the held level, and a withdrawn grant revokes that operator's context on that device
+  (`credential_revoked` at the next command).
 - **A policy that does not load is refused** and the old one keeps serving; one stderr line says
   why. New metrics: `port49_policy_reloads_total{outcome}` (`applied`, `unchanged`, `refused`) and
   `port49_policy_file_refused` (alert on 1).
+- **Breaking: a policy file someone else could have written is refused.** The file and the
+  directory holding it must be writable by `port49d`'s user or root alone and owned by one of
+  them; otherwise `port49d` does not start, and a reload keeps the policy in force serving. A
+  symlink is followed and the file it reaches is judged, so a Kubernetes ConfigMap mount (root's,
+  not group- or world-writable) passes. Fix with `chmod go-w` (file and directory) or `chown`.
+  With a live reload, whoever can write the policy decides every operator's access within
+  seconds.
+- **A reload that has not yet reached every live session** holds
+  `port49_policy_refresh_pending` at 1 (alert on it staying 1): the store failed part-way, and a
+  context not reached keeps its previous policy, a withdrawn grant included, until the 30s retry
+  finishes and says `policy refresh finished`.
 - **New decision event `refresh`**, one per live context a reload changes, naming its `ctx_id`:
   `permit grants_matched`, `deny no_grants_matched` (revoked), or `deny device_quarantined` (left as
   it was). New metrics: `port49_context_refreshes_total{outcome}` and
   `port49_tokens_superseded_total`.
 - **An unspent token whose answer the edit changed is deleted**: its holder sees
   `token_not_found` and runs `port49 token` again. Tokens whose answer did not change are kept.
+- **`credential_revoked` now also follows a routine edit** that withdraws a grant. The
+  `refresh deny no_grants_matched` record naming the same `ctx_id` tells the two apart; an alert
+  on `credential_revoked` as an incident signal should leave those out.
 - **The inventory is still read only at start.** A reload after an inventory edit says so; restart
   to apply it (plan 6).
 - **`SIGHUP` no longer ends `port49d`**, with or without a `broker:` block.
@@ -4065,16 +4971,24 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - **Spec coverage.** §5.1.3 "Policy reload": validate or keep (Task 6, `reload`), swap (Tasks 3,
   4, 6), joint checks re-run (the load itself, `sayPolicy`, and `Live.Quarantined` per packet),
   refresh by compare-and-set (Tasks 2, 5), revoke (Task 5), tokens (Task 5), settle and expiry
-  passes (Task 6), store down (Tasks 5, 6). §5.7's `refresh` event (Tasks 1, 5). §14's five new
-  assertions: narrowing, widening, revocation and clamp (`refresh_test.go`, `run_test.go`); refusal
-  (`reload_test.go`, `run_test.go`); tokens (`TestARefreshRevokesAContextWhoseGrantIsGone`,
-  `TestAnEditThatChangesNoAnswerKeepsEveryToken`); the race (`TestARefreshThatLosesARaceReadsAgain`);
-  expiry (`TestAGrantsExpiryReachesALiveContext`, `TestTheRefreshIsScheduledAtTheNextGrantExpiry`).
-  The roadmap's carries: `Server` (Task 4), `run` with no `lab:` block (Task 7).
+  passes (Task 6), store down (Tasks 5, 6), the pending gauge (Task 6), the busy context and the
+  superseded policy's span (Task 5), the agreed bytes (Task 6), the policy file's permissions
+  (Tasks 4, 6). §5.7's `refresh` event and its carve-outs (Tasks 1, 5). §14's eight new
+  assertions: narrowing, widening, revocation and clamp (`refresh_test.go`, `run_test.go`, the
+  clamp end to end to `privilege_exceeded`); refusal (`reload_test.go`, `run_test.go`); tokens
+  (`TestARefreshRevokesAContextWhoseGrantIsGone`, `TestAnEditThatChangesNoAnswerKeepsEveryToken`,
+  `TestASupersededPolicyIsJudgedAtEveryExpiryItSpanned`); the race
+  (`TestARefreshThatLosesARaceReadsAgain`); expiry (`TestAGrantsExpiryReachesALiveContext`,
+  `TestTheRefreshIsScheduledAtTheNextGrantExpiry`); the unsafe file (`policyfile_test.go`,
+  `TestAPolicyFileOthersCouldWriteIsRefusedAtAReload`); the busy context
+  (`TestABusyContextDoesNotStopTheRefresh`, `TestABusyContextIsRevokedAnyway`). The roadmap's
+  carries: `Server` (Task 4), `run` with no `lab:` block (Task 7).
 - **Written against the tree.** Every task's code was written and tested on a scratch branch off
   `e10ab29`, and each task's commit passed `go vet ./...`, `gofmt -l .` and `go test ./...
   -count=1`. The blocks in this file were then extracted and applied in order to a clean checkout
   of `main` plus this plan's commit, exactly as an executor applies them: every Step 2 failed with
   the build error it names, every Step 4 passed, and the result was byte-identical to the scratch
   branch and passed `go test -race ./internal/... ./cmd/...`, `make vet`,
-  `go vet -tags lab ./tests/lab/...` and `make build`.
+  `go vet -tags lab ./tests/lab/...` and `make build`. The pre-flight rulings were then folded in
+  the same way — written and tested task by task on a scratch branch off `e10ab29`, the blocks
+  regenerated from it, and the whole plan dry-run again from a clean copy.
