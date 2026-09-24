@@ -4113,7 +4113,23 @@ Beyond those already listed in the design document's §14:
   attributes.
 - **Unknown attributes default to optional.**
 - **Privilege composition**: `max` across granted roles over the declared ordering;
-  `parent:` resolves transitively; an unresolvable level fails at load.
+  `parent:` resolves transitively; an unresolvable level fails at load; a `privilege_levels`
+  that reorders the reserved levels fails at load.
+- **The ceiling caps the level**: an `admin` role capped at `operator` is quarantined on every
+  platform, `arista_eos` and `cisco_nxos` included, where both number 15; there
+  `max_privilege: operator` is reported `ceiling_indistinct`.
+- **Session tests**: `level:`, `max_privilege:`, `priv_lvl:` and `enable:` each pass only on the
+  value the mint would give, and a session test fails where no token would be minted.
+- **The privilege gate sees what the device gets**: each of a role or grant attribute
+  `priv-lvl=15`, a custom level's `parent:` moved up, a level raised under either order, a
+  ceiling raised or removed, and `enable` switched on fails `port49 policy diff` until a session
+  test asserts the raised value, on a device of that group, at that instant; a lowering passes.
+- **The regex gate cannot be satisfied by a deny test**: `/^(wri|rel)/ **` rewritten as
+  `/^wri/ **` fails `port49 policy diff` with a passing test that `write erase` is denied, and
+  passes with a test that `reload` is now permitted on each device group or an `acknowledge:`
+  entry naming the old rule with a reason; an entry with no reason fails at load.
+- **Acknowledgments hold at their instant**: a test that passes only after a grant expires
+  acknowledges no expansion or raise reported before it.
 - **Enable**: all three mechanisms, including the `$enab15$` username path resolving through
   the `(nas, rem_addr)` secondary index, and its refusal when that index is ambiguous.
 - **Receipt binds the credential**: the hash is in the key, so a byte-identical
