@@ -927,3 +927,38 @@ func TestARefreshNamesTheContextsASessionOnlyPlatformKeeps(t *testing.T) {
 		t.Fatalf("the process log names the unreached context, and only it: %q", out.String())
 	}
 }
+
+// An idempotent retry after a refresh superseded the tokens it would replay
+// must not answer permit with a token that no longer exists (final review
+// m2): the operator would be handed a dead token and then see token_not_found
+// at the device, with nothing linking the two. The retry mints afresh under
+// the policy in force, and the record says the replay was abandoned; a retry
+// after that replays the fresh mint.
+func TestARetryAfterASupersedeIsNotAnsweredWithTheDeletedToken(t *testing.T) {
+	f := newFixture(t, 8)
+	bg := context.Background()
+	body := `{"devices":["nx1"]}`
+	first := decodeMint(t, f.post(bg, f.state(f.alice), body, "retry-1")).Results[0]
+	f.advance(time.Second)
+	if _, err := f.b.Refresh(bg, f.reload(t, edit(t, roleList, readOnly, aliceGrant,
+		"roles: [read_only], max_privilege: admin"))); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(time.Second)
+	f.log.Reset()
+	again := decodeMint(t, f.post(bg, f.state(f.alice), body, "retry-1")).Results[0]
+	if again.Verdict != "permit" || again.Login == first.Login {
+		t.Fatalf("the retry must not replay the superseded token: %+v", again)
+	}
+	toks, _ := f.st.Candidates(bg, store.TokenKey{NAS: "nx1", Username: "alice"})
+	if len(toks) != 1 || string(toks[0].Secret) != again.Login {
+		t.Fatalf("the token answered is the one standing: %d standing", len(toks))
+	}
+	mints := eventsOf(f.records(t), "mint")
+	if len(mints) != 1 || !strings.Contains(mints[0]["index_error"].(string), "superseded") {
+		t.Fatalf("the mint record says the replay was abandoned: %v", mints)
+	}
+	if replay := decodeMint(t, f.post(bg, f.state(f.alice), body, "retry-1")).Results[0]; replay.Login != again.Login {
+		t.Fatalf("a retry after the fresh mint replays it: %+v", replay)
+	}
+}

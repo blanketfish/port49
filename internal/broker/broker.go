@@ -72,6 +72,11 @@ type Broker struct {
 	// recorded the context left for a quarantine: one record per context per
 	// policy, not one per pass (refreshContext).
 	quarantineRecorded map[string]string
+	// superseded is, by (device, username), when a refresh last deleted its
+	// unspent tokens: an idempotent retry of a mint from before then is not
+	// replayed with a token that no longer exists (token.Request). It holds
+	// at most one entry per key the policy has ever minted for.
+	superseded map[store.TokenKey]time.Time
 }
 
 // Handler routes the two endpoints the slice serves.
@@ -312,13 +317,16 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 	if err := b.putBlob(ctx, hash, body); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil
 	}
+	b.mu.Lock()
+	supersededAt := b.superseded[store.TokenKey{NAS: name, Username: res.Username}]
+	b.mu.Unlock()
 	out, err := b.Minter.Mint(ctx, token.Request{
 		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
 			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: b.MaxSessionAge,
 			Credential: cred, AuthTime: authTime},
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
 		TTL:            time.Duration(req.TTLSeconds) * time.Second,
-		IdempotencyKey: key, BodyHash: bodyHash,
+		IdempotencyKey: key, BodyHash: bodyHash, SupersededAt: supersededAt,
 		Policy: &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Grants: res.Grants}})
 	var capped *token.ErrTooManyOutstanding
 	switch {
