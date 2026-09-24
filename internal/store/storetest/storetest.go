@@ -227,3 +227,56 @@ func PolicyRevision(t *testing.T, newStore func() store.Store, now time.Time) {
 		t.Fatalf("a token minted before the revocation lifted it: %+v", got)
 	}
 }
+
+// RevocationIsMonotonic checks that SetRevokedAt keeps the later of the mark
+// it holds and the one it is given (spec §5.6). A mark moved earlier weakens
+// the revocation: a token minted between the two instants would count as
+// minted after it and lift it at the next join. The refresh's revocation
+// relies on this, since it writes the mark unconditionally, whatever a
+// revoke-by-sid or a revoke-by-principal stamped first.
+//
+// newStore returns a fresh store whose clock returns now.
+func RevocationIsMonotonic(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	const principal = "user:alice@example.com"
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	ctx := context.Background()
+	s := newStore()
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "ctx_first", Principal: principal, Username: "alice",
+		PrivLvl: 1, AuthTime: now.Add(-time.Hour), RefreshedAt: now.Add(-time.Hour)}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	marked := func() time.Time {
+		c, err := s.GetContext(ctx, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.RevokedAt
+	}
+	later, earlier := now.Add(-time.Minute), now.Add(-time.Hour)
+	if err := s.SetRevokedAt(ctx, k, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRevokedAt(ctx, k, earlier); err != nil {
+		t.Fatal(err)
+	}
+	if got := marked(); !got.Equal(later) {
+		t.Fatalf("an earlier mark replaced a later one: %v, want %v", got, later)
+	}
+	// And the weakening it would have allowed: a token minted between the
+	// two does not lift the revocation.
+	login := store.Context{CtxID: "ctx_login", Principal: principal, Username: "alice", PrivLvl: 1,
+		AuthTime: now, RefreshedAt: now}
+	if _, err := store.JoinContext(ctx, s, k, login, now.Add(-30*time.Minute), now, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got := marked(); !got.Equal(later) {
+		t.Fatalf("a token minted before the revocation lifted it: %v", got)
+	}
+	if err := s.SetRevokedAt(ctx, k, now); err != nil {
+		t.Fatal(err)
+	}
+	if got := marked(); !got.Equal(now) {
+		t.Fatalf("a later mark must replace an earlier one: %v, want %v", got, now)
+	}
+}

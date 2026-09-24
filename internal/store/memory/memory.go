@@ -664,6 +664,7 @@ func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.Co
 // `credential_revoked` rather than answered as a session port49 never saw
 // (store.Store; spec §5.6 row 2). It moves neither the expiry nor
 // LastTouchedAt: row 6 reclaims the record on the idle TTL it was already on.
+// It keeps the later of the mark it holds and the one it is given.
 func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -672,7 +673,11 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 		delete(s.contexts, k)
 		return store.ErrNotFound
 	}
-	e.c.RevokedAt = at
+	// The later mark stands (store.Store): an earlier one would let a token
+	// minted between the two lift the revocation at a join.
+	if at.After(e.c.RevokedAt) {
+		e.c.RevokedAt = at
+	}
 	e.rev = s.nextRevLocked()
 	e.policyRev = e.rev
 	s.contexts[k] = e

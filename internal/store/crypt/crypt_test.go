@@ -330,6 +330,15 @@ func TestPolicyRevisionThroughTheSealingLayer(t *testing.T) {
 	}, now)
 }
 
+// SetRevokedAt's comparison is made below the sealing layer, on a plaintext
+// timestamp, so the property has to hold through it.
+func TestRevocationIsMonotonicThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RevocationIsMonotonic(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
 func TestJoinRacesRevocationThroughTheSealingLayer(t *testing.T) {
 	now := time.Unix(1_757_041_495, 0)
 	storetest.JoinRacesRevocation(t, func() store.Store {

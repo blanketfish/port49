@@ -1342,3 +1342,8 @@ func TestPolicyRevisionOnTheMemoryStore(t *testing.T) {
 	now := time.Unix(1_757_041_495, 0)
 	storetest.PolicyRevision(t, func() store.Store { return New(func() time.Time { return now }) }, now)
 }
+
+func TestRevocationIsMonotonicOnTheMemoryStore(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RevocationIsMonotonic(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}

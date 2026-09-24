@@ -373,7 +373,8 @@ func (w *wrapped) RefreshContext(ctx context.Context, k store.ContextKey, r stor
 // comment is about: RevokedAt is a plaintext timestamp, so a daemon holding no
 // usable key can still mark every context of a principal the index names.
 // Revocation is the path needed most on a bad day and must not depend on the
-// encryption key or its rotation window being available.
+// encryption key or its rotation window being available. Its keep-the-later
+// comparison is on that plaintext timestamp too, so it is made down there.
 func (w *wrapped) SetRevokedAt(ctx context.Context, k store.ContextKey, at time.Time) error {
 	return w.inner.SetRevokedAt(ctx, k, at)
 }

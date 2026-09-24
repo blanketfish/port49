@@ -505,6 +505,12 @@ type Store interface {
 	// which is why this moves neither the expiry nor LastTouchedAt: a revoked
 	// context ages out on the clock it was already on.
 	//
+	// It is monotonic: it keeps the later of the mark the record holds and
+	// at. A mark moved earlier weakens the revocation — a token minted between
+	// the two instants would count as minted after it and lift it at a join
+	// (spec §5.6) — so a revocation written unconditionally, as the policy
+	// refresh's is (spec §5.1.3), never undoes a later one another path made.
+	//
 	// ErrNotFound if the key is absent or already expired.
 	SetRevokedAt(ctx context.Context, k ContextKey, at time.Time) error
 	// SetContextPolicy writes a policy refresh's answer into this context, in
