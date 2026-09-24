@@ -265,10 +265,13 @@ func (p *Policy) RuleSecretLiterals() []Finding {
 	var out []Finding
 	for _, name := range sortedKeys(p.roles) {
 		r := p.roles[name]
-		for _, verdict := range []string{"deny", "permit"} {
+		for _, verdict := range []string{"deny", "permit", "pipe permit"} {
 			rules := r.Deny
-			if verdict == "permit" {
+			switch verdict {
+			case "permit":
 				rules = r.Permit
+			case "pipe permit":
+				rules = r.Pipe
 			}
 			for _, rule := range rules {
 				var on []string

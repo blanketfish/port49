@@ -67,3 +67,27 @@ func TestABrokerLogLineNeverQuotesARuleSecret(t *testing.T) {
 		t.Fatalf("%s", out.String())
 	}
 }
+
+// A pipe permit is a rule and is redacted as one; an entity class a rule
+// names where a value is redacted holds those values, so its patterns are
+// redacted too. Either marks the event redacted (task 11 review M2).
+func TestABlobEventRedactsPipePermitsAndSecretClasses(t *testing.T) {
+	var log bytes.Buffer
+	b := &Broker{Store: memory.New(time.Now), Log: decision.NewJSONLines(&log), Now: time.Now, MaxSessionAge: time.Hour}
+	body, hash, err := engine.Encode(engine.Blob{Bundle: "sha256:policy", Platform: "arista_eos",
+		Normalize: engine.Normalize{PipeToken: "|"}, Privilege: "admin",
+		Rules: []engine.Rule{{Verdict: engine.Deny, Rule: "snmp-server community @bad **", Role: "no_public"},
+			{Verdict: engine.Deny, Rule: "interface @mgmt", Role: "safety"}},
+		Pipe:    []string{"include key Pipe5ecret"},
+		Classes: map[string][]string{"bad": {"^Class5ecret$"}, "mgmt": {"^Management[0-9]+$"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.putBlob(context.Background(), hash, body); err != nil {
+		t.Fatal(err)
+	}
+	if s := log.String(); strings.Contains(s, "5ecret") || !strings.Contains(s, `"redacted":true`) ||
+		!strings.Contains(s, "^Management[0-9]+$") {
+		t.Fatalf("the blob event: %s", s)
+	}
+}

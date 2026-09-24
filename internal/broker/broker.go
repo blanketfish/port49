@@ -425,9 +425,29 @@ func (b *Broker) blobEvent(hash string, body []byte) *decision.Blob {
 		redact = platform.BuiltInRedactor
 	}
 	patterns, redacted := redact(blob.Platform), false
+	// An entity class a rule names where a value is redacted holds those
+	// values: `snmp-server community @bad **` lists bad communities.
+	secretClasses := map[string]bool{}
 	for i, r := range blob.Rules {
-		if words, ok := platform.RedactRule(patterns, strings.Fields(r.Rule)); ok {
+		orig := strings.Fields(r.Rule)
+		if words, ok := platform.RedactRule(patterns, orig); ok {
 			blob.Rules[i].Rule, redacted = strings.Join(words, " "), true
+			for k, w := range words {
+				if w == platform.Redacted && strings.HasPrefix(orig[k], "@") {
+					secretClasses[orig[k][1:]] = true
+				}
+			}
+		}
+	}
+	// A pipe permit is a rule over an output modifier, redacted as one.
+	for i, p := range blob.Pipe {
+		if words, ok := platform.RedactRule(patterns, strings.Fields(p)); ok {
+			blob.Pipe[i], redacted = strings.Join(words, " "), true
+		}
+	}
+	for name := range secretClasses {
+		for i := range blob.Classes[name] {
+			blob.Classes[name][i] = platform.Redacted
 		}
 	}
 	if !redacted {

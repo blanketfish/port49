@@ -163,8 +163,9 @@ scopes: [{name: all_devices, match: {}}]
 roles:
   - {name: no_public, deny: ["snmp-server community public **"]}
   - {name: admin, permit: ["username * secret **", "show **"]}
+  - {name: piped, permit: ["show **"], pipe: {permit: ["include key Pipe5ecret"]}}
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [admin, no_public]}]
+grants: [{subject: s, scope: all_devices, roles: [admin, no_public, piped]}]
 `)
 	var got []string
 	for _, f := range p.Lint(noon) {
@@ -172,8 +173,8 @@ grants: [{subject: s, scope: all_devices, roles: [admin, no_public]}]
 			got = append(got, f.Message)
 		}
 	}
-	if len(got) != 1 || !strings.Contains(got[0], `role "no_public": deny "snmp-server community «redacted» **"`) ||
-		strings.Contains(got[0], "public ") {
+	if len(got) != 2 || !strings.Contains(got[0], `role "no_public": deny "snmp-server community «redacted» **"`) ||
+		strings.Contains(got[0], "public ") || !strings.Contains(got[1], `role "piped": pipe permit "include key «redacted»"`) {
 		t.Fatalf("%q", got)
 	}
 	if !slices.ContainsFunc(p.RuleSecretLiterals(), func(f Finding) bool { return f.Message == got[0] }) {
