@@ -35,7 +35,10 @@ var shipped = map[string]Dialect{
 		// ceiling-arista_eos.md; L16-arista_eos.md, command authorization LOCAL.
 		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **",
 			"show users detail **"}},
-		Fallback:      map[string]string{"admin": "network-admin: every command, configuration included"},
+		Fallback: map[string]string{
+			"operator": "network-operator: clear counters and clear ip bgp * run; configuration refused " +
+				"(% Authorization denied)",
+			"admin": "network-admin: every command, configuration included"},
 		LocalAccounts: []string{`^username\s+(\S+)`},
 		ConfigChecks: []ConfigCheck{
 			{Match: `^aaa authorization commands \S+ default .*\b(none|if-authenticated)\s*$`, Says: "the command method " +
@@ -88,7 +91,6 @@ var shipped = map[string]Dialect{
 			"aaa accounting commands 15 default start-stop group port49"},
 		Unreachable: map[string][]string{"readonly": {"clear counters **", "clear ip bgp **", "configure terminal **"},
 			"operator": {"clear ip bgp **", "configure terminal **"}},
-		Fallback:      map[string]string{"admin": "level 15: every command, configuration included"},
 		LocalAccounts: []string{`^username\s+(\S+)`},
 		ConfigChecks: []ConfigCheck{
 			{Match: `^aaa authorization commands \d+ default .*\b(none|if-authenticated)\s*$`, Says: "the command method " +
@@ -495,13 +497,13 @@ func TestOverMergesRoleOrder(t *testing.T) {
 func TestOverKeepsTheMeasuredIntersection(t *testing.T) {
 	base, _ := DialectFor("arista_eos")
 	d := Spec{Unreachable: &map[string][]string{"readonly": {"show users detail **", "reload **"}},
-		Fallback: &map[string]string{"admin": "read-only in practice", "operator": "network-operator"}}.Over(base)
+		Fallback: &map[string]string{"admin": "read-only in practice", "readonly": "network-operator"}}.Over(base)
 	if !reflect.DeepEqual(d.Unreachable["readonly"], []string{"clear counters **", "clear ip bgp **",
 		"configure terminal **", "show users detail **", "reload **"}) {
 		t.Errorf("unreachable: %q", d.Unreachable)
 	}
 	if d.Fallback["admin"] != base.Fallback["admin"] || d.FallbackNote["admin"] != "read-only in practice" ||
-		d.Fallback["operator"] != "network-operator" || d.FallbackNote["operator"] != "" {
+		d.Fallback["readonly"] != "network-operator" || d.FallbackNote["readonly"] != "" {
 		t.Errorf("fallback: %q, note %q", d.Fallback, d.FallbackNote)
 	}
 	if again := SpecOf(d).Over(base); !reflect.DeepEqual(again, d) {

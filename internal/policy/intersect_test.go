@@ -67,17 +67,19 @@ grants:
   - {subject: noc, scope: all_devices, roles: [noc]}
 `)
 	got := findings(p, FindingFallbackExposure)
-	if len(got) != 3 {
+	// IOS-XE has no fallback entry: with port49d down, a token session there
+	// was refused every command (tests/lab/results/L22-cisco_iosxe.md).
+	if len(got) != 2 {
 		t.Fatalf("one per platform with a fallback, for svc_oxidized alone: %q", got)
 	}
-	for i, platformName := range []string{"cisco_iosxe", "arista_eos", "cisco_nxos"} {
+	for i, platformName := range []string{"arista_eos", "cisco_nxos"} {
 		if !strings.HasPrefix(got[i], `subject "svc_oxidized" at admin (`) || !strings.Contains(got[i], ") on "+platformName+
 			": port49's rules confine it to show **, and if port49 cannot answer") {
 			t.Errorf("%q", got[i])
 		}
 	}
-	if !strings.Contains(got[1], "it gets network-admin: every command, configuration included") {
-		t.Errorf("%q", got[1])
+	if !strings.Contains(got[0], "it gets network-admin: every command, configuration included") {
+		t.Errorf("%q", got[0])
 	}
 }
 
@@ -201,10 +203,10 @@ func TestTheIntersectionReportsRedactBlockText(t *testing.T) {
 // only adds a report, and the text reads as the operator's note.
 func TestABlockFallbackForAnUnmeasuredLevelIsANote(t *testing.T) {
 	p := mustParse(t, `platforms:
-  arista_eos:
+  cisco_nxos:
     fallback: {operator: "network-operator: show commands"}
 `+strings.Replace(intersectBody, "{name: backup, privilege: admin", "{name: backup, privilege: operator", 1))
-	exposed := onPlatform(findings(p, FindingFallbackExposure), "arista_eos")
+	exposed := onPlatform(findings(p, FindingFallbackExposure), "cisco_nxos")
 	if len(exposed) != 1 || !strings.HasPrefix(exposed[0], `subject "svc" at operator (`) ||
 		!strings.Contains(exposed[0], `it gets what no platform set measured (operator note: "network-operator: show commands"): more`) {
 		t.Errorf("%q", exposed)
@@ -215,20 +217,20 @@ func TestABlockFallbackForAnUnmeasuredLevelIsANote(t *testing.T) {
 // parenthesis or opens another note stays inside the quotes, and never reads
 // as the set's measurement (spec §12).
 func TestAnOperatorNoteCannotForgeAMeasurement(t *testing.T) {
-	for _, tt := range []struct{ block, level, want string }{
-		{`{admin: "x) level 15: read-only (operator note: y"}`, "admin",
+	for _, tt := range []struct{ platform, block, level, want string }{
+		{"arista_eos", `{admin: "x) level 15: read-only (operator note: y"}`, "admin",
 			`it gets network-admin: every command, configuration included ` +
 				`(operator note: "x) level 15: read-only (operator note: y"): more`},
 		// A printable look-alike of a parenthesis or a quote is escaped.
-		{`{admin: "x） level 15: read-only “y"}`, "admin",
+		{"arista_eos", `{admin: "x） level 15: read-only “y"}`, "admin",
 			`(operator note: "x\uff09 level 15: read-only \u201cy"): more`},
-		{`{operator: "(operator note: x) network-admin: measured (operator note: y)"}`, "operator",
+		{"cisco_nxos", `{operator: "(operator note: x) network-admin: measured (operator note: y)"}`, "operator",
 			`it gets what no platform set measured ` +
 				`(operator note: "(operator note: x) network-admin: measured (operator note: y)"): more`},
 	} {
-		p := mustParse(t, "platforms:\n  arista_eos:\n    fallback: "+tt.block+"\n"+
+		p := mustParse(t, "platforms:\n  "+tt.platform+":\n    fallback: "+tt.block+"\n"+
 			strings.Replace(intersectBody, "{name: backup, privilege: admin", "{name: backup, privilege: "+tt.level, 1))
-		exposed := onPlatform(printed(p, FindingFallbackExposure), "arista_eos")
+		exposed := onPlatform(printed(p, FindingFallbackExposure), tt.platform)
 		if len(exposed) != 1 || !strings.Contains(exposed[0], tt.want) {
 			t.Errorf("%s: %q", tt.level, exposed)
 		}

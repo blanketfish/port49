@@ -58,12 +58,13 @@ platforms:
     unreachable:
       readonly: [clear counters **, clear ip bgp **, configure terminal **]
       operator: [clear ip bgp **, configure terminal **]
-    # Local authorization runs a command at or below the session's level
-    # (the lab's break-glass account, tests/lab/configs/iosxe-startup.cfg); a
-    # token session at 15 falling back is unmeasured, and reported as the
-    # exposure it would be.
-    fallback:
-      admin: "level 15: every command, configuration included"
+    # No fallback exposure: with port49d down under an open session, local
+    # authorization refused every command a token session typed, `%
+    # Authorization failed.`, at 15 (`clear counters`, `clear ip bgp *`,
+    # `configure terminal`) and at 7 (`clear counters`). A token user has no
+    # local account (tests/lab/results/L22-cisco_iosxe.md,
+    # L22-carried-cisco_iosxe.md). A fallback entry names more than the
+    # policy grants, so none is listed; readonly's level 1 was not measured.
     # `port49 devices check-config` (spec §5.6).
     local_accounts: ['^username\s+(\S+)']
     config_checks:

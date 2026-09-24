@@ -195,8 +195,11 @@ func TestTheCompletePolicyExampleReportsWhatItShould(t *testing.T) {
 		`port49's rules confine it to show **, terminal length *, and if port49 cannot answer`) {
 		t.Fatalf("the exposure: %s", exposure)
 	}
-	want := []string{FindingFallbackExposure, FindingGroupSubject, FindingGroupSubject, FindingGroupSubject,
-		FindingIncomparableVersion}
+	// Two exposures on EOS: svc_oxidized at admin, and noc_tier1 at operator,
+	// whose network-operator still ran clear counters and clear ip bgp * with
+	// port49 down (tests/lab/results/L22-arista_eos.md).
+	want := []string{FindingFallbackExposure, FindingFallbackExposure, FindingGroupSubject, FindingGroupSubject,
+		FindingGroupSubject, FindingIncomparableVersion}
 	if !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("findings %q, want %q", kinds, want)
 	}

@@ -4078,13 +4078,19 @@ command of which is in the adapter's `unreachable` list for the level the sessio
 the commands the device refused in its parser at that level with port49 permitting everything
 (`tests/lab/results/ceiling-*.md`). A **fallback exposure** is a subject whose composed rules
 deny something, at a level whose adapter `fallback` says what the device gives a session on its
-own when the method list falls back to `local` — `network-admin` at admin on EOS and NX-OS,
-level 15 on IOS-XE. `operator` gets readonly's role for this reason (§6), so it never gets
-configuration where its device role binds. That is all L16 measured: `network-operator` under
-LOCAL command authorization refused configuration. Whether it also refuses `clear counters` and
-`clear ip bgp *` is an open question of L22. The report has no exemption for `operator`. It
-judges every level by that level's adapter `fallback` entry. A level with no entry, which is
-operator's case until L22 closes, is not reported, and that silence is unmeasured, not safe.
+own when the method list falls back to `local`: `network-admin` at admin on EOS and NX-OS,
+and on EOS `network-operator` at operator. `operator` gets readonly's role for this reason (§6), so it never gets
+configuration where its device role binds. L16 measured that `network-operator` under LOCAL
+command authorization refuses configuration. L22 measured what else it runs with port49d
+stopped under an open session (`tests/lab/results/L22-*.md`):
+- On vEOS it still ran `clear counters` and `clear ip bgp *`, which is operator's EOS entry.
+- On the N9Kv it was refused both (`% Permission denied for the role`).
+- On IOS-XE, local authorization refused every command a token session typed, at 15 and at 7,
+  because a token user has no local account. So IOS-XE has no entry.
+
+The report has no exemption for `operator`. It judges every level by that level's adapter
+`fallback` entry. A level with no entry is not reported. That silence is measured for IOS-XE
+and for NX-OS's `clear` commands, and is unmeasured elsewhere, not safe.
 A `platforms:` block adds to both and takes nothing away, `replace: true` and `based_on:`
 included: its `unreachable` rules join the set's for the level, and its `fallback` text is
 kept apart from the set's, as the adapter's `fallback_note`, which only port49 writes and a

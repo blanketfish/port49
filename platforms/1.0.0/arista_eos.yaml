@@ -49,8 +49,13 @@ platforms:
       readonly: [clear counters **, clear ip bgp **, configure terminal **, show users detail **]
     # Under `aaa authorization commands ... local`, network-admin configures
     # and network-operator is refused (L16-arista_eos.md, command
-    # authorization LOCAL).
+    # authorization LOCAL). With port49d down under an open session,
+    # operator's network-operator still ran `clear counters` and `clear ip bgp
+    # *` and was refused `configure terminal`; admin ran all three
+    # (tests/lab/results/L22-arista_eos.md, L22-carried-arista_eos.md).
+    # readonly at level 1 was not measured falling back.
     fallback:
+      operator: "network-operator: clear counters and clear ip bgp * run; configuration refused (% Authorization denied)"
       admin: "network-admin: every command, configuration included"
     # `port49 devices check-config`: a local account named as a port49
     # username inherits that username's context (spec §5.6), and two lines

@@ -48,6 +48,13 @@ platforms:
     # No role refuses a command while port49 answers (ceiling-cisco_nxos.md),
     # so nothing is unreachable. Under local authorization network-admin
     # changed configuration (L16-cisco_nxos.md, command authorization LOCAL).
+    # With port49d down under an open session, network-operator was refused
+    # `clear counters`, `clear ip bgp *` and the configuration change, `%
+    # Permission denied for the role`, and network-admin ran all three
+    # (tests/lab/results/L22-cisco_nxos.md, L22-carried-cisco_nxos.md).
+    # A fallback entry names more than the policy grants, and the lab
+    # measured none of that for network-operator, so readonly and operator
+    # (the same reply) list none.
     fallback:
       admin: "network-admin: every command, configuration included"
     # `port49 devices check-config` (spec §5.6). NX-OS 10.x has no enable
