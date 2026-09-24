@@ -25,8 +25,9 @@ changed, rewrite every live context on every reload, leave a quarantined device'
 **5a merged 2026-09-24** (PR #13; `2026-09-24-05a-platform-adapters.md`, eighteen tasks: one
 docs, fifteen code, one lab, one lab-and-docs; reviewed per task, then a final whole-branch
 review, one fix wave and two scoped re-reviews; L22 closed, and the EOS, NX-OS and IOS-XE
-adapters `verified: containerlab`); plan 5 is split at the seam below, and 5b is the next plan
-to write. 6–13 not yet.
+adapters `verified: containerlab`); plan 5 is split at the seam below. **5b written 2026-09-24**
+(`2026-09-24-05b-projection-capabilities.md`, nineteen tasks: one docs, three lab, thirteen code,
+one lab, one lab-and-docs; not yet executed). 6–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -528,6 +529,16 @@ than 25 tasks. The seam is the kind of platform:
   capabilities`, the supports-versus-observed matrix, accounting reconciliation); and an NX-OS
   `vsh.bin` system user if a note measures it. 5a leaves Junos rendering nothing, as today, so 5b
   reworks nothing 5a builds.
+
+  **Written 2026-09-24** as `2026-09-24-05b-projection-capabilities.md`. The lab measures L9, L12,
+  L23, L24 and L25 first (Tasks 2–4), and the new platform set 1.1.0 takes its values from those
+  notes (Task 13). The projection ships in 1.1.0, so an unpinned policy still gets nothing on Junos.
+  Each reply is proven not to let the device run what port49 denies before it is sent, and a
+  composition that cannot be proven quarantines the device. Bits reach the device by template
+  (`local_user_name`) until L12 measures `user-permissions` over a bitless template. `port49
+  platform export --classes` renders the reference classes with decision 21's `idle-timeout`.
+  `port49 devices capabilities` reads the decision log, qualified by a new `account_gap` record.
+  Task 18 is the differential test.
 
 Spec §8 in full: built-in adapters, entity classes, user overrides and layering, pinned
 platform set, `redact` patterns (accounting redaction was deferred from plan 1 and MUST land
