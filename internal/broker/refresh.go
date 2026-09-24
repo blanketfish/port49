@@ -55,6 +55,12 @@ type RefreshReport struct {
 	// deleted as superseded.
 	TokenKeys                                        int
 	Updated, Unchanged, Revoked, Quarantined, Failed int
+	// At is the instant the pass judged every token and context at. A caller
+	// schedules the next grant expiry from it (policy.NextChange(At)), not
+	// from its own clock after the pass, and runs another pass at once when
+	// that expiry is already due: an expiry between At and the caller's clock
+	// is one no context has been judged after.
+	At time.Time
 }
 
 // Refresh carries the policy in force into everything the policies before it
@@ -95,6 +101,10 @@ type RefreshReport struct {
 // why; a context left for a quarantine is recorded once per policy, not at
 // every pass.
 //
+// A pass judges every token and context at one instant, RefreshReport.At. A
+// grant that expires while it runs sends it round again at once, so the
+// report's counts can sum more than one pass, and At is the last pass's.
+//
 // It returns nil only when every live context is on the policy in force —
 // written, unchanged, revoked, or left for a quarantine — which is what
 // port49d clears port49_policy_refresh_pending on. A store error ends the pass
@@ -104,15 +114,28 @@ type RefreshReport struct {
 // the pass goes on and returns store.ErrConflict at the end so the caller
 // runs it again.
 func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, error) {
-	cur, now := b.Policy.Load(), b.Now()
+	cur := b.Policy.Load()
 	var rep RefreshReport
-	if err := b.supersedeTokens(ctx, cur, now, priors, &rep); err != nil {
-		return rep, fmt.Errorf("deleting superseded tokens: %w", err)
+	for {
+		rep.At = b.Now()
+		if err := b.supersedeTokens(ctx, cur, rep.At, priors, &rep); err != nil {
+			return rep, fmt.Errorf("deleting superseded tokens: %w", err)
+		}
+		if err := b.refreshContexts(ctx, cur, rep.At, &rep); err != nil {
+			return rep, fmt.Errorf("refreshing live contexts: %w", err)
+		}
+		// Every context was judged at At. A grant that expired while the
+		// pass ran was judged before its expiry, and a caller scheduling from
+		// its own clock would never come back for it, so the pass runs again
+		// at once, over the span the policy in force has minted in since At.
+		// Each pass passes at least one expiry, so this ends. A policy
+		// swapped in meanwhile is the reload's own pass to carry.
+		next, ok := cur.NextChange(rep.At)
+		if !ok || next.After(b.Now()) || b.Policy.Load() != cur {
+			return rep, nil
+		}
+		priors = []Prior{{Policy: cur, At: rep.At}}
 	}
-	if err := b.refreshContexts(ctx, cur, now, &rep); err != nil {
-		return rep, fmt.Errorf("refreshing live contexts: %w", err)
-	}
-	return rep, nil
 }
 
 // minted is what a token for one principal on one device carries of its

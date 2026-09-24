@@ -650,3 +650,46 @@ func TestAQuarantinedContextIsRecordedOncePerPolicy(t *testing.T) {
 		t.Fatalf("a new policy records the quarantine again: %v", recs)
 	}
 }
+
+// slowStore advances the clock once, as the pass reaches the contexts: a pass
+// on a real fleet takes seconds, and a grant can expire inside one.
+type slowStore struct {
+	store.Store
+	f    *fixture
+	d    time.Duration
+	done bool
+}
+
+func (s *slowStore) ActivePrincipals(ctx context.Context) ([]string, error) {
+	if !s.done {
+		s.done = true
+		s.f.advance(s.d)
+	}
+	return s.Store.ActivePrincipals(ctx)
+}
+
+// A grant that expires while a pass is running is not skipped: the contexts
+// were judged before it, and the caller schedules the next expiry from the
+// instant judged at, so neither would ever apply it. Refresh runs again at
+// once, and the report's At is the instant the last pass judged at.
+func TestAnExpiryInsideAPassIsApplied(t *testing.T) {
+	f := newFixture(t, 8)
+	lapse := f.now.Add(time.Second)
+	priors := f.reload(t, edit(t, aliceGrant, aliceGrant+", expires: "+lapse.UTC().Format(time.RFC3339)))
+	f.login(t, alice, "leaf1", "alice")
+	start := f.now
+	f.b.Store = &slowStore{Store: f.st, f: f, d: 2 * time.Second}
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.Revoked != 1 {
+		t.Fatalf("the grant that expired during the pass is applied: %+v %v", rep, err)
+	}
+	if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+		t.Fatalf("the context must be revoked: %+v", c)
+	}
+	if !rep.At.After(start) || rep.At.Before(lapse) {
+		t.Fatalf("At is the instant the last pass judged at, past the expiry: %v (lapse %v)", rep.At, lapse)
+	}
+	if _, more := f.b.Policy.Load().NextChange(rep.At); more {
+		t.Fatal("no expiry is left before At for the caller to miss")
+	}
+}
