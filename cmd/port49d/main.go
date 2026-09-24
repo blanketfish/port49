@@ -294,14 +294,17 @@ func run(cfgPath string) error {
 
 	// A context the broker minted names a compiled blob and is answered from it
 	// by the policy engine (plan 4). A context with no blob — the lab's seeds —
-	// is answered by the lab authorizer; config.Load refuses a config without
-	// it, so the fallback is never nil and port49 never falls back to
+	// is answered by the lab's instrument where port49d.yaml has a `lab:`
+	// block, and denied where it has none: port49 never falls back to
 	// permitting everything.
-	authz := &author.Engine{Store: st, Metrics: m, Fallback: &author.Lab{
-		SessionAttributes: cfg.Lab.SessionAttributes,
-		CommandAttributes: cfg.Lab.CommandAttributes,
-		DenyPrefixes:      cfg.Lab.DenyPrefixes,
-	}}
+	authz := &author.Engine{Store: st, Metrics: m}
+	if cfg.Lab != nil {
+		authz.Fallback = &author.Lab{
+			SessionAttributes: cfg.Lab.SessionAttributes,
+			CommandAttributes: cfg.Lab.CommandAttributes,
+			DenyPrefixes:      cfg.Lab.DenyPrefixes,
+		}
+	}
 	minter := token.NewMinter(st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
 	// Plan 7's broker exposes Refresh, RevokeByPrincipal and RevokeBySID over
 	// HTTP; plan 3's serves /v1/tokens and /v1/config only, so nothing in this
@@ -328,7 +331,7 @@ func run(cfgPath string) error {
 	//
 	// One line per seed, JSON, written before the listener opens; the file is
 	// truncated at start so a restart cannot leave a spent token behind.
-	if len(cfg.Lab.SeedTokens) > 0 {
+	if cfg.Lab != nil && len(cfg.Lab.SeedTokens) > 0 {
 		logins, enables, err := mintSeeds(ctx, cfg, minter)
 		if err != nil {
 			stopSpool()

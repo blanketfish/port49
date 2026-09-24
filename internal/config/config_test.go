@@ -15,7 +15,7 @@ import (
 // The sample config is assembled from three pieces rather than written twice,
 // because exactly one test has to load a config that names no encryption key
 // and every other test must load one that does. Splitting it also puts
-// `encryption:` ahead of `lab:`, so TestLoadRequiresLabBlock's truncation at
+// `encryption:` ahead of `lab:`, so TestLoadWithoutALabBlock's truncation at
 // `lab:` removes the lab block and nothing else.
 const sampleHead = `
 listen: ":4949"
@@ -252,17 +252,20 @@ func TestLoadRefusesZeroOrNegativeWindows(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresLabBlock(t *testing.T) {
+// Since the policy engine (plan 4) the lab: block is optional: a daemon with
+// none runs the engine alone, and Lab is nil so nothing builds the lab's
+// instrument by accident.
+func TestLoadWithoutALabBlock(t *testing.T) {
 	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	body := fmt.Sprintf(sample, invPath)
 	body = body[:strings.Index(body, "lab:")]
-	_, err := Load(write(t, "nolab.yaml", body))
-	if err == nil {
-		t.Fatal("a config without lab: must fail; there is no authorizer until plan 4")
+	c, err := Load(write(t, "nolab.yaml", body))
+	if err != nil {
+		t.Fatalf("a config without lab: loads: %v", err)
 	}
-	if !strings.Contains(err.Error(), "lab: block is required until the policy engine lands (plan 4)") {
-		t.Fatalf("error must name the missing block: %v", err)
+	if c.Lab != nil {
+		t.Fatalf("no lab: block is a nil Lab, got %+v", c.Lab)
 	}
 }
 

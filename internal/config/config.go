@@ -59,9 +59,11 @@ type SeedToken struct {
 	Enable   bool   `yaml:"enable"`
 }
 
-// LabConfig is the stand-in authorizer's configuration. It is required until
-// the policy engine lands (plan 4): without it there is no authorizer at all,
-// and port49 never falls back to permitting everything.
+// LabConfig is the lab's measurement instrument (author.Lab): seeded tokens,
+// and the fixed answers the register entries vary. It is optional since the
+// policy engine landed (plan 4): without it a context with no blob is denied,
+// and every context the broker mints has one. With it, only the seeded
+// contexts get the lab's answers.
 type LabConfig struct {
 	SessionAttributes []string `yaml:"session_attributes"`
 	// CommandAttributes are attached to a PERMITTED per-command authorization
@@ -121,7 +123,7 @@ type TokenConfig struct {
 // The policy file is read once, at start, and the store is in memory: a
 // policy edit needs a restart, and a restart ends every live login context
 // and every unspent token — every operator logs in again (plan 3,
-// Question 3). Plan 4 brings reload.
+// Question 3). Live policy reload, which keeps every login, is plan 4b's (roadmap).
 //
 // The slice has no revocation lever. To cut someone off, remove their subject
 // from the policy (or re-issue the CA) and restart; certificate revocation is
@@ -234,7 +236,8 @@ type Config struct {
 	Accounting     AccountingConfig
 	Session        SessionConfig
 	Token          TokenConfig
-	// Broker is nil when no broker: block is configured.
+	// Broker is nil when no broker: block is configured, and Lab when no lab:
+	// block is.
 	Broker *BrokerConfig
 	Lab    *LabConfig
 
@@ -364,18 +367,20 @@ func Load(path string) (Config, error) {
 	if err := resolveEnableUsernames(&c, f.Platforms); err != nil {
 		return Config{}, err
 	}
-	if c.Lab == nil {
-		return Config{}, fmt.Errorf("config: lab: block is required until the policy engine lands (plan 4)")
-	}
-	for i, t := range c.Lab.SeedTokens {
-		if t.NAS == "" || t.Username == "" {
-			return Config{}, fmt.Errorf("config: lab.seed_tokens[%d]: nas and username are both required", i)
+	// No lab: block is a production daemon: Lab stays nil, the policy engine
+	// answers every context the broker minted, and a context with no blob is
+	// denied — there is no instrument to answer it.
+	if c.Lab != nil {
+		for i, t := range c.Lab.SeedTokens {
+			if t.NAS == "" || t.Username == "" {
+				return Config{}, fmt.Errorf("config: lab.seed_tokens[%d]: nas and username are both required", i)
+			}
 		}
-	}
-	if len(c.Lab.SeedTokens) > 0 && c.Lab.SeedTokenFile == "" {
-		return Config{}, fmt.Errorf("config: lab.seed_token_file is required when lab.seed_tokens is non-empty: " +
-			"port49d mints each seed's secret at start and has to put it somewhere an operator can read " +
-			"and nothing else can — a 0600 file, never a stream")
+		if len(c.Lab.SeedTokens) > 0 && c.Lab.SeedTokenFile == "" {
+			return Config{}, fmt.Errorf("config: lab.seed_token_file is required when lab.seed_tokens is non-empty: " +
+				"port49d mints each seed's secret at start and has to put it somewhere an operator can read " +
+				"and nothing else can — a 0600 file, never a stream")
+		}
 	}
 
 	if f.Broker != nil {
