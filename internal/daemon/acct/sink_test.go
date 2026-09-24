@@ -1,10 +1,12 @@
 package acct
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -15,9 +17,10 @@ import (
 
 // flakySink refuses every record while down, and records what it took.
 type flakySink struct {
-	mu   sync.Mutex
-	down bool
-	got  []string
+	mu    sync.Mutex
+	down  bool
+	got   []string
+	tries int
 }
 
 func (f *flakySink) Emit(r decision.Record) { _ = f.Write(r) }
@@ -25,6 +28,7 @@ func (f *flakySink) Emit(r decision.Record) { _ = f.Write(r) }
 func (f *flakySink) Write(r decision.Record) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.tries++
 	if f.down {
 		return errors.New("sink: connection refused")
 	}
@@ -114,6 +118,52 @@ func TestARefusingSinkNeverQuarantines(t *testing.T) {
 	if ok, n := sp.drainOnce(); !ok || n != 1 || len(sink.got) != 1 {
 		t.Fatalf("after the outage: ok=%v forwarded=%d got=%q", ok, n, sink.got)
 	}
+}
+
+// A sink that keeps refusing is retried at a pace, not every tick: each
+// refused write is a counted failure and a log line in the decision package,
+// so a spool hammering a full disk ten times a second would bury stderr and
+// make port49_decision_log_write_failures_total climb as if records were
+// being lost, while every one of them is still in the spool.
+func TestARefusingSinkIsRetriedAtAPace(t *testing.T) {
+	sink := &flakySink{down: true}
+	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "o.jsonl"), sink,
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sp.Run(ctx); close(done) }()
+	time.Sleep(600 * time.Millisecond)
+	sink.mu.Lock()
+	tries := sink.tries
+	sink.mu.Unlock()
+	if tries > 2 {
+		t.Fatalf("%d writes to a refusing sink in 600ms, want at most 2", tries)
+	}
+	// Recovery is still picked up: the paced retry delivers the record.
+	sink.mu.Lock()
+	sink.down = false
+	sink.mu.Unlock()
+	deadline := time.Now().Add(3 * sinkRetryInterval)
+	for {
+		sink.mu.Lock()
+		n := len(sink.got)
+		sink.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the record was not delivered after the sink recovered")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
 }
 
 // refuseAfter passes n records to next, then refuses exactly one, then passes

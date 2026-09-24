@@ -37,6 +37,13 @@ const (
 // it can never allocate more than roughly this many bytes.
 const maxLineBytes = 1 << 20 // 1 MiB
 
+// sinkRetryInterval paces Run after the sink refuses a record. Every refused
+// write is a log line and one more port49_decision_log_write_failures_total
+// in the decision package, so retrying on the drain's 100ms tick (or on every
+// Offer) would bury stderr and make that counter climb ten times a second
+// for records the spool still holds.
+const sinkRetryInterval = time.Second
+
 // Spool is a durable, append-only file log (spec §5.8, §14): Offer returns nil
 // only after the record has been written to the file, fsynced, and (when the
 // file was just created) its parent directory entry fsynced too, so a
@@ -119,6 +126,7 @@ type Spool struct {
 	lastQuarantineLog time.Time // throttles a failing quarantine rename's log
 	lastReadLog       time.Time // throttles the read-failure log
 	lastSinkLog       time.Time // throttles the sink-refusal log
+	sinkRefused       bool      // the last pass stopped at a record the sink refused; Run paces the retry
 	drainOffset       int64     // bytes of .draining already forwarded; 0 for a file not yet started
 	offsetFailAt      int64     // drainOffset (or -1 for a structural failure) at the last failure
 	offsetFailCount   int       // consecutive failures at offsetFailAt
@@ -371,6 +379,18 @@ func (s *Spool) Run(ctx context.Context) {
 	defer ticker.Stop()
 	for {
 		s.drainOnce()
+		if s.sinkRefused {
+			// Neither the tick nor an Offer can help a sink that just
+			// refused, so wait out sinkRetryInterval; a pending signal
+			// stays buffered for the pass after.
+			select {
+			case <-ctx.Done():
+				s.drainUntilEmptyOrGiveUp()
+				return
+			case <-time.After(sinkRetryInterval):
+			}
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			s.drainUntilEmptyOrGiveUp()
@@ -449,6 +469,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 	}
 
 	draining := s.path + ".draining"
+	s.sinkRefused = false
 
 	if s.stuck {
 		if err := os.Remove(draining); err != nil {
@@ -524,6 +545,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 					// sink, not only up to it (roadmap, plan 4). The record
 					// is counted by the sink's own failure hook.
 					s.applyForwarded(forwarded, pos)
+					s.sinkRefused = true
 					s.logThrottled(&s.lastSinkLog, "acct: the decision log sink refused an accounting record; "+
 						"it stays in %s and is offered again: %v", draining, err)
 					return false, forwarded

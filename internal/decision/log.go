@@ -231,8 +231,11 @@ type jsonLines struct {
 func NewJSONLines(w io.Writer) Sink { return &jsonLines{w: w} }
 
 // NewJSONLinesWithFailureHook is NewJSONLines plus a callback run once for
-// every record the sink refuses. A refused record is a record that does not
+// every refused write. From Emit a refused write is a record that does not
 // exist while the device was still answered, so something has to count it;
+// from Write it may be a record its caller still holds and writes again (the
+// accounting spool), which counts once per attempt, so the count is refused
+// writes, not lost records;
 // the callback rather than a metric keeps this package's dependencies to the
 // standard library, so the record shape and the metric registry stay
 // independent of each other.
@@ -249,8 +252,9 @@ func (j *jsonLines) failed() {
 
 func (j *jsonLines) Emit(r Record) { _ = j.Write(r) }
 
-// Write is Emit that returns the refusal. Either way a refused record is
-// logged and counted once, here, so a caller that retries does not have to.
+// Write is Emit that returns the refusal. Either way the refused write is
+// logged and counted, here, once per call: a caller that retries a record
+// counts once per refused write, and should pace its retries.
 func (j *jsonLines) Write(r Record) error {
 	r.TS = r.TS.UTC()
 	b, err := json.Marshal(r)

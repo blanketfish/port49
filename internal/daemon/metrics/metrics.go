@@ -82,9 +82,13 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Store operations by op and outcome."}, []string{"op", "outcome"}),
 		// A decision record the sink refused is a record that does not exist:
 		// the device was still answered, so without this counter the log is
-		// silently short and nothing says so (design §11).
+		// silently short and nothing says so (design §11). It counts refused
+		// writes, not lost records: the accounting spool keeps a refused
+		// record and writes it again once a second, each attempt counted, so
+		// a climb with spool depth steady or rising is records held, not
+		// records lost (acct.sinkRetryInterval).
 		DecisionLogWriteFailures: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_decision_log_write_failures_total",
-			Help: "Decision records the log sink refused to write."}),
+			Help: "Writes the decision log sink refused. A record the accounting spool retries counts once per attempt."}),
 		CryptOpenFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_crypt_open_failures_total",
 			Help: "Stored records that would not decrypt, by record kind."}, []string{"record"}),
 		Attributions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_attributions_total",
