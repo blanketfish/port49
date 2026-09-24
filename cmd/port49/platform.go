@@ -165,7 +165,7 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 			return 1
 		}
 		for _, platformName := range sortedNames(set) {
-			body, err := adapterFile(platformName, set[platformName])
+			body, err := adapterFile(platformName, set[platformName], true)
 			if err == nil {
 				err = os.WriteFile(filepath.Join(*dir, platformName+".yaml"), body, 0o644)
 			}
@@ -183,7 +183,7 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 			strings.Join(sortedNames(set), ", "))
 		return 1
 	}
-	body, err := adapterFile(platformName, d)
+	body, err := adapterFile(platformName, d, export)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", name, err)
 		return 1
@@ -316,12 +316,27 @@ func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
 	}
 }
 
-// adapterFile is d as an adapter file: `platforms: {name: ...}`.
-func adapterFile(name string, d platform.Dialect) ([]byte, error) {
+// adapterFile is d as an adapter file: `platforms: {name: ...}`. Exported, a
+// block's fallback note is written under fallback, where the block wrote it,
+// so the file pastes back as a block: fallback_note is port49's own record,
+// which a block may not set, and the set's measured text a block cannot
+// change goes with it (spec §8, §12). show prints both apart.
+func adapterFile(name string, d platform.Dialect, export bool) ([]byte, error) {
+	spec := platform.SpecOf(d)
+	if export && spec.FallbackNote != nil {
+		fallback := map[string]string{}
+		if spec.Fallback != nil {
+			fallback = *spec.Fallback
+		}
+		for level, note := range *spec.FallbackNote {
+			fallback[level] = note
+		}
+		spec.Fallback, spec.FallbackNote = &fallback, nil
+	}
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
-	if err := enc.Encode(map[string]map[string]platform.Spec{"platforms": {name: platform.SpecOf(d)}}); err != nil {
+	if err := enc.Encode(map[string]map[string]platform.Spec{"platforms": {name: spec}}); err != nil {
 		return nil, err
 	}
 	if err := enc.Close(); err != nil {

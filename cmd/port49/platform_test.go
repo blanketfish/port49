@@ -116,6 +116,48 @@ func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
 	}
 }
 
+// `export` writes a block's fallback text under fallback, where the block
+// wrote it, and never fallback_note, which a block may not set: pasted back
+// as the policy's block, the export loads with the same note and exports the
+// same again (spec §8, §12). `show` prints both, the set's measured text and
+// the note apart.
+func TestPlatformExportPastesBackWithTheFallbackNote(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	block := "platforms:\n  arista_eos: {fallback: {admin: \"read-only in practice\"}}\n"
+	if err := os.WriteFile(pol, append([]byte(block), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	export := func() string {
+		t.Helper()
+		var out, errb bytes.Buffer
+		if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "arista_eos"}, &out, &errb); code != 0 {
+			t.Fatalf("code %d %s", code, errb.String())
+		}
+		return out.String()
+	}
+	first := export()
+	if strings.Contains(first, "fallback_note") || !strings.Contains(first, "    fallback:\n      admin: read-only in practice\n") {
+		t.Fatalf("export:\n%s", first)
+	}
+	if err := os.WriteFile(pol, append([]byte(first), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if again := export(); again != first {
+		t.Errorf("pasted back, the export changed:\n%s\nwas\n%s", again, first)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "show", "--policy", pol, "--inventory", inv, "arista_eos"}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	for _, want := range []string{"    fallback:\n      admin: 'network-admin: every command, configuration included'\n",
+		"    fallback_note:\n      admin: read-only in practice\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("show: missing %q in\n%s", want, out.String())
+		}
+	}
+}
+
 // `export --all --dir` writes one file per platform, and the directory is a
 // platform set LoadSets reads back as the one it was written from: a file
 // fit for platforms/ in an upstream pull request.
