@@ -57,6 +57,14 @@ func gitRepo(t *testing.T) (repo, remote, pol, inv string) {
 			t.Fatal(err)
 		}
 	}
+	// gh is never run in a test: a test that expects the pull request to
+	// open replaces this with a fake of its own.
+	orig := openPR
+	openPR = func(dir, repo, branch, base, title, body string) (string, error) {
+		t.Fatal("gh was run")
+		return "", nil
+	}
+	t.Cleanup(func() { openPR = orig })
 	return repo, remote, pol, inv
 }
 
@@ -255,12 +263,6 @@ func TestAFailedStepLeavesTheCheckoutAlone(t *testing.T) {
 // that cannot stand in a branch name.
 func TestThePullRequestRefusesWhatGitWouldMisread(t *testing.T) {
 	repo, _, pol, inv := gitRepo(t)
-	orig := openPR
-	openPR = func(dir, _, branch, base, title, body string) (string, error) {
-		t.Fatal("gh was run")
-		return "", nil
-	}
-	t.Cleanup(func() { openPR = orig })
 	before := checkout(t, repo)
 	for _, c := range []struct {
 		flags []string
@@ -323,12 +325,6 @@ func TestWithoutCredentialsKeepsAURLWithoutOne(t *testing.T) {
 // `x.lock`); it is refused before git fetches or writes anything.
 func TestASubjectThatCannotNameABranchIsRefusedFirst(t *testing.T) {
 	repo, _, pol, _ := gitRepo(t)
-	orig := openPR
-	openPR = func(dir, _, branch, base, title, body string) (string, error) {
-		t.Fatal("gh was run")
-		return "", nil
-	}
-	t.Cleanup(func() { openPR = orig })
 	for _, subject := range []string{"a..b", "x.lock", "x."} {
 		_, err := removalPR(pol, subject, nil, policy.Removal{}, "origin", "main", nil)
 		if err == nil || !strings.Contains(err.Error(), "cannot name a branch") {
