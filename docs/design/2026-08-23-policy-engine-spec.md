@@ -2147,13 +2147,20 @@ inventory name and `{privilege}` the abstract level the roles compose to (`admin
 An attribute is at most 255 bytes as written, checked at load, and again once filled in, at
 mint, where the broker holds the same values the daemon will substitute.
 
-**Privilege-bearing attributes take no substitution** (owner's ruling 2026-09-24, review I3).
-Each platform's adapter lists the attribute names that carry privilege on it, from the lab:
-`priv-lvl` everywhere; `roles` on `arista_eos` and `shell:roles`, and `cisco-av-pair` which can
-carry it, on `cisco_nxos` (L16); `local-user-name` and `user-permissions` on `juniper_junos`
-(L18, decision 22). A placeholder in the value of any attribute with one of those names, on any
-platform key, is refused at load: `priv-lvl={username}` would hide the level the device gets from
-every review tool and hand it to whatever the mint fills in.
+**A placeholder goes only in an attribute listed as inert** (owner's rulings 2026-09-24,
+reviews I3 and I4). Each platform's adapter lists the attribute names that carry privilege on
+it — `priv-lvl` everywhere; `roles` on `arista_eos` and `shell:roles`, and `cisco-av-pair` which
+can carry it, on `cisco_nxos` (L16); `local-user-name` and `user-permissions` on
+`juniper_junos` (L18, decision 22), with the Junos command and configuration regexes
+`allow-commands`, `deny-commands`, `allow-configuration`, `deny-configuration` and their
+`-regexps` forms (vendor-documented, unmeasured, L18) — and the names it holds to carry none.
+The inert list is seeded with this section's own motivating case, `home-directory`, on every
+shipped adapter; it is unmeasured on any lab image. A placeholder is allowed only in an attribute
+listed inert on its platform key, or under `all` on every platform in the inventory; anywhere
+else — a privilege-bearing attribute or one no adapter lists — it is refused at load. A
+substitution refuses only `=`, `*` and control characters, so `priv-lvl={username}` would hide
+the level from every review tool, and `allow-commands={principal}` would let a principal's
+text widen a session-only device's own allow-list.
 
 ### Validation without semantics
 
@@ -3555,7 +3562,8 @@ listing commands. This is contained, and is a reason to prefer literals and `*`.
   sends after §6 layering, or, where it sends none, the number the platform gives the level
   (`none` where neither says); `enable:`, the subject's escalation mechanism (`none`,
   `auto` or `token`); and `reply:`, the exact session reply as a list, in order, with the
-  placeholders empty (`[]` for none). A test with no `command:` is a session test and takes no `expect:`; it
+  placeholders empty (`[]` for none); and `api:`, the subject's broker API rights, which a test
+  may assert alone, on any device, since they do not depend on one. A test with no `command:` is a session test and takes no `expect:`; it
   passes only where the subject would be minted a token for the device, with every value it
   names.
 
@@ -3622,14 +3630,16 @@ each instant. Any of these is a raise:
   version does not declare counts as below every level it does;
 - **`enable` was switched on** — from unset or `none` to `auto` or `token`, which lets the
   session escalate to its ceiling, or with none to anything;
-- **the session reply gained or changed a privilege-bearing attribute** — the whole rendered
-  reply is compared (placeholders empty), so any change to it is at least a reported line, and
-  one that adds or changes an attribute other than `priv-lvl` (which the first item judges) is a
-  raise unless that attribute is one the platform's adapter lists as carrying no privilege. No
-  shipped adapter lists one yet, so today every such attribute counts: `local-user-name` on
-  Junos, `shell:roles` on NX-OS and `roles` on EOS each change what the device lets the session
-  do (§6; L16, L18), and on a session-only platform the reply is the only fence. Removing an
-  attribute is reported and does not fail.
+- **the session reply gained, changed or lost a privilege-bearing attribute** — the whole
+  rendered reply is compared (placeholders empty), so any change to it is at least a reported
+  line, and one that adds, changes or removes an attribute other than `priv-lvl` (which the first
+  item judges) is a raise unless that attribute is one the platform's adapter lists as inert
+  (§6). `local-user-name` on Junos, `shell:roles` on NX-OS and `roles` on EOS each change what the
+  device lets the session do (L16, L18), and on a session-only platform the reply is the only
+  fence, so removing one widens access too: without `deny-commands` a Junos session loses its
+  only refusal, and without `local-user-name` it falls back to the device's template user (owner's
+  ruling 2026-09-24, review C4). The gate cannot read the direction of such a change, so it fails
+  closed.
 
 Each fails unless a passing session test in the new policy, at that instant, on a device of the
 group reported, asserts the new value of every dimension that rose: `priv_lvl:` for the device
@@ -3647,6 +3657,13 @@ in the new policy asserts the access it resolves to; for a `username:` change, a
 naming one of the subject's principals. A principal removed from every subject is reported and
 does not fail. A subject's `group:` changing is reported; group subjects mint for no one until the
 directory arrives (plan 7), and the gate on them is that plan's.
+
+**A broker API right gained fails the gate** (owner's ruling 2026-09-24, review M6). A subject's
+`api:` rights (§2) let it act on other people's sessions, so the diff compares them per subject,
+and per principal where a principal moves to a subject with rights its old one lacked. A right
+gained fails unless a passing test in the new policy asserts the subject's whole right list with
+`api:` — naming the subject or one of its principals for a subject's gain, naming the principal
+for a principal's. A right lost is reported and does not fail.
 
 **A regex-constrained change fails the gate too** (owner's ruling 2026-09-24). Regex and class
 terms are matched only against the words the rules name, so a rule that carries one and changed,
