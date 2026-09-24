@@ -1,0 +1,120 @@
+# Spec §11's complete policy example, as a test corpus (spec §14). Two blocks
+# are not here, and two values are, each corrected in the spec by the same
+# plan:
+#
+#   - `platform_set` is plan 5's and `key_groups` live in the inventory file
+#     until plan 6 (spec11-inventory.yaml carries §11's two groups).
+#   - svc_oxidized declares the username spec §2 gives it. A machine subject
+#     with no username fails at load (spec §14, "Username resolution"), and
+#     §11 as printed omitted it.
+#   - dc_fabric declares `on_missing: exclude`. Its grant carries
+#     interface_tech's deny, and a keyed scope that delivers a deny must say
+#     which way a device with no data goes (spec §5.5).
+
+privilege_levels:
+  - {name: readonly}
+  - {name: read_only_limited, parent: readonly}
+  - {name: operator}
+  - {name: admin}
+
+scopes:
+  - {name: all_devices, match: {}}
+  - {name: dc_fabric,   match: {site: [dc1, dc2], role: [leaf, spine]}, on_missing: exclude}
+  - name: srx_unpatched
+    match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}
+    on_missing: include
+    security_log: true
+    attached_roles:
+      humans:   [cve_2026_xxxx]
+      machines: [cve_2026_xxxx]
+
+roles:
+  - name: read_only
+    privilege: readonly
+    permit:
+      - show **
+      - terminal length *
+
+  - name: read_only_limited
+    privilege: read_only_limited
+    permit:
+      - show version
+      - show interfaces **
+      - show ip route **
+
+  - name: network_admin
+    privilege: admin
+    permit: ["**"]
+    pipe:
+      permit: ["**"]
+
+  - name: bgp_operator
+    privilege: operator
+    permit:
+      - show bgp **
+      - clear bgp /^[0-9]+$/ **
+      - clear bgp neighbor **
+    deny:
+      - clear bgp all
+
+  - name: interface_tech
+    privilege: operator
+    permit:
+      - configure **
+      - interface @physical
+      - shutdown
+      - no shutdown
+      - description **
+      - end
+    deny:
+      - interface @management
+
+  - name: elevated_session
+    privilege: admin
+    reason: "device exposes show running-config only at level 15"
+
+  - name: no_disruptive
+    deny:
+      - reload **
+      - write erase **
+
+  - name: cve_2026_xxxx
+    reason: "CVE-2026-XXXX — SRX cluster subsystem"
+    deny:
+      - show chassis cluster **
+
+  - name: cve_2026_xxxx_assess
+    reason: "CVE-2026-XXXX — IR needs cluster state to assess exposure"
+    permit:
+      - show chassis cluster status
+
+subjects:
+  - {name: netops_admins, group: "CN=netops-admins,OU=Groups,DC=example,DC=com",
+     enable: token, token_ttl: 60s}
+  - {name: noc_tier1,     group: "CN=noc-tier1,OU=Groups,DC=example,DC=com",
+     enable: none,  token_ttl: 60s}
+  - {name: security_ir,   group: "CN=security-ir,OU=Groups,DC=example,DC=com",
+     enable: token, token_ttl: 60s}
+  - {name: svc_oxidized,  identity: "system:serviceaccount:netops:oxidized",
+     username: svc-config-backup, enable: token, token_ttl: 900s}
+
+grants:
+  - {subject: netops_admins, scope: all_devices,   roles: [network_admin], max_privilege: admin}
+  - {subject: noc_tier1,     scope: all_devices,   roles: [read_only, no_disruptive]}
+  - {subject: noc_tier1,     scope: dc_fabric,     roles: [interface_tech], expires: 2026-12-01}
+  - {subject: svc_oxidized,  scope: all_devices,   roles: [read_only, elevated_session]}
+  - {subject: security_ir,   scope: srx_unpatched, roles: [cve_2026_xxxx_assess]}
+
+tests:
+  - {subject: noc_tier1,    device: leaf-01, command: "show version",   expect: permit}
+  - {subject: noc_tier1,    device: leaf-01, command: "reload",         expect: deny}
+  - {subject: noc_tier1,    device: leaf-01, command: "show run | redirect ftp://x",
+     expect: deny}
+  - {subject: svc_oxidized, device: leaf-01, command: "show running-config",
+     expect: permit}
+  - {subject: svc_oxidized, device: srx-fw-04, command: "show chassis hardware",
+     expect: permit}      # the CVE deny is scoped to `cluster`, so no conflict arises
+  - {subject: noc_tier1,    device: srx-fw-04, command: "show chassis cluster status",
+     expect: deny}        # only the CVE deny matches
+  - {subject: security_ir,  device: srx-fw-04, command: "show chassis cluster status",
+     expect: permit}      # the assess permit dominates the CVE deny at every position
