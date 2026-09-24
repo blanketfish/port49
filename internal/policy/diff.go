@@ -875,7 +875,7 @@ func replyRose(old, new, oldRendered, newRendered []string, before, after platfo
 // attribute that bears privilege under either adapter or any shipped set
 // (bearsPrivilege), by the one judgment the ceiling check shares (rose).
 func attributeRose(name string, from, to, fromRendered, toRendered []string, before, after platform.Dialect) bool {
-	return name != "priv-lvl" && bearsPrivilege(name, before, after) &&
+	return !strings.EqualFold(name, "priv-lvl") && bearsPrivilege(name, before, after) &&
 		rose(from, to, fromRendered, toRendered, before, after)
 }
 
@@ -1096,7 +1096,7 @@ func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]
 // M8, 2026-09-24).
 func bearsPrivilege(name string, before, after platform.Dialect) bool {
 	return before.BearsPrivilege(name) || after.BearsPrivilege(name) ||
-		slices.Contains(platform.PrivilegeAttributeNames(), name)
+		platform.ContainsName(platform.PrivilegeAttributeNames(), name)
 }
 
 // adapters compares each platform's adapter, key by key, for every platform

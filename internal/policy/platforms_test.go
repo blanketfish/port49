@@ -159,6 +159,11 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 		{"a key with no value", "  arista_eos:\n    inert_attributes:\n",
 			"platforms.arista_eos.inert_attributes is null"},
 		{"a key set to null", "  cisco_iosxe: {accepted_attributes: ~}\n", "platforms.cisco_iosxe.accepted_attributes is null"},
+		// One name in two cases reads as two to a comparison (RR2-M1).
+		{"a privilege name in a rendered name's other case", "  arista_eos: {privilege_attributes: [priv-lvl, roles, Roles]}\n",
+			"platforms.arista_eos.privilege_attributes: Roles and roles"},
+		{"an inert name in a rendered name's other case", "  x: {inert_attributes: [home-directory, PRIV-LVL]}\n",
+			"platforms.x.inert_attributes: PRIV-LVL and priv-lvl"},
 		{"replace and based_on", "  x: {replace: true, based_on: arista_eos}\n", "platforms.x: replace starts from nothing"},
 		{"based_on a shipped name", "  cisco_nxos: {based_on: arista_eos}\n", "platforms.cisco_nxos: based_on declares a variant"},
 		{"based_on nothing shipped", "  x: {based_on: arista}\n", `platforms.x: based_on "arista" is not a platform in set 1.0.0`},

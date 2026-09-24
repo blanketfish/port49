@@ -276,6 +276,14 @@ func (d Dialect) clone() Dialect {
 // this platform: every name but one measured inert (InertAttributes).
 func (d Dialect) BearsPrivilege(name string) bool { return !slices.Contains(d.InertAttributes, name) }
 
+// ContainsName reports whether list holds name in any case: a comparison
+// that makes more of an attribute bear privilege reads it this way, since
+// what a device makes of a name's case is unmeasured (re-review 2, RR2-M1).
+// A comparison that exempts one, inert or accepted, stays exact.
+func ContainsName(list []string, name string) bool {
+	return slices.ContainsFunc(list, func(n string) bool { return strings.EqualFold(n, name) })
+}
+
 // PrivilegeAttributeNames is the PrivilegeAttributes of every platform in
 // every built-in set, sorted: the names no attribute value may put a
 // placeholder in, whatever platform key it is written under (spec §6).

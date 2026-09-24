@@ -929,3 +929,34 @@ grants: [{subject: s, scope: all_devices, roles: [r]GRANT}]`
 		t.Errorf("exposure: %q", got)
 	}
 }
+
+// An attribute name is compared with a rendered or privilege-bearing name
+// without regard to case, the way that bounds more: a role sending
+// `f5-ltm-user-role*0` where a level renders `F5-LTM-User-Role` is the level,
+// whatever case accepted_attributes spells it in (re-review 2, RR2-M1).
+func TestARenderedNameIsMatchedInAnyCase(t *testing.T) {
+	d := platform.Dialect{Levels: map[string][]string{"admin": {"F5-LTM-User-Role*0"}},
+		AcceptedAttributes: []string{"F5-LTM-User-Role", "f5-ltm-user-role"}, InertAttributes: []string{"x-label"}}
+	for _, name := range []string{"f5-ltm-user-role", "F5-LTM-USER-ROLE", "PRIV-LVL", "Shell:Roles"} {
+		if !raisesCeiling(name, d) {
+			t.Errorf("%s does not raise the ceiling", name)
+		}
+	}
+	// The block the probe needs is refused at load: two spellings of one name.
+	_, err := Parse([]byte(`
+platforms:
+  f5_bigip:
+    supports: [session]
+    accepted_attributes: [F5-LTM-User-Role, f5-ltm-user-role, priv-lvl]
+    role_order: {F5-LTM-User-Role: ["700", "0"]}
+    privilege: {readonly: ["F5-LTM-User-Role*700"], operator: ["F5-LTM-User-Role*700"], admin: ["F5-LTM-User-Role*0"]}
+    ceiling_levels: {readonly: 1, operator: 7, admin: 15}
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {f5_bigip: ["f5-ltm-user-role*0"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r], max_privilege: readonly}]`), withDevice("bigip-01", "f5_bigip"))
+	if err == nil || !strings.Contains(err.Error(), "platforms.f5_bigip.accepted_attributes") ||
+		!strings.Contains(err.Error(), "F5-LTM-User-Role") || !strings.Contains(err.Error(), "f5-ltm-user-role") {
+		t.Errorf("%v", err)
+	}
+}

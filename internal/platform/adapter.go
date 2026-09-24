@@ -337,6 +337,9 @@ func Validate(name string, d Dialect) error {
 			}
 		}
 	}
+	if err := oneSpelling(field, d); err != nil {
+		return err
+	}
 	for _, n := range d.InertAttributes {
 		if slices.Contains(d.PrivilegeAttributes, n) {
 			return fmt.Errorf("%s: %s is also in privilege_attributes; an attribute carries privilege or it does not",
@@ -344,10 +347,10 @@ func Validate(name string, d Dialect) error {
 		}
 		// What a level renders is the level (spec §6): listed inert, every
 		// later change to it would pass the diff ungated.
-		rendered := n == "priv-lvl"
+		rendered := strings.EqualFold(n, "priv-lvl")
 		for _, level := range sortedKeys(d.Levels) {
 			rendered = rendered || slices.ContainsFunc(d.Levels[level], func(a string) bool {
-				return engine.AttributeName(a) == n
+				return strings.EqualFold(engine.AttributeName(a), n)
 			})
 		}
 		if rendered {
@@ -475,6 +478,40 @@ func Validate(name string, d Dialect) error {
 		}
 		if strings.TrimSpace(line) == "" || strings.ContainsFunc(line, func(r rune) bool { return r < 0x20 || r > 0x7e }) {
 			return fmt.Errorf("%s[%d]: one printable ASCII configuration line", field("device_config"), i)
+		}
+	}
+	return nil
+}
+
+// oneSpelling refuses an adapter that spells one attribute name in two
+// cases across its privilege_attributes, inert_attributes,
+// accepted_attributes, its renderings and priv-lvl: an exact comparison reads
+// the two as two names, and one of them can then escape a list the other is
+// in (re-review 2, RR2-M1). It names both spellings; a name is the file's
+// identifier, never a secret.
+func oneSpelling(field func(string) string, d Dialect) error {
+	seen := map[string]string{"priv-lvl": "priv-lvl"}
+	for _, level := range sortedKeys(d.Levels) {
+		for _, a := range d.Levels[level] {
+			n := engine.AttributeName(a)
+			if first, ok := seen[strings.ToLower(n)]; ok && first != n {
+				return fmt.Errorf("%s: %s and %s are one attribute name in two cases; spell it one way",
+					field("privilege."+level), n, first)
+			}
+			seen[strings.ToLower(n)] = n
+		}
+	}
+	for _, list := range []struct {
+		key   string
+		names []string
+	}{{"privilege_attributes", d.PrivilegeAttributes}, {"inert_attributes", d.InertAttributes},
+		{"accepted_attributes", d.AcceptedAttributes}} {
+		for _, n := range list.names {
+			if first, ok := seen[strings.ToLower(n)]; ok && first != n {
+				return fmt.Errorf("%s: %s and %s are one attribute name in two cases; spell it one way",
+					field(list.key), n, first)
+			}
+			seen[strings.ToLower(n)] = n
 		}
 	}
 	return nil

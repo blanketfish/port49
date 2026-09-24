@@ -137,7 +137,9 @@ func GrantedPrivLvl(attrs []string) (level uint8, at int, ok bool) {
 	at = -1
 	for i, a := range attrs {
 		j := strings.IndexAny(a, "=*")
-		if j < 0 || a[:j] != "priv-lvl" {
+		// Any case: what a device makes of the name's case is unmeasured,
+		// and read as priv-lvl it is held to more (re-review 2, RR2-M1).
+		if j < 0 || !strings.EqualFold(a[:j], "priv-lvl") {
 			continue
 		}
 		n, valid := PrivLvlValue(a[j+1:])
@@ -174,7 +176,7 @@ var NumericAttributes = []string{"idletime", "timeout"}
 // leading zero.
 func NotANumber(a string) bool {
 	i := strings.IndexAny(a, "=*")
-	if i < 0 || !slices.Contains(NumericAttributes, a[:i]) {
+	if i < 0 || !slices.ContainsFunc(NumericAttributes, func(n string) bool { return strings.EqualFold(n, a[:i]) }) {
 		return false
 	}
 	n, err := strconv.ParseUint(a[i+1:], 10, 16)
@@ -185,7 +187,7 @@ func NotANumber(a string) bool {
 // value PrivLvlValue refuses.
 func NotALevel(a string) bool {
 	i := strings.IndexAny(a, "=*")
-	if i < 0 || a[:i] != "priv-lvl" {
+	if i < 0 || !strings.EqualFold(a[:i], "priv-lvl") {
 		return false
 	}
 	_, ok := PrivLvlValue(a[i+1:])

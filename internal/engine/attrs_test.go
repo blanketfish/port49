@@ -61,3 +61,15 @@ func TestSplitName(t *testing.T) {
 		}
 	}
 }
+
+// A priv-lvl, idletime or timeout spelled in another case is read as the
+// attribute: what a device makes of the name's case is unmeasured, so the
+// checks read it the way that holds it to more (re-review 2, RR2-M1).
+func TestPrivLvlIsReadInAnyCase(t *testing.T) {
+	if n, _, ok := GrantedPrivLvl([]string{"PRIV-LVL=15"}); !ok || n != 15 {
+		t.Errorf("GrantedPrivLvl: %d %v", n, ok)
+	}
+	if !NotALevel("Priv-Lvl*99") || !NotANumber("IDLETIME*abc") {
+		t.Error("a bad value in another case passes")
+	}
+}

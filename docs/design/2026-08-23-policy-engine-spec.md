@@ -2578,6 +2578,13 @@ port49 cannot check what an attribute means. It MUST check everything else:
   variant 7). An adapter whose rendering sends another value is refused at load, and a
   composition whose reply carries one fails the joint check and quarantines the device (§10).
   The daemon refuses such a reply too (`blob_unavailable`, nothing sent).
+- **An attribute name's case never loosens a check** (re-review 2, RR2-M1). What a device makes
+  of a name's case is unmeasured, so a comparison that makes an attribute bear privilege, count
+  toward the ceiling or read as `priv-lvl`, `idletime` or `timeout` ignores case, and one that
+  exempts it — inert, or accepted — is exact: `PRIV-LVL=15` is judged as `priv-lvl=15`, and
+  `f5-ltm-user-role*0` as the `F5-LTM-User-Role` a level renders. An adapter that spells one name
+  in two cases across `privilege_attributes`, `inert_attributes`, `accepted_attributes`, its
+  renderings and `priv-lvl` is refused at load, naming the platform, the key and both spellings.
 - **No `priv-lvl` where the levels render a role and no `priv-lvl`** (task 4 review M4). On
   `cisco_nxos` a `priv-lvl` beside `shell:roles` is ignored, and alone it picks a role nobody
   named out of a per-release table, 15 to `network-admin` and 6 to `vdc-operator`

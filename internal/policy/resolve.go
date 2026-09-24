@@ -461,7 +461,7 @@ func (p *Policy) exceeds(dialect platform.Dialect, bound, level string, reply []
 	held, sent := attributesByName(ceiling), attributesByName(reply)
 	for i, a := range reply {
 		name := engine.AttributeName(a)
-		if name != "priv-lvl" && raisesCeiling(name, dialect) &&
+		if !strings.EqualFold(name, "priv-lvl") && raisesCeiling(name, dialect) &&
 			rose(held[name], sent[name], ceiling, rendered, dialect, dialect) {
 			return i, true
 		}
@@ -480,14 +480,14 @@ func (p *Policy) exceeds(dialect platform.Dialect, bound, level string, reply []
 // (bearsPrivilege): "gated in the diff" and "raises the ceiling" are separate
 // properties (owner's ruling on the fix wave).
 func raisesCeiling(name string, d platform.Dialect) bool {
-	if slices.Contains(d.PrivilegeAttributes, name) || slices.Contains(platform.PrivilegeAttributeNames(), name) {
+	if platform.ContainsName(d.PrivilegeAttributes, name) || platform.ContainsName(platform.PrivilegeAttributeNames(), name) {
 		return true
 	}
 	// What a level renders is the level (spec §6, as Validate reads it),
 	// whatever accepted_attributes lists: checked before either exemption
 	// (re-review RR-I1).
 	for _, attrs := range d.Levels {
-		if slices.ContainsFunc(attrs, func(a string) bool { return engine.AttributeName(a) == name }) {
+		if slices.ContainsFunc(attrs, func(a string) bool { return strings.EqualFold(engine.AttributeName(a), name) }) {
 			return true
 		}
 	}
@@ -601,7 +601,7 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 	// M4).
 	if dialect := p.dialect(d.Platform); rendersRoleOnly(dialect) {
 		for _, a := range res.Attributes {
-			if engine.AttributeName(a.Attribute) == "priv-lvl" {
+			if strings.EqualFold(engine.AttributeName(a.Attribute), "priv-lvl") {
 				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s's levels render a role and no "+
 					"priv-lvl: the device ignores a priv-lvl beside a role, and alone it picks a role nobody named by a "+
 					"per-release table (tests/lab/results/L16-cisco_nxos.md); key the attribute to the platforms "+
@@ -645,13 +645,13 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 			}
 			// A closed platform took these optional, `*`; the mandatory `=` is
 			// unmeasured there (L22-cisco_iosxe.md).
-			if slices.Contains(engine.NumericAttributes, name) && engine.Mandatory(a.Attribute) {
+			if platform.ContainsName(engine.NumericAttributes, name) && engine.Mandatory(a.Attribute) {
 				return fmt.Sprintf("on %s its session reply sends %s (%s), and %s was measured taking %s only as "+
 					"%s*<number>: the mandatory form is unmeasured, and the device refuses the whole session for "+
 					"what it does not take%s; send it optional", d.Platform, a.Attribute, a.Source, d.Platform,
 					name, name, lockout)
 			}
-			if name != "priv-lvl" {
+			if !strings.EqualFold(name, "priv-lvl") {
 				continue
 			}
 			// Not a level was refused above, so the value parses.

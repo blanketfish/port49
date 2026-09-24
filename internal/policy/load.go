@@ -449,7 +449,7 @@ func (p *Policy) buildPlatforms(f file) error {
 // acknowledged edit would blind the gate to it for good.
 func inertBearsNoPrivilege(at string, d platform.Dialect) error {
 	for _, n := range d.InertAttributes {
-		if slices.Contains(platform.PrivilegeAttributeNames(), n) {
+		if platform.ContainsName(platform.PrivilegeAttributeNames(), n) {
 			return fmt.Errorf("%s.inert_attributes: %s bears privilege in a platform set port49 ships, so no block "+
 				"may list it inert (spec §8)", at, n)
 		}
@@ -863,12 +863,12 @@ func (p *Policy) checkPlaceholder(at, key, a string) error {
 		return nil
 	}
 	name := a[:strings.IndexAny(a, "=*")]
-	if slices.Contains(engine.NumericAttributes, name) {
+	if platform.ContainsName(engine.NumericAttributes, name) {
 		return fmt.Errorf("%s: %s is a number and takes no placeholder: a mint fills in an identity, which is "+
 			"never a value the device takes, and on IOS-XE a refused session locks out SSH (spec §6)", at, name)
 	}
-	if slices.Contains(platform.PrivilegeAttributeNames(), name) || slices.ContainsFunc(sortedKeys(p.adapters),
-		func(n string) bool { return slices.Contains(p.adapters[n].PrivilegeAttributes, name) }) {
+	if platform.ContainsName(platform.PrivilegeAttributeNames(), name) || slices.ContainsFunc(sortedKeys(p.adapters),
+		func(n string) bool { return platform.ContainsName(p.adapters[n].PrivilegeAttributes, name) }) {
 		return fmt.Errorf("%s: %s carries privilege and takes no placeholder: the device would get "+
 			"whatever the mint fills in, which no review tool can see (spec §6)", at, name)
 	}
