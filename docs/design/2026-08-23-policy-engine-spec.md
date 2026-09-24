@@ -265,7 +265,9 @@ entire class.
    declares only `session` and is widened on purpose) the term matches **any argument** in
    its position: an over-denial of the commands the deny's other terms reach, and no device
    is quarantined or login refused for it. `port49 policy test` reports each such term and
-   platform as `deny_widened`, and `port49d` says it at start. A platform measured sending no
+   platform as `deny_widened`, naming the term by its position (`term 3 (a regex)`, `term 3
+   (@bad pattern #1)`), never its text, which may spell a secret out (§5.8), and `port49d` says
+   it at start. A platform measured sending no
    per-command authorization (Junos, decision 21) widens nothing. The cost is an over-denial
    of a full word that is a prefix of a deny's word — `show ip` against `deny: show ipv6 **`
    — reported by name in the `server_msg`. `arista_eos`, `cisco_nxos` and `cisco_iosxe` are
@@ -2032,7 +2034,9 @@ by its role, list and position and a term by its position, e.g. `role "admin": d
 is a regex that is one word; write the word instead`; a test row as `tests[N]` with its subject
 and device, never its command; an adapter or redaction-pattern value, an attribute or an entity
 class pattern by its key and index (`platforms.arista_eos.entity_classes.bad_comm[0] does not
-compile: missing closing )`); a YAML type error, unknown field or repeated key by its line. Names
+compile: missing closing )`); a YAML type error, unknown field or repeated key by its line, and
+an explicitly tagged scalar that does not decode (`!!int "…"`) or an alias to no anchor
+(`deny: [*secret]`) by what it is, never the value. Names
 the file declares or refers to — a role, a subject, a scope, a level, a device, a class, an
 attribute name — are named. The operator finds the rest in the file. The `blob` event
 (§5.7, "Replay") is logged with such rules and pipe permits redacted, and with the patterns of
