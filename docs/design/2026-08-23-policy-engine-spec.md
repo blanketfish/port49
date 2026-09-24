@@ -365,6 +365,10 @@ principal
   → av_pairs            rendered for this device's platform
 ```
 
+When some matching grants set `max_privilege` and others leave it unset, the ceiling is the
+max of the ones that set it: a grant that states no ceiling does not lift the ceiling another
+grant states. The result has no ceiling only when no matching grant sets one.
+
 Failure to match any grant means the device is unreachable for that principal, and the mint
 fails **before an SSH connection is opened**.
 
