@@ -4956,8 +4956,10 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - **Breaking: a policy file someone else could have written is refused.** The file and the
   directory holding it must be writable by `port49d`'s user or root alone and owned by one of
   them; otherwise `port49d` does not start, and a reload keeps the policy in force serving. A
-  symlink is followed and the file it reaches is judged, so a Kubernetes ConfigMap mount (root's,
-  not group- or world-writable) passes. Fix with `chmod go-w` (file and directory) or `chown`.
+  symlink is followed, and the directory holding every link on the way is held to the same
+  rule. **A Kubernetes ConfigMap or Secret mount is refused today**: its mount root is mode
+  0777 or 01777, though the mount itself is read-only (`tests/lab/results/configmap-mounts.md`).
+  Files over 1 MiB are refused. Fix with `chmod go-w` (file and directory) or `chown`.
   With a live reload, whoever can write the policy decides every operator's access within
   seconds.
 - **A reload that has not yet reached every live session** holds

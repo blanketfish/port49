@@ -623,9 +623,16 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    neither the user `port49d` runs as nor root. A directory another user owns is refused even
    at mode 0755, because its owner can rename any file over the policy or change the mode. At
    start `port49d` does not start; at a reload the policy in force keeps serving. The check
-   follows symlinks — it is the file actually read, and the directory holding it, that must be
-   safe — so a Kubernetes ConfigMap mount, whose files and the directory holding them are
-   root's and not group- or world-writable, passes. The file's owner and mode are taken from
+   follows symlinks, at most 40. The file actually read and the directory holding it must be
+   safe, and so must the directory holding every link the path passes through: the
+   configured name's own, one half-way along the chain, and one standing for a directory.
+   Whoever can write a link's directory can re-point it at any file that passes, such as a
+   root-owned `policy.yaml.bak` from before a grant was withdrawn. The read is capped at
+   1 MiB, and a refusal quotes at most 64 characters of any value it found. **A Kubernetes
+   ConfigMap or Secret mount is refused by this check today.** Its mount root holds both links
+   and is mode 0777 (01777 for a Secret, 02777 with `fsGroup`), though the mount is read-only
+   (`tests/lab/results/configmap-mounts.md`). Whether a read-only mount counts as safe is an
+   open ruling. The file's owner and mode are taken from
    the descriptor the policy is read through (`fstat`), not from a path checked beforehand, so
    a rename between the check and the read cannot put another file in its place. The check
    reads owners and mode bits alone: a POSIX ACL granting someone else write, or a writable
@@ -4519,7 +4526,10 @@ Beyond those already listed in the design document's §14:
   file or directory, or a file or directory owned by someone other than `port49d`'s user or
   root, refuses the start, and at a reload keeps the policy in force serving, logged once and
   counted in `port49_policy_reloads_total{outcome="refused"}`; the check follows a symlink to
-  the file it reads, and is made on the descriptor the policy is read through.
+  the file it reads, and is made on the descriptor the policy is read through. A link in a
+  directory others can write is refused too, whether it is the configured name, one half-way
+  along the chain, or one standing for a directory. So is a chain of more than 40 links, and a
+  file over 1 MiB.
 - **A superseded token is judged at every instant it could have been minted**: a token minted
   after a grant's expiry under the policy since replaced is deleted when its answer differs,
   though the answer before the expiry did not.
