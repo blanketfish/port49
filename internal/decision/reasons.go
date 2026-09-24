@@ -49,7 +49,12 @@ const (
 	DeviceUnknown         Reason = "device_unknown"
 	PlatformUnknown       Reason = "platform_unknown"
 	BlobUnavailable       Reason = "blob_unavailable"
-	DeviceQuarantined     Reason = "device_quarantined"
+	// BlobPlatformMismatch: the context's blob was compiled for a platform
+	// other than the one the daemon's inventory gives this device. Its
+	// attributes and dialect are another platform's, so it is never answered
+	// from; operational, like blob_unavailable (spec §5.7).
+	BlobPlatformMismatch Reason = "blob_platform_mismatch"
+	DeviceQuarantined    Reason = "device_quarantined"
 )
 
 // Events.

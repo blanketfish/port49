@@ -22,6 +22,7 @@ type Record struct {
 	Device      *Device      `json:"device,omitempty"`
 	Session     *Session     `json:"session,omitempty"`
 	Request     *Request     `json:"request,omitempty"`
+	Reply       *Reply       `json:"reply,omitempty"`
 	Flags       string       `json:"flags,omitempty"`
 	Attribution string       `json:"attribution,omitempty"`
 	TaskID      string       `json:"task_id,omitempty"`
@@ -116,6 +117,13 @@ type Request struct {
 	Vector  []string `json:"vector"`
 }
 
+// Reply is what a permitted authorization returned to the device, as sent: a
+// session's attributes with every placeholder filled. Replay re-derives them
+// from the blob and compares (spec §5.7).
+type Reply struct {
+	Attributes []string `json:"attributes"`
+}
+
 type AcctRecord struct {
 	Raw         []string `json:"raw"`
 	Vector      []string `json:"vector"`
@@ -133,17 +141,47 @@ type Mint struct {
 	BlobHash    string   `json:"blob,omitempty"`
 }
 
-// Policy is what a mint record says about why it was allowed (spec §5.7): the
-// subject the principal matched and the grants that selected the device.
+// Policy is the record's policy identity and what it matched (spec §5.7).
+// Bundle and Blob are mandatory on every record that consulted policy: they
+// are what makes the record replayable, and a replay that disagrees with the
+// logged verdict is itself a finding. A mint record adds the subject and the
+// grants that selected the device; an authorization record adds the rules
+// that matched.
 type Policy struct {
+	// Bundle names the policy the blob was compiled from. Until plan 6
+	// publishes versioned bundles it is the sha256 of the policy file.
+	Bundle string `json:"bundle,omitempty"`
+	// Blob is the hash of the compiled blob the decision was made against.
+	Blob    string        `json:"blob,omitempty"`
 	Subject string        `json:"subject,omitempty"`
 	Grants  []PolicyGrant `json:"grants,omitempty"`
+	// MatchedDeny is the deny that decided a no_permit_dominates_deny, or the
+	// most specific deny a permit overrode.
+	MatchedDeny *PolicyRule `json:"matched_deny,omitempty"`
+	// MatchedPermits is every permit that matched the command, most specific
+	// first; the first is the one that decided a permit.
+	MatchedPermits []PolicyRule `json:"matched_permits,omitempty"`
+	// Stage is the 1-based pipeline stage a pipe_stage_denied refused. The
+	// stage's words are on the record already, in request.raw.
+	Stage int `json:"stage,omitempty"`
 }
 
 // PolicyGrant is one grant that selected the device.
 type PolicyGrant struct {
 	Scope string   `json:"scope"`
 	Roles []string `json:"roles,omitempty"`
+	// Expires is when the grant stops matching, rendered as ts is; empty is
+	// never.
+	Expires string `json:"expires,omitempty"`
+}
+
+// PolicyRule is one rule that matched a command: its terms as written, the
+// specificity tuple it scored against this command (spec §5.4), and the role
+// that carries it.
+type PolicyRule struct {
+	Rule        []string `json:"rule"`
+	Specificity []int    `json:"specificity"`
+	Role        string   `json:"role"`
 }
 
 // Blob is the `blob` event's body: the compiled blob whole, emitted once per
@@ -173,13 +211,24 @@ type Emitter interface {
 	Emit(Record)
 }
 
+// Sink is an Emitter that says whether the record reached its destination.
+// Emit is for the decision paths, which answer the device either way and
+// count a refusal; Write is for a caller that must not forget a record the
+// sink refused — the accounting spool, whose at-least-once contract ends
+// here, and the broker's blob emission, which has to emit a refused blob
+// again (roadmap, plan 4).
+type Sink interface {
+	Emitter
+	Write(Record) error
+}
+
 type jsonLines struct {
 	mu        sync.Mutex
 	w         io.Writer
 	onFailure func()
 }
 
-func NewJSONLines(w io.Writer) Emitter { return &jsonLines{w: w} }
+func NewJSONLines(w io.Writer) Sink { return &jsonLines{w: w} }
 
 // NewJSONLinesWithFailureHook is NewJSONLines plus a callback run once for
 // every record the sink refuses. A refused record is a record that does not
@@ -187,7 +236,7 @@ func NewJSONLines(w io.Writer) Emitter { return &jsonLines{w: w} }
 // the callback rather than a metric keeps this package's dependencies to the
 // standard library, so the record shape and the metric registry stay
 // independent of each other.
-func NewJSONLinesWithFailureHook(w io.Writer, onFailure func()) Emitter {
+func NewJSONLinesWithFailureHook(w io.Writer, onFailure func()) Sink {
 	return &jsonLines{w: w, onFailure: onFailure}
 }
 
@@ -198,13 +247,17 @@ func (j *jsonLines) failed() {
 	}
 }
 
-func (j *jsonLines) Emit(r Record) {
+func (j *jsonLines) Emit(r Record) { _ = j.Write(r) }
+
+// Write is Emit that returns the refusal. Either way a refused record is
+// logged and counted once, here, so a caller that retries does not have to.
+func (j *jsonLines) Write(r Record) error {
 	r.TS = r.TS.UTC()
 	b, err := json.Marshal(r)
 	if err != nil {
 		log.Printf("decision: dropping record that failed to marshal: %v", err)
 		j.failed()
-		return
+		return err
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -213,6 +266,7 @@ func (j *jsonLines) Emit(r Record) {
 		log.Printf("decision: write failed: %v", err)
 		j.failed()
 	}
+	return err
 }
 
 // CredentialHash identifies a presented credential in the log without revealing it.
