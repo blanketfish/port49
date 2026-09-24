@@ -4179,10 +4179,16 @@ Beyond those already listed in the design document's §14:
   acknowledges no expansion or raise reported before it.
 - **The gate sees the whole reply**: a grant attribute `local-user-name=super-user` on Junos,
   `shell:roles=network-admin` on NX-OS or `roles=network-admin` on EOS fails `port49 policy
-  diff` on that platform's group until a `reply:` session test asserts the new reply; removing
-  it passes.
-- **No placeholder in a privilege attribute**: `priv-lvl={username}`, and a placeholder in any
-  attribute an adapter lists as privilege-bearing, fails at load.
+  diff` on that platform's group until a `reply:` session test asserts the new reply, and so
+  does removing one, `deny-commands` or `local-user-name` on Junos included.
+- **Placeholders only in inert attributes**: `priv-lvl={username}`,
+  `allow-commands={principal}`, `allow-configuration={username}` and a placeholder in an
+  attribute no adapter lists (`note*{device}`) each fail at load; `home-directory*/home/{username}`
+  loads under `all` and under each platform.
+- **The gate sees broker rights**: `api: [explain_others, revoke_others, replay]` added to a
+  subject fails `port49 policy diff` until a test asserts the whole list with `api:`; a
+  principal moved to a subject with more rights needs that assertion in its own test; a right
+  lost passes.
 - **The gate sees principals**: an identity moved to another person, identities swapped between
   subjects, and a `username:` change each fail `port49 policy diff` until a session test naming
   the principal passes; a subject test does not acknowledge them, and a principal removed passes.
