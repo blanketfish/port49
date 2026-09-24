@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,5 +96,31 @@ func TestHandlersSeeTheStoreItselfWithoutAFaultFile(t *testing.T) {
 	got := labHandlerStore(st, author.LabFault{Path: filepath.Join(t.TempDir(), "fault")})
 	if fs, ok := got.(*author.FaultStore); !ok || fs.Store != store.Store(st) {
 		t.Fatalf("with a fault_file the handlers got %T, want *author.FaultStore over the store", got)
+	}
+}
+
+// A lab: block makes the start say, on stderr, what it enables and that it
+// must never be in production; no block says nothing (owner's ruling
+// 2026-09-24; design §13).
+func TestALabBlockIsAnnouncedAtStart(t *testing.T) {
+	if got := labWarning(nil); got != "" {
+		t.Fatalf("no lab block: %q", got)
+	}
+	got := labWarning(&config.LabConfig{SeedTokenFile: "/tmp/seeds.jsonl",
+		SeedTokens: []config.SeedToken{{NAS: "leaf-01", Username: "alice"}, {NAS: "nx1", Username: "bob"}},
+		FaultFile:  "/tmp/fault"})
+	for _, want := range []string{"LAB MODE", "2 seed token(s) minted to /tmp/seeds.jsonl", "fault file /tmp/fault",
+		"lab fallback authorizer", "must never be in production"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
+	}
+	if strings.Count(got, "\n") != 1 || !strings.HasSuffix(got, "\n") {
+		t.Errorf("one line: %q", got)
+	}
+	bare := labWarning(&config.LabConfig{})
+	if strings.Contains(bare, "seed token") || strings.Contains(bare, "fault file") ||
+		!strings.Contains(bare, "lab fallback authorizer") {
+		t.Errorf("a bare lab block enables the fallback authorizer alone: %q", bare)
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -142,6 +143,28 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (lo
 		}
 	}
 	return logins, enables, nil
+}
+
+// labWarning is the line port49d prints at start when its config has a
+// `lab:` block (owner's ruling 2026-09-24; design §13): what the block
+// enables, and that it must never be in production. The block is the lab's
+// instrument, and nothing refuses it, so the start says so where an operator
+// reading the journal will see it. Empty without a block.
+func labWarning(lab *config.LabConfig) string {
+	if lab == nil {
+		return ""
+	}
+	var enables []string
+	if len(lab.SeedTokens) > 0 {
+		enables = append(enables, fmt.Sprintf("%d seed token(s) minted to %s", len(lab.SeedTokens), lab.SeedTokenFile))
+	}
+	if lab.FaultFile != "" {
+		enables = append(enables, "the fault file "+lab.FaultFile+", which fails the store on demand")
+	}
+	enables = append(enables, "the lab fallback authorizer, which answers a context with no blob from the "+
+		"lab's fixed attributes and deny prefixes instead of denying it")
+	return fmt.Sprintf("port49d: LAB MODE: port49d.yaml has a lab: block, which enables %s; a lab: block must "+
+		"never be in production\n", strings.Join(enables, "; "))
 }
 
 // stderr is where port49d's operational lines go — not the decision log,
@@ -269,6 +292,7 @@ func run(cfgPath string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Fprint(stderr, labWarning(cfg.Lab))
 
 	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
