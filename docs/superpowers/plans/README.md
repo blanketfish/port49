@@ -22,7 +22,9 @@ start; PR #11); **4b merged 2026-09-24** (PR #12;
 and whole-branch;
 its three "Questions for Ryan" were decided security-first: delete unspent tokens whose answer
 changed, rewrite every live context on every reload, leave a quarantined device's contexts);
-5–13 not yet. **Plan 5 (platform adapters) is the next plan to write.**
+**5a written 2026-09-24** (`2026-09-24-05a-platform-adapters.md`, eighteen tasks: one docs,
+fifteen code, one lab, one lab-and-docs; not yet executed); plan 5 is split at the seam below, and
+5b is written after 5a merges. 6–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -471,6 +473,31 @@ and a settle pass or retry no longer compares the policy in force with itself. M
 rest at fleet size here.
 
 ## Plan 5 — Platform adapters (§19 step 5)
+
+**Split into 5a and 5b (2026-09-24),** because the brief below and every plan-4 hand-off is more
+than 25 tasks. The seam is the kind of platform:
+
+- **Plan 5a — `2026-09-24-05a-platform-adapters.md`. Written 2026-09-24; not yet executed.** The
+  adapters as data and every platform that authorizes per command: the built-in adapters as files
+  in a pinned set (`platforms/1.0.0/`; a policy that pins none renders with 1.0.0 forever),
+  operator overrides in the policy file's `platforms:` block (merge per key, `replace`,
+  `based_on`), EOS, NX-OS and IOS-XE rendering under a new decision 25 (a level is a device level
+  and a device role; `operator` gets admin's level and readonly's role on EOS and NX-OS, and
+  `priv-lvl=7` on IOS-XE with its reference configuration), IOS-XE's closed attribute list
+  (anything else quarantines), redaction (built in, unpinned, before the spool), N5, the
+  adapter-edit gate and the stricter `BearsPrivilege`, the `(?-i)` check on operator classes,
+  `port49 platform list/show/export/upgrade`, the dead-rule and fallback-exposure reports, `port49
+  devices check-config` (plan 2b's owed check), `grants remove --pr`, and a lab task that
+  measures each adapter's reply level by level (new register row L22) and three candidate inert
+  attributes.
+- **Plan 5b — the session-only half and capability inference; written after 5a merges.** Junos's
+  projection under decision 22 (`bits`, `bit_delivery`, `command_projection`, `local-user-name`
+  templates, the generator constraints and the refused shape), gated on L12 and L9, with its own
+  containerlab differential tests and `platform export` of the reference classes; decision 21's
+  class `idle-timeout` from `max_session_age`; spec §9's capability inference (`port49 devices
+  capabilities`, the supports-versus-observed matrix, accounting reconciliation); and an NX-OS
+  `vsh.bin` system user if a note measures it. 5a leaves Junos rendering nothing, as today, so 5b
+  reworks nothing 5a builds.
 
 Spec §8 in full: built-in adapters, entity classes, user overrides and layering, pinned
 platform set, `redact` patterns (accounting redaction was deferred from plan 1 and MUST land
