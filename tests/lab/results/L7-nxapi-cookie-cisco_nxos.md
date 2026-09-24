@@ -11,7 +11,8 @@
   configuration is `tests/lab/configs/nxos-startup.cfg` as shipped. Every curl request sent the
   credential or cookie on stdin (`curl -K -`), never on a command line. The decision log was read
   for 8s after each request, so accounting that arrives through the spool is counted with it.
-  Cookie values are shown as `<redacted>`; nothing else in the replies is edited. Every "`200`"
+  Cookie values, the `anticsrf` token bound to the cookie and the CSP nonces are shown as
+  `<redacted>`; nothing else in the replies is edited. Every "`200`"
   below was also checked for the `ins_api` result code inside the body, because NX-API answers
   some refusals with HTTP 200 (see "Max sessions").
 
@@ -67,11 +68,11 @@ server: nginx/1.24.0
 date: Thu, 24 Sep 2026 02:52:15 GMT
 content-type: text/json; charset=UTF-8
 set-cookie: nxapi_auth=<redacted>; Secure; HttpOnly;
-anticsrf: u70pI8lRSx6z1e1csURkR6XqyUY=
+anticsrf: <redacted>
 strict-transport-security: max-age=31536000; includeSubDomains
 x-frame-options: SAMEORIGIN
 x-content-type-options: nosniff
-content-security-policy: block-all-mixed-content; base-uri 'self'; default-src 'self'; script-src 'self' 'nonce-WfrhKhNx5dDkktzx33PHT6hxLSr6BfPO'; style-src 'self' 'nonce-WfrhKhNx5dDkktzx33PHT6hxLSr6BfPO'; img-src 'self'; connect-src 'self'; font-src 'self'; object-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'self';
+content-security-policy: block-all-mixed-content; base-uri 'self'; default-src 'self'; script-src 'self' 'nonce-<redacted>'; style-src 'self' 'nonce-<redacted>'; img-src 'self'; connect-src 'self'; font-src 'self'; object-src 'self'; media-src 'self'; form-action 'self'; frame-ancestors 'self';
 cache-control: no-store, no-cache
 ```
 
