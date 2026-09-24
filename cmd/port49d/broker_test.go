@@ -140,7 +140,7 @@ func TestAWidenedDenyIsSaidAtStart(t *testing.T) {
 	if _, ok := b.Policy.Quarantined("ntp1", time.Now()); ok {
 		t.Fatal("a widened deny quarantines nothing")
 	}
-	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "* * /tftp/" on meinberg_lantime: /tftp/:`) ||
+	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "* * /tftp/" on meinberg_lantime: term 3 (a regex):`) ||
 		!strings.Contains(out.String(), "matches any argument") {
 		t.Fatalf("stderr: %s", out.String())
 	}

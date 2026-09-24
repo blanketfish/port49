@@ -542,3 +542,24 @@ func TestWhitespaceNeverWidensAPermit(t *testing.T) {
 		}
 	}
 }
+
+// The widened report names a term by its position, never its text: a
+// regex or a class pattern may spell a secret out, and the report prints
+// it outside the quoted rule the redaction reads (task 11 re-review m7).
+func TestTheWidenedReportQuotesNoTermText(t *testing.T) {
+	n := testBlob(false).Normalize
+	for _, tt := range []struct {
+		rule    string
+		classes map[string][]string
+		want    string
+	}{
+		{"snmp-server community /Hunter2/", nil, "term 3 (a regex): "},
+		{"snmp-server community /^Hunter[a-z]/", nil, "term 3 (a regex): "},
+		{"snmp-server community @bad", map[string][]string{"bad": {"Hunter2"}}, "term 3 (@bad pattern #1): "},
+	} {
+		got := WidenedToAny(tt.rule, tt.classes, n)
+		if len(got) != 1 || strings.Contains(got[0], "Hunter") || !strings.HasPrefix(got[0], tt.want) {
+			t.Errorf("%s: %q", tt.rule, got)
+		}
+	}
+}

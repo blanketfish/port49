@@ -201,6 +201,8 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 		// may be a rule or a secret in it: the line and the types say where
 		// (spec §5.8).
 		msg := yamlValue.ReplaceAllString(err.Error(), "cannot unmarshal a $1 value")
+		msg = yamlTagged.ReplaceAllString(msg, "cannot decode a $1 value")
+		msg = yamlAnchor.ReplaceAllString(msg, "an unknown anchor was referenced; quote a rule that starts with *")
 		msg = yamlField.ReplaceAllString(msg, "an unknown field in type $1")
 		msg = yamlKey.ReplaceAllString(msg, "a mapping key already defined at line $1")
 		if strings.Contains(msg, "time.Duration") {
@@ -231,12 +233,16 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 	return p, nil
 }
 
-// yamlValue is the value a YAML type error quotes; yamlField and yamlKey
-// the key an unknown-field or duplicate-key error does. Each names its line.
+// yamlValue is the value a YAML type error quotes, yamlTagged the one an
+// explicitly tagged scalar's does and yamlAnchor the name an alias does
+// (`deny: [*secret]`); yamlField and yamlKey the key an unknown-field or
+// duplicate-key error does. Each is replaced by what it is.
 var (
-	yamlValue = regexp.MustCompile("cannot unmarshal (!!\\w+) `[^`]*`")
-	yamlField = regexp.MustCompile(`field .* not found in type (\S+)`)
-	yamlKey   = regexp.MustCompile(`mapping key ".*" already defined at line (\d+)`)
+	yamlValue  = regexp.MustCompile("cannot unmarshal (!!\\w+) `[^`]*`")
+	yamlTagged = regexp.MustCompile("cannot decode (!!\\w+) `[^`]*`")
+	yamlAnchor = regexp.MustCompile(`unknown anchor '.*' referenced`)
+	yamlField  = regexp.MustCompile(`field .* not found in type (\S+)`)
+	yamlKey    = regexp.MustCompile(`mapping key ".*" already defined at line (\d+)`)
 )
 
 // refusedKeys names the plan that reads a key this build does not, before the

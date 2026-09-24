@@ -34,6 +34,11 @@ func TestARefusalQuotesNothingFromTheFile(t *testing.T) {
 		{"an unknown field", "roles:\n  - {name: r, \"snmp-server community Hunter2\": x}\n" + subjOK,
 			"line 2: an unknown field"},
 		{"a duplicate key", "roles:\n  - {name: r, Hunter2: x, Hunter2: y}\n" + subjOK, "line 2: a mapping key"},
+		// Task 11 re-review m5, m6: a tagged scalar and an alias quote the
+		// value too.
+		{"a tagged scalar", "roles:\n  - {name: r, deny: [!!int \"snmp-server community Hunter2\"]}\n" + subjOK,
+			"cannot decode a !!str value as a !!int"},
+		{"an unknown anchor", "roles:\n  - {name: r, deny: [*Hunter2]}\n" + subjOK, "an unknown anchor"},
 		// M4: an operator redaction pattern.
 		{"a redaction after of two words", block("redact: [{match: ['**'], after: 'psk Hunter2'}]"),
 			"platforms.arista_eos.redact[0]: after is one word"},

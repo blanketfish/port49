@@ -90,7 +90,11 @@ func stems(pattern string) ([]stemmed, error) {
 		}
 		s.rest = append(s.rest, b[1:]...)
 		if !matchesAnything(s.rest) && mayStartName(s.rest, true) {
-			return nil, fmt.Errorf("the name %q runs on into a part that may be more of it, so %w", string(s.stem), errUnreadable)
+			// The name is not quoted: a pattern may spell a secret out, and
+			// the report prints this outside the rule redaction reads (task 11
+			// re-review m7).
+			return nil, fmt.Errorf("a branch's leading name runs on into a part that may be more of it, so %w",
+				errUnreadable)
 		}
 		out = append(out, s)
 	}
@@ -304,10 +308,10 @@ func WidenedToAny(rule string, classes map[string][]string, n Normalize) []strin
 		return nil
 	}
 	var out []string
-	for _, t := range terms {
-		for _, pat := range termPatterns(t, classes) {
+	for i, t := range terms {
+		for k, pat := range termPatterns(t, classes) {
 			if _, err := denyPatterns(pat, n); err != nil {
-				out = append(out, termName(t, pat)+": "+err.Error())
+				out = append(out, termName(i, t, k)+": "+err.Error())
 			}
 		}
 	}
@@ -326,9 +330,13 @@ func termPatterns(t Term, classes map[string][]string) []string {
 	return nil
 }
 
-func termName(t Term, pattern string) string {
+// termName names term i of a rule by its position, and a class's pattern k
+// by its index: never the pattern, which may spell a secret out where the
+// report prints it outside the quoted rule (task 11 re-review m7). A class's
+// name is the file's own identifier.
+func termName(i int, t Term, k int) string {
 	if t.Kind == Class {
-		return fmt.Sprintf("@%s pattern %q", t.Text, pattern)
+		return fmt.Sprintf("term %d (@%s pattern #%d)", i+1, t.Text, k+1)
 	}
-	return "/" + t.Text + "/"
+	return fmt.Sprintf("term %d (a regex)", i+1)
 }
