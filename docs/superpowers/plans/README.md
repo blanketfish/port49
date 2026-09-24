@@ -289,6 +289,18 @@ not ignored:**
   flag, so nothing port49 sends can end a Junos session by attribute. No variant produced a
   per-command authorization request, on either image, in any of 26 sessions — decision 21's
   shape, confirmed.
+- **From the 2026-09-24 lab (`tests/lab/results/ceiling-*.md`, `L4-error-*.md`, `L21-*.md`):**
+  the device enforces a ceiling only through the privilege level. IOS-XE and vEOS at level 1
+  refuse `clear counters`, `clear ip bgp *` and `configure` in the parser without asking port49;
+  IOS-XE level 7 is level 1 until the reference config assigns it commands (`privilege exec
+  level 7 clear counters` gives exactly the operator rung); vEOS `network-operator` at 15 and
+  every NX-OS role, `network-operator` included, run all three and change configuration while
+  command authorization points at port49 — so the operator rung is port49's per-command policy
+  there, not the role. The reference configs must be written for a store outage, which is not
+  the break-glass case (only an unreachable port49 is), and the N9Kv `deadtime` trades the 5s
+  silent-server penalty for a minute of refused token logins. All three per-command platforms
+  send resolved words (L21, closed): `expands_abbreviations: true` for them over SSH, and
+  interface arguments differ (IOS-XE `GigabitEthernet`, `1`; EOS/NX-OS one word).
 - Device-generated accounting under another user (Junos root RPC in production, NX-OS
   `admin`/`vsh.bin`) is real and must not be treated as a foreign session (plan 2 rule).
 
