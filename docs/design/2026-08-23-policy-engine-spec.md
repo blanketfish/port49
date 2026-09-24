@@ -2731,6 +2731,7 @@ attribute is complete in four lines:
 | `strip_cr` / `shows_server_msg` | whether commands end in `<cr>` (§3 rule 1); whether the device displays a denial's `server_msg` (L2) | defaults from the generic adapter |
 | `privilege_attributes` / `inert_attributes` | the attribute names that carry privilege on the platform, and those held to carry none: the only names a placeholder may go in (§6), and the only ones whose change the diff does not gate (§12) | defaults from the generic adapter |
 | `accepted_attributes` | where set, every attribute name the session reply may carry, and the reply's `priv-lvl` limited to the levels `privilege` renders; any other quarantines the device, and the list rides in the blob for the daemon to enforce (§6, "What the device takes") | optional |
+| `role_order` | per attribute that names a role, its values lowest first, where the lab measured one fencing less than another: `roles` on `arista_eos` and `shell:roles` on `cisco_nxos` rank `network-operator` below `network-admin` (L16, command authorization LOCAL). A value it does not list is unranked and ranks above every value. The reply gate (§12) and the monotone rule (§8) read it | optional |
 | `device_config` | the device configuration the adapter's renderings depend on, one line each, printed by `platform show` | optional |
 | `unreachable` / `fallback` | per level, the commands the device refuses in its own parser, and what it gives a session on its own when port49 cannot answer: the dead-rule and fallback-exposure reports read them (§12) | optional |
 | `local_accounts` / `config_checks` | patterns that find a device-local account in the device's configuration, and lines the configuration must not carry: `port49 devices check-config` reads them (§5.6) | optional |
@@ -3041,7 +3042,20 @@ syntax, the 255-byte limit, entity-class patterns compiling under RE2, a renderi
 accepts (`accepted_attributes`), and `enable_username` (§7). A block may not claim `verified`,
 may not list inert an attribute one of its levels renders — that attribute is the level (§6)
 — and may not be named `all` or `default`, which name every platform in `attributes:` and in
-the redaction table.
+the redaction table. An explicitly empty `accepted_attributes: []` is refused, on any adapter:
+the joint check would read it as "accept nothing" and a blob, which omits an empty list, as
+"accept anything"; list the names, or remove the key.
+
+A block's merged adapter renders **monotone** in the policy's `privilege_levels` order, by value,
+because the reply gate lets a level's rendering go down only where its values did (§12): for
+every two levels it renders or numbers, the lower one's `priv-lvl` (or `ceiling_levels` number)
+is no higher than the higher one's, every attribute the lower one renders the higher one renders
+too, and where their values differ the lower one's ranks below the higher one's in `role_order`
+— an unranked value ranks above every value, so a higher level may render one and a lower level
+may not. A block may add values to a `role_order` the set ships, anywhere in it, and may not
+rank two values the set ranks the other way round — under `replace: true` and `based_on:`
+included, since the device behind the name is the same device and the set's ranking is its lab
+note's.
 A class pattern a deny names may not turn case-insensitivity off (`(?-i)`), on any platform: a
 differently-cased interface name would walk past the deny (§4).
 
@@ -3999,12 +4013,18 @@ each instant. Any of these is a raise:
   ruling 2026-09-24, review C4). The gate cannot read the direction of such a change, so it fails
   closed.
 
-Where the platform's adapter is the same in both versions, the attributes the level itself
-renders move with the level, and `level` and `priv_lvl` judge the direction: a subject moved
-from admin to readonly on EOS is a lowering, although the role its rendering names changed from
-`network-admin` to `network-operator`. Which attributes bear privilege is read from both
-versions' adapters, the stricter winning, so an edit that lists an attribute inert cannot hide a
-change to it in the same diff.
+One change's direction the gate can read: a level's own rendering moving down `role_order`
+(§8). Where an attribute is the old level's rendering in the old reply and the new level's in
+the new reply, one value each, and the new value ranks strictly below the old one in
+`role_order` under both versions' adapters, it is a lowering: a subject moved from admin to
+readonly on EOS is lowered because `network-operator` ranks below `network-admin`
+(L16-arista_eos.md, command authorization LOCAL), not because readonly is below admin. The
+level order proves nothing about what is rendered — a custom level's parent can put a level
+above one whose rendering is stronger — so it is never read here. An unranked value, a changed
+separator, an attribute gained or lost, and any attribute a role or grant layers are judged as
+above: a raise. Which attributes bear privilege is read from both versions' adapters, the
+stricter winning, so an edit that lists an attribute inert cannot hide a change to it in the
+same diff.
 
 Each fails unless a passing session test in the new policy, at that instant, on a device of the
 group reported, asserts the new value of every dimension that rose: `priv_lvl:` for the device
