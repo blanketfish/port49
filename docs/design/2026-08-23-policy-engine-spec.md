@@ -1558,8 +1558,8 @@ username it knows. The detection that exists is accounting: such a session's exe
 discriminator port49 never saw begin and are attributed `foreign` (§5.8), counted in
 `port49_accounting_attributions_total{attribution="foreign"}`. The configuration check is
 `port49 devices check-config` (§12): it reads a device's configuration against its adapter and
-fails on a device-local account named as a username port49 serves there, and on an enable list
-that falls back to a local secret.
+fails on a device-local account named as a username port49 serves there, on an enable list
+that falls back to a local secret, and on a `device_config` line the configuration lacks.
 
 #### Gated on the lab
 
@@ -2017,6 +2017,14 @@ replaced by `«redacted»`; it carries `"redacted": true`. The store keeps the b
 the hash beside it still names which blob it was. A redacted body does not hash to its name, so replay reports every record
 naming it `unverifiable` — never a divergence, and never an agreement — until replay can read
 the verbatim blob from outside the log. A blob with no such rule is logged byte for byte.
+
+**A block's `device_config` line is redacted too.** An operator may hold a device to a line
+that carries a value a pattern hides — `snmp-server community X ro` — and it loads; `port49
+policy test` reports it as `device_config_secret_literal`, naming the line by its platform key
+and index in its redacted form, and `port49 platform show` prints it redacted. A line a
+built-in set ships is lab text and printed as written, though abbreviation matching reads its
+`authentication` as `authentication-key`. `port49 devices check-config` redacts every
+configuration line it prints the same way (§12).
 
 **The built-in patterns are not part of a pinned platform set** (§8). Redaction changes what
 the log keeps and never what anyone may do, so a pattern a release adds applies at upgrade.
@@ -2536,8 +2544,9 @@ command method list, what the device does is unmeasured: the request carries the
 level, and the measured run configured `aaa authorization commands 7`. A device that has the
 `privilege exec` line and no level-7 list may run `clear counters` without asking port49.
 That case is an open question of L22, and until it closes, IOS-XE's `operator` rendering is
-*provisional on L22* (decision 25). `port49 devices check-config` does not catch the missing
-list: a `config_checks` entry reads one line, and this is the absence of a line.
+*provisional on L22* (decision 25). `port49 devices check-config` catches the missing list: it
+requires every `device_config` line of the adapter, and fails on one the configuration lacks
+(§12).
 
 **The device role is the other half, and it is what binds when port49 cannot answer.** With
 command authorization pointed at port49 no EOS or NX-OS role narrows anything (above); with
@@ -4065,8 +4074,17 @@ prints it, against the policy's adapter for its platform, and exits non-zero on 
 account named as a username port49 serves on that device — the collision §5.6 forbids — or on a
 line the adapter's `config_checks` name: a command method list falling back to `none` or
 `if-authenticated` (§6), an enable list falling back to a local secret (§5.6), a Junos
-`authentication-order` with `password` in it (L4). port49 never logs into a device; this reads
-a file a compliance tool fetched.
+`authentication-order` with `password` in it (L4) — or on a `device_config` line the
+configuration does not carry as a top-level line of its own, the absence no `config_checks`
+entry can see: IOS-XE's level-7 command method list, without which a level-7 command is never
+asked about (§6). A `platforms:` block adds to the set's `device_config`, `local_accounts` and
+`config_checks` and never takes one away, `replace: true` and `based_on:` included: a block
+that rewrites the set's line ending in `local` to end in `none` still has the set's line
+required and its own reported by the set's check. A device configuration is full of secrets,
+so every line of it the check prints, and every `device_config` line, is redacted by every
+pattern that applies under the policy (§5.8), and a text it could not read to the end fails
+the check without quoting it. port49 never logs into a device; this reads a file a compliance
+tool fetched.
 
 **`port49 devices capabilities`** reports the `supports`-versus-`observed` matrix from §9.
 
