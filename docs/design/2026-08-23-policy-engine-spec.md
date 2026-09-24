@@ -628,11 +628,14 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    configured name's own, one half-way along the chain, and one standing for a directory.
    Whoever can write a link's directory can re-point it at any file that passes, such as a
    root-owned `policy.yaml.bak` from before a grant was withdrawn. The read is capped at
-   1 MiB, and a refusal quotes at most 64 characters of any value it found. **A Kubernetes
-   ConfigMap or Secret mount is refused by this check today.** Its mount root holds both links
-   and is mode 0777 (01777 for a Secret, 02777 with `fsGroup`), though the mount is read-only
-   (`tests/lab/results/configmap-mounts.md`). Whether a read-only mount counts as safe is an
-   open ruling. The file's owner and mode are taken from
+   1 MiB, and a refusal quotes at most 64 characters of any value it found. A directory's mode
+   is excused, and its owner still checked, when `fstatfs` on the opened directory reports its
+   filesystem read-only. Nobody can write a read-only mount, whatever the mode says. This is how
+   a Kubernetes ConfigMap or Secret mount passes, as measured
+   (`tests/lab/results/configmap-mounts.md`). Its mount root holds both links at mode 0777
+   (01777 for a Secret, 02777 or 03777 with `fsGroup`), but the mount is read-only, even to root
+   in the pod. The file (root's, 0644 or `defaultMode`) and its timestamped directory (root's,
+   0755) pass on their own. The file's owner and mode are taken from
    the descriptor the policy is read through (`fstat`), not from a path checked beforehand, so
    a rename between the check and the read cannot put another file in its place. The check
    reads owners and mode bits alone: a POSIX ACL granting someone else write, or a writable

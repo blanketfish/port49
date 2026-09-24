@@ -4957,8 +4957,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   directory holding it must be writable by `port49d`'s user or root alone and owned by one of
   them; otherwise `port49d` does not start, and a reload keeps the policy in force serving. A
   symlink is followed, and the directory holding every link on the way is held to the same
-  rule. **A Kubernetes ConfigMap or Secret mount is refused today**: its mount root is mode
-  0777 or 01777, though the mount itself is read-only (`tests/lab/results/configmap-mounts.md`).
+  rule, except that a directory on a read-only mount may have any mode. A Kubernetes ConfigMap
+  or Secret mount passes: its 0777 mount root is mounted read-only
+  (`tests/lab/results/configmap-mounts.md`). With `defaultMode: 0400` or `0440` and no
+  `fsGroup`, a non-root `port49d` cannot read the file. Use `fsGroup` or `defaultMode: 0444`.
+  An edit to the ConfigMap reached the pod about 55 s later in the lab (the kubelet's sync).
   Files over 1 MiB are refused. Fix with `chmod go-w` (file and directory) or `chown`.
   With a live reload, whoever can write the policy decides every operator's access within
   seconds.
