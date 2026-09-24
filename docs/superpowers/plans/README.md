@@ -194,8 +194,10 @@ rather than the answer. **Lab:** the API-transport half of L1 and the eAPI `/log
 hand.
 
 **Lab, as run:** the slice end to end on vEOS (`tests/lab/results/slice-arista_eos.md`); L7's eAPI
-`/login` clause measured on vEOS (`L7-login-arista_eos.md`), and L7 still open on NX-API's
-`nxapi_auth` cookie (lab register rule 3), with decision 15 provisional on it; L1's RESTCONF
+`/login` clause measured on vEOS (`L7-login-arista_eos.md`); L7 was left open on NX-API's
+`nxapi_auth` cookie and closed 2026-09-24 when that was measured by hand
+(`L7-nxapi-cookie-cisco_nxos.md`), so decision 15 no longer waits on L7 — what it still names as
+unmeasured is HTTP keep-alive and an idle-gap playbook run (spec §13); L1's RESTCONF
 clause measured on IOS-XE (`L1-restconf-cisco_iosxe.md`), and L1 open on the console.
 
 ## Plan 4 — Policy engine (§19 step 4)
