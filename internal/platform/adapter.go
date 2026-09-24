@@ -333,6 +333,20 @@ func (d Dialect) rankedBelow(attr, v, w string) bool {
 	return okv && (!okw || rv < rw)
 }
 
+// Lowers reports whether a reply's attribute from, replaced by to, provably
+// fences the session more: the same name, the same separator, and both values
+// ranked in its role_order with to's strictly below. Anything else is a
+// change whose direction nobody measured (spec §12).
+func (d Dialect) Lowers(from, to string) bool {
+	i, j := strings.IndexAny(from, "=*"), strings.IndexAny(to, "=*")
+	if i < 0 || j < 0 || from[:i+1] != to[:j+1] {
+		return false
+	}
+	rf, okf := d.RoleRank(from[:i], from[i+1:])
+	rt, okt := d.RoleRank(to[:j], to[j+1:])
+	return okf && okt && rt < rf
+}
+
 // attributeValue is what follows an attribute's separator.
 func attributeValue(a string) string {
 	if i := strings.IndexAny(a, "=*"); i >= 0 {

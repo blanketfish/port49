@@ -531,6 +531,73 @@ func TestTheGateFailsARoleRaiseAtTheSameLevel(t *testing.T) {
 	}
 }
 
+// The reply gate reads values, not the level order (task 7 review): a change
+// to a level's rendering passes only where every value that bears privilege
+// provably went down in role_order, under both versions' adapters. A custom level can
+// sit above a level whose rendering is stronger, so "a lower level" proves
+// nothing about what the device is told.
+func TestTheGateReadsRoleValuesNotTheLevelOrder(t *testing.T) {
+	on := func(t *testing.T, d Diff, device string) (LevelChange, bool) {
+		for _, l := range d.Levels {
+			if slices.Contains(l.Devices, device) {
+				return l, true
+			}
+		}
+		return LevelChange{}, false
+	}
+	above := "privilege_levels: [{name: readonly}, {name: operator}, {name: admin}, {name: netops, parent: operator}]\n"
+	between := "privilege_levels: [{name: readonly}, {name: operator}, {name: viewer, parent: readonly}, {name: admin}]\n"
+	admin := strings.Replace(diffBase, "privilege: readonly", "privilege: admin", 1)
+	roleAttr := func(a string) string {
+		return strings.Replace(diffBase, "permit: [show **]}", "permit: [show **], attributes: {arista_eos: ["+a+"]}}", 1)
+	}
+	for _, tt := range []struct {
+		name, before, after, device string
+		raised                      []string // nil: no change raises
+	}{
+		{"a custom level ordered above admin, rendered as operator, moved to admin",
+			above + strings.Replace(diffBase, "privilege: readonly", "privilege: netops", 1), above + admin,
+			"leaf-01", []string{"reply"}},
+		{"a custom level rendered as readonly, ordered above operator, moved to operator",
+			between + strings.Replace(diffBase, "privilege: readonly", "privilege: viewer", 1),
+			between + strings.Replace(diffBase, "privilege: readonly", "privilege: operator", 1),
+			"leaf-01", []string{"priv_lvl"}},
+		{"admin to readonly on EOS", admin, diffBase, "leaf-01", nil},
+		{"admin to readonly on NX-OS", admin, diffBase, "nx-01", nil},
+		// Only a level's own rendering moves down role_order ungated: a role's
+		// or grant's attribute is gated both ways (review C4), whatever it
+		// ranks.
+		{"a role attribute lowered", roleAttr("roles=network-admin"), diffBase, "leaf-01", []string{"reply"}},
+		{"a role attribute raised", diffBase, roleAttr("roles=network-admin"), "leaf-01", []string{"reply"}},
+		{"a role no adapter ranks", diffBase, roleAttr("roles=p49-noc"), "leaf-01", []string{"reply"}},
+		{"from a role no adapter ranks", roleAttr("roles=p49-noc"), diffBase, "leaf-01", []string{"reply"}},
+		{"the same role, mandatory to optional", roleAttr("roles=network-operator"), roleAttr("roles*network-operator"),
+			"leaf-01", []string{"reply"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			l, changed := on(t, Compare(mustParse(t, tt.before), mustParse(t, tt.after), noon), tt.device)
+			if !changed {
+				t.Fatalf("no change on %s", tt.device)
+			}
+			if tt.raised == nil && l.Raise || tt.raised != nil && !slices.Equal(l.Raised, tt.raised) {
+				t.Fatalf("%s: %+v, want raised %v", tt.device, l, tt.raised)
+			}
+		})
+	}
+	// The swap that would make "lower" a raise does not load: a block's
+	// renderings rise in role_order, and it cannot reorder the set's.
+	for _, block := range []string{
+		"platforms:\n  arista_eos:\n    privilege:\n      readonly: [priv-lvl=1, roles=network-admin]\n" +
+			"      admin: [priv-lvl=15, roles=network-operator]\n",
+		"platforms:\n  arista_eos:\n    replace: true\n    role_order: {roles: [network-admin, network-operator]}\n" +
+			"    privilege:\n      readonly: [priv-lvl=1, roles=network-admin]\n      admin: [priv-lvl=15, roles=network-operator]\n",
+	} {
+		if _, err := Parse([]byte(block+diffBase), env()); err == nil {
+			t.Errorf("the swapped block loads:\n%s", block)
+		}
+	}
+}
+
 // A session test acknowledges a raise only at the instant it passes: one that
 // passes only after a grant expires does not acknowledge the raise before it
 // (review M2). At noon the ceiling is admin, from the grant that expires;

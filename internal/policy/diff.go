@@ -3,7 +3,6 @@ package policy
 import (
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -13,6 +12,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // Diff is the effective-permission diff between two versions of a policy
@@ -774,42 +774,10 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 	if enableRank[is.enable] > enableRank[was.enable] {
 		l.Raised = append(l.Raised, "enable")
 	}
-	// An attribute the reply gained, changed or lost, other than priv-lvl,
-	// which priv_lvl judges, changes what the device lets the session do in a
-	// direction the gate cannot read, unless its adapter lists it inert: on a
-	// session-only platform losing deny-commands widens access (spec §12).
-	//
-	// Except the level's own rendering, where it provably went down. Where the
-	// platform's adapter is the same in both versions and the level the
-	// rendering comes from is strictly lower in both versions' orders, the
-	// attributes a level brings move down with it: a subject moved from admin
-	// to readonly on EOS is lowered, although the role its rendering names
-	// changed from network-admin to network-operator. Anything else is judged
-	// by the reply, because on EOS operator and admin share priv-lvl 15 and
-	// only the role tells them apart when the device falls back to local
-	// (decision 25). An adapter edit is judged whole here and gated in its own
-	// right.
-	dialect := c.after.dialect(is.platform)
-	var oldRendered, newRendered []string
-	if reflect.DeepEqual(c.before.dialect(was.platform), dialect) {
-		oldAttrs, oldFrom, _ := c.before.render(dialect, was.level)
-		newAttrs, newFrom, _ := c.after.render(dialect, is.level)
-		lower := func(p *Policy) bool {
-			from, to := p.levelIndex(oldFrom), p.levelIndex(newFrom)
-			return from >= 0 && to >= 0 && to < from
-		}
-		if lower(c.before) && lower(c.after) {
-			oldRendered, newRendered = oldAttrs, newAttrs
-		}
-	}
-	moved := func(from, to, rendered []string) bool {
-		return slices.ContainsFunc(from, func(a string) bool {
-			name := a[:strings.IndexAny(a, "=*")]
-			return name != "priv-lvl" && !slices.Contains(to, a) && !slices.Contains(rendered, a) &&
-				dialect.BearsPrivilege(name)
-		})
-	}
-	if moved(l.NewReply, l.OldReply, newRendered) || moved(l.OldReply, l.NewReply, oldRendered) {
+	before, after := c.before.dialect(was.platform), c.after.dialect(is.platform)
+	oldRendered, _, _ := c.before.render(before, was.level)
+	newRendered, _, _ := c.after.render(after, is.level)
+	if replyRose(l.OldReply, l.NewReply, oldRendered, newRendered, before, after) {
 		l.Raised = append(l.Raised, "reply")
 	}
 	l.Raise = len(l.Raised) > 0
@@ -825,6 +793,46 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 		return true
 	})
 	return l
+}
+
+// replyRose reports whether the session reply gained, changed or lost an
+// attribute, other than priv-lvl, which priv_lvl judges, that bears privilege
+// under either version's adapter, other than by provably going down (spec
+// §12). A level's own rendering goes down where its one value is replaced by
+// the new level's, which role_order ranks strictly below under both versions'
+// adapters: a subject moved from admin to readonly on EOS is lowered because
+// network-operator ranks below network-admin (L16), not because readonly is
+// below admin, which a custom level's parent can make untrue of what it
+// renders. Anything else changes what the device lets the session do in a
+// direction the gate cannot read: a role's or grant's attribute either way
+// (on a session-only platform losing deny-commands widens access), and a
+// role no adapter ranks, which ranks above every role.
+func replyRose(old, new, oldRendered, newRendered []string, before, after platform.Dialect) bool {
+	byName := func(reply []string) map[string][]string {
+		out := map[string][]string{}
+		for _, a := range reply {
+			out[engine.AttributeName(a)] = append(out[engine.AttributeName(a)], a)
+		}
+		return out
+	}
+	was, is := byName(old), byName(new)
+	names := sortedKeys(was)
+	for _, n := range sortedKeys(is) {
+		if !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	for _, name := range names {
+		from, to := was[name], is[name]
+		if name == "priv-lvl" || slices.Equal(from, to) || !before.BearsPrivilege(name) && !after.BearsPrivilege(name) {
+			continue
+		}
+		if len(from) != 1 || len(to) != 1 || !slices.Contains(oldRendered, from[0]) ||
+			!slices.Contains(newRendered, to[0]) || !before.Lowers(from[0], to[0]) || !after.Lowers(from[0], to[0]) {
+			return true
+		}
+	}
+	return false
 }
 
 // enableRank orders the mechanisms by what they ask of an escalation: none
