@@ -1542,7 +1542,7 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
-| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, which the broker refused at mint (§6) |
+| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a composition the load quarantines (§7) |
 | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
 | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed |
 
@@ -2244,6 +2244,13 @@ and lives on the subject, so two grants can never disagree about it.
 | `max_privilege` | grant | how far `enable` may *raise* it afterwards |
 | `enable` | subject | *how* the raise is authenticated: refused, automatic, or by token |
 
+The ceiling bounds what the session reply says, not only what the level renders to: §6
+layering lets a role or grant set `priv-lvl` itself, and the device applies the reply. A
+composition whose reply, after layering, sends a `priv-lvl` above its `max_privilege` fails
+the joint check and quarantines the device on that platform (§10), naming the role or grant
+and the attribute; and the daemon refuses a session reply above the context's ceiling
+(`blob_unavailable`) rather than sending it and holding the session lower.
+
 If the role's `privilege` already reaches what the subject needs, leave `max_privilege` and
 `enable` unset — the session lands there and nothing needs escalating. Set `max_privilege`
 only when a session should start low and be raised on demand, and then `enable` says how.
@@ -2856,8 +2863,9 @@ bundle v2291
 
 **A sync can make a valid policy invalid, and the bundle builder quarantines rather than
 refuses.** Several load checks are joint over policy and inventory — a privilege level with no
-mapping on a platform present in inventory (§6), `enable: auto` reaching a platform whose
-enable exchange carries no principal (§5.6). A device racked tomorrow with a new platform can
+mapping on a platform present in inventory (§6), a session reply whose `priv-lvl` exceeds
+the grants' `max_privilege` there (§7), `enable: auto` reaching a platform whose enable
+exchange carries no principal (§5.6). A device racked tomorrow with a new platform can
 fail them against a policy that was valid today. Refusing the whole bundle would block every
 inventory change fleet-wide until someone edits policy, including the leaf racked in another
 site — a ticket-queue bottleneck created by the safety mechanism. Instead the offending

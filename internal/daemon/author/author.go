@@ -6,13 +6,13 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
@@ -144,31 +144,6 @@ func ParseArgs(args [][]byte) (kv map[string]string, cmd string, cmdArgs []strin
 		cmdArgs = cmdArgs[:n-1]
 	}
 	return kv, cmd, cmdArgs, raw
-}
-
-// grantedPrivLvl finds the level a session authorization reply grants, if it
-// grants one. The attribute is `priv-lvl`, in either the mandatory (`=`) or
-// optional (`*`) form, since a device reads both and so must the record of
-// what it was told.
-//
-// A value that is not a privilege level is no grant: ok is false and the
-// context keeps the level it had, rather than being moved to something the
-// reply did not say. The last occurrence wins, which is what a device reading
-// the arguments in order ends up applying.
-func grantedPrivLvl(attrs []string) (uint8, bool) {
-	level, ok := uint8(0), false
-	for _, a := range attrs {
-		i := strings.IndexAny(a, "=*")
-		if i < 0 || a[:i] != "priv-lvl" {
-			continue
-		}
-		n, err := strconv.ParseUint(a[i+1:], 10, 8)
-		if err != nil || n > 15 {
-			continue
-		}
-		level, ok = uint8(n), true
-	}
-	return level, ok
 }
 
 // Vector is the command vector authorization and accounting agree on: the
@@ -311,16 +286,17 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	// SetPrivilege, never PutContext, and for the reason the extension below
 	// gives: `c` was read at the top of this request.
 	if cmd == "" {
-		if level, ok := grantedPrivLvl(d.Attributes); ok {
+		if level, _, ok := engine.GrantedPrivLvl(d.Attributes); ok {
 			// Clamped to the ceiling the token was minted with, the same bound
 			// the enable path refuses above (`ceiling_exceeded`, spec §7).
-			// What is granted here comes from port49's own Authorizer, so
-			// today this cannot fire; it is here so the invariant lives next
-			// to the field it protects rather than only in the policy engine
-			// (plan 4). A grant above the ceiling records the ceiling rather
-			// than being dropped: the device was told the higher level either
-			// way, and recording the lower one is what makes the next command
-			// denied instead of permitted.
+			// Engine refuses a blob whose reply exceeds the ceiling before it
+			// gets here, and the policy's joint check quarantines one at load,
+			// so only another Authorizer (the lab's) can reach it; the clamp
+			// keeps the invariant next to the field it protects. A grant above
+			// the ceiling records the ceiling rather than being dropped: the
+			// device was told the higher level either way, and recording the
+			// lower one is what makes the next command denied instead of
+			// permitted.
 			//
 			// A zero MaxPrivilege is a token minted with no ceiling, not a
 			// ceiling of zero — the same reading as a zero SessionExpires

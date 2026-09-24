@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -117,4 +118,27 @@ func safeValue(s string) bool {
 		return false
 	}
 	return !strings.ContainsFunc(s, unicode.IsControl)
+}
+
+// GrantedPrivLvl finds the level a session reply's attributes grant, if they
+// grant one, and the index of the attribute that does. The attribute is
+// `priv-lvl`, in either the mandatory (`=`) or optional (`*`) form, since a
+// device reads both. A value that is not a privilege level is no grant. The
+// last occurrence wins, which is what a device reading the arguments in order
+// ends up applying. The daemon records the level from it, and the joint check
+// compares it with the ceiling, so both read a reply the same way.
+func GrantedPrivLvl(attrs []string) (level uint8, at int, ok bool) {
+	at = -1
+	for i, a := range attrs {
+		j := strings.IndexAny(a, "=*")
+		if j < 0 || a[:j] != "priv-lvl" {
+			continue
+		}
+		n, err := strconv.ParseUint(a[j+1:], 10, 8)
+		if err != nil || n > 15 {
+			continue
+		}
+		level, at, ok = uint8(n), i, true
+	}
+	return level, at, ok
 }

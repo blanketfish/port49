@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -153,20 +154,74 @@ func TestAStoreErrorIsStoreUnavailableAndAMissingBlobIsNot(t *testing.T) {
 	f := newEngineFixture(t, eosBlob())
 	f.st.down = true
 	resp, rec := f.authorize(t, "cmd=show", "cmd-arg=version")
-	if resp.Status != wire.AuthorStatusFail || rec["reason"] != "store_unavailable" {
+	if resp.Status != wire.AuthorStatusFail || rec["reason"] != "store_unavailable" || string(resp.ServerMsg) != storeUnavailableMsg {
 		t.Fatalf("store down: %+v %v", resp, rec)
 	}
 	f.st.down = false
+	// A body stored under its own hash that this build refuses — an older
+	// format left in the store at an upgrade — gets past the hash check and
+	// is refused by the decode.
+	refused := []byte(`{"version":2}`)
+	f.st.PutBlob(context.Background(), engine.HashOf(refused), refused, time.Hour)
 	for name, hash := range map[string]string{
-		"missing": engine.HashOf([]byte("nothing was stored under this")),
-		"corrupt": "sha256:wrong",
+		"missing":      engine.HashOf([]byte("nothing was stored under this")),
+		"corrupt":      "sha256:wrong",
+		"hash-correct": engine.HashOf(refused),
 	} {
 		f.st.PutBlob(context.Background(), "sha256:wrong", []byte(`{"version":2}`), time.Hour)
 		f.st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
 			store.Context{CtxID: "ctx1", Username: "alice", PrivLvl: 15, BlobHash: hash}, time.Hour)
 		resp, rec := f.authorize(t, "cmd=show", "cmd-arg=version")
-		if resp.Status != wire.AuthorStatusFail || rec["reason"] != "blob_unavailable" {
+		if resp.Status != wire.AuthorStatusFail || rec["reason"] != "blob_unavailable" || string(resp.ServerMsg) != blobUnavailableMsg {
 			t.Fatalf("%s: %+v %v", name, resp, rec)
+		}
+	}
+}
+
+// The cache stays within its bound: past blobCacheMax distinct blobs, one
+// entry is dropped for each one added, and every blob still answers.
+func TestTheBlobCacheIsBounded(t *testing.T) {
+	st := memory.New(time.Now)
+	e := &Engine{Store: st, Metrics: metrics.New(prometheus.NewRegistry())}
+	for i := range blobCacheMax + 3 {
+		b := eosBlob()
+		b.Bundle = fmt.Sprintf("sha256:policy-%d", i)
+		body, hash, err := engine.Encode(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st.PutBlob(context.Background(), hash, body, time.Hour)
+		if _, reason := e.program(context.Background(), hash); reason != "" {
+			t.Fatalf("blob %d: %s", i, reason)
+		}
+		if len(e.cache) > blobCacheMax {
+			t.Fatalf("cache holds %d, bound %d", len(e.cache), blobCacheMax)
+		}
+	}
+	if len(e.cache) != blobCacheMax {
+		t.Fatalf("cache holds %d, want the bound %d", len(e.cache), blobCacheMax)
+	}
+}
+
+// A blob whose reply would tell the device a priv-lvl above the context's
+// ceiling is refused, never sent and clamped: the device would run at the
+// higher level while port49 held the session lower (spec §7). The load's
+// joint check quarantines such a composition, so meeting it here means the
+// context no longer fits the blob.
+func TestASessionReplyAboveTheCeilingIsRefused(t *testing.T) {
+	f := newEngineFixture(t, eosBlob())
+	e := &Engine{Store: f.st, Metrics: f.m}
+	c := store.Context{Username: "alice", Principal: "user:alice@example.com", PrivLvl: 1, MaxPrivilege: 1, BlobHash: f.hash}
+	d := e.Session(context.Background(), Request{Context: c, Device: peer})
+	if d.Permit || d.Reason != decision.BlobUnavailable || len(d.Attributes) != 0 || d.ServerMsg != blobUnavailableMsg ||
+		d.Policy == nil || d.Policy.Blob != f.hash {
+		t.Fatalf("%+v", d)
+	}
+	// At the ceiling, or with none, it is answered.
+	for _, ceiling := range []uint8{15, 0} {
+		c.MaxPrivilege = ceiling
+		if d := e.Session(context.Background(), Request{Context: c, Device: peer}); !d.Permit {
+			t.Fatalf("ceiling %d: %+v", ceiling, d)
 		}
 	}
 }

@@ -128,6 +128,15 @@ func (e *Engine) Session(ctx context.Context, r Request) Decision {
 		// minted for. Nothing partial is sent.
 		return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg, Policy: pol}
 	}
+	if level, _, ok := engine.GrantedPrivLvl(attrs); ok {
+		// A reply above the ceiling the token was minted with would tell the
+		// device a level port49 then holds the session under (spec §7). The
+		// load's joint check quarantines such a composition, so the context
+		// no longer fits the blob: refused, never sent and clamped.
+		if ceiling, ok := r.Context.PrivilegeCeiling(); ok && level > ceiling {
+			return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg, Policy: pol}
+		}
+	}
 	return Decision{Permit: true, Reason: decision.ContextMatched, Attributes: attrs, Policy: pol}
 }
 

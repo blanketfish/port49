@@ -262,7 +262,7 @@ func TestGetContextStoreErrorIsNotContextMissing(t *testing.T) {
 		platform.Defaults(), time.Hour, time.Minute, time.Hour)
 
 	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
-	if resp.Status != wire.AuthorStatusFail || string(resp.ServerMsg) != "port49: authorization store unavailable" {
+	if resp.Status != wire.AuthorStatusFail || string(resp.ServerMsg) != storeUnavailableMsg {
 		t.Fatalf("%+v", resp)
 	}
 	r := lastRecord(t, log)
@@ -958,36 +958,6 @@ func (v *vanishingContextStore) TouchContext(ctx context.Context, k store.Contex
 		return store.ErrNotFound
 	}
 	return v.Store.TouchContext(ctx, k, ttl)
-}
-
-func TestGrantedPrivLvl(t *testing.T) {
-	for _, tt := range []struct {
-		attrs []string
-		want  uint8
-		ok    bool
-	}{
-		{nil, 0, false},
-		{[]string{"shell:roles*network-admin"}, 0, false},
-		{[]string{"priv-lvl=15"}, 15, true},
-		{[]string{"priv-lvl*15"}, 15, true}, // the optional form a device reads just the same
-		{[]string{"priv-lvl=0"}, 0, true},
-		{[]string{"shell:roles*network-admin", "priv-lvl=1"}, 1, true},
-		// Not a level, so not a grant: the context keeps what it had rather
-		// than being moved to something the reply did not say.
-		{[]string{"priv-lvl="}, 0, false},
-		{[]string{"priv-lvl=fifteen"}, 0, false},
-		{[]string{"priv-lvl=16"}, 0, false},
-		{[]string{"priv-lvl=-1"}, 0, false},
-		{[]string{"priv-lvl=300"}, 0, false},
-		{[]string{"priv-lvlx=15"}, 0, false},
-		// The last one wins, as it does on a device reading them in order.
-		{[]string{"priv-lvl=1", "priv-lvl=15"}, 15, true},
-	} {
-		got, ok := grantedPrivLvl(tt.attrs)
-		if got != tt.want || ok != tt.ok {
-			t.Errorf("grantedPrivLvl(%q) = %d, %v; want %d, %v", tt.attrs, got, ok, tt.want, tt.ok)
-		}
-	}
 }
 
 type countingTouchStore struct {

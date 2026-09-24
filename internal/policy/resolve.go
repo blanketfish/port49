@@ -433,6 +433,22 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 				res.Ceiling, res.MaxPrivilege, landing, res.MaxPrivilege)
 		}
 	}
+	if res.HasCeiling {
+		// §6 layering lets a role or grant set priv-lvl over the level's
+		// rendering, and the device applies what the reply says. The reply is
+		// read as the daemon reads it (engine.GrantedPrivLvl), with the
+		// placeholders a mint cannot know left empty.
+		attrs, err := res.Blob.SessionAttributes(engine.Values{})
+		if err != nil {
+			attrs = res.Blob.Attributes
+		}
+		if sent, at, ok := engine.GrantedPrivLvl(attrs); ok && sent > res.MaxPrivilege {
+			return fmt.Sprintf("on %s its session reply sends %s (%s), above its grants' max_privilege %s (%d): "+
+				"the daemon refuses a session whose reply exceeds the ceiling, so every login would fail "+
+				"blob_unavailable; raise max_privilege or remove the attribute", d.Platform,
+				res.Attributes[at].Attribute, res.Attributes[at].Source, res.Ceiling, res.MaxPrivilege)
+		}
+	}
 	if sub.Enable == "auto" {
 		if eu := p.env.EnableUsernames[d.Platform]; eu != "" && eu != platform.EnablePrincipal {
 			return fmt.Sprintf("enable: auto reaches this device, whose platform %s does not put the operator's "+

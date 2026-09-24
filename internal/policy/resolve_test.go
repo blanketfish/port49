@@ -177,6 +177,20 @@ scopes: [{name: all_devices, match: {}}]
 roles: [{name: adm, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [adm], max_privilege: readonly}]`, "above its grants' max_privilege", all},
+		// §6 layering lets a role or grant override priv-lvl, and the device
+		// is told what the reply says, not what the level renders to.
+		{"a role's priv-lvl above the ceiling", `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {arista_eos: ["priv-lvl=15"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: readonly}]`,
+			"its session reply sends priv-lvl=15 (role ro)", []string{"campus-sw-7", "leaf-01"}},
+		{"a grant's priv-lvl above the ceiling", `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: readonly, attributes: {arista_eos: ["priv-lvl*15"]}}]`,
+			"its session reply sends priv-lvl*15 (grant all_devices", []string{"campus-sw-7", "leaf-01"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := mustParse(t, tt.yaml)
