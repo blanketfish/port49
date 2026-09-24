@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // policyFixture writes a small policy and inventory and returns their paths.
@@ -376,5 +378,13 @@ func TestGrantsRemoveFailsWhenStdoutFails(t *testing.T) {
 	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops"}, failingWriter{}, &errb); code != 1 ||
 		strings.Contains(errb.String(), "removed") {
 		t.Fatalf("code %d %s", code, errb.String())
+	}
+}
+
+// The offline tools load a policy with the enable-username table port49d
+// resolves, so the `enable: auto` joint check answers the same offline.
+func TestOfflineToolsLoadWithTheEnableUsernameTable(t *testing.T) {
+	if got := offlineEnv(nil).EnableUsernames; !reflect.DeepEqual(got, platform.EnableUsernames()) {
+		t.Fatalf("%v", got)
 	}
 }

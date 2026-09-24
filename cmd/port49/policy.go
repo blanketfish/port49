@@ -14,6 +14,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/replay"
 )
@@ -22,6 +23,14 @@ import (
 // inventory it is checked against (spec §10, §12). The tools run offline, as
 // CI runs them; they never ask a broker.
 type policyFiles struct{ policy, inventory string }
+
+// offlineEnv is the environment the offline tools load a policy in: the
+// inventory, and the built-in enable-username table port49d resolves from
+// config, so a joint check port49d runs (`enable: auto`) runs here too.
+// Config accepts no override of it today (config.resolveEnableUsernames).
+func offlineEnv(devices []admission.Device) policy.Env {
+	return policy.Env{Devices: devices, EnableUsernames: platform.EnableUsernames()}
+}
 
 func (f *policyFiles) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.policy, "policy", "", "the policy file")
@@ -36,7 +45,7 @@ func (f *policyFiles) load() (*policy.Policy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return policy.Load(f.policy, policy.Env{Devices: inv.Devices})
+	return policy.Load(f.policy, offlineEnv(inv.Devices))
 }
 
 // explainCmd resolves a hypothetical decision and prints exactly one reason
@@ -218,12 +227,12 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 policy diff:", err)
 		return 1
 	}
-	before, err := policy.Load(*oldPath, policy.Env{Devices: inv.Devices})
+	before, err := policy.Load(*oldPath, offlineEnv(inv.Devices))
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy diff: --old:", err)
 		return 1
 	}
-	after, err := policy.Load(*newPath, policy.Env{Devices: inv.Devices})
+	after, err := policy.Load(*newPath, offlineEnv(inv.Devices))
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy diff: --new:", err)
 		return 1
@@ -492,7 +501,7 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 grants remove:", err)
 		return 1
 	}
-	if _, err := policy.Parse(out, policy.Env{Devices: inv.Devices}); err != nil {
+	if _, err := policy.Parse(out, offlineEnv(inv.Devices)); err != nil {
 		fmt.Fprintf(stderr, "port49 grants remove: the policy without %s does not load, so nothing was written: %v\n",
 			*subject, err)
 		return 1
