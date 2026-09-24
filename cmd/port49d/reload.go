@@ -157,9 +157,13 @@ func (r *reloader) poll(ctx context.Context) {
 	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
 	switch {
 	case v == r.broker.Policy.Load().Bundle:
-		r.pending = ""
-		if r.refused != "" || r.changing >= stillChangingAfter {
-			r.refused, r.changing = "", 0
+		// The file in force ends a run of differing reads: blips days
+		// apart — a file missing for a moment in a ConfigMap swap — must
+		// not add up to the never-settles alarm.
+		alarmed := r.changing >= stillChangingAfter
+		r.pending, r.changing = "", 0
+		if r.refused != "" || alarmed {
+			r.refused = ""
 			r.metrics.PolicyFileRefused.Set(0)
 			fmt.Fprintf(stderr, "port49d: policy: broker.policy_file %s is the policy in force again (%s)\n",
 				r.cfg.Broker.PolicyFile, v)
@@ -199,7 +203,11 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 	r.changing = 0
 	old := r.broker.Policy.Load()
 	var pol *policy.Policy
-	if err == nil {
+	if err == nil && v == old.Bundle {
+		// The bytes in force: nothing to compile, and nothing is refused
+		// that was loaded before (a SIGHUP with no edit).
+		pol = old
+	} else if err == nil {
 		pol, err = parsePolicy(r.cfg, raw)
 	} else {
 		err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
@@ -248,6 +256,11 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 // live context may still hold a policy no longer in force — a withdrawn or
 // expired grant included.
 func (r *reloader) refresh(ctx context.Context) {
+	if !r.expiry.IsZero() && !r.now().Before(r.expiry) {
+		// A grant has expired, and until this pass reaches every context
+		// one may still hold it.
+		r.metrics.PolicyRefreshPending.Set(1)
+	}
 	rep, err := r.broker.Refresh(ctx, r.priors)
 	if err != nil && ctx.Err() != nil {
 		return // port49d is shutting down: there is no retry to announce

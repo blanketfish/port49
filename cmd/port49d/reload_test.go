@@ -222,6 +222,35 @@ func TestAnExpiryPassIsSettled(t *testing.T) {
 	}
 }
 
+// gaugeStore reads port49_policy_refresh_pending as the pass reaches the
+// contexts.
+type gaugeStore struct {
+	store.Store
+	m    *metrics.Metrics
+	seen *float64
+}
+
+func (g gaugeStore) ActivePrincipals(ctx context.Context) ([]string, error) {
+	*g.seen = testutil.ToFloat64(g.m.PolicyRefreshPending)
+	return g.Store.ActivePrincipals(ctx)
+}
+
+// From a grant's expiry a live context may still hold the expired grant, so
+// port49_policy_refresh_pending is 1 from that instant, while the expiry pass
+// runs, not only once it has finished (final review m4).
+func TestAnExpiryIsPendingWhileItsPassRuns(t *testing.T) {
+	lapse := time.Now().Add(time.Hour).Truncate(time.Second)
+	rig := newReloadRig(t, strings.Replace(minimalPolicy, "roles: [r]}", "roles: [r], expires: "+
+		lapse.UTC().Format(time.RFC3339)+"}", 1))
+	seen := -1.0
+	rig.b.Store = gaugeStore{Store: rig.st, m: rig.m, seen: &seen}
+	rig.now = lapse
+	rig.with(func() { rig.r.refresh(context.Background()) })
+	if seen != 1 {
+		t.Fatalf("port49_policy_refresh_pending during the expiry pass = %v", seen)
+	}
+}
+
 // The next expiry is scheduled from the instant the pass judged at
 // (RefreshReport.At), not from port49d's clock after it: an expiry between the
 // two is one no context was judged after, so it is due at once.
@@ -463,6 +492,23 @@ func TestAFileThatNeverStopsChangingIsSaid(t *testing.T) {
 	}
 	if rig.b.Policy.Load().Bundle == engine.HashOf([]byte(minimalPolicy)) || testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
 		t.Fatalf("a file that settles loads and clears the alarm: %q", rig.out.String())
+	}
+}
+
+// A read that differs once and then finds the policy in force again — a
+// file missing for a moment during a ConfigMap swap — is a blip, not a file
+// that never settles: blips days apart must not add up to a false alarm.
+func TestBlipsBetweenReadsOfThePolicyInForceRaiseNoAlarm(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	for i := 0; i < stillChangingAfter+1; i++ {
+		rig.write(t, fmt.Sprintf("# blip %d\n%s", i, minimalPolicy))
+		rig.with(func() { rig.r.poll(context.Background()) })
+		rig.write(t, minimalPolicy)
+		rig.with(func() { rig.r.poll(context.Background()) })
+	}
+	if strings.Contains(rig.out.String(), "has changed at each of the last") ||
+		testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
+		t.Fatalf("blips raised the alarm: %q", rig.out.String())
 	}
 }
 
