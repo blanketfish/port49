@@ -72,9 +72,30 @@ func TestExplainRefusesAnIncompleteAsk(t *testing.T) {
 	if code := run([]string{"explain", "--policy", pol, "--inventory", inv, "--device", "leaf-01"}, &out, &errb); code != 2 {
 		t.Fatalf("no subject or principal: code %d", code)
 	}
-	if code := run([]string{"explain", "--policy", pol, "--subject", "noc", "--device", "leaf-01"}, &out, &errb); code != 1 ||
+	if code := run([]string{"explain", "--policy", pol, "--subject", "noc", "--device", "leaf-01"}, &out, &errb); code != 2 ||
 		!strings.Contains(errb.String(), "--inventory") {
 		t.Fatalf("no inventory: code %d %s", code, errb.String())
+	}
+}
+
+// A usage error exits 2, so CI tells a misconfigured job from a policy that
+// does not load (1): a missing file flag, a stray argument, no subcommand, an
+// unknown one, a bad flag.
+func TestPolicyToolsExitTwoOnAUsageError(t *testing.T) {
+	pol, inv := policyFixture(t)
+	for _, args := range [][]string{
+		{"policy", "test", "--policy", pol},
+		{"policy", "test", "--policy", pol, "--inventory", inv, "extra"},
+		{"policy", "test", "--bogus"},
+		{"policy"},
+		{"policy", "lint"},
+		{"access", "review", "--inventory", inv, "--subject", "noc"},
+		{"explain", "--policy", pol, "--inventory", inv, "--subject", "noc", "--device", "leaf-01", "extra"},
+	} {
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != 2 || out.Len() != 0 {
+			t.Errorf("%q: code %d, stdout %q", args, code, out.String())
+		}
 	}
 }
 
@@ -88,7 +109,7 @@ func TestPolicyTestIsACIGate(t *testing.T) {
 		!strings.Contains(out.String(), "2 tests, 0 failed; 0 shadowed denies, 0 unacknowledged") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
-	raw, _ := os.ReadFile(pol)
+	raw := readFile(t, pol)
 	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), `command: "reload", expect: deny`,
 		`command: "reload", expect: permit`, 1)), 0o600); err != nil {
 		t.Fatal(err)
@@ -105,7 +126,7 @@ func TestPolicyTestIsACIGate(t *testing.T) {
 // permit, and the test is the acknowledgment.
 func TestPolicyTestFailsAnUnacknowledgedShadow(t *testing.T) {
 	pol, inv := policyFixture(t)
-	raw, _ := os.ReadFile(pol)
+	raw := readFile(t, pol)
 	shadowed := strings.Replace(string(raw), "permit: [show **]}", "permit: [show **, reload now]}", 1)
 	if err := os.WriteFile(pol, []byte(shadowed), 0o600); err != nil {
 		t.Fatal(err)
@@ -132,7 +153,7 @@ func TestPolicyTestFailsAnUnacknowledgedShadow(t *testing.T) {
 // in the new version exercises that permit over that deny.
 func TestPolicyDiffGatesAnExpansionPastADeny(t *testing.T) {
 	oldPol, inv := policyFixture(t)
-	raw, _ := os.ReadFile(oldPol)
+	raw := readFile(t, oldPol)
 	newPol := filepath.Join(t.TempDir(), "policy.yaml")
 	expanded := strings.Replace(string(raw), "permit: [show **]}", "permit: [show **, reload now]}", 1)
 	if err := os.WriteFile(newPol, []byte(expanded), 0o600); err != nil {
@@ -163,7 +184,7 @@ func TestPolicyDiffGatesAnExpansionPastADeny(t *testing.T) {
 // diff` fails a change that locks a subject out at the mint (spec §12).
 func TestPolicyTestAndDiffAnswerAsTheBrokerMints(t *testing.T) {
 	oldPol, inv := policyFixture(t)
-	raw, _ := os.ReadFile(oldPol)
+	raw := readFile(t, oldPol)
 	refused := strings.Replace(string(raw), "{name: read_only, privilege: readonly, permit: [show **]}",
 		`{name: read_only, privilege: readonly, permit: [show **], attributes: {all: ["home*/`+strings.Repeat("h", 237)+`/{principal}"]}}`, 1)
 	newPol := filepath.Join(t.TempDir(), "policy.yaml")
@@ -187,7 +208,7 @@ func TestPolicyTestAndDiffAnswerAsTheBrokerMints(t *testing.T) {
 // patterns meet.
 func TestPolicyTestReportsAPossibleShadowATestProves(t *testing.T) {
 	pol, inv := policyFixture(t)
-	raw, _ := os.ReadFile(pol)
+	raw := readFile(t, pol)
 	body := strings.Replace(string(raw), "permit: [show **]}", `permit: [show **, "show /^ver/ detail"]}`, 1)
 	body = strings.Replace(body, "deny: [reload **]}", `deny: [reload **, "show /^v/ *"]}`, 1)
 	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
@@ -214,7 +235,7 @@ func TestPolicyTestReportsAPossibleShadowATestProves(t *testing.T) {
 // A policy that loads with a device quarantined names it (spec §10).
 func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
 	pol, inv := policyFixture(t)
-	raw, _ := os.ReadFile(pol)
+	raw := readFile(t, pol)
 	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), "permit: [show **]", "permit: [interface @uplinks]", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +249,7 @@ func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
 	}
 	out.Reset()
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
-		!strings.Contains(out.String(), "quarantine: leaf-01 (arista_eos): quarantined: subject \"noc\": level operator has no rendering") ||
+		!strings.Contains(out.String(), "quarantine: leaf-01 (arista_eos): subject \"noc\": level operator has no rendering") ||
 		!strings.Contains(out.String(), "FAIL noc on leaf-01: \"show version\" -> deny device_quarantined, want permit") {
 		t.Fatalf("code %d\n%s", code, out.String())
 	}
@@ -320,7 +341,7 @@ func TestGrantsRemoveOffboardsASubject(t *testing.T) {
 		!strings.Contains(errb.String(), "ops: 1 grant row(s), the subject block, and 0 test(s) removed") {
 		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
 	}
-	before, _ := os.ReadFile(pol)
+	before := readFile(t, pol)
 	if !strings.Contains(string(before), "ops@example.com") {
 		t.Fatal("without --write the file is left alone")
 	}
@@ -328,7 +349,7 @@ func TestGrantsRemoveOffboardsASubject(t *testing.T) {
 	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops", "--write"}, &out, &errb); code != 0 || out.Len() != 0 {
 		t.Fatalf("--write: code %d %s", code, out.String())
 	}
-	after, _ := os.ReadFile(pol)
+	after := readFile(t, pol)
 	if strings.Contains(string(after), "ops@example.com") {
 		t.Fatalf("--write replaced nothing:\n%s", after)
 	}
@@ -342,7 +363,7 @@ func TestGrantsRemoveOffboardsASubject(t *testing.T) {
 		!strings.Contains(errb.String(), "nothing was written") {
 		t.Fatalf("code %d %s", code, errb.String())
 	}
-	if kept, _ := os.ReadFile(pol); string(kept) != string(after) {
+	if kept := readFile(t, pol); string(kept) != string(after) {
 		t.Fatal("a refused removal must not touch the file")
 	}
 }
@@ -362,7 +383,7 @@ func TestGrantsRemoveWritesThroughASymlink(t *testing.T) {
 	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("the link was replaced: %v %v", info, err)
 	}
-	if after, _ := os.ReadFile(pol); strings.Contains(string(after), "ops@example.com") {
+	if after := readFile(t, pol); strings.Contains(string(after), "ops@example.com") {
 		t.Fatalf("the target was not changed:\n%s", after)
 	}
 }
@@ -386,5 +407,43 @@ func TestGrantsRemoveFailsWhenStdoutFails(t *testing.T) {
 func TestOfflineToolsLoadWithTheEnableUsernameTable(t *testing.T) {
 	if got := offlineEnv(nil).EnableUsernames; !reflect.DeepEqual(got, platform.EnableUsernames()) {
 		t.Fatalf("%v", got)
+	}
+}
+
+// readFile is os.ReadFile that fails the test at the cause.
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// What the gate prints besides PASS and FAIL: a lint finding as a `report:`
+// line, a caveat under its test as a `note:` line, and a quarantine an expiry
+// will bring on as a `quarantine:` line that says when.
+func TestPolicyTestPrintsReportsNotesAndScheduledQuarantines(t *testing.T) {
+	pol, inv := policyFixture(t)
+	body := strings.Replace(string(readFile(t, pol)), "  - {name: admin, privilege: admin, permit: [\"**\"]}\n",
+		"  - {name: admin, privilege: admin, permit: [\"**\"]}\n  - {name: op, privilege: operator, permit: [show **]}\n", 1)
+	body = strings.Replace(body, "  - {subject: ops, scope: all_devices, roles: [admin]}\n",
+		"  - {subject: ops, scope: all_devices, roles: [admin], expires: 2099-01-01}\n"+
+			"  - {subject: ops, scope: all_devices, roles: [op]}\n", 1)
+	body = strings.Replace(body, "subjects:\n", "subjects:\n  - {name: gone, identity: \"user:gone@example.com\", username: gone, token_ttl: 60s}\n", 1)
+	body += "  - {subject: noc, device: leaf-01, command: \"show version | include x\", expect: permit}\n"
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+	for _, want := range []string{
+		`report: grantless_subject: subject "gone" has no grant`,
+		"     note: arista_eos applies output modifiers itself",
+		"quarantine: leaf-01 (arista_eos): will be quarantined from 2099-01-01T00:00:00.000Z, when grant all_devices [admin] expires",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
+		}
 	}
 }

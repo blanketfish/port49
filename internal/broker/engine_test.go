@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
@@ -47,8 +50,7 @@ func TestARefusedBlobRecordIsEmittedAgain(t *testing.T) {
 	}
 }
 
-// The mint record names the policy it was decided against (spec §5.7), and a
-// grant's expiry rides on the grant.
+// The mint record names the policy it was decided against (spec §5.7).
 func TestAMintRecordNamesItsBundle(t *testing.T) {
 	f := newFixture(t, 8)
 	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, ""))
@@ -69,8 +71,11 @@ func TestAQuarantinedDeviceIsRefusedAtMint(t *testing.T) {
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: operator, permit: ["**"]}]
 subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [r]}]
+grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: nx, roles: [r]}]
 `
+	body = strings.Replace(body, "scopes: [{name: all_devices, match: {}}]",
+		"scopes: [{name: all_devices, match: {}}, {name: nx, match: {platform: cisco_nxos}}]", 1)
+	body = strings.Replace(body, "subjects: [", `subjects: [{name: c, identity: "user:carol@example.com", username: carol, token_ttl: 60s}, `, 1)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +91,20 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	}
 	if byDevice["leaf1"] != "deny device_quarantined" || !strings.HasPrefix(byDevice["nx1"], "permit") {
 		t.Fatalf("%+v", resp.Results)
+	}
+	// A principal with no grant on the quarantined device hears
+	// no_grants_matched, in the reply and the record: the mint API must not
+	// tell a caller which devices exist (design §17).
+	carol := f.client(t, "carol@example.com", f.now.Add(24*time.Hour))
+	f.log.Reset()
+	resp = decodeMint(t, f.post(context.Background(), f.state(carol), `{"devices":["leaf1"]}`, ""))
+	if it := resp.Results[0]; it.Verdict != "deny" || it.Reason != "no_grants_matched" {
+		t.Fatalf("carol: %+v", it)
+	}
+	for _, r := range f.records(t) {
+		if r["reason"] == "device_quarantined" {
+			t.Fatalf("carol's mint logged the quarantine: %v", r)
+		}
 	}
 }
 
@@ -113,6 +132,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	if it := resp.Results[0]; it.Error != "attribute_too_long" || it.Login != "" {
 		t.Fatalf("%+v", it)
 	}
+	f.assertItemErrorOnly(t, "attribute_too_long")
 }
 
 // A substitution value a device could read as another attribute — here an
@@ -140,5 +160,18 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["sw=1"]}`, ""))
 	if it := resp.Results[0]; it.Error != "attribute_unsafe" || it.Login != "" {
 		t.Fatalf("%+v", it)
+	}
+	f.assertItemErrorOnly(t, "attribute_unsafe")
+}
+
+// assertItemErrorOnly checks an item error is counted by its code and is not
+// a decision: no mint record says it (metrics.BrokerItemErrors).
+func (f *fixture) assertItemErrorOnly(t *testing.T, code string) {
+	t.Helper()
+	if n := testutil.ToFloat64(f.b.Metrics.BrokerItemErrors.WithLabelValues(code)); n != 1 {
+		t.Errorf("broker_item_errors_total{error=%q} = %v", code, n)
+	}
+	if mints := eventsOf(f.records(t), "mint"); len(mints) != 0 {
+		t.Errorf("an item error wrote a decision record: %v", mints)
 	}
 }

@@ -83,20 +83,28 @@ func (p *Policy) ResolveSubject(subject string, d admission.Device, now time.Tim
 // mint API must not tell a caller which devices exist (design §17), and a
 // quarantine names one.
 func (p *Policy) resolveNow(sub *Subject, d admission.Device, now time.Time) (Resolution, error) {
-	if len(p.compose(sub, d, now).grants) == 0 {
+	c := p.compose(sub, d, now)
+	if len(c.grants) == 0 {
 		return Resolution{}, ErrNoGrants
 	}
 	if err := p.quarantined(d, now); err != nil {
 		return Resolution{}, err
 	}
-	return p.resolve(sub, d, now)
+	return p.resolved(sub, d, c)
 }
 
+// resolve is resolveNow without the quarantine: what the joint checks, the
+// diff and lint read.
 func (p *Policy) resolve(sub *Subject, d admission.Device, now time.Time) (Resolution, error) {
 	c := p.compose(sub, d, now)
 	if len(c.grants) == 0 {
 		return Resolution{}, ErrNoGrants
 	}
+	return p.resolved(sub, d, c)
+}
+
+// resolved turns a composition with grants into its resolution and blob.
+func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Resolution, error) {
 	res := Resolution{Subject: sub.Name, Username: sub.Username, Enable: sub.Enable, TokenTTL: sub.TokenTTL,
 		Level: c.level, Ceiling: c.ceiling, Roles: c.roles, Attached: c.attached, Incomparable: c.incomparable}
 	for _, g := range c.grants {

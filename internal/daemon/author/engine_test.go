@@ -251,6 +251,9 @@ func TestAContextWithNoBlobIsTheFallbacksOrDenied(t *testing.T) {
 	if d := e.Command(context.Background(), r); d.Permit || d.Reason != decision.NoRuleMatched {
 		t.Fatalf("no fallback: %+v", d)
 	}
+	if d := e.Session(context.Background(), r); d.Permit || d.Reason != decision.NoRuleMatched || len(d.Attributes) != 0 {
+		t.Fatalf("no fallback, session: %+v", d)
+	}
 	e.Fallback = &Lab{SessionAttributes: []string{"priv-lvl=15"}}
 	if d := e.Session(context.Background(), r); !d.Permit || !reflect.DeepEqual(d.Attributes, []string{"priv-lvl=15"}) {
 		t.Fatalf("the lab's seeded contexts keep the lab's answers: %+v", d)

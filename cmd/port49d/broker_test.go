@@ -161,6 +161,9 @@ func TestAJoinedInterfacePermitIsSaidAtStart(t *testing.T) {
 // at the time of each scrape: a device an expiry will quarantine is neither
 // refused nor counted until then (spec §10).
 func TestTheDaemonsQuarantineFollowsTheClock(t *testing.T) {
+	var out bytes.Buffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
 	now := time.Now()
 	lapse := now.Add(48 * time.Hour).Truncate(time.Second)
 	_, pol, err := buildBroker(brokerConfig(t, `
@@ -175,6 +178,11 @@ grants:
 `), memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The start says it now, with when, while leaf1 still mints.
+	if !strings.Contains(out.String(), "port49d: broker: device leaf1 (arista_eos) will be quarantined from "+
+		decision.FormatTime(lapse)) || strings.Contains(out.String(), "is quarantined") {
+		t.Fatalf("stderr: %s", out.String())
 	}
 	m := metrics.New(prometheus.NewRegistry())
 	clock := now

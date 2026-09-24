@@ -37,10 +37,10 @@ func (f *policyFiles) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.inventory, "inventory", "", "the inventory file the daemon admits from (inventory_file)")
 }
 
+// missing reports a usage error: a policy tool needs both files.
+func (f *policyFiles) missing() bool { return f.policy == "" || f.inventory == "" }
+
 func (f *policyFiles) load() (*policy.Policy, error) {
-	if f.policy == "" || f.inventory == "" {
-		return nil, fmt.Errorf("--policy and --inventory are both required")
-	}
 	inv, err := admission.LoadFile(f.inventory)
 	if err != nil {
 		return nil, err
@@ -64,7 +64,7 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if (*subject == "") == (*principal == "") || *device == "" || fs.NArg() != 0 {
+	if (*subject == "") == (*principal == "") || *device == "" || files.missing() || fs.NArg() != 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -113,6 +113,10 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	if files.missing() || fs.NArg() != 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
 	p, err := files.load()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy test:", err)
@@ -125,7 +129,7 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	// expiry will bring on is reported too, so CI sees it before it lands.
 	for _, q := range p.Quarantines(now) {
 		for _, e := range q.Entries {
-			fmt.Fprintf(stdout, "quarantine: %s (%s): %s\n", q.Device, q.Platform, e.Message(now))
+			fmt.Fprintf(stdout, "quarantine: %s (%s): %s\n", q.Device, q.Platform, quarantineLine(e, now))
 		}
 	}
 	for _, f := range p.Lint(now) {
@@ -251,7 +255,7 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, q := range d.Quarantined {
 		for _, e := range q.Entries {
-			fmt.Fprintf(stdout, "QUARANTINES: %s (%s): %s\n", q.Device, q.Platform, e.Message(now))
+			fmt.Fprintf(stdout, "QUARANTINES: %s (%s): %s\n", q.Device, q.Platform, quarantineLine(e, now))
 		}
 	}
 	for _, r := range d.Refused {
@@ -330,6 +334,15 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// quarantineLine is an entry after a label that already says quarantine:
+// the cause for one in force now, and when for one an expiry brings on.
+func quarantineLine(e policy.QuarantineEntry, now time.Time) string {
+	if e.Current(now) {
+		return e.Cause
+	}
+	return e.Message(now)
 }
 
 func orNone(s string) string {
@@ -422,7 +435,7 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *subject == "" || fs.NArg() != 0 {
+	if *subject == "" || files.missing() || fs.NArg() != 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -482,7 +495,7 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *subject == "" || files.policy == "" || files.inventory == "" || fs.NArg() != 0 {
+	if *subject == "" || files.missing() || fs.NArg() != 0 {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}

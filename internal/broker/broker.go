@@ -266,8 +266,8 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 			"a session attribute for this device is longer than 255 bytes once filled in; tell the operator"), nil
 	case "attribute_unsafe":
 		log.Printf("broker: the session reply for %s on %q cannot carry a substitution: %s", principal, name, detail)
-		return b.fault(name, code, "a session attribute for this device would carry =, * or a "+
-			"control character once filled in; tell the operator"), nil
+		return b.fault(name, code, "a session attribute for this device would carry =, *, a control "+
+			"character or invalid UTF-8 once filled in; tell the operator"), nil
 	default:
 		// Policy load checks every rule and compiles every device's blob, so
 		// this is a broker defect, not a refusal. The error names policy

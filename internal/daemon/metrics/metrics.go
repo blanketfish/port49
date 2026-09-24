@@ -58,8 +58,8 @@ type Metrics struct {
 	// inventory device with no platform), "broker_error" (a policy that
 	// compiled to a blob the daemon would refuse), "attribute_too_long" (a
 	// session attribute the principal's own values push past 255 bytes), or
-	// "attribute_unsafe" (one they would fill with `=`, `*` or a control
-	// character). None is a decision, so none is in port49_decisions_total.
+	// "attribute_unsafe" (one they would fill with `=`, `*`, a control
+	// character or invalid UTF-8). None is a decision, so none is in port49_decisions_total.
 	// The label is the code only.
 	BrokerItemErrors *prometheus.CounterVec
 	// port49_blob_cache_lookups_total{outcome}: the authorizer's per-replica

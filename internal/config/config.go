@@ -127,7 +127,8 @@ type TokenConfig struct {
 // The policy file is read once, at start, and the store is in memory: a
 // policy edit needs a restart, and a restart ends every live login context
 // and every unspent token — every operator logs in again (plan 3,
-// Question 3). Live policy reload, which keeps every login, is plan 4b's (roadmap).
+// Question 3). Live policy reload, which keeps every login, is plan 4b's
+// (roadmap).
 //
 // The slice has no revocation lever. To cut someone off, remove their subject
 // from the policy (or re-issue the CA) and restart; certificate revocation is

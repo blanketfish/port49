@@ -602,7 +602,7 @@ func TestAnAttributeTooLongItemSaysWhy(t *testing.T) {
 }
 
 // attribute_unsafe is the broker refusing a session reply a substituted value
-// would break with `=`, `*` or a control character.
+// would break with `=`, `*`, a control character or invalid UTF-8.
 func TestAnAttributeUnsafeItemSaysWhy(t *testing.T) {
 	err := &ItemError{Device: "leaf1", Code: "attribute_unsafe", Detail: "tell the operator"}
 	if !strings.Contains(err.Error(), "a character port49 refuses") || !strings.Contains(err.Error(), "leaf1") {
