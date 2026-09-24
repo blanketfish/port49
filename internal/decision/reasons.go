@@ -1,5 +1,7 @@
 package decision
 
+import "slices"
+
 // Reason is the closed vocabulary of spec §5.7. Handlers use these constants
 // and nothing else; the log and the metrics share them.
 type Reason string
@@ -73,3 +75,19 @@ const (
 	VerdictPermit = "permit"
 	VerdictDeny   = "deny"
 )
+
+// reasons is every Reason above; reasons_test.go keeps it complete.
+var reasons = []Reason{
+	GrantsMatched, NoGrantsMatched, UsernameCollision, TrustDomainUnresolved, CandidateCapReached,
+	TokenRedeemed, TokenNotFound, TokenSpent, DeviceMismatch, CredentialMismatch, ReceiptReplayed,
+	TokenKindMismatch, StoreUnavailable,
+	ContextMatched, EscalationGranted, PermitDominates, PipeStageDenied, ServiceUnsupported, EnableRefused,
+	CeilingExceeded, NoRuleMatched, NoPermitDominatesDeny, ContextMissing, UsernameMismatch, RemAddrMismatch,
+	PrivilegeExceeded, SessionExpired, ContextStale, CredentialRevoked, DeviceUnknown, PlatformUnknown,
+	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined,
+}
+
+// Known reports whether r is in spec §5.7's vocabulary. A policy test's
+// expected reason is checked against it, so a typo fails at load rather than
+// as a test that can never pass.
+func Known(r Reason) bool { return slices.Contains(reasons, r) }
