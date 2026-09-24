@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 )
 
 // policyFixture writes a small policy and inventory and returns their paths.
@@ -116,6 +119,53 @@ func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
 		!strings.Contains(out.String(), "quarantine: leaf-01 (arista_eos): quarantined: subject \"noc\": level operator has no rendering") ||
 		!strings.Contains(out.String(), "FAIL noc on leaf-01: \"show version\" -> deny device_quarantined, want permit") {
+		t.Fatalf("code %d\n%s", code, out.String())
+	}
+}
+
+// `port49 policy replay` agrees with a log the engine wrote and fails one
+// whose record was edited. The log here is written by the engine directly;
+// internal/replay's tests run the daemon's handler.
+func TestPolicyReplayFindsAnEditedRecord(t *testing.T) {
+	b := engine.Blob{Bundle: "sha256:p", Platform: "arista_eos", Normalize: engine.Normalize{PipeToken: "|"},
+		Rules: []engine.Rule{{Verdict: engine.Permit, Rule: "show **", Role: "read_only"}}}
+	body, hash, err := engine.Encode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := engine.Decode(hash, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := engine.Compile(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := []string{"service=shell", "cmd=show", "cmd-arg=version"}
+	o := prog.Command(raw)
+	var log bytes.Buffer
+	sink := decision.NewJSONLines(&log)
+	sink.Emit(decision.Record{Event: decision.EventBlob, Blob: &decision.Blob{Hash: hash, Body: body}})
+	sink.Emit(decision.Record{Event: decision.EventAuthorizeCommand, Verdict: decision.VerdictPermit, Reason: o.Reason,
+		Device: &decision.Device{Name: "leaf-01", Platform: "arista_eos"}, Request: &decision.Request{Raw: raw},
+		Policy: o.Policy(b.Bundle, hash)})
+	path := filepath.Join(t.TempDir(), "decisions.jsonl")
+	if err := os.WriteFile(path, log.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "replay", path}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "replayed 1 records: 1 agree, 0 diverge, 0 unverifiable") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	edited := strings.Replace(log.String(), `"verdict":"permit","reason":"permit_dominates"`,
+		`"verdict":"deny","reason":"no_rule_matched"`, 1)
+	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "replay", "--line", "2", path}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "line 2 authorize_command: diverge logged deny no_rule_matched, replayed permit permit_dominates") {
 		t.Fatalf("code %d\n%s", code, out.String())
 	}
 }

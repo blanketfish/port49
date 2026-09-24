@@ -35,6 +35,7 @@ const usage = `usage:
   port49 explain --policy FILE --inventory FILE (--subject NAME | --principal ID) --device NAME
                  [--command "LINE"] [--show-attributes]
   port49 policy test --policy FILE --inventory FILE
+  port49 policy replay [--line N] LOGFILE|-
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }

@@ -4,10 +4,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/replay"
 )
 
 // policyFiles are the two files every policy tool reads: the policy and the
@@ -74,6 +76,8 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "test":
 		return policyTest(args[1:], stdout, stderr)
+	case "replay":
+		return policyReplay(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
@@ -142,6 +146,56 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "%d tests, %d failed\n", len(results), failed)
 	if failed > 0 {
+		return 1
+	}
+	return 0
+}
+
+// policyReplay re-evaluates a decision log against the blobs it carries
+// (spec §5.7, "Replay"): an auditor's reconstruction, a regression check of a
+// captured corpus against this build, and an integrity check of the log. It
+// prints every record that did not agree and exits 1 if any did not; with
+// --line it replays that one record and prints it either way.
+func policyReplay(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("port49 policy replay", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	only := fs.Int("line", 0, "replay only the record on this line of the log")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	in := io.Reader(os.Stdin)
+	if name := fs.Arg(0); name != "-" {
+		f, err := os.Open(name)
+		if err != nil {
+			fmt.Fprintln(stderr, "port49 policy replay:", err)
+			return 1
+		}
+		defer f.Close()
+		in = f
+	}
+	results, err := replay.Replay(in, *only)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 policy replay:", err)
+		return 1
+	}
+	counts := map[replay.Status]int{}
+	for _, r := range results {
+		counts[r.Status]++
+		if r.Status != replay.Agree || *only != 0 {
+			fmt.Fprintf(stdout, "line %d %s: %s %s\n", r.Line, r.Event, r.Status, r.Detail)
+		}
+	}
+	fmt.Fprintf(stdout, "replayed %d records: %d agree, %d diverge, %d unverifiable\n", len(results),
+		counts[replay.Agree], counts[replay.Diverge], counts[replay.Unverifiable])
+	if *only != 0 && len(results) == 0 {
+		fmt.Fprintf(stderr, "port49 policy replay: line %d is not an authorization record that consulted a blob\n", *only)
+		return 1
+	}
+	if counts[replay.Diverge]+counts[replay.Unverifiable] > 0 {
 		return 1
 	}
 	return 0
