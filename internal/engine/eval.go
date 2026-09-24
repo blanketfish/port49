@@ -328,7 +328,7 @@ func (p *Program) Command(raw []string) Outcome {
 	}
 	var permits, denies []Match
 	for _, r := range p.rules {
-		abbrev := r.verdict == Deny && !p.Blob.Normalize.ExpandsAbbreviations
+		abbrev := r.verdict == Deny && p.Blob.Normalize.abbreviated()
 		if spec, ok := r.match(vector, abbrev); ok {
 			m := Match{Rule: r.rule, Role: r.role, Specificity: spec}
 			if r.verdict == Permit {

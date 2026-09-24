@@ -308,6 +308,21 @@ func TestAnyDenyTermMatchesTheSplitName(t *testing.T) {
 	}
 }
 
+// A platform measured sending no per-command authorization (Junos; spec §13
+// decision 21) has no command to widen for, so no deny is widened or refused
+// for it: a command that did arrive is matched as written.
+func TestASessionOnlyPlatformWidensNothing(t *testing.T) {
+	b := testBlob(false, "admin:permit **", "nd:deny reload **", "d:deny interface /Management/")
+	if _, _, err := Encode(b); err == nil {
+		t.Fatal("a platform that may send what was typed refuses the unanchored deny")
+	}
+	b.Normalize.SessionOnly = true
+	p := compileBlob(t, b)
+	expect(t, p, "rel", true, decision.PermitDominates)
+	expect(t, p, "reload", false, decision.NoPermitDominatesDeny)
+	expect(t, p, "interface xManagementx", false, decision.NoPermitDominatesDeny)
+}
+
 // Specificity is a property of the rule and the command, never of position, so
 // shuffling the rules changes no outcome, not even which rule is named
 // (spec §5.4; §14, "Order independence").

@@ -44,7 +44,7 @@ func Probes(programs ...*Program) [][]string {
 		if p == nil {
 			continue
 		}
-		abbrev := !p.Blob.Normalize.ExpandsAbbreviations
+		abbrev := p.Blob.Normalize.abbreviated()
 		for _, r := range p.rules {
 			fixed, rest := fixedLen(r.terms)
 			rules = append(rules, probeRule{c: r, fixed: fixed, rest: rest, abbrev: r.verdict == Deny && abbrev})
@@ -364,7 +364,7 @@ func Exposures(before, after *Program) []Exposure {
 		other           *Program
 		added           bool
 	}{{before, after, after, false}, {after, before, before, true}} {
-		abbrev := !v.denies.Blob.Normalize.ExpandsAbbreviations
+		abbrev := v.denies.Blob.Normalize.abbreviated()
 		for _, d := range v.denies.rules {
 			if d.verdict != Deny || v.other.holds(d) {
 				continue

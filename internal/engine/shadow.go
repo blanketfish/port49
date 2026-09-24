@@ -24,7 +24,7 @@ type Shadow struct {
 // the deny's role and rule and then the permit's, so a report built from it
 // does not depend on a file's layout.
 func (p *Program) Shadows() []Shadow {
-	abbrev := !p.Blob.Normalize.ExpandsAbbreviations
+	abbrev := p.Blob.Normalize.abbreviated()
 	var out []Shadow
 	for _, d := range p.rules {
 		if d.verdict != Deny {

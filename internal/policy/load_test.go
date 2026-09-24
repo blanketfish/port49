@@ -136,8 +136,6 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a regex that is a word", "roles:\n  - {name: r, deny: [\"/^reload$/ **\"]}\n" + subjOK, "the word `reload`"},
 		{"a case-sensitive regex", "roles:\n  - {name: r, deny: [\"* * /(?-i)^TFTP:/\"]}\n" + subjOK, "case-insensitively"},
 		{"a case-sensitive group", "roles:\n  - {name: r, deny: [\"interface /(?s-i:^Mgmt)/\"]}\n" + subjOK, "case-insensitively"},
-		{"an unanchored deny pattern", "roles:\n  - {name: r, deny: [\"interface /Management/\"]}\n" + subjOK,
-			"deny \"interface /Management/\": /Management/: the platform"},
 		{"a class no platform defines", "roles:\n  - {name: r, permit: [\"interface @uplinks\"]}\n" + subjOK, "which no platform defines"},
 		{"a ceiling no platform numbers", scopeOK + roleOK + subjOK +
 			"grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: operator}\n", "no priv-lvl number on any platform"},

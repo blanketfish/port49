@@ -246,7 +246,7 @@ func nameRune(r rune, hyphen bool) bool { return unicode.IsLetter(r) || (hyphen 
 // cannot read.
 func denyPatterns(pattern string, n Normalize) ([]string, error) {
 	out := []string{pattern}
-	if !n.ExpandsAbbreviations {
+	if n.abbreviated() {
 		abbrs, err := abbreviations(pattern)
 		if err != nil {
 			return nil, fmt.Errorf("the platform may send it abbreviated (spec §3 rule 4) and %w", err)

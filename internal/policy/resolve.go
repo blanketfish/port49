@@ -132,7 +132,7 @@ func (p *Policy) resolve(sub *Subject, d admission.Device, now time.Time) (Resol
 // as this platform defines them; and the session attributes, layered.
 func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dialect) (engine.Blob, []AttributeSource, error) {
 	b := engine.Blob{Version: engine.Version, Bundle: p.Bundle, Platform: d.Platform, Privilege: c.level,
-		Normalize: normalizeOf(dialect), Classes: map[string][]string{}}
+		Normalize: p.normalizeFor(d.Platform), Classes: map[string][]string{}}
 	pipe := map[string]bool{}
 	for _, name := range c.roles {
 		r := p.roles[name]

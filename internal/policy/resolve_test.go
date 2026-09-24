@@ -493,3 +493,23 @@ grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: floor}]`),
 		t.Fatalf("Parse = %v", err)
 	}
 }
+
+// Junos sends no per-command authorization (L18; spec §13 decision 21), so its
+// blob is session-only and widens no command rule; EOS and an unknown
+// platform's generic adapter, which the engine still evaluates commands for,
+// are not.
+func TestOnlyAMeasuredSessionOnlyPlatformIsSessionOnly(t *testing.T) {
+	p := mustParse(t, good)
+	generic := deviceNamed(t, "leaf-01")
+	generic.Name, generic.Platform = "ntp-01", "meinberg_lantime"
+	for device, want := range map[string]bool{"srx-fw-04": true, "leaf-01": false, "ntp-01": false} {
+		d := generic
+		if device != "ntp-01" {
+			d = deviceNamed(t, device)
+		}
+		r, err := p.Resolve("user:alice@example.com", d, noon)
+		if err != nil || r.Blob.Normalize.SessionOnly != want {
+			t.Errorf("%s: session_only %v, err %v; want %v", device, r.Blob.Normalize.SessionOnly, err, want)
+		}
+	}
+}

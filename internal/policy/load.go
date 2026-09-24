@@ -762,17 +762,24 @@ func (p *Policy) checkWidening(rule string) error {
 	platforms := p.platforms()
 	for _, name := range sortedKeys(platforms) {
 		d := platforms[name]
-		if err := engine.CheckDeny(rule, d.EntityClasses, normalizeOf(d)); err != nil {
+		if err := engine.CheckDeny(rule, d.EntityClasses, p.normalizeFor(name)); err != nil {
 			return fmt.Errorf("on %s, %w", name, err)
 		}
 	}
 	return nil
 }
 
-// normalizeOf is the part of a dialect a blob carries (spec §5.1.2).
-func normalizeOf(d platform.Dialect) engine.Normalize {
+// normalizeFor is the part of a platform's dialect a blob carries (spec
+// §5.1.2). A platform port49 has a dialect for that declares no command
+// authorization is session-only (Junos: L18, decision 21), and no command
+// rule is widened for it; the generic adapter's `session` alone is assumed,
+// not measured, so an unknown platform is not.
+func (p *Policy) normalizeFor(name string) engine.Normalize {
+	d := p.dialect(name)
+	_, known := p.platforms()[name]
 	return engine.Normalize{PipeToken: d.PipeToken, PipeAuthorized: d.PipeAuthorized,
-		StripCR: d.StripCR, ExpandsAbbreviations: d.ExpandsAbbreviations, SplitsInterfaceNames: d.SplitsInterfaceNames}
+		StripCR: d.StripCR, ExpandsAbbreviations: d.ExpandsAbbreviations, SplitsInterfaceNames: d.SplitsInterfaceNames,
+		SessionOnly: known && !d.Authorizes("commands")}
 }
 
 // numberedAnywhere reports whether some platform gives level a priv-lvl

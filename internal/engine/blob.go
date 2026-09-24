@@ -61,13 +61,22 @@ type Blob struct {
 // Normalize is the platform's dialect as the evaluator needs it (spec §3).
 // A flag added after format version 2 is written only when set, so a v2 blob
 // written before it still decodes, reads it as false, and keeps its hash.
+//
+// SessionOnly is a platform measured sending no per-command authorization
+// (Junos, spec §13 decision 21): there is no command to widen a deny for, so
+// none is, and a command that did arrive is matched as written.
 type Normalize struct {
 	PipeToken            string `json:"pipe_token"`
 	PipeAuthorized       bool   `json:"pipe_authorized"`
 	StripCR              bool   `json:"strip_cr"`
 	ExpandsAbbreviations bool   `json:"expands_abbreviations"`
 	SplitsInterfaceNames bool   `json:"splits_interface_names,omitempty"`
+	SessionOnly          bool   `json:"session_only,omitempty"`
 }
+
+// abbreviated reports whether a deny must also match what the operator typed
+// abbreviated (spec §3 rule 4).
+func (n Normalize) abbreviated() bool { return !n.ExpandsAbbreviations && !n.SessionOnly }
 
 // Rule is one command rule and the role that carries it. The role is on the
 // rule so a decision names exactly one (spec §5.3).
