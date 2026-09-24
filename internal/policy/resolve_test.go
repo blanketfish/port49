@@ -33,7 +33,7 @@ func TestResolveComposesAndCompiles(t *testing.T) {
 	}
 	b := r.Blob
 	if b.Platform != "arista_eos" || b.Bundle != p.Bundle || b.Privilege != "readonly" ||
-		!reflect.DeepEqual(b.Attributes, []string{"priv-lvl=1"}) || !reflect.DeepEqual(b.Pipe, sortedCopy(DefaultPipe)) ||
+		!reflect.DeepEqual(b.Attributes, []string{"priv-lvl=1", "roles=network-operator"}) || !reflect.DeepEqual(b.Pipe, sortedCopy(DefaultPipe)) ||
 		b.Normalize.PipeToken != "|" || b.Normalize.PipeAuthorized || !b.Normalize.ExpandsAbbreviations {
 		t.Fatalf("blob: %+v", b)
 	}
@@ -130,7 +130,7 @@ grants:
 	}
 	// Order is first appearance — platform, then roles by name, then grants —
 	// with an override taking the place of what it shadows.
-	want := []string{"priv-lvl=2", "home-directory*/home/{username}", "idletime*30", "timeout*60"}
+	want := []string{"priv-lvl=2", "roles=network-operator", "home-directory*/home/{username}", "idletime*30", "timeout*60"}
 	if !reflect.DeepEqual(r.Blob.Attributes, want) {
 		t.Fatalf("attributes %q, want %q", r.Blob.Attributes, want)
 	}

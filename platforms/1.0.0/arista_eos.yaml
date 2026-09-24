@@ -6,14 +6,25 @@ platforms:
     # Session and per-command authorization (L1, L10). Config-command
     # authorization is unmeasured, so it is not claimed.
     supports: [session, commands]
-    # readonly and admin are applied by vEOS on every lab run since 2026-09-20
-    # (tests/lab/results/L16-arista_eos.md). operator renders as admin does
-    # (spec §6, decision 23): at 15 vEOS fenced nothing port49 permitted, and
-    # at 1 it refused even `clear counters` (ceiling-arista_eos.md).
+    # The level and the role travel together: EOS reads the bare `roles=`, and
+    # a role with no `priv-lvl` beside it lands the session at 1
+    # (tests/lab/results/L16-arista_eos.md, 2026-09-22).
+    #
+    # The level is what fences a session while port49 answers: at 1 the parser
+    # refuses `clear counters`, `clear ip bgp *` and `configure terminal`
+    # without asking port49, and at 15 it fences nothing port49 permits, a
+    # network-operator role included (ceiling-arista_eos.md). So operator gets
+    # admin's 15 and port49's rules are its fence (spec §6, decision 23).
+    #
+    # The role is what fences a session when port49 cannot answer and
+    # `aaa authorization commands ... local` takes over: network-operator is
+    # refused `configure`, network-admin is not (L16-arista_eos.md, command
+    # authorization LOCAL). So operator gets readonly's role, and the
+    # fallback never hands an operator configuration (decision 25).
     privilege:
-      readonly: ["priv-lvl=1"]
-      operator: ["priv-lvl=15"]
-      admin: ["priv-lvl=15"]
+      readonly: ["priv-lvl=1", "roles=network-operator"]
+      operator: ["priv-lvl=15", "roles=network-operator"]
+      admin: ["priv-lvl=15", "roles=network-admin"]
     # Interface names, not device behaviour: spec §8's example.
     entity_classes:
       management: ['^Management[0-9]+$']

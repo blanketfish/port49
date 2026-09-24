@@ -9,8 +9,8 @@ import (
 	"github.com/rhwendt/port49/platforms"
 )
 
-// shipped is the table plan 4 compiled into the binary, value for value.
-// Moving it into platforms/1.0.0/ must not change what any device is told.
+// shipped is the default set, value for value: the table plan 4 compiled
+// into the binary, and each change plan 5 made to it with the note behind it.
 var shipped = map[string]Dialect{
 	"arista_eos": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
@@ -20,7 +20,9 @@ var shipped = map[string]Dialect{
 			"loopback":   {`^Loopback[0-9]+$`},
 			"physical":   {`^Ethernet[0-9/.]+$`, `^Port-Channel[0-9]+$`},
 		},
-		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=15"}, "admin": {"priv-lvl=15"}},
+		// L16-arista_eos.md, ceiling-arista_eos.md; decisions 23 and 25.
+		Levels: map[string][]string{"readonly": {"priv-lvl=1", "roles=network-operator"},
+			"operator": {"priv-lvl=15", "roles=network-operator"}, "admin": {"priv-lvl=15", "roles=network-admin"}},
 		PrivilegeAttributes: []string{"priv-lvl", "roles"},
 		InertAttributes:     []string{"home-directory"},
 	},
@@ -49,7 +51,7 @@ var shipped = map[string]Dialect{
 	},
 }
 
-func TestTheDefaultSetIsTheTablePlan4Shipped(t *testing.T) {
+func TestTheDefaultSetValueForValue(t *testing.T) {
 	got := Dialects()
 	if len(got) != len(shipped) {
 		t.Fatalf("%d platforms, want %d", len(got), len(shipped))

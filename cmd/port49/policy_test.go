@@ -543,7 +543,8 @@ func TestPolicyDiffGatesALevelRaise(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
 		!strings.Contains(out.String(), "RAISES: noc on leaf-01: level readonly -> admin, max_privilege none -> none, "+
-			"priv_lvl 1 -> 15, enable none -> none, reply [\"priv-lvl=1\"] -> [\"priv-lvl=15\"]; no session test asserts it: add {subject: noc, device: leaf-01, "+
+			"priv_lvl 1 -> 15, enable none -> none, reply [\"priv-lvl=1\", \"roles=network-operator\"] -> "+
+			"[\"priv-lvl=15\", \"roles=network-admin\"]; no session test asserts it: add {subject: noc, device: leaf-01, "+
 			"priv_lvl: 15, level: admin}") ||
 		!strings.Contains(out.String(), "1 unacknowledged privilege raises") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
@@ -688,7 +689,7 @@ func TestPolicyDiffGatesAPrivilegeAttributeInTheReply(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
-		!strings.Contains(out.String(), `reply ["priv-lvl=1"] -> ["priv-lvl=1", "roles=network-admin"]; no session test asserts it: `+
+		!strings.Contains(out.String(), `reply ["priv-lvl=1", "roles=network-operator"] -> ["priv-lvl=1", "roles=network-admin"]; no session test asserts it: `+
 			`add {subject: noc, device: leaf-01, reply: ["priv-lvl=1", "roles=network-admin"]}`) {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}

@@ -88,12 +88,11 @@ func TestManagementIsDefinedPerPlatform(t *testing.T) {
 	}
 }
 
-// Levels render per platform. arista_eos is the one platform whose rendering is
-// measured (L16); every other platform renders nothing, which is not a mapping
-// error, and still has a number for the token's ceiling.
+// Levels render per platform, and a platform that renders no priv-lvl still
+// has a number for the token's ceiling.
 func TestLevelsRenderAndHaveANumber(t *testing.T) {
 	eos, _ := DialectFor("arista_eos")
-	if a, ok := eos.Render("admin"); !ok || !reflect.DeepEqual(a, []string{"priv-lvl=15"}) {
+	if a, ok := eos.Render("admin"); !ok || !reflect.DeepEqual(a, []string{"priv-lvl=15", "roles=network-admin"}) {
 		t.Fatalf("eos admin: %v %v", a, ok)
 	}
 	if n, ok := eos.PrivLvl("readonly"); !ok || n != 1 {
@@ -113,8 +112,8 @@ func TestLevelsRenderAndHaveANumber(t *testing.T) {
 // spec §6, decision 23), and nothing new on IOS-XE, which can (plan 5's).
 func TestOperatorIsAdminsLevelWhereTheDeviceCannotFenceIt(t *testing.T) {
 	eos, _ := DialectFor("arista_eos")
-	if a, ok := eos.Render("operator"); !ok || !reflect.DeepEqual(a, []string{"priv-lvl=15"}) {
-		t.Fatalf("eos operator renders as admin does: %v %v", a, ok)
+	if a, ok := eos.Render("operator"); !ok || !reflect.DeepEqual(a, []string{"priv-lvl=15", "roles=network-operator"}) {
+		t.Fatalf("eos operator gets admin's level and readonly's role: %v %v", a, ok)
 	}
 	if n, ok := eos.PrivLvl("operator"); !ok || n != 15 {
 		t.Fatalf("eos operator: %d %v", n, ok)
@@ -145,7 +144,7 @@ func TestUnknownPlatformsAreGenericAndTheTableIsCopied(t *testing.T) {
 	eos.EntityClasses["management"][0] = "changed"
 	eos.Levels["admin"] = nil
 	again, _ := DialectFor("arista_eos")
-	if again.EntityClasses["management"][0] == "changed" || len(again.Levels["admin"]) != 1 {
+	if again.EntityClasses["management"][0] == "changed" || len(again.Levels["admin"]) != 2 {
 		t.Fatal("DialectFor must return a copy")
 	}
 	if len(Dialects()) != len(Names()) {
@@ -188,6 +187,24 @@ func TestPrivilegeAttributesArePerPlatformAndFailClosed(t *testing.T) {
 	for _, n := range append([]string{"priv-lvl", "roles", "shell:roles", "cisco-av-pair"}, junos...) {
 		if !slices.Contains(all, n) {
 			t.Errorf("PrivilegeAttributeNames lacks %s: %v", n, all)
+		}
+	}
+}
+
+// EOS is told the level and the role together, because a role with no
+// priv-lvl beside it lands the session at 1 (L16-arista_eos.md). The level
+// fences a session while port49 answers and the role when the device falls
+// back to local, so operator gets admin's level and readonly's role
+// (ceiling-arista_eos.md; decisions 23 and 25).
+func TestEOSSendsTheLevelAndTheRole(t *testing.T) {
+	eos, _ := DialectFor("arista_eos")
+	for level, want := range map[string][]string{
+		"readonly": {"priv-lvl=1", "roles=network-operator"},
+		"operator": {"priv-lvl=15", "roles=network-operator"},
+		"admin":    {"priv-lvl=15", "roles=network-admin"},
+	} {
+		if got, ok := eos.Render(level); !ok || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %v %v, want %v", level, got, ok, want)
 		}
 	}
 }

@@ -583,7 +583,7 @@ func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
 		}
 		was := `[]`
 		if tt.device == "leaf-01" {
-			was = `["priv-lvl=1"]`
+			was = `["priv-lvl=1", "roles=network-operator"]`
 		}
 		back = Compare(mustParse(t, after), mustParse(t, diffBase+"tests:\n  - {subject: noc, device: "+tt.device+", reply: "+was+"}\n"), noon)
 		if back.UnacknowledgedLevels() != raised-1 {
