@@ -439,7 +439,9 @@ func TestAShortCommandWordIsASecretKeywordOnlyInAKeysShape(t *testing.T) {
 		"crypto isakmp k Hunter2 address 0.0.0.0", "enable s 0 Hunter2", "enable p Hunter2", "enable pa Hunter2",
 		"username bob pa Hunter2", "username bob se 0 Hunter2", "neighbor 10.0.0.1 pa Hunter2", "sh 7 Hunter2",
 		"sh 0 Hunter2", "k Hunter2", "shared-key 7 Hunter2", "do sh 7 Hunter2", "key-string Hunter2",
-		"license smart register idtoken Hunter2", "management api gnmi token Hunter2"} {
+		"license smart register idtoken Hunter2", "management api gnmi token Hunter2",
+		// A token need not be the last word (task 15 re-review 2, R2).
+		"token 0 Hunter2", "ip http token Hunter2 extra", "management api gnmi token Hunter2 vrf mgmt"} {
 		for _, name := range []string{"default", "arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
 			if got, _ := Redact(Redactions(name), []string{line}); strings.Contains(got[0], "Hunter2") {
 				t.Errorf("%s: %q: %q", name, line, got[0])

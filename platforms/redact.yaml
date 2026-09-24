@@ -73,12 +73,13 @@ default:
   # over-redaction is the accepted cost (task 15 review I4).
   - {match: ['**', community, '*', '{'], after: community}
   # Wireless pre-shared keys (`wpa-psk ascii 0 <key>`), API tokens (`management
-  # api gnmi ... token <t>`, scoped to `token` and one word so a short word
-  # elsewhere is not read as it), and RADIUS and OAuth secrets (`shared-secret
-  # <s>`, `client-secret <s>`). An argument matches a keyword's every
-  # abbreviation; the command word only in a key's shape (spec §5.8).
+  # api gnmi ... token <t> vrf <v>`, unscoped: a token need not be the last
+  # word), and RADIUS and OAuth secrets (`shared-secret <s>`, `client-secret
+  # <s>`). An argument matches a keyword's every abbreviation, so an argument
+  # `to` loses what follows it, accepted; the command word only in a key's
+  # shape (spec §5.8).
   - {match: ['**'], after: wpa-psk}
-  - {match: ['**', token, '*'], after: token}
+  - {match: ['**'], after: token}
   - {match: ['**'], after: shared-secret}
   - {match: ['**'], after: client-secret}
 juniper_junos:
