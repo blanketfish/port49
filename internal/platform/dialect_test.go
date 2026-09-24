@@ -99,17 +99,24 @@ func TestLevelsRenderAndHaveANumber(t *testing.T) {
 		t.Fatalf("eos readonly: %d %v", n, ok)
 	}
 	nx, _ := DialectFor("cisco_nxos")
-	if a, ok := nx.Render("operator"); !ok || len(a) != 0 {
-		t.Fatalf("nx-os renders nothing, for any level: %v %v", a, ok)
+	if a, ok := nx.Render("admin"); !ok || !reflect.DeepEqual(a, []string{"shell:roles*network-admin"}) {
+		t.Fatalf("nx-os admin: %v %v", a, ok)
 	}
 	if n, ok := nx.PrivLvl("admin"); !ok || n != 15 {
-		t.Fatalf("nx-os admin's ceiling number: %d %v", n, ok)
+		t.Fatalf("nx-os renders no priv-lvl, and admin's ceiling number is its table's: %d %v", n, ok)
+	}
+	junos, _ := DialectFor("juniper_junos")
+	if a, ok := junos.Render("admin"); !ok || len(a) != 0 {
+		t.Fatalf("junos renders nothing until plan 5b's projection: %v %v", a, ok)
+	}
+	if n, ok := junos.PrivLvl("admin"); !ok || n != 15 {
+		t.Fatalf("junos admin's ceiling number is plan 3's table's: %d %v", n, ok)
 	}
 }
 
 // operator gets admin's device privilege on arista_eos and cisco_nxos, where
 // the device cannot draw the operator line (tests/lab/results/ceiling-*.md;
-// spec §6, decision 23), and nothing new on IOS-XE, which can (plan 5's).
+// spec §6, decision 23), and level 7 on IOS-XE, where it can (decision 25).
 func TestOperatorIsAdminsLevelWhereTheDeviceCannotFenceIt(t *testing.T) {
 	eos, _ := DialectFor("arista_eos")
 	if a, ok := eos.Render("operator"); !ok || !reflect.DeepEqual(a, []string{"priv-lvl=15", "roles=network-operator"}) {
@@ -125,7 +132,11 @@ func TestOperatorIsAdminsLevelWhereTheDeviceCannotFenceIt(t *testing.T) {
 	if n, ok := nx.PrivLvl("readonly"); !ok || n != 1 {
 		t.Fatalf("nx-os readonly: %d %v", n, ok)
 	}
-	for _, name := range []string{"cisco_iosxe", "juniper_junos", "no_such_platform"} {
+	xe, _ := DialectFor("cisco_iosxe")
+	if n, ok := xe.PrivLvl("operator"); !ok || n != 7 {
+		t.Fatalf("ios-xe operator: %d %v", n, ok)
+	}
+	for _, name := range []string{"juniper_junos", "no_such_platform"} {
 		d, _ := DialectFor(name)
 		if _, ok := d.PrivLvl("operator"); ok {
 			t.Fatalf("%s: operator has no number there yet", name)
@@ -205,6 +216,31 @@ func TestEOSSendsTheLevelAndTheRole(t *testing.T) {
 	} {
 		if got, ok := eos.Render(level); !ok || !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %v %v, want %v", level, got, ok, want)
+		}
+	}
+}
+
+// NX-OS is told the role and never priv-lvl: the role decides in both
+// directions and a priv-lvl beside it is inert (L16-cisco_nxos.md). IOS-XE is
+// told priv-lvl and nothing else, and its level 7 is the operator rung
+// (L18-cisco_iosxe.md, ceiling-cisco_iosxe.md).
+func TestNXOSSendsTheRoleAndIOSXETheLevel(t *testing.T) {
+	nx, _ := DialectFor("cisco_nxos")
+	xe, _ := DialectFor("cisco_iosxe")
+	for _, tt := range []struct {
+		d     Dialect
+		level string
+		want  []string
+	}{
+		{nx, "readonly", []string{"shell:roles*network-operator"}},
+		{nx, "operator", []string{"shell:roles*network-operator"}},
+		{nx, "admin", []string{"shell:roles*network-admin"}},
+		{xe, "readonly", []string{"priv-lvl=1"}},
+		{xe, "operator", []string{"priv-lvl=7"}},
+		{xe, "admin", []string{"priv-lvl=15"}},
+	} {
+		if got, ok := tt.d.Render(tt.level); !ok || !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("%s: %v %v, want %v", tt.level, got, ok, tt.want)
 		}
 	}
 }

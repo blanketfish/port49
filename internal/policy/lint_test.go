@@ -17,7 +17,7 @@ subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s
 grants: [{subject: s, scope: all_devices, roles: [op]}]
 tests:
   - {subject: s, device: leaf-01, command: "show version", expect: deny, reason: device_quarantined}
-  - {subject: s, device: nx-01, command: "show version", expect: permit}
+  - {subject: s, device: srx-fw-04, command: "show version", expect: permit}
 `)
 	results := p.RunTests(noon)
 	if len(results) != 2 {

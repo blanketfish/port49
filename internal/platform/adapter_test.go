@@ -28,15 +28,20 @@ var shipped = map[string]Dialect{
 	},
 	"cisco_nxos": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true,
-		Supports:            []string{"session", "commands"},
-		EntityClasses:       map[string][]string{"management": {`^mgmt[0-9]+$`}},
+		Supports:      []string{"session", "commands"},
+		EntityClasses: map[string][]string{"management": {`^mgmt[0-9]+$`}},
+		// L16-cisco_nxos.md, ceiling-cisco_nxos.md; decisions 23 and 25.
+		Levels: map[string][]string{"readonly": {"shell:roles*network-operator"},
+			"operator": {"shell:roles*network-operator"}, "admin": {"shell:roles*network-admin"}},
 		CeilingLevels:       map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
 		PrivilegeAttributes: []string{"priv-lvl", "shell:roles", "cisco-av-pair"},
 		InertAttributes:     []string{"home-directory"},
 	},
 	"cisco_iosxe": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true, SplitsInterfaceNames: true,
-		Supports:            []string{"session", "commands"},
+		Supports: []string{"session", "commands"},
+		// L18-cisco_iosxe.md, ceiling-cisco_iosxe.md; decision 25.
+		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=7"}, "admin": {"priv-lvl=15"}},
 		PrivilegeAttributes: []string{"priv-lvl"},
 		InertAttributes:     []string{"home-directory"},
 	},

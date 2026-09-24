@@ -104,7 +104,7 @@ grants: [{subject: s, scope: all_devices, roles: [op]}]`)
 	_, out := explained(t, p, "s", "", "leaf-01", "show version", false)
 	mustContain(t, out, "deny device_quarantined", "leaf-01 (arista_eos) fails a joint check now",
 		"level unmapped has no rendering on arista_eos")
-	_, out = explained(t, p, "s", "", "nx-01", "show version", false)
+	_, out = explained(t, p, "s", "", "srx-fw-04", "show version", false)
 	mustContain(t, out, "permit permit_dominates")
 }
 

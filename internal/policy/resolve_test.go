@@ -58,20 +58,26 @@ func sortedCopy(s []string) []string {
 }
 
 // A platform that renders no level sends no attributes, and still numbers the
-// ceiling for the token (plan 3's table); a group subject resolves by name
-// only, since matching a person to a group is the directory's (plan 7).
+// ceiling for the token (plan 3's table), as one that renders a role and no
+// priv-lvl numbers it from its own; a group subject resolves by name only,
+// since matching a person to a group is the directory's (plan 7).
 func TestAPlatformThatRendersNothingStillHasACeiling(t *testing.T) {
 	p := mustParse(t, good)
-	if _, err := p.Resolve("CN=netops-admins,OU=Groups,DC=example,DC=com", deviceNamed(t, "nx-01"), noon); !errors.Is(err, ErrNoGrants) {
+	if _, err := p.Resolve("CN=netops-admins,OU=Groups,DC=example,DC=com", deviceNamed(t, "srx-fw-04"), noon); !errors.Is(err, ErrNoGrants) {
 		t.Fatalf("a group is never a principal: %v", err)
 	}
-	r, err := p.ResolveSubject("netops_admins", deviceNamed(t, "nx-01"), noon)
+	r, err := p.ResolveSubject("netops_admins", deviceNamed(t, "srx-fw-04"), noon)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.MaxPrivilege != 15 || !r.HasCeiling || r.Level != "admin" || len(r.Blob.Attributes) != 0 ||
 		!reflect.DeepEqual(r.Blob.Pipe, []string{"**"}) {
-		t.Fatalf("netops_admins on NX-OS: %+v", r)
+		t.Fatalf("netops_admins on Junos: %+v", r)
+	}
+	r, err = p.ResolveSubject("netops_admins", deviceNamed(t, "nx-01"), noon)
+	if err != nil || r.MaxPrivilege != 15 || !r.HasCeiling ||
+		!reflect.DeepEqual(r.Blob.Attributes, []string{"shell:roles*network-admin"}) {
+		t.Fatalf("netops_admins on NX-OS: %+v %v", r, err)
 	}
 	if _, err := p.ResolveSubject("nobody", deviceNamed(t, "nx-01"), noon); err == nil {
 		t.Fatal("an undeclared subject is an error")
@@ -170,8 +176,8 @@ grants: [{subject: s, scope: all_devices, roles: [tech]}]`, `role "tech" names @
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: op, privilege: unmapped, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [op]}]`, "level unmapped has no rendering on arista_eos",
-			[]string{"campus-sw-7", "leaf-01"}},
+grants: [{subject: s, scope: all_devices, roles: [op]}]`, "level unmapped has no rendering on",
+			[]string{"campus-sw-7", "leaf-01", "nx-01", "xe-01"}},
 		{"a landing level above the ceiling", `
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: adm, privilege: admin, permit: ["**"]}]
@@ -352,7 +358,7 @@ grants:
   - {subject: s, scope: all_devices, roles: [op], expires: 2026-11-01}
   - {subject: s, scope: dc, roles: [adm], expires: 2026-10-01}`, env())
 	leaf, campus := got["leaf-01"], got["campus-sw-7"]
-	if len(got) != 2 || len(leaf) != 1 || len(campus) != 1 ||
+	if len(got) != 4 || len(leaf) != 1 || len(campus) != 1 || len(got["nx-01"]) != 1 || len(got["xe-01"]) != 1 ||
 		!strings.HasPrefix(leaf[0], "will be quarantined from 2026-10-01T00:00:00.000Z, when grant dc [adm] expires: ") ||
 		!strings.Contains(leaf[0], "level unmapped has no rendering on arista_eos") ||
 		!strings.HasPrefix(campus[0], `quarantined: subject "s": level unmapped`) {

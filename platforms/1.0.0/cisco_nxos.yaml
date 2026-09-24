@@ -6,10 +6,27 @@ platforms:
     # Session and per-command authorization (L1, L10). Config-command
     # authorization is unmeasured, so it is not claimed.
     supports: [session, commands]
-    # No level is rendered yet. The token's ceiling still needs a number:
-    # operator numbers 15, admin's, on the owner's ruling of 2026-09-24 —
-    # every N9Kv role ran all three disruptive commands and network-operator
-    # changed configuration (ceiling-cisco_nxos.md; spec §6, decision 23).
+    # The role alone, never priv-lvl: `shell:roles` decides the role in both
+    # directions and a priv-lvl beside it is inert, the role alone suffices,
+    # and priv-lvl with no role picks one by a per-release table
+    # (tests/lab/results/L16-cisco_nxos.md, 2026-09-22). The flag changes
+    # nothing on this image (L16, L18), so the attribute is optional, the
+    # spelling a device that does not read it must ignore (spec §6).
+    #
+    # While command authorization points at port49 no role narrows anything:
+    # network-operator ran `clear counters`, `clear ip bgp *` and a
+    # configuration change (ceiling-cisco_nxos.md), so port49's rules are the
+    # fence for every level (decision 23). When the device falls back to
+    # local, the role binds: network-operator is refused a configuration
+    # command, network-admin is not (L16-cisco_nxos.md, command authorization
+    # LOCAL). So operator gets readonly's role (decision 25).
+    privilege:
+      readonly: ["shell:roles*network-operator"]
+      operator: ["shell:roles*network-operator"]
+      admin: ["shell:roles*network-admin"]
+    # No priv-lvl is rendered, so the token's ceiling takes its number here:
+    # operator numbers 15, admin's, on the owner's ruling of 2026-09-24
+    # (spec §6, decision 23).
     ceiling_levels: {readonly: 1, operator: 15, admin: 15}
     # mgmt0 is the interface the lab reaches the device on
     # (tests/lab/configs/nxos-startup.cfg).

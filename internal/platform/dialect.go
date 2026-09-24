@@ -59,9 +59,10 @@ type Dialect struct {
 	// Question 2) — and is not a load error; an entry missing from a non-nil
 	// map is, unless the level's parent chain reaches one.
 	Levels map[string][]string
-	// CeilingLevels is the priv-lvl number each level stands for on a
-	// platform that renders none (Levels nil), where the token's ceiling still
-	// needs one. nil is plan 3's table, ceilingLevels.
+	// CeilingLevels is the priv-lvl number each level stands for where the
+	// platform's rendering sends no priv-lvl — NX-OS is sent a role and no
+	// level (L16) — and the token's ceiling still needs one. nil on a platform
+	// with no Levels is plan 3's table, ceilingLevels.
 	CeilingLevels map[string]uint8
 	// PrivilegeAttributes are the attribute names measured to carry privilege
 	// on this platform (spec §6): none takes a placeholder, and the policy
@@ -186,18 +187,11 @@ func (d Dialect) Render(level string) (attrs []string, ok bool) {
 }
 
 // PrivLvl is the priv-lvl number this platform gives exactly this level: the
-// value of a `priv-lvl` attribute in its rendering, or, where the platform
-// renders none, its CeilingLevels or plan 3's table. ok is false where none
-// says.
+// value of a `priv-lvl` attribute in its rendering; where the rendering sends
+// none, its CeilingLevels (NX-OS renders a role and no level, L16); and where
+// the platform renders nothing at all and declares no table, plan 3's. ok is
+// false where none says.
 func (d Dialect) PrivLvl(level string) (uint8, bool) {
-	if d.Levels == nil {
-		table := d.CeilingLevels
-		if table == nil {
-			table = ceilingLevels
-		}
-		n, ok := table[level]
-		return n, ok
-	}
 	for _, a := range d.Levels[level] {
 		i := strings.IndexAny(a, "=*")
 		if i < 0 || a[:i] != "priv-lvl" {
@@ -207,5 +201,13 @@ func (d Dialect) PrivLvl(level string) (uint8, bool) {
 			return uint8(n), true
 		}
 	}
-	return 0, false
+	table := d.CeilingLevels
+	if table == nil {
+		if d.Levels != nil {
+			return 0, false
+		}
+		table = ceilingLevels
+	}
+	n, ok := table[level]
+	return n, ok
 }

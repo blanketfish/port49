@@ -6,8 +6,24 @@ platforms:
     # Session and per-command authorization (L1, L10). Config-command
     # authorization is unmeasured, so it is not claimed.
     supports: [session, commands]
-    # No level is rendered yet, and no entity class is defined: the lab's
-    # management interface is GigabitEthernet1, a physical port by name.
+    # priv-lvl alone: this image refuses the session for any attribute it does
+    # not recognise, under either flag, and a run of refusals stops it
+    # answering SSH for about a minute, break-glass included
+    # (tests/lab/results/L18-cisco_iosxe.md).
+    #
+    # The device draws its own ladder: level 1 refuses `clear counters`,
+    # `clear ip bgp *` and `configure terminal` in the parser without asking
+    # port49; level 7 does the same until the device is told what level 7
+    # may run, and `privilege exec level 7 clear counters` makes it exactly
+    # the operator rung (ceiling-cisco_iosxe.md). So operator is 7 here, not
+    # admin's 15 (decision 25), and the reference configuration carries the
+    # line that gives 7 its commands.
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=7"]
+      admin: ["priv-lvl=15"]
+    # No entity class is defined: the lab's management interface is
+    # GigabitEthernet1, a physical port by name.
     #
     # `sh ver` arrived as `show version` over SSH (L21-cisco_iosxe.md);
     # RESTCONF and NETCONF are unmeasured.

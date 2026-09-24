@@ -46,10 +46,11 @@ func mustParse(t *testing.T, body string) *Policy {
 }
 
 // unmappedLevel declares a level, between operator and admin, that no
-// built-in platform renders or numbers: a role landing an arista_eos session
-// there quarantines the device, and a ceiling naming it loads nowhere. Since
-// the owner's ruling of 2026-09-24 `operator` renders on EOS (spec §6,
-// decision 23), so it is the tests' stand-in for a level with no mapping.
+// built-in platform renders or numbers: a role landing a session there
+// quarantines every device whose platform renders levels — arista_eos,
+// cisco_nxos and cisco_iosxe since plan 5 — and a ceiling naming it loads
+// nowhere. juniper_junos renders nothing until plan 5b's projection, so its
+// devices are the tests' devices that still mint.
 const unmappedLevel = "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"
 
 // good is spec §11's shape, cut to what every platform in inventory() can

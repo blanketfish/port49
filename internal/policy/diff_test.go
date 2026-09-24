@@ -95,7 +95,7 @@ func TestTheDiffReportsWhatItCannotEnumerate(t *testing.T) {
 		t.Fatalf("access %+v", d.Access)
 	}
 	quarantining := mustParse(t, unmappedLevel+strings.Replace(diffBase, "privilege: readonly", "privilege: unmapped", 1))
-	if q := Compare(before, quarantining, noon).Quarantined; len(q) != 2 || q[0].Device != "campus-sw-7" {
+	if q := Compare(before, quarantining, noon).Quarantined; len(q) != 4 || q[0].Device != "campus-sw-7" {
 		t.Fatalf("newly quarantined %+v", q)
 	}
 }
@@ -197,22 +197,26 @@ func TestTheGateSeesAWidenedPipeAllowlist(t *testing.T) {
 func TestTheGateSeesAReleaseAndANewCause(t *testing.T) {
 	quarantining := unmappedLevel + strings.Replace(diffBase, "privilege: readonly", "privilege: unmapped", 1)
 	d := Compare(mustParse(t, quarantining), mustParse(t, diffBase), noon)
-	if len(d.Released) != 2 || d.Released[0].Device != "campus-sw-7" || d.Unacknowledged() == 0 {
+	if len(d.Released) != 4 || d.Released[0].Device != "campus-sw-7" || d.Unacknowledged() == 0 {
 		t.Fatalf("released %+v, %d unacknowledged", d.Released, d.Unacknowledged())
 	}
 	for _, c := range d.Changes {
-		if c.Old.Reason != decision.DeviceQuarantined || !c.Gated || !slices.Contains([]string{"leaf-01", "campus-sw-7"}, c.Devices[0]) {
+		if c.Old.Reason != decision.DeviceQuarantined || !c.Gated ||
+			!slices.Contains([]string{"leaf-01", "campus-sw-7", "nx-01", "xe-01"}, c.Devices[0]) {
 			t.Errorf("%+v", c)
 		}
 	}
-	acked := diffBase + "tests:\n  - {subject: noc, device: leaf-01, command: \"show version\", expect: permit}\n"
+	acked := diffBase + "tests:\n"
+	for _, device := range []string{"leaf-01", "nx-01", "xe-01"} {
+		acked += "  - {subject: noc, device: " + device + ", command: \"show version\", expect: permit}\n"
+	}
 	if d := Compare(mustParse(t, quarantining), mustParse(t, acked), noon); d.Unacknowledged() != 0 {
 		t.Fatalf("a test acknowledges it: %+v", d.Changes)
 	}
 	second := strings.Replace(quarantining, "grants:\n", "  - {name: ops, identity: \"user:ops@example.com\", username: ops, token_ttl: 60s}\ngrants:\n"+
 		"  - {subject: ops, scope: all_devices, roles: [read_only]}\n", 1)
 	q := Compare(mustParse(t, quarantining), mustParse(t, second), noon).Quarantined
-	if len(q) != 2 || len(q[0].Entries) != 1 || !strings.Contains(q[0].Entries[0].Cause, `"ops"`) {
+	if len(q) != 4 || len(q[0].Entries) != 1 || !strings.Contains(q[0].Entries[0].Cause, `"ops"`) {
 		t.Fatalf("newly quarantined %+v", q)
 	}
 }
@@ -556,7 +560,7 @@ func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
 		{`{juniper_junos: [local-user-name=super-user]}`, "srx-lab-01", `["local-user-name=super-user"]`},
 		{`{cisco_nxos: ["shell:roles=network-admin"]}`, "nx-01", `["shell:roles=network-admin"]`},
 		{`{arista_eos: ["roles=network-admin"]}`, "leaf-01", `["priv-lvl=1", "roles=network-admin"]`},
-		{`{all: ["idletime*30"]}`, "xe-01", `["idletime*30"]`},
+		{`{all: ["idletime*30"]}`, "xe-01", `["priv-lvl=1", "idletime*30"]`},
 	} {
 		after := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: "+tt.attrs+"}", 1)
 		d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
@@ -581,9 +585,10 @@ func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
 		if back.UnacknowledgedLevels() != raised {
 			t.Fatalf("%s: removing it fails the gate: %+v", tt.attrs, back.Levels)
 		}
-		was := `[]`
-		if tt.device == "leaf-01" {
-			was = `["priv-lvl=1", "roles=network-operator"]`
+		was := map[string]string{"leaf-01": `["priv-lvl=1", "roles=network-operator"]`,
+			"nx-01": `["shell:roles*network-operator"]`, "xe-01": `["priv-lvl=1"]`}[tt.device]
+		if was == "" {
+			was = `[]`
 		}
 		back = Compare(mustParse(t, after), mustParse(t, diffBase+"tests:\n  - {subject: noc, device: "+tt.device+", reply: "+was+"}\n"), noon)
 		if back.UnacknowledgedLevels() != raised-1 {
