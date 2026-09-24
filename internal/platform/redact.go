@@ -442,23 +442,6 @@ func RedactRule(rules []Redaction, words []string) ([]string, bool) {
 	return out, true
 }
 
-// RedactRaw applies rules to a record's raw AV pairs: the values of its cmd
-// and cmd-arg pairs are the command's elements, a trailing `<cr>` aside, and
-// each keeps its own key and separator.
-func RedactRaw(rules []Redaction, raw []string) ([]string, bool) {
-	at, elements := rawElements(raw)
-	redactedElements, redacted := Redact(rules, elements)
-	if !redacted {
-		return raw, false
-	}
-	out := slices.Clone(raw)
-	for k, i := range at {
-		j := strings.IndexAny(out[i], "=*")
-		out[i] = out[i][:j+1] + redactedElements[k]
-	}
-	return out, true
-}
-
 // rawElements is where in raw the command's elements are, and their values:
 // the cmd and cmd-arg pairs, a trailing `<cr>` aside.
 func rawElements(raw []string) (at []int, elements []string) {

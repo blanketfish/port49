@@ -57,7 +57,7 @@ func TestASecretIsRemovedAndTheShapeKept(t *testing.T) {
 	}
 	raw := []string{"task_id=43", "service=shell", "cmd=username", "cmd-arg=bob", "cmd-arg=secret", "cmd-arg=Hunter2",
 		"cmd-arg=<cr>"}
-	got, redacted := RedactRaw(rules, raw)
+	got, _, redacted := RedactRecord(rules, raw, nil)
 	want := []string{"task_id=43", "service=shell", "cmd=username", "cmd-arg=bob", "cmd-arg=secret",
 		"cmd-arg=" + Redacted, "cmd-arg=<cr>"}
 	if !redacted || !reflect.DeepEqual(got, want) {
@@ -103,7 +103,7 @@ func TestEachVendorsSecretsAreRedacted(t *testing.T) {
 		{"juniper_junos", []string{"cmd=set security ike policy p pre-shared-key ascii-text SECRET1"}},
 		{"juniper_junos", []string{"cmd=set system login user bob authentication plain-text-password-value SECRET1"}},
 	} {
-		got, redacted := RedactRaw(Redactions(tt.platform), tt.raw)
+		got, _, redacted := RedactRecord(Redactions(tt.platform), tt.raw, nil)
 		if joined := strings.Join(got, " "); !redacted || strings.Contains(joined, "SECRET") {
 			t.Errorf("%s %q: %q", tt.platform, tt.raw, got)
 		}
@@ -116,8 +116,8 @@ func TestEachVendorsSecretsAreRedacted(t *testing.T) {
 // expansion for interactive SSH only and a missed abbreviation leaks a secret
 // the log cannot take back (task 10 review I1).
 func TestJunosLinesAndAbbreviationsAreRedacted(t *testing.T) {
-	got, redacted := RedactRaw(Redactions("juniper_junos"),
-		[]string{"task_id=2", "cmd=set system root-authentication encrypted-password \"$6$abc\" <cr>"})
+	got, _, redacted := RedactRecord(Redactions("juniper_junos"),
+		[]string{"task_id=2", "cmd=set system root-authentication encrypted-password \"$6$abc\" <cr>"}, nil)
 	if !redacted || got[1] != "cmd=set system root-authentication encrypted-password "+Redacted+" "+Redacted {
 		t.Fatalf("%q", got)
 	}
@@ -260,7 +260,7 @@ func TestTheSecretKeywordsAreRedactedOnEveryPlatform(t *testing.T) {
 			for _, w := range words[1:] {
 				raw = append(raw, "cmd-arg="+w)
 			}
-			gotRaw, redacted := RedactRaw(Redactions(platform), append(raw, "cmd-arg=<cr>"))
+			gotRaw, _, redacted := RedactRecord(Redactions(platform), append(raw, "cmd-arg=<cr>"), nil)
 			if joined := strings.Join(gotRaw, " "); !redacted || strings.Contains(joined, "SECRET") {
 				t.Errorf("%s raw %q: %q", platform, line, gotRaw)
 			}
@@ -326,7 +326,7 @@ func TestAURLPasswordIsRedacted(t *testing.T) {
 			for _, w := range words[1:] {
 				raw = append(raw, "cmd-arg="+w)
 			}
-			gotRaw, redacted := RedactRaw(Redactions(platform), append(raw, "cmd-arg=<cr>"))
+			gotRaw, _, redacted := RedactRecord(Redactions(platform), append(raw, "cmd-arg=<cr>"), nil)
 			if joined := strings.Join(gotRaw, " "); !redacted || strings.Contains(joined, "SEC") ||
 				!strings.Contains(joined, "://") || !strings.Contains(joined, ":"+Redacted+"@") {
 				t.Errorf("%s raw %q: %q", platform, tt.line, gotRaw)
