@@ -295,10 +295,12 @@ not ignored:**
   the device enforces a ceiling only through the privilege level. IOS-XE and vEOS at level 1
   refuse `clear counters`, `clear ip bgp *` and `configure` in the parser without asking port49;
   IOS-XE level 7 is level 1 until the reference config assigns it commands (`privilege exec
-  level 7 clear counters` gives exactly the operator rung); vEOS `network-operator` at 15 and
-  every NX-OS role, `network-operator` included, run all three and change configuration while
-  command authorization points at port49 — so the operator rung is port49's per-command policy
-  there, not the role. The reference configs must be written for a store outage, which is not
+  level 7 clear counters` gives exactly the operator rung); vEOS `network-operator` at 15 ran
+  `clear counters`, had `clear ip bgp *` authorized (`% BGP inactive`: no BGP on that image) and
+  entered `configure`, and every NX-OS role, `network-operator` included, ran all three — with
+  `network-operator` also changing configuration (not typed under the other roles, nor on vEOS) —
+  while command authorization points at port49. So the operator rung is port49's per-command
+  policy there, not the role. The reference configs must be written for a store outage, which is not
   the break-glass case (only an unreachable port49 is), and the N9Kv `deadtime` trades the 5s
   silent-server penalty for a minute of refused token logins. All three per-command platforms
   send resolved words (L21, closed): `expands_abbreviations: true` for them over SSH, and
