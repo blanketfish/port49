@@ -181,3 +181,29 @@ grants: [{subject: s, scope: all_devices, roles: [admin, no_public, piped]}]
 		t.Fatal("port49d says what policy test says")
 	}
 }
+
+// A device_config line a `platforms:` block writes with a value redaction
+// hides is reported, and named redacted (spec §5.8): the value is in the
+// policy file, and `platform show` and `devices check-config` print it
+// «redacted». A line a set ships never trips it, though abbreviation matching
+// reads NX-OS's `aaa authentication login` as `authentication-key`.
+func TestADeviceConfigSecretLiteralIsReportedRedacted(t *testing.T) {
+	p := mustParse(t, "platforms:\n  arista_eos:\n    device_config: [\"aaa authorization exec default group port49 local\", "+
+		"\"snmp-server community Hunter2 ro\"]\n"+
+		"  cisco_nxos:\n    device_config: [\"aaa authentication login default group port49 local\"]\n"+good)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingDeviceConfigSecretLiteral {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], `platforms.arista_eos.device_config[1] "snmp-server community «redacted» «redacted»"`) ||
+		strings.Contains(got[0], "Hunter2") {
+		t.Fatalf("%q", got)
+	}
+	for _, f := range mustParse(t, good).Lint(noon) {
+		if f.Kind == FindingDeviceConfigSecretLiteral {
+			t.Errorf("a set's line: %s", f.Message)
+		}
+	}
+}

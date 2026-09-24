@@ -37,6 +37,9 @@ const (
 	FindingAcknowledgeStale    = "acknowledge_stale"
 	FindingPlatformOverride    = "platform_override_redundant"
 	FindingRuleSecretLiteral   = "rule_secret_literal"
+	// FindingDeviceConfigSecretLiteral is a `platforms:` block's device_config
+	// line carrying a value redaction hides (spec §5.8).
+	FindingDeviceConfigSecretLiteral = "device_config_secret_literal"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -145,6 +148,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
 	out = append(out, p.WidenedDenies()...)
 	out = append(out, p.JoinedNamePermits()...)
 	out = append(out, p.RuleSecretLiterals()...)
+	out = append(out, p.DeviceConfigSecretLiterals()...)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Kind != out[j].Kind {
 			return out[i].Kind < out[j].Kind
@@ -289,6 +293,33 @@ func (p *Policy) RuleSecretLiterals() []Finding {
 							"and every log, record and server_msg that echoes the rule shows it redacted",
 						name, verdict, strings.Join(shown, " "), strings.Join(on, ", "))})
 				}
+			}
+		}
+	}
+	return out
+}
+
+// DeviceConfigSecretLiterals names every device_config line a `platforms:`
+// block writes with a value a redaction pattern hides (spec §5.8): an
+// operator may put a line such as `snmp-server community X ro` in the
+// configuration a device is held to, and it loads, but `port49 platform show`
+// and `devices check-config` print it «redacted», so the operator is told the
+// value lives in the policy file. The line is named by its key and index, in
+// its redacted form, by every pattern that applies under the policy; a line a
+// set ships is lab text and never reported (platform.RedactConfigLine).
+func (p *Policy) DeviceConfigSecretLiterals() []Finding {
+	patterns := p.Redactions()
+	var out []Finding
+	for _, name := range sortedKeys(p.overrides) {
+		lines := p.overrides[name].DeviceConfig
+		if lines == nil {
+			continue
+		}
+		for i, line := range *lines {
+			if shown := platform.RedactConfigLine(patterns, line); strings.Contains(shown, platform.Redacted) {
+				out = append(out, Finding{Kind: FindingDeviceConfigSecretLiteral, Message: fmt.Sprintf(
+					"platforms.%s.device_config[%d] %q carries a value redaction hides: the value is in the policy "+
+						"file, and platform show and devices check-config print the line redacted", name, i, shown)})
 			}
 		}
 	}

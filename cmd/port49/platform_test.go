@@ -358,3 +358,24 @@ func TestTheUpgradeReportPrintsPasteReadyAcknowledgments(t *testing.T) {
 		t.Fatalf("%s", out.String())
 	}
 }
+
+// A device_config line a block writes with a value redaction hides is shown
+// redacted: `platform show` output lands in terminals and CI logs (spec §5.8).
+func TestPlatformShowRedactsADeviceConfigSecret(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	block := "platforms:\n  arista_eos:\n    device_config: [\"aaa authorization exec default group port49 local\", " +
+		"\"snmp-server community Hunter2 ro\"]\n"
+	if err := os.WriteFile(pol, append([]byte(block), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "show", "--policy", pol, "--inventory", inv, "arista_eos"}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if strings.Contains(out.String()+errb.String(), "Hunter2") ||
+		!strings.Contains(out.String(), "snmp-server community «redacted» «redacted»") ||
+		!strings.Contains(out.String(), "aaa authorization exec default group port49 local") {
+		t.Fatalf("%s%s", out.String(), errb.String())
+	}
+}

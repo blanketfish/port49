@@ -187,6 +187,19 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 	mode := exportShow
 	if export {
 		mode = exportBlock
+	} else {
+		// A block's device_config line may carry a secret, and show's output
+		// lands in terminals and CI logs: it is printed redacted by every
+		// pattern that applies, and policy test reports it (spec §5.8).
+		patterns := platform.AllRedactions()
+		if p != nil {
+			patterns = p.Redactions()
+		}
+		lines := slices.Clone(d.DeviceConfig)
+		for i, line := range lines {
+			lines[i] = platform.RedactConfigLine(patterns, line)
+		}
+		d.DeviceConfig = lines
 	}
 	body, err := adapterFile(platformName, d, mode)
 	if err != nil {
