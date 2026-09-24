@@ -3071,6 +3071,11 @@ included; a block that would loosen one is refused at load, naming the key:
 - `pipe_authorized` and `expands_abbreviations` may not be set `true` where the set measured
   `false`, and `splits_interface_names` and `strip_cr` may not be set `false` where it measured
   `true`: each would let a command past a deny, or claim a rule the device does not enforce.
+- `pipe_token` must equal the set's: the token cuts a command into stages before any rule reads
+  it, so another one splits a deny's vector apart — `pipe_token: running-config` on
+  `arista_eos` would let `copy running-config tftp:x` past `deny copy running-config **` — and
+  there is no tighter value. With `supports`, these are every field of the normalization a blob
+  carries (§5.1.2).
 
 And on every block, a new platform's included, `inert_attributes` may not name an attribute any
 shipped adapter lists in `privilege_attributes`: listed inert, a later change to it would pass
