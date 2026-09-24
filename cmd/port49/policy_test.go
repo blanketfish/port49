@@ -149,13 +149,23 @@ func TestPolicyReplayFindsAnEditedRecord(t *testing.T) {
 	sink.Emit(decision.Record{Event: decision.EventAuthorizeCommand, Verdict: decision.VerdictPermit, Reason: o.Reason,
 		Device: &decision.Device{Name: "leaf-01", Platform: "arista_eos"}, Request: &decision.Request{Raw: raw},
 		Policy: o.Policy(b.Bundle, hash)})
+	// Decided before policy ran: counted, not replayed.
+	sink.Emit(decision.Record{Event: decision.EventAuthorizeCommand, Verdict: decision.VerdictDeny,
+		Reason: decision.StoreUnavailable, Request: &decision.Request{Raw: raw}})
 	path := filepath.Join(t.TempDir(), "decisions.jsonl")
 	if err := os.WriteFile(path, log.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "replay", path}, &out, &errb); code != 0 ||
-		!strings.Contains(out.String(), "replayed 1 records: 1 agree, 0 diverge, 0 unverifiable") {
+		!strings.Contains(out.String(), "replayed 1 records: 1 agree, 0 diverge, 0 unverifiable; 1 not replayed (store_unavailable 1)") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// A record replay passes over is not an answer to --line.
+	out.Reset()
+	if code := run([]string{"policy", "replay", "--line", "3", path}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "line 3 authorize_command: not_replayed store_unavailable is decided before policy runs") ||
+		!strings.Contains(errb.String(), "line 3 is not an authorization record that consulted a blob") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 	edited := strings.Replace(log.String(), `"verdict":"permit","reason":"permit_dominates"`,

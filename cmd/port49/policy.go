@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/replay"
 )
@@ -155,7 +158,13 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 // (spec §5.7, "Replay"): an auditor's reconstruction, a regression check of a
 // captured corpus against this build, and an integrity check of the log. It
 // prints every record that did not agree and exits 1 if any did not; with
-// --line it replays that one record and prints it either way.
+// --line it replays that one record and prints it either way. A record
+// denied before policy ran is counted, by reason, and not replayed.
+//
+// Agreement is about the decision, not about who asked: a command's verdict
+// does not depend on the username or principal, so an edit to either on a
+// command record replays in agreement. The username, principal and device
+// are checked only where they shaped the answer, a session's attributes.
 func policyReplay(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 policy replay", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -183,15 +192,29 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	counts := map[replay.Status]int{}
+	skipped := map[decision.Reason]int{}
 	for _, r := range results {
 		counts[r.Status]++
-		if r.Status != replay.Agree || *only != 0 {
+		if r.Status == replay.Skipped {
+			skipped[r.Reason]++
+		}
+		if (r.Status != replay.Agree && r.Status != replay.Skipped) || *only != 0 {
 			fmt.Fprintf(stdout, "line %d %s: %s %s\n", r.Line, r.Event, r.Status, r.Detail)
 		}
 	}
-	fmt.Fprintf(stdout, "replayed %d records: %d agree, %d diverge, %d unverifiable\n", len(results),
-		counts[replay.Agree], counts[replay.Diverge], counts[replay.Unverifiable])
-	if *only != 0 && len(results) == 0 {
+	summary := fmt.Sprintf("replayed %d records: %d agree, %d diverge, %d unverifiable; %d not replayed",
+		counts[replay.Agree]+counts[replay.Diverge]+counts[replay.Unverifiable],
+		counts[replay.Agree], counts[replay.Diverge], counts[replay.Unverifiable], counts[replay.Skipped])
+	if len(skipped) > 0 {
+		var by []string
+		for reason, n := range skipped {
+			by = append(by, fmt.Sprintf("%s %d", reason, n))
+		}
+		slices.Sort(by)
+		summary += " (" + strings.Join(by, ", ") + ")"
+	}
+	fmt.Fprintln(stdout, summary)
+	if *only != 0 && len(results) == counts[replay.Skipped] {
 		fmt.Fprintf(stderr, "port49 policy replay: line %d is not an authorization record that consulted a blob\n", *only)
 		return 1
 	}

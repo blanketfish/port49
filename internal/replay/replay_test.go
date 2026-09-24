@@ -3,6 +3,7 @@ package replay
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -87,13 +88,27 @@ func replayAll(t *testing.T, log string) []Result {
 // the logged verdict, reason and matched rules (spec §14, "Replay agreement").
 func TestEveryRecordReplaysToTheSameDecision(t *testing.T) {
 	log, _ := daemonLog(t)
-	res := replayAll(t, log)
+	all := replayAll(t, log)
+	// carol's context_missing was decided before policy ran: it is counted,
+	// not replayed.
+	if last := all[len(all)-1]; last.Status != Skipped || last.Reason != decision.ContextMissing {
+		t.Fatalf("the context_missing record: %+v", last)
+	}
+	res := all[:len(all)-1]
 	if len(res) != 5 {
 		t.Fatalf("five decisions consulted the blob, replayed %d: %+v", len(res), res)
 	}
 	for _, r := range res {
 		if r.Status != Agree {
 			t.Errorf("line %d (%s): %s %s", r.Line, r.Event, r.Status, r.Detail)
+		}
+	}
+	// A blob event after the records that name it still replays them.
+	lines := strings.Split(strings.TrimSpace(log), "\n")
+	late := replayAll(t, strings.Join(append(lines[1:], lines[0]), "\n"))
+	for _, r := range late[:5] {
+		if r.Status != Agree {
+			t.Errorf("blob last: line %d (%s): %s %s", r.Line, r.Event, r.Status, r.Detail)
 		}
 	}
 	one, err := Replay(strings.NewReader(log), res[2].Line)
@@ -109,6 +124,17 @@ func TestEveryRecordReplaysToTheSameDecision(t *testing.T) {
 func TestTamperingIsDetected(t *testing.T) {
 	log, hash := daemonLog(t)
 	lines := strings.Split(strings.TrimSpace(log), "\n")
+	dropPolicy := func(i int) string {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(lines[i]), &m); err != nil || m["policy"] == nil {
+			t.Fatalf("line %d: %v %s", i, err, lines[i])
+		}
+		delete(m, "policy")
+		b, _ := json.Marshal(m)
+		out := append([]string(nil), lines...)
+		out[i] = string(b)
+		return strings.Join(out, "\n")
+	}
 	edit := func(i int, old, new string) string {
 		out := append([]string(nil), lines...)
 		if !strings.Contains(out[i], old) {
@@ -130,6 +156,14 @@ func TestTamperingIsDetected(t *testing.T) {
 		"a substituted blob": {edit(0, `"role":"no_exfil"`, `"role":"nobody"`), Diverge, "does not hash to its name"},
 		"a missing blob":     {strings.Join(lines[1:], "\n"), Unverifiable, "no blob event for " + hash},
 		"another bundle":     {edit(2, `"bundle":"sha256:policy"`, `"bundle":"sha256:other"`), Diverge, "names bundle"},
+		// Edits that would make replay pass over a record rather than
+		// replay it.
+		"a permit given an operational reason": {edit(3, `"verdict":"deny","reason":"no_permit_dominates_deny"`,
+			`"verdict":"permit","reason":"device_quarantined"`), Diverge, "only ever a denial"},
+		"a deleted policy": {dropPolicy(3), Diverge, "names no blob"},
+		"a blanked blob":   {edit(3, `"blob":"`+hash+`"`, `"blob":""`), Diverge, "names no blob"},
+		"an altered copy of the blob after the genuine one": {log + strings.Replace(lines[0], `"role":"no_exfil"`, `"role":"nobody"`, 1),
+			Diverge, "does not hash to its name"},
 	} {
 		var hit bool
 		for _, r := range replayAll(t, tt.log) {
@@ -140,6 +174,27 @@ func TestTamperingIsDetected(t *testing.T) {
 		if !hit {
 			t.Errorf("%s: no %s result mentioning %q in %+v", name, tt.status, tt.detail, replayAll(t, tt.log))
 		}
+	}
+}
+
+// A string from the log never reaches the auditor's console as a control
+// sequence.
+func TestADetailCarriesNoControlCharacters(t *testing.T) {
+	log, _ := daemonLog(t)
+	lines := strings.Split(strings.TrimSpace(log), "\n")
+	lines[3] = strings.Replace(lines[3], `"verdict":"deny"`, `"verdict":"\u001b[2J\u009b"`, 1)
+	for _, r := range replayAll(t, strings.Join(lines, "\n")) {
+		if strings.ContainsAny(r.Detail, "\x1b\u009b") {
+			t.Fatalf("line %d: %q", r.Line, r.Detail)
+		}
+	}
+}
+
+// A line too long to be a record says which line it was.
+func TestAnOverlongLineNamesItsLine(t *testing.T) {
+	log := "{\"ts\":\"2026-09-23T00:00:00.000Z\",\"event\":\"mint\"}\n" + strings.Repeat("x", 17<<20) + "\n"
+	if _, err := Replay(strings.NewReader(log), 0); err == nil || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("%v", err)
 	}
 }
 

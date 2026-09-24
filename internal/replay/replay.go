@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
+	"unicode"
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
@@ -29,13 +31,18 @@ const (
 	Diverge Status = "diverge"
 	// Unverifiable: the log does not carry the blob the record names.
 	Unverifiable Status = "unverifiable"
+	// Skipped: an authorization denied for a reason decided before any policy
+	// ran. It is counted, so a record cannot leave the replay unseen.
+	Skipped Status = "not_replayed"
 )
 
-// Result is one replayed record, by its 1-based line in the log.
+// Result is one record, by its 1-based line in the log. Reason is the
+// reason the record logged; a blob event's own result has none.
 type Result struct {
 	Line   int
 	Event  string
 	Status Status
+	Reason decision.Reason
 	Detail string
 }
 
@@ -48,15 +55,20 @@ var replayable = map[decision.Reason]bool{
 }
 
 // Replay reads a decision log and replays every authorization record that
-// consulted a blob. only, when non-zero, restricts it to the record on that
-// line. A line that is not a record is an error: a decision log is JSON lines
-// and nothing else.
+// consulted a blob, and reports every other authorization record as Skipped.
+// only, when non-zero, restricts it to the record on that line. A line that
+// is not a record is an error: a decision log is JSON lines and nothing else.
+//
+// It streams: a record is replayed as it is read, against a program compiled
+// once per blob, and only a record read before its blob event is held back —
+// decision 19 writes the blob first, so those are rare. Results come back in
+// line order.
 func Replay(r io.Reader, only int) ([]Result, error) {
-	var records []numbered
-	blobs := map[string][]byte{}
+	rp := replayer{only: only, programs: map[string]*program{}, pending: map[string][]numbered{}}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
-	for n := 1; sc.Scan(); n++ {
+	n := 1
+	for ; sc.Scan(); n++ {
 		if len(sc.Bytes()) == 0 {
 			continue
 		}
@@ -64,24 +76,31 @@ func Replay(r io.Reader, only int) ([]Result, error) {
 		if err := rec.UnmarshalJSON(sc.Bytes()); err != nil {
 			return nil, fmt.Errorf("line %d is not a decision record: %w", n, err)
 		}
-		switch {
-		case rec.Event == decision.EventBlob && rec.Blob != nil:
-			blobs[rec.Blob.Hash] = append([]byte(nil), rec.Blob.Body...)
-		case rec.Event == decision.EventAuthorizeCommand || rec.Event == decision.EventAuthorizeSession:
-			if rec.Policy != nil && rec.Policy.Blob != "" && replayable[rec.Reason] && (only == 0 || only == n) {
-				records = append(records, numbered{n, rec})
-			}
+		rp.read(n, rec)
+		if only != 0 && n >= only && len(rp.pending) == 0 {
+			break
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("line %d: %w", n, err)
 	}
-	out := make([]Result, 0, len(records))
-	for _, nr := range records {
-		status, detail := one(nr.rec, blobs)
-		out = append(out, Result{Line: nr.line, Event: nr.rec.Event, Status: status, Detail: detail})
+	for hash, recs := range rp.pending {
+		for _, nr := range recs {
+			rp.emit(nr, Unverifiable, "the log carries no blob event for "+hash)
+		}
 	}
-	return out, nil
+	slices.SortStableFunc(rp.out, func(a, b Result) int { return a.Line - b.Line })
+	return rp.out, nil
+}
+
+type replayer struct {
+	only int
+	// programs caches every blob event by hash, a bad one as its failure, so
+	// each blob is decoded and compiled once however many records name it.
+	programs map[string]*program
+	// pending holds the records read before their blob event, by hash.
+	pending map[string][]numbered
+	out     []Result
 }
 
 type numbered struct {
@@ -89,30 +108,114 @@ type numbered struct {
 	rec  decision.Record
 }
 
-// one replays a single record.
-func one(rec decision.Record, blobs map[string][]byte) (Status, string) {
-	hash := rec.Policy.Blob
-	body, ok := blobs[hash]
-	if !ok {
-		return Unverifiable, "the log carries no blob event for " + hash
+// program is one blob event, compiled; or, when failure is set, why it could
+// not be.
+type program struct {
+	blob    engine.Blob
+	prog    *engine.Program
+	failure string
+}
+
+func (rp *replayer) read(n int, rec decision.Record) {
+	switch {
+	case rec.Event == decision.EventBlob && rec.Blob != nil:
+		rp.blob(n, rec.Blob.Hash, rec.Blob.Body)
+	case rec.Event == decision.EventAuthorizeCommand || rec.Event == decision.EventAuthorizeSession:
+		if rp.only != 0 && rp.only != n {
+			return
+		}
+		nr := numbered{n, rec}
+		switch {
+		case !replayable[rec.Reason] && rec.Verdict != decision.VerdictDeny:
+			// Every reason replay skips is a denial. A permit carrying one is
+			// a record edited so that replay would pass over it.
+			rp.emit(nr, Diverge, fmt.Sprintf("logged %s %s, and %s is only ever a denial decided before policy ran",
+				rec.Verdict, rec.Reason, rec.Reason))
+		case !replayable[rec.Reason]:
+			rp.emit(nr, Skipped, fmt.Sprintf("%s is decided before policy runs", rec.Reason))
+		case rec.Policy == nil || rec.Policy.Blob == "":
+			// Bundle and Blob are mandatory on every record that consulted
+			// policy (decision.Policy).
+			rp.emit(nr, Diverge, fmt.Sprintf("logged %s %s, a decision a blob makes, and the record names no blob",
+				rec.Verdict, rec.Reason))
+		default:
+			p, ok := rp.programs[rec.Policy.Blob]
+			if !ok {
+				rp.pending[rec.Policy.Blob] = append(rp.pending[rec.Policy.Blob], nr)
+				return
+			}
+			rp.judge(nr, p)
+		}
 	}
+}
+
+// blob compiles a blob event and replays the records that were waiting for
+// it. Every blob event is checked against its name whether or not a record
+// names it: a bad one is a divergence on its own line, and does not displace
+// a good copy read earlier.
+func (rp *replayer) blob(n int, hash string, body []byte) {
+	p := &program{}
 	b, err := engine.Decode(hash, body)
-	if errors.Is(err, engine.ErrHashMismatch) {
-		return Diverge, "the blob event for " + hash + " does not hash to its name: the log was altered"
+	switch {
+	case errors.Is(err, engine.ErrHashMismatch):
+		p.failure = "the blob event for " + hash + " does not hash to its name: the log was altered"
+	case err != nil:
+		p.failure = "the blob event for " + hash + " does not decode: " + err.Error()
+	default:
+		p.blob = b
+		if p.prog, err = engine.Compile(b); err != nil {
+			p.failure = "the blob " + hash + " does not compile: " + err.Error()
+		}
 	}
-	if err != nil {
-		return Diverge, "the blob event for " + hash + " does not decode: " + err.Error()
+	if p.failure != "" && (rp.only == 0 || rp.only == n) {
+		rp.emit(numbered{n, decision.Record{Event: decision.EventBlob}}, Diverge, p.failure)
 	}
+	if prev, ok := rp.programs[hash]; ok && (prev.failure == "" || p.failure != "") {
+		return
+	}
+	rp.programs[hash] = p
+	for _, nr := range rp.pending[hash] {
+		rp.judge(nr, p)
+	}
+	delete(rp.pending, hash)
+}
+
+func (rp *replayer) emit(nr numbered, status Status, detail string) {
+	rp.out = append(rp.out, Result{Line: nr.line, Event: nr.rec.Event, Status: status,
+		Reason: decision.Reason(printable(string(nr.rec.Reason))), Detail: printable(detail)})
+}
+
+// printable replaces every rune a terminal could act on. A detail carries
+// strings from the log, and an edited log must not write control sequences
+// on the auditor's console.
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return '?'
+	}, s)
+}
+
+// judge replays one record against its blob's program.
+func (rp *replayer) judge(nr numbered, p *program) {
+	status, detail := one(nr.rec, p)
+	rp.emit(nr, status, detail)
+}
+
+// one replays a single record.
+func one(rec decision.Record, p *program) (Status, string) {
+	if p.failure != "" {
+		return Diverge, p.failure
+	}
+	hash, b, prog := rec.Policy.Blob, p.blob, p.prog
 	if rec.Policy.Bundle != b.Bundle {
 		return Diverge, fmt.Sprintf("the record names bundle %s; its blob was compiled from %s", rec.Policy.Bundle, b.Bundle)
-	}
-	prog, err := engine.Compile(b)
-	if err != nil {
-		return Diverge, "the blob does not compile: " + err.Error()
 	}
 	verdict, reason := decision.VerdictPermit, decision.ContextMatched
 	var pol *decision.Policy
 	var attrs []string
+	var err error
 	session := false
 	switch {
 	case rec.Device != nil && rec.Device.Platform != b.Platform:
