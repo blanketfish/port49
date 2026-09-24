@@ -39,6 +39,9 @@ const usage = `usage:
   port49 policy diff --old FILE --new FILE --inventory FILE
   port49 access review --policy FILE --inventory FILE --subject NAME
   port49 grants remove --policy FILE --inventory FILE --subject NAME [--write]
+  port49 platform list [--set VERSION | --policy FILE --inventory FILE]
+  port49 platform show [--set VERSION | --policy FILE --inventory FILE] PLATFORM
+  port49 platform export [--set VERSION | --policy FILE --inventory FILE] (PLATFORM | --all --dir DIR)
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -68,6 +71,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if len(args) > 1 && args[1] == "remove" {
 			return grantsRemove(args[2:], stdout, stderr)
 		}
+	case "platform":
+		return platformCmd(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2

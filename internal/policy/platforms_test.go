@@ -116,6 +116,7 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 		{"an unknown key", "  arista_eos: {entity_class: {}}\n", "field entity_class not found"},
 		{"the attributes key", "  all: {supports: [session]}\n", "platforms.all: all is reserved"},
 		{"the redaction default", "  default: {supports: [session]}\n", "platforms.default: default is reserved"},
+		{"a verified claim", "  arista_eos: {verified: containerlab}\n", "platforms.arista_eos: verified is port49's own claim"},
 		{"a rendering the device refuses", "  cisco_iosxe: {privilege: {admin: [\"roles=x\"]}}\n",
 			"platforms.cisco_iosxe.privilege.admin: roles is not in accepted_attributes"},
 		{"a priv-lvl that is not a level", "  cisco_iosxe: {privilege: {admin: [\"priv-lvl=16\"]}}\n",

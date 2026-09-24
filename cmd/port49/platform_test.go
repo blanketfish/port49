@@ -1,0 +1,121 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/rhwendt/port49/internal/platform"
+)
+
+// `port49 platform list` prints every platform with where its adapter comes
+// from, how it was verified and what it authorizes (spec §8); with a policy,
+// its blocks are named for what they are, and an adapter a block changed is
+// not the one anybody verified.
+func TestPlatformListSaysWhereEachAdapterComesFrom(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "list"}, &out, &errb); code != 0 ||
+		!strings.HasPrefix(out.String(), "PLATFORM") || strings.Count(out.String(), "built-in") != 4 ||
+		listRow(out.String(), "juniper_junos") != "juniper_junos built-in — session" {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	blocks := "platforms:\n  arista_eos: {entity_classes: {uplink: ['^Ethernet49$']}}\n" +
+		"  whitebox_nos: {based_on: arista_eos}\n  meinberg_lantime: {supports: [session]}\n"
+	if err := os.WriteFile(pol, append([]byte(blocks), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"platform", "list", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	for name, want := range map[string]string{"arista_eos": "overridden — session,commands",
+		"meinberg_lantime": "local — session", "whitebox_nos": "variant — session,commands"} {
+		if got := listRow(out.String(), name); got != name+" "+want {
+			t.Errorf("%s: %q in\n%s", name, got, out.String())
+		}
+	}
+	if code := run([]string{"platform", "list", "--set", "0.1.0"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "it ships 1.0.0") {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+}
+
+// `show` prints the adapter as a file writes it, headed by where it came from
+// and followed by the built-in redaction; `export` prints the file alone, and
+// what it prints is the adapter again when read back (spec §8).
+func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "show", "cisco_iosxe"}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	for _, want := range []string{"# cisco_iosxe: built-in, platform set 1.0.0\n", "      operator:\n        - priv-lvl=7\n",
+		"    accepted_attributes:\n      - priv-lvl\n", "      - privilege exec level 7 clear counters\n",
+		"#   {match: ['**'], after: secret}\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s", want, out.String())
+		}
+	}
+	for _, name := range platform.Names() {
+		out.Reset()
+		if code := run([]string{"platform", "export", name}, &out, &errb); code != 0 {
+			t.Fatalf("%s: code %d %s", name, code, errb.String())
+		}
+		specs, err := platform.ParseSpecs(out.Bytes())
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", name, err, out.String())
+		}
+		want, _ := platform.DialectFor(name)
+		if got := specs[name].Over(platform.Dialect{}); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s:\n got %+v\nwant %+v", name, got, want)
+		}
+	}
+	if code := run([]string{"platform", "show", "junos"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), `"junos" has no adapter here; the platforms are arista_eos,`) {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+}
+
+// `export --all --dir` writes one file per platform, and the directory is a
+// platform set LoadSets reads back as the one it was written from: a file
+// fit for platforms/ in an upstream pull request.
+func TestPlatformExportAllWritesASet(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "1.0.0")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "--all", "--dir", dir}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	sets, err := platform.LoadSets(os.DirFS(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := platform.Set(platform.DefaultSet)
+	if !reflect.DeepEqual(sets["1.0.0"], want) {
+		t.Fatalf("the exported set reads back differently:\n%+v", sets["1.0.0"])
+	}
+	for _, args := range [][]string{{"platform", "show", "--all", "--dir", dir}, {"platform", "export", "--all"},
+		{"platform", "export"}, {"platform", "list", "extra"}, {"platform"}, {"platform", "upgrad"}} {
+		if code := run(args, &out, &errb); code != 2 {
+			t.Errorf("%q: code %d", args, code)
+		}
+	}
+}
+
+// listRow is the `platform list` line for name, its columns joined by one
+// space, so a test does not depend on how wide another row made them.
+func listRow(out, name string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if f := strings.Fields(line); len(f) > 0 && f[0] == name {
+			return strings.Join(f, " ")
+		}
+	}
+	return ""
+}

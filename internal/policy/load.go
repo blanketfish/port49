@@ -282,6 +282,9 @@ func (p *Policy) buildPlatforms(f file) error {
 			// of either name would be read as the other.
 			return fmt.Errorf("%s: %s is reserved: attributes.all names every platform and the built-in redaction "+
 				"table's default list every unlisted one; name the platform as the inventory does", at, name)
+		case b.Verified != nil:
+			return fmt.Errorf("%s: verified is port49's own claim about its lab (spec §8); an adapter written "+
+				"here is unverified until it is contributed and measured, so remove the key", at)
 		case b.Replace && b.BasedOn != "":
 			return fmt.Errorf("%s: replace starts from nothing and based_on from another platform; use one", at)
 		case b.BasedOn != "" && shipped:
@@ -302,6 +305,9 @@ func (p *Policy) buildPlatforms(f file) error {
 			base = builtin[name]
 		}
 		d := b.Spec.Over(base)
+		// The lab verified the set's adapter, not this one: `platform show`
+		// and `export` print the claim only where nothing changed it (spec §8).
+		d.Verified = ""
 		if err := platform.Validate(name, d); err != nil {
 			return err
 		}
@@ -445,6 +451,29 @@ var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // PlatformSet is the platform set the policy renders with.
 func (p *Policy) PlatformSet() string { return p.set }
+
+// PlatformNames is every platform the policy has an adapter for, sorted: its
+// set's and its `platforms:` blocks'.
+func (p *Policy) PlatformNames() []string { return sortedKeys(p.adapters) }
+
+// PlatformSource says where a platform's adapter comes from, as `port49
+// platform list` prints it: `built-in`, `overridden` (a block over a built-in,
+// or one that replaced it), `variant` (based_on), or `local` (a platform the
+// set does not ship).
+func (p *Policy) PlatformSource(name string) string {
+	b, written := p.overrides[name]
+	builtin, _ := platform.Set(p.set)
+	_, shipped := builtin[name]
+	switch {
+	case !written:
+		return "built-in"
+	case b.BasedOn != "":
+		return "variant"
+	case shipped:
+		return "overridden"
+	}
+	return "local"
+}
 
 func (p *Policy) buildLevels(f file) error {
 	p.parents = map[string]string{}

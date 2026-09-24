@@ -989,10 +989,11 @@ func TestARedactionEditIsGated(t *testing.T) {
 // The gate fails closed on keys (task 1 review I3): only a key on the closed
 // list of explain-only keys is reported, and every key an adapter has today,
 // device_config included (task 7 review H6), and any a later plan adds is
-// gated until it is listed.
+// gated until it is listed. verified is the one key an adapter has that is on
+// the list: it says how the set's adapter was checked, and no block may set it.
 func TestOnlyExplainKeysAreReported(t *testing.T) {
 	for _, key := range platform.SpecKeys() {
-		if !adapterKeyGated(key) {
+		if key != "verified" && !adapterKeyGated(key) {
 			t.Errorf("%s is reported, not gated", key)
 		}
 	}

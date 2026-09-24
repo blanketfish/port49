@@ -18,25 +18,26 @@ import (
 // Spec is one platform block as a file writes it (spec §8): a built-in adapter
 // under platforms/<set>/. A nil field is one the block does not set, and Over
 // lays the set fields over a base, so a block that sets one key inherits every
-// other.
+// other. A nil field is also one `port49 platform export` leaves out.
 type Spec struct {
-	Supports             *[]string            `yaml:"supports"`
-	Privilege            *map[string][]string `yaml:"privilege"`
-	CeilingLevels        *map[string]uint8    `yaml:"ceiling_levels"`
-	EntityClasses        *map[string][]string `yaml:"entity_classes"`
-	ExpandsAbbreviations *bool                `yaml:"expands_abbreviations"`
-	SplitsInterfaceNames *bool                `yaml:"splits_interface_names"`
-	PipeToken            *string              `yaml:"pipe_token"`
-	PipeAuthorized       *bool                `yaml:"pipe_authorized"`
-	StripCR              *bool                `yaml:"strip_cr"`
-	ShowsServerMsg       *bool                `yaml:"shows_server_msg"`
-	PrivilegeAttributes  *[]string            `yaml:"privilege_attributes"`
-	InertAttributes      *[]string            `yaml:"inert_attributes"`
-	AcceptedAttributes   *[]string            `yaml:"accepted_attributes"`
-	RoleOrder            *map[string][]string `yaml:"role_order"`
-	DeviceConfig         *[]string            `yaml:"device_config"`
-	EnableUsername       *string              `yaml:"enable_username"`
-	Redact               *[]Redaction         `yaml:"redact"`
+	Supports             *[]string            `yaml:"supports,omitempty"`
+	Privilege            *map[string][]string `yaml:"privilege,omitempty"`
+	CeilingLevels        *map[string]uint8    `yaml:"ceiling_levels,omitempty"`
+	EntityClasses        *map[string][]string `yaml:"entity_classes,omitempty"`
+	ExpandsAbbreviations *bool                `yaml:"expands_abbreviations,omitempty"`
+	SplitsInterfaceNames *bool                `yaml:"splits_interface_names,omitempty"`
+	PipeToken            *string              `yaml:"pipe_token,omitempty"`
+	PipeAuthorized       *bool                `yaml:"pipe_authorized,omitempty"`
+	StripCR              *bool                `yaml:"strip_cr,omitempty"`
+	ShowsServerMsg       *bool                `yaml:"shows_server_msg,omitempty"`
+	PrivilegeAttributes  *[]string            `yaml:"privilege_attributes,omitempty"`
+	InertAttributes      *[]string            `yaml:"inert_attributes,omitempty"`
+	AcceptedAttributes   *[]string            `yaml:"accepted_attributes,omitempty"`
+	RoleOrder            *map[string][]string `yaml:"role_order,omitempty"`
+	DeviceConfig         *[]string            `yaml:"device_config,omitempty"`
+	EnableUsername       *string              `yaml:"enable_username,omitempty"`
+	Redact               *[]Redaction         `yaml:"redact,omitempty"`
+	Verified             *string              `yaml:"verified,omitempty"`
 }
 
 // ParseSpecs reads an adapter file: one YAML document whose one key is
@@ -126,6 +127,9 @@ func (s Spec) Over(base Dialect) Dialect {
 		// Appended, never replaced: a block cannot take a redaction away.
 		d.Redact = append(d.Redact, *s.Redact...)
 	}
+	if s.Verified != nil {
+		d.Verified = *s.Verified
+	}
 	return d
 }
 
@@ -140,6 +144,12 @@ func mergeLists(base, over map[string][]string) map[string][]string {
 	}
 	return base
 }
+
+// verifications are what `verified` may say (spec §8, "Knowing what is
+// shipped"): unset, confirmed against a lab image on every change
+// (`containerlab`, with a tests/lab/results/ note), or contributed and run by
+// nobody here (`community`).
+var verifications = []string{"", "containerlab", "community"}
 
 // capabilities is spec §9's vocabulary for `supports`.
 var capabilities = []string{"session", "commands", "config_commands"}
@@ -282,6 +292,9 @@ func Validate(name string, d Dialect) error {
 		if err := r.check(); err != nil {
 			return fmt.Errorf("%s[%d]: %w", field("redact"), i, err)
 		}
+	}
+	if !slices.Contains(verifications, d.Verified) {
+		return fmt.Errorf("%s is %q; it is containerlab, community, or unset", field("verified"), d.Verified)
 	}
 	switch d.EnableUsername {
 	case EnablePrincipal:
@@ -431,6 +444,9 @@ func SpecOf(d Dialect) Spec {
 	}
 	if d.Redact != nil {
 		s.Redact = &d.Redact
+	}
+	if d.Verified != "" {
+		s.Verified = &d.Verified
 	}
 	return s
 }

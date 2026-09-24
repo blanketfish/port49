@@ -104,6 +104,12 @@ type Dialect struct {
 	// to the platform's built-in ones (Redactions). A block adds; it never
 	// removes a built-in pattern (spec §5.8).
 	Redact []Redaction
+	// Verified is how the adapter's spellings were confirmed (spec §8):
+	// "containerlab" where a tests/lab/results/ note shows every attribute it
+	// sends applied by a lab image, "community" for a contributed adapter
+	// nobody here has run, and empty where neither is true. Only a built-in
+	// adapter may say it.
+	Verified string
 }
 
 // builtin is the default set's adapters, platforms/<DefaultSet>/*.yaml, where

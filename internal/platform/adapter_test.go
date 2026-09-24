@@ -266,6 +266,7 @@ func TestValidateNamesTheField(t *testing.T) {
 		"role_order: \"a=b\"":       with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"a=b": {"x"}} }),
 		"role_order.priv-lvl":       with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"priv-lvl": {"1"}} }),
 		"role_order.roles is empty": with(ok, func(d *Dialect) { d.RoleOrder = map[string][]string{"roles": {}} }),
+		"verified is \"lab\"":       with(ok, func(d *Dialect) { d.Verified = "lab" }),
 		"role_order.roles: \"x\" is ranked twice": with(ok, func(d *Dialect) {
 			d.RoleOrder = map[string][]string{"roles": {"x", "y", "x"}}
 		}),
