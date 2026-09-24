@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"encoding/json"
 	"os"
 	"reflect"
 	"slices"
@@ -545,5 +546,25 @@ func TestSpecOfRoundTrips(t *testing.T) {
 	keys := SpecKeys()
 	if len(keys) != reflect.TypeOf(Spec{}).NumField() || keys[0] != "supports" || !slices.Contains(keys, "enable_username") {
 		t.Fatalf("keys %v", keys)
+	}
+}
+
+// An adapter value is compared, printed and acknowledged as JSON (policy
+// diff's canonical form, whose sha256 an acknowledge: entry binds), and data
+// is snake_case: a config check and a redaction pattern marshal with their
+// YAML keys, never Go's field names (final review M1).
+func TestAdapterValuesMarshalSnakeCase(t *testing.T) {
+	from := 2
+	for _, tt := range []struct {
+		v    any
+		want string
+	}{
+		{ConfigCheck{Match: "^x", Says: "y"}, `{"match":"^x","says":"y"}`},
+		{Redaction{Match: []string{"**"}, After: "secret"}, `{"match":["**"],"after":"secret"}`},
+		{Redaction{Match: []string{"a", "**"}, From: &from}, `{"match":["a","**"],"from":2}`},
+	} {
+		if b, err := json.Marshal(tt.v); err != nil || string(b) != tt.want {
+			t.Errorf("%+v: %s, want %s (%v)", tt.v, b, tt.want, err)
+		}
 	}
 }

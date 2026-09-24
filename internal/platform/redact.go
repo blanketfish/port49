@@ -23,9 +23,9 @@ const Redacted = "«redacted»"
 // From on. Match is words, `*` for one word and `**` for any number, anchored
 // at both ends as a rule is.
 type Redaction struct {
-	Match []string `yaml:"match"`
-	After string   `yaml:"after,omitempty"`
-	From  *int     `yaml:"from,omitempty"`
+	Match []string `yaml:"match" json:"match"`
+	After string   `yaml:"after,omitempty" json:"after,omitempty"`
+	From  *int     `yaml:"from,omitempty" json:"from,omitempty"`
 }
 
 // check refuses a pattern that could not do what it says, or could remove the

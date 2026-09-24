@@ -143,8 +143,8 @@ type Dialect struct {
 // ConfigCheck is one line a device's configuration must not carry: an RE2
 // pattern over each line, and what the line costs, as the check says it.
 type ConfigCheck struct {
-	Match string `yaml:"match"`
-	Says  string `yaml:"says"`
+	Match string `yaml:"match" json:"match"`
+	Says  string `yaml:"says" json:"says"`
 }
 
 // builtin is the default set's adapters, platforms/<DefaultSet>/*.yaml, where
