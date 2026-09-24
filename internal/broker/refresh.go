@@ -307,13 +307,17 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now tim
 			// so it cannot be judged against the policy in force, and it is
 			// not left on the one before. It is revoked, as a compile fault
 			// is; the authorizer cannot open it either, and the next login
-			// replaces it.
-			log.Printf("broker: refresh: the context for %q on %q will not open (%v); revoking it", ref.Username,
-				ref.NAS, err)
+			// replaces it. The record names what is authoritative, the
+			// device and the username the key holds, and no principal: the
+			// index entry that led here may be one another principal's
+			// login has made stale, and whose the record is, is sealed.
+			log.Printf("broker: refresh: the context for %q on %q, indexed under %s, will not open (%v); revoking it",
+				ref.Username, ref.NAS, principal, err)
 			rec := decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
-				Reason: decision.BlobUnavailable, Principal: principal,
-				Device: &decision.Device{Name: ref.NAS, Platform: b.Devices[ref.NAS].Platform},
-				Policy: &decision.Policy{Bundle: cur.Bundle}}
+				Reason:  decision.BlobUnavailable,
+				Device:  &decision.Device{Name: ref.NAS, Platform: b.Devices[ref.NAS].Platform},
+				Session: &decision.Session{Username: ref.Username},
+				Policy:  &decision.Policy{Bundle: cur.Bundle}}
 			return b.revoke(ctx, k, now, refreshStep{revoke: true, rec: rec, outcome: "failed"}, rep)
 		case err != nil:
 			return err

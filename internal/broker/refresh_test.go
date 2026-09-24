@@ -582,7 +582,8 @@ func TestACompileFaultRevokesThatContextAndSaysSo(t *testing.T) {
 }
 
 // unreadableStore answers one context as a record the sealing layer cannot
-// open: sealed under a key that has left the two-key window.
+// open: sealed under a key that has left the two-key window. The error
+// carries the record's plaintext revision and revocation, as crypt's does.
 type unreadableStore struct {
 	store.Store
 	k store.ContextKey
@@ -590,7 +591,12 @@ type unreadableStore struct {
 
 func (u unreadableStore) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
 	if k == u.k {
-		return store.Context{}, &store.UnreadableContextError{Rev: 1, Err: errors.New("crypt: no key opens this record")}
+		c, err := u.Store.GetContext(ctx, k)
+		if err != nil {
+			return c, err
+		}
+		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
+			Err: errors.New("crypt: no key opens this record")}
 	}
 	return u.Store.GetContext(ctx, k)
 }
@@ -613,9 +619,49 @@ func TestARefreshRevokesAContextItCannotOpen(t *testing.T) {
 		t.Fatalf("the unreadable context must be revoked: %+v", c)
 	}
 	recs := eventsOf(f.records(t), "refresh")
-	if len(recs) != 1 || recs[0]["verdict"] != "deny" || recs[0]["reason"] != "blob_unavailable" ||
-		recs[0]["principal"] != alice {
+	if len(recs) != 1 || recs[0]["verdict"] != "deny" || recs[0]["reason"] != "blob_unavailable" {
 		t.Fatalf("one refresh deny blob_unavailable: %v", recs)
+	}
+	// Revoked is its answer now, and its plaintext mark says so: the next
+	// pass leaves it alone and records nothing.
+	rep, err = f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Load(), At: f.now}})
+	if err != nil || rep.Failed != 0 || len(eventsOf(f.records(t), "refresh")) != 1 {
+		t.Fatalf("a second pass: %+v %v", rep, err)
+	}
+}
+
+// Whose an unopenable context is cannot be read, so its record names what is
+// authoritative — the device and the username its key holds — and no
+// principal: the index that led to it may be stale. Here carol's login has
+// replaced the context alice's index entry still names, and the record of
+// carol's revocation must not say it was alice's.
+func TestAnUnopenableContextIsNotAttributedFromTheIndex(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	f.login(t, alice, "leaf1", "alice")
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	carol := "user:carol@example.com"
+	if err := f.st.PutContext(ctx, k, store.Context{CtxID: "carol", Principal: carol, Username: "alice",
+		BlobHash: "sha256:carol"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexContext(ctx, carol, "", "", store.ContextRef{NAS: "leaf1", Username: "alice"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	f.b.Store = unreadableStore{Store: f.st, k: k}
+	priors := f.reload(t, edit(t, aliceGrant, "roles: [network_admin], max_privilege: admin"))
+	f.log.Reset()
+	if _, err := f.b.Refresh(ctx, priors); err != nil {
+		t.Fatal(err)
+	}
+	recs := eventsOf(f.records(t), "refresh")
+	if len(recs) != 1 {
+		t.Fatalf("one record for the one revocation: %v", recs)
+	}
+	s, _ := recs[0]["session"].(map[string]any)
+	d, _ := recs[0]["device"].(map[string]any)
+	if _, named := recs[0]["principal"]; named || s["username"] != "alice" || d["name"] != "leaf1" {
+		t.Fatalf("the record names the key's device and username, and no principal: %v", recs[0])
 	}
 }
 
