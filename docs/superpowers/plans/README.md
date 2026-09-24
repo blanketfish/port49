@@ -310,6 +310,12 @@ NOT collide"). Such an account's commands arrive under the same username and mat
 context at its highest granted level; `foreign` attribution is the only detection until this check
 exists.
 
+**Owed from plan 4 (owner's ruling 2026-09-24):** spec §12's CI reports — the
+effective-permission diff, the shadowed-deny report, the privilege-expansion gate, and the
+dead-rule and fallback-exposure intersection checks. Plan 4 builds `explain`, policy tests,
+access review and `grants remove` and none of these; they land here because the level and role
+data the intersection checks need comes from this plan's adapters.
+
 **Possible later, not planned:** per-window contexts on the platforms that give a window its own
 stable identifier — EOS `vty<n>`, bound at session authorization
 (`tests/lab/results/L1-arista_eos.md`; again 2026-09-22), and IOS-XE `tty<n>`

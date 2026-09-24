@@ -113,9 +113,13 @@ Where the spec leaves a shape open, this plan chooses, and says why here once:
    policy, naming subject, device and cause; plan 6 turns it into a quarantined device (decision
    20). The cost is O(subjects × devices) at start, which is fine at the lab's size and is plan
    12's to measure at the fleet's.
-9. **`on_missing` defaults to `exclude`, and a scope that attaches a role carrying a deny must
-   declare it.** The default is the safe direction for a grant; for a mitigation the safe
-   direction is the other one, so the author must say it.
+9. **`on_missing` defaults to `exclude`, and a scope with a match key that delivers a deny must
+   declare it**, whether a role carrying the deny is attached to the scope or granted on it. The
+   default is the safe direction for a grant; for a mitigation the safe direction is the other
+   one, so the author must say it. A scope with no match key (`all_devices`) is exempt, because
+   it has nothing to miss. Spec §11's `dc_fabric` carries `interface_tech`'s deny through a grant,
+   so it gains `on_missing: exclude`, and §5.5's example scope that attaches a deny gains
+   `on_missing: include` (spec corrected in Task 1).
 10. **Attribute layering takes each layer's sources in name order** — roles by name, grants by
     scope — so which one wins cannot depend on a file's layout; the result keeps first-appearance
     order with an override in the place of what it shadows. Every attribute states its own
@@ -130,15 +134,18 @@ Where the spec leaves a shape open, this plan chooses, and says why here once:
     including invented attributes no policy should be able to send, and rewriting it onto
     broker-minted tokens is lab work this plan has no host time for. With no `lab:` block a
     context with no blob is denied.
-13. **An authorization whose store read fails answers ERROR**, `store_unavailable`, on the context
-    read and on a blob read the cache cannot answer. Plans 1–3 answered FAIL; spec §5.7 and the
-    design §12 failure matrix say ERROR, so a device with a local fallback keeps working on its
-    own role while the store is down (Question 3).
+13. **An authorization whose store read fails answers FAIL**, `store_unavailable`, on the context
+    read and on a blob read the cache cannot answer, as plans 1–3 did. ERROR would let a device
+    fall through to its local method, and whether any device does that on an authorization ERROR
+    is unmeasured (L4). So it fails closed, and break-glass is the escape (owner's ruling
+    2026-09-24, Question 3). Task 1 amends spec §5.7, §6 and the design §12 failure matrix to
+    say so, and adds the measurement to L4.
 14. **A new reason, `blob_platform_mismatch`**, added to spec §5.7 in Task 1 before any code emits
     it. No existing reason is true of a blob compiled for another platform than the device's.
 15. **The per-replica blob cache holds compiled programs, 1,024 of them, with no invalidation**, and
     is counted (`port49_blob_cache_lookups_total{outcome}`, plus `get_blob` in
-    `port49_store_operations_total`). A cached blob answers through a store outage.
+    `port49_store_operations_total`). A cached blob answers a blob-read failure. It does not
+    carry a whole-store outage, because `Handle` reads the context from the same store first.
 16. **`decision.Sink` is an `Emitter` whose `Write` returns the refusal.** The spool drains through
     it and stops at a refused record without advancing `drainOffset`; the broker marks a blob
     emitted only when the sink took it, so the next mint re-emits a refused one. `jsonLines` is the
@@ -184,18 +191,21 @@ None of these blocks a task; each has a recommendation the plan implements as wr
    unmeasured, lets an abbreviation slip past a deny silently. *Recommendation:* ship `false`;
    L21 is one typed abbreviation per platform, so measure it at the next lab session and flip
    each platform on its note.
-3. **Authorization now answers ERROR, not FAIL, when the store cannot be read.** At 3am with the
-   store down, a device configured `aaa authorization commands … group tacacs+ local` then
-   authorizes by the local role (spec §6: the device role is the degraded-mode policy) instead of
-   denying every command of every live login. Spec §5.7 and design §12 say ERROR; plans 1–3
-   answered FAIL, and whether a device falls through on an authorization ERROR is unmeasured on
-   every platform (L4 covers authentication only). *Recommendation:* ERROR, as specified; the
-   reference AAA configuration (plan 12) is what makes the fallback role a sane one.
+3. **Authorization answers FAIL, not ERROR, when the store cannot be read.** *Ruled
+   2026-09-24: FAIL `store_unavailable`, as plans 1–3.* ERROR would let a device fall through to
+   `local`, or to no authorization at all, and whether any device falls through on an
+   authorization ERROR is unmeasured on every platform (L4 covers authentication only). So it
+   fails closed, and break-glass is the escape. The cost the owner accepted: at 3am with the
+   store down, every command of every live login is denied, showing `port49: authorization
+   store unavailable`. Spec §5.7, §6 and design §12 said ERROR and are amended in Task 1. L4
+   gains the measurement (authorization FAIL vs ERROR, with and without `local`), along with an
+   authentication-ERROR fall-through run and a per-platform role-ceiling run.
 4. **No plan owns spec §12's CI reports**: the effective-permission diff, the shadowed-deny
    report, the privilege-expansion gate, and the dead-rule and fallback-exposure intersection
    checks. Plan 4's roadmap entry names `explain`, policy tests, access review and `grants
    remove`, and this plan builds only those. *Recommendation:* plan 5, which is where the level
-   and role data the intersection checks need comes from; say so in the roadmap.
+   and role data the intersection checks need comes from; say so in the roadmap. *Ruled
+   2026-09-24: plan 5.* The roadmap's Plan 5 section lists them, and Task 20 hands them there.
 
 ## Global Constraints
 
@@ -276,11 +286,12 @@ internal/policy/lint_test.go                    NEW
 internal/policy/spec11_test.go                  NEW  the §11 corpus, order independence
 internal/policy/testdata/spec11.yaml            NEW
 internal/policy/testdata/spec11-inventory.yaml  NEW
-internal/daemon/author/author.go                MOD  Request; the new Authorizer; Decision.Policy; ERROR on store_unavailable
+internal/daemon/author/author.go                MOD  Request; the new Authorizer; Decision.Policy; storeUnavailableMsg
 internal/daemon/author/engine.go                NEW  Engine: the daemon's authorizer
 internal/daemon/author/engine_test.go           NEW
 internal/daemon/author/lab.go                   MOD  the new signatures; the instrument's comment
 internal/daemon/author/blob.go                  MOD then DEL (Tasks 12, 13)
+internal/daemon/author/blob_test.go             MOD then DEL (Tasks 12, 13)
 internal/daemon/author/author_test.go           MOD
 internal/daemon/metrics/metrics.go              MOD  BlobCache; the item-error codes
 internal/daemon/metrics/metrics_test.go         MOD
@@ -288,6 +299,8 @@ internal/daemon/server/server_test.go           MOD  panicAuthorizer's signature
 internal/broker/broker.go                       MOD  internal/policy and internal/engine; attribute_too_long; re-emits a refused blob
 internal/broker/engine_test.go                  NEW
 internal/broker/{fixture,identity,broker}_test.go MOD
+internal/agent/agent.go                         MOD  attribute_too_long's operator message (Task 13)
+internal/agent/agent_test.go                    MOD
 internal/blob/                                  DEL
 internal/broker/policy/                         DEL
 internal/policy/labpolicy_test.go               NEW  the lab's slice policy loads against the lab inventory
@@ -321,13 +334,15 @@ test` green.
 
 **Files:**
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§3 rule 4, §5.4 "Ties and explain", §5.5,
-  §5.7 "Three properties" and the reason table, §6 substitution, §8's example, §11, §15)
-- Modify: `docs/design/2026-08-21-port49-design.md` (§19 step 4)
+  §5.7 "Three properties" and the reason table, §6 substitution and the device-local role, §8's
+  example, §11, §15 L2, L4 and L21)
+- Modify: `docs/design/2026-08-21-port49-design.md` (§12 failure matrix, §19 step 4)
 
 **Interfaces:**
 - Produces: the §5.7 row for `blob_platform_mismatch`, which Task 2 adds as a constant and Task 12
   emits; register row L21, which `internal/platform/dialect.go` (Task 4) cites; the §5.4 tie-break
-  Task 6 implements; the §8 correction Decided 4 rests on.
+  Task 6 implements; the §8 correction Decided 4 rests on; the §5.5 rule Task 8 enforces; the
+  §5.7 `store_unavailable` row Task 12 answers by (FAIL on authorization, Decided 13).
 
 Why first: a reason code is added to the spec table before any code names it (`CLAUDE.md`), and
 the lab contradicts one line of spec §8 — lab register rule 4 says the doc is fixed, citing the
@@ -337,16 +352,18 @@ results note, and the commit says so.
 
 Eight spec changes. §3 rule 4 gains the fail-closed mechanism for abbreviations and names L21;
 §5.4's tie-break becomes role name then rule text (Decided 6); §5.5 says when `on_missing` must be
-declared (Decided 9); §5.7 says what `bundle` is until plan 6 (Decided 3) and gains the
+declared, and its example scope that attaches a deny declares it (Decided 9); §5.7 says what
+`bundle` is until plan 6 (Decided 3) and gains the
 `blob_platform_mismatch` row; §6 says what `{device}` and `{privilege}` render and where length is
 checked; §8's example is corrected to `pipe_authorized: false`, citing `L2-arista_eos.md`, with a
-paragraph saying so; §11's `svc_oxidized` gains the username §2 gives it (Decided 24); §15 gains
-row L21 and its note. The design gains one sentence at §19 step 4.
+paragraph saying so; §11's `svc_oxidized` gains the username §2 gives it (Decided 24), and its
+`dc_fabric` declares `on_missing: exclude` (Decided 9); §15 gains row L21 and its note. The design
+gains one sentence at §19 step 4. The third patch below carries the owner's rulings.
 
 <!-- patch: docs/design/2026-08-23-policy-engine-spec.md -->
 ````diff
 diff --git a/docs/design/2026-08-23-policy-engine-spec.md b/docs/design/2026-08-23-policy-engine-spec.md
-index ceac013..845e833 100644
+index ceac013..3641578 100644
 --- a/docs/design/2026-08-23-policy-engine-spec.md
 +++ b/docs/design/2026-08-23-policy-engine-spec.md
 @@ -245,6 +245,16 @@ entire class.
@@ -380,18 +397,27 @@ index ceac013..845e833 100644
  
  Specificity is a property of the rule and the command, never of position in a file, so
  **evaluation is order-independent**: reordering roles, grants, or rules within a role cannot
-@@ -883,7 +896,9 @@ decommissioning}` for read-only on the way out.
+@@ -838,6 +851,7 @@ scopes:
+       machines: [baseline_show]
+   - name: dc_fabric
+     match: {site: dc1}
++    on_missing: include
+     attached_roles:
+       humans: [dc_safety_denies]
+ ```
+@@ -883,7 +897,10 @@ decommissioning}` for read-only on the way out.
  `on_missing` MUST be explicit where an attribute is optional, and the safe direction differs
  by rule type: for a deny-bearing scope, a missing attribute means *include* (assume
  vulnerable); for a permit-bearing scope it means *exclude*. A broken inventory sync silently
 -lifting a mitigation is the failure to design against.
-+lifting a mitigation is the failure to design against. So a scope that attaches a role
-+carrying a deny MUST declare `on_missing` — omitting it is a load error — and any other scope
-+defaults to `exclude` (plan 4).
++lifting a mitigation is the failure to design against. So a scope with at least one match
++key that delivers a deny — it attaches a role carrying one, or a grant on it holds one — MUST
++declare `on_missing`, and omitting it is a load error; any other scope defaults to `exclude`.
++A scope with no match key, `all_devices`, selects every device and needs neither (plan 4).
  
  `security_log: true` marks a scope whose membership changes are security events. This is
  required because a scope keyed on device state makes **source-of-truth write access
-@@ -1368,7 +1383,10 @@ for `copy`, a deny matched the destination more specifically, and dominance fail
+@@ -1368,7 +1385,10 @@ for `copy`, a deny matched the destination more specifically, and dominance fail
  **Log inputs and policy identity, not a narrative.** The matched rules are included because
  they make a record readable on its own, but the blob hash is what makes it provable. A replay
  that disagrees with the logged verdict is itself a finding — version skew, or tampering — so
@@ -403,7 +429,7 @@ index ceac013..845e833 100644
  
  **Keep the raw arguments alongside the normalized vector.** Normalization (§3) is where
  matcher bugs live. A record holding only the vector erases the evidence of its own
-@@ -1477,6 +1495,7 @@ not an unvalidated body. A connection with no verified chain names no one.
+@@ -1477,6 +1497,7 @@ not an unvalidated body. A connection with no verified chain names no one.
  | `device_unknown` | the source address is not in the admission trie (§10) |
  | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
  | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) |
@@ -411,7 +437,7 @@ index ceac013..845e833 100644
  | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed |
  
  Every event has a success reason and at least one failure reason in this table, so
-@@ -2059,7 +2078,10 @@ and CI MUST report the shadowing so an override never happens silently.
+@@ -2059,7 +2080,10 @@ and CI MUST report the shadowing so an override never happens silently.
  
  Values support a **fixed** substitution vocabulary — `{username}`, `{principal}`,
  `{device}`, `{privilege}` — and nothing more. `home-directory*/home/{username}` is the
@@ -423,7 +449,7 @@ index ceac013..845e833 100644
  
  ### Validation without semantics
  
-@@ -2243,12 +2265,19 @@ platforms:
+@@ -2243,12 +2267,19 @@ platforms:
        loopback:   ['^Loopback[0-9]+$']
        physical:   ['^Ethernet[0-9/.]+$', '^Port-Channel[0-9]+$']
      enable_username: principal
@@ -445,7 +471,16 @@ index ceac013..845e833 100644
  Most devices need far less. A time server or a BMC that does authentication plus one
  attribute is complete in four lines:
  
-@@ -3325,7 +3354,7 @@ subjects:
+@@ -3248,7 +3279,7 @@ key_groups:
+ 
+ scopes:
+   - {name: all_devices, match: {}}
+-  - {name: dc_fabric,   match: {site: [dc1, dc2], role: [leaf, spine]}}
++  - {name: dc_fabric,   match: {site: [dc1, dc2], role: [leaf, spine]}, on_missing: exclude}
+   - name: srx_unpatched
+     match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}
+     on_missing: include
+@@ -3325,7 +3356,7 @@ subjects:
    - {name: security_ir,   group: "CN=security-ir,OU=Groups,DC=example,DC=com",
       enable: token, token_ttl: 60s}
    - {name: svc_oxidized,  identity: "system:serviceaccount:netops:oxidized",
@@ -454,7 +489,7 @@ index ceac013..845e833 100644
  
  grants:
    - {subject: netops_admins, scope: all_devices,   roles: [network_admin], max_privilege: admin}
-@@ -4156,6 +4185,7 @@ implemented against a guess. This section is the one place the distinction is ke
+@@ -4156,6 +4187,7 @@ implemented against a guess. This section is the one place the distinction is ke
  | **L18** | How each platform treats a reply attribute it did not ask for: applied, ignored, or the session killed. Another vendor's attribute, an invented one, and a known attribute carrying a value the device cannot use, each in the OPTIONAL and the MANDATORY spelling. Per variant: whether the session opens and, when it does not, what the device says verbatim; what role or privilege the session ends up with; and whether the device still sends per-command authorization. | Whether an adapter may send one attribute list to a mixed fleet at all (§8). RFC 8907 §8.2 says an OPTIONAL argument a device does not understand SHOULD be ignored and a MANDATORY one MUST fail the authorization; `lab.session_attributes` in `tests/lab/port49d-lab.yaml` rested on the first half until IOS-XE disproved it (L10), and what an operator's typo costs (§6) rests on the same answer. Also decision 22's two Junos attributes (§13, gated on L12). | EOS, NX-OS, IOS-XE, Junos | open — added and measured 2026-09-22 on all five images, `tests/lab/l18_test.go`. **Three vendors answer three different ways, so §8 cannot have one rule.** vEOS follows §8.2 in both directions. The N9Kv and both Junos images honour neither half and ignore everything, mandatory included. IOS-XE refuses the session for anything it does not recognise under either flag — and a run of those refusals stops it answering SSH at all for about a minute, without sending port49 a packet. On Junos `local-user-name` is applied under either flag and **`user-permissions` does nothing**, which is decision 22's second attribute measured for the first time. **The per-command reply is measured too, 2026-09-22, and it does not follow the session reply:** the C8000V refuses EVERY command in the session — `Command authorization failed.` — for any of the three attributes under either flag, on authorizations port49 answered `permit`; vEOS ignores an optional unknown there and refuses every command on a MANDATORY one; the N9Kv ignores all of them. Junos has no per-command reply to ask it of (L10, L14; decision 21). Open: every non-SSH transport, and whether IOS-XE's SSH condition is the vty pool; see below |
  | **L19** | The maximum password length each platform accepts via PAP, on every login path where the device uses PAP. | The 30-character handle (design document §8): an authentication START carries a PAP password in `data`, whose length field is one byte, so PAP can bound the handle where the ASCII prompt does not — and NX-OS uses PAP for every SSH login by default | all | open — added 2026-09-23, split from L8. On the N9Kv an SSH login is carried as PAP and 127 characters arrive (`tests/lab/results/L8-cisco_nxos.md`); PAP on any other path, and on EOS, Junos and IOS-XE, which this lab does not configure for it, is unmeasured; see below |
  | **L20** | Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a **wrong password** for the same user inside that window is also accepted; and whether a credential port49 would now refuse is re-checked inside it. | Whether a revocation in port49 reaches an API client at all (§5.1.4), and decision 15's bound on how long a spent token works — the receipt's `receipt_idle_ttl` and `receipt_max_age` act only on exchanges the device sends | IOS-XE; then every HTTP API transport | open — added 2026-09-23. IOS-XE RESTCONF answered a repeat of an already-spent token, 3s later, with `200 OK` and **zero** TACACS+ traffic (`tests/lab/results/L1-restconf-cisco_iosxe.md`), so a revocation in port49 cannot reach that repeat. Open: the window's length, what the device keys the answer on, and whether a wrong password within the window is accepted too; see below |
@@ -462,7 +497,7 @@ index ceac013..845e833 100644
  
  **What has been measured so far, per row.** The measurements exist and the notes are in the
  repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
-@@ -5503,5 +5533,13 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
+@@ -5503,5 +5535,13 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
    question on eAPI and NX-API with Basic credentials on a kept-alive connection, and on every
    other platform.
  
@@ -481,9 +516,18 @@ index ceac013..845e833 100644
 <!-- patch: docs/design/2026-08-21-port49-design.md -->
 ```diff
 diff --git a/docs/design/2026-08-21-port49-design.md b/docs/design/2026-08-21-port49-design.md
-index 5ad785e..9e7ce5f 100644
+index 5ad785e..95ca2f9 100644
 --- a/docs/design/2026-08-21-port49-design.md
 +++ b/docs/design/2026-08-21-port49-design.md
+@@ -1100,7 +1100,7 @@ silently engages is indistinguishable from a bug.
+ | Failure | New session | New device login | **Active login (commands)** | Batch run in progress |
+ |---|---|---|---|---|
+ | **Directory unavailable** | ✓ credential only | ⚠ ok within grace; else denied | ✓ stale context to ceiling | ⚠ as new login |
+-| **Token store unavailable** | ✓ `port49 login` touches no store | ✗ | ⚠ continues only where a replica holds a warm cache entry; otherwise ✗ → device falls back to local authorization | ✗ |
++| **Token store unavailable** | ✓ `port49 login` touches no store | ✗ | ✗ port49 answers `FAIL` `store_unavailable` and every command is denied until the store returns; device-local break-glass is the escape (policy engine spec §5.7; authorization fall-through unmeasured, §15 L4) | ✗ |
+ | **Broker unavailable** | ✗ | ✗ | ⚠ unaffected within the staleness ceiling; ✗ beyond it | ✗ |
+ | **All daemons unavailable** | ✓ | ✗ → device-local break-glass | ⚠ device retains its shell profile; remote authorization stops | ✗ |
+ | **One region unavailable** | ✓ | ✓ device fails over | ✓ | ✓ |
 @@ -1668,7 +1668,9 @@ built against a guess.
     over SSH on all five images including IOS-XE, stays open on `deadtime`, the transports it
     has not measured, and authorization fall-through (policy engine spec, §15).
@@ -497,11 +541,97 @@ index 5ad785e..9e7ce5f 100644
     projection generator is not final until L12 closes (spec §13, decision 22).
 ```
 
+The owner's rulings of 2026-09-24 add a third patch, applied after the first two. It amends the
+spec text that said an authorization store failure answers ERROR: the §5.7 `store_unavailable`
+row now says FAIL on authorization until L4 measures authorization fall-through, and §6's
+device-local-role bullet says a reachable port49 with its store down answers FAIL (Decided 13).
+It widens the §5.7 `blob_unavailable` row to cover a context that no longer fits its blob's
+attributes, the one daemon-side case Task 12 answers with it. It records the output-modifier
+observation in the L2 row. It keeps L4 open and gives its note a *To measure* paragraph with
+three runs: authentication ERROR fall-through, authorization FAIL vs ERROR, and the role ceiling
+per platform. The design patch above also changes the §12 failure matrix's store-unavailable
+cell to match.
+
+<!-- patch: docs/design/2026-08-23-policy-engine-spec.md -->
+````diff
+diff --git a/docs/design/2026-08-23-policy-engine-spec.md b/docs/design/2026-08-23-policy-engine-spec.md
+index 3641578..7b47dd3 100644
+--- a/docs/design/2026-08-23-policy-engine-spec.md
++++ b/docs/design/2026-08-23-policy-engine-spec.md
+@@ -1475,7 +1475,7 @@ not an unvalidated body. A connection with no verified chain names no one.
+ | `permit_dominates` | a permit dominated every matching deny (§5.4) |
+ | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
+ | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
+-| `store_unavailable` | any event: the store did not answer or returned an error; the reply is `ERROR` so the device falls through to its next method (design document §12) — the log line is the evidence an operator needs at 3am |
++| `store_unavailable` | any event: the store did not answer or returned an error. On authentication and accounting the reply is `ERROR`, so the device falls through to its next method (design document §12); on authorization it is `FAIL` — fail closed, break-glass is the escape — until L4 measures what each device does with an authorization `ERROR` (§15; plan 4, owner's ruling 2026-09-24). The log line is the evidence an operator needs at 3am |
+ | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
+ | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
+ | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
+@@ -1496,7 +1496,7 @@ not an unvalidated body. A connection with no verified chain names no one.
+ | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, or every grant withdrawn (§5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
+ | `device_unknown` | the source address is not in the admission trie (§10) |
+ | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
+-| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) |
++| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, which the broker refused at mint (§6) |
+ | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
+ | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed |
+ 
+@@ -1944,7 +1944,8 @@ confines it once it is.
+ - **When port49 is unreachable.** Under `aaa authorization commands … group tacacs+ local`,
+   the device falls back to local authorization, and the role assigned at login is what
+   remains. This is the "active login" column of the design document's failure matrix — the
+-  device role *is* the degraded-mode policy.
++  device role *is* the degraded-mode policy. A reachable port49 whose store is down answers
++  `FAIL`, not `ERROR` (§5.7), so the device role does not take over then.
+ - **Commands the device never submits.** With `aaa authorization commands 15` and no
+   `commands 1`, everything below that tier is governed by the device role alone, always.
+ 
+@@ -4168,9 +4169,9 @@ implemented against a guess. This section is the one place the distinction is ke
+ | ID | Claim to measure | What rests on it | Platforms | Status |
+ |---|---|---|---|---|
+ | **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE's RESTCONF measured 2026-09-23 (`tests/lab/results/L1-restconf-cisco_iosxe.md`); the console and IOS-XE's NETCONF unmeasured; see below |
+-| **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below |
++| **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below. **Output modifiers (recorded 2026-09-23, plan 4):** in the truncation runs a typed `show clock \| include …` reached port49 as `show clock` alone on vEOS 4.31.2F, NX-OS 10.4(2)F and IOS-XE 17.13.01a (`tests/lab/results/L2-arista_eos.md`, `L2-cisco_nxos.md`, `L2-cisco_iosxe.md`, "Truncation length"), which is why no built-in platform's `pipe_authorized` is true (§8); whether any modifier reaches port49 anywhere is unmeasured |
+ | **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | closed — measured 2026-09-21; `tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`, `L3-nxos-cisco_nxos.md`. Scope: NX-OS 10.x has no enable exchange (`feature privilege` was removed in 10.x; the owner confirmed the same on production Nexus 9000 hardware running 10.3(5)); NX-OS 9.x and earlier are unmeasured and out of scope. No measured image sends `$enab{level}$`. History: closed in error 2026-09-20 on a note with no transcript, reopened 2026-09-21. Measured: vEOS-lab 4.31.2F (image tagged 4.32.2F) and IOS-XE 17.13.01a both send the operator's own username with `service=enable` and a bare-address `rem_addr` (`tests/lab/results/L3-arista_eos.md`, re-measured 2026-09-22, which is where the image tag was found to overstate the running version; the image under the tag is `sha256:8ef33020ece8871b19ddfdddf7f3585b04d2ac3672845b0db88debe8e96ff9c9`, created 2026-09-15, the only one on the lab host; `L3-cisco_iosxe.md`). **NX-OS re-measured 2026-09-21 with the transcript it was missing** (`tests/lab/results/L3-nxos-cisco_nxos.md`): `disable`, `enable` and `enable 15` were each typed separately and each answered `% Invalid command at '^' marker.`, and `feature privilege` is itself refused by this image, so the conclusion the reopened note reached without evidence is confirmed with it |
+-| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS, the N9Kv and IOS-XE over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS, the N9Kv and IOS-XE never do (`tests/lab/results/L4-cisco_iosxe.md`, which this cell omitted until 2026-09-23); `deadtime`, other transports and authorization fall-through unmeasured. **2026-09-21 (L17):** committing `tacplus-options strict-authorization` on both Junos images changes none of the unreachable-server cells — break-glass still logged in under both orders with port49d down — so making a port49 denial binding does not cost the fall-through this row measures; see below |
++| **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS, the N9Kv and IOS-XE over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS, the N9Kv and IOS-XE never do (`tests/lab/results/L4-cisco_iosxe.md`, which this cell omitted until 2026-09-23); `deadtime`, other transports and authorization fall-through unmeasured — plan 4 answers an authorization `store_unavailable` `FAIL` until it is (§5.7), and the runs that would settle it are under *To measure* below. **2026-09-21 (L17):** committing `tacplus-options strict-authorization` on both Junos images changes none of the unreachable-server cells — break-glass still logged in under both orders with port49d down — so making a port49 denial binding does not cost the fall-through this row measures; see below |
+ | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | closed — measured 2026-09-20; `tests/lab/results/L5-arista_eos.md`, `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, `L5-cisco_nxos.md`, `L5-cisco_iosxe.md`. No image sends a WATCHDOG over a 2m30s idle interactive session under the lab's accounting config, which sets no periodic update; a device configured for periodic updates is outside what was measured |
+ | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
+ | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | open — eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. The eAPI `/login` cookie flow measured 2026-09-23 by hand on vEOS (`tests/lab/results/L7-login-arista_eos.md`): a request carrying the cookie runs no authentication and no session authorization, only its command authorization and an accounting stop. Open: NX-API's `nxapi_auth` cookie, unmeasured, so the row stays open (lab register rule 3); see below |
+@@ -4488,6 +4489,22 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
+   true. Note also that both contradicted sentences are about *authorization* fall-through,
+   which this row has not measured; what is measured is that the general principle they appeal
+   to is false on Junos for authentication.
++
++  *To measure* (added 2026-09-24 by plan 4, on the owner's rulings; nothing here is measured
++  yet):
++
++  - **Authentication `ERROR` fall-through:** with port49d up and answering authentication
++    `ERROR` `store_unavailable` (its store down), does a local break-glass account log in —
++    EOS, NX-OS, IOS-XE, Junos?
++  - **Authorization `FAIL` vs `ERROR`:** with port49d up and its store down, what each device
++    does with a per-command authorization answered `FAIL`, and with one answered `ERROR`,
++    under a method list with `local` after `group tacacs+` and one without. This is the
++    measurement behind plan 4 answering authorization `store_unavailable` `FAIL` (§5.7).
++  - **Role ceiling, per platform:** at each candidate device role (for example EOS and NX-OS
++    `network-operator`), whether the device itself allows `clear counters`, `clear ip bgp *`
++    and `configure`. The device role is the ceiling and port49's command rules draw the line
++    inside it (§6), so this is what an adapter's level mapping (plan 5) rests on; `operator`
++    on `arista_eos` stays refused at load until it is measured.
+ - **L5** — EOS 2026-09-17 and Junos 2026-09-20: no WATCHDOG at all on any of the three, over a
+   2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`,
+   `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, and the N9Kv and Catalyst 8000V both join them with
+````
+
 - [ ] **Step 2: Check and commit**
 
 Run: `grep -n 'blob_platform_mismatch\|^| \*\*L21\*\*\|pipe_authorized: false\|username: svc-config-backup' docs/design/2026-08-23-policy-engine-spec.md`
-Expected: the reason row in §5.7, the L21 row in §15, the corrected §8 example line, and §11's
-subject line.
+Expected: at least these four among the matches (spec §2, §4 and §9 already match too): the reason
+row in §5.7, the L21 row in §15, the corrected §8 example line, and §11's subject line.
+
+Run: `grep -n 'on authorization it is .FAIL.\|To measure. (added 2026-09-24\|on_missing: exclude}' docs/design/2026-08-23-policy-engine-spec.md; grep -n 'port49 answers .FAIL. .store_unavailable.' docs/design/2026-08-21-port49-design.md`
+Expected: the §5.7 `store_unavailable` row, the L4 note's *To measure* paragraph, §11's `dc_fabric`
+line, and the design §12 cell.
 
 ```bash
 git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
@@ -519,7 +649,17 @@ vEOS, NX-OS and IOS-XE each sent 'show clock' alone for a typed
 'show clock | include ...' (tests/lab/results/L2-arista_eos.md,
 L2-cisco_nxos.md, L2-cisco_iosxe.md). The example is corrected and the
 paragraph under it says so (lab register rule 4). §11's svc_oxidized
-gains the username §2 gives it, which §14 requires.
+gains the username §2 gives it, which §14 requires, and its dc_fabric
+declares on_missing, which §5.5 now requires of a keyed scope that
+carries a deny.
+
+Authorization answers store_unavailable FAIL, not ERROR, until L4
+measures authorization fall-through (owner's ruling 2026-09-24): §5.7,
+§6 and the design's §12 failure matrix are amended, and L4 stays open
+with three runs to measure (authentication ERROR fall-through,
+authorization FAIL vs ERROR, the role ceiling per platform). The L2 row
+records the output-modifier observation; blob_unavailable's row covers
+a context that no longer fits its blob.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -958,22 +1098,27 @@ forwards through `Emit` and never hears the refusal).
 <!-- patch: internal/daemon/acct/spool.go -->
 ```diff
 diff --git a/internal/daemon/acct/spool.go b/internal/daemon/acct/spool.go
-index c7fa175..bb26c70 100644
+index c7fa175..fbce085 100644
 --- a/internal/daemon/acct/spool.go
 +++ b/internal/daemon/acct/spool.go
-@@ -51,7 +51,10 @@ const maxLineBytes = 1 << 20 // 1 MiB
+@@ -51,9 +51,13 @@ const maxLineBytes = 1 << 20 // 1 MiB
  // Delivery is at-least-once: a crash between forwarding a record to the sink
  // and removing the .draining file re-forwards that record the next time Run
  // starts (TestSpoolResumesDrainingFile). Consumers of the sink must tolerate
 -// duplicates. Every error on the drain path is logged (path and error, never
+-// record contents), throttled to once a minute per failure kind once a
+-// condition persists, so a stuck filesystem cannot flood the log.
 +// duplicates. The contract reaches across the last hop: a record the sink
 +// refuses stops the pass at that record, drainOffset stays at its first byte,
 +// and the next pass offers it again (TestARefusedRecordIsOfferedAgain). A
-+// refusal is not the file's fault, so it never counts toward quarantine. Every error on the drain path is logged (path and error, never
- // record contents), throttled to once a minute per failure kind once a
- // condition persists, so a stuck filesystem cannot flood the log.
++// refusal is not the file's fault, so it never counts toward quarantine.
++// Every error on the drain path is logged (path and error, never record
++// contents), throttled to once a minute per failure kind once a condition
++// persists, so a stuck filesystem cannot flood the log.
  //
-@@ -87,7 +90,7 @@ const maxLineBytes = 1 << 20 // 1 MiB
+ // A read error partway through .draining does not lose or repeat the prefix
+ // already forwarded: the spool remembers how many bytes of the file it has
+@@ -87,7 +91,7 @@ const maxLineBytes = 1 << 20 // 1 MiB
  // first.
  type Spool struct {
  	path     string
@@ -982,7 +1127,7 @@ index c7fa175..bb26c70 100644
  	metrics  *metrics.Metrics
  	capacity int
  
-@@ -114,6 +117,7 @@ type Spool struct {
+@@ -114,6 +118,7 @@ type Spool struct {
  	lastStructLog     time.Time // throttles stat/open/seek/rename failure logs
  	lastQuarantineLog time.Time // throttles a failing quarantine rename's log
  	lastReadLog       time.Time // throttles the read-failure log
@@ -990,7 +1135,7 @@ index c7fa175..bb26c70 100644
  	drainOffset       int64     // bytes of .draining already forwarded; 0 for a file not yet started
  	offsetFailAt      int64     // drainOffset (or -1 for a structural failure) at the last failure
  	offsetFailCount   int       // consecutive failures at offsetFailAt
-@@ -129,7 +133,7 @@ type Spool struct {
+@@ -129,7 +134,7 @@ type Spool struct {
  // at start with one actionable line instead of becoming an ERROR reply per
  // record once devices are live, and it notes whether the existing file ends
  // mid-record so the first Offer does not append onto a fragment.
@@ -999,7 +1144,7 @@ index c7fa175..bb26c70 100644
  	if capacity < 1 {
  		return nil, errors.New("acct: spool capacity must be at least 1")
  	}
-@@ -512,7 +516,17 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
+@@ -512,7 +517,17 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
  				log.Printf("acct: dropping oversized spool line (over %d bytes)", maxLineBytes)
  				s.metrics.SpoolDrops.WithLabelValues(dropDrainUnparseable).Inc()
  			default:
@@ -1018,7 +1163,7 @@ index c7fa175..bb26c70 100644
  			}
  			forwarded++
  			pos += n
-@@ -545,18 +559,20 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
+@@ -545,18 +560,20 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
  // deliverLine unmarshals one record and forwards it, or logs and counts a
  // drop for a line that is empty or fails to unmarshal. An oversized line
  // never reaches here — drainOnce handles that case itself, since
@@ -1243,7 +1388,7 @@ type Dialect struct {
 	// ExpandsAbbreviations says the device sends the resolved command words
 	// rather than what the operator typed. Where it is false, a deny's words
 	// also match any abbreviation of them, so `rel` cannot slip past
-	// `deny reload **` (spec §3 rule 4; blob.Normalize).
+	// `deny reload **` (spec §3 rule 4; engine.Normalize).
 	ExpandsAbbreviations bool
 	// Supports is the capability declaration of spec §9: which of `session`,
 	// `commands` and `config_commands` the platform authorizes. The engine
@@ -1548,26 +1693,26 @@ func TestDecodeRefusesWhatItCannotDecideWith(t *testing.T) {
 		t.Fatalf("a tampered body must be refused as a hash mismatch: %v", err)
 	}
 	const head = `{"version":2,"bundle":"b","platform":"arista_eos","normalize":{"pipe_token":"|","pipe_authorized":false,"strip_cr":true,"expands_abbreviations":false},"privilege":"","attributes":[],`
-	for name, body := range map[string]string{
-		"plan 3's slice blob": `{"platform":"arista_eos","privilege":15,"attributes":[],"permit":["**"],"deny":[]}`,
-		"a newer version":     strings.Replace(head, `"version":2`, `"version":3`, 1) + `"rules":[],"pipe":[],"classes":{}}`,
-		"an unknown field":    head + `"rules":[],"pipe":[],"classes":{},"extra":1}`,
-		"trailing bytes":      head + `"rules":[],"pipe":[],"classes":{}} {}`,
-		"no platform":         strings.Replace(head, `"arista_eos"`, `""`, 1) + `"rules":[],"pipe":[],"classes":{}}`,
-		"no pipe token":       strings.Replace(head, `"pipe_token":"|"`, `"pipe_token":""`, 1) + `"rules":[],"pipe":[],"classes":{}}`,
-		"a class with no pattern": head + `"rules":[{"verdict":"deny","rule":"interface @management","role":"r"}],` +
-			`"pipe":[],"classes":{}}`,
-		"a regex RE2 refuses": head + `"rules":[{"verdict":"deny","rule":"interface /(?!x)/","role":"r"}],"pipe":[],"classes":{}}`,
-		"a verdict that is neither": head + `"rules":[{"verdict":"allow","rule":"show **","role":"r"}],` +
-			`"pipe":[],"classes":{}}`,
-		"a rule with no role":          head + `"rules":[{"verdict":"permit","rule":"show **","role":""}],"pipe":[],"classes":{}}`,
-		"a non-trailing **":            head + `"rules":[{"verdict":"permit","rule":"show ** detail","role":"r"}],"pipe":[],"classes":{}}`,
-		"an attribute with no sep":     strings.Replace(head, `"attributes":[]`, `"attributes":["priv-lvl"]`, 1) + `"rules":[],"pipe":[],"classes":{}}`,
-		"an unknown substitution":      strings.Replace(head, `"attributes":[]`, `"attributes":["home*{home}"]`, 1) + `"rules":[],"pipe":[],"classes":{}}`,
-		"a pipe rule that won't parse": head + `"rules":[],"pipe":["** include"],"classes":{}}`,
+	for name, tt := range map[string]struct{ body, want string }{
+		"plan 3's slice blob": {`{"platform":"arista_eos","privilege":15,"attributes":[],"permit":["**"],"deny":[]}`, "plan 3's"},
+		"a newer version":     {strings.Replace(head, `"version":2`, `"version":3`, 1) + `"rules":[],"pipe":[],"classes":{}}`, "format version 3"},
+		"an unknown field":    {head + `"rules":[],"pipe":[],"classes":{},"extra":1}`, `unknown field "extra"`},
+		"trailing bytes":      {head + `"rules":[],"pipe":[],"classes":{}} {}`, "bytes after the blob"},
+		"no platform":         {strings.Replace(head, `"arista_eos"`, `""`, 1) + `"rules":[],"pipe":[],"classes":{}}`, "names no platform"},
+		"no pipe token":       {strings.Replace(head, `"pipe_token":"|"`, `"pipe_token":""`, 1) + `"rules":[],"pipe":[],"classes":{}}`, "no pipe token"},
+		"a class with no pattern": {head + `"rules":[{"verdict":"deny","rule":"interface @management","role":"r"}],` +
+			`"pipe":[],"classes":{}}`, "carries no pattern"},
+		"a regex RE2 refuses": {head + `"rules":[{"verdict":"deny","rule":"interface /(?!x)/","role":"r"}],"pipe":[],"classes":{}}`, "regex"},
+		"a verdict that is neither": {head + `"rules":[{"verdict":"allow","rule":"show **","role":"r"}],` +
+			`"pipe":[],"classes":{}}`, "neither permit nor deny"},
+		"a rule with no role":          {head + `"rules":[{"verdict":"permit","rule":"show **","role":""}],"pipe":[],"classes":{}}`, "names no role"},
+		"a non-trailing **":            {head + `"rules":[{"verdict":"permit","rule":"show ** detail","role":"r"}],"pipe":[],"classes":{}}`, "trailing-only"},
+		"an attribute with no sep":     {strings.Replace(head, `"attributes":[]`, `"attributes":["priv-lvl"]`, 1) + `"rules":[],"pipe":[],"classes":{}}`, "separator"},
+		"an unknown substitution":      {strings.Replace(head, `"attributes":[]`, `"attributes":["home*{home}"]`, 1) + `"rules":[],"pipe":[],"classes":{}}`, "not a substitution"},
+		"a pipe rule that won't parse": {head + `"rules":[],"pipe":["** include"],"classes":{}}`, "pipe rule"},
 	} {
-		if b, err := Decode(HashOf([]byte(body)), []byte(body)); err == nil {
-			t.Errorf("%s: decoded %+v, want an error", name, b)
+		if b, err := Decode(HashOf([]byte(tt.body)), []byte(tt.body)); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: decoded %+v, %v; want an error mentioning %q", name, b, err, tt.want)
 		}
 	}
 }
@@ -1575,22 +1720,25 @@ func TestDecodeRefusesWhatItCannotDecideWith(t *testing.T) {
 // Encode refuses what Decode would refuse: a daemon must never be handed a
 // blob it cannot read.
 func TestEncodeRefusesWhatDecodeRefuses(t *testing.T) {
-	for name, mutate := range map[string]func(*Blob){
-		"no platform":          func(b *Blob) { b.Platform = "" },
-		"an undefined class":   func(b *Blob) { b.Classes = nil },
-		"a bad attribute":      func(b *Blob) { b.Attributes = []string{"=15"} },
-		"a rule with no role":  func(b *Blob) { b.Rules[0].Role = "" },
-		"no pipe token":        func(b *Blob) { b.Normalize.PipeToken = "" },
-		"an unparseable rule":  func(b *Blob) { b.Rules[0].Rule = "show int*" },
-		"an unknown verdict":   func(b *Blob) { b.Rules[0].Verdict = "allow" },
-		"an empty regex":       func(b *Blob) { b.Rules[0].Rule = "show //" },
-		"a class not snake":    func(b *Blob) { b.Rules[0].Rule = "interface @Mgmt" },
-		"a wildcard in a word": func(b *Blob) { b.Pipe = []string{"inc*"} },
+	for name, tt := range map[string]struct {
+		mutate func(*Blob)
+		want   string
+	}{
+		"no platform":          {func(b *Blob) { b.Platform = "" }, "names no platform"},
+		"an undefined class":   {func(b *Blob) { b.Classes = nil }, "carries no pattern"},
+		"a bad attribute":      {func(b *Blob) { b.Attributes = []string{"=15"} }, "empty name"},
+		"a rule with no role":  {func(b *Blob) { b.Rules[0].Role = "" }, "names no role"},
+		"no pipe token":        {func(b *Blob) { b.Normalize.PipeToken = "" }, "no pipe token"},
+		"an unparseable rule":  {func(b *Blob) { b.Rules[0].Rule = "show int*" }, "whole term"},
+		"an unknown verdict":   {func(b *Blob) { b.Rules[0].Verdict = "allow" }, "neither permit nor deny"},
+		"an empty regex":       {func(b *Blob) { b.Rules[0].Rule = "show //" }, "empty regex"},
+		"a class not snake":    {func(b *Blob) { b.Rules[0].Rule = "interface @Mgmt" }, "not a class name"},
+		"a wildcard in a word": {func(b *Blob) { b.Pipe = []string{"inc*"} }, "whole term"},
 	} {
 		b := eos()
-		mutate(&b)
-		if _, _, err := Encode(b); err == nil {
-			t.Errorf("%s: encoded, want an error", name)
+		tt.mutate(&b)
+		if _, _, err := Encode(b); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: Encode = %v, want an error mentioning %q", name, err, tt.want)
 		}
 	}
 }
@@ -3026,7 +3174,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 The whole §11 grammar is read — `privilege_levels` with `parent:`, `scopes` with `match`,
 `on_missing`, `security_log` and `attached_roles`, roles with `pipe` and `attributes`, group and
 identity subjects with `api:`, grants with `expires` and `attributes`, and `tests:`. The checks here
-are the structural ones; the joint checks against inventory arrive in Task 10.
+are the structural ones; the joint checks against inventory arrive in Task 10. A scope with a match
+key that delivers a deny, attached or through a grant, must declare `on_missing` (Decided 9). A
+grant's roles are kept sorted, so nothing a grant reports depends on how the file lists them.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3177,6 +3327,8 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"on_missing", "scopes:\n  - {name: x, match: {site: dc1}, on_missing: maybe}\n" + subjOK, "include or exclude"},
 		{"a deny-bearing scope without on_missing", roleOK + "  - {name: d, deny: [reload]}\n" +
 			"scopes:\n  - {name: x, match: {site: dc1}, attached_roles: {humans: [d]}}\n" + subjOK, "declare on_missing"},
+		{"a deny granted on a keyed scope without on_missing", scopeOK + "  - {name: x, match: {site: dc1}}\n" + roleOK +
+			"  - {name: d, deny: [reload]}\n" + subjOK + "grants:\n  - {subject: s, scope: x, roles: [r, d]}\n", "declare on_missing"},
 		{"an undeclared attached role", "scopes:\n  - {name: x, match: {}, attached_roles: {machines: [nope]}}\n" + subjOK, "attached_roles.machines"},
 		{"a group and identities", roleOK + "subjects:\n  - {name: s, group: G, identity: [\"user:a@example.com\"], username: a, token_ttl: 60s}\n", "not both"},
 		{"neither", roleOK + "subjects:\n  - {name: s, username: a, token_ttl: 60s}\n", "group or an identity"},
@@ -3449,6 +3601,9 @@ type Scope struct {
 	SecurityLog bool
 	Attached    map[string][]string // "humans" | "machines" → roles
 	res         map[string]*regexp.Regexp
+	// onMissingDeclared is whether the file wrote on_missing rather than
+	// taking the default, which a deny-bearing scope must (spec §5.5).
+	onMissingDeclared bool
 }
 
 // Role is a named set of rules, an optional level, and attributes (spec §6).
@@ -3735,7 +3890,7 @@ func (p *Policy) buildScopes(f file) error {
 		}
 		sc := &Scope{Name: s.Name, Match: s.Match, OnMissing: s.OnMissing, SecurityLog: s.SecurityLog,
 			Attached: map[string][]string{"humans": s.AttachedRoles.Humans, "machines": s.AttachedRoles.Machines},
-			res:      map[string]*regexp.Regexp{}}
+			res:      map[string]*regexp.Regexp{}, onMissingDeclared: s.OnMissing != ""}
 		for key, v := range s.Match {
 			if key == "" {
 				return fmt.Errorf("scope %q: a match key is empty", s.Name)
@@ -3767,8 +3922,10 @@ func (p *Policy) buildScopes(f file) error {
 		case "":
 			// A deny-bearing scope that silently excludes a device with no
 			// version data lifts a mitigation on a broken sync (spec §5.5), so
-			// the direction has to be written down, not defaulted.
-			if deny {
+			// the direction has to be written down, not defaulted. A scope with
+			// no match key selects every device and has nothing to miss.
+			// buildGrants checks the other way a scope carries a deny.
+			if deny && len(s.Match) > 0 {
 				return fmt.Errorf("scope %q attaches a deny: declare on_missing (include assumes a device with no "+
 					"data for the match is affected, which is the safe direction for a mitigation; spec §5.5)", s.Name)
 			}
@@ -3931,7 +4088,23 @@ func (p *Policy) buildGrants(f file) error {
 		if err := p.checkLevel(g.MaxPrivilege); err != nil {
 			return fmt.Errorf("grants[%d]: max_privilege: %w", i, err)
 		}
-		grant := &Grant{Subject: g.Subject, Scope: g.Scope, Roles: g.Roles, MaxPrivilege: g.MaxPrivilege,
+		// A deny reaches a scope through a grant as surely as through
+		// attached_roles, and a broken sync that drops the device from the
+		// scope lifts it the same way (spec §5.5).
+		if sc := p.scopes[g.Scope]; len(sc.Match) > 0 && !sc.onMissingDeclared {
+			for _, r := range g.Roles {
+				if len(p.roles[r].Deny) > 0 {
+					return fmt.Errorf("grants[%d]: role %q carries a deny onto scope %q: declare on_missing on the "+
+						"scope (include assumes a device with no data for the match is affected, the safe direction "+
+						"for a mitigation; exclude says the grant must be earned by data; spec §5.5)", i, r, g.Scope)
+				}
+			}
+		}
+		// Roles are kept sorted, so nothing a grant reports — the mint
+		// record, explain, access review — depends on how the file lists them.
+		roles := slices.Clone(g.Roles)
+		slices.Sort(roles)
+		grant := &Grant{Subject: g.Subject, Scope: g.Scope, Roles: roles, MaxPrivilege: g.MaxPrivilege,
 			Attributes: g.Attributes}
 		if g.Expires != "" {
 			t, err := parseExpires(g.Expires)
@@ -4509,7 +4682,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 **Interfaces:**
 - Consumes: `compose` (Task 9); `engine.Blob`, `engine.Rule`, `engine.Normalize` (Task 5);
   `platform.Dialect.Render`, `PrivLvl`, `EntityClasses` (Task 4); `decision.PolicyGrant`,
-  `decision.FormatTime` (Task 2).
+  `decision.FormatTime` (plan 3).
 - Produces:
   - `var ErrNoGrants`.
   - `type Resolution struct { Subject, Username, Enable string; TokenTTL time.Duration; Level, Ceiling string; MaxPrivilege uint8; Grants []decision.PolicyGrant; Roles []string; Attached map[string][]string; Incomparable []string; Blob engine.Blob; Attributes []AttributeSource }`;
@@ -5039,10 +5212,10 @@ func (p *Policy) checkDevices() error {
 <!-- patch: internal/policy/load.go -->
 ```diff
 diff --git a/internal/policy/load.go b/internal/policy/load.go
-index d8bb423..0aca89f 100644
+index 88f41a0..1e3d746 100644
 --- a/internal/policy/load.go
 +++ b/internal/policy/load.go
-@@ -168,6 +168,9 @@ func Parse(raw []byte, env Env) (*Policy, error) {
+@@ -171,6 +171,9 @@ func Parse(raw []byte, env Env) (*Policy, error) {
  	if len(p.subs) == 0 {
  		return nil, errors.New("declares no subjects, so nobody can mint; is this the right file?")
  	}
@@ -5105,9 +5278,10 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   Task 15's `Explain` uses `Decide` and `Caveats`; Task 16's `policy test` prints `Lint` and
   `RunTests`.
 
-The corpus is §11 with two blocks moved and one line added, each said in the file's header: its
-`key_groups` go to the inventory file where they live until plan 6, `platform_set` is plan 5's, and
-`svc_oxidized` declares the username spec §2 gives it (Decided 24; spec corrected in Task 1). Its
+The corpus is §11 with two blocks moved and two values added, each said in the file's header: its
+`key_groups` go to the inventory file where they live until plan 6, `platform_set` is plan 5's,
+`svc_oxidized` declares the username spec §2 gives it (Decided 24), and `dc_fabric` declares
+`on_missing: exclude` (Decided 9); the spec is corrected in Task 1. Its
 `operator` level is mapped to `priv-lvl=7` in a test-only dialect table, because the shipped
 `arista_eos` adapter leaves it unmapped (Question 1). The order-independence test shuffles every
 list of the file and requires byte-identical decisions (spec §14).
@@ -5117,13 +5291,17 @@ list of the file and requires byte-identical decisions (spec §14).
 <!-- write: internal/policy/testdata/spec11.yaml -->
 ```yaml
 # Spec §11's complete policy example, as a test corpus (spec §14). Two blocks
-# are not here, and one line is:
+# are not here, and two values are, each corrected in the spec by the same
+# plan:
 #
 #   - `platform_set` is plan 5's and `key_groups` live in the inventory file
 #     until plan 6 (spec11-inventory.yaml carries §11's two groups).
 #   - svc_oxidized declares the username spec §2 gives it. A machine subject
 #     with no username fails at load (spec §14, "Username resolution"), and
-#     §11 as printed omits it; the spec is corrected in the same plan.
+#     §11 as printed omitted it.
+#   - dc_fabric declares `on_missing: exclude`. Its grant carries
+#     interface_tech's deny, and a keyed scope that delivers a deny must say
+#     which way a device with no data goes (spec §5.5).
 
 privilege_levels:
   - {name: readonly}
@@ -5133,7 +5311,7 @@ privilege_levels:
 
 scopes:
   - {name: all_devices, match: {}}
-  - {name: dc_fabric,   match: {site: [dc1, dc2], role: [leaf, spine]}}
+  - {name: dc_fabric,   match: {site: [dc1, dc2], role: [leaf, spine]}, on_missing: exclude}
   - name: srx_unpatched
     match: {platform: juniper_junos, os_version: {lt: "21.4R3-S5"}}
     on_missing: include
@@ -5852,7 +6030,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `type Authorizer interface { Session(ctx context.Context, r Request) Decision; Command(ctx context.Context, r Request) Decision }`
     — the device reaches the authorizer, which is what the platform check and `{device}` need.
   - `Decision` gains `Policy *decision.Policy`, which `Handle` puts on the record, permit or deny.
-  - `Handle` answers `store_unavailable` ERROR, not FAIL (Decided 13; Question 3).
+  - `Handle` still answers `store_unavailable` FAIL (Decided 13), and its context-read denial uses
+    `storeUnavailableMsg` from `engine.go`, the one spelling of that `server_msg`.
   - `type Engine struct { Store store.Store; Metrics *metrics.Metrics; Fallback Authorizer }` —
     `Metrics` is required.
   - `metrics.Metrics.BlobCache` — `port49_blob_cache_lookups_total{outcome}`, `hit` or `miss`.
@@ -5860,10 +6039,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   deletes `Blob`. `blobUnavailableMsg` and `denyAll` move from `blob.go` to `engine.go`.
 
 Engine answers a context with a blob; a context without one is `Fallback`'s, or denied. A blob the
-store does not hold, or holds wrong, is `blob_unavailable` (FAIL); a store that does not answer is
-`store_unavailable` (ERROR); a blob compiled for another platform than the device's is
-`blob_platform_mismatch` — the two carries from plan 3. A cached blob answers through a store
-outage (spec §5.1.1).
+store does not hold, or holds wrong, is `blob_unavailable`; a store that does not answer is
+`store_unavailable`, FAIL like the rest, and the log tells them apart; a blob compiled for another
+platform than the device's is `blob_platform_mismatch` — the two carries from plan 3. A cached blob
+answers a blob-read failure (spec §5.1.1). It does not carry a whole-store outage: `Handle` reads
+the context first, from the same store.
 
 - [ ] **Step 1: Write the failing tests, and move the existing ones to the new signatures**
 
@@ -5993,14 +6173,16 @@ func TestTheEngineDecidesACommandAndSaysWhy(t *testing.T) {
 	}
 }
 
-// The blob is cached by hash: a replica answers from its copy while the store
-// is down (spec §5.1.1), and the cache and the store read are both counted.
-func TestACachedBlobOutlivesAStoreOutage(t *testing.T) {
+// The blob is cached by hash: a replica answers from its copy when a blob read
+// fails (spec §5.1.1), and the cache and the store read are both counted. It
+// does not carry a whole-store outage: Handle reads the context from the same
+// store first, and that read fails before the cache is asked.
+func TestACachedBlobOutlivesABlobReadFailure(t *testing.T) {
 	f := newEngineFixture(t, eosBlob())
 	f.authorize(t, "cmd=show", "cmd-arg=version")
 	f.st.down = true
 	if resp, _ := f.authorize(t, "cmd=show", "cmd-arg=clock"); resp.Status != wire.AuthorStatusPassAdd {
-		t.Fatalf("a cached blob answers through a store outage: %+v", resp)
+		t.Fatalf("a cached blob answers through a blob read failure: %+v", resp)
 	}
 	if hit, miss := testutil.ToFloat64(f.m.BlobCache.WithLabelValues("hit")), testutil.ToFloat64(f.m.BlobCache.WithLabelValues("miss")); hit != 1 || miss != 1 {
 		t.Fatalf("cache hit %v miss %v", hit, miss)
@@ -6010,14 +6192,16 @@ func TestACachedBlobOutlivesAStoreOutage(t *testing.T) {
 	}
 }
 
-// A store that does not answer is store_unavailable, answered ERROR so the
-// device falls to its next method; a blob the store does not hold, or holds
-// wrong, is blob_unavailable, FAIL (spec §5.7; roadmap, carried from plan 3).
+// A store that does not answer is store_unavailable, FAIL like every
+// authorization denial (plan 4, owner's ruling; authorization fall-through is
+// unmeasured, L4); a blob the store does not hold, or holds wrong, is
+// blob_unavailable, also FAIL. The log tells them apart (spec §5.7; roadmap,
+// carried from plan 3).
 func TestAStoreErrorIsStoreUnavailableAndAMissingBlobIsNot(t *testing.T) {
 	f := newEngineFixture(t, eosBlob())
 	f.st.down = true
 	resp, rec := f.authorize(t, "cmd=show", "cmd-arg=version")
-	if resp.Status != wire.AuthorStatusError || rec["reason"] != "store_unavailable" {
+	if resp.Status != wire.AuthorStatusFail || rec["reason"] != "store_unavailable" {
 		t.Fatalf("store down: %+v %v", resp, rec)
 	}
 	f.st.down = false
@@ -6069,8 +6253,6 @@ func TestAContextWithNoBlobIsTheFallbacksOrDenied(t *testing.T) {
 func TestAnOverlongSubstitutionIsNotSent(t *testing.T) {
 	f := newEngineFixture(t, eosBlob())
 	long := strings.Repeat("a", 250)
-	f.st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
-		store.Context{CtxID: "ctx1", Username: long, PrivLvl: 15, BlobHash: f.hash}, time.Hour)
 	d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(),
 		Request{Context: store.Context{Username: long, BlobHash: f.hash}, Device: peer})
 	if d.Permit || d.Reason != decision.BlobUnavailable || len(d.Attributes) != 0 {
@@ -6079,13 +6261,13 @@ func TestAnOverlongSubstitutionIsNotSent(t *testing.T) {
 }
 ```
 
-`TestGetContextStoreErrorIsNotContextMissing` now expects ERROR (Decided 13); the rest of this
-patch is the new signatures:
+The existing tests move to the new signatures; no expected status changes
+(`TestGetContextStoreErrorIsNotContextMissing` stays FAIL, Decided 13):
 
 <!-- patch: internal/daemon/author/author_test.go -->
 ```diff
 diff --git a/internal/daemon/author/author_test.go b/internal/daemon/author/author_test.go
-index 4a3c730..1661d22 100644
+index 4a3c730..5ca2eac 100644
 --- a/internal/daemon/author/author_test.go
 +++ b/internal/daemon/author/author_test.go
 @@ -135,10 +135,10 @@ func TestVector(t *testing.T) {
@@ -6101,20 +6283,7 @@ index 4a3c730..1661d22 100644
  		t.Fatalf("expected \"shower\" to be permitted (no token boundary match): %+v", d)
  	}
  }
-@@ -261,8 +261,11 @@ func TestGetContextStoreErrorIsNotContextMissing(t *testing.T) {
- 	h := New(st, lab, decision.NewJSONLines(log), metrics.New(prometheus.NewRegistry()), time.Now,
- 		platform.Defaults(), time.Hour, time.Minute, time.Hour)
- 
-+	// ERROR, not FAIL: "not me, ask the next method" (spec §5.7), so a device
-+	// with a local fallback keeps its operators working on the device role
-+	// while the store is down (design §12).
- 	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
--	if resp.Status != wire.AuthorStatusFail || string(resp.ServerMsg) != "port49: authorization store unavailable" {
-+	if resp.Status != wire.AuthorStatusError || string(resp.ServerMsg) != "port49: authorization store unavailable" {
- 		t.Fatalf("%+v", resp)
- 	}
- 	r := lastRecord(t, log)
-@@ -473,7 +476,7 @@ func TestLabCommandAttributes(t *testing.T) {
+@@ -473,7 +473,7 @@ func TestLabCommandAttributes(t *testing.T) {
  		DenyPrefixes:      []string{"reload"},
  	}
  
@@ -6123,7 +6292,7 @@ index 4a3c730..1661d22 100644
  	if !d.Permit {
  		t.Fatalf("expected a permit for \"show version\": %+v", d)
  	}
-@@ -481,7 +484,7 @@ func TestLabCommandAttributes(t *testing.T) {
+@@ -481,7 +481,7 @@ func TestLabCommandAttributes(t *testing.T) {
  		t.Fatalf("a permitted command reply should carry the configured command attributes, got %q", d.Attributes)
  	}
  
@@ -6132,7 +6301,7 @@ index 4a3c730..1661d22 100644
  		t.Fatalf("expected \"reload\" to be denied: %+v", d)
  	} else if len(d.Attributes) != 0 {
  		t.Fatalf("a DENIED command reply must carry no attributes, got %q", d.Attributes)
-@@ -489,14 +492,14 @@ func TestLabCommandAttributes(t *testing.T) {
+@@ -489,14 +489,14 @@ func TestLabCommandAttributes(t *testing.T) {
  
  	// The two lists are separate: a session reply does not pick up command
  	// attributes, which is what makes L18 able to vary one at a time.
@@ -6279,7 +6448,7 @@ Expected: FAIL to build — `undefined: Request`, `undefined: Engine`, `m.BlobCa
 <!-- patch: internal/daemon/author/author.go -->
 ```diff
 diff --git a/internal/daemon/author/author.go b/internal/daemon/author/author.go
-index 9f27a7b..d2bdd84 100644
+index 9f27a7b..aeca081 100644
 --- a/internal/daemon/author/author.go
 +++ b/internal/daemon/author/author.go
 @@ -18,18 +18,31 @@ import (
@@ -6318,6 +6487,15 @@ index 9f27a7b..d2bdd84 100644
  }
  
  type Handler struct {
+@@ -185,7 +198,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
+ 		return h.deny(rec, decision.ContextMissing, "port49: this session was not authenticated by port49")
+ 	}
+ 	if err != nil {
+-		return h.deny(rec, decision.StoreUnavailable, "port49: authorization store unavailable")
++		return h.deny(rec, decision.StoreUnavailable, storeUnavailableMsg)
+ 	}
+ 	// The key already selected on the username; this re-checks what came back,
+ 	// for the same reason package authen re-checks the receipt hash after its
 @@ -242,11 +255,13 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
  	}
  
@@ -6334,28 +6512,6 @@ index 9f27a7b..d2bdd84 100644
  	if !d.Permit {
  		return h.deny(rec, d.Reason, d.ServerMsg)
  	}
-@@ -326,10 +341,20 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
- 	return resp
- }
- 
-+// deny answers FAIL, except for a store port49 could not reach, which is
-+// ERROR: "not me, ask the next method" (spec §5.7). A device configured with a
-+// local fallback then authorizes by its own role, which is the degraded-mode
-+// policy spec §6 says the device role is — the store-unavailable row of the
-+// design §12 failure matrix. A FAIL would deny every command of every live
-+// login for as long as the store is down.
- func (h *Handler) deny(rec decision.Record, reason decision.Reason, msg string) wire.AuthorResponse {
- 	rec.Verdict, rec.Reason, rec.ServerMsg = decision.VerdictDeny, reason, msg
- 	h.emit(rec)
--	return wire.AuthorResponse{Status: wire.AuthorStatusFail, ServerMsg: []byte(msg)}
-+	status := uint8(wire.AuthorStatusFail)
-+	if reason == decision.StoreUnavailable {
-+		status = wire.AuthorStatusError
-+	}
-+	return wire.AuthorResponse{Status: status, ServerMsg: []byte(msg)}
- }
- 
- func (h *Handler) emit(rec decision.Record) {
 ```
 
 <!-- patch: internal/daemon/author/lab.go -->
@@ -6523,12 +6679,12 @@ import (
 //
 // Blobs are immutable and named by their hash, so each replica caches them
 // compiled, by hash, with no invalidation (spec §5.1.1). A command on a cached
-// blob costs no store read; a blob the store cannot produce is
-// blob_unavailable, and a store that does not answer is store_unavailable,
-// which the handler answers ERROR so the device falls to its next method.
-// Either way nothing falls back: answering a broker-minted session from
-// another authorizer because the store hiccuped would be a permit nobody
-// granted.
+// blob costs no blob read; a blob the store cannot produce is
+// blob_unavailable, and a store that does not answer is store_unavailable.
+// The handler answers both FAIL (plan 4, owner's ruling: authorization
+// fall-through is unmeasured, L4). Either way nothing falls back: answering a
+// broker-minted session from another authorizer because the store hiccuped
+// would be a permit nobody granted.
 //
 // A context with no blob hash is Fallback's: the lab's seeded tokens are
 // minted without one. With no Fallback it is denied.
@@ -6684,9 +6840,9 @@ author.Engine decides sessions and commands against the context's
 compiled blob, cached per replica by hash, and puts the policy block
 on the record. A blob for another platform than the device's is
 blob_platform_mismatch, a missing or corrupt one blob_unavailable, and
-a store that does not answer store_unavailable, which authorization now
-answers ERROR (spec §5.7; design §12). The Authorizer interface takes
-a Request carrying the device.
+a store that does not answer store_unavailable, answered FAIL as before
+(spec §5.7). The Authorizer interface takes a Request carrying the
+device.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -6698,19 +6854,19 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 **Files:**
 - Modify: `internal/broker/broker.go`, `cmd/port49d/main.go`, `internal/daemon/metrics/metrics.go`,
-  `tests/lab/slice/policy.yaml`
+  `internal/agent/agent.go`, `tests/lab/slice/policy.yaml`
 - Delete: `internal/blob/`, `internal/broker/policy/`, `internal/daemon/author/blob.go`,
   `internal/daemon/author/blob_test.go`
 - Test: `internal/broker/engine_test.go`, `internal/policy/labpolicy_test.go`; modify
   `internal/broker/fixture_test.go`, `internal/broker/identity_test.go`,
-  `internal/broker/broker_test.go`, `cmd/port49d/broker_test.go`
+  `internal/broker/broker_test.go`, `cmd/port49d/broker_test.go`, `internal/agent/agent_test.go`
 
 **Interfaces:**
 - Consumes: `policy.Load`, `Policy.Resolve`, `ErrNoGrants`, `Policy.Bundle` (Tasks 8, 10);
   `engine.Encode`, `Blob.SessionAttributes` (Task 5); `author.Engine` (Task 12); `decision.Sink`
   (Task 2).
 - Produces: `broker.Broker.Policy` is `*policy.Policy` from `internal/policy`; a mint item error
-  `attribute_too_long`; the mint record's `policy.bundle`; `putBlob` marks a blob emitted only when
+  `attribute_too_long`, which the agent names for the operator; the mint record's `policy.bundle`; `putBlob` marks a blob emitted only when
   the sink took it. `buildBroker` loads the policy with `policy.Env{Devices: cfg.Inventory.Devices,
   EnableUsernames: cfg.EnableUsernames}`. `run` wires `&author.Engine{Store: st, Metrics: m,
   Fallback: &author.Lab{…}}`.
@@ -7235,6 +7391,49 @@ index 2e50a56..cf5ccbf 100644
  	// blob cache, "hit" or "miss" (spec §5.1.1). A miss is one store read,
 ```
 
+The agent names the new item error for the operator rather than falling back to "the broker
+could not answer":
+
+<!-- patch: internal/agent/agent.go -->
+```diff
+diff --git a/internal/agent/agent.go b/internal/agent/agent.go
+index 2897ccf..ce200d9 100644
+--- a/internal/agent/agent.go
++++ b/internal/agent/agent.go
+@@ -297,6 +297,7 @@ func (e *ItemError) Error() string {
+ 	what := map[string]string{
+ 		"device_unconfigured":  "the broker's inventory does not configure this device",
+ 		"broker_error":         "the broker failed",
++		"attribute_too_long":   "a session attribute for this device is too long once filled in",
+ 		"bad_request":          "the broker refused the request",
+ 		"idempotency_conflict": "the broker holds a different request under this request's key",
+ 	}[e.Code]
+```
+
+<!-- patch: internal/agent/agent_test.go -->
+```diff
+diff --git a/internal/agent/agent_test.go b/internal/agent/agent_test.go
+index 7e923cc..76076fe 100644
+--- a/internal/agent/agent_test.go
++++ b/internal/agent/agent_test.go
+@@ -592,6 +592,15 @@ func TestAnItemErrorReachesTheOperator(t *testing.T) {
+ 	}
+ }
+ 
++// attribute_too_long (plan 4) is the broker refusing a session reply that
++// would not fit on the wire; the operator is told that, not "could not answer".
++func TestAnAttributeTooLongItemSaysWhy(t *testing.T) {
++	err := &ItemError{Device: "leaf1", Code: "attribute_too_long", Detail: "tell the operator"}
++	if !strings.Contains(err.Error(), "too long once filled in") || !strings.Contains(err.Error(), "leaf1") {
++		t.Fatalf("%v", err)
++	}
++}
++
+ // An item with neither a verdict nor an error is a broker this agent does not
+ // understand, and is an error rather than a silent empty answer.
+ func TestAnItemWithNoVerdictIsAnError(t *testing.T) {
+```
+
 Then remove plan 3's borrowed-ahead blob, its authorizer and its policy:
 
 ```bash
@@ -7261,7 +7460,7 @@ git commit -m "refactor: broker and daemon run the policy engine; the slice's bl
 The broker resolves and compiles through internal/policy and writes
 version-2 blobs; port49d answers them with author.Engine. A session
 attribute the principal's own values push past 255 bytes is refused
-at mint (attribute_too_long). The mint record names its bundle, and a
+at mint (attribute_too_long), and the agent says so. The mint record names its bundle, and a
 blob event the sink refused is emitted again by the next mint.
 internal/blob, author.Blob and internal/broker/policy, borrowed ahead
 by plan 3, are removed. all_devices is declared in the slice policy.
@@ -7545,7 +7744,7 @@ func TestExplainNamesOneReasonAndWhoWouldPermit(t *testing.T) {
 		t.Fatalf("%+v", e.Outcome)
 	}
 	mustContain(t, out, "deny no_rule_matched", "rule        no permit matches", "permitted by network_admin",
-		"grants      all_devices [read_only no_disruptive]; dc_fabric [interface_tech] expires 2026-12-01T00:00:00.000Z")
+		"grants      all_devices [no_disruptive read_only]; dc_fabric [interface_tech] expires 2026-12-01T00:00:00.000Z")
 	_, out = explained(t, p, "noc_tier1", "", "srx-fw-04", "show chassis cluster status", false)
 	mustContain(t, out, "deny no_permit_dominates_deny",
 		"rule        show chassis cluster ** (cve_2026_xxxx) [3 3 3 0]",
@@ -8845,7 +9044,7 @@ index 341d802..7cb394d 100644
 +	if code := run([]string{"access", "review", "--policy", pol, "--inventory", inv, "--subject", "noc"}, &out, &errb); code != 0 {
 +		t.Fatalf("code %d %s", code, errb.String())
 +	}
-+	for _, want := range []string{"noc (humans; identity user:noc@example.com)", "SCOPE", "all_devices  read_only no_reload  -",
++	for _, want := range []string{"noc (humans; identity user:noc@example.com)", "SCOPE", "all_devices  no_reload read_only  -",
 +		"never", "1"} {
 +		if !strings.Contains(out.String(), want) {
 +			t.Errorf("output lacks %q:\n%s", want, out.String())
@@ -9047,7 +9246,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 `port49 grants remove --policy FILE --inventory FILE --subject NAME [--write]` is the offboarding
 path for machine subjects and literal identities (spec §12; decision 2's accepted cost): every grant
 row naming the subject, then the subject block, so nothing is left behind to match, and the tests
-naming it, which would otherwise make the file refuse to load (Decided 19). The result must load
+naming it, which would otherwise make the file refuse to load (Decided 19). Tests that name one of
+its identities as `principal` go too; left, they would load and quietly become `no_grants_matched`
+denies. The result must load
 against the inventory before anything is printed or written; `--write` replaces the file through a
 rename, keeping its mode.
 
@@ -9091,6 +9292,21 @@ func TestRemoveSubjectDeletesItsRowsAndItsBlock(t *testing.T) {
 	}
 	if _, ok := p.Subject("noc_tier1"); !ok || len(p.Grants("noc_tier1")) != 2 {
 		t.Fatal("nobody else's rows are touched")
+	}
+}
+
+// A test naming the subject by one of its identities goes with it: left, it
+// would load and quietly become a no_grants_matched deny.
+func TestRemoveSubjectTakesTestsNamingItsIdentities(t *testing.T) {
+	raw := string(spec11Raw(t)) + `  - {principal: "system:serviceaccount:netops:oxidized", device: leaf-01,
+     command: "show version", expect: permit}
+`
+	out, r, err := RemoveSubject([]byte(raw), "svc_oxidized")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Tests != 3 || strings.Contains(string(out), "system:serviceaccount") {
+		t.Fatalf("removed %+v:\n%s", r, out)
 	}
 }
 
@@ -9178,7 +9394,9 @@ type Removal struct {
 // file with every grant row naming the subject deleted and then, because none
 // remains, the subject block itself, so nothing is left behind to match. The
 // file's tests naming the subject go too; left, they would name a subject
-// that is no longer declared and the file would not load. It edits the YAML
+// that is no longer declared and the file would not load. So do tests naming
+// one of its identities as `principal`, which would otherwise load and quietly
+// turn into no_grants_matched denies. It edits the YAML
 // tree rather than re-rendering the policy, so comments and the order of
 // everything else survive; indentation is re-rendered at two spaces. The
 // caller writes the result where a pull request will review it.
@@ -9191,6 +9409,19 @@ func RemoveSubject(raw []byte, subject string) ([]byte, Removal, error) {
 		return nil, Removal{}, errors.New("the policy file is not a YAML mapping")
 	}
 	top := doc.Content[0]
+	ids := map[string]bool{}
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		if top.Content[i].Value != "subjects" {
+			continue
+		}
+		for _, item := range top.Content[i+1].Content {
+			if item.Kind == yaml.MappingNode && field(item, "name") == subject {
+				for _, id := range identities(item) {
+					ids[id] = true
+				}
+			}
+		}
+	}
 	var r Removal
 	declared := false
 	for i := 0; i+1 < len(top.Content); i += 2 {
@@ -9200,11 +9431,13 @@ func RemoveSubject(raw []byte, subject string) ([]byte, Removal, error) {
 		}
 		switch top.Content[i].Value {
 		case "grants":
-			r.Grants += filter(list, "subject", subject)
+			r.Grants += filter(list, func(m *yaml.Node) bool { return field(m, "subject") == subject })
 		case "tests":
-			r.Tests += filter(list, "subject", subject)
+			r.Tests += filter(list, func(m *yaml.Node) bool {
+				return field(m, "subject") == subject || ids[field(m, "principal")]
+			})
 		case "subjects":
-			declared = filter(list, "name", subject) > 0
+			declared = filter(list, func(m *yaml.Node) bool { return field(m, "name") == subject }) > 0
 		}
 	}
 	if !declared {
@@ -9222,12 +9455,12 @@ func RemoveSubject(raw []byte, subject string) ([]byte, Removal, error) {
 	return buf.Bytes(), r, nil
 }
 
-// filter drops every mapping in list whose key is value, and says how many.
-func filter(list *yaml.Node, key, value string) int {
+// filter drops every mapping in list that drop selects, and says how many.
+func filter(list *yaml.Node, drop func(*yaml.Node) bool) int {
 	kept := list.Content[:0]
 	removed := 0
 	for _, item := range list.Content {
-		if item.Kind == yaml.MappingNode && field(item, key) == value {
+		if item.Kind == yaml.MappingNode && drop(item) {
 			removed++
 			continue
 		}
@@ -9235,6 +9468,26 @@ func filter(list *yaml.Node, key, value string) int {
 	}
 	list.Content = kept
 	return removed
+}
+
+// identities is a subject mapping's identity list, written as one string or
+// as a sequence (spec §2, §11).
+func identities(m *yaml.Node) []string {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value != "identity" {
+			continue
+		}
+		v := m.Content[i+1]
+		if v.Kind == yaml.ScalarNode {
+			return []string{v.Value}
+		}
+		var out []string
+		for _, c := range v.Content {
+			out = append(out, c.Value)
+		}
+		return out
+	}
+	return nil
 }
 
 func field(m *yaml.Node, key string) string {
@@ -9385,7 +9638,8 @@ git add internal/policy/edit.go internal/policy/edit_test.go cmd/port49/
 git commit -m "feat: port49 grants remove
 
 Offboards a subject: every grant row naming it, then its block, and
-the tests naming it, as an edit to the YAML tree that keeps comments.
+the tests naming it or one of its identities, as an edit to the YAML
+tree that keeps comments.
 The result must load against the inventory before it is printed or,
 with --write, renamed into place (spec §12).
 
@@ -9409,7 +9663,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 <!-- patch: docs/superpowers/plans/README.md -->
 ```diff
 diff --git a/docs/superpowers/plans/README.md b/docs/superpowers/plans/README.md
-index 175d24d..e21de1d 100644
+index 545d2aa..1639839 100644
 --- a/docs/superpowers/plans/README.md
 +++ b/docs/superpowers/plans/README.md
 @@ -199,7 +199,7 @@ hand.
@@ -9421,7 +9675,7 @@ index 175d24d..e21de1d 100644
  
  Spec §3 (normalization), §4 (grammar, pipeline stages), §5.1–§5.5 (mint resolution, blob
  compilation, refresh, credential identity, scopes and `attached_roles`, version comparison),
-@@ -224,6 +224,38 @@ is enforced up to the last hop and not across it.
+@@ -224,6 +224,55 @@ is enforced up to the last hop and not across it.
    becomes reachable when they stop sharing one.
  - **A `GetBlob` store error answers `store_unavailable`** once the store is remote.
  
@@ -9431,7 +9685,8 @@ index 175d24d..e21de1d 100644
 +`author.Engine` is the daemon's authorizer. `author.Lab` survives only as the lab's instrument
 +for seeded contexts, behind an optional `lab:` block (plan 4, Decided 12). The accounting spool
 +drains to a `decision.Sink` and stops at a refused record. Authorization answers
-+`store_unavailable` ERROR (plan 4, Question 3).
++`store_unavailable` FAIL, as plans 1–3 did, until L4 measures authorization fall-through (plan 4,
++Question 3, owner's ruling 2026-09-24).
 +
 +**Hands to plan 5:**
 +
@@ -9440,12 +9695,28 @@ index 175d24d..e21de1d 100644
 +  `tests/lab/results/L2-*.md`); `expands_abbreviations` is false everywhere until L21 closes per
 +  platform; entity classes are names from spec §8 and the lab configs, unverified against a device;
 +  only `arista_eos` renders levels, and `operator` renders nowhere (plan 4, Question 1), so a policy
-+  landing an EOS session at `operator` is refused at load.
++  landing an EOS session at `operator` is refused at load, and stays refused until the role-ceiling
++  run below measures it.
++- **The owner's level definitions (2026-09-24), binding on the adapters:** `readonly` is show and
++  info only; `operator` is non-disruptive state changes and no configuration (`clear counters`
++  yes, `clear bgp *` no); `admin` is everything. The device role is the ceiling, and port49's
++  command rules draw the line inside it.
++- **Three lab runs, added to spec §15 L4's *To measure* by plan 4 (owner's rulings 2026-09-24;
++  none measured yet):** authentication `ERROR` fall-through — with port49d answering
++  authentication `ERROR` `store_unavailable`, does a local break-glass account log in on EOS,
++  NX-OS, IOS-XE and Junos; authorization `FAIL` vs `ERROR` on a per-command request, with and
++  without `local` in the method list; and the role ceiling per platform — at each candidate
++  device role (for example EOS and NX-OS `network-operator`), whether the device itself allows
++  `clear counters`, `clear ip bgp *` and `configure`.
 +- **L21**, added by plan 4: type an abbreviation on each platform and record what the
 +  authorization request and the accounting record carry.
-+- The CI reports spec §12 names and no plan yet owns — the effective-permission diff, the
-+  shadowed-deny report, the privilege-expansion gate, and the dead-rule and fallback-exposure
-+  intersection checks (plan 4, Question 4).
++- The CI reports of spec §12 — the effective-permission diff, the shadowed-deny report, the
++  privilege-expansion gate, and the dead-rule and fallback-exposure intersection checks — are
++  this plan's (plan 4, Question 4, owner's ruling 2026-09-24; listed in its section).
++- The offline tools (`port49 explain`, `policy test`, `access review`, `grants remove`) load a
++  policy without config's resolved `EnableUsernames`, so CI cannot see a `platforms:`
++  enable-username override the daemon applies. Harmless while `config.Load` refuses such an
++  override; plan 5's to close when its adapters bring the overrides.
 +
 +**Hands to plan 6:** the joint policy-and-inventory checks refuse a policy at load
 +(`policy.checkDevices`); plan 6 turns a failure into a quarantined device (spec §13, decision 20).
@@ -9462,8 +9733,9 @@ index 175d24d..e21de1d 100644
  Spec §8 in full: built-in adapters, entity classes, user overrides and layering, pinned
 ```
 
-If Ryan has ruled on a Question for Ryan by the time this task runs, write the ruling into the
-matching bullet in place of the question's reference.
+The owner's rulings of 2026-09-24 (Questions 3 and 4, the L4 runs, the level definitions) are
+already written into the patch. If a later ruling lands before this task runs, write it into the
+matching bullet in the same way.
 
 - [ ] **Step 2: Check and commit**
 
@@ -9475,7 +9747,8 @@ git add docs/superpowers/plans/README.md
 git commit -m "docs: the roadmap records plan 4 and hands forward
 
 What plan 4 built, and what plans 5, 6 and 7 inherit from it: the
-borrowed dialect table and L21, the joint checks plan 6 turns into
+borrowed dialect table and L21, the owner's level definitions and the
+three L4 runs, the CI reports, the joint checks plan 6 turns into
 quarantine, and the group subjects, api: rights and reload that wait
 for plan 7.
 
@@ -9505,9 +9778,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 | Replace `author.Lab` with the real `Authorizer` | 12, 13 (`author.Engine`); 14 (`lab:` optional); Decided 12 |
 | The spool's failing sink, no advance past a refusal | 2, 3 |
 | Carried: blob platform checked against the device's | 12 (`blob_platform_mismatch`), 1 (§5.7 row) |
-| Carried: a `GetBlob` store error answers `store_unavailable` | 12 (ERROR, Decided 13) |
+| Carried: a `GetBlob` store error answers `store_unavailable` | 12 (FAIL, Decided 13) |
 | Produces the compiled blob plan 2 stores | 13 (`engine.Encode` into `putBlob`) |
-| Spec text the plan changes | 1 (spec §3, §5.4, §5.5, §5.7, §6, §8, §11, §15; design §19), 20 (roadmap) |
+| Spec text the plan changes | 1 (spec §3, §5.4, §5.5, §5.7, §6, §8, §11, §15 L2, L4, L21; design §12, §19), 20 (roadmap) |
 
 **Spec §14 assertions, and where each is tested**
 
@@ -9531,10 +9804,10 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 | Replay agreement | `replay.TestEveryRecordReplaysToTheSameDecision` |
 | Replay divergence detected | `replay.TestTamperingIsDetected` |
 | Reason codes closed | Task 1 before Task 2; `decision.TestAnAuthorizationRecordCarriesItsMatchedRules` |
-| Blob lifetime follows the context (a restarted replica resolves it) | `author.TestACachedBlobOutlivesAStoreOutage` for the cache; the store TTL is plan 3's (Decided 8 there), unchanged |
+| Blob lifetime follows the context (a restarted replica resolves it) | not exercised: the in-process store keeps no contexts across a restart; plan 6 or the remote store. `author.TestACachedBlobOutlivesABlobReadFailure` covers the cache; the store TTL is plan 3's (Decided 8 there), unchanged |
 | Attached roles by trust domain; no grant, no access | `policy.TestAttachedRolesFollowTheTrustDomainAndNeverAddADevice` |
 | Attached permit reported, deny-only not | `policy.TestLintReportsWhatAReviewerMustSee` |
-| State-scoped mitigation; `on_missing` | `policy.TestAnIncomparableVersionIsIncludedAndSaysSo`, `TestOnMissingExcludesByDefault` |
+| State-scoped mitigation; `on_missing` | `policy.TestAnIncomparableVersionIsIncludedAndSaysSo`, `TestOnMissingExcludesByDefault`, `TestLoadRefusesByName` ("a deny granted on a keyed scope without on_missing") |
 
 **Placeholder scan:** none. Every code block is the file or the patch as built and tested; the
 only prose instruction without a block is Task 13's `git rm`, which is the block.
@@ -9553,8 +9826,6 @@ time.Time) (Resolution, error)` has that signature in Tasks 10, 11, 13 and 15;
 
 **Things an implementer must not miss.**
 
-- Task 12 changes one existing test's expectation, `TestGetContextStoreErrorIsNotContextMissing`:
-  FAIL becomes ERROR. That is Decided 13, not a regression.
 - Task 13 is the only task that changes what the running system does for a broker-minted login;
   do not split it. The daemon and the broker must switch blob formats in one commit.
 - Task 13 deletes whole packages. `git rm -r` them; a stray file left in `internal/broker/policy`
@@ -9569,8 +9840,8 @@ time.Time) (Resolution, error)` has that signature in Tasks 10, 11, 13 and 15;
 **Unmeasured, and not relied on:** whether any platform sends abbreviations (L21 — the default
 fails closed, Decided 5); whether any output modifier reaches port49 on any platform (the table
 says none does, from L2's one modifier); what a vEOS session at `priv-lvl=7` can reach (Question
-1); whether a device falls through on an authorization ERROR (L4 covers authentication only;
-Question 3); the interface names behind `@physical`, `@loopback` and `@management` beyond the
+1); whether a device falls through on an authorization ERROR (L4 covers authentication only, so
+authorization answers FAIL and L4 gains the run; Question 3); the interface names behind `@physical`, `@loopback` and `@management` beyond the
 lab's own management interfaces (plan 5 verifies them).
 
 ---
@@ -9598,6 +9869,8 @@ documentation from it). For this plan it lists at least:
   level it cannot render (`operator` on `arista_eos` — Question 1), a ceiling below the landing
   level, `enable: auto` where the enable username is not the principal, and a regex that is only
   a costlier `*` or word. `port49d` refuses to start on any of them, naming subject and device.
+  Also refused, without the inventory: a scope with a match key that delivers a deny, attached or
+  through a grant, and does not declare `on_missing` (`all_devices` is exempt).
 - **Decisions:** specificity dominance replaces plan 3's deny-overrides — a more specific permit now
   overrides a broader deny, which plan 3 never allowed; a deny is a default, and `port49 policy
   test` and `explain` show which permit beats it. Output modifiers are allow-listed per role (the
@@ -9607,11 +9880,12 @@ documentation from it). For this plan it lists at least:
   L21 is measured (Question 2), and the `server_msg` names the deny.
 - **`server_msg` on a denial** now names the deciding rule and role: `port49: denied by <role>
   (<rule>) - see 'port49 explain'`.
-- **Authorization answers ERROR, not FAIL, when the store cannot be read** (Question 3): a device
-  with a local fallback authorizes by its own role during a store outage. A blob a replica has
-  cached keeps answering through one.
+- **Authorization still answers FAIL `store_unavailable` when the store cannot be read** (Question
+  3, owner's ruling): every command is denied until the store returns, and break-glass is the
+  escape.
 - **New reason** `blob_platform_mismatch`; new metric `port49_blob_cache_lookups_total{outcome}`;
-  new mint item error `attribute_too_long` in `port49_broker_item_errors_total{error}`.
+  new mint item error `attribute_too_long` in `port49_broker_item_errors_total{error}`, which
+  `port49 token` reports as "a session attribute for this device is too long once filled in".
 - **Decision records** carry `policy.bundle` (the policy file's `sha256:`), `policy.blob`, and the
   matched deny and permits with their tuples and roles; grants on a mint record carry `expires`.
 - **New commands**, all offline over files: `port49 explain`, `port49 policy test`, `port49 policy
@@ -9622,5 +9896,7 @@ documentation from it). For this plan it lists at least:
 - **The accounting spool** now retries a record the decision-log sink refused rather than dropping
   it; a sink that stays down leaves the records on disk.
 - **Spec corrections, for Ryan:** §8's EOS example said `pipe_authorized: true`, which the lab
-  contradicts; §11's `svc_oxidized` lacked the username §14 requires. Both are corrected in Task
-  1, and register row L21 is new. No plan yet owns spec §12's CI diff reports (Question 4).
+  contradicts; §11's `svc_oxidized` lacked the username §14 requires, and its `dc_fabric` now
+  declares `on_missing`. All are corrected in Task 1, and register row L21 is new. Spec §5.7, §6
+  and design §12 now say authorization answers `store_unavailable` FAIL, and L4 carries three new
+  runs to measure. Spec §12's CI diff reports are plan 5's (Question 4, owner's ruling).
