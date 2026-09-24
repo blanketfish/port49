@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 const brokerBlock = `broker:
@@ -32,7 +33,8 @@ func TestABrokerBlockLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b := c.Broker; b == nil || b.Listen != "127.0.0.1:8449" || b.PolicyFile != "/etc/port49/policy.yaml" || b.BatchMax != 100 {
+	if b := c.Broker; b == nil || b.Listen != "127.0.0.1:8449" || b.PolicyFile != "/etc/port49/policy.yaml" || b.BatchMax != 100 ||
+		b.PolicyWatchInterval != 5*time.Second {
 		t.Fatalf("broker: %+v", c.Broker)
 	}
 }
@@ -56,5 +58,21 @@ func TestABrokerBlockMissingAKeyIsRefused(t *testing.T) {
 func TestBatchMaxIsBounded(t *testing.T) {
 	if _, err := loadWith(t, brokerBlock+"  batch_max: 5000\n"); err == nil || !strings.Contains(err.Error(), "batch_max") {
 		t.Fatalf("batch_max 5000: %v", err)
+	}
+}
+
+// The watch reads the policy file on a timer. Faster than a second is a disk
+// read loop, and slower than five minutes is an edit an operator thinks is
+// live and is not; both are refused rather than clamped.
+func TestPolicyWatchIntervalIsBounded(t *testing.T) {
+	for _, v := range []string{"500ms", "10m"} {
+		if _, err := loadWith(t, brokerBlock+"  policy_watch_interval: "+v+"\n"); err == nil ||
+			!strings.Contains(err.Error(), "broker.policy_watch_interval") {
+			t.Errorf("policy_watch_interval %s: %v", v, err)
+		}
+	}
+	c, err := loadWith(t, brokerBlock+"  policy_watch_interval: 30s\n")
+	if err != nil || c.Broker.PolicyWatchInterval != 30*time.Second {
+		t.Fatalf("30s: %+v %v", c.Broker, err)
 	}
 }

@@ -91,6 +91,23 @@ type Metrics struct {
 	// not mint what they carry. Each is one operator's `port49 token` to run
 	// again; none is a session ended.
 	TokensSuperseded prometheus.Counter
+	// port49_policy_reloads_total{outcome}: attempts to put a changed policy
+	// file in force (plan 4b) — "applied", "unchanged" (a SIGHUP with nothing
+	// new), or "refused" (the file does not load; the policy in force keeps
+	// serving). The watch counts a refused file once per distinct content,
+	// however many times it reads it; each SIGHUP is an attempt of its own.
+	PolicyReloads *prometheus.CounterVec
+	// port49_policy_file_refused: 1 while the file on disk is one port49d
+	// refused, so the policy serving is not the one in the file; 0 once a
+	// file loads or the file is put back. It is the alert: an edit someone
+	// believes is live, and is not.
+	PolicyFileRefused prometheus.Gauge
+	// port49_policy_refresh_pending: 1 from a policy swap, or a refresh pass
+	// the store stopped, until a pass completes. While it is 1 a live login
+	// context may still hold a policy no longer in force — a withdrawn grant
+	// included. It is the alert beside port49_policy_file_refused: an edit that
+	// loaded, and has not yet reached every live session.
+	PolicyRefreshPending prometheus.Gauge
 }
 
 // CountQuarantined sets what port49_devices_quarantined reports at each scrape.
@@ -143,6 +160,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Live login contexts a policy refresh visited, by outcome."}, []string{"outcome"}),
 		TokensSuperseded: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_tokens_superseded_total",
 			Help: "(device, username) keys whose unspent tokens a policy change deleted."}),
+		PolicyReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_policy_reloads_total",
+			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
+		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
+			Help: "1 while the policy file on disk is one port49d refused and an older policy is serving."}),
+		PolicyRefreshPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_refresh_pending",
+			Help: "1 from a policy swap until a refresh pass has carried it into every live login context."}),
 	}
 	m.DevicesQuarantined = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_quarantined",
 		Help: "Inventory devices the loaded policy quarantines now."}, func() float64 {
@@ -154,6 +177,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
-		m.DevicesQuarantined, m.ContextRefreshes, m.TokensSuperseded)
+		m.DevicesQuarantined, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
+		m.PolicyRefreshPending)
 	return m
 }

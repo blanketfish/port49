@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -304,19 +303,21 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
 	if live == nil {
 		return nil
 	}
-	m.CountQuarantined(func() int {
-		at, n := now(), 0
-		for _, q := range live.Load().Quarantines(at) {
-			if slices.ContainsFunc(q.Entries, func(e policy.QuarantineEntry) bool { return e.Current(at) }) {
-				n++
-			}
-		}
-		return n
-	})
+	m.CountQuarantined(func() int { return quarantinedAt(live.Load(), now()) })
 	return live.Quarantined
 }
 
 func run(cfgPath string) error {
+	// SIGHUP reloads the policy (plan 4b), and is taken with no broker too,
+	// where it is said to do nothing: its default action ends the process, and
+	// a reload habit must not take device AAA down. It is caught first, before
+	// anything else, so a HUP sent while port49d starts — by the tool that
+	// just wrote the file, say — does not end it either; one that arrives
+	// before the reloader runs waits in the channel.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -509,6 +510,24 @@ func run(cfgPath string) error {
 		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", brokerSrv.Addr)
 	}
 
+	// The policy file is watched and SIGHUP reloads it (plan 4b); hup was
+	// caught at the top of run.
+	reloadDone := make(chan struct{})
+	go func() {
+		defer close(reloadDone)
+		if brk == nil {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-hup:
+					fmt.Fprintln(stderr, "port49d: SIGHUP: no broker: block, so there is no policy to reload")
+				}
+			}
+		}
+		newReloader(cfg, brk, m, time.Now).run(ctx, hup)
+	}()
+
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(ctx, ln, deps) }()
 
@@ -530,6 +549,7 @@ func run(cfgPath string) error {
 		<-serveErr
 	}
 	cancel()
+	<-reloadDone
 	if brokerSrv != nil {
 		shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = brokerSrv.Shutdown(shutdownCtx)

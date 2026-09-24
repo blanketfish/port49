@@ -33,6 +33,9 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.CountQuarantined(func() int { return 1 })
 	m.ContextRefreshes.WithLabelValues("updated").Inc()
 	m.TokensSuperseded.Inc()
+	m.PolicyReloads.WithLabelValues("applied").Inc()
+	m.PolicyFileRefused.Set(0)
+	m.PolicyRefreshPending.Set(0)
 
 	// Gather all metrics from registry.
 	families, err := reg.Gather()
@@ -61,6 +64,9 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_devices_quarantined":               false,
 		"port49_context_refreshes_total":           false,
 		"port49_tokens_superseded_total":           false,
+		"port49_policy_reloads_total":              false,
+		"port49_policy_file_refused":               false,
+		"port49_policy_refresh_pending":            false,
 	}
 
 	// Check that all expected metrics are present and all gathered metrics are snake_case.
