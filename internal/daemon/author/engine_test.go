@@ -244,6 +244,24 @@ func TestASessionReplyWithAPrivLvlThatIsNotALevelIsRefused(t *testing.T) {
 	}
 }
 
+// A blob whose reply carries an idletime or timeout that is not a plain
+// decimal is refused, never sent, as the load's joint check quarantines it
+// (resolve.go, engine.NotANumber): a device sent a value it cannot use may
+// refuse the session, and on IOS-XE a run of refusals locks out SSH
+// (final review M2).
+func TestASessionReplyWithANumberThatIsNotOneIsRefused(t *testing.T) {
+	for _, a := range []string{"idletime*abc", "timeout*-1", "idletime*030", "timeout*99999"} {
+		b := eosBlob()
+		b.Attributes = []string{"priv-lvl=1", a}
+		f := newEngineFixture(t, b)
+		c := store.Context{Username: "alice", Principal: "user:alice@example.com", BlobHash: f.hash}
+		d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(), Request{Context: c, Device: peer})
+		if d.Permit || d.Reason != decision.BlobUnavailable || len(d.Attributes) != 0 || d.ServerMsg != blobUnavailableMsg {
+			t.Errorf("%s: %+v", a, d)
+		}
+	}
+}
+
 // A blob that says which attributes its platform takes is never answered with
 // another: the device would refuse the session, and on IOS-XE a run of
 // refusals stops it answering SSH (L18-cisco_iosxe.md). The load's joint check

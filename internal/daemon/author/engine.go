@@ -133,9 +133,10 @@ func (e *Engine) Session(ctx context.Context, r Request) Decision {
 		// The device refuses the whole session for a priv-lvl that is not a
 		// level and for an attribute its platform does not take (IOS-XE,
 		// L18-cisco_iosxe.md), and GrantedPrivLvl skips the first, so the
-		// ceiling below never sees it. The load's joint check quarantines
-		// such a composition: refused here, never sent.
-		if engine.NotALevel(a) || !p.Blob.Accepts(a) {
+		// ceiling below never sees it; an idletime or timeout that is not a
+		// plain decimal may be refused the same way. The load's joint check
+		// quarantines such a composition: refused here, never sent.
+		if engine.NotALevel(a) || engine.NotANumber(a) || !p.Blob.Accepts(a) {
 			return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg, Policy: pol}
 		}
 	}
