@@ -182,3 +182,36 @@ tests: [{subject: q, device: leaf-01, level: unmapped}]
 		t.Fatalf("a session test on a quarantined device: %+v", r)
 	}
 }
+
+// A session test asserts the device privilege the session lands at — the
+// priv-lvl the reply sends after layering, else the level's number — and the
+// subject's enable (review C1; spec §12, "Policy tests").
+func TestASessionTestAssertsDevicePrivilegeAndEnable(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: ro, privilege: readonly, permit: [show **]}
+  - {name: lift, attributes: {arista_eos: ["priv-lvl=15"]}}
+subjects:
+  - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s, enable: token}
+grants:
+  - {subject: s, scope: all_devices, roles: [ro, lift], max_privilege: admin}
+tests:
+  - {subject: s, device: leaf-01, priv_lvl: 15, enable: token}
+  - {subject: s, device: nx-01, priv_lvl: 1}
+  - {subject: s, device: srx-lab-01, priv_lvl: 1}
+  - {subject: s, device: leaf-01, priv_lvl: 1}
+  - {subject: s, device: leaf-01, enable: none}
+`)
+	want := []bool{true, true, true, false, false}
+	for i, r := range p.RunTests(noon) {
+		if r.Pass != want[i] {
+			t.Errorf("tests[%d] %+v: pass %v, want %v (priv_lvl %q, enable %q)", i, r.Test, r.Pass, want[i], r.PrivLvl, r.Enable)
+		}
+	}
+	for _, bad := range []string{"priv_lvl: 16", "priv_lvl: high", "enable: maybe"} {
+		if _, err := Parse([]byte(scopeOK+roleOK+subjOK+grantOK+"tests:\n  - {subject: s, device: leaf-01, "+bad+"}\n"), env()); err == nil {
+			t.Errorf("%s loads", bad)
+		}
+	}
+}

@@ -516,8 +516,8 @@ func TestPolicyTestPrintsASessionTest(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
 	for _, want := range []string{
-		"PASS ops on leaf-01: session -> level admin, max_privilege none\n",
-		"FAIL noc on leaf-01: session -> level readonly, max_privilege none, want level admin\n",
+		"PASS ops on leaf-01: session -> level admin, max_privilege none, priv_lvl 15, enable none\n",
+		"FAIL noc on leaf-01: session -> level readonly, max_privilege none, priv_lvl 1, enable none, want level admin\n",
 		"4 tests, 1 failed",
 	} {
 		if !strings.Contains(out.String(), want) {

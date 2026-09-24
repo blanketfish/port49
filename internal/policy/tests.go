@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -121,9 +122,13 @@ type TestResult struct {
 	// a test that asserts them; Ceiling is NoCeiling where the grants set
 	// none.
 	Level, Ceiling string
-	Pass           bool
-	Err            error
-	Caveats        []string
+	// PrivLvl is the device privilege the session lands at, a number or
+	// NoCeiling's `none`, and Enable the subject's mechanism, for a minted
+	// session.
+	PrivLvl, Enable string
+	Pass            bool
+	Err             error
+	Caveats         []string
 }
 
 // Session reports whether the test asserts the session alone.
@@ -162,9 +167,12 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 			if r.MintError, _ = mintCheck(res, p.principalsOf(t.Subject, t.Principal), d.Name); r.MintError != "" {
 				break
 			}
-			r.Level, r.Ceiling = res.Level, res.Ceiling
+			r.Level, r.Ceiling, r.Enable, r.PrivLvl = res.Level, res.Ceiling, res.Enable, NoCeiling
 			if r.Ceiling == "" {
 				r.Ceiling = NoCeiling
+			}
+			if n, ok := p.devicePrivLvl(res, d.Platform); ok {
+				r.PrivLvl = strconv.Itoa(int(n))
 			}
 			if t.Session() {
 				break
@@ -176,7 +184,9 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 		// so it fails wherever no level was resolved.
 		minted := r.Err == nil && r.Ceiling != ""
 		r.Pass = r.Err == nil && (t.Level == "" || minted && t.Level == r.Level) &&
-			(t.MaxPrivilege == "" || minted && t.MaxPrivilege == r.Ceiling)
+			(t.MaxPrivilege == "" || minted && t.MaxPrivilege == r.Ceiling) &&
+			(t.PrivLvl == "" || minted && samePrivLvl(t.PrivLvl, r.PrivLvl)) &&
+			(t.Enable == "" || minted && t.Enable == r.Enable)
 		if t.Session() {
 			r.Pass = r.Pass && minted
 		} else {
@@ -189,6 +199,36 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 		out = append(out, r)
 	}
 	return out
+}
+
+// samePrivLvl compares an asserted priv_lvl with the resolved one, reading
+// the number as a number, so `015` is 15.
+func samePrivLvl(asserted, resolved string) bool {
+	if asserted == resolved {
+		return true
+	}
+	a, errA := strconv.Atoi(asserted)
+	b, errB := strconv.Atoi(resolved)
+	return errA == nil && errB == nil && a == b
+}
+
+// devicePrivLvl is the device privilege a resolved session lands at on a
+// platform (spec §12): the priv-lvl its session reply sends after §6
+// layering, read as the daemon reads it with the placeholders a mint cannot
+// know left empty, or where the reply sends none, the number the platform
+// gives the level. ok is false where neither says.
+func (p *Policy) devicePrivLvl(res Resolution, platformName string) (uint8, bool) {
+	attrs, err := res.Blob.SessionAttributes(engine.Values{})
+	if err != nil {
+		attrs = res.Blob.Attributes
+	}
+	if n, _, ok := engine.GrantedPrivLvl(attrs); ok {
+		return n, true
+	}
+	if res.Level == "" {
+		return 0, false
+	}
+	return p.privLvl(p.dialect(platformName), res.Level)
 }
 
 // resolveFor resolves a subject, or with principal set a principal, on a

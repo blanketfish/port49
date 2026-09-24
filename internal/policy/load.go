@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"regexp/syntax"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -118,8 +119,10 @@ type Test struct {
 	Subject, Principal, Device, Command, Expect, Reason string
 	// Level is the level the roles compose to on the device, and
 	// MaxPrivilege the ceiling the grants compose to there, `none` for no
-	// ceiling; empty asserts nothing.
-	Level, MaxPrivilege string
+	// ceiling; PrivLvl is the device privilege the session lands at, a
+	// number or `none` (Policy.devicePrivLvl), and Enable the subject's
+	// mechanism. Empty asserts nothing.
+	Level, MaxPrivilege, PrivLvl, Enable string
 }
 
 // NoCeiling is how a test asserts that the grants compose to no ceiling.
@@ -696,8 +699,9 @@ func (p *Policy) buildTests(f file) error {
 			return fmt.Errorf("%s: subject %q is not declared", row, t.Subject)
 		case t.Device == "":
 			return fmt.Errorf("%s: device is required", row)
-		case strings.TrimSpace(t.Command) == "" && t.Level == "" && t.MaxPrivilege == "":
-			return fmt.Errorf("%s: command is required, or a session test's level or max_privilege", row)
+		case strings.TrimSpace(t.Command) == "" && t.Level == "" && t.MaxPrivilege == "" && t.PrivLvl == "" &&
+			t.Enable == "":
+			return fmt.Errorf("%s: command is required, or a session test's level, max_privilege, priv_lvl or enable", row)
 		case strings.TrimSpace(t.Command) == "" && (t.Expect != "" || t.Reason != ""):
 			return fmt.Errorf("%s: a session test takes no expect or reason: it passes where the subject is "+
 				"minted a token with the level and ceiling it names", row)
@@ -724,7 +728,15 @@ func (p *Policy) buildTests(f file) error {
 				return fmt.Errorf("%s: max_privilege: %w", row, err)
 			}
 		}
-		p.tests = append(p.tests, Test(t))
+		if n, err := strconv.Atoi(t.PrivLvl); t.PrivLvl != "" && t.PrivLvl != NoCeiling && (err != nil || n < 0 || n > 15) {
+			return fmt.Errorf("%s: priv_lvl is a number from 0 to 15, or none, not %q", row, t.PrivLvl)
+		}
+		if t.Enable != "" && t.Enable != "none" && t.Enable != "auto" && t.Enable != "token" {
+			return fmt.Errorf("%s: enable is none, auto or token, not %q", row, t.Enable)
+		}
+		p.tests = append(p.tests, Test{Subject: t.Subject, Principal: t.Principal, Device: t.Device, Command: t.Command,
+			Expect: t.Expect, Reason: t.Reason, Level: t.Level, MaxPrivilege: t.MaxPrivilege, PrivLvl: t.PrivLvl,
+			Enable: t.Enable})
 	}
 	return nil
 }

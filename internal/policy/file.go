@@ -81,6 +81,9 @@ type fileTest struct {
 	// "Policy tests"); MaxPrivilege `none` asserts no ceiling.
 	Level        string `yaml:"level"`
 	MaxPrivilege string `yaml:"max_privilege"`
+	// PrivLvl is a number 0-15 or `none`; Enable is none, auto or token.
+	PrivLvl string `yaml:"priv_lvl"`
+	Enable  string `yaml:"enable"`
 }
 
 // stringList is a YAML scalar or a sequence of scalars: spec §11 writes one

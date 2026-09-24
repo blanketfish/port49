@@ -180,11 +180,13 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		if r.Test.Session() {
 			line = fmt.Sprintf("%s %s on %s: session -> deny %s", status, who, r.Test.Device, r.Reason)
 			if r.Ceiling != "" {
-				line = fmt.Sprintf("%s %s on %s: session -> level %s, max_privilege %s", status, who, r.Test.Device,
-					orNone(r.Level), r.Ceiling)
+				line = fmt.Sprintf("%s %s on %s: session -> level %s, max_privilege %s, priv_lvl %s, enable %s", status,
+					who, r.Test.Device, orNone(r.Level), r.Ceiling, r.PrivLvl, r.Enable)
 			}
-		} else if (r.Test.Level != "" || r.Test.MaxPrivilege != "") && r.Ceiling != "" {
-			line += fmt.Sprintf(" at level %s, max_privilege %s", orNone(r.Level), r.Ceiling)
+		} else if (r.Test.Level != "" || r.Test.MaxPrivilege != "" || r.Test.PrivLvl != "" || r.Test.Enable != "") &&
+			r.Ceiling != "" {
+			line += fmt.Sprintf(" at level %s, max_privilege %s, priv_lvl %s, enable %s", orNone(r.Level), r.Ceiling,
+				r.PrivLvl, r.Enable)
 		}
 		if r.MintError != "" {
 			line = fmt.Sprintf("%s %s on %s: %q -> deny: the broker refuses the mint, %s", status, who,
@@ -205,6 +207,12 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 			}
 			if r.Test.MaxPrivilege != "" {
 				want = append(want, "max_privilege "+r.Test.MaxPrivilege)
+			}
+			if r.Test.PrivLvl != "" {
+				want = append(want, "priv_lvl "+r.Test.PrivLvl)
+			}
+			if r.Test.Enable != "" {
+				want = append(want, "enable "+r.Test.Enable)
 			}
 			line += ", want " + strings.Join(want, " ")
 		}
