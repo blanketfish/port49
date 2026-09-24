@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // MaxAttribute is the longest AV pair RFC 8907 can carry: its argument length
@@ -36,7 +38,7 @@ func Mandatory(a string) bool {
 // CheckAttribute is the structural validation spec §6 requires, since port49
 // cannot check what an attribute means: a non-empty name before the first `=`
 // or `*`, no whitespace in the name, at most MaxAttribute bytes as written,
-// and no placeholder outside the vocabulary.
+// no placeholder in the name, and none outside the vocabulary.
 func CheckAttribute(a string) error {
 	i := strings.IndexAny(a, "=*")
 	switch {
@@ -48,6 +50,10 @@ func CheckAttribute(a string) error {
 		return fmt.Errorf("attribute %q: the name contains whitespace", a)
 	case len(a) > MaxAttribute:
 		return fmt.Errorf("attribute %q is %d bytes; RFC 8907 carries at most %d", AttributeName(a), len(a), MaxAttribute)
+	case placeholder.MatchString(a[:i]):
+		// A substitution in the name would let a username rewrite which
+		// attribute is sent, and whether it is mandatory.
+		return fmt.Errorf("attribute %q: a placeholder may appear only in the value (spec §6)", a)
 	}
 	for _, p := range placeholder.FindAllString(a, -1) {
 		known := false
@@ -75,14 +81,26 @@ type Values struct {
 // daemon meeting it means the context no longer holds what was minted.
 var ErrAttributeTooLong = errors.New("engine: a substituted attribute is longer than 255 bytes")
 
+// ErrSubstitution is a substitution value that carries a separator (`=` or
+// `*`), a control character or invalid UTF-8: something a device could read as
+// the start of another attribute. It is refused, never escaped.
+var ErrSubstitution = errors.New("engine: a substitution value carries a separator or control character")
+
 // SessionAttributes renders the session reply for one login: the blob's
 // attributes with every placeholder filled, `{privilege}` from the blob's own
 // level. It returns a fresh slice.
 func (b Blob) SessionAttributes(v Values) ([]string, error) {
+	values := map[string]string{"{username}": v.Username, "{principal}": v.Principal,
+		"{device}": v.Device, "{privilege}": b.Privilege}
 	r := strings.NewReplacer("{username}", v.Username, "{principal}", v.Principal,
 		"{device}", v.Device, "{privilege}", b.Privilege)
 	out := make([]string, 0, len(b.Attributes))
 	for _, a := range b.Attributes {
+		for _, p := range placeholder.FindAllString(a, -1) {
+			if !safeValue(values[p]) {
+				return nil, fmt.Errorf("%w: %s in %s", ErrSubstitution, p, AttributeName(a))
+			}
+		}
 		s := r.Replace(a)
 		if len(s) > MaxAttribute {
 			return nil, fmt.Errorf("%w: %s", ErrAttributeTooLong, AttributeName(a))
@@ -90,4 +108,13 @@ func (b Blob) SessionAttributes(v Values) ([]string, error) {
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+// safeValue reports whether a substitution value can go inside an attribute's
+// value without changing its structure.
+func safeValue(s string) bool {
+	if !utf8.ValidString(s) || strings.ContainsAny(s, "=*") {
+		return false
+	}
+	return !strings.ContainsFunc(s, unicode.IsControl)
 }

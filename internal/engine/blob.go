@@ -21,6 +21,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // Version is the blob format this package writes and the only one it reads.
@@ -129,8 +130,8 @@ func Encode(b Blob) ([]byte, string, error) {
 // Decode parses a blob and refuses anything it cannot decide with, because a
 // half-understood decision is how a daemon and a broker come to disagree about
 // a rule (spec §5.1.2): a body that does not hash to its name, a field this
-// build does not know, another format version, bytes after the value, and a
-// blob whose rules would not run. Every refusal is an error, which the daemon
+// build does not know, another format version, bytes after the value, a blob
+// whose rules would not run, and a body that is not exactly what Encode writes. Every refusal is an error, which the daemon
 // answers blob_unavailable — never a permit.
 func Decode(hash string, body []byte) (Blob, error) {
 	if HashOf(body) != hash {
@@ -149,6 +150,13 @@ func Decode(hash string, body []byte) (Blob, error) {
 	if err := b.check(); err != nil {
 		return Blob{}, fmt.Errorf("%w (blob %s)", err, hash)
 	}
+	// The canonical form is the only spelling a blob has. encoding/json reads
+	// keys case-insensitively and lets a repeated key's last value win, so a
+	// body that is not exactly what Encode writes can show an auditor a rule
+	// the daemon never evaluates.
+	if canon, _, err := Encode(b); err != nil || !bytes.Equal(canon, body) {
+		return Blob{}, fmt.Errorf("engine: blob %s is not in canonical form", hash)
+	}
 	return b, nil
 }
 
@@ -158,8 +166,14 @@ func (b Blob) check() error {
 	if b.Version != Version {
 		return fmt.Errorf("engine: blob format version %d; this build reads %d", b.Version, Version)
 	}
+	if b.Bundle == "" {
+		return errors.New("engine: blob names no bundle")
+	}
 	if b.Platform == "" {
 		return errors.New("engine: blob names no platform")
+	}
+	if s, ok := invalidUTF8(b); !ok {
+		return fmt.Errorf("engine: blob carries invalid UTF-8 in %q", s)
 	}
 	if b.Normalize.PipeToken == "" {
 		return errors.New("engine: blob has no pipe token")
@@ -191,12 +205,39 @@ func (b Blob) check() error {
 			}
 		}
 	}
+	names := map[string]bool{}
 	for _, a := range b.Attributes {
 		if err := CheckAttribute(a); err != nil {
 			return fmt.Errorf("engine: %w", err)
 		}
+		if names[AttributeName(a)] {
+			return fmt.Errorf("engine: attribute %s appears twice (spec §6)", AttributeName(a))
+		}
+		names[AttributeName(a)] = true
 	}
 	return nil
+}
+
+// invalidUTF8 finds a string in b that is not valid UTF-8. json.Marshal would
+// rewrite it to U+FFFD, so the body would name a different blob from the one
+// check validated.
+func invalidUTF8(b Blob) (string, bool) {
+	all := []string{b.Bundle, b.Platform, b.Normalize.PipeToken, b.Privilege}
+	all = append(all, b.Attributes...)
+	all = append(all, b.Pipe...)
+	for _, r := range b.Rules {
+		all = append(all, r.Verdict, r.Rule, r.Role)
+	}
+	for name, patterns := range b.Classes {
+		all = append(all, name)
+		all = append(all, patterns...)
+	}
+	for _, s := range all {
+		if !utf8.ValidString(s) {
+			return s, false
+		}
+	}
+	return "", true
 }
 
 // referencedClasses is the set of class names b's rules and pipe list use.

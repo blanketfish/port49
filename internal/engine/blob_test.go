@@ -20,6 +20,15 @@ func eos() Blob {
 	}
 }
 
+func mustEncode(t *testing.T, b Blob) ([]byte, string) {
+	t.Helper()
+	body, hash, err := Encode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body, hash
+}
+
 // A blob is named by its content: one decision, one hash (spec §5.1.1). The
 // canonical form is what makes that true — rule order, spacing and repeats,
 // pattern order, and classes no rule names do not change the name.
@@ -43,23 +52,23 @@ func TestOneDecisionIsOneHash(t *testing.T) {
 	}
 	other := eos()
 	other.Platform = "cisco_nxos"
-	if _, h3, _ := Encode(other); h3 == h1 {
+	if _, h3 := mustEncode(t, other); h3 == h1 {
 		t.Fatal("two platforms must not share a blob")
 	}
 	reordered := eos()
 	reordered.Attributes = []string{"home-directory*/home/{username}", "priv-lvl=15"}
-	if _, h4, _ := Encode(reordered); h4 == h1 {
+	if _, h4 := mustEncode(t, reordered); h4 == h1 {
 		t.Fatal("attributes go on the wire in order; Encode must not reorder them")
 	}
 	in := eos()
-	Encode(in)
+	mustEncode(t, in)
 	if in.Rules[0].Rule != "show **" || len(in.Classes) != 2 {
 		t.Fatal("Encode must not mutate the caller's blob")
 	}
 }
 
 func TestDecodeRoundTrips(t *testing.T) {
-	body, hash, _ := Encode(eos())
+	body, hash := mustEncode(t, eos())
 	b, err := Decode(hash, body)
 	if err != nil {
 		t.Fatal(err)
@@ -68,13 +77,36 @@ func TestDecodeRoundTrips(t *testing.T) {
 		b.Classes["management"][0] != `^Management[0-9]+$` || b.Attributes[1] != "home-directory*/home/{username}" {
 		t.Fatalf("round trip: %+v", b)
 	}
+	if again, _ := mustEncode(t, b); string(again) != string(body) {
+		t.Fatalf("Encode(Decode(body)) is not body:\n%s\n%s", again, body)
+	}
+}
+
+// encoding/json reads keys case-insensitively and lets a repeated key's last
+// value win. A body whose bytes show a rule the daemon would not evaluate is
+// refused: the canonical form is the only spelling a blob has.
+func TestDecodeRefusesANonCanonicalBody(t *testing.T) {
+	body, _ := mustEncode(t, eos())
+	for name, b := range map[string]string{
+		"a duplicate rules key": strings.Replace(string(body), `"rules":[`,
+			`"rules":[{"verdict":"deny","rule":"show **","role":"r"}],"rules":[`, 1),
+		"a case-variant key":       strings.Replace(string(body), `"version"`, `"VERSION"`, 1),
+		"insignificant whitespace": strings.Replace(string(body), `{`, `{ `, 1),
+	} {
+		if b == string(body) {
+			t.Fatalf("%s: the mutation did not apply", name)
+		}
+		if _, err := Decode(HashOf([]byte(b)), []byte(b)); err == nil || !strings.Contains(err.Error(), "canonical") {
+			t.Errorf("%s: Decode = %v, want a canonical-form refusal", name, err)
+		}
+	}
 }
 
 // A blob the daemon cannot fully decide with is refused, never half-read
 // (spec §5.1.2). The hash proves the bytes are the ones named, not that this
 // build understands them.
 func TestDecodeRefusesWhatItCannotDecideWith(t *testing.T) {
-	body, hash, _ := Encode(eos())
+	body, hash := mustEncode(t, eos())
 	tampered := []byte(strings.Replace(string(body), `show **`, `show *`, 1))
 	if _, err := Decode(hash, tampered); !errors.Is(err, ErrHashMismatch) {
 		t.Fatalf("a tampered body must be refused as a hash mismatch: %v", err)
@@ -121,6 +153,11 @@ func TestEncodeRefusesWhatDecodeRefuses(t *testing.T) {
 		"an empty regex":       {func(b *Blob) { b.Rules[0].Rule = "show //" }, "empty regex"},
 		"a class not snake":    {func(b *Blob) { b.Rules[0].Rule = "interface @Mgmt" }, "not a class name"},
 		"a wildcard in a word": {func(b *Blob) { b.Pipe = []string{"inc*"} }, "whole term"},
+		"no bundle":            {func(b *Blob) { b.Bundle = "" }, "names no bundle"},
+		"invalid UTF-8":        {func(b *Blob) { b.Attributes = []string{"a*\xff"} }, "invalid UTF-8"},
+		"invalid UTF-8 role":   {func(b *Blob) { b.Rules[0].Role = "r\xff" }, "invalid UTF-8"},
+		"a duplicate name":     {func(b *Blob) { b.Attributes = []string{"priv-lvl=1", "priv-lvl*15"} }, "appears twice"},
+		"a name placeholder":   {func(b *Blob) { b.Attributes = []string{"{username}*x"} }, "only in the value"},
 	} {
 		b := eos()
 		tt.mutate(&b)
@@ -179,6 +216,8 @@ func TestCheckAttribute(t *testing.T) {
 		"x=" + strings.Repeat("a", 254):     "255",
 		"home-directory*/home/{user}":       "not a substitution",
 		"home-directory*/home/{username}{}": "not a substitution",
+		"{username}*x":                      "only in the value",
+		"shell:{device}=x":                  "only in the value",
 	} {
 		if err := CheckAttribute(a); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("CheckAttribute(%q) = %v, want an error mentioning %q", a, err, want)
@@ -206,5 +245,19 @@ func TestSessionAttributesSubstitute(t *testing.T) {
 	}
 	if _, err := b.SessionAttributes(Values{Username: strings.Repeat("a", 250)}); !errors.Is(err, ErrAttributeTooLong) {
 		t.Fatalf("an over-long substitution: %v", err)
+	}
+	// A substituted value cannot start another attribute or smuggle a
+	// separator: "priv-lvl=15 " as a username must not become a mandatory
+	// priv-lvl anywhere in the reply.
+	for _, u := range []string{"priv-lvl=15 ", "a*b", "a\nb", "a\x00b", "a\xffb"} {
+		if got, err := b.SessionAttributes(Values{Username: u}); !errors.Is(err, ErrSubstitution) {
+			t.Errorf("username %q: %q, %v; want ErrSubstitution", u, got, err)
+		}
+	}
+	// A value the attribute does not use is not checked.
+	plain := eos()
+	plain.Attributes = []string{"priv-lvl=15"}
+	if _, err := plain.SessionAttributes(Values{Username: "a=b"}); err != nil {
+		t.Errorf("an unused value refused: %v", err)
 	}
 }
