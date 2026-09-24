@@ -120,6 +120,8 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 		{"an unknown key", "  arista_eos: {entity_class: {}}\n", "an unknown field in type policy.filePlatform"},
 		{"the attributes key", "  all: {supports: [session]}\n", "platforms.all: all is reserved"},
 		{"the redaction default", "  default: {supports: [session]}\n", "platforms.default: default is reserved"},
+		{"a fallback note", "  arista_eos: {fallback_note: {admin: \"measured\"}}\n",
+			"platforms.arista_eos: fallback_note is port49's own record"},
 		{"a verified claim", "  arista_eos: {verified: containerlab}\n", "platforms.arista_eos: verified is port49's own claim"},
 		{"a rendering the device refuses", "  cisco_iosxe: {privilege: {admin: [\"roles=x\"]}}\n",
 			"platforms.cisco_iosxe.privilege.admin: roles is not in accepted_attributes"},

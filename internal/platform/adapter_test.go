@@ -462,9 +462,9 @@ func TestOverMergesRoleOrder(t *testing.T) {
 
 // unreachable and fallback say what the lab measured, so a block adds to
 // them and never takes away (spec §8, §12): a level's rules are the union,
-// and a block's fallback text follows the set's as the operator's note. A
-// block that restates the set's text, or a note it already carries, is the
-// set's again, so the round trip through SpecOf holds for a merged adapter.
+// and a block's fallback text over the set's is kept apart, as the
+// operator's note. A block that restates the set's text is the set's again,
+// and the round trip through SpecOf holds for a merged adapter.
 func TestOverKeepsTheMeasuredIntersection(t *testing.T) {
 	base, _ := DialectFor("arista_eos")
 	d := Spec{Unreachable: &map[string][]string{"readonly": {"show users detail **", "reload **"}},
@@ -473,18 +473,15 @@ func TestOverKeepsTheMeasuredIntersection(t *testing.T) {
 		"configure terminal **", "show users detail **", "reload **"}) {
 		t.Errorf("unreachable: %q", d.Unreachable)
 	}
-	if want := "network-admin: every command, configuration included (operator note: read-only in practice)"; d.Fallback["admin"] != want ||
-		d.Fallback["operator"] != "network-operator" {
-		t.Errorf("fallback: %q", d.Fallback)
-	}
-	if set, note := FallbackParts(d.Fallback["admin"]); set != base.Fallback["admin"] || note != "read-only in practice" {
-		t.Errorf("parts: %q, %q", set, note)
+	if d.Fallback["admin"] != base.Fallback["admin"] || d.FallbackNote["admin"] != "read-only in practice" ||
+		d.Fallback["operator"] != "network-operator" || d.FallbackNote["operator"] != "" {
+		t.Errorf("fallback: %q, note %q", d.Fallback, d.FallbackNote)
 	}
 	if again := SpecOf(d).Over(base); !reflect.DeepEqual(again, d) {
 		t.Errorf("a merged adapter laid over its set again:\n got %+v\nwant %+v", again, d)
 	}
 	if same := (Spec{Fallback: &map[string]string{"admin": base.Fallback["admin"]}}).Over(base); !reflect.DeepEqual(same, base) {
-		t.Errorf("restating the set's text: %q", same.Fallback)
+		t.Errorf("restating the set's text: %q %q", same.Fallback, same.FallbackNote)
 	}
 }
 

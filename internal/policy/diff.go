@@ -84,7 +84,7 @@ type AdapterChange struct {
 // device to, and a block that ends a line in `none` instead of `local` has the
 // device authorize every command itself whenever port49 is unreachable
 // (task 7 review H6).
-var reportedAdapterKeys = []string{"port_pattern", "verified", "unreachable", "fallback"}
+var reportedAdapterKeys = []string{"port_pattern", "verified", "unreachable", "fallback", "fallback_note"}
 
 // adapterKeyGated reports whether an edit to an adapter key is gated.
 func adapterKeyGated(key string) bool { return !slices.Contains(reportedAdapterKeys, key) }

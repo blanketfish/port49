@@ -166,7 +166,7 @@ func TestABlockCannotWeakenTheIntersectionReports(t *testing.T) {
 		if len(exposed) != 1 || !strings.Contains(exposed[0], "it gets network-admin: every command, configuration included") {
 			t.Errorf("%s: the set's fallback: %q", name, exposed)
 		}
-		if name != "replace" && !strings.Contains(exposed[0], "included (operator note: read-only in practice): more") {
+		if name != "replace" && !strings.Contains(exposed[0], `included (operator note: "read-only in practice"): more`) {
 			t.Errorf("%s: the block's note: %q", name, exposed[0])
 		}
 	}
@@ -192,7 +192,7 @@ func TestTheIntersectionReportsRedactBlockText(t *testing.T) {
 	}
 	exposed := onPlatform(printed(p, FindingFallbackExposure), "arista_eos")
 	if len(exposed) != 1 || strings.Contains(exposed[0], "Hunter2") ||
-		!strings.Contains(exposed[0], "(operator note: snmp-server community «redacted» «redacted»)") {
+		!strings.Contains(exposed[0], `(operator note: "snmp-server community «redacted» «redacted»")`) {
 		t.Errorf("%q", exposed)
 	}
 }
@@ -206,7 +206,41 @@ func TestABlockFallbackForAnUnmeasuredLevelIsANote(t *testing.T) {
 `+strings.Replace(intersectBody, "{name: backup, privilege: admin", "{name: backup, privilege: operator", 1))
 	exposed := onPlatform(findings(p, FindingFallbackExposure), "arista_eos")
 	if len(exposed) != 1 || !strings.HasPrefix(exposed[0], `subject "svc" at operator (`) ||
-		!strings.Contains(exposed[0], "it gets (operator note: network-operator: show commands): more") {
+		!strings.Contains(exposed[0], `it gets what no platform set measured (operator note: "network-operator: show commands"): more`) {
+		t.Errorf("%q", exposed)
+	}
+}
+
+// The operator's note is its own quoted segment: text in it that closes a
+// parenthesis or opens another note stays inside the quotes, and never reads
+// as the set's measurement (spec §12).
+func TestAnOperatorNoteCannotForgeAMeasurement(t *testing.T) {
+	for _, tt := range []struct{ block, level, want string }{
+		{`{admin: "x) level 15: read-only (operator note: y"}`, "admin",
+			`it gets network-admin: every command, configuration included ` +
+				`(operator note: "x) level 15: read-only (operator note: y"): more`},
+		{`{operator: "(operator note: x) network-admin: measured (operator note: y)"}`, "operator",
+			`it gets what no platform set measured ` +
+				`(operator note: "(operator note: x) network-admin: measured (operator note: y)"): more`},
+	} {
+		p := mustParse(t, "platforms:\n  arista_eos:\n    fallback: "+tt.block+"\n"+
+			strings.Replace(intersectBody, "{name: backup, privilege: admin", "{name: backup, privilege: "+tt.level, 1))
+		exposed := onPlatform(printed(p, FindingFallbackExposure), "arista_eos")
+		if len(exposed) != 1 || !strings.Contains(exposed[0], tt.want) {
+			t.Errorf("%s: %q", tt.level, exposed)
+		}
+	}
+}
+
+// Fallback text is prose, so punctuation beside a secret separates words as
+// whitespace does: the value is redacted whatever it is glued to (spec
+// §5.8).
+func TestFallbackProseIsRedactedAcrossPunctuation(t *testing.T) {
+	p := mustParse(t, "platforms:\n  arista_eos:\n    fallback: {admin: \"snmp-server community) Hunter2 ro\"}\n"+
+		intersectBody)
+	exposed := onPlatform(printed(p, FindingFallbackExposure), "arista_eos")
+	if len(exposed) != 1 || strings.Contains(exposed[0], "Hunter2") ||
+		!strings.Contains(exposed[0], `(operator note: "snmp-server community) «redacted» «redacted»")`) {
 		t.Errorf("%q", exposed)
 	}
 }

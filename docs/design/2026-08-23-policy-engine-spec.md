@@ -4041,10 +4041,14 @@ judges every level by that level's adapter `fallback` entry. A level with no ent
 operator's case until L22 closes, is not reported, and that silence is unmeasured, not safe.
 A `platforms:` block adds to both and takes nothing away, `replace: true` and `based_on:`
 included: its `unreachable` rules join the set's for the level, and its `fallback` text is
-printed after the set's as `(operator note: ...)`, or alone in that form for a level the set
-measured nothing for, so it never reads as a measurement. An entry for a level the policy
-does not declare is refused. The rules and texts are printed unquoted, so the report redacts
-them itself (§5.8).
+kept apart from the set's, as the adapter's `fallback_note`, which only port49 writes and a
+block may not set. The report prints the set's text, or `what no platform set measured` for
+a level the set measured nothing for, and then the block's text as `(operator note:
+"...")`, quoted, so nothing in it can close the note or read as a measurement. An entry for a
+level the policy does not declare is refused. The rules and the set's text are printed
+unquoted, so the report redacts them itself (§5.8), and fallback text is prose: punctuation
+beside a word separates it as whitespace does, so a value glued to `community)` is still
+redacted.
 Each is reported by `port49 policy test` and does not fail it: the answer is a review question,
 not a wrong policy.
 
@@ -4233,7 +4237,7 @@ The report-only keys are reported and never fail:
 
 - `port_pattern`: drift detection only.
 - `verified`: the adapter's claim about the lab. A block may not set it.
-- `unreachable` and `fallback`: they feed only the dead-rule and fallback-exposure reports,
+- `unreachable`, `fallback` and `fallback_note`: they feed only the dead-rule and fallback-exposure reports,
   which do not fail `policy test` either. An edit to one is reported in the diff, where the
   reviewer sees it.
 

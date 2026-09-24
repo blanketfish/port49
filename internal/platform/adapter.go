@@ -41,6 +41,7 @@ type Spec struct {
 	Verified             *string              `yaml:"verified,omitempty"`
 	Unreachable          *map[string][]string `yaml:"unreachable,omitempty"`
 	Fallback             *map[string]string   `yaml:"fallback,omitempty"`
+	FallbackNote         *map[string]string   `yaml:"fallback_note,omitempty"`
 }
 
 // ParseSpecs reads an adapter file: one YAML document whose one key is
@@ -140,8 +141,27 @@ func (s Spec) Over(base Dialect) Dialect {
 		if d.Fallback == nil {
 			d.Fallback = map[string]string{}
 		}
+		// Over a measured text, a block's own is the operator's note, never
+		// the measurement (spec §12); restating the text changes nothing.
 		for k, v := range *s.Fallback {
-			d.Fallback[k] = fallbackOver(d.Fallback[k], v)
+			switch set := d.Fallback[k]; {
+			case set == "":
+				d.Fallback[k] = v
+			case v == set || strings.TrimSpace(v) == "":
+			default:
+				if d.FallbackNote == nil {
+					d.FallbackNote = map[string]string{}
+				}
+				d.FallbackNote[k] = v
+			}
+		}
+	}
+	if s.FallbackNote != nil {
+		if d.FallbackNote == nil {
+			d.FallbackNote = map[string]string{}
+		}
+		for k, v := range *s.FallbackNote {
+			d.FallbackNote[k] = v
 		}
 	}
 	return d
@@ -177,49 +197,11 @@ func unionLists(base, over map[string][]string) map[string][]string {
 	return base
 }
 
-// operatorNote opens the part of a fallback text a `platforms:` block wrote
-// over the set's: the operator's word, never the lab's.
-const operatorNote = "(operator note: "
-
-// fallbackOver is a block's fallback text v laid over base's: base's measured
-// text always stays first, and v follows it as the operator's note unless it
-// restates it (spec §12). Over nothing, v is the text as written.
-func fallbackOver(base, v string) string {
-	set, _ := FallbackParts(base)
-	switch vSet, _ := FallbackParts(v); {
-	case set == "" || vSet == set:
-		return v
-	case strings.TrimSpace(v) == "":
-		return base
-	}
-	return set + " " + NoteFallback(v)
-}
-
-// NoteFallback is v labelled as the operator's note, as a block's fallback
-// text for a level no set measured reads (spec §12). A note already labelled
-// is itself.
-func NoteFallback(v string) string {
-	if set, note := FallbackParts(v); set == "" && note != "" {
-		return v
-	}
-	return operatorNote + v + ")"
-}
-
-// FallbackParts splits a fallback text into what the set measured and the
-// operator's note after it, either of them empty, so a report can redact each
-// on its own (spec §5.8).
-func FallbackParts(text string) (set, note string) {
-	i := strings.Index(text, operatorNote)
-	if i < 0 || !strings.HasSuffix(text, ")") || (i > 0 && text[i-1] != ' ') {
-		return text, ""
-	}
-	return strings.TrimSuffix(text[:i], " "), strings.TrimSuffix(text[i+len(operatorNote):], ")")
-}
-
 // KeepMeasured is d with ref's unreachable rules and fallback texts laid back
 // under it: what the set measured about the device a block cannot discard,
 // `replace: true` included, since the device behind the name is the same
-// device (spec §8, §12).
+// device (spec §8, §12). Text d had in a measured text's place becomes its
+// note.
 func KeepMeasured(d, ref Dialect) Dialect {
 	d = d.clone()
 	d.Unreachable = unionLists(d.Unreachable, ref.Unreachable)
@@ -230,7 +212,15 @@ func KeepMeasured(d, ref Dialect) Dialect {
 		if d.Fallback == nil {
 			d.Fallback = map[string]string{}
 		}
-		d.Fallback[level] = fallbackOver(ref.Fallback[level], d.Fallback[level])
+		if was := d.Fallback[level]; was != ref.Fallback[level] {
+			if strings.TrimSpace(was) != "" && d.FallbackNote[level] == "" {
+				if d.FallbackNote == nil {
+					d.FallbackNote = map[string]string{}
+				}
+				d.FallbackNote[level] = was
+			}
+			d.Fallback[level] = ref.Fallback[level]
+		}
 	}
 	return d
 }
@@ -398,7 +388,14 @@ func Validate(name string, d Dialect) error {
 		}
 	}
 	for _, level := range sortedKeys(d.Fallback) {
-		if set, note := FallbackParts(d.Fallback[level]); strings.TrimSpace(set+note) == "" {
+		if strings.TrimSpace(d.Fallback[level]) == "" {
+			return fmt.Errorf("%s is empty: say what the device gives a session at %s on its own", field("fallback."+level),
+				level)
+		}
+	}
+	for _, level := range sortedKeys(d.FallbackNote) {
+		// A block's own text for the level, kept as its note.
+		if strings.TrimSpace(d.FallbackNote[level]) == "" {
 			return fmt.Errorf("%s is empty: say what the device gives a session at %s on its own", field("fallback."+level),
 				level)
 		}
@@ -574,6 +571,9 @@ func SpecOf(d Dialect) Spec {
 	}
 	if d.Fallback != nil {
 		s.Fallback = &d.Fallback
+	}
+	if d.FallbackNote != nil {
+		s.FallbackNote = &d.FallbackNote
 	}
 	return s
 }

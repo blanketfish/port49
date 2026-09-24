@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -60,11 +61,12 @@ func (p *Policy) intersections(now time.Time) []Finding {
 						}
 					}
 				}
-				if fallback := dialect.Fallback[level]; fallback != "" && confined(res.Blob) {
+				fallback, note := dialect.Fallback[level], dialect.FallbackNote[level]
+				if (fallback != "" || note != "") && confined(res.Blob) {
 					add(FindingFallbackExposure, name+"\x00"+d.Platform+"\x00"+level,
 						"subject %q at %s: port49's rules confine it to %s, and if port49 cannot answer and the device "+
 							"falls back to local it gets %s: more than the policy grants (spec §6, §12)", name, on,
-						strings.Join(redacted(redact, permitsOf(res.Blob)), ", "), redactedFallback(redact, fallback))
+						strings.Join(redacted(redact, permitsOf(res.Blob)), ", "), fallbackText(redact, fallback, note))
 				}
 			}
 		}
@@ -140,20 +142,51 @@ func permitsOf(b engine.Blob) []string {
 	return out
 }
 
-// redactedFallback is an adapter's fallback text as the exposure prints it:
-// the set's text and the operator's note are policy text a `platforms:` block
-// can write and are printed unquoted, so each is redacted on its own (spec
-// §5.8), a pattern being anchored at both ends of what it reads.
-func redactedFallback(patterns []platform.Redaction, text string) string {
-	set, note := platform.FallbackParts(text)
-	out := redacted(patterns, []string{set, note})
-	switch {
-	case note == "":
-		return out[0]
-	case set == "":
-		return platform.NoteFallback(out[1])
+// fallbackText is what the exposure says the device gives: the set's
+// measured text, or that no set measured one, then a block's own text as the
+// operator's note. The note is quoted, so nothing in it can close it or
+// read as the measurement (spec §12). Both are prose a `platforms:` block
+// can write, redacted here (redactProse).
+func fallbackText(patterns []platform.Redaction, set, note string) string {
+	text := "what no platform set measured"
+	if set != "" {
+		text = redactProse(patterns, set)
 	}
-	return out[0] + " " + platform.NoteFallback(out[1])
+	if note != "" {
+		text += fmt.Sprintf(" (operator note: %q)", redactProse(patterns, note))
+	}
+	return text
+}
+
+// proseWord is a word of prose as redaction reads it: punctuation separates
+// words as whitespace does, so a value glued to `community)` or `community:`
+// is still the word after `community` (spec §5.8). Over-redaction is the
+// accepted cost.
+var proseWord = regexp.MustCompile("[^\\s()\\[\\]{}<>,;:!?\"'=`]+")
+
+// redactProse is text redacted as a rule is, first by whitespace, which is
+// where a URL's password is found whole, and then by proseWord, with the
+// text's punctuation kept where it was.
+func redactProse(patterns []platform.Redaction, text string) string {
+	text = redacted(patterns, []string{text})[0]
+	spans := proseWord.FindAllStringIndex(text, -1)
+	words := make([]string, len(spans))
+	for i, sp := range spans {
+		words[i] = text[sp[0]:sp[1]]
+	}
+	out, ok := platform.RedactRule(patterns, words)
+	if !ok {
+		return text
+	}
+	var b strings.Builder
+	last := 0
+	for i, sp := range spans {
+		b.WriteString(text[last:sp[0]])
+		b.WriteString(out[i])
+		last = sp[1]
+	}
+	b.WriteString(text[last:])
+	return b.String()
 }
 
 // redacted is rules as a report lists them unquoted, each redacted by

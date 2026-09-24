@@ -989,17 +989,17 @@ func TestARedactionEditIsGated(t *testing.T) {
 // The gate fails closed on keys (task 1 review I3): only a key on the closed
 // list of explain-only keys is reported, and every key an adapter has today,
 // device_config included (task 7 review H6), and any a later plan adds is
-// gated until it is listed. Three keys an adapter has are on the list:
+// gated until it is listed. Four keys an adapter has are on the list:
 // verified says how the set's adapter was checked, and no block may set it;
-// unreachable and fallback feed only the dead-rule and fallback-exposure
-// reports (spec §12).
+// unreachable, fallback and fallback_note feed only the dead-rule and
+// fallback-exposure reports (spec §12).
 func TestOnlyExplainKeysAreReported(t *testing.T) {
 	for _, key := range platform.SpecKeys() {
-		if !slices.Contains([]string{"verified", "unreachable", "fallback"}, key) && !adapterKeyGated(key) {
+		if !slices.Contains([]string{"verified", "unreachable", "fallback", "fallback_note"}, key) && !adapterKeyGated(key) {
 			t.Errorf("%s is reported, not gated", key)
 		}
 	}
-	for _, key := range []string{"port_pattern", "verified", "unreachable", "fallback"} {
+	for _, key := range []string{"port_pattern", "verified", "unreachable", "fallback", "fallback_note"} {
 		if adapterKeyGated(key) {
 			t.Errorf("%s is gated; it changes only what explain says", key)
 		}

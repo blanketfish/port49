@@ -310,6 +310,9 @@ func (p *Policy) buildPlatforms(f file) error {
 		case b.Verified != nil:
 			return fmt.Errorf("%s: verified is port49's own claim about its lab (spec §8); an adapter written "+
 				"here is unverified until it is contributed and measured, so remove the key", at)
+		case b.FallbackNote != nil:
+			return fmt.Errorf("%s: fallback_note is port49's own record of a block's fallback text over the set's "+
+				"(spec §12); write the text under fallback", at)
 		case b.Replace && b.BasedOn != "":
 			return fmt.Errorf("%s: replace starts from nothing and based_on from another platform; use one", at)
 		case b.BasedOn != "" && shipped:
@@ -348,8 +351,15 @@ func (p *Policy) buildPlatforms(f file) error {
 		if b.Spec.Fallback != nil {
 			for _, level := range sortedKeys(*b.Spec.Fallback) {
 				if ref.Fallback[level] == "" {
-					d.Fallback[level] = platform.NoteFallback(d.Fallback[level])
+					if d.FallbackNote == nil {
+						d.FallbackNote = map[string]string{}
+					}
+					d.FallbackNote[level] = d.Fallback[level]
+					delete(d.Fallback, level)
 				}
+			}
+			if len(d.Fallback) == 0 {
+				d.Fallback = nil
 			}
 		}
 		if err := platform.Validate(name, d); err != nil {

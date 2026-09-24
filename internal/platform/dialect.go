@@ -119,8 +119,16 @@ type Dialect struct {
 	// own when port49 cannot answer and the command method list falls back to
 	// local, where that is more than a confined role: a subject port49
 	// confines at that level has more access in an outage than the policy
-	// grants (spec §6, §12, "Fallback exposure").
+	// grants (spec §6, §12, "Fallback exposure"). It is only what the lab
+	// measured, or what a block wrote for a level no set measured anything
+	// for: a block's text for a level the set did measure is FallbackNote.
 	Fallback map[string]string
+	// FallbackNote maps a level to a `platforms:` block's fallback text where
+	// the set measured its own: the operator's word, kept apart from the
+	// measurement so the report prints it as a note no text in it can close
+	// or forge (spec §12). Its Spec key, fallback_note, is set only by
+	// SpecOf; a block may not write it.
+	FallbackNote map[string]string
 }
 
 // builtin is the default set's adapters, platforms/<DefaultSet>/*.yaml, where
@@ -219,6 +227,9 @@ func (d Dialect) clone() Dialect {
 	}
 	if d.Fallback != nil {
 		d.Fallback = maps.Clone(d.Fallback)
+	}
+	if d.FallbackNote != nil {
+		d.FallbackNote = maps.Clone(d.FallbackNote)
 	}
 	return d
 }
