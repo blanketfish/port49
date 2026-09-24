@@ -1241,9 +1241,11 @@ forcing a reconnect. Requirements:
   measured only for *authentication*: on both Junos images a FAIL falls through to the local
   password whenever `password` is in `authentication-order`, while vEOS and the N9Kv treat a
   FAIL as final under every method list tested (`tests/lab/results/L4-juniper_vsrx.md`,
-  `L4-juniper_vjunos-router.md`, `L4-arista_eos.md`, `L4-cisco_nxos.md`). Authorization
-  fall-through is unmeasured on every platform. What closes the window is the reference AAA
-  configuration per platform, which the lab register tracks as L4.
+  `L4-juniper_vjunos-router.md`, `L4-arista_eos.md`, `L4-cisco_nxos.md`). Per-command
+  authorization was measured 2026-09-24: a FAIL is final on vEOS, the N9Kv and IOS-XE under every
+  list tried, `local` and `if-authenticated` included (`tests/lab/results/L4-error-*.md`). What
+  closes the window is the reference AAA configuration per platform, which the lab register
+  tracks as L4.
 - `max_session_age: never` MUST be expressible. Some deployments have no such requirement,
   and a ceiling nobody asked for is an outage waiting to happen. The default is **12h**; a
   compliance parameter with an unstated default is one nobody sets.
@@ -1262,8 +1264,11 @@ forcing a reconnect. Requirements:
 
 #### Why `enable: auto` is restricted
 
-Method lists fall through to a later method only on **ERROR** (the server is unreachable), not
-on **FAIL** (an explicit reject). So a session that authenticates locally rather than through
+Method lists fall through to a later method when the server is unreachable, and not on **FAIL**
+(an explicit reject). Whether an **ERROR** reply falls through is per platform, and it is not the
+same as unreachable: measured 2026-09-24, an authentication ERROR falls through to `local` on vEOS
+and the N9Kv and on Junos with `password` in `authentication-order`, and is final on IOS-XE and on
+Junos with `tacplus` alone (`tests/lab/results/L4-error-*.md`). So a session that authenticates locally rather than through
 port49 implies port49 was *unreachable at that moment*, so port49 never saw the START and
 holds no context for that occupant. (Until 2026-09-20 this sentence turned on teardown row 5,
 which withdrew with the re-key; the exposure below does not depend on it.)
@@ -1455,7 +1460,7 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error; the reply is `ERROR` so the device falls through to its next method (design document §12) — the log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error. On `redeem` the reply is `ERROR`; on an authorization it is `FAIL` (plan 4, ruled 2026-09-24). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`) — the log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
