@@ -71,6 +71,11 @@ const (
 	EventUnvalidated      = "unvalidated" // not a decision; header-only diagnosis record (spec §10)
 )
 
+// EventRefresh is the broker carrying the policy in force into a live login
+// context (spec §5.1.3): the policy written into it, or the context revoked.
+// It is a decision, so it has a verdict and a reason from the table above.
+const EventRefresh = "refresh"
+
 const (
 	VerdictPermit = "permit"
 	VerdictDeny   = "deny"

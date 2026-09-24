@@ -5,6 +5,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -56,6 +57,9 @@ type ctxEntry struct {
 	c   store.Context
 	exp time.Time
 	rev uint64 // store.Context.Rev; see nextRevLocked
+	// policyRev is store.Context.PolicyRev: it takes a revision from the same
+	// counter as rev, but only on a write to what a policy refresh decides.
+	policyRev uint64
 }
 
 // nextRevLocked returns a revision no context has held. Every write to a
@@ -465,9 +469,10 @@ func (s *Store) PutContext(_ context.Context, k store.ContextKey, c store.Contex
 // share once SwapContext's precondition has held.
 func (s *Store) writeContextLocked(k store.ContextKey, c store.Context, now time.Time, ttl time.Duration) {
 	c.LastTouchedAt = now
-	c.Rev = 0 // the entry holds the revision; the record's copy is GetContext's to fill
+	c.Rev, c.PolicyRev = 0, 0 // the entry holds the revisions; the record's copies are GetContext's to fill
 	exp := now.Add(ttl)
-	s.contexts[k] = ctxEntry{c: c, exp: exp, rev: s.nextRevLocked()}
+	rev := s.nextRevLocked()
+	s.contexts[k] = ctxEntry{c: c, exp: exp, rev: rev, policyRev: rev}
 	// A re-put is an extension too, so the index entries come with it
 	// (design §12). At a first login this is a no-op — the context is written
 	// before it is indexed — and it matters when a second login joins or
@@ -488,7 +493,7 @@ func (s *Store) GetContext(_ context.Context, k store.ContextKey) (store.Context
 		return store.Context{}, store.ErrNotFound
 	}
 	c := e.c
-	c.Rev = e.rev
+	c.Rev, c.PolicyRev = e.rev, e.policyRev
 	return c, nil
 }
 
@@ -549,6 +554,7 @@ func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8)
 	// Raise-only, then clamped, both under this lock: the ceiling read is the
 	// one on the record now, which a join may have moved since the caller read
 	// it (spec §5.3).
+	held := e.c.PrivLvl
 	if level > e.c.PrivLvl {
 		e.c.PrivLvl = level
 	}
@@ -556,6 +562,12 @@ func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8)
 		e.c.PrivLvl = ceiling
 	}
 	e.rev = s.nextRevLocked()
+	// A level that moved is a write to what the refresh decides; a grant of
+	// the level already held, which a device repeats, is not, or a session
+	// authorizing often could keep the refresh losing (store.Context.PolicyRev).
+	if e.c.PrivLvl != held {
+		e.policyRev = e.rev
+	}
 	s.contexts[k] = e
 	return nil
 }
@@ -632,12 +644,18 @@ func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.Co
 	// directory re-resolution, not a credential re-verification, and the only
 	// thing that ends a revocation is spec §5.6 row 6 reclaiming the record
 	// (store.Store).
+	blobMoved := r.BlobHash != "" && r.BlobHash != e.c.BlobHash
 	if r.BlobHash != "" {
 		e.c.BlobHash = r.BlobHash
 	}
 	e.exp = now.Add(ttl)
 	e.c.LastTouchedAt = now
 	e.rev = s.nextRevLocked()
+	// The clocks and the expiry are not what a policy refresh decides; a new
+	// blob hash is (store.Context.PolicyRev).
+	if blobMoved {
+		e.policyRev = e.rev
+	}
 	s.contexts[k] = e
 	s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, e.exp)
 	return nil
@@ -647,6 +665,7 @@ func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.Co
 // `credential_revoked` rather than answered as a session port49 never saw
 // (store.Store; spec §5.6 row 2). It moves neither the expiry nor
 // LastTouchedAt: row 6 reclaims the record on the idle TTL it was already on.
+// It keeps the later of the mark it holds and the one it is given.
 func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -655,8 +674,51 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 		delete(s.contexts, k)
 		return store.ErrNotFound
 	}
-	e.c.RevokedAt = at
+	// The later mark stands (store.Store): an earlier one would let a token
+	// minted between the two lift the revocation at a join.
+	if at.After(e.c.RevokedAt) {
+		e.c.RevokedAt = at
+	}
 	e.rev = s.nextRevLocked()
+	e.policyRev = e.rev
+	s.contexts[k] = e
+	return nil
+}
+
+// SetContextPolicy is the refresher's setter: the compare, the write and the
+// clamp are one critical section (store.Store). It compares the policy
+// revision, moves both revisions, and nothing about the expiry: a policy edit
+// is not activity.
+func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRev uint64, p store.ContextPolicy) error {
+	if p.RevokedAt.IsZero() && p.BlobHash == "" {
+		// A live context pointing at no blob is a corrupt record, whatever
+		// the caller meant; refuse it rather than write it.
+		return errors.New("store: a policy write that does not revoke must name a blob hash")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(s.now()) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	if e.policyRev != policyRev {
+		return store.ErrConflict
+	}
+	if !p.RevokedAt.IsZero() {
+		// The later mark stands: an earlier one would let a token minted
+		// between the two lift the revocation at a join (spec §5.6).
+		if p.RevokedAt.After(e.c.RevokedAt) {
+			e.c.RevokedAt = p.RevokedAt
+		}
+	} else {
+		e.c.BlobHash, e.c.MaxPrivilege, e.c.Enable = p.BlobHash, p.MaxPrivilege, p.Enable
+		if ceiling, ok := e.c.PrivilegeCeiling(); ok && e.c.PrivLvl > ceiling {
+			e.c.PrivLvl = ceiling
+		}
+	}
+	e.rev = s.nextRevLocked()
+	e.policyRev = e.rev
 	s.contexts[k] = e
 	return nil
 }

@@ -17,8 +17,11 @@ whole-branch; the five calls in PR #10's "Questions for Ryan" were decided 2026-
 built on `feature/gate-rulings`: `operator` renders as level 15 on EOS and NX-OS, a level or
 ceiling raise and a regex-constrained widening fail `port49 policy diff`, a refused mint always
 does, a policy with no tests is reported `no_tests`, and a `lab:` block announces itself at
-start); 5–13 not yet. **Plan 4b
-(live policy) is the next plan to write.**
+start); **4b executed 2026-09-24 on `feature/live-policy`, not yet merged**
+(`2026-09-24-04b-live-policy.md`, eight tasks: one docs, six code, one docs; reviewed per task;
+its three "Questions for Ryan" were decided security-first: delete unspent tokens whose answer
+changed, rewrite every live context on every reload, leave a quarantined device's contexts);
+5–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -365,6 +368,106 @@ context and every unspent token (plan 3, Question 3).
 
 Plan 7 keeps the scheduled refresh through `active_principals` for directory changes, and the
 `staleness_ceiling` default that goes with it.
+
+**As built** (`2026-09-24-04b-live-policy.md`): `policy.Live` holds the policy in force; the
+broker mints from it and the daemon asks it about quarantine at every packet, so one swap changes
+both. `port49d` reads `broker.policy_file` every `broker.policy_watch_interval` (default 5s) and
+loads the bytes two agreeing reads saw, and loads at once on `SIGHUP`. The file is checked on the
+descriptor it was read from: a file that does not load, or that anyone but `port49d`'s user or
+root could have written — the file, or the directory holding it, group- or world-writable or owned
+by anyone else — is refused whole (at start `port49d` does not start), said once per distinct
+content, counted (`port49_policy_reloads_total{outcome}`) and alarmed
+(`port49_policy_file_refused`). A mint holds the policy from its first resolution to its last
+token write, and not while its response is written. A hold is never nested, and its store calls
+are bounded by `holdTimeout` (10s; past it the rest of the batch is refused `store_unavailable`),
+so a store that stops answering cannot hold a reload, and every mint queued behind it.
+
+`(*broker.Broker).Refresh` carries the policy in force into every live context through
+`store.SetContextPolicy`, the fifth narrow setter and the first that is a compare-and-set. It
+compares `PolicyRev`, a revision only policy-relevant writes bump (join, revoke, privilege,
+ceiling, enable, blob), so accounting traffic on a busy session cannot starve it. A principal with
+no grant left on the device has the context revoked through `SetRevokedAt`, which writes the mark
+alone and keeps the later of two, so no racing write can hold a withdrawn grant in force. A
+context the policy in force cannot be resolved or compiled for is revoked too (`refresh deny
+blob_unavailable`, the process log naming the `ctx_id`), and so is one that cannot be opened
+(sealed under a key past the two-key window): its record names the device and the key's
+username and no principal, since the owner is sealed and the index may be stale. A context on a
+device quarantined now is left as it is, with one `refresh deny device_quarantined` record per
+context per bundle, not one per pass. Every change is a `refresh` decision record (spec §5.7).
+The refresh also deletes the unspent tokens a superseded policy minted that the policy in force
+would not mint identically; a superseded policy's tokens are judged at the start of its span and
+at every grant expiry inside it. A pass judges everything at one instant (`RefreshReport.At`) and
+goes round again at once if a grant expired while it ran.
+
+`port49d` runs the refresh at every reload and every grant expiry (scheduled from
+`RefreshReport.At`), a settle pass 30s after each for a login in flight across the swap or the
+expiry, and every 30s after a store error until one completes. `port49_policy_refresh_pending`
+is 1 from a swap or an expiry until its settle pass completes, and while any retry is owed. A
+context still changing after every compare-and-set attempt is left for the retry and the pass
+goes on; a revocation never waits on it. The inventory is not reloaded: a reload after an
+inventory edit says so (plan 6). `run` takes a context, so a test can stop it, and the end-to-end
+test of `port49d` with no `lab:` block that plan 4 carried here drives a live edit through a real
+login. `SIGHUP` no longer ends `port49d`.
+
+**Hands to plan 6:** the snapshot refresh (spec §10) swaps an inventory under a live policy. It
+must re-run the joint checks against the new inventory and call `Refresh` exactly as a policy
+reload does, since a device leaving a scope is a narrowing like any other; `Refresh` already
+revokes a context on a device inventory no longer names. Reloading the inventory itself is plan
+6's: today a reload after an inventory edit only says a restart is needed. The token supersede
+walks principals × devices × superseded policies × expiry instants, compiling each answer (plan
+12 measures it at fleet size). With the remote store:
+- **Unindexed contexts are invisible to the refresh** (4b pre-flight N4). An `IndexContext` can
+  fail, and a login whose index write failed is invisible to the policy refresh as it is to
+  revocation (`authen`, the `index_error` record). Close it, or at least extend the
+  `index_error` wording to name the policy refresh too.
+- **The refresh's store calls are bounded only by the caller's context** (4b Task 5, M4). A
+  local store answers at once; a remote one can hang a pass, and with it every later reload,
+  since `port49d` runs one pass at a time. Give each store call its own deadline.
+- **Decision-log emits under a hold are not context-bounded** (4b Task 4). A mint writes its
+  records while it holds the policy, so a stalled log sink stalls a swap. Harmless with a local
+  file; bound it before the log can be remote.
+- **The settle pass assumes redeem-to-write is under 30s** (4b final review m3). A login that
+  spent a token before the supersede and writes its context after the settle pass keeps the
+  superseded answer until the next reload or expiry, and the pending gauge reads 0. With the
+  memory store this is immediate. The daemon's per-packet store calls use the connection's
+  context with no deadline. Give them one that is well under `settleAfterReload`.
+- **What the broker remembers grows with the policy's history** (4b final review m10). A file
+  rewritten on a schedule, such as a templater stamping the time, reloads on that schedule.
+  Every load writes one `refresh` record per live context and a new blob, held in the store for
+  `max_session_age` and in `b.blobsSeen` for good. `b.superseded` holds one instant per
+  (device, username) ever superseded. Both are bounded by memory today; bound them before the
+  store is shared.
+
+**Hands to plan 7:** the scheduled directory refresh is `Refresh`'s context pass with group
+membership re-read; a policy refresh does not stamp `refreshed_at`, because nothing about the
+directory was re-verified, so the staleness ceiling still waits on plan 7's scheduler. Revoking
+by principal, `sid` or certificate should also delete tokens (roadmap, plan 3's hole), as the
+policy refresh already does for a withdrawn grant. **A candidate reload guard** (4b Task 6, M3):
+a reload that fails the joint check for most devices applies anyway and quarantines them live,
+as spec §10 and decision 20 require; the CI gate (`port49 policy diff` fails on a newly
+quarantined device) is today's only guard. An optional guard that refuses a reload quarantining
+more than a configured share of the fleet is plan 7's to weigh. **Revocation records must name the
+contexts they could not reach** (decision 21; 4b final review I1). The policy refresh
+already counts contexts on session-only platforms (`RefreshReport.Unreached`), says so on its
+summary line, and names each `ctx_id` in the process log. Revocation by identity adds the
+record field, a §5.7 edit first, and the refresh should use it too.
+
+**Hands to plan 12:** the policy file check covers the file, the directory holding it, and the
+directory holding every symlink on the path. It does not cover ACLs or other ancestor
+directories. The deployment docs must say that the path to the policy file is the deployment's
+to protect, since whoever can write it decides every operator's access within seconds. The mode
+of a directory holding a link, never the file's own directory, is excused on a read-only mount
+(`fstatfs`). That is how a ConfigMap or Secret mount passes: its 0777 root is mounted read-only
+(`tests/lab/results/configmap-mounts.md`). The excuse trusts whoever writes the mount's source,
+so the deployment docs must say: do not mount the policy from FUSE, or from a host path others
+can write (re-review n1). They must also say to use `fsGroup` or `defaultMode: 0444` for a
+non-root `port49d`, and that an edit takes about 55 s to reach the pod.
+**The refresh's cost** (4b final review I3): one `mintedBy` compile measured 17.8 µs on the
+fixture's three-role policy. The token scan runs principals × devices × instants for each
+superseded policy, so 500 principals by 5,000 devices is about 45 s per instant per prior, and
+a real policy compiles slower. The context pass now runs first, both loops stop when cancelled,
+and a settle pass or retry no longer compares the policy in force with itself. Measure the
+rest at fleet size here.
 
 ## Plan 5 — Platform adapters (§19 step 5)
 

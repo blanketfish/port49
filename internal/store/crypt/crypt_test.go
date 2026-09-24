@@ -321,6 +321,24 @@ func TestSwapContextSealsAndKeepsTheRevision(t *testing.T) {
 // The join's merge happens up here, with the sealed fields open, and the
 // precondition is held down in the inner store: the property has to survive
 // that split, so it is run against the wrapped store as well as the bare one.
+// PolicyRev is plaintext bookkeeping like Rev, so the property has to hold
+// with the sealing layer between the refresher and the inner store.
+func TestPolicyRevisionThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.PolicyRevision(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
+// SetRevokedAt's comparison is made below the sealing layer, on a plaintext
+// timestamp, so the property has to hold through it.
+func TestRevocationIsMonotonicThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RevocationIsMonotonic(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
 func TestJoinRacesRevocationThroughTheSealingLayer(t *testing.T) {
 	now := time.Unix(1_757_041_495, 0)
 	storetest.JoinRacesRevocation(t, func() store.Store {
@@ -382,5 +400,39 @@ func TestUnindexRefPassesThrough(t *testing.T) {
 	}
 	if r, _ := inner.ContextsBySid(ctx, "sid-1"); len(r) != 0 {
 		t.Fatalf("UnindexRef did not reach the inner store: %v", r)
+	}
+}
+
+// SetContextPolicy's compare-and-set survives the sealing layer: the
+// policy revision read through GetContext, with the principal opened, is the
+// one the inner store compares, and the fields it writes are plaintext, so the sealed
+// ones are untouched.
+func TestSetContextPolicyThroughTheSealingLayer(t *testing.T) {
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	ctx := context.Background()
+	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	if err := s.PutContext(ctx, ck, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com",
+		Username: "alice", PrivLvl: 15, BlobHash: "sha256:old"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetContext(ctx, ck)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRevokedAt(ctx, ck, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetContextPolicy(ctx, ck, got.PolicyRev, store.ContextPolicy{BlobHash: "sha256:new"}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("the revision read through the sealing layer must be the one compared: %v", err)
+	}
+	got, _ = s.GetContext(ctx, ck)
+	if err := s.SetContextPolicy(ctx, ck, got.PolicyRev, store.ContextPolicy{BlobHash: "sha256:new", MaxPrivilege: 1}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.GetContext(ctx, ck)
+	if err != nil || after.Principal != "user:alice@example.com" || after.CtxID != "ctx1" ||
+		after.BlobHash != "sha256:new" || after.PrivLvl != 1 {
+		t.Fatalf("%+v %v", after, err)
 	}
 }

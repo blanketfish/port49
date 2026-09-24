@@ -836,11 +836,55 @@ func (l *lab) derivedConfigCmd(suffix, attrs, cmdAttrs, extra string) (string, e
 	if suffix != "" {
 		name += "-" + suffix
 	}
+	out, err = privatePolicy(out, filepath.Join(dir, name+"-policy"))
+	if err != nil {
+		return "", err
+	}
 	path := filepath.Join(dir, name+".yaml")
 	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// privatePolicy copies the file a `policy_file:` line names into dir, a
+// directory only this user can write, and points the line at the copy.
+// port49d refuses a policy file anyone else could have written, or one in a
+// directory they could (spec §5.1.3), and a checkout under a umask of 002 —
+// the usual one on a desktop distribution — leaves the repository's policy
+// files and their directories group-writable.
+func privatePolicy(cfg, dir string) (string, error) {
+	const anchor = "  policy_file: "
+	i := strings.Index(cfg, anchor)
+	if i < 0 {
+		return cfg, nil
+	}
+	j := strings.Index(cfg[i:], "\n")
+	if j < 0 {
+		j = len(cfg) - i
+	}
+	src := strings.TrimSpace(cfg[i+len(anchor) : i+j])
+	if !filepath.IsAbs(src) {
+		src = filepath.Join(root, src)
+	}
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", err
+	}
+	dst := filepath.Join(dir, "policy.yaml")
+	if err := os.WriteFile(dst, raw, 0o600); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(dst, 0o600); err != nil {
+		return "", err
+	}
+	return cfg[:i] + anchor + dst + cfg[i+j:], nil
 }
 
 // startDaemonWith starts port49d against cfgPath. resume appends to this

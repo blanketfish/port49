@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -52,7 +51,9 @@ import (
 func main() {
 	cfgPath := flag.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
 	flag.Parse()
-	if err := run(*cfgPath); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, *cfgPath); err != nil {
 		fmt.Fprintln(os.Stderr, "port49d:", err)
 		os.Exit(1)
 	}
@@ -167,57 +168,31 @@ func labWarning(lab *config.LabConfig) string {
 		"never be in production\n", strings.Join(enables, "; "))
 }
 
-// stderr is where port49d's operational lines go — not the decision log,
-// which is stdout — swapped in tests.
-var stderr io.Writer = os.Stderr
+// stderr is where port49d's operational lines go, and stdout is the decision
+// log; both are swapped in tests.
+var (
+	stderr io.Writer = os.Stderr
+	stdout io.Writer = os.Stdout
+)
 
 // buildBroker loads what the broker needs and returns its server and the
-// policy it loaded, or nils when no broker: block is configured. The daemon
-// asks the policy about quarantine, and nothing else (spec §10). It runs
+// broker, or nils when no broker: block is configured. The daemon asks the
+// broker's policy about quarantine, and nothing else (spec §10). It runs
 // before any listener opens, so a policy typo or an unreadable certificate
 // ends the start with one line rather than surfacing at the first mint. Each
 // error names the config key and the file, so that line says what to go and
 // fix.
 func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log decision.Emitter,
-	m *metrics.Metrics) (*http.Server, *policy.Policy, error) {
+	m *metrics.Metrics) (*http.Server, *broker.Broker, error) {
 	if cfg.Broker == nil {
 		return nil, nil, nil
 	}
-	// The policy is checked against the inventory the daemon admits from: a
-	// class a platform in it does not define, or a level it cannot render, is
-	// found here rather than at the first mint for that device (spec §4, §6).
-	pol, err := policy.Load(cfg.Broker.PolicyFile, policy.Env{Devices: cfg.Inventory.Devices,
-		EnableUsernames: cfg.EnableUsernames})
+	pol, err := loadPolicy(cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
+		return nil, nil, err
 	}
-	// A device a joint check failed on is quarantined rather than the policy
-	// refused: its mints are refused device_quarantined and the rest of the
-	// fleet loads (spec §10; §13 decision 20). Each is said here, with its
-	// cause, so the line at start names what to fix. Quarantine is
-	// time-scoped: one a grant's expiry will bring on is said now too, with
-	// when, while the device still mints.
 	now := time.Now()
-	for _, q := range pol.Quarantines(now) {
-		for _, e := range q.Entries {
-			msg := e.Message(now)
-			if e.Current(now) {
-				msg = "is " + msg
-			}
-			fmt.Fprintf(stderr, "port49d: broker: device %s (%s) %s\n", q.Device, q.Platform, msg)
-		}
-	}
-	// A deny term that matches any argument, because its platform may send
-	// what was typed and its abbreviations cannot be read, over-denies
-	// rather than refusing the device (spec §3 rule 4); say which.
-	for _, f := range pol.WidenedDenies() {
-		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
-	}
-	// A permit naming an interface joined never matches where the platform
-	// sends the name and the index apart (spec §3 rule 5); say which.
-	for _, f := range pol.JoinedNamePermits() {
-		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
-	}
+	sayPolicy(pol, now)
 	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
 	if err != nil {
 		return nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
@@ -250,58 +225,164 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 		}
 		devices[d.Name] = d
 	}
-	b := &broker.Broker{Policy: pol, Devices: devices, Minter: minter, Store: st, Log: log, Metrics: m,
+	b := &broker.Broker{Policy: policy.NewLive(pol), Devices: devices, Minter: minter, Store: st, Log: log, Metrics: m,
 		Now: time.Now, MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax}
-	// Startup only. Server panics on a nil or empty anchor pool; LoadTLS has
-	// just returned a pool of exactly one, so it cannot here, and buildBroker
-	// runs before the TACACS+ listener opens — a panic would end a start, never
-	// a running daemon's device AAA. A live reload (plan 4b) must not call
-	// Server until it returns an error instead.
-	srv := b.Server(cfg.Broker.Listen, cert, anchor)
+	srv, err := b.Server(cfg.Broker.Listen, cert, anchor)
+	if err != nil {
+		return nil, nil, fmt.Errorf("broker.client_ca_file %s: %w", cfg.Broker.ClientCAFile, err)
+	}
 	// net/http logs what no handler sees — a handshake refused for an expired
 	// or untrusted certificate — through ErrorLog. Left nil it goes to the
 	// standard library's default logger; routed here it lands beside
 	// port49d's other lines, where an operator is already looking.
 	srv.ErrorLog = stdlog.New(stderr, "port49d: broker: ", 0)
-	return srv, pol, nil
+	return srv, b, nil
+}
+
+// loadPolicy reads broker.policy_file and checks it against the inventory the
+// daemon admits from: a class a platform in it does not define, or a level it
+// cannot render, is found here rather than at the first mint for that device
+// (spec §4, §6). It is the one load, at start and at every reload, so a file
+// the start would refuse is a file a reload refuses, with the same words. A
+// file anyone but port49d's user or root could have written is one of them
+// (readPolicyFile).
+func loadPolicy(cfg config.Config) (*policy.Policy, error) {
+	raw, err := readPolicyFile(cfg.Broker.PolicyFile)
+	if err != nil {
+		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
+	}
+	return parsePolicy(cfg, raw)
+}
+
+// parsePolicy is loadPolicy for bytes already read: a reload loads exactly the
+// bytes it hashed, so the version it remembers refusing is the version it
+// refused, and the version the watch saw agree twice is the version loaded.
+func parsePolicy(cfg config.Config, raw []byte) (*policy.Policy, error) {
+	pol, err := policy.Parse(raw, policy.Env{Devices: cfg.Inventory.Devices, EnableUsernames: cfg.EnableUsernames})
+	if err != nil {
+		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, quotesCut{err})
+	}
+	return pol, nil
+}
+
+// maxQuoted is the most of any one quoted value a refusal line carries.
+const maxQuoted = 64
+
+// quotesCut is a parse error whose text cuts every quoted value in it to
+// maxQuoted characters. A refusal quotes what it found, and the file can hold
+// anything a link aimed it at, so the line says where the fault is without
+// echoing the file into stderr.
+type quotesCut struct{ err error }
+
+func (q quotesCut) Unwrap() error { return q.err }
+
+func (q quotesCut) Error() string {
+	var out strings.Builder
+	s := []rune(q.err.Error())
+	for i := 0; i < len(s); i++ {
+		out.WriteRune(s[i])
+		if s[i] != '"' && s[i] != '`' {
+			continue
+		}
+		// A quoted value runs to the matching quote; inside "…" a backslash
+		// escapes the next character, as %q writes it.
+		end := i + 1
+		for end < len(s) && s[end] != s[i] {
+			if s[i] == '"' && s[end] == '\\' {
+				end++
+			}
+			end++
+		}
+		if end >= len(s) {
+			continue // no closing quote: not a quoted value
+		}
+		value := s[i+1 : end]
+		if len(value) > maxQuoted {
+			value = append(value[:maxQuoted:maxQuoted], '…')
+		}
+		out.WriteString(string(value))
+		out.WriteRune(s[end])
+		i = end
+	}
+	return out.String()
+}
+
+// sayPolicy writes what a loaded policy does to the fleet short of refusing
+// it, at start and after every reload, so the lines an operator reads after
+// an edit are the lines they would read after a restart.
+//
+// A device a joint check failed on is quarantined rather than the policy
+// refused: its mints are refused device_quarantined and the rest of the
+// fleet loads (spec §10; §13 decision 20). Each is said, with its cause, so
+// the line names what to fix. Quarantine is time-scoped: one a grant's
+// expiry will bring on is said too, with when, while the device still mints.
+func sayPolicy(pol *policy.Policy, now time.Time) {
+	for _, q := range pol.Quarantines(now) {
+		for _, e := range q.Entries {
+			msg := e.Message(now)
+			if e.Current(now) {
+				msg = "is " + msg
+			}
+			fmt.Fprintf(stderr, "port49d: broker: device %s (%s) %s\n", q.Device, q.Platform, msg)
+		}
+	}
+	// A deny term that matches any argument, because its platform may send
+	// what was typed and its abbreviations cannot be read, over-denies
+	// rather than refusing the device (spec §3 rule 4); say which.
+	for _, f := range pol.WidenedDenies() {
+		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
+	}
+	// A permit naming an interface joined never matches where the platform
+	// sends the name and the index apart (spec §3 rule 5); say which.
+	for _, f := range pol.JoinedNamePermits() {
+		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
+	}
 }
 
 // watchQuarantine is what the daemon asks of the policy: whether a device is
 // quarantined at the time of a packet (spec §10; §13 decision 20), and at each
 // scrape how many are, for port49_devices_quarantined. Quarantine is
-// time-scoped, so neither is captured at start. nil with no policy.
-func watchQuarantine(pol *policy.Policy, m *metrics.Metrics,
+// time-scoped, and the policy in force changes at a reload, so neither is
+// captured at start: both ask the Live at the moment of asking. nil with no
+// policy.
+func watchQuarantine(live *policy.Live, m *metrics.Metrics,
 	now func() time.Time) func(device string, at time.Time) (string, bool) {
-	if pol == nil {
+	if live == nil {
 		return nil
 	}
-	m.CountQuarantined(func() int {
-		at, n := now(), 0
-		for _, q := range pol.Quarantines(at) {
-			if slices.ContainsFunc(q.Entries, func(e policy.QuarantineEntry) bool { return e.Current(at) }) {
-				n++
-			}
-		}
-		return n
-	})
-	return pol.Quarantined
+	m.CountQuarantined(func() int { return quarantinedAt(live.Load(), now()) })
+	return live.Quarantined
 }
 
-func run(cfgPath string) error {
+// run is port49d from config load to exit. It serves until parent ends —
+// main's is SIGINT or SIGTERM, a test's is its own — and then shuts down in
+// the order the package comment gives, returning once the spool has drained.
+func run(parent context.Context, cfgPath string) error {
+	// SIGHUP reloads the policy (plan 4b), and is taken with no broker too,
+	// where it is said to do nothing: its default action ends the process, and
+	// a reload habit must not take device AAA down. It is caught first, before
+	// anything else, so a HUP sent while port49d starts — by the tool that
+	// just wrote the file, say — does not end it either; one that arrives
+	// before the reloader runs waits in the channel.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
 	}
+	// The inventory as loaded, hashed now rather than when the reloader
+	// starts: an edit in between would otherwise never be said (checkInventory).
+	_, inventoryAtStart, _ := fileVersion(cfg.InventoryFile)
 	fmt.Fprint(stderr, labWarning(cfg.Lab))
 
-	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	ctx, cancel := context.WithCancel(signalCtx)
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg)
-	log := decision.NewJSONLinesWithFailureHook(os.Stdout, m.DecisionLogWriteFailures.Inc)
+	log := decision.NewJSONLinesWithFailureHook(stdout, m.DecisionLogWriteFailures.Inc)
 	lim := limits.New(cfg.Limits, time.Now)
 
 	// Everything that holds a credential, a principal or a context is sealed
@@ -380,7 +461,7 @@ func run(cfgPath string) error {
 	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	_ = sessions
 
-	brokerSrv, pol, err := buildBroker(cfg, st, minter, log, m)
+	brokerSrv, brk, err := buildBroker(cfg, st, minter, log, m)
 	if err != nil {
 		stopSpool()
 		<-spoolDone
@@ -412,7 +493,11 @@ func run(cfgPath string) error {
 	// A quarantined device is closed without a reply, as for an unknown
 	// source, so it falls to its local method exactly as in an outage.
 	// buildBroker has already named each one and its cause.
-	deps := server.Deps{Admission: cfg.Admission, Quarantined: watchQuarantine(pol, m, time.Now), Keys: cfg.Keyring(),
+	var live *policy.Live
+	if brk != nil {
+		live = brk.Policy
+	}
+	deps := server.Deps{Admission: cfg.Admission, Quarantined: watchQuarantine(live, m, time.Now), Keys: cfg.Keyring(),
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
@@ -439,16 +524,25 @@ func run(cfgPath string) error {
 
 	// A dead metrics listener is not a detail: without it nobody can see the
 	// daemon at all, so its error ends the process rather than disappearing.
+	// It binds first, as the others do, so a port taken ends the start and
+	// the line below names the address bound.
+	mln, err := net.Listen("tcp", cfg.MetricsListen)
+	if err != nil {
+		stopSpool()
+		<-spoolDone
+		return fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
+	}
 	metricsErr := make(chan error, 1)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		metricsErr <- http.ListenAndServe(cfg.MetricsListen, mux)
+		metricsErr <- http.Serve(mln, mux)
 	}()
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
+		mln.Close()
 		stopSpool()
 		<-spoolDone
 		return err
@@ -460,21 +554,44 @@ func run(cfgPath string) error {
 	if brokerSrv != nil {
 		if bln, err = net.Listen("tcp", brokerSrv.Addr); err != nil {
 			ln.Close()
+			mln.Close()
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
 		}
 	}
+	// The bound address, not the configured one: `:49` says nothing about
+	// which address answered, and `:0` says nothing about which port.
 	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
-		cfg.Listen, cfg.MetricsListen, len(cfg.Inventory.Devices))
+		ln.Addr(), mln.Addr(), len(cfg.Inventory.Devices))
 
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {
 		// Capped, so connections to the broker cannot take the file
 		// descriptors the TACACS+ listener beside it needs (pre-flight F1).
 		go func() { brokerErr <- brokerSrv.ServeTLS(broker.Limit(bln, broker.MaxConns), "", "") }()
-		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", brokerSrv.Addr)
+		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", bln.Addr())
 	}
+
+	// The policy file is watched and SIGHUP reloads it (plan 4b); hup was
+	// caught at the top of run.
+	reloadDone := make(chan struct{})
+	go func() {
+		defer close(reloadDone)
+		if brk == nil {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-hup:
+					fmt.Fprintln(stderr, "port49d: SIGHUP: no `broker:` block in the config, so there is no policy to reload")
+				}
+			}
+		}
+		r := newReloader(cfg, brk, m, time.Now)
+		r.inventory = inventoryAtStart
+		r.run(ctx, hup)
+	}()
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(ctx, ln, deps) }()
@@ -497,6 +614,7 @@ func run(cfgPath string) error {
 		<-serveErr
 	}
 	cancel()
+	<-reloadDone
 	if brokerSrv != nil {
 		shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = brokerSrv.Shutdown(shutdownCtx)
@@ -508,6 +626,7 @@ func run(cfgPath string) error {
 	stopSpool()
 	<-spoolDone
 	fmt.Fprintln(stderr, "port49d: accounting spool drained, exiting")
+	mln.Close()
 	return runErr
 }
 

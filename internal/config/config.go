@@ -124,15 +124,19 @@ type TokenConfig struct {
 // port49d on a second listener because the store is in-process (plan 3,
 // Decided 1). Absent, port49d runs no broker, as before.
 //
-// The policy file is read once, at start, and the store is in memory: a
-// policy edit needs a restart, and a restart ends every live login context
-// and every unspent token — every operator logs in again (plan 3,
-// Question 3). Live policy reload, which keeps every login, is plan 4b's
-// (roadmap).
+// The policy file is watched: port49d reads it every policy_watch_interval,
+// and on SIGHUP, and a file that loads is put in force and carried into every
+// live login context with no logout; one that does not is refused and the
+// policy in force keeps serving (plan 4b). The TLS files and the inventory are
+// read once, at start: a change to either needs a restart, and the store is in
+// memory, so a restart ends every live login context and every unspent token.
 //
-// The slice has no revocation lever. To cut someone off, remove their subject
-// from the policy (or re-issue the CA) and restart; certificate revocation is
-// plan 7.
+// To cut someone off, remove their grants from the policy: their live
+// contexts are revoked at the next reload, with no restart, and the next
+// command is denied on a platform that authorizes commands. On one that does
+// not (Junos, spec §13 decision 21) the live shell keeps its access until
+// logout: the refresh line counts those and the process log names each
+// ctx_id, so close them on the device. Certificate revocation is plan 7.
 //
 // A relative path resolves against port49d's working directory, not the
 // config file's, as inventory_file does.
@@ -152,6 +156,16 @@ type BrokerConfig struct {
 	// BatchMax caps the devices in one mint request; a larger sweep pages
 	// (design §17). Default 100.
 	BatchMax int `yaml:"batch_max"`
+	// PolicyWatchInterval is how often port49d reads policy_file for a
+	// change (plan 4b). A change is loaded once two reads in a row agree, and
+	// what is loaded is the bytes they agreed on, so an edit is in force
+	// within two intervals and a write in progress is not loaded part-way.
+	// Default 5s; 1s to 5m. SIGHUP loads what is on disk at once. Write the
+	// file atomically — a temporary file renamed over it: a writer stalled
+	// part-way for two intervals, or a SIGHUP sent mid-write, loads what is
+	// there. The file and its directory must be writable by port49d's user or
+	// root alone, or it is refused (spec §5.1.3).
+	PolicyWatchInterval time.Duration `yaml:"policy_watch_interval"`
 }
 
 // encKeyYAML names one encryption-at-rest key: the id that travels with every
@@ -402,6 +416,11 @@ func Load(path string) (Config, error) {
 		b.BatchMax = orI(b.BatchMax, 100)
 		if b.BatchMax < 1 || b.BatchMax > 1000 {
 			return Config{}, fmt.Errorf("config: broker.batch_max must be between 1 and 1000; got %d", b.BatchMax)
+		}
+		b.PolicyWatchInterval = orD(b.PolicyWatchInterval, 5*time.Second)
+		if b.PolicyWatchInterval < time.Second || b.PolicyWatchInterval > 5*time.Minute {
+			return Config{}, fmt.Errorf("config: broker.policy_watch_interval must be between 1s and 5m; got %s",
+				b.PolicyWatchInterval)
 		}
 		c.Broker = &b
 	}

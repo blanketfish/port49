@@ -217,6 +217,9 @@ do sleep 10; done
 # any device configuration the run needs (plan 3 Task 17's RESTCONF AAA) goes here, as breakglass
 # the daemon config: the lab file, plus the broker block where the run needs a broker
 cat tests/lab/port49d-lab.yaml tests/lab/slice/broker.yaml > tests/lab/logs/port49d-byhand.yaml
+# a broker run only: port49d refuses a policy file, or a directory holding one, that others could
+# write (spec §5.1.3), and a checkout under a umask of 002 is group-writable
+chmod go-w tests/lab/slice tests/lab/slice/policy.yaml tests/lab/quarantine tests/lab/quarantine/policy.yaml
 # a broker run only: its certificates, written before the daemon that loads them at start
 go run ./tests/lab/cmd/slice-pki
 PORT49_LAB_KEY=labsecret PORT49_LAB_ENC_KEY=port49-lab-encryption-key-32byte \

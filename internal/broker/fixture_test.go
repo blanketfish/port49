@@ -81,7 +81,7 @@ func newFixture(t *testing.T, candidateCap int) *fixture {
 	}
 	f.alice = f.client(t, "alice@example.com", f.now.Add(24*time.Hour))
 	log := decision.NewJSONLines(f.log)
-	f.b = &Broker{Policy: pol, Devices: devices,
+	f.b = &Broker{Policy: policy.NewLive(pol), Devices: devices,
 		Minter: token.NewMinter(f.st, log, rand.Reader, token.TagKey([]byte("k")), clock, candidateCap),
 		Store:  f.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: clock,
 		MaxSessionAge: 12 * time.Hour, BatchMax: 4}

@@ -94,6 +94,12 @@ type Request struct {
 	// A caller may send one key for a whole batch, which is what design §17's
 	// POST /v1/tokens does, and each device still gets its own record.
 	IdempotencyKey, BodyHash string
+	// SupersededAt is when a policy refresh last deleted this (device,
+	// username)'s unspent tokens, zero for never. A replay of tokens minted
+	// no later than that would hand back a token that no longer exists, so
+	// it is not replayed: the mint is made afresh, as for a record that will
+	// not decode, and the record says why.
+	SupersededAt time.Time
 	// Policy is the subject and grants that allowed this mint. The minter
 	// judges none of it and copies it onto the mint record (spec §5.7).
 	Policy *decision.Policy
@@ -127,6 +133,9 @@ type Result struct {
 	Login, Enable string
 	ExpiresAt     time.Time
 	Username      string
+	// MintedAt is when the tokens were minted, kept in the idempotency
+	// record so a replay can be judged against Request.SupersededAt.
+	MintedAt time.Time
 }
 
 // Minter issues device tokens. It is in-process and knows nothing of HTTP;
@@ -168,13 +177,23 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 				return Result{}, ErrIdempotencyConflict
 			}
 			var res Result
-			if uerr := json.Unmarshal(rec.Response, &res); uerr == nil {
+			uerr := json.Unmarshal(rec.Response, &res)
+			switch {
+			case uerr != nil:
+				// A record that will not decode is a mint that cannot be
+				// replayed. Fall through and mint — the caller gets working
+				// tokens — but the record must say the replay was abandoned,
+				// or this is silent.
+				idemErr = "idempotency record did not decode; minted again rather than replayed"
+			case !r.SupersededAt.IsZero() && !res.MintedAt.After(r.SupersededAt):
+				// Its tokens were deleted as superseded by a policy change:
+				// replayed, the caller would hold a token no device accepts.
+				// A record from before MintedAt was kept has a zero one, and
+				// is not replayed either.
+				idemErr = "idempotency record names tokens a policy change superseded; minted again rather than replayed"
+			default:
 				return res, nil
 			}
-			// A record that will not decode is a mint that cannot be replayed.
-			// Fall through and mint — the caller gets working tokens — but the
-			// record must say the replay was abandoned, or this is silent.
-			idemErr = "idempotency record did not decode; minted again rather than replayed"
 		case !errors.Is(err, store.ErrNotFound):
 			// Not a miss: the store failed. Minting here is the one thing §17
 			// forbids, because the caller cannot tell a retry from a first try
@@ -204,7 +223,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 
 	mintedAt := m.now()
 	expires := mintedAt.Add(ttl)
-	res := Result{ExpiresAt: expires, Username: r.Subject.Username}
+	res := Result{ExpiresAt: expires, Username: r.Subject.Username, MintedAt: mintedAt}
 	var hashes []string
 
 	mint := func(kind string) (string, error) {
