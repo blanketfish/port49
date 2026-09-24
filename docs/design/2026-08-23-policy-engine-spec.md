@@ -4119,8 +4119,9 @@ report: dead_rule: role "interface_tech": permit "configure terminal" cannot be 
 
 report: fallback_exposure: subject "svc_oxidized" at admin (priv-lvl=15, roles=network-admin)
   on arista_eos: port49's rules confine it to show **, terminal length *, and if port49 cannot
-  answer and the device falls back to local it gets network-admin: every command, configuration
-  included: more than the policy grants (spec §6, §12)
+  answer and the device falls back to local it gets network-admin, of the commands measured:
+  clear counters ran, clear ip bgp * passed authorization (BGP inactive on the lab node),
+  configuration changed: more than the policy grants (spec §6, §12)
 ```
 
 Both read the adapter (§8), and only what the lab measured. A **dead rule** is a permit every

@@ -78,7 +78,7 @@ grants:
 			t.Errorf("%q", got[i])
 		}
 	}
-	if !strings.Contains(got[0], "it gets network-admin: every command, configuration included") {
+	if !strings.Contains(got[0], "it gets network-admin, of the commands measured: clear counters ran, clear ip bgp * passed authorization (BGP inactive on the lab node), configuration changed") {
 		t.Errorf("%q", got[0])
 	}
 }
@@ -165,10 +165,10 @@ func TestABlockCannotWeakenTheIntersectionReports(t *testing.T) {
 			t.Errorf("%s: the set's dead rule: %q", name, dead)
 		}
 		exposed := onPlatform(findings(p, FindingFallbackExposure), "arista_eos")
-		if len(exposed) != 1 || !strings.Contains(exposed[0], "it gets network-admin: every command, configuration included") {
+		if len(exposed) != 1 || !strings.Contains(exposed[0], "it gets network-admin, of the commands measured: clear counters ran, clear ip bgp * passed authorization (BGP inactive on the lab node), configuration changed") {
 			t.Errorf("%s: the set's fallback: %q", name, exposed)
 		}
-		if name != "replace" && !strings.Contains(exposed[0], `included (operator note: "read-only in practice"): more`) {
+		if name != "replace" && !strings.Contains(exposed[0], `changed (operator note: "read-only in practice"): more`) {
 			t.Errorf("%s: the block's note: %q", name, exposed[0])
 		}
 	}
@@ -219,7 +219,7 @@ func TestABlockFallbackForAnUnmeasuredLevelIsANote(t *testing.T) {
 func TestAnOperatorNoteCannotForgeAMeasurement(t *testing.T) {
 	for _, tt := range []struct{ platform, block, level, want string }{
 		{"arista_eos", `{admin: "x) level 15: read-only (operator note: y"}`, "admin",
-			`it gets network-admin: every command, configuration included ` +
+			`it gets network-admin, of the commands measured: clear counters ran, clear ip bgp * passed authorization (BGP inactive on the lab node), configuration changed ` +
 				`(operator note: "x) level 15: read-only (operator note: y"): more`},
 		// A printable look-alike of a parenthesis or a quote is escaped.
 		{"arista_eos", `{admin: "x） level 15: read-only “y"}`, "admin",

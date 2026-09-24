@@ -41,7 +41,7 @@ var shipped = map[string]Dialect{
 		Fallback: map[string]string{
 			"operator": "network-operator, of the commands measured: clear counters ran, clear ip bgp * passed " +
 				"authorization (BGP inactive on the lab node), configuration refused (% Authorization denied)",
-			"admin": "network-admin: every command, configuration included"},
+			"admin": "network-admin, of the commands measured: clear counters ran, clear ip bgp * passed authorization (BGP inactive on the lab node), configuration changed"},
 		LocalAccounts: []string{`^username\s+(\S+)`},
 		ConfigChecks: []ConfigCheck{
 			{Match: `^aaa authorization commands \S+ default .*\b(none|if-authenticated)\s*$`, Says: "the command method " +
@@ -69,7 +69,7 @@ var shipped = map[string]Dialect{
 			"aaa authorization commands default group port49 local",
 			"aaa authorization config-commands default group port49 local"},
 		Verified:      "containerlab", // tests/lab/results/L22-cisco_nxos.md
-		Fallback:      map[string]string{"admin": "network-admin: every command, configuration included"},
+		Fallback:      map[string]string{"admin": "network-admin, of the commands measured: clear counters and clear ip bgp * ran, configuration changed"},
 		LocalAccounts: []string{`^username\s+(\S+)`},
 		ConfigChecks: []ConfigCheck{
 			{Match: `^aaa authorization (config-)?commands default .*\b(none|if-authenticated)\s*$`, Says: "the command " +

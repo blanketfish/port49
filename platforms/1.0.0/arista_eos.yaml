@@ -62,7 +62,7 @@ platforms:
     # entry says so. readonly at level 1 was not measured falling back.
     fallback:
       operator: "network-operator, of the commands measured: clear counters ran, clear ip bgp * passed authorization (BGP inactive on the lab node), configuration refused (% Authorization denied)"
-      admin: "network-admin: every command, configuration included"
+      admin: "network-admin, of the commands measured: clear counters ran, clear ip bgp * passed authorization (BGP inactive on the lab node), configuration changed"
     # `port49 devices check-config`: a local account named as a port49
     # username inherits that username's context (spec §5.6), and two lines
     # the spec forbids.
