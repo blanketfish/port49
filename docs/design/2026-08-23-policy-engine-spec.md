@@ -2708,6 +2708,24 @@ the joint check and quarantines the device on that platform (§10), naming the r
 and the attribute; and the daemon refuses a session reply above the context's ceiling
 (`blob_unavailable`) rather than sending it and holding the session lower.
 
+`priv-lvl` is not the only attribute the ceiling bounds (final review I1, 2026-09-24). On
+`cisco_nxos` and `juniper_junos` the role *is* the privilege, and on `arista_eos` the role is
+what the device's local authorization reads when port49 cannot answer (L22). Every other
+attribute of the reply that bears privilege on the platform (§6: not listed inert, or listed
+as bearing by a shipped set) must be one the ceiling's level renders there with the same
+value, or one whose value that attribute's `role_order` ranks strictly below it, the reply
+rendered at the session's own level. A value `role_order` does not rank counts as the highest;
+an attribute the ceiling's level does not render at all is above it. So
+`shell:roles*network-admin` from a readonly role under `max_privilege: readonly` quarantines
+`cisco_nxos`, as `roles=network-admin` does `arista_eos` and any `local-user-name` does
+`juniper_junos`, which renders no level yet; so do `idletime` and `timeout` under any ceiling
+on `cisco_iosxe`, where they are held bearing, and on `juniper_junos`, where they are
+unmeasured (§6). The judgment is the policy
+diff's (§12): the joint check asks the one function the diff gate asks of a changed reply, so
+the two cannot disagree about what raises a session. The daemon holds only `priv-lvl` to the
+context's ceiling, which is all the token carries; the load's joint check is what holds every
+other attribute, and a blob is minted only from a composition that passed it.
+
 **The ceiling is a cap on the level, not only on its number.** A composition whose roles land
 above its grants' `max_privilege` in `privilege_levels` fails the joint check on every platform,
 however the platform numbers the two: a role at `admin` capped at `operator` is quarantined on
@@ -4099,7 +4117,10 @@ command of which is in the adapter's `unreachable` list for the level the sessio
 the commands the device refused in its parser at that level with port49 permitting everything
 (`tests/lab/results/ceiling-*.md`). A **fallback exposure** is a subject whose composed rules
 deny something, at a level whose adapter `fallback` says what the device gives a session on its
-own when the method list falls back to `local`: `network-admin` at admin on EOS and NX-OS,
+own when the method list falls back to `local`. The level is the one the reply *delivers*, not
+the one the roles name: the lowest level, from the session's own up, whose rendering the reply
+does not exceed as the ceiling check reads it (§7), so a readonly role that sends
+`shell:roles*network-admin` is exposed as admin is (final review I1): `network-admin` at admin on EOS and NX-OS,
 and on EOS `network-operator` at operator. `operator` gets readonly's role for this reason (§6), so it never gets
 configuration where its device role binds. L16 measured that `network-operator` under LOCAL
 command authorization refuses configuration. L22 measured what else it runs with port49d
