@@ -27,13 +27,19 @@ func TestAnAuthorizationRecordCarriesItsMatchedRules(t *testing.T) {
 	deny, _ := p["matched_deny"].(map[string]any)
 	rule, _ := deny["rule"].([]any)
 	permits, _ := p["matched_permits"].([]any)
+	specificity, _ := deny["specificity"].([]any)
+	permit, _ := permits[0].(map[string]any)
 	if p["bundle"] != "sha256:b" || p["blob"] != "sha256:a" || deny["role"] != "no_exfil" ||
-		len(rule) != 3 || len(permits) != 1 {
+		len(rule) != 3 || len(specificity) != 3 || len(permits) != 1 || permit["role"] != "net_operator" {
 		t.Fatalf("policy block: %s", buf.String())
 	}
 	if _, ok := p["stage"]; ok {
 		t.Fatalf("stage is omitted unless a pipeline stage was refused: %s", buf.String())
 	}
+}
+
+// The reason plan 4 added is spelled as spec §5.7 spells it.
+func TestBlobPlatformMismatchIsSpelledAsTheSpecSpellsIt(t *testing.T) {
 	if BlobPlatformMismatch != "blob_platform_mismatch" {
 		t.Fatalf("the §5.7 spelling is blob_platform_mismatch, got %q", BlobPlatformMismatch)
 	}
