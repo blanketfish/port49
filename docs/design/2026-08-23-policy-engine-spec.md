@@ -3553,8 +3553,9 @@ listing commands. This is contained, and is a reason to prefer literals and `*`.
   `max_privilege:`, the ceiling its grants compose to there (`none` for no ceiling);
   `priv_lvl:`, the device privilege the session lands at — the `priv-lvl` the session reply
   sends after §6 layering, or, where it sends none, the number the platform gives the level
-  (`none` where neither says); and `enable:`, the subject's escalation mechanism (`none`,
-  `auto` or `token`). A test with no `command:` is a session test and takes no `expect:`; it
+  (`none` where neither says); `enable:`, the subject's escalation mechanism (`none`,
+  `auto` or `token`); and `reply:`, the exact session reply as a list, in order, with the
+  placeholders empty (`[]` for none). A test with no `command:` is a session test and takes no `expect:`; it
   passes only where the subject would be minted a token for the device, with every value it
   names.
 
@@ -4159,6 +4160,18 @@ Beyond those already listed in the design document's §14:
   entry naming the old rule with a reason; an entry with no reason fails at load.
 - **Acknowledgments hold at their instant**: a test that passes only after a grant expires
   acknowledges no expansion or raise reported before it.
+- **The gate sees the whole reply**: a grant attribute `local-user-name=super-user` on Junos,
+  `shell:roles=network-admin` on NX-OS or `roles=network-admin` on EOS fails `port49 policy
+  diff` on that platform's group until a `reply:` session test asserts the new reply; removing
+  it passes.
+- **No placeholder in a privilege attribute**: `priv-lvl={username}`, and a placeholder in any
+  attribute an adapter lists as privilege-bearing, fails at load.
+- **The gate sees principals**: an identity moved to another person, identities swapped between
+  subjects, and a `username:` change each fail `port49 policy diff` until a session test naming
+  the principal passes; a subject test does not acknowledge them, and a principal removed passes.
+- **Stale acknowledgments**: an `acknowledge:` entry naming a rule the policy still denies is
+  reported `acknowledge_stale` and acknowledges nothing; `policy diff` reports every entry no
+  widening used.
 - **Enable**: all three mechanisms, including the `$enab15$` username path resolving through
   the `(nas, rem_addr)` secondary index, and its refusal when that index is ambiguous.
 - **Receipt binds the credential**: the hash is in the key, so a byte-identical
