@@ -2045,7 +2045,12 @@ and the operator restores the value from the policy file. A `device_config` line
 `config_checks` `match` that holds the marker `«redacted»` is refused at load, naming the
 platform, key and index — an export pasted back would otherwise hold the device to a line
 nobody wrote, or run a check that matches nothing — and says to re-enter the value from the
-policy. A regex escape, `\s` or `\S`, is not read as a word when a `match` is redacted, so a
+policy. The rest of a block's text is printed the same way (final review I2): its `unreachable`
+rules redacted as a rule is, its `fallback` text and note as prose, and its entity classes'
+patterns as prose, every pattern of a class a rule names where a value is redacted reading
+`«redacted»`, as the `blob` event writes it; and an `unreachable` rule, a `fallback` text or an
+entity class pattern that holds the marker is refused at load the same way (an `unreachable`
+rule named by its level alone, since a block's list merges into the set's). A regex escape, `\s` or `\S`, is not read as a word when a `match` is redacted, so a
 check with no secret is exported as written. A block's `config_checks[i].match`
 that carries such a value is reported the same way, as `device_config_secret_literal` naming
 `platforms.<p>.config_checks[i].match`; its `says` is prose, redacted wherever it is printed
