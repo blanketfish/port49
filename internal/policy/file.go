@@ -42,6 +42,7 @@ type fileAck struct {
 	Rule     string `yaml:"rule"`
 	Platform string `yaml:"platform"`
 	Field    string `yaml:"field"`
+	Sha256   string `yaml:"sha256"`
 	Reason   string `yaml:"reason"`
 }
 

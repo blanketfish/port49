@@ -325,8 +325,8 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "adapter (acknowledged: %s): %s\n", a.AcknowledgedBy, change)
 		default:
 			fmt.Fprintf(stdout, "ADAPTER: %s: the key changes what port49 decides or what this gate reads, so the "+
-				"diff cannot vouch for it; add {platform: %s, field: %s, reason: \"...\"} under acknowledge: (spec §12)\n",
-				change, a.Platform, a.Field)
+				"diff cannot vouch for it; add {platform: %s, field: %s, sha256: %s, reason: \"...\"} under acknowledge: "+
+				"(spec §12)\n", change, a.Platform, a.Field, a.Sha256)
 		}
 	}
 	for _, p := range d.Principals {

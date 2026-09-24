@@ -142,10 +142,12 @@ type Test struct {
 
 // Acknowledgment is one `acknowledge:` entry (spec §12): a removed or
 // rewritten deny, named by its role and exact rule text, or an edited key of a
-// platform's adapter, named by the platform and the key, that the author
-// acknowledges in writing, with why.
+// platform's adapter, named by the platform, the key and the sha256 of the
+// key's new value, that the author acknowledges in writing, with why. The
+// digest binds the entry to the one edit it was written for: left in the
+// file, it acknowledges no later edit to the same key (spec §12).
 type Acknowledgment struct {
-	Role, Rule, Platform, Field, Reason string
+	Role, Rule, Platform, Field, Sha256, Reason string
 }
 
 // NoCeiling is how a test asserts that the grants compose to no ceiling.
@@ -1041,7 +1043,7 @@ func (p *Policy) buildTests(f file) error {
 
 func (p *Policy) buildAcknowledgments(f file) error {
 	for i, a := range f.Acknowledge {
-		byRule, byAdapter := a.Role != "" || a.Rule != "", a.Platform != "" || a.Field != ""
+		byRule, byAdapter := a.Role != "" || a.Rule != "", a.Platform != "" || a.Field != "" || a.Sha256 != ""
 		switch {
 		case byRule == byAdapter:
 			return fmt.Errorf("acknowledge[%d]: name a deny by role and rule, or an adapter edit by platform and "+
@@ -1052,6 +1054,10 @@ func (p *Policy) buildAcknowledgments(f file) error {
 		case byAdapter && (a.Platform == "" || !slices.Contains(platform.SpecKeys(), a.Field)):
 			return fmt.Errorf("acknowledge[%d]: platform and field are required, and field is one of an adapter's "+
 				"keys: %s (spec §8, §12)", i, strings.Join(platform.SpecKeys(), ", "))
+		case byAdapter && !sha256Hex.MatchString(a.Sha256):
+			return fmt.Errorf("acknowledge[%d]: sha256 is required: the digest `port49 policy diff` prints for the "+
+				"key's new value, 64 lower-case hex digits, so the entry acknowledges that edit and no later one "+
+				"(spec §12)", i)
 		case strings.TrimSpace(a.Reason) == "":
 			return fmt.Errorf("acknowledge[%d]: reason is required: review reads it beside the change it "+
 				"acknowledges (spec §12)", i)
@@ -1060,6 +1066,9 @@ func (p *Policy) buildAcknowledgments(f file) error {
 	}
 	return nil
 }
+
+// sha256Hex is the shape of an adapter acknowledgment's digest.
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // hasDeny reports whether any role in the policy denies rule as written:
 // an acknowledge: entry naming it removed nothing (spec §12).

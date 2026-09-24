@@ -137,6 +137,12 @@ func TestLoadRefusesByName(t *testing.T) {
 			"acknowledge: [{role: r, rule: x, platform: arista_eos, field: supports, reason: y}]\n", "one of the two"},
 		{"an acknowledgment of no adapter key", scopeOK + roleOK + subjOK +
 			"acknowledge: [{platform: arista_eos, field: suports, reason: y}]\n", "field is one of an adapter's keys"},
+		{"an adapter acknowledgment with no digest", scopeOK + roleOK + subjOK +
+			"acknowledge: [{platform: arista_eos, field: supports, reason: y}]\n", "sha256 is required"},
+		{"an adapter acknowledgment with a short digest", scopeOK + roleOK + subjOK +
+			"acknowledge: [{platform: arista_eos, field: supports, sha256: abc123, reason: y}]\n", "sha256 is required"},
+		{"a deny acknowledgment with a digest", scopeOK + roleOK + subjOK + "acknowledge: [{role: r, rule: x, sha256: " +
+			strings.Repeat("0", 64) + ", reason: y}]\n", "one of the two"},
 		{"a second document", scopeOK + roleOK + subjOK + grantOK + "---\nscopes: []\n", "one YAML document"},
 		{"an empty file", "", "declares no subjects"},
 		{"a duration with no unit", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, token_ttl: 60}\n", "need a unit"},

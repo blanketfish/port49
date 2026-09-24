@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -910,10 +912,12 @@ func TestAnInertListingCannotHideItsOwnEdit(t *testing.T) {
 		t.Fatalf("x-label changed on NX-OS, which the old adapter says bears privilege: %+v", d.Levels)
 	}
 	if len(d.Adapters) != 1 || d.Adapters[0] != (AdapterChange{Platform: "cisco_nxos", Field: "inert_attributes",
-		Old: `["home-directory"]`, New: `["home-directory","x-label"]`, Gated: true}) || d.UnacknowledgedAdapters() != 1 {
+		Old: `["home-directory"]`, New: `["home-directory","x-label"]`, Sha256: digest(`["home-directory","x-label"]`),
+		Gated: true}) || d.UnacknowledgedAdapters() != 1 {
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
-	acked := after + "acknowledge:\n  - {platform: cisco_nxos, field: inert_attributes, reason: \"a label here\"}\n"
+	acked := after + "acknowledge:\n  - {platform: cisco_nxos, field: inert_attributes, sha256: " + d.Adapters[0].Sha256 +
+		", reason: \"a label here\"}\n"
 	d = Compare(mustParse(t, diffBase), mustParse(t, acked), noon)
 	if d.UnacknowledgedAdapters() != 0 || d.Adapters[0].AcknowledgedBy != "a label here" ||
 		len(d.StaleAcknowledgments) != 0 {
@@ -924,7 +928,7 @@ func TestAnInertListingCannotHideItsOwnEdit(t *testing.T) {
 	}
 	// The same entry against a diff with no such edit acknowledges nothing.
 	if d := Compare(mustParse(t, diffBase), mustParse(t, diffBase+"acknowledge:\n  - {platform: cisco_nxos, "+
-		"field: inert_attributes, reason: x}\n"), noon); len(d.StaleAcknowledgments) != 1 {
+		"field: inert_attributes, sha256: "+digest("x")+", reason: x}\n"), noon); len(d.StaleAcknowledgments) != 1 {
 		t.Fatalf("stale %+v", d.StaleAcknowledgments)
 	}
 }
@@ -1044,15 +1048,79 @@ func TestTheHandOffBlocksFailTheGate(t *testing.T) {
 			}
 			before := mustParse(t, tc.before+hbase)
 			d := Compare(before, mustParse(t, tc.after+hbase), noon)
-			if d.UnacknowledgedAdapters() != 1 || d.Adapters[0].Platform != tc.platform ||
-				d.Adapters[0].Field != tc.field || !d.Adapters[0].Gated {
+			// Every change is gated, and the named key is one of them.
+			target := slices.IndexFunc(d.Adapters, func(a AdapterChange) bool {
+				return a.Platform == tc.platform && a.Field == tc.field
+			})
+			if target < 0 || !d.Adapters[target].Gated || d.UnacknowledgedAdapters() != len(d.Adapters) {
 				t.Fatalf("adapters %+v", d.Adapters)
 			}
-			acked := tc.after + hbase + "acknowledge:\n  - {platform: " + tc.platform + ", field: " + tc.field +
-				", reason: reviewed}\n"
-			if d := Compare(before, mustParse(t, acked), noon); d.UnacknowledgedAdapters() != 0 {
-				t.Fatalf("acknowledged: %+v", d.Adapters)
+			// acks acknowledges every change, the target by entry instead.
+			acks := func(entry string) *Policy {
+				body := tc.after + hbase + "acknowledge:\n"
+				for i, a := range d.Adapters {
+					if i == target {
+						body += entry
+						continue
+					}
+					body += "  - {platform: " + a.Platform + ", field: " + a.Field + ", sha256: " + a.Sha256 +
+						", reason: reviewed}\n"
+				}
+				return mustParse(t, body)
+			}
+			entry := func(platform, field, sha string) string {
+				return "  - {platform: " + platform + ", field: " + field + ", sha256: " + sha + ", reason: reviewed}\n"
+			}
+			sha := d.Adapters[target].Sha256
+			if d := Compare(before, acks(entry(tc.platform, tc.field, sha)), noon); d.UnacknowledgedAdapters() != 0 ||
+				len(d.StaleAcknowledgments) != 0 {
+				t.Fatalf("acknowledged: %+v stale %+v", d.Adapters, d.StaleAcknowledgments)
+			}
+			// An entry naming another platform, another key, or another value
+			// acknowledges nothing, and is reported stale (task 9 review I1).
+			other := "cisco_nxos"
+			if tc.platform == other {
+				other = "arista_eos"
+			}
+			otherField := "strip_cr"
+			if tc.field == otherField {
+				otherField = "supports"
+			}
+			for _, wrong := range []string{entry(other, tc.field, sha), entry(tc.platform, otherField, sha),
+				entry(tc.platform, tc.field, digest("another value"))} {
+				if d := Compare(before, acks(wrong), noon); d.UnacknowledgedAdapters() != 1 ||
+					len(d.StaleAcknowledgments) != 1 || d.Adapters[target].Acknowledged {
+					t.Fatalf("%s: adapters %+v stale %+v", wrong, d.Adapters, d.StaleAcknowledgments)
+				}
 			}
 		})
+	}
+}
+
+// digest is an acknowledge: entry's sha256 of a value.
+func digest(v string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(v))) }
+
+// An entry left in the file acknowledges the edit it was written for and no
+// later one: its digest names the value that edit wrote. Task 9 review C1's
+// probe: v1 adds a logging line and acknowledges it; v2 keeps the entry and
+// ends the commands line in none (H6).
+func TestALeftoverAdapterAcknowledgmentCoversNoLaterEdit(t *testing.T) {
+	block := func(commands string) string {
+		return "platforms:\n  arista_eos:\n    device_config: [\"aaa authorization exec default group port49 local\", " +
+			"\"aaa authorization commands all default group port49 " + commands + "\", \"logging host 192.0.2.1\"]\n"
+	}
+	d := Compare(mustParse(t, diffBase), mustParse(t, block("local")+diffBase), noon)
+	if len(d.Adapters) != 1 || d.UnacknowledgedAdapters() != 1 {
+		t.Fatalf("adapters %+v", d.Adapters)
+	}
+	entry := "acknowledge:\n  - {platform: arista_eos, field: device_config, sha256: " + d.Adapters[0].Sha256 +
+		", reason: add logging line}\n"
+	v1 := mustParse(t, block("local")+diffBase+entry)
+	if d := Compare(mustParse(t, diffBase), v1, noon); d.UnacknowledgedAdapters() != 0 {
+		t.Fatalf("v1: %+v", d.Adapters)
+	}
+	d = Compare(v1, mustParse(t, block("none")+diffBase+entry), noon)
+	if d.UnacknowledgedAdapters() != 1 || d.Adapters[0].Acknowledged || len(d.StaleAcknowledgments) != 1 {
+		t.Fatalf("v2: adapters %+v stale %+v", d.Adapters, d.StaleAcknowledgments)
 	}
 }

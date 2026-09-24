@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -784,11 +785,16 @@ func TestPolicyDiffGatesAnAdapterEdit(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
 		!strings.Contains(out.String(), `ADAPTER: platforms.arista_eos.entity_classes {"loopback":`) ||
-		!strings.Contains(out.String(), `add {platform: arista_eos, field: entity_classes, reason: "..."} under acknowledge:`) ||
 		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits\n") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
-	acked := edited + "acknowledge:\n  - {platform: arista_eos, field: entity_classes, reason: only Management1 is out of band}\n"
+	// The entry is printed ready to paste, bound by digest to this edit.
+	entry := regexp.MustCompile(`add (\{platform: arista_eos, field: entity_classes, sha256: [0-9a-f]{64}, reason: )"\.\.\."\}` +
+		` under acknowledge:`).FindStringSubmatch(out.String())
+	if entry == nil {
+		t.Fatalf("no paste-ready entry\n%s", out.String())
+	}
+	acked := edited + "acknowledge:\n  - " + entry[1] + "only Management1 is out of band}\n"
 	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
 		t.Fatal(err)
 	}

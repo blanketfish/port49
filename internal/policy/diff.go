@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,11 +65,13 @@ type Diff struct {
 // attributes bear privilege, which the device takes, how its roles rank — is
 // Gated: a diff cannot vouch for its own reading when the change is to the
 // reading, so it is acknowledged only in writing, by an acknowledge: entry
-// naming the platform and the key (review M8, 2026-09-24). Old and New are
-// the key's value as JSON, `null` where the adapter leaves it unset.
+// naming the platform, the key and New's Sha256 (review M8, 2026-09-24;
+// task 9 review C1). Old and New are the key's value as JSON, `null` where
+// the adapter leaves it unset.
 type AdapterChange struct {
 	Platform, Field     string
 	Old, New            string
+	Sha256              string // hex sha256 of New: what an acknowledge: entry names
 	Gated, Acknowledged bool
 	AcknowledgedBy      string
 }
@@ -1073,7 +1076,8 @@ func bearsPrivilege(name string, before, after platform.Dialect) bool {
 // the inventory has devices of and every platform either version has an
 // adapter for. A block for a platform no device has yet is compared too: the
 // inventory is not diffed, so the day a device of it arrives is no review
-// (pre-flight B2).
+// (pre-flight B2). Each side is the platform's effective adapter
+// (adapterSpec), the generic one where the version has none.
 func (c *comparison) adapters() {
 	platforms := map[string]bool{}
 	for _, p := range []*Policy{c.before, c.after} {
@@ -1086,17 +1090,20 @@ func (c *comparison) adapters() {
 	}
 	keys := platform.SpecKeys()
 	for _, name := range sortedKeys(platforms) {
-		was := reflect.ValueOf(platform.SpecOf(c.before.dialect(name)))
-		is := reflect.ValueOf(platform.SpecOf(c.after.dialect(name)))
+		was := reflect.ValueOf(c.before.adapterSpec(name))
+		is := reflect.ValueOf(c.after.adapterSpec(name))
 		for i, key := range keys {
 			if reflect.DeepEqual(was.Field(i).Interface(), is.Field(i).Interface()) {
 				continue
 			}
-			old, _ := json.Marshal(was.Field(i).Interface())
-			now, _ := json.Marshal(is.Field(i).Interface())
-			a := AdapterChange{Platform: name, Field: key, Old: string(old), New: string(now), Gated: adapterKeyGated(key)}
+			a := AdapterChange{Platform: name, Field: key, Old: canonical(was.Field(i).Interface()),
+				New: canonical(is.Field(i).Interface()), Gated: adapterKeyGated(key)}
+			a.Sha256 = fmt.Sprintf("%x", sha256.Sum256([]byte(a.New)))
 			for _, ack := range c.after.acked {
-				if a.Gated && ack.Platform == name && ack.Field == key {
+				// The digest binds the entry to this edit: one left in the file
+				// from an earlier edit to the key names another value, and
+				// acknowledges nothing (task 9 review C1).
+				if a.Gated && ack.Platform == name && ack.Field == key && ack.Sha256 == a.Sha256 {
 					a.Acknowledged, a.AcknowledgedBy = true, ack.Reason
 					c.usedAcks[ack] = true
 				}
@@ -1104,4 +1111,19 @@ func (c *comparison) adapters() {
 			c.d.Adapters = append(c.d.Adapters, a)
 		}
 	}
+}
+
+// adapterSpec is the platform's effective adapter in this version as the diff
+// compares it.
+func (p *Policy) adapterSpec(name string) platform.Spec { return platform.SpecOf(p.dialect(name)) }
+
+// canonical is an adapter value as JSON, the text an acknowledgment's digest
+// is taken over. Every Spec field marshals; were one not to, the change is
+// still shown, and gated like any other.
+func canonical(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "unrenderable: " + err.Error()
+	}
+	return string(b)
 }
