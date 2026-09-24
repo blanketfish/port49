@@ -233,6 +233,10 @@ func TestLoadSetsRefusesAMisfiledAdapter(t *testing.T) {
 		// A set is laid over its own generic adapter, so one with none
 		// frozen for it has nothing to stand on.
 		"a set with no generic adapter": {"9.9.9/meinberg_lantime.yaml": {Data: []byte(good)}},
+		// A file the loader would skip reads as part of the set to whoever
+		// wrote it (task 2 review minor 4).
+		"a .yml file": {"1.0.0/meinberg_lantime.yml": {Data: []byte(good)}},
+		"a directory": {"1.0.0/extra/meinberg_lantime.yaml": {Data: []byte(good)}},
 	} {
 		if _, err := LoadSets(fsys); err == nil {
 			t.Errorf("%s: loaded", name)

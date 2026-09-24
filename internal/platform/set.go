@@ -68,8 +68,11 @@ func LoadSets(fsys fs.FS) (map[string]map[string]Dialect, error) {
 		}
 		set := map[string]Dialect{}
 		for _, f := range files {
+			// A file the loader skipped would read as part of the set to
+			// whoever put it there (task 2 review minor 4).
 			if f.IsDir() || path.Ext(f.Name()) != ".yaml" {
-				continue
+				return nil, fmt.Errorf("%s/%s: a set holds one <platform>.yaml file per platform and nothing else",
+					version, f.Name())
 			}
 			raw, err := fs.ReadFile(fsys, path.Join(version, f.Name()))
 			if err != nil {
