@@ -303,3 +303,44 @@ func TestTheRecordCarriesTheVectorTheEngineDecided(t *testing.T) {
 		}
 	}
 }
+
+// Decision.Error is lab-only: an ERROR on authorization runs every command
+// under IOS-XE's if-authenticated and hands the N9Kv to local RBAC
+// (tests/lab/results/L4-error-*.md), so Engine never sets it, on any path —
+// a permit, a deny, a store outage, a blob it cannot use, a context it does
+// not fit, or no blob and no Fallback.
+func TestTheEngineNeverAnswersError(t *testing.T) {
+	f := newEngineFixture(t, eosBlob())
+	e := &Engine{Store: f.st, Metrics: f.m}
+	ok := store.Context{Username: "alice", Principal: "user:alice@example.com", BlobHash: f.hash}
+	other := eosBlob()
+	other.Platform = "cisco_nxos"
+	body, otherHash, err := engine.Encode(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.st.PutBlob(context.Background(), otherHash, body, time.Hour)
+	contexts := map[string]store.Context{
+		"blob":             ok,
+		"missing blob":     {Username: "alice", BlobHash: engine.HashOf([]byte("absent"))},
+		"another platform": {Username: "alice", BlobHash: otherHash},
+		"unsafe username":  {Username: "alice*priv-lvl=15", BlobHash: f.hash},
+		"above ceiling":    {Username: "alice", MaxPrivilege: 1, BlobHash: f.hash},
+		"no blob":          {Username: "alice"},
+	}
+	for _, down := range []bool{false, true} {
+		f.st.down = down
+		e.cache = nil
+		for name, c := range contexts {
+			for _, raw := range [][]string{nil, {"service=shell", "cmd=show", "cmd-arg=version"},
+				{"service=shell", "cmd=show", "cmd-arg=hostname"}} {
+				r := Request{Context: c, Device: peer, Raw: raw}
+				for _, d := range []Decision{e.Session(context.Background(), r), e.Command(context.Background(), r)} {
+					if d.Error {
+						t.Errorf("%s (store down %v, %q): Error set: %+v", name, down, raw, d)
+					}
+				}
+			}
+		}
+	}
+}
