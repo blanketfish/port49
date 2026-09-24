@@ -9,9 +9,9 @@ import (
 // mint refuses it and the daemon closes the connection (spec §10). The other
 // devices answer as ever.
 func TestATestOnAQuarantinedDeviceIsADeny(t *testing.T) {
-	p := mustParse(t, `
+	p := mustParse(t, unmappedLevel+`
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: op, privilege: operator, permit: [show **]}]
+roles: [{name: op, privilege: unmapped, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [op]}]
 tests:

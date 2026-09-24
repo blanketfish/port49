@@ -166,11 +166,11 @@ roles: [{name: tech, permit: [interface @physical]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [tech]}]`, `role "tech" names @physical, which`,
 			[]string{"nx-01", "srx-fw-04", "srx-fw-05", "srx-fw-22", "srx-lab-01", "xe-01"}},
-		{"a level the platform cannot render", `
+		{"a level the platform cannot render", unmappedLevel + `
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: op, privilege: operator, permit: [show **]}]
+roles: [{name: op, privilege: unmapped, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [op]}]`, "level operator has no rendering on arista_eos",
+grants: [{subject: s, scope: all_devices, roles: [op]}]`, "level unmapped has no rendering on arista_eos",
 			[]string{"campus-sw-7", "leaf-01"}},
 		{"a landing level above the ceiling", `
 scopes: [{name: all_devices, match: {}}]
@@ -224,11 +224,11 @@ grants: [{subject: s, scope: eos, roles: [tech]}]`); len(p.Quarantines(noon)) !=
 	}
 	// A ceiling no platform can number is the policy's own error: no inventory
 	// could make it load, so it is refused rather than quarantining the fleet.
-	if _, err := Parse([]byte(`
+	if _, err := Parse([]byte(unmappedLevel+`
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: ro, privilege: readonly, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
-grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: operator}]`), env()); err == nil ||
+grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: unmapped}]`), env()); err == nil ||
 		!strings.Contains(err.Error(), "no priv-lvl number on any platform") {
 		t.Fatalf("Parse = %v", err)
 	}
@@ -238,9 +238,9 @@ grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: operator}]
 // not the quarantine: the mint API must not tell a caller which devices exist
 // (design §17). Only a principal with a grant there hears the quarantine.
 func TestAPrincipalWithNoGrantThereDoesNotHearTheQuarantine(t *testing.T) {
-	p := mustParse(t, `
+	p := mustParse(t, unmappedLevel+`
 scopes: [{name: all_devices, match: {}}, {name: nx, match: {platform: cisco_nxos}}]
-roles: [{name: op, privilege: operator, permit: [show **]}]
+roles: [{name: op, privilege: unmapped, permit: [show **]}]
 subjects:
   - {name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}
   - {name: other, identity: "user:o@example.com", username: o, token_ttl: 60s}
@@ -250,7 +250,7 @@ grants: [{subject: s, scope: all_devices, roles: [op]}, {subject: other, scope: 
 		t.Fatal("inventory has no leaf-01")
 	}
 	if _, q := p.Quarantined("leaf-01", noon); !q {
-		t.Fatal("leaf-01 renders no operator, so it is quarantined")
+		t.Fatal("leaf-01 renders no unmapped, so it is quarantined")
 	}
 	if _, err := p.Resolve("user:s@example.com", leaf, noon); !errors.Is(err, ErrDeviceQuarantined) {
 		t.Fatalf("the granted principal: %v", err)
@@ -342,10 +342,10 @@ func causesOf(q Quarantine) []string {
 func TestAnExpiryThatBreaksTheCompositionIsQuarantinedFromTheExpiry(t *testing.T) {
 	before, lapse := time.Date(2026, 9, 30, 23, 59, 59, 0, time.UTC), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	after, lastLapse := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	p, got := quarantinedAt(t, `
+	p, got := quarantinedAt(t, unmappedLevel+`
 scopes: [{name: all_devices, match: {}}, {name: dc, match: {site: dc1}}]
 roles:
-  - {name: op, privilege: operator, permit: [show **]}
+  - {name: op, privilege: unmapped, permit: [show **]}
   - {name: adm, privilege: admin, permit: ["**"]}
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
 grants:
@@ -354,8 +354,8 @@ grants:
 	leaf, campus := got["leaf-01"], got["campus-sw-7"]
 	if len(got) != 2 || len(leaf) != 1 || len(campus) != 1 ||
 		!strings.HasPrefix(leaf[0], "will be quarantined from 2026-10-01T00:00:00.000Z, when grant dc [adm] expires: ") ||
-		!strings.Contains(leaf[0], "level operator has no rendering on arista_eos") ||
-		!strings.HasPrefix(campus[0], `quarantined: subject "s": level operator`) {
+		!strings.Contains(leaf[0], "level unmapped has no rendering on arista_eos") ||
+		!strings.HasPrefix(campus[0], `quarantined: subject "s": level unmapped`) {
 		t.Fatalf("quarantines at noon: %q", got)
 	}
 	leaf01 := deviceNamed(t, "leaf-01")

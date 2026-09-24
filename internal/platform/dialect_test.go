@@ -96,9 +96,6 @@ func TestLevelsRenderAndHaveANumber(t *testing.T) {
 	if a, ok := eos.Render("admin"); !ok || !reflect.DeepEqual(a, []string{"priv-lvl=15"}) {
 		t.Fatalf("eos admin: %v %v", a, ok)
 	}
-	if _, ok := eos.Render("operator"); ok {
-		t.Fatal("eos operator is unmapped: nothing measured says what level it is")
-	}
 	if n, ok := eos.PrivLvl("readonly"); !ok || n != 1 {
 		t.Fatalf("eos readonly: %d %v", n, ok)
 	}
@@ -109,8 +106,31 @@ func TestLevelsRenderAndHaveANumber(t *testing.T) {
 	if n, ok := nx.PrivLvl("admin"); !ok || n != 15 {
 		t.Fatalf("nx-os admin's ceiling number: %d %v", n, ok)
 	}
-	if _, ok := nx.PrivLvl("operator"); ok {
-		t.Fatal("operator has no number anywhere yet")
+}
+
+// operator gets admin's device privilege on arista_eos and cisco_nxos, where
+// the device cannot draw the operator line (tests/lab/results/ceiling-*.md;
+// spec §6, decision 23), and nothing new on IOS-XE, which can (plan 5's).
+func TestOperatorIsAdminsLevelWhereTheDeviceCannotFenceIt(t *testing.T) {
+	eos, _ := DialectFor("arista_eos")
+	if a, ok := eos.Render("operator"); !ok || !reflect.DeepEqual(a, []string{"priv-lvl=15"}) {
+		t.Fatalf("eos operator renders as admin does: %v %v", a, ok)
+	}
+	if n, ok := eos.PrivLvl("operator"); !ok || n != 15 {
+		t.Fatalf("eos operator: %d %v", n, ok)
+	}
+	nx, _ := DialectFor("cisco_nxos")
+	if n, ok := nx.PrivLvl("operator"); !ok || n != 15 {
+		t.Fatalf("nx-os operator's ceiling number is admin's: %d %v", n, ok)
+	}
+	if n, ok := nx.PrivLvl("readonly"); !ok || n != 1 {
+		t.Fatalf("nx-os readonly: %d %v", n, ok)
+	}
+	for _, name := range []string{"cisco_iosxe", "juniper_junos", "no_such_platform"} {
+		d, _ := DialectFor(name)
+		if _, ok := d.PrivLvl("operator"); ok {
+			t.Fatalf("%s: operator has no number there yet", name)
+		}
 	}
 }
 

@@ -43,6 +43,11 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 	}
 }
 
+// unmappedLevel declares a level no built-in platform renders: a role landing
+// an arista_eos session there quarantines the device. `operator` renders on
+// EOS since the owner's ruling of 2026-09-24 (spec §6, decision 23).
+const unmappedLevel = "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"
+
 const minimalPolicy = `
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
@@ -98,12 +103,12 @@ func TestABrokerThatCannotLoadFailsTheStart(t *testing.T) {
 
 // A device the policy cannot be compiled for is quarantined, not a reason to
 // stay down: the start goes on, and names the device and the cause (spec §10;
-// §13 decision 20). leaf1 is arista_eos, which renders no `operator`.
+// §13 decision 20). leaf1 is arista_eos, which renders no custom level `unmapped`.
 func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
 	var out bytes.Buffer
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = &out
-	_, pol, err := buildBroker(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1)),
+	_, pol, err := buildBroker(brokerConfig(t, unmappedLevel+strings.Replace(minimalPolicy, "privilege: admin", "privilege: unmapped", 1)),
 		memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatalf("a quarantined device must not stop the start: %v", err)
@@ -112,7 +117,7 @@ func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
 		t.Fatal("the daemon is handed the policy that quarantines leaf1")
 	}
 	if !strings.Contains(out.String(), "device leaf1 (arista_eos) is quarantined") ||
-		!strings.Contains(out.String(), "level operator has no rendering on arista_eos") {
+		!strings.Contains(out.String(), "level unmapped has no rendering on arista_eos") {
 		t.Fatalf("stderr: %s", out.String())
 	}
 }
@@ -166,10 +171,10 @@ func TestTheDaemonsQuarantineFollowsTheClock(t *testing.T) {
 	stderr = &out
 	now := time.Now()
 	lapse := now.Add(48 * time.Hour).Truncate(time.Second)
-	_, pol, err := buildBroker(brokerConfig(t, `
+	_, pol, err := buildBroker(brokerConfig(t, unmappedLevel+`
 scopes: [{name: all_devices, match: {}}]
 roles:
-  - {name: op, privilege: operator, permit: [show **]}
+  - {name: op, privilege: unmapped, permit: [show **]}
   - {name: adm, privilege: admin, permit: ["**"]}
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
 grants:

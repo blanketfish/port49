@@ -663,15 +663,16 @@ func TestUnadmittedSourceIsRecordedAndClosed(t *testing.T) {
 }
 
 // quarantinePolicy is a policy under which leaf-01 (arista_eos) is quarantined
-// from adminUntil to opUntil: once the admin grant lapses, the operator level
-// left has no rendering on arista_eos, and once the operator grant lapses too
+// from adminUntil to opUntil: once the admin grant lapses, the custom level
+// `unmapped` left has no rendering on arista_eos, and once the operator grant lapses too
 // there is no composition to fail.
 func quarantinePolicy(t *testing.T, loaded, adminUntil, opUntil time.Time) *policy.Policy {
 	t.Helper()
 	p, err := policy.Parse([]byte(`
+privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]
 scopes: [{name: all_devices, match: {}}]
 roles:
-  - {name: op, privilege: operator, permit: [show **]}
+  - {name: op, privilege: unmapped, permit: [show **]}
   - {name: adm, privilege: admin, permit: ["**"]}
 subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
 grants:

@@ -45,9 +45,15 @@ func mustParse(t *testing.T, body string) *Policy {
 	return p
 }
 
+// unmappedLevel declares a level, between operator and admin, that no
+// built-in platform renders or numbers: a role landing an arista_eos session
+// there quarantines the device, and a ceiling naming it loads nowhere. Since
+// the owner's ruling of 2026-09-24 `operator` renders on EOS (spec §6,
+// decision 23), so it is the tests' stand-in for a level with no mapping.
+const unmappedLevel = "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"
+
 // good is spec §11's shape, cut to what every platform in inventory() can
-// render with the built-in adapters: `operator` has no mapping on arista_eos
-// (internal/platform), so no role here lands an EOS session there.
+// render with the built-in adapters.
 const good = `
 scopes:
   - {name: all_devices, match: {}}
@@ -141,8 +147,8 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a case-sensitive regex", "roles:\n  - {name: r, deny: [\"* * /(?-i)^TFTP:/\"]}\n" + subjOK, "case-insensitively"},
 		{"a case-sensitive group", "roles:\n  - {name: r, deny: [\"interface /(?s-i:^Mgmt)/\"]}\n" + subjOK, "case-insensitively"},
 		{"a class no platform defines", "roles:\n  - {name: r, permit: [\"interface @uplinks\"]}\n" + subjOK, "which no platform defines"},
-		{"a ceiling no platform numbers", scopeOK + roleOK + subjOK +
-			"grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: operator}\n", "no priv-lvl number on any platform"},
+		{"a ceiling no platform numbers", unmappedLevel + scopeOK + roleOK + subjOK +
+			"grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: unmapped}\n", "no priv-lvl number on any platform"},
 		{"a bad pipe rule", "roles:\n  - {name: r, pipe: {permit: [\"inc*\"]}}\n" + subjOK, "pipe"},
 		{"an attribute with no separator", "roles:\n  - {name: r, attributes: {all: [idletime]}}\n" + subjOK, "separator"},
 		{"an attribute for no platform", "roles:\n  - {name: r, attributes: {junos: [\"idletime*30\"]}}\n" + subjOK, "neither `all`"},

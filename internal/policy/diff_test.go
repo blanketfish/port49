@@ -94,7 +94,7 @@ func TestTheDiffReportsWhatItCannotEnumerate(t *testing.T) {
 	if gained != len(inventory()) {
 		t.Fatalf("access %+v", d.Access)
 	}
-	quarantining := mustParse(t, strings.Replace(diffBase, "privilege: readonly", "privilege: operator", 1))
+	quarantining := mustParse(t, unmappedLevel+strings.Replace(diffBase, "privilege: readonly", "privilege: unmapped", 1))
 	if q := Compare(before, quarantining, noon).Quarantined; len(q) != 2 || q[0].Device != "campus-sw-7" {
 		t.Fatalf("newly quarantined %+v", q)
 	}
@@ -195,7 +195,7 @@ func TestTheGateSeesAWidenedPipeAllowlist(t *testing.T) {
 // everything before, so everything the new version permits there is gated;
 // and a device quarantined in both for a new cause is newly quarantined.
 func TestTheGateSeesAReleaseAndANewCause(t *testing.T) {
-	quarantining := strings.Replace(diffBase, "privilege: readonly", "privilege: operator", 1)
+	quarantining := unmappedLevel + strings.Replace(diffBase, "privilege: readonly", "privilege: unmapped", 1)
 	d := Compare(mustParse(t, quarantining), mustParse(t, diffBase), noon)
 	if len(d.Released) != 2 || d.Released[0].Device != "campus-sw-7" || d.Unacknowledged() == 0 {
 		t.Fatalf("released %+v, %d unacknowledged", d.Released, d.Unacknowledged())

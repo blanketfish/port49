@@ -63,13 +63,15 @@ func TestAMintRecordNamesItsBundle(t *testing.T) {
 
 // A device a joint check failed on is quarantined at load, and a mint for it
 // is refused device_quarantined, by name, while every other device mints
-// (spec §10; §13 decision 20). leaf1 is arista_eos, which renders no operator.
+// (spec §10; §13 decision 20). leaf1 is arista_eos, which renders no custom level
+// `unmapped` (`operator` renders there since spec §13 decision 23).
 func TestAQuarantinedDeviceIsRefusedAtMint(t *testing.T) {
 	f := newFixture(t, 8)
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	body := `
+privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]
 scopes: [{name: all_devices, match: {}}]
-roles: [{name: r, privilege: operator, permit: ["**"]}]
+roles: [{name: r, privilege: unmapped, permit: ["**"]}]
 subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: nx, roles: [r]}]
 `

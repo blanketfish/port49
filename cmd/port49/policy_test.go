@@ -13,6 +13,11 @@ import (
 	"github.com/rhwendt/port49/internal/platform"
 )
 
+// unmappedLevel declares a level no built-in platform renders: a role landing
+// an arista_eos session there quarantines the device. `operator` renders on
+// EOS since the owner's ruling of 2026-09-24 (spec §6, decision 23).
+const unmappedLevel = "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"
+
 // policyFixture writes a small policy and inventory and returns their paths.
 func policyFixture(t *testing.T) (pol, inv string) {
 	t.Helper()
@@ -244,12 +249,12 @@ func TestPolicyTestFailsAPolicyThatDoesNotLoad(t *testing.T) {
 		!strings.Contains(errb.String(), "@uplinks, which no platform defines") || out.Len() != 0 {
 		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
 	}
-	if err := os.WriteFile(pol, []byte(strings.Replace(string(raw), "privilege: readonly", "privilege: operator", 1)), 0o600); err != nil {
+	if err := os.WriteFile(pol, []byte(unmappedLevel+strings.Replace(string(raw), "privilege: readonly", "privilege: unmapped", 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 1 ||
-		!strings.Contains(out.String(), "quarantine: leaf-01 (arista_eos): subject \"noc\": level operator has no rendering") ||
+		!strings.Contains(out.String(), "quarantine: leaf-01 (arista_eos): subject \"noc\": level unmapped has no rendering") ||
 		!strings.Contains(out.String(), "FAIL noc on leaf-01: \"show version\" -> deny device_quarantined, want permit") {
 		t.Fatalf("code %d\n%s", code, out.String())
 	}
@@ -462,11 +467,11 @@ func readFile(t *testing.T, path string) []byte {
 func TestPolicyTestPrintsReportsNotesAndScheduledQuarantines(t *testing.T) {
 	pol, inv := policyFixture(t)
 	body := strings.Replace(string(readFile(t, pol)), "  - {name: admin, privilege: admin, permit: [\"**\"]}\n",
-		"  - {name: admin, privilege: admin, permit: [\"**\"]}\n  - {name: op, privilege: operator, permit: [show **]}\n", 1)
+		"  - {name: admin, privilege: admin, permit: [\"**\"]}\n  - {name: op, privilege: unmapped, permit: [show **]}\n", 1)
 	body = strings.Replace(body, "  - {subject: ops, scope: all_devices, roles: [admin]}\n",
 		"  - {subject: ops, scope: all_devices, roles: [admin], expires: 2099-01-01}\n"+
 			"  - {subject: ops, scope: all_devices, roles: [op]}\n", 1)
-	body = strings.Replace(body, "subjects:\n", "subjects:\n  - {name: gone, identity: \"user:gone@example.com\", username: gone, token_ttl: 60s}\n", 1)
+	body = unmappedLevel + strings.Replace(body, "subjects:\n", "subjects:\n  - {name: gone, identity: \"user:gone@example.com\", username: gone, token_ttl: 60s}\n", 1)
 	body += "  - {subject: noc, device: leaf-01, command: \"show version | include x\", expect: permit}\n"
 	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
 		t.Fatal(err)

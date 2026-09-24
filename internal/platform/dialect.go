@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"maps"
 	"strconv"
 	"strings"
 )
@@ -59,6 +60,10 @@ type Dialect struct {
 	// Question 2) — and is not a load error; an entry missing from a non-nil
 	// map is, unless the level's parent chain reaches one.
 	Levels map[string][]string
+	// CeilingLevels is the priv-lvl number each level stands for on a
+	// platform that renders none (Levels nil), where the token's ceiling still
+	// needs one. nil is plan 3's table, ceilingLevels.
+	CeilingLevels map[string]uint8
 }
 
 // dialects are the built-in platforms. Each value is cited or marked
@@ -102,9 +107,17 @@ type Dialect struct {
 //     GigabitEthernet1, which is a physical port by name.
 //   - Levels: arista_eos renders `priv-lvl` for readonly and admin, applied by
 //     vEOS on every lab run since 2026-09-20 (L16-arista_eos.md). `operator`
-//     is unmapped — nothing measured says what level it is — so a policy
-//     that lands an arista_eos session there quarantines the device. Every other
+//     renders as admin does, on the owner's ruling of 2026-09-24 (spec §6,
+//     decision 23): at level 15 vEOS ran `clear counters`, `clear ip bgp *`
+//     and `configure` for a `network-operator` session, and at level 1 refused
+//     even `clear counters` (ceiling-arista_eos.md), so no level fences an
+//     operator there and port49's command rules are the fence. Every other
 //     platform renders nothing, as in plan 3; plan 5 fills them.
+//   - CeilingLevels: cisco_nxos numbers `operator` 15, admin's number, on the
+//     same ruling: every N9Kv role ran all three commands and
+//     `network-operator` changed configuration (ceiling-cisco_nxos.md).
+//     IOS-XE, whose level 7 can carry the operator rung (ceiling-cisco_iosxe.md),
+//     keeps plan 3's table until plan 5 renders it.
 var dialects = map[string]Dialect{
 	"arista_eos": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
@@ -114,12 +127,13 @@ var dialects = map[string]Dialect{
 			"loopback":   {`^Loopback[0-9]+$`},
 			"physical":   {`^Ethernet[0-9/.]+$`, `^Port-Channel[0-9]+$`},
 		},
-		Levels: map[string][]string{"readonly": {"priv-lvl=1"}, "admin": {"priv-lvl=15"}},
+		Levels: map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=15"}, "admin": {"priv-lvl=15"}},
 	},
 	"cisco_nxos": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: false,
 		Supports:      []string{"session", "commands"},
 		EntityClasses: map[string][]string{"management": {`^mgmt[0-9]+$`}},
+		CeilingLevels: map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
 	},
 	"cisco_iosxe": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
@@ -142,8 +156,9 @@ var generic = Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session
 // ceilingLevels is the priv-lvl number a level stands for on a platform that
 // renders no level, where the number is still needed: the token's
 // max_privilege is compared against the priv_lvl a device puts on a request
-// (spec §5.3, §7). It is plan 3's table; `operator` is absent for the reason
-// arista_eos does not map it.
+// (spec §5.3, §7). It is plan 3's table, for a platform with no CeilingLevels
+// of its own; `operator` is absent because nothing measured says what it is
+// on IOS-XE and Junos.
 var ceilingLevels = map[string]uint8{"readonly": 1, "admin": 15}
 
 // DialectFor returns name's dialect and whether port49 ships one. An unknown
@@ -182,6 +197,9 @@ func (d Dialect) clone() Dialect {
 		}
 		d.Levels = levels
 	}
+	if d.CeilingLevels != nil {
+		d.CeilingLevels = maps.Clone(d.CeilingLevels)
+	}
 	return d
 }
 
@@ -208,11 +226,16 @@ func (d Dialect) Render(level string) (attrs []string, ok bool) {
 }
 
 // PrivLvl is the priv-lvl number this platform gives exactly this level: the
-// value of a `priv-lvl` attribute in its rendering, or plan 3's table where
-// the platform renders none. ok is false where neither says.
+// value of a `priv-lvl` attribute in its rendering, or, where the platform
+// renders none, its CeilingLevels or plan 3's table. ok is false where none
+// says.
 func (d Dialect) PrivLvl(level string) (uint8, bool) {
 	if d.Levels == nil {
-		n, ok := ceilingLevels[level]
+		table := d.CeilingLevels
+		if table == nil {
+			table = ceilingLevels
+		}
+		n, ok := table[level]
 		return n, ok
 	}
 	for _, a := range d.Levels[level] {
