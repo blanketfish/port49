@@ -11,8 +11,9 @@ Plan 13 builds the user and admin documentation from these.
 
 Status: **1 merged 2026-09-21** (PR #2); **2 merged 2026-09-22** (PR #4;
 fifteen tasks, reviewed per task and whole-branch); **3 merged 2026-09-23** (PR #8, below);
-**4 written 2026-09-23** (`2026-09-23-04-policy-engine.md`, twenty tasks, one plan — under the
-25-task line, so not split); 5–13 not yet. Plan 4 is the next plan to execute.
+**lab 2026-09-24 merged** (PR #9); **4 executed 2026-09-24 on `feature/policy-engine`**
+(`2026-09-23-04-policy-engine.md`, twenty-three tasks), not yet merged; 5–13 not yet. Plan 4b
+is next.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -255,8 +256,9 @@ privilege-expansion gate (spec §12), and replay re-derives a session's attribut
 
 - `internal/platform/dialect.go` is borrowed ahead and is plan 5's to replace with the layered
   adapters: `pipe_authorized` is false on EOS, NX-OS and IOS-XE (measured,
-  `tests/lab/results/L2-*.md`); `expands_abbreviations` is false everywhere until L21 closes per
-  platform; entity classes are names from spec §8 and the lab configs, unverified against a device;
+  `tests/lab/results/L2-*.md`); `expands_abbreviations` is false everywhere in the borrowed
+  table, though L21 closed 2026-09-24 with EOS, NX-OS and IOS-XE sending resolved words over SSH,
+  so the adapters may set it `true` for that transport; entity classes are names from spec §8 and the lab configs, unverified against a device;
   only `arista_eos` renders levels, and `operator` renders nowhere (plan 4, Question 1), so a policy
   landing an EOS session at `operator` quarantines those devices until plan 5 renders it (the
   role-ceiling results below).
@@ -277,8 +279,8 @@ privilege-expansion gate (spec §12), and replay re-derives a session's attribut
   under local authorization); on NX-OS every role runs all three. **On EOS and NX-OS the
   `operator` rung is port49's per-command policy alone.** Open for the owner: how EOS and NX-OS
   render `operator` (for example level 15 with port49's rules drawing the line).
-- **L21**, added by plan 4: type an abbreviation on each platform and record what the
-  authorization request and the accounting record carry.
+- **L21**, added by plan 4, closed 2026-09-24 (`tests/lab/results/L21-*.md`): all three
+  per-command platforms send resolved words over SSH; other transports are unmeasured.
 - The dead-rule and fallback-exposure intersection checks of spec §12 are this plan's; plan 4
   built the shadowed-deny report, the effective-permission diff and the privilege-expansion gate,
   because it is the plan that switched to dominance (plan 4, Question 4, owner's rulings
@@ -494,9 +496,9 @@ built it (plan 4's "Hands to plan 6"). Also owed by plan 3's reviews:
 - A **per-principal cap on held broker connections**, beside the per-source one. Any
   certificate the anchor signs can open all 256 slots and hold them for `max_session_age`,
   locking every other operator out of `port49 login`.
-- **A revocation must reach the held connection.** The slice has no revocation lever: to cut
-  someone off, remove their subject from the policy (or re-issue the CA) and restart
-  `port49d`, which logs everyone out. A revocation by principal or by certificate must also
+- **A revocation must reach the held connection.** Plan 4b makes a policy edit live: removing
+  a subject's grant revokes that principal's contexts with no restart and no logout. Revocation
+  by principal or by certificate (spec §5.1.4) is this plan's, and it must also
   refuse mints on, or close, that principal's held broker connections; otherwise a token
   minted after the revocation lifts it (decision 15).
 
