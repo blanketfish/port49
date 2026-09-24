@@ -428,6 +428,50 @@ func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []
 	return out
 }
 
+// exceeds finds the first attribute of reply, priv-lvl aside, that goes
+// above what level bound renders on the platform, as the diff gate judges a
+// raise (attributeRose): bound's rendering is the reply it is held to, and
+// level, the one the reply was rendered at, says which of its values are a
+// level's own. A reply's attribute bound does not render at all is above it,
+// and a value no role_order ranks is above every value. What bound renders
+// but the reply lacks is not a raise here: a role or grant only adds and
+// overrides, so the reply lacks it because its own level does, and Monotone
+// keeps a level below bound from rendering more than bound does.
+func (p *Policy) exceeds(dialect platform.Dialect, bound, level string, reply []string) (int, bool) {
+	ceiling, _, _ := p.render(dialect, bound)
+	rendered, _, _ := p.render(dialect, level)
+	held, sent := attributesByName(ceiling), attributesByName(reply)
+	for i, a := range reply {
+		name := engine.AttributeName(a)
+		if attributeRose(name, held[name], sent[name], ceiling, rendered, dialect, dialect) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// deliveredLevel is the level a reply delivers on the platform: the lowest,
+// from the session's own level up, that it does not exceed, its priv-lvl
+// included. A reply that exceeds every level, such as one sending a role no
+// role_order ranks, delivers the highest. The fallback exposure reads it, so
+// a readonly role that sends admin's device role is exposed as admin is
+// (final review I1).
+func (p *Policy) deliveredLevel(dialect platform.Dialect, level string, reply []string) string {
+	sent, _, hasPrivLvl := engine.GrantedPrivLvl(reply)
+	for _, l := range p.levels[max(p.levelIndex(level), 0):] {
+		if _, _, ok := p.render(dialect, l); !ok {
+			continue
+		}
+		if n, ok := p.privLvl(dialect, l); hasPrivLvl && (!ok || sent > n) {
+			continue
+		}
+		if _, over := p.exceeds(dialect, l, level, reply); !over {
+			return l
+		}
+	}
+	return p.levels[len(p.levels)-1]
+}
+
 // checkDeviceAt is one subject's joint checks on one device at one instant.
 func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) string {
 	res, err := p.resolve(sub, d, at)
@@ -471,6 +515,16 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 				"the daemon refuses a session whose reply exceeds the ceiling, so every login would fail "+
 				"blob_unavailable; raise max_privilege or remove the attribute", d.Platform,
 				res.Attributes[at].Attribute, res.Attributes[at].Source, res.Ceiling, res.MaxPrivilege)
+		}
+		// Every other attribute that bears privilege is bounded too: on NX-OS
+		// and Junos the role is the privilege, and on EOS the role is what the
+		// fallback to local reads (final review I1).
+		if at, ok := p.exceeds(p.dialect(d.Platform), res.Ceiling, res.Level, res.Blob.Attributes); ok {
+			return fmt.Sprintf("on %s its session reply sends %s (%s), which is not what max_privilege %s renders "+
+				"there or a role its role_order ranks below that: the ceiling bounds every attribute the reply sends "+
+				"that bears privilege, and a role no role_order ranks counts as the highest (spec §7); raise "+
+				"max_privilege or remove the attribute", d.Platform, res.Attributes[at].Attribute,
+				res.Attributes[at].Source, res.Ceiling)
 		}
 	}
 	// A platform that refuses a session for any attribute it does not take

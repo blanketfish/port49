@@ -249,3 +249,29 @@ func TestFallbackProseIsRedactedAcrossPunctuation(t *testing.T) {
 		t.Errorf("%q", exposed)
 	}
 }
+
+// The exposure reads the role the reply actually sends, not the level's name:
+// a readonly role that sends network-admin on NX-OS falls back to
+// network-admin's local authorization, which configures
+// (L22-carried-cisco_nxos.md), so it is reported at admin (final review I1).
+func TestAFallbackExposureReadsTheReplysRole(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: noc, privilege: readonly, permit: [show **], attributes: {cisco_nxos: ["shell:roles*network-admin"], arista_eos: ["roles=network-admin"]}}
+subjects:
+  - {name: noc, identity: "user:n@example.com", username: n, token_ttl: 60s}
+grants:
+  - {subject: noc, scope: all_devices, roles: [noc]}
+`)
+	got := findings(p, FindingFallbackExposure)
+	if len(got) != 2 {
+		t.Fatalf("one per platform whose reply reaches admin's role: %q", got)
+	}
+	for i, platformName := range []string{"arista_eos", "cisco_nxos"} {
+		if !strings.HasPrefix(got[i], `subject "noc" at readonly`) || !strings.Contains(got[i], "on "+platformName) ||
+			!strings.Contains(got[i], "network-admin") || !strings.Contains(got[i], "reaches admin") {
+			t.Errorf("%q", got[i])
+		}
+	}
+}

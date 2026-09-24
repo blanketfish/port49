@@ -848,26 +848,10 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 
 // replyRose reports whether the session reply gained, changed or lost an
 // attribute, other than priv-lvl, which priv_lvl judges, that bears privilege
-// under either version's adapter or any shipped set (bearsPrivilege), other
-// than by provably going down (spec
-// §12). A level's own rendering goes down where its one value is replaced by
-// the new level's, which role_order ranks strictly below under both versions'
-// adapters: a subject moved from admin to readonly on EOS is lowered because
-// network-operator ranks below network-admin (L16), not because readonly is
-// below admin, which a custom level's parent can make untrue of what it
-// renders. Anything else changes what the device lets the session do in a
-// direction the gate cannot read: a role's or grant's attribute either way
-// (on a session-only platform losing deny-commands widens access), and a
-// role no adapter ranks, which ranks above every role.
+// under either version's adapter or any shipped set, other than by provably
+// going down (attributeRose; spec §12).
 func replyRose(old, new, oldRendered, newRendered []string, before, after platform.Dialect) bool {
-	byName := func(reply []string) map[string][]string {
-		out := map[string][]string{}
-		for _, a := range reply {
-			out[engine.AttributeName(a)] = append(out[engine.AttributeName(a)], a)
-		}
-		return out
-	}
-	was, is := byName(old), byName(new)
+	was, is := attributesByName(old), attributesByName(new)
 	names := sortedKeys(was)
 	for _, n := range sortedKeys(is) {
 		if !slices.Contains(names, n) {
@@ -875,16 +859,47 @@ func replyRose(old, new, oldRendered, newRendered []string, before, after platfo
 		}
 	}
 	for _, name := range names {
-		from, to := was[name], is[name]
-		if name == "priv-lvl" || slices.Equal(from, to) || !bearsPrivilege(name, before, after) {
-			continue
-		}
-		if len(from) != 1 || len(to) != 1 || !slices.Contains(oldRendered, from[0]) ||
-			!slices.Contains(newRendered, to[0]) || !before.Lowers(from[0], to[0]) || !after.Lowers(from[0], to[0]) {
+		if attributeRose(name, was[name], is[name], oldRendered, newRendered, before, after) {
 			return true
 		}
 	}
 	return false
+}
+
+// attributeRose is the one judgment of whether a privilege-bearing attribute
+// went up: from its values in one reply to its values in another, each read
+// beside what the level it came from renders. The diff gate asks it of a
+// reply's old and new values (replyRose), and the joint check asks it of the
+// ceiling's rendering and the reply sent under the ceiling (exceeds), so the
+// two cannot disagree about what raises a session (final review I1).
+//
+// priv-lvl is judged as a number by each caller, and an attribute that bears
+// no privilege under either adapter or any shipped set (bearsPrivilege)
+// never rises. Otherwise a change rises unless it provably goes down: one
+// value a level renders replaced by one value the other level renders, which
+// role_order ranks strictly below under both adapters. A subject moved from
+// admin to readonly on EOS is lowered because network-operator ranks below
+// network-admin (L16), not because readonly is below admin, which a custom
+// level's parent can make untrue of what it renders. Anything else changes
+// what the device lets the session do in a direction the gate cannot read: a
+// role's or grant's attribute either way (on a session-only platform losing
+// deny-commands widens access), and a role no adapter ranks, which ranks
+// above every role.
+func attributeRose(name string, from, to, fromRendered, toRendered []string, before, after platform.Dialect) bool {
+	if name == "priv-lvl" || slices.Equal(from, to) || !bearsPrivilege(name, before, after) {
+		return false
+	}
+	return len(from) != 1 || len(to) != 1 || !slices.Contains(fromRendered, from[0]) ||
+		!slices.Contains(toRendered, to[0]) || !before.Lowers(from[0], to[0]) || !after.Lowers(from[0], to[0])
+}
+
+// attributesByName is a reply's attributes keyed by name.
+func attributesByName(reply []string) map[string][]string {
+	out := map[string][]string{}
+	for _, a := range reply {
+		out[engine.AttributeName(a)] = append(out[engine.AttributeName(a)], a)
+	}
+	return out
 }
 
 // enableRank orders the mechanisms by what they ask of an escalation: none

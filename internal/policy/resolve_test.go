@@ -751,3 +751,73 @@ grants: [{subject: s, scope: all_devices, roles: [ro], attributes: {cisco_iosxe:
 		t.Fatalf("quarantines: %+v", q)
 	}
 }
+
+// The ceiling bounds every attribute of the reply that bears privilege, not
+// only priv-lvl (spec §7): on NX-OS and Junos the role is the privilege, and
+// on EOS the role is what the fallback to local reads. A role or grant that
+// sends one above what the ceiling's level renders, or one no role_order
+// ranks, which counts as the highest, quarantines the device, judged as the
+// diff gate judges a raised reply (final review I1).
+func TestARoleAttributeAboveTheCeilingQuarantines(t *testing.T) {
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **], attributes: {KEY: ["ATTR"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r], max_privilege: readonly}]`
+	for _, tt := range []struct {
+		key, attr string
+		devices   []string
+	}{
+		{"cisco_nxos", "shell:roles*network-admin", []string{"nx-01"}},
+		{"arista_eos", "roles=network-admin", []string{"campus-sw-7", "leaf-01"}},
+		{"juniper_junos", "local-user-name*super-user", []string{"srx-fw-04", "srx-fw-05", "srx-fw-22", "srx-lab-01"}},
+		// Unranked, so above every role.
+		{"arista_eos", "roles=p49-custom", []string{"campus-sw-7", "leaf-01"}},
+	} {
+		p := mustParse(t, strings.NewReplacer("KEY", tt.key, "ATTR", tt.attr).Replace(body))
+		var got []string
+		for _, q := range p.Quarantines(noon) {
+			got = append(got, q.Device)
+			if c := causesOf(q)[0]; !strings.Contains(c, "its session reply sends "+tt.attr+" (role r)") ||
+				!strings.Contains(c, "max_privilege readonly") {
+				t.Errorf("%s: cause %q", q.Device, c)
+			}
+		}
+		if strings.Join(got, ",") != strings.Join(tt.devices, ",") {
+			t.Errorf("%s: quarantined %v, want %v", tt.attr, got, tt.devices)
+		}
+	}
+	// A grant's attribute is judged the same.
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r], max_privilege: readonly, attributes: {cisco_nxos: ["shell:roles*network-admin"]}}]`)
+	if q := p.Quarantines(noon); len(q) != 1 || q[0].Device != "nx-01" {
+		t.Errorf("a grant's role: %+v", q)
+	}
+	// idletime is held bearing on IOS-XE and unmeasured on Junos (spec §6),
+	// so under a ceiling there it is bounded like a role; where it is inert
+	// it is not.
+	p = mustParse(t, strings.NewReplacer("KEY", "all", "ATTR", "idletime*30", "max_privilege: readonly",
+		"max_privilege: admin").Replace(body))
+	var got []string
+	for _, q := range p.Quarantines(noon) {
+		got = append(got, q.Device)
+	}
+	if strings.Join(got, ",") != "srx-fw-04,srx-fw-05,srx-fw-22,srx-lab-01,xe-01" {
+		t.Errorf("idletime under a ceiling: %v", got)
+	}
+	// What the ceiling's level renders, or provably less, is within it.
+	for _, tt := range []struct{ key, attr, ceiling string }{
+		{"arista_eos", "roles=network-operator", "readonly"},
+		{"cisco_nxos", "shell:roles*network-admin", "admin"},
+		{"cisco_nxos", "shell:roles*network-operator", "admin"},
+	} {
+		body := strings.NewReplacer("KEY", tt.key, "ATTR", tt.attr, "max_privilege: readonly",
+			"max_privilege: "+tt.ceiling).Replace(body)
+		if q := mustParse(t, body).Quarantines(noon); len(q) != 0 {
+			t.Errorf("%s under %s: %+v", tt.attr, tt.ceiling, q)
+		}
+	}
+}

@@ -61,9 +61,20 @@ func (p *Policy) intersections(now time.Time) []Finding {
 						}
 					}
 				}
-				fallback, note := dialect.Fallback[level], dialect.FallbackNote[level]
+				// The device's fallback reads the reply it was sent, not the
+				// level's name: a role or grant that sends a higher level's
+				// role is exposed as that level is (final review I1).
+				exposed := p.deliveredLevel(dialect, res.Level, res.Blob.Attributes)
+				if _, rendered, ok := p.render(dialect, exposed); ok {
+					exposed = rendered
+				}
+				if exposed != level {
+					on = fmt.Sprintf("%s on %s, whose reply (%s) reaches %s", level, d.Platform,
+						strings.Join(res.Blob.Attributes, ", "), exposed)
+				}
+				fallback, note := dialect.Fallback[exposed], dialect.FallbackNote[exposed]
 				if (fallback != "" || note != "") && confined(res.Blob) {
-					add(FindingFallbackExposure, name+"\x00"+d.Platform+"\x00"+level,
+					add(FindingFallbackExposure, name+"\x00"+d.Platform+"\x00"+exposed,
 						"subject %q at %s: port49's rules confine it to %s, and if port49 cannot answer and the device "+
 							"falls back to local it gets %s: more than the policy grants (spec §6, §12)", name, on,
 						strings.Join(redacted(redact, permitsOf(res.Blob)), ", "), fallbackText(redact, fallback, note))
