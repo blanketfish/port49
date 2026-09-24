@@ -3487,6 +3487,8 @@ tests:
      expect: deny}        # only the CVE deny matches
   - {subject: security_ir,  device: srx-fw-04, command: "show chassis cluster status",
      expect: permit}      # the assess permit dominates the CVE deny at every position
+  - {subject: svc_oxidized, device: leaf-01, level: admin}
+                          # a session test: elevated_session lifts the login to admin
 ```
 
 Three things this example is chosen to show.
@@ -3520,7 +3522,16 @@ Leaf regex is the one construct that degrades this: a regex position is not enum
 the diff reports *"argument 3 is regex-constrained and the constraint changed"* rather than
 listing commands. This is contained, and is a reason to prefer literals and `*`.
 
-**Policy tests** run in CI against a file-backed inventory, as in §11.
+**Policy tests** run in CI against a file-backed inventory, as in §11. A test names a
+`subject` (or a `principal`) and a `device`, and asserts one or both of:
+
+- **a command:** `command:` with `expect: permit` or `deny`, and optionally the `reason:`;
+- **the session:** `level:`, the level the subject's roles compose to on that device, and
+  `max_privilege:`, the ceiling its grants compose to there (`none` for no ceiling). A test
+  with no `command:` is a session test and takes no `expect:`; it passes only where the
+  subject would be minted a token for the device, with the level and ceiling it names.
+
+A session test is what acknowledges a privilege raise to the gate below.
 
 **Intersection checks.** Because the effective permission set is the intersection of what
 the device offers and what port49 permits (§6), CI MUST report where the two disagree. Neither of these is visible in any existing TACACS+
@@ -3562,7 +3573,16 @@ and each device the new policy quarantines. It exits non-zero on a command a den
 the new policy permits, unless a policy test in the new policy exercises that permit over that
 deny, on a newly quarantined device, and on a subject whose mint the new policy's broker
 refuses (`attribute_too_long`, `attribute_unsafe`), since the diff, `policy test` and `explain`
-run the broker's mint checks and answer as it does. Regex and class terms are matched only
+run the broker's mint checks and answer as it does.
+
+**A level or ceiling raise fails the gate too** (owner's ruling 2026-09-24): a subject whose
+roles now compose to a higher level on a device (`readonly` to `admin`), or whose grants' ceiling
+is raised or removed there, unless a session test in the new policy asserts the new value for
+that subject on that device — `level:` for a level raise, `max_privilege:` for a ceiling raise.
+Higher is later in `privilege_levels` as the new policy orders it; a level the new policy no
+longer declares counts as raised from. The devices a raise is reported on hold the same blobs
+and ceiling, so a test on any one of them is the assertion for all. A lowering is reported and
+does not fail. Regex and class terms are matched only
 against the words the rules name, so a rule that carries one and changed, or a permit that carries one and
 meets a deny that changed, is reported as regex-constrained rather than enumerated (§4).
 
