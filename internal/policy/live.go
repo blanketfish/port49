@@ -25,8 +25,10 @@ type Live struct {
 	p  atomic.Pointer[Policy]
 }
 
-// NewLive returns a Live holding p.
+// NewLive returns a Live holding p. A nil p panics here, where it is handed
+// over, rather than at the next packet that reads it.
 func NewLive(p *Policy) *Live {
+	mustPolicy(p)
 	l := &Live{}
 	l.p.Store(p)
 	return l
@@ -44,10 +46,18 @@ func (l *Live) Hold() (p *Policy, release func()) {
 
 // Swap puts p in force and returns the policy it replaced. It waits for every
 // Hold on the old policy to be released, and a Hold after it returns sees p.
+// A nil p panics, as NewLive's does.
 func (l *Live) Swap(p *Policy) *Policy {
+	mustPolicy(p)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.p.Swap(p)
+}
+
+func mustPolicy(p *Policy) {
+	if p == nil {
+		panic("policy: a nil policy cannot be in force")
+	}
 }
 
 // Quarantined is (*Policy).Quarantined on the policy in force: the daemon's

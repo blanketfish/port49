@@ -95,3 +95,21 @@ func TestPrincipalsAndUsernameOf(t *testing.T) {
 		t.Fatal("a principal no subject lists has no username")
 	}
 }
+
+// A nil policy is refused where it is handed over, not at the next packet
+// that reads it, far from its cause (final review m8).
+func TestLiveRefusesANilPolicy(t *testing.T) {
+	for name, fn := range map[string]func(){
+		"NewLive": func() { NewLive(nil) },
+		"Swap":    func() { NewLive(&Policy{}).Swap(nil) },
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s(nil) must panic", name)
+				}
+			}()
+			fn()
+		}()
+	}
+}
