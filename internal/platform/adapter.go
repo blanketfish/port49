@@ -416,6 +416,9 @@ func Validate(name string, d Dialect) error {
 		}
 	}
 	for i, c := range d.ConfigChecks {
+		if strings.Contains(c.Match, Redacted) {
+			return pastedBack(fmt.Sprintf("%s[%d].match", field("config_checks"), i))
+		}
 		if _, err := regexp.Compile(c.Match); err != nil || c.Match == "" || strings.TrimSpace(c.Says) == "" {
 			return fmt.Errorf("%s[%d]: match is an RE2 pattern over a configuration line, and says what the line costs",
 				field("config_checks"), i)
@@ -439,11 +442,22 @@ func Validate(name string, d Dialect) error {
 		return fmt.Errorf("%s must be %q", field("enable_username"), EnablePrincipal)
 	}
 	for i, line := range d.DeviceConfig {
+		if strings.Contains(line, Redacted) {
+			return pastedBack(fmt.Sprintf("%s[%d]", field("device_config"), i))
+		}
 		if strings.TrimSpace(line) == "" || strings.ContainsFunc(line, func(r rune) bool { return r < 0x20 || r > 0x7e }) {
 			return fmt.Errorf("%s[%d]: one printable ASCII configuration line", field("device_config"), i)
 		}
 	}
 	return nil
+}
+
+// pastedBack is the refusal of a value holding the marker `platform export`
+// writes in a secret's place (spec §5.8): an export pasted back would hold a
+// device to a line nobody wrote, or run a check that matches nothing.
+func pastedBack(at string) error {
+	return fmt.Errorf("%s holds %s, the marker platform export writes in place of a value redaction hides: "+
+		"re-enter the value from your policy", at, Redacted)
 }
 
 // RegexpProblem is what a pattern RE2 refuses has wrong, without the

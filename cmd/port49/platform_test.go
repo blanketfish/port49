@@ -421,3 +421,34 @@ func TestPlatformExportKeepsARegexCheckWhole(t *testing.T) {
 		}
 	}
 }
+
+// An export of a block whose check or line carries a secret holds the
+// marker in the value's place; pasted back, it would run a check that
+// matches nothing or hold the device to a line nobody wrote, so the load
+// refuses it and says to re-enter the value (task 15 re-review 2, R1b).
+func TestAPastedBackRedactedValueIsRefused(t *testing.T) {
+	for key, block := range map[string]string{
+		"platforms.arista_eos.config_checks[0].match": "    config_checks:\n      - {match: '^snmp-server community Hunter2', says: x}\n",
+		"platforms.arista_eos.device_config[1]": "    device_config: [\"aaa authorization exec default group port49 local\", " +
+			"\"snmp-server community Hunter2 ro\"]\n",
+	} {
+		pol, inv := policyFixture(t)
+		raw := readFile(t, pol)
+		if err := os.WriteFile(pol, append([]byte("platforms:\n  arista_eos:\n"+block), raw...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "arista_eos"}, &out, &errb); code != 0 ||
+			!strings.Contains(out.String(), platform.Redacted) {
+			t.Fatalf("code %d %s%s", code, out.String(), errb.String())
+		}
+		if err := os.WriteFile(pol, append(out.Bytes(), raw...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		code := run([]string{"platform", "show", "--policy", pol, "--inventory", inv, "arista_eos"}, &out, &errb)
+		if code != 1 || !strings.Contains(errb.String(), key) || !strings.Contains(errb.String(), "re-enter the value from your policy") {
+			t.Errorf("%s: code %d\n%s", key, code, errb.String())
+		}
+	}
+}
