@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -336,7 +337,8 @@ func TestBrokerTLSErrorsReachPort49dsLog(t *testing.T) {
 }
 
 // writeRunConfig writes a complete port49d.yaml whose broker block uses b,
-// and returns its path.
+// and returns its path. It has no lab: block: it is the production shape, a
+// daemon answering only what the broker minted (plan 4, Decided 12).
 func writeRunConfig(t *testing.T, b *config.BrokerConfig) string {
 	t.Helper()
 	t.Setenv("T_RUN_SECRET", "run-test-secret")
@@ -362,14 +364,13 @@ keys:
 encryption:
   current: {id: v1, secret_env: T_RUN_ENC}
 accounting: {spool_path: %s}
-lab:
-  session_attributes: ["priv-lvl=15"]
 broker:
   listen: %q
   tls_cert_file: %s
   tls_key_file: %s
   client_ca_file: %s
   policy_file: %s
+  policy_watch_interval: 1s
 `, inv, filepath.Join(dir, "acct.jsonl"), b.Listen, b.TLSCertFile, b.TLSKeyFile, b.ClientCAFile,
 		b.PolicyFile)), 0o600); err != nil {
 		t.Fatal(err)
@@ -385,7 +386,7 @@ func runExpectingRefusal(t *testing.T, cfgPath string) (string, error) {
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = &out
 	done := make(chan error, 1)
-	go func() { done <- run(cfgPath) }()
+	go func() { done <- run(context.Background(), cfgPath) }()
 	select {
 	case err := <-done:
 		return out.String(), err

@@ -51,7 +51,9 @@ import (
 func main() {
 	cfgPath := flag.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
 	flag.Parse()
-	if err := run(*cfgPath); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, *cfgPath); err != nil {
 		fmt.Fprintln(os.Stderr, "port49d:", err)
 		os.Exit(1)
 	}
@@ -166,9 +168,12 @@ func labWarning(lab *config.LabConfig) string {
 		"never be in production\n", strings.Join(enables, "; "))
 }
 
-// stderr is where port49d's operational lines go — not the decision log,
-// which is stdout — swapped in tests.
-var stderr io.Writer = os.Stderr
+// stderr is where port49d's operational lines go, and stdout is the decision
+// log; both are swapped in tests.
+var (
+	stderr io.Writer = os.Stderr
+	stdout io.Writer = os.Stdout
+)
 
 // buildBroker loads what the broker needs and returns its server and the
 // broker, or nils when no broker: block is configured. The daemon asks the
@@ -307,7 +312,10 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
 	return live.Quarantined
 }
 
-func run(cfgPath string) error {
+// run is port49d from config load to exit. It serves until parent ends —
+// main's is SIGINT or SIGTERM, a test's is its own — and then shuts down in
+// the order the package comment gives, returning once the spool has drained.
+func run(parent context.Context, cfgPath string) error {
 	// SIGHUP reloads the policy (plan 4b), and is taken with no broker too,
 	// where it is said to do nothing: its default action ends the process, and
 	// a reload habit must not take device AAA down. It is caught first, before
@@ -324,14 +332,12 @@ func run(cfgPath string) error {
 	}
 	fmt.Fprint(stderr, labWarning(cfg.Lab))
 
-	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	ctx, cancel := context.WithCancel(signalCtx)
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg)
-	log := decision.NewJSONLinesWithFailureHook(os.Stdout, m.DecisionLogWriteFailures.Inc)
+	log := decision.NewJSONLinesWithFailureHook(stdout, m.DecisionLogWriteFailures.Inc)
 	lim := limits.New(cfg.Limits, time.Now)
 
 	// Everything that holds a credential, a principal or a context is sealed
@@ -499,15 +505,17 @@ func run(cfgPath string) error {
 			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
 		}
 	}
+	// The bound address, not the configured one: `:49` says nothing about
+	// which address answered, and `:0` says nothing about which port.
 	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
-		cfg.Listen, cfg.MetricsListen, len(cfg.Inventory.Devices))
+		ln.Addr(), cfg.MetricsListen, len(cfg.Inventory.Devices))
 
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {
 		// Capped, so connections to the broker cannot take the file
 		// descriptors the TACACS+ listener beside it needs (pre-flight F1).
 		go func() { brokerErr <- brokerSrv.ServeTLS(broker.Limit(bln, broker.MaxConns), "", "") }()
-		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", brokerSrv.Addr)
+		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", bln.Addr())
 	}
 
 	// The policy file is watched and SIGHUP reloads it (plan 4b); hup was
