@@ -303,6 +303,11 @@ func (p *Policy) buildRoles(f file) error {
 				if err := p.checkClasses(rule); err != nil {
 					return fmt.Errorf("role %q: %w", r.Name, err)
 				}
+				if list.deny {
+					if err := p.checkWidening(rule); err != nil {
+						return fmt.Errorf("role %q: %w", r.Name, err)
+					}
+				}
 				*list.out = append(*list.out, engine.CanonicalRule(rule))
 			}
 		}
@@ -745,6 +750,29 @@ func (p *Policy) checkClasses(rule string) error {
 		}
 	}
 	return nil
+}
+
+// checkWidening refuses a deny whose regex or class patterns some platform
+// needs widened and port49 cannot widen: on a platform that may send what
+// was typed, a pattern whose abbreviations cannot be listed would let one
+// slip past the deny (spec §3 rule 4). It is the policy's own error rather
+// than a device's, since the platform's dialect does not change with
+// inventory, so the policy is refused and never goes live.
+func (p *Policy) checkWidening(rule string) error {
+	platforms := p.platforms()
+	for _, name := range sortedKeys(platforms) {
+		d := platforms[name]
+		if err := engine.CheckDeny(rule, d.EntityClasses, normalizeOf(d)); err != nil {
+			return fmt.Errorf("on %s, %w", name, err)
+		}
+	}
+	return nil
+}
+
+// normalizeOf is the part of a dialect a blob carries (spec §5.1.2).
+func normalizeOf(d platform.Dialect) engine.Normalize {
+	return engine.Normalize{PipeToken: d.PipeToken, PipeAuthorized: d.PipeAuthorized,
+		StripCR: d.StripCR, ExpandsAbbreviations: d.ExpandsAbbreviations}
 }
 
 // numberedAnywhere reports whether some platform gives level a priv-lvl

@@ -191,6 +191,61 @@ func TestAFoldedAbbreviationCannotSlipPastADeny(t *testing.T) {
 	expect(t, typed, "ſh run", false, decision.NoPermitDominatesDeny)
 }
 
+// Spec §3 rule 4 for a class or regex term: on a platform that may send what
+// was typed, `int ma1` must not slip past `deny interface @management`. A
+// deny's pattern that names a literal stem also matches every abbreviation of
+// the stem followed by what the pattern allows after it, so `Ma1` is denied as
+// `Management1` is; a permit's pattern still matches only as written.
+func TestAnAbbreviatedNameCannotSlipPastADenysPattern(t *testing.T) {
+	lines := []string{"admin:permit **", "no_mgmt:deny interface @management", "no_lo:deny interface /^Loopback[0-9]+$/"}
+	typed := program(t, false, lines...)
+	for _, line := range []string{"int ma1", "interface Ma1", "interface management1", "interface M1", "interface lo0", "int Loop0"} {
+		expect(t, typed, line, false, decision.NoPermitDominatesDeny)
+	}
+	// Past the stem the pattern binds as written: `Ma` alone names no
+	// interface @management holds, and `Mx1` abbreviates nothing.
+	for _, line := range []string{"interface Ma", "interface Mx1", "interface Ethernet1"} {
+		expect(t, typed, line, true, decision.PermitDominates)
+	}
+	ro := program(t, false, "net:permit interface @management", "net:permit interface /^Loopback[0-9]+$/")
+	expect(t, ro, "interface Ma1", false, decision.NoRuleMatched)
+	expect(t, ro, "interface Lo0", false, decision.NoRuleMatched)
+	resolved := program(t, true, lines...)
+	expect(t, resolved, "interface Ma1", true, decision.PermitDominates)
+}
+
+// A deny's pattern whose abbreviations cannot be read from its syntax is
+// refused on a platform that may send what was typed, rather than left to
+// miss one (spec §3 rule 4): an unanchored pattern, or one that does not
+// start with the literal name. Where the platform sends resolved words, or on
+// a permit, it is fine.
+func TestADenyPatternWithUnreadableAbbreviationsIsRefused(t *testing.T) {
+	for _, rule := range []string{"interface /Management/", "interface /^[a-z]+[0-9]+$/", "interface /^Ma.?nagement1$/",
+		"interface /^Gig[a-z]*[0-9]+$/"} {
+		if _, _, err := Encode(testBlob(false, "d:deny "+rule)); err == nil || !strings.Contains(err.Error(), "abbreviat") {
+			t.Errorf("%s: %v, want a refusal naming the abbreviations it cannot read", rule, err)
+		}
+		if _, _, err := Encode(testBlob(true, "d:deny "+rule)); err != nil {
+			t.Errorf("%s, resolved words: %v", rule, err)
+		}
+		if _, _, err := Encode(testBlob(false, "p:permit "+rule)); err != nil {
+			t.Errorf("%s, a permit: %v", rule, err)
+		}
+	}
+	// A name with an optional part, an alternation, a pattern past which
+	// anything may follow, and one that starts with no letter all read.
+	for _, rule := range []string{"interface /^Gig(abit)?Ethernet[0-9/]+$/", "interface /^(management|mgmt)[0-9]*$/",
+		"copy * /^tftp:/", "show /^run.*/", "vlan /^[0-9]+$/", "interface @physical"} {
+		if _, _, err := Encode(testBlob(false, "d:deny "+rule)); err != nil {
+			t.Errorf("%s: %v", rule, err)
+		}
+	}
+	gig := program(t, false, "admin:permit **", "d:deny interface /^Gig(abit)?Ethernet[0-9/]+$/")
+	for _, line := range []string{"int Gi1/0/1", "interface GigE1", "interface g0"} {
+		expect(t, gig, line, false, decision.NoPermitDominatesDeny)
+	}
+}
+
 // Specificity is a property of the rule and the command, never of position, so
 // shuffling the rules changes no outcome, not even which rule is named
 // (spec §5.4; §14, "Order independence").

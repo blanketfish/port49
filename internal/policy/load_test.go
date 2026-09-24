@@ -136,6 +136,8 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a regex that is a word", "roles:\n  - {name: r, deny: [\"/^reload$/ **\"]}\n" + subjOK, "the word `reload`"},
 		{"a case-sensitive regex", "roles:\n  - {name: r, deny: [\"* * /(?-i)^TFTP:/\"]}\n" + subjOK, "case-insensitively"},
 		{"a case-sensitive group", "roles:\n  - {name: r, deny: [\"interface /(?s-i:^Mgmt)/\"]}\n" + subjOK, "case-insensitively"},
+		{"a deny pattern whose abbreviations cannot be read", "roles:\n  - {name: r, deny: [\"interface /Management/\"]}\n" + subjOK,
+			"on juniper_junos, deny \"interface /Management/\": /Management/: the platform may send it abbreviated"},
 		{"a class no platform defines", "roles:\n  - {name: r, permit: [\"interface @uplinks\"]}\n" + subjOK, "which no platform defines"},
 		{"a ceiling no platform numbers", scopeOK + roleOK + subjOK +
 			"grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: operator}\n", "no priv-lvl number on any platform"},
@@ -227,9 +229,10 @@ func TestATestReasonFromTheVocabularyLoads(t *testing.T) {
 
 // A deny regex that sets flags without turning case-insensitivity off loads,
 // and a permit or pipe entry may opt out with (?-i): that only narrows what
-// it permits, so it fails closed (spec §3 rule 3).
+// it permits, so it fails closed (spec §3 rule 3). Each deny is anchored, as
+// a deny's pattern must be where abbreviations are read (spec §3 rule 4).
 func TestOnlyADenyMustStayCaseInsensitive(t *testing.T) {
-	mustParse(t, "roles:\n  - {name: r, deny: [\"* * /(?i)^tftp:/\", \"* * /(?s)^ftp:/\", \"* * /[(?-i)]/\"]}\n"+subjOK)
+	mustParse(t, "roles:\n  - {name: r, deny: [\"* * /(?i)^tftp:/\", \"* * /(?s)^ftp:/\", \"* * /^0[(?-i)]/\"]}\n"+subjOK)
 	p := mustParse(t, scopeOK+`roles:
   - {name: r, privilege: readonly, permit: ["show ip access-list /(?-i)^MGMT$/"], pipe: {permit: ["include /(?U-i)x/"]}}
 `+subjOK+grantOK)
@@ -237,6 +240,31 @@ func TestOnlyADenyMustStayCaseInsensitive(t *testing.T) {
 	for command, want := range map[string]bool{"show ip access-list MGMT": true, "show ip access-list mgmt": false} {
 		if _, o, err := p.Decide("s", "", d, command, noon); err != nil || o.Permit != want {
 			t.Errorf("%q: permit %v, err %v; want %v", command, o.Permit, err, want)
+		}
+	}
+}
+
+// On a platform that may send what was typed — the generic adapter, which
+// nothing has measured — an abbreviated interface cannot slip past a deny
+// naming it by pattern; on EOS, which L21 measured sending the resolved name,
+// what arrives is matched as written (spec §3 rule 4).
+func TestAnAbbreviatedNameIsDeniedWhereAbbreviationsAreAssumed(t *testing.T) {
+	p := mustParse(t, scopeOK+`roles:
+  - {name: r, privilege: admin, permit: ["**"]}
+  - {name: no_mgmt, deny: ["interface /^Management[0-9]+$/"]}
+`+subjOK+"grants:\n  - {subject: s, scope: all_devices, roles: [r, no_mgmt]}\n")
+	generic := admission.Device{Name: "ntp-01", Platform: "meinberg_lantime", Addresses: []netip.Addr{netip.MustParseAddr("10.0.9.1")}}
+	for _, tt := range []struct {
+		d       admission.Device
+		command string
+		want    bool
+	}{
+		{generic, "int ma1", false}, {generic, "interface Ma1", false}, {generic, "interface Management1", false},
+		{generic, "interface Ethernet1", true},
+		{deviceNamed(t, "leaf-01"), "interface Ma1", true}, {deviceNamed(t, "leaf-01"), "interface Management1", false},
+	} {
+		if _, o, err := p.Decide("s", "", tt.d, tt.command, noon); err != nil || o.Permit != tt.want {
+			t.Errorf("%s %q: permit %v (%s), err %v; want %v", tt.d.Platform, tt.command, o.Permit, o.Reason, err, tt.want)
 		}
 	}
 }

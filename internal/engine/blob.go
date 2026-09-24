@@ -205,6 +205,16 @@ func (b Blob) check() error {
 			}
 		}
 	}
+	// A deny whose patterns cannot be widened as the platform needs would
+	// miss what the device sends (spec §3 rule 4).
+	for _, r := range b.Rules {
+		if r.Verdict != Deny {
+			continue
+		}
+		if err := CheckDeny(r.Rule, b.Classes, b.Normalize); err != nil {
+			return fmt.Errorf("engine: on %s, %w", b.Platform, err)
+		}
+	}
 	names := map[string]bool{}
 	for _, a := range b.Attributes {
 		if err := CheckAttribute(a); err != nil {

@@ -254,7 +254,14 @@ entire class.
    non-empty proper prefix of itself, case-insensitively, so `rel` is denied by
    `deny: reload **`; a **permit's** word matches only as written, so `sh run` is not
    permitted by `permit: show **`. An abbreviation is therefore denied or matched as written
-   and never slips past a deny. The cost is an over-denial of a full word that is a prefix of
+   and never slips past a deny. A deny's `@class` or `/re/` term is widened the same way:
+   each branch of its pattern is read as `^`, a literal name and what follows the name, and
+   the term also matches any non-empty prefix of the name followed by the same tail, so
+   `int ma1` is denied by `deny: interface @management` where `@management` is
+   `^Management[0-9]+$`. A deny pattern that cannot be read that way — unanchored, starting
+   with anything but its literal name, or a name that runs on into a part that may be more
+   of it — is a **policy load error** naming the term and the platform, because the
+   abbreviations it would miss cannot be listed. The cost is an over-denial of a full word that is a prefix of
    a deny's word — `show ip` against `deny: show ipv6 **` — reported by name in the
    `server_msg`. `arista_eos`, `cisco_nxos` and `cisco_iosxe` are marked `true`, set from
    L21 (closed 2026-09-24): all three send the resolved words over interactive SSH (§15, L21;

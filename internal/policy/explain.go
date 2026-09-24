@@ -213,8 +213,7 @@ func (p *Policy) wouldPermit(line, platformName string) ([]string, error) {
 	for name, r := range p.roles {
 		// This blob is never minted; Compile only needs a bundle named.
 		b := engine.Blob{Version: engine.Version, Bundle: "explain", Platform: platformName, Classes: dialect.EntityClasses,
-			Normalize: engine.Normalize{PipeToken: dialect.PipeToken, PipeAuthorized: dialect.PipeAuthorized,
-				StripCR: dialect.StripCR, ExpandsAbbreviations: dialect.ExpandsAbbreviations}}
+			Normalize: normalizeOf(dialect)}
 		for _, rule := range r.Permit {
 			missing, err := missingClass(rule, dialect.EntityClasses)
 			if err != nil {

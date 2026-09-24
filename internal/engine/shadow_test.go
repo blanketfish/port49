@@ -35,6 +35,10 @@ func TestShadowsAreTheDominancesThatCanHappen(t *testing.T) {
 		// The permit's word matches every case-fold of itself, and each is an
 		// abbreviation the deny takes.
 		{"a folded abbreviation", "ſh version", "show **", true, false, false},
+		// A deny's class takes the abbreviations of its names the same way
+		// (spec §3 rule 4), so a permit naming one is a shadow.
+		{"an abbreviated name, sent as typed", "interface Ma1", "interface @management", true, false, false},
+		{"an abbreviated name, sent resolved", "interface Ma1", "interface @management", false, false, true},
 	} {
 		p := program(t, tt.expandsAbbrev, "p:permit "+tt.permit, "d:deny "+tt.deny)
 		got := p.Shadows()

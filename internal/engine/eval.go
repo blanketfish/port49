@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -37,14 +38,14 @@ func Compile(b Blob) (*Program, error) {
 	}
 	p := &Program{Blob: b}
 	for _, r := range b.Rules {
-		c, err := compileRule(r.Verdict, r.Rule, r.Role, b.Classes)
+		c, err := compileRule(r.Verdict, r.Rule, r.Role, b.Classes, b.Normalize)
 		if err != nil {
 			return nil, err
 		}
 		p.rules = append(p.rules, c)
 	}
 	for _, r := range b.Pipe {
-		c, err := compileRule(Permit, r, "", b.Classes)
+		c, err := compileRule(Permit, r, "", b.Classes, b.Normalize)
 		if err != nil {
 			return nil, err
 		}
@@ -53,7 +54,9 @@ func Compile(b Blob) (*Program, error) {
 	return p, nil
 }
 
-func compileRule(verdict, rule, role string, classes map[string][]string) (compiled, error) {
+// compileRule compiles one rule. A deny's regex and class patterns are widened
+// as the dialect n calls for (denyPatterns); a permit's never are.
+func compileRule(verdict, rule, role string, classes map[string][]string, n Normalize) (compiled, error) {
 	terms, err := ParseRule(rule)
 	if err != nil {
 		return compiled{}, err
@@ -61,19 +64,20 @@ func compileRule(verdict, rule, role string, classes map[string][]string) (compi
 	c := compiled{verdict: verdict, rule: CanonicalRule(rule), role: role}
 	for _, t := range terms {
 		ct := cterm{kind: t.Kind, word: t.Text}
-		var patterns []string
-		switch t.Kind {
-		case Regex:
-			patterns = []string{t.Text}
-		case Class:
-			patterns = classes[t.Text]
-		}
-		for _, pat := range patterns {
-			re, err := compileTerm(pat)
-			if err != nil {
-				return compiled{}, err
+		for _, pat := range termPatterns(t, classes) {
+			patterns := []string{pat}
+			if verdict == Deny {
+				if patterns, err = denyPatterns(pat, n); err != nil {
+					return compiled{}, fmt.Errorf("deny %q: %s: %w", c.rule, termName(t, pat), err)
+				}
 			}
-			ct.res = append(ct.res, re)
+			for _, p := range patterns {
+				re, err := compileTerm(p)
+				if err != nil {
+					return compiled{}, err
+				}
+				ct.res = append(ct.res, re)
+			}
 		}
 		c.terms = append(c.terms, ct)
 	}
