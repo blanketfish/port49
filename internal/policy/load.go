@@ -1361,6 +1361,26 @@ func (p *Policy) dialect(name string) platform.Dialect {
 	return d
 }
 
+// ConfigDialect is the adapter `port49 devices check-config` holds a device of
+// the platform to: the policy's, over the set's adapter the platform stands
+// for — its own, or the one its block is based_on — as the floor
+// (platform.ConfigFloor). A block's device_config is what `platform show`
+// prints, and a block that rewrote a set line to end in `none` would
+// otherwise have the check require the unsafe line; the set's lines and
+// checks apply whatever the block says. A platform no set ships has no floor.
+func (p *Policy) ConfigDialect(platformName string) platform.Dialect {
+	d := p.dialect(platformName)
+	shippedAs := platformName
+	if b, ok := p.overrides[platformName]; ok && b.BasedOn != "" {
+		shippedAs = b.BasedOn
+	}
+	builtin, _ := p.builtinSet(p.set)
+	if ref, ok := builtin[shippedAs]; ok {
+		return platform.ConfigFloor(d, ref)
+	}
+	return d
+}
+
 // SubjectOf names the subject a principal resolves to, by its identity lists.
 // A group subject is matched through the directory, which is plan 7's.
 func (p *Policy) SubjectOf(principal string) (string, bool) {

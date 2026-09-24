@@ -89,3 +89,90 @@ func TestALocalAccountPatternCapturesTheName(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// A line the adapter's renderings depend on that the configuration does not
+// carry is missing: IOS-XE's operator is level 7, and without its level-7
+// command method list a level-7 command is never asked about (spec §6). The
+// lab's configurations carry every line their adapter names.
+func TestARequiredLineThatIsAbsentIsMissing(t *testing.T) {
+	for platformName, file := range map[string]string{"arista_eos": "eos-startup.cfg", "cisco_iosxe": "iosxe-startup.cfg",
+		"cisco_nxos": "nxos-startup.cfg", "juniper_junos": "vjunos-startup.conf"} {
+		raw, err := os.ReadFile("../../tests/lab/configs/" + file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, _ := DialectFor(platformName)
+		if missing, err := Missing(raw, d.DeviceConfig); err != nil || len(missing) != 0 {
+			t.Errorf("%s: %q %v", platformName, missing, err)
+		}
+	}
+	xe, _ := DialectFor("cisco_iosxe")
+	raw, _ := os.ReadFile("../../tests/lab/configs/iosxe-startup.cfg")
+	cut := strings.Replace(string(raw), "aaa authorization commands 7 default group port49 local\n", "", 1)
+	missing, err := Missing([]byte(cut), xe.DeviceConfig)
+	if err != nil || !reflect.DeepEqual(missing, []string{"aaa authorization commands 7 default group port49 local"}) {
+		t.Fatalf("%q %v", missing, err)
+	}
+	// Runs of whitespace are one space; a line indented under another command,
+	// or carrying more words, is not the line.
+	required := []string{"aaa authorization commands 7 default group port49 local"}
+	for config, want := range map[string]int{
+		"aaa  authorization commands 7 default group port49 local  \n":   0,
+		"aaa authorization commands 7 default group port49 local\r\n":    0,
+		" aaa authorization commands 7 default group port49 local\n":     1,
+		"aaa authorization commands 7 default group port49 local none\n": 1,
+		"": 1,
+	} {
+		if missing, _ := Missing([]byte(config), required); len(missing) != want {
+			t.Errorf("%q: missing %q", config, missing)
+		}
+	}
+	if _, err := Missing([]byte("banner motd "+strings.Repeat("x", 2<<20)+"\n"), required); err == nil {
+		t.Fatal("a line past the limit must fail the read")
+	}
+}
+
+// The set's device_config, local_accounts and config_checks are the floor
+// the check holds a device to: a block adds to them and never takes one away,
+// so a block that rewrites `local` to `none`, or empties the checks, still has
+// the set's line required and the set's checks run.
+func TestTheSetsConfigIsTheFloor(t *testing.T) {
+	ref, _ := DialectFor("arista_eos")
+	d := ref.clone()
+	d.DeviceConfig = []string{"aaa authorization exec default group port49 local",
+		"aaa authorization commands all default group port49 none"}
+	d.ConfigChecks, d.LocalAccounts = []ConfigCheck{}, []string{`^user (\S+)`}
+	got := ConfigFloor(d, ref)
+	if !reflect.DeepEqual(got.DeviceConfig, []string{"aaa authorization exec default group port49 local",
+		"aaa authorization commands all default group port49 local",
+		"aaa authorization commands all default group port49 none"}) {
+		t.Errorf("device_config %q", got.DeviceConfig)
+	}
+	if !reflect.DeepEqual(got.ConfigChecks, ref.ConfigChecks) {
+		t.Errorf("config_checks %+v", got.ConfigChecks)
+	}
+	if !reflect.DeepEqual(got.LocalAccounts, []string{`^username (\S+)`, `^user (\S+)`}) {
+		t.Errorf("local_accounts %q", got.LocalAccounts)
+	}
+	if !reflect.DeepEqual(ConfigFloor(ref, ref), ref) || !reflect.DeepEqual(ref, shipped["arista_eos"]) {
+		t.Fatal("the floor under the set's own adapter is that adapter, and it shares nothing")
+	}
+}
+
+// A configuration line is printed redacted, save a line some set's adapter
+// ships as device_config: that is lab text, never a secret, and the
+// abbreviation matching that reads `authentication` as `authentication-key`
+// would otherwise hide which line a device lacks.
+func TestAConfigLineIsRedactedUnlessASetShipsIt(t *testing.T) {
+	for line, want := range map[string]string{
+		"aaa authentication login default group port49 local":         "aaa authentication login default group port49 local",
+		"  aaa  authentication login default group port49 local ":     "aaa authentication login default group port49 local",
+		"aaa authentication login default group port49 local Hunter2": "aaa authentication «redacted» «redacted» «redacted» «redacted» «redacted» «redacted»",
+		"snmp-server community Hunter2 ro":                            "snmp-server community «redacted» «redacted»",
+		"copy scp://u:Hunter2@h/x":                                    "copy scp://u:«redacted»@h/x",
+	} {
+		if got := RedactConfigLine(AllRedactions(), line); got != want {
+			t.Errorf("%q: %q", line, got)
+		}
+	}
+}

@@ -2,9 +2,12 @@ package policy
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // Access review renders the flat grant table for one subject, with scope size
@@ -46,5 +49,39 @@ func TestServedUsernamesAreTheOnesAGrantReaches(t *testing.T) {
 	}
 	if _, _, err := p.ServedUsernames("nowhere", noon); err == nil {
 		t.Fatal("a device not in the inventory")
+	}
+}
+
+// ConfigDialect is the adapter devices check-config holds a device to: the
+// policy's, with the set's device_config, local_accounts and config_checks as
+// its floor. A block that rewrites a set line to end in `none` and empties
+// the checks takes none of them away, nor does a variant based_on the
+// platform; a platform no set ships has no floor.
+func TestConfigDialectKeepsTheSetsLines(t *testing.T) {
+	set, _ := platform.DialectFor("arista_eos")
+	unsafe := "    device_config: [\"aaa authorization commands all default group port49 none\"]\n" +
+		"    config_checks: []\n    local_accounts: []\n"
+	for name, block := range map[string]string{
+		"arista_eos": "platforms:\n  arista_eos:\n" + unsafe,
+		"eos_lab":    "platforms:\n  eos_lab:\n    based_on: arista_eos\n" + unsafe,
+	} {
+		p := mustParse(t, block+good)
+		d := p.ConfigDialect(name)
+		for _, line := range set.DeviceConfig {
+			if !slices.Contains(d.DeviceConfig, line) {
+				t.Errorf("%q: %q is not required", block, line)
+			}
+		}
+		if !reflect.DeepEqual(d.ConfigChecks, set.ConfigChecks) || !reflect.DeepEqual(d.LocalAccounts, set.LocalAccounts) {
+			t.Errorf("%q: %+v %q", block, d.ConfigChecks, d.LocalAccounts)
+		}
+	}
+	p := mustParse(t, "platforms:\n  acme_os:\n    supports: [session]\n    device_config: [\"aaa new-model\"]\n"+good)
+	if d := p.ConfigDialect("acme_os"); !reflect.DeepEqual(d.DeviceConfig, []string{"aaa new-model"}) ||
+		d.ConfigChecks != nil {
+		t.Fatalf("%+v", d)
+	}
+	if d := p.ConfigDialect("cisco_iosxe"); !reflect.DeepEqual(d, p.Dialect("cisco_iosxe")) {
+		t.Fatal("no block: the policy's adapter is the set's")
 	}
 }

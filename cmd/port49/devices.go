@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
+
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 // checkConfig is `port49 devices check-config` (spec §5.6, §6): a device's
@@ -14,10 +15,19 @@ import (
 // policy's adapter for its platform. A device-local account named as a
 // username port49 serves on that device is a collision the spec forbids —
 // such a session's commands arrive under the same username and are
-// authorized at the level port49 granted that username there — and each line
-// the adapter's checks name is one the spec says the device must not carry.
-// It exits 1 on either. port49 never logs into a device; this reads a file a
-// compliance tool fetched (spec §8, "Verification").
+// authorized at the level port49 granted that username there — each line
+// the adapter's checks name is one the spec says the device must not carry,
+// and each device_config line the configuration lacks is one the adapter's
+// renderings depend on (IOS-XE's level-7 command method list, spec §6). The
+// set's lines and checks are the floor under a `platforms:` block's
+// (Policy.ConfigDialect). It exits 1 on any of them. port49 never logs into a
+// device; this reads a file a compliance tool fetched (spec §8,
+// "Verification").
+//
+// A device's configuration is full of secrets — communities, keys, enable
+// secrets, a URL's password — so every line of it this prints is redacted by
+// every pattern that applies under the policy, and a line that could not be
+// read is never quoted (spec §5.8).
 func checkConfig(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 devices check-config", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -31,11 +41,17 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	out, errOut, flush := redactOutput(stdout, stderr)
+	defer flush()
+	stdout, stderr = out, errOut
 	p, err := files.load()
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 devices check-config:", err)
 		return 1
 	}
+	rules := p.Redactions()
+	out.rules, errOut.rules = rules, rules
+	redact := func(line string) string { return platform.RedactConfigLine(rules, line) }
 	d, ok := p.Device(*device)
 	if !ok {
 		fmt.Fprintf(stderr, "port49 devices check-config: device %q is not in the inventory\n", *device)
@@ -51,7 +67,13 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 devices check-config:", err)
 		return 1
 	}
-	accounts, findings, err := p.Dialect(d.Platform).ReadConfig(config)
+	dialect := p.ConfigDialect(d.Platform)
+	accounts, findings, err := dialect.ReadConfig(config)
+	if err != nil {
+		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
+		return 1
+	}
+	missing, err := platform.Missing(config, dialect.DeviceConfig)
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
 		return 1
@@ -67,7 +89,13 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, f := range findings {
 		failed++
-		fmt.Fprintf(stdout, "CONFIG: %s:%d: %s: %s\n", fs.Arg(0), f.Line, strings.TrimSpace(f.Text), f.Says)
+		fmt.Fprintf(stdout, "CONFIG: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
+	}
+	for _, line := range missing {
+		failed++
+		fmt.Fprintf(stdout, "MISSING: %s: %s: the configuration does not carry this line, and the %s adapter's "+
+			"renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 "+
+			"platform show %s)\n", fs.Arg(0), redact(line), d.Platform, d.Platform)
 	}
 	for _, g := range groups {
 		fmt.Fprintf(stdout, "note: group subject %s reaches %s; its members' usernames come from the directory "+
