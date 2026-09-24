@@ -17,11 +17,12 @@ whole-branch; the five calls in PR #10's "Questions for Ryan" were decided 2026-
 built on `feature/gate-rulings`: `operator` renders as level 15 on EOS and NX-OS, a level or
 ceiling raise and a regex-constrained widening fail `port49 policy diff`, a refused mint always
 does, a policy with no tests is reported `no_tests`, and a `lab:` block announces itself at
-start); **4b executed 2026-09-24 on `feature/live-policy`, not yet merged**
-(`2026-09-24-04b-live-policy.md`, eight tasks: one docs, six code, one docs; reviewed per task;
+start; PR #11); **4b merged 2026-09-24** (PR #12;
+(`2026-09-24-04b-live-policy.md`, eight tasks: one docs, six code, one docs; reviewed per task
+and whole-branch;
 its three "Questions for Ryan" were decided security-first: delete unspent tokens whose answer
 changed, rewrite every live context on every reload, leave a quarantined device's contexts);
-5–13 not yet.
+5–13 not yet. **Plan 5 (platform adapters) is the next plan to write.**
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
