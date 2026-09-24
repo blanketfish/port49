@@ -2,6 +2,7 @@ package policy
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -315,5 +316,23 @@ func TestABlocksUnreachableRulesAreTheOperators(t *testing.T) {
 	if _, err := Parse([]byte("platforms:\n  arista_eos: {unreachable_note: {readonly: [x]}}\n"+intersectBody), env()); err == nil ||
 		!strings.Contains(err.Error(), "platforms.arista_eos: unreachable_note is port49's own record") {
 		t.Errorf("%v", err)
+	}
+}
+
+// The note is quoted fragment by fragment around each marker, so no escape
+// in it can run into a restored «redacted» and leave a string no reader can
+// unquote (task 14 re-review 2, M6).
+func TestAnOperatorNoteQuotesValidly(t *testing.T) {
+	for _, note := range []string{`\\u00abredacted»`, `x \` + platform.Redacted + ` y`, `password Hunter2 \`} {
+		text := fallbackText(platform.AllRedactions(), "", note)
+		i := strings.Index(text, "(operator note: ")
+		if i < 0 || !strings.HasSuffix(text, ")") {
+			t.Fatalf("%s", text)
+		}
+		quoted := text[i+len("(operator note: ") : len(text)-1]
+		if _, err := strconv.Unquote(strings.ReplaceAll(quoted, platform.Redacted, "R")); err != nil ||
+			strings.Contains(quoted, "Hunter2") {
+			t.Errorf("%q: %s (%v)", note, quoted, err)
+		}
 	}
 }

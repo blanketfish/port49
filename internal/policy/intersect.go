@@ -174,9 +174,14 @@ func fallbackText(patterns []platform.Redaction, set, note string) string {
 		text = platform.RedactProse(patterns, set)
 	}
 	if note != "" {
-		marker := strings.Trim(strconv.QuoteToASCII(platform.Redacted), `"`)
-		text += " (operator note: " + strings.ReplaceAll(strconv.QuoteToASCII(platform.RedactProse(patterns, note)), marker,
-			platform.Redacted) + ")"
+		// Each fragment between markers is quoted on its own and the markers
+		// laid back between them, so no escape in the note can run into one
+		// and leave a string no reader unquotes (task 14 re-review 2, M6).
+		fragments := strings.Split(platform.RedactProse(patterns, note), platform.Redacted)
+		for i, f := range fragments {
+			fragments[i] = strings.TrimSuffix(strings.TrimPrefix(strconv.QuoteToASCII(f), `"`), `"`)
+		}
+		text += ` (operator note: "` + strings.Join(fragments, platform.Redacted) + `")`
 	}
 	return text
 }
