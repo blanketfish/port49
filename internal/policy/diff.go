@@ -2,8 +2,10 @@ package policy
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,33 +15,48 @@ import (
 )
 
 // Diff is the effective-permission diff between two versions of a policy
-// loaded against the same inventory (spec §5.4, §12): every command whose
+// loaded against the same inventory (spec §5.4, §12), at now and at every
+// later instant a grant in either version expires: every command whose
 // verdict moved, for every subject, on the devices that hold the same blobs
-// before and after; every level and ceiling that moved; every device that
-// gained or lost a subject's access outright; every changed rule carrying a
-// regex or class term, which the diff cannot enumerate; and every device the
-// new version quarantines that the old did not.
+// before and after, pipeline stages included; every level and ceiling that
+// moved; every device that gained or lost a subject's access outright; every
+// rule carrying a regex or class term that changed, or that a changed deny
+// meets, which the diff cannot enumerate; every device the new version
+// quarantines for a cause the old did not, and every one it releases; and
+// every composition that would not resolve.
 type Diff struct {
 	Changes     []Change
 	Access      []AccessChange
 	Levels      []LevelChange
 	Regex       []RegexChange
 	Quarantined []Quarantine
+	Released    []Release
+	// Unresolved are compositions the diff could not compare. The gate
+	// cannot vouch for them, so each fails it.
+	Unresolved []string
 }
 
 // Change is one command whose verdict moved.
 type Change struct {
 	Subject string
 	Devices []string
-	// Command is Vector joined by spaces. Vector is the command exactly as
-	// probed: an argument may carry whitespace, which a deny reads trimmed
-	// and a permit does not (spec §3), and only Vector keeps it.
+	// At is the first instant the change holds: the diff's now, or a later
+	// grant expiry.
+	At time.Time
+	// Command is Vector as a person reads it: an argument no rule names is
+	// `<any other argument>`, and one carrying whitespace is quoted. Vector
+	// is the command exactly as probed: an argument may carry whitespace,
+	// which a deny reads trimmed and a permit does not (spec §3).
 	Command  string
 	Vector   []string
 	Old, New engine.Outcome
-	// Gated is spec §12's privilege-expansion gate: a command a deny refused
-	// that the new version permits. Acknowledged is a policy test in the new
-	// version that exercises that permit over that deny.
+	// PipeEntry is the new version's allowlist entry that permits the
+	// pipeline stage the old version refused (pipe_stage_denied).
+	PipeEntry string
+	// Gated is spec §12's privilege-expansion gate: a command the old
+	// version refused with a deny, at a pipeline stage, or by quarantining
+	// the device, that the new version permits. Acknowledged is a policy
+	// test in the new version that exercises that permit.
 	Gated, Acknowledged bool
 }
 
@@ -48,6 +65,7 @@ type Change struct {
 type AccessChange struct {
 	Subject string
 	Devices []string
+	At      time.Time
 	Gained  bool
 }
 
@@ -56,17 +74,29 @@ type AccessChange struct {
 type LevelChange struct {
 	Subject                                    string
 	Devices                                    []string
+	At                                         time.Time
 	OldLevel, NewLevel, OldCeiling, NewCeiling string
 }
 
-// RegexChange is a rule carrying a regex or class term that one version has
-// and the other does not. Commands it matches are not enumerated, because a
-// regex position is not (spec §12, "Effective-permission diff in CI").
+// RegexChange is a rule carrying a regex or class term whose commands are not
+// enumerated, because a regex position is not (spec §12, "Effective-
+// permission diff in CI"). With Deny empty, Rule is one version has and the
+// other does not, and Added says the new one has it. With Deny set, Rule is a
+// permit that meets Deny, a deny the change added (Added) or removed.
 type RegexChange struct {
 	Subject string
 	Devices []string
+	At      time.Time
 	Rule    engine.Rule
+	Deny    engine.Rule
 	Added   bool
+}
+
+// Release is a device the old version quarantines and the new does not.
+// Everything the new version permits there is a change from refused.
+type Release struct {
+	Device, Platform string
+	At               time.Time
 }
 
 // Unacknowledged counts the gated changes no test exercises.
@@ -80,33 +110,42 @@ func (d Diff) Unacknowledged() int {
 	return n
 }
 
-// side is one version's view of one subject on one device.
+// side is one version's view of one subject on one device at one instant.
 type side struct {
-	prog        *engine.Program
-	res         Resolution
+	prog *engine.Program
+	res  Resolution
+	// hash names the blob with a fixed bundle in place of its own, which
+	// differs between any two files, so equal hashes mean the version
+	// changed nothing here.
 	hash        string
 	quarantined bool
+	err         error
 }
 
-func (p *Policy) side(subject string, d admission.Device) side {
-	if _, ok := p.Quarantined(d.Name, time.Time{}); ok {
+func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
+	if _, ok := p.Quarantined(d.Name, at); ok {
 		return side{quarantined: true}
 	}
 	sub, ok := p.subs[subject]
 	if !ok {
 		return side{}
 	}
-	res, err := p.resolve(sub, d, time.Time{})
-	if err != nil {
+	res, err := p.resolve(sub, d, at)
+	if errors.Is(err, ErrNoGrants) {
 		return side{}
 	}
-	_, hash, err := engine.Encode(res.Blob)
 	if err != nil {
-		return side{}
+		return side{err: err}
+	}
+	unbundled := res.Blob
+	unbundled.Bundle = "diff"
+	_, hash, err := engine.Encode(unbundled)
+	if err != nil {
+		return side{err: err}
 	}
 	prog, err := engine.Compile(res.Blob)
 	if err != nil {
-		return side{}
+		return side{err: err}
 	}
 	return side{prog: prog, res: res, hash: hash}
 }
@@ -124,28 +163,73 @@ func (s side) decide(vector []string) engine.Outcome {
 	return s.prog.Command(raw)
 }
 
-// Compare computes the diff from before to after, every grant in force. The
-// two must have been loaded against the same inventory; after's is the one
-// walked.
-func Compare(before, after *Policy) Diff {
-	var d Diff
-	// A zero time holds every entry, current or one an expiry brings on: a
-	// quarantine the change schedules is as much the change's as one it
-	// starts now.
-	quarantinedBefore := map[string]bool{}
-	for _, q := range before.Quarantines(time.Time{}) {
-		quarantinedBefore[q.Device] = true
+// Compare computes the diff from before to after at now and at every later
+// instant a grant in either version expires, when a composition, and so a
+// quarantine, can change: a grant that lapsed in the old version and is
+// re-armed in the new is seen at now, and a removed `expires:` at the
+// instant it would have lapsed. The two must have been loaded against the
+// same inventory; after's is the one walked. A change is reported once, at
+// the first instant it holds.
+func Compare(before, after *Policy, now time.Time) Diff {
+	instants := before.expiryInstants(now)
+	for _, at := range after.expiryInstants(now) {
+		if !slices.ContainsFunc(instants, at.Equal) {
+			instants = append(instants, at)
+		}
 	}
-	for _, q := range after.Quarantines(time.Time{}) {
-		if !quarantinedBefore[q.Device] {
-			d.Quarantined = append(d.Quarantined, q)
+	slices.SortFunc(instants, func(a, b time.Time) int { return a.Compare(b) })
+	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{}}
+	for _, at := range instants {
+		c.at(at)
+	}
+	return c.d
+}
+
+// comparison is one Compare in progress.
+type comparison struct {
+	before, after *Policy
+	acks          map[string]bool
+	// seen holds what has been reported, so an instant repeats nothing an
+	// earlier one found.
+	seen map[string]bool
+	d    Diff
+}
+
+func (c *comparison) once(parts ...string) bool {
+	k := shadowKey(parts...)
+	if c.seen[k] {
+		return false
+	}
+	c.seen[k] = true
+	return true
+}
+
+func (c *comparison) at(at time.Time) {
+	// Quarantines and releases are listed by device name, as Quarantines
+	// lists them.
+	byName := slices.Clone(c.after.Devices())
+	slices.SortFunc(byName, func(a, b admission.Device) int { return strings.Compare(a.Name, b.Name) })
+	for _, dev := range byName {
+		was, is := currentEntries(c.before, dev.Name, at), currentEntries(c.after, dev.Name, at)
+		var fresh []QuarantineEntry
+		for _, e := range is {
+			if !slices.ContainsFunc(was, func(w QuarantineEntry) bool { return w.Cause == e.Cause }) &&
+				c.once("quarantine", dev.Name, e.Cause) {
+				fresh = append(fresh, e)
+			}
+		}
+		if len(fresh) > 0 {
+			c.d.Quarantined = append(c.d.Quarantined, Quarantine{Device: dev.Name, Platform: dev.Platform, Entries: fresh})
+		}
+		if len(was) > 0 && len(is) == 0 && c.once("release", dev.Name) {
+			c.d.Released = append(c.d.Released, Release{Device: dev.Name, Platform: dev.Platform, At: at})
 		}
 	}
 	names := map[string]bool{}
-	for n := range before.subs {
+	for n := range c.before.subs {
 		names[n] = true
 	}
-	for n := range after.subs {
+	for n := range c.after.subs {
 		names[n] = true
 	}
 	subjects := make([]string, 0, len(names))
@@ -153,7 +237,6 @@ func Compare(before, after *Policy) Diff {
 		subjects = append(subjects, n)
 	}
 	sort.Strings(subjects)
-	acks := after.expansionAcks(before)
 	type group struct {
 		was, is side
 		devices []string
@@ -161,14 +244,25 @@ func Compare(before, after *Policy) Diff {
 	for _, subject := range subjects {
 		var order []string
 		groups := map[string]*group{}
-		for _, dev := range after.Devices() {
-			was, is := before.side(subject, dev), after.side(subject, dev)
-			if was.quarantined || is.quarantined || (was.prog == nil && is.prog == nil) {
+		for _, dev := range c.after.Devices() {
+			was, is := c.before.side(subject, dev, at), c.after.side(subject, dev, at)
+			if is.quarantined || (was.quarantined && is.prog == nil && is.err == nil) {
+				continue
+			}
+			if err := errors.Join(was.err, is.err); err != nil {
+				msg := fmt.Sprintf("%s on %s: %v", subject, dev.Name, err)
+				if c.once("unresolved", msg) {
+					c.d.Unresolved = append(c.d.Unresolved, msg)
+				}
+				continue
+			}
+			if !was.quarantined && was.prog == nil && is.prog == nil {
 				continue
 			}
 			// The ceiling is the grants', not the blob's, so it is part of
 			// what makes two devices alike.
-			key := was.hash + "|" + was.res.Ceiling + "|" + is.hash + "|" + is.res.Ceiling
+			key := strconv.FormatBool(was.quarantined) + "|" + was.hash + "|" + was.res.Ceiling + "|" + is.hash +
+				"|" + is.res.Ceiling
 			if _, ok := groups[key]; !ok {
 				groups[key] = &group{was: was, is: is}
 				order = append(order, key)
@@ -177,41 +271,152 @@ func Compare(before, after *Policy) Diff {
 		}
 		for _, key := range order {
 			g := groups[key]
-			if g.was.prog == nil || g.is.prog == nil {
-				d.Access = append(d.Access, AccessChange{Subject: subject, Devices: g.devices, Gained: g.was.prog == nil})
-				continue
-			}
-			was, is := g.was.res, g.is.res
-			if was.Level != is.Level || was.Ceiling != is.Ceiling {
-				d.Levels = append(d.Levels, LevelChange{Subject: subject, Devices: g.devices, OldLevel: was.Level,
-					NewLevel: is.Level, OldCeiling: was.Ceiling, NewCeiling: is.Ceiling})
-			}
-			if g.was.hash == g.is.hash {
-				continue
-			}
-			d.Regex = append(d.Regex, regexChanges(subject, g.devices, was.Blob.Rules, is.Blob.Rules)...)
-			for _, v := range engine.Probes(g.was.prog, g.is.prog) {
-				from, to := g.was.decide(v), g.is.decide(v)
-				if from.Permit == to.Permit {
-					continue
-				}
-				c := Change{Subject: subject, Devices: g.devices, Command: strings.Join(v, " "), Vector: v, Old: from,
-					New: to}
-				if !from.Permit && from.Deny != nil {
-					c.Gated = true
-					c.Acknowledged = acks[shadowKey(subject, from.Deny.Role, from.Deny.Rule, to.Decided.Role,
-						to.Decided.Rule)]
-				}
-				d.Changes = append(d.Changes, c)
-			}
+			c.group(subject, g.devices, g.was, g.is, at)
 		}
 	}
-	return d
+}
+
+// currentEntries are the device's quarantine entries in force at at.
+func currentEntries(p *Policy, device string, at time.Time) []QuarantineEntry {
+	q, ok := p.quarantine[device]
+	if !ok {
+		return nil
+	}
+	var out []QuarantineEntry
+	for _, e := range q.Entries {
+		if e.Current(at) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// group compares one subject on devices that hold the same blobs.
+func (c *comparison) group(subject string, devices []string, was, is side, at time.Time) {
+	on := strings.Join(devices, ",")
+	if was.quarantined {
+		// The old version refused everything here, so everything the new
+		// one permits is a change from refused (spec §10, §12).
+		for _, v := range engine.Probes(is.prog) {
+			if to := is.decide(v); to.Permit {
+				c.change(subject, devices, at, v, engine.Outcome{Reason: decision.DeviceQuarantined}, to, is)
+			}
+		}
+		return
+	}
+	if was.prog == nil || is.prog == nil {
+		if c.once("access", subject, on, strconv.FormatBool(was.prog == nil)) {
+			c.d.Access = append(c.d.Access, AccessChange{Subject: subject, Devices: devices, At: at,
+				Gained: was.prog == nil})
+		}
+		return
+	}
+	wr, ir := was.res, is.res
+	if (wr.Level != ir.Level || wr.Ceiling != ir.Ceiling) &&
+		c.once("level", subject, on, wr.Level, ir.Level, wr.Ceiling, ir.Ceiling) {
+		c.d.Levels = append(c.d.Levels, LevelChange{Subject: subject, Devices: devices, At: at, OldLevel: wr.Level,
+			NewLevel: ir.Level, OldCeiling: wr.Ceiling, NewCeiling: ir.Ceiling})
+	}
+	if was.hash == is.hash {
+		return
+	}
+	for _, r := range regexChanges(wr.Blob.Rules, ir.Blob.Rules) {
+		if c.once("regex", subject, on, r.Rule.Verdict, r.Rule.Role, r.Rule.Rule, r.Deny.Role, r.Deny.Rule,
+			strconv.FormatBool(r.Added)) {
+			r.Subject, r.Devices, r.At = subject, devices, at
+			c.d.Regex = append(c.d.Regex, r)
+		}
+	}
+	for _, e := range engine.Exposures(was.prog, is.prog) {
+		if c.once("exposure", subject, on, e.Permit.Role, e.Permit.Rule, e.Deny.Role, e.Deny.Rule,
+			strconv.FormatBool(e.Added)) {
+			c.d.Regex = append(c.d.Regex, RegexChange{Subject: subject, Devices: devices, At: at, Rule: e.Permit,
+				Deny: e.Deny, Added: e.Added})
+		}
+	}
+	var base []string
+	for _, v := range engine.Probes(was.prog, is.prog) {
+		from, to := was.decide(v), is.decide(v)
+		if from.Permit != to.Permit {
+			c.change(subject, devices, at, v, from, to, is)
+		} else if from.Permit && base == nil {
+			base = v
+		}
+	}
+	// A pipeline stage is decided by the allowlist once the command is
+	// permitted, so one command both versions permit carries every stage
+	// the two allowlists tell apart (spec §4, "Pipeline stages").
+	token := is.prog.Blob.Normalize.PipeToken
+	if base == nil || token == "" || slices.Equal(was.prog.Blob.Pipe, is.prog.Blob.Pipe) {
+		return
+	}
+	for _, stage := range engine.PipeProbes(was.prog, is.prog) {
+		v := slices.Concat(base, []string{token}, stage)
+		if from, to := was.decide(v), is.decide(v); from.Permit != to.Permit {
+			c.change(subject, devices, at, v, from, to, is)
+		}
+	}
+}
+
+// change records one command whose verdict moved, and whether it is gated.
+func (c *comparison) change(subject string, devices []string, at time.Time, v []string, from, to engine.Outcome,
+	is side) {
+	ch := Change{Subject: subject, Devices: devices, At: at, Command: display(v), Vector: v, Old: from, New: to}
+	if to.Permit && !from.Permit {
+		switch {
+		case from.Reason == decision.DeviceQuarantined:
+			ch.Gated = true
+			ch.Acknowledged = c.acks[releaseKey(subject, to.Decided.Role, to.Decided.Rule)]
+		case from.Reason == decision.PipeStageDenied && from.Stage > 0 && from.Stage <= len(to.Pipeline):
+			ch.Gated = true
+			ch.PipeEntry = is.prog.PipeEntry(to.Pipeline[from.Stage-1])
+			ch.Acknowledged = c.acks[pipeKey(subject, ch.PipeEntry)]
+		case from.Deny != nil:
+			ch.Gated = true
+			ch.Acknowledged = c.acks[shadowKey(subject, from.Deny.Role, from.Deny.Rule, to.Decided.Role,
+				to.Decided.Rule)]
+		}
+	}
+	var oldRule, newRule string
+	if from.Deny != nil {
+		oldRule = from.Deny.Rule
+	}
+	if to.Decided != nil {
+		newRule = to.Decided.Rule
+	}
+	if c.once(append([]string{"change", subject, strings.Join(devices, ","), string(from.Reason),
+		string(to.Reason), oldRule, newRule}, v...)...) {
+		c.d.Changes = append(c.d.Changes, ch)
+	}
+}
+
+// display is a probe vector as a person reads it.
+func display(v []string) string {
+	out := make([]string, len(v))
+	for i, a := range v {
+		switch {
+		case a == engine.OtherArgument:
+			out[i] = "<any other argument>"
+		case a == "" || strings.TrimSpace(a) != a || strings.ContainsAny(a, " \t"):
+			out[i] = strconv.Quote(a)
+		default:
+			out[i] = a
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+func releaseKey(subject, role, rule string) string {
+	return shadowKey(subject, string(decision.DeviceQuarantined), role, rule)
+}
+
+func pipeKey(subject, entry string) string {
+	return shadowKey(subject, string(decision.PipeStageDenied), entry)
 }
 
 // regexChanges lists the rules carrying a regex or class term that one side
 // has and the other does not.
-func regexChanges(subject string, devices []string, was, is []engine.Rule) []RegexChange {
+func regexChanges(was, is []engine.Rule) []RegexChange {
 	var out []RegexChange
 	for _, v := range []struct {
 		have, other []engine.Rule
@@ -221,7 +426,7 @@ func regexChanges(subject string, devices []string, was, is []engine.Rule) []Reg
 			if !constrained(r.Rule) || slices.Contains(v.other, r) {
 				continue
 			}
-			out = append(out, RegexChange{Subject: subject, Devices: devices, Rule: r, Added: v.added})
+			out = append(out, RegexChange{Rule: r, Added: v.added})
 		}
 	}
 	return out
@@ -237,30 +442,48 @@ func constrained(rule string) bool {
 	return false
 }
 
-// expansionAcks is every (subject, deny, permit) a passing permit test in p
-// exercises where before refused the same command with that deny: the test is
-// the author saying the expansion is meant (spec §12).
-func (p *Policy) expansionAcks(before *Policy) map[string]bool {
+// expansionAcks is what each passing permit test in p acknowledges, at each
+// of instants, where before refused the same command: with a deny, every
+// (subject, deny, permit) for a permit in p that wins over every deny it
+// meets, as the shadowed-deny report reads a test; at a pipeline stage, the
+// allowlist entry that now permits it; on a device before quarantined, every
+// such permit. The test is the author saying the expansion is meant (spec
+// §12).
+func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]bool {
 	acks := map[string]bool{}
-	for _, r := range p.RunTests(time.Time{}) {
-		if !r.Pass || !r.Permit || r.Outcome.Decided == nil {
-			continue
-		}
-		subject := r.Test.Subject
-		if subject == "" {
-			subject = p.byID[r.Test.Principal]
-		}
-		dev, ok := p.device(r.Test.Device)
+	for _, t := range p.passedPermits(instants) {
+		dev, ok := p.device(t.result.Test.Device)
 		if !ok {
 			continue
 		}
-		_, was, err := before.Decide(subject, "", dev, r.Test.Command, time.Time{})
-		if err != nil && !errors.Is(err, ErrNoGrants) {
-			continue
+		o := t.result.Outcome
+		var winners []engine.Match
+		for _, pm := range o.Permits {
+			if !slices.ContainsFunc(o.Denies, func(d engine.Match) bool {
+				return !engine.Dominates(pm.Specificity, d.Specificity)
+			}) {
+				winners = append(winners, pm)
+			}
 		}
-		if !was.Permit && was.Deny != nil {
-			acks[shadowKey(subject, was.Deny.Role, was.Deny.Rule, r.Outcome.Decided.Role,
-				r.Outcome.Decided.Rule)] = true
+		_, was, err := before.Decide(t.subject, "", dev, t.result.Test.Command, t.at)
+		switch {
+		case errors.Is(err, ErrDeviceQuarantined):
+			for _, pm := range winners {
+				acks[releaseKey(t.subject, pm.Role, pm.Rule)] = true
+			}
+		case err != nil && !errors.Is(err, ErrNoGrants):
+		case was.Reason == decision.PipeStageDenied && was.Stage > 0 && was.Stage <= len(o.Pipeline):
+			res, err := p.ResolveSubject(t.subject, dev, t.at)
+			if err != nil {
+				continue
+			}
+			if prog, err := engine.Compile(res.Blob); err == nil {
+				acks[pipeKey(t.subject, prog.PipeEntry(o.Pipeline[was.Stage-1]))] = true
+			}
+		case !was.Permit && was.Deny != nil:
+			for _, pm := range winners {
+				acks[shadowKey(t.subject, was.Deny.Role, was.Deny.Rule, pm.Role, pm.Rule)] = true
+			}
 		}
 	}
 	return acks

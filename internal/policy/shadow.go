@@ -98,6 +98,31 @@ func (p *Policy) expiryInstants(now time.Time) []time.Time {
 // the author has seen each of those pairs happen (spec §12).
 func (p *Policy) shadowAcks(instants []time.Time) map[string]bool {
 	acks := map[string]bool{}
+	for _, t := range p.passedPermits(instants) {
+		for _, pm := range t.result.Outcome.Permits {
+			for _, d := range t.result.Outcome.Denies {
+				if engine.Dominates(pm.Specificity, d.Specificity) {
+					acks[shadowKey(t.subject, d.Role, d.Rule, pm.Role, pm.Rule)] = true
+				}
+			}
+		}
+	}
+	return acks
+}
+
+// passedPermit is one passing test that expects permit, run at one instant,
+// with the subject it names or its principal resolves to.
+type passedPermit struct {
+	subject string
+	at      time.Time
+	result  TestResult
+}
+
+// passedPermits runs the tests at each of instants and keeps the passing
+// permits: what the shadowed-deny report and the diff read as the author's
+// acknowledgment (spec §12).
+func (p *Policy) passedPermits(instants []time.Time) []passedPermit {
+	var out []passedPermit
 	for _, at := range instants {
 		for _, r := range p.RunTests(at) {
 			if !r.Pass || !r.Permit {
@@ -107,16 +132,10 @@ func (p *Policy) shadowAcks(instants []time.Time) map[string]bool {
 			if subject == "" {
 				subject = p.byID[r.Test.Principal]
 			}
-			for _, pm := range r.Outcome.Permits {
-				for _, d := range r.Outcome.Denies {
-					if engine.Dominates(pm.Specificity, d.Specificity) {
-						acks[shadowKey(subject, d.Role, d.Rule, pm.Role, pm.Rule)] = true
-					}
-				}
-			}
+			out = append(out, passedPermit{subject: subject, at: at, result: r})
 		}
 	}
-	return acks
+	return out
 }
 
 func shadowKey(parts ...string) string { return strings.Join(parts, "\x00") }

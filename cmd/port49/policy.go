@@ -189,9 +189,11 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 // policyDiff is the effective-permission diff and the privilege-expansion
 // gate (spec §12): both versions of a policy, loaded against one inventory,
 // compared for every subject on every device over every command shape their
-// rules distinguish. It prints each change and exits 1 on a command a deny
-// refused that the new version permits and no policy test in it exercises,
-// and on a device the new version quarantines.
+// rules distinguish, now and at every later grant expiry. It prints each
+// change and exits 1 on a command the old version refused (by a deny, at a
+// pipeline stage, or by quarantining the device) that the new version
+// permits and no policy test in it exercises, on a device the new version
+// quarantines for a new cause, and on a composition it could not compare.
 func policyDiff(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 policy diff", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -220,58 +222,90 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 policy diff: --new:", err)
 		return 1
 	}
-	d := policy.Compare(before, after)
 	now := time.Now()
+	d := policy.Compare(before, after, now)
+	// A change that first holds at a later grant expiry says when.
+	from := func(at time.Time) string {
+		if at.After(now) {
+			return " (from " + decision.FormatTime(at) + ")"
+		}
+		return ""
+	}
+	for _, u := range d.Unresolved {
+		fmt.Fprintf(stdout, "UNRESOLVED: %s; the diff cannot vouch for it\n", u)
+	}
 	for _, q := range d.Quarantined {
 		for _, e := range q.Entries {
 			fmt.Fprintf(stdout, "QUARANTINES: %s (%s): %s\n", q.Device, q.Platform, e.Message(now))
 		}
+	}
+	for _, r := range d.Released {
+		fmt.Fprintf(stdout, "RELEASES: %s (%s)%s: the old version quarantines it, so every command the new one "+
+			"permits there is an expansion\n", r.Device, r.Platform, from(r.At))
 	}
 	for _, a := range d.Access {
 		verb := "loses"
 		if a.Gained {
 			verb = "gains"
 		}
-		fmt.Fprintf(stdout, "access: %s %s every grant on %s\n", a.Subject, verb, strings.Join(a.Devices, ", "))
+		fmt.Fprintf(stdout, "access: %s %s every grant on %s%s\n", a.Subject, verb, strings.Join(a.Devices, ", "),
+			from(a.At))
 	}
 	for _, l := range d.Levels {
-		fmt.Fprintf(stdout, "privilege: %s on %s: level %s -> %s, max_privilege %s -> %s\n", l.Subject,
-			strings.Join(l.Devices, ", "), orNone(l.OldLevel), orNone(l.NewLevel), orNone(l.OldCeiling),
+		fmt.Fprintf(stdout, "privilege: %s on %s%s: level %s -> %s, max_privilege %s -> %s\n", l.Subject,
+			strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel), orNone(l.OldCeiling),
 			orNone(l.NewCeiling))
 	}
 	widen, narrow := 0, 0
 	for _, c := range d.Changes {
-		on := c.Subject + " on " + strings.Join(c.Devices, ", ")
-		switch {
-		case c.New.Permit && c.Gated:
-			widen++
-			label := "EXPANDS"
-			if c.Acknowledged {
-				label = "expands (a policy test exercises it)"
-			}
-			fmt.Fprintf(stdout, "%s: %s: %q was denied by %q (%s), now permitted by %q (%s)\n", label, on, c.Command,
-				c.Old.Deny.Rule, c.Old.Deny.Role, c.New.Decided.Rule, c.New.Decided.Role)
-		case c.New.Permit:
-			widen++
-			fmt.Fprintf(stdout, "widens: %s: %q was %s, now permitted by %q (%s)\n", on, c.Command, c.Old.Reason,
-				c.New.Decided.Rule, c.New.Decided.Role)
-		default:
+		on := c.Subject + " on " + strings.Join(c.Devices, ", ") + from(c.At)
+		if !c.New.Permit {
 			narrow++
 			fmt.Fprintf(stdout, "narrows: %s: %q was permitted by %q (%s), now %s\n", on, c.Command,
 				c.Old.Decided.Rule, c.Old.Decided.Role, c.New.Reason)
+			continue
 		}
+		widen++
+		permitted := fmt.Sprintf("now permitted by %q (%s)", c.New.Decided.Rule, c.New.Decided.Role)
+		if !c.Gated {
+			fmt.Fprintf(stdout, "widens: %s: %q was %s, %s\n", on, c.Command, c.Old.Reason, permitted)
+			continue
+		}
+		label := "EXPANDS"
+		if c.Acknowledged {
+			label = "expands (a policy test exercises it)"
+		}
+		var was string
+		switch c.Old.Reason {
+		case decision.DeviceQuarantined:
+			was = "refused (device_quarantined)"
+		case decision.PipeStageDenied:
+			was = fmt.Sprintf("refused at pipeline stage %d (pipe_stage_denied)", c.Old.Stage)
+			permitted = fmt.Sprintf("now permitted by the pipe allowlist entry %q", c.PipeEntry)
+		default:
+			was = fmt.Sprintf("denied by %q (%s)", c.Old.Deny.Rule, c.Old.Deny.Role)
+		}
+		fmt.Fprintf(stdout, "%s: %s: %q was %s, %s\n", label, on, c.Command, was, permitted)
 	}
 	for _, r := range d.Regex {
+		on := r.Subject + " on " + strings.Join(r.Devices, ", ") + from(r.At)
 		verb := "removed"
 		if r.Added {
 			verb = "added"
 		}
-		fmt.Fprintf(stdout, "regex-constrained: %s on %s: %s %q (%s) %s; the commands it matches are not "+
-			"enumerated (spec §12)\n", r.Subject, strings.Join(r.Devices, ", "), r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb)
+		if r.Deny.Rule != "" {
+			fmt.Fprintf(stdout, "regex-constrained: %s: permit %q (%s) meets deny %q (%s), which the change %s; "+
+				"the commands they share are not enumerated (spec §12)\n", on, r.Rule.Rule, r.Rule.Role, r.Deny.Rule,
+				r.Deny.Role, verb)
+			continue
+		}
+		fmt.Fprintf(stdout, "regex-constrained: %s: %s %q (%s) %s; the commands it matches are not "+
+			"enumerated (spec §12)\n", on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb)
 	}
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
-		"%d devices newly quarantined\n", len(d.Changes), widen, narrow, d.Unacknowledged(), len(d.Quarantined))
-	if d.Unacknowledged() > 0 || len(d.Quarantined) > 0 {
+		"%d devices newly quarantined, %d released; %d unresolved\n", len(d.Changes), widen, narrow,
+		d.Unacknowledged(), len(d.Quarantined), len(d.Released), len(d.Unresolved))
+	if d.Unacknowledged() > 0 || len(d.Quarantined) > 0 || len(d.Unresolved) > 0 {
 		return 1
 	}
 	return 0
