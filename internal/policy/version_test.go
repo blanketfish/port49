@@ -26,6 +26,11 @@ func TestCompareVersions(t *testing.T) {
 		{"21.4R3-S5", "21.4R3.5", 0, false}, // a letter run against a digit run
 		{"99999999999999999999999.1", "99999999999999999999999.2", -1, true},
 		{"007", "7", 0, true},
+		{"-.-", "21.4R3-S5", 0, false},   // separators only: nothing to compare
+		{"２１.4", "22.1", 0, false},       // a fullwidth digit is not read, nor dropped
+		{"21.4R3+1", "21.4R3", 0, false}, // `+` is not a §5.5 separator
+		{"21.4R3 ", "21.4R3", 0, false},  // nor is a space
+		{"21.4", "21.4R3-S5", -1, true},  // a truncated version is ordered by the prefix rule, not refused
 	} {
 		got, ok := CompareVersions(tt.a, tt.b)
 		if got != tt.want || ok != tt.ok {

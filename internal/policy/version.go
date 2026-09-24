@@ -16,8 +16,9 @@ import (
 // deliberately not used: it would sort Junos service release `21.4R3-S5`
 // below `21.4R3`.
 func CompareVersions(a, b string) (int, bool) {
-	x, y := versionTokens(a), versionTokens(b)
-	if len(x) == 0 || len(y) == 0 {
+	x, xOK := versionTokens(a)
+	y, yOK := versionTokens(b)
+	if !xOK || !yOK || len(x) == 0 || len(y) == 0 {
 		return 0, false
 	}
 	for i := 0; i < len(x) && i < len(y); i++ {
@@ -70,9 +71,11 @@ func (n numeric) cmp(m numeric) int {
 	return strings.Compare(string(n), string(m))
 }
 
-// versionTokens splits v into digit and letter runs; everything else — `.`,
-// `-`, `(`, `)`, `_`, `/`, spaces — separates.
-func versionTokens(v string) []versionToken {
+// versionTokens splits v into ASCII digit and letter runs at the separators
+// of spec §5.5 — `.`, `-`, `(`, `)`, `_`, `/`. Any other rune (a space, `+`,
+// a fullwidth digit) reports false: text the comparator cannot read makes the
+// version incomparable, never silently a different version.
+func versionTokens(v string) ([]versionToken, bool) {
 	var out []versionToken
 	var cur strings.Builder
 	kind := 0 // 0 none, 1 digits, 2 letters
@@ -97,10 +100,12 @@ func versionTokens(v string) []versionToken {
 				kind = 2
 			}
 			cur.WriteRune(unicode.ToUpper(r))
-		default:
+		case strings.ContainsRune(".-()_/", r):
 			flush()
+		default:
+			return nil, false
 		}
 	}
 	flush()
-	return out
+	return out, true
 }
