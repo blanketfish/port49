@@ -23,11 +23,12 @@ watch is a content-hash poll, not inotify.
 **Spec:** `docs/design/2026-08-23-policy-engine-spec.md` §5.1.3 (refreshing live context; this
 plan adds "Policy reload"), §5.6 teardown row 2 (revocation), §5.7 (the `refresh` event; the
 `grants_matched`, `no_grants_matched`, `device_quarantined` and `credential_revoked` rows), §10
-(quarantine), §13 decision 20 and the new decision 23, §14 "Session lifetime and revocation".
+(quarantine), §13 decision 20 and the new decision 24, §14 "Session lifetime and revocation".
 Design `docs/design/2026-08-21-port49-design.md` §9 (refresh), §12 (the failure matrix). Roadmap
 `docs/superpowers/plans/README.md`, "Plan 4b", and the plan 4 section's carries (the end-to-end
 test of `run` with no `lab:` block).
-**Prerequisite:** plan 4 merged (PR #10). Branch `feature/live-policy` off `main` at `11f02c0`.
+**Prerequisite:** plan 4 merged (PR #10) and the gate rulings merged (PR #11). Branch
+`feature/live-policy` off `main` at `e10ab29`.
 
 ## Why this plan exists
 
@@ -202,40 +203,24 @@ decision log to stdout.
 - **An inventory edit followed by `SIGHUP`:** `port49d: inventory_file … has changed since start
   and is not reloaded (plan 6); … restart port49d to apply it`.
 
-## Rebase on `feature/gate-rulings` before executing
+## Written against `main` after the gate rulings
 
-A small rulings PR (`feature/gate-rulings`) merges to `main` before this plan runs. It renders
-`operator` as level 15 on `arista_eos` and `cisco_nxos`, adds a `level:` field to session tests and
-two `policy diff` gates, a `report: no_tests` warning, and a `LAB MODE` start-up line for a `lab:`
-block. This plan depends on none of those behaviours either way — its one quarantine test lands a
-subject at a declared level no platform renders, not at `operator` — but it touches three of the
-same places, and the blocks below are written against `main` at `11f02c0`. **Rebase this branch on
-`main` once that PR has merged, then apply each task's blocks; where a hunk does not apply, resolve
-it as below.** Each resolution was made on a scratch branch rebased on `feature/gate-rulings`
-(`7383758`), and the result passed `go test -race ./internal/... ./cmd/...`, `make vet` and
-`go vet -tags lab ./tests/lab/...`.
+This plan was first written against `11f02c0` and rebased when PR #11 (`feature/gate-rulings`)
+merged as `e10ab29`; every block below is written against `e10ab29` and applies with no
+hand-resolution. What the rebase changed, so a reader of the first version is not surprised:
 
-- **This plan's commit (`README.md` status line).** Both change the same status sentence. Keep
-  the gate-rulings text and replace its closing "**Plan 4b (live policy) is the next plan to
-  write.**" with this plan's "**4b written 2026-09-24** (…) and is the next plan to execute".
-- **Task 1 (spec §13).** Gate-rulings takes decision **23** (`operator` renders as `admin`'s
-  level). This plan's decision becomes **24**: renumber it in the patch, and read "decision 24"
-  wherever this plan says decision 23 (the Spec line, Task 1's Interfaces, and Step 2's grep,
-  which becomes `^\*\*24\. `).
-- **Task 4 (`cmd/port49d/broker_test.go`).** Gate-rulings rewrote
-  `TestAQuarantinedDeviceDoesNotStopTheStart` and `TestTheDaemonsQuarantineFollowsTheClock` to
-  quarantine through `unmappedLevel` and `privilege: unmapped`. Keep its policies and apply only
-  this plan's renames: `_, pol, err := buildBroker(` becomes `_, b, err := buildBroker(`,
-  `pol.Quarantined(` becomes `b.Policy.Quarantined(`, and `watchQuarantine(pol,` becomes
-  `watchQuarantine(b.Policy,`.
-- **Task 6 (`cmd/port49d/main.go` imports).** Gate-rulings adds `"strings"`; this task removes
-  `"slices"`. The import block keeps `"strings"` and drops `"slices"`.
-- **Task 7 (`cmd/port49d/main.go`).** Gate-rulings adds `labWarning` just above the `stderr`
-  declaration and prints it first thing in `run`. Keep both; replace only the `stderr`
-  declaration with this task's `stderr`/`stdout` block, and keep `fmt.Fprint(stderr,
-  labWarning(cfg.Lab))` right after `config.Load` in the new `run(parent context.Context, …)`.
-  `writeRunConfig` has no `lab:` block, so the end-to-end test never prints the `LAB MODE` line.
-- **Task 8** applies cleanly on top.
+- **Spec §13.** PR #11 took decision 23 (`operator` renders as `admin`'s level on EOS and NX-OS),
+  so this plan's decision is **24**.
+- **`cmd/port49d/broker_test.go` (Task 4).** PR #11 moved the two port49d quarantine tests from
+  `operator` to a declared `unmapped` level (`unmappedLevel`); Task 4 applies only its renames to
+  them (`pol` to `b`, `pol.Quarantined` to `b.Policy.Quarantined`).
+- **`cmd/port49d/main.go` (Tasks 6 and 7).** PR #11 added `"strings"` and the `LAB MODE` line
+  (`labWarning`, printed first in `run`). Task 6 drops only `"slices"`; Task 7 keeps
+  `labWarning` and its print in the new `run(parent context.Context, …)`. `writeRunConfig` has
+  no `lab:` block, so the end-to-end test never prints the `LAB MODE` line.
+- **No test here depends on how `operator` renders.** The one refresh test that needs a
+  quarantine lands a subject at a declared level no built-in platform renders
+  (`TestARefreshLeavesAQuarantinedDevicesContextAlone`), the mechanism PR #11's own tests use.
 
 Nothing in this plan touches the policy tests' grammar (`level:`, `report:`), `policy diff`, or
 the dialect table.
@@ -284,7 +269,7 @@ New in this plan:
 ## File Structure
 
 ```
-docs/design/2026-08-23-policy-engine-spec.md    MOD  §5.1.3 "Policy reload"; §5.6 row 2; §5.7 refresh event + four rows; §13 decision 23; §14 (Task 1)
+docs/design/2026-08-23-policy-engine-spec.md    MOD  §5.1.3 "Policy reload"; §5.6 row 2; §5.7 refresh event + four rows; §13 decision 24; §14 (Task 1)
 internal/store/store.go                         MOD  ContextPolicy; Store.SetContextPolicy (Task 2)
 internal/store/memory/memory.go                 MOD  SetContextPolicy
 internal/store/memory/memory_test.go            MOD
@@ -322,11 +307,11 @@ live sessions; Task 7 proves it end to end through `run`. Every task leaves `mak
 
 **Files:**
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§5.1.3, §5.6 teardown row 2, §5.7 events
-  and four reason rows, §13 decision 23, §14 "Session lifetime and revocation")
+  and four reason rows, §13 decision 24, §14 "Session lifetime and revocation")
 
 **Interfaces:**
 - Produces: the §5.7 `refresh` event Task 5 emits, and the reason rows it emits under; §5.1.3's
-  "Policy reload", which every later task implements a paragraph of; decision 23; the §14
+  "Policy reload", which every later task implements a paragraph of; decision 24; the §14
   assertions Tasks 2–7 test.
 
 Why first: a new event is added to the spec table before any code names it (`CLAUDE.md`, and plan
@@ -338,7 +323,7 @@ directory refresh.
 <!-- patch: docs/design/2026-08-23-policy-engine-spec.md -->
 ```diff
 diff --git a/docs/design/2026-08-23-policy-engine-spec.md b/docs/design/2026-08-23-policy-engine-spec.md
-index 028c5f7..de4704a 100644
+index d604973..9660a2b 100644
 --- a/docs/design/2026-08-23-policy-engine-spec.md
 +++ b/docs/design/2026-08-23-policy-engine-spec.md
 @@ -587,6 +587,60 @@ This also makes **policy-driven revocation reach active sessions**, not only dir
@@ -454,11 +439,11 @@ index 028c5f7..de4704a 100644
  
  Every event has a success reason and at least one failure reason in this table, so
  "decisions by event, verdict, and reason" (design document §15) is a complete metric. A
-@@ -3909,6 +3964,15 @@ where a deployment provisions classes. A permit narrower than the bits with a de
- it is refused at load; the `-regexps` family's documented deny-precedence may lift that once
- measured. The choice is made from the composed grant, never per role. (§8, §15)
+@@ -4091,6 +4146,15 @@ policy landed there. `operator` gets level 15 on both, port49's per-command rule
+ fence, and the device's method list must not fall back to `none` or `if-authenticated`.
+ IOS-XE, whose level 7 can carry the rung, is left to plan 5's adapters. (§6, §8)
  
-+**23. A policy edit reaches live sessions without a logout.** A restart ends every live
++**24. A policy edit reaches live sessions without a logout.** A restart ends every live
 +context and every unspent token, so without a live reload the only way to narrow an operator's
 +access was to log everyone out — and the edit most in need of reaching a live session, a grant
 +withdrawn, was the one that could not. The file is reloaded in place, refused whole if it does
@@ -470,7 +455,7 @@ index 028c5f7..de4704a 100644
  ### Deferred, with reasons
  
  Neither of these is an open question about the design. Both are closed for v1 on the
-@@ -4097,6 +4161,19 @@ Beyond those already listed in the design document's §14:
+@@ -4313,6 +4377,19 @@ Beyond those already listed in the design document's §14:
    without a reconnect, and the next command authorizes.
  - **Refresh re-resolves policy**: a principal whose grant was withdrawn cannot extend a
    session into continued access.
@@ -494,8 +479,8 @@ index 028c5f7..de4704a 100644
 
 - [ ] **Step 2: Check it landed**
 
-Run: `grep -n '^#### Policy reload\|^| .refresh. | broker\|^\*\*23\. \|Policy reload reaches a live session' docs/design/2026-08-23-policy-engine-spec.md`
-Expected: four lines — the §5.1.3 heading, the §5.7 event row, decision 23, the §14 assertion.
+Run: `grep -n '^#### Policy reload\|^| .refresh. | broker\|^\*\*24\. \|Policy reload reaches a live session' docs/design/2026-08-23-policy-engine-spec.md`
+Expected: four lines — the §5.1.3 heading, the §5.7 event row, decision 24, the §14 assertion.
 
 - [ ] **Step 3: Commit**
 
@@ -507,7 +492,7 @@ Spec §5.1.3 gains 'Policy reload': validate or keep the old, swap, re-run
 the joint checks, refresh every live context by compare-and-set, revoke
 where no grant is left, and delete unspent tokens whose answer changed.
 §5.7 gains the refresh event; four reason rows say what they mean on it.
-§5.6 row 2, §13 decision 23 and §14's assertions follow.
+§5.6 row 2, §13 decision 24 and §14's assertions follow.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -1165,7 +1150,7 @@ the very next mint to be refused `no_grants_matched`, naming the new bundle.
 <!-- patch: internal/broker/engine_test.go -->
 ```diff
 diff --git a/internal/broker/engine_test.go b/internal/broker/engine_test.go
-index f6b6848..cbbdfa6 100644
+index 1213337..a4c2404 100644
 --- a/internal/broker/engine_test.go
 +++ b/internal/broker/engine_test.go
 @@ -56,7 +56,7 @@ func TestAMintRecordNamesItsBundle(t *testing.T) {
@@ -1177,7 +1162,7 @@ index f6b6848..cbbdfa6 100644
  		t.Fatalf("mint record policy: %v", pol)
  	}
  }
-@@ -83,7 +83,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: nx, r
+@@ -85,7 +85,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: nx, r
  	if err != nil {
  		t.Fatal(err)
  	}
@@ -1186,7 +1171,7 @@ index f6b6848..cbbdfa6 100644
  	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","nx1"]}`, ""))
  	byDevice := map[string]string{}
  	for _, it := range resp.Results {
-@@ -127,7 +127,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
+@@ -129,7 +129,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
  	if err != nil {
  		t.Fatal(err)
  	}
@@ -1195,7 +1180,7 @@ index f6b6848..cbbdfa6 100644
  	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, ""))
  	if it := resp.Results[0]; it.Error != "attribute_too_long" || it.Login != "" {
  		t.Fatalf("%+v", it)
-@@ -156,7 +156,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
+@@ -158,7 +158,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
  	if err != nil {
  		t.Fatal(err)
  	}
@@ -1204,7 +1189,7 @@ index f6b6848..cbbdfa6 100644
  	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["sw=1"]}`, ""))
  	if it := resp.Results[0]; it.Error != "attribute_unsafe" || it.Login != "" {
  		t.Fatalf("%+v", it)
-@@ -175,3 +175,30 @@ func (f *fixture) assertItemErrorOnly(t *testing.T, code string) {
+@@ -177,3 +177,30 @@ func (f *fixture) assertItemErrorOnly(t *testing.T, code string) {
  		t.Errorf("an item error wrote a decision record: %v", mints)
  	}
  }
@@ -1312,10 +1297,10 @@ index 24cbb8d..274cff1 100644
 <!-- patch: cmd/port49d/broker_test.go -->
 ```diff
 diff --git a/cmd/port49d/broker_test.go b/cmd/port49d/broker_test.go
-index 6385ea8..db182b6 100644
+index 6a895ca..f43e08a 100644
 --- a/cmd/port49d/broker_test.go
 +++ b/cmd/port49d/broker_test.go
-@@ -57,9 +57,9 @@ func buildWith(cfg config.Config) error {
+@@ -62,9 +62,9 @@ func buildWith(cfg config.Config) error {
  }
  
  func TestNoBrokerBlockBuildsNoBroker(t *testing.T) {
@@ -1328,12 +1313,12 @@ index 6385ea8..db182b6 100644
  	}
  }
  
-@@ -103,12 +103,12 @@ func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
+@@ -108,12 +108,12 @@ func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
  	var out bytes.Buffer
  	defer func(w io.Writer) { stderr = w }(stderr)
  	stderr = &out
--	_, pol, err := buildBroker(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1)),
-+	_, b, err := buildBroker(brokerConfig(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: operator", 1)),
+-	_, pol, err := buildBroker(brokerConfig(t, unmappedLevel+strings.Replace(minimalPolicy, "privilege: admin", "privilege: unmapped", 1)),
++	_, b, err := buildBroker(brokerConfig(t, unmappedLevel+strings.Replace(minimalPolicy, "privilege: admin", "privilege: unmapped", 1)),
  		memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
  	if err != nil {
  		t.Fatalf("a quarantined device must not stop the start: %v", err)
@@ -1343,7 +1328,7 @@ index 6385ea8..db182b6 100644
  		t.Fatal("the daemon is handed the policy that quarantines leaf1")
  	}
  	if !strings.Contains(out.String(), "device leaf1 (arista_eos) is quarantined") ||
-@@ -126,12 +126,12 @@ func TestAWidenedDenyIsSaidAtStart(t *testing.T) {
+@@ -131,12 +131,12 @@ func TestAWidenedDenyIsSaidAtStart(t *testing.T) {
  	stderr = &out
  	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`, `permit: ["**"], deny: ["* * /tftp/"]}`, 1))
  	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "ntp1", Platform: "meinberg_lantime"})
@@ -1358,16 +1343,16 @@ index 6385ea8..db182b6 100644
  		t.Fatal("a widened deny quarantines nothing")
  	}
  	if !strings.Contains(out.String(), `port49d: broker: role "r": deny "* * /tftp/" on meinberg_lantime: /tftp/:`) ||
-@@ -166,7 +166,7 @@ func TestTheDaemonsQuarantineFollowsTheClock(t *testing.T) {
+@@ -171,7 +171,7 @@ func TestTheDaemonsQuarantineFollowsTheClock(t *testing.T) {
  	stderr = &out
  	now := time.Now()
  	lapse := now.Add(48 * time.Hour).Truncate(time.Second)
--	_, pol, err := buildBroker(brokerConfig(t, `
-+	_, b, err := buildBroker(brokerConfig(t, `
+-	_, pol, err := buildBroker(brokerConfig(t, unmappedLevel+`
++	_, b, err := buildBroker(brokerConfig(t, unmappedLevel+`
  scopes: [{name: all_devices, match: {}}]
  roles:
-   - {name: op, privilege: operator, permit: [show **]}
-@@ -186,7 +186,7 @@ grants:
+   - {name: op, privilege: unmapped, permit: [show **]}
+@@ -191,7 +191,7 @@ grants:
  	}
  	m := metrics.New(prometheus.NewRegistry())
  	clock := now
@@ -1504,10 +1489,10 @@ index 8ef99a2..1aadf3e 100644
 <!-- patch: cmd/port49d/main.go -->
 ```diff
 diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
-index d641642..f096ab8 100644
+index ced655a..efcf689 100644
 --- a/cmd/port49d/main.go
 +++ b/cmd/port49d/main.go
-@@ -149,52 +149,23 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (lo
+@@ -172,52 +172,23 @@ func labWarning(lab *config.LabConfig) string {
  var stderr io.Writer = os.Stderr
  
  // buildBroker loads what the broker needs and returns its server and the
@@ -1533,15 +1518,14 @@ index d641642..f096ab8 100644
 +	pol, err := loadPolicy(cfg)
  	if err != nil {
 -		return nil, nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
-+		return nil, nil, err
- 	}
+-	}
 -	// A device a joint check failed on is quarantined rather than the policy
 -	// refused: its mints are refused device_quarantined and the rest of the
 -	// fleet loads (spec §10; §13 decision 20). Each is said here, with its
 -	// cause, so the line at start names what to fix. Quarantine is
 -	// time-scoped: one a grant's expiry will bring on is said now too, with
 -	// when, while the device still mints.
- 	now := time.Now()
+-	now := time.Now()
 -	for _, q := range pol.Quarantines(now) {
 -		for _, e := range q.Entries {
 -			msg := e.Message(now)
@@ -1561,12 +1545,14 @@ index d641642..f096ab8 100644
 -	// sends the name and the index apart (spec §3 rule 5); say which.
 -	for _, f := range pol.JoinedNamePermits() {
 -		fmt.Fprintf(stderr, "port49d: broker: %s\n", f.Message)
--	}
++		return nil, nil, err
+ 	}
++	now := time.Now()
 +	sayPolicy(pol, now)
  	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
  	if err != nil {
  		return nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
-@@ -227,41 +198,87 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
+@@ -250,41 +221,87 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
  		}
  		devices[d.Name] = d
  	}
@@ -1667,7 +1653,7 @@ index d641642..f096ab8 100644
  }
  
  func run(cfgPath string) error {
-@@ -356,7 +373,7 @@ func run(cfgPath string) error {
+@@ -380,7 +397,7 @@ func run(cfgPath string) error {
  	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
  	_ = sessions
  
@@ -1676,7 +1662,7 @@ index d641642..f096ab8 100644
  	if err != nil {
  		stopSpool()
  		<-spoolDone
-@@ -388,7 +405,11 @@ func run(cfgPath string) error {
+@@ -412,7 +429,11 @@ func run(cfgPath string) error {
  	// A quarantined device is closed without a reply, as for an unknown
  	// source, so it falls to its local method exactly as in an outage.
  	// buildBroker has already named each one and its cause.
@@ -3403,7 +3389,7 @@ func (r *reloader) checkInventory() {
 <!-- patch: cmd/port49d/main.go -->
 ```diff
 diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
-index f096ab8..11e8e47 100644
+index efcf689..1bed677 100644
 --- a/cmd/port49d/main.go
 +++ b/cmd/port49d/main.go
 @@ -21,7 +21,6 @@ import (
@@ -3411,10 +3397,10 @@ index f096ab8..11e8e47 100644
  	"os"
  	"os/signal"
 -	"slices"
+ 	"strings"
  	"syscall"
  	"time"
- 
-@@ -218,8 +217,18 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
+@@ -241,8 +240,18 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
  // (spec §4, §6). It is the one load, at start and at every reload, so a file
  // the start would refuse is a file a reload refuses, with the same words.
  func loadPolicy(cfg config.Config) (*policy.Policy, error) {
@@ -3435,7 +3421,7 @@ index f096ab8..11e8e47 100644
  	if err != nil {
  		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
  	}
-@@ -269,15 +278,7 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
+@@ -292,15 +301,7 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
  	if live == nil {
  		return nil
  	}
@@ -3452,7 +3438,7 @@ index f096ab8..11e8e47 100644
  	return live.Quarantined
  }
  
-@@ -473,6 +474,28 @@ func run(cfgPath string) error {
+@@ -497,6 +498,28 @@ func run(cfgPath string) error {
  		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", brokerSrv.Addr)
  	}
  
@@ -3481,7 +3467,7 @@ index f096ab8..11e8e47 100644
  	serveErr := make(chan error, 1)
  	go func() { serveErr <- server.Serve(ctx, ln, deps) }()
  
-@@ -494,6 +517,7 @@ func run(cfgPath string) error {
+@@ -518,6 +541,7 @@ func run(cfgPath string) error {
  		<-serveErr
  	}
  	cancel()
@@ -3818,7 +3804,7 @@ func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 <!-- patch: cmd/port49d/broker_test.go -->
 ```diff
 diff --git a/cmd/port49d/broker_test.go b/cmd/port49d/broker_test.go
-index db182b6..0efe87f 100644
+index f43e08a..a7db974 100644
 --- a/cmd/port49d/broker_test.go
 +++ b/cmd/port49d/broker_test.go
 @@ -2,6 +2,7 @@ package main
@@ -3829,7 +3815,7 @@ index db182b6..0efe87f 100644
  	"crypto/tls"
  	"fmt"
  	"io"
-@@ -331,7 +332,8 @@ func TestBrokerTLSErrorsReachPort49dsLog(t *testing.T) {
+@@ -336,7 +337,8 @@ func TestBrokerTLSErrorsReachPort49dsLog(t *testing.T) {
  }
  
  // writeRunConfig writes a complete port49d.yaml whose broker block uses b,
@@ -3839,7 +3825,7 @@ index db182b6..0efe87f 100644
  func writeRunConfig(t *testing.T, b *config.BrokerConfig) string {
  	t.Helper()
  	t.Setenv("T_RUN_SECRET", "run-test-secret")
-@@ -357,14 +359,13 @@ keys:
+@@ -362,14 +364,13 @@ keys:
  encryption:
    current: {id: v1, secret_env: T_RUN_ENC}
  accounting: {spool_path: %s}
@@ -3855,7 +3841,7 @@ index db182b6..0efe87f 100644
  `, inv, filepath.Join(dir, "acct.jsonl"), b.Listen, b.TLSCertFile, b.TLSKeyFile, b.ClientCAFile,
  		b.PolicyFile)), 0o600); err != nil {
  		t.Fatal(err)
-@@ -380,7 +381,7 @@ func runExpectingRefusal(t *testing.T, cfgPath string) (string, error) {
+@@ -385,7 +386,7 @@ func runExpectingRefusal(t *testing.T, cfgPath string) (string, error) {
  	defer func(w io.Writer) { stderr = w }(stderr)
  	stderr = &out
  	done := make(chan error, 1)
@@ -3877,10 +3863,10 @@ Expected: FAIL to build — `too many arguments in call to run` (`have (context.
 <!-- patch: cmd/port49d/main.go -->
 ```diff
 diff --git a/cmd/port49d/main.go b/cmd/port49d/main.go
-index 11e8e47..d969b83 100644
+index 1bed677..9ce993c 100644
 --- a/cmd/port49d/main.go
 +++ b/cmd/port49d/main.go
-@@ -50,7 +50,9 @@ import (
+@@ -51,7 +51,9 @@ import (
  func main() {
  	cfgPath := flag.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
  	flag.Parse()
@@ -3891,8 +3877,8 @@ index 11e8e47..d969b83 100644
  		fmt.Fprintln(os.Stderr, "port49d:", err)
  		os.Exit(1)
  	}
-@@ -143,9 +145,12 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (lo
- 	return logins, enables, nil
+@@ -166,9 +168,12 @@ func labWarning(lab *config.LabConfig) string {
+ 		"never be in production\n", strings.Join(enables, "; "))
  }
  
 -// stderr is where port49d's operational lines go — not the decision log,
@@ -3907,7 +3893,7 @@ index 11e8e47..d969b83 100644
  
  // buildBroker loads what the broker needs and returns its server and the
  // broker, or nils when no broker: block is configured. The daemon asks the
-@@ -282,20 +287,21 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
+@@ -305,21 +310,22 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
  	return live.Quarantined
  }
  
@@ -3920,6 +3906,7 @@ index 11e8e47..d969b83 100644
  	if err != nil {
  		return err
  	}
+ 	fmt.Fprint(stderr, labWarning(cfg.Lab))
  
 -	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 -	defer stop()
@@ -3934,7 +3921,7 @@ index 11e8e47..d969b83 100644
  	lim := limits.New(cfg.Limits, time.Now)
  
  	// Everything that holds a credential, a principal or a context is sealed
-@@ -463,15 +469,17 @@ func run(cfgPath string) error {
+@@ -487,15 +493,17 @@ func run(cfgPath string) error {
  			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
  		}
  	}
@@ -3995,10 +3982,10 @@ The status line is the merge's to change (`docs: plan 4b merged`), as it was for
 <!-- patch: docs/superpowers/plans/README.md -->
 ```diff
 diff --git a/docs/superpowers/plans/README.md b/docs/superpowers/plans/README.md
-index 374b9f3..0a231c9 100644
+index 3d98a68..a986210 100644
 --- a/docs/superpowers/plans/README.md
 +++ b/docs/superpowers/plans/README.md
-@@ -350,6 +350,33 @@ context and every unspent token (plan 3, Question 3).
+@@ -368,6 +368,33 @@ context and every unspent token (plan 3, Question 3).
  Plan 7 keeps the scheduled refresh through `active_principals` for directory changes, and the
  `staleness_ceiling` default that goes with it.
  
@@ -4085,7 +4072,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   expiry (`TestAGrantsExpiryReachesALiveContext`, `TestTheRefreshIsScheduledAtTheNextGrantExpiry`).
   The roadmap's carries: `Server` (Task 4), `run` with no `lab:` block (Task 7).
 - **Written against the tree.** Every task's code was written and tested on a scratch branch off
-  `11f02c0`, and each task's commit passed `go vet ./...`, `gofmt -l .` and `go test ./...
+  `e10ab29`, and each task's commit passed `go vet ./...`, `gofmt -l .` and `go test ./...
   -count=1`. The blocks in this file were then extracted and applied in order to a clean checkout
   of `main` plus this plan's commit, exactly as an executor applies them: every Step 2 failed with
   the build error it names, every Step 4 passed, and the result was byte-identical to the scratch
