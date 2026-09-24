@@ -1561,7 +1561,7 @@ events (`account`, `blob`) that share the envelope and carry no verdict:
 | `refresh` | broker | whether a live context takes the policy now in force, or is revoked (§5.1.3) |
 | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
-Device accounting shares this envelope as the seventh event, `account`, and is specified in
+Device accounting shares this envelope as the eighth event, `account`, and is specified in
 §5.8. It is not a decision — it is a report — so it carries no `policy` block and no verdict.
 
 `escalate` exists as its own event because the device-facing username on those platforms is
@@ -4338,8 +4338,11 @@ Beyond those already listed in the design document's §14:
 
 **Decision log**
 
-- **One record per evaluation**, at each of the five decision events, permits included — a corpus
-  exercising the matcher produces exactly as many records as decisions.
+- **One record per evaluation**, at each of the six decision events, permits included — a corpus
+  exercising the matcher produces exactly as many records as decisions. The two `refresh`
+  carve-outs (§5.7) hold: a refresh that finds a context already on the answer the policy in
+  force gives writes no record, and one that revokes because the broker could not resolve or
+  compile the policy is a fault in the process log, counted `failed`, not a decision record.
 - **Replay agreement**: every record in the corpus replays against its named blob and
   reproduces the logged verdict and reason.
 - **Replay divergence is detected**: a record whose blob is substituted, or whose verdict is
