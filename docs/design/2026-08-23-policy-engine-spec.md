@@ -2514,7 +2514,11 @@ that sends it there quarantines the device. It left a session unchanged for `idl
 answering SSH, break-glass included (L18), so both are held bearing on IOS-XE and a change to
 either is gated. On `juniper_junos` all three are unmeasured, and only `home-directory` is
 listed. A placeholder is allowed only in an attribute listed inert on its platform key, or
-under `all` on every platform in the inventory; anywhere else — a privilege-bearing attribute
+under `all` on every platform in the inventory, every platform the pinned set ships and every
+platform a `platforms:` block declares: the inventory is not diffed, so the day a device of one
+of those arrives it would be sent the placeholder with no review (final review M6), and since
+`cisco_iosxe` ships holding `home-directory` bearing, `home-directory*/home/{username}` goes
+under each platform's own key, never `all`; anywhere else — a privilege-bearing attribute
 or one no adapter lists — it is refused at load. A substitution refuses only `=`, `*` and
 control characters, so `priv-lvl={username}` would hide the level from every review tool, and
 `allow-commands={principal}` would let a principal's text widen a session-only device's own
