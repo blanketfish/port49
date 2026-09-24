@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rhwendt/port49/internal/policy"
 )
 
 // gitRepo is a scratch repository holding the policy fixture, committed on
@@ -298,5 +300,26 @@ func TestWithoutCredentialsKeepsAURLWithoutOne(t *testing.T) {
 		if got := withoutCredentials(in); got != want {
 			t.Errorf("%q: got %q", in, got)
 		}
+	}
+}
+
+// A subject of branch-safe characters can still make no branch name (`a..b`,
+// `x.lock`); it is refused before git fetches or writes anything.
+func TestASubjectThatCannotNameABranchIsRefusedFirst(t *testing.T) {
+	repo, _, pol, _ := gitRepo(t)
+	orig := openPR
+	openPR = func(dir, branch, base, title, body string) (string, error) {
+		t.Fatal("gh was run")
+		return "", nil
+	}
+	t.Cleanup(func() { openPR = orig })
+	for _, subject := range []string{"a..b", "x.lock", "x."} {
+		_, err := removalPR(pol, subject, nil, policy.Removal{}, "origin", "main", nil)
+		if err == nil || !strings.Contains(err.Error(), "cannot name a branch") {
+			t.Errorf("%q: %v", subject, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git", "FETCH_HEAD")); !os.IsNotExist(err) {
+		t.Fatalf("git fetched: %v", err)
 	}
 }

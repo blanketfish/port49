@@ -84,6 +84,11 @@ func removalPR(path, subject string, edited []byte, r policy.Removal, remote, ba
 		return "", fmt.Errorf("subject %q cannot name a branch; offboard it with --write and open the review by hand",
 			subject)
 	}
+	branch := "port49/offboard-" + subject
+	if _, err := runGit(filepath.Dir(path), "check-ref-format", "--branch", branch); err != nil {
+		return "", fmt.Errorf("subject %q cannot name a branch; offboard it with --write and open the review by hand",
+			subject)
+	}
 	// Both reach git's argument list: a remote must be one of the
 	// repository's own, by name, and a base a plain branch name, so neither
 	// is read as an option (`--receive-pack=...` runs a command), a URL, or a
@@ -137,7 +142,6 @@ func removalPR(path, subject string, edited []byte, r policy.Removal, remote, ba
 			"copy, so bring it level with %s/%s first, and the pull request carries the removal and nothing else",
 			remote, base, remote, base)
 	}
-	branch := "port49/offboard-" + subject
 	if on, err := runGit(top, "ls-remote", "--heads", "--", remote, "refs/heads/"+branch); err != nil {
 		return "", err
 	} else if on != "" {
