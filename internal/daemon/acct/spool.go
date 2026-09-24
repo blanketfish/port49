@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -630,8 +632,10 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 }
 
 // setAside appends one spool line to <path>.unencodable and syncs it, so a
-// record the log will never take is kept for an operator, not lost.
+// record the log will never take is kept for an operator, not lost. What is
+// written is setAsideForm's, never the line as read.
 func (s *Spool) setAside(line []byte) error {
+	line = s.setAsideForm(line)
 	f, err := os.OpenFile(s.path+".unencodable", os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
@@ -671,6 +675,28 @@ func redactAccount(redact platform.Redactor, r *decision.Record) {
 		a.Raw, a.Vector, a.Redacted = raw, v, true
 		r.AcctRecord = &a
 	}
+}
+
+// setAsideForm is what the set-aside file keeps of a line: the record with
+// its secrets redacted, as the drain would forward it, since a spool file an
+// earlier build left holds records it never redacted; or, for a line that
+// does not read back as a record or does not encode again, only its length
+// and sha256 — never its bytes (spec §5.8).
+func (s *Spool) setAsideForm(line []byte) []byte {
+	line = bytes.TrimRight(line, "\n")
+	var r decision.Record
+	if err := r.UnmarshalJSON(line); err == nil {
+		var redact platform.Redactor
+		if p := s.redact.Load(); p != nil {
+			redact = *p
+		}
+		redactAccount(redact, &r)
+		if b, err := json.Marshal(r); err == nil {
+			return b
+		}
+	}
+	sum := sha256.Sum256(line)
+	return []byte(fmt.Sprintf(`{"unreadable":true,"length":%d,"sha256":"%s"}`, len(line), hex.EncodeToString(sum[:])))
 }
 
 // deliverLine unmarshals one record and forwards it, or logs and counts a
