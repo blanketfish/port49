@@ -12,13 +12,18 @@ import (
 
 // gitRepo is a scratch repository holding the policy fixture, committed on
 // main, with a bare repository as its origin. Identity and signing are set
-// in the repository, so the test does not depend on the machine's git config.
+// in the repository, and the machine's global and system config are not
+// read (a global core.hooksPath would replace the remote's hooks), so the
+// test does not depend on the machine's git config.
 func gitRepo(t *testing.T) (repo, remote, pol, inv string) {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not installed")
 	}
 	root := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("HOME", t.TempDir())
 	repo, remote = filepath.Join(root, "policy"), filepath.Join(root, "remote.git")
 	fixturePol, fixtureInv := policyFixture(t)
 	for _, args := range [][]string{{"init", "--quiet", "--bare", remote}, {"init", "--quiet", "-b", "main", repo}} {
