@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"text/tabwriter"
@@ -280,4 +281,83 @@ func accessReview(args []string, stdout, stderr io.Writer) int {
 	}
 	tw.Flush()
 	return 0
+}
+
+// grantsRemove is the offboarding path for machine subjects and literal
+// identities (spec §12): the policy file with every grant row naming the
+// subject deleted, and the subject block with them. It prints the new file on
+// stdout for a pull request, or with --write replaces the file in place; the
+// result must load against the inventory before anything is written. What it
+// removed goes to stderr.
+func grantsRemove(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("port49 grants remove", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var files policyFiles
+	files.register(fs)
+	subject := fs.String("subject", "", "the subject to offboard, by its name in the policy")
+	write := fs.Bool("write", false, "replace the policy file instead of printing the result")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *subject == "" || files.policy == "" || files.inventory == "" || fs.NArg() != 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	raw, err := os.ReadFile(files.policy)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 grants remove:", err)
+		return 1
+	}
+	out, removed, err := policy.RemoveSubject(raw, *subject)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 grants remove:", err)
+		return 1
+	}
+	inv, err := admission.LoadFile(files.inventory)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 grants remove:", err)
+		return 1
+	}
+	if _, err := policy.Parse(out, policy.Env{Devices: inv.Devices}); err != nil {
+		fmt.Fprintf(stderr, "port49 grants remove: the policy without %s does not load, so nothing was written: %v\n",
+			*subject, err)
+		return 1
+	}
+	if *write {
+		if err := replaceFile(files.policy, out); err != nil {
+			fmt.Fprintln(stderr, "port49 grants remove:", err)
+			return 1
+		}
+	} else {
+		stdout.Write(out)
+	}
+	fmt.Fprintf(stderr, "port49 grants remove: %s: %d grant row(s), the subject block, and %d test(s) removed\n",
+		*subject, removed.Grants, removed.Tests)
+	return 0
+}
+
+// replaceFile writes data beside path and renames it over path, so a policy
+// file is never left half-written, and keeps path's mode.
+func replaceFile(path string, data []byte) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }

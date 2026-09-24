@@ -37,6 +37,7 @@ const usage = `usage:
   port49 policy test --policy FILE --inventory FILE
   port49 policy replay [--line N] LOGFILE|-
   port49 access review --policy FILE --inventory FILE --subject NAME
+  port49 grants remove --policy FILE --inventory FILE --subject NAME [--write]
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -61,6 +62,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "access":
 		if len(args) > 1 && args[1] == "review" {
 			return accessReview(args[2:], stdout, stderr)
+		}
+	case "grants":
+		if len(args) > 1 && args[1] == "remove" {
+			return grantsRemove(args[2:], stdout, stderr)
 		}
 	}
 	fmt.Fprint(stderr, usage)

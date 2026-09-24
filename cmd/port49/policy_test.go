@@ -198,3 +198,40 @@ func TestAccessReviewPrintsTheGrantRows(t *testing.T) {
 		t.Fatalf("an undeclared subject: code %d", code)
 	}
 }
+
+// `port49 grants remove` prints the policy without the subject, or replaces
+// the file with --write, and refuses a result that would not load.
+func TestGrantsRemoveOffboardsASubject(t *testing.T) {
+	pol, inv := policyFixture(t)
+	var out, errb bytes.Buffer
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops"}, &out, &errb); code != 0 ||
+		strings.Contains(out.String(), "ops@example.com") || !strings.Contains(out.String(), "noc@example.com") ||
+		!strings.Contains(errb.String(), "ops: 1 grant row(s), the subject block, and 0 test(s) removed") {
+		t.Fatalf("code %d\nstdout %s\nstderr %s", code, out.String(), errb.String())
+	}
+	before, _ := os.ReadFile(pol)
+	if !strings.Contains(string(before), "ops@example.com") {
+		t.Fatal("without --write the file is left alone")
+	}
+	out.Reset()
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops", "--write"}, &out, &errb); code != 0 || out.Len() != 0 {
+		t.Fatalf("--write: code %d %s", code, out.String())
+	}
+	after, _ := os.ReadFile(pol)
+	if strings.Contains(string(after), "ops@example.com") {
+		t.Fatalf("--write replaced nothing:\n%s", after)
+	}
+	if info, _ := os.Stat(pol); info.Mode().Perm() != 0o600 {
+		t.Fatalf("the file's mode changed: %v", info.Mode())
+	}
+	// noc is the last subject: removing it leaves a policy that declares none,
+	// which does not load, so nothing is written.
+	errb.Reset()
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "noc", "--write"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "nothing was written") {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	if kept, _ := os.ReadFile(pol); string(kept) != string(after) {
+		t.Fatal("a refused removal must not touch the file")
+	}
+}
