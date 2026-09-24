@@ -28,6 +28,9 @@ func TestShadowsAreTheDominancesThatCanHappen(t *testing.T) {
 		// takes its own abbreviations, and a permit written as one meets it.
 		{"an abbreviation, sent as typed", "rel now", "reload **", true, false, false},
 		{"an abbreviation, sent resolved", "rel now", "reload **", false, false, true},
+		// The permit's word matches every case-fold of itself, and each is an
+		// abbreviation the deny takes.
+		{"a folded abbreviation", "ſh version", "show **", true, false, false},
 	} {
 		p := program(t, tt.expandsAbbrev, "p:permit "+tt.permit, "d:deny "+tt.deny)
 		got := p.Shadows()

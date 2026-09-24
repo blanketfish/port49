@@ -184,6 +184,13 @@ func TestAnAbbreviationCannotSlipPastADeny(t *testing.T) {
 	expect(t, resolved, "rel", true, decision.PermitDominates)
 }
 
+// An abbreviation is compared the way a word is, by case folding, so a
+// spelling that folds to a prefix of a deny's word is denied too.
+func TestAFoldedAbbreviationCannotSlipPastADeny(t *testing.T) {
+	typed := program(t, false, "admin:permit **", "ro:deny show **")
+	expect(t, typed, "ſh run", false, decision.NoPermitDominatesDeny)
+}
+
 // Specificity is a property of the rule and the command, never of position, so
 // shuffling the rules changes no outcome, not even which rule is named
 // (spec §5.4; §14, "Order independence").

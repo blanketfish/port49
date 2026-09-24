@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/rhwendt/port49/internal/decision"
 )
@@ -142,9 +143,25 @@ func (c compiled) match(vector []string, abbrev bool) ([]int, bool) {
 }
 
 // abbreviates reports whether arg is a proper, non-empty prefix of word,
-// ignoring case.
+// ignoring case exactly as a word's comparison does: rune by rune under
+// strings.EqualFold, so every spelling that folds to a prefix is one (`ſh`
+// abbreviates `show`), which lowercasing both sides would miss.
 func abbreviates(arg, word string) bool {
-	return arg != "" && len(arg) < len(word) && strings.HasPrefix(strings.ToLower(word), strings.ToLower(arg))
+	if arg == "" {
+		return false
+	}
+	for arg != "" {
+		if word == "" {
+			return false
+		}
+		_, na := utf8.DecodeRuneInString(arg)
+		_, nw := utf8.DecodeRuneInString(word)
+		if !strings.EqualFold(arg[:na], word[:nw]) {
+			return false
+		}
+		arg, word = arg[na:], word[nw:]
+	}
+	return word != ""
 }
 
 // Dominates reports whether a permit scoring x dominates a deny scoring y:
