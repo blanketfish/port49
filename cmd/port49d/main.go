@@ -278,11 +278,20 @@ func run(cfgPath string) error {
 	// the lab authorizer, which stays until the policy engine lands (plan 4);
 	// config.Load refuses a config without it, so the fallback is never nil and
 	// port49 never falls back to permitting everything.
+	fault := author.LabFault{Path: cfg.Lab.FaultFile}
 	authz := &author.Blob{Store: st, Fallback: &author.Lab{
 		SessionAttributes: cfg.Lab.SessionAttributes,
 		CommandAttributes: cfg.Lab.CommandAttributes,
 		DenyPrefixes:      cfg.Lab.DenyPrefixes,
+		Fault:             fault,
 	}}
+	// The request handlers see the store through the lab's fault switch; the
+	// minter, the broker and the seeding below do not, so a fault can never
+	// stop the daemon starting. With no fault_file this is the store itself.
+	var handlerStore store.Store = st
+	if cfg.Lab.FaultFile != "" {
+		handlerStore = &author.FaultStore{Store: st, Fault: fault}
+	}
 	minter := token.NewMinter(st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
 	// Plan 7's broker exposes Refresh, RevokeByPrincipal and RevokeBySID over
 	// HTTP; plan 3's serves /v1/tokens and /v1/config only, so nothing in this
@@ -324,7 +333,7 @@ func run(cfgPath string) error {
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
-		Authen: authen.New(st, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
+		Authen: authen.New(handlerStore, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
 			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags),
 		// `session.staleness_ceiling` defaults to 0 — no staleness check — and
 		// that default is the operational one, not an unfinished wiring: a
@@ -335,14 +344,14 @@ func run(cfgPath string) error {
 		//
 		// The grace window is carried for plan 7's sweep and read by nothing
 		// today.
-		Author: author.New(st, authz, log, m, time.Now, cfg.SessionServices,
+		Author: author.New(handlerStore, authz, log, m, time.Now, cfg.SessionServices,
 			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL),
 		// The system-user table is injected rather than looked up through a
 		// package global, so nothing can mutate a security rule at run time.
 		// It carries `root` for juniper_junos and nothing else
 		// (internal/platform). No idle TTL: accounting does not extend one
 		// (spec §5.8).
-		Acct:   acct.New(st, spool, m, time.Now, platform.SystemUsers()),
+		Acct:   acct.New(handlerStore, spool, m, time.Now, platform.SystemUsers()),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}
 
 	// A dead metrics listener is not a detail: without it nobody can see the

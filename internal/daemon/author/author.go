@@ -25,6 +25,9 @@ type Decision struct {
 	Reason     decision.Reason
 	ServerMsg  string
 	Attributes []string // session only, e.g. "priv-lvl=15"
+	// Error answers a refusal ERROR rather than FAIL. Only the lab's fault
+	// switch sets it (LabFault); it is ignored on a permit.
+	Error bool
 }
 
 type Authorizer interface {
@@ -248,6 +251,11 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		d = h.authz.Command(ctx, c, vector, raw)
 	}
 	if !d.Permit {
+		if d.Error {
+			resp := h.deny(rec, d.Reason, d.ServerMsg)
+			resp.Status = wire.AuthorStatusError
+			return resp
+		}
 		return h.deny(rec, d.Reason, d.ServerMsg)
 	}
 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason

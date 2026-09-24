@@ -2,6 +2,8 @@ package author
 
 import (
 	"context"
+	"errors"
+	"os"
 	"strings"
 
 	"github.com/rhwendt/port49/internal/decision"
@@ -31,6 +33,9 @@ type Lab struct {
 	// the joined command line must equal the prefix, or begin with the prefix
 	// followed by a space, so "show" denies "show version" but not "shower".
 	DenyPrefixes []string
+	// Fault is the lab's fault switch; see LabFault. The zero value is no
+	// fault.
+	Fault LabFault
 }
 
 func (l *Lab) Session(_ context.Context, _ store.Context, _ []string) Decision {
@@ -38,6 +43,12 @@ func (l *Lab) Session(_ context.Context, _ store.Context, _ []string) Decision {
 }
 
 func (l *Lab) Command(_ context.Context, _ store.Context, vector []string, _ []string) Decision {
+	switch {
+	case l.Fault.Is(FaultCommandError):
+		return Decision{Error: true, Reason: decision.StoreUnavailable, ServerMsg: "port49: authorization store unavailable"}
+	case l.Fault.Is(FaultCommandFail):
+		return Decision{Reason: decision.NoRuleMatched, ServerMsg: "port49: denied by lab fault command_fail"}
+	}
 	line := strings.Join(vector, " ")
 	for _, p := range l.DenyPrefixes {
 		// A denial carries no attributes on purpose: its payload is the
@@ -49,4 +60,74 @@ func (l *Lab) Command(_ context.Context, _ store.Context, vector []string, _ []s
 		}
 	}
 	return Decision{Permit: true, Reason: decision.PermitDominates, Attributes: l.CommandAttributes}
+}
+
+// LabFault is the lab's fault switch (spec §15, L4): a file whose trimmed
+// contents name the fault in force. It is read on every request, so a
+// measurement moves between faults without restarting the daemon -- a restart
+// re-mints the seeded tokens, and the redactor can verify a capture only
+// against the tokens of the run that made it.
+//
+// An empty Path, a missing file and an empty file are all "no fault", which is
+// what every configuration but a lab derivation carries: `lab.fault_file` is
+// absent from tests/lab/port49d-lab.yaml on purpose, so a file left behind by
+// one run cannot inject a fault into the next.
+type LabFault struct{ Path string }
+
+const (
+	// FaultStoreUnavailable makes FaultStore fail the reads each request
+	// handler begins with, so every handler answers as it does when the store
+	// is down: authentication ERROR store_unavailable, authorization FAIL
+	// store_unavailable, accounting spooled unattributed.
+	FaultStoreUnavailable = "store_unavailable"
+	// FaultCommandError answers every per-command authorization ERROR. No
+	// production path does: a store outage at command authorization is a FAIL
+	// (Handler.Handle). It exists to measure what a device does with an ERROR
+	// there, which is the fall-through question L4 (b) asks.
+	FaultCommandError = "command_error"
+	// FaultCommandFail answers every per-command authorization FAIL, the
+	// counterpart of FaultCommandError without a daemon restart.
+	FaultCommandFail = "command_fail"
+)
+
+// Is reports whether the named fault is in force.
+func (f LabFault) Is(name string) bool {
+	if f.Path == "" {
+		return false
+	}
+	b, err := os.ReadFile(f.Path)
+	return err == nil && strings.TrimSpace(string(b)) == name
+}
+
+var errLabStoreUnavailable = errors.New("lab fault: store_unavailable")
+
+// FaultStore is a store that fails, under FaultStoreUnavailable, the reads
+// that start authentication (GetReceipt, Candidates, and GetContext for an
+// enable), authorization and accounting (GetContext). Everything else passes
+// through, which is enough: no handler reaches a write without one of those
+// reads succeeding first.
+type FaultStore struct {
+	store.Store
+	Fault LabFault
+}
+
+func (s *FaultStore) GetReceipt(ctx context.Context, rk store.ReceiptKey) (store.Receipt, error) {
+	if s.Fault.Is(FaultStoreUnavailable) {
+		return store.Receipt{}, errLabStoreUnavailable
+	}
+	return s.Store.GetReceipt(ctx, rk)
+}
+
+func (s *FaultStore) Candidates(ctx context.Context, k store.TokenKey) ([]store.Token, error) {
+	if s.Fault.Is(FaultStoreUnavailable) {
+		return nil, errLabStoreUnavailable
+	}
+	return s.Store.Candidates(ctx, k)
+}
+
+func (s *FaultStore) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	if s.Fault.Is(FaultStoreUnavailable) {
+		return store.Context{}, errLabStoreUnavailable
+	}
+	return s.Store.GetContext(ctx, k)
 }
