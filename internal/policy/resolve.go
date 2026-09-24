@@ -26,9 +26,11 @@ type Resolution struct {
 	TokenTTL                  time.Duration
 	// Level is the level the roles compose to; Ceiling the max_privilege the
 	// grants compose to. MaxPrivilege is Ceiling as this platform's priv-lvl
-	// number, the form the token and the daemon compare; zero is no ceiling.
+	// number, the form the token and the daemon compare; HasCeiling says
+	// whether there is one, so priv-lvl 0 is a ceiling and not its absence.
 	Level, Ceiling string
 	MaxPrivilege   uint8
+	HasCeiling     bool
 	// Grants are the grants that selected the device, for the mint record.
 	Grants []decision.PolicyGrant
 	// Roles are every role that composed, attached ones included; Attached
@@ -103,7 +105,13 @@ func (p *Policy) resolve(sub *Subject, d admission.Device, now time.Time) (Resol
 			return Resolution{}, fmt.Errorf("max_privilege %s has no priv-lvl number on %s; the token's ceiling "+
 				"cannot be stated to the daemon", c.ceiling, d.Platform)
 		}
-		res.MaxPrivilege = n
+		// The token reads a zero max_privilege as none (store.Context.
+		// PrivilegeCeiling), so a ceiling of 0 would be minted as no ceiling.
+		if n == 0 {
+			return Resolution{}, fmt.Errorf("max_privilege %s is priv-lvl 0 on %s, which the token cannot carry: "+
+				"it reads zero as no ceiling; use a level numbered 1 or above", c.ceiling, d.Platform)
+		}
+		res.MaxPrivilege, res.HasCeiling = n, true
 	}
 	var err error
 	res.Blob, res.Attributes, err = p.compile(c, d, dialect)
@@ -266,16 +274,23 @@ func (p *Policy) quarantined(d admission.Device) error {
 // checkDevices runs every subject's composition on every device in the
 // inventory, and quarantines a device where one would not compile or would
 // contradict itself: a class its platform does not define, a level it cannot
-// render, a ceiling it cannot number, a landing level above the ceiling, and
-// `enable: auto` where its enable exchange does not carry the principal
-// (spec §4, §5.6, §6, §7). A quarantined device is skipped — refused at mint,
-// closed without a reply by the daemon — and the rest of the fleet loads
-// (spec §10, §13 decision 20); refusing the policy instead would take every
-// device down for one. A check no platform could pass is the policy's own
-// error and refused at load (checkClasses, numberedAnywhere). Plan 6 moves
-// quarantine into the bundle the inventory service publishes.
+// render, a ceiling it cannot number, a landing level above the ceiling, a
+// blob the engine refuses, and `enable: auto` where its enable exchange does
+// not carry the principal (spec §4, §5.6, §6, §7). A composition changes only
+// when a grant expires, so each is checked now and again at every later
+// expiry: a device that fails once a grant lapses is quarantined from the
+// start, not left to fail at a mint. A quarantined device is skipped —
+// refused at mint, closed without a reply by the daemon — and the rest of the
+// fleet loads (spec §10, §13 decision 20); refusing the policy instead would
+// take every device down for one. A check no platform could pass is the
+// policy's own error and refused at load (checkClasses, numberedAnywhere).
+// Plan 6 moves quarantine into the bundle the inventory service publishes.
 func (p *Policy) checkDevices() {
 	p.quarantine = map[string]*Quarantine{}
+	now := p.env.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
 	names := make([]string, 0, len(p.subs))
 	for name := range p.subs {
 		names = append(names, name)
@@ -283,7 +298,7 @@ func (p *Policy) checkDevices() {
 	sort.Strings(names)
 	for _, d := range p.env.Devices {
 		for _, name := range names {
-			if cause := p.checkDevice(p.subs[name], d); cause != "" {
+			if cause := p.checkDevice(p.subs[name], d, now); cause != "" {
 				q, ok := p.quarantine[d.Name]
 				if !ok {
 					q = &Quarantine{Device: d.Name, Platform: d.Platform}
@@ -295,16 +310,48 @@ func (p *Policy) checkDevices() {
 	}
 }
 
-// checkDevice is one subject's joint checks on one device; "" is none failed.
-func (p *Policy) checkDevice(sub *Subject, d admission.Device) string {
-	res, err := p.resolve(sub, d, time.Time{})
+// checkDevice is one subject's joint checks on one device, at now and at
+// every later instant one of its grants expires; "" is none failed. A cause
+// found after an expiry names the instant and the grants that lapse at it.
+func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) string {
+	if cause := p.checkDeviceAt(sub, d, now); cause != "" {
+		return cause
+	}
+	lapsing := map[time.Time][]string{}
+	var instants []time.Time
+	for _, g := range p.grants {
+		if g.Subject != sub.Name || !g.Expires.After(now) {
+			continue
+		}
+		if _, ok := lapsing[g.Expires]; !ok {
+			instants = append(instants, g.Expires)
+		}
+		lapsing[g.Expires] = append(lapsing[g.Expires], "grant "+g.Scope+" ["+strings.Join(g.Roles, " ")+"]")
+	}
+	sort.Slice(instants, func(i, j int) bool { return instants[i].Before(instants[j]) })
+	for _, at := range instants {
+		if cause := p.checkDeviceAt(sub, d, at); cause != "" {
+			return fmt.Sprintf("from %s, when %s expires: %s", decision.FormatTime(at),
+				strings.Join(lapsing[at], " and "), cause)
+		}
+	}
+	return ""
+}
+
+// checkDeviceAt is one subject's joint checks on one device at one instant.
+func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) string {
+	res, err := p.resolve(sub, d, at)
 	if errors.Is(err, ErrNoGrants) {
 		return ""
 	}
 	if err != nil {
 		return err.Error()
 	}
-	if res.MaxPrivilege > 0 && res.Level != "" {
+	if _, _, err := engine.Encode(res.Blob); err != nil {
+		return fmt.Sprintf("its compiled blob for %s is refused, so no mint could carry it: %v",
+			platformName(d.Platform), err)
+	}
+	if res.HasCeiling && res.Level != "" {
 		if landing, ok := p.privLvl(p.dialect(d.Platform), res.Level); ok && landing > res.MaxPrivilege {
 			return fmt.Sprintf("on %s its roles land it at %s (priv-lvl %d), above its grants' max_privilege %s "+
 				"(%d): the device would be told %d while port49 holds the session at %d, and every command would "+

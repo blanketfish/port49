@@ -40,6 +40,9 @@ type Env struct {
 	// EnableUsernames is config's resolved table (config.Config); a platform
 	// with no entry is `principal`.
 	EnableUsernames map[string]string
+	// Now is the present the joint checks start from: a grant already expired
+	// by then is not checked. Zero is the clock at load; tests fix it.
+	Now time.Time
 }
 
 // Policy is a loaded, validated policy file.

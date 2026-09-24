@@ -25,7 +25,7 @@ func TestResolveComposesAndCompiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r.Subject != "alice" || r.Username != "alice" || r.Enable != "token" || r.TokenTTL != time.Minute ||
-		r.Level != "readonly" || r.MaxPrivilege != 0 || strings.Join(r.Roles, ",") != "no_disruptive,read_only" {
+		r.Level != "readonly" || r.MaxPrivilege != 0 || r.HasCeiling || strings.Join(r.Roles, ",") != "no_disruptive,read_only" {
 		t.Fatalf("resolution: %+v", r)
 	}
 	if len(r.Grants) != 1 || r.Grants[0].Scope != "all_devices" || r.Grants[0].Expires != "2026-12-01T00:00:00.000Z" {
@@ -69,7 +69,7 @@ func TestAPlatformThatRendersNothingStillHasACeiling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.MaxPrivilege != 15 || r.Level != "admin" || len(r.Blob.Attributes) != 0 ||
+	if r.MaxPrivilege != 15 || !r.HasCeiling || r.Level != "admin" || len(r.Blob.Attributes) != 0 ||
 		!reflect.DeepEqual(r.Blob.Pipe, []string{"**"}) {
 		t.Fatalf("netops_admins on NX-OS: %+v", r)
 	}
@@ -242,5 +242,118 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	if len(q) != 2 || q[0].Device != "campus-sw-7" || q[1].Device != "leaf-01" ||
 		!strings.Contains(q[0].Causes[0], "enable: auto reaches this device") {
 		t.Fatalf("quarantined %+v", q)
+	}
+}
+
+// quarantinedAt parses body with the joint checks' present fixed at noon.
+func quarantinedAt(t *testing.T, body string, e Env) (*Policy, map[string][]string) {
+	t.Helper()
+	e.Now = noon
+	p, err := Parse([]byte(body), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]string{}
+	for _, q := range p.Quarantined() {
+		got[q.Device] = q.Causes
+	}
+	return p, got
+}
+
+// A blob the engine would refuse at a mint is caught at load: a dialect with
+// no pipe token compiles, and Encode refuses it.
+func TestABlobTheEngineRefusesQuarantinesTheDevice(t *testing.T) {
+	e := env()
+	eos, _ := platform.DialectFor("arista_eos")
+	eos.PipeToken = ""
+	e.Dialects = map[string]platform.Dialect{"arista_eos": eos}
+	_, got := quarantinedAt(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`, e)
+	if len(got) != 2 || len(got["leaf-01"]) != 1 || len(got["campus-sw-7"]) != 1 ||
+		!strings.Contains(got["leaf-01"][0], "compiled blob for arista_eos is refused") ||
+		!strings.Contains(got["leaf-01"][0], "no pipe token") {
+		t.Fatalf("quarantined %q", got)
+	}
+}
+
+// A composition changes when a grant expires, so the joint checks run again at
+// every later expiry: a device that fails once the admin grant lapses — the
+// operator level left has no EOS rendering, or a lower ceiling is left under
+// the landing level — is quarantined up front, naming when and why.
+func TestAnExpiryThatBreaksTheCompositionQuarantinesUpFront(t *testing.T) {
+	p, got := quarantinedAt(t, `
+scopes: [{name: all_devices, match: {}}, {name: dc, match: {site: dc1}}]
+roles:
+  - {name: op, privilege: operator, permit: [show **]}
+  - {name: adm, privilege: admin, permit: ["**"]}
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants:
+  - {subject: s, scope: all_devices, roles: [op]}
+  - {subject: s, scope: dc, roles: [adm], expires: 2026-10-01}`, env())
+	leaf := got["leaf-01"]
+	if len(got) != 2 || len(leaf) != 1 ||
+		!strings.Contains(leaf[0], "from 2026-10-01T00:00:00.000Z, when grant dc [adm] expires: ") ||
+		!strings.Contains(leaf[0], "level operator has no rendering on arista_eos") ||
+		strings.Contains(got["campus-sw-7"][0], "expires") {
+		t.Fatalf("quarantined %q", got)
+	}
+	if _, err := p.Resolve("user:s@example.com", deviceNamed(t, "leaf-01"), noon); !errors.Is(err, ErrDeviceQuarantined) {
+		t.Fatalf("Resolve before the expiry: %v", err)
+	}
+
+	_, got = quarantinedAt(t, `
+scopes: [{name: all_devices, match: {}}, {name: dc, match: {site: dc1}}]
+roles:
+  - {name: adm, privilege: admin, permit: ["**"]}
+  - {name: adm2, privilege: admin, permit: [show **]}
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants:
+  - {subject: s, scope: all_devices, roles: [adm], max_privilege: admin, expires: 2026-10-01}
+  - {subject: s, scope: dc, roles: [adm2], max_privilege: readonly}`, env())
+	if len(got) != 1 || len(got["leaf-01"]) != 1 ||
+		!strings.Contains(got["leaf-01"][0], "from 2026-10-01T00:00:00.000Z, when grant all_devices [adm] expires: ") ||
+		!strings.Contains(got["leaf-01"][0], "above its grants' max_privilege readonly") {
+		t.Fatalf("the lower ceiling left behind: %q", got)
+	}
+}
+
+// A grant already expired when the policy loads reaches no mint, so it
+// quarantines nothing.
+func TestAnExpiredGrantQuarantinesNothing(t *testing.T) {
+	p, got := quarantinedAt(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: op, privilege: operator, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [op], expires: 2026-09-01}]`, env())
+	if len(got) != 0 {
+		t.Fatalf("quarantined %q", got)
+	}
+	if _, err := p.Resolve("user:s@example.com", deviceNamed(t, "leaf-01"), noon); !errors.Is(err, ErrNoGrants) {
+		t.Fatalf("Resolve = %v", err)
+	}
+}
+
+// priv-lvl 0 is a ceiling, not its absence. The token reads a zero
+// max_privilege as none, so a ceiling numbered 0 cannot be minted and
+// quarantines the device rather than being lifted.
+func TestACeilingOfZeroIsACeiling(t *testing.T) {
+	e := env()
+	eos, _ := platform.DialectFor("arista_eos")
+	eos.Levels = map[string][]string{"readonly": {"priv-lvl=0"}, "admin": {"priv-lvl=15"}}
+	e.Dialects = map[string]platform.Dialect{"arista_eos": eos}
+	p, got := quarantinedAt(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro], max_privilege: readonly}]`, e)
+	if len(got) != 2 || !strings.Contains(got["leaf-01"][0], "max_privilege readonly is priv-lvl 0 on arista_eos") {
+		t.Fatalf("quarantined %q", got)
+	}
+	r, err := p.Resolve("user:s@example.com", deviceNamed(t, "nx-01"), noon)
+	if err != nil || !r.HasCeiling || r.MaxPrivilege != 1 {
+		t.Fatalf("elsewhere the ceiling stands: %+v %v", r, err)
 	}
 }
