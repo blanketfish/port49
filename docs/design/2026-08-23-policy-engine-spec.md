@@ -231,8 +231,11 @@ entire class.
 3. **Comparison is case-insensitive; the vector is not altered.** Device CLIs accept
    mixed-case keywords, so a case-sensitive match is bypassable with `SHOW run`. Literal
    terms and entity-class patterns therefore compare case-insensitively, and regex terms
-   compile case-insensitive. A policy regex that opts out with `(?-i)` is refused at load
-   (§4), even where a device object really is case-sensitive (IOS ACL names, for instance).
+   compile case-insensitive **by default**, with `(?-i)` available to a permit to opt into
+   exactness where a device object really is case-sensitive (IOS ACL names, for instance).
+   A deny may not opt out: its `(?-i)` is refused at load (§4), because a case-sensitive
+   deny is walked past by typing another case, while a case-sensitive permit only permits
+   less.
 
    Insensitive must be the default because a case-sensitive deny fails *open*: a rule
    reading `deny: interface /^Management/` would otherwise be evaded by typing
@@ -309,9 +312,9 @@ rather than in the grammar.
 backtracking, and a leaf regex can never span argument boundaries, so its blast radius is
 one position. Regex terms are also the only construct that degrades the effective-permission
 diff (§12), which is a reason to prefer literals, `@class`, and `*` where any will do.
-A policy regex that turns case-insensitivity off, with `(?-i)` or any flag group clearing
+A deny's regex that turns case-insensitivity off, with `(?-i)` or any flag group clearing
 `i`, is a **policy load error**: port49 matches case-insensitively, and a case-sensitive
-deny could be walked past by changing the case of what is typed.
+deny could be walked past by changing the case of what is typed. A permit may opt out.
 
 **Entity classes solve cross-platform naming.** A rule reading
 `deny: interface /^(management|mgmt)/` works on EOS and NX-OS and silently does nothing on
@@ -3881,7 +3884,7 @@ Beyond those already listed in the design document's §14:
 
 - **Full-vector matching**: `show bgp summary` does not match `show bgp summary detail`.
 - **Case insensitivity**: `SHOW RUN` matches `show run`; `interface MANAGEMENT1` matches
-  `@management` defined as `^Management[0-9]+$`; a policy `(?-i)` regex is refused at load;
+  `@management` defined as `^Management[0-9]+$`; a permit's `(?-i)` regex matches case-sensitively and a deny's is refused at load;
   the vector reaching accounting is unaltered.
 - **Dominance, permitting**: a permit of `show chassis hardware` (3,3,3) beats a deny of
   `show chassis **` (3,3,0), while `show chassis hardware detail` remains denied.

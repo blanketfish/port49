@@ -24,6 +24,10 @@ func TestShadowsAreTheDominancesThatCanHappen(t *testing.T) {
 		{"a word the regex refuses", "copy running-config scp://x", "* * /^tftp:/", false, false, true},
 		{"a class against a regex", "copy running-config @backup_targets", "* * /^scp:/", true, true, true},
 		{"a deny of everything", "show version", "**", true, false, true},
+		// A case-sensitive permit matches a subset of what the same pattern
+		// matches folded, so whether it meets the deny is still only possible.
+		{"a case-sensitive permit", "copy running-config /(?-i)^TFTP:/", "* * /^tftp:/", true, true, true},
+		{"a case-sensitive permit, same text", "copy running-config /(?-i)^tftp:/", "* * /(?-i)^tftp:/", true, false, true},
 		// Where the platform may send what was typed, the deny's word also
 		// takes its own abbreviations, and a permit written as one meets it.
 		{"an abbreviation, sent as typed", "rel now", "reload **", true, false, false},

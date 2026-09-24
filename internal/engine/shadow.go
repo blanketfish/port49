@@ -124,7 +124,7 @@ func overlap(a, b cterm, abbrev bool) (meet, possible bool) {
 	case a.kind == Word:
 		// The permit's word matches every case-fold of itself, and a pattern
 		// compiles case-insensitive, so testing the literal tests them all.
-		// A policy refuses a regex that turns that off (spec §4).
+		// A policy refuses a deny regex that turns that off (spec §4).
 		return anyMatch(b.res, a.word), false
 	case b.kind == Word:
 		if anyMatch(a.res, b.word) {

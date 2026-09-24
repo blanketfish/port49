@@ -292,11 +292,12 @@ func (p *Policy) buildRoles(f file) error {
 		}
 		role := &Role{Name: r.Name, Privilege: r.Privilege, Reason: r.Reason, Attributes: r.Attributes}
 		for _, list := range []struct {
-			in  []string
-			out *[]string
-		}{{r.Permit, &role.Permit}, {r.Deny, &role.Deny}} {
+			in   []string
+			out  *[]string
+			deny bool
+		}{{r.Permit, &role.Permit, false}, {r.Deny, &role.Deny, true}} {
 			for _, rule := range list.in {
-				if err := checkRule(rule); err != nil {
+				if err := checkRule(rule, list.deny); err != nil {
 					return fmt.Errorf("role %q: %w", r.Name, err)
 				}
 				if err := p.checkClasses(rule); err != nil {
@@ -308,7 +309,7 @@ func (p *Policy) buildRoles(f file) error {
 		if r.Pipe != nil {
 			role.Pipe = []string{}
 			for _, rule := range r.Pipe.Permit {
-				if err := checkRule(rule); err != nil {
+				if err := checkRule(rule, false); err != nil {
 					return fmt.Errorf("role %q: pipe: %w", r.Name, err)
 				}
 				if err := p.checkClasses(rule); err != nil {
@@ -328,9 +329,11 @@ func (p *Policy) buildRoles(f file) error {
 // checkRule parses a rule and refuses a regex that buys specificity by how it
 // is written rather than by what it constrains (spec §4; §14, "Rank lint"):
 // one equivalent to `*` ranks 2 where `*` ranks 1, and one equivalent to a
-// literal ranks 2 where the word ranks 3. It also refuses a regex that turns
-// case-insensitivity off anywhere in it (spec §4).
-func checkRule(rule string) error {
+// literal ranks 2 where the word ranks 3. In a deny it also refuses a regex
+// that turns case-insensitivity off anywhere in it (spec §3 rule 3, §4): a
+// differently-cased command would walk past it. A permit may opt out, since
+// that only narrows what it permits.
+func checkRule(rule string, deny bool) error {
 	terms, err := engine.ParseRule(rule)
 	if err != nil {
 		return err
@@ -339,8 +342,8 @@ func checkRule(rule string) error {
 		if t.Kind != engine.Regex {
 			continue
 		}
-		if caseSensitive(t.Text) {
-			return fmt.Errorf("rule %q: /%s/ turns case-insensitivity off; port49 matches case-insensitively, "+
+		if deny && caseSensitive(t.Text) {
+			return fmt.Errorf("deny %q: /%s/ turns case-insensitivity off; port49 matches case-insensitively, "+
 				"and a case-sensitive deny could be walked past by changing case (spec §4)", rule, t.Text)
 		}
 		if simpler, ok := rankLint(t.Text); ok {
