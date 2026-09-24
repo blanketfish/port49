@@ -4654,7 +4654,8 @@ the requirement to handle it if some other train does.
 
 **Superseded 2026-09-22.** Plan 2 builds neither the index nor the reason code. `$enab{level}$`
 becomes an explicit `platforms.<name>.enable_username: enab` option that `config.Load`
-**refuses**, with an error naming what would lift the refusal: a `tests/lab/results/` note
+**refuses** (moved to `platform.Validate`, in the policy file's `platforms:` block, in plan 5,
+§8), with an error naming what would lift the refusal: a `tests/lab/results/` note
 showing a device sending that username form. Until such a note exists, the `(nas, rem_addr)`
 secondary index, its ambiguity refusal and the §5.7 row that refusal would need are all
 **deferred** — §5.6's bound-attributes table and teardown row 4, and §7's "How an enable token is

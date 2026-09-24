@@ -146,6 +146,16 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (lo
 	return logins, enables, nil
 }
 
+// announce is what the start says about the configuration file itself: the
+// lab block's warning, and each notice config.Load left, such as a key that
+// moved to the policy file (task 8 review minor 2).
+func announce(w io.Writer, cfg *config.Config) {
+	fmt.Fprint(w, labWarning(cfg.Lab))
+	for _, n := range cfg.Notices {
+		fmt.Fprintln(w, "port49d:", n)
+	}
+}
+
 // labWarning is the line port49d prints at start when its config has a
 // `lab:` block (owner's ruling 2026-09-24; design §13): what the block
 // enables, and that it must never be in production. The block is the lab's
@@ -405,10 +415,7 @@ func run(parent context.Context, cfgPath string) error {
 	// The inventory as loaded, hashed now rather than when the reloader
 	// starts: an edit in between would otherwise never be said (checkInventory).
 	_, inventoryAtStart, _ := fileVersion(cfg.InventoryFile)
-	fmt.Fprint(stderr, labWarning(cfg.Lab))
-	for _, n := range cfg.Notices {
-		fmt.Fprintln(stderr, "port49d:", n)
-	}
+	announce(stderr, &cfg)
 
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()

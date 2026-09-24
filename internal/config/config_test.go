@@ -467,6 +467,12 @@ func TestEnableUsernameMovedToThePolicyFile(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "platforms.cisco_iosxe.enable_username moved to the policy file") {
 			t.Fatalf("%s: %v", v, err)
 		}
+		// Told to move it, the operator is told too that the value is refused
+		// there, rather than learning it on the second try (task 8 review
+		// minor 1).
+		if refused := strings.Contains(err.Error(), "enab is refused there too"); refused != (v == "enab") {
+			t.Errorf("%s: %v", v, err)
+		}
 	}
 }
 

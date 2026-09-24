@@ -696,6 +696,12 @@ func moveEnableUsernames(c *Config, overrides map[string]PlatformConfig) error {
 		moved := fmt.Sprintf("platforms.%s.enable_username moved to the policy file in plan 5: write it under "+
 			"`platforms: {%s: {enable_username: ...}}` there, where `port49 policy test` reads it as port49d does",
 			name, name)
+		if v == platform.EnableEnab {
+			// Told only to move it, the operator would learn on the second
+			// try that the policy file refuses it too (task 8 review minor 1).
+			return fmt.Errorf("config: %s; enab is refused there too until a tests/lab/results/ note shows a "+
+				"device sending it (spec §7, L3), so delete the line", moved)
+		}
 		if v != platform.EnablePrincipal {
 			return fmt.Errorf("config: %s", moved)
 		}
