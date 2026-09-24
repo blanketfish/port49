@@ -128,8 +128,8 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	for _, line := range missing {
 		failed++
 		fmt.Fprintf(stdout, "MISSING: %s: %s: the configuration does not carry this line, and the %s adapter's "+
-			"renderings depend on it: without it a level is not what the adapter says it is (spec §6; port49 "+
-			"platform show %s)\n", fs.Arg(0), redact(line), d.Platform, d.Platform)
+			"renderings depend on it: without it a level is not what the adapter says it is (spec §6; %s)\n",
+			fs.Arg(0), redact(line), d.Platform, whereWritten(files, p.PlatformSet(), d.Platform, line))
 	}
 	// Half an adapter checks half: what it could not look for is said, so
 	// the summary line is not read as covering it.
@@ -151,4 +151,24 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// whereWritten is where a device_config line check-config requires can be
+// read: a line the platform set holds the device to is in the set's adapter,
+// which `platform show --policy` does not print where a block replaced its
+// device_config; any other is the policy's block's (final review M7).
+func whereWritten(files policyFiles, version, platformName, line string) string {
+	if set, ok := platform.Set(version); ok {
+		names := sortedNames(set)
+		if i := slices.Index(names, platformName); i > 0 {
+			names[0], names[i] = names[i], names[0]
+		}
+		for _, name := range names {
+			if slices.Contains(set[name].DeviceConfig, line) {
+				return fmt.Sprintf("the platform set's line: port49 platform show --set %s %s", version, name)
+			}
+		}
+	}
+	return fmt.Sprintf("the policy's platforms: block's line: port49 platform show --policy %s --inventory %s %s",
+		files.policy, files.inventory, platformName)
 }

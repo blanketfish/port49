@@ -301,3 +301,34 @@ key_groups:
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// A MISSING line points where the operator can read it: a line the set holds
+// the device to is in the set's adapter, not in `platform show --policy`,
+// which prints a block's device_config without the set's floor (final review
+// M7).
+func TestCheckConfigPointsAMissingLineAtWhereItIsWritten(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	block := "platforms:\n  arista_eos:\n    device_config: [\"aaa authorization exec default group port49 local\", " +
+		"\"aaa accounting commands all default start-stop group port49\"]\n"
+	if err := os.WriteFile(pol, append([]byte(block), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(t.TempDir(), "leaf-01.cfg")
+	if err := os.WriteFile(cfg, []byte("aaa authorization exec default group port49 local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "leaf-01", cfg}, &out, &errb)
+	for _, want := range []string{
+		"MISSING: " + cfg + ": aaa authorization commands all default group port49 local: ",
+		"(spec §6; the platform set's line: port49 platform show --set 1.0.0 arista_eos)\n",
+		"MISSING: " + cfg + ": aaa accounting commands all default start-stop group port49: ",
+		"(spec §6; the policy's platforms: block's line: port49 platform show --policy " + pol + " --inventory " + inv +
+			" arista_eos)\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
+		}
+	}
+}
