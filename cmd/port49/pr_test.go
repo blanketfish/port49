@@ -306,9 +306,12 @@ func TestAFailedFetchDoesNotPrintTheRemotesCredential(t *testing.T) {
 
 func TestWithoutCredentialsKeepsAURLWithoutOne(t *testing.T) {
 	for in, want := range map[string]string{
-		"fatal: 'https://github.com/o/p.git/' not found":       "fatal: 'https://github.com/o/p.git/' not found",
-		"https://a:p@ss@host/x and ssh://git@example.test/o/p": "https://«redacted»@host/x and ssh://«redacted»@example.test/o/p",
-		"to https://x-access-token:t0k@github.com/o/p.git":     "to https://«redacted»@github.com/o/p.git",
+		"fatal: 'https://github.com/o/p.git/' not found":        "fatal: 'https://github.com/o/p.git/' not found",
+		"https://a:p@ss@host/x and ssh://git@example.test/o/p":  "https://«redacted»@host/x and ssh://«redacted»@example.test/o/p",
+		"fatal: 'ci:ghp_s3cret@github.com:o/p' does not appear": "fatal: '«redacted»@github.com:o/p' does not appear",
+		"https://u:p/w@github.com/o/p":                          "https://«redacted»@github.com/o/p",
+		"git@github.com:o/p.git":                                "git@github.com:o/p.git",
+		"to https://x-access-token:t0k@github.com/o/p.git":      "to https://«redacted»@github.com/o/p.git",
 	} {
 		if got := withoutCredentials(in); got != want {
 			t.Errorf("%q: got %q", in, got)
@@ -390,6 +393,8 @@ func TestThePullRequestGoesWhereTheBranchIsPushed(t *testing.T) {
 		{"remote", "add", "elsewhere", "ssh://example.test/o/p.git"},
 		{"remote", "set-url", "--push", "elsewhere", remote},
 		{"remote", "add", "creds", "https://ci:ghp_s3cret@example.test/no-owner"},
+		{"remote", "add", "scpcreds", "ci:ghp_s3cret@example.test:no-owner"},
+		{"remote", "add", "slashcreds", "https://ci:ghp/s3cret@example.test/no-owner"},
 		{"remote", "add", "fetchpath", remote},
 		{"remote", "set-url", "--push", "fetchpath", "ssh://example.test/o/p.git"},
 	} {
@@ -398,11 +403,14 @@ func TestThePullRequestGoesWhereTheBranchIsPushed(t *testing.T) {
 		}
 	}
 	before := checkout(t, repo)
-	for _, name := range []string{"mirror", "path", "file", "elsewhere", "creds"} {
+	// The refusal names the remote, never its URL: a URL malformed enough to
+	// refuse may hold a credential no pattern recognizes.
+	for _, name := range []string{"mirror", "path", "file", "elsewhere", "creds", "scpcreds", "slashcreds"} {
 		var out, errb bytes.Buffer
 		if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops", "--pr",
 			"--remote", name}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "names no repository") ||
-			strings.Contains(errb.String(), "ghp_s3cret") {
+			!strings.Contains(errb.String(), "git remote get-url --push "+name) || strings.Contains(errb.String(), "s3cret") ||
+			strings.Contains(errb.String(), "example.test") || strings.Contains(errb.String(), remote) {
 			t.Errorf("--remote %s: code %d %s", name, code, errb.String())
 		}
 	}

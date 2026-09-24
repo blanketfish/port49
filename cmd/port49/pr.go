@@ -40,14 +40,22 @@ var runGit = func(dir string, args ...string) (string, error) {
 }
 
 // credentialInURL is the user-information part of a URL, where a token
-// pasted into a remote's address sits; it runs to the last `@` before the
-// host, since a password may hold one.
-var credentialInURL = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^/\s]+@`)
+// pasted into a remote's address sits. It runs to the last `@` in the word,
+// since a password may hold an `@` or an unencoded `/`; a path holding an `@`
+// loses its host too, which removes more rather than less.
+var credentialInURL = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s'"]+@`)
 
-// withoutCredentials is git's or gh's error text with any credential in a URL
-// replaced: some git releases print the remote's address as configured.
+// credentialInSCP is the same in an scp-style address, `user:password@host:
+// path`: a word with a `:` before its `@`, where the `:` does not begin a
+// scheme's `://`.
+var credentialInSCP = regexp.MustCompile(`(^|[\s'"(])[^\s'"@/:]+:(?:[^\s'"/]|/[^\s'"/])[^\s'"]*@`)
+
+// withoutCredentials is git's or gh's error text with any credential in an
+// address replaced: some git releases print the remote's address as
+// configured.
 func withoutCredentials(s string) string {
-	return credentialInURL.ReplaceAllString(s, "${1}«redacted»@")
+	s = credentialInURL.ReplaceAllString(s, "${1}«redacted»@")
+	return credentialInSCP.ReplaceAllString(s, "${1}«redacted»@")
 }
 
 // ghName is a host, owner or repository name as it stands in a GitHub URL.
@@ -178,9 +186,11 @@ func removalPR(path, subject string, edited []byte, r policy.Removal, remote, ba
 	}
 	repo, ok := ghRepo(pushURL)
 	if !ok {
-		return "", fmt.Errorf("--remote %q pushes to %s, which names no repository gh can open a pull request in "+
-			"(https://HOST/OWNER/REPO, ssh://HOST/OWNER/REPO or HOST:OWNER/REPO); offboard with --write and open "+
-			"the review by hand", remote, withoutCredentials(pushURL))
+		// The URL is not echoed: one malformed enough to refuse may hold a
+		// credential no pattern recognizes.
+		return "", fmt.Errorf("--remote %q pushes to an address that names no repository gh can open a pull "+
+			"request in (https://HOST/OWNER/REPO, ssh://HOST/OWNER/REPO or HOST:OWNER/REPO; `git remote get-url "+
+			"--push %s` shows it); offboard with --write and open the review by hand", remote, remote)
 	}
 	rel, err := filepath.Rel(top, path)
 	if err != nil {
