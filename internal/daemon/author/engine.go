@@ -130,11 +130,12 @@ func (e *Engine) Session(ctx context.Context, r Request) Decision {
 		return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg, Policy: pol}
 	}
 	for _, a := range attrs {
-		// A priv-lvl that is not a level refuses the session on the device
-		// (IOS-XE, L18-cisco_iosxe.md, variant 7), and GrantedPrivLvl skips it,
-		// so the ceiling below never sees it. The load's joint check
-		// quarantines such a composition: refused here, never sent.
-		if engine.NotALevel(a) {
+		// The device refuses the whole session for a priv-lvl that is not a
+		// level and for an attribute its platform does not take (IOS-XE,
+		// L18-cisco_iosxe.md), and GrantedPrivLvl skips the first, so the
+		// ceiling below never sees it. The load's joint check quarantines
+		// such a composition: refused here, never sent.
+		if engine.NotALevel(a) || !p.Blob.Accepts(a) {
 			return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg, Policy: pol}
 		}
 	}

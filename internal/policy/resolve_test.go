@@ -624,6 +624,21 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`
 	}
 }
 
+// The blob carries the merged adapter's accepted_attributes, so the daemon
+// refuses what the device would; a platform that takes any name carries none.
+func TestTheBlobCarriesWhatItsPlatformTakes(t *testing.T) {
+	p := mustParse(t, good)
+	r, err := p.ResolveSubject("netops_admins", deviceNamed(t, "xe-01"), noon)
+	if err != nil || !reflect.DeepEqual(r.Blob.AcceptedAttributes, []string{"priv-lvl"}) {
+		t.Fatalf("IOS-XE: %+v %v", r.Blob.AcceptedAttributes, err)
+	}
+	for _, name := range []string{"nx-01", "srx-fw-04"} {
+		if r, err := p.ResolveSubject("netops_admins", deviceNamed(t, name), noon); err != nil || r.Blob.AcceptedAttributes != nil {
+			t.Fatalf("%s: %+v %v", name, r.Blob.AcceptedAttributes, err)
+		}
+	}
+}
+
 // A grant's attribute is layered like a role's, and the check names it.
 func TestAGrantsAttributeIOSXEDoesNotTakeQuarantinesIt(t *testing.T) {
 	p := mustParse(t, `

@@ -201,6 +201,13 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
 	for _, a := range attrs {
 		b.Attributes = append(b.Attributes, a.Attribute)
 	}
+	// The daemon's twin of the joint check below: it refuses a reply the
+	// device would refuse, under the adapter this policy merged.
+	if len(dialect.AcceptedAttributes) > 0 {
+		b.AcceptedAttributes = slices.Clone(dialect.AcceptedAttributes)
+		slices.Sort(b.AcceptedAttributes)
+		b.AcceptedAttributes = slices.Compact(b.AcceptedAttributes)
+	}
 	return b, attrs, nil
 }
 

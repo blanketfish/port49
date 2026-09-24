@@ -160,6 +160,43 @@ func TestALaterDialectFlagIsOmittedWhenFalse(t *testing.T) {
 	}
 }
 
+// The adapter's accepted_attributes ride in the blob so the daemon refuses a
+// reply the device would refuse, under whatever adapter the policy merged. A
+// v2 blob written without the key decodes as no restriction and keeps its
+// hash; set, the list is sorted and deduplicated, so it has one spelling.
+func TestAcceptedAttributesAreCanonicalAndOmittedWhenEmpty(t *testing.T) {
+	const v2 = `{"version":2,"bundle":"b","platform":"cisco_iosxe","normalize":{"pipe_token":"|","pipe_authorized":false,` +
+		`"strip_cr":true,"expands_abbreviations":true},"privilege":"","attributes":["priv-lvl=1"],"rules":[],"pipe":[],"classes":{}}`
+	b, err := Decode(HashOf([]byte(v2)), []byte(v2))
+	if err != nil || b.AcceptedAttributes != nil || !b.Accepts("idletime*30") {
+		t.Fatalf("a v2 blob without the key: %+v, %v", b.AcceptedAttributes, err)
+	}
+	b.AcceptedAttributes = []string{}
+	if body, _, err := Encode(b); err != nil || string(body) != v2 {
+		t.Fatalf("an empty list is no list: %s %v", body, err)
+	}
+	b.AcceptedAttributes = []string{"priv-lvl", "idletime", "priv-lvl"}
+	body, hash, err := Encode(b)
+	if err != nil || hash == HashOf([]byte(v2)) ||
+		!strings.Contains(string(body), `"attributes":["priv-lvl=1"],"accepted_attributes":["idletime","priv-lvl"],`) {
+		t.Fatalf("set: %s %v", body, err)
+	}
+	got, err := Decode(hash, body)
+	if err != nil || !got.Accepts("priv-lvl*15") || !got.Accepts("idletime=5") || got.Accepts("roles=x") {
+		t.Fatalf("round trip: %+v %v", got.AcceptedAttributes, err)
+	}
+	unsorted := strings.Replace(string(body), `["idletime","priv-lvl"]`, `["priv-lvl","idletime"]`, 1)
+	if _, err := Decode(HashOf([]byte(unsorted)), []byte(unsorted)); err == nil || !strings.Contains(err.Error(), "canonical") {
+		t.Fatalf("an unsorted list: %v", err)
+	}
+	for _, bad := range []string{"", "a=b", "a b", "a*", "a\xff"} {
+		b.AcceptedAttributes = []string{bad}
+		if _, _, err := Encode(b); err == nil {
+			t.Errorf("%q: encoded", bad)
+		}
+	}
+}
+
 // Encode refuses what Decode would refuse: a daemon must never be handed a
 // blob it cannot read.
 func TestEncodeRefusesWhatDecodeRefuses(t *testing.T) {

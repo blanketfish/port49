@@ -244,6 +244,29 @@ func TestASessionReplyWithAPrivLvlThatIsNotALevelIsRefused(t *testing.T) {
 	}
 }
 
+// A blob that says which attributes its platform takes is never answered with
+// another: the device would refuse the session, and on IOS-XE a run of
+// refusals stops it answering SSH (L18-cisco_iosxe.md). The load's joint check
+// quarantines such a composition, so a blob carrying one was minted before
+// that check or under another adapter.
+func TestASessionReplyTheBlobsPlatformDoesNotTakeIsRefused(t *testing.T) {
+	b := eosBlob()
+	b.AcceptedAttributes = []string{"priv-lvl"}
+	f := newEngineFixture(t, b)
+	c := store.Context{Username: "alice", Principal: "user:alice@example.com", BlobHash: f.hash}
+	e := &Engine{Store: f.st, Metrics: f.m}
+	d := e.Session(context.Background(), Request{Context: c, Device: peer})
+	if d.Permit || d.Reason != decision.BlobUnavailable || len(d.Attributes) != 0 || d.ServerMsg != blobUnavailableMsg {
+		t.Fatalf("%+v", d)
+	}
+	b.AcceptedAttributes = []string{"home-directory", "priv-lvl"}
+	f = newEngineFixture(t, b)
+	c.BlobHash = f.hash
+	if d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(), Request{Context: c, Device: peer}); !d.Permit {
+		t.Fatalf("every name accepted: %+v", d)
+	}
+}
+
 // A blob compiled for another platform than the device's is never answered
 // from: its attributes and its dialect are another vendor's (roadmap, plan 4,
 // carried from plan 3).
