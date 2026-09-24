@@ -2,10 +2,12 @@ package policy
 
 import (
 	"bytes"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
 )
 
@@ -17,7 +19,23 @@ func explained(t *testing.T, p *Policy, subject, principal, device, line string,
 	}
 	var buf bytes.Buffer
 	e.Render(&buf, attrs)
+	oneVerdict(t, buf.String())
 	return e, buf.String()
+}
+
+// oneVerdict checks spec §12's "exactly one reason": one line of the output
+// is a verdict.
+func oneVerdict(t *testing.T, out string) {
+	t.Helper()
+	n := 0
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "permit ") || strings.HasPrefix(l, "deny ") || strings.HasPrefix(l, "refused ") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("explain printed %d verdicts, not one:\n%s", n, out)
+	}
 }
 
 func mustContain(t *testing.T, out string, want ...string) {
@@ -83,7 +101,7 @@ roles: [{name: op, privilege: operator, permit: [show **]}]
 subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [op]}]`)
 	_, out := explained(t, p, "s", "", "leaf-01", "show version", false)
-	mustContain(t, out, "deny device_quarantined", "leaf-01 (arista_eos) failed a joint check at load",
+	mustContain(t, out, "deny device_quarantined", "leaf-01 (arista_eos) fails a joint check now",
 		"level operator has no rendering on arista_eos")
 	_, out = explained(t, p, "s", "", "nx-01", "show version", false)
 	mustContain(t, out, "permit permit_dominates")
@@ -111,6 +129,7 @@ grants:
 	}
 	var buf bytes.Buffer
 	e.Render(&buf, false)
+	oneVerdict(t, buf.String())
 	mustContain(t, buf.String(), "deny device_quarantined", "level operator has no rendering on arista_eos")
 	if strings.Contains(buf.String(), "will be quarantined") {
 		t.Errorf("a current entry is a cause, not a note:\n%s", buf.String())
@@ -130,5 +149,76 @@ func TestExplainNoGrants(t *testing.T) {
 	}
 	if _, err := p.Explain("nobody", "", "leaf-01", "show version", noon); err == nil {
 		t.Fatal("an undeclared subject is an error")
+	}
+}
+
+// A permit explain cannot compile is a defect it reports, never a role it
+// drops: "permitted by none" would send an operator after the wrong thing.
+func TestExplainReportsAPermitItCannotCompile(t *testing.T) {
+	p := spec11(t, spec11Raw(t))
+	p.roles["network_admin"].Permit = append(p.roles["network_admin"].Permit, "** reload")
+	if _, err := p.Explain("noc_tier1", "", "leaf-01", "reload", noon); err == nil {
+		t.Fatal("a permit that does not parse was dropped silently")
+	}
+}
+
+// explain answers what the mint would: where the broker refuses the session
+// reply, explain says refused with the mint item error, not permit, on the
+// session and on a command alike.
+func TestExplainNamesTheMintItemError(t *testing.T) {
+	policy := func(attr string) *Policy {
+		p, err := Parse([]byte(`
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: admin, permit: ["**"], attributes: {all: ["`+attr+`"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: a_rather_long_username, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]`), Env{Devices: append(inventory(),
+			admission.Device{Name: "sw=1", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("10.9.9.9")}})})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	long, unsafe := policy("note*"+strings.Repeat("x", 230)+"{username}"), policy("where*{device}")
+	for _, line := range []string{"", "show version"} {
+		_, out := explained(t, long, "s", "", "leaf-01", line, false)
+		mustContain(t, out, "refused attribute_too_long", "the broker mints no token")
+		_, out = explained(t, unsafe, "", "user:s@example.com", "sw=1", line, false)
+		mustContain(t, out, "refused attribute_unsafe")
+		_, out = explained(t, unsafe, "s", "", "leaf-01", line, false)
+		mustContain(t, out, "permit ")
+	}
+}
+
+// NX-OS never displays server_msg (spec §15, L2), so the ceiling warning and
+// the revocation notices reach nobody there, and explain says so.
+func TestExplainSaysNXOSShowsNoServerMsg(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`)
+	for _, line := range []string{"", "show version"} {
+		_, out := explained(t, p, "s", "", "nx-01", line, false)
+		mustContain(t, out, "note: cisco_nxos never displays port49's server_msg",
+			"tests/lab/results/L2-cisco_nxos.md")
+		_, out = explained(t, p, "s", "", "leaf-01", line, false)
+		if strings.Contains(out, "server_msg") {
+			t.Errorf("arista_eos displays server_msg:\n%s", out)
+		}
+	}
+}
+
+// A pipe stage denial names the stage; "permitted by" is about command
+// permits, which already match, so it is not printed.
+func TestExplainAPipeDenialNamesNoPermitters(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], pipe: {permit: [include *]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`)
+	_, out := explained(t, p, "s", "", "leaf-01", "show run | redirect x", false)
+	mustContain(t, out, "deny pipe_stage_denied", "stage       1")
+	if strings.Contains(out, "permitted by") {
+		t.Errorf("a pipe denial printed permitted by:\n%s", out)
 	}
 }

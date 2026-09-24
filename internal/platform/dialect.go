@@ -32,6 +32,12 @@ type Dialect struct {
 	// also match any abbreviation of them, so `rel` cannot slip past
 	// `deny reload **` (spec §3 rule 4; engine.Normalize).
 	ExpandsAbbreviations bool
+	// ShowsServerMsg says the device displays the server_msg of an
+	// authorization reply to the operator. Where it does not, nothing spec §5.6
+	// says through server_msg — the session-ceiling warning, context_stale,
+	// credential_revoked — reaches anyone, and `port49 explain` must say so
+	// (spec §15, L2).
+	ShowsServerMsg bool
 	// Supports is the capability declaration of spec §9: which of `session`,
 	// `commands` and `config_commands` the platform authorizes. The engine
 	// evaluates every rule whatever it says; explain reads it to say which
@@ -58,6 +64,11 @@ type Dialect struct {
 //     (tests/lab/results/L2-arista_eos.md, L2-cisco_nxos.md,
 //     L2-cisco_iosxe.md). Whether any other modifier reaches port49 anywhere
 //     is unmeasured. Junos never authorizes a command.
+//   - ShowsServerMsg: a 61-character server_msg on a denied command was
+//     displayed in full on vEOS 4.31.2F and IOS-XE 17.13.01a and not at all on
+//     NX-OS 10.4(2)F, which printed its own error (tests/lab/results/
+//     L2-arista_eos.md, L2-cisco_iosxe.md, L2-cisco_nxos.md). Junos makes no
+//     command request to carry one and is unmeasured, so false.
 //   - StripCR: every command authorization measured ends `cmd-arg=<cr>`
 //     (L10-arista_eos.md, L10-cisco_nxos.md, L10-cisco_iosxe.md).
 //   - ExpandsAbbreviations is false everywhere: whether a device sends `sh run`
@@ -79,7 +90,7 @@ type Dialect struct {
 //     platform renders nothing, as in plan 3; plan 5 fills them.
 var dialects = map[string]Dialect{
 	"arista_eos": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false,
+		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false, ShowsServerMsg: true,
 		Supports: []string{"session", "commands"},
 		EntityClasses: map[string][]string{
 			"management": {`^Management[0-9]+$`},
@@ -89,12 +100,12 @@ var dialects = map[string]Dialect{
 		Levels: map[string][]string{"readonly": {"priv-lvl=1"}, "admin": {"priv-lvl=15"}},
 	},
 	"cisco_nxos": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false,
+		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false, ShowsServerMsg: false,
 		Supports:      []string{"session", "commands"},
 		EntityClasses: map[string][]string{"management": {`^mgmt[0-9]+$`}},
 	},
 	"cisco_iosxe": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false,
+		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false, ShowsServerMsg: true,
 		Supports: []string{"session", "commands"},
 	},
 	"juniper_junos": {
