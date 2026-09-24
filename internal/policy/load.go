@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 
@@ -838,9 +839,10 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 // caseSensitive reports whether a regex term, compiled the way the matcher
-// compiles it, has any literal or character class that does not fold case:
-// what a `(?-i)` or any flag group clearing `i` leaves behind, however it is
-// spelled.
+// compiles it, has any literal or character class that does not fold case
+// and holds a rune that has another case: what a `(?-i)` or any flag group
+// clearing `i` leaves behind, however it is spelled. A rune with no other
+// case has nothing to fold, which is what `[.]` or `[_]` is rewritten to.
 func caseSensitive(body string) bool {
 	re, err := syntax.Parse("(?i)"+body, syntax.Perl)
 	if err != nil {
@@ -848,10 +850,26 @@ func caseSensitive(body string) bool {
 	}
 	var walk func(*syntax.Regexp) bool
 	walk = func(re *syntax.Regexp) bool {
-		if (re.Op == syntax.OpLiteral || re.Op == syntax.OpCharClass) && re.Flags&syntax.FoldCase == 0 {
-			return true
+		if re.Flags&syntax.FoldCase == 0 {
+			switch re.Op {
+			case syntax.OpLiteral:
+				if slices.ContainsFunc(re.Rune, cased) {
+					return true
+				}
+			case syntax.OpCharClass:
+				for i := 0; i+1 < len(re.Rune); i += 2 {
+					for r := re.Rune[i]; r <= re.Rune[i+1]; r++ {
+						if cased(r) {
+							return true
+						}
+					}
+				}
+			}
 		}
 		return slices.ContainsFunc(re.Sub, walk)
 	}
 	return walk(re)
 }
+
+// cased reports whether r has another case to fold to.
+func cased(r rune) bool { return unicode.SimpleFold(r) != r }

@@ -231,6 +231,9 @@ func TestATestReasonFromTheVocabularyLoads(t *testing.T) {
 // it permits, so it fails closed (spec §3 rule 3).
 func TestOnlyADenyMustStayCaseInsensitive(t *testing.T) {
 	mustParse(t, "roles:\n  - {name: r, deny: [\"* * /(?i)^tftp:/\", \"* * /(?s)^ftp:/\", \"* * /[(?-i)]/\"]}\n"+subjOK)
+	// A one-rune class is rewritten to a literal that does not fold case, and
+	// a rune with no other case has none to fold: nothing can walk past it.
+	mustParse(t, "roles:\n  - {name: r, deny: [\"interface /^Ethernet1[.]1$/\", \"copy /[/_]x/ *\", \"* /(?-i)[0-9.]+/\"]}\n"+subjOK)
 	p := mustParse(t, scopeOK+`roles:
   - {name: r, privilege: readonly, permit: ["show ip access-list /(?-i)^MGMT$/"], pipe: {permit: ["include /(?U-i)x/"]}}
 `+subjOK+grantOK)
