@@ -142,34 +142,67 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 			words[i], rewritten[i], redacted = u, true, true
 		}
 	}
-	for _, r := range rules {
-		if !matchWords(r.Match, words) {
+	// A value glued to its keyword, `key=X` or `password:X`, is the word
+	// after the keyword: each such word is matched as the two, and a keyword
+	// ending in the separator, `password:`, as the keyword (task 15 review
+	// I4). A URL is left whole: redactURL read it.
+	var split []glued
+	for i, w := range words {
+		j := strings.IndexAny(w, "=:")
+		if rewritten[i] || j <= 0 || strings.Contains(w, "://") {
+			split = append(split, glued{word: i, text: w})
 			continue
 		}
-		start := len(words)
+		split = append(split, glued{word: i, text: w[:j], sep: w[j : j+1]})
+		if j+1 < len(w) {
+			split = append(split, glued{word: i, text: w[j+1:], value: true})
+		}
+	}
+	matched := make([]string, len(split))
+	for k, g := range split {
+		matched[k] = g.text
+	}
+	hideSplit := make([]bool, len(split))
+	for _, r := range rules {
+		if !matchWords(r.Match, matched) {
+			continue
+		}
+		start := len(matched)
 		switch {
 		case r.After != "":
 			// From the command word itself: in a submode the secret's
 			// keyword is the command, `key-string X` in a key chain or
 			// `pre-shared-key local X` in an IKEv2 keyring. The command
 			// word is still never removed.
-			for i := 0; i < len(words); i++ {
-				if sameWord(r.After, words[i]) {
-					start = i + 1
+			for k := 0; k < len(matched); k++ {
+				if sameWord(r.After, matched[k]) {
+					start = k + 1
 					break
 				}
 			}
 		case *r.From > 0:
 			start = *r.From
 		default:
-			start = len(words) + *r.From
+			start = len(matched) + *r.From
 		}
-		for i := max(start, 1); i < len(words); i++ {
-			hide[i], redacted = true, true
+		for k := max(start, 1); k < len(matched); k++ {
+			hideSplit[k], redacted = true, true
 		}
 	}
 	if !redacted {
 		return elements, false
+	}
+	// A hidden keyword part hides its whole word; a hidden value part keeps
+	// the keyword and its separator, `key=«redacted»`.
+	for k, g := range split {
+		switch {
+		case !hideSplit[k]:
+		case g.value && !hide[g.word]:
+			kw := split[k-1]
+			words[g.word], rewritten[g.word] = kw.text+kw.sep+Redacted, true
+		default:
+			hide[g.word] = true
+		}
 	}
 	out := slices.Clone(elements)
 	touched := map[int]bool{}
@@ -192,6 +225,15 @@ func Redact(rules []Redaction, elements []string) ([]string, bool) {
 		out[e] = strings.Join(rebuilt, " ")
 	}
 	return out, true
+}
+
+// glued is one word as Redact matches it: a whole word, or the keyword or
+// the value part of one glued with sep.
+type glued struct {
+	word  int
+	text  string
+	sep   string
+	value bool
 }
 
 // AllRedactions is every built-in pattern, the default list and every

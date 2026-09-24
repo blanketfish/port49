@@ -66,6 +66,20 @@ default:
   # OSPFv3 IPsec: `ospfv3 authentication ipsec spi 256 sha1 <key>`; the SPI
   # goes with the key, because the key's position after it varies.
   - {match: ['**', ipsec, spi, '**'], after: spi}
+  # A Junos SNMP community in hierarchical form, `community <c> {`, as `show
+  # configuration` prints it; the `set snmp community <c>` form is the
+  # snmp-server-free `community` below it in the tree, and a BGP community
+  # defined as `community <name> {` under policy-options loses its name too:
+  # over-redaction is the accepted cost (task 15 review I4).
+  - {match: ['**', community, '*', '{'], after: community}
+  # Wireless pre-shared keys (`wpa-psk ascii 0 <key>`), API tokens (`management
+  # api gnmi ... token <t>`), and RADIUS and OAuth secrets (`shared-secret <s>`,
+  # `client-secret <s>`). A pattern's abbreviations match too, so `to` loses
+  # what follows it: over-redaction, accepted.
+  - {match: ['**'], after: wpa-psk}
+  - {match: ['**'], after: token}
+  - {match: ['**'], after: shared-secret}
+  - {match: ['**'], after: client-secret}
 juniper_junos:
   - {match: ['**'], after: encrypted-password}
   - {match: ['**'], after: plain-text-password-value}

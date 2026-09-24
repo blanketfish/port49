@@ -381,3 +381,49 @@ func TestAQuotedRuleIsRedactedInALine(t *testing.T) {
 		}
 	}
 }
+
+// A secret glued to its keyword by `=` or `:`, or after a keyword that ends in
+// a colon, is removed as the keyword's next word is, and so are the keywords
+// the default list names for tokens and pre-shared secrets and Junos's
+// hierarchical `community X {`: on every platform, since the default list
+// guards the accounting log as well as check-config (task 15 review I4). The
+// word keeps its keyword, and the command keeps its shape.
+func TestAGluedOrNamedSecretIsRedacted(t *testing.T) {
+	for _, line := range []string{
+		"tacacs-server key=Hunter2", "tacacs-server host 10.1.1.1 key=Hunter2 timeout 5", "password:Hunter2",
+		"username bob password: Hunter2", "username bob secret=0 Hunter2", "snmp-server community=Hunter2 ro",
+		"community Hunter2 {", "wpa-psk ascii 0 Hunter2", "management api gnmi token Hunter2",
+		"radius-server shared-secret Hunter2", "oauth client-secret Hunter2", "set client-secret=Hunter2",
+	} {
+		for _, name := range []string{"default", "arista_eos", "cisco_iosxe", "cisco_nxos", "juniper_junos"} {
+			in := strings.Fields(line)
+			got, redacted := Redact(Redactions(name), in)
+			keyword := func(w string) string {
+				return strings.FieldsFunc(w, func(r rune) bool { return r == '=' || r == ':' })[0]
+			}
+			if !redacted || strings.Contains(strings.Join(got, " "), "Hunter2") || len(got) != len(in) ||
+				keyword(got[0]) != keyword(in[0]) {
+				t.Errorf("%s: %q: %q", name, line, got)
+			}
+			if one, _ := Redact(Redactions(name), []string{line}); strings.Contains(one[0], "Hunter2") ||
+				len(strings.Fields(one[0])) != len(in) {
+				t.Errorf("%s: %q as one element: %q", name, line, one)
+			}
+		}
+	}
+	for in, want := range map[string]string{
+		"tacacs-server key=Hunter2":      "tacacs-server key=«redacted»",
+		"username bob password: Hunter2": "username bob password: «redacted»",
+		"copy scp://u:Hunter2@h/x t":     "copy scp://u:«redacted»@h/x t",
+		"set community 65000:1 additive": "set community 65000:1 additive",
+	} {
+		if got, _ := Redact(Redactions("cisco_iosxe"), []string{in}); got[0] != want {
+			t.Errorf("%q: %q, want %q", in, got[0], want)
+		}
+	}
+	raw := []string{"cmd=tacacs-server", "cmd-arg=key=Hunter2", "cmd-arg=<cr>"}
+	gotRaw, gotVector, _ := RedactRecord(Redactions("arista_eos"), raw, []string{"tacacs-server", "key=Hunter2", "<cr>"})
+	if strings.Contains(strings.Join(gotRaw, " ")+strings.Join(gotVector, " "), "Hunter2") {
+		t.Fatalf("record: %q %q", gotRaw, gotVector)
+	}
+}

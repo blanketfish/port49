@@ -1990,7 +1990,9 @@ words from a record's `raw` pairs and not its vector, or the other way round, th
 missed loses every argument, so a secret is never left in one of the two. Each pattern is
 judged on its own: another pattern matching both forms does not excuse this one.
 
-Redaction replaces argument *values* with `«redacted»` and preserves the vector's shape and
+A value glued to its keyword, `key=X` or `password:X`, is matched as the keyword and the word
+after it, and a keyword ending in the separator, `password: X`, as the keyword; the word keeps
+its keyword, `key=«redacted»`. Redaction replaces argument *values* with `«redacted»` and preserves the vector's shape and
 length, so the reconciliation join still works on a redacted record. It applies to `raw` as
 well — a rule that redacted only the normalized form would defeat itself.
 
