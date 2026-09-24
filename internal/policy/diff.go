@@ -779,18 +779,28 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 	// direction the gate cannot read, unless its adapter lists it inert: on a
 	// session-only platform losing deny-commands widens access (spec §12).
 	//
-	// Except the level's own rendering. Where the platform's adapter is the
-	// same in both versions, what a level renders there is what it rendered,
-	// so the attributes a level brings move with the level, and level and
-	// priv_lvl judge the direction: a subject moved from admin to readonly on
-	// EOS is lowered, although the role its rendering names changed from
-	// network-admin to network-operator. An adapter edit is judged whole here
-	// and gated in its own right.
+	// Except the level's own rendering, where it provably went down. Where the
+	// platform's adapter is the same in both versions and the level the
+	// rendering comes from is strictly lower in both versions' orders, the
+	// attributes a level brings move down with it: a subject moved from admin
+	// to readonly on EOS is lowered, although the role its rendering names
+	// changed from network-admin to network-operator. Anything else is judged
+	// by the reply, because on EOS operator and admin share priv-lvl 15 and
+	// only the role tells them apart when the device falls back to local
+	// (decision 25). An adapter edit is judged whole here and gated in its own
+	// right.
 	dialect := c.after.dialect(is.platform)
 	var oldRendered, newRendered []string
 	if reflect.DeepEqual(c.before.dialect(was.platform), dialect) {
-		oldRendered, _, _ = c.before.render(dialect, was.level)
-		newRendered, _, _ = c.after.render(dialect, is.level)
+		oldAttrs, oldFrom, _ := c.before.render(dialect, was.level)
+		newAttrs, newFrom, _ := c.after.render(dialect, is.level)
+		lower := func(p *Policy) bool {
+			from, to := p.levelIndex(oldFrom), p.levelIndex(newFrom)
+			return from >= 0 && to >= 0 && to < from
+		}
+		if lower(c.before) && lower(c.after) {
+			oldRendered, newRendered = oldAttrs, newAttrs
+		}
 	}
 	moved := func(from, to, rendered []string) bool {
 		return slices.ContainsFunc(from, func(a string) bool {

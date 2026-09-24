@@ -545,7 +545,7 @@ func TestPolicyDiffGatesALevelRaise(t *testing.T) {
 		!strings.Contains(out.String(), "RAISES: noc on leaf-01: level readonly -> admin, max_privilege none -> none, "+
 			"priv_lvl 1 -> 15, enable none -> none, reply [\"priv-lvl=1\", \"roles=network-operator\"] -> "+
 			"[\"priv-lvl=15\", \"roles=network-admin\"]; no session test asserts it: add {subject: noc, device: leaf-01, "+
-			"priv_lvl: 15, level: admin}") ||
+			"priv_lvl: 15, level: admin, reply: [\"priv-lvl=15\", \"roles=network-admin\"]}") ||
 		!strings.Contains(out.String(), "1 unacknowledged privilege raises") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
@@ -554,7 +554,8 @@ func TestPolicyDiffGatesALevelRaise(t *testing.T) {
 		!strings.Contains(out.String(), "privilege: noc on leaf-01: level admin -> readonly") {
 		t.Fatalf("a lowering: code %d\n%s%s", code, out.String(), errb.String())
 	}
-	if err := os.WriteFile(newPol, []byte(raised+"  - {subject: noc, device: leaf-01, level: admin, priv_lvl: 15}\n"), 0o600); err != nil {
+	if err := os.WriteFile(newPol, []byte(raised+"  - {subject: noc, device: leaf-01, level: admin, priv_lvl: 15, "+
+		`reply: ["priv-lvl=15", "roles=network-admin"]}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()

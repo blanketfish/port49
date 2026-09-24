@@ -304,28 +304,38 @@ func TestTheGateFailsALevelOrCeilingRaise(t *testing.T) {
 	// A session test on one device of each group asserting the new value is
 	// the acknowledgment; one asserting the old value, or on another subject,
 	// is not.
-	levelTest := func(assert string) string {
+	levelTest := func(assert string, replies map[string]string) string {
 		out := "tests:\n"
 		for _, device := range []string{"campus-sw-7", "nx-01", "xe-01", "srx-lab-01"} {
-			out += "  - {subject: noc, device: " + device + ", " + assert + "}\n"
+			out += "  - {subject: noc, device: " + device + ", " + assert + replies[device] + "}\n"
 		}
 		return out
 	}
-	// readonly to admin raises the level and the device privilege, 1 to 15:
-	// the test asserts both.
-	d := Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("level: admin, max_privilege: none, priv_lvl: 15")), noon)
+	// readonly to admin raises the level and the device privilege, 1 to 15,
+	// and on EOS and NX-OS the role the reply names, which fences the session
+	// when the device falls back to local: the test asserts all three.
+	adminReply := map[string]string{
+		"campus-sw-7": `, reply: ["priv-lvl=15", "roles=network-admin"]`,
+		"nx-01":       `, reply: ["shell:roles*network-admin"]`,
+	}
+	d := Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("level: admin, max_privilege: none, priv_lvl: 15", adminReply)), noon)
 	if d.UnacknowledgedLevels() != 0 {
 		t.Fatalf("a session test acknowledges the raise: %+v", d.Levels)
 	}
-	d = Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("level: admin")), noon)
+	d = Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("level: admin", nil)), noon)
 	if d.UnacknowledgedLevels() != 4 {
 		t.Fatalf("the level alone does not acknowledge the device privilege's rise: %+v", d.Levels)
 	}
-	d = Compare(mustParse(t, diffBase), mustParse(t, raised+"tests:\n  - {subject: noc, device: leaf-01, level: admin, priv_lvl: 15}\n"), noon)
+	d = Compare(mustParse(t, diffBase), mustParse(t, raised+levelTest("level: admin, max_privilege: none, priv_lvl: 15", nil)), noon)
+	if d.UnacknowledgedLevels() != 2 {
+		t.Fatalf("where the role rose, the level and priv_lvl do not acknowledge it: %+v", d.Levels)
+	}
+	d = Compare(mustParse(t, diffBase), mustParse(t, raised+"tests:\n  - {subject: noc, device: leaf-01, level: admin, priv_lvl: 15, "+
+		`reply: ["priv-lvl=15", "roles=network-admin"]}`+"\n"), noon)
 	if d.UnacknowledgedLevels() != 3 {
 		t.Fatalf("a test on one group acknowledges that group alone: %+v", d.Levels)
 	}
-	d = Compare(mustParse(t, ceilinged), mustParse(t, diffBase+levelTest("level: readonly, max_privilege: none")), noon)
+	d = Compare(mustParse(t, ceilinged), mustParse(t, diffBase+levelTest("level: readonly, max_privilege: none", nil)), noon)
 	if d.UnacknowledgedLevels() != 0 {
 		t.Fatalf("a session test asserting no ceiling acknowledges its removal: %+v", d.Levels)
 	}
@@ -428,20 +438,25 @@ func TestTheGateFailsEveryKindOfPrivilegeRaise(t *testing.T) {
 		groups              int
 		dimension           string
 		ack                 string
+		// replies is what a raise the role names also asserts, per device.
+		replies map[string]string
 	}{
 		{"a grant attribute priv-lvl=15", diffBase,
 			strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: {all: [priv-lvl=15]}}", 1),
-			4, "priv_lvl", "priv_lvl: 15"},
+			4, "priv_lvl", "priv_lvl: 15", nil},
 		{"a role attribute priv-lvl=15 on one platform", diffBase,
 			strings.Replace(diffBase, "{name: read_only, privilege: readonly, permit: [show **]}",
 				"{name: read_only, privilege: readonly, permit: [show **], attributes: {arista_eos: [priv-lvl=15]}}", 1),
-			1, "priv_lvl", "priv_lvl: 15"},
+			1, "priv_lvl", "priv_lvl: 15", nil},
 		{"a custom level's parent moved up", custom, strings.Replace(custom, "parent: readonly", "parent: admin", 1),
-			4, "priv_lvl", "priv_lvl: 15"},
+			4, "priv_lvl", "priv_lvl: 15", map[string]string{
+				"leaf-01": `, reply: ["priv-lvl=15", "roles=network-admin"]`,
+				"nx-01":   `, reply: ["shell:roles*network-admin"]`,
+			}},
 		{"enable switched on under a ceiling", ceilinged,
-			strings.Replace(ceilinged, "token_ttl: 60s}", "token_ttl: 60s, enable: token}", 1), 4, "enable", "enable: token"},
+			strings.Replace(ceilinged, "token_ttl: 60s}", "token_ttl: 60s, enable: token}", 1), 4, "enable", "enable: token", nil},
 		{"enable switched on with no ceiling", diffBase,
-			strings.Replace(diffBase, "token_ttl: 60s}", "token_ttl: 60s, enable: token}", 1), 4, "enable", "enable: token"},
+			strings.Replace(diffBase, "token_ttl: 60s}", "token_ttl: 60s, enable: token}", 1), 4, "enable", "enable: token", nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := Compare(mustParse(t, tt.before), mustParse(t, tt.after), noon)
@@ -455,13 +470,62 @@ func TestTheGateFailsEveryKindOfPrivilegeRaise(t *testing.T) {
 			}
 			tests := "tests:\n"
 			for _, device := range []string{"leaf-01", "nx-01", "xe-01", "srx-lab-01"} {
-				tests += "  - {subject: noc, device: " + device + ", " + tt.ack + "}\n"
+				tests += "  - {subject: noc, device: " + device + ", " + tt.ack + tt.replies[device] + "}\n"
 			}
 			// A test on a group that did not rise may fail; it acknowledges
 			// nothing there and nothing there needs it.
 			d = Compare(mustParse(t, tt.before), mustParse(t, tt.after+tests), noon)
 			if n := d.UnacknowledgedLevels(); n != 0 {
 				t.Fatalf("session tests on every group: %d unacknowledged, %+v", n, d.Levels)
+			}
+		})
+	}
+}
+
+// A level's own rendering is exempt from the reply check only where the level
+// it is rendered from went strictly down in both versions' orders (task 3
+// review C1): on EOS operator and admin share priv-lvl 15, so a role raised
+// from network-operator to network-admin is the one signal that the local
+// fallback now hands the session configure (decision 25).
+func TestTheGateFailsARoleRaiseAtTheSameLevel(t *testing.T) {
+	custom := "privilege_levels: [{name: readonly}, {name: operator}, {name: admin}, {name: netops, parent: operator}]\n" +
+		strings.Replace(diffBase, "privilege: readonly", "privilege: netops", 1)
+	siblings := "privilege_levels: [{name: readonly}, {name: operator}, {name: admin}, {name: ops_plus, parent: admin}, " +
+		"{name: ops, parent: operator}]\n"
+	sideways := siblings + strings.Replace(diffBase, "privilege: readonly", "privilege: ops", 1)
+	admin := strings.Replace(diffBase, "privilege: readonly", "privilege: admin", 1)
+	eos := func(d Diff) LevelChange {
+		for _, l := range d.Levels {
+			if slices.Contains(l.Devices, "leaf-01") {
+				return l
+			}
+		}
+		t.Fatalf("no change on leaf-01: %+v", d.Levels)
+		return LevelChange{}
+	}
+	for _, tt := range []struct {
+		name, before, after string
+		raise               bool
+	}{
+		{"a custom level's parent moved from operator to admin", custom,
+			strings.Replace(custom, "parent: operator", "parent: admin", 1), true},
+		{"a sibling custom level whose parent is admin", sideways,
+			strings.Replace(sideways, "privilege: ops,", "privilege: ops_plus,", 1), true},
+		{"admin to operator", admin, strings.Replace(diffBase, "privilege: readonly", "privilege: operator", 1), false},
+		{"admin to readonly", admin, diffBase, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d := Compare(mustParse(t, tt.before), mustParse(t, tt.after), noon)
+			l := eos(d)
+			if slices.Contains(l.Raised, "reply") != tt.raise || l.Raise != tt.raise {
+				t.Fatalf("leaf-01: %+v, want a reply raise %v", l, tt.raise)
+			}
+			if !tt.raise {
+				return
+			}
+			acked := tt.after + "tests:\n  - {subject: noc, device: leaf-01, reply: [\"priv-lvl=15\", \"roles=network-admin\"]}\n"
+			if l := eos(Compare(mustParse(t, tt.before), mustParse(t, acked), noon)); !l.Acknowledged {
+				t.Fatalf("a session test asserting the role acknowledges it: %+v", l)
 			}
 		})
 	}
@@ -477,9 +541,13 @@ func TestASessionAckHoldsOnlyAtItsInstant(t *testing.T) {
 	after = strings.Replace(after, "  - {subject: noc, scope: all_devices, roles: [read_only, cve]}\n",
 		"  - {subject: noc, scope: all_devices, roles: [read_only, cve, adm], max_privilege: admin, expires: 2026-10-01}\n"+
 			"  - {subject: noc, scope: all_devices, roles: [read_only, adm]}\n", 1)
+	reply := map[string]string{
+		"leaf-01": `, reply: ["priv-lvl=15", "roles=network-admin"]`,
+		"nx-01":   `, reply: ["shell:roles*network-admin"]`,
+	}
 	later := "tests:\n"
 	for _, device := range []string{"leaf-01", "nx-01", "xe-01", "srx-lab-01"} {
-		later += "  - {subject: noc, device: " + device + ", level: admin, max_privilege: none, priv_lvl: 15}\n"
+		later += "  - {subject: noc, device: " + device + ", level: admin, max_privilege: none, priv_lvl: 15" + reply[device] + "}\n"
 	}
 	d := Compare(mustParse(t, diffBase), mustParse(t, after+later), noon)
 	atNoon, afterwards := 0, 0
