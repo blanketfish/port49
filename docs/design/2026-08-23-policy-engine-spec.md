@@ -2495,7 +2495,7 @@ The inert list is seeded with this section's own motivating case, `home-director
 shipped adapter but `cisco_iosxe`. vEOS and the N9Kv leave a session with it beside admin's
 reply unchanged. The C8000V refuses the session for it, `% Authorization failed.`
 (`tests/lab/results/L22-*.md`), so on IOS-XE it bears privilege like every other name, and a
-policy that sends it there quarantines the device. A placeholder is allowed only in an attribute
+policy that sends it there quarantines the device. On `juniper_junos` it is unmeasured. A placeholder is allowed only in an attribute
 listed inert on its platform key, or under `all` on every platform in the inventory; anywhere
 else — a privilege-bearing attribute or one no adapter lists — it is refused at load. A
 substitution refuses only `=`, `*` and control characters, so `priv-lvl={username}` would hide
@@ -2578,9 +2578,9 @@ exec` line, operator is readonly (`ceiling-cisco_iosxe.md`, "Reading"). Without 
 command method list, the device runs a level-7 command without asking port49: with the
 `privilege exec` line and no `aaa authorization commands 7`, operator's `clear counters` ran
 and port49 saw no authorization request for it (`tests/lab/results/L22-carried-cisco_iosxe.md`).
-IOS-XE's `operator` rendering stays *provisional on L22* (decision 25) until that row closes. `port49 devices check-config` catches the missing list: it
-requires every `device_config` line of the adapter, and fails on one the configuration lacks
-(§12).
+IOS-XE's `operator` rendering stays *provisional on L22* (decision 25) until that row
+closes. `port49 devices check-config` catches the missing list: it requires every
+`device_config` line of the adapter, and fails on one the configuration lacks (§12).
 
 **The device role is the other half, and it is what binds when port49 cannot answer.** With
 command authorization pointed at port49 no EOS or NX-OS role narrows anything (above); with
