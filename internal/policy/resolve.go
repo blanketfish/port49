@@ -433,6 +433,14 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 		return fmt.Sprintf("its compiled blob for %s is refused, so no mint could carry it: %v",
 			platformName(d.Platform), err)
 	}
+	// The ceiling caps the level whatever the platform numbers them: where
+	// operator and admin both number 15 (decision 23), a numeric check alone
+	// would let an admin role capped at operator through (spec §7).
+	if res.HasCeiling && res.Level != "" && p.levelIndex(res.Level) > p.levelIndex(res.Ceiling) {
+		return fmt.Sprintf("on %s its roles land it at %s, above its grants' max_privilege %s in "+
+			"privilege_levels: the ceiling caps the level on every platform, however %s numbers the two; raise "+
+			"max_privilege or lower the role", d.Platform, res.Level, res.Ceiling, d.Platform)
+	}
 	if res.HasCeiling && res.Level != "" {
 		if landing, ok := p.privLvl(p.dialect(d.Platform), res.Level); ok && landing > res.MaxPrivilege {
 			return fmt.Sprintf("on %s its roles land it at %s (priv-lvl %d), above its grants' max_privilege %s "+

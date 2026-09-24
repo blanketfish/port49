@@ -31,6 +31,7 @@ const (
 	FindingDenyWidened         = "deny_widened"
 	FindingPermitJoinedName    = "permit_joined_name"
 	FindingNoTests             = "no_tests"
+	FindingCeilingIndistinct   = "ceiling_indistinct"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -120,6 +121,9 @@ func (p *Policy) Lint(now time.Time) []Finding {
 					"(spec §5.5)", name, d.Name, s.comparedValues(d))
 			}
 		}
+	}
+	for _, f := range p.indistinctCeilings() {
+		add(FindingCeilingIndistinct, "%s", f)
 	}
 	if len(p.tests) == 0 {
 		add(FindingNoTests, "the policy has no tests: nothing in it acknowledges a shadowed deny, an expansion or "+
@@ -212,6 +216,46 @@ func (p *Policy) JoinedNamePermits() []Finding {
 								"(tests/lab/results/L21-cisco_iosxe.md); write `%s %s`", name, rule, plat, t.Text, plat,
 							head, index)})
 					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// indistinctCeilings names each grant ceiling that numbers the same as a
+// higher level on a platform in the inventory (spec §7): there `enable` can
+// reach that level's device privilege under it, and only port49's command
+// rules separate the two. One line per ceiling and platform, in order.
+func (p *Policy) indistinctCeilings() []string {
+	var out []string
+	seen := map[string]bool{}
+	platforms := map[string]bool{}
+	for _, d := range p.env.Devices {
+		if d.Platform != "" {
+			platforms[d.Platform] = true
+		}
+	}
+	for _, g := range p.grants {
+		if g.MaxPrivilege == "" {
+			continue
+		}
+		for _, name := range sortedKeys(platforms) {
+			if seen[g.MaxPrivilege+"\x00"+name] {
+				continue
+			}
+			seen[g.MaxPrivilege+"\x00"+name] = true
+			d := p.dialect(name)
+			n, ok := p.privLvl(d, g.MaxPrivilege)
+			if !ok {
+				continue
+			}
+			for _, higher := range p.levels[p.levelIndex(g.MaxPrivilege)+1:] {
+				if m, ok := p.privLvl(d, higher); ok && m == n {
+					out = append(out, fmt.Sprintf("max_privilege: %s does not limit device privilege on %s: it "+
+						"numbers %d, as %s does; port49's command rules are the only fence", g.MaxPrivilege, name, n,
+						higher))
+					break
 				}
 			}
 		}

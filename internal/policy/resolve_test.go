@@ -527,3 +527,23 @@ func TestOnlyAMeasuredSessionOnlyPlatformIsSessionOnly(t *testing.T) {
 		}
 	}
 }
+
+// A ceiling caps the level, not only its number: an admin role capped at
+// operator is quarantined on arista_eos and cisco_nxos, where both number 15,
+// as on every other platform (review I2; spec §7).
+func TestARoleAboveItsCeilingsLevelIsQuarantinedWhereverItNumbers(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: adm, privilege: admin, permit: ["**"]}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [adm], max_privilege: operator}]`)
+	for _, d := range inventory() {
+		cause, q := p.Quarantined(d.Name, noon)
+		if !q {
+			t.Errorf("%s (%s) is not quarantined", d.Name, d.Platform)
+		}
+		if d.Platform == "arista_eos" && !strings.Contains(cause, "land it at admin, above its grants' max_privilege operator") {
+			t.Errorf("%s: cause %q", d.Name, cause)
+		}
+	}
+}
