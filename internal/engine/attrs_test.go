@@ -21,6 +21,11 @@ func TestGrantedPrivLvl(t *testing.T) {
 		{[]string{"priv-lvl=16"}, 0, false},
 		{[]string{"priv-lvl=-1"}, 0, false},
 		{[]string{"priv-lvl=300"}, 0, false},
+		// Decimal as a device prints it, nothing else: what a device does with
+		// a leading zero or a sign is unmeasured (task 7 review M4).
+		{[]string{"priv-lvl=07"}, 0, false},
+		{[]string{"priv-lvl=00"}, 0, false},
+		{[]string{"priv-lvl=+7"}, 0, false},
 		{[]string{"priv-lvlx=15"}, 0, false},
 		// The last one wins, as it does on a device reading them in order.
 		{[]string{"priv-lvl=1", "priv-lvl=15"}, 15, true},

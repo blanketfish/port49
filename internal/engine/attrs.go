@@ -143,13 +143,14 @@ func GrantedPrivLvl(attrs []string) (level uint8, at int, ok bool) {
 	return level, at, ok
 }
 
-// PrivLvlValue reads a priv-lvl attribute's value as a level: decimal, 0 to
-// 15. ok is false for anything else, which no device is measured to take:
+// PrivLvlValue reads a priv-lvl attribute's value as a level: decimal as
+// written plainly, 0 to 15, no sign and no leading zero. ok is false for
+// anything else, which no device is measured to take:
 // IOS-XE refused the session for priv-lvl=99 rather than clamp or ignore it
 // (tests/lab/results/L18-cisco_iosxe.md, variant 7).
 func PrivLvlValue(v string) (level uint8, ok bool) {
 	n, err := strconv.ParseUint(v, 10, 8)
-	if err != nil || n > 15 {
+	if err != nil || n > 15 || strconv.FormatUint(n, 10) != v {
 		return 0, false
 	}
 	return uint8(n), true
