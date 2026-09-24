@@ -105,7 +105,7 @@ func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
 			t.Errorf("missing %q in\n%s", want, out.String())
 		}
 	}
-	if !strings.Contains(out.String(), "a URL's password") {
+	if !strings.Contains(out.String(), "a URL's password") || !strings.Contains(out.String(), "a credential in its query string") {
 		t.Errorf("the footer does not say a URL's password is removed:\n%s", out.String())
 	}
 	for _, name := range platform.Names() {

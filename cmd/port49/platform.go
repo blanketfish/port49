@@ -217,7 +217,8 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		for _, r := range platform.Redactions(platformName) {
 			fmt.Fprintf(stdout, "#   %s\n", redactionLine(r))
 		}
-		fmt.Fprintln(stdout, "# and a URL's password (scheme://user:password@host), in any word, whatever the patterns say")
+		fmt.Fprintln(stdout, "# and a URL's password (scheme://user:password@host) and a credential in its query string "+
+			"(X-Amz-Signature=, token=, access_token=, ...), in any word, whatever the patterns say")
 	}
 	return 0
 }

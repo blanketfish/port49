@@ -509,3 +509,26 @@ func TestAnEscapedBackslashIsOneSeparator(t *testing.T) {
 		t.Fatalf("%s", got)
 	}
 }
+
+// A credential in a URL's query string — a presigned `X-Amz-Signature`, a
+// `token` or an `access_token` — is replaced whatever the patterns say, as a
+// userinfo password is, and the rest of the URL is kept; and a WLC's
+// `security wpa psk set-key` key is redacted as `wpa-psk`'s is (task 10
+// re-review, parked).
+func TestAURLQueryCredentialIsRedacted(t *testing.T) {
+	for in, want := range map[string]string{
+		"copy https://b.s3.amazonaws.com/x.bin?X-Amz-Credential=AKIAHunter2&X-Amz-Signature=Hunter2&v=1 flash:": "copy https://b.s3.amazonaws.com/x.bin?X-Amz-Credential=«redacted»&X-Amz-Signature=«redacted»&v=1 flash:",
+		"copy https://h/x?sig=Hunter2 flash:":                  "copy https://h/x?sig=«redacted» flash:",
+		"copy http://h/x?access_token=Hunter2;token=Hunter2 t": "copy http://h/x?access_token=«redacted»;token=«redacted» t",
+		"copy http://h/x?Password=Hunter2&key=Hunter2 t":       "copy http://h/x?Password=«redacted»&key=«redacted» t",
+		"copy http://h/x?X-Amz-Security-Token=Hunter2 t":       "copy http://h/x?X-Amz-Security-Token=«redacted» t",
+		"copy http://h/x?version=2 t":                          "copy http://h/x?version=2 t",
+	} {
+		if got, _ := Redact(nil, []string{in}); got[0] != want {
+			t.Errorf("%q: %q, want %q", in, got[0], want)
+		}
+	}
+	if got, _ := Redact(Redactions("default"), []string{"security wpa psk set-key ascii 0 Hunter2"}); strings.Contains(got[0], "Hunter2") {
+		t.Errorf("%q", got)
+	}
+}

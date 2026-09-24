@@ -493,23 +493,48 @@ func sameWord(word, sent string) bool {
 // and host, so the audit still shows where a configuration was copied (task 10
 // re-review C3). No `after:` pattern can hide part of a word. The userinfo
 // ends at the last `@`, so a password holding one, or a path after it,
-// removes more rather than less.
+// removes more rather than less. A credential in the query string, a
+// presigned `X-Amz-Signature` or an `access_token` (queryCredentials), is
+// replaced the same way, its name kept (task 10 re-review, parked).
 func redactURL(word string) (string, bool) {
 	i := strings.Index(word, "://")
 	if i < 0 {
 		return word, false
 	}
+	out, redacted := word, false
 	rest := word[i+3:]
-	at := strings.LastIndex(rest, "@")
-	if at < 0 {
-		return word, false
+	if at := strings.LastIndex(rest, "@"); at >= 0 {
+		if colon := strings.Index(rest[:at], ":"); colon >= 0 {
+			out, redacted = word[:i+3]+rest[:colon+1]+Redacted+rest[at:], true
+		}
 	}
-	colon := strings.Index(rest[:at], ":")
-	if colon < 0 {
-		return word, false
+	q := strings.Index(out, "?")
+	if q < 0 {
+		return out, redacted
 	}
-	return word[:i+3] + rest[:colon+1] + Redacted + rest[at:], true
+	query := out[q+1:]
+	var b strings.Builder
+	for len(query) > 0 {
+		end := strings.IndexAny(query, "&;")
+		param, sep := query, ""
+		if end >= 0 {
+			param, sep, query = query[:end], query[end:end+1], query[end+1:]
+		} else {
+			query = ""
+		}
+		if eq := strings.Index(param, "="); eq > 0 && slices.Contains(queryCredentials, strings.ToLower(param[:eq])) {
+			param, redacted = param[:eq+1]+Redacted, true
+		}
+		b.WriteString(param + sep)
+	}
+	return out[:q+1] + b.String(), redacted
 }
+
+// queryCredentials are the query parameters whose value is a credential,
+// compared ignoring case: the AWS presigned-URL signature, credential and
+// session token, a generic signature and token, and a password or key.
+var queryCredentials = []string{"x-amz-signature", "x-amz-credential", "x-amz-security-token", "sig", "signature",
+	"token", "access_token", "password", "passwd", "key", "secret"}
 
 // proseWord is a word of prose as redaction reads it: punctuation separates
 // words as whitespace does, so a value glued to `community)` or `community:`
