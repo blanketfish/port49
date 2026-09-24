@@ -640,24 +640,27 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    was read: the blob hash, the privilege ceiling (a held level above a lowered ceiling comes
    down to it, as at a join, §5.3) and the `enable` mechanism. A principal left with no grant
    on the device has that context **revoked** instead (§5.6 row 2), and its next command is
-   denied `credential_revoked`. A context the policy in force cannot be resolved or compiled
-   for is revoked too, failing closed, with a `refresh` deny record (`blob_unavailable`), a
-   process-log line naming the `ctx_id` and the fault, and a `failed` count; the pass goes on
-   to the next context. So is a context the refresher cannot open — sealed under a key that
-   has left the two-key window, or failing authentication — which cannot be judged against the
-   policy in force and is not left on the one before: a `refresh` deny record
-   (`blob_unavailable`) naming the principal and device (its `ctx_id` is sealed), a
-   process-log line, and a `failed` count. Every revocation a refresh makes is written as the
-   revocation mark alone, with no compare, and the mark keeps the later of the one held and
-   the one written (§5.6), so no write racing it can hold a withdrawn grant in force. That is an unexpected broker fault, not a bad file: step 1's load has
-   already compiled every subject on every device, and what failed there quarantined its
-   device or, where no platform could pass, refused the policy (the joint check, §10; §13
-   decision 20), so a compile fault here is never a reason to revoke the fleet. Such a context is
-   revoked, so it is on the policy in force and counts as reached for
-   `port49_policy_refresh_pending`; the `failed` count is the alarm. A context on a device
-   quarantined now is left as it is until the refresh that lifts the
-   quarantine, and is recorded once per policy version (bundle), not at every pass. A narrowed rule denies the next command and a widened
-   one permits it; a widened *level* reaches the device only at the next session authorization
+   denied `credential_revoked`; so is one whose subject's username changed, since the
+   principal can no longer mint under the name the context is keyed by. A context the policy
+   in force cannot be resolved or compiled for is revoked too, failing closed, with a
+   `refresh` deny record (`blob_unavailable`), a process-log line naming the `ctx_id` and the
+   fault, and a `failed` count; the pass goes on to the next context. That is an unexpected
+   broker fault, not a bad file: step 1's load has already compiled every subject on every
+   device, and what failed there quarantined its device or, where no platform could pass,
+   refused the policy (the joint check, §10; §13 decision 20), so a compile fault here is
+   never a reason to revoke the fleet. Such a context is revoked, so it is on the policy in
+   force and counts as reached for `port49_policy_refresh_pending`; the `failed` count is the
+   alarm. A context the refresher cannot open — sealed under a key that has left the two-key
+   window, or failing authentication — cannot be judged against the policy in force and is
+   not left on the one before, so it is revoked the same way and counted `failed`. Its owner
+   is sealed, and the index entry that led to it may be stale, so its `refresh` deny record
+   (`blob_unavailable`) names the device and the username its key holds and no principal. Every
+   revocation a refresh makes is written as the revocation mark alone, with no compare, and
+   the mark keeps the later of the one held and the one written (§5.6), so no write racing it
+   can hold a withdrawn grant in force. A context on a device quarantined now is left as it is
+   until the refresh that lifts the quarantine, and is recorded once per policy version
+   (bundle), not at every pass. A narrowed rule denies the next command and a widened one
+   permits it; a widened *level* reaches the device only at the next session authorization
    or `enable`, where levels are granted. `auth_time`, `session_expires`, `refreshed_at` and the
    idle TTL are not touched: nothing about the operator's authentication or the directory was
    re-verified, and a reload is not activity.
@@ -672,8 +675,9 @@ the context's `ctx_id`, so the record before a command's changed answer says why
 | The refresh | `verdict` | `reason` |
 |---|---|---|
 | wrote the policy in force into the context | `permit` | `grants_matched` |
-| revoked it: no grant left on the device | `deny` | `no_grants_matched` |
+| revoked it: no grant left on the device, or the subject's username changed | `deny` | `no_grants_matched` |
 | revoked it: the policy in force could not be resolved or compiled for it | `deny` | `blob_unavailable` |
+| revoked it: the context could not be opened (the record names no principal) | `deny` | `blob_unavailable` |
 | left it as it was: the device is quarantined (recorded once per context per bundle) | `deny` | `device_quarantined` |
 
 Each context is counted once per pass in `port49_context_refreshes_total{outcome}`: `updated`,
@@ -686,13 +690,17 @@ creates or joins. So the refresh also deletes, per `(device, username)`, the uns
 superseded policy minted and the policy in force would not mint identically — otherwise a grant
 removed at 10:00 returns at 10:05 on a device where the operator had no context yet, from a
 token minted at 09:58. A token whose answer is unchanged, the bundle aside, is kept: a reload is
-not a reason to make everyone mint again. A login in flight across the swap may still write the
+not a reason to make everyone mint again. A shortened `token_ttl` is a changed answer, since
+those tokens would outlive what the policy now allows; a lengthened one is not. A login in flight across the swap may still write the
 superseded answer after the refresh has passed its context, so the refresh runs again a
 settle interval (30s) after every reload.
 
 **A grant's expiry is a scheduled edit.** A resolution changes with no edit to the file when a
 grant expires (§5.1), so the refresh also runs at every expiry instant; otherwise a live context
-would keep an expired grant's rules until the next edit.
+would keep an expired grant's rules until the next edit. A pass judges every context at one
+instant, so a grant that expires while a pass is running sends it round again at once, and the
+next expiry is scheduled from the instant the last pass judged at, never from the clock after
+it.
 
 **The store down during a reload** does not stop the swap: the new policy is in force for every
 mint at once (and every mint fails `store_unavailable` until the store answers). The refresh
@@ -1700,10 +1708,10 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `privilege_exceeded` | the request is above the session's granted level |
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `max_session_age`, and the caller must authenticate again (§13, decision 17) |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
-| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, or the policy in force not compiling for the context, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
+| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
 | `device_unknown` | the source address is not in the admission trie (§10) |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
-| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a composition the load quarantines (§7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the principal and device (the `ctx_id` is sealed), and it is counted `failed` |
+| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a composition the load quarantines (§7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
 | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
 | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed. On `refresh`, a deny recorded once per context per policy version (bundle): the live context is left as it was until the quarantine lifts |
 
