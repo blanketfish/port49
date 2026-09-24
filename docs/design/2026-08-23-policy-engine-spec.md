@@ -3174,7 +3174,13 @@ platforms:
 `replace: true` on a platform block discards the built-in and starts from the generic adapter
 (below), save what the set measured about the device, which the block must restate (below). `based_on:` declares a variant of a platform the pinned set ships, under a new name,
 using the same vocabulary as `parent:` on privilege levels; a name the set does not ship starts
-from the generic adapter:
+from the generic adapter. What port49d reads off the wire — `session_services`, the exec
+records' commands and the system users — is still keyed by the platform's name until plan 6
+carries it to a variant, so a variant would get an unknown platform's; `based_on:` a platform
+whose facts differ from those — `juniper_junos`, whose sessions arrive as `junos-exec` and whose
+exec records carry `cmd=login` — is refused at load, naming them (final review M8). A variant
+of a platform whose only such fact is its session discriminator loads: without one the daemon
+binds a record by username alone, the safe direction (§5.8).
 
 ```yaml
   whitebox_nos:
