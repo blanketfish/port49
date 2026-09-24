@@ -393,6 +393,19 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
 			if err := engine.CheckAttribute(a); err != nil {
 				return fmt.Errorf("attributes.%s: %w", key, err)
 			}
+			// A placeholder in a privilege attribute hides the level the
+			// device gets from every review tool and hands it to whatever the
+			// mint fills in (spec §6).
+			name := a[:strings.IndexAny(a, "=*")]
+			if slices.Contains(platform.PrivilegeAttributeNames(), name) && strings.Contains(a, "{") {
+				for _, v := range engine.Placeholders {
+					if strings.Contains(a, v) {
+						return fmt.Errorf("attributes.%s: %s: %s carries privilege and takes no placeholder: the "+
+							"device would get whatever the mint fills in, which no review tool can see (spec §6)",
+							key, a, name)
+					}
+				}
+			}
 		}
 	}
 	return nil
