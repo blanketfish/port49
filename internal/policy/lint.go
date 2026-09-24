@@ -280,9 +280,9 @@ func (p *Policy) indistinctCeilings() []string {
 // silently pin the old value when a later set improves it.
 func (p *Policy) redundantOverrides() []Finding {
 	var out []Finding
+	builtin, ok := platform.Set(p.set)
 	for _, name := range sortedKeys(p.overrides) {
 		b := p.overrides[name]
-		builtin, ok := platform.Set(p.set)
 		base, shipped := builtin[name]
 		if !ok || !shipped || b.Replace || b.BasedOn != "" {
 			continue

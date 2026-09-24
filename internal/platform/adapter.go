@@ -302,6 +302,8 @@ func Validate(name string, d Dialect) error {
 // through only where every value provably went down (spec §12); this keeps
 // the adapter's own ladder from being the thing that goes up. A level the
 // adapter neither renders nor numbers is skipped: its parent chain renders it.
+// Values are compared without their separator, so `roles=x` below `roles*x`
+// passes; the diff gates a separator change on its own (Lowers).
 func Monotone(name string, d Dialect, order []string) error {
 	var levels []string
 	for _, l := range order {
