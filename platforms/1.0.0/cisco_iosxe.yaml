@@ -32,9 +32,10 @@ platforms:
     # The request carries the command's level, not the session's
     # (ceiling-cisco_iosxe.md), so there is a command list for each level
     # port49 renders; the operator rung was measured with all three present.
-    # What the device does with a level-7 command when no commands 7 list
-    # exists is unmeasured, provisional on L22 (Task 17): carry the line
-    # either way.
+    # Without the commands 7 list a level-7 command is never sent to port49:
+    # operator's `clear counters` ran with no authorization request, so
+    # check-config's MISSING for that line is load-bearing
+    # (tests/lab/results/L22-carried-cisco_iosxe.md).
     device_config:
       # Required: the session reply, and with it priv-lvl, is asked for here.
       - aaa authorization exec default group port49 local

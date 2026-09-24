@@ -2572,11 +2572,10 @@ the lines level 7 depends on — a command method list for level 7, so the devic
 about a level-7 command at all, and `privilege exec level 7 clear counters`, the one command
 the measured rung runs. The reference configuration MUST carry both. Without the `privilege
 exec` line, operator is readonly (`ceiling-cisco_iosxe.md`, "Reading"). Without the level-7
-command method list, what the device does is unmeasured: the request carries the command's
-level, and the measured run configured `aaa authorization commands 7`. A device that has the
-`privilege exec` line and no level-7 list may run `clear counters` without asking port49.
-That case is an open question of L22, and until it closes, IOS-XE's `operator` rendering is
-*provisional on L22* (decision 25). `port49 devices check-config` catches the missing list: it
+command method list, the device runs a level-7 command without asking port49: with the
+`privilege exec` line and no `aaa authorization commands 7`, operator's `clear counters` ran
+and port49 saw no authorization request for it (`tests/lab/results/L22-carried-cisco_iosxe.md`).
+IOS-XE's `operator` rendering stays *provisional on L22* (decision 25) until that row closes. `port49 devices check-config` catches the missing list: it
 requires every `device_config` line of the adapter, and fails on one the configuration lacks
 (§12).
 
