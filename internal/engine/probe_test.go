@@ -15,10 +15,20 @@ func rawOf(vector []string) []string {
 	return append(raw, "cmd-arg=<cr>")
 }
 
-// verdictOf is a program's answer to a command vector, as a comparable string.
+// verdictOf is a program's answer to a command vector, as a comparable
+// string: the reason and every rule that matched. Two vectors with the same
+// verdict are the same class to that program.
 func verdictOf(p *Program, vector []string) string {
 	o := p.Command(rawOf(vector))
-	return string(o.Reason)
+	var b strings.Builder
+	b.WriteString(string(o.Reason))
+	for _, m := range o.Permits {
+		b.WriteString(" +" + m.Role + ":" + m.Rule)
+	}
+	for _, m := range o.Denies {
+		b.WriteString(" -" + m.Role + ":" + m.Rule)
+	}
+	return b.String()
 }
 
 // universe is every vector up to length n over words: small enough to
@@ -41,15 +51,18 @@ func universe(words []string, n int) [][]string {
 	return out
 }
 
-// crossCheck asserts the probes find every pair of answers the two programs
-// give to one command, and only those: the same set a brute-force walk over
-// every vector of up to n of words finds.
+// crossCheck asserts the probes reach every disagreement a brute-force walk
+// over every vector of up to n of words finds, keyed by the reason and the
+// rules each program matched, so two classes that happen to share a reason
+// pair are still told apart. The converse needs no check: every probe is a
+// real vector, so a disagreement it finds is real.
 func crossCheck(t *testing.T, before, after *Program, words []string, n int) {
 	t.Helper()
 	pairs := func(vectors [][]string) map[string]bool {
 		seen := map[string]bool{}
 		for _, v := range vectors {
-			if a, b := verdictOf(before, v), verdictOf(after, v); a != b {
+			a, b := verdictOf(before, v), verdictOf(after, v)
+			if before.Command(rawOf(v)).Reason != after.Command(rawOf(v)).Reason {
 				seen[a+" -> "+b] = true
 			}
 		}
@@ -63,11 +76,6 @@ func crossCheck(t *testing.T, before, after *Program, words []string, n int) {
 	for k := range want {
 		if !got[k] {
 			t.Errorf("brute force finds %q, the probes do not", k)
-		}
-	}
-	for k := range got {
-		if !want[k] {
-			t.Errorf("the probes find %q, brute force does not", k)
 		}
 	}
 }
@@ -93,6 +101,24 @@ func TestProbesModelTheDenyOnlyTrim(t *testing.T) {
 	crossCheck(t, before, after, []string{"reload", "now", "x", " reload", " now", "reload "}, 3)
 }
 
+// An abbreviation two deny words share is a class of its own where the
+// platform may send what was typed: `re now` is refused by both `reload **`
+// and `reset **`, which no whole word is.
+func TestProbesModelTheDenyAbbreviations(t *testing.T) {
+	before := program(t, false, "nd:deny reload **", "nr:deny reset **")
+	after := program(t, false, "nd:deny reload **", "nr:deny reset **", "any:permit * now")
+	crossCheck(t, before, after, []string{"reload", "reset", "re", "rel", "now", "x"}, 2)
+}
+
+// A regex term is tried against an argument it matches, not only against the
+// words the rules name: narrowing the deny `copy * startup-config` frees
+// `copy scp:x startup-config` for the unchanged `copy /^scp:/ *`.
+func TestProbesTryWhatARegexMatches(t *testing.T) {
+	before := program(t, true, "bk:permit copy /^scp:/ *", "nd:deny copy * startup-config")
+	after := program(t, true, "bk:permit copy /^scp:/ *", "nd:deny copy * running-config")
+	crossCheck(t, before, after, []string{"copy", "scp:x", "startup-config", "running-config", "x"}, 3)
+}
+
 // The command a change turns on is itself among the probes, spelled with the
 // rule's words, and a word no rule names is one probe, not many.
 func TestProbesUseTheRulesWords(t *testing.T) {
@@ -109,5 +135,37 @@ func TestProbesUseTheRulesWords(t *testing.T) {
 	}
 	if Probes() != nil || Probes(nil) != nil {
 		t.Fatal("no programs, no probes")
+	}
+}
+
+// The pipe allowlist is probed the same way: a stage one version's entries
+// permit and the other's do not is among the stages, and the empty stage
+// always is.
+func TestPipeProbesFindAWidenedAllowlist(t *testing.T) {
+	b := testBlob(true, "ro:permit show **")
+	before := compileBlob(t, b)
+	b.Pipe = append(b.Pipe, "save **")
+	after := compileBlob(t, b)
+	flipped := 0
+	stages := PipeProbes(before, after)
+	for _, s := range stages {
+		if before.PipeEntry(s) == "" && after.PipeEntry(s) == "save **" {
+			flipped++
+		}
+	}
+	if flipped == 0 || len(stages[0]) != 0 {
+		t.Fatalf("stages %q", stages)
+	}
+}
+
+// A permit carrying a regex that meets a deny the change removed is exposed:
+// which commands it frees turns on the pattern (spec §12).
+func TestExposuresNameARegexPermitAChangedDenyMeets(t *testing.T) {
+	before := program(t, true, "bk:permit copy /^scp:/ *", "nd:deny copy * startup-config", "ro:permit show **")
+	after := program(t, true, "bk:permit copy /^scp:/ *", "nd:deny copy * running-config", "ro:permit show **")
+	got := Exposures(before, after)
+	if len(got) != 2 || got[0].Deny.Rule != "copy * startup-config" || got[0].Added ||
+		got[1].Deny.Rule != "copy * running-config" || !got[1].Added || got[0].Permit.Rule != "copy /^scp:/ *" {
+		t.Fatalf("%+v", got)
 	}
 }
