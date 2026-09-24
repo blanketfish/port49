@@ -1961,6 +1961,11 @@ prefix of it, ignoring case — on every platform, whatever `expands_abbreviatio
 `usern x sec 0 X` and `snmp comm X` are redacted. That removes more rather than less, and it
 does not trust the flag: L21 measured expansion for interactive SSH only, and a flag that is
 wrong where redaction relies on it leaks a secret into a log that cannot take it back.
+Redaction therefore errs toward hiding: some non-secret arguments — `aaa authentication login
+… none`, `area 0 …`, `ip domain name …` — are redacted, because a word that begins a secret
+keyword (`authentication-key`, `area-password`, `domain-password`) counts as its
+abbreviation. The record still carries the command word, so an auditor sees that an `aaa
+authentication` change happened and can read the rest from the device.
 Junos sends a whole command line as one `cmd`, so each element is split into words first.
 The built-in patterns lead with `**`, because a secret sits anywhere in a line and NX-OS's
 accounting `cmd` is the configuration path joined with ` ; ` and a result — `configure
