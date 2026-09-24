@@ -359,23 +359,42 @@ func TestTheUpgradeReportPrintsPasteReadyAcknowledgments(t *testing.T) {
 	}
 }
 
-// A device_config line a block writes with a value redaction hides is shown
-// redacted: `platform show` output lands in terminals and CI logs (spec §5.8).
-func TestPlatformShowRedactsADeviceConfigSecret(t *testing.T) {
+// A device_config line or a config check a block writes with a value
+// redaction hides is printed redacted by show, export and export --all: their
+// output lands in terminals, CI logs and upstream pull requests (spec §5.8;
+// task 15 review I2, I3). A set's own lines and checks print as written.
+func TestPlatformShowAndExportRedactABlocksSecrets(t *testing.T) {
 	pol, inv := policyFixture(t)
 	raw := readFile(t, pol)
 	block := "platforms:\n  arista_eos:\n    device_config: [\"aaa authorization exec default group port49 local\", " +
-		"\"snmp-server community Hunter2 ro\"]\n"
+		"\"snmp-server community Hunter2 ro\"]\n" +
+		"    config_checks:\n      - {match: '^tacacs-server key=Hunter2', says: 'tacacs-server key Hunter2 and " +
+		"\"snmp-server community Hunter2 ro\"'}\n" +
+		"  cisco_nxos:\n    device_config: [\"aaa authentication login default group port49 local\"]\n"
 	if err := os.WriteFile(pol, append([]byte(block), raw...), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var out, errb bytes.Buffer
-	if code := run([]string{"platform", "show", "--policy", pol, "--inventory", inv, "arista_eos"}, &out, &errb); code != 0 {
-		t.Fatalf("code %d %s", code, errb.String())
+	dir := t.TempDir()
+	for _, args := range [][]string{{"platform", "show", "--policy", pol, "--inventory", inv, "arista_eos"},
+		{"platform", "export", "--policy", pol, "--inventory", inv, "arista_eos"},
+		{"platform", "export", "--all", "--dir", dir, "--policy", pol, "--inventory", inv}} {
+		var out, errb bytes.Buffer
+		if code := run(args, &out, &errb); code != 0 {
+			t.Fatalf("%q: code %d %s", args, code, errb.String())
+		}
+		text := out.String()
+		if args[2] == "--all" {
+			text = string(readFile(t, filepath.Join(dir, "arista_eos.yaml"))) +
+				string(readFile(t, filepath.Join(dir, "cisco_nxos.yaml")))
+		}
+		if strings.Contains(text+errb.String(), "Hunter2") || !strings.Contains(text, "snmp-server community «redacted» «redacted»") ||
+			!strings.Contains(text, "aaa authorization exec default group port49 local") {
+			t.Errorf("%q:\n%s%s", args, text, errb.String())
+		}
 	}
-	if strings.Contains(out.String()+errb.String(), "Hunter2") ||
-		!strings.Contains(out.String(), "snmp-server community «redacted» «redacted»") ||
-		!strings.Contains(out.String(), "aaa authorization exec default group port49 local") {
-		t.Fatalf("%s%s", out.String(), errb.String())
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "show", "--policy", pol, "--inventory", inv, "cisco_nxos"}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "aaa authentication login default group port49 local") {
+		t.Fatalf("a set's line prints as written:\n%s%s", out.String(), errb.String())
 	}
 }

@@ -2023,7 +2023,9 @@ the verbatim blob from outside the log. A blob with no such rule is logged byte 
 **A block's `device_config` line is redacted too.** An operator may hold a device to a line
 that carries a value a pattern hides — `snmp-server community X ro` — and it loads; `port49
 policy test` reports it as `device_config_secret_literal`, naming the line by its platform key
-and index in its redacted form, and `port49 platform show` prints it redacted. A line a
+and index in its redacted form, and `port49 platform show` and `platform export` print it
+redacted, as they do a block's `config_checks` `match` and `says`: export's output goes upstream,
+and the operator restores the value from the policy file. A line or a check a
 built-in set ships is lab text and printed as written, though abbreviation matching reads its
 `authentication` as `authentication-key`. `port49 devices check-config` redacts every
 configuration line it prints the same way (§12).

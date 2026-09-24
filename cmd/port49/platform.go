@@ -156,6 +156,17 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		fmt.Fprintf(stderr, "%s: %v\n", name, err)
 		return 1
 	}
+	// A block's device_config line or config check may carry a secret, and
+	// what show and export print lands in terminals, CI logs and upstream pull
+	// requests: each is redacted by every pattern that applies, and policy
+	// test reports the lines (spec §5.8). A set's own print as written.
+	patterns := platform.AllRedactions()
+	if p != nil {
+		patterns = p.Redactions()
+	}
+	for platformName, d := range set {
+		set[platformName] = redactAdapter(patterns, d)
+	}
 	if *all {
 		// A file already there would be read back as part of the set.
 		if entries, err := os.ReadDir(*dir); err != nil || len(entries) != 0 {
@@ -187,19 +198,6 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 	mode := exportShow
 	if export {
 		mode = exportBlock
-	} else {
-		// A block's device_config line may carry a secret, and show's output
-		// lands in terminals and CI logs: it is printed redacted by every
-		// pattern that applies, and policy test reports it (spec §5.8).
-		patterns := platform.AllRedactions()
-		if p != nil {
-			patterns = p.Redactions()
-		}
-		lines := slices.Clone(d.DeviceConfig)
-		for i, line := range lines {
-			lines[i] = platform.RedactConfigLine(patterns, line)
-		}
-		d.DeviceConfig = lines
 	}
 	body, err := adapterFile(platformName, d, mode)
 	if err != nil {
@@ -350,6 +348,26 @@ const (
 	// measured: the note is dropped (spec §8).
 	exportSet
 )
+
+// redactAdapter is d with its device_config lines and config checks as port49
+// may print them (platform.RedactConfigLine, RedactConfigCheck).
+func redactAdapter(patterns []platform.Redaction, d platform.Dialect) platform.Dialect {
+	if d.DeviceConfig != nil {
+		lines := make([]string, len(d.DeviceConfig))
+		for i, line := range d.DeviceConfig {
+			lines[i] = platform.RedactConfigLine(patterns, line)
+		}
+		d.DeviceConfig = lines
+	}
+	if d.ConfigChecks != nil {
+		checks := make([]platform.ConfigCheck, len(d.ConfigChecks))
+		for i, c := range d.ConfigChecks {
+			checks[i] = platform.RedactConfigCheck(patterns, c)
+		}
+		d.ConfigChecks = checks
+	}
+	return d
+}
 
 // notMeasured is the comment on a fallback level exportBlock folded a note
 // into.
