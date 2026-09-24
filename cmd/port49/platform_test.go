@@ -398,3 +398,26 @@ func TestPlatformShowAndExportRedactABlocksSecrets(t *testing.T) {
 		t.Fatalf("a set's line prints as written:\n%s%s", out.String(), errb.String())
 	}
 }
+
+// A block's check with no secret in it exports as written, regex escapes
+// included: pasted back, a mangled match would be a check that matches
+// nothing (task 15 re-review 2, R1).
+func TestPlatformExportKeepsARegexCheckWhole(t *testing.T) {
+	pol, inv := policyFixture(t)
+	raw := readFile(t, pol)
+	block := "platforms:\n  arista_eos:\n    config_checks:\n" +
+		"      - {match: '^aaa authorization exec default\\s+group \\S+ none$', says: the exec list falls back to none}\n" +
+		"      - {match: '^username\\s+\\S+\\s+privilege\\s+\\d+$', says: a local account}\n"
+	if err := os.WriteFile(pol, append([]byte(block), raw...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "arista_eos"}, &out, &errb); code != 0 {
+		t.Fatalf("code %d %s", code, errb.String())
+	}
+	for _, want := range []string{`^aaa authorization exec default\s+group \S+ none$`, `^username\s+\S+\s+privilege\s+\d+$`} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s", want, out.String())
+		}
+	}
+}

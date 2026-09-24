@@ -217,7 +217,14 @@ func TestAConfigCheckSecretLiteralIsReportedRedacted(t *testing.T) {
 		"      - {match: '^snmp-server community Hunter2', says: 'falls back to a local secret: x'}\n"+
 		"      - {match: '^aaa authentication enable default .*\\b(local|enable)\\s*$', says: \"enable falls back to a local "+
 		"secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)\"}\n"+
-		"      - {match: '^logging host', says: 'the secret word in prose'}\n"+good)
+		"      - {match: '^logging host', says: 'the secret word in prose'}\n"+
+		// A regex's escapes are not words: none of these carries a secret
+		// (task 15 re-review 2, R1).
+		"      - {match: '^aaa authorization exec default\\s+group \\S+ none$', says: x}\n"+
+		"      - {match: '^aaa authorization commands \\S+ default .*\\b(none|if-authenticated)\\s*$', says: x}\n"+
+		"      - {match: '^aaa authentication enable default .*\\b(local|enable)\\s*$', says: x}\n"+
+		"      - {match: 'authentication-order .*\\bpassword\\b', says: x}\n"+
+		"      - {match: '^username\\s+\\S+\\s+privilege\\s+\\d+$', says: x}\n"+good)
 	var got []string
 	for _, f := range p.Lint(noon) {
 		if f.Kind == FindingDeviceConfigSecretLiteral {

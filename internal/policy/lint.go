@@ -318,7 +318,7 @@ func (p *Policy) DeviceConfigSecretLiterals() []Finding {
 			// not reported: ordinary wording, "falls back to a local secret",
 			// would trip it.
 			for i, c := range *checks {
-				if platform.ShippedConfigCheck(c) {
+				if platform.ShippedConfigMatch(c.Match) {
 					continue
 				}
 				if shown := platform.RedactProse(patterns, c.Match); shown != c.Match {

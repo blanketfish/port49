@@ -514,9 +514,12 @@ func redactURL(word string) (string, bool) {
 // words as whitespace does, so a value glued to `community)` or `community:`
 // is still the word after `community` (spec §5.8). A regex's anchors and
 // operators, `^`, `$`, `|`, `\`, `*` and `+`, separate too, so a block's
-// config check match `^snmp-server community X` is read as its words.
+// config check match `^snmp-server community X` is read as its words, and an
+// escape, `\s` or `\S`, is one separator, never the word `s`, which would
+// read as `secret`'s abbreviation (task 15 re-review 2, R1). The pattern's
+// first alternative finds the escapes, which RedactProse skips.
 // Over-redaction is the accepted cost.
-var proseWord = regexp.MustCompile("[^\\s()\\[\\]{}<>,;:!?\"'=`^$|\\\\*+]+")
+var proseWord = regexp.MustCompile("\\\\[A-Za-z]|[^\\s()\\[\\]{}<>,;:!?\"'=`^$|\\\\*+]+")
 
 // RedactProse is text redacted as a rule is, first by whitespace, which is
 // where a URL's password is found whole, and then by proseWord, with the
@@ -525,7 +528,12 @@ var proseWord = regexp.MustCompile("[^\\s()\\[\\]{}<>,;:!?\"'=`^$|\\\\*+]+")
 func RedactProse(patterns []Redaction, text string) string {
 	words, _ := RedactRule(patterns, strings.Fields(text))
 	text = strings.Join(words, " ")
-	spans := proseWord.FindAllStringIndex(text, -1)
+	var spans [][]int
+	for _, sp := range proseWord.FindAllStringIndex(text, -1) {
+		if text[sp[0]] != '\\' {
+			spans = append(spans, sp)
+		}
+	}
 	words = make([]string, len(spans))
 	for i, sp := range spans {
 		words[i] = text[sp[0]:sp[1]]

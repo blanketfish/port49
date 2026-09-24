@@ -173,12 +173,33 @@ func ShippedConfigCheck(c ConfigCheck) bool {
 	return false
 }
 
+// ShippedConfigMatch reports whether some built-in set's adapter ships a
+// config check whose match is match: lab text, never a secret, whatever a
+// block's check says beside it.
+func ShippedConfigMatch(match string) bool {
+	for _, set := range sets {
+		for _, d := range set {
+			for _, c := range d.ConfigChecks {
+				if c.Match == match {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // RedactConfigCheck is c as port49 may print it: as written where a set ships
-// it (ShippedConfigCheck), and otherwise its match and says redacted as prose
-// by rules, since a block's text may carry a secret (spec §5.8).
+// it (ShippedConfigCheck), and otherwise its says redacted as prose by rules,
+// and its match too unless a set ships that match (ShippedConfigMatch), since
+// a block's text may carry a secret (spec §5.8).
 func RedactConfigCheck(rules []Redaction, c ConfigCheck) ConfigCheck {
 	if ShippedConfigCheck(c) {
 		return c
 	}
-	return ConfigCheck{Match: RedactProse(rules, c.Match), Says: RedactProse(rules, c.Says)}
+	out := ConfigCheck{Match: c.Match, Says: RedactProse(rules, c.Says)}
+	if !ShippedConfigMatch(c.Match) {
+		out.Match = RedactProse(rules, c.Match)
+	}
+	return out
 }
