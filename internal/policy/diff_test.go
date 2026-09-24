@@ -525,3 +525,24 @@ grants:
 		t.Fatalf("an acknowledge: entry: gate %d", n)
 	}
 }
+
+// A permit test acknowledges an expansion past a deny only at the instant it
+// passes (review M2): here it asserts the level the subject has only after a
+// grant expires, so it does not acknowledge the expansion at noon.
+func TestAnExpansionAckHoldsOnlyAtItsInstant(t *testing.T) {
+	after := strings.Replace(diffBase, "  - {name: cve, deny: [show chassis **]}\n",
+		"  - {name: cve, deny: [show chassis **]}\n  - {name: ir, permit: [show chassis hardware]}\n"+
+			"  - {name: adm, privilege: admin}\n", 1)
+	after = strings.Replace(after, "roles: [read_only, cve]}\n", "roles: [read_only, cve, ir]}\n"+
+		"  - {subject: noc, scope: all_devices, roles: [adm], expires: 2026-10-01}\n", 1)
+	test := after + "tests:\n  - {subject: noc, device: leaf-01, command: \"show chassis hardware\", expect: permit, level: readonly}\n"
+	d := Compare(mustParse(t, diffBase), mustParse(t, test), noon)
+	for _, c := range d.Changes {
+		if c.Gated && c.Acknowledged && c.At.Equal(noon) {
+			t.Fatalf("a test that fails at noon acknowledges noon's expansion: %+v", c)
+		}
+	}
+	if d.Unacknowledged() == 0 {
+		t.Fatalf("changes %+v", d.Changes)
+	}
+}

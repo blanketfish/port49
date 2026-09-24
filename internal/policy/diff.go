@@ -482,15 +482,15 @@ func (c *comparison) change(subject string, devices []string, at time.Time, v []
 		switch {
 		case from.Reason == decision.DeviceQuarantined || oldRefused != "":
 			ch.Gated = true
-			ch.Acknowledged = c.acks[releaseKey(subject, to.Decided.Role, to.Decided.Rule)]
+			ch.Acknowledged = c.acks[instantKey(at, releaseKey(subject, to.Decided.Role, to.Decided.Rule))]
 		case from.Reason == decision.PipeStageDenied && from.Stage > 0 && from.Stage <= len(to.Pipeline):
 			ch.Gated = true
 			ch.PipeEntry = is.prog.PipeEntry(to.Pipeline[from.Stage-1])
-			ch.Acknowledged = c.acks[pipeKey(subject, ch.PipeEntry)]
+			ch.Acknowledged = c.acks[instantKey(at, pipeKey(subject, ch.PipeEntry))]
 		case from.Deny != nil:
 			ch.Gated = true
-			ch.Acknowledged = c.acks[shadowKey(subject, from.Deny.Role, from.Deny.Rule, to.Decided.Role,
-				to.Decided.Rule)]
+			ch.Acknowledged = c.acks[instantKey(at, shadowKey(subject, from.Deny.Role, from.Deny.Rule, to.Decided.Role,
+				to.Decided.Rule))]
 		}
 	}
 	var oldRule, newRule string
@@ -739,8 +739,9 @@ func constrained(rule string) bool {
 // (subject, deny, permit) for a permit in p that wins over every deny it
 // meets, as the shadowed-deny report reads a test; at a pipeline stage, the
 // allowlist entry that now permits it; on a device before quarantined, or
-// where before's broker refused the mint, every such permit. The test is the author saying the expansion is meant (spec
-// §12).
+// where before's broker refused the mint, every such permit. Each holds only
+// at the instant the test passed. The test is the author saying the
+// expansion is meant (spec §12).
 func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]bool {
 	acks := map[string]bool{}
 	for _, t := range p.passedPermits(instants) {
@@ -765,7 +766,7 @@ func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]
 		switch {
 		case errors.Is(err, ErrDeviceQuarantined) || refused != "":
 			for _, pm := range winners {
-				acks[releaseKey(t.subject, pm.Role, pm.Rule)] = true
+				acks[instantKey(t.at, releaseKey(t.subject, pm.Role, pm.Rule))] = true
 			}
 		case err != nil && !errors.Is(err, ErrNoGrants):
 		case was.Reason == decision.PipeStageDenied && was.Stage > 0 && was.Stage <= len(o.Pipeline):
@@ -774,11 +775,11 @@ func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]
 				continue
 			}
 			if prog, err := engine.Compile(res.Blob); err == nil {
-				acks[pipeKey(t.subject, prog.PipeEntry(o.Pipeline[was.Stage-1]))] = true
+				acks[instantKey(t.at, pipeKey(t.subject, prog.PipeEntry(o.Pipeline[was.Stage-1])))] = true
 			}
 		case !was.Permit && was.Deny != nil:
 			for _, pm := range winners {
-				acks[shadowKey(t.subject, was.Deny.Role, was.Deny.Rule, pm.Role, pm.Rule)] = true
+				acks[instantKey(t.at, shadowKey(t.subject, was.Deny.Role, was.Deny.Rule, pm.Role, pm.Rule))] = true
 			}
 		}
 	}
