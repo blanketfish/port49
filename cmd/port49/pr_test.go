@@ -323,3 +323,35 @@ func TestASubjectThatCannotNameABranchIsRefusedFirst(t *testing.T) {
 		t.Fatalf("git fetched: %v", err)
 	}
 }
+
+// A scratch worktree git will not remove is said, with the pull request's URL
+// when it opened, and beside gh's error when it did not.
+func TestAWorktreeLeftBehindIsSaid(t *testing.T) {
+	for _, ghFails := range []bool{false, true} {
+		repo, _, pol, inv := gitRepo(t)
+		orig := openPR
+		openPR = func(dir, branch, base, title, body string) (string, error) {
+			if _, err := runGit(repo, "worktree", "lock", "--", dir); err != nil {
+				t.Fatal(err)
+			}
+			if ghFails {
+				return "", errors.New("gh: not logged in")
+			}
+			return "https://example.test/pull/9", nil
+		}
+		t.Cleanup(func() { openPR = orig })
+		var out, errb bytes.Buffer
+		code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops", "--pr"}, &out,
+			&errb)
+		if code != 1 || !strings.Contains(errb.String(), "was not removed; `git worktree prune` clears it") ||
+			!strings.Contains(errb.String(), "locked") {
+			t.Fatalf("gh fails %v: code %d\n%s", ghFails, code, errb.String())
+		}
+		if ghFails && (!strings.Contains(errb.String(), "not logged in") || out.Len() != 0) {
+			t.Fatalf("gh's error: %q %s", out.String(), errb.String())
+		}
+		if !ghFails && out.String() != "https://example.test/pull/9\n" {
+			t.Fatalf("the URL: %q", out.String())
+		}
+	}
+}

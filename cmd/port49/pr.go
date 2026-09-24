@@ -77,9 +77,10 @@ var openPR = func(dir, branch, base, title, body string) (string, error) {
 // removal was computed from a file the pull request would not merge into, and
 // a branch already on the remote, which it never replaces. The title and body
 // are redacted by rules, as anything quoting the policy is. It returns the
-// pull request's URL.
+// pull request's URL, and with it an error if the scratch worktree could not
+// be removed afterwards.
 func removalPR(path, subject string, edited []byte, r policy.Removal, remote, base string,
-	rules []platform.Redaction) (string, error) {
+	rules []platform.Redaction) (url string, err error) {
 	if !branchSafe.MatchString(subject) {
 		return "", fmt.Errorf("subject %q cannot name a branch; offboard it with --write and open the review by hand",
 			subject)
@@ -96,7 +97,7 @@ func removalPR(path, subject string, edited []byte, r policy.Removal, remote, ba
 	if !baseSafe.MatchString(base) {
 		return "", fmt.Errorf("--base %q is not a branch's name", base)
 	}
-	path, err := filepath.EvalSymlinks(path)
+	path, err = filepath.EvalSymlinks(path)
 	if err != nil {
 		return "", err
 	}
@@ -157,7 +158,15 @@ func removalPR(path, subject string, edited []byte, r policy.Removal, remote, ba
 	if _, err := runGit(top, "worktree", "add", "--quiet", "--detach", "--", work, from); err != nil {
 		return "", err
 	}
-	defer runGit(top, "worktree", "remove", "--force", "--", work)
+	// A worktree left behind is an entry in the operator's .git/worktrees
+	// once its directory is gone; it is said, beside whatever else failed,
+	// rather than dropped.
+	defer func() {
+		if _, rerr := runGit(top, "worktree", "remove", "--force", "--", work); rerr != nil {
+			err = errors.Join(err, fmt.Errorf("the scratch worktree %s was not removed; `git worktree prune` "+
+				"clears it: %w", work, rerr))
+		}
+	}()
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
@@ -175,7 +184,7 @@ func removalPR(path, subject string, edited []byte, r policy.Removal, remote, ba
 	if _, err := runGit(work, "push", "--quiet", "--", remote, "HEAD:refs/heads/"+branch); err != nil {
 		return "", err
 	}
-	url, err := openPR(work, branch, base, title, body)
+	url, err = openPR(work, branch, base, title, body)
 	if err != nil {
 		return "", fmt.Errorf("%s is pushed to %s, but the pull request did not open; open it against %s by "+
 			"hand: %w", branch, remote, base, err)

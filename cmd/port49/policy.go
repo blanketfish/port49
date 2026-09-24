@@ -720,12 +720,16 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 		// The pull request and git's errors quote the policy; both are
 		// redacted as `policy diff`'s output is (spec §5.8).
 		url, err := removalPR(files.policy, *subject, out, removed, *remote, *base, after.Redactions())
+		if url != "" {
+			// Open, even if what followed failed: the error says what is
+			// left to clear up.
+			fmt.Fprintln(stdout, url)
+		}
 		if err != nil {
 			errOut := &redacting{w: stderr, rules: after.Redactions()}
 			fmt.Fprintln(errOut, "port49 grants remove:", err)
 			return 1
 		}
-		fmt.Fprintln(stdout, url)
 	case *write:
 		if err := replaceFile(files.policy, out); err != nil {
 			fmt.Fprintln(stderr, "port49 grants remove:", err)
