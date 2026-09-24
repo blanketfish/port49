@@ -14,6 +14,12 @@ import (
 // allowlist.
 func program(t *testing.T, expands bool, lines ...string) *Program {
 	t.Helper()
+	return compileBlob(t, testBlob(expands, lines...))
+}
+
+// testBlob is program's blob before it is compiled, for a test that changes
+// the dialect or the allowlist first.
+func testBlob(expands bool, lines ...string) Blob {
 	b := Blob{Version: Version, Bundle: "b", Platform: "arista_eos",
 		Normalize: Normalize{PipeToken: "|", StripCR: true, ExpandsAbbreviations: expands},
 		Pipe:      []string{"include **", "exclude **", "begin **", "section **", "json", "count", "no-more"},
@@ -27,6 +33,11 @@ func program(t *testing.T, expands bool, lines ...string) *Program {
 		verdict, rule, _ := strings.Cut(rest, " ")
 		b.Rules = append(b.Rules, Rule{Verdict: verdict, Rule: rule, Role: role})
 	}
+	return b
+}
+
+func compileBlob(t *testing.T, b Blob) *Program {
+	t.Helper()
 	// Classes no rule names are dropped by Encode, not by Compile; keep only
 	// what is named so the blob is one Encode would write.
 	body, hash, err := Encode(b)
@@ -229,5 +240,75 @@ func TestTheDominatingPermitDecidesEvenWhenAnotherSortsFirst(t *testing.T) {
 	o := expect(t, p, "show chassis cluster", true, decision.PermitDominates)
 	if o.Decided.Role != "b" || o.Permits[0].Role != "b" || len(o.Permits) != 2 {
 		t.Fatalf("decided %+v, permits %+v", o.Decided, o.Permits)
+	}
+}
+
+// A request with no command is not a command authorization (spec §5.2 owns
+// it), so Command denies it rather than let `**` permit an empty vector —
+// replay and explain call Command on a record's raw directly.
+func TestACommandWithNoWordsIsDenied(t *testing.T) {
+	p := program(t, true, "admin:permit **")
+	for _, raw := range [][]string{
+		{"service=shell"},
+		{"service=shell", "cmd="},
+		{"service=shell", "cmd= ", "cmd-arg=<cr>"},
+	} {
+		if o := p.Command(raw); o.Permit || o.Reason != decision.NoRuleMatched || len(o.Vector) != 0 || o.Decided != nil {
+			t.Errorf("%q: %+v", raw, o)
+		}
+	}
+}
+
+// Whitespace inside or around an argument cannot change what matches: every
+// argument is split on whitespace runs before matching, so `reload ` is the
+// deny's `reload`, and a pipe token inside an argument is a stage like any
+// other.
+func TestWhitespaceInAnArgumentCannotSlipPastADeny(t *testing.T) {
+	p := program(t, true, "admin:permit **", "no_disruptive:deny reload **")
+	for _, raw := range [][]string{
+		{"service=shell", "cmd=reload ", "cmd-arg=<cr>"},
+		{"service=shell", "cmd= reload", "cmd-arg=<cr>"},
+		{"service=shell", "cmd=reload\tnow", "cmd-arg=<cr>"},
+		{"service=shell", "cmd=reload", "cmd-arg= now ", "cmd-arg=<cr>"},
+	} {
+		if o := p.Command(raw); o.Permit || o.Reason != decision.NoPermitDominatesDeny || o.Vector[0] != "reload" {
+			t.Errorf("%q: permit=%v %s on %q", raw, o.Permit, o.Reason, o.Vector)
+		}
+	}
+	o := p.Command([]string{"service=shell", "cmd=show", "cmd-arg=run  |  redirect x", "cmd-arg=<cr>"})
+	if o.Reason != decision.PipeStageDenied || !reflect.DeepEqual(o.Vector, []string{"show", "run"}) ||
+		!reflect.DeepEqual(o.Pipeline, [][]string{{"redirect", "x"}}) {
+		t.Errorf("a pipe inside an argument: %s %q %q", o.Reason, o.Vector, o.Pipeline)
+	}
+}
+
+// Every stage is checked whatever pipe_authorized says: a platform that does
+// not send its pipes has nothing to check, and one that does is allow-listed
+// all the same, so no dialect setting skips the check.
+func TestPipeStagesAreCheckedWhetherOrNotThePlatformAuthorizesThem(t *testing.T) {
+	for _, authorized := range []bool{false, true} {
+		b := testBlob(true, "r:permit show **")
+		b.Normalize.PipeAuthorized = authorized
+		p := compileBlob(t, b)
+		expect(t, p, "show run | redirect x", false, decision.PipeStageDenied)
+		expect(t, p, "show run | include bgp", true, decision.PermitDominates)
+	}
+}
+
+// With strip_cr off, `<cr>` is an argument like any other and must be
+// matched; with an empty allowlist, every stage is refused.
+func TestStripCROffAndAnEmptyPipeAllowlist(t *testing.T) {
+	b := testBlob(true, "r:permit show run", "s:permit show **")
+	b.Normalize.StripCR = false
+	o := expect(t, compileBlob(t, b), "show run", true, decision.PermitDominates)
+	if !reflect.DeepEqual(o.Vector, []string{"show", "run", "<cr>"}) || o.Decided.Rule != "show **" {
+		t.Errorf("<cr> kept and matched: %q by %+v", o.Vector, o.Decided)
+	}
+	b = testBlob(true, "r:permit show **")
+	b.Pipe = nil
+	p := compileBlob(t, b)
+	expect(t, p, "show run", true, decision.PermitDominates)
+	if o := expect(t, p, "show run | include bgp", false, decision.PipeStageDenied); o.Stage != 1 {
+		t.Errorf("stage %d", o.Stage)
 	}
 }
