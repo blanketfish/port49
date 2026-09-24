@@ -159,25 +159,33 @@ func TestUnknownPlatformsAreGenericAndTheTableIsCopied(t *testing.T) {
 }
 
 // Each platform lists the attribute names that carry privilege on it, from
-// the lab (L16, L18; spec §6), and none is listed as inert yet, so every
-// attribute bears privilege for the gate (spec §12).
+// the lab (L16, L18; spec §6), and the names it holds inert, seeded with spec
+// §6's home-directory; every other attribute bears privilege for the gate
+// (spec §12).
 func TestPrivilegeAttributesArePerPlatformAndFailClosed(t *testing.T) {
+	junos := []string{"local-user-name", "user-permissions", "allow-commands", "deny-commands", "allow-configuration",
+		"deny-configuration", "allow-commands-regexps", "deny-commands-regexps", "allow-configuration-regexps",
+		"deny-configuration-regexps"}
 	for name, want := range map[string][]string{
-		"arista_eos":    {"priv-lvl", "roles"},
-		"cisco_nxos":    {"priv-lvl", "shell:roles", "cisco-av-pair"},
-		"cisco_iosxe":   {"priv-lvl"},
-		"juniper_junos": {"local-user-name", "user-permissions"},
+		"arista_eos":       {"priv-lvl", "roles"},
+		"cisco_nxos":       {"priv-lvl", "shell:roles", "cisco-av-pair"},
+		"cisco_iosxe":      {"priv-lvl"},
+		"juniper_junos":    junos,
+		"no_such_platform": {"priv-lvl"},
 	} {
 		d, _ := DialectFor(name)
 		if !reflect.DeepEqual(d.PrivilegeAttributes, want) {
 			t.Errorf("%s: %v", name, d.PrivilegeAttributes)
 		}
-		if !d.BearsPrivilege("idletime") || !d.BearsPrivilege(want[0]) {
-			t.Errorf("%s: an attribute no adapter lists as inert bears privilege", name)
+		if !reflect.DeepEqual(d.InertAttributes, []string{"home-directory"}) {
+			t.Errorf("%s inert: %v", name, d.InertAttributes)
+		}
+		if !d.BearsPrivilege("idletime") || !d.BearsPrivilege(want[0]) || d.BearsPrivilege("home-directory") {
+			t.Errorf("%s: only an attribute listed inert bears no privilege", name)
 		}
 	}
 	all := PrivilegeAttributeNames()
-	for _, n := range []string{"priv-lvl", "roles", "shell:roles", "cisco-av-pair", "local-user-name", "user-permissions"} {
+	for _, n := range append([]string{"priv-lvl", "roles", "shell:roles", "cisco-av-pair"}, junos...) {
 		if !slices.Contains(all, n) {
 			t.Errorf("PrivilegeAttributeNames lacks %s: %v", n, all)
 		}

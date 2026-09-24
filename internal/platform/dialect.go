@@ -69,9 +69,10 @@ type Dialect struct {
 	// on this platform (spec §6): none takes a placeholder, and the policy
 	// diff gates a change to one (spec §12).
 	PrivilegeAttributes []string
-	// InertAttributes are names measured to carry none. An attribute in
-	// neither list bears privilege as far as the diff is concerned: the gate
-	// fails closed on what nobody measured. No platform lists one yet.
+	// InertAttributes are names held to carry none: the only attributes a
+	// placeholder may go in (spec §6), and the only ones whose change the
+	// diff does not gate. An attribute in neither list bears privilege: the
+	// gate and the load fail closed on what nobody listed.
 	InertAttributes []string
 }
 
@@ -132,8 +133,14 @@ type Dialect struct {
 //     `shell:roles`, bare or inside `cisco-av-pair` (L16-arista_eos.md,
 //     L16-cisco_nxos.md); Junos applies `local-user-name` and decision 22
 //     names `user-permissions`, measured inert on these releases but a
-//     permission carrier by design (L18-juniper_*.md). The generic adapter
-//     lists `priv-lvl`, what an unknown TACACS+ device most likely reads.
+//     permission carrier by design (L18-juniper_*.md), and its command and
+//     configuration regexes, `allow-commands`, `deny-commands`,
+//     `allow-configuration`, `deny-configuration` and their `-regexps` forms,
+//     vendor-documented and unmeasured (L18; decision 22). The generic
+//     adapter lists `priv-lvl`, what an unknown TACACS+ device most likely
+//     reads.
+//   - InertAttributes: `home-directory` everywhere, spec §6's motivating case
+//     for a placeholder; unmeasured on any lab image.
 var dialects = map[string]Dialect{
 	"arista_eos": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
@@ -145,6 +152,7 @@ var dialects = map[string]Dialect{
 		},
 		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=15"}, "admin": {"priv-lvl=15"}},
 		PrivilegeAttributes: []string{"priv-lvl", "roles"},
+		InertAttributes:     inert,
 	},
 	"cisco_nxos": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: false,
@@ -152,27 +160,35 @@ var dialects = map[string]Dialect{
 		EntityClasses:       map[string][]string{"management": {`^mgmt[0-9]+$`}},
 		CeilingLevels:       map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
 		PrivilegeAttributes: []string{"priv-lvl", "shell:roles", "cisco-av-pair"},
+		InertAttributes:     inert,
 	},
 	"cisco_iosxe": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
 		SplitsInterfaceNames: true,
 		Supports:             []string{"session", "commands"},
 		PrivilegeAttributes:  []string{"priv-lvl"},
+		InertAttributes:      inert,
 	},
 	"juniper_junos": {
 		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false,
-		Supports:            []string{"session"},
-		EntityClasses:       map[string][]string{"management": {`^(fxp0|em0)$`}},
-		PrivilegeAttributes: []string{"local-user-name", "user-permissions"},
+		Supports:      []string{"session"},
+		EntityClasses: map[string][]string{"management": {`^(fxp0|em0)$`}},
+		PrivilegeAttributes: []string{"local-user-name", "user-permissions", "allow-commands", "deny-commands",
+			"allow-configuration", "deny-configuration", "allow-commands-regexps", "deny-commands-regexps",
+			"allow-configuration-regexps", "deny-configuration-regexps"},
+		InertAttributes: inert,
 	},
 }
+
+// inert is every shipped adapter's InertAttributes.
+var inert = []string{"home-directory"}
 
 // generic is the dialect of a platform port49 ships no adapter for (spec §8,
 // "Unknown platforms"): the device still logs in, nothing is rendered for it,
 // no modifier is claimed to reach port49, and the device is assumed to send
 // abbreviations as typed.
 var generic = Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session"},
-	PrivilegeAttributes: []string{"priv-lvl"}}
+	PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert}
 
 // ceilingLevels is the priv-lvl number a level stands for on a platform that
 // renders no level, where the number is still needed: the token's
