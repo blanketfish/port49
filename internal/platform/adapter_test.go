@@ -348,6 +348,14 @@ func TestValidateRefusesAnEmptyAcceptedList(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "platforms.cisco_iosxe.accepted_attributes is empty") {
 		t.Fatalf("%v", err)
 	}
+	// With no level rendered there is no rendering to catch it: the joint
+	// check would read [] as nothing accepted, and the blob, which omits an
+	// empty list, as anything.
+	generic, _ := DialectFor("")
+	err = Validate("x", with(generic, func(d *Dialect) { d.AcceptedAttributes = []string{} }))
+	if generic.Levels != nil || err == nil || !strings.Contains(err.Error(), "platforms.x.accepted_attributes is empty") {
+		t.Fatalf("no levels: %v", err)
+	}
 }
 
 func with(d Dialect, edit func(*Dialect)) Dialect {

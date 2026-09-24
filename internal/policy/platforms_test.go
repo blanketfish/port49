@@ -118,6 +118,8 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 			"platforms.cisco_iosxe.privilege.admin: priv-lvl=16: not a privilege level"},
 		{"an explicitly empty accepted_attributes", "  cisco_iosxe: {accepted_attributes: []}\n",
 			"platforms.cisco_iosxe.accepted_attributes is empty"},
+		{"an empty accepted_attributes where no level renders", "  x: {accepted_attributes: []}\n",
+			"platforms.x.accepted_attributes is empty"},
 		{"a rendered attribute listed inert", "  arista_eos: {privilege_attributes: [priv-lvl], inert_attributes: [home-directory, roles]}\n",
 			"platforms.arista_eos.inert_attributes: roles: a level renders it"},
 		{"priv-lvl listed inert", "  x: {privilege_attributes: [], inert_attributes: [priv-lvl]}\n",
