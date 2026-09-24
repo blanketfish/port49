@@ -1,0 +1,32 @@
+# juniper_junos — vSRX 21.4R3.15 and vJunos-router 23.4R2-S2.1 in the port49 lab.
+# Every value is measured and cited, or marked unmeasured and chosen in the
+# direction that fails closed (spec §8, §15).
+platforms:
+  juniper_junos:
+    # Session authorization only: no per-command request in 26 sessions on two
+    # images (L18; decision 21). The projection that carries port49's rules
+    # onto the session reply is decision 22, provisional on L12 (plan 5b), so
+    # no level is rendered yet.
+    supports: [session]
+    # fxp0 is the interface the lab reaches both images on
+    # (tests/lab/configs/vjunos-startup.conf); em0 is spec §8's example and no
+    # lab image uses it.
+    entity_classes:
+      management: ['^(fxp0|em0)$']
+    # Junos sends no command to expand; unmeasured, so false, the direction
+    # that fails closed.
+    expands_abbreviations: false
+    splits_interface_names: false
+    pipe_token: "|"
+    pipe_authorized: false
+    strip_cr: true
+    # No command request to carry one; unmeasured, so false.
+    shows_server_msg: false
+    # local-user-name is applied (L18-juniper_*.md); user-permissions is
+    # measured inert on these releases and a permission carrier by design
+    # (decision 22); the command and configuration regexes are
+    # vendor-documented and unmeasured (L18).
+    privilege_attributes: [local-user-name, user-permissions, allow-commands, deny-commands, allow-configuration,
+      deny-configuration, allow-commands-regexps, deny-commands-regexps, allow-configuration-regexps,
+      deny-configuration-regexps]
+    inert_attributes: [home-directory]

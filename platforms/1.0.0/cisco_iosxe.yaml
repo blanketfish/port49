@@ -1,0 +1,28 @@
+# cisco_iosxe — Catalyst 8000V 17.13.01a in the port49 lab.
+# Every value is measured and cited, or marked unmeasured and chosen in the
+# direction that fails closed (spec §8, §15).
+platforms:
+  cisco_iosxe:
+    # Session and per-command authorization (L1, L10). Config-command
+    # authorization is unmeasured, so it is not claimed.
+    supports: [session, commands]
+    # No level is rendered yet, and no entity class is defined: the lab's
+    # management interface is GigabitEthernet1, a physical port by name.
+    #
+    # `sh ver` arrived as `show version` over SSH (L21-cisco_iosxe.md);
+    # RESTCONF and NETCONF are unmeasured.
+    expands_abbreviations: true
+    # `int Gi1` arrived as `cmd-arg=GigabitEthernet cmd-arg=1`
+    # (L21-cisco_iosxe.md). Other interface types are unmeasured.
+    splits_interface_names: true
+    # A typed `show clock | include ...` reached port49 as `show clock` alone
+    # (L2-cisco_iosxe.md, "Truncation length").
+    pipe_token: "|"
+    pipe_authorized: false
+    # Every command authorization ends `cmd-arg=<cr>` (L10-cisco_iosxe.md).
+    strip_cr: true
+    # A 61-character server_msg was displayed in full (L2-cisco_iosxe.md).
+    shows_server_msg: true
+    # `priv-lvl` sets the level (L16, ceiling-cisco_iosxe.md).
+    privilege_attributes: [priv-lvl]
+    inert_attributes: [home-directory]

@@ -14,10 +14,8 @@ import (
 // the broker compiles it into the blob, so a daemon and a broker cannot
 // disagree about a rule.
 //
-// BORROWED AHEAD from plan 5, which builds the adapters in full — user
-// overrides and layering, the pinned platform set, `redact`, projection — and
-// replaces this table. Every value here is either measured and cited, or
-// marked unmeasured and chosen in the direction that fails closed.
+// The built-in dialects are files, platforms/<set>/<platform>.yaml (spec §8,
+// "Knowing what is shipped"), parsed by LoadSets into this type.
 type Dialect struct {
 	// PipeToken is the argument that separates a command from its output
 	// modifiers (spec §3 rule 2). Only a whole argument equal to it splits.
@@ -76,111 +74,12 @@ type Dialect struct {
 	InertAttributes []string
 }
 
-// dialects are the built-in platforms. Each value is cited or marked
-// unmeasured:
-//
-//   - PipeAuthorized is false on every platform with a command path, and that
-//     is measured: typing `show clock | include AAAA…` sent port49 `show clock`
-//     alone on vEOS 4.31.2F, NX-OS 10.4(2)F and IOS-XE 17.13.01a
-//     (tests/lab/results/L2-arista_eos.md, L2-cisco_nxos.md,
-//     L2-cisco_iosxe.md). Whether any other modifier reaches port49 anywhere
-//     is unmeasured. Junos never authorizes a command.
-//   - ShowsServerMsg: a 61-character server_msg on a denied command was
-//     displayed in full on vEOS 4.31.2F and IOS-XE 17.13.01a and not at all on
-//     NX-OS 10.4(2)F, which printed its own error (tests/lab/results/
-//     L2-arista_eos.md, L2-cisco_iosxe.md, L2-cisco_nxos.md). Junos makes no
-//     command request to carry one and is unmeasured, so false.
-//   - StripCR: every command authorization measured ends `cmd-arg=<cr>`
-//     (L10-arista_eos.md, L10-cisco_nxos.md, L10-cisco_iosxe.md).
-//   - ExpandsAbbreviations is true on EOS, NX-OS and IOS-XE, set from L21:
-//     typed `sh ver`, `sho run` and `sh clock` arrived as the full keywords on
-//     the authorization request and the accounting record on vEOS 4.31.2F,
-//     NX-OS 10.4(2)F and IOS-XE 17.13.01a, and `sh clock` was denied by a
-//     `show clock` deny on all three (tests/lab/results/L21-arista_eos.md,
-//     L21-cisco_nxos.md, L21-cisco_iosxe.md). That was interactive SSH; eAPI,
-//     NX-API and NETCONF are unmeasured. Junos sends no command to expand and
-//     is unmeasured, so false, the direction that fails closed.
-//   - SplitsInterfaceNames is true on IOS-XE alone: a typed `int Gi1` arrived
-//     as `cmd-arg=GigabitEthernet cmd-arg=1` on IOS-XE 17.13.01a, while vEOS
-//     and the N9Kv sent one argument, `Ethernet1` and `Ethernet1/1`
-//     (tests/lab/results/L21-cisco_iosxe.md, L21-arista_eos.md,
-//     L21-cisco_nxos.md). Other interface types and subinterfaces are
-//     unmeasured; an index is read as digits and `/ . :`.
-//   - Supports: EOS, NX-OS and IOS-XE send per-command authorization (L1, L10);
-//     Junos sends none, in 26 sessions on two images (L18; decision 21).
-//     Config-command authorization is unmeasured, so no platform claims it.
-//   - EntityClasses: interface NAMES, not device behaviour. `management` is the
-//     interface the lab reaches each image on (fxp0 and mgmt0 in
-//     tests/lab/configs/vjunos-startup.conf and nxos-startup.cfg; Management1
-//     is spec §8's EOS example, and `em0` spec §8's Junos one, which no lab
-//     image uses); `loopback` and `physical` are spec §8's EOS example. IOS-XE defines none: its lab management interface is
-//     GigabitEthernet1, which is a physical port by name.
-//   - Levels: arista_eos renders `priv-lvl` for readonly and admin, applied by
-//     vEOS on every lab run since 2026-09-20 (L16-arista_eos.md). `operator`
-//     renders as admin does, on the owner's ruling of 2026-09-24 (spec §6,
-//     decision 23): at level 15 vEOS ran `clear counters`, `clear ip bgp *`
-//     and `configure` for a `network-operator` session, and at level 1 refused
-//     even `clear counters` (ceiling-arista_eos.md), so no level fences an
-//     operator there and port49's command rules are the fence. Every other
-//     platform renders nothing, as in plan 3; plan 5 fills them.
-//   - CeilingLevels: cisco_nxos numbers `operator` 15, admin's number, on the
-//     same ruling: every N9Kv role ran all three commands and
-//     `network-operator` changed configuration (ceiling-cisco_nxos.md).
-//     IOS-XE, whose level 7 can carry the operator rung (ceiling-cisco_iosxe.md),
-//     keeps plan 3's table until plan 5 renders it.
-//   - PrivilegeAttributes: `priv-lvl` sets the level on EOS, NX-OS and IOS-XE
-//     (L16, ceiling-*.md); EOS applies a bare `roles=<name>` and NX-OS
-//     `shell:roles`, bare or inside `cisco-av-pair` (L16-arista_eos.md,
-//     L16-cisco_nxos.md); Junos applies `local-user-name` and decision 22
-//     names `user-permissions`, measured inert on these releases but a
-//     permission carrier by design (L18-juniper_*.md), and its command and
-//     configuration regexes, `allow-commands`, `deny-commands`,
-//     `allow-configuration`, `deny-configuration` and their `-regexps` forms,
-//     vendor-documented and unmeasured (L18; decision 22). The generic
-//     adapter lists `priv-lvl`, what an unknown TACACS+ device most likely
-//     reads.
-//   - InertAttributes: `home-directory` everywhere, spec §6's motivating case
-//     for a placeholder; unmeasured on any lab image.
-var dialects = map[string]Dialect{
-	"arista_eos": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
-		Supports: []string{"session", "commands"},
-		EntityClasses: map[string][]string{
-			"management": {`^Management[0-9]+$`},
-			"loopback":   {`^Loopback[0-9]+$`},
-			"physical":   {`^Ethernet[0-9/.]+$`, `^Port-Channel[0-9]+$`},
-		},
-		Levels:              map[string][]string{"readonly": {"priv-lvl=1"}, "operator": {"priv-lvl=15"}, "admin": {"priv-lvl=15"}},
-		PrivilegeAttributes: []string{"priv-lvl", "roles"},
-		InertAttributes:     inert,
-	},
-	"cisco_nxos": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: false,
-		Supports:            []string{"session", "commands"},
-		EntityClasses:       map[string][]string{"management": {`^mgmt[0-9]+$`}},
-		CeilingLevels:       map[string]uint8{"readonly": 1, "operator": 15, "admin": 15},
-		PrivilegeAttributes: []string{"priv-lvl", "shell:roles", "cisco-av-pair"},
-		InertAttributes:     inert,
-	},
-	"cisco_iosxe": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
-		SplitsInterfaceNames: true,
-		Supports:             []string{"session", "commands"},
-		PrivilegeAttributes:  []string{"priv-lvl"},
-		InertAttributes:      inert,
-	},
-	"juniper_junos": {
-		PipeToken: "|", PipeAuthorized: false, StripCR: true, ExpandsAbbreviations: false,
-		Supports:      []string{"session"},
-		EntityClasses: map[string][]string{"management": {`^(fxp0|em0)$`}},
-		PrivilegeAttributes: []string{"local-user-name", "user-permissions", "allow-commands", "deny-commands",
-			"allow-configuration", "deny-configuration", "allow-commands-regexps", "deny-commands-regexps",
-			"allow-configuration-regexps", "deny-configuration-regexps"},
-		InertAttributes: inert,
-	},
-}
+// builtin is the default set's adapters, platforms/<DefaultSet>/*.yaml, where
+// every value is cited to the lab note that measured it or marked unmeasured
+// and chosen in the direction that fails closed.
+func builtin() map[string]Dialect { return sets[DefaultSet] }
 
-// inert is every shipped adapter's InertAttributes.
+// inert is the generic adapter's InertAttributes, as every shipped adapter's.
 var inert = []string{"home-directory"}
 
 // generic is the dialect of a platform port49 ships no adapter for (spec §8,
@@ -202,7 +101,7 @@ var ceilingLevels = map[string]uint8{"readonly": 1, "admin": 15}
 // platform gets the generic dialect. The maps are copies: a caller cannot edit
 // the table through them.
 func DialectFor(name string) (Dialect, bool) {
-	d, ok := dialects[name]
+	d, ok := builtin()[name]
 	if !ok {
 		d = generic
 	}
@@ -211,8 +110,8 @@ func DialectFor(name string) (Dialect, bool) {
 
 // Dialects is the whole built-in table, copied.
 func Dialects() map[string]Dialect {
-	out := make(map[string]Dialect, len(dialects))
-	for name, d := range dialects {
+	out := make(map[string]Dialect, len(builtin()))
+	for name, d := range builtin() {
 		out[name] = d.clone()
 	}
 	return out
@@ -246,15 +145,17 @@ func (d Dialect) clone() Dialect {
 // this platform: every name but one measured inert (InertAttributes).
 func (d Dialect) BearsPrivilege(name string) bool { return !slices.Contains(d.InertAttributes, name) }
 
-// PrivilegeAttributeNames is every built-in platform's PrivilegeAttributes,
-// sorted: the names no attribute value may put a placeholder in, whatever
-// platform key it is written under (spec §6).
+// PrivilegeAttributeNames is the PrivilegeAttributes of every platform in
+// every built-in set, sorted: the names no attribute value may put a
+// placeholder in, whatever platform key it is written under (spec §6).
 func PrivilegeAttributeNames() []string {
 	out := slices.Clone(generic.PrivilegeAttributes)
-	for _, d := range dialects {
-		for _, n := range d.PrivilegeAttributes {
-			if !slices.Contains(out, n) {
-				out = append(out, n)
+	for _, set := range sets {
+		for _, d := range set {
+			for _, n := range d.PrivilegeAttributes {
+				if !slices.Contains(out, n) {
+					out = append(out, n)
+				}
 			}
 		}
 	}

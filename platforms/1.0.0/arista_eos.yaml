@@ -1,0 +1,39 @@
+# arista_eos — vEOS-lab 4.31.2F (image tagged 4.32.2F) in the port49 lab.
+# Every value is measured and cited, or marked unmeasured and chosen in the
+# direction that fails closed (spec §8, §15).
+platforms:
+  arista_eos:
+    # Session and per-command authorization (L1, L10). Config-command
+    # authorization is unmeasured, so it is not claimed.
+    supports: [session, commands]
+    # readonly and admin are applied by vEOS on every lab run since 2026-09-20
+    # (tests/lab/results/L16-arista_eos.md). operator renders as admin does
+    # (spec §6, decision 23): at 15 vEOS fenced nothing port49 permitted, and
+    # at 1 it refused even `clear counters` (ceiling-arista_eos.md).
+    privilege:
+      readonly: ["priv-lvl=1"]
+      operator: ["priv-lvl=15"]
+      admin: ["priv-lvl=15"]
+    # Interface names, not device behaviour: spec §8's example.
+    entity_classes:
+      management: ['^Management[0-9]+$']
+      loopback: ['^Loopback[0-9]+$']
+      physical: ['^Ethernet[0-9/.]+$', '^Port-Channel[0-9]+$']
+    # `sh ver` arrived as `show version` over SSH (L21-arista_eos.md); eAPI and
+    # NETCONF are unmeasured.
+    expands_abbreviations: true
+    # `int Et1` arrived as one argument, `Ethernet1` (L21-arista_eos.md).
+    splits_interface_names: false
+    # A typed `show clock | include ...` reached port49 as `show clock` alone
+    # (L2-arista_eos.md, "Truncation length").
+    pipe_token: "|"
+    pipe_authorized: false
+    # Every command authorization ends `cmd-arg=<cr>` (L10-arista_eos.md).
+    strip_cr: true
+    # A 61-character server_msg was displayed in full (L2-arista_eos.md).
+    shows_server_msg: true
+    # `priv-lvl` sets the level and a bare `roles=<name>` the role
+    # (L16-arista_eos.md). home-directory is spec §6's motivating case for a
+    # placeholder, unmeasured on any lab image.
+    privilege_attributes: [priv-lvl, roles]
+    inert_attributes: [home-directory]

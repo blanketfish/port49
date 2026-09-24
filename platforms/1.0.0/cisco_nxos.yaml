@@ -1,0 +1,35 @@
+# cisco_nxos — Nexus 9300v 10.4(2)F in the port49 lab.
+# Every value is measured and cited, or marked unmeasured and chosen in the
+# direction that fails closed (spec §8, §15).
+platforms:
+  cisco_nxos:
+    # Session and per-command authorization (L1, L10). Config-command
+    # authorization is unmeasured, so it is not claimed.
+    supports: [session, commands]
+    # No level is rendered yet. The token's ceiling still needs a number:
+    # operator numbers 15, admin's, on the owner's ruling of 2026-09-24 —
+    # every N9Kv role ran all three disruptive commands and network-operator
+    # changed configuration (ceiling-cisco_nxos.md; spec §6, decision 23).
+    ceiling_levels: {readonly: 1, operator: 15, admin: 15}
+    # mgmt0 is the interface the lab reaches the device on
+    # (tests/lab/configs/nxos-startup.cfg).
+    entity_classes:
+      management: ['^mgmt[0-9]+$']
+    # `sh ver` arrived as `show version` over SSH (L21-cisco_nxos.md); NX-API
+    # and NETCONF are unmeasured.
+    expands_abbreviations: true
+    # `int e1/1` arrived as one argument, `Ethernet1/1` (L21-cisco_nxos.md).
+    splits_interface_names: false
+    # A typed `show clock | include ...` reached port49 as `show clock` alone
+    # (L2-cisco_nxos.md, "Truncation length").
+    pipe_token: "|"
+    pipe_authorized: false
+    # Every command authorization ends `cmd-arg=<cr>` (L10-cisco_nxos.md).
+    strip_cr: true
+    # NX-OS printed its own error and never port49's server_msg
+    # (L2-cisco_nxos.md).
+    shows_server_msg: false
+    # `priv-lvl` picks a role by a per-release table, and `shell:roles`, bare
+    # or inside `cisco-av-pair`, names one (L16-cisco_nxos.md).
+    privilege_attributes: [priv-lvl, shell:roles, cisco-av-pair]
+    inert_attributes: [home-directory]

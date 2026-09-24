@@ -1,0 +1,208 @@
+package platform
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"regexp"
+	"slices"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/internal/engine"
+)
+
+// Spec is one platform block as a file writes it (spec §8): a built-in adapter
+// under platforms/<set>/. A nil field is one the block does not set, and Over
+// lays the set fields over a base, so a block that sets one key inherits every
+// other.
+type Spec struct {
+	Supports             *[]string            `yaml:"supports"`
+	Privilege            *map[string][]string `yaml:"privilege"`
+	CeilingLevels        *map[string]uint8    `yaml:"ceiling_levels"`
+	EntityClasses        *map[string][]string `yaml:"entity_classes"`
+	ExpandsAbbreviations *bool                `yaml:"expands_abbreviations"`
+	SplitsInterfaceNames *bool                `yaml:"splits_interface_names"`
+	PipeToken            *string              `yaml:"pipe_token"`
+	PipeAuthorized       *bool                `yaml:"pipe_authorized"`
+	StripCR              *bool                `yaml:"strip_cr"`
+	ShowsServerMsg       *bool                `yaml:"shows_server_msg"`
+	PrivilegeAttributes  *[]string            `yaml:"privilege_attributes"`
+	InertAttributes      *[]string            `yaml:"inert_attributes"`
+}
+
+// ParseSpecs reads an adapter file: one YAML document whose one key is
+// `platforms`, a map of platform name to Spec. A key the schema does not know
+// is refused, never ignored: an ignored key is an adapter that reads one way
+// and renders another.
+func ParseSpecs(raw []byte) (map[string]Spec, error) {
+	var f struct {
+		Platforms map[string]Spec `yaml:"platforms"`
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return nil, err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return nil, errors.New("an adapter file is one YAML document; remove the `---` separator and what follows it")
+	}
+	if len(f.Platforms) == 0 {
+		return nil, errors.New("an adapter file defines its platforms under a `platforms:` key, and this one defines none")
+	}
+	return f.Platforms, nil
+}
+
+// Over lays s over base: every field s sets replaces base's, whole, and every
+// field it leaves nil is base's. The result shares nothing with either.
+func (s Spec) Over(base Dialect) Dialect {
+	d := base.clone()
+	if s.Supports != nil {
+		d.Supports = slices.Clone(*s.Supports)
+	}
+	if s.Privilege != nil {
+		d.Levels = cloneLists(*s.Privilege)
+	}
+	if s.CeilingLevels != nil {
+		d.CeilingLevels = make(map[string]uint8, len(*s.CeilingLevels))
+		for k, v := range *s.CeilingLevels {
+			d.CeilingLevels[k] = v
+		}
+	}
+	if s.EntityClasses != nil {
+		d.EntityClasses = cloneLists(*s.EntityClasses)
+	}
+	if s.ExpandsAbbreviations != nil {
+		d.ExpandsAbbreviations = *s.ExpandsAbbreviations
+	}
+	if s.SplitsInterfaceNames != nil {
+		d.SplitsInterfaceNames = *s.SplitsInterfaceNames
+	}
+	if s.PipeToken != nil {
+		d.PipeToken = *s.PipeToken
+	}
+	if s.PipeAuthorized != nil {
+		d.PipeAuthorized = *s.PipeAuthorized
+	}
+	if s.StripCR != nil {
+		d.StripCR = *s.StripCR
+	}
+	if s.ShowsServerMsg != nil {
+		d.ShowsServerMsg = *s.ShowsServerMsg
+	}
+	if s.PrivilegeAttributes != nil {
+		d.PrivilegeAttributes = slices.Clone(*s.PrivilegeAttributes)
+	}
+	if s.InertAttributes != nil {
+		d.InertAttributes = slices.Clone(*s.InertAttributes)
+	}
+	return d
+}
+
+func cloneLists(m map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(m))
+	for k, v := range m {
+		out[k] = slices.Clone(v)
+	}
+	return out
+}
+
+// capabilities is spec §9's vocabulary for `supports`.
+var capabilities = []string{"session", "commands", "config_commands"}
+
+// className is the shape of an entity class name, as a rule writes it after
+// `@` (engine.ParseRule).
+var className = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// Validate is the structural validation spec §8 requires of every adapter,
+// built-in or not: port49 cannot check what an attribute means, so it checks
+// everything else. Each error names the field.
+func Validate(name string, d Dialect) error {
+	field := func(f string) string { return "platforms." + name + "." + f }
+	if len(d.Supports) == 0 {
+		return fmt.Errorf("%s is required: which of %s the platform authorizes (spec §9)", field("supports"),
+			strings.Join(capabilities, ", "))
+	}
+	for _, c := range d.Supports {
+		if !slices.Contains(capabilities, c) {
+			return fmt.Errorf("%s: %q is not a capability; the capabilities are %s", field("supports"), c,
+				strings.Join(capabilities, ", "))
+		}
+	}
+	if !slices.Contains(d.Supports, "session") {
+		return fmt.Errorf("%s must include session: every platform port49 serves authorizes its sessions",
+			field("supports"))
+	}
+	for _, level := range sortedKeys(d.Levels) {
+		seen := map[string]bool{}
+		for _, a := range d.Levels[level] {
+			if err := engine.CheckAttribute(a); err != nil {
+				return fmt.Errorf("%s: %w", field("privilege."+level), err)
+			}
+			// A level's rendering is the level: a placeholder in it would let a
+			// principal's name decide what the device is told (spec §6).
+			if slices.ContainsFunc(engine.Placeholders, func(p string) bool { return strings.Contains(a, p) }) {
+				return fmt.Errorf("%s: %s: a level's rendering takes no placeholder (spec §6)", field("privilege."+level), a)
+			}
+			n := engine.AttributeName(a)
+			if seen[n] {
+				// A device keeps the first of two and drops the second, silently
+				// (spec §8, "Generator constraints").
+				return fmt.Errorf("%s: %s is sent twice; send it once", field("privilege."+level), n)
+			}
+			seen[n] = true
+		}
+	}
+	for _, level := range sortedKeys(d.CeilingLevels) {
+		if n := d.CeilingLevels[level]; n > 15 {
+			return fmt.Errorf("%s: %d is not a privilege level; they run 0 to 15", field("ceiling_levels."+level), n)
+		}
+	}
+	for _, class := range sortedKeys(d.EntityClasses) {
+		if !className.MatchString(class) {
+			return fmt.Errorf("%s: %q is not a class name: lower case, digits and _, starting with a letter",
+				field("entity_classes"), class)
+		}
+		if len(d.EntityClasses[class]) == 0 {
+			return fmt.Errorf("%s is empty, which matches nothing; remove the class instead", field("entity_classes."+class))
+		}
+		for _, p := range d.EntityClasses[class] {
+			if _, err := regexp.Compile(p); err != nil {
+				return fmt.Errorf("%s: %q does not compile under RE2: %w", field("entity_classes."+class), p, err)
+			}
+		}
+	}
+	if d.PipeToken == "" || strings.ContainsAny(d.PipeToken, " \t") {
+		return fmt.Errorf("%s is %q: one argument with no whitespace, e.g. \"|\"", field("pipe_token"), d.PipeToken)
+	}
+	for _, list := range []struct {
+		name  string
+		names []string
+	}{{"privilege_attributes", d.PrivilegeAttributes}, {"inert_attributes", d.InertAttributes}} {
+		for _, n := range list.names {
+			if n == "" || strings.ContainsAny(n, "=* \t") {
+				return fmt.Errorf("%s: %q is not an attribute name", field(list.name), n)
+			}
+		}
+	}
+	for _, n := range d.InertAttributes {
+		if slices.Contains(d.PrivilegeAttributes, n) {
+			return fmt.Errorf("%s: %s is also in privilege_attributes; an attribute carries privilege or it does not",
+				field("inert_attributes"), n)
+		}
+		// What a level renders is the level (spec §6): listed inert, every
+		// later change to it would pass the diff ungated.
+		rendered := n == "priv-lvl"
+		for _, level := range sortedKeys(d.Levels) {
+			rendered = rendered || slices.ContainsFunc(d.Levels[level], func(a string) bool {
+				return engine.AttributeName(a) == n
+			})
+		}
+		if rendered {
+			return fmt.Errorf("%s: %s: a level renders it, so it carries privilege", field("inert_attributes"), n)
+		}
+	}
+	return nil
+}
