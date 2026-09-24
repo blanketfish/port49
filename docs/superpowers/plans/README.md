@@ -620,6 +620,12 @@ admission snapshot refresh in the daemon, key rotation reporting (`keys status`,
 `keys diagnose`, unvalidated-source report), device records, address-added-as-security-event.
 Design §10 "Device inventory".
 
+**Owed from plan 5a (owner's ruling 2026-09-24):** a blob whose rule text carries a value the
+redaction patterns hide is logged with that text redacted and `"redacted": true` (spec §5.8), so
+`port49 policy replay` reports every record naming it `unverifiable`. Verification comes back
+when replay can take the verbatim blob from outside the log: from the versioned bundle this plan
+publishes, from the store, or from `--policy <file>`, checked against the hash the log carries.
+
 ## Plan 7 — Broker in full (§19 step 7)
 
 Design §7 (OIDC public client with PKCE, certificate-to-directory mapping, directory

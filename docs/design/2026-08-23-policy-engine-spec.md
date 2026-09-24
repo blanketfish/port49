@@ -1781,6 +1781,15 @@ A denial's `server_msg` (§5.3) names the rule that decided and does not echo th
 goes only to the session that typed the command. `port49 policy test` reads commands from the
 policy's own test cases, not from a device.
 
+A rule's text is redacted by the same patterns wherever it is echoed: a record's
+`matched_deny` and `matched_permits`, and a denial's `server_msg`, which shows the value as
+`<redacted>` because a console takes ASCII. A policy literal is no safer in a log than a typed
+one — `deny snmp-server community public **` is a legitimate rule, and its value is a
+community. A record whose echoed rules were redacted carries `"redacted": true` in its
+`request` as well, and replay reports it `unverifiable`: the rules it logged are not the blob's.
+Wildcards are not values and are echoed as written. The `blob` event is redacted the same way
+(§5.8).
+
 #### Replay
 
 `port49 policy replay <record>` re-evaluates a record against the blob it names and reports
@@ -1983,6 +1992,16 @@ missed loses every argument, so a secret is never left in one of the two.
 Redaction replaces argument *values* with `«redacted»` and preserves the vector's shape and
 length, so the reconciliation join still works on a redacted record. It applies to `raw` as
 well — a rule that redacted only the normalized form would defeat itself.
+
+**A policy's own rule text is redacted too** (§5.7). A rule may legitimately carry a value a
+pattern hides — `deny snmp-server community public **` — and it loads; `port49 policy test`
+and `port49d` at start report it as `rule_secret_literal`, naming the role and the rule in its
+redacted form, so the operator knows the value lives in the policy file and reads `«redacted»`
+everywhere else. The `blob` event (§5.7, "Replay") is logged with such rule text redacted and
+carries `"redacted": true`; the store keeps the blob verbatim, and the hash beside it still names
+which blob it was. A redacted body does not hash to its name, so replay reports every record
+naming it `unverifiable` — never a divergence, and never an agreement — until replay can read
+the verbatim blob from outside the log. A blob with no such rule is logged byte for byte.
 
 **The built-in patterns are not part of a pinned platform set** (§8). Redaction changes what
 the log keeps and never what anyone may do, so a pattern a release adds applies at upgrade.
