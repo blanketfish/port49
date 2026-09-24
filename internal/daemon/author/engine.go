@@ -20,10 +20,11 @@ import (
 // compiled, by hash, with no invalidation (spec §5.1.1). A command on a cached
 // blob costs no blob read; a blob the store cannot produce is
 // blob_unavailable, and a store that does not answer is store_unavailable.
-// The handler answers both FAIL (plan 4, owner's ruling: authorization
-// fall-through is unmeasured, L4). Either way nothing falls back: answering a
-// broker-minted session from another authorizer because the store hiccuped
-// would be a permit nobody granted.
+// The handler answers both FAIL (plan 4, owner's ruling): an ERROR here
+// would run every command under IOS-XE's `if-authenticated` and hand the N9Kv
+// to local RBAC (tests/lab/results/L4-error-*.md). Either way nothing falls
+// back: answering a broker-minted session from another authorizer because the
+// store hiccuped would be a permit nobody granted.
 //
 // A context with no blob hash is Fallback's: the lab's seeded tokens are
 // minted without one. With no Fallback it is denied.

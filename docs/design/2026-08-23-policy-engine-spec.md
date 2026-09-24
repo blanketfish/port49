@@ -261,14 +261,15 @@ entire class.
    `^Management[0-9]+$`. A deny pattern that cannot be read that way — unanchored, starting
    with anything but its literal name, or a name that runs on into a part that may be more
    of it — cannot have the abbreviations it would miss listed, so on a platform marked
-   `expands_abbreviations: false` that authorizes commands the term matches **any argument**
-   in its position: an over-denial of the commands the deny's other terms reach, and no
-   device is quarantined or login refused for it. `port49 policy test` reports each such
-   term and platform as `deny_widened`, and `port49d` says it at start. A platform measured
-   sending no per-command authorization (Junos, decision 21) widens nothing. The cost is an over-denial of a full word that is a prefix of
-   a deny's word — `show ip` against `deny: show ipv6 **` — reported by name in the
-   `server_msg`. `arista_eos`, `cisco_nxos` and `cisco_iosxe` are marked `true`, set from
-   L21 (closed 2026-09-24): all three send the resolved words over interactive SSH (§15, L21;
+   `expands_abbreviations: false` that is not measured session-only (the generic adapter
+   declares only `session` and is widened on purpose) the term matches **any argument** in
+   its position: an over-denial of the commands the deny's other terms reach, and no device
+   is quarantined or login refused for it. `port49 policy test` reports each such term and
+   platform as `deny_widened`, and `port49d` says it at start. A platform measured sending no
+   per-command authorization (Junos, decision 21) widens nothing. The cost is an over-denial
+   of a full word that is a prefix of a deny's word — `show ip` against `deny: show ipv6 **`
+   — reported by name in the `server_msg`. `arista_eos`, `cisco_nxos` and `cisco_iosxe` are
+   marked `true`, set from L21 (closed 2026-09-24): all three send the resolved words over interactive SSH (§15, L21;
    `tests/lab/results/L21-arista_eos.md`, `L21-cisco_nxos.md`, `L21-cisco_iosxe.md`).
    `juniper_junos`, which authorizes no command, and the generic adapter are unmeasured and
    stay `false`.
@@ -2892,8 +2893,13 @@ quarantined device is logged at start with its cause, its mints are refused
 reply, exactly as for `device_unknown`. The device then declares the server dead and falls to
 its local method, which is the posture every platform documents for a port49 outage and the
 one the reference AAA configuration and the runbook already cover. Answering FAIL would be a
-new posture: the device believes AAA is healthy and refuses everyone, and whether it then
-tries local is L4, unmeasured and platform-dependent. Quarantine means port49 cannot compute a
+new posture: the device believes AAA is healthy and refuses everyone, and only Junos with
+`password` listed then tries local (§15, L4; `tests/lab/results/L4-*.md`). The close was
+measured on vEOS, the N9Kv, IOS-XE and vJunos-router on 2026-09-24: it costs the device what a
+refused connection does — break-glass logs in and runs its commands, a command in a session
+already open runs on the local fall-through, and nothing waits out a silent server's
+timeout; IOS-XE still asks per command and is told no at once, about 0.27s
+(`tests/lab/results/quarantine-*.md`). Quarantine means port49 cannot compute a
 correct policy for the device, not that the device is suspect, and port49 cannot block the
 console or a local account under either shape — so the choice is only whether the failure
 looks like a rejection or an outage, and the outage is the one whose consequences are known.
@@ -3523,9 +3529,11 @@ rules distinguish — each word, `*`, `**`, and each deny word's abbreviations �
 command whose decision changed, each level or ceiling that changed (a privilege change, §6),
 and each device the new policy quarantines. It exits non-zero on a command a deny refused that
 the new policy permits, unless a policy test in the new policy exercises that permit over that
-deny, and on a newly quarantined device. Regex and class terms are matched only against the
-words the rules name, so a rule that carries one and changed is reported as regex-constrained
-rather than enumerated (§4).
+deny, on a newly quarantined device, and on a subject whose mint the new policy's broker
+refuses (`attribute_too_long`, `attribute_unsafe`), since the diff, `policy test` and `explain`
+run the broker's mint checks and answer as it does. Regex and class terms are matched only
+against the words the rules name, so a rule that carries one and changed, or a permit that carries one and
+meets a deny that changed, is reported as regex-constrained rather than enumerated (§4).
 
 **`port49 platform upgrade`** reports what a platform-set bump changes, so a binary upgrade
 is never an unreviewed policy change (§8).
@@ -3933,8 +3941,9 @@ Beyond those already listed in the design document's §14:
 
 - **Full-vector matching**: `show bgp summary` does not match `show bgp summary detail`.
 - **Case insensitivity**: `SHOW RUN` matches `show run`; `interface MANAGEMENT1` matches
-  `@management` defined as `^Management[0-9]+$`; a permit's `(?-i)` regex matches case-sensitively and a deny's is refused at load;
-  the vector reaching accounting is unaltered.
+  `@management` defined as `^Management[0-9]+$`; a permit's `(?-i)` regex matches
+  case-sensitively and a deny's is refused at load; the vector reaching accounting is
+  unaltered.
 - **Dominance, permitting**: a permit of `show chassis hardware` (3,3,3) beats a deny of
   `show chassis **` (3,3,0), while `show chassis hardware detail` remains denied.
 - **Dominance, denying**: each of these resolves to DENY because no permit dominates —
@@ -4612,21 +4621,23 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   which this row has not measured; what is measured is that the general principle they appeal
   to is false on Junos for authentication.
 
-  *To measure* (added 2026-09-24 by plan 4, on the owner's rulings; nothing here is measured
-  yet):
+  *Measured since* (added 2026-09-24 by plan 4, on the owner's rulings, and run the same day):
 
-  - **Authentication `ERROR` fall-through:** with port49d up and answering authentication
-    `ERROR` `store_unavailable` (its store down), does a local break-glass account log in —
-    EOS, NX-OS, IOS-XE, Junos?
-  - **Authorization `FAIL` vs `ERROR`:** with port49d up and its store down, what each device
-    does with a per-command authorization answered `FAIL`, and with one answered `ERROR`,
-    under a method list with `local` after `group tacacs+` and one without. This is the
-    measurement behind plan 4 answering authorization `store_unavailable` `FAIL` (§5.7).
-  - **Role ceiling, per platform:** at each candidate device role (for example EOS and NX-OS
-    `network-operator`), whether the device itself allows `clear counters`, `clear ip bgp *`
-    and `configure`. The device role is the ceiling and port49's command rules draw the line
-    inside it (§6), so this is what an adapter's level mapping (plan 5) rests on; `operator`
-    on `arista_eos` stays unmapped, quarantining the devices it reaches, until it is measured.
+  - **Authentication `ERROR` fall-through,** with port49d up and its store down: the table
+    above. It is final on IOS-XE and on Junos under `tacplus` alone; on vEOS and the N9Kv
+    break-glass logs in and is then refused by the authorization FAIL that follows
+    (`tests/lab/results/L4-error-*.md`).
+  - **Authorization `FAIL` vs `ERROR`:** the table above. `FAIL` is final everywhere; `ERROR`
+    runs every command under IOS-XE's `if-authenticated` and hands the N9Kv to local RBAC,
+    which is why plan 4 answers authorization `store_unavailable` `FAIL` (§5.7).
+  - **Role ceiling, per platform** (`tests/lab/results/ceiling-arista_eos.md`,
+    `ceiling-cisco_iosxe.md`, `ceiling-cisco_nxos.md`): IOS-XE's parser refuses `clear
+    counters`, `clear ip bgp *` and `configure` at levels 1 and 7, and one line
+    (`privilege exec level 7 clear counters`) gives level 7 exactly the operator rung; vEOS
+    refuses all three at level 1 and runs all three as `network-operator` at 15; on the N9Kv
+    every role runs all three. So on EOS and NX-OS the operator rung is port49's per-command
+    policy alone. `operator` on `arista_eos` stays unmapped, quarantining the devices it
+    reaches, until the owner decides its rendering.
 - **L5** — EOS 2026-09-17 and Junos 2026-09-20: no WATCHDOG at all on any of the three, over a
   2m30s idle interactive session. `tests/lab/results/L5-arista_eos.md`,
   `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, and the N9Kv and Catalyst 8000V both join them with

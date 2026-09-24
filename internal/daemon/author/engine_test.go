@@ -146,8 +146,9 @@ func TestACachedBlobOutlivesABlobReadFailure(t *testing.T) {
 }
 
 // A store that does not answer is store_unavailable, FAIL like every
-// authorization denial (plan 4, owner's ruling; authorization fall-through is
-// unmeasured, L4); a blob the store does not hold, or holds wrong, is
+// authorization denial (plan 4, owner's ruling; an ERROR falls through on
+// some images, tests/lab/results/L4-error-*.md); a blob the store does not
+// hold, or holds wrong, is
 // blob_unavailable, also FAIL. The log tells them apart (spec §5.7; roadmap,
 // carried from plan 3).
 func TestAStoreErrorIsStoreUnavailableAndAMissingBlobIsNot(t *testing.T) {

@@ -166,10 +166,13 @@ func (s *conn) serve(ctx context.Context) {
 		// declares the server dead and falls to its local method exactly as in
 		// an outage. It is closed at once, not held for the limiter's backoff:
 		// a server that stays silent costs the device ~5 s per command on
-		// IOS-XE, EOS and NX-OS, every session, while a closed connection
-		// costs it nothing (L4, measured 2026-09-24). The device is not
-		// suspect — the policy could not be compiled for it — so it takes no
-		// strike either.
+		// IOS-XE, EOS and NX-OS, every session (tests/lab/results/
+		// L4-error-*.md), while this close costs it what a refused connection
+		// does: break-glass logs in and runs, and a session already open runs
+		// its commands on the local fall-through (measured with this daemon
+		// on vEOS, the N9Kv, IOS-XE and vJunos-router 2026-09-24,
+		// tests/lab/results/quarantine-*.md). The device is not suspect — the
+		// policy could not be compiled for it — so it takes no strike either.
 		if s.quarantined() {
 			s.quarantine(h)
 			return
