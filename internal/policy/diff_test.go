@@ -964,6 +964,18 @@ func TestAnAdapterEditIsGated(t *testing.T) {
 	}
 }
 
+// A redaction pattern changes what the audit keeps, so a block that adds one
+// is gated like a rendering: a pattern written wide enough removes what every
+// command was typed with from the log and the spool (spec §5.8, §12).
+func TestARedactionEditIsGated(t *testing.T) {
+	after := "platforms:\n  arista_eos:\n    redact: [{match: ['**'], after: interface}]\n" + diffBase
+	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
+	if len(d.Adapters) != 1 || d.Adapters[0].Field != "redact" || !d.Adapters[0].Gated ||
+		d.UnacknowledgedAdapters() != 1 {
+		t.Fatalf("adapters %+v", d.Adapters)
+	}
+}
+
 // The gate fails closed on keys (task 1 review I3): only a key on the closed
 // list of explain-only keys is reported, and every key an adapter has today,
 // device_config included (task 7 review H6), and any a later plan adds is

@@ -16,3 +16,9 @@ import "embed"
 //
 //go:embed */*.yaml
 var FS embed.FS
+
+// Redact is the built-in redaction table (spec §5.8), which is not pinned:
+// redaction changes what the log keeps, never what anyone may do.
+//
+//go:embed redact.yaml
+var Redact []byte

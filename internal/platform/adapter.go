@@ -36,6 +36,7 @@ type Spec struct {
 	RoleOrder            *map[string][]string `yaml:"role_order"`
 	DeviceConfig         *[]string            `yaml:"device_config"`
 	EnableUsername       *string              `yaml:"enable_username"`
+	Redact               *[]Redaction         `yaml:"redact"`
 }
 
 // ParseSpecs reads an adapter file: one YAML document whose one key is
@@ -120,6 +121,10 @@ func (s Spec) Over(base Dialect) Dialect {
 	}
 	if s.RoleOrder != nil {
 		d.RoleOrder = mergeLists(d.RoleOrder, *s.RoleOrder)
+	}
+	if s.Redact != nil {
+		// Appended, never replaced: a block cannot take a redaction away.
+		d.Redact = append(d.Redact, *s.Redact...)
 	}
 	return d
 }
@@ -273,6 +278,11 @@ func Validate(name string, d Dialect) error {
 			}
 		}
 	}
+	for i, r := range d.Redact {
+		if err := r.check(); err != nil {
+			return fmt.Errorf("%s[%d]: %w", field("redact"), i, err)
+		}
+	}
 	switch d.EnableUsername {
 	case EnablePrincipal:
 	case EnableEnab:
@@ -418,6 +428,9 @@ func SpecOf(d Dialect) Spec {
 	}
 	if d.DeviceConfig != nil {
 		s.DeviceConfig = &d.DeviceConfig
+	}
+	if d.Redact != nil {
+		s.Redact = &d.Redact
 	}
 	return s
 }

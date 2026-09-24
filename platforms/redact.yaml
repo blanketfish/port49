@@ -1,0 +1,43 @@
+# Redaction patterns (spec §5.8): the words of a command that are removed
+# before an accounting or authorization record is written, because a typed
+# secret — `username bob secret Hunter2` — arrives in full.
+#
+# These are NOT part of a pinned platform set. Redaction changes what the log
+# keeps and never what anyone may do, so a pattern a release adds applies at
+# upgrade, and a policy file's `platforms.<name>.redact` adds to these; it
+# never removes one.
+#
+# Best-effort, and said so: a pattern that misses leaks. Every pattern here is
+# vendor syntax, unmeasured in the lab. Each is `{match: [...], after: <word>}`
+# — a command the pattern matches loses every word after the first word equal
+# to <word> — or `{match: [...], from: N}`, every word from position N on (0 is
+# the command word and is never removed; a negative N counts from the end).
+# `*` is one word and `**` any number, as in a rule.
+#
+# `default` applies to every platform, an unmodeled one included; a
+# platform's own list adds to it and never replaces it.
+#
+# The patterns lead with `**` because a secret can sit anywhere in a line, and
+# NX-OS's accounting `cmd` is the configuration path joined with ` ; ` and a
+# result, `configure terminal ; username bob password ... (SUCCESS)`
+# (tests/lab/results/L21-cisco_nxos.md): a pattern anchored at the command
+# word would never match it.
+default:
+  - {match: ['**'], after: secret}
+  - {match: ['**'], after: password}
+  - {match: ['**'], after: key}
+  - {match: ['**'], after: key-string}
+  - {match: ['**'], after: authentication-key}
+  - {match: ['**'], after: message-digest-key}
+  - {match: ['**'], after: community}
+  # IKE pre-shared keys: IOS-XE's IKEv2 keyring `pre-shared-key [local|remote]
+  # <key>` and Junos's `pre-shared-key ascii-text <key>`.
+  - {match: ['**'], after: pre-shared-key}
+  # SNMPv3 passphrases: `snmp-server user u g v3 auth sha <pass> priv aes 128
+  # <pass>`. Scoped to the command, so `auth` elsewhere is left alone.
+  - {match: ['**', snmp-server, user, '**'], after: auth}
+juniper_junos:
+  - {match: ['**'], after: encrypted-password}
+  - {match: ['**'], after: plain-text-password-value}
+  - {match: ['**'], after: authentication-password}
+  - {match: ['**'], after: privacy-password}

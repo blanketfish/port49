@@ -100,6 +100,10 @@ type Dialect struct {
 	// port49d does, so the `enable: auto` joint check answers the same in CI
 	// (spec §5.6, §7).
 	EnableUsername string
+	// Redact are the redaction patterns an operator's `platforms:` block adds
+	// to the platform's built-in ones (Redactions). A block adds; it never
+	// removes a built-in pattern (spec §5.8).
+	Redact []Redaction
 }
 
 // builtin is the default set's adapters, platforms/<DefaultSet>/*.yaml, where
@@ -164,6 +168,7 @@ func (d Dialect) clone() Dialect {
 	d.InertAttributes = slices.Clone(d.InertAttributes)
 	d.AcceptedAttributes = slices.Clone(d.AcceptedAttributes)
 	d.DeviceConfig = slices.Clone(d.DeviceConfig)
+	d.Redact = slices.Clone(d.Redact)
 	if d.RoleOrder != nil {
 		order := make(map[string][]string, len(d.RoleOrder))
 		for k, v := range d.RoleOrder {
