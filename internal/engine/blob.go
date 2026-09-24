@@ -143,8 +143,9 @@ func Encode(b Blob) ([]byte, string, error) {
 // half-understood decision is how a daemon and a broker come to disagree about
 // a rule (spec §5.1.2): a body that does not hash to its name, a field this
 // build does not know, another format version, bytes after the value, a blob
-// whose rules would not run, and a body that is not exactly what Encode writes. Every refusal is an error, which the daemon
-// answers blob_unavailable — never a permit.
+// whose rules would not run, and a body that is not exactly what Encode
+// writes. Every refusal is an error, which the daemon answers
+// blob_unavailable — never a permit.
 func Decode(hash string, body []byte) (Blob, error) {
 	if HashOf(body) != hash {
 		return Blob{}, ErrHashMismatch

@@ -97,8 +97,8 @@ type Dialect struct {
 //   - EntityClasses: interface NAMES, not device behaviour. `management` is the
 //     interface the lab reaches each image on (fxp0 and mgmt0 in
 //     tests/lab/configs/vjunos-startup.conf and nxos-startup.cfg; Management1
-//     is spec §8's EOS example); `loopback` and `physical` are spec §8's EOS
-//     example. IOS-XE defines none: its lab management interface is
+//     is spec §8's EOS example, and `em0` spec §8's Junos one, which no lab
+//     image uses); `loopback` and `physical` are spec §8's EOS example. IOS-XE defines none: its lab management interface is
 //     GigabitEthernet1, which is a physical port by name.
 //   - Levels: arista_eos renders `priv-lvl` for readonly and admin, applied by
 //     vEOS on every lab run since 2026-09-20 (L16-arista_eos.md). `operator`
@@ -135,7 +135,8 @@ var dialects = map[string]Dialect{
 
 // generic is the dialect of a platform port49 ships no adapter for (spec §8,
 // "Unknown platforms"): the device still logs in, nothing is rendered for it,
-// no modifier is claimed to reach port49, and abbreviations are assumed.
+// no modifier is claimed to reach port49, and the device is assumed to send
+// abbreviations as typed.
 var generic = Dialect{PipeToken: "|", StripCR: true, Supports: []string{"session"}}
 
 // ceilingLevels is the priv-lvl number a level stands for on a platform that

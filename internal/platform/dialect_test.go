@@ -3,6 +3,7 @@ package platform
 import (
 	"reflect"
 	"regexp"
+	"slices"
 	"testing"
 )
 
@@ -41,6 +42,11 @@ func TestEveryBuiltInPlatformHasAMeasuredDialect(t *testing.T) {
 		if d.ExpandsAbbreviations != expandsMeasured[name] {
 			t.Errorf("%s: ExpandsAbbreviations %v, want %v: true only where L21 measured resolved words (spec §15, L21)",
 				name, d.ExpandsAbbreviations, expandsMeasured[name])
+		}
+		// Config-command authorization is unmeasured everywhere, so claiming
+		// it would tell explain a configuration-mode command reaches port49.
+		if d.Authorizes("config_commands") {
+			t.Errorf("%s: declares config_commands, which no lab run measured", name)
 		}
 		if d.SplitsInterfaceNames != splitsMeasured[name] {
 			t.Errorf("%s: SplitsInterfaceNames %v, want %v: true only where L21 measured the split", name,
@@ -124,5 +130,10 @@ func TestUnknownPlatformsAreGenericAndTheTableIsCopied(t *testing.T) {
 	}
 	if len(Dialects()) != len(Names()) {
 		t.Fatalf("Dialects() has %d platforms, Names() %d", len(Dialects()), len(Names()))
+	}
+	for name := range Dialects() {
+		if !slices.Contains(Names(), name) {
+			t.Errorf("dialect %s has no session-service platform", name)
+		}
 	}
 }

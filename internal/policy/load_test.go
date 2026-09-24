@@ -31,7 +31,10 @@ func inventory() []admission.Device {
 	}
 }
 
-func env() Env { return Env{Devices: inventory()} }
+// env is the test environment, its joint checks fixed at noon: a test never
+// reads the wall clock, or the corpus grant that expires 2026-12-01 would
+// change the answers after that day.
+func env() Env { return Env{Now: noon, Devices: inventory()} }
 
 func mustParse(t *testing.T, body string) *Policy {
 	t.Helper()
@@ -198,8 +201,6 @@ func TestLoadRefusesByName(t *testing.T) {
 	}
 }
 
-// Declaring privilege_levels replaces the ordering, and a custom level may
-// hang off a reserved one (spec §6).
 // Spec §2's own example loads: a subject no grant names mints nothing, so it
 // needs neither a username nor a token_ttl.
 func TestSpecSection2ExamplesLoad(t *testing.T) {
@@ -376,6 +377,8 @@ func TestRankLint(t *testing.T) {
 	}
 }
 
+// Declaring privilege_levels replaces the ordering, and a custom level may
+// hang off a reserved one (spec §6).
 func TestCustomLevelsReplaceTheOrdering(t *testing.T) {
 	p := mustParse(t, `
 privilege_levels:

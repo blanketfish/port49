@@ -27,7 +27,7 @@ grants:
 func TestTheGateFindsAPermitThatBeatsADeny(t *testing.T) {
 	before := mustParse(t, diffBase)
 	after := mustParse(t, strings.Replace(diffBase, "permit: [show **]}", "permit: [show **, show chassis hardware]}", 1))
-	d := Compare(before, after, time.Now())
+	d := Compare(before, after, noon)
 	if len(d.Changes) == 0 || d.Unacknowledged() != len(d.Changes) {
 		t.Fatalf("changes %+v", d.Changes)
 	}
@@ -44,7 +44,7 @@ func TestTheGateFindsAPermitThatBeatsADeny(t *testing.T) {
 	}
 	acked := mustParse(t, strings.Replace(diffBase, "permit: [show **]}", "permit: [show **, show chassis hardware]}", 1)+
 		"tests:\n  - {subject: noc, device: leaf-01, command: \"show chassis hardware\", expect: permit}\n")
-	if d := Compare(before, acked, time.Now()); d.Unacknowledged() != 0 || len(d.Changes) == 0 {
+	if d := Compare(before, acked, noon); d.Unacknowledged() != 0 || len(d.Changes) == 0 {
 		t.Fatalf("a test acknowledges it on every device: %+v", d.Changes)
 	}
 }
@@ -54,7 +54,7 @@ func TestTheGateFindsAPermitThatBeatsADeny(t *testing.T) {
 func TestGrowthIsReportedAndNotGated(t *testing.T) {
 	before := mustParse(t, diffBase)
 	after := mustParse(t, strings.Replace(diffBase, "permit: [show **]}", "permit: [show **, ping *]}", 1))
-	d := Compare(before, after, time.Now())
+	d := Compare(before, after, noon)
 	if len(d.Changes) == 0 || d.Unacknowledged() != 0 {
 		t.Fatalf("%+v", d.Changes)
 	}
@@ -63,7 +63,7 @@ func TestGrowthIsReportedAndNotGated(t *testing.T) {
 			t.Errorf("%+v", c)
 		}
 	}
-	if back := Compare(after, before, time.Now()); len(back.Changes) != len(d.Changes) || back.Changes[0].New.Permit {
+	if back := Compare(after, before, noon); len(back.Changes) != len(d.Changes) || back.Changes[0].New.Permit {
 		t.Fatalf("the reverse is a narrowing: %+v", back.Changes)
 	}
 }
@@ -78,7 +78,7 @@ func TestTheDiffReportsWhatItCannotEnumerate(t *testing.T) {
 		"privilege: readonly, permit: [show **]}", "privilege: admin, permit: [show **, \"copy * /^scp:/\"]}", 1),
 		"grants:\n", "  - {name: ops, identity: \"user:ops@example.com\", username: ops, token_ttl: 60s}\ngrants:\n"+
 			"  - {subject: ops, scope: all_devices, roles: [read_only]}\n", 1))
-	d := Compare(before, after, time.Now())
+	d := Compare(before, after, noon)
 	if len(d.Levels) == 0 || d.Levels[0].OldLevel != "readonly" || d.Levels[0].NewLevel != "admin" {
 		t.Fatalf("levels %+v", d.Levels)
 	}
@@ -95,7 +95,7 @@ func TestTheDiffReportsWhatItCannotEnumerate(t *testing.T) {
 		t.Fatalf("access %+v", d.Access)
 	}
 	quarantining := mustParse(t, strings.Replace(diffBase, "privilege: readonly", "privilege: operator", 1))
-	if q := Compare(before, quarantining, time.Now()).Quarantined; len(q) != 2 || q[0].Device != "campus-sw-7" {
+	if q := Compare(before, quarantining, noon).Quarantined; len(q) != 2 || q[0].Device != "campus-sw-7" {
 		t.Fatalf("newly quarantined %+v", q)
 	}
 }
@@ -117,7 +117,7 @@ grants:
 func TestTheGateSeesARegexPermitAChangedDenyFrees(t *testing.T) {
 	before := mustParse(t, regexBase)
 	after := mustParse(t, strings.Replace(regexBase, "copy * startup-config", "copy * running-config", 1))
-	d := Compare(before, after, time.Now())
+	d := Compare(before, after, noon)
 	gated := 0
 	for _, c := range d.Changes {
 		if c.Gated && c.Old.Deny.Rule == "copy * startup-config" && c.New.Decided.Rule == "copy /^scp:/ *" {
@@ -176,7 +176,7 @@ func TestTheGateSeesAGrantsExpiry(t *testing.T) {
 func TestTheGateSeesAWidenedPipeAllowlist(t *testing.T) {
 	base := strings.Replace(diffBase, "permit: [show **]}", "permit: [show **], pipe: {permit: [include **]}}", 1)
 	widened := strings.Replace(base, "[include **]", "[include **, save **]", 1)
-	d := Compare(mustParse(t, base), mustParse(t, widened), time.Now())
+	d := Compare(mustParse(t, base), mustParse(t, widened), noon)
 	if len(d.Changes) == 0 || d.Unacknowledged() != len(d.Changes) {
 		t.Fatalf("changes %+v", d.Changes)
 	}
@@ -186,7 +186,7 @@ func TestTheGateSeesAWidenedPipeAllowlist(t *testing.T) {
 		}
 	}
 	acked := widened + "tests:\n  - {subject: noc, device: leaf-01, command: \"show version | save x\", expect: permit}\n"
-	if d := Compare(mustParse(t, base), mustParse(t, acked), time.Now()); d.Unacknowledged() != 0 {
+	if d := Compare(mustParse(t, base), mustParse(t, acked), noon); d.Unacknowledged() != 0 {
 		t.Fatalf("a test acknowledges it: %+v", d.Changes)
 	}
 }
@@ -196,7 +196,7 @@ func TestTheGateSeesAWidenedPipeAllowlist(t *testing.T) {
 // and a device quarantined in both for a new cause is newly quarantined.
 func TestTheGateSeesAReleaseAndANewCause(t *testing.T) {
 	quarantining := strings.Replace(diffBase, "privilege: readonly", "privilege: operator", 1)
-	d := Compare(mustParse(t, quarantining), mustParse(t, diffBase), time.Now())
+	d := Compare(mustParse(t, quarantining), mustParse(t, diffBase), noon)
 	if len(d.Released) != 2 || d.Released[0].Device != "campus-sw-7" || d.Unacknowledged() == 0 {
 		t.Fatalf("released %+v, %d unacknowledged", d.Released, d.Unacknowledged())
 	}
@@ -206,12 +206,12 @@ func TestTheGateSeesAReleaseAndANewCause(t *testing.T) {
 		}
 	}
 	acked := diffBase + "tests:\n  - {subject: noc, device: leaf-01, command: \"show version\", expect: permit}\n"
-	if d := Compare(mustParse(t, quarantining), mustParse(t, acked), time.Now()); d.Unacknowledged() != 0 {
+	if d := Compare(mustParse(t, quarantining), mustParse(t, acked), noon); d.Unacknowledged() != 0 {
 		t.Fatalf("a test acknowledges it: %+v", d.Changes)
 	}
 	second := strings.Replace(quarantining, "grants:\n", "  - {name: ops, identity: \"user:ops@example.com\", username: ops, token_ttl: 60s}\ngrants:\n"+
 		"  - {subject: ops, scope: all_devices, roles: [read_only]}\n", 1)
-	q := Compare(mustParse(t, quarantining), mustParse(t, second), time.Now()).Quarantined
+	q := Compare(mustParse(t, quarantining), mustParse(t, second), noon).Quarantined
 	if len(q) != 2 || len(q[0].Entries) != 1 || !strings.Contains(q[0].Entries[0].Cause, `"ops"`) {
 		t.Fatalf("newly quarantined %+v", q)
 	}
@@ -224,7 +224,7 @@ func TestTheGateSeesAReleaseAndANewCause(t *testing.T) {
 func TestTheDiffSeesASplitAnyDeny(t *testing.T) {
 	base := strings.Replace(diffBase, "permit: [show **]}", "permit: [show **, default **]}", 1)
 	after := strings.Replace(base, "deny: [show chassis **]}", "deny: [show chassis **, default interface *]}", 1)
-	d := Compare(mustParse(t, base), mustParse(t, after), time.Now())
+	d := Compare(mustParse(t, base), mustParse(t, after), noon)
 	split := false
 	for _, c := range d.Changes {
 		if len(strings.Fields(c.Command)) == 4 && strings.HasPrefix(c.Command, "default interface ") {
