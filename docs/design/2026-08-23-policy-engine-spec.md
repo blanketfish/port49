@@ -4125,12 +4125,20 @@ version has an adapter for, whether or not the inventory has a device of it yet 
 is not diffed, so the day a device arrives is no review — and whether the change is a
 `platforms:` block or a moved `platform_set`. It compares the **effective** adapter, after
 `replace:` and `based_on:` have been merged, so a block cannot change a key by changing where
-the key is inherited from.
+the key is inherited from. A version with no adapter for a platform has the generic one, whose
+`supports` is compared as no claim at all: the generic `session` is assumed, not measured, and an
+unmeasured platform is not session-only. So a block that says only what the generic adapter
+says still shows as an edit to `supports`, which makes the platform session-only and turns off
+abbreviation matching on its denies (task 9 review I2).
 
 **Every adapter key is gated, fail closed, unless it is on a closed list of report-only keys.**
-A gated key fails unless an `acknowledge:` entry names the platform and the key with a reason,
-`{platform: arista_eos, field: entity_classes, reason: ...}`: a diff cannot vouch for its own
-reading when the change is to the reading. A key a later plan adds is gated until it is added
+A gated key fails unless an `acknowledge:` entry names the platform, the key and the sha256 of
+the key's new value with a reason, `{platform: arista_eos, field: entity_classes, sha256: <64 hex
+digits>, reason: ...}`: a diff cannot vouch for its own reading when the change is to the
+reading. The digest is taken over the value as `policy diff` prints it (canonical JSON), and the
+diff prints the entry ready to paste. It binds the entry to that one edit: left in the file, it
+names a value a later edit to the key does not write, so it acknowledges nothing and is reported
+`acknowledge_stale`, like a deny's entry once its rule is gone (task 9 review C1). A key a later plan adds is gated until it is added
 to that list. The gated keys therefore include:
 
 - `supports`, `privilege`, `ceiling_levels` and `entity_classes`.
