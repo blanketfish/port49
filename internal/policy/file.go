@@ -93,6 +93,9 @@ type fileTest struct {
 	// PrivLvl is a number 0-15 or `none`; Enable is none, auto or token.
 	PrivLvl string `yaml:"priv_lvl"`
 	Enable  string `yaml:"enable"`
+	// Reply is the exact session reply, in order, placeholders empty; nil
+	// asserts nothing and an empty list asserts an empty reply.
+	Reply *[]string `yaml:"reply"`
 }
 
 // stringList is a YAML scalar or a sequence of scalars: spec §11 writes one

@@ -215,3 +215,25 @@ tests:
 		}
 	}
 }
+
+// A session test's reply: is the exact session reply, in order, with the
+// placeholders empty (spec §12).
+func TestASessionTestAssertsTheReply(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **], attributes: {all: ["home*/h/{username}"]}}]
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]
+tests:
+  - {subject: s, device: leaf-01, reply: ["priv-lvl=1", "home*/h/"]}
+  - {subject: s, device: nx-01, reply: ["home*/h/"]}
+  - {subject: s, device: leaf-01, reply: ["home*/h/", "priv-lvl=1"]}
+  - {subject: s, device: nx-01, reply: []}
+`)
+	want := []bool{true, true, false, false}
+	for i, r := range p.RunTests(noon) {
+		if r.Pass != want[i] {
+			t.Errorf("tests[%d]: pass %v, want %v (reply %q)", i, r.Pass, want[i], r.Reply)
+		}
+	}
+}

@@ -543,7 +543,7 @@ func TestPolicyDiffGatesALevelRaise(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
 		!strings.Contains(out.String(), "RAISES: noc on leaf-01: level readonly -> admin, max_privilege none -> none, "+
-			"priv_lvl 1 -> 15, enable none -> none; no session test asserts it: add {subject: noc, device: leaf-01, "+
+			"priv_lvl 1 -> 15, enable none -> none, reply [\"priv-lvl=1\"] -> [\"priv-lvl=15\"]; no session test asserts it: add {subject: noc, device: leaf-01, "+
 			"priv_lvl: 15, level: admin}") ||
 		!strings.Contains(out.String(), "1 unacknowledged privilege raises") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
@@ -667,5 +667,30 @@ func TestPolicyToolsPrintAnAcknowledgment(t *testing.T) {
 	if code := run([]string{"policy", "test", "--policy", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
 		!strings.Contains(out.String(), `acknowledge: no_reload "/^(rel|wri)/ **": reload moves to the change window`) {
 		t.Fatalf("policy test: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A privilege attribute added to the reply fails the diff, and the RAISES
+// line names the reply: test to add (review C2).
+func TestPolicyDiffGatesAPrivilegeAttributeInTheReply(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	added := strings.Replace(raw, "roles: [read_only, no_reload]}", `roles: [read_only, no_reload], attributes: {arista_eos: ["roles=network-admin"]}}`, 1)
+	if err := os.WriteFile(newPol, []byte(added), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `reply ["priv-lvl=1"] -> ["priv-lvl=1", "roles=network-admin"]; no session test asserts it: `+
+			`add {subject: noc, device: leaf-01, reply: ["priv-lvl=1", "roles=network-admin"]}`) {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	if err := os.WriteFile(newPol, []byte(added+`  - {subject: noc, device: leaf-01, reply: ["priv-lvl=1", "roles=network-admin"]}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 {
+		t.Fatalf("acknowledged: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }

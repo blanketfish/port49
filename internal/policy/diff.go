@@ -88,8 +88,10 @@ type LevelChange struct {
 	// OldPrivLvl and NewPrivLvl are the device privilege, a number or `none`
 	// (Policy.devicePrivLvl); OldEnable and NewEnable the mechanism.
 	OldPrivLvl, NewPrivLvl, OldEnable, NewEnable string
+	// OldReply and NewReply are the session reply, placeholders empty.
+	OldReply, NewReply []string
 	// Raised names each dimension that rose, as a session test asserts it:
-	// priv_lvl, max_privilege, level, enable. Raise is spec §12's gate on
+	// priv_lvl, max_privilege, level, enable, reply. Raise is spec §12's gate on
 	// privilege, any of them. Acknowledged is a passing session test in the
 	// new version, at At, on one of Devices, asserting the new value of each.
 	Raised              []string
@@ -194,11 +196,18 @@ type privilege struct {
 	// device is the device privilege as a session test asserts it: a number
 	// or NoCeiling's `none`.
 	device, enable string
+	// reply is the session reply joined by replySep, and platform whose
+	// adapter says which of its attributes bear privilege.
+	reply, platform string
 }
+
+// replySep joins a reply's attributes, which cannot carry a newline
+// (engine.CheckAttribute).
+const replySep = "\n"
 
 func (v privilege) key() string {
 	return strings.Join([]string{v.level, v.ceiling, strconv.FormatBool(v.hasMax), strconv.Itoa(int(v.max)), v.device,
-		v.enable}, "/")
+		v.enable, v.reply}, "/")
 }
 
 func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
@@ -230,7 +239,7 @@ func (p *Policy) side(subject string, d admission.Device, at time.Time) side {
 		return side{err: err}
 	}
 	priv := privilege{level: res.Level, ceiling: res.Ceiling, hasMax: res.HasCeiling, max: res.MaxPrivilege,
-		device: NoCeiling, enable: res.Enable}
+		device: NoCeiling, enable: res.Enable, reply: strings.Join(sessionReply(res), replySep), platform: d.Platform}
 	if n, ok := p.devicePrivLvl(res, d.Platform); ok {
 		priv.device = strconv.Itoa(int(n))
 	}
@@ -430,7 +439,8 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 		c.d.Levels = append(c.d.Levels, c.levelChange(LevelChange{Subject: subject, Devices: devices, At: at,
 			OldLevel: wr.Level, NewLevel: ir.Level, OldCeiling: wr.Ceiling, NewCeiling: ir.Ceiling,
 			OldPrivLvl: was.priv.device, NewPrivLvl: is.priv.device, OldEnable: was.priv.enable,
-			NewEnable: is.priv.enable}, was.priv, is.priv))
+			NewEnable: is.priv.enable, OldReply: splitReply(was.priv.reply), NewReply: splitReply(is.priv.reply)},
+			was.priv, is.priv))
 	}
 	if was.hash == is.hash {
 		return
@@ -585,7 +595,9 @@ func (p *Policy) regexAcks(before *Policy, instants []time.Time) map[string]bool
 //   - level: the level rose under either version's order; a level a version
 //     does not declare is below every level it does;
 //   - enable: the mechanism went from none to token, or to auto, which asks
-//     for nothing more than a login.
+//     for nothing more than a login;
+//   - reply: the session reply gained or changed an attribute that bears
+//     privilege on the platform, priv-lvl aside.
 func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 	rose := func(from, to string) bool {
 		return from != to && to != "" && (c.before.levelIndex(to) > c.before.levelIndex(from) ||
@@ -607,6 +619,17 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 	}
 	if enableRank[is.enable] > enableRank[was.enable] {
 		l.Raised = append(l.Raised, "enable")
+	}
+	// An attribute the reply gained or changed, other than priv-lvl, which
+	// priv_lvl judges, raises what the device lets the session do unless its
+	// adapter measured it inert (spec §12).
+	dialect := c.after.dialect(is.platform)
+	for _, a := range l.NewReply {
+		name := a[:strings.IndexAny(a, "=*")]
+		if name != "priv-lvl" && !slices.Contains(l.OldReply, a) && dialect.BearsPrivilege(name) {
+			l.Raised = append(l.Raised, "reply")
+			break
+		}
 	}
 	l.Raise = len(l.Raised) > 0
 	if !l.Raise {
@@ -640,8 +663,17 @@ func (l LevelChange) NewValue(field string) string {
 		return l.NewCeiling
 	case "level":
 		return l.NewLevel
+	case "reply":
+		return strings.Join(l.NewReply, replySep)
 	}
 	return l.NewEnable
+}
+
+func splitReply(joined string) []string {
+	if joined == "" {
+		return []string{}
+	}
+	return strings.Split(joined, replySep)
 }
 
 func levelKey(at time.Time, subject, device, field, value string) string {
@@ -669,12 +701,13 @@ func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
 				subject = p.byID[r.Test.Principal]
 			}
 			for field, asserted := range map[string]bool{"level": r.Test.Level != "",
-				"max_privilege": r.Test.MaxPrivilege != "", "priv_lvl": r.Test.PrivLvl != "", "enable": r.Test.Enable != ""} {
+				"max_privilege": r.Test.MaxPrivilege != "", "priv_lvl": r.Test.PrivLvl != "", "enable": r.Test.Enable != "",
+				"reply": r.Test.AssertsReply} {
 				if !asserted {
 					continue
 				}
 				value := map[string]string{"level": r.Level, "max_privilege": r.Ceiling, "priv_lvl": r.PrivLvl,
-					"enable": r.Enable}[field]
+					"enable": r.Enable, "reply": strings.Join(r.Reply, replySep)}[field]
 				acks[levelKey(at, subject, r.Test.Device, field, value)] = true
 			}
 		}

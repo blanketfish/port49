@@ -126,9 +126,11 @@ type TestResult struct {
 	// NoCeiling's `none`, and Enable the subject's mechanism, for a minted
 	// session.
 	PrivLvl, Enable string
-	Pass            bool
-	Err             error
-	Caveats         []string
+	// Reply is the session reply, placeholders empty (sessionReply).
+	Reply   []string
+	Pass    bool
+	Err     error
+	Caveats []string
 }
 
 // Session reports whether the test asserts the session alone.
@@ -168,6 +170,7 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 				break
 			}
 			r.Level, r.Ceiling, r.Enable, r.PrivLvl = res.Level, res.Ceiling, res.Enable, NoCeiling
+			r.Reply = sessionReply(res)
 			if r.Ceiling == "" {
 				r.Ceiling = NoCeiling
 			}
@@ -186,7 +189,8 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 		r.Pass = r.Err == nil && (t.Level == "" || minted && t.Level == r.Level) &&
 			(t.MaxPrivilege == "" || minted && t.MaxPrivilege == r.Ceiling) &&
 			(t.PrivLvl == "" || minted && samePrivLvl(t.PrivLvl, r.PrivLvl)) &&
-			(t.Enable == "" || minted && t.Enable == r.Enable)
+			(t.Enable == "" || minted && t.Enable == r.Enable) &&
+			(!t.AssertsReply || minted && slices.Equal(t.Reply, r.Reply))
 		if t.Session() {
 			r.Pass = r.Pass && minted
 		} else {
@@ -218,17 +222,26 @@ func samePrivLvl(asserted, resolved string) bool {
 // know left empty, or where the reply sends none, the number the platform
 // gives the level. ok is false where neither says.
 func (p *Policy) devicePrivLvl(res Resolution, platformName string) (uint8, bool) {
-	attrs, err := res.Blob.SessionAttributes(engine.Values{})
-	if err != nil {
-		attrs = res.Blob.Attributes
-	}
-	if n, _, ok := engine.GrantedPrivLvl(attrs); ok {
+	if n, _, ok := engine.GrantedPrivLvl(sessionReply(res)); ok {
 		return n, true
 	}
 	if res.Level == "" {
 		return 0, false
 	}
 	return p.privLvl(p.dialect(platformName), res.Level)
+}
+
+// sessionReply is the session reply a resolution sends, after §6 layering,
+// with the placeholders a mint cannot know left empty (spec §12): what the
+// gate compares and a session test's reply: asserts. No privilege-bearing
+// attribute carries a placeholder (checkAttributes), so what it leaves empty
+// carries none.
+func sessionReply(res Resolution) []string {
+	attrs, err := res.Blob.SessionAttributes(engine.Values{})
+	if err != nil {
+		attrs = res.Blob.Attributes
+	}
+	return append([]string{}, attrs...)
 }
 
 // resolveFor resolves a subject, or with principal set a principal, on a

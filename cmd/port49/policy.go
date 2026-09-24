@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -219,6 +220,10 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 			if r.Test.Enable != "" {
 				want = append(want, "enable "+r.Test.Enable)
 			}
+			if r.Test.AssertsReply {
+				line += ", reply " + yamlList(r.Reply)
+				want = append(want, "reply "+yamlList(r.Test.Reply))
+			}
 			line += ", want " + strings.Join(want, " ")
 		}
 		fmt.Fprintln(stdout, line)
@@ -317,6 +322,10 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			// each value that rose.
 			hint := "{subject: " + l.Subject + ", device: " + l.Devices[0]
 			for _, field := range l.Raised {
+				if field == "reply" {
+					hint += ", reply: " + yamlList(l.NewReply)
+					continue
+				}
 				hint += ", " + field + ": " + orNone(l.NewValue(field))
 			}
 			label, tail = "RAISES", "; no session test asserts it: add "+hint+"}"
@@ -329,9 +338,13 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 				}
 			}
 		}
-		fmt.Fprintf(stdout, "%s: %s on %s%s: level %s -> %s, max_privilege %s -> %s, priv_lvl %s -> %s, enable %s -> %s%s\n",
+		reply := ""
+		if !slices.Equal(l.OldReply, l.NewReply) {
+			reply = ", reply " + yamlList(l.OldReply) + " -> " + yamlList(l.NewReply)
+		}
+		fmt.Fprintf(stdout, "%s: %s on %s%s: level %s -> %s, max_privilege %s -> %s, priv_lvl %s -> %s, enable %s -> %s%s%s\n",
 			label, l.Subject, strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel),
-			orNone(l.OldCeiling), orNone(l.NewCeiling), l.OldPrivLvl, l.NewPrivLvl, l.OldEnable, l.NewEnable, tail)
+			orNone(l.OldCeiling), orNone(l.NewCeiling), l.OldPrivLvl, l.NewPrivLvl, l.OldEnable, l.NewEnable, reply, tail)
 	}
 	widen, narrow := 0, 0
 	for _, c := range d.Changes {
@@ -400,6 +413,16 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// yamlList is a list as a policy file writes it in flow style, each item
+// quoted, so a RAISES hint can be pasted as a test.
+func yamlList(items []string) string {
+	quoted := make([]string, len(items))
+	for i, it := range items {
+		quoted[i] = strconv.Quote(it)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 // quarantineLine is an entry after a label that already says quarantine:

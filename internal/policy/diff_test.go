@@ -546,3 +546,37 @@ func TestAnExpansionAckHoldsOnlyAtItsInstant(t *testing.T) {
 		t.Fatalf("changes %+v", d.Changes)
 	}
 }
+
+// A privilege-bearing attribute other than priv-lvl, added to the session
+// reply, raises what the device lets the session do (review C2): each fails
+// the gate on its platform's group until a session test asserts the new
+// reply; taking it away again is reported and passes.
+func TestTheGateFailsAPrivilegeAttributeInTheReply(t *testing.T) {
+	for _, tt := range []struct{ attrs, device, reply string }{
+		{`{juniper_junos: [local-user-name=super-user]}`, "srx-lab-01", `["local-user-name=super-user"]`},
+		{`{cisco_nxos: ["shell:roles=network-admin"]}`, "nx-01", `["shell:roles=network-admin"]`},
+		{`{arista_eos: ["roles=network-admin"]}`, "leaf-01", `["priv-lvl=1", "roles=network-admin"]`},
+		{`{all: ["idletime*30"]}`, "xe-01", `["idletime*30"]`},
+	} {
+		after := strings.Replace(diffBase, "roles: [read_only, cve]}", "roles: [read_only, cve], attributes: "+tt.attrs+"}", 1)
+		d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
+		raised := 0
+		for _, l := range d.Levels {
+			if l.Raise && slices.Contains(l.Raised, "reply") && !l.Acknowledged {
+				raised++
+			}
+		}
+		if raised == 0 || d.UnacknowledgedLevels() != raised {
+			t.Fatalf("%s: levels %+v", tt.attrs, d.Levels)
+		}
+		acked := after + "tests:\n  - {subject: noc, device: " + tt.device + ", reply: " + tt.reply + "}\n"
+		d = Compare(mustParse(t, diffBase), mustParse(t, acked), noon)
+		if d.UnacknowledgedLevels() != raised-1 {
+			t.Fatalf("%s: a reply: test on %s acknowledges its group: %+v", tt.attrs, tt.device, d.Levels)
+		}
+		if back := Compare(mustParse(t, after), mustParse(t, diffBase), noon); back.UnacknowledgedLevels() != 0 ||
+			len(back.Levels) == 0 {
+			t.Fatalf("%s: removing it is reported and passes: %+v", tt.attrs, back.Levels)
+		}
+	}
+}

@@ -124,6 +124,10 @@ type Test struct {
 	// number or `none` (Policy.devicePrivLvl), and Enable the subject's
 	// mechanism. Empty asserts nothing.
 	Level, MaxPrivilege, PrivLvl, Enable string
+	// Reply is the exact session reply, in order, with the placeholders
+	// empty, where AssertsReply.
+	Reply        []string
+	AssertsReply bool
 }
 
 // Acknowledgment is one `acknowledge:` entry (spec §12): a removed or
@@ -721,8 +725,9 @@ func (p *Policy) buildTests(f file) error {
 		case t.Device == "":
 			return fmt.Errorf("%s: device is required", row)
 		case strings.TrimSpace(t.Command) == "" && t.Level == "" && t.MaxPrivilege == "" && t.PrivLvl == "" &&
-			t.Enable == "":
-			return fmt.Errorf("%s: command is required, or a session test's level, max_privilege, priv_lvl or enable", row)
+			t.Enable == "" && t.Reply == nil:
+			return fmt.Errorf("%s: command is required, or a session test's level, max_privilege, priv_lvl, enable "+
+				"or reply", row)
 		case strings.TrimSpace(t.Command) == "" && (t.Expect != "" || t.Reason != ""):
 			return fmt.Errorf("%s: a session test takes no expect or reason: it passes where the subject is "+
 				"minted a token with the level and ceiling it names", row)
@@ -755,9 +760,13 @@ func (p *Policy) buildTests(f file) error {
 		if t.Enable != "" && t.Enable != "none" && t.Enable != "auto" && t.Enable != "token" {
 			return fmt.Errorf("%s: enable is none, auto or token, not %q", row, t.Enable)
 		}
-		p.tests = append(p.tests, Test{Subject: t.Subject, Principal: t.Principal, Device: t.Device, Command: t.Command,
+		test := Test{Subject: t.Subject, Principal: t.Principal, Device: t.Device, Command: t.Command,
 			Expect: t.Expect, Reason: t.Reason, Level: t.Level, MaxPrivilege: t.MaxPrivilege, PrivLvl: t.PrivLvl,
-			Enable: t.Enable})
+			Enable: t.Enable, AssertsReply: t.Reply != nil}
+		if t.Reply != nil {
+			test.Reply = append([]string{}, (*t.Reply)...)
+		}
+		p.tests = append(p.tests, test)
 	}
 	return nil
 }
