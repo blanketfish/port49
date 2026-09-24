@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/rhwendt/port49/internal/platform"
@@ -49,12 +50,60 @@ func withoutCredentials(s string) string {
 	return credentialInURL.ReplaceAllString(s, "${1}«redacted»@")
 }
 
-// openPR opens the pull request with the gh CLI, in dir, and returns its URL.
-// The body goes on stdin, not the command line, and gh is told not to prompt:
-// run unattended, it fails rather than waiting. A test replaces it: nothing
-// in a test reaches GitHub.
-var openPR = func(dir, branch, base, title, body string) (string, error) {
-	cmd := exec.Command("gh", "pr", "create", "--head="+branch, "--base="+base, "--title="+title, "--body-file=-")
+// ghName is a host, owner or repository name as it stands in a GitHub URL.
+var (
+	ghHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
+	ghName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	scpURL = regexp.MustCompile(`^(?:[^@/:]+@)?([^@/:]+):(.*)$`)
+)
+
+// ghRepo is the HOST/OWNER/REPO a push URL names: https://[cred@]host[:port]/
+// owner/repo, ssh://[user@]host[:port]/owner/repo, or scp-style
+// [user@]host:owner/repo, each with or without .git and a trailing slash.
+// Anything else (a path, file://, git://, more or fewer path segments) names
+// no repository gh can open a pull request in.
+func ghRepo(url string) (string, bool) {
+	var host, path string
+	if scheme, rest, found := strings.Cut(url, "://"); found {
+		if scheme != "https" && scheme != "ssh" {
+			return "", false
+		}
+		authority, p, _ := strings.Cut(rest, "/")
+		if i := strings.LastIndexByte(authority, '@'); i >= 0 {
+			authority = authority[i+1:]
+		}
+		if h, port, found := strings.Cut(authority, ":"); found {
+			if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+				return "", false
+			}
+			authority = h
+		}
+		host, path = authority, p
+	} else if m := scpURL.FindStringSubmatch(url); m != nil {
+		host, path = m[1], m[2]
+	} else {
+		return "", false
+	}
+	host = strings.ToLower(host)
+	if host == "ssh.github.com" {
+		host = "github.com" // GitHub's ssh-over-443 endpoint
+	}
+	owner, name, found := strings.Cut(strings.TrimSuffix(strings.TrimSuffix(path, "/"), ".git"), "/")
+	if !found || !ghHost.MatchString(host) || strings.Contains(host, "..") || !ghName.MatchString(owner) ||
+		!ghName.MatchString(name) || owner == "." || owner == ".." || name == "." || name == ".." {
+		return "", false
+	}
+	return host + "/" + owner + "/" + name, true
+}
+
+// openPR opens the pull request with the gh CLI, in dir, in repo (HOST/OWNER/
+// REPO, where the branch was pushed), and returns its URL. The body goes on
+// stdin, not the command line, and gh is told not to prompt: run unattended,
+// it fails rather than waiting. A test replaces it: nothing in a test reaches
+// GitHub.
+var openPR = func(dir, repo, branch, base, title, body string) (string, error) {
+	cmd := exec.Command("gh", "pr", "create", "--repo="+repo, "--head="+branch, "--base="+base, "--title="+title,
+		"--body-file=-")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1")
 	cmd.Stdin = strings.NewReader(body)
@@ -119,6 +168,19 @@ func removalPR(path, subject string, edited []byte, r policy.Removal, remote, ba
 	}
 	if !known {
 		return "", fmt.Errorf("--remote %q is not a remote of %s; `git remote` lists them", remote, top)
+	}
+	// The review opens where the branch goes: the push URL as git resolves
+	// it (pushurl, insteadOf, pushInsteadOf), never a repository gh would
+	// choose for itself, which in a fork's checkout is often the upstream.
+	pushURL, err := runGit(top, "remote", "get-url", "--push", "--", remote)
+	if err != nil {
+		return "", err
+	}
+	repo, ok := ghRepo(pushURL)
+	if !ok {
+		return "", fmt.Errorf("--remote %q pushes to %s, which names no repository gh can open a pull request in "+
+			"(https://HOST/OWNER/REPO, ssh://HOST/OWNER/REPO or HOST:OWNER/REPO); offboard with --write and open "+
+			"the review by hand", remote, withoutCredentials(pushURL))
 	}
 	rel, err := filepath.Rel(top, path)
 	if err != nil {
@@ -185,7 +247,7 @@ func removalPR(path, subject string, edited []byte, r policy.Removal, remote, ba
 	if _, err := runGit(work, "push", "--quiet", "--", remote, "HEAD:refs/heads/"+branch); err != nil {
 		return "", err
 	}
-	url, err = openPR(work, branch, base, title, body)
+	url, err = openPR(work, repo, branch, base, title, body)
 	if err != nil {
 		return "", fmt.Errorf("%s is pushed to %s, but the pull request did not open; open it against %s by "+
 			"hand: %w", branch, remote, base, err)

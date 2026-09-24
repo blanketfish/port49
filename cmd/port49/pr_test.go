@@ -13,7 +13,10 @@ import (
 )
 
 // gitRepo is a scratch repository holding the policy fixture, committed on
-// main, with a bare repository as its origin. Identity and signing are set
+// main, with a bare repository as its origin. origin's address is
+// ssh://example.test/o/p.git, as a GitHub remote's would be, and ssh is a
+// script that serves that one path from the bare repository, so the pull
+// request's repository is read from a real push URL. Identity and signing are set
 // in the repository, and the machine's global and system config are not
 // read (a global core.hooksPath would replace the remote's hooks), so the
 // test does not depend on the machine's git config.
@@ -27,6 +30,14 @@ func gitRepo(t *testing.T) (repo, remote, pol, inv string) {
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("HOME", t.TempDir())
 	repo, remote = filepath.Join(root, "policy"), filepath.Join(root, "remote.git")
+	ssh := filepath.Join(root, "ssh")
+	script := "#!/bin/sh\n[ \"${2#* }\" = \"'/o/p.git'\" ] || { echo \"ssh: no repository at $2\" >&2; exit 1; }\n" +
+		"sub=${2%% *}\nexec git \"${sub#git-}\" '" + remote + "'\n"
+	if err := os.WriteFile(ssh, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_SSH_COMMAND", ssh)
+	t.Setenv("GIT_SSH_VARIANT", "simple")
 	fixturePol, fixtureInv := policyFixture(t)
 	for _, args := range [][]string{{"init", "--quiet", "--bare", remote}, {"init", "--quiet", "-b", "main", repo}} {
 		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
@@ -41,7 +52,7 @@ func gitRepo(t *testing.T) (repo, remote, pol, inv string) {
 	}
 	for _, args := range [][]string{{"config", "user.email", "ci@example.test"}, {"config", "user.name", "ci"},
 		{"config", "commit.gpgsign", "false"}, {"add", "."}, {"commit", "--quiet", "-m", "policy"},
-		{"remote", "add", "origin", remote}, {"push", "--quiet", "origin", "main"}} {
+		{"remote", "add", "origin", "ssh://example.test/o/p.git"}, {"push", "--quiet", "origin", "main"}} {
 		if _, err := runGit(repo, args...); err != nil {
 			t.Fatal(err)
 		}
@@ -59,8 +70,8 @@ func TestGrantsRemoveOpensThePullRequest(t *testing.T) {
 	before := readFile(t, pol)
 	var asked []string
 	orig := openPR
-	openPR = func(dir, branch, base, title, body string) (string, error) {
-		asked = []string{branch, base, title, body}
+	openPR = func(dir, repo, branch, base, title, body string) (string, error) {
+		asked = []string{repo, branch, base, title, body}
 		return "https://example.test/policy/pull/7", nil
 	}
 	t.Cleanup(func() { openPR = orig })
@@ -69,8 +80,8 @@ func TestGrantsRemoveOpensThePullRequest(t *testing.T) {
 		&errb); code != 0 || out.String() != "https://example.test/policy/pull/7\n" {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
-	if len(asked) != 4 || asked[0] != "port49/offboard-ops" || asked[1] != "main" ||
-		asked[2] != "chore(policy): offboard ops" || !strings.Contains(asked[3], "1 grant row(s), the subject block") {
+	if len(asked) != 5 || asked[0] != "example.test/o/p" || asked[1] != "port49/offboard-ops" || asked[2] != "main" ||
+		asked[3] != "chore(policy): offboard ops" || !strings.Contains(asked[4], "1 grant row(s), the subject block") {
 		t.Fatalf("the pull request: %q", asked)
 	}
 	if !bytes.Equal(readFile(t, pol), before) {
@@ -107,7 +118,9 @@ func TestGrantsRemoveOpensThePullRequest(t *testing.T) {
 func TestThePullRequestIsCutFromTheBase(t *testing.T) {
 	repo, remote, pol, inv := gitRepo(t)
 	orig := openPR
-	openPR = func(dir, branch, base, title, body string) (string, error) { return "https://example.test/pull/8", nil }
+	openPR = func(dir, _, branch, base, title, body string) (string, error) {
+		return "https://example.test/pull/8", nil
+	}
 	t.Cleanup(func() { openPR = orig })
 	if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("unrelated\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -178,7 +191,7 @@ func TestAFailedStepLeavesTheCheckoutAlone(t *testing.T) {
 	repo, remote, pol, inv := gitRepo(t)
 	opened := 0
 	orig := openPR
-	openPR = func(dir, branch, base, title, body string) (string, error) {
+	openPR = func(dir, _, branch, base, title, body string) (string, error) {
 		opened++
 		return "", errors.New("gh: not logged in")
 	}
@@ -243,7 +256,7 @@ func TestAFailedStepLeavesTheCheckoutAlone(t *testing.T) {
 func TestThePullRequestRefusesWhatGitWouldMisread(t *testing.T) {
 	repo, _, pol, inv := gitRepo(t)
 	orig := openPR
-	openPR = func(dir, branch, base, title, body string) (string, error) {
+	openPR = func(dir, _, branch, base, title, body string) (string, error) {
 		t.Fatal("gh was run")
 		return "", nil
 	}
@@ -308,7 +321,7 @@ func TestWithoutCredentialsKeepsAURLWithoutOne(t *testing.T) {
 func TestASubjectThatCannotNameABranchIsRefusedFirst(t *testing.T) {
 	repo, _, pol, _ := gitRepo(t)
 	orig := openPR
-	openPR = func(dir, branch, base, title, body string) (string, error) {
+	openPR = func(dir, _, branch, base, title, body string) (string, error) {
 		t.Fatal("gh was run")
 		return "", nil
 	}
@@ -330,7 +343,7 @@ func TestAWorktreeLeftBehindIsSaid(t *testing.T) {
 	for _, ghFails := range []bool{false, true} {
 		repo, _, pol, inv := gitRepo(t)
 		orig := openPR
-		openPR = func(dir, branch, base, title, body string) (string, error) {
+		openPR = func(dir, _, branch, base, title, body string) (string, error) {
 			if _, err := runGit(repo, "worktree", "lock", "--", dir); err != nil {
 				t.Fatal(err)
 			}
@@ -352,6 +365,89 @@ func TestAWorktreeLeftBehindIsSaid(t *testing.T) {
 		}
 		if !ghFails && out.String() != "https://example.test/pull/9\n" {
 			t.Fatalf("the URL: %q", out.String())
+		}
+	}
+}
+
+// The pull request is opened in the repository the branch is pushed to, as
+// `git remote get-url --push` has it after pushurl and insteadOf, never in
+// one gh would pick for itself (in a fork's checkout, often the upstream). A
+// push URL that names no HOST/OWNER/REPO refuses --pr before git fetches.
+func TestThePullRequestGoesWhereTheBranchIsPushed(t *testing.T) {
+	repo, remote, pol, inv := gitRepo(t)
+	var opened []string
+	orig := openPR
+	openPR = func(dir, target, branch, base, title, body string) (string, error) {
+		opened = append(opened, target)
+		return "https://example.test/pull/10", nil
+	}
+	t.Cleanup(func() { openPR = orig })
+	for _, args := range [][]string{
+		{"remote", "add", "mirror", "https://example.test/m/p.git"},
+		{"config", "url." + remote + ".insteadOf", "https://example.test/m/p.git"},
+		{"remote", "add", "path", remote},
+		{"remote", "add", "file", "file://" + remote},
+		{"remote", "add", "elsewhere", "ssh://example.test/o/p.git"},
+		{"remote", "set-url", "--push", "elsewhere", remote},
+		{"remote", "add", "creds", "https://ci:ghp_s3cret@example.test/no-owner"},
+		{"remote", "add", "fetchpath", remote},
+		{"remote", "set-url", "--push", "fetchpath", "ssh://example.test/o/p.git"},
+	} {
+		if _, err := runGit(repo, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := checkout(t, repo)
+	for _, name := range []string{"mirror", "path", "file", "elsewhere", "creds"} {
+		var out, errb bytes.Buffer
+		if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops", "--pr",
+			"--remote", name}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "names no repository") ||
+			strings.Contains(errb.String(), "ghp_s3cret") {
+			t.Errorf("--remote %s: code %d %s", name, code, errb.String())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git", "FETCH_HEAD")); !os.IsNotExist(err) || len(opened) != 0 {
+		t.Fatalf("git fetched (%v) or gh ran (%q)", err, opened)
+	}
+	if after := checkout(t, repo); after != before {
+		t.Fatalf("the checkout changed:\n%s", after)
+	}
+	// Fetched from a path, pushed over ssh: the push URL names the repository.
+	var out, errb bytes.Buffer
+	if code := run([]string{"grants", "remove", "--policy", pol, "--inventory", inv, "--subject", "ops", "--pr",
+		"--remote", "fetchpath"}, &out, &errb); code != 0 || len(opened) != 1 || opened[0] != "example.test/o/p" {
+		t.Fatalf("code %d %q\n%s", code, opened, errb.String())
+	}
+}
+
+func TestGHRepoReadsWhatGitHubServes(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://github.com/o/p.git":                    "github.com/o/p",
+		"https://github.com/o/p":                        "github.com/o/p",
+		"https://github.com/o/p.git/":                   "github.com/o/p",
+		"https://x-access-token:t0k@github.com/o/p.git": "github.com/o/p",
+		"https://GHE.Example.test:8443/team/policy.git": "ghe.example.test/team/policy",
+		"ssh://git@github.com/o/p.git":                  "github.com/o/p",
+		"ssh://git@ssh.github.com:443/o/p.git":          "github.com/o/p",
+		"git@github.com:o/p.git":                        "github.com/o/p",
+		"git@github.com:o/p.git/":                       "github.com/o/p",
+		"github.com:o/p":                                "github.com/o/p",
+		"/srv/git/o/p.git":                              "",
+		"../remote.git":                                 "",
+		"file:///srv/o/p.git":                           "",
+		"git://github.com/o/p.git":                      "",
+		"https://github.com/o":                          "",
+		"https://github.com/o/p/q":                      "",
+		"https://github.com//p":                         "",
+		"https://github.com/o/..":                       "",
+		"git@github.com:/o/p.git":                       "",
+		"origin":                                        "",
+		"C:/repos/o/p":                                  "",
+		"https://-oProxyCommand=x/o/p":                  "",
+	} {
+		got, ok := ghRepo(in)
+		if got != want || ok != (want != "") {
+			t.Errorf("%q: got %q %v, want %q", in, got, ok, want)
 		}
 	}
 }
