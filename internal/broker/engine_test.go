@@ -114,3 +114,31 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 		t.Fatalf("%+v", it)
 	}
 }
+
+// A substitution value a device could read as another attribute — here an
+// inventory name carrying `=` — is refused at mint, by name, as the data's
+// fault rather than the broker's (engine.ErrSubstitution).
+func TestASessionReplyThatWouldCarryASeparatorIsRefusedAtMint(t *testing.T) {
+	f := newFixture(t, 8)
+	odd := admission.Device{Name: "sw=1", Platform: "arista_eos", Addresses: f.b.Devices["leaf1"].Addresses}
+	f.b.Devices[odd.Name] = odd
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	body := `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: admin, permit: ["**"], attributes: {all: ["note*{device}"]}}]
+subjects: [{name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pol, err := policy.Load(path, policy.Env{Devices: []admission.Device{odd}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.b.Policy = pol
+	resp := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["sw=1"]}`, ""))
+	if it := resp.Results[0]; it.Error != "attribute_unsafe" || it.Login != "" {
+		t.Fatalf("%+v", it)
+	}
+}

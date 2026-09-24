@@ -298,6 +298,7 @@ func (e *ItemError) Error() string {
 		"device_unconfigured":  "the broker's inventory does not configure this device",
 		"broker_error":         "the broker failed",
 		"attribute_too_long":   "a session attribute for this device is too long once filled in",
+		"attribute_unsafe":     "a session attribute for this device would contain a character port49 refuses (= or *, or a control character) once filled in",
 		"bad_request":          "the broker refused the request",
 		"idempotency_conflict": "the broker holds a different request under this request's key",
 	}[e.Code]

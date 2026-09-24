@@ -49,10 +49,11 @@ type Metrics struct {
 	// port49_broker_item_errors_total{error}: mint items the broker could not
 	// decide, by the API error code on the item — "device_unconfigured" (an
 	// inventory device with no platform), "broker_error" (a policy that
-	// compiled to a blob the daemon would refuse), or "attribute_too_long" (a
-	// session attribute the principal's own values push past 255 bytes). None
-	// is a decision, so none is in port49_decisions_total. The label is the
-	// code only.
+	// compiled to a blob the daemon would refuse), "attribute_too_long" (a
+	// session attribute the principal's own values push past 255 bytes), or
+	// "attribute_unsafe" (one they would fill with `=`, `*` or a control
+	// character). None is a decision, so none is in port49_decisions_total.
+	// The label is the code only.
 	BrokerItemErrors *prometheus.CounterVec
 	// port49_blob_cache_lookups_total{outcome}: the authorizer's per-replica
 	// blob cache, "hit" or "miss" (spec §5.1.1). A miss is one store read,

@@ -262,9 +262,9 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 	// the operator can be told, rather than there, where the device can only
 	// be refused.
 	//
-	// A value carrying a separator is refused the same way, as broker_error:
-	// the daemon would refuse the reply it builds (blob_unavailable), and the
-	// fix is the operator's, in the policy or the identity it names.
+	// A value carrying a separator is refused the same way (attribute_unsafe):
+	// the fault is in the data it fills in, not the broker, and the daemon
+	// would refuse the reply it builds (blob_unavailable).
 	_, err = res.Blob.SessionAttributes(engine.Values{Username: res.Username, Principal: principal, Device: name})
 	switch {
 	case errors.Is(err, engine.ErrAttributeTooLong):
@@ -273,8 +273,8 @@ func (b *Broker) mintOne(ctx context.Context, principal string, cred store.Crede
 			"a session attribute for this device is longer than 255 bytes once filled in; tell the operator"), nil
 	case err != nil:
 		log.Printf("broker: the session reply for %s on %q cannot carry a substitution: %v", principal, name, err)
-		return b.fault(name, "broker_error",
-			"a session attribute for this device cannot carry a value it substitutes; tell the operator"), nil
+		return b.fault(name, "attribute_unsafe", "a session attribute for this device would carry =, * or a "+
+			"control character once filled in; tell the operator"), nil
 	}
 	if err := b.putBlob(ctx, hash, body); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil

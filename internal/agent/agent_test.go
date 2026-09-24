@@ -601,6 +601,15 @@ func TestAnAttributeTooLongItemSaysWhy(t *testing.T) {
 	}
 }
 
+// attribute_unsafe is the broker refusing a session reply a substituted value
+// would break with `=`, `*` or a control character.
+func TestAnAttributeUnsafeItemSaysWhy(t *testing.T) {
+	err := &ItemError{Device: "leaf1", Code: "attribute_unsafe", Detail: "tell the operator"}
+	if !strings.Contains(err.Error(), "a character port49 refuses") || !strings.Contains(err.Error(), "leaf1") {
+		t.Fatalf("%v", err)
+	}
+}
+
 // An item with neither a verdict nor an error is a broker this agent does not
 // understand, and is an error rather than a silent empty answer.
 func TestAnItemWithNoVerdictIsAnError(t *testing.T) {
