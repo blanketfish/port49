@@ -4184,8 +4184,13 @@ for a check a set ships, which reads a method list or an authentication order: a
 may match any line, and its finding names the check by key and index,
 `platforms.arista_eos.config_checks[2]`, with its `says` redacted, never the line. A device-local
 account collides in any form the daemon reads as the served username — `NOC`, `CORP\noc`,
-`noc@corp`, a quoted name (§2) — and a Junos account under `protect:` or `inactive:` is read. port49 never logs into a device; this reads a file a compliance
-tool fetched.
+`noc@corp`, a quoted name (§2) — and a Junos account under `protect:` or `inactive:` is read.
+The check never reports a device clean when it looked for nothing (final review I4): where the
+adapter in force, resolved as the daemon resolves it, the set's generic adapter for a platform
+with none included, has no `local_accounts`, `device_config` or `config_checks`, it exits 2,
+`nothing checked: <platform> has no config checks`; where it lacks only `local_accounts`, or
+only the lines, it says which was not checked beside the summary. port49 never logs into a
+device; this reads a file a compliance tool fetched.
 
 **`port49 devices capabilities`** reports the `supports`-versus-`observed` matrix from §9.
 
