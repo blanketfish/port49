@@ -4,6 +4,7 @@ package lab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -320,7 +321,7 @@ func (l *lab) carriedEOSPair(t *testing.T, obs *strings.Builder) {
 	outs, err := l.loginWithin(reader, readerSecret, 150*time.Second, "show users detail")
 	users := ""
 	if err != nil {
-		users = "reader session refused: " + err.Error()
+		users = "reader " + loginFailure(err)
 	} else if len(outs) > 0 {
 		users = outs[0]
 	}
@@ -423,7 +424,7 @@ func (l *lab) carriedIOSXENoLevel7List(t *testing.T, obs *strings.Builder, d ada
 	outs, err := l.loginWithin(user, secret, 150*time.Second, "show privilege", "clear counters", "show version")
 	recs := l.drainRecords(off, 3*time.Second)
 	if err != nil {
-		fmt.Fprintf(obs, "operator's session refused: %v\n", err)
+		fmt.Fprintf(obs, "operator's %s\n", loginFailure(err))
 		return
 	}
 	fmt.Fprintf(obs, "Operator's reply `%s`, session `%s`, the commands typed in one pty session (IOS-XE runs one exec channel per connection):\n\n",
@@ -458,4 +459,15 @@ func carriedReply(s string) string {
 		return emptyDeviceReply
 	}
 	return s
+}
+
+// loginFailure says what a loginWithin error was: a session that opened and
+// then missed a command is not one the device refused (task 17 re-review,
+// parked), as adapterRowFrom reads it.
+func loginFailure(err error) string {
+	var missed *notObserved
+	if errors.As(err, &missed) {
+		return "session opened, then: " + oneLine(missed.Error())
+	}
+	return "session refused: " + oneLine(err.Error())
 }
