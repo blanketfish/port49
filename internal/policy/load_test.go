@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -128,7 +129,7 @@ const grantOK = "grants:\n  - {subject: s, scope: all_devices, roles: [r]}\n"
 // plan lifts it.
 func TestLoadRefusesByName(t *testing.T) {
 	for _, tt := range []struct{ name, yaml, want string }{
-		{"platform_set", "platform_set: 1.4.0\n" + roleOK + subjOK, "plan 5"},
+		{"a platform set this binary does not ship", "platform_set: 1.4.0\n" + roleOK + subjOK, "it ships 1.0.0"},
 		{"key_groups", "key_groups: []\n" + roleOK + subjOK, "inventory file"},
 		{"platforms", "platforms: {arista_eos: {}}\n" + roleOK + subjOK, "plan 5"},
 		{"a role's max_session_age", "roles:\n  - {name: r, max_session_age: 8h}\n" + subjOK, "plan 7"},
@@ -438,5 +439,23 @@ func TestAPlaceholderGoesOnlyInAnInertAttribute(t *testing.T) {
 		if _, err := Parse([]byte("roles:\n  - {name: r, attributes: {"+key+": [\"home-directory*/home/{username}\"]}}\n"+subjOK), env()); err != nil {
 			t.Errorf("%s: %v", key, err)
 		}
+	}
+}
+
+// A policy pins the platform set it renders with (spec §8). One that pins none
+// renders with 1.0.0, the first set, on every binary; a set this binary does
+// not ship is refused by name (TestLoadRefusesByName).
+func TestAPolicyPinsItsPlatformSet(t *testing.T) {
+	body := scopeOK + roleOK + subjOK + grantOK
+	if p := mustParse(t, body); p.PlatformSet() != platform.UnpinnedSet || p.PlatformSet() != "1.0.0" {
+		t.Fatalf("unpinned: %q", p.PlatformSet())
+	}
+	p := mustParse(t, "platform_set: 1.0.0\n"+body)
+	if p.PlatformSet() != "1.0.0" {
+		t.Fatalf("pinned: %q", p.PlatformSet())
+	}
+	want, _ := platform.Set("1.0.0")
+	if got := p.Dialect("cisco_iosxe"); !reflect.DeepEqual(got, want["cisco_iosxe"]) {
+		t.Fatalf("the pinned set's adapter: %+v", got)
 	}
 }

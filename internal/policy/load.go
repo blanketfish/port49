@@ -37,8 +37,8 @@ type Env struct {
 	// Devices is the inventory: the file inventory the daemon admits from,
 	// until plan 6's bundle.
 	Devices []admission.Device
-	// Dialects replaces the built-in platform table when non-nil. Tests use it;
-	// plan 5's layered adapters will too.
+	// Dialects replaces platforms of the pinned set when non-nil: tests use
+	// it to stand a platform up with other behaviour.
 	Dialects map[string]platform.Dialect
 	// EnableUsernames is config's resolved table (config.Config); a platform
 	// with no entry is `principal`.
@@ -53,6 +53,11 @@ type Policy struct {
 	// Bundle names this policy on every blob and record: the sha256 of the
 	// file's bytes, until plan 6 publishes versioned bundles (spec §5.7).
 	Bundle string
+
+	// set is the platform set the policy pins (spec §8), and adapters its
+	// platforms: the built-in set, Env.Dialects over it.
+	set      string
+	adapters map[string]platform.Dialect
 
 	levels  []string          // the declared ordering, lowest first
 	parents map[string]string // level → parent, for rendering
@@ -196,7 +201,7 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 			"everything after it, or merge it into the first document")
 	}
 	p := &Policy{Bundle: engine.HashOf(raw), env: env}
-	for _, step := range []func(file) error{p.buildLevels, p.buildRoles, p.buildScopes, p.buildSubjects,
+	for _, step := range []func(file) error{p.buildPlatforms, p.buildLevels, p.buildRoles, p.buildScopes, p.buildSubjects,
 		p.buildGrants, p.checkMinters, p.buildTests, p.buildAcknowledgments} {
 		if err := step(f); err != nil {
 			return nil, err
@@ -216,17 +221,14 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 // carries two of them.
 func refusedKeys(raw []byte) error {
 	var loose struct {
-		PlatformSet any              `yaml:"platform_set"`
-		KeyGroups   any              `yaml:"key_groups"`
-		Platforms   any              `yaml:"platforms"`
-		Roles       []map[string]any `yaml:"roles"`
+		KeyGroups any              `yaml:"key_groups"`
+		Platforms any              `yaml:"platforms"`
+		Roles     []map[string]any `yaml:"roles"`
 	}
 	if err := yaml.Unmarshal(raw, &loose); err != nil {
 		return nil // the strict decode reports it, with a line number
 	}
 	switch {
-	case loose.PlatformSet != nil:
-		return errors.New("platform_set: pinning the platform set is plan 5's; remove the key until it lands")
 	case loose.KeyGroups != nil:
 		return errors.New("key_groups: key groups live in the inventory file (inventory_file) until plan 6 " +
 			"moves them to the policy repository; move the block there")
@@ -245,6 +247,29 @@ func refusedKeys(raw []byte) error {
 	}
 	return nil
 }
+
+// buildPlatforms resolves the platform set the policy pins, or UnpinnedSet
+// where it pins none (spec §8): a binary upgrade never changes what a policy
+// renders, and a set this binary does not ship is refused by name.
+func (p *Policy) buildPlatforms(f file) error {
+	p.set = f.PlatformSet
+	if p.set == "" {
+		p.set = platform.UnpinnedSet
+	}
+	set, ok := platform.Set(p.set)
+	if !ok {
+		return fmt.Errorf("platform_set: %s is not a set this binary ships; it ships %s. Pin one of those, or run "+
+			"a binary that ships %s (spec §8)", p.set, strings.Join(platform.Sets(), ", "), p.set)
+	}
+	for name, d := range p.env.Dialects {
+		set[name] = d
+	}
+	p.adapters = set
+	return nil
+}
+
+// PlatformSet is the platform set the policy renders with.
+func (p *Policy) PlatformSet() string { return p.set }
 
 func (p *Policy) buildLevels(f file) error {
 	p.parents = map[string]string{}
@@ -855,15 +880,10 @@ func (p *Policy) device(name string) (admission.Device, bool) {
 	return admission.Device{}, false
 }
 
-// platforms is every dialect this policy can meet: the built-in table with
-// the environment's own table over it.
-func (p *Policy) platforms() map[string]platform.Dialect {
-	out := platform.Dialects()
-	for name, d := range p.env.Dialects {
-		out[name] = d
-	}
-	return out
-}
+// platforms is every dialect this policy can meet: its pinned set, the
+// environment's own table over it. The map is the policy's own; callers read
+// it and never write it.
+func (p *Policy) platforms() map[string]platform.Dialect { return p.adapters }
 
 // checkClasses refuses a rule naming a class no platform defines. That is
 // the policy's own error, a typo, rather than a device's: no inventory could
@@ -930,14 +950,13 @@ func (p *Policy) privLvl(dialect platform.Dialect, level string) (uint8, bool) {
 	return 0, false
 }
 
-// dialect is the platform's dialect under this policy's environment.
+// dialect is the platform's dialect in this policy's set, or the generic
+// adapter for a platform the set has none for (spec §8, "Unknown platforms").
 func (p *Policy) dialect(name string) platform.Dialect {
-	if p.env.Dialects != nil {
-		if d, ok := p.env.Dialects[name]; ok {
-			return d
-		}
+	if d, ok := p.adapters[name]; ok {
+		return d
 	}
-	d, _ := platform.DialectFor(name)
+	d, _ := platform.DialectFor("")
 	return d
 }
 

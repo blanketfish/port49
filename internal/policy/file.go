@@ -11,6 +11,7 @@ import (
 // declared: the decoder refuses one it does not know rather than ignoring it,
 // because an ignored key is a policy that reads one way and runs another.
 type file struct {
+	PlatformSet     string        `yaml:"platform_set"`
 	PrivilegeLevels []fileLevel   `yaml:"privilege_levels"`
 	Scopes          []fileScope   `yaml:"scopes"`
 	Roles           []fileRole    `yaml:"roles"`

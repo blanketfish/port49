@@ -124,6 +124,9 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	now := time.Now()
+	// The set the policy renders with, first: a reviewer reading a rendering
+	// change needs to know which adapters produced it (spec §8).
+	fmt.Fprintf(stdout, "platform_set: %s\n", p.PlatformSet())
 	// A quarantined device is reported, not a failure of its own: the policy
 	// loaded, and decision 20 exists so one device cannot block the rest. A
 	// test on it fails in the ordinary way, as device_quarantined. An entry an

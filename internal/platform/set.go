@@ -11,9 +11,15 @@ import (
 	"github.com/rhwendt/port49/platforms"
 )
 
-// DefaultSet is the platform set this build renders with: the one a policy
-// that pins none gets (spec §8, "the platform set is pinned").
+// DefaultSet is the newest set this build ships: what `port49 platform`
+// shows and exports unless asked for another.
 const DefaultSet = "1.0.0"
+
+// UnpinnedSet is the set a policy that pins none renders with, and it never
+// moves: 1.0.0 is the first set, so a policy written before pinning existed
+// renders the same on every later binary (spec §8, "the platform set is
+// pinned"). A policy moves forward only by pinning a newer set.
+const UnpinnedSet = "1.0.0"
 
 // sets is every built-in platform set, by version, parsed and validated once.
 // An embedded file that does not load is a build defect, never an operator's

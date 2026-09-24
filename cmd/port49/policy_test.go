@@ -105,11 +105,13 @@ func TestPolicyToolsExitTwoOnAUsageError(t *testing.T) {
 }
 
 // `port49 policy test` passes a policy whose tests pass, and fails one whose
-// test does not, naming it.
+// test does not, naming it. It says first which platform set the policy
+// renders with (spec §8).
 func TestPolicyTestIsACIGate(t *testing.T) {
 	pol, inv := policyFixture(t)
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.HasPrefix(out.String(), "platform_set: 1.0.0\n") ||
 		!strings.Contains(out.String(), "PASS noc on leaf-01: \"reload\" -> deny no_rule_matched") ||
 		!strings.Contains(out.String(), "2 tests, 0 failed; 0 shadowed denies, 0 unacknowledged") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
