@@ -1533,6 +1533,120 @@ func (l *lab) login(user, password string, commands ...string) ([]string, error)
 	return outs, nil
 }
 
+// loginWithin is login with a deadline on each command: a channel the device
+// never answers is closed at per, and its output is what arrived plus a note
+// saying so, rather than a run that waits forever. The first NX-OS run of
+// TestAdapterReplies hung for 76 minutes on an exec channel the device opened
+// no command on. If closing the channel does not free it within 10s, the
+// whole connection is closed and the commands after it are reported not run.
+func (l *lab) loginWithin(user, password string, per time.Duration, commands ...string) ([]string, error) {
+	if l.p.name == "cisco_iosxe" {
+		return l.ptyCommands(user, password, per, commands...)
+	}
+	c, err := l.dial(user, password, 45*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	var outs []string
+	for i, cmd := range commands {
+		var buf syncBuf
+		done := make(chan error, 1)
+		var s *ssh.Session
+		var smu sync.Mutex
+		go func() {
+			sess, err := c.NewSession()
+			if err != nil {
+				done <- err
+				return
+			}
+			smu.Lock()
+			s = sess
+			smu.Unlock()
+			sess.Stdout, sess.Stderr = &buf, &buf
+			_ = sess.Run(cmd)
+			sess.Close()
+			done <- nil
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				return outs, err
+			}
+			outs = append(outs, buf.String())
+			continue
+		case <-time.After(per):
+		}
+		smu.Lock()
+		if s != nil {
+			s.Close()
+		}
+		smu.Unlock()
+		select {
+		case <-done:
+			outs = append(outs, buf.String()+fmt.Sprintf("\n(no end of output within %v; the channel was closed)", per))
+			continue
+		case <-time.After(10 * time.Second):
+		}
+		c.Close()
+		outs = append(outs, buf.String()+fmt.Sprintf("\n(no end of output within %v, and closing the channel "+
+			"did not free it; the connection was closed)", per))
+		return outs, fmt.Errorf("%q did not finish within %v and the connection had to be closed; %d command(s) "+
+			"after it were not run", cmd, per, len(commands)-i-1)
+	}
+	return outs, nil
+}
+
+// ptyCommands is loginWithin for IOS-XE: the C8000V 17.13.01a runs one exec
+// channel per SSH connection and answers the second with EOF (this task's
+// first IOS-XE pass), so each command is typed at the prompt of one pty
+// session instead, paging off first. A `[confirm]` is answered `n`: the
+// command's authorization has already happened by then. A command that
+// reaches configuration mode is followed by `end`. Each output is the
+// command's reply without its echo or the prompt after it.
+func (l *lab) ptyCommands(user, password string, per time.Duration, commands ...string) ([]string, error) {
+	c, err := l.sshCLI(user, password)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	prompts := []string{l.p.node + "#", l.p.node + ">"}
+	if _, err := c.expect(60*time.Second, prompts...); err != nil {
+		return nil, err
+	}
+	if _, err := c.sendExpect("terminal length 0", per, prompts...); err != nil {
+		return nil, err
+	}
+	// A command that enters configuration mode ends at the configuration
+	// prompt, and `end` leaves it again so the next command runs in exec.
+	cfg := l.p.node + "(config"
+	var outs []string
+	for _, cmd := range commands {
+		out, err := c.sendExpect(cmd, per, append([]string{"[confirm]", cfg}, prompts...)...)
+		if err == nil && strings.Contains(out, "[confirm]") {
+			var more string
+			more, err = c.sendExpect("n", per, prompts...)
+			out += more
+		}
+		if err == nil && strings.Contains(out, cfg) {
+			_, err = c.sendExpect("end", per, prompts...)
+		}
+		lines := strings.Split(strings.ReplaceAll(out, "\r", ""), "\n")
+		if len(lines) > 0 {
+			lines = lines[1:]
+		}
+		for len(lines) > 0 && (strings.TrimSpace(lines[len(lines)-1]) == "" ||
+			strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), l.p.node)) {
+			lines = lines[:len(lines)-1]
+		}
+		outs = append(outs, strings.Join(lines, "\n"))
+		if err != nil {
+			return outs, fmt.Errorf("%q: %w", cmd, err)
+		}
+	}
+	return outs, nil
+}
+
 // holdSession opens an interactive shell with a pty and holds it idle for d.
 // That is the session shape a WATCHDOG is sent for: a logged-in operator who is
 // not typing.

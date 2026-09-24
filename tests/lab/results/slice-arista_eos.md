@@ -1,6 +1,6 @@
 # slice — arista_eos
 
-- **Date measured:** 2026-09-23
+- **Date measured:** 2026-09-24
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.31.2F (image tagged 4.32.2F) (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
@@ -13,36 +13,36 @@ The vertical slice end to end: an operator's client certificate, validated by th
 
 ## Observation
 
-Two `port49 token leaf1` calls over one `port49 login` session minted two different tokens for principal `user:alice@slice.port49.test`, username `slice01`, each on its own `mint` record naming blob `sha256:0a2f7063497603e199be3811160b65d706ac85aa115aa09a38d9db1df3433fd5`. The `blob` event carried it:
+Two `port49 token leaf1` calls over one `port49 login` session minted two different tokens for principal `user:alice@slice.port49.test`, username `slice01`, each on its own `mint` record naming blob `sha256:72f97decb4b90934b5ebee634382b6e2892fc68e2c4ea4be18df6ba3a29c35a5`. The `blob` event carried it:
 
 ```json
-{"attributes":["priv-lvl=15"],"deny":["show hostname"],"permit":["**"],"platform":"arista_eos","privilege":15}
+{"attributes":["priv-lvl=15","roles=network-admin"],"bundle":"sha256:7dab7395f0b92032bb037eda78b4acf24108412deb1ea390657fdd46e094bb0b","classes":{},"normalize":{"expands_abbreviations":true,"pipe_authorized":false,"pipe_token":"|","strip_cr":true},"pipe":["begin **","count","exclude **","include **","json","no-more","section **"],"platform":"arista_eos","privilege":"admin","rules":[{"role":"slice_denies","rule":"show hostname","verdict":"deny"},{"role":"slice_denies","rule":"show users","verdict":"deny"},{"role":"network_admin","rule":"**","verdict":"permit"}],"version":2}
 ```
 
 Every record for `slice01` in the run, in order (tokens appear as the hash the log carries):
 
 | event | verdict | reason | ctx_id | port | credential_sha256 / vector |
 |---|---|---|---|---|---|
-| redeem | permit | token_redeemed | `AYYDCHWLFO42ILQR` | `ssh` | `afd34242d710…` |
-| account |  |  | `AYYDCHWLFO42ILQR` | `ssh` |  |
-| authorize_session | permit | context_matched | `AYYDCHWLFO42ILQR` | `ssh` |  |
-| authorize_command | permit | permit_dominates | `AYYDCHWLFO42ILQR` | `ssh` | `show version` |
-| account |  |  | `AYYDCHWLFO42ILQR` | `ssh` |  |
-| authorize_session | permit | context_matched | `AYYDCHWLFO42ILQR` | `ssh` |  |
-| authorize_command | deny | no_permit_dominates_deny | `AYYDCHWLFO42ILQR` | `ssh` | `show hostname` |
-| account |  |  | `AYYDCHWLFO42ILQR` | `ssh` |  |
-| redeem | permit | token_redeemed | `AYYDCHWLFO42ILQR` | `ssh` | `fce133545f57…` |
-| account |  |  | `AYYDCHWLFO42ILQR` | `ssh` |  |
-| authorize_session | permit | context_matched | `AYYDCHWLFO42ILQR` | `ssh` |  |
-| authorize_command | permit | permit_dominates | `AYYDCHWLFO42ILQR` | `ssh` | `show version` |
-| account |  |  | `AYYDCHWLFO42ILQR` | `ssh` |  |
+| redeem | permit | token_redeemed | `NVP66G2VBJJADRUZ` | `ssh` | `22c303f283f5…` |
+| account |  |  | `NVP66G2VBJJADRUZ` | `ssh` |  |
+| authorize_session | permit | context_matched | `NVP66G2VBJJADRUZ` | `ssh` |  |
+| authorize_command | permit | permit_dominates | `NVP66G2VBJJADRUZ` | `ssh` | `show version` |
+| account |  |  | `NVP66G2VBJJADRUZ` | `ssh` |  |
+| authorize_session | permit | context_matched | `NVP66G2VBJJADRUZ` | `ssh` |  |
+| authorize_command | deny | no_permit_dominates_deny | `NVP66G2VBJJADRUZ` | `ssh` | `show hostname` |
+| account |  |  | `NVP66G2VBJJADRUZ` | `ssh` |  |
+| redeem | permit | token_redeemed | `NVP66G2VBJJADRUZ` | `ssh` | `b99a6b3a10db…` |
+| account |  |  | `NVP66G2VBJJADRUZ` | `ssh` |  |
+| authorize_session | permit | context_matched | `NVP66G2VBJJADRUZ` | `ssh` |  |
+| authorize_command | permit | permit_dominates | `NVP66G2VBJJADRUZ` | `ssh` | `show version` |
+| account |  |  | `NVP66G2VBJJADRUZ` | `ssh` |  |
 
-Both logins redeemed into ctx_id `AYYDCHWLFO42ILQR`: the second window joined the first's context (spec §5.6).
+Both logins redeemed into ctx_id `NVP66G2VBJJADRUZ`: the second window joined the first's context (spec §5.6).
 
-The device's reply to `show hostname`, which only the blob denies (`tests/lab/slice/policy.yaml`); the decision record's server_msg was `port49: denied by policy; see 'port49 explain'`:
+The device's reply to `show hostname`, which only the blob denies (`tests/lab/slice/policy.yaml`); the decision record's server_msg was `port49: denied by slice_denies (show hostname) - see 'port49 explain'`:
 
 ```
 > show hostname
-% Authorization denied for command 'show hostname': port49: denied by policy; see 'port49 explain' at line 1
+% Authorization denied for command 'show hostname': port49: denied by slice_denies (show hostname) - see 'port49 explain' at line 1
 ```
 
