@@ -218,6 +218,14 @@ the sink if it lands later — must give the spool a sink interface that returns
 the spool must not advance `drainOffset` past a refusal. Without both, the durability contract
 is enforced up to the last hop and not across it.
 
+**Carried from the 2026-09-24 lab branch:** `author.Decision.Error`, which makes
+`Handler.Handle` answer a refusal ERROR, exists only for the lab's fault switch
+(`lab.fault_file`, `author.LabFault`). When this plan replaces `author.Lab`, the real `Authorizer`
+must never set it — a store outage stays FAIL `store_unavailable`, because an ERROR at command
+authorization permits everything under IOS-XE `if-authenticated` and falls through to local RBAC
+on the N9Kv (`tests/lab/results/L4-error-*.md`). Remove the field with `author.Lab`, or keep it and
+the fault switch lab-only and say so.
+
 **Carried from plan 3:**
 
 - **Compare the blob's `Platform` with the device's platform at authorization.** Unreachable

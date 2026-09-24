@@ -25,8 +25,13 @@ type Decision struct {
 	Reason     decision.Reason
 	ServerMsg  string
 	Attributes []string // session only, e.g. "priv-lvl=15"
-	// Error answers a refusal ERROR rather than FAIL. Only the lab's fault
-	// switch sets it (LabFault); it is ignored on a permit.
+	// Error answers a refusal ERROR rather than FAIL. It is lab-only: the
+	// lab's fault switch (LabFault) is the only thing that may set it, and it
+	// is ignored on a permit. A production Authorizer MUST leave it false —
+	// a store outage is FAIL `store_unavailable` (plan 4's ruling), because an
+	// ERROR here authorizes every command on an IOS-XE `if-authenticated`
+	// list and hands the N9Kv to local RBAC (tests/lab/results/L4-error-*.md).
+	// Plan 4 removes it with author.Lab or keeps it lab-only.
 	Error bool
 }
 
