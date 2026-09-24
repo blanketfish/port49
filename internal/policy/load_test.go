@@ -138,8 +138,6 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a case-sensitive group", "roles:\n  - {name: r, deny: [\"interface /(?s-i:^Mgmt)/\"]}\n" + subjOK, "case-insensitively"},
 		{"an unanchored deny pattern", "roles:\n  - {name: r, deny: [\"interface /Management/\"]}\n" + subjOK,
 			"deny \"interface /Management/\": /Management/: the platform"},
-		{"a deny pattern whose split cannot be read", "roles:\n  - {name: r, deny: [\"interface /^Gig[a-z]*[0-9]+$/\"]}\n" + subjOK,
-			"on cisco_iosxe, deny \"interface /^Gig[a-z]*[0-9]+$/\": /^Gig[a-z]*[0-9]+$/: the platform sends an interface name and its index as two arguments (spec §3 rule 5)"},
 		{"a class no platform defines", "roles:\n  - {name: r, permit: [\"interface @uplinks\"]}\n" + subjOK, "which no platform defines"},
 		{"a ceiling no platform numbers", scopeOK + roleOK + subjOK +
 			"grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: operator}\n", "no priv-lvl number on any platform"},

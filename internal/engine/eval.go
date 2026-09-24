@@ -28,14 +28,28 @@ type cterm struct {
 	kind Kind
 	word string
 	res  []*regexp.Regexp // a regex term's one pattern, or a class's patterns
-	// index is a split's tail (splits): it takes only an argument shaped as
-	// an interface index.
-	index bool
+	// joinHead and joinTail are a deny term in its split shape (compileRule):
+	// the head takes any argument, and the tail an index-shaped one the term
+	// matches joined to the argument before it. Both keep the term's rank.
+	joinHead, joinTail bool
 }
 
-// takes reports whether a regex or class term matches arg.
-func (t cterm) takes(arg string) bool {
-	return anyMatch(t.res, arg) && (!t.index || indexShape.MatchString(arg))
+// takes reports whether a term matches arg as a deny reads it: the word
+// case-folded, or as an abbreviation where abbrev, or the patterns.
+func (t cterm) takes(arg string, abbrev bool) bool {
+	switch t.kind {
+	case Any, Rest:
+		return true
+	case Word:
+		return strings.EqualFold(t.word, arg) || (abbrev && abbreviates(arg, t.word))
+	}
+	return anyMatch(t.res, arg)
+}
+
+// joins reports whether a split tail matches arg after prev: arg is an index
+// and the term matches the two joined.
+func (t cterm) joins(prev, arg string, abbrev bool) bool {
+	return indexShape.MatchString(arg) && t.takes(prev+arg, abbrev)
 }
 
 // Compile readies b for evaluation. It fails only where Decode would have, so a
@@ -62,18 +76,18 @@ func Compile(b Blob) (*Program, error) {
 	return p, nil
 }
 
-// compileRule compiles one rule: the rule as written and, for a deny on a
-// platform that splits interface names, one sibling per way of splitting it
-// (splits). A deny's regex and class patterns are widened as the dialect n
-// calls for (denyPatterns); a permit is never widened.
+// compileRule compiles one rule. A deny's regex and class patterns are widened
+// as the dialect n calls for (denyPatterns); a permit is never widened. On a
+// platform that splits interface names, a deny compiles to the rule as written
+// and one shape per combination of its terms split (joinable), each covering
+// the name and the index as two positions.
 func compileRule(verdict, rule, role string, classes map[string][]string, n Normalize) ([]compiled, error) {
 	terms, err := ParseRule(rule)
 	if err != nil {
 		return nil, err
 	}
 	canon := CanonicalRule(rule)
-	// Each term's shapes: the term as written, then each split of it.
-	shapes := make([][][]cterm, 0, len(terms))
+	out := []compiled{{verdict: verdict, rule: canon, role: role}}
 	for _, t := range terms {
 		ct := cterm{kind: t.Kind, word: t.Text}
 		for _, pat := range termPatterns(t, classes) {
@@ -91,32 +105,18 @@ func compileRule(verdict, rule, role string, classes map[string][]string, n Norm
 				ct.res = append(ct.res, re)
 			}
 		}
-		shape := [][]cterm{{ct}}
-		if verdict == Deny {
-			ss, err := splits(t, classes, n)
-			if err != nil {
-				return nil, fmt.Errorf("deny %q: %w", canon, err)
-			}
-			for _, sp := range ss {
-				pair, err := sp.terms()
-				if err != nil {
-					return nil, err
-				}
-				shape = append(shape, pair)
-			}
+		shapes := [][]cterm{{ct}}
+		if verdict == Deny && n.SplitsInterfaceNames && joinable(ct) {
+			head, tail := ct, ct
+			head.joinHead, tail.joinTail = true, true
+			shapes = append(shapes, []cterm{head, tail})
 		}
-		shapes = append(shapes, shape)
-	}
-	// Every combination of shapes is one rule; the first is the rule as
-	// written.
-	out := []compiled{{verdict: verdict, rule: canon, role: role}}
-	for _, shape := range shapes {
-		if len(out)*len(shape) > maxBranches {
-			return nil, fmt.Errorf("deny %q: it splits more than %d ways; write it as one rule per interface", canon, maxBranches)
+		if len(out)*len(shapes) > maxBranches {
+			return nil, fmt.Errorf("deny %q splits more than %d ways; write it as more than one rule", canon, maxBranches)
 		}
 		var next []compiled
 		for _, c := range out {
-			for _, ts := range shape {
+			for _, ts := range shapes {
 				next = append(next, compiled{verdict: verdict, rule: canon, role: role,
 					terms: append(slices.Clone(c.terms), ts...)})
 			}
@@ -126,22 +126,16 @@ func compileRule(verdict, rule, role string, classes map[string][]string, n Norm
 	return out, nil
 }
 
-// terms compiles a split into the two terms it matches as. A word splits into
-// two words; a pattern into two patterns of a regex's rank, whose tail takes
-// only an index.
-func (sp split) terms() ([]cterm, error) {
-	if sp.word {
-		return []cterm{{kind: Word, word: sp.head}, {kind: Word, word: sp.tail}}, nil
+// joinable reports whether a term may match a name and an index joined: a
+// class or regex may, and a word that ends in an index.
+func joinable(t cterm) bool {
+	switch t.kind {
+	case Class, Regex:
+		return true
+	case Word:
+		return len(splitsOf(t.word)) > 0
 	}
-	head, err := compileTerm(sp.head)
-	if err != nil {
-		return nil, err
-	}
-	tail, err := compileTerm(sp.tail)
-	if err != nil {
-		return nil, err
-	}
-	return []cterm{{kind: Regex, res: []*regexp.Regexp{head}}, {kind: Regex, res: []*regexp.Regexp{tail}, index: true}}, nil
+	return false
 }
 
 // match reports whether the rule matches the whole vector and, when it does,
@@ -179,15 +173,20 @@ func (c compiled) match(vector []string, abbrev bool) ([]int, bool) {
 		if c.verdict == Deny {
 			trimmed = strings.TrimSpace(arg)
 		}
-		switch t.kind {
-		case Any:
-		case Word:
-			if !strings.EqualFold(t.word, arg) && !strings.EqualFold(t.word, trimmed) &&
-				!(abbrev && abbreviates(trimmed, t.word)) {
+		switch {
+		case t.joinHead:
+			// The tail decides, with this argument joined to its own.
+		case t.joinTail:
+			if !t.joins(vector[i-1], arg, false) && !t.joins(strings.TrimSpace(vector[i-1]), trimmed, abbrev) {
 				return nil, false
 			}
-		case Class, Regex:
-			if !t.takes(arg) && !t.takes(trimmed) {
+		case t.kind == Any:
+		case t.kind == Word:
+			if !strings.EqualFold(t.word, arg) && !t.takes(trimmed, abbrev) {
+				return nil, false
+			}
+		default:
+			if !t.takes(arg, false) && !t.takes(trimmed, false) {
 				return nil, false
 			}
 		}

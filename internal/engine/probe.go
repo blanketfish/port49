@@ -123,8 +123,12 @@ func walkProbes(rules []probeRule, empty bool) [][]string {
 		rep := map[string]string{}
 		for _, c := range cands[depth] {
 			var keep []int
+			prev := ""
+			if depth > 0 {
+				prev = prefix[depth-1]
+			}
 			for _, ri := range alive {
-				if rules[ri].matchesAt(depth, c) {
+				if rules[ri].matchesAt(depth, prev, c) {
 					keep = append(keep, ri)
 				}
 			}
@@ -161,6 +165,24 @@ func candidates(rules []probeRule, i int) []string {
 			continue
 		}
 		t := r.c.terms[i]
+		if t.joinHead || t.joinTail {
+			// A split term is tried as each name and index its joined
+			// candidates divide into.
+			joined := []string{t.word}
+			if t.kind != Word {
+				joined = witnesses(t.res)
+			}
+			for _, w := range joined {
+				for _, sp := range splitsOf(w) {
+					if t.joinHead {
+						words[sp[0]] = true
+					} else {
+						words[sp[1]] = true
+					}
+				}
+			}
+			continue
+		}
 		switch t.kind {
 		case Regex, Class:
 			for _, re := range t.res {
@@ -201,6 +223,17 @@ func sortedSet(set map[string]bool) []string {
 		out = append(out, w)
 	}
 	slices.Sort(out)
+	return out
+}
+
+// witnesses is one argument per pattern that has one.
+func witnesses(res []*regexp.Regexp) []string {
+	var out []string
+	for _, re := range res {
+		if w, ok := witness(re); ok {
+			out = append(out, w)
+		}
+	}
 	return out
 }
 
@@ -276,10 +309,10 @@ func endsAt(rules []probeRule, alive []int, n int) bool {
 }
 
 // matchesAt reports whether the rule, alive so far, still matches with arg at
-// position i, exactly as compiled.match reads it: a deny also compares the
-// argument trimmed and, where abbrev, as an abbreviation; a permit compares it
-// only as received.
-func (r probeRule) matchesAt(i int, arg string) bool {
+// position i after prev, exactly as compiled.match reads it: a deny also
+// compares the argument trimmed and, where abbrev, as an abbreviation, and a
+// split tail joined to prev; a permit compares it only as received.
+func (r probeRule) matchesAt(i int, prev, arg string) bool {
 	if i >= r.fixed {
 		return r.rest
 	}
@@ -288,14 +321,17 @@ func (r probeRule) matchesAt(i int, arg string) bool {
 		trimmed = strings.TrimSpace(arg)
 	}
 	t := r.c.terms[i]
-	switch t.kind {
-	case Any:
+	switch {
+	case t.joinHead:
 		return true
-	case Word:
-		return strings.EqualFold(t.word, arg) || strings.EqualFold(t.word, trimmed) ||
-			(r.abbrev && abbreviates(trimmed, t.word))
+	case t.joinTail:
+		return t.joins(prev, arg, false) || t.joins(strings.TrimSpace(prev), trimmed, r.abbrev)
+	case t.kind == Any:
+		return true
+	case t.kind == Word:
+		return strings.EqualFold(t.word, arg) || t.takes(trimmed, r.abbrev)
 	default:
-		return t.takes(arg) || t.takes(trimmed)
+		return t.takes(arg, false) || t.takes(trimmed, false)
 	}
 }
 
@@ -368,7 +404,7 @@ func meets(pm, d compiled, abbrev bool) bool {
 		return false
 	}
 	for i := 0; i < max(pf, df); i++ {
-		if meet, _ := overlap(termAt(pm.terms, pf, i), termAt(d.terms, df, i), abbrev); !meet {
+		if meet, _ := overlapAt(pm.terms, pf, d.terms, df, i, abbrev); !meet {
 			return false
 		}
 	}

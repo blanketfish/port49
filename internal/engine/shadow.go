@@ -87,7 +87,7 @@ func overrides(pm, d compiled, abbrev bool) (ok, possible bool) {
 	strict := false
 	for i := 0; i < n; i++ {
 		a, b := termAt(pm.terms, pf, i), termAt(d.terms, df, i)
-		meet, maybe := overlap(a, b, abbrev)
+		meet, maybe := overlapAt(pm.terms, pf, d.terms, df, i, abbrev)
 		if !meet {
 			return false, false
 		}
@@ -135,7 +135,7 @@ func overlap(a, b cterm, abbrev bool) (meet, possible bool) {
 		// The permit's word matches every case-fold of itself, and a pattern
 		// compiles case-insensitive, so testing the literal tests them all.
 		// A policy refuses a deny regex that turns that off (spec §4).
-		return b.takes(a.word), false
+		return anyMatch(b.res, a.word), false
 	case b.kind == Word:
 		if anyMatch(a.res, b.word) {
 			return true, false
@@ -152,6 +152,59 @@ func overlap(a, b cterm, abbrev bool) (meet, possible bool) {
 		return true, false
 	}
 	return true, true
+}
+
+// overlapAt is overlap at position i of a permit's terms and a deny's, where
+// a deny term in its split shape is read as a pair: its head meets anything,
+// and its tail meets the permit's two terms there when some name and index
+// they take joins to what the deny's term takes.
+func overlapAt(pterms []cterm, pf int, dterms []cterm, df int, i int, abbrev bool) (meet, possible bool) {
+	a, b := termAt(pterms, pf, i), termAt(dterms, df, i)
+	switch {
+	case b.joinHead:
+		return true, false
+	case b.joinTail:
+		return joinOverlap(termAt(pterms, pf, i-1), a, b, abbrev)
+	}
+	return overlap(a, b, abbrev)
+}
+
+// joinOverlap decides whether some name the permit term h takes and some
+// index the permit term x takes join to what the deny's split term t takes. A
+// deny word lists its own names and indexes, and two permit words are one
+// candidate; any other pair turns on two patterns and is only possible.
+func joinOverlap(h, x, t cterm, abbrev bool) (meet, possible bool) {
+	if h.kind == Word && x.kind == Word {
+		return t.joins(h.word, x.word, abbrev), false
+	}
+	if t.kind != Word {
+		return true, true
+	}
+	joined := []string{t.word}
+	if abbrev {
+		for k := 1; k < len(t.word); k++ {
+			joined = append(joined, t.word[:k])
+		}
+	}
+	for _, w := range joined {
+		for _, sp := range splitsOf(w) {
+			if permitTakes(h, sp[0]) && permitTakes(x, sp[1]) {
+				return true, false
+			}
+		}
+	}
+	return false, false
+}
+
+// permitTakes reports whether a permit's term matches arg as received.
+func permitTakes(t cterm, arg string) bool {
+	switch t.kind {
+	case Any, Rest:
+		return true
+	case Word:
+		return strings.EqualFold(t.word, arg)
+	}
+	return anyMatch(t.res, arg)
 }
 
 func anyMatch(res []*regexp.Regexp, s string) bool {

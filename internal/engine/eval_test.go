@@ -291,20 +291,20 @@ func TestADenyMatchingTwoWaysIsNamedOnce(t *testing.T) {
 	}
 }
 
-// Where the platform splits names, a deny pattern whose split cannot be read
-// is refused, as one whose abbreviations cannot be (spec §3 rule 5).
-func TestADenyPatternWithAnUnreadableSplitIsRefused(t *testing.T) {
-	b := testBlob(true, "d:deny interface /^Gig[a-z]*[0-9]+$/")
-	if _, _, err := Encode(b); err != nil {
-		t.Fatalf("a platform that joins names reads it as written: %v", err)
-	}
+// The split is read at match time, so it needs nothing from a pattern's
+// syntax: any deny term matches a name and an index the device sent apart
+// when it matches them joined, and nothing is refused for it (spec §3 rule 5).
+func TestAnyDenyTermMatchesTheSplitName(t *testing.T) {
+	b := testBlob(true, "admin:permit **", "d:deny interface /^Gig[a-z]*[0-9]+$/", "e:deny ip /ethernet2/ **",
+		"f:deny shutdown Port-channel10")
 	b.Normalize.SplitsInterfaceNames = true
-	if _, _, err := Encode(b); err == nil || !strings.Contains(err.Error(), "index as two arguments") {
-		t.Errorf("%v, want a refusal naming the split", err)
+	xe := compileBlob(t, b)
+	for _, line := range []string{"interface Gigabit 1", "interface GigabitEthernet1", "ip xEthernet 2 x", "ip Ethernet 22",
+		"shutdown Port-channel 10", "shutdown Port-channel1 0", "shutdown port-channel10"} {
+		expect(t, xe, line, false, decision.NoPermitDominatesDeny)
 	}
-	b.Rules[0].Verdict = Permit
-	if _, _, err := Encode(b); err != nil {
-		t.Errorf("a permit is matched as written: %v", err)
+	for _, line := range []string{"interface Gigabit x", "interface Gigabit 1 2", "shutdown Port-channel 1"} {
+		expect(t, xe, line, true, decision.PermitDominates)
 	}
 }
 

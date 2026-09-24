@@ -273,12 +273,12 @@ entire class.
    IOS-XE splits an interface name from its index: a typed `int Gi1` arrives as
    `GigabitEthernet`, `1`, where EOS and NX-OS send one argument (§15, L21;
    `tests/lab/results/L21-cisco_iosxe.md`), so `deny: interface GigabitEthernet1 **` would
-   never match there. On a platform marked `splits_interface_names: true`, a **deny's** word,
-   `@class` or `/re/` term that names an interface with its index — a name, then digits and
-   `/ . :` — also matches the name and the index as two arguments, and the decision names the
-   deny as written; a **permit** matches only as written, so it is written as the device
-   sends it. A deny pattern whose split cannot be read, as in rule 4, is a policy load error
-   naming the term and the platform.
+   never match there. On a platform marked `splits_interface_names: true`, a **deny's** term at
+   one position also matches two arguments — an argument and the next, where the next is an
+   index (digits and `/ . :`) and the term matches the two joined — and the rest of the rule
+   continues after both. That holds for a word, an `@class` and a `/re/` alike and needs
+   nothing from a pattern's syntax, so nothing is refused for it; the decision names the deny
+   as written. A **permit** matches only as written, so it is written as the device sends it.
 
 ---
 

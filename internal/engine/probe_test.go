@@ -122,6 +122,10 @@ func TestProbesModelTheSplitInterfaceName(t *testing.T) {
 		Rule{Verdict: Deny, Rule: "interface /^Loopback[0-9]+$/", Role: "lo"})
 	after := compileBlob(t, b)
 	crossCheck(t, before, after, []string{"interface", "GigabitEthernet", "GigabitEthernet1", "Loopback", "Loopback0", "1", "0", "x"}, 3)
+	// A pattern no stem can be read from splits too, and the probes find it.
+	b.Rules = append(b.Rules[:2], Rule{Verdict: Deny, Rule: "interface /^Gig[a-z]*[0-9]+$/", Role: "gi"},
+		Rule{Verdict: Permit, Rule: "interface Gigabit 1", Role: "fix"})
+	crossCheck(t, before, compileBlob(t, b), []string{"interface", "Gig", "Gigabit", "Gigabit1", "1", "x"}, 3)
 }
 
 // A regex term is tried against an argument it matches, not only against the

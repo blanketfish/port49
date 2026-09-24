@@ -9,34 +9,32 @@ import (
 	"unicode"
 )
 
-// A deny's regex or class pattern is widened where the platform's dialect
-// says an argument may arrive in another shape than the one the pattern names
-// (spec §3 rules 4 and 5): abbreviated, where the platform may send what was
-// typed, and split, where it sends an interface name and its index as two
-// arguments (IOS-XE sends a typed `Gi1` as `GigabitEthernet`, `1`;
-// tests/lab/results/L21-cisco_iosxe.md). Widening is deny-only, like the word abbreviations in compiled.match: it can
+// A deny is widened where the platform's dialect says an argument may arrive
+// in another shape than the one the rule names (spec §3 rules 4 and 5):
+// abbreviated, where the platform may send what was typed, and split, where it
+// sends an interface name and its index as two arguments (IOS-XE sends a typed
+// `Gi1` as `GigabitEthernet`, `1`; tests/lab/results/L21-cisco_iosxe.md).
+// Widening is deny-only, like the word abbreviations in compiled.match: it can
 // only make a deny match more.
 //
 // A pattern is widened by reading its syntax as the names it matches: each
 // branch of it is `^`, a literal stem, and what the pattern allows after the
 // stem. `^Management[0-9]+$` is the stem `Management` and then `[0-9]+$`, and
 // its abbreviations are every non-empty prefix of the stem followed by the
-// same `[0-9]+$`, so `Ma1` is denied as `Management1` is; split, it is the stem
-// as one argument and an index `[0-9]+$` matches as the next. A branch that
-// starts with no letter names nothing a device abbreviates or splits and is
-// left as written. A
+// same `[0-9]+$`, so `Ma1` is denied as `Management1` is. A branch that starts
+// with no letter names nothing a device abbreviates and is left as written. A
 // pattern whose branches cannot be read that way — unanchored, starting with a
 // class or a wildcard that may be a letter, or a stem that runs on into
 // something that may be a letter — is refused, because the abbreviations it
 // would miss cannot be listed (spec §3 rule 4: fail closed rather than match a
 // possibly-abbreviated vector).
 //
-// A split is a second shape of the whole rule, not of one argument: the
-// vector is never re-joined (spec §3 rule 5), so a deny whose term may name an
-// interface with its index compiles to the rule as written and one sibling per
-// way of splitting it, each with the name and the index as two terms. The
-// siblings carry the rule's text and role, so a decision names the rule as
-// written.
+// A split is read at match time instead, and needs nothing from a pattern's
+// syntax: the vector is never re-joined (spec §3 rule 5), so a deny term that
+// may name an interface with its index compiles to a second shape of the rule
+// in which it covers two positions — any argument, then an index-shaped one —
+// and matches where the term matches the two joined (compileRule). The shapes
+// carry the rule's text and role, so a decision names the rule as written.
 
 // stemmed is one branch of a pattern read as a name: its literal stem and what
 // the pattern allows after it.
@@ -44,9 +42,6 @@ type stemmed struct {
 	stem  []rune
 	flags syntax.Flags
 	rest  []*syntax.Regexp
-	// anything is a branch that matches every argument (`^.*`): no stem,
-	// nothing to abbreviate, and any name to split.
-	anything bool
 }
 
 // maxBranches bounds how many branches a pattern's alternations and optional
@@ -75,11 +70,7 @@ func stems(pattern string) ([]stemmed, error) {
 			return nil, fmt.Errorf("it is not anchored with `^`, so %w", errUnreadable)
 		}
 		b = b[1:]
-		if len(b) == 0 || matchesAnything(b) {
-			out = append(out, stemmed{anything: true})
-			continue
-		}
-		if !mayStartName(b, false) {
+		if matchesAnything(b) || !mayStartName(b, false) {
 			continue
 		}
 		lit := b[0]
@@ -113,9 +104,6 @@ func abbreviations(pattern string) ([]string, error) {
 	}
 	out := make([]string, 0, len(ss))
 	for _, s := range ss {
-		if s.anything {
-			continue
-		}
 		nodes := append([]*syntax.Regexp{{Op: syntax.OpBeginText, Flags: s.flags}, prefixes(s.stem, s.flags)}, s.rest...)
 		out = append(out, (&syntax.Regexp{Op: syntax.OpConcat, Flags: s.flags, Sub: nodes}).String())
 	}
@@ -268,79 +256,25 @@ func denyPatterns(pattern string, n Normalize) ([]string, error) {
 	return out, nil
 }
 
-// split is one way a deny's term also matches an interface name and its index
-// sent as two arguments: head matches the name and tail the index. A word
-// splits into two words; a pattern into two patterns, and the tail matches
-// only an argument shaped as an index.
-type split struct {
-	head, tail string
-	word       bool
-}
+// indexShape is an argument a split name's index may be: what IOS-XE sent
+// after `GigabitEthernet` for `Gi1` (L21), widened to slot, subinterface and
+// channel separators, which are unmeasured.
+var indexShape = regexp.MustCompile(`^[0-9][0-9/.:]*$`)
 
-var (
-	// splitWord is a word that names an interface with its index:
-	// `GigabitEthernet1`, `Port-channel2`, `GigabitEthernet1/0/1.100`.
-	splitWord = regexp.MustCompile(`^(\pL[\pL-]*)([0-9][0-9/.:]*)$`)
-	// indexShape is an argument a split tail may be: what IOS-XE sent after
-	// `GigabitEthernet` for `Gi1` (L21), widened to slot, subinterface and
-	// channel separators, which are unmeasured.
-	indexShape = regexp.MustCompile(`^[0-9][0-9/.:]*$`)
-)
-
-// splits lists the ways a deny's term also matches an interface name split
-// from its index, where the platform splits them, and refuses a pattern whose
-// split it cannot read.
-func splits(t Term, classes map[string][]string, n Normalize) ([]split, error) {
-	if !n.SplitsInterfaceNames {
-		return nil, nil
-	}
-	if t.Kind == Word {
-		if m := splitWord.FindStringSubmatch(t.Text); m != nil {
-			return []split{{head: m[1], tail: m[2], word: true}}, nil
-		}
-		return nil, nil
-	}
-	var out []split
-	for _, pat := range termPatterns(t, classes) {
-		ss, err := stems(pat)
-		if err != nil {
-			return nil, fmt.Errorf("%s: the platform sends an interface name and its index as two arguments (spec §3 rule 5) and %w",
-				termName(t, pat), err)
-		}
-		for _, s := range ss {
-			if len(s.rest) > 0 && s.rest[0].Op == syntax.OpEndText {
-				continue // the name ends the argument: no index follows it
-			}
-			// The head is the stem, and on a platform that may send what was
-			// typed its abbreviations; where anything may follow the stem,
-			// the head is the stem and any more of a name.
-			var head string
-			switch {
-			case s.anything:
-				head = `^\pL[\pL\-]*$`
-			default:
-				stem := &syntax.Regexp{Op: syntax.OpLiteral, Flags: s.flags, Rune: s.stem}
-				if !n.ExpandsAbbreviations {
-					stem = prefixes(s.stem, s.flags)
-				}
-				head = (&syntax.Regexp{Op: syntax.OpConcat, Flags: s.flags, Sub: []*syntax.Regexp{
-					{Op: syntax.OpBeginText, Flags: s.flags}, stem}}).String()
-				if len(s.rest) == 0 || matchesAnything(s.rest) {
-					head += `[\pL\-]*$`
-				} else {
-					head += `$`
-				}
-			}
-			tail := (&syntax.Regexp{Op: syntax.OpConcat, Flags: s.flags,
-				Sub: append([]*syntax.Regexp{{Op: syntax.OpBeginText, Flags: s.flags}}, s.rest...)}).String()
-			out = append(out, split{head: head, tail: tail})
+// splitsOf lists every way word is a name and an index joined: each non-empty
+// head with an index-shaped rest.
+func splitsOf(word string) [][2]string {
+	var out [][2]string
+	for k := 1; k < len(word); k++ {
+		if indexShape.MatchString(word[k:]) {
+			out = append(out, [2]string{word[:k], word[k:]})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // CheckDeny refuses a deny rule whose regex or class terms cannot be widened
-// as a platform with dialect n needs (spec §3 rules 4 and 5). A class classes
+// as a platform with dialect n needs (spec §3 rule 4). A class classes
 // does not define is skipped: that is another check's refusal.
 func CheckDeny(rule string, classes map[string][]string, n Normalize) error {
 	_, err := compileRule(Deny, rule, "", classes, n)
