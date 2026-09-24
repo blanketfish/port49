@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/daemon/author"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/token"
 )
@@ -82,5 +84,16 @@ func TestSeedTokenFileIsNarrowedTo0600(t *testing.T) {
 	}
 	if len(b) == 0 || string(b[:5]) == "stale" {
 		t.Fatalf("the file was not truncated before the pairs were written: %q", b)
+	}
+}
+
+func TestHandlersSeeTheStoreItselfWithoutAFaultFile(t *testing.T) {
+	st := memory.New(time.Now)
+	if got := labHandlerStore(st, author.LabFault{}); got != store.Store(st) {
+		t.Fatalf("with no fault_file the handlers got %T, want the store itself", got)
+	}
+	got := labHandlerStore(st, author.LabFault{Path: filepath.Join(t.TempDir(), "fault")})
+	if fs, ok := got.(*author.FaultStore); !ok || fs.Store != store.Store(st) {
+		t.Fatalf("with a fault_file the handlers got %T, want *author.FaultStore over the store", got)
 	}
 }

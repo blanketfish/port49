@@ -254,6 +254,16 @@ server certificate does not stop the start; it is one line, `port49d: broker: se
 certificate expired at …; logins will fail`. Once running, a failed handshake (a login with an
 untrusted or expired certificate) is logged as `port49d: broker: http: TLS handshake error …`.
 
+### The fault switch
+
+A by-hand run that needs port49 to answer ERROR adds `fault_file: <path>` to the `lab:` block of
+its derived config (never to `port49d-lab.yaml`, so a file left behind cannot fault a later
+run). port49d re-reads the file on every request; its trimmed contents name the fault:
+`store_unavailable` fails the store reads each handler starts with (authentication answers ERROR,
+authorization FAIL, accounting is spooled unattributed), `command_error` / `command_fail` answer
+every per-command authorization ERROR / FAIL, and anything else is no fault. It is what
+`tests/lab/results/L4-error-*.md` measured with; `author.LabFault` holds the code.
+
 ## Tokens
 
 `port49d-lab.yaml` seeds single-use tokens, because redemption deletes the token: every login

@@ -195,8 +195,10 @@ rather than the answer. **Lab:** the API-transport half of L1 and the eAPI `/log
 hand.
 
 **Lab, as run:** the slice end to end on vEOS (`tests/lab/results/slice-arista_eos.md`); L7's eAPI
-`/login` clause measured on vEOS (`L7-login-arista_eos.md`), and L7 still open on NX-API's
-`nxapi_auth` cookie (lab register rule 3), with decision 15 provisional on it; L1's RESTCONF
+`/login` clause measured on vEOS (`L7-login-arista_eos.md`); L7 was left open on NX-API's
+`nxapi_auth` cookie and closed 2026-09-24 when that was measured by hand
+(`L7-nxapi-cookie-cisco_nxos.md`), so decision 15 no longer waits on L7 — what it still names as
+unmeasured is HTTP keep-alive and an idle-gap playbook run (spec §13); L1's RESTCONF
 clause measured on IOS-XE (`L1-restconf-cisco_iosxe.md`), and L1 open on the console.
 
 ## Plan 4 — Policy engine (§19 step 4) — `2026-09-23-04-policy-engine.md`
@@ -216,6 +218,14 @@ first gives the decision log a real sink — this one owns the log in full, but 
 the sink if it lands later — must give the spool a sink interface that returns an error, and
 the spool must not advance `drainOffset` past a refusal. Without both, the durability contract
 is enforced up to the last hop and not across it.
+
+**Carried from the 2026-09-24 lab branch:** `author.Decision.Error`, which makes
+`Handler.Handle` answer a refusal ERROR, exists only for the lab's fault switch
+(`lab.fault_file`, `author.LabFault`). When this plan replaces `author.Lab`, the real `Authorizer`
+must never set it — a store outage stays FAIL `store_unavailable`, because an ERROR at command
+authorization permits everything under IOS-XE `if-authenticated` and falls through to local RBAC
+on the N9Kv (`tests/lab/results/L4-error-*.md`). Remove the field with `author.Lab`, or keep it and
+the fault switch lab-only and say so.
 
 **Carried from plan 3:**
 
@@ -401,6 +411,20 @@ not ignored:**
   flag, so nothing port49 sends can end a Junos session by attribute. No variant produced a
   per-command authorization request, on either image, in any of 26 sessions — decision 21's
   shape, confirmed.
+- **From the 2026-09-24 lab (`tests/lab/results/ceiling-*.md`, `L4-error-*.md`, `L21-*.md`):**
+  the device enforces a ceiling only through the privilege level. IOS-XE and vEOS at level 1
+  refuse `clear counters`, `clear ip bgp *` and `configure` in the parser without asking port49;
+  IOS-XE level 7 is level 1 until the reference config assigns it commands (`privilege exec
+  level 7 clear counters` gives exactly the operator rung); vEOS `network-operator` at 15 ran
+  `clear counters`, had `clear ip bgp *` authorized (`% BGP inactive`: no BGP on that image) and
+  entered `configure`, and every NX-OS role, `network-operator` included, ran all three — with
+  `network-operator` also changing configuration (not typed under the other roles, nor on vEOS) —
+  while command authorization points at port49. So the operator rung is port49's per-command
+  policy there, not the role. The reference configs must be written for a store outage, which is not
+  the break-glass case (only an unreachable port49 is), and the N9Kv `deadtime` trades the 5s
+  silent-server penalty for a minute of refused token logins. All three per-command platforms
+  send resolved words (L21, closed): `expands_abbreviations: true` for them over SSH, and
+  interface arguments differ (IOS-XE `GigabitEthernet`, `1`; EOS/NX-OS one word).
 - Device-generated accounting under another user (Junos root RPC in production, NX-OS
   `admin`/`vsh.bin`) is real and must not be treated as a foreign session (plan 2 rule).
 

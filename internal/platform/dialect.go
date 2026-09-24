@@ -71,9 +71,10 @@ type Dialect struct {
 //     command request to carry one and is unmeasured, so false.
 //   - StripCR: every command authorization measured ends `cmd-arg=<cr>`
 //     (L10-arista_eos.md, L10-cisco_nxos.md, L10-cisco_iosxe.md).
-//   - ExpandsAbbreviations is false everywhere: whether a device sends `sh run`
-//     or `show running-config` is unmeasured on every platform (spec §15, L21),
-//     and false is the direction that fails closed.
+//   - ExpandsAbbreviations is false everywhere, the direction that fails
+//     closed. L21 measured EOS, NX-OS and IOS-XE sending the resolved words over
+//     interactive SSH only (spec §15, L21), so the flip is per transport and is
+//     plan 5's adapters' to make.
 //   - Supports: EOS, NX-OS and IOS-XE send per-command authorization (L1, L10);
 //     Junos sends none, in 26 sessions on two images (L18; decision 21).
 //     Config-command authorization is unmeasured, so no platform claims it.

@@ -32,6 +32,14 @@ type Decision struct {
 	// the request itself; Handle records it in place of its own parse, so the
 	// record and the decision never disagree (spec §3, §5.7).
 	Vector []string
+	// Error answers a refusal ERROR rather than FAIL. It is lab-only: the
+	// lab's fault switch (LabFault) is the only thing that may set it, and it
+	// is ignored on a permit. A production Authorizer MUST leave it false —
+	// a store outage is FAIL `store_unavailable` (plan 4's ruling), because an
+	// ERROR here authorizes every command on an IOS-XE `if-authenticated`
+	// list and hands the N9Kv to local RBAC (tests/lab/results/L4-error-*.md).
+	// Plan 4 keeps it lab-only: Engine never sets it.
+	Error bool
 }
 
 // Request is one authorization after the §5.3 checks have passed: the context
@@ -270,6 +278,11 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		rec.Request.Vector = d.Vector
 	}
 	if !d.Permit {
+		if d.Error {
+			resp := h.deny(rec, d.Reason, d.ServerMsg)
+			resp.Status = wire.AuthorStatusError
+			return resp
+		}
 		return h.deny(rec, d.Reason, d.ServerMsg)
 	}
 	rec.Verdict, rec.Reason = decision.VerdictPermit, d.Reason

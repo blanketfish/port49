@@ -23,8 +23,7 @@ unmodified network devices. Apache-2.0. Read this file first, then the plan you 
 - **Write plan N+1 only after plan N is merged.** A plan names exact files and signatures,
   so it is written against real code, not a guess. The one exception: plan 2 may be written
   from plan 1's text, because plan 1 fixes the interfaces plan 2 builds on.
-- **Do not write plan 3 before plan 1's lab results exist.** The vertical slice is where lab
-  entries L4 and L7 close and decision 15 stops being provisional.
+- **Do not write plan 3 before plan 1's lab results exist.**
 - Execute a plan with `superpowers:subagent-driven-development` or
   `superpowers:executing-plans`, task by task, tests first.
 

@@ -23,7 +23,7 @@ func TestEveryBuiltInPlatformHasAMeasuredDialect(t *testing.T) {
 			t.Errorf("%s: pipe token %q strip_cr %v", name, d.PipeToken, d.StripCR)
 		}
 		if d.ExpandsAbbreviations {
-			t.Errorf("%s: claims to expand abbreviations; that is unmeasured (spec §15, L21) and the claim fails open", name)
+			t.Errorf("%s: claims to expand abbreviations; L21 measured SSH only, the flip is plan 5's (spec §15, L21), and a wrong claim fails open", name)
 		}
 		for class, patterns := range d.EntityClasses {
 			for _, p := range patterns {
