@@ -769,3 +769,37 @@ func TestPolicyDiffGatesABrokerRightGained(t *testing.T) {
 		t.Fatalf("a right lost: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }
+
+// An edit to a key of an adapter the gate reads fails `port49 policy diff`
+// until an acknowledge: entry names the platform and the key, and `policy
+// test` prints the entry beside the others (review M8; spec §12).
+func TestPolicyDiffGatesAnAdapterEdit(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	raw := string(readFile(t, oldPol))
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	edited := "platforms: {arista_eos: {entity_classes: {management: ['^Management1$']}}}\n" + raw
+	if err := os.WriteFile(newPol, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `ADAPTER: platforms.arista_eos.entity_classes {"loopback":`) ||
+		!strings.Contains(out.String(), `add {platform: arista_eos, field: entity_classes, reason: "..."} under acknowledge:`) ||
+		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits\n") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	acked := edited + "acknowledge:\n  - {platform: arista_eos, field: entity_classes, reason: only Management1 is out of band}\n"
+	if err := os.WriteFile(newPol, []byte(acked), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "adapter (acknowledged: only Management1 is out of band): platforms.arista_eos.entity_classes") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"policy", "test", "--policy", newPol, "--inventory", inv}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "acknowledge: platforms.arista_eos.entity_classes: only Management1 is out of band\n") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

@@ -141,10 +141,11 @@ type Test struct {
 }
 
 // Acknowledgment is one `acknowledge:` entry (spec §12): a removed or
-// rewritten deny, named by its role and exact rule text, that the author
+// rewritten deny, named by its role and exact rule text, or an edited key of a
+// platform's adapter, named by the platform and the key, that the author
 // acknowledges in writing, with why.
 type Acknowledgment struct {
-	Role, Rule, Reason string
+	Role, Rule, Platform, Field, Reason string
 }
 
 // NoCeiling is how a test asserts that the grants compose to no ceiling.
@@ -1040,10 +1041,17 @@ func (p *Policy) buildTests(f file) error {
 
 func (p *Policy) buildAcknowledgments(f file) error {
 	for i, a := range f.Acknowledge {
+		byRule, byAdapter := a.Role != "" || a.Rule != "", a.Platform != "" || a.Field != ""
 		switch {
-		case a.Role == "" || a.Rule == "":
+		case byRule == byAdapter:
+			return fmt.Errorf("acknowledge[%d]: name a deny by role and rule, or an adapter edit by platform and "+
+				"field, one of the two (spec §12)", i)
+		case byRule && (a.Role == "" || a.Rule == ""):
 			return fmt.Errorf("acknowledge[%d]: role and rule are required: the entry names the exact deny it "+
 				"acknowledges (spec §12)", i)
+		case byAdapter && (a.Platform == "" || !slices.Contains(platform.SpecKeys(), a.Field)):
+			return fmt.Errorf("acknowledge[%d]: platform and field are required, and field is one of an adapter's "+
+				"keys: %s (spec §8, §12)", i, strings.Join(platform.SpecKeys(), ", "))
 		case strings.TrimSpace(a.Reason) == "":
 			return fmt.Errorf("acknowledge[%d]: reason is required: review reads it beside the change it "+
 				"acknowledges (spec §12)", i)

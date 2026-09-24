@@ -142,7 +142,7 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	// An acknowledge: entry is the author's written word for a widening no
 	// test can show (spec §12); review reads each one.
 	for _, a := range p.Acknowledgments() {
-		fmt.Fprintf(stdout, "acknowledge: %s %q: %s\n", a.Role, a.Rule, a.Reason)
+		fmt.Fprintf(stdout, "acknowledge: %s: %s\n", ackName(a), a.Reason)
 	}
 	// The shadowed-deny report is what replaces the guarantee deny-overrides
 	// gave (spec §12): every deny a more specific permit beats, for whom, and
@@ -313,8 +313,21 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			"permits there is an expansion\n", r.Device, r.Platform, from(r.At))
 	}
 	for _, a := range d.StaleAcknowledgments {
-		fmt.Fprintf(stdout, "report: acknowledge_stale: %s %q (%s): no widening in this diff is the one it names, so "+
-			"it acknowledges nothing; delete it (spec §12)\n", a.Role, a.Rule, a.Reason)
+		fmt.Fprintf(stdout, "report: acknowledge_stale: %s (%s): no change in this diff is the one it names, so "+
+			"it acknowledges nothing; delete it (spec §12)\n", ackName(a), a.Reason)
+	}
+	for _, a := range d.Adapters {
+		change := fmt.Sprintf("platforms.%s.%s %s -> %s", a.Platform, a.Field, a.Old, a.New)
+		switch {
+		case !a.Gated:
+			fmt.Fprintf(stdout, "adapter: %s\n", change)
+		case a.Acknowledged:
+			fmt.Fprintf(stdout, "adapter (acknowledged: %s): %s\n", a.AcknowledgedBy, change)
+		default:
+			fmt.Fprintf(stdout, "ADAPTER: %s: the key changes what port49 decides or what this gate reads, so the "+
+				"diff cannot vouch for it; add {platform: %s, field: %s, reason: \"...\"} under acknowledge: (spec §12)\n",
+				change, a.Platform, a.Field)
+		}
 	}
 	for _, p := range d.Principals {
 		switch {
@@ -462,11 +475,12 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
 		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d unacknowledged "+
 		"principal or username changes; %d devices newly quarantined, %d released; %d mints newly refused; "+
-		"%d unresolved\n", len(d.Changes), widen, narrow, d.Unacknowledged(), d.UnacknowledgedLevels(),
-		d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(), len(d.Quarantined), len(d.Released), len(d.Refused),
-		len(d.Unresolved))
+		"%d unresolved; %d unacknowledged adapter edits\n", len(d.Changes), widen, narrow, d.Unacknowledged(),
+		d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(), len(d.Quarantined),
+		len(d.Released), len(d.Refused), len(d.Unresolved), d.UnacknowledgedAdapters())
 	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
-		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 {
+		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 ||
+		d.UnacknowledgedAdapters() > 0 {
 		return 1
 	}
 	return 0
@@ -480,6 +494,15 @@ func yamlList(items []string) string {
 		quoted[i] = strconv.Quote(it)
 	}
 	return "[" + strings.Join(quoted, ", ") + "]"
+}
+
+// ackName is an acknowledge: entry as review reads it: the deny by role and
+// rule, or the adapter key by platform and field.
+func ackName(a policy.Acknowledgment) string {
+	if a.Platform != "" {
+		return "platforms." + a.Platform + "." + a.Field
+	}
+	return fmt.Sprintf("%s %q", a.Role, a.Rule)
 }
 
 // quarantineLine is an entry after a label that already says quarantine:

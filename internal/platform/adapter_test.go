@@ -455,3 +455,18 @@ func with(d Dialect, edit func(*Dialect)) Dialect {
 	edit(&d)
 	return d
 }
+
+// SpecOf is Over's inverse: every built-in adapter, written back out as a
+// block and laid over nothing, is itself again. Export and the policy diff
+// both rely on it.
+func TestSpecOfRoundTrips(t *testing.T) {
+	for name, d := range Dialects() {
+		if got := SpecOf(d).Over(Dialect{}); !reflect.DeepEqual(got, d) {
+			t.Errorf("%s:\n got %+v\nwant %+v", name, got, d)
+		}
+	}
+	keys := SpecKeys()
+	if len(keys) != reflect.TypeOf(Spec{}).NumField() || keys[0] != "supports" || !slices.Contains(keys, "enable_username") {
+		t.Fatalf("keys %v", keys)
+	}
+}

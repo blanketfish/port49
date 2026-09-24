@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 const diffBase = `
@@ -886,5 +887,160 @@ func TestAnAPIOnlyTestDoesNotAcknowledgeAnIdentityMove(t *testing.T) {
 		"tests:\n  - {principal: \"user:mallory@example.com\", device: leaf-01, api: []}\n"
 	if n := Compare(mustParse(t, diffBase), mustParse(t, mallory), noon).UnacknowledgedPrincipals(); n != 1 {
 		t.Fatalf("an api:-only test acknowledged the move: %d unacknowledged", n)
+	}
+}
+
+// Which attributes bear privilege is read from the adapters, so an edit that
+// lists an attribute inert is judged under the stricter of the two versions:
+// it cannot hide a change to that attribute in the same diff. The list edit is
+// gated in its own right, and acknowledged only in writing (review M8). The
+// attribute is one no shipped set lists: listing a shipped one inert, such as
+// NX-OS's cisco-av-pair, is refused at load (task 7 review C1).
+func TestAnInertListingCannotHideItsOwnEdit(t *testing.T) {
+	after := "platforms:\n  cisco_nxos:\n    inert_attributes: [home-directory, x-label]\n" + strings.Replace(diffBase,
+		"roles: [read_only, cve]}", `roles: [read_only, cve], attributes: {cisco_nxos: ["x-label=network-admin"]}}`, 1)
+	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
+	raised := false
+	for _, l := range d.Levels {
+		if slices.Contains(l.Devices, "nx-01") && slices.Contains(l.Raised, "reply") && !l.Acknowledged {
+			raised = true
+		}
+	}
+	if !raised {
+		t.Fatalf("x-label changed on NX-OS, which the old adapter says bears privilege: %+v", d.Levels)
+	}
+	if len(d.Adapters) != 1 || d.Adapters[0] != (AdapterChange{Platform: "cisco_nxos", Field: "inert_attributes",
+		Old: `["home-directory"]`, New: `["home-directory","x-label"]`, Gated: true}) || d.UnacknowledgedAdapters() != 1 {
+		t.Fatalf("adapters %+v", d.Adapters)
+	}
+	acked := after + "acknowledge:\n  - {platform: cisco_nxos, field: inert_attributes, reason: \"a label here\"}\n"
+	d = Compare(mustParse(t, diffBase), mustParse(t, acked), noon)
+	if d.UnacknowledgedAdapters() != 0 || d.Adapters[0].AcknowledgedBy != "a label here" ||
+		len(d.StaleAcknowledgments) != 0 {
+		t.Fatalf("adapters %+v stale %+v", d.Adapters, d.StaleAcknowledgments)
+	}
+	if d.UnacknowledgedLevels() == 0 {
+		t.Fatal("the entry acknowledges the list edit, not the reply the edit would have hidden")
+	}
+	// The same entry against a diff with no such edit acknowledges nothing.
+	if d := Compare(mustParse(t, diffBase), mustParse(t, diffBase+"acknowledge:\n  - {platform: cisco_nxos, "+
+		"field: inert_attributes, reason: x}\n"), noon); len(d.StaleAcknowledgments) != 1 {
+		t.Fatalf("stale %+v", d.StaleAcknowledgments)
+	}
+}
+
+// A name a shipped set lists as bearing privilege bears it under any adapter
+// the gate is handed, even one both versions list it inert in: the load
+// refuses such a block, and the gate does not rely on that alone.
+func TestTheGateReadsAShippedPrivilegeNameAsBearing(t *testing.T) {
+	d, _ := platform.DialectFor("cisco_nxos")
+	d.InertAttributes = append(d.InertAttributes, "cisco-av-pair", "x-label")
+	if !bearsPrivilege("cisco-av-pair", d, d) {
+		t.Fatal("cisco-av-pair read as inert")
+	}
+	if bearsPrivilege("x-label", d, d) {
+		t.Fatal("a name both versions list inert, and no set ships, read as bearing privilege")
+	}
+}
+
+// An edit to any key of an adapter is gated, on every platform either version
+// has an adapter for, a device or not (spec §8, §12). A block for a platform
+// no device has yet is gated too: the inventory is not diffed, so the day a
+// device of it arrives is not a review.
+func TestAnAdapterEditIsGated(t *testing.T) {
+	after := "platforms:\n  cisco_iosxe:\n    privilege: {operator: [\"priv-lvl=15\"]}\n  cisco_nxos:\n" +
+		"    shows_server_msg: true\n  f5_bigip:\n    supports: [session]\n    privilege: {admin: [\"priv-lvl=15\"]}\n" +
+		diffBase
+	d := Compare(mustParse(t, diffBase), mustParse(t, after), noon)
+	if len(d.Adapters) != 3 || d.UnacknowledgedAdapters() != 3 {
+		t.Fatalf("adapters %+v", d.Adapters)
+	}
+	xe, nx, f5 := d.Adapters[0], d.Adapters[1], d.Adapters[2]
+	if xe.Platform != "cisco_iosxe" || xe.Field != "privilege" || !xe.Gated ||
+		!strings.Contains(xe.New, `"operator":["priv-lvl=15"]`) ||
+		nx.Platform != "cisco_nxos" || nx.Field != "shows_server_msg" || !nx.Gated ||
+		f5.Platform != "f5_bigip" || f5.Field != "privilege" || !f5.Gated || f5.Old != "null" {
+		t.Fatalf("adapters %+v", d.Adapters)
+	}
+}
+
+// The gate fails closed on keys (task 1 review I3): only a key on the closed
+// list of explain-only keys is reported, and every key an adapter has today,
+// device_config included (task 7 review H6), and any a later plan adds is
+// gated until it is listed.
+func TestOnlyExplainKeysAreReported(t *testing.T) {
+	for _, key := range platform.SpecKeys() {
+		if !adapterKeyGated(key) {
+			t.Errorf("%s is reported, not gated", key)
+		}
+	}
+	for _, key := range []string{"port_pattern", "verified", "unreachable", "fallback"} {
+		if adapterKeyGated(key) {
+			t.Errorf("%s is gated; it changes only what explain says", key)
+		}
+	}
+	if !adapterKeyGated("a_key_no_plan_has_added") {
+		t.Fatal("an unknown key is reported")
+	}
+}
+
+// hbase is the base policy of task 7 review's hand-off cases H1–H7, verbatim.
+const hbase = `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: rw, privilege: readonly, permit: ["**"], deny: [interface @management **, "configure **", "reload **"]}
+subjects:
+  - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
+grants:
+  - {subject: noc, scope: all_devices, roles: [rw]}
+`
+
+// Each block task 7's review found passing `policy diff` with exit 0 fails
+// the gate, or is refused at load, and an acknowledge: entry for exactly the
+// key it names is what lets it through (task 7 review M1, hand-off H1–H7).
+func TestTheHandOffBlocksFailTheGate(t *testing.T) {
+	h1 := "platforms:\n  arista_eos:\n    role_order:\n      roles: [p49-x, network-operator, network-admin]\n"
+	for _, tc := range []struct {
+		name, before, after string
+		platform, field     string // the gated key, or
+		refused             string // the load error
+	}{
+		{"H1 a role_order value inserted", "", h1, "arista_eos", "role_order", ""},
+		{"H2 a rendering moved onto it", h1, h1 + "    privilege:\n      readonly: [priv-lvl=1, roles=p49-x]\n",
+			"arista_eos", "privilege", ""},
+		{"H3 strip_cr turned off", "", "platforms:\n  cisco_iosxe:\n    strip_cr: false\n", "", "",
+			"platforms.cisco_iosxe.strip_cr"},
+		{"H4 expands_abbreviations claimed", "", "platforms:\n  juniper_junos:\n    expands_abbreviations: true\n",
+			"", "", "platforms.juniper_junos.expands_abbreviations"},
+		{"H5 a capability removed", "", "platforms:\n  arista_eos:\n    supports: [session]\n", "arista_eos",
+			"supports", ""},
+		{"H6 device_config ending in none", "", "platforms:\n  arista_eos:\n    device_config: [\"aaa authorization " +
+			"exec default group port49 local\", \"aaa authorization commands all default group port49 none\"]\n",
+			"arista_eos", "device_config", ""},
+		{"H7 a platform no device has", "", "platforms:\n  f5_bigip:\n    privilege:\n      readonly: [priv-lvl=15]\n" +
+			"      operator: [priv-lvl=15]\n      admin: [priv-lvl=15]\n", "f5_bigip", "privilege", ""},
+		// Only the old version has the block: the platform is still compared.
+		{"H7 removed", "platforms:\n  f5_bigip:\n    entity_classes: {management: ['^mgmt$']}\n", "\n", "f5_bigip",
+			"entity_classes", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.refused != "" {
+				if _, err := Parse([]byte(tc.after+hbase), env()); err == nil || !strings.Contains(err.Error(), tc.refused) {
+					t.Fatalf("loaded: %v", err)
+				}
+				return
+			}
+			before := mustParse(t, tc.before+hbase)
+			d := Compare(before, mustParse(t, tc.after+hbase), noon)
+			if d.UnacknowledgedAdapters() != 1 || d.Adapters[0].Platform != tc.platform ||
+				d.Adapters[0].Field != tc.field || !d.Adapters[0].Gated {
+				t.Fatalf("adapters %+v", d.Adapters)
+			}
+			acked := tc.after + hbase + "acknowledge:\n  - {platform: " + tc.platform + ", field: " + tc.field +
+				", reason: reviewed}\n"
+			if d := Compare(before, mustParse(t, acked), noon); d.UnacknowledgedAdapters() != 0 {
+				t.Fatalf("acknowledged: %+v", d.Adapters)
+			}
+		})
 	}
 }

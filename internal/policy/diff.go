@@ -1,8 +1,10 @@
 package policy
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -49,6 +51,51 @@ type Diff struct {
 	// widening in the diff is the one they name. They acknowledge nothing and
 	// are reported, acknowledge_stale (spec §12).
 	StaleAcknowledgments []Acknowledgment
+	// Adapters are the keys of a platform's adapter that differ between the
+	// versions, on every platform either version has an adapter for or the
+	// inventory has devices of: a platform_set moved, or a `platforms:` block
+	// edited (spec §8, §12).
+	Adapters []AdapterChange
+}
+
+// AdapterChange is one key of one platform's adapter that the two versions
+// say differently. A key that changes what port49 decides — a rendering, a
+// class, how a command is normalized — or what this gate reads — which
+// attributes bear privilege, which the device takes, how its roles rank — is
+// Gated: a diff cannot vouch for its own reading when the change is to the
+// reading, so it is acknowledged only in writing, by an acknowledge: entry
+// naming the platform and the key (review M8, 2026-09-24). Old and New are
+// the key's value as JSON, `null` where the adapter leaves it unset.
+type AdapterChange struct {
+	Platform, Field     string
+	Old, New            string
+	Gated, Acknowledged bool
+	AcknowledgedBy      string
+}
+
+// reportedAdapterKeys are the only adapter keys an edit to is reported and
+// not gated: each changes what explain says, and nothing port49 decides or
+// this gate reads. Every other key is gated, one a later plan adds included,
+// until it is listed here, so the list fails closed (task 1 review I3).
+// device_config is not on it: it is the configuration check-config holds a
+// device to, and a block that ends a line in `none` instead of `local` has the
+// device authorize every command itself whenever port49 is unreachable
+// (task 7 review H6).
+var reportedAdapterKeys = []string{"port_pattern", "verified", "unreachable", "fallback"}
+
+// adapterKeyGated reports whether an edit to an adapter key is gated.
+func adapterKeyGated(key string) bool { return !slices.Contains(reportedAdapterKeys, key) }
+
+// UnacknowledgedAdapters counts the gated adapter edits no acknowledge: entry
+// names.
+func (d Diff) UnacknowledgedAdapters() int {
+	n := 0
+	for _, a := range d.Adapters {
+		if a.Gated && !a.Acknowledged {
+			n++
+		}
+	}
+	return n
 }
 
 // PrincipalChange is a principal that resolves to another subject in the new
@@ -337,6 +384,7 @@ func Compare(before, after *Policy, now time.Time) Diff {
 		c.at(at)
 	}
 	c.principals(now)
+	c.adapters()
 	for _, a := range after.acked {
 		if !c.usedAcks[a] {
 			c.d.StaleAcknowledgments = append(c.d.StaleAcknowledgments, a)
@@ -797,7 +845,8 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 
 // replyRose reports whether the session reply gained, changed or lost an
 // attribute, other than priv-lvl, which priv_lvl judges, that bears privilege
-// under either version's adapter, other than by provably going down (spec
+// under either version's adapter or any shipped set (bearsPrivilege), other
+// than by provably going down (spec
 // §12). A level's own rendering goes down where its one value is replaced by
 // the new level's, which role_order ranks strictly below under both versions'
 // adapters: a subject moved from admin to readonly on EOS is lowered because
@@ -824,7 +873,7 @@ func replyRose(old, new, oldRendered, newRendered []string, before, after platfo
 	}
 	for _, name := range names {
 		from, to := was[name], is[name]
-		if name == "priv-lvl" || slices.Equal(from, to) || !before.BearsPrivilege(name) && !after.BearsPrivilege(name) {
+		if name == "priv-lvl" || slices.Equal(from, to) || !bearsPrivilege(name, before, after) {
 			continue
 		}
 		if len(from) != 1 || len(to) != 1 || !slices.Contains(oldRendered, from[0]) ||
@@ -1006,4 +1055,53 @@ func (p *Policy) expansionAcks(before *Policy, instants []time.Time) map[string]
 		}
 	}
 	return acks
+}
+
+// bearsPrivilege reports whether the gate reads an attribute as bearing
+// privilege: under the stricter of the two versions' adapters, and always
+// where any platform set port49 ships lists it as bearing privilege. Which
+// attributes bear privilege is itself read from the adapters, so an edit that
+// lists an attribute inert cannot hide a change to that attribute in the same
+// diff, and no adapter, however it was loaded, unlists a shipped one (review
+// M8, 2026-09-24).
+func bearsPrivilege(name string, before, after platform.Dialect) bool {
+	return before.BearsPrivilege(name) || after.BearsPrivilege(name) ||
+		slices.Contains(platform.PrivilegeAttributeNames(), name)
+}
+
+// adapters compares each platform's adapter, key by key, for every platform
+// the inventory has devices of and every platform either version has an
+// adapter for. A block for a platform no device has yet is compared too: the
+// inventory is not diffed, so the day a device of it arrives is no review
+// (pre-flight B2).
+func (c *comparison) adapters() {
+	platforms := map[string]bool{}
+	for _, p := range []*Policy{c.before, c.after} {
+		for _, d := range p.Devices() {
+			platforms[d.Platform] = true
+		}
+		for name := range p.adapters {
+			platforms[name] = true
+		}
+	}
+	keys := platform.SpecKeys()
+	for _, name := range sortedKeys(platforms) {
+		was := reflect.ValueOf(platform.SpecOf(c.before.dialect(name)))
+		is := reflect.ValueOf(platform.SpecOf(c.after.dialect(name)))
+		for i, key := range keys {
+			if reflect.DeepEqual(was.Field(i).Interface(), is.Field(i).Interface()) {
+				continue
+			}
+			old, _ := json.Marshal(was.Field(i).Interface())
+			now, _ := json.Marshal(is.Field(i).Interface())
+			a := AdapterChange{Platform: name, Field: key, Old: string(old), New: string(now), Gated: adapterKeyGated(key)}
+			for _, ack := range c.after.acked {
+				if a.Gated && ack.Platform == name && ack.Field == key {
+					a.Acknowledged, a.AcknowledgedBy = true, ack.Reason
+					c.usedAcks[ack] = true
+				}
+			}
+			c.d.Adapters = append(c.d.Adapters, a)
+		}
+	}
 }

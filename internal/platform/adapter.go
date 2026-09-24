@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -380,4 +381,56 @@ func privLvlText(n uint8, ok bool) string {
 		return "none"
 	}
 	return fmt.Sprint(n)
+}
+
+// SpecOf is d as a block that sets every field d has: nil where d leaves a
+// map or a list nil, so that SpecOf(d).Over(Dialect{}) is d again. `port49
+// platform export` writes it, and the policy diff compares two adapters
+// through it, key by key.
+func SpecOf(d Dialect) Spec {
+	s := Spec{ExpandsAbbreviations: ptr(d.ExpandsAbbreviations), SplitsInterfaceNames: ptr(d.SplitsInterfaceNames),
+		PipeToken: ptr(d.PipeToken), PipeAuthorized: ptr(d.PipeAuthorized), StripCR: ptr(d.StripCR),
+		ShowsServerMsg: ptr(d.ShowsServerMsg), EnableUsername: ptr(d.EnableUsername)}
+	d = d.clone()
+	if d.Supports != nil {
+		s.Supports = &d.Supports
+	}
+	if d.Levels != nil {
+		s.Privilege = &d.Levels
+	}
+	if d.CeilingLevels != nil {
+		s.CeilingLevels = &d.CeilingLevels
+	}
+	if d.EntityClasses != nil {
+		s.EntityClasses = &d.EntityClasses
+	}
+	if d.PrivilegeAttributes != nil {
+		s.PrivilegeAttributes = &d.PrivilegeAttributes
+	}
+	if d.InertAttributes != nil {
+		s.InertAttributes = &d.InertAttributes
+	}
+	if d.AcceptedAttributes != nil {
+		s.AcceptedAttributes = &d.AcceptedAttributes
+	}
+	if d.RoleOrder != nil {
+		s.RoleOrder = &d.RoleOrder
+	}
+	if d.DeviceConfig != nil {
+		s.DeviceConfig = &d.DeviceConfig
+	}
+	return s
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// SpecKeys are the keys an adapter block may set, in the order Spec
+// declares them: what an acknowledge: entry may name as a field.
+func SpecKeys() []string {
+	t := reflect.TypeOf(Spec{})
+	out := make([]string, t.NumField())
+	for i := range out {
+		out[i] = strings.Split(t.Field(i).Tag.Get("yaml"), ",")[0]
+	}
+	return out
 }

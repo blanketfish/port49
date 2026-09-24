@@ -35,11 +35,14 @@ type filePlatform struct {
 }
 
 // fileAck is one acknowledge: entry (spec §12): the author's written word for
-// a removed or rewritten deny no test can flip.
+// a removed or rewritten deny no test can flip, or for an edit to a
+// platform's adapter the gate reads (Diff.Adapters).
 type fileAck struct {
-	Role   string `yaml:"role"`
-	Rule   string `yaml:"rule"`
-	Reason string `yaml:"reason"`
+	Role     string `yaml:"role"`
+	Rule     string `yaml:"rule"`
+	Platform string `yaml:"platform"`
+	Field    string `yaml:"field"`
+	Reason   string `yaml:"reason"`
 }
 
 type fileLevel struct {

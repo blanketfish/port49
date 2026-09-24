@@ -130,7 +130,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
 		add(FindingCeilingIndistinct, "%s", f)
 	}
 	for _, a := range p.acked {
-		if p.hasDeny(a.Rule) {
+		if a.Role != "" && p.hasDeny(a.Rule) {
 			add(FindingAcknowledgeStale, "acknowledge: %s %q: the policy still denies %q, so the entry removed nothing "+
 				"and acknowledges nothing; delete it (spec §12)", a.Role, a.Rule, a.Rule)
 		}

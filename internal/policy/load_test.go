@@ -133,6 +133,10 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"key_groups", "key_groups: []\n" + roleOK + subjOK, "inventory file"},
 		{"a role's max_session_age", "roles:\n  - {name: r, max_session_age: 8h}\n" + subjOK, "plan 7"},
 		{"an unknown key", scopeOK + roleOK + subjOK + "gratns: []\n", "field gratns not found"},
+		{"an acknowledgment of two shapes", scopeOK + roleOK + subjOK +
+			"acknowledge: [{role: r, rule: x, platform: arista_eos, field: supports, reason: y}]\n", "one of the two"},
+		{"an acknowledgment of no adapter key", scopeOK + roleOK + subjOK +
+			"acknowledge: [{platform: arista_eos, field: suports, reason: y}]\n", "field is one of an adapter's keys"},
 		{"a second document", scopeOK + roleOK + subjOK + grantOK + "---\nscopes: []\n", "one YAML document"},
 		{"an empty file", "", "declares no subjects"},
 		{"a duration with no unit", roleOK + "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, token_ttl: 60}\n", "need a unit"},
