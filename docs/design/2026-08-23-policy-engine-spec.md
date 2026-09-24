@@ -600,7 +600,8 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    is logged once with the reason and the bundle still serving, counted in
    `port49_policy_reloads_total{outcome}` as `refused` (`applied` and `unchanged` beside it), and
    `port49_policy_file_refused` holds at 1 until a file loads or the old one is put back. A typo
-   never takes the fleet down. Nothing is half-applied. The timer is
+   never takes the fleet down, and that includes a file that parses but whose joint checks
+   (§10) find a composition no platform can compile. Nothing is half-applied. The timer is
    `broker.policy_watch_interval` (default 5s, 1s to 5m). A change it finds is loaded once
    two reads in a row agree, and what is loaded is the bytes those two reads agreed on, so an
    edit is in force within two intervals of its write; a `SIGHUP` loads what is on disk at
@@ -636,9 +637,14 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    down to it, as at a join, §5.3) and the `enable` mechanism. A principal left with no grant
    on the device has that context **revoked** instead (§5.6 row 2), and its next command is
    denied `credential_revoked`. A context the policy in force cannot be resolved or compiled
-   for is revoked too, failing closed: that is a broker defect, since the load's joint checks
-   compile every subject on every device (§10), so the process log names the `ctx_id` and the
-   fault and the context is counted `failed`, and the pass goes on to the next context. A
+   for is revoked too, failing closed, with a `refresh` deny record (`blob_unavailable`), a
+   process-log line naming the `ctx_id` and the fault, and a `failed` count; the pass goes on
+   to the next context. That is an unexpected fault, not a bad file: step 1's load runs the
+   joint checks (§10), which compile every subject-by-device composition the new policy can
+   reach at every grant expiry. A composition no platform can compile **refuses the policy at
+   the reload**, and the old one keeps serving; one that fails only on some platforms
+   quarantines the devices on them (§13, decision 20), whose contexts are left as they are
+   (below). A bad file is never a reason to revoke the fleet. A
    context on a device quarantined now is left as it is until the refresh that lifts the
    quarantine. A narrowed rule denies the next command and a widened
    one permits it; a widened *level* reaches the device only at the next session authorization
