@@ -2,7 +2,6 @@ package policy
 
 import (
 	"fmt"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -148,49 +147,18 @@ func permitsOf(b engine.Blob) []string {
 // operator's note. The note is quoted in ASCII, so nothing in it can close
 // it or read as the measurement, a printable look-alike of a parenthesis or
 // a quote included (spec §12); only the redaction marker is left as it reads. Both are prose a `platforms:` block
-// can write, redacted here (redactProse).
+// can write, redacted here (platform.RedactProse).
 func fallbackText(patterns []platform.Redaction, set, note string) string {
 	text := "what no platform set measured"
 	if set != "" {
-		text = redactProse(patterns, set)
+		text = platform.RedactProse(patterns, set)
 	}
 	if note != "" {
 		marker := strings.Trim(strconv.QuoteToASCII(platform.Redacted), `"`)
-		text += " (operator note: " + strings.ReplaceAll(strconv.QuoteToASCII(redactProse(patterns, note)), marker,
+		text += " (operator note: " + strings.ReplaceAll(strconv.QuoteToASCII(platform.RedactProse(patterns, note)), marker,
 			platform.Redacted) + ")"
 	}
 	return text
-}
-
-// proseWord is a word of prose as redaction reads it: punctuation separates
-// words as whitespace does, so a value glued to `community)` or `community:`
-// is still the word after `community` (spec §5.8). Over-redaction is the
-// accepted cost.
-var proseWord = regexp.MustCompile("[^\\s()\\[\\]{}<>,;:!?\"'=`]+")
-
-// redactProse is text redacted as a rule is, first by whitespace, which is
-// where a URL's password is found whole, and then by proseWord, with the
-// text's punctuation kept where it was.
-func redactProse(patterns []platform.Redaction, text string) string {
-	text = redacted(patterns, []string{text})[0]
-	spans := proseWord.FindAllStringIndex(text, -1)
-	words := make([]string, len(spans))
-	for i, sp := range spans {
-		words[i] = text[sp[0]:sp[1]]
-	}
-	out, ok := platform.RedactRule(patterns, words)
-	if !ok {
-		return text
-	}
-	var b strings.Builder
-	last := 0
-	for i, sp := range spans {
-		b.WriteString(text[last:sp[0]])
-		b.WriteString(out[i])
-		last = sp[1]
-	}
-	b.WriteString(text[last:])
-	return b.String()
 }
 
 // redacted is rules as a report lists them unquoted, each redacted by

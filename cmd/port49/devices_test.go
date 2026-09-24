@@ -144,8 +144,12 @@ func TestCheckConfigHoldsTheSetsLinesUnderABlock(t *testing.T) {
 }
 
 // A device configuration is full of secrets, so no line check-config echoes
-// is printed as the device wrote it: a finding's line, a missing line and the
-// read error all pass through redaction (spec §5.8).
+// is printed as the device wrote it (spec §5.8). A finding from the set's own
+// checks, which read method lists, echoes its line redacted; one from a
+// block's check names the check by key and index and never echoes the line,
+// since the patterns are best-effort and a block's check may match anything
+// (task 15 review I4). A block's says is redacted, a missing line is, and the
+// read error quotes nothing.
 func TestCheckConfigNeverPrintsASecret(t *testing.T) {
 	pol, inv := checkConfigFixture(t, `platforms:
   arista_eos:
@@ -153,8 +157,8 @@ func TestCheckConfigNeverPrintsASecret(t *testing.T) {
       "aaa authorization commands all default group port49 local", "snmp-server community Hunter2 rw"]
     config_checks:
       - {match: '^snmp-server community', says: "an snmp community"}
-      - {match: '^tacacs-server key', says: "a tacacs key"}
-      - {match: 'Hunter2', says: "the secret itself"}
+      - {match: '^tacacs-server key', says: 'tacacs-server key Hunter2 and "snmp-server community Hunter2 ro"'}
+      - {match: 'Hunter2', says: "the value itself"}
 `)
 	cfg := filepath.Join(t.TempDir(), "leaf-01.cfg")
 	config := "username noc privilege 1 secret 0 Hunter2\n" +
@@ -163,17 +167,27 @@ func TestCheckConfigNeverPrintsASecret(t *testing.T) {
 		"snmp-server community Hunter2 ro\n" +
 		"tacacs-server key Hunter2\n" +
 		"tacacs-server host 10.9.9.9 key 7 Hunter2\n" +
-		"copy scp://backup:Hunter2@10.9.9.9/cfg flash:\n"
+		"copy scp://backup:Hunter2@10.9.9.9/cfg flash:\n" +
+		"tacacs-server key=Hunter2\n" +
+		"password:Hunter2\n" +
+		"    community Hunter2 {\n" +
+		"wpa-psk ascii 0 Hunter2\n" +
+		"management api gnmi token Hunter2\n" +
+		"radius-server shared-secret Hunter2\n" +
+		"oauth client-secret Hunter2\n" +
+		"aaa authentication enable default group port49 key=Hunter2 local\n"
 	if err := os.WriteFile(cfg, []byte(config), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
 	code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "leaf-01", cfg}, &out, &errb)
 	for _, want := range []string{
-		"CONFIG: " + cfg + ":4: snmp-server community «redacted» «redacted»: an snmp community",
-		"CONFIG: " + cfg + ":5: tacacs-server key «redacted»: a tacacs key",
+		"CONFIG: " + cfg + ":4: platforms.arista_eos.config_checks[0]: an snmp community\n",
+		"CONFIG: " + cfg + ":5: platforms.arista_eos.config_checks[1]: tacacs-server key «redacted» ",
+		"CONFIG: " + cfg + ":7: platforms.arista_eos.config_checks[2]: the value itself\n",
+		"CONFIG: " + cfg + ":15: platforms.arista_eos.config_checks[2]: the value itself\n",
+		"CONFIG: " + cfg + ":15: aaa authentication «redacted»",
 		"MISSING: " + cfg + ": snmp-server community «redacted» «redacted»: ",
-		"CONFIG: " + cfg + ":7: copy scp://backup:«redacted»@10.9.9.9/cfg flash:: the secret itself",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())

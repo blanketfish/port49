@@ -4085,7 +4085,12 @@ that rewrites the set's line ending in `local` to end in `none` still has the se
 required and its own reported by the set's check. A device configuration is full of secrets,
 so every line of it the check prints, and every `device_config` line, is redacted by every
 pattern that applies under the policy (§5.8), and a text it could not read to the end fails
-the check without quoting it. port49 never logs into a device; this reads a file a compliance
+the check without quoting it. The patterns are best-effort, so the check echoes a line only
+for a check a set ships, which reads a method list or an authentication order: a block's check
+may match any line, and its finding names the check by key and index,
+`platforms.arista_eos.config_checks[2]`, with its `says` redacted, never the line. A device-local
+account collides in any form the daemon reads as the served username — `NOC`, `CORP\noc`,
+`noc@corp`, a quoted name (§2) — and a Junos account under `protect:` or `inactive:` is read. port49 never logs into a device; this reads a file a compliance
 tool fetched.
 
 **`port49 devices capabilities`** reports the `supports`-versus-`observed` matrix from §9.

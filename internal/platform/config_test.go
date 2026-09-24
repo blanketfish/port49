@@ -176,3 +176,19 @@ func TestAConfigLineIsRedactedUnlessASetShipsIt(t *testing.T) {
 		}
 	}
 }
+
+// A check a set ships is printed as written; a block's has its match and says
+// redacted as prose, a quoted or glued value included.
+func TestABlocksConfigCheckIsRedacted(t *testing.T) {
+	eos, _ := DialectFor("arista_eos")
+	for _, c := range eos.ConfigChecks {
+		if !ShippedConfigCheck(c) || RedactConfigCheck(AllRedactions(), c) != c {
+			t.Errorf("a set's check: %+v", c)
+		}
+	}
+	got := RedactConfigCheck(AllRedactions(), ConfigCheck{Match: `^tacacs-server key=Hunter2`,
+		Says: `tacacs-server key Hunter2 and "snmp-server community Hunter2 ro"`})
+	if ShippedConfigCheck(ConfigCheck{Match: "x", Says: "y"}) || strings.Contains(got.Match+got.Says, "Hunter2") {
+		t.Fatalf("%+v", got)
+	}
+}

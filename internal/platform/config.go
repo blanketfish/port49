@@ -17,11 +17,13 @@ type LocalAccount struct {
 	Line int
 }
 
-// ConfigFinding is a configuration line one of the adapter's checks names.
+// ConfigFinding is a configuration line one of the adapter's checks names:
+// Check is the check's index in the adapter's ConfigChecks.
 type ConfigFinding struct {
-	Line int
-	Text string
-	Says string
+	Line  int
+	Text  string
+	Says  string
+	Check int
 }
 
 // ReadConfig reads a device's configuration text, as `show running-config`
@@ -40,10 +42,10 @@ func (d Dialect) ReadConfig(config []byte) ([]LocalAccount, []ConfigFinding, err
 			accountRes = append(accountRes, re)
 		}
 	}
-	checks := make(map[*regexp.Regexp]string)
-	for _, c := range d.ConfigChecks {
+	checks := make(map[*regexp.Regexp]int)
+	for i, c := range d.ConfigChecks {
 		if re, err := regexp.Compile(c.Match); err == nil {
-			checkRes, checks[re] = append(checkRes, re), c.Says
+			checkRes, checks[re] = append(checkRes, re), i
 		}
 	}
 	err := eachLine(config, func(n int, line string) {
@@ -54,7 +56,8 @@ func (d Dialect) ReadConfig(config []byte) ([]LocalAccount, []ConfigFinding, err
 		}
 		for _, re := range checkRes {
 			if re.MatchString(line) {
-				findings = append(findings, ConfigFinding{Line: n, Text: line, Says: checks[re]})
+				i := checks[re]
+				findings = append(findings, ConfigFinding{Line: n, Text: line, Says: d.ConfigChecks[i].Says, Check: i})
 			}
 		}
 	})
@@ -152,6 +155,30 @@ func RedactConfigLine(rules []Redaction, line string) string {
 			}
 		}
 	}
-	words, _ := Redact(rules, []string{line})
-	return words[0]
+	return RedactProse(rules, line)
+}
+
+// ShippedConfigCheck reports whether some built-in set's adapter ships c, as
+// written: its match reads a method list or an authentication order, lines
+// that carry no secret, and its says is lab text. Any other check is a
+// `platforms:` block's, which may match any line and say anything.
+func ShippedConfigCheck(c ConfigCheck) bool {
+	for _, set := range sets {
+		for _, d := range set {
+			if slices.Contains(d.ConfigChecks, c) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RedactConfigCheck is c as port49 may print it: as written where a set ships
+// it (ShippedConfigCheck), and otherwise its match and says redacted as prose
+// by rules, since a block's text may carry a secret (spec §5.8).
+func RedactConfigCheck(rules []Redaction, c ConfigCheck) ConfigCheck {
+	if ShippedConfigCheck(c) {
+		return c
+	}
+	return ConfigCheck{Match: RedactProse(rules, c.Match), Says: RedactProse(rules, c.Says)}
 }

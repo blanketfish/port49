@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -468,4 +469,37 @@ func redactURL(word string) (string, bool) {
 		return word, false
 	}
 	return word[:i+3] + rest[:colon+1] + Redacted + rest[at:], true
+}
+
+// proseWord is a word of prose as redaction reads it: punctuation separates
+// words as whitespace does, so a value glued to `community)` or `community:`
+// is still the word after `community` (spec §5.8). Over-redaction is the
+// accepted cost.
+var proseWord = regexp.MustCompile("[^\\s()\\[\\]{}<>,;:!?\"'=`]+")
+
+// RedactProse is text redacted as a rule is, first by whitespace, which is
+// where a URL's password is found whole, and then by proseWord, with the
+// text's punctuation kept where it was: what a report prints of text a
+// `platforms:` block wrote, a fallback note or a config check's says.
+func RedactProse(patterns []Redaction, text string) string {
+	words, _ := RedactRule(patterns, strings.Fields(text))
+	text = strings.Join(words, " ")
+	spans := proseWord.FindAllStringIndex(text, -1)
+	words = make([]string, len(spans))
+	for i, sp := range spans {
+		words[i] = text[sp[0]:sp[1]]
+	}
+	out, ok := RedactRule(patterns, words)
+	if !ok {
+		return text
+	}
+	var b strings.Builder
+	last := 0
+	for i, sp := range spans {
+		b.WriteString(text[last:sp[0]])
+		b.WriteString(out[i])
+		last = sp[1]
+	}
+	b.WriteString(text[last:])
+	return b.String()
 }

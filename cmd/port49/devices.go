@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -94,7 +95,20 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, f := range findings {
 		failed++
-		fmt.Fprintf(stdout, "CONFIG: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
+		check := dialect.ConfigChecks[f.Check]
+		if platform.ShippedConfigCheck(check) {
+			// A set's check reads a method list or an authentication order:
+			// the line is echoed, redacted.
+			fmt.Fprintf(stdout, "CONFIG: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), check.Says)
+			continue
+		}
+		// A block's check may match any line, and the patterns are
+		// best-effort: the line is not echoed, and the check is named by its
+		// key and index in the block's list. The operator has the file.
+		key := fmt.Sprintf("platforms.%s.config_checks[%d]", d.Platform,
+			slices.Index(p.Dialect(d.Platform).ConfigChecks, check))
+		fmt.Fprintf(stdout, "CONFIG: %s:%d: %s: %s\n", fs.Arg(0), f.Line, key,
+			platform.RedactConfigCheck(rules, check).Says)
 	}
 	for _, line := range missing {
 		failed++
