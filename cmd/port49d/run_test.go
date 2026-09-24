@@ -169,6 +169,17 @@ func records(t *testing.T, log *syncBuffer, event string) []map[string]any {
 	return out
 }
 
+// lastCommand is the decision log's last authorize_command record, or fails
+// the test with the log when there is none.
+func lastCommand(t *testing.T, log *syncBuffer) map[string]any {
+	t.Helper()
+	cmds := records(t, log, "authorize_command")
+	if len(cmds) == 0 {
+		t.Fatalf("no authorize_command record; decision log %s", log.String())
+	}
+	return cmds[len(cmds)-1]
+}
+
 func ctxID(m map[string]any) any {
 	s, _ := m["session"].(map[string]any)
 	return s["ctx_id"]
@@ -210,6 +221,10 @@ func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 	if len(addrs) != 2 {
 		t.Fatalf("stderr: %q", out.String())
 	}
+	// The production shape: no lab: block, so nothing says LAB MODE.
+	if strings.Contains(out.String(), "LAB MODE") {
+		t.Fatalf("a run with no lab: block warned of lab mode: %q", out.String())
+	}
 	dev := tacacsClient{t: t, addr: addrs[0][1], key: []byte("run-test-secret")}
 
 	if st := dev.login("alice", mint(t, addrs[1][1], pkiDir, "leaf1")); st != wire.AuthenStatusPass {
@@ -241,8 +256,8 @@ func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 	if dev.permits("alice", "show", "version") {
 		t.Fatal("after the ceiling is lowered a command at 15 is above the level alice holds")
 	}
-	if cmds := records(t, &log, "authorize_command"); cmds[len(cmds)-1]["reason"] != "privilege_exceeded" {
-		t.Fatalf("the command above the lowered level: %v", cmds[len(cmds)-1])
+	if last := lastCommand(t, &log); last["reason"] != "privilege_exceeded" {
+		t.Fatalf("the command above the lowered level: %v", last)
 	}
 	if !dev.permitsAt(1, "alice", "show", "version") {
 		t.Fatal("at the lowered level alice's show is still permitted")
@@ -253,8 +268,14 @@ func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, &out, "refused; still serving ")
-	if !dev.permitsAt(1, "alice", "show", "version") {
-		t.Fatal("a refused file changes nothing")
+	if dev.permits("alice", "show", "version") {
+		t.Fatal("after a refused file the lowered ceiling still holds: a command at 15 is above it")
+	}
+	if last := lastCommand(t, &log); last["reason"] != "privilege_exceeded" {
+		t.Fatalf("the command above the level the lowered policy still holds: %v", last)
+	}
+	if !dev.permitsAt(1, "alice", "show", "version") || dev.permitsAt(1, "alice", "configure") {
+		t.Fatal("after a refused file the lowered policy keeps serving: show is permitted and configure denied")
 	}
 
 	// Withdraw alice's grant, to carol: alice's context is revoked, not
@@ -277,15 +298,17 @@ func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 		t.Fatalf("alice logged in %d times", len(redeems))
 	}
 	id := ctxID(redeems[0])
-	for _, event := range []string{"authorize_command", "refresh"} {
+	if id == nil || id == "" {
+		t.Fatalf("the redeem record names no context: %v", redeems[0])
+	}
+	for _, event := range []string{"authorize_session", "authorize_command", "refresh"} {
 		for _, rec := range records(t, &log, event) {
 			if ctxID(rec) != id {
 				t.Fatalf("a %s record names another context: %v", event, rec)
 			}
 		}
 	}
-	cmds := records(t, &log, "authorize_command")
-	if last := cmds[len(cmds)-1]; last["reason"] != "credential_revoked" {
+	if last := lastCommand(t, &log); last["reason"] != "credential_revoked" {
 		t.Fatalf("the last command: %v", last)
 	}
 	// The revocation is on the record before the command it denied: a refresh
