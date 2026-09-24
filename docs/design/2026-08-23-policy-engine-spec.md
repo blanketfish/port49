@@ -3592,10 +3592,10 @@ exercises it, the acknowledgment the shadowed-deny report and a deny-to-permit c
 
 - a permit carrying a regex or class term that the new policy added — by a test that expects
   `permit` on a command that permit decides;
-- a permit carrying one that meets a deny the new policy removed — by a test that expects
-  `permit` on a command that deny refused before and that permit wins now;
-- a deny carrying one that the new policy removed — by a test, `permit` or `deny`, on a command
-  that deny refused before, so a deny rewritten wider is acknowledged by a test it still refuses.
+- a deny carrying one that the new policy removed, or a permit carrying one that meets a deny
+  the new policy removed — by a test, `permit` or `deny`, on a command that deny refused before.
+  A test of the permit over the deny is one; a deny rewritten wider, which no permit test can
+  get past, is acknowledged by a test it still refuses.
 
 The narrowings — such a permit removed, such a deny added, or a permit meeting a deny the change
 added — are reported and do not fail.
