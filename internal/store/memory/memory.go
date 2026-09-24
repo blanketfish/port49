@@ -5,6 +5,7 @@ package memory
 import (
 	"bytes"
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -689,6 +690,11 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 // revision, moves both revisions, and nothing about the expiry: a policy edit
 // is not activity.
 func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRev uint64, p store.ContextPolicy) error {
+	if p.RevokedAt.IsZero() && p.BlobHash == "" {
+		// A live context pointing at no blob is a corrupt record, whatever
+		// the caller meant; refuse it rather than write it.
+		return errors.New("store: a policy write that does not revoke must name a blob hash")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.contexts[k]

@@ -199,6 +199,20 @@ func PolicyRevision(t *testing.T, newStore func() store.Store, now time.Time) {
 		}
 	}
 
+	// A write that does not revoke names a blob: one with none would leave a
+	// live context pointing at nothing. It is refused, and nothing is written.
+	{
+		s := fresh()
+		before := read(s)
+		if err := s.SetContextPolicy(ctx, k, before.PolicyRev, store.ContextPolicy{MaxPrivilege: 7}); err == nil {
+			t.Fatal("a non-revoking write with no blob hash must be refused")
+		}
+		if got := read(s); got.BlobHash != before.BlobHash || got.MaxPrivilege != before.MaxPrivilege ||
+			got.Rev != before.Rev {
+			t.Fatalf("a refused write wrote: %+v", got)
+		}
+	}
+
 	// A revocation stands. A refresh read after it cannot clear it, and a
 	// revoking refresh stamped earlier cannot move it earlier, which would let
 	// a token minted between the two lift it at the next join.

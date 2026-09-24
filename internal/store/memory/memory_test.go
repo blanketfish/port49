@@ -1325,10 +1325,12 @@ func TestSetContextPolicyWritesItsListOnlyIfTheRecordIsTheOneRead(t *testing.T) 
 	}
 
 	// A revocation writes RevokedAt and nothing else.
-	if err := s.SetContextPolicy(ctx, k, got.PolicyRev, store.ContextPolicy{RevokedAt: now, BlobHash: "sha256:ignored"}); err != nil {
+	if err := s.SetContextPolicy(ctx, k, got.PolicyRev, store.ContextPolicy{RevokedAt: now, BlobHash: "sha256:ignored",
+		MaxPrivilege: 1, Enable: "auto"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = s.GetContext(ctx, k); !got.RevokedAt.Equal(now) || got.BlobHash != "sha256:wide" {
+	if got, _ = s.GetContext(ctx, k); !got.RevokedAt.Equal(now) || got.BlobHash != "sha256:wide" ||
+		got.MaxPrivilege != 0 || got.Enable != "token" || got.PrivLvl != 7 {
 		t.Fatalf("a revoking refresh must write the mark and only the mark: %+v", got)
 	}
 
