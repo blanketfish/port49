@@ -581,3 +581,70 @@ func RedactProse(patterns []Redaction, text string) string {
 	b.WriteString(text[last:])
 	return b.String()
 }
+
+// HiddenValues are the values RedactRule hides in a rule's words: each word
+// it changed, less what it kept of the word, so `key=X` gives `X`. A writer
+// that knows them can redact a value wherever a line prints it, not only in
+// a quoted rule (RedactValues).
+func HiddenValues(rules []Redaction, words []string) []string {
+	out, ok := RedactRule(rules, words)
+	if !ok || len(out) != len(words) {
+		return nil
+	}
+	var values []string
+	for i, w := range words {
+		o := out[i]
+		if o == w {
+			continue
+		}
+		pre := 0
+		for pre < len(w) && pre < len(o) && w[pre] == o[pre] {
+			pre++
+		}
+		suf := 0
+		for suf < len(w)-pre && suf < len(o)-pre && w[len(w)-1-suf] == o[len(o)-1-suf] {
+			suf++
+		}
+		if v := w[pre : len(w)-suf]; v != "" {
+			values = append(values, v)
+		}
+	}
+	return values
+}
+
+// RedactValues is line with every occurrence of each value that stands as a
+// word of its own, bounded by anything but a letter, a digit or `_`,
+// replaced by Redacted: a report that derives text from a secret-bearing
+// rule, a word it names or a fix it suggests, prints no more of the secret
+// than the rule's own quoted form does (spec §5.8).
+func RedactValues(values []string, line string) string {
+	for _, v := range values {
+		if v == "" || v == Redacted {
+			continue
+		}
+		var b strings.Builder
+		rest := line
+		for {
+			i := strings.Index(rest, v)
+			if i < 0 {
+				b.WriteString(rest)
+				break
+			}
+			end := i + len(v)
+			if (i > 0 && wordByte(rest[i-1])) || (end < len(rest) && wordByte(rest[end])) {
+				b.WriteString(rest[:end])
+				rest = rest[end:]
+				continue
+			}
+			b.WriteString(rest[:i])
+			b.WriteString(Redacted)
+			rest = rest[end:]
+		}
+		line = b.String()
+	}
+	return line
+}
+
+func wordByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}

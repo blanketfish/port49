@@ -532,3 +532,21 @@ func TestAURLQueryCredentialIsRedacted(t *testing.T) {
 		t.Errorf("%q", got)
 	}
 }
+
+// The values a rule's redaction hides are what a writer redacts wherever a
+// line prints them, as a word of its own, and nowhere else.
+func TestHiddenValuesAreRedactedWhereverALinePrintsThem(t *testing.T) {
+	rules := Redactions("cisco_iosxe")
+	got := HiddenValues(rules, strings.Fields("show system radius-server 10.0.0.1 secret HUNTER2"))
+	if !slices.Equal(got, []string{"HUNTER2"}) {
+		t.Fatalf("%q", got)
+	}
+	if got := HiddenValues(rules, strings.Fields("show version")); got != nil {
+		t.Fatalf("%q", got)
+	}
+	line := "`HUNTER2` never matches; write `HUNTER2x` or HUNTER2, not xHUNTER2"
+	if got, want := RedactValues([]string{"HUNTER2"}, line),
+		"`«redacted»` never matches; write `HUNTER2x` or «redacted», not xHUNTER2"; got != want {
+		t.Fatalf("%q", got)
+	}
+}

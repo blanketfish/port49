@@ -961,3 +961,40 @@ key_groups:
 		}
 	}
 }
+
+// A finding that derives text from a rule, not only quotes it, still prints
+// no secret: permit_joined_name names the joined word and the fix, and the
+// word here is the secret. The writer redacts every value the policy's rules
+// hide wherever it appears in a line, not only inside a quoted rule (task 11
+// review, pre-existing leak from f426892).
+func TestPolicyTestNeverPrintsASecretAJoinedNameFindingDerives(t *testing.T) {
+	pol, inv := policyFixture(t)
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: xe-01, platform: cisco_iosxe, addresses: [10.0.0.3]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := string(readFile(t, pol))
+	withSecret := strings.Replace(raw, "permit: [show **]}",
+		`permit: [show **, "show system radius-server 10.0.0.1 secret HUNTER2", "show interfaces Gi1"]}`, 1)
+	if withSecret == raw {
+		t.Fatal("the fixture's permit moved")
+	}
+	if err := os.WriteFile(pol, []byte(withSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+	got := out.String() + errb.String()
+	if strings.Contains(got, "HUNTER") {
+		t.Fatalf("policy test printed the secret:\n%s", got)
+	}
+	// The finding still fires for a joined name that is no secret.
+	if !strings.Contains(got, "`Gi1` never matches on cisco_iosxe") {
+		t.Fatalf("the joined-name finding is gone:\n%s", got)
+	}
+}

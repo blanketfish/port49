@@ -238,6 +238,7 @@ func (p *Policy) JoinedNamePermits() []Finding {
 			platforms[d.Platform] = true
 		}
 	}
+	patterns := p.Redactions()
 	var out []Finding
 	for _, name := range sortedKeys(p.roles) {
 		for _, rule := range p.roles[name].Permit {
@@ -245,8 +246,15 @@ func (p *Policy) JoinedNamePermits() []Finding {
 			if err != nil {
 				continue
 			}
+			// A word redaction hides is never named, nor split into the fix:
+			// rule_secret_literal reports that rule, and `HUNTER 2` would
+			// print the secret past any writer (spec §5.8).
+			hidden := platform.HiddenValues(patterns, strings.Fields(rule))
 			for _, plat := range sortedKeys(platforms) {
 				for _, t := range terms {
+					if slices.Contains(hidden, t.Text) {
+						continue
+					}
 					if head, index, ok := engine.SplitName(t.Text); ok && t.Kind == engine.Word {
 						out = append(out, Finding{Kind: FindingPermitJoinedName, Message: fmt.Sprintf(
 							"role %q: permit %q on %s: `%s` never matches on %s, which sends it as two arguments "+
@@ -270,6 +278,26 @@ func (p *Policy) Redactions() []platform.Redaction {
 		all = append(all, p.adapters[name].Redact...)
 	}
 	return all
+}
+
+// HiddenValues is every value Redactions hides in a role's rule: what a
+// report's writer redacts wherever a line prints it, since a finding may
+// derive text from a rule, a word it names or a fix it suggests, beside the
+// rule's quoted form (platform.RedactValues; spec §5.8).
+func (p *Policy) HiddenValues() []string {
+	patterns := p.Redactions()
+	var out []string
+	for _, name := range sortedKeys(p.roles) {
+		r := p.roles[name]
+		for _, rule := range slices.Concat(r.Permit, r.Deny, r.Pipe) {
+			for _, v := range platform.HiddenValues(patterns, strings.Fields(rule)) {
+				if !slices.Contains(out, v) {
+					out = append(out, v)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // SecretClasses is every entity class a role's rule names where a value is

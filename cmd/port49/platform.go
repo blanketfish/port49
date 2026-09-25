@@ -286,8 +286,8 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 			after.PlatformSet(), *to)
 		return 1
 	}
-	out.rules = append(before.Redactions(), after.Redactions()...)
-	errOut.rules = out.rules
+	out.learn(before, after)
+	errOut.learn(before, after)
 	upgradeReport(stdout, before, after, time.Now())
 	if *write {
 		if err := replaceFile(files.policy, moved); err != nil {

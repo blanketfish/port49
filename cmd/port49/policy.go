@@ -81,7 +81,8 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 explain:", err)
 		return 1
 	}
-	out.rules, errOut.rules = p.Redactions(), p.Redactions()
+	out.learn(p)
+	errOut.learn(p)
 	e, err := p.Explain(*subject, *principal, *device, *command, time.Now())
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 explain:", err)
@@ -138,7 +139,8 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 policy test:", err)
 		return 1
 	}
-	out.rules, errOut.rules = p.Redactions(), p.Redactions()
+	out.learn(p)
+	errOut.learn(p)
 	stdout = out
 	now := time.Now()
 	// The set the policy renders with, first: a reviewer reading a rendering
@@ -312,8 +314,8 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 policy diff: --new:", err)
 		return 1
 	}
-	out.rules = append(before.Redactions(), after.Redactions()...)
-	errOut.rules = out.rules
+	out.learn(before, after)
+	errOut.learn(before, after)
 	stdout = out
 	now := time.Now()
 	d := policy.Compare(before, after, now)
@@ -731,7 +733,8 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, url)
 		}
 		if err != nil {
-			errOut := &redacting{w: stderr, rules: after.Redactions()}
+			errOut := &redacting{w: stderr}
+			errOut.learn(after)
 			fmt.Fprintln(errOut, "port49 grants remove:", err)
 			return 1
 		}
@@ -823,7 +826,26 @@ func writeSynced(tmp *os.File, data []byte, old os.FileInfo) error {
 type redacting struct {
 	w     io.Writer
 	rules []platform.Redaction
-	buf   []byte
+	// values are what the rules hide in the loaded policies' rules, redacted
+	// wherever a line prints them: a report may derive text from a rule
+	// beside quoting it (platform.RedactValues).
+	values []string
+	buf    []byte
+}
+
+// learn takes the redactions of each loaded policy and the values they hide
+// in its rules.
+func (r *redacting) learn(ps ...*policy.Policy) {
+	r.rules, r.values = nil, nil
+	for _, p := range ps {
+		r.rules = append(r.rules, p.Redactions()...)
+		r.values = append(r.values, p.HiddenValues()...)
+	}
+}
+
+// redact is one line as the writer prints it.
+func (r *redacting) redact(line string) string {
+	return platform.RedactValues(r.values, platform.RedactQuoted(r.rules, line))
 }
 
 func (r *redacting) Write(p []byte) (int, error) {
@@ -833,7 +855,7 @@ func (r *redacting) Write(p []byte) (int, error) {
 		if i < 0 {
 			return len(p), nil
 		}
-		if _, err := io.WriteString(r.w, platform.RedactQuoted(r.rules, string(r.buf[:i+1]))); err != nil {
+		if _, err := io.WriteString(r.w, r.redact(string(r.buf[:i+1]))); err != nil {
 			return 0, err
 		}
 		r.buf = r.buf[i+1:]
@@ -847,7 +869,7 @@ func redactOutput(stdout, stderr io.Writer) (out, errOut *redacting, flush func(
 	return out, errOut, func() {
 		for _, r := range []*redacting{out, errOut} {
 			if len(r.buf) > 0 {
-				io.WriteString(r.w, platform.RedactQuoted(r.rules, string(r.buf)))
+				io.WriteString(r.w, r.redact(string(r.buf)))
 				r.buf = nil
 			}
 		}

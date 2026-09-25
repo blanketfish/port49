@@ -53,7 +53,8 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	rules := p.Redactions()
-	out.rules, errOut.rules = rules, rules
+	out.learn(p)
+	errOut.learn(p)
 	redact := func(line string) string { return platform.RedactConfigLine(rules, line) }
 	d, ok := p.Device(*device)
 	if !ok {
