@@ -376,14 +376,25 @@ func (p *Policy) buildPlatforms(f file) error {
 		// the block gives a level the set measured nothing for is the
 		// operator's note, never read as a measurement.
 		ref, measured := builtin[shippedAs]
-		// Only a measured set subtracts reach (spec §8, carve_outs): a block
-		// for a platform the pinned set does not project declares none, or a
-		// deny its carve-out claims would be sent as nothing (plan 5b
-		// pre-flight R-I1). keepsProjection holds a projected one to the set's.
-		if b.Spec.CarveOuts != nil && !(measured && ref.Projected()) {
-			return fmt.Errorf("%s.carve_outs: platform set %s does not project %s, so no carve-out on it is "+
-				"measured; a carve-out says the held bits reach less, and only a measured set subtracts reach, so "+
-				"remove the key (spec §8, §15 L12)", at, p.set, shippedAs)
+		// Only a platform the pinned set projects is projected (spec §8,
+		// command_projection): anywhere else nothing measured sets a floor
+		// under a bit's reach or measures a carve-out, so an understated one
+		// would send a deny as nothing (plan 5b pre-flight R-I1; Task 6 review
+		// I3). keepsProjection holds a projected platform to the set's.
+		if !(measured && ref.Projected()) {
+			for _, k := range []struct {
+				key string
+				set bool
+			}{{"command_projection", b.Spec.CommandProjection != nil}, {"bits", b.Spec.Bits != nil},
+				{"carve_outs", b.Spec.CarveOuts != nil}, {"bit_delivery", b.Spec.BitDelivery != nil},
+				{"local_user_names", b.Spec.LocalUserNames != nil}} {
+				if k.set {
+					return fmt.Errorf("%s.%s: platform set %s does not project %s, and only a platform the pinned set "+
+						"projects is projected: nothing measured there sets a floor under a bit's reach or measures a "+
+						"carve-out, so a deny could be sent as nothing; remove the key (spec §8, §15 L12)", at, k.key,
+						p.set, shippedAs)
+				}
+			}
 		}
 		if measured {
 			d = platform.KeepMeasured(d, ref)
@@ -956,17 +967,30 @@ func (p *Policy) checkPlaceholder(at, key, a string) error {
 }
 
 // checkInertOnProjected refuses, under a projected platform's key or under
-// `all` where any platform is projected, an attribute that platform's adapter
-// does not list inert: whether the device reads a name outside the
-// projection's (`shell:allow-commands`, `foo-bar`) is unmeasured, and one it
-// read would stand beside what the projection proved (spec §8, "Generator
-// constraints" 6; plan 5b pre-flight R-M3). A name is read as written, so a
-// case variant of an inert one is refused too.
+// `all` where a device in the inventory has a projected platform, an
+// attribute that platform's adapter does not list inert: whether the device
+// reads a name outside the projection's (`shell:allow-commands`, `foo-bar`) is
+// unmeasured, and one it read would stand beside what the projection proved
+// (spec §8, "Generator constraints" 7; plan 5b pre-flight R-M3). A name is
+// read as written, so a case or numbered variant is refused too. Under `all`,
+// classIdle's names are left off a projected platform instead (leftOff).
 func (p *Policy) checkInertOnProjected(at, key, a string) error {
 	name := engine.AttributeName(a)
-	for _, plat := range sortedKeys(p.adapters) {
-		d := p.adapters[plat]
-		if (key == plat || key == "all") && d.Projected() && d.BearsPrivilege(name) {
+	platforms := []string{key}
+	if key == "all" {
+		if slices.Contains(classIdle, name) {
+			return nil
+		}
+		platforms = nil
+		for _, d := range p.env.Devices {
+			if !slices.Contains(platforms, d.Platform) {
+				platforms = append(platforms, d.Platform)
+			}
+		}
+		slices.Sort(platforms)
+	}
+	for _, plat := range platforms {
+		if d := p.dialect(plat); d.Projected() && d.BearsPrivilege(name) {
 			return fmt.Errorf("%s: %s is not listed inert on %s, whose reply is its projection's: whether the "+
 				"device reads it is unmeasured, and one it read would stand beside what the projection proved, so "+
 				"only an attribute the adapter lists inert is set there (spec §8)", at, name, plat)

@@ -208,6 +208,13 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 		// A level or ceiling is asserted of a session the mint would make,
 		// so it fails wherever no level was resolved.
 		minted := r.Err == nil && r.Ceiling != ""
+		if minted {
+			for _, a := range res.LeftOff {
+				r.Caveats = append(r.Caveats, fmt.Sprintf("%s (%s) is not sent to %s: under `all`, idletime and "+
+					"timeout are left off a projected platform, whose idle limit is the device's login class's "+
+					"(spec §8, decision 21)", a.Attribute, a.Source, d.Platform))
+			}
+		}
 		r.Pass = r.Err == nil && (t.Level == "" || minted && t.Level == r.Level) &&
 			(t.MaxPrivilege == "" || minted && t.MaxPrivilege == r.Ceiling) &&
 			(t.PrivLvl == "" || minted && samePrivLvl(t.PrivLvl, r.PrivLvl)) &&

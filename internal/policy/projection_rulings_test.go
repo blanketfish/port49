@@ -1,9 +1,11 @@
 package policy
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/platform"
 )
 
@@ -25,31 +27,113 @@ const myJunos = `platforms:
   - {name: r, privilege: readonly, permit: ["show **"], deny: ["show log **"]}
 ` + subjOK + grantOK
 
-// Only a measured set subtracts reach: a block for a platform the pinned set
-// does not project may not declare carve_outs at all, or a deny the carve-out
-// claims would be sent as nothing (spec §8, carve_outs; pre-flight R-I1).
-func TestACarveOutNoSetMeasuredIsRefused(t *testing.T) {
+// Only a platform the pinned set projects is projected: nothing measured sets
+// a floor under a bit's reach anywhere else, so an understated reach or an
+// unmeasured carve-out would send a deny as nothing (spec §8,
+// command_projection; pre-flight R-I1; Task 6 review I3). A block, replace:
+// true included, and a new platform are refused for any projection key.
+func TestOnlyThePinnedSetProjects(t *testing.T) {
+	withoutProjection := strings.Replace(myJunos, "    command_projection: junos_regex\n", "", 1)
+	replaceOn100 := strings.Replace(strings.Replace(myJunos, "my_junos:\n", "juniper_junos:\n    replace: true\n", 1),
+		`    carve_outs: {trace: ["show log **"]}`+"\n", "", 1)
 	for _, c := range []struct {
-		name, body string
-		env        Env
+		name, body, want string
+		env              Env
 	}{
 		{"a new platform, on the projected set", "platform_set: " + projectedSet + "\n" + myJunos,
+			"platforms.my_junos.command_projection: platform set 9.0.0 does not project my_junos",
 			projectedEnv(platform.BitDeliveryUserPermissions)},
-		{"a new platform, unpinned", myJunos, env()},
-		{"a new platform with no carve-out's key but an empty one", "platform_set: " + projectedSet + "\n" +
-			strings.Replace(myJunos, `carve_outs: {trace: ["show log **"]}`, "carve_outs: {}", 1),
+		{"a new platform, unpinned", myJunos, "platforms.my_junos.command_projection: platform set 1.0.0 does not " +
+			"project my_junos", env()},
+		{"a new platform with bits and no projection", "platform_set: " + projectedSet + "\n" + withoutProjection,
+			"platforms.my_junos.bits: platform set 9.0.0 does not project my_junos",
 			projectedEnv(platform.BitDeliveryUserPermissions)},
-		{"a shipped platform the pinned set does not project", strings.Replace(myJunos, "my_junos", "juniper_junos",
-			1), env()},
+		{"a new platform with only an empty carve_outs", strings.Replace(myJunos, `carve_outs: {trace: ["show log **"]}`,
+			"carve_outs: {}", 1), "platforms.my_junos.command_projection: platform set 1.0.0 does not project", env()},
+		{"replace: true over 1.0.0's juniper_junos", replaceOn100,
+			"platforms.juniper_junos.command_projection: platform set 1.0.0 does not project juniper_junos", env()},
+		{"a new platform with a root template", "platform_set: " + projectedSet + "\n" +
+			strings.Replace(strings.Replace(myJunos, "user_permissions", "local_user_name", 1),
+				"    privilege:", "    local_user_names: {readonly: root}\n    privilege:", 1),
+			"does not project my_junos", projectedEnv(platform.BitDeliveryLocalUserName)},
 	} {
 		_, err := Parse([]byte(c.body), c.env)
-		if err == nil || !strings.Contains(err.Error(), "carve_outs: platform set") {
-			t.Errorf("%s: %v", c.name, err)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
 	}
-	// The same platform with no carve-out loads: its deny goes on the wire.
-	parseProjected(t, platform.BitDeliveryUserPermissions,
-		strings.Replace(myJunos, "    carve_outs: {trace: [\"show log **\"]}\n", "", 1))
+}
+
+// A template user is p49-<name>, in the set and in a block alike: `root` or
+// `remote` would put the session in a class the device already has, whatever
+// bits the projection proved (spec §8, local_user_names; Task 6 review I2).
+func TestABlockTemplateIsP49Namespaced(t *testing.T) {
+	for _, c := range []struct{ block, want string }{
+		{"local_user_names: {admin: root}", "local_user_names.admin: root is not a p49- template"},
+		{"local_user_names: {readonly: remote}", "local_user_names.readonly: remote is the device's own fallback"},
+		{"local_user_names: {readonly: ROOT}", "local_user_names.readonly is not a login name"},
+	} {
+		_, err := Parse([]byte("platform_set: "+projectedSet+"\nplatforms:\n  juniper_junos:\n    "+c.block+"\n"+
+			readonlyCarveOut), projectedEnv(platform.BitDeliveryLocalUserName))
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.block, err, c.want)
+		}
+	}
+}
+
+// Under `all`, idletime and timeout are left off a projected Junos device,
+// whose idle limit is its class's (decision 21), and policy test says so:
+// spec §6's example loads on a projected set and is still sent elsewhere.
+// Under the platform's own key they are refused as any unlisted name is.
+func TestClassIdleUnderAllIsNotSent(t *testing.T) {
+	body := scopeOK + `roles:
+  - {name: r, privilege: readonly, permit: ["show **"], attributes: {all: ["idletime*30", "timeout*480"]}}
+` + subjOK + grantOK + `tests:
+  - {subject: s, device: srx-fw-04, level: readonly}
+  - {subject: s, device: srx-fw-04, command: "show version", expect: permit}
+  - {subject: s, device: leaf-01, level: readonly}
+`
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, body)
+	results := p.RunTests(noon)
+	for _, r := range results[:2] {
+		if !r.Pass || strings.Contains(strings.Join(r.Reply, " "), "idletime") ||
+			!slices.ContainsFunc(r.Caveats, func(c string) bool {
+				return strings.Contains(c, "idletime*30 (role r) is not sent to juniper_junos") &&
+					strings.Contains(c, "login class's")
+			}) {
+			t.Errorf("srx-fw-04 %q: reply %q, caveats %q", r.Test.Command, r.Reply, r.Caveats)
+		}
+	}
+	if r := results[2]; !slices.Contains(r.Reply, "idletime*30") || len(r.Caveats) != 0 {
+		t.Errorf("leaf-01: reply %q, caveats %q", r.Reply, r.Caveats)
+	}
+	for _, a := range []string{"Idletime*30", "idletime2*30", "timeout1*480"} {
+		_, err := Parse([]byte("platform_set: "+projectedSet+"\n"+strings.Replace(body, "idletime*30", a, 1)),
+			projectedEnv(platform.BitDeliveryUserPermissions))
+		if err == nil || !strings.Contains(err.Error(), "is not listed inert on juniper_junos") {
+			t.Errorf("all %s: %v", a, err)
+		}
+	}
+	_, err := Parse([]byte("platform_set: "+projectedSet+"\n"+strings.Replace(body, "all:", "juniper_junos:", 1)),
+		projectedEnv(platform.BitDeliveryUserPermissions))
+	if err == nil || !strings.Contains(err.Error(), "idletime is not listed inert on juniper_junos") {
+		t.Errorf("juniper_junos idletime: %v", err)
+	}
+}
+
+// Under `all`, the rule is read for each platform a device in the inventory
+// has: a projected adapter no device uses refuses nothing there (review M3).
+func TestAllIsReadPerDevicePlatform(t *testing.T) {
+	e := projectedEnv(platform.BitDeliveryUserPermissions)
+	e.Devices = slices.DeleteFunc(slices.Clone(e.Devices), func(d admission.Device) bool {
+		return d.Platform == "juniper_junos"
+	})
+	body := scopeOK + `roles:
+  - {name: r, privilege: readonly, permit: ["show **"], attributes: {all: ["foo-bar=1"]}}
+` + subjOK + grantOK
+	if _, err := Parse([]byte("platform_set: "+projectedSet+"\n"+body), e); err != nil {
+		t.Errorf("no Junos device: %v", err)
+	}
 }
 
 // A block that adds to a bit's reach, or drops a carve-out, claims the bits

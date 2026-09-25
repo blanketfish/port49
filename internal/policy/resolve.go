@@ -41,6 +41,10 @@ type Resolution struct {
 	// Incomparable names scopes that selected the device only because a
 	// version could not be compared (spec §5.5).
 	Incomparable []string
+	// LeftOff are the attributes under `all` the reply does not carry on a
+	// projected platform, each with its source (leftOff): policy test notes
+	// them, so an idle limit written once is never silently dropped.
+	LeftOff []AttributeSource
 	// Blob is the compiled decision; Attributes says where each of its
 	// attributes came from and what it shadowed (spec §6).
 	Blob       engine.Blob
@@ -116,6 +120,7 @@ func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Reso
 		res.Grants = append(res.Grants, pg)
 	}
 	dialect := p.dialect(d.Platform)
+	res.LeftOff = p.leftOffAttributes(c, dialect)
 	if c.ceiling != "" {
 		n, ok := p.privLvl(dialect, c.ceiling)
 		if !ok {
@@ -248,16 +253,56 @@ func (p *Policy) layerAttributes(c composition, platformName string, dialect pla
 	}
 	for _, name := range c.roles {
 		attrs := p.roles[name].Attributes
-		for _, a := range slices.Concat(attrs["all"], attrs[platformName]) {
+		for _, a := range slices.Concat(sentUnderAll(dialect, attrs["all"]), attrs[platformName]) {
 			put(a, "role "+name)
 		}
 	}
 	for _, g := range c.grants {
-		for _, a := range slices.Concat(g.Attributes["all"], g.Attributes[platformName]) {
+		for _, a := range slices.Concat(sentUnderAll(dialect, g.Attributes["all"]), g.Attributes[platformName]) {
 			put(a, "grant "+g.Scope+" ["+strings.Join(g.Roles, " ")+"]")
 		}
 	}
 	return out, nil
+}
+
+// classIdle are the attribute names that, under `all`, a projected platform
+// is not sent: its device's idle limit is its login class's (spec §8,
+// "Generator constraints" 7; decision 21). Under the platform's own key they
+// are refused unless listed inert (checkInertOnProjected).
+var classIdle = []string{"idletime", "timeout"}
+
+// leftOff reports whether an attribute under `all` is left off this platform.
+func leftOff(dialect platform.Dialect, a string) bool {
+	return dialect.Projected() && slices.Contains(classIdle, engine.AttributeName(a))
+}
+
+// sentUnderAll is the `all` attributes this platform is sent: every one but
+// those leftOff.
+func sentUnderAll(dialect platform.Dialect, all []string) []string {
+	return slices.DeleteFunc(slices.Clone(all), func(a string) bool { return leftOff(dialect, a) })
+}
+
+// leftOffAttributes is every `all` attribute of the composition's roles and
+// grants that layerAttributes leaves off this platform, sourced as it would
+// have been.
+func (p *Policy) leftOffAttributes(c composition, dialect platform.Dialect) []AttributeSource {
+	var out []AttributeSource
+	for _, name := range c.roles {
+		for _, a := range p.roles[name].Attributes["all"] {
+			if leftOff(dialect, a) {
+				out = append(out, AttributeSource{Attribute: a, Source: "role " + name})
+			}
+		}
+	}
+	for _, g := range c.grants {
+		for _, a := range g.Attributes["all"] {
+			if leftOff(dialect, a) {
+				out = append(out, AttributeSource{Attribute: a, Source: "grant " + g.Scope + " [" +
+					strings.Join(g.Roles, " ") + "]"})
+			}
+		}
+	}
+	return out
 }
 
 // render follows a level's parent chain to the first level the platform maps
