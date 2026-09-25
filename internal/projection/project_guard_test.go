@@ -165,3 +165,50 @@ func TestTwentyCompositionsProjectQuickly(t *testing.T) {
 	}
 	t.Logf("20 compositions projected in %v", best)
 }
+
+// measuredJunos is junos with the reach and baseline the lab measured on the
+// vSRX (tests/lab/results/L12-bits-juniper_vsrx.md) and the test levels.
+func measuredJunos(delivery string) platform.Dialect {
+	d := junos(delivery)
+	d.Bits = map[string][]string{
+		platform.BaselineBit: {"help **", "quit **", "exit **", "set cli **", "show cli **", "file **", "load **",
+			"op **", "request **", "save **", "scp **", "set **", "start **", "test **"},
+		"clear":   {"clear **", "request mpls **", "set chassis **"},
+		"network": {"ping **", "traceroute **", "ssh **", "telnet **", "mtrace **", "probe **", "request routing-engine **"},
+		"trace":   {"monitor **"},
+		"view": {"show **", "request flight-recorder **", "request pppoe **", "request snmp **",
+			"request validation **", "test interface **", "test msdp **", "test policy **", "test rib-sharding **",
+			"test services **"},
+		"view-configuration": {"show configuration **", "monitor **", "request mpls **",
+			"request path-computation-client **", "request security **", "request unified-edge **",
+			"request virtual-chassis **", "load dhcp-security-snoop **", "save dhcp-security-snoop **"},
+		"all": {"**"},
+	}
+	return d
+}
+
+func measuredInput(delivery, level string, f Facts, rules ...engine.Rule) Input {
+	in := input(delivery, level, f, rules...)
+	in.Dialect = measuredJunos(delivery)
+	in.Bits = in.Dialect.CeilingBits[level]
+	return in
+}
+
+// A baseline deny is port49's reading of what the baseline runs, not a rule
+// anyone wrote: a permit of a baseline command beneath it is no refused
+// shape (review I1).
+func TestAPermitOfABaselineCommandIsNotRefused(t *testing.T) {
+	for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
+		for _, f := range []Facts{JunosFacts} {
+			res, err := Project(measuredInput(delivery, "operator", f, permit("show **"), permit("clear **"),
+				permit("ping **"), permit("request support information **"), permit("quit"), permit("exit")))
+			if err != nil || res.Shape == ShapeFailClosed {
+				t.Errorf("%s %+v: %+v %v", delivery, f, res.Refusal, err)
+				continue
+			}
+			if !res.Device([]string{"quit"}) || !res.Device([]string{"exit"}) || res.Device([]string{"quit", "now"}) {
+				t.Errorf("%s %+v: %q", delivery, f, res.Attributes)
+			}
+		}
+	}
+}

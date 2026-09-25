@@ -374,9 +374,14 @@ func (g generator) reaches(p string, s []string, denied bool) bool {
 
 // allowable is the deny sending p as an allow would void, if any: on the
 // device a matching allow beats every deny, so p goes out only where it
-// dominates each deny it meets (spec §5.4, §8).
+// dominates each deny it meets (spec §5.4, §8). A baseline deny is none of
+// port49's: it holds what the baseline runs and no rule decides, so an allow
+// running only what p matches runs nothing port49 denies beneath it.
 func (g generator) allowable(p string) (engine.Rule, bool) {
 	for _, d := range g.denies {
+		if d.Role == platform.BaselineBit {
+			continue
+		}
 		if g.mayMeet(p, d.Rule) && !g.dominates(p, d.Rule) {
 			return d, false
 		}
