@@ -144,6 +144,35 @@ func TestCheckServicesBypasses(t *testing.T) {
 			t.Errorf("%q: %+v %v", ok, f, err)
 		}
 	}
+	// Under ssh only the transport's own options pass: sftp-server opens a
+	// file-access subsystem no measured deny binds, tcp-forwarding a channel
+	// to any port, and an option the list does not know fails, as does a
+	// quoted value where the option belongs.
+	for _, line := range []string{
+		"set system services ssh sftp-server",
+		"set system services ssh tcp-forwarding",
+		"set system services ssh authorized-keys-command /var/tmp/k",
+		"set system services ssh subsystem x",
+		"set system services ssh frobnicate",
+		"set system services ssh \"root-login deny\"",
+		"set logical-systems ls1 system services ssh sftp-server",
+	} {
+		f, err := CheckServices(d, []byte(clean+line+"\n"))
+		if err != nil || len(f) != 1 || !strings.Contains(f[0].Says, "only `system services ssh`") {
+			t.Errorf("%q: %+v %v", line, f, err)
+		}
+	}
+	for _, ok := range []string{"set system services ssh", "set system services ssh ciphers aes256-ctr",
+		"set system services ssh macs hmac-sha2-256", "set system services ssh key-exchange ecdh-sha2-nistp256",
+		"set system services ssh hostkey-algorithm no-ssh-dss", "set system services ssh rate-limit 10",
+		"set system services ssh connection-limit 10", "set system services ssh no-tcp-forwarding",
+		"set system services ssh no-passwords", "set system services ssh port 2222",
+		"set system services ssh client-alive-interval 60", "set system services ssh max-sessions-per-connection 1",
+		"set system services ssh rekey time-limit 60", "set system services ssh log-key-changes"} {
+		if f, err := CheckServices(d, []byte(clean+ok+"\n")); len(f) != 0 || err != nil {
+			t.Errorf("%q: %+v %v", ok, f, err)
+		}
+	}
 	// A capture of nothing but a prompt holds no statement.
 	if _, err := CheckServices(d, []byte("{master:0}\n\n")); err == nil {
 		t.Error("a prompt alone is no configuration")

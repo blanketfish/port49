@@ -30,6 +30,19 @@ func RPCServicesChecked(d Dialect) bool {
 // fails (plan 5b pre-flight C1: an allowlist, not a denylist).
 var cliServices = []string{"ssh", "telnet"}
 
+// sshOptions are the only statements under `system services ssh` a checked
+// device may carry: the transport's own options — its algorithms, limits,
+// port, login and forwarding refusals — none of which opens a channel but
+// the CLI's. `sftp-server` opens a file-access subsystem no measured deny
+// binds, `tcp-forwarding` a channel to any port, and a statement this list
+// does not know, `authorized-keys-command` included, fails (plan 5b Task
+// 13a ruling). scp rides the CLI's ssh and cannot be switched off apart
+// from it; whether a deny binds it is a Task 19 lab row.
+var sshOptions = []string{"ciphers", "client-alive-count-max", "client-alive-interval", "connection-limit",
+	"fingerprint-hash", "hostkey-algorithm", "key-exchange", "log-key-changes", "macs",
+	"max-pre-authentication-packets", "max-sessions-per-connection", "no-challenge-response", "no-passwords",
+	"no-public-keys", "no-tcp-forwarding", "port", "protocol-version", "rate-limit", "rekey", "root-login"}
+
 // rpcAnywhere are service names that run RPCs wherever in the hierarchy they
 // appear: the REST API, J-Web, and JET/gRPC/gNMI.
 var rpcAnywhere = []string{"rest", "web-management", "extension-service"}
@@ -96,7 +109,9 @@ func CheckServices(d Dialect, config []byte) ([]ConfigFinding, error) {
 			return
 		}
 		underServices := len(path) >= 3 && path[0].keyword("system") && path[1].keyword("services")
+		underSSH := underServices && len(path) >= 4 && path[2].keyword("ssh")
 		if underServices && (path[2].value || !slices.Contains(cliServices, path[2].text)) ||
+			underSSH && (path[3].value || !slices.Contains(sshOptions, path[3].text)) ||
 			slices.ContainsFunc(words, func(w word) bool {
 				return slices.ContainsFunc(rpcAnywhere, w.keyword)
 			}) {
