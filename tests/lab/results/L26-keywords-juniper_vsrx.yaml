@@ -50,7 +50,7 @@ nodes:
   "show igmp": {words: ["group", "interface", "output-group", "snooping", "statistics"], argument: false}
   "show interfaces": {words: ["brief", "descriptions", "detail", "extensive", "media", "statistics", "terse", "zone"], argument: true}
   "show interfaces extensive": {words: ["brief", "descriptions", "detail", "terse", "zone"], argument: true}
-  "show interfaces terse": {words: ["media", "statistics", "zone"], argument: true}
+  "show interfaces terse": {words: ["extensive", "media", "statistics", "zone"], argument: true}
   "show ipv6": {words: ["neighbors", "router-advertisement"], argument: false}
   "show isdn": {words: ["calls", "history", "q921", "q931", "status"], argument: false}
   "show isis": {words: ["adjacency", "authentication", "backup", "bgp-orr", "context-identifier", "database", "hostname", "interface", "interface-group", "layer2-map", "overview", "purge", "route", "spf", "spring", "statistics"], argument: false}
@@ -94,7 +94,7 @@ nodes:
   "show ripng": {words: ["general-statistics", "neighbor", "statistics"], argument: false}
   "show route": {words: ["active-path", "all", "best", "brief", "detail", "display-client-data", "exact", "expanded-nh", "extensive", "fib-expanded-nh", "hidden", "inactive-path", "inactive-prefix", "nh-detail", "no-community", "private", "programmed", "range", "terse"], argument: true}
   "show routing": {words: ["transport-class"], argument: false}
-  "show rsvp": {words: ["interface", "neighbor", "pop-and-forward", "route-session-id", "session", "statistics", "version"], argument: false}
+  "show rsvp": {words: ["neighbor", "pop-and-forward", "route-session-id", "session", "statistics", "version"], argument: true}
   "show sap": {words: ["listen"], argument: false}
   "show schedulers": {words: ["all-logical-systems-tenants", "root-logical-system"], argument: true}
   "show security": {words: ["advance-policy-based-routing", "alarms", "alg", "application-tracking", "cloud", "datapath-debug", "dns-cache", "dynamic-address", "dynamic-policies", "firewall-authentication", "flow", "forward-options", "group-vpn", "gtp", "idp", "ike", "internal-security-association", "ipsec", "keychain", "l3vpn", "log", "macsec", "match-policies", "mka", "monitoring", "nat", "packet-drop", "pki", "policies", "policy-report", "remote-access", "resource-manager", "screen", "sctp", "shadow-policies", "softwires", "ssh", "tcp-encap", "tunnel-inspection", "user-identification", "utm", "zones"], argument: false}
@@ -108,7 +108,7 @@ nodes:
   "show ssl-certificates": {words: ["brief", "detail"], argument: false}
   "show subscribers": {words: ["accounting-statistics", "count", "detail", "extensive", "terse"], argument: true}
   "show system": {words: ["alarms", "autoinstallation", "buffers", "commit", "configuration", "core-dumps", "directory-usage", "download", "information", "license", "log-vital", "login", "memory", "ntp", "processes", "queues", "reboot", "resource-cleanup", "schema", "services", "snapshot", "statistics", "storage", "subscriber-management", "uptime", "users", "virtual-memory", "yang"], argument: true}
-  "show system processes": {words: ["wide"], argument: true}
+  "show system processes": {words: ["detail", "wide"], argument: true}
   "show system uptime": {words: [], argument: false}
   "show system users": {words: ["no-resolve"], argument: false}
   "show ted": {words: ["database", "ipv4-prefix", "ipv6-prefix", "link", "protocol", "spring"], argument: false}
