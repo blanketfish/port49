@@ -101,6 +101,37 @@ func netconfCell(reply, evidence string) string {
 	return "not observed"
 }
 
+// sessionPermitted reports whether port49d answered the session's
+// authorization with a permit (review R1): a channel the device closes is the
+// fail-closed reply being enforced only where port49d sent that reply. A deny,
+// or no authorization record at all, is not.
+func sessionPermitted(recs []map[string]any) bool {
+	for _, rec := range recs {
+		if str(rec, "event") == "authorize_session" && str(rec, "verdict") == "permit" {
+			return true
+		}
+	}
+	return false
+}
+
+// netconfBound is the note's read-off from every session's cells, the
+// control's first: deny-commands and the fail-closed reply bind NETCONF RPCs
+// only where the control ran every RPC and every other session refused every
+// one, or closed the channel before hello.
+func netconfBound(cells [][]string) bool {
+	if len(cells) == 0 || slices.ContainsFunc(cells[0], func(c string) bool { return c != "ran" }) {
+		return false
+	}
+	for _, row := range cells[1:] {
+		for _, c := range row {
+			if c != "refused" && c != junosNetconfClosed {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // netconfDialCell is the outcome of a NETCONF session that did not open. It
 // is a refusal only where the device closed the channel after port49d
 // authorized the session, and the paired controls, opened without the deny
@@ -155,13 +186,12 @@ func TestL12JunosNetconf(t *testing.T) {
 			if err == nil {
 				return n, hello, true, nil
 			}
+			recs := l.drainRecords(off, 10*time.Second)
 			var events []string
-			authorized := false
-			for _, rec := range l.drainRecords(off, 10*time.Second) {
-				events = append(events, str(rec, "event")+" "+str(rec, "decision")+" "+str(rec, "reason"))
-				authorized = authorized || str(rec, "event") == "authorize_session"
+			for _, rec := range recs {
+				events = append(events, str(rec, "event")+" "+str(rec, "verdict")+" "+str(rec, "reason"))
 			}
-			return nil, "", authorized, fmt.Errorf("%s: %w (%s); port49d recorded %v", user, err, oneLine(hello), events)
+			return nil, "", sessionPermitted(recs), fmt.Errorf("%s: %w (%s); port49d recorded %v", user, err, oneLine(hello), events)
 		}
 		for i, v := range junosNetconfVariants {
 			pair, paired := junosNetconfPairs[v.name]
@@ -212,16 +242,10 @@ func TestL12JunosNetconf(t *testing.T) {
 				t.Logf("%s: the paired control after it did not open: %v", v.name, pairs)
 			}
 		}
-		ranControl := !slices.ContainsFunc(cells[0], func(c string) bool { return c != "ran" })
-		if !ranControl {
+		if slices.ContainsFunc(cells[0], func(c string) bool { return c != "ran" }) {
 			t.Errorf("the control did not run every RPC, so no deny is measured: %v", cells[0])
 		}
-		bound := ranControl
-		for _, row := range cells[1:] {
-			for _, c := range row {
-				bound = bound && (c == "refused" || c == junosNetconfClosed)
-			}
-		}
+		bound := netconfBound(cells)
 		var b strings.Builder
 		fmt.Fprintf(&b, "The classes were committed: %s.\n\n```\n%s\n```\n\n", commitWord(commit),
 			strings.Join(junosNetconfClass, "\n"))

@@ -62,28 +62,35 @@ func TestNetconfDialCell(t *testing.T) {
 func TestAbbrevCells(t *testing.T) {
 	ver := junosAbbrevProbe{cmd: "sh ver", of: "show version"}
 	count := junosAbbrevProbe{cmd: "sh int ter | count", of: "show interfaces terse"}
+	// The control's own run of `show interfaces terse`: three lines as
+	// `| count` counts them (the blank line and the prompt are not).
+	plain := " \nInterface               Admin Link Proto    Local                 Remote\ncbp0  up  up\nfxp0  up  up\n\nalice01@srx1> "
 	for _, c := range []struct {
-		p                  junosAbbrevProbe
-		control, deny      string
-		wantCtrl, wantDeny string
+		p                    junosAbbrevProbe
+		control, deny, plain string
+		wantCtrl, wantDeny   string
 	}{
-		{ver, "show version\nHostname: srx1\nJunos: 23.4R2-S2.1", "show version\n  ^\npermission denied.", "ran", "refused"},
-		{ver, "show version\nJunos: 23.4", "show version\nJunos: 23.4", "ran", "ran"},
+		{ver, "show version\nHostname: srx1\nJunos: 23.4R2-S2.1", "show version\n  ^\npermission denied.", "", "ran", "refused"},
+		{ver, "show version\nJunos: 23.4", "show version\nJunos: 23.4", "", "ran", "ran"},
 		{junosAbbrevProbe{cmd: "sh int ter", of: "show interfaces terse"},
-			"show interfaces terse\nInterface               Admin Link Proto", "show interfaces ter\nerror: device ter not found",
+			"show interfaces terse\nInterface               Admin Link Proto", "show interfaces ter\nerror: device ter not found", "",
 			"ran", "not run"},
 		{junosAbbrevProbe{cmd: "sh i terse", of: "show interfaces terse"}, "show i\n'i' is ambiguous.",
-			"show i\n'i' is ambiguous.", "ambiguous", "ambiguous"},
+			"show i\n'i' is ambiguous.", "", "ambiguous", "ambiguous"},
 		// Neither the output nor an error: not observed, never safe.
-		{ver, "show version\nJunos: 23.4", "show version\n", "ran", "not observed"},
-		// `| count`: one line is an error's; the control's count is a run; another count is not observed.
-		{count, "show interfaces terse | count\nCount: 42 lines", "show interfaces ter | count\nCount: 1 lines", "ran", "not run"},
-		{count, "Count: 42 lines", "Count: 42 lines", "ran", "ran"},
-		{count, "Count: 42 lines", "Count: 23 lines", "ran", "not observed"},
-		{count, "Count: 1 lines", "Count: 1 lines", "not run", "not run"},
-		{count, "Count: 42 lines", "show interfaces terse | count\n  ^\npermission denied.", "ran", "refused"},
+		{ver, "show version\nJunos: 23.4", "show version\n", "", "ran", "not observed"},
+		// `| count` is held to the lines the control's own run of the command
+		// held: one line is an error's, that count is a run, any other count
+		// is not observed, in either session (review R2).
+		{count, "Count: 3 lines", "show interfaces ter | count\nCount: 1 lines", plain, "ran", "not run"},
+		{count, "Count: 3 lines", "Count: 3 lines", plain, "ran", "ran"},
+		{count, "Count: 3 lines", "Count: 2 lines", plain, "ran", "not observed"},
+		{count, "Count: 5 lines", "Count: 1 lines", plain, "not observed", "not run"},
+		{count, "Count: 3 lines", "Count: 3 lines", "show interfaces terse\nerror: something", "not observed", "not observed"},
+		{count, "Count: 1 lines", "Count: 1 lines", plain, "not run", "not run"},
+		{count, "Count: 3 lines", "show interfaces terse | count\n  ^\npermission denied.", plain, "ran", "refused"},
 	} {
-		cc, dc := abbrevCells(c.p, c.control, c.deny)
+		cc, dc := abbrevCells(c.p, c.control, c.deny, c.plain)
 		if cc != c.wantCtrl || dc != c.wantDeny {
 			t.Errorf("%q: (%q, %q) = %q, %q; want %q, %q", c.p.cmd, oneLine(c.control), oneLine(c.deny), cc, dc,
 				c.wantCtrl, c.wantDeny)
@@ -91,6 +98,25 @@ func TestAbbrevCells(t *testing.T) {
 	}
 	if got := expansion("\a\a\ashow interfaces terse \nInterface"); got != "show interfaces terse" {
 		t.Errorf("expansion trims the bell: %q", got)
+	}
+}
+
+func TestSessionPermitted(t *testing.T) {
+	permit := map[string]any{"event": "authorize_session", "verdict": "permit", "reason": "context_matched"}
+	deny := map[string]any{"event": "authorize_session", "verdict": "deny", "reason": "no_rule_matched"}
+	redeem := map[string]any{"event": "redeem", "reason": "token_redeemed"}
+	for _, c := range []struct {
+		recs []map[string]any
+		want bool
+	}{
+		{[]map[string]any{redeem, permit}, true},
+		{[]map[string]any{redeem, deny}, false},
+		{[]map[string]any{redeem}, false},
+		{nil, false},
+	} {
+		if got := sessionPermitted(c.recs); got != c.want {
+			t.Errorf("sessionPermitted(%v) = %v, want %v", c.recs, got, c.want)
+		}
 	}
 }
 
@@ -152,20 +178,24 @@ func TestCommittedL9VerdictsHold(t *testing.T) {
 		}
 		note := string(raw)
 		blocks := noteBlocks(t, note)
+		cells := map[string][2]string{}
 		for _, p := range junosAbbrevProbes {
 			row := tableRow(note, tableCell(fmt.Sprintf("%q", p.cmd)))
 			if row == nil {
 				t.Errorf("%s: no row for %q", img, p.cmd)
 				continue
 			}
-			cc, dc := abbrevCells(p, blocks["control"][p.cmd], blocks["deny"][p.cmd])
+			cc, dc := abbrevCells(p, blocks["control"][p.cmd], blocks["deny"][p.cmd], blocks["control"][p.of])
+			cells[p.cmd] = [2]string{cc, dc}
 			if cc != row[1] || dc != baseCell(row[2]) {
 				t.Errorf("%s %q: the note reads %q / %q, the classifier now %q / %q", img, p.cmd, row[1], row[2], cc, dc)
 			}
 		}
-		if !strings.Contains(note, "JunosFacts.DenyMatchesExpanded (keywords) = true") ||
-			!strings.Contains(note, "enforced: true") {
-			t.Errorf("%s: the committed read-off is not the one this test re-derives", img)
+		// The read-off, derived again from the cells (review R3).
+		enforced, expanded := abbrevVerdict(cells)
+		if !strings.Contains(note, fmt.Sprintf("enforced: %v:", enforced)) ||
+			!strings.Contains(note, fmt.Sprintf("JunosFacts.DenyMatchesExpanded (keywords) = %v:", expanded)) {
+			t.Errorf("%s: the note's read-off is not what its cells now give: enforced %v, expanded %v", img, enforced, expanded)
 		}
 	}
 }
@@ -178,7 +208,8 @@ func TestCommittedNetconfVerdictsHold(t *testing.T) {
 		}
 		note := string(raw)
 		blocks := noteBlocks(t, note)
-		for _, v := range junosNetconfVariants {
+		cells := make([][]string, len(junosNetconfVariants))
+		for i, v := range junosNetconfVariants {
 			row := tableRow(note, v.name)
 			if row == nil {
 				t.Fatalf("%s: no row for %q", img, v.name)
@@ -189,17 +220,23 @@ func TestCommittedNetconfVerdictsHold(t *testing.T) {
 				got := netconfCell(reply, r.evidence)
 				if rest, ok := strings.CutPrefix(reply, "no session: "); ok {
 					errText, _, _ := strings.Cut(rest, "\n")
-					got = netconfDialCell(errors.New(errText), strings.Contains(rest, "authorize_session"),
+					// The committed notes printed an empty verdict (review R1);
+					// context_matched is the permit's reason.
+					permitted := strings.Contains(rest, "authorize_session permit") ||
+						strings.Contains(rest, "authorize_session  context_matched")
+					got = netconfDialCell(errors.New(errText), permitted,
 						strings.Contains(rest, "paired control before") && strings.Contains(rest, "paired control after") &&
 							!strings.Contains(rest, "no hello"))
 				}
+				cells[i] = append(cells[i], got)
 				if got != want {
 					t.Errorf("%s %s %s: the note reads %q, the classifier now %q", img, v.name, r.rpc, want, got)
 				}
 			}
 		}
-		if !strings.Contains(note, "bind NETCONF RPCs: false") {
-			t.Errorf("%s: the committed read-off is not `false`", img)
+		// The read-off, derived again from the cells (review R3).
+		if bound := netconfBound(cells); !strings.Contains(note, fmt.Sprintf("bind NETCONF RPCs: %v ", bound)) {
+			t.Errorf("%s: the note's read-off is not what its cells now give: bound %v", img, bound)
 		}
 	}
 }

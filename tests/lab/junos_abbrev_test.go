@@ -128,12 +128,13 @@ func abbrevCell(out, evidence string) string {
 	return "not observed"
 }
 
-// countCell is a `| count` probe's outcome. More than one line counted is the
-// command's output: in the control, any such count is a run; under the deny,
-// it is a run where it equals the control's count, and not observed where it
-// differs, since then the two sessions did not count the same command. A
-// count of one line or none is an error's, not the command running.
-func countCell(out string, control int) string {
+// countCell is a `| count` probe's outcome against want, the lines the
+// denied command's own output holds: the control session's uncounted run of it
+// (commandLines). A count of exactly want, more than one, is the command
+// running, in either session; a count of one line or none is an error's, not
+// the command running; any other count is not observed, since then the pipe
+// did not count the command's output (review R2).
+func countCell(out string, want int) string {
 	if strings.Contains(out, "ambiguous") {
 		return "ambiguous"
 	}
@@ -145,33 +146,70 @@ func countCell(out string, control int) string {
 	switch {
 	case n <= 1:
 		return "not run"
-	case control == 0 || n == control:
+	case want > 1 && n == want:
 		return "ran"
 	}
 	return "not observed"
 }
 
-// abbrevCells is a probe's cell in the control and under the deny.
-func abbrevCells(p junosAbbrevProbe, control, deny string) (string, string) {
+var junosPromptLine = regexp.MustCompile(`@\S+> ?$`)
+
+// commandLines is the lines a command's output holds as `| count` counts
+// them: not blank, and not the prompt that follows it.
+func commandLines(out string) int {
+	n := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) != "" && !junosPromptLine.MatchString(line) {
+			n++
+		}
+	}
+	return n
+}
+
+// abbrevCells is a probe's cell in the control and under the deny. plain is
+// the control's output of the full command p abbreviates, which a `| count`
+// probe's count is held to.
+func abbrevCells(p junosAbbrevProbe, control, deny, plain string) (string, string) {
 	if !strings.Contains(p.cmd, "| count") {
 		ev := junosAbbrevEvidence[p.of]
 		return abbrevCell(control, ev), abbrevCell(deny, ev)
 	}
-	cc := countCell(control, 0)
-	n := 0
-	if cc == "ran" {
-		n = countOf(control)
+	want := 0
+	if abbrevCell(plain, junosAbbrevEvidence[p.of]) == "ran" {
+		want = commandLines(plain)
 	}
-	return cc, countCell(deny, n)
+	return countCell(control, want), countCell(deny, want)
 }
 
-// countOf is the lines a `| count` output counted, or 0.
-func countOf(out string) int {
-	if m := junosCountLine.FindStringSubmatch(out); m != nil {
-		n, _ := strconv.Atoi(m[1])
-		return n
+// junosAbbrevFull are the full forms, plain and piped, whose cells say whether
+// the rendered deny shape is enforced at all.
+var junosAbbrevFull = map[string]bool{"show version": true, "show version | no-more": true,
+	"show interfaces terse": true, "show system uptime": true, "show route summary": true,
+	"show chassis hardware": true}
+
+// abbrevVerdict reads the note's two facts off every probe's cells (control,
+// deny): the rendered shape is enforced where every full form ran in the
+// control and was refused under the deny; DenyMatchesExpanded holds where it
+// is enforced, nothing is not observed, the control ran every counted probe
+// but the ambiguous and the odd, and nothing counted ran under the deny.
+func abbrevVerdict(cells map[string][2]string) (enforced, expanded bool) {
+	enforced, expanded = true, true
+	for _, p := range junosAbbrevProbes {
+		cc, dc := cells[p.cmd][0], cells[p.cmd][1]
+		if cc == "not observed" || dc == "not observed" {
+			expanded = false
+		}
+		if p.uncounted != "" {
+			continue
+		}
+		if junosAbbrevFull[p.cmd] {
+			enforced = enforced && cc == "ran" && dc == "refused"
+		}
+		if (cc != "ran" && cc != "ambiguous" && !p.odd) || dc == "ran" {
+			expanded = false
+		}
 	}
-	return 0
+	return enforced, expanded && enforced
 }
 
 // expansion is the command line the CLI echoed as it expanded an
@@ -216,17 +254,17 @@ func TestL9JunosAbbreviations(t *testing.T) {
 				t.Fatalf("%s: not observed: %v", r.name, r.unobserved)
 			}
 		}
-		// The rendered shape is enforced where every full form, plain and
-		// piped, is run by the control and refused by the CLI under the deny.
-		full := map[string]bool{"show version": true, "show version | no-more": true, "show interfaces terse": true,
-			"show system uptime": true, "show route summary": true, "show chassis hardware": true}
-		enforced := true
-		expanded := true
+		cells := map[string][2]string{}
+		for _, p := range junosAbbrevProbes {
+			cc, dc := abbrevCells(p, control.outs[p.cmd], deny.outs[p.cmd], control.outs[p.of])
+			cells[p.cmd] = [2]string{cc, dc}
+		}
+		enforced, expanded := abbrevVerdict(cells)
 		var b strings.Builder
 		fmt.Fprintf(&b, "The class was committed: %s.\n\n```\n%s\n```\n\nThe deny: `deny-commands=%s`.\n\n",
 			commitWord(commit), strings.Join(junosAbbrevClass, "\n"), tableCell(junosAbbrevDeny))
 		b.WriteString("A probe ran only where its output holds the denied command's own output (for `| count`, " +
-			"more than one line counted, and under the deny the control's count); `refused` is the CLI's refusal; " +
+			"the lines the control's own run of the command held, more than one); `refused` is the CLI's refusal; " +
 			"`not run` is a device error, so the command did not execute, and the deny did not refuse it either; " +
 			"anything else is not observed and fails the test. A `not run` cell marked not isolated as an " +
 			"abbreviation still counts toward the fact (the lead's ruling of 2026-09-25): the denied command did " +
@@ -234,11 +272,10 @@ func TestL9JunosAbbreviations(t *testing.T) {
 			"false.\n\n")
 		b.WriteString("| probe | control | under the deny | expanded, control / deny |\n|---|---|---|---|\n")
 		for _, p := range junosAbbrevProbes {
-			cc, dc := abbrevCells(p, control.outs[p.cmd], deny.outs[p.cmd])
+			cc, dc := cells[p.cmd][0], cells[p.cmd][1]
 			if cc == "not observed" || dc == "not observed" {
 				t.Errorf("%q: not observed (control %s, deny %s): %s / %s", p.cmd, cc, dc,
 					oneLine(control.outs[p.cmd]), oneLine(deny.outs[p.cmd]))
-				expanded = false
 			}
 			if p.uncounted != "" {
 				fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", tableCell(fmt.Sprintf("%q", p.cmd)), cc,
@@ -246,21 +283,14 @@ func TestL9JunosAbbreviations(t *testing.T) {
 					tableCell(fmt.Sprintf("`%s` / `%s`", expansion(control.outs[p.cmd]), expansion(deny.outs[p.cmd]))))
 				continue
 			}
-			if full[p.cmd] {
-				enforced = enforced && cc == "ran" && dc == "refused"
-			}
 			// The control's own answer says which abbreviation is ambiguous on
 			// this image; one it did not run for any other reason measures nothing.
 			if cc != "ran" && cc != "ambiguous" && !p.odd {
 				t.Errorf("the control did not run %q, so the deny's cell measures nothing: %s", p.cmd,
 					oneLine(control.outs[p.cmd]))
-				expanded = false
 			}
 			if p.ambiguous && cc != "ambiguous" {
 				t.Logf("%q was expected ambiguous and was not on this image", p.cmd)
-			}
-			if dc == "ran" {
-				expanded = false
 			}
 			cell := dc
 			// A deny cell whose control did not run the probe isolates nothing;
@@ -278,7 +308,6 @@ func TestL9JunosAbbreviations(t *testing.T) {
 			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", tableCell(fmt.Sprintf("%q", p.cmd)), cc, tableCell(cell),
 				tableCell(fmt.Sprintf("`%s` / `%s`", ce, de)))
 		}
-		expanded = expanded && enforced
 		fmt.Fprintf(&b, "\n### Read off the table\n\n- the rendered deny shape (` *... *(\\|.*)?`) enforced: %v: every "+
 			"full form, plain and piped, refused under it and run by the control\n", enforced)
 		fmt.Fprintf(&b, "- JunosFacts.DenyMatchesExpanded (keywords) = %v: true only where the shape is enforced, no "+
