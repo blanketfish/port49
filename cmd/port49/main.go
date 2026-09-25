@@ -41,9 +41,10 @@ const usage = `usage:
   port49 grants remove --policy FILE --inventory FILE --subject NAME [--write | --pr [--remote R] [--base B]]
   port49 platform list [--set VERSION | --policy FILE --inventory FILE]
   port49 platform show [--set VERSION | --policy FILE --inventory FILE] PLATFORM
-  port49 platform export [--set VERSION | --policy FILE --inventory FILE] (PLATFORM | --all --dir EMPTY_DIR)
+  port49 platform export [--set VERSION | --policy FILE --inventory FILE] (PLATFORM | --all --dir EMPTY_DIR |
+                         --classes --config PORT49D_YAML PLATFORM)
   port49 platform upgrade --policy FILE --inventory FILE --to VERSION [--write]
-  port49 devices check-config --policy FILE --inventory FILE --device NAME CONFIGFILE
+  port49 devices check-config --policy FILE --inventory FILE --device NAME [--config PORT49D_YAML] CONFIGFILE
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }

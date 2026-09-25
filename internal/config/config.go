@@ -287,6 +287,31 @@ type Config struct {
 
 const defaultWindow = 10 * time.Minute
 
+// DefaultMaxSessionAge is session.max_session_age_default where the file
+// sets none (spec §5.6: "The default is 12h").
+const DefaultMaxSessionAge = 12 * time.Hour
+
+// MaxSessionAge reads session.max_session_age_default from a port49d.yaml's
+// bytes and nothing else, with Load's default and its refusal of a value that
+// is not positive. It is what `port49 platform export --classes` renders a
+// session-only platform's idle-timeout from (spec §13, decision 21), and it
+// reads no secret, so a CI job holding no key can run it.
+func MaxSessionAge(raw []byte) (time.Duration, error) {
+	var f struct {
+		Session struct {
+			MaxSessionAgeDefault time.Duration `yaml:"max_session_age_default"`
+		} `yaml:"session"`
+	}
+	if err := yaml.Unmarshal(raw, &f); err != nil {
+		return 0, fmt.Errorf("config: %w", err)
+	}
+	d := orD(f.Session.MaxSessionAgeDefault, DefaultMaxSessionAge)
+	if d <= 0 {
+		return 0, fmt.Errorf("config: session.max_session_age_default must be greater than zero; got %s", d)
+	}
+	return d, nil
+}
+
 func Load(path string) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -341,7 +366,7 @@ func Load(path string) (Config, error) {
 			StalenessCeiling:     f.Session.StalenessCeiling,
 			GraceWindow:          orD(f.Session.GraceWindow, 10*time.Minute),
 			IndexTTL:             orD(f.Session.IndexTTL, 12*time.Hour),
-			MaxSessionAgeDefault: orD(f.Session.MaxSessionAgeDefault, 12*time.Hour),
+			MaxSessionAgeDefault: orD(f.Session.MaxSessionAgeDefault, DefaultMaxSessionAge),
 		},
 		Token:       TokenConfig{CandidateCap: orI(f.Token.CandidateCap, 8)},
 		encCurrent:  f.Encryption.Current,

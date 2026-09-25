@@ -359,3 +359,22 @@ func TestCheckConfigWarnsOnAPartialCapture(t *testing.T) {
 		t.Errorf("whole:\n%s", out)
 	}
 }
+
+// --config goes with a projected platform alone: it is the template
+// classes' idle-timeout, and a platform that projects nothing has none.
+func TestCheckConfigTakesConfigOnlyOnAProjectedPlatform(t *testing.T) {
+	pol, inv := policyFixture(t)
+	dir := t.TempDir()
+	cfg, daemon := filepath.Join(dir, "leaf-01.cfg"), filepath.Join(dir, "port49d.yaml")
+	if err := os.WriteFile(cfg, []byte("hostname leaf-01\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(daemon, []byte("session: {max_session_age_default: 8h}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "leaf-01",
+		"--config", daemon, cfg}, &out, &errb); code != 2 {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}

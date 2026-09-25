@@ -832,3 +832,16 @@ func TestLabFaultFileIsOptionalAndLabOnly(t *testing.T) {
 		t.Fatal("a top-level fault_file loaded; the switch belongs to the lab block only")
 	}
 }
+
+// MaxSessionAge reads the one key, with Load's default, and no secret.
+func TestMaxSessionAge(t *testing.T) {
+	for raw, want := range map[string]time.Duration{"": DefaultMaxSessionAge,
+		"session: {max_session_age_default: 8h}\n": 8 * time.Hour} {
+		if got, err := MaxSessionAge([]byte(raw)); err != nil || got != want {
+			t.Errorf("%q: %s %v", raw, got, err)
+		}
+	}
+	if _, err := MaxSessionAge([]byte("session: {max_session_age_default: -1h}\n")); err == nil {
+		t.Error("a negative age")
+	}
+}

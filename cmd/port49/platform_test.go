@@ -634,3 +634,29 @@ func TestAnOperatorsUnreachableRulesExportAsTheOperators(t *testing.T) {
 		t.Errorf("--all:\n%s", file)
 	}
 }
+
+// export --classes prints a projected platform's reference configuration;
+// a platform that projects nothing has none, and the flag goes with export
+// and a config alone.
+func TestPlatformExportClasses(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "port49d.yaml")
+	if err := os.WriteFile(cfg, []byte("inventory_file: inventory.yaml\nsession: {max_session_age_default: 8h}\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "--set", "1.0.0", "--classes", "--config", cfg, "juniper_junos"},
+		&out, &errb); code != 1 || !strings.Contains(errb.String(), "projects nothing") {
+		t.Fatalf("1.0.0: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	for _, args := range [][]string{
+		{"platform", "show", "--classes", "--config", cfg, "juniper_junos"},
+		{"platform", "export", "--classes", "juniper_junos"},
+		{"platform", "export", "--config", cfg, "juniper_junos"},
+		{"platform", "export", "--classes", "--config", cfg, "--all", "--dir", t.TempDir()},
+	} {
+		if code := run(args, &out, &errb); code != 2 {
+			t.Errorf("%q: code %d", args, code)
+		}
+	}
+}

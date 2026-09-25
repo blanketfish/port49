@@ -16,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 )
@@ -142,12 +143,16 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 	a.register(fs)
 	all := fs.Bool("all", false, "every platform, one file each in --dir (export only)")
 	dir := fs.String("dir", "", "the directory --all writes to")
+	classes := fs.Bool("classes", false, "a projected platform's reference device configuration, as set lines "+
+		"(export only)")
+	cfgPath := fs.String("config", "", "port49d.yaml: its session.max_session_age_default is the classes' "+
+		"idle-timeout (with --classes)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	switch {
 	case *all && (!export || *dir == "" || fs.NArg() != 0), !*all && (*dir != "" || fs.NArg() != 1),
-		a.conflicting():
+		a.conflicting(), *classes && (!export || *all || *cfgPath == ""), !*classes && *cfgPath != "":
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -194,6 +199,9 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		fmt.Fprintf(stderr, "%s: %q has no adapter here; the platforms are %s\n", name, platformName,
 			strings.Join(sortedNames(set), ", "))
 		return 1
+	}
+	if *classes {
+		return exportClasses(stdout, stderr, name, platformName, d, *cfgPath, a, p)
 	}
 	mode := exportShow
 	if export {
@@ -484,4 +492,42 @@ func sortedNames(set map[string]platform.Dialect) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// exportClasses prints a projected platform's reference device configuration
+// (spec §8): the configuration its replies rest on, the bitless `remote`
+// template, and each level's template and class where the adapter sends one,
+// every class carrying idle-timeout from port49d.yaml's
+// session.max_session_age_default (spec §5.6; §13 decision 21). A compliance
+// tool checks devices against it; port49 never logs into one.
+func exportClasses(stdout, stderr io.Writer, name, platformName string, d platform.Dialect, cfgPath string, a adapters,
+	p *policy.Policy) int {
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", name, err)
+		return 1
+	}
+	age, err := config.MaxSessionAge(raw)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %s: %v\n", name, cfgPath, err)
+		return 1
+	}
+	lines, err := platform.ReferenceClasses(d, age)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %s: %v\n", name, platformName, err)
+		return 1
+	}
+	setName := a.set
+	if p != nil {
+		setName = p.PlatformSet()
+	}
+	fmt.Fprintf(stdout, "# %s: reference configuration, platform set %s (spec §8). Load it with `load set "+
+		"terminal`: each template class and user is deleted before it is set, so nothing a device carried under one "+
+		"survives, and `port49 devices check-config --config` verifies it. idle-timeout is "+
+		"session.max_session_age_default (%s) in whole minutes: a session-only device never asks port49 again after "+
+		"login, so this timer is what ends a session there (decision 21).\n", platformName, setName, age)
+	for _, line := range lines {
+		fmt.Fprintln(stdout, line)
+	}
+	return 0
 }
