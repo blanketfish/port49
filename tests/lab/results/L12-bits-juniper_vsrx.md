@@ -2649,3 +2649,12 @@ alice10@srx1>
 
 `exit`: prompt back: ^ unknown command. alice10@srx1>
 
+
+## Reading (controller, 2026-09-25; added by hand after the run, not generated)
+
+- **Carve-out candidates beyond `show configuration`, by completion only.** The `view view-configuration` pair's `Completion:` line offers `show firewall`, `show log` and `show policer`. None of `view`, `view-configuration` or `none` offers them, and the same holds on both images. So view-configuration withholds them from `view` alone. This is completion evidence: no probe ran `show log`. Task 14 carries them as view-configuration carve-outs. Where a carve-out is unmeasured, the reach widens conservatively. A rerun of this test prints the pair's words beyond its parts.
+- **Bare `show configuration` under `view` alone: not probed.** Under `view`, the caret falls on the hierarchy word (`system`, `routing-instances`, `interfaces`), not on `configuration`. What the bare command prints under `view` is unmeasured.
+- **R-M2 line:** "(`configure` ran): none." means no class. A rerun prints "no class".
+- **Refusals verified by hand:** each `view` carve-out cell above is `syntax error.`, and each `quit`/`exit` under `deny-commands=^.*$` is `^ unknown command.` with a prompt back. Neither verdict rests on an empty read. The test now requires a refusal marker for both (task-3 review I1).
+- **Raw `?` listings:** this run recorded only the parsed words (`Completion:`). A rerun records the raw top-level, `request ?`, `test ?` and `set ?` listings for each class.
+- **How the reach reads (lead's ruling):** the baseline's top-level words are held whole (`request **`), and a bit's rules under those words stay per sub-word. The union with the baseline makes the whole word reachable anyway.
