@@ -423,3 +423,17 @@ func TestASecretOneFormMissesIsRedactedInBoth(t *testing.T) {
 		t.Fatalf("%v", r)
 	}
 }
+
+// A blob whose reply is a projection's fail-closed reply opens the session
+// with that reply, recorded as projection_fail_closed: the subject told less
+// than port49 would permit is in the log by name (spec §13 decision 26).
+func TestAFailClosedReplyIsRecordedByName(t *testing.T) {
+	b := eosBlob()
+	b.FailClosed = "refused_shape"
+	f := newEngineFixture(t, b)
+	c := store.Context{Username: "alice", Principal: "user:alice@example.com", BlobHash: f.hash}
+	d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(), Request{Context: c, Device: peer})
+	if !d.Permit || d.Reason != decision.ProjectionFailClosed || len(d.Attributes) == 0 {
+		t.Fatalf("%+v", d)
+	}
+}

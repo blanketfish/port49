@@ -126,6 +126,11 @@ grants:
 			!reflect.DeepEqual(res.Blob.Attributes, []string{"deny-commands=^.*$"}) {
 			t.Fatalf("%q %q %v", res.Blob.Attributes, res.Blob.FailClosed, err)
 		}
+		// explain says which reply the login would be told, by reason.
+		_, out := explained(t, p, "s", "", "srx-fw-04", "", false)
+		mustContain(t, out, "permit projection_fail_closed (session)")
+		_, out = explained(t, p, "t", "", "srx-fw-04", "", false)
+		mustContain(t, out, "permit context_matched (session)")
 	}
 }
 

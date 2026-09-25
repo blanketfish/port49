@@ -22,6 +22,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/rhwendt/port49/internal/decision"
 )
 
 // Version is the blob format this package writes and the only one it reads.
@@ -316,4 +318,15 @@ func referencedClasses(b Blob) map[string]bool {
 		add(p)
 	}
 	return out
+}
+
+// SessionReason is the reason a session answered from b is recorded under:
+// projection_fail_closed where b's reply is a projection's fail-closed reply,
+// so the one subject told less than port49 would permit is in the log by
+// name (spec §13 decision 26), and context_matched otherwise.
+func (b Blob) SessionReason() decision.Reason {
+	if b.FailClosed != "" {
+		return decision.ProjectionFailClosed
+	}
+	return decision.ContextMatched
 }

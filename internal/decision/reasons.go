@@ -57,6 +57,12 @@ const (
 	// from; operational, like blob_unavailable (spec §5.7).
 	BlobPlatformMismatch Reason = "blob_platform_mismatch"
 	DeviceQuarantined    Reason = "device_quarantined"
+	// ProjectionFailClosed: a session on a projected platform answered with
+	// its composition's fail-closed reply, deny every command but what the
+	// projection proved, because the composition cannot be told to the
+	// device faithfully (spec §8; §13 decision 26). A permit: the session
+	// opens, told less than port49 would permit. `policy test` fails on it.
+	ProjectionFailClosed Reason = "projection_fail_closed"
 )
 
 // Events.
@@ -93,7 +99,7 @@ var reasons = []Reason{
 	ContextMatched, EscalationGranted, PermitDominates, PipeStageDenied, ServiceUnsupported, EnableRefused,
 	CeilingExceeded, NoRuleMatched, NoPermitDominatesDeny, ContextMissing, UsernameMismatch, RemAddrMismatch,
 	PrivilegeExceeded, SessionExpired, ContextStale, CredentialRevoked, DeviceUnknown, PlatformUnknown,
-	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined,
+	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined, ProjectionFailClosed,
 }
 
 // Known reports whether r is in spec §5.7's vocabulary. A policy test's

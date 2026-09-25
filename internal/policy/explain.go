@@ -339,7 +339,7 @@ func (e Explanation) Render(w io.Writer, showAttributes bool) {
 	r := e.Resolution
 	o := e.Outcome
 	if e.Command == "" {
-		fmt.Fprintf(w, "permit %s (session)\n", decision.ContextMatched)
+		fmt.Fprintf(w, "permit %s (session)\n", r.Blob.SessionReason())
 	} else if o.Permit {
 		fmt.Fprintf(w, "permit %s\n", o.Reason)
 	} else {

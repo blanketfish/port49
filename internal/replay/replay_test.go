@@ -355,3 +355,52 @@ func TestARedactedBlobEventLeavesItsRecordsUnverifiable(t *testing.T) {
 		}
 	}
 }
+
+// A session answered with a projection's fail-closed reply replays to the
+// same reason and reply, and editing its reason to context_matched diverges;
+// so does the other way round, a context_matched session edited to
+// projection_fail_closed (spec §13 decision 26).
+func TestAFailClosedSessionReplays(t *testing.T) {
+	for _, tc := range []struct {
+		failClosed string
+		reason     decision.Reason
+		edited     decision.Reason
+	}{
+		{"refused_shape", decision.ProjectionFailClosed, decision.ContextMatched},
+		{"", decision.ContextMatched, decision.ProjectionFailClosed},
+	} {
+		b := engine.Blob{Bundle: "sha256:policy", Platform: "juniper_junos",
+			Normalize: engine.Normalize{PipeToken: "|", StripCR: true, SessionOnly: true}, Privilege: "readonly",
+			Attributes: []string{"deny-commands=^.*$"}, FailClosed: tc.failClosed,
+			Rules: []engine.Rule{{Verdict: engine.Permit, Rule: "show interfaces **", Role: "r"},
+				{Verdict: engine.Deny, Rule: "show interfaces terse", Role: "r"}}}
+		body, hash, err := engine.Encode(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var log bytes.Buffer
+		sink := decision.NewJSONLines(&log)
+		sink.Emit(decision.Record{TS: time.Now(), Event: decision.EventBlob, Blob: &decision.Blob{Hash: hash, Body: body}})
+		st := memory.New(time.Now)
+		st.PutBlob(context.Background(), hash, body, time.Hour)
+		st.PutContext(context.Background(), store.ContextKey{NAS: "srx-01", Username: "alice"},
+			store.Context{CtxID: "ctx1", Username: "alice", Principal: "user:alice@example.com", BlobHash: hash}, time.Hour)
+		m := metrics.New(prometheus.NewRegistry())
+		h := author.New(st, &author.Engine{Store: st, Metrics: m}, sink, m, time.Now, platform.Defaults(),
+			time.Hour, time.Minute, time.Hour)
+		h.Handle(context.Background(), authen.Peer{NAS: "srx-01", NASAddr: "10.20.0.9", Platform: "juniper_junos"},
+			wire.AuthorRequest{User: []byte("alice"), Port: []byte("vty0"),
+				Args: [][]byte{[]byte("service=junos-exec"), []byte("cmd=")}})
+		res := replayAll(t, log.String())
+		if len(res) != 1 || res[0].Status != Agree || res[0].Reason != tc.reason {
+			t.Fatalf("%s: %+v\n%s", tc.reason, res, log.String())
+		}
+		edited := strings.Replace(log.String(), `"reason":"`+string(tc.reason)+`"`, `"reason":"`+string(tc.edited)+`"`, 1)
+		if edited == log.String() {
+			t.Fatalf("%s: the record's reason was not found to edit", tc.reason)
+		}
+		if res := replayAll(t, edited); res[0].Status != Diverge {
+			t.Fatalf("%s edited to %s: %+v", tc.reason, tc.edited, res)
+		}
+	}
+}
