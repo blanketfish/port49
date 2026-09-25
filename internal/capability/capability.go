@@ -16,12 +16,15 @@ import (
 	"github.com/rhwendt/port49/internal/platform"
 )
 
-// deviceSent is the events a device's own TACACS+ packet produces. A device
-// is seen when it sent one; the broker's mint and refresh name a device
-// without it ever having asked (task 18 review I1).
+// deviceSent is the events a device's own TACACS+ packet produces, once
+// port49 validated it. A device is seen when it sent one; the broker's mint
+// and refresh name a device without it ever having asked (task 18 review
+// I1), and an unvalidated packet, which a device with the wrong key sends,
+// is counted apart: it is the one hint the report can give for that device
+// (final review minor 12).
 var deviceSent = map[string]bool{
 	decision.EventRedeem: true, decision.EventAuthorizeSession: true, decision.EventAuthorizeCommand: true,
-	decision.EventEscalate: true, decision.EventAccount: true, decision.EventUnvalidated: true,
+	decision.EventEscalate: true, decision.EventAccount: true,
 }
 
 // The capabilities of spec §9's vocabulary, as `supports` names them.
@@ -186,10 +189,13 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 		// §9's third observation reads silence up to the session's end.
 		pending := map[string]int{}
 		unmatched := map[string]string{} // context and command → the command, redacted
-		seen, minted := false, 0
+		seen, minted, unvalidated := false, 0, 0
 		for _, r := range recs {
 			if r.Event == decision.EventMint && r.Mint != nil {
 				minted += len(r.Mint.TokenSHA256)
+			}
+			if r.Event == decision.EventUnvalidated {
+				unvalidated++
 			}
 			seen = seen || deviceSent[r.Event]
 			switch r.Event {
@@ -269,6 +275,12 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 		}
 		if row.Device.Quarantine == "" && !seen {
 			note := "never seen: no TACACS+ record in the window, so nothing is inferred"
+			if unvalidated > 0 {
+				// It asked, and nothing it sent validated: a key mismatch
+				// is the likely cause, and the one to check first.
+				note = fmt.Sprintf("never validated: %d TACACS+ packets from it in the window did not validate "+
+					"(a key mismatch?), so nothing is inferred", unvalidated)
+			}
 			if minted > 0 {
 				// Credentials were issued for a device that never asked: its
 				// AAA may not point at port49 (task 18 review I1).

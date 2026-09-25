@@ -256,6 +256,22 @@ func TestMintsAloneAreNeverSeen(t *testing.T) {
 	}
 }
 
+// A device whose every packet failed to validate, as one with the wrong key
+// sends, is not seen: the note says it asked and did not validate, the hint
+// an operator needs, and pages nobody (final review minor 12).
+func TestUnvalidatedAloneIsNeverValidated(t *testing.T) {
+	var l logb
+	for range 3 {
+		l.add(decision.EventUnvalidated, "leaf-01", "arista_eos", "", func(r *decision.Record) { r.Session = nil })
+	}
+	devices := []Device{{Name: "leaf-01", Platform: "arista_eos", Supports: eos}}
+	r := Infer(l.recs, devices, Options{}).Rows[0]
+	if len(r.Warnings) != 0 || !slices.Equal(r.Notes, []string{"never validated: 3 TACACS+ packets from it in the " +
+		"window did not validate (a key mismatch?), so nothing is inferred"}) {
+		t.Fatalf("%+v", r)
+	}
+}
+
 // The Redactor is the one a caller passes, not only the built-in patterns:
 // a policy's own pattern hides its secret in an example, for a consumer of
 // Report with no redacting writer in front of it (task 18 review M1).

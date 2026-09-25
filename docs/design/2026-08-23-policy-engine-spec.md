@@ -3767,7 +3767,9 @@ shows it asked: `session` for an `authorize_session` record, `commands` for an
 configuration entry (`configure …`) in the same context. `--since` bounds the window by the
 newest record's time, never the wall clock. An admitted device with no record in the window
 is noted **never seen** and exits 0: in a day's window every device nobody logged into is one,
-and a job that pages on them is one nobody reads. It warns — and exits 1, for a job to page on
+and a job that pages on them is one nobody reads. One whose only records are `unvalidated` is
+noted **never validated** instead, with the count: it asked, and nothing it sent validated,
+which a key mismatch causes. It warns — and exits 1, for a job to page on
 — on a contradiction between what a device declares and what it did:
 
 - **config-commands probably off**: on a `commands` platform, at least 5 permitted configuration
