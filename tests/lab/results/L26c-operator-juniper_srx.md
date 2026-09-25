@@ -31,7 +31,9 @@ deny list as sent.
 `xml-mode netconf need-trailer` is not a valid command on this release; plain `xml-mode netconf`
 works, and the results do not depend on the argument. No configuration statement was found that
 controls `xml-mode`. Where `xml-mode` ran, TACACS+ accounting recorded it as
-`cmd=xml-mode netconf <cr>`.
+`cmd=xml-mode netconf <cr>`, and the authorization syslog showed the command as typed, followed
+by a UI login event with client mode `netconf`. The NETCONF service (`system services netconf
+ssh`) was on throughout; whether `xml-mode` works with it off was not tested here.
 
 ## What it means for port49
 
