@@ -128,7 +128,7 @@ grammar, so it cannot tell a keyword from an argument.
    is proven for a deny: the device refuses every command whose keywords begin with the deny's
    words, which is every command port49's deny matches, and more. That is the realistic readonly's
    `deny show configuration **`, spec §11's `show chassis cluster **` and every carve-out. It is
-   the one reading put to the owner (below).
+   ruled (below).
 2. **The deny that matters is one that meets a permit.** One that meets none is port49's
    `no_rule_matched` either way and never needs the wire, so it does not fail anything. One that
    meets a permit and names an argument fails closed (`argument_deny`) with the ruling's message;
@@ -139,14 +139,31 @@ grammar, so it cannot tell a keyword from an argument.
    `**` follows. `allow show interfaces terse` is not sent, since the device would also run `show
    interfaces fxp0 terse`, which port49 does not permit; it is warned about like an allow naming an
    argument. Unsent allows make the device narrower, never wider.
-4. **The keyword tree** (`platform.Keywords`) records, per captured command path, the keywords the
-   CLI completes there and whether an argument may be typed there. A word `| display xml rpc` shows
-   as an element's text (`show route protocol static`) is an argument's value, not a keyword. A path
-   the capture did not reach proves nothing, a keyword on one image only is not proven (the merge
+4. **The keyword tree** (`platform.Keywords`) records, per captured command path, the keywords
+   proven there and whether an argument may be typed there. **A word is a keyword only on positive
+   evidence** (the lead's ruling on this amendment's pre-flight A1): the CLI offers it by completion
+   at that exact place, and its own RPC shows it a keyword — an element named as the word and no
+   element holding it as text (`show interfaces terse` is `<terse/>`), an RPC with no text where the
+   path alone still asked for a `<command>` (`show route`), or a path still asking for a
+   `<command>` (`show chassis`). Absence of evidence is an argument: no RPC (`monitor traffic
+   interface fxp0`, `help`, `set cli`), an error asking for anything but a command (`ping
+   routing-instance mgmt_junos`, which still needs a host), RPC text that differs from the word, and
+   a timeout. **The capture types nothing that acts or streams** (pre-flight A2): it first proves on
+   `show system uptime` and `show version` that `| display xml rpc` shows the RPC and runs nothing,
+   then walks only under `show`. Every other top-level word is proven a command name by the top-level
+   listing, and nothing under it is proven, so `deny request system reboot **`, `deny clear bgp **`
+   and `deny monitor traffic **` fail closed as argument denies; `deny clear **`, `deny request **`
+   and `deny monitor **` go out. A path the capture did not reach proves nothing, a keyword on one image only is not proven (the merge
    keeps what every image proves, and an argument on any image), and the tree is the set's
    measurement: it lives outside the adapter, in `platforms/keywords/<set>/<platform>.yaml`, and no
-   `platforms:` block can touch it. It is bounded: the capture stops at 4,000 nodes and 20,000
-   commands per image, and a tree past 5,000 nodes or 1 MiB is refused at load.
+   `platforms:` block can touch it. It is bounded: the capture walks its seeds' prefixes first and
+   stops at 4,000 nodes and 20,000 commands per image, and a tree past 5,000 nodes or 1 MiB is
+   refused at load. **Its scope is the two lab images** (vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15):
+   on another release or hardware family a word it proves a keyword could take an argument, and a
+   keyword deny would fail open there (pre-flight A-M5). The adapter comment and §8 say so, and
+   "capture per fleet release" is carried. An argument completion never lists (a hidden one) is
+   invisible to the capture, so an exact allow could run with one; the stake is a read command under
+   `show`, and L26's note says so (A-M4).
 5. **The proof and its witness need no argument matching.** Only keyword-only rules reach the wire,
    and for those the device matches at least what the model's deny program matches and exactly
    what its allow program matches, so the model remains an over-approximation of what the device
@@ -167,8 +184,10 @@ grammar, so it cannot tell a keyword from an argument.
    (`set`, `delete`, `edit`, `activate`, …) and is not an operational command the keyword tree proves
    fails closed as `configuration_deny`, whose message says why: "`deny set system host-name **`
    names a configuration statement, and Junos never applies deny-commands in configuration mode …
-   port49 cannot enforce it: drop the rule". One the tree proves an operational command (`set cli
-   **`, the baseline's) is sent, since no reply that carries it can configure. `deny-configuration`
+   port49 cannot enforce it: drop the rule". One the tree proves an operational command is sent,
+   since no reply that carries it can configure; 1.1.0's tree proves nothing under `set` (item 4),
+   so the baseline's `set cli **` is not sent either, and a capability shape that would need it
+   goes narrow, where `.*` holds it. `deny-configuration`
    and `-regexps` over the wire are carried to a later plan.
 8. **A set update refreshes the tree** by rerunning Task 3b on the new set's images, merging with
    `junos-keywords`, and shipping it under the new set's directory. A released set's tree is frozen
@@ -202,7 +221,7 @@ them edits `internal/platform/adapter.go`, `dialect.go` or `internal/policy/load
   every Task 3b abbreviation probe is refused on both images; branch J records that deny-commands
   does not reach configuration mode; branch A lists nothing about arguments, which decision 27
   handles.
-- **Task 19**: three more shapes and one more probe.
+- **Task 19**: five more shapes and one more probe.
 - **Task 20**: L26 closes, the tree is frozen, and the roadmap records decision 27.
 
 ### Task 1a: The spec records decision 27, before the code
@@ -241,24 +260,28 @@ Check: `git show --stat <this amendment's commit>` lists the spec and this plan 
 - Produces: the two per-image trees Task 14 merges, in the form `platform.ParseKeywords` (Task 12a)
   reads.
 
-Over the break-glass CLI, which holds every permission and so sees every command, the test walks
-the operational tree breadth first. At each command path it types `<path> ?` and reads the words the
-CLI offers; an `<argument>` placeholder among them means an argument may be typed there. Each
-offered word below the top level is classified by `<path> <word> | display xml rpc`, which shows
-the command's RPC and never runs it: a word that is the text of an RPC element is an argument's
-value and marks the path as taking an argument; a word whose command is not complete is a keyword.
-A command that asks for confirmation is answered `no` and its word left out. Top-level words are
-command names and never typed with a pipe, and the walk never descends under a top-level command
-that changes the session (`configure`, `edit`, `exit`, `load`, `op`, `quit`, `save`, `start`,
-`test`).
+Over the break-glass CLI, which holds every permission and so sees every command, the test first
+proves the capture inert: `show system uptime | display xml rpc` and `show version | display xml
+rpc` must show their RPCs (`get-system-uptime-information`, `get-software-information`) and none
+of their output (`System booted`, `Junos:`), or the test fails before the walk (pre-flight A2). It
+then walks only under `show`, which acts on nothing; every other top-level word is recorded as a
+command name from the top-level listing, and nothing under it is typed, so a word under it is
+unproven. At each path it types `<path> ?` and reads the words offered; an `<argument>`
+placeholder among them means an argument may be typed there. Each offered word is proven a
+keyword only on positive evidence from `<path> <word> | display xml rpc` (item 4 above); anything
+else — no RPC, an error asking for anything but a `<command>`, the word as an element's text, text
+that differs from it — is an argument and marks the path as taking one. A prompt that does not come
+back within `junosPer` is interrupted with ^C and the word is an argument; one that does not come
+back after that either is not observed and fails the test.
 
-Bounds: every path of up to 2 words; below that, the prefixes of the seed list (the bits' reach and
-baseline, spec §11's example, the lab's and the fleet's operational commands) to 4 words; at most
-4,000 nodes and 20,000 commands per image. The note says whether the walk stopped at a bound; a path
-it did not reach proves nothing. The test fails if the capture does not list `show`, `show
-interfaces`, `show version`, `show interfaces terse` or `request system` as keywords, since then it
-misread the listing. It spends no token: the break-glass account is local. Every command has
-`junosPer`; a missed prompt is not observed, fails the test and ends the walk.
+Bounds: the prefixes of the seed list (spec §11's `show chassis cluster status`, the carve-out,
+the lab's and the fleet's show commands) first, so the bounds never cut them off (A-M1); then every
+path under `show` of up to 2 words, to 4 words; at most 4,000 nodes and 20,000 commands per image.
+The note says whether the walk stopped at a bound, which words were offered and not proven, and
+what the capture cannot see (hidden arguments; other releases). The test fails if `show`, `show
+interfaces`, `show version`, `show interfaces terse`, `show system` or `show system uptime` is not
+proven, since then it misread the device. It logs a progress line every 100 commands, well inside
+the watchdog's bound (A-M2), and spends no token: the break-glass account is local.
 
 `TestL9JunosAbbreviations` measures `DenyMatchesExpanded` for keywords. Over a class holding every
 bit, a control session and a session under one deny naming five commands of two and three keywords
@@ -276,10 +299,10 @@ two seeded tokens.
 ````diff
 diff --git a/tests/lab/junos_keywords_test.go b/tests/lab/junos_keywords_test.go
 new file mode 100644
-index 0000000..5d8cf1f
+index 0000000..6719eb0
 --- /dev/null
 +++ b/tests/lab/junos_keywords_test.go
-@@ -0,0 +1,316 @@
+@@ -0,0 +1,417 @@
 +//go:build lab
 +
 +package lab
@@ -299,30 +322,42 @@ index 0000000..5d8cf1f
 +// deny-commands or allow-commands regex against a command's keywords only
 +// (tests/lab/results/L12-juniper_*.md), and port49 has no Junos grammar, so a
 +// rule reaches the wire only where this tree proves each of its words a
-+// keyword. Over the break-glass CLI, which holds every permission and so sees
-+// every command, the test walks the operational tree by completion: at each
-+// command path it types `<path> ?` and reads the words the CLI offers, an
-+// `<argument>` placeholder among them meaning an argument may be typed there.
-+// Each offered word is then classified by `<path> <word> | display xml rpc`,
-+// which shows the command's RPC and never runs it: a word that is the text of
-+// an RPC element is an argument's value (`show route protocol static` is
-+// `<protocol>static</protocol>`), not a keyword, and marks the path as taking
-+// an argument. A word whose command is not complete yet is a keyword. A
-+// command that asks for confirmation is answered `no`, and its word is left
-+// out, which fails closed.
++// keyword.
 +//
-+// The walk never descends under a top-level command that changes the session
-+// (junosKeywordSkip). It is bounded: every path of up to junosKeywordBreadth words, and
-+// below that only the prefixes of junosKeywordSeeds, to junosKeywordDepth
-+// words, at most junosKeywordNodes nodes and junosKeywordCommands commands.
-+// A path it did not reach proves nothing, so a rule under it fails closed.
-+// Every command has junosPer; a missed prompt is not observed, fails the
-+// test, and ends the walk, since the session's state is unknown past it.
++// A word is a keyword only on positive evidence (the lead's ruling on the
++// amendment's pre-flight A1). The CLI must offer it by completion at that
++// exact place (`<path> ?`), which alone is not enough, since Junos offers an
++// argument's values there too (interface names, routing instances). And its
++// RPC must show it a keyword: `<path> <word> | display xml rpc` either shows
++// an RPC in which the word is an element's name and no element's text
++// (`show interfaces terse` is `<terse/>`), or an RPC with no text at all
++// where `<path>` alone was still asking for a `<command>` (`show route`), or
++// is itself still asking for a `<command>` (`show chassis`). Anything else is
++// an argument: an RPC holding the word as text (`<interface-name>fxp0`), text
++// that differs from the word, no RPC, an error naming anything but
++// `<command>`, and a prompt that did not come back. The two images' trees are
++// merged by intersection (Task 14), so a keyword must be proven on both.
++//
++// The walk runs no command that acts or streams (pre-flight A2). Before it
++// walks, it proves on harmless commands that `| display xml rpc` shows the
++// RPC without running the command: `show system uptime` and `show version`
++// return their RPCs and none of their output. It then descends only under
++// `show`: every other top-level word is a command name, proven by the
++// top-level listing, and nothing under it is typed, so a word under one is
++// unproven and counts as an argument. A prompt that does not come back within
++// junosPer is interrupted with ^C and the word is an argument; if the prompt
++// does not come back after that either, the session's state is unknown, and
++// the test fails as not observed.
++//
++// The walk is bounded: the prefixes of junosKeywordSeeds first, then every
++// path under `show` of up to junosKeywordBreadth words, to at most
++// junosKeywordDepth words, junosKeywordNodes nodes and junosKeywordCommands
++// commands. A path it did not reach proves nothing, so a rule under it fails
++// closed. It logs progress every 100 commands, for the watchdog.
 +//
 +// It writes tests/lab/results/L26-keywords-<image>.yaml, the tree in the
-+// format platform.ParseKeywords reads, and the note. Plan 5b Task 14 merges
-+// the two images' files (a keyword on one image only is not proven) into
-+// platforms/keywords/1.1.0/juniper_junos.yaml.
++// format platform.ParseKeywords reads, and the note. Task 14 merges the two
++// images' files into platforms/keywords/1.1.0/juniper_junos.yaml.
 +
 +const (
 +	junosKeywordBreadth  = 2
@@ -331,38 +366,40 @@ index 0000000..5d8cf1f
 +	junosKeywordCommands = 20000
 +)
 +
-+// junosKeywordSeeds are commands a policy denies or allows below the
-+// breadth: the set's bits' reach and baseline, spec §11's example, and the
-+// operational commands the lab and the owner's fleet name. Every prefix of
-+// each is walked in full.
++// junosKeywordWalked is the one top-level command the walk descends under:
++// it only shows, and its RPC is shown without running it.
++const junosKeywordWalked = "show"
++
++// junosKeywordSeeds are show commands a policy denies or allows below the
++// breadth: spec §11's example, the carve-out, and the operational commands
++// the lab and the owner's fleet name. Their prefixes are walked first, in
++// full, so the bounds never cut them off (pre-flight A-M1).
 +var junosKeywordSeeds = []string{
 +	"show chassis cluster status", "show chassis hardware", "show chassis routing-engine",
 +	"show configuration system", "show interfaces terse", "show interfaces extensive",
-+	"show route summary", "show route protocol", "show system users", "show system uptime",
-+	"show system processes", "show log messages", "show cli authorization", "show bgp summary",
-+	"show bgp neighbor", "show ospf neighbor", "show security policies", "show security flow session",
-+	"show version", "clear bgp neighbor", "clear interfaces statistics", "clear arp", "clear log",
-+	"clear security flow session", "request system reboot", "request system halt",
-+	"request system power-off", "request system zeroize", "request system software add",
-+	"request system storage cleanup", "restart routing", "monitor traffic", "monitor interface",
-+	"file list", "file delete", "file show", "set cli screen-length", "set cli screen-width",
-+	"ping", "traceroute", "ssh", "telnet", "help topic", "quit", "exit",
++	"show route summary", "show system users", "show system uptime", "show system processes",
++	"show cli authorization", "show bgp summary", "show bgp neighbor", "show ospf neighbor",
++	"show security policies", "show security flow session", "show version",
 +}
 +
-+// junosKeywordSkip are top-level commands the walk does not descend under:
-+// each changes the session or runs a shell, so no command under one is typed
-+// even to show its RPC. A rule under one fails closed. Top-level words are
-+// never classified by their RPC either: they are command names, and `quit`
-+// or `exit` typed with a pipe could end the session.
-+var junosKeywordSkip = []string{"configure", "edit", "exit", "load", "op", "quit", "save", "start", "test"}
++// junosPlaceholder is an argument in a completion listing: `<name>`, but not
++// `<[Enter]>`, which says the command is complete there.
++var junosPlaceholder = regexp.MustCompile(`^<[^\[].*>$`)
++
++var (
++	junosRPCTag     = regexp.MustCompile(`<([A-Za-z][A-Za-z0-9_.-]*)[\s/>]`)
++	junosRPCText    = regexp.MustCompile(`>([^<>]+)<`)
++	junosRPCCommand = regexp.MustCompile(`expecting <command>`)
++)
 +
 +type keywordWalk struct {
 +	c        *cliConn
-+	logf     func(format string, args ...any) // progress, so the watchdog sees the log grow
++	logf     func(format string, args ...any)
++	prompt   string
 +	nodes    map[string]*keywordNode
++	rpcs     map[string]rpcAnswer
 +	commands int
-+	values   []string // "<path> <word>" classified as an argument's value
-+	asked    []string // "<path> <word>" that asked for confirmation
++	values   []string // "<path> <word> (why)": offered, and not proven a keyword
 +}
 +
 +type keywordNode struct {
@@ -370,14 +407,25 @@ index 0000000..5d8cf1f
 +	argument bool
 +}
 +
-+// junosPlaceholder is an argument in a completion listing: `<name>`, but not
-+// `<[Enter]>`, which says the command is complete there.
-+var junosPlaceholder = regexp.MustCompile(`^<[^\[].*>$`)
++// rpcAnswer is what `<cmd> | display xml rpc` showed.
++type rpcAnswer struct {
++	rpc          bool     // an RPC came back
++	tags, values []string // its element names and texts
++	command      bool     // the device is still asking for a <command>
++	stalled      bool     // no prompt within junosPer, interrupted
++}
++
++func (w *keywordWalk) tick() {
++	w.commands++
++	if w.commands%100 == 0 {
++		w.logf("keyword walk: %d commands, %d nodes", w.commands, len(w.nodes))
++	}
++}
 +
 +// completion lists what the CLI offers after path: the words, and whether an
 +// argument placeholder is among them.
 +func (w *keywordWalk) completion(path string) ([]string, bool, error) {
-+	w.commands++
++	w.tick()
 +	send := "?"
 +	if path != "" {
 +		send = path + " ?"
@@ -388,10 +436,9 @@ index 0000000..5d8cf1f
 +		return nil, false, err
 +	}
 +	const none = "No valid completions"
-+	out, err := w.c.expectFrom(from, junosPer, junosOpPrompt+prefix, none)
-+	if i := strings.Index(out, none); err == nil && i >= 0 && !strings.Contains(out, junosOpPrompt+prefix) {
-+		// Nothing completes here: the device says so and redraws a prompt.
-+		_, err = w.c.expectFrom(from+i+len(none), junosPer, junosOpPrompt)
++	out, err := w.c.expectFrom(from, junosPer, w.prompt+prefix, none)
++	if i := strings.Index(out, none); err == nil && i >= 0 && !strings.Contains(out, w.prompt+prefix) {
++		_, err = w.c.expectFrom(from+i+len(none), junosPer, w.prompt)
 +		fmt.Fprint(w.c.in, "\x15")
 +		return nil, false, err
 +	}
@@ -400,8 +447,7 @@ index 0000000..5d8cf1f
 +		return nil, false, err
 +	}
 +	var words []string
-+	argument := false
-+	listing := false
++	argument, listing := false, false
 +	for _, line := range strings.Split(out, "\n") {
 +		line = strings.TrimRight(line, "\r")
 +		if strings.HasPrefix(line, "Possible completions:") {
@@ -425,31 +471,73 @@ index 0000000..5d8cf1f
 +	return slices.Compact(words), argument, nil
 +}
 +
-+// rpcValue reports whether word, typed after path, is an argument's value:
-+// the text of an element in the command's RPC. ok is false where the command
-+// asked for confirmation, which is answered `no`.
-+func (w *keywordWalk) rpcValue(path, word string) (value, ok bool, err error) {
-+	w.commands++
-+	cmd := strings.TrimSpace(path + " " + word)
-+	out, err := w.c.sendExpect(cmd+" | display xml rpc", junosPer, junosOpPrompt, "[yes,no]", "(yes)")
++// rpc is `<cmd> | display xml rpc`, remembered. A prompt that does not come
++// back is interrupted; one that still does not come back is an error.
++func (w *keywordWalk) rpc(cmd string) (rpcAnswer, error) {
++	if a, ok := w.rpcs[cmd]; ok {
++		return a, nil
++	}
++	w.tick()
++	out, err := w.c.sendExpect(cmd+" | display xml rpc", junosPer, w.prompt)
++	var a rpcAnswer
 +	if err != nil {
-+		return false, false, err
-+	}
-+	if strings.Contains(out, "[yes,no]") || strings.Contains(out, "(yes)") {
-+		if _, err := w.c.sendExpect("no", junosPer, junosOpPrompt); err != nil {
-+			return false, false, err
++		fmt.Fprint(w.c.in, "\x03")
++		if _, err := w.c.expectFrom(len(w.c.out.String()), junosPer, w.prompt); err != nil {
++			return rpcAnswer{}, fmt.Errorf("%q did not return a prompt, even after ^C: %w", cmd, err)
 +		}
-+		return false, false, nil
-+	}
-+	if !strings.Contains(out, "<rpc>") {
-+		return false, true, nil // not a command yet: a keyword the path continues through
-+	}
-+	for _, m := range regexp.MustCompile(`>([^<>]+)<`).FindAllStringSubmatch(out, -1) {
-+		if strings.EqualFold(strings.TrimSpace(m[1]), word) {
-+			return true, true, nil
++		a.stalled = true
++	} else if i := strings.Index(out, "<rpc>"); i >= 0 {
++		a.rpc = true
++		// The RPC alone: Junos follows it with a <cli> block whose tags are
++		// no part of the command.
++		body := out[i:]
++		if j := strings.Index(body, "</rpc>"); j >= 0 {
++			body = body[:j]
 +		}
++		for _, m := range junosRPCTag.FindAllStringSubmatch(body, -1) {
++			a.tags = append(a.tags, strings.ToLower(m[1]))
++		}
++		for _, m := range junosRPCText.FindAllStringSubmatch(body, -1) {
++			if t := strings.TrimSpace(m[1]); t != "" {
++				a.values = append(a.values, strings.ToLower(t))
++			}
++		}
++	} else {
++		a.command = junosRPCCommand.MatchString(out)
 +	}
-+	return false, true, nil
++	w.rpcs[cmd] = a
++	return a, nil
++}
++
++// keyword reports whether word, offered after path, is proven a keyword
++// there, and if not, why.
++func (w *keywordWalk) keyword(path, word string) (bool, string, error) {
++	a, err := w.rpc(path + " " + word)
++	if err != nil {
++		return false, "", err
++	}
++	switch {
++	case a.stalled:
++		return false, "no prompt within the deadline", nil
++	case a.rpc && slices.Contains(a.values, word):
++		return false, "the RPC holds it as text", nil
++	case a.rpc && slices.Contains(a.tags, word):
++		return true, "", nil
++	case a.rpc && len(a.values) == 0:
++		parent, err := w.rpc(path)
++		if err != nil {
++			return false, "", err
++		}
++		if parent.command {
++			return true, "", nil
++		}
++		return false, "an RPC names it nowhere, and the path was not asking for a command", nil
++	case a.rpc:
++		return false, "the RPC holds text other than the word", nil
++	case a.command:
++		return true, "", nil
++	}
++	return false, "no RPC, and no <command> asked for", nil
 +}
 +
 +// seeded reports whether path is a prefix of a seed, word for word.
@@ -463,49 +551,70 @@ index 0000000..5d8cf1f
 +	return false
 +}
 +
-+// walk captures the tree breadth first, within the bounds.
++// visit captures one node, and returns its keywords.
++func (w *keywordWalk) visit(path []string) ([]string, error) {
++	p := strings.Join(path, " ")
++	if n, ok := w.nodes[p]; ok {
++		return n.words, nil
++	}
++	words, argument, err := w.completion(p)
++	if err != nil {
++		return nil, fmt.Errorf("completion after %q: %w", p, err)
++	}
++	n := &keywordNode{argument: argument}
++	for _, word := range words {
++		if len(path) == 0 {
++			// The top-level listing holds command names only.
++			n.words = append(n.words, word)
++			continue
++		}
++		ok, why, err := w.keyword(p, word)
++		if err != nil {
++			return nil, err
++		}
++		if ok {
++			n.words = append(n.words, word)
++			continue
++		}
++		n.argument = true
++		w.values = append(w.values, fmt.Sprintf("%s %s (%s)", p, word, why))
++	}
++	w.nodes[p] = n
++	return n.words, nil
++}
++
++func (w *keywordWalk) bounded() bool {
++	return len(w.nodes) >= junosKeywordNodes || w.commands >= junosKeywordCommands
++}
++
++// walk captures the root, then every seed's prefixes, then the breadth under
++// junosKeywordWalked, within the bounds.
 +func (w *keywordWalk) walk() error {
-+	queue := [][]string{nil}
-+	for len(queue) > 0 {
++	if _, err := w.visit(nil); err != nil {
++		return err
++	}
++	for _, s := range junosKeywordSeeds {
++		f := strings.Fields(s)
++		for i := 1; i < len(f) && i < junosKeywordDepth && !w.bounded(); i++ {
++			words, err := w.visit(f[:i])
++			if err != nil {
++				return err
++			}
++			if !slices.Contains(words, f[i]) {
++				break // not proven here: nothing under it is walked
++			}
++		}
++	}
++	queue := [][]string{{junosKeywordWalked}}
++	for len(queue) > 0 && !w.bounded() {
 +		path := queue[0]
 +		queue = queue[1:]
-+		if len(w.nodes) >= junosKeywordNodes || w.commands >= junosKeywordCommands {
-+			return nil
-+		}
-+		p := strings.Join(path, " ")
-+		words, argument, err := w.completion(p)
++		words, err := w.visit(path)
 +		if err != nil {
-+			return fmt.Errorf("completion after %q: %w", p, err)
++			return err
 +		}
-+		n := &keywordNode{argument: argument}
 +		for _, word := range words {
-+			if len(path) == 0 {
-+				n.words = append(n.words, word)
-+				continue
-+			}
-+			value, ok, err := w.rpcValue(p, word)
-+			if err != nil {
-+				return fmt.Errorf("classifying %q after %q: %w", word, p, err)
-+			}
-+			switch {
-+			case !ok:
-+				w.asked = append(w.asked, strings.TrimSpace(p+" "+word))
-+			case value:
-+				n.argument = true
-+				w.values = append(w.values, strings.TrimSpace(p+" "+word))
-+			default:
-+				n.words = append(n.words, word)
-+			}
-+		}
-+		w.nodes[p] = n
-+		if len(w.nodes)%20 == 0 {
-+			w.logf("keyword walk: %d nodes, %d commands, at %q", len(w.nodes), w.commands, p)
-+		}
-+		for _, word := range n.words {
 +			next := append(slices.Clone(path), word)
-+			if len(path) == 0 && slices.Contains(junosKeywordSkip, word) {
-+				continue
-+			}
 +			if len(next) < junosKeywordDepth && (len(next) <= junosKeywordBreadth || seeded(next)) {
 +				queue = append(queue, next)
 +			}
@@ -514,8 +623,27 @@ index 0000000..5d8cf1f
 +	return nil
 +}
 +
-+// yaml is the tree as platform.ParseKeywords reads it: paths sorted, words
-+// quoted.
++// proveInert shows that `| display xml rpc` returns a command's RPC and does
++// not run it, on two harmless commands, before anything else is typed.
++func (w *keywordWalk) proveInert() error {
++	for _, c := range []struct{ cmd, rpc, output string }{
++		{"show system uptime", "get-system-uptime-information", "System booted"},
++		{"show version", "get-software-information", "Junos:"},
++	} {
++		w.tick()
++		out, err := w.c.sendExpect(c.cmd+" | display xml rpc", junosPer, w.prompt)
++		if err != nil {
++			return fmt.Errorf("%s | display xml rpc: not observed: %w", c.cmd, err)
++		}
++		if !strings.Contains(out, "<rpc>") || !strings.Contains(out, c.rpc) || strings.Contains(out, c.output) {
++			return fmt.Errorf("%s | display xml rpc did not show the RPC alone, so the pipe may run the command "+
++				"and the walk does not start: %s", c.cmd, oneLine(out))
++		}
++	}
++	return nil
++}
++
++// yaml is the tree as platform.ParseKeywords reads it.
 +func (w *keywordWalk) yaml(platformName string) string {
 +	var b strings.Builder
 +	fmt.Fprintf(&b, "platform: %s\nnodes:\n", platformName)
@@ -550,19 +678,19 @@ index 0000000..5d8cf1f
 +		if err := junosPrepare(c); err != nil {
 +			t.Fatalf("set cli screen-length 0 not observed within %s: %v", junosPer, err)
 +		}
-+		w := &keywordWalk{c: c, logf: t.Logf, nodes: map[string]*keywordNode{}}
++		w := &keywordWalk{c: c, logf: t.Logf, prompt: "@" + junosHost + "> ", nodes: map[string]*keywordNode{},
++			rpcs: map[string]rpcAnswer{}}
++		if err := w.proveInert(); err != nil {
++			t.Fatal(err)
++		}
 +		if err := w.walk(); err != nil {
 +			t.Fatalf("not observed; the walk stopped: %v", err)
 +		}
-+		if _, ok := w.nodes[""]; !ok || len(w.nodes[""].words) == 0 {
-+			t.Fatal("the top-level completion offered no keyword")
-+		}
-+		// The words the projection's own tests and the differential test
-+		// deny must be keywords, or the capture misread the listing.
++		// Keywords every image has: a capture without them misread the device.
 +		for _, want := range [][2]string{{"", "show"}, {"show", "interfaces"}, {"show", "version"},
-+			{"show interfaces", "terse"}, {"", "request"}, {"request", "system"}} {
-+			if !slices.Contains(w.nodes[want[0]].wordsOrNil(), want[1]) {
-+				t.Errorf("%q is not a keyword after %q in the capture", want[1], want[0])
++			{"show interfaces", "terse"}, {"show", "system"}, {"show system", "uptime"}} {
++			if n := w.nodes[want[0]]; n == nil || !slices.Contains(n.words, want[1]) {
++				t.Errorf("%q is not proven a keyword after %q", want[1], want[0])
 +			}
 +		}
 +		file := filepath.Join(root, "tests", "lab", "results", "L26-keywords-"+l.p.name+".yaml")
@@ -570,31 +698,27 @@ index 0000000..5d8cf1f
 +			t.Fatal(err)
 +		}
 +		bounded := "no"
-+		if len(w.nodes) >= junosKeywordNodes || w.commands >= junosKeywordCommands {
-+			bounded = "yes: the walk stopped at a bound, and every path it did not reach proves nothing"
++		if w.bounded() {
++			bounded = "yes: every path it did not reach proves nothing"
 +		}
 +		var b strings.Builder
-+		fmt.Fprintf(&b, "Walked over the break-glass CLI: %d nodes, %d commands typed. Stopped at a bound: %s.\n\n",
-+			len(w.nodes), w.commands, bounded)
-+		fmt.Fprintf(&b, "Bounds: every path of up to %d words, then the prefixes of %d seed commands to %d words; "+
-+			"at most %d nodes and %d commands.\n\n", junosKeywordBreadth, len(junosKeywordSeeds), junosKeywordDepth,
-+			junosKeywordNodes, junosKeywordCommands)
-+		fmt.Fprintf(&b, "Words classified as an argument's value by `| display xml rpc` (%d), the first 40: `%s`\n\n",
-+			len(w.values), strings.Join(w.values[:min(40, len(w.values))], "`, `"))
-+		fmt.Fprintf(&b, "Words whose command asked for confirmation, answered `no` and left out (%d): `%s`\n\n",
-+			len(w.asked), strings.Join(w.asked, "`, `"))
++		fmt.Fprintf(&b, "`| display xml rpc` showed the RPCs of `show system uptime` and `show version` and none of "+
++			"their output, so it runs nothing. The walk then typed only under `show`: %d nodes, %d commands. "+
++			"Stopped at a bound: %s.\n\n", len(w.nodes), w.commands, bounded)
++		fmt.Fprintf(&b, "Bounds: the prefixes of %d seed commands first, then every path under `show` of up to %d "+
++			"words, to %d words; at most %d nodes and %d commands.\n\n", len(junosKeywordSeeds), junosKeywordBreadth,
++			junosKeywordDepth, junosKeywordNodes, junosKeywordCommands)
++		fmt.Fprintf(&b, "Words offered by completion and not proven keywords (%d), the first 60: `%s`\n\n",
++			len(w.values), strings.Join(w.values[:min(60, len(w.values))], "`, `"))
++		b.WriteString("What this does not show: an argument completion never lists, a hidden one, is invisible " +
++			"here, so an exact allow may run with one (the stake is a read command under `show`); and the tree " +
++			"holds for these two images only: another release or hardware family (MX, EX, QFX, SRX hardware) " +
++			"may take an argument where this tree proves a keyword.\n\n")
 +		fmt.Fprintf(&b, "The tree: `tests/lab/results/L26-keywords-%s.yaml`.\n", l.p.name)
-+		l.result(t, "L26", "The Junos operational CLI keyword tree, walked by completion and classified by `| "+
-+			"display xml rpc`, within the stated bounds: the keywords decision 27 proves a projected rule's words "+
++		l.result(t, "L26", "The Junos operational CLI keyword tree under `show`, each keyword proven by completion "+
++			"and by its RPC, within the stated bounds: the keywords decision 27 proves a projected rule's words "+
 +			"against (spec §8; §15 L26).", b.String())
 +	})
-+}
-+
-+func (n *keywordNode) wordsOrNil() []string {
-+	if n == nil {
-+		return nil
-+	}
-+	return n.words
 +}
 ````
 
@@ -2061,6 +2185,17 @@ nodes and 1 MiB. The merge keeps what both images prove: a keyword on one image 
 an argument on either is kept. Add `platforms/keywords/1.1.0/juniper_junos.yaml` and
 `tests/lab/cmd/junos-keywords/main.go` to the task's commit.
 
+If Task 3b produced no tree on either image (pre-flight A-M3), ship 1.1.0 with **no** keyword
+tree: skip the merge, and write in the adapter comment and the commit message that no Junos rule
+is proven. Every live Junos deny then fails closed and no allow is sent, so every Junos
+composition that is not a pure bits grant gets the fail-closed reply, and `policy test` names each
+one before anyone pins the set. Report it to the controller: it ships a projection that denies
+nearly everything, which is closed and loud, rather than branch A's unprojected Junos. In the
+adapter file, above `bits:`, write the tree's scope: "The keyword tree
+(platforms/keywords/1.1.0/juniper_junos.yaml) is proven on vJunos-router 23.4R2-S2.1 and vSRX
+21.4R3.15 only (tests/lab/results/L26-juniper_*.md); on another release or hardware family a word
+it proves a keyword may take an argument (spec §8)."
+
 In Step 4's branch table:
 - **Branch A** loses nothing and gains nothing: a deny naming an argument is decision 27's, handled
   by Task 12a, and is never a reason to ship Junos unprojected.
@@ -2079,17 +2214,22 @@ In Step 4's branch table:
 
 ### Task 19, amended: an argument deny, an argument allow, an enumerated value
 
-Apply this block after Task 19's own. It adds three shapes — a deny naming an argument, which must
+Apply this block after Task 19's own. It adds five shapes — a deny naming an argument, which must
 get the fail-closed reply; an allow naming one, which is not sent, so the device refuses what port49
-permits; and a deny naming an enumerated value (`show route protocol static`), which reaches the wire
-only if Task 3b's tree proved `static` a keyword — and the probe `show route protocol static`. The
+permits; a deny naming an enumerated value (`show route protocol static`), which reaches the wire
+only if Task 3b's tree proved `static` a keyword; and, for pre-flight A1, `deny monitor traffic
+interface fxp0 **` beside `permit monitor **` (a value under a command with no RPC) and `deny ping
+routing-instance mgmt_junos **` beside `permit ping **` (a value under a command that still needs
+a host), each of which must get the fail-closed reply, and so fail CI — and the probe `show route
+protocol static`. No probe streams: under the fail-closed reply `monitor` and `ping` are refused
+outright, and a reply that let them run would fail the test's fail-open check at the first probe. The
 test's fail-open check is what catches a misclassified value: if the tree called it a keyword and
 the device ignores the deny, the device runs a command port49 denies, and the test fails.
 
 <!-- patch: tests/lab/projection_test.go -->
 ````diff
 diff --git a/tests/lab/projection_test.go b/tests/lab/projection_test.go
-index 70aacec..e41d6c3 100644
+index 70aacec..0176bd0 100644
 --- a/tests/lab/projection_test.go
 +++ b/tests/lab/projection_test.go
 @@ -62,6 +62,9 @@ var projectionProbes = []projectionProbe{
@@ -2102,7 +2242,7 @@ index 70aacec..e41d6c3 100644
  	{junosProbe{cmd: "clear interfaces statistics fxp0"}, "clear interfaces statistics fxp0"},
  	{junosProbe{cmd: "ping 127.0.0.1 count 1 rapid"}, "ping 127.0.0.1 count 1 rapid"},
  	{junosProbe{cmd: "sh ver"}, "show version"},
-@@ -98,6 +101,13 @@ var projectionShapes = []struct {
+@@ -98,6 +101,19 @@ var projectionShapes = []struct {
  	{"admin", `  - {name: r, privilege: admin, permit: ["**"]}`, false},
  	{"admin with a deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["request system reboot **"]}`, false},
  	{"the refused shape", `  - {name: r, privilege: readonly, permit: ["show interfaces **", "show version"], deny: ["show interfaces terse"]}`, true},
@@ -2113,6 +2253,12 @@ index 70aacec..e41d6c3 100644
 +	{"a deny naming an argument", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show interfaces fxp0 **"]}`, true},
 +	{"an allow naming an argument", `  - {name: r, privilege: readonly, permit: ["show version", "show interfaces fxp0 **"]}`, false},
 +	{"a deny naming an enumerated value", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show route protocol static"]}`, false},
++	// A value under a command with no RPC, and one under a command that still
++	// needs another argument: neither is proven a keyword (pre-flight A1), so
++	// each deny fails closed and fails CI. Nothing here streams: the
++	// fail-closed reply refuses `monitor` and `ping` outright.
++	{"a deny of a value under a command with no RPC", `  - {name: r, privilege: operator, permit: ["show **", "monitor **"], deny: ["monitor traffic interface fxp0 **"]}`, true},
++	{"a deny of a value under an incomplete command", `  - {name: r, privilege: operator, permit: ["show **", "ping **"], deny: ["ping routing-instance mgmt_junos **"]}`, true},
  }
  
  func TestProjectionDifferential(t *testing.T) {
@@ -2170,8 +2316,10 @@ passed. Its paragraph under "What has been measured so far" gives each tree's si
 the walk stopped at a bound; a path it did not reach proves nothing, by design. Add `platforms/keywords/1.1.0/juniper_junos.yaml` to the
 commit. In the roadmap's "Plan 5b — As built", record decision 27, the tree's size, and which
 spec §11 denies it proves. Carry, for a later plan: "measure deny-configuration(-regexps) over the
-wire", which would let a configuration statement be denied in configuration mode; and "grow the
-keyword capture's seed list where a fleet's denies fail as unproven". Close **L9** only if both
+wire", which would let a configuration statement be denied in configuration mode; "grow the
+keyword capture's seed list where a fleet's denies fail as unproven"; "capture the keyword tree per
+fleet release and hardware family" (A-M5); and "prove keywords outside `show`" with a mechanism that
+runs nothing, so a deny under `request`, `clear` or `monitor` can be sent. Close **L9** only if both
 `L9-abbreviations-juniper_*.md` notes passed, citing them beside Task 2's.
 
 ## Why this plan exists, and what 5a left

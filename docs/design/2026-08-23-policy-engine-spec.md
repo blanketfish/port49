@@ -3237,7 +3237,18 @@ port49 permits under it**: keyword-only, and no argument may be typed among its 
 records where one may), since `allow show interfaces terse` would also run `show interfaces fxp0
 terse`. Any other allow is left off the wire, so the device refuses what port49 permits there,
 and `policy test` warns (`projection_argument_allow`). A keyword on one image only is not
-proven, and a command path the capture did not reach proves nothing: both fail closed. A new
+proven, and a command path the capture did not reach proves nothing: both fail closed. **A word is
+a keyword only on positive evidence**: the CLI offers it by completion at that place, and its own
+`| display xml rpc` shows it a keyword (an element named as the word and no element holding it as
+text, or a path still asking for a `<command>`). No RPC, an error asking for anything else, the
+word as text, and a timeout all make it an argument, so a value under a command with no RPC
+(`monitor traffic interface fxp0`) or under one that still needs an argument (`ping
+routing-instance mgmt_junos`) is never proven a keyword. The capture runs nothing that acts or
+streams: it walks only under `show`, after proving the pipe shows the RPC and runs nothing, so in
+set 1.1.0 no word under another top-level command is proven. **The tree holds for the images it was
+captured on** (vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15); on another release or hardware family
+a word it proves a keyword may take an argument there, and a keyword deny would fail open. A hidden
+argument, one completion never lists, is invisible to the capture. A new
 capture ships in a new set, and the diff gates the pin move like any adapter edit.
 
 **`deny-commands` never reaches configuration mode** (`tests/lab/results/L12-configuration-juniper_*.md`,
@@ -5141,7 +5152,9 @@ the bits that enter configuration mode where the rest is provably sound, which i
 `deny-commands` or `allow-commands` regex against a command's keywords as typed and expanded,
 never against its arguments: `^show interfaces fxp0( .*)?$` did not stop `show interfaces fxp0
 terse` or `sh int fxp0 terse`. port49 has no Junos grammar, so the proof of a keyword comes from
-a keyword tree captured in the lab on every image a set measures and shipped with the set (L26).
+a keyword tree captured in the lab on every image a set measures and shipped with the set (L26),
+in which a word is a keyword only on positive evidence from the device, never for want of evidence
+against it (§8).
 A deny whose every word is proven a keyword is sent as written, and so is one whose other words
 are all proven keywords and which ends in a trailing `**`: the device refuses by keyword prefix, so
 it refuses at least what port49 denies (`deny show configuration **` and `deny show chassis cluster
@@ -5633,7 +5646,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L23** | Whether `home-directory`, `idletime` and `timeout`, each beside readonly's reply, leave the session readonly's on EOS and NX-OS: the same identity, the same reach for `clear counters` and `configure terminal`, and a permitted `show version`. Beside admin's reply (L22) a raise is invisible (5a final review M3). | The inert lists of `arista_eos` and `cisco_nxos` (§6, §8) | EOS, NX-OS | open |
 | **L24** | Whether a Junos login class's `idle-timeout` ends an idle session a TACACS+ reply landed in that class, through `local-user-name` and through the `remote` template. | Decision 21's enforced approximation; `port49 platform export --classes` (§5.6, §8) | Junos | open |
 | **L25** | Whether the N9Kv writes an accounting record under `admin` with task_id `vsh.bin.<port>` when a network-operator cancels the sudo prompt of a bare `show interface`, and what distinguishes it from a person's `admin` session, over SSH and over NX-API. | A `cisco_nxos` system user keyed on its task_id, never the username alone (§5.8) | NX-OS | open — a production observation with no note |
-| **L26** | The Junos operational CLI keyword tree: at each command path, the words the CLI completes that are keywords, and whether an argument may be typed there; a word `\| display xml rpc` shows as an element's text is an argument's value, not a keyword. Walked by completion over the break-glass CLI, bounded in breadth, depth, nodes and commands. | Which denies and allows the projection may send (decision 27; §8); `platforms/keywords/<set>/juniper_junos.yaml` | Junos (vSRX / vJunos-router in containerlab) | open — added 2026-09-25 |
+| **L26** | The Junos operational CLI keyword tree under `show`: at each command path, the words proven keywords — offered by completion there, and shown a keyword by `\| display xml rpc` (an element named as the word, none holding it as text, or a path still asking for a `<command>`) — and whether an argument may be typed there; anything without that evidence is an argument. The pipe is first proven to run nothing. Walked over the break-glass CLI, seeds first, bounded in breadth, depth, nodes and commands. Scope: the images captured, and no hidden argument. | Which denies and allows the projection may send (decision 27; §8); `platforms/keywords/<set>/juniper_junos.yaml` | Junos (vSRX / vJunos-router in containerlab) | open — added 2026-09-25 |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
