@@ -242,20 +242,24 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
 // Compositions repeat across devices, so each is projected once per policy
 // (plan 5b pre-flight I12): the result depends only on the platform, whose
 // adapter, normalization and redactions this policy fixes, the level, and the
-// blob's rules and classes.
+// blob's rules and classes. Each call returns its own copy.
 func (p *Policy) project(c composition, b engine.Blob, dialect platform.Dialect) (projection.Result, error) {
 	key, err := json.Marshal([]any{b.Platform, c.level, b.Rules, b.Classes})
 	if err != nil {
 		return projection.Result{}, err
 	}
 	if r, ok := p.projected.Load(string(key)); ok {
-		return r.(projection.Result), nil
+		return r.(projection.Result).Clone(), nil
 	}
 	r, err := p.projectOnce(c, b, dialect)
-	if err == nil {
-		p.projected.Store(string(key), r)
+	if err != nil {
+		return projection.Result{}, err
 	}
-	return r, err
+	// The memo's value is never handed out, only a clone of it: a caller
+	// that sorts or filters its Resolution's projection would otherwise
+	// rewrite every other device's. A concurrent miss keeps the first.
+	stored, _ := p.projected.LoadOrStore(string(key), r)
+	return stored.(projection.Result).Clone(), nil
 }
 
 func (p *Policy) projectOnce(c composition, b engine.Blob, dialect platform.Dialect) (projection.Result, error) {

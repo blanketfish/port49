@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/decision"
@@ -47,18 +45,8 @@ var ErrUsernameNotCanonical = errors.New("token: device-facing username must be 
 var ErrUsernameReserved = errors.New("token: device-facing username is reserved for a device account (remote, p49-*, a system user)")
 
 // ReservedUsername reports whether u is `remote`, a p49-* name, or a
-// platform's system user.
-func ReservedUsername(u string) bool {
-	if u == "remote" || strings.HasPrefix(u, "p49-") {
-		return true
-	}
-	for _, users := range platform.SystemUsers() {
-		if slices.Contains(users, u) {
-			return true
-		}
-	}
-	return false
-}
+// platform's system user (platform.ReservedUsername).
+func ReservedUsername(u string) bool { return platform.ReservedUsername(u) }
 
 // asciiUsername reports whether every byte of u is printable ASCII
 // (0x21–0x7E), which excludes the empty name, spaces and control characters.

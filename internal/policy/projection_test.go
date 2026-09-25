@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/projection"
 )
@@ -199,13 +202,18 @@ subjects:
 		fmt.Fprintf(&b, "  - {subject: s%d, scope: all_devices, roles: [%s]}\n", i, roles[i%len(roles)])
 	}
 	start := time.Now()
-	if _, err := Parse([]byte(b.String()), e); err != nil {
+	p, err := Parse([]byte(b.String()), e)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("1,000 SRXs x 20 subjects loaded in %v; the bound is 2 s", d)
 	} else {
 		t.Logf("1,000 SRXs x 20 subjects loaded in %v", d)
+	}
+	// Four compositions, four projections, however many devices.
+	if n := memoized(p); n != 4 {
+		t.Fatalf("four compositions, %d projections memoized", n)
 	}
 }
 
@@ -225,5 +233,82 @@ func TestARepeatedCompositionIsNotReprojected(t *testing.T) {
 	res, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
 	if err != nil || res.Attributes[0].Source != "platform juniper_junos, projection (memo)" {
 		t.Fatalf("%+v %v", res.Attributes, err)
+	}
+}
+
+// The memo is keyed finely enough: two compositions with the same rules, role
+// for role, at different levels are two projections with two replies.
+func TestTheMemoKeysOnTheLevel(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: ro, privilege: readonly, permit: ["show **", "clear **"]}
+  - {name: op, privilege: operator}
+subjects:
+  - {name: s, identity: ["user:a@example.com"], username: a, token_ttl: 60s}
+  - {name: t, identity: ["user:b@example.com"], username: b, token_ttl: 60s}
+grants:
+  - {subject: s, scope: all_devices, roles: [ro]}
+  - {subject: t, scope: all_devices, roles: [ro, op]}
+`)
+	if n := memoized(p); n != 2 {
+		t.Fatalf("two compositions, %d projections memoized", n)
+	}
+	s, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := p.ResolveSubject("t", deviceNamed(t, "srx-fw-04"), noon)
+	if err != nil || reflect.DeepEqual(s.Blob.Attributes, u.Blob.Attributes) {
+		t.Fatalf("%q %q %v", s.Blob.Attributes, u.Blob.Attributes, err)
+	}
+}
+
+func memoized(p *Policy) int {
+	n := 0
+	p.projected.Range(func(_, _ any) bool { n++; return true })
+	return n
+}
+
+// A resolution's projection is its own: what one caller does to it never
+// reaches another resolution of the same composition, however concurrent.
+func TestAProjectionIsNotSharedAcrossResolutions(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, readonlyCarveOut)
+	want, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAttrs, wantBeyond := slices.Clone(want.Projection.Attributes), slices.Clone(want.Projection.Beyond)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			res.Projection.Attributes[0] = "user-permissions=all"
+			res.Projection.Beyond = append(res.Projection.Beyond[:0], engine.Rule{Verdict: engine.Permit, Rule: "**"})
+			res.Projection.Denies = slices.DeleteFunc(res.Projection.Denies, func(engine.Rule) bool { return true })
+		}()
+	}
+	wg.Wait()
+	got, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
+	if err != nil || !reflect.DeepEqual(got.Projection.Attributes, wantAttrs) ||
+		!reflect.DeepEqual(got.Projection.Beyond, wantBeyond) ||
+		!reflect.DeepEqual(got.Projection.Denies, want.Projection.Denies) {
+		t.Fatalf("%q %v", got.Projection.Attributes, err)
+	}
+}
+
+// The projection holds its own attributes to the level's bits, not to the
+// grant's ceiling: a role above max_privilege still quarantines the device.
+func TestAProjectionDoesNotMaskALevelAboveTheCeiling(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryLocalUserName, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"]}
+  - {name: o, privilege: operator, permit: ["clear **"]}
+`+subjOK+"grants:\n  - {subject: s, scope: all_devices, roles: [r, o], max_privilege: readonly}\n")
+	if cause, ok := p.Quarantined("srx-fw-04", noon); !ok || !strings.Contains(cause, "above its grants' max_privilege readonly") {
+		t.Fatalf("%q %v", cause, ok)
 	}
 }

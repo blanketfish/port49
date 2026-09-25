@@ -133,6 +133,22 @@ type Refusal struct {
 
 func (r *Refusal) Error() string { return r.Why }
 
+// Clone is r with every slice and the Refusal copied, so a caller may sort,
+// filter or append to its copy without touching another's: a policy hands
+// one composition's Result to every device it lands on. The model is shared;
+// nothing writes it after Project returns.
+func (r Result) Clone() Result {
+	r.Bits, r.Attributes = slices.Clone(r.Bits), slices.Clone(r.Attributes)
+	r.Denies, r.Allows, r.Omitted = slices.Clone(r.Denies), slices.Clone(r.Allows), slices.Clone(r.Omitted)
+	r.Beyond, r.Unreached = slices.Clone(r.Beyond), slices.Clone(r.Unreached)
+	r.ConfigurationDropped = slices.Clone(r.ConfigurationDropped)
+	if r.Refusal != nil {
+		rf := *r.Refusal
+		r.Refusal = &rf
+	}
+	return r
+}
+
 func refuse(category, format string, args ...any) error {
 	return &Refusal{Category: category, Why: fmt.Sprintf(format, args...)}
 }

@@ -151,3 +151,19 @@ func TestProjectionOwns(t *testing.T) {
 		t.Error("a platform that projects nothing owns nothing")
 	}
 }
+
+// A device's own accounts are reserved in any case: `remote`, the p49-
+// template namespace every local_user_names entry is in, and every platform's
+// system user. The mint and policy load both ask this.
+func TestReservedUsername(t *testing.T) {
+	for _, u := range []string{"remote", "Remote", "p49-readonly", "P49-x", "p49-", "root", "ROOT"} {
+		if !ReservedUsername(u) {
+			t.Errorf("%q: not reserved", u)
+		}
+	}
+	for _, u := range []string{"alice", "remote1", "p49", "p49x", "rooted"} {
+		if ReservedUsername(u) {
+			t.Errorf("%q: reserved", u)
+		}
+	}
+}

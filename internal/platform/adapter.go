@@ -762,12 +762,25 @@ var templateName = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 // p49Template is port49's template namespace: a template the device already
 // has for another reason, `root` or `remote`, would put the session in that
 // account's class whatever bits the projection proved (spec §8,
-// local_user_names). No subject may take a p49- name either.
-var p49Template = regexp.MustCompile(`^p49-[a-z0-9][a-z0-9._-]*$`)
+// local_user_names). No subject may take a p49- name either
+// (ReservedUsername).
+var p49Template = regexp.MustCompile(`^` + templatePrefix + `[a-z0-9][a-z0-9._-]*$`)
+
+const templatePrefix = "p49-"
 
 // remoteUser is the device's own fallback template: the user a session with
 // no template, or one the device lacks, lands under (RemoteClass).
 const remoteUser = "remote"
+
+// ReservedUsername reports whether u names one of a device's own accounts,
+// in any case: `remote`, any p49- name, or any platform's system user. A
+// session under one lands in that account's class whatever the reply says,
+// so no subject takes one: policy load refuses a declared one and the mint
+// one a directory derives (spec §8; §13 decision 26).
+func ReservedUsername(u string) bool {
+	return strings.EqualFold(u, remoteUser) || strings.HasPrefix(strings.ToLower(u), templatePrefix) ||
+		ContainsName(systemUserNames(), u)
+}
 
 // systemUserNames is every platform's system users as one list: no template
 // user takes one, whatever platform it is declared on.
