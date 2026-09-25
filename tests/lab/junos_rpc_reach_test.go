@@ -143,6 +143,18 @@ func l26cCLICell(out, evidence string) string {
 	return "not observed"
 }
 
+// l26cSend types cmd and reads its window drained to quiet (review L26b
+// I-2), so a refusal the CLI prints after its first prompt stays in its own
+// command's window.
+func l26cSend(c *cliConn, cmd string) (string, error) {
+	from := len(c.out.String())
+	_, err := c.sendExpect(cmd, junosPer, junosOpPrompt)
+	if err == nil {
+		err = junosSettle(c)
+	}
+	return c.out.String()[from:], err
+}
+
 // l26cRun is one class's (or R's) cells and outputs, keyed by probe.
 type l26cRun struct {
 	cells, outs map[string]string
@@ -199,7 +211,7 @@ func l26cXMLMode(c *cliConn, entry string, r l26cRun) {
 // (5), typing only `exit` in a shell.
 func (l *lab) l26cCLI(c *cliConn, r l26cRun) {
 	for _, p := range []struct{ cmd, evidence string }{{"show version", "Junos:"}, {"show configuration", "host-name"}} {
-		out, err := c.sendExpect(p.cmd, junosPer, junosOpPrompt)
+		out, err := l26cSend(c, p.cmd)
 		r.outs[p.cmd] = out
 		r.cells[p.cmd] = l26cCLICell(out, p.evidence)
 		if err != nil {
@@ -214,7 +226,7 @@ func (l *lab) l26cCLI(c *cliConn, r l26cRun) {
 		r.outs["op ?"] = strings.Join(words, " ")
 	}
 	junosSettle(c)
-	out, err := c.sendExpect("op url /var/tmp/p49-none.slax", junosPer, junosOpPrompt)
+	out, err := l26cSend(c, "op url /var/tmp/p49-none.slax")
 	r.outs["op url"] = out
 	r.cells["op url"] = l26cOpURLCell(out)
 	if err != nil {
@@ -454,6 +466,13 @@ func l26cVerdict(runs map[string]l26cRun, probes []string) (reachable, isolated 
 			if l26cReached(cell) {
 				reachable = true
 				why = append(why, fmt.Sprintf("reached: %s in %s (%s)", p, cls, cell))
+				continue
+			}
+			if cell == "not observed" && runs["C"].cells[p] == "not observed" && l26cReached(runs["R"].cells[p]) {
+				// The class's bits answer it as in C, which neither runs nor
+				// refuses it; R reaches it: a result of the bits, recorded, not
+				// a failure (the controller's I-5 ruling on L26b).
+				why = append(why, fmt.Sprintf("bits-limited: %s neither ran nor was refused in %s, as in C; reached in R", p, cls))
 				continue
 			}
 			if cell != "refused" && cell != "login refused" {

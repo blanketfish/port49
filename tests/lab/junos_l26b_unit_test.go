@@ -139,7 +139,7 @@ func TestCommittedL26bVerdictsHold(t *testing.T) {
 				t.Errorf("%s: no row or outputs for %q", img, w.cmd)
 				continue
 			}
-			cc, dc := l26bCell(o[0], w.evidence), l26bCell(o[1], w.evidence)
+			cc, dc := l26bCell(o[0], w.evidence), l26bDenyCell(o[1], w.word, w.evidence, len("alice01@"+junosHost+"> "))
 			isOffered := slices.Contains(offered[w.path], w.word) || w.path == "show" || w.path == "set"
 			v := l26bVerdict(cc, dc, isOffered, o[0])
 			got := strings.Trim(strings.Fields(row[5])[0], "*")
@@ -148,5 +148,24 @@ func TestCommittedL26bVerdictsHold(t *testing.T) {
 					w.path, row[3], row[4], got, cc, dc, v)
 			}
 		}
+	}
+}
+
+func TestCaretAt(t *testing.T) {
+	// The first echo carries no prompt; the caret column counts it.
+	first := "show cli\n                   ^\nsyntax error, expecting <command>.\nalice02@srx1> show cli   |\n"
+	if got := caretAt(first, len("alice02@srx1> ")); !strings.HasPrefix(got, "cli") {
+		t.Errorf("caretAt(first echo) = %q", got)
+	}
+	// A retyped line carries its own prompt.
+	retyped := "garbage\nalice02@srx1> exit\n              ^\nunknown command.\n"
+	if got := caretAt(retyped, 99); !strings.HasPrefix(got, "exit") {
+		t.Errorf("caretAt(retyped) = %q", got)
+	}
+	if l26bDenyCell("show cli\n               ^\nsyntax error.\n", "cli", nil, len("alice02@srx1> ")) != "not observed" {
+		t.Error("a refusal whose caret is not at the word is refused")
+	}
+	if l26bDenyCell(first, "cli", nil, len("alice02@srx1> ")) != "refused" {
+		t.Error("a refusal at the word is not refused")
 	}
 }

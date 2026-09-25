@@ -121,6 +121,44 @@ func l26bCell(out string, evidence *regexp.Regexp) string {
 	return "not observed"
 }
 
+// caretAt is the text the CLI's first caret points at in out: the caret's
+// column, less the prompt that preceded the echoed line it sits under.
+// promptLen is the length of the session's own prompt, which the window's
+// first echo does not carry (it was printed before the window began); a
+// retyped line within the window carries its prompt, `user@host> `.
+func caretAt(out string, promptLen int) string {
+	lines := strings.Split(strings.ReplaceAll(out, "\r", ""), "\n")
+	for i := 1; i < len(lines); i++ {
+		col := strings.Index(lines[i], "^")
+		if col < 0 || strings.TrimSpace(lines[i]) != "^" {
+			continue
+		}
+		echo := lines[i-1]
+		off := col - promptLen
+		if j := strings.Index(echo, "> "); j >= 0 && strings.Contains(echo[:j], "@") {
+			off = col - (j + 2)
+			echo = echo[j+2:]
+		}
+		if off < 0 || off > len(echo) {
+			return ""
+		}
+		return echo[off:]
+	}
+	return ""
+}
+
+// l26bDenyCell is l26bCell for a deny session, with the refusal tied to the
+// word under test (review L26b I-2): refused only where the CLI's first caret
+// points at word, so a refusal of anything else, or one spilled from another
+// command, is not observed.
+func l26bDenyCell(out, word string, evidence *regexp.Regexp, promptLen int) string {
+	c := l26bCell(out, evidence)
+	if c == "refused" && !strings.HasPrefix(caretAt(out, promptLen), word) {
+		return "not observed"
+	}
+	return c
+}
+
 // l26bVerdict is a word's verdict on one image from its two cells, whether
 // the image's completion offers it, and the control's output: proven where
 // the control ran it and the deny refused it; absent where the image does not
@@ -168,6 +206,10 @@ func l26bChunks(path string, words []string) [][]string {
 	return append(out, cur)
 }
 
+// l26bUserKey keys the session's user in l26bSession's outputs, for the
+// prompt's length: never a command.
+const l26bUserKey = "\x00user"
+
 // l26bSession is one token login under attrs, each command typed with
 // junosPer, and then `exit` where exit is set: its cell is ran where the SSH
 // session ended within junosPer (cliConn.done), refused where the prompt came
@@ -176,6 +218,7 @@ func (l *lab) l26bSession(t *testing.T, name, attrs string, cmds []string, exit 
 	t.Helper()
 	outs := map[string]string{}
 	c, r, _ := l.junosLogin(t, name, attrs)
+	outs[l26bUserKey] = r.user
 	if c == nil {
 		t.Errorf("%s: the session did not open, so nothing was measured: %s", name, r.loginErr)
 		return outs, "not observed", r.auth
@@ -209,7 +252,12 @@ func (l *lab) l26bSession(t *testing.T, name, attrs string, cmds []string, exit 
 		case <-time.After(250 * time.Millisecond):
 			out := c.out.String()[from:]
 			if strings.Contains(out, junosOpPrompt) && containsAny(strings.ToLower(out), junosL26bRefusal) {
+				junosSettle(c)
+				out = c.out.String()[from:]
 				outs["exit"] = out
+				if !strings.HasPrefix(caretAt(out, len(r.user+"@"+junosHost+"> ")), "exit") {
+					return outs, "not observed", r.auth
+				}
 				return outs, "refused", r.auth
 			}
 		}
@@ -317,10 +365,11 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 				sc = append(sc, w.cmd)
 			}
 			outs, exitCell, auth := l.l26bSession(t, s.name, "["+class+`, "deny-commands=`+quote(s.deny)+`"]`, sc, s.exit)
+			promptLen := len(outs[l26bUserKey] + "@" + junosHost + "> ")
 			denyAuth = append(denyAuth, fmt.Sprintf("%s: `deny-commands=%s`\n\n```\n%s\n```", s.name, tableCell(s.deny), auth))
 			for _, w := range s.words {
 				key := strings.TrimSpace(w.path + " " + w.word)
-				denyCells[key] = l26bCell(outs[w.cmd], w.evidence)
+				denyCells[key] = l26bDenyCell(outs[w.cmd], w.word, w.evidence, promptLen)
 				denyOuts[key] = outs[w.cmd]
 				denyOf[key] = s.name
 			}

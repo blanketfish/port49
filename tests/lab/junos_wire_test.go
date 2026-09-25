@@ -199,13 +199,21 @@ func (l *lab) junosSession(t *testing.T, name, attrs string, probes []junosProbe
 // the line with ^U, so the command is never run.
 func (l *lab) junosProbe(c *cliConn, p junosProbe) (string, error) {
 	if !p.complete {
-		out, err := c.sendExpect(p.cmd, junosPer, junosOpPrompt, junosCfgPrompt, "(yes)")
-		if err == nil && strings.Contains(out, "(yes)") {
-			var more string
-			more, err = c.sendExpect("yes", junosPer, junosOpPrompt)
-			out += more
+		// The window is drained to quiet before it is read (review L26b I-2):
+		// Junos refuses a hidden word as it is typed and retypes the rest of
+		// the line, whose refusal and prompt can come after the first prompt,
+		// and would otherwise land in the next command's window.
+		from := len(c.out.String())
+		_, err := c.sendExpect(p.cmd, junosPer, junosOpPrompt, junosCfgPrompt, "(yes)")
+		if err == nil {
+			err = junosSettle(c)
 		}
-		return precReply(l16TrimEcho(out, p.cmd)), err
+		if err == nil && strings.Contains(c.out.String()[from:], "(yes)") {
+			if _, err = c.sendExpect("yes", junosPer, junosOpPrompt); err == nil {
+				err = junosSettle(c)
+			}
+		}
+		return precReply(l16TrimEcho(c.out.String()[from:], p.cmd)), err
 	}
 	send := p.cmd
 	prefix := strings.TrimSuffix(p.cmd, "?")

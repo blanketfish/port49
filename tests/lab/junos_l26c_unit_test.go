@@ -2,7 +2,11 @@
 
 package lab
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 // These run without a device: the L26c classifiers and the verdict.
 
@@ -61,6 +65,14 @@ func TestL26cVerdict(t *testing.T) {
 	if _, isolated, _ := l26cVerdict(runs, probes); isolated {
 		t.Error("a refusal with no control is isolated")
 	}
+	// Not observed in P and C alike, reached in R: the bits, recorded.
+	runs["P"] = run(map[string]string{"entry: x": "hello", "x: rpc": "not observed"})
+	runs["C"] = run(map[string]string{"entry: x": "hello", "x: rpc": "not observed"})
+	runs["R"] = run(map[string]string{"entry: x": "hello", "x: rpc": "result"})
+	if _, isolated, why := l26cVerdict(runs, probes); !isolated || !slices.ContainsFunc(why, func(w string) bool { return strings.HasPrefix(w, "bits-limited:") }) {
+		t.Errorf("a bits-limited cell: isolated %v, %v", isolated, why)
+	}
+	runs["C"] = run(map[string]string{"entry: x": "hello", "x: rpc": "result"})
 	// Not observed in P: not isolated.
 	runs["R"] = run(map[string]string{"entry: x": "hello"})
 	runs["P"] = run(map[string]string{"entry: x": "not observed"})
