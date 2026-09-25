@@ -1,11 +1,21 @@
-.PHONY: test vet fuzz lab build evidence
+.PHONY: test lab-unit vet fuzz lab build evidence
 
 build:
 	go build -o bin/port49d ./cmd/port49d
 	go build -o bin/port49 ./cmd/port49
 
-test:
+test: lab-unit
 	go test ./... -count=1
+
+# The lab package's pure tests — the classifiers and row builders that read a
+# device's output into a verdict, and the committed notes they must still
+# read the same — live behind the `lab` tag with the harness they serve, so
+# `go test ./...` never builds them. This runs each Test in a *_unit_test.go
+# file, by anchored name, and nothing that brings a device up.
+LAB_UNIT_TESTS = $(shell grep -ho '^func Test[A-Za-z0-9_]*' tests/lab/*_unit_test.go | sed 's/^func //' | paste -sd'|' -)
+
+lab-unit:
+	go test -tags lab ./tests/lab/ -run '^($(LAB_UNIT_TESTS))$$' -count=1
 
 vet:
 # gofmt lists every unformatted file and fails if there is one. No tee to
