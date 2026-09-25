@@ -592,6 +592,37 @@ func TestProjectionFindingsNeverPrintASecret(t *testing.T) {
 			t.Fatalf("%s:\n%s", roles, strings.Join(all, "\n"))
 		}
 	}
+	// A value another rule hides, in a rule that is no secret, in any letter
+	// case and with a `"` or `\` %q would escape past any writer, is left
+	// out where each finding and caveat is made (task 12b review I1).
+	for _, c := range []struct{ hides, typed string }{
+		{"HUNTER2", "hunter2"}, {`PA"sS9`, `pa"ss9`}, {`A\B9`, `a\b9`}, {`Mi"X\d9`, `mI"x\D9`},
+	} {
+		for _, roles := range []string{
+			`permit: ["show interfaces **", 'show version ` + c.typed + `'], deny: ["show interfaces terse"]`,
+			`permit: ["show **"], deny: ['show route ` + c.typed + `']`,
+			`permit: ['show interfaces ` + c.typed + ` **', "show version"]`,
+		} {
+			p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+"roles:\n  - {name: r, privilege: readonly, "+
+				roles+"}\n  - {name: sec, privilege: readonly, permit: ['show system radius-server 10.0.0.1 secret "+
+				c.hides+"']}\n"+subjOK+grantOK)
+			var all []string
+			for _, f := range p.Lint(noon) {
+				all = append(all, f.Message)
+			}
+			for _, line := range []string{"", "show version", "show interfaces " + c.typed + " terse"} {
+				e, err := p.Explain("s", "", "srx-fw-04", line, noon)
+				if err != nil {
+					t.Fatal(err)
+				}
+				all = append(all, e.Caveats...)
+			}
+			if leaks(strings.Join(all, "\n"), c.hides) {
+				t.Errorf("%s:\n%s", roles, strings.Join(all, "\n"))
+			}
+		}
+	}
+
 	// Each message redacts what it lists itself, whatever reached it.
 	patterns := mustParse(t, readonlyCarveOut).Redactions()
 	rule := engine.Rule{Verdict: engine.Permit, Rule: secret, Role: "r"}
@@ -601,9 +632,14 @@ func TestProjectionFindingsNeverPrintASecret(t *testing.T) {
 			Beyond: []engine.Rule{rule}, Unreached: []engine.Rule{rule}}, patterns, nil),
 		second(refusedMessage(projection.Result{FailClosed: projection.FailOverflow,
 			Allows: []engine.Rule{rule}, Refusal: &projection.Refusal{Why: "w", Attribute: "deny-commands",
-				Value: "^(" + secret + ")$", Class: "p49-readonly"}}, patterns)),
+				Value: "^(" + secret + ")$", Class: "p49-readonly"}}, patterns, nil)),
 		second(refusedMessage(projection.Result{FailClosed: projection.FailRefusedShape,
-			Allows: []engine.Rule{rule}, Refusal: &projection.Refusal{Why: "w"}}, patterns)),
+			Allows: []engine.Rule{rule}, Refusal: &projection.Refusal{Why: "w"}}, patterns, nil)),
+		// The class line's regex writes a hidden value re-cased, which no
+		// writer recognizes: it prints redacted whole.
+		second(refusedMessage(projection.Result{FailClosed: projection.FailOverflow, Refusal: &projection.Refusal{
+			Why: "w", Attribute: "deny-commands", Value: "^(show [hH][uU][nN][tT][eE][rR]2)$", Class: "p49-readonly"}},
+			patterns, []string{"HUNTER2"})),
 	} {
 		if strings.Contains(msg, "HUNTER2") || !strings.Contains(msg, platform.Redacted) {
 			t.Errorf("%s", msg)
@@ -630,7 +666,7 @@ func TestTheFailClosedCaveatSaysWhy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := strings.Join(ProjectionCaveats(res, "juniper_junos", engine.Outcome{}), "\n"); !strings.Contains(c,
+	if c := strings.Join(ProjectionCaveats(res, "juniper_junos", engine.Outcome{}, nil), "\n"); !strings.Contains(c,
 		"gets the fail-closed reply there") || strings.Contains(c, "the device runs") {
 		t.Fatalf("%q", c)
 	}

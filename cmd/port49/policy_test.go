@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1013,6 +1014,28 @@ key_groups:
 	if got := strings.ToUpper(out.String() + errb.String()); strings.Contains(got, "SEKRIT") ||
 		!strings.Contains(got, "SECRET «REDACTED»") {
 		t.Fatalf("explain printed the secret:\n%s%s", out.String(), errb.String())
+	}
+	// A value with a `"` or `\` in it, which %q escapes past the writer's
+	// pass, in any letter case: a finding quoting a rule that carries it and
+	// a test line typing it print it redacted (task 12b review I1).
+	for _, c := range []struct{ hides, typed, test string }{
+		{`PA"sS9`, `pa"ss9`, `Pa"Ss9`}, {`A\B9`, `a\b9`, `a\B9`}, {`Mi"X\d9`, `mI"x\D9`, `MI"x\d9`},
+	} {
+		with := strings.Replace(raw, "permit: [show **]}", `permit: [show **, 'show system radius-server 10.0.0.1 `+
+			`secret `+c.hides+`', 'show interfaces Gi1 `+c.typed+`']}`, 1) + "  - {subject: noc, device: xe-01, " +
+			"command: 'show running-config " + c.test + "', expect: permit}\n"
+		if err := os.WriteFile(pol, []byte(with), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		errb.Reset()
+		run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+		got := out.String() + errb.String()
+		low, escaped := strings.ToLower(got), strings.ToLower(strings.Trim(strconv.Quote(c.hides), `"`))
+		if strings.Contains(low, strings.ToLower(c.hides)) || strings.Contains(low, escaped) ||
+			!strings.Contains(got, "`Gi1` never matches on cisco_iosxe") || !strings.Contains(got, "show running-config «redacted»") {
+			t.Errorf("%s: policy test printed the secret:\n%s", c.typed, got)
+		}
 	}
 }
 

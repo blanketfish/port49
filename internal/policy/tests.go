@@ -127,8 +127,9 @@ func Caveats(platformName string, dialect platform.Dialect, o engine.Outcome) []
 // projected session reply (spec §8, "Verification"): whether it runs it, and
 // that its effective set is its class ∩ the wire, the class half outside
 // port49. Where port49 permits what the device refuses, the projection is
-// narrower there, which fails closed and is said.
-func ProjectionCaveats(res Resolution, platformName string, o engine.Outcome) []string {
+// narrower there, which fails closed and is said. A rule it quotes has each
+// value secrets holds redacted first (platform.QuoteShown).
+func ProjectionCaveats(res Resolution, platformName string, o engine.Outcome, secrets []string) []string {
 	pr := res.Projection
 	if pr == nil {
 		return nil
@@ -162,9 +163,9 @@ func ProjectionCaveats(res Resolution, platformName string, o engine.Outcome) []
 	if runs && o.Decided != nil {
 		for _, u := range pr.Unreached {
 			if u.Rule == o.Decided.Rule {
-				out = append(out, fmt.Sprintf("the device may refuse it: the allow that carries it, %q, is sent "+
+				out = append(out, fmt.Sprintf("the device may refuse it: the allow that carries it, %s, is sent "+
 					"under bits that do not reach it, and whether a Junos allow runs without its bit is unmeasured "+
-					"(spec §8)", u.Rule))
+					"(spec §8)", platform.QuoteShown(secrets, u.Rule)))
 				break
 			}
 		}
@@ -262,7 +263,7 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 			}
 			r.Permit, r.Reason, r.Outcome = o.Permit, o.Reason, o
 			r.Caveats = append(Caveats(d.Platform, p.dialect(d.Platform), o), p.splitNotes(t.Command, d.Platform)...)
-			r.Caveats = append(r.Caveats, ProjectionCaveats(res, d.Platform, o)...)
+			r.Caveats = append(r.Caveats, ProjectionCaveats(res, d.Platform, o, p.HiddenValues())...)
 		}
 		// API rights belong to the subject, not to a session on a device, so
 		// they are read whether or not the mint would be made (spec §12).

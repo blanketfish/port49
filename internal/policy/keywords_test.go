@@ -2,6 +2,7 @@ package policy
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -111,6 +112,36 @@ func TestAnArgumentDenyNeverPrintsASecret(t *testing.T) {
 	if text := strings.Join(shown, "\n"); strings.Contains(text, "HUNTER2") || !strings.Contains(text, "secret_rule") {
 		t.Fatalf("%s", text)
 	}
+	// A value another rule hides, typed in a deny that is no secret, in any
+	// letter case and with a `"` or `\` %q would escape past any writer, is
+	// left out of the refusal where it is made (task 12b review I1).
+	for _, c := range []struct{ hides, typed string }{
+		{"HUNTER2", "hunter2"}, {`PA"sS9`, `pa"ss9`}, {`A\B9`, `a\b9`}, {`Mi"X\d9`, `mI"x\D9`},
+	} {
+		p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ['show route `+c.typed+`']}
+  - {name: sec, privilege: readonly, permit: ['show system radius-server 10.0.0.1 secret `+c.hides+`']}
+`+subjOK+grantOK+`tests:
+  - {subject: s, device: srx-fw-04, command: "show version", expect: permit}
+`)
+		var shown []string
+		refused := false
+		for _, f := range p.Lint(noon) {
+			shown = append(shown, f.Message)
+			refused = refused || strings.Contains(f.Message, "(argument_deny)")
+		}
+		for _, r := range p.RunTests(noon) {
+			shown = append(shown, r.Caveats...)
+		}
+		e, err := p.Explain("s", "", "srx-fw-04", "", noon)
+		if err != nil {
+			t.Fatal(err)
+		}
+		shown = append(shown, e.Caveats...)
+		if text := strings.Join(shown, "\n"); !refused || leaks(text, c.hides) {
+			t.Errorf("%s:\n%s", c.typed, text)
+		}
+	}
 }
 
 // An allow Junos would not match as port49 does is left off the reply, and
@@ -163,11 +194,39 @@ func TestAnArgumentAllowWarningSaysWhenAndWhere(t *testing.T) {
 	}
 }
 
+// A fail-closed reply leaves an unsent allow off too, and warns; a warning
+// that holds across an expiry that changes the reply prints once, with no
+// moment, since the rule is unsent now and after (task 12b review M1).
+func TestAnArgumentAllowWarningHoldsAcrossAFailClosedReply(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: ok, privilege: readonly, permit: ["show version", "show interfaces fxp0 **"]}
+  - {name: r, privilege: readonly, permit: ["show route **"], deny: ["show route 10.0.0.1"]}
+`+subjOK+`grants:
+  - {subject: s, scope: all_devices, roles: [ok]}
+  - {subject: s, scope: all_devices, roles: [r], expires: 2099-01-01}
+`)
+	var warned, refused []string
+	for _, f := range p.Lint(noon) {
+		switch f.Kind {
+		case FindingProjectionArgumentAllow:
+			warned = append(warned, f.Message)
+		case FindingProjectionRefused:
+			refused = append(refused, f.Message)
+		}
+	}
+	if len(refused) != 1 || !strings.Contains(refused[0], "until 2099-01-01T00:00:00.000Z") ||
+		!strings.Contains(refused[0], "(argument_deny)") || len(warned) != 1 ||
+		!strings.HasPrefix(warned[0], `subject "s" on juniper_junos: allow "show interfaces fxp0 **" (role "ok")`) {
+		t.Fatalf("refused %q\nwarned %q", refused, warned)
+	}
+}
+
 // The warning prints no value redaction hides (spec §5.8). A rule that
 // carries one never reaches Unsent: its composition is refused as
 // secret_rule first, naming only the role. A value another rule hides,
-// written in a rule that is sent nowhere, the writer redacts in any letter
-// case, since the reason quotes the rule's own words unchanged.
+// written in a rule that is sent nowhere, in any letter case and with a `"`
+// or `\` that %q would escape past any writer, is left out where the warning
+// is made (task 12b review I1).
 func TestAnArgumentAllowWarningNeverPrintsASecret(t *testing.T) {
 	const secret = "show system radius-server 10.0.0.1 secret HUNTER2"
 	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
@@ -191,29 +250,38 @@ func TestAnArgumentAllowWarningNeverPrintsASecret(t *testing.T) {
 		}
 	}
 
-	p = parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
-  - {name: r, privilege: readonly, permit: ["show version", "show interfaces hunter2 **"]}
-  - {name: sec, privilege: readonly, permit: ["`+secret+`"]}
+	for _, c := range []struct{ hides, typed string }{
+		{"HUNTER2", "hunter2"}, {`PA"sS9`, `pa"ss9`}, {`A\B9`, `a\b9`}, {`Mi"X\d9`, `mI"x\D9`},
+	} {
+		p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show version", 'show interfaces `+c.typed+` **', 'show `+c.typed+`']}
+  - {name: sec, privilege: readonly, permit: ['show system radius-server 10.0.0.1 secret `+c.hides+`']}
 `+subjOK+grantOK)
-	writer := func(line string) string {
-		return platform.RedactValues(p.HiddenValues(), platform.RedactQuoted(p.Redactions(), line))
-	}
-	var warned []string
-	for _, f := range p.Lint(noon) {
-		if f.Kind == FindingProjectionArgumentAllow {
-			warned = append(warned, writer(f.Message))
+		var warned []string
+		for _, f := range p.Lint(noon) {
+			if f.Kind == FindingProjectionArgumentAllow {
+				warned = append(warned, f.Message)
+			}
 		}
-	}
-	if len(warned) != 1 || strings.Contains(strings.ToUpper(warned[0]), "HUNTER") ||
-		!strings.Contains(warned[0], `is not a keyword the lab measured after "show interfaces"`) {
-		t.Fatalf("%q", warned)
+		if len(warned) != 2 || leaks(strings.Join(warned, "\n"), c.hides) ||
+			!strings.Contains(warned[0], `is not a keyword the lab measured after "show interfaces"`) ||
+			!strings.Contains(warned[1], `is not a keyword the lab measured after "show"`) {
+			t.Errorf("%s: %q", c.typed, warned)
+		}
 	}
 
 	// The message redacts the rule it quotes itself, whatever reached it.
-	patterns := p.Redactions()
 	msg := unsentMessage(projection.Unsent{Rule: engine.Rule{Verdict: engine.Permit, Rule: secret, Role: "r"},
-		Why: "w"}, patterns)
+		Why: "w"}, p.Redactions(), nil)
 	if strings.Contains(msg, "HUNTER2") || !strings.Contains(msg, platform.Redacted) {
 		t.Errorf("%s", msg)
 	}
+}
+
+// leaks reports whether text holds value, in any letter case, as written or
+// as %q escapes it: what no writer's pass would then recognize.
+func leaks(text, value string) bool {
+	low := strings.ToLower(text)
+	return strings.Contains(low, strings.ToLower(value)) ||
+		strings.Contains(low, strings.ToLower(strings.Trim(strconv.Quote(value), `"`)))
 }

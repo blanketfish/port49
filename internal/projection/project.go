@@ -81,6 +81,11 @@ type Input struct {
 	// redaction hides: the reply is logged whole, so such a rule is never
 	// sent (spec §5.8).
 	Secret func(rule string) bool
+	// Hidden is every value a redaction hides anywhere in the policy's rules:
+	// a refusal or an unsent allow's why that quotes a rule's words prints
+	// each redacted, since %q escapes a `"` or `\` in one past any writer's
+	// pass (platform.QuoteShown; spec §5.8).
+	Hidden []string
 	Facts  Facts
 	// Keywords is the platform's keyword tree, from the policy's pinned set
 	// (platform.KeywordsFor): a rule reaches the wire only where it proves
@@ -197,8 +202,8 @@ func Project(in Input) (Result, error) {
 		}
 		// The checks are a proof; this is its witness. A vector here is a
 		// generator defect, and the subject gets the fail-closed reply.
-		err = refuse(FailUnsound, "on %s the reply would let the device run %q, which port49 denies; this is a "+
-			"projection defect", in.Platform, strings.Join(v, " "))
+		err = refuse(FailUnsound, "on %s the reply would let the device run %s, which port49 denies; this is a "+
+			"projection defect", in.Platform, platform.QuoteShown(in.Hidden, strings.Join(v, " ")))
 	}
 	if !errors.As(err, &r) {
 		return Result{}, err
@@ -211,6 +216,14 @@ type generator struct {
 	permits, denies []engine.Rule
 	ceiling         []string
 }
+
+// quote is text derived from a rule as a refusal or a why quotes it: each
+// value a redaction hides redacted first (platform.QuoteShown).
+func (g generator) quote(s string) string { return platform.QuoteShown(g.in.Hidden, s) }
+
+// shown is text derived from a rule as a refusal prints it between
+// backticks, each value a redaction hides redacted (platform.RedactValues).
+func (g generator) shown(s string) string { return platform.RedactValues(g.in.Hidden, s) }
 
 // newGenerator splits the rules, and adds a deny for each baseline reach rule
 // no permit holds: the baseline runs it for every session, so without the
@@ -481,9 +494,9 @@ func (g generator) allowable(p string) (engine.Rule, bool) {
 // refusedShape is spec §8's refused shape, naming the grant's two rules and
 // the platform.
 func (g generator) refusedShape(p, d engine.Rule) error {
-	return refuse(FailRefusedShape, "on %s, permit %q (role %q) needs an allow-commands the device would let "+
-		"beat deny %q (role %q), which sits beneath it: Junos regex cannot write everything under a permit except "+
-		"a deny (spec §8, \"Refused shape\")", g.in.Platform, p.Rule, p.Role, d.Rule, d.Role)
+	return refuse(FailRefusedShape, "on %s, permit %s (role %q) needs an allow-commands the device would let "+
+		"beat deny %s (role %q), which sits beneath it: Junos regex cannot write everything under a permit except "+
+		"a deny (spec §8, \"Refused shape\")", g.in.Platform, g.quote(p.Rule), p.Role, g.quote(d.Rule), d.Role)
 }
 
 // capability is the capability shape, or narrowOnly where it cannot carry
@@ -599,7 +612,7 @@ func (g generator) configuration(res Result) error {
 	}
 	for _, a := range res.Allows {
 		if what == "" && g.meetsConfiguration(a.Rule) {
-			what = fmt.Sprintf("allow %q", a.Rule)
+			what = "allow " + g.quote(a.Rule)
 		}
 	}
 	if what == "" {
@@ -613,7 +626,7 @@ func (g generator) configuration(res Result) error {
 	// permits less than every command.
 	grant := "permits less than every command"
 	if i := slices.IndexFunc(g.denies, func(d engine.Rule) bool { return d.Role != platform.BaselineBit }); i >= 0 {
-		grant = fmt.Sprintf("denies %q (role %q)", g.denies[i].Rule, g.denies[i].Role)
+		grant = fmt.Sprintf("denies %s (role %q)", g.quote(g.denies[i].Rule), g.denies[i].Role)
 	}
 	return refuse(FailConfigurationMode, "on %s the reply's %s enters configuration mode, where a statement is "+
 		"governed by the class's configuration permissions and no command regex reaches it (spec §8, §15 L12), "+
@@ -908,8 +921,8 @@ func (g generator) alternation(rules []engine.Rule, deny bool) (string, error) {
 	for _, r := range rules {
 		e, err := ruleERE(r.Rule, g.in.Classes, deny, g.in.Facts)
 		if err != nil {
-			return "", refuse(FailUnwritable, "on %s, %s %q (role %q) cannot be written as the device's regex: %v "+
-				"(spec §8, §15 L9)", g.in.Platform, r.Verdict, r.Rule, r.Role, err)
+			return "", refuse(FailUnwritable, "on %s, %s %s (role %q) cannot be written as the device's regex: %v "+
+				"(spec §8, §15 L9)", g.in.Platform, r.Verdict, g.quote(r.Rule), r.Role, err)
 		}
 		if !slices.Contains(alts, e) {
 			alts = append(alts, e)

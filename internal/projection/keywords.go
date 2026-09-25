@@ -80,7 +80,7 @@ func (g generator) denyProvable(rule string) bool {
 func (g generator) unsendableAllow(rule string) string {
 	term, prefix, ok := g.argument(rule)
 	if !ok {
-		return argumentWhy(term, prefix) + ", so an allow of it never matches on the device"
+		return g.argumentWhy(term, prefix) + ", so an allow of it never matches on the device"
 	}
 	// An argument typed before any of the rule's words, or after its last
 	// where no `**` permits one there, is one port49 does not permit.
@@ -92,24 +92,25 @@ func (g generator) unsendableAllow(rule string) string {
 	for i := 0; i < places; i++ {
 		if g.in.Keywords.TakesArgument(words[:i]) {
 			at := strings.Join(words[:i], " ")
-			return fmt.Sprintf("an argument may be typed after %q, so an allow of it would also run %q with an "+
-				"argument there, which port49 does not permit", at, strings.TrimSpace(at+" <argument> "+
-				strings.Join(words[i:], " ")))
+			return fmt.Sprintf("an argument may be typed after %s, so an allow of it would also run %s with an "+
+				"argument there, which port49 does not permit", g.quote(at), g.quote(strings.TrimSpace(at+" <argument> "+
+				strings.Join(words[i:], " "))))
 		}
 	}
 	return ""
 }
 
-// argumentWhy says which term is not a proven keyword.
-func argumentWhy(term string, prefix []string) string {
+// argumentWhy says which term is not a proven keyword, each value a
+// redaction hides redacted (quote, shown).
+func (g generator) argumentWhy(term string, prefix []string) string {
 	if strings.HasPrefix(term, "@") || strings.HasPrefix(term, "/") || term == "*" {
-		return fmt.Sprintf("%s stands for an argument", term)
+		return fmt.Sprintf("%s stands for an argument", g.shown(term))
 	}
 	at := strings.Join(prefix, " ")
 	if at == "" {
-		return fmt.Sprintf("%q is not a keyword the lab measured at the start of a command", term)
+		return fmt.Sprintf("%s is not a keyword the lab measured at the start of a command", g.quote(term))
 	}
-	return fmt.Sprintf("%q is not a keyword the lab measured after %q", term, at)
+	return fmt.Sprintf("%s is not a keyword the lab measured after %s", g.quote(term), g.quote(at))
 }
 
 // configurationVerbs are the configuration-mode commands that change the
@@ -136,7 +137,7 @@ func (g generator) denyRefusal(d engine.Rule) error {
 		"never applies deny-commands in configuration mode: on both images a statement ran there under a "+
 		"deny-commands naming it (tests/lab/results/L12-configuration-juniper_*.md), and deny-configuration is not "+
 		"measured; as an operational command it is not proven either (%s). port49 cannot enforce it: drop the rule",
-		g.in.Platform, d.Rule, d.Role, argumentWhy(term, prefix))
+		g.in.Platform, g.shown(d.Rule), d.Role, g.argumentWhy(term, prefix))
 }
 
 // argumentDeny is decision 27's refusal of a deny port49 needs enforced and
@@ -146,9 +147,9 @@ func (g generator) argumentDeny(d engine.Rule) error {
 	term, prefix, _ := g.argument(d.Rule)
 	instead := "drop the rule"
 	if len(prefix) > 0 {
-		instead = fmt.Sprintf("deny the whole command (`%s`) or drop the rule", strings.Join(prefix, " "))
+		instead = fmt.Sprintf("deny the whole command (`%s`) or drop the rule", g.shown(strings.Join(prefix, " ")))
 	}
 	return refuse(FailArgumentDeny, "on %s, Junos can't deny by argument: `%s` in `deny %s` (role %q): %s, and "+
 		"Junos matches a deny against a command's keywords only (tests/lab/results/L12-juniper_*.md); %s",
-		g.in.Platform, term, d.Rule, d.Role, argumentWhy(term, prefix), instead)
+		g.in.Platform, g.shown(term), g.shown(d.Rule), d.Role, g.argumentWhy(term, prefix), instead)
 }

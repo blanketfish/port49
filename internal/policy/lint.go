@@ -152,10 +152,12 @@ func (p *Policy) Lint(now time.Time) []Finding {
 	for _, f := range p.indistinctCeilings() {
 		add(FindingCeilingIndistinct, "%s", f)
 	}
+	secrets := p.HiddenValues()
 	for _, a := range p.acked {
 		if a.Role != "" && p.hasDeny(a.Rule) {
-			add(FindingAcknowledgeStale, "acknowledge: %s %q: the policy still denies %q, so the entry removed nothing "+
-				"and acknowledges nothing; delete it (spec §12)", a.Role, a.Rule, a.Rule)
+			rule := platform.QuoteShown(secrets, a.Rule)
+			add(FindingAcknowledgeStale, "acknowledge: %s %s: the policy still denies %s, so the entry removed nothing "+
+				"and acknowledges nothing; delete it (spec §12)", a.Role, rule, rule)
 		}
 	}
 	out = append(out, p.redundantOverrides()...)
@@ -212,13 +214,14 @@ func (p *Policy) WidenedDenies() []Finding {
 	for _, d := range p.env.Devices {
 		platforms[d.Platform] = true
 	}
+	secrets := p.HiddenValues()
 	var out []Finding
 	for _, name := range sortedKeys(p.roles) {
 		for _, rule := range p.roles[name].Deny {
 			for _, plat := range sortedKeys(platforms) {
 				for _, why := range engine.WidenedToAny(rule, p.dialect(plat).EntityClasses, p.normalizeFor(plat)) {
 					out = append(out, Finding{Kind: FindingDenyWidened, Message: fmt.Sprintf(
-						"role %q: deny %q on %s: %s", name, rule, plat, why)})
+						"role %q: deny %s on %s: %s", name, platform.QuoteShown(secrets, rule), plat, why)})
 				}
 			}
 		}
@@ -258,8 +261,9 @@ func (p *Policy) JoinedNamePermits() []Finding {
 					}
 					if head, index, ok := engine.SplitName(t.Text); ok && t.Kind == engine.Word {
 						out = append(out, Finding{Kind: FindingPermitJoinedName, Message: fmt.Sprintf(
-							"role %q: permit %q on %s: `%s` never matches on %s, which sends it as two arguments "+
-								"(tests/lab/results/L21-cisco_iosxe.md); write `%s %s`", name, rule, plat, t.Text, plat,
+							"role %q: permit %s on %s: `%s` never matches on %s, which sends it as two arguments "+
+								"(tests/lab/results/L21-cisco_iosxe.md); write `%s %s`", name,
+							platform.QuoteShown(secrets, rule), plat, t.Text, plat,
 							head, index)})
 					}
 				}
@@ -345,6 +349,7 @@ func (p *Policy) RuleSecretLiterals() []Finding {
 	if len(platforms) == 0 {
 		platforms["default"] = true
 	}
+	secrets := p.HiddenValues()
 	var out []Finding
 	for _, name := range sortedKeys(p.roles) {
 		r := p.roles[name]
@@ -367,9 +372,9 @@ func (p *Policy) RuleSecretLiterals() []Finding {
 				}
 				if len(on) > 0 {
 					out = append(out, Finding{Kind: FindingRuleSecretLiteral, Message: fmt.Sprintf(
-						"role %q: %s %q carries a value redaction hides on %s: the value is in the policy file, "+
+						"role %q: %s %s carries a value redaction hides on %s: the value is in the policy file, "+
 							"and every log, record and server_msg that echoes the rule shows it redacted",
-						name, verdict, strings.Join(shown, " "), strings.Join(on, ", "))})
+						name, verdict, platform.QuoteShown(secrets, strings.Join(shown, " ")), strings.Join(on, ", "))})
 				}
 			}
 		}
@@ -388,7 +393,7 @@ func (p *Policy) RuleSecretLiterals() []Finding {
 // block's config check whose match carries such a value is reported the same
 // way.
 func (p *Policy) DeviceConfigSecretLiterals() []Finding {
-	patterns := p.Redactions()
+	patterns, secrets := p.Redactions(), p.HiddenValues()
 	var out []Finding
 	for _, name := range sortedKeys(p.overrides) {
 		if checks := p.overrides[name].ConfigChecks; checks != nil {
@@ -401,8 +406,9 @@ func (p *Policy) DeviceConfigSecretLiterals() []Finding {
 				}
 				if shown := platform.RedactProse(patterns, c.Match); shown != c.Match {
 					out = append(out, Finding{Kind: FindingDeviceConfigSecretLiteral, Message: fmt.Sprintf(
-						"platforms.%s.config_checks[%d].match %q carries a value redaction hides: the value is in the "+
-							"policy file, and platform show and export print the check redacted", name, i, shown)})
+						"platforms.%s.config_checks[%d].match %s carries a value redaction hides: the value is in the "+
+							"policy file, and platform show and export print the check redacted", name, i,
+						platform.QuoteShown(secrets, shown))})
 				}
 			}
 		}
@@ -413,8 +419,9 @@ func (p *Policy) DeviceConfigSecretLiterals() []Finding {
 		for i, line := range *lines {
 			if shown := platform.RedactConfigLine(patterns, line); strings.Contains(shown, platform.Redacted) {
 				out = append(out, Finding{Kind: FindingDeviceConfigSecretLiteral, Message: fmt.Sprintf(
-					"platforms.%s.device_config[%d] %q carries a value redaction hides: the value is in the policy "+
-						"file, and platform show and devices check-config print the line redacted", name, i, shown)})
+					"platforms.%s.device_config[%d] %s carries a value redaction hides: the value is in the policy "+
+						"file, and platform show and devices check-config print the line redacted", name, i,
+					platform.QuoteShown(secrets, shown))})
 			}
 		}
 	}
@@ -628,11 +635,11 @@ func (p *Policy) Projections(now time.Time) []Finding {
 				if pr.FailClosed == "" {
 					reports[i] = append(reports[i], item{FindingProjection, projectionMessage(*pr, patterns, secrets)})
 				} else {
-					kind, msg := refusedMessage(*pr, patterns)
+					kind, msg := refusedMessage(*pr, patterns, secrets)
 					reports[i] = append(reports[i], item{kind, msg})
 				}
 				for _, u := range pr.Unsent {
-					reports[i] = append(reports[i], item{FindingProjectionArgumentAllow, unsentMessage(u, patterns)})
+					reports[i] = append(reports[i], item{FindingProjectionArgumentAllow, unsentMessage(u, patterns, secrets)})
 				}
 			}
 			for i := range replies {
@@ -748,8 +755,12 @@ func ProjectionRefusals(findings []Finding) int {
 // devices, which it writes after. Every rule and value it quotes is
 // redacted (spec §5.8; plan 5b pre-flight M9). The refusal's own text quotes
 // only rules the secret check passed: a composition with a rule redaction
-// would hide is refused as secret_rule, whose text names only the role.
-func refusedMessage(pr projection.Result, patterns []platform.Redaction) (string, string) {
+// would hide is refused as secret_rule, whose text names only the role, and
+// it quotes each value another rule hides redacted (projection.Input.Hidden).
+// The class line's regex writes a word re-cased or escaped, which no writer
+// recognizes, so one that carries such a value prints redacted whole
+// (platform.RegexShown; task 12b review I1).
+func refusedMessage(pr projection.Result, patterns []platform.Redaction, secrets []string) (string, string) {
 	r := pr.Refusal
 	var allows []string
 	for _, a := range pr.Allows {
@@ -766,21 +777,24 @@ func refusedMessage(pr projection.Result, patterns []platform.Redaction) (string
 	}
 	if r.Class != "" {
 		msg += fmt.Sprintf("; the class line that carries the denies on the device instead, binding every subject at "+
-			"that template: set system login class %s %s %q", r.Class, r.Attribute,
-			strings.Join(redacted(patterns, []string{r.Value}), ""))
+			"that template: set system login class %s %s %s", r.Class, r.Attribute,
+			platform.QuoteShown(secrets, platform.RegexShown(secrets, strings.Join(redacted(patterns,
+				[]string{r.Value}), ""))))
 	}
 	return FindingProjectionOverflow, msg
 }
 
 // unsentMessage is an unsent allow's warning after its subject, platform
-// and moment, which Projections writes before it. The rule is redacted; Why
-// quotes only the rule's own words, unchanged, and a rule redaction would
-// hide is never among Unsent: its composition is refused as secret_rule
-// first, and a fail-closed reply puts it beyond the allows.
-func unsentMessage(u projection.Unsent, patterns []platform.Redaction) string {
-	return fmt.Sprintf(" allow %q (role %q) is not sent: %s; the device refuses what port49 permits there. "+
+// and moment, which Projections writes before it. The rule is redacted, and
+// each value another rule hides redacted before it is quoted, which would
+// escape a `"` or `\` past any writer (platform.QuoteShown); Why quotes the
+// rule's words the same way (projection.Input.Hidden). A rule redaction
+// would hide is never among Unsent: its composition is refused as
+// secret_rule first, and a fail-closed reply puts it beyond the allows.
+func unsentMessage(u projection.Unsent, patterns []platform.Redaction, secrets []string) string {
+	return fmt.Sprintf(" allow %s (role %q) is not sent: %s; the device refuses what port49 permits there. "+
 		"Permit the whole command with `**` after its keywords, or drop the rule (spec §13 decision 27)",
-		strings.Join(redacted(patterns, []string{u.Rule.Rule}), ""), u.Rule.Role, u.Why)
+		platform.QuoteShown(secrets, strings.Join(redacted(patterns, []string{u.Rule.Rule}), "")), u.Rule.Role, u.Why)
 }
 
 // projectionMessage is a composition's finding after its subject, platform

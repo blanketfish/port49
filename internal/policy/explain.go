@@ -39,6 +39,10 @@ type Explanation struct {
 	// denied command on this platform: what to ask for, or what a deny beats.
 	WouldPermit []string
 	Caveats     []string
+	// hidden are the values a redaction hides in the line and the policy's
+	// rules: Render quotes text derived from the line through them
+	// (platform.QuoteShown).
+	hidden []string
 }
 
 // Explain resolves a subject (or a principal) on a device and decides one
@@ -65,7 +69,8 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	if _, ok := p.subs[subject]; !ok {
 		return Explanation{}, fmt.Errorf("subject %q is not declared", subject)
 	}
-	e := Explanation{Subject: subject, Device: device, Platform: d.Platform, Command: line}
+	e := Explanation{Subject: subject, Device: device, Platform: d.Platform, Command: line,
+		hidden: append(platform.HiddenValues(p.Redactions(), strings.Fields(line)), p.HiddenValues()...)}
 	dialect := p.dialect(d.Platform)
 	var res Resolution
 	var o engine.Outcome
@@ -147,7 +152,7 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	}
 	e.Outcome = o
 	e.Caveats = append(e.Caveats, Caveats(d.Platform, dialect, o)...)
-	e.Caveats = append(e.Caveats, ProjectionCaveats(res, d.Platform, o)...)
+	e.Caveats = append(e.Caveats, ProjectionCaveats(res, d.Platform, o, e.hidden)...)
 	e.Caveats = append(e.Caveats, p.splitNotes(line, d.Platform)...)
 	// Spec §12: explain MUST say so where `supports` lacks config_commands. No
 	// built-in platform declares it (internal/platform), so a command typed in
@@ -403,7 +408,8 @@ func (e Explanation) Render(w io.Writer, showAttributes bool) {
 		case decision.PipeStageDenied:
 			fmt.Fprintf(w, "  rule        %s (%s) %v permits the command\n", o.Decided.Rule, o.Decided.Role,
 				o.Decided.Specificity)
-			fmt.Fprintf(w, "  stage       %d, %q, matches no pipe permit\n", o.Stage, strings.Join(o.Pipeline[o.Stage-1], " "))
+			fmt.Fprintf(w, "  stage       %d, %s, matches no pipe permit\n", o.Stage,
+				platform.QuoteShown(e.hidden, strings.Join(o.Pipeline[o.Stage-1], " ")))
 		case decision.NoRuleMatched:
 			fmt.Fprintf(w, "  rule        no permit matches\n")
 		}

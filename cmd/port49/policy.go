@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -165,7 +164,7 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	// An acknowledge: entry is the author's written word for a widening no
 	// test can show (spec §12); review reads each one.
 	for _, a := range p.Acknowledgments() {
-		fmt.Fprintf(stdout, "acknowledge: %s: %s\n", ackName(a), a.Reason)
+		fmt.Fprintf(stdout, "acknowledge: %s: %s\n", ackName(out.values, a), a.Reason)
 	}
 	// The shadowed-deny report is what replaces the guarantee deny-overrides
 	// gave (spec §12): every deny a more specific permit beats, for whom, and
@@ -175,8 +174,8 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	shadows := p.ShadowedDenies(now)
 	unacknowledged := 0
 	for _, s := range shadows {
-		line := fmt.Sprintf("%q (%s) does not bind %s where %q (%s) is more specific, on %s", s.Deny, s.DenyRole,
-			s.Subject, s.Permit, s.PermitRole, strings.Join(s.Platforms, ", "))
+		line := fmt.Sprintf("%s (%s) does not bind %s where %s (%s) is more specific, on %s", out.quote(s.Deny),
+			s.DenyRole, s.Subject, out.quote(s.Permit), s.PermitRole, strings.Join(s.Platforms, ", "))
 		switch {
 		case s.Acknowledged:
 			fmt.Fprintf(stdout, "shadowed: %s; a policy test exercises it\n", line)
@@ -208,7 +207,8 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 			status = "FAIL"
 			failed++
 		}
-		line := fmt.Sprintf("%s %s on %s: %q -> %s %s", status, who, r.Test.Device, r.Test.Command, got, r.Reason)
+		line := fmt.Sprintf("%s %s on %s: %s -> %s %s", status, who, r.Test.Device, out.quote(r.Test.Command), got,
+			r.Reason)
 		if r.Test.Session() {
 			line = fmt.Sprintf("%s %s on %s: session -> deny %s", status, who, r.Test.Device, r.Reason)
 			if r.Ceiling != "" {
@@ -221,11 +221,12 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 				r.PrivLvl, r.Enable)
 		}
 		if r.MintError != "" {
-			line = fmt.Sprintf("%s %s on %s: %q -> deny: the broker refuses the mint, %s", status, who,
-				r.Test.Device, r.Test.Command, r.MintError)
+			line = fmt.Sprintf("%s %s on %s: %s -> deny: the broker refuses the mint, %s", status, who,
+				r.Test.Device, out.quote(r.Test.Command), r.MintError)
 		}
 		if r.Err != nil {
-			line = fmt.Sprintf("%s %s on %s: %q -> error: %v", status, who, r.Test.Device, r.Test.Command, r.Err)
+			line = fmt.Sprintf("%s %s on %s: %s -> error: %v", status, who, r.Test.Device, out.quote(r.Test.Command),
+				r.Err)
 		} else if !r.Pass {
 			var want []string
 			if r.Test.Expect != "" {
@@ -247,12 +248,12 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 				want = append(want, "enable "+r.Test.Enable)
 			}
 			if r.Test.AssertsReply {
-				line += ", reply " + yamlList(r.Reply)
-				want = append(want, "reply "+yamlList(r.Test.Reply))
+				line += ", reply " + yamlList(out.values, r.Reply)
+				want = append(want, "reply "+yamlList(out.values, r.Test.Reply))
 			}
 			if r.Test.AssertsAPI {
-				line += ", api " + yamlList(r.API)
-				want = append(want, "api "+yamlList(r.Test.API))
+				line += ", api " + yamlList(out.values, r.API)
+				want = append(want, "api "+yamlList(out.values, r.Test.API))
 			}
 			line += ", want " + strings.Join(want, " ")
 		}
@@ -345,7 +346,7 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, a := range d.StaleAcknowledgments {
 		fmt.Fprintf(stdout, "report: acknowledge_stale: %s (%s): no change in this diff is the one it names, so "+
-			"it acknowledges nothing; delete it (spec §12)\n", ackName(a), a.Reason)
+			"it acknowledges nothing; delete it (spec §12)\n", ackName(out.values, a), a.Reason)
 	}
 	for _, a := range d.Adapters {
 		change := fmt.Sprintf("%s %s -> %s", adapterKey(a), a.OldShown, a.NewShown)
@@ -370,7 +371,7 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		default:
 			assert := "level: ..."
 			if len(p.APIGained) > 0 {
-				assert += ", api: " + yamlList(p.APIGained) + " (the subject's whole list)"
+				assert += ", api: " + yamlList(out.values, p.APIGained) + " (the subject's whole list)"
 			}
 			fmt.Fprintf(stdout, "PRINCIPAL: %s now resolves to subject %s (was %s): that person now holds %s's access; "+
 				"no session test names the principal: add {principal: %q, device: <a device %s reaches>, %s}\n",
@@ -389,10 +390,10 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 				label = "api (a test asserts it)"
 			case len(s.APIGained) > 0:
 				label, tail = "API", fmt.Sprintf("; the new rights act on other people's sessions, and no test asserts "+
-					"them: add {subject: %s, device: <any device>, api: %s}", s.Subject, yamlList(s.NewAPI))
+					"them: add {subject: %s, device: <any device>, api: %s}", s.Subject, yamlList(out.values, s.NewAPI))
 			}
-			fmt.Fprintf(stdout, "%s: subject %s's broker rights %s -> %s%s\n", label, s.Subject, yamlList(s.OldAPI),
-				yamlList(s.NewAPI), tail)
+			fmt.Fprintf(stdout, "%s: subject %s's broker rights %s -> %s%s\n", label, s.Subject, yamlList(out.values, s.OldAPI),
+				yamlList(out.values, s.NewAPI), tail)
 		}
 		if s.OldUsername == s.NewUsername {
 			continue
@@ -423,7 +424,7 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			hint := "{subject: " + l.Subject + ", device: " + l.Devices[0]
 			for _, field := range l.Raised {
 				if field == "reply" {
-					hint += ", reply: " + yamlList(l.NewReply)
+					hint += ", reply: " + yamlList(out.values, l.NewReply)
 					continue
 				}
 				hint += ", " + field + ": " + orNone(l.NewValue(field))
@@ -440,7 +441,7 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		}
 		reply := ""
 		if !slices.Equal(l.OldReply, l.NewReply) {
-			reply = ", reply " + yamlList(l.OldReply) + " -> " + yamlList(l.NewReply)
+			reply = ", reply " + yamlList(out.values, l.OldReply) + " -> " + yamlList(out.values, l.NewReply)
 		}
 		fmt.Fprintf(stdout, "%s: %s on %s%s: level %s -> %s, max_privilege %s -> %s, priv_lvl %s -> %s, enable %s -> %s%s%s\n",
 			label, l.Subject, strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel),
@@ -457,14 +458,14 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		on := c.Subject + " on " + strings.Join(c.Devices, ", ") + from(c.At)
 		if !c.New.Permit {
 			narrow++
-			fmt.Fprintf(stdout, "narrows: %s: %q was permitted by %q (%s), now %s\n", on, c.Command,
-				c.Old.Decided.Rule, c.Old.Decided.Role, c.New.Reason)
+			fmt.Fprintf(stdout, "narrows: %s: %s was permitted by %s (%s), now %s\n", on, out.quote(c.Command),
+				out.quote(c.Old.Decided.Rule), c.Old.Decided.Role, c.New.Reason)
 			continue
 		}
 		widen++
-		permitted := fmt.Sprintf("now permitted by %q (%s)", c.New.Decided.Rule, c.New.Decided.Role)
+		permitted := fmt.Sprintf("now permitted by %s (%s)", out.quote(c.New.Decided.Rule), c.New.Decided.Role)
 		if !c.Gated {
-			fmt.Fprintf(stdout, "widens: %s: %q was %s, %s\n", on, c.Command, c.Old.Reason, permitted)
+			fmt.Fprintf(stdout, "widens: %s: %s was %s, %s\n", on, out.quote(c.Command), c.Old.Reason, permitted)
 			continue
 		}
 		label := "EXPANDS"
@@ -479,11 +480,11 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			was = "refused (device_quarantined)"
 		case c.Old.Reason == decision.PipeStageDenied:
 			was = fmt.Sprintf("refused at pipeline stage %d (pipe_stage_denied)", c.Old.Stage)
-			permitted = fmt.Sprintf("now permitted by the pipe allowlist entry %q", c.PipeEntry)
+			permitted = "now permitted by the pipe allowlist entry " + out.quote(c.PipeEntry)
 		default:
-			was = fmt.Sprintf("denied by %q (%s)", c.Old.Deny.Rule, c.Old.Deny.Role)
+			was = fmt.Sprintf("denied by %s (%s)", out.quote(c.Old.Deny.Rule), c.Old.Deny.Role)
 		}
-		fmt.Fprintf(stdout, "%s: %s: %q was %s, %s\n", label, on, c.Command, was, permitted)
+		fmt.Fprintf(stdout, "%s: %s: %s was %s, %s\n", label, on, out.quote(c.Command), was, permitted)
 	}
 	for _, r := range d.Regex {
 		on := r.Subject + " on " + strings.Join(r.Devices, ", ") + from(r.At)
@@ -501,13 +502,13 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			label, tail = "REGEX-CONSTRAINED", ", and no policy test exercises it"
 		}
 		if r.Deny.Rule != "" {
-			fmt.Fprintf(stdout, "%s: %s: permit %q (%s) meets deny %q (%s), which the change %s; "+
-				"the commands they share are not enumerated (spec §12)%s\n", label, on, r.Rule.Rule, r.Rule.Role,
-				r.Deny.Rule, r.Deny.Role, verb, tail)
+			fmt.Fprintf(stdout, "%s: %s: permit %s (%s) meets deny %s (%s), which the change %s; "+
+				"the commands they share are not enumerated (spec §12)%s\n", label, on, out.quote(r.Rule.Rule),
+				r.Rule.Role, out.quote(r.Deny.Rule), r.Deny.Role, verb, tail)
 			continue
 		}
-		fmt.Fprintf(stdout, "%s: %s: %s %q (%s) %s; the commands it matches are not "+
-			"enumerated (spec §12)%s\n", label, on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb, tail)
+		fmt.Fprintf(stdout, "%s: %s: %s %s (%s) %s; the commands it matches are not "+
+			"enumerated (spec §12)%s\n", label, on, r.Rule.Verdict, out.quote(r.Rule.Rule), r.Rule.Role, verb, tail)
 	}
 	// A fail-closed reply fails the diff whether or not the change brought
 	// it: CI refuses a policy that ships one (spec §8; §13 decision 26).
@@ -530,22 +531,29 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 }
 
 // yamlList is a list as a policy file writes it in flow style, each item
-// quoted, so a RAISES hint can be pasted as a test.
-func yamlList(items []string) string {
+// quoted, so a RAISES hint can be pasted as a test. An item carries a reply's
+// regex, which writes a word re-cased or escaped: its value prints redacted
+// whole where it carries one of values, and every item is quoted with each
+// of values redacted first, which %q would escape past the writer
+// (platform.RegexShown, QuoteShown; task 12b review I1).
+func yamlList(values, items []string) string {
 	quoted := make([]string, len(items))
 	for i, it := range items {
-		quoted[i] = strconv.Quote(it)
+		if name, value, ok := strings.Cut(it, "="); ok {
+			it = name + "=" + platform.RegexShown(values, value)
+		}
+		quoted[i] = platform.QuoteShown(values, it)
 	}
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 // ackName is an acknowledge: entry as review reads it: the deny by role and
 // rule, or the adapter key by platform and field.
-func ackName(a policy.Acknowledgment) string {
+func ackName(values []string, a policy.Acknowledgment) string {
 	if a.Platform != "" {
 		return "platforms." + a.Platform + "." + a.Field
 	}
-	return fmt.Sprintf("%s %q", a.Role, a.Rule)
+	return a.Role + " " + platform.QuoteShown(values, a.Rule)
 }
 
 // quarantineLine is an entry after a label that already says quarantine:
@@ -855,6 +863,11 @@ func (r *redacting) learn(ps ...*policy.Policy) {
 		r.values = append(r.values, p.HiddenValues()...)
 	}
 }
+
+// quote is text derived from a rule or a command as a line quotes it, each
+// value the loaded policies hide redacted first: %q escapes a `"` or `\` in
+// one past the line's pass (platform.QuoteShown; task 12b review I1).
+func (r *redacting) quote(s string) string { return platform.QuoteShown(r.values, s) }
 
 // redact is one line as the writer prints it.
 func (r *redacting) redact(line string) string {

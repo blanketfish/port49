@@ -286,6 +286,9 @@ func (p *Policy) projectOnce(c composition, b engine.Blob, dialect platform.Dial
 		_, hidden := platform.RedactRule(patterns, strings.Fields(rule))
 		return hidden
 	}
+	// What a refusal or a why quotes of a rule prints each value any rule
+	// hides redacted (spec §5.8; task 12b review I1).
+	in.Hidden = p.HiddenValues()
 	return projection.Project(in)
 }
 
