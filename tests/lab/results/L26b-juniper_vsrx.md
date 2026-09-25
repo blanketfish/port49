@@ -4,7 +4,7 @@
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/L26b-juniper_vsrx.pcap` — 2690 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L26b-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L26b-juniper_vsrx.pcap` — 2926 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L26b-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -20,16 +20,16 @@ set system login class p49-l26b-all permissions all
 set system login user p49-l26b-all class p49-l26b-all
 ```
 
-A word is **proven** a keyword where the control (the class, no deny) ran the command with positive evidence (`Count: N lines` from `| count`, which only a command the CLI took and ran prints; `Screen length set to 0`; for `exit`, the SSH session ending) and the deny session refused it with the CLI's refusal; **absent** where the image does not offer the word and the control's CLI refused it too, typed in full as a hidden command would be (a deny naming it is vacuous there, and it is never an allow); anything else is **unproven**, and fails closed.
+A word is **proven** a keyword where the control (the class, no deny) ran the command with positive evidence and no refusal in its window (a `Count: N lines` line from `| count`; `Screen length set to 0`; for `exit`, the SSH session ending; never a match in the command's own echo), and the deny session refused it with the CLI's refusal, its caret under the word; **absent** only where the image does not offer the word and the control's CLI answered `unknown command`, typed in full as a hidden command would be (a deny naming it is vacuous there, and it is never an allow); anything else is **unproven**, and fails closed. Unproven is a result, not a test failure: the test fails on a harness failure and on a regression of the words the first run proved.
 
 ### Completion listings (break-glass)
 
-| path | placeholder offered | words offered |
-|---|---|---|
-| `` | false | 21 |
-| `set` | false | 3 |
-| `show` | false | 108 |
-| `show configuration` | false | 25 |
+| path | placeholder offered | words offered | words |
+|---|---|---|---|
+| `` | false | 21 | `clear`, `configure`, `file`, `help`, `load`, `monitor`, `mtrace`, `op`, `ping`, `probe`, `quit`, `request`, `restart`, `scp`, `set`, `show`, `ssh`, `start`, `telnet`, `test`, `traceroute` |
+| `set` | false | 3 | `chassis`, `cli`, `date` |
+| `show` | false | 108 | `access-cac`, `access-security`, `accounting`, `agent`, `app-engine`, `arp`, `as-path`, `authentication-whitelist`, `auto-bandwidth`, `auto-configuration`, `backup-selection`, `bfd`, `bgp`, `captive-portal`, `chassis`, `class-of-service`, `cli`, `configuration`, `connections`, `database-replication`, `dhcp`, `dhcp-security`, `dhcpv6`, `dialer`, `diameter`, `dot1x`, `dynamic-tunnels`, `ephemeral-configuration`, `esis`, `ethernet-switching`, `event-options`, `evpn`, `express-segments`, `extension-service`, `firewall`, `flexible-tunnels`, `flight-recorder`, `forwarding-options`, `helper`, `hfrr`, `host`, `iccp`, `igmp`, `ingress-replication`, `interfaces`, `ipv6`, `isdn`, `isis`, `jdaf`, `l2circuit`, `l2cpd`, `l2vpn`, `lacp`, `ldp`, `lldp`, `log`, `loop-detect`, `mac-rewrite`, `mac-vrf`, `mld`, `modem`, `monitor`, `mpls`, `msdp`, `multi-chassis`, `multicast`, `mvpn`, `network-access`, `network-agent`, `nonstop-routing`, `ntp`, `oam`, `ospf`, `ospf3`, `performance-monitoring`, `pfe`, `pim`, `policer`, `policy`, `ppp`, `pppoe`, `programmable-rpd`, `r2cp`, `resource-manager`, `rip`, `ripng`, `route`, `routing`, `rsvp`, `sap`, `schedulers`, `security`, `services`, `smtp`, `snmp`, `spanning-tree`, `spring-traffic-engineering`, `ssl-certificates`, `subscribers`, `system`, `task`, `ted`, `v4ov6-tunnels`, `validation`, `version`, `vlans`, `vpls`, `vrrp` |
+| `show configuration` | false | 25 | `access`, `access-profile`, `accounting-options`, `applications`, `apply-groups`, `chassis`, `class-of-service`, `diameter`, `event-options`, `firewall`, `forwarding-options`, `groups`, `interfaces`, `policy-options`, `protocols`, `routing-instances`, `routing-options`, `schedulers`, `security`, `services`, `smtp`, `snmp`, `switch-options`, `system`, `vlans` |
 
 ### Verdicts
 
@@ -41,7 +41,7 @@ A word is **proven** a keyword where the control (the class, no deny) ran the co
 | `show` | `policy` | `show policy \| count` | ran | refused | **proven** | deny show words |
 | `show` | `task` | `show task memory \| count` | ran | refused | **proven** | deny show words |
 | `set` | `cli` | `set cli screen-length 0` | ran | refused | **proven** | deny root and set words |
-| `` | `save` | `save dhcp-security-snoop /var/tmp/p49-l26b.snoop` | refused | not observed | **unproven** (corrected; see below) | deny root and set words |
+| `` | `save` | `save dhcp-security-snoop /var/tmp/p49-l26b.snoop \| count` | refused | refused | **unproven** | deny root and set words |
 | `show configuration` | `access` | `show configuration access \| count` | ran | ran | **unproven** | deny hierarchies 1 |
 | `show configuration` | `access-profile` | `show configuration access-profile \| count` | ran | ran | **unproven** | deny hierarchies 1 |
 | `show configuration` | `accounting-options` | `show configuration accounting-options \| count` | ran | ran | **unproven** | deny hierarchies 1 |
@@ -79,18 +79,23 @@ A word is **proven** a keyword where the control (the class, no deny) ran the co
 | `show configuration` | `virtual-chassis` | `show configuration virtual-chassis \| count` | ran | ran | **unproven** | deny hierarchies 3 |
 | `` | `exit` | `exit` | ran | refused | **proven** | deny root and set words |
 
-**Correction (2026-09-25, after the run).** This run's classifier read `save` as **absent** here: vSRX's listing does
-not offer it and the control refused the command. But the control's caret points past `save dhcp-security-snoop`, at
-the `/var/tmp/...` argument (`syntax error, expecting <command>`), so vSRX took the hidden head and refused only
-what followed it. Absence needs the CLI to call the head an unknown command, as the brief says, so the verdict is
-**unproven**. The classifier now requires that (`l26bVerdict`), and `TestCommittedL26bVerdictsHold` re-reads this
-note with it. The overlay below is unchanged: an absent word never entered it.
+### Hierarchies
+
+**A deny naming a `show configuration` hierarchy is not enforced.** Every one of the 25 hierarchies this image offers ran under a deny naming it, as it did in the control; the same deny shape refused the `show` words above. Each hierarchy word stays unproven.
+
+Each hierarchy deny session that does not name `system` also typed `show configuration system \| count`, a hierarchy with lines to count, under its deny:
+
+| deny session | deny |
+|---|---|
+| deny hierarchies 1 | ran |
+| deny hierarchies 3 | ran |
 
 ### The overlay
 
-`tests/lab/results/L26b-keywords-juniper_vsrx.yaml`, in platform.ParseKeywords form: a node's words are those this run proves (and, for the parent chain, `set`, `show` and `configuration`, which L26 proves); its `argument` is the node once the overlay is laid over this image's L26 tree: true where a placeholder is offered there, or a word offered there is proven by neither.
+`tests/lab/results/L26b-keywords-juniper_vsrx.yaml`, in platform.ParseKeywords form: a node's words are those this run proves (and, for the parent chain, `set`, `show` and `configuration`, which L26 proves); its `argument` is the node once the overlay is laid over this image's L26 tree: true where a placeholder is offered there, or a word offered there is proven by neither. It was computed against `tests/lab/results/L26-keywords-juniper_vsrx.yaml`, sha256 `9a7013ee7595d93571faea0987ee5a36036cb84a8bdccba447761770a455ad76`, and holds only against the tree that hashes to that.
 
 ```yaml
+# computed against tests/lab/results/L26-keywords-juniper_vsrx.yaml sha256 9a7013ee7595d93571faea0987ee5a36036cb84a8bdccba447761770a455ad76
 platform: juniper_junos
 nodes:
   "": {words: ["exit", "set", "show"], argument: false}
@@ -101,7 +106,7 @@ nodes:
 
 ### Sessions
 
-control:
+#### control, user `alice01`
 
 ```
  
@@ -160,21 +165,24 @@ Individual command authorization:
 alice01@srx1> 
 ```
 
-deny show words: `deny-commands=^( *show +(cli\|host\|ingress-replication\|policy\|task)( .*)? *(\\|.*)?)$`
+#### deny show words, user `alice02`
+
+`deny-commands=^( *show +(cli\|host\|ingress-replication\|policy\|task)( .*)? *(\\|.*)?)$`
 
 ```
 show cli
                    ^
 syntax error, expecting <command>.
-
-alice02@srx1> show cli   authorization
+alice02@srx1> show cli   authorization
                    ^
 syntax error, expecting <command>.
 
 alice02@srx1> 
 ```
 
-deny root and set words: `deny-commands=^( *exit( .*)? *(\\|.*)?\| *save( .*)? *(\\|.*)?\| *set +cli( .*)? *(\\|.*)?)$`
+#### deny root and set words, user `alice03`
+
+`deny-commands=^( *exit( .*)? *(\\|.*)?\| *save( .*)? *(\\|.*)?\| *set +cli( .*)? *(\\|.*)?)$`
 
 ```
  
@@ -233,7 +241,9 @@ Individual command authorization:
 alice03@srx1> 
 ```
 
-deny hierarchies 1: `deny-commands=^( *show +configuration +(access\|access-profile\|accounting-options\|applications\|apply-groups\|bridge-domains\|chassis\|class-of-service\|diameter\|dynamic-profiles\|event-options\|firewall\|forwarding-options\|groups\|interfaces\|jsrc)( .*)? *(\\|.*)?)$`
+#### deny hierarchies 1, user `alice04`
+
+`deny-commands=^( *show +configuration +(access\|access-profile\|accounting-options\|applications\|apply-groups\|bridge-domains\|chassis\|class-of-service\|diameter\|dynamic-profiles\|event-options\|firewall\|forwarding-options\|groups\|interfaces\|jsrc)( .*)? *(\\|.*)?)$`
 
 ```
  
@@ -292,7 +302,9 @@ Individual command authorization:
 alice04@srx1> 
 ```
 
-deny hierarchies 2: `deny-commands=^( *show +configuration +(jsrc-partition\|logical-systems\|multi-chassis\|multicast-snooping-options\|poe\|policy-options\|protocols\|routing-instances\|routing-options\|schedulers\|security\|services\|smtp\|snmp\|switch-options\|system)( .*)? *(\\|.*)?)$`
+#### deny hierarchies 2, user `alice05`
+
+`deny-commands=^( *show +configuration +(jsrc-partition\|logical-systems\|multi-chassis\|multicast-snooping-options\|poe\|policy-options\|protocols\|routing-instances\|routing-options\|schedulers\|security\|services\|smtp\|snmp\|switch-options\|system)( .*)? *(\\|.*)?)$`
 
 ```
  
@@ -351,7 +363,9 @@ Individual command authorization:
 alice05@srx1> 
 ```
 
-deny hierarchies 3: `deny-commands=^( *show +configuration +(unified-edge\|vlans\|virtual-chassis)( .*)? *(\\|.*)?)$`
+#### deny hierarchies 3, user `alice06`
+
+`deny-commands=^( *show +configuration +(unified-edge\|vlans\|virtual-chassis)( .*)? *(\\|.*)?)$`
 
 ```
  
@@ -429,12 +443,10 @@ deny:
 show cli
                    ^
 syntax error, expecting <command>.
-
-alice02@srx1> show cli   |
+alice02@srx1> show cli   |
                    ^
 permission denied.
-
-alice02@srx1> show cli|   count
+alice02@srx1> show cli|   count
                    ^
 permission denied.
 
@@ -458,19 +470,17 @@ deny:
 show host
                    ^
 syntax error, expecting <command>.
-
-alice02@srx1> show host   localhost
+alice02@srx1> show host   localhost
+                   ^
+syntax error, expecting <command>.
+alice02@srx1> show hostlocalhost   |
+                   ^
+syntax error, expecting <command>.
+alice02@srx1> show hostlocalhost|   count
                    ^
 syntax error, expecting <command>.
 
-alice02@srx1> show hostlocalhost   |
-                   ^
-syntax error, expecting <command>.
-
-alice02@srx1> show hostlocalhost|   count
-                   ^
-syntax error, expecting <command>.
-… (2 more lines)
+alice02@srx1> 
 ```
 
 #### `show ingress-replication mvpn | count`
@@ -490,19 +500,17 @@ deny:
 show ingress-replication
                    ^
 syntax error, expecting <command>.
-
-alice02@srx1> show ingress-replication   mvpn
+alice02@srx1> show ingress-replication   mvpn
+                   ^
+syntax error, expecting <command>.
+alice02@srx1> show ingress-replicationmvpn   |
+                   ^
+syntax error, expecting <command>.
+alice02@srx1> show ingress-replicationmvpn|   count
                    ^
 syntax error, expecting <command>.
 
-alice02@srx1> show ingress-replicationmvpn   |
-                   ^
-syntax error, expecting <command>.
-
-alice02@srx1> show ingress-replicationmvpn|   count
-                   ^
-syntax error, expecting <command>.
-… (2 more lines)
+alice02@srx1> 
 ```
 
 #### `show policy | count`
@@ -522,12 +530,10 @@ deny:
 show policy
                    ^
 syntax error, expecting <command>.
-
-alice02@srx1> show policy   |
+alice02@srx1> show policy   |
                    ^
 permission denied.
-
-alice02@srx1> show policy|   count
+alice02@srx1> show policy|   count
                    ^
 permission denied.
 
@@ -551,19 +557,17 @@ deny:
 show task
                    ^
 syntax error, expecting <command>.
-
-alice02@srx1> show task   memory
+alice02@srx1> show task   memory
+                   ^
+syntax error, expecting <command>.
+alice02@srx1> show taskmemory   |
+                   ^
+syntax error, expecting <command>.
+alice02@srx1> show taskmemory|   count
                    ^
 syntax error, expecting <command>.
 
-alice02@srx1> show taskmemory   |
-                   ^
-syntax error, expecting <command>.
-
-alice02@srx1> show taskmemory|   count
-                   ^
-syntax error, expecting <command>.
-… (2 more lines)
+alice02@srx1> 
 ```
 
 #### `set cli screen-length 0`
@@ -583,23 +587,28 @@ deny:
 set cli
                   ^
 syntax error, expecting <command>.
-
-alice03@srx1> set cli   screen-length
+alice03@srx1> set cli   screen-length
                   ^
 syntax error, expecting <command>.
-
-alice03@srx1> set cliscreen-length   0
+alice03@srx1> set cliscreen-length   0
                   ^
 syntax error, expecting <command>.
 
 alice03@srx1> 
 ```
 
-#### `save dhcp-security-snoop /var/tmp/p49-l26b.snoop`
+#### `save dhcp-security-snoop /var/tmp/p49-l26b.snoop | count`
 
 control:
 
 ```
+save dhcp-security-snoop /var/tmp/p49-l26b.snoop
+                                       ^
+syntax error, expecting <command>.
+alice01@srx1> save dhcp-security-snoop /var/tmp/p49-l26b.snoop   |
+                                       ^
+syntax error, expecting <command>.
+alice01@srx1> save dhcp-security-snoop /var/tmp/p49-l26b.snoop|   count
                                        ^
 syntax error, expecting <command>.
 
@@ -612,12 +621,16 @@ deny:
 save
               ^
 unknown command.
-
-alice03@srx1> save   dhcp-security-snoop
+alice03@srx1> save   dhcp-security-snoop
               ^
 unknown command.
-
-alice03@srx1> savedhcp-security-snoop   /var/tmp/p49-l26b.snoop
+alice03@srx1> savedhcp-security-snoop   /var/tmp/p49-l26b.snoop
+              ^
+unknown command.
+alice03@srx1> savedhcp-security-snoop/var/tmp/p49-l26b.snoop   |
+              ^
+unknown command.
+alice03@srx1> savedhcp-security-snoop/var/tmp/p49-l26b.snoop|   count
               ^
 unknown command.
 
@@ -732,8 +745,7 @@ control:
 show configuration bridge-domains
                                  ^
 syntax error.
-
-alice01@srx1> show configuration bridge-domains   | count 
+alice01@srx1> show configuration bridge-domains   | count 
 Count: 0 lines
 
 alice01@srx1> 
@@ -745,8 +757,7 @@ deny:
 show configuration bridge-domains
                                  ^
 syntax error.
-
-alice04@srx1> show configuration bridge-domains   | count 
+alice04@srx1> show configuration bridge-domains   | count 
 Count: 0 lines
 
 alice04@srx1> 
@@ -820,8 +831,7 @@ control:
 show configuration dynamic-profiles
                                  ^
 syntax error.
-
-alice01@srx1> show configuration dynamic-profiles   | count 
+alice01@srx1> show configuration dynamic-profiles   | count 
 Count: 0 lines
 
 alice01@srx1> 
@@ -833,8 +843,7 @@ deny:
 show configuration dynamic-profiles
                                  ^
 syntax error.
-
-alice04@srx1> show configuration dynamic-profiles   | count 
+alice04@srx1> show configuration dynamic-profiles   | count 
 Count: 0 lines
 
 alice04@srx1> 
@@ -988,8 +997,7 @@ control:
 show configuration logical-systems
                                  ^
 syntax error.
-
-alice01@srx1> show configuration logical-systems   | count 
+alice01@srx1> show configuration logical-systems   | count 
 Count: 0 lines
 
 alice01@srx1> 
@@ -1001,8 +1009,7 @@ deny:
 show configuration logical-systems
                                  ^
 syntax error.
-
-alice05@srx1> show configuration logical-systems   | count 
+alice05@srx1> show configuration logical-systems   | count 
 Count: 0 lines
 
 alice05@srx1> 
@@ -1036,8 +1043,7 @@ control:
 show configuration multicast-snooping-options
                                  ^
 syntax error.
-
-alice01@srx1> show configuration multicast-snooping-options   | count 
+alice01@srx1> show configuration multicast-snooping-options   | count 
 Count: 0 lines
 
 alice01@srx1> 
@@ -1049,8 +1055,7 @@ deny:
 show configuration multicast-snooping-options
                                  ^
 syntax error.
-
-alice05@srx1> show configuration multicast-snooping-options   | count 
+alice05@srx1> show configuration multicast-snooping-options   | count 
 Count: 0 lines
 
 alice05@srx1> 
@@ -1374,5 +1379,27 @@ exit
 unknown command.
 
 alice03@srx1> 
+```
+
+#### sentinel, deny hierarchies 1
+
+deny:
+
+```
+ 
+Count: 139 lines
+
+alice04@srx1> 
+```
+
+#### sentinel, deny hierarchies 3
+
+deny:
+
+```
+ 
+Count: 139 lines
+
+alice06@srx1> 
 ```
 
