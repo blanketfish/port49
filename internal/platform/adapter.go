@@ -929,6 +929,11 @@ func validateProjection(field func(string) string, d Dialect) error {
 				"when its template is missing; a level's template is p49-<name> (spec §8)",
 				field("local_user_names."+level), name)
 		}
+		if strings.EqualFold(name, RemoteClass) {
+			return fmt.Errorf("%s: %s is the fallback remote user's bitless class, which a session whose template "+
+				"the device lacks lands in; a level under it would give every such session the level's bits (spec §8)",
+				field("local_user_names."+level), name)
+		}
 		if !p49Template.MatchString(name) || ContainsName(systemUserNames(), name) {
 			return fmt.Errorf("%s: %s is not a p49- template: a level's template is p49-<name>, since one the "+
 				"device already has, root or a local account, puts the session in its own class whatever bits the "+

@@ -201,6 +201,18 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		return 1
 	}
 	if *classes {
+		if p != nil {
+			// check-config holds a device to the set's device_config under a
+			// block's (Policy.ConfigDialect), so the reference prints the same
+			// lines: one a `replace: true` block drops is still one the check
+			// reports missing.
+			floor, err := p.ConfigDialect(platformName)
+			if err != nil {
+				fmt.Fprintf(stderr, "%s: %v\n", name, err)
+				return 1
+			}
+			d.DeviceConfig = platform.RedactAdapter(patterns, secret, floor).DeviceConfig
+		}
 		return exportClasses(stdout, stderr, name, platformName, d, *cfgPath, a, p)
 	}
 	mode := exportShow
@@ -498,8 +510,12 @@ func sortedNames(set map[string]platform.Dialect) []string {
 // (spec §8): the configuration its replies rest on, the bitless `remote`
 // template, and each level's template and class where the adapter sends one,
 // every class carrying idle-timeout from port49d.yaml's
-// session.max_session_age_default (spec §5.6; §13 decision 21). A compliance
-// tool checks devices against it; port49 never logs into one.
+// session.max_session_age_default (spec §5.6; §13 decision 21). Loading it
+// clears what is written under each template, and not what reaches one from
+// outside — a group applied from above, a deactivated or protected ancestor
+// (platform.ReferenceClasses) — so the header says check-config is what
+// proves the device. A compliance tool checks devices against it; port49
+// never logs into one.
 func exportClasses(stdout, stderr io.Writer, name, platformName string, d platform.Dialect, cfgPath string, a adapters,
 	p *policy.Policy) int {
 	raw, err := os.ReadFile(cfgPath)
@@ -522,8 +538,11 @@ func exportClasses(stdout, stderr io.Writer, name, platformName string, d platfo
 		setName = p.PlatformSet()
 	}
 	fmt.Fprintf(stdout, "# %s: reference configuration, platform set %s (spec §8). Load it with `load set "+
-		"terminal`: each template class and user is deleted before it is set, so nothing a device carried under one "+
-		"survives, and `port49 devices check-config --config` verifies it. idle-timeout is "+
+		"terminal`: each template class and user is deleted before it is set, which clears what was written under "+
+		"one. It does not clear what reaches a template from outside it: a configuration group applied from above "+
+		"still applies to the loaded class, a deactivated ancestor leaves the loaded lines inactive, and a protected "+
+		"one fails the load. `port49 devices check-config --config` on a `show configuration | display set` "+
+		"capture is what proves the device carries the template and nothing more. idle-timeout is "+
 		"session.max_session_age_default (%s) in whole minutes: a session-only device never asks port49 again after "+
 		"login, so this timer is what ends a session there (decision 21).\n", platformName, setName, age)
 	for _, line := range lines {

@@ -844,4 +844,16 @@ func TestMaxSessionAge(t *testing.T) {
 	if _, err := MaxSessionAge([]byte("session: {max_session_age_default: -1h}\n")); err == nil {
 		t.Error("a negative age")
 	}
+	// The wrong file or a misspelled key is refused, as Load refuses it:
+	// the default read in its place would be a timeout the daemon does not
+	// run with, and check-config would pass against it (task 13 review I2).
+	for _, raw := range []string{
+		"sessions: {max_session_age_default: 8h}\n",
+		"session: {max_sesion_age_default: 8h}\n",
+		"subjects:\n  - {name: noc, username: noc}\n",
+	} {
+		if _, err := MaxSessionAge([]byte(raw)); err == nil {
+			t.Errorf("%q: read", raw)
+		}
+	}
 }

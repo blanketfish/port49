@@ -205,8 +205,9 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 // configuration against the reference (platform.TemplateDrift), at the
 // idle-timeout cfgPath's session.max_session_age_default gives: the reference
 // lines the device lacks, and the lines under a template it does not write.
-// It reads that one key, so no key or secret is needed (spec §13, decision
-// 21). Anything it cannot read is an error, never a clean device.
+// The file is decoded as strictly as the daemon decodes it and no key or
+// secret is resolved, so none is needed (config.MaxSessionAge; spec §13,
+// decision 21). Anything it cannot read is an error, never a clean device.
 func templateCheck(dialect platform.Dialect, cfgPath, configName string, config []byte) ([]string,
 	[]platform.ConfigFinding, error) {
 	raw, err := os.ReadFile(cfgPath)

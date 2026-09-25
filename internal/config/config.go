@@ -292,18 +292,23 @@ const defaultWindow = 10 * time.Minute
 const DefaultMaxSessionAge = 12 * time.Hour
 
 // MaxSessionAge reads session.max_session_age_default from a port49d.yaml's
-// bytes and nothing else, with Load's default and its refusal of a value that
-// is not positive. It is what `port49 platform export --classes` renders a
-// session-only platform's idle-timeout from (spec §13, decision 21), and it
-// reads no secret, so a CI job holding no key can run it.
+// bytes, with Load's default and its refusal of a value that is not
+// positive. It is what `port49 platform export --classes` renders a
+// session-only platform's idle-timeout from (spec §13, decision 21). The file
+// is decoded as strictly as Load decodes it, so the wrong file or a
+// misspelled key is an error, never the default: a default read in place of
+// the daemon's value is a timeout the device would be checked against and
+// the daemon does not run with. It resolves no key and reads no secret or
+// inventory, so a CI job holding no key can run it.
 func MaxSessionAge(raw []byte) (time.Duration, error) {
-	var f struct {
-		Session struct {
-			MaxSessionAgeDefault time.Duration `yaml:"max_session_age_default"`
-		} `yaml:"session"`
+	if err := staleSeedKeys(raw); err != nil {
+		return 0, err
 	}
-	if err := yaml.Unmarshal(raw, &f); err != nil {
-		return 0, fmt.Errorf("config: %w", err)
+	var f fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", err)
 	}
 	d := orD(f.Session.MaxSessionAgeDefault, DefaultMaxSessionAge)
 	if d <= 0 {

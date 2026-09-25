@@ -189,3 +189,67 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 		t.Errorf("session: %q %+v %v", missing, extra, err)
 	}
 }
+
+// A level's template is never p49-remote, in any case, and no two templates
+// share a class unless they are the same template with the same bits:
+// p49-remote is the fallback `remote` user's bitless class, which a session
+// whose template the device lacks lands in (L18), so a level under it would
+// give every such session that level's bits, and the reference would write
+// it and the check pass it (task 13 review I1).
+func TestNoTemplateTakesTheRemoteClassOrAnothersClass(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		names map[string]string
+		bits  map[string][]string
+	}{
+		{"p49-remote", map[string]string{"readonly": "p49-readonly", "admin": "p49-remote"}, nil},
+		{"P49-Remote", map[string]string{"readonly": "p49-readonly", "admin": "P49-Remote"}, nil},
+		{"a case variant of another template", map[string]string{"readonly": "p49-ops", "admin": "P49-OPS"}, nil},
+		{"two levels one class, different bits", map[string]string{"readonly": "p49-ops", "admin": "p49-ops"}, nil},
+	} {
+		d := junosProjected(BitDeliveryLocalUserName)
+		d.LocalUserNames = c.names
+		if err := Validate("juniper_junos", d); err == nil {
+			t.Errorf("%s: validated", c.name)
+		}
+		if _, err := ReferenceClasses(d, time.Hour); err == nil {
+			t.Errorf("%s: written", c.name)
+		}
+		if _, _, err := TemplateDrift([]byte("set system host-name srx1\n"), d, time.Hour); err == nil {
+			t.Errorf("%s: checked", c.name)
+		}
+	}
+	// Two levels with the same bits may share one template, written once.
+	d := junosProjected(BitDeliveryLocalUserName)
+	d.CeilingBits["operator"] = []string{"all"}
+	d.LocalUserNames["operator"] = "p49-admin"
+	got, err := ReferenceClasses(d, time.Hour)
+	if err != nil || strings.Count(strings.Join(got, "\n"), "delete system login class p49-admin") != 1 {
+		t.Errorf("shared: %q %v", got, err)
+	}
+}
+
+// A path word a hand-edited capture quotes, a curly statement carrying a
+// trailing annotation, and a template under a logical system or tenant are
+// read as what they are (task 13 review M1-M3).
+func TestTemplateDriftReadsQuotedAndNestedPaths(t *testing.T) {
+	d := junosProjected(BitDeliveryLocalUserName)
+	for _, line := range []string{
+		`set system login class "p49-readonly" allow-commands ".*"`,
+		`set system login user "p49-admin" authentication encrypted-password "$6$x"`,
+		`deactivate "system" login`,
+		"set logical-systems ls1 system login class p49-readonly permissions all",
+		"set tenants t1 system login class p49-remote permissions all",
+		"set groups g logical-systems <*> system login class p49-readonly permissions all",
+	} {
+		config := append(cleanCapture(t, d), line)
+		if _, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour); err != nil ||
+			len(extra) != 1 {
+			t.Errorf("%s: %+v %v", line, extra, err)
+		}
+	}
+	mixed := append(cleanCapture(t, d), `system { login { class p49-readonly { allow-commands ".*"; } } } ## x`)
+	if _, _, err := TemplateDrift([]byte(strings.Join(mixed, "\n")), d, time.Hour); err == nil {
+		t.Error("an annotated one-line curly statement read as nothing")
+	}
+}
