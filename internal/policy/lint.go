@@ -11,6 +11,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/projection"
 )
 
 // Finding is something CI reports about a policy that loads: not an error,
@@ -40,6 +41,23 @@ const (
 	// FindingDeviceConfigSecretLiteral is a `platforms:` block's device_config
 	// line carrying a value redaction hides (spec §5.8).
 	FindingDeviceConfigSecretLiteral = "device_config_secret_literal"
+	// FindingProjection is how a composition's rules render on a projected
+	// platform: the shape, the bits, what each regex carries, and where the
+	// device is narrower than port49 (spec §8).
+	FindingProjection = "projection"
+	// FindingProjectionOverflow is a reply attribute past RFC 8907's length:
+	// the subject gets the fail-closed reply, and where the attribute is
+	// deny-commands the finding prints the class line that would carry the
+	// denies on the device instead (spec §8). Never for allow-commands: a
+	// class allow runs for every subject at that template, past their own
+	// denies (L11). It fails `policy test`.
+	FindingProjectionOverflow = "projection_overflow"
+	// FindingProjectionRefused is a composition a projected platform cannot
+	// be told faithfully, naming the subject, the devices and the reason: the
+	// subject gets the fail-closed reply there and everyone else keeps
+	// theirs (spec §13 decision 26). It fails `policy test`, as spec §8's
+	// "CI MUST refuse the policy" requires.
+	FindingProjectionRefused = "projection_refused"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -140,6 +158,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
 		}
 	}
 	out = append(out, p.redundantOverrides()...)
+	out = append(out, p.Projections(now)...)
 	out = append(out, p.intersections(now)...)
 	if len(p.tests) == 0 {
 		add(FindingNoTests, "the policy has no tests: nothing in it acknowledges a shadowed deny, an expansion or "+
@@ -516,4 +535,150 @@ func (p *Policy) onGeneric(name string) bool {
 	builtin, _ := p.builtinSet(p.set)
 	_, shipped := builtin[name]
 	return b.Replace || !shipped
+}
+
+// Projections reports each composition on a projected platform (spec §8,
+// "CI reports which shape each grant rendered under, the bit set it chose"):
+// once per subject, platform and reply, at now and at every later grant
+// expiry. A composition that gets the fail-closed reply is a
+// projection_refused finding, or projection_overflow where a reply attribute
+// is past RFC 8907's length, naming the subject, every device it lands on
+// and why; both fail `policy test` (spec §13 decision 26).
+func (p *Policy) Projections(now time.Time) []Finding {
+	var out []Finding
+	seen := map[string]bool{}
+	add := func(kind, msg string) {
+		if !seen[msg] {
+			seen[msg] = true
+			out = append(out, Finding{Kind: kind, Message: msg})
+		}
+	}
+	patterns := p.Redactions()
+	type refusal struct {
+		kind, msg string
+		devices   []string
+	}
+	var refusals []*refusal
+	index := map[string]*refusal{}
+	for _, name := range sortedKeys(p.subs) {
+		for _, d := range p.env.Devices {
+			if !p.dialect(d.Platform).Projected() {
+				continue
+			}
+			for _, at := range p.expiryInstants(now) {
+				res, err := p.resolve(p.subs[name], d, at)
+				if err != nil || res.Projection == nil {
+					continue // a quarantine or a refused mint, reported as one
+				}
+				pr := *res.Projection
+				if pr.FailClosed == "" {
+					add(FindingProjection, projectionMessage(name, d.Platform, pr, patterns))
+					continue
+				}
+				kind, msg := refusedMessage(name, d.Platform, pr, patterns)
+				r := index[kind+msg]
+				if r == nil {
+					r = &refusal{kind: kind, msg: msg}
+					index[kind+msg] = r
+					refusals = append(refusals, r)
+				}
+				if !slices.Contains(r.devices, d.Name) {
+					r.devices = append(r.devices, d.Name)
+				}
+			}
+		}
+	}
+	for _, r := range refusals {
+		slices.Sort(r.devices)
+		add(r.kind, strings.Replace(r.msg, "%DEVICES%", strings.Join(r.devices, ", "), 1))
+	}
+	return out
+}
+
+// ProjectionRefusals counts the findings that fail `policy test`: every
+// composition that gets the fail-closed reply (spec §8, "CI MUST refuse").
+func ProjectionRefusals(findings []Finding) int {
+	n := 0
+	for _, f := range findings {
+		if f.Kind == FindingProjectionRefused || f.Kind == FindingProjectionOverflow {
+			n++
+		}
+	}
+	return n
+}
+
+// refusedMessage is a fail-closed composition's finding, the devices left as
+// %DEVICES% for Projections to fill. Every rule and value it quotes is
+// redacted (spec §5.8; plan 5b pre-flight M9). The refusal's own text quotes
+// only rules the secret check passed: a composition with a rule redaction
+// would hide is refused as secret_rule, whose text names only the role.
+func refusedMessage(subject, platformName string, pr projection.Result, patterns []platform.Redaction) (string, string) {
+	r := pr.Refusal
+	var allows []string
+	for _, a := range pr.Allows {
+		allows = append(allows, a.Rule)
+	}
+	told := "every command denied"
+	if len(allows) > 0 {
+		told = "every command denied but " + strings.Join(redacted(patterns, allows), "; ")
+	}
+	msg := fmt.Sprintf("subject %q on %s (%%DEVICES%%) gets the fail-closed reply (%s): %s; it is told %s, and "+
+		"every other subject on those devices keeps its reply (spec §13 decision 26)", subject, platformName,
+		pr.FailClosed, r.Why, told)
+	if pr.FailClosed != projection.FailOverflow {
+		return FindingProjectionRefused, msg
+	}
+	if r.Class != "" {
+		msg += fmt.Sprintf("; the class line that carries the denies on the device instead, binding every subject at "+
+			"that template: set system login class %s %s %q", r.Class, r.Attribute,
+			strings.Join(redacted(patterns, []string{r.Value}), ""))
+	}
+	return FindingProjectionOverflow, msg
+}
+
+func projectionMessage(subject, platformName string, pr projection.Result, patterns []platform.Redaction) string {
+	rules := func(rs []engine.Rule) string {
+		var texts []string
+		for _, r := range rs {
+			texts = append(texts, r.Rule)
+		}
+		return strings.Join(redacted(patterns, texts), "; ")
+	}
+	carrier := "no bits"
+	switch {
+	case pr.Template != "":
+		carrier = "template " + pr.Template + " (bits " + strings.Join(pr.Bits, " ") + ")"
+	case len(pr.Bits) > 0:
+		carrier = "bits " + strings.Join(pr.Bits, " ")
+	}
+	msg := fmt.Sprintf("subject %q on %s: %s shape, %s", subject, platformName, pr.Shape, carrier)
+	if len(pr.Denies) > 0 {
+		msg += "; deny-commands: " + rules(pr.Denies)
+	}
+	if pr.Shape == projection.ShapeNarrow {
+		msg += "; deny-commands: everything"
+	}
+	if len(pr.Allows) > 0 {
+		msg += "; allow-commands: " + rules(pr.Allows)
+	}
+	if len(pr.Omitted) > 0 {
+		msg += "; refused by the bits, sent as nothing: " + rules(pr.Omitted)
+	}
+	if len(pr.Beyond) > 0 {
+		msg += "; beyond the level's bits, not sent: " + rules(pr.Beyond)
+	}
+	var narrower []string
+	for _, v := range pr.Narrower(3) {
+		narrower = append(narrower, strings.Join(v, " "))
+	}
+	if len(narrower) > 0 {
+		msg += "; the device refuses what port49 permits, e.g. " + strings.Join(redacted(patterns, narrower), "; ")
+	}
+	// Beside what was narrowed, what may not be reached: an allow its bits do
+	// not reach may not run (Result.Unreached).
+	if len(pr.Unreached) > 0 {
+		msg += "; sent under bits that do not reach them, which the device may refuse (whether a Junos allow " +
+			"runs without its bit is unmeasured): " + rules(pr.Unreached)
+	}
+	return msg
 }

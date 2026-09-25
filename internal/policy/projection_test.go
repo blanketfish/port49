@@ -317,3 +317,150 @@ func TestAProjectionDoesNotMaskALevelAboveTheCeiling(t *testing.T) {
 		t.Fatalf("%q %v", cause, ok)
 	}
 }
+
+// explain says what the device does with a command under the projection, and
+// that the class half of what it runs is outside port49 (spec §8,
+// "Verification").
+func TestExplainSaysWhatTheDeviceDoes(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **", "clear counters"], deny: ["show configuration **"]}
+`+subjOK+grantOK)
+	for line, want := range map[string]string{
+		"show configuration system": "the device refuses it",
+		"show version":              "the device runs it",
+		"clear counters":            "the projection does not carry it to juniper_junos",
+	} {
+		e, err := p.Explain("s", "", "srx-fw-04", line, noon)
+		if err != nil || !strings.Contains(strings.Join(e.Caveats, "\n"), want) {
+			t.Errorf("%s: %q %v", line, e.Caveats, err)
+		}
+	}
+	e, err := p.Explain("s", "", "srx-fw-04", "", noon)
+	if err != nil || !strings.Contains(strings.Join(e.Caveats, "\n"), "the reply projects these rules as the capability shape") {
+		t.Errorf("session: %q %v", e.Caveats, err)
+	}
+}
+
+// policy test reports each composition's projection, and a reply past RFC
+// 8907's length with the class line that carries it instead.
+func TestProjectionFindings(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **", "clear counters"], deny: ["show configuration **"]}
+`+subjOK+grantOK)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjection {
+			got = append(got, f.Message)
+		}
+	}
+	want := `subject "s" on juniper_junos: capability shape, bits view; refused by the bits, sent as nothing: ` +
+		`show configuration **; beyond the level's bits, not sent: clear counters; the device refuses what port49 ` +
+		`permits, e.g. clear counters`
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("%q", got)
+	}
+	// Sixteen permits narrower than view: the narrow shape's one allow
+	// alternation is past 255 bytes.
+	body := scopeOK + "roles:\n  - {name: r, privilege: readonly, permit: ["
+	for i, w := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india",
+		"juliett", "kilo", "lima", "mike", "november", "oscar", "papa"} {
+		if i > 0 {
+			body += ", "
+		}
+		body += `"show ` + w + ` **"`
+	}
+	// That subject gets the fail-closed reply, and the finding prints no class
+	// line: a class allow would run for every subject at that template, past
+	// their own denies (C2).
+	p = parseProjected(t, platform.BitDeliveryUserPermissions, body+"]}\n"+subjOK+grantOK)
+	var over []Finding
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjectionOverflow {
+			over = append(over, f)
+		}
+	}
+	if len(over) != 1 || strings.Contains(over[0].Message, "set system login class") ||
+		!strings.Contains(over[0].Message, "narrow the grant") ||
+		!strings.Contains(over[0].Message, `subject "s" on juniper_junos (srx-fw-04, srx-fw-05, srx-fw-22, srx-lab-01)`) ||
+		ProjectionRefusals(p.Lint(noon)) != 1 {
+		t.Fatalf("%+v", over)
+	}
+	// Past the budget in deny-commands, the class line carries the denies,
+	// and says it binds every subject at that template.
+	body = scopeOK + "roles:\n  - {name: r, privilege: readonly, permit: [\"show **\"], deny: ["
+	for i, w := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"} {
+		if i > 0 {
+			body += ", "
+		}
+		body += `"show ` + w + ` **"`
+	}
+	// A deny narrower than every command goes out only once L9 measures that
+	// the device matches it against the expanded command.
+	saved := projection.JunosFacts
+	projection.JunosFacts.DenyMatchesExpanded = true
+	defer func() { projection.JunosFacts = saved }()
+	p = parseProjected(t, platform.BitDeliveryLocalUserName, body+"]}\n"+subjOK+grantOK)
+	over = nil
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjectionOverflow {
+			over = append(over, f)
+		}
+	}
+	if len(over) != 1 || !strings.Contains(over[0].Message, "binding every subject at that template: "+
+		"set system login class p49-readonly deny-commands \"^( *[sS]") {
+		t.Fatalf("%+v", over)
+	}
+}
+
+// A refused composition is a projection_refused finding naming the subject,
+// every device, and why, and it is what fails policy test (I10).
+func TestARefusalIsAFinding(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show interfaces **", "show version"], deny: ["show interfaces terse"]}
+`+subjOK+grantOK)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjectionRefused {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], `subject "s" on juniper_junos (srx-fw-04, srx-fw-05, srx-fw-22, `+
+		`srx-lab-01) gets the fail-closed reply (refused_shape)`) ||
+		!strings.Contains(got[0], `it is told every command denied but show version`) {
+		t.Fatalf("%q", got)
+	}
+	e, err := p.Explain("s", "", "srx-fw-04", "show interfaces em0", noon)
+	if err != nil || !strings.Contains(strings.Join(e.Caveats, "\n"), "gets the fail-closed reply there") ||
+		!strings.Contains(strings.Join(e.Caveats, "\n"), "the device refuses it") {
+		t.Fatalf("%q %v", e.Caveats, err)
+	}
+}
+
+// An allow sent under bits that do not reach it is reported beside what the
+// device refuses: whether a Junos allow runs a command its bits do not reach
+// is unmeasured, so the operator sees both what was narrowed and what may not
+// be reached, and explain says the device may refuse it.
+func TestAnUnreachedAllowIsReported(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: operator, permit: ["show **", "clear counters", "ping **"], deny: ["show configuration **"]}
+`+subjOK+grantOK)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjection {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], "; sent under bits that do not reach them, which the device may "+
+		"refuse (whether a Junos allow runs without its bit is unmeasured): clear counters; ping **") {
+		t.Fatalf("%q", got)
+	}
+	e, err := p.Explain("s", "", "srx-fw-04", "ping 192.0.2.1", noon)
+	if c := strings.Join(e.Caveats, "\n"); err != nil || !strings.Contains(c, "the device may refuse it: "+
+		`the allow that carries it, "ping **", is sent under bits that do not reach it`) {
+		t.Fatalf("%q %v", e.Caveats, err)
+	}
+	e, err = p.Explain("s", "", "srx-fw-04", "show version", noon)
+	if c := strings.Join(e.Caveats, "\n"); err != nil || strings.Contains(c, "may refuse") {
+		t.Fatalf("%q %v", e.Caveats, err)
+	}
+}

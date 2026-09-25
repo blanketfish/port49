@@ -504,15 +504,21 @@ func TestPolicyTestPrintsReportsNotesAndScheduledQuarantines(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
-	run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
 	for _, want := range []string{
 		`report: grantless_subject: subject "gone" has no grant`,
 		"     note: arista_eos applies output modifiers itself",
 		"quarantine: leaf-01 (arista_eos): will be quarantined from 2099-01-01T00:00:00.000Z, when grant all_devices [admin] expires",
+		"; 1 quarantined, 0 projection refusals\n",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
 		}
+	}
+	// A quarantine, even one an expiry brings on later, fails the gate
+	// (plan 5b pre-flight I10): the daemon serves the rest, CI ships none.
+	if code != 1 {
+		t.Fatalf("code %d", code)
 	}
 }
 

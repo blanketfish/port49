@@ -111,9 +111,11 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
 
 // policyTest is the CI gate (spec §11, §12): it loads the policy against the
 // inventory — every load-time check is a failure here — prints what CI must
-// report without refusing, the shadowed-deny report, then runs the file's
-// tests. It exits 1 if the policy does not load, any test fails, or a deny is
-// shadowed and no test exercises it.
+// report, the shadowed-deny report, then runs the file's tests. It exits 1 if
+// the policy does not load, any test fails, a deny is shadowed and no test
+// exercises it, a device is quarantined now or at a later expiry, or a
+// composition gets a projection's fail-closed reply (spec §8, "CI MUST refuse
+// the policy"; §13 decision 26).
 func policyTest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 policy test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -142,18 +144,21 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	// The set the policy renders with, first: a reviewer reading a rendering
 	// change needs to know which adapters produced it (spec §8).
 	fmt.Fprintf(stdout, "platform_set: %s\n", p.PlatformSet())
-	// A quarantined device is reported, not a failure of its own: the policy
-	// loaded, and decision 20 exists so one device cannot block the rest. A
-	// test on it fails in the ordinary way, as device_quarantined. An entry an
-	// expiry will bring on is reported too, so CI sees it before it lands.
+	// A quarantined device fails the gate: the daemon still loads the policy
+	// and serves the rest (decision 20), but CI refuses to ship one. An entry
+	// an expiry will bring on fails it too, so CI sees it before it lands.
+	quarantined := 0
 	for _, q := range p.Quarantines(now) {
 		for _, e := range q.Entries {
+			quarantined++
 			fmt.Fprintf(stdout, "quarantine: %s (%s): %s\n", q.Device, q.Platform, quarantineLine(e, now))
 		}
 	}
-	for _, f := range p.Lint(now) {
+	findings := p.Lint(now)
+	for _, f := range findings {
 		fmt.Fprintf(stdout, "report: %s: %s\n", f.Kind, f.Message)
 	}
+	refused := policy.ProjectionRefusals(findings)
 	// An acknowledge: entry is the author's written word for a widening no
 	// test can show (spec §12); review reads each one.
 	for _, a := range p.Acknowledgments() {
@@ -253,9 +258,9 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "     note: %s\n", c)
 		}
 	}
-	fmt.Fprintf(stdout, "%d tests, %d failed; %d shadowed denies, %d unacknowledged\n", len(results), failed,
-		len(shadows), unacknowledged)
-	if failed > 0 || unacknowledged > 0 {
+	fmt.Fprintf(stdout, "%d tests, %d failed; %d shadowed denies, %d unacknowledged; %d quarantined, %d "+
+		"projection refusals\n", len(results), failed, len(shadows), unacknowledged, quarantined, refused)
+	if failed > 0 || unacknowledged > 0 || quarantined > 0 || refused > 0 {
 		return 1
 	}
 	return 0
