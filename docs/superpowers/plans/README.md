@@ -757,28 +757,16 @@ reproduced), and Task 19 is on hold for the owner.
   - `devices capabilities` reads a whole log into memory;
   - an `account_gap` count held in memory is lost on a restart.
 - vJunosEvolved is unmeasured. L25 is still open.
-- **Before the branch is pushed:**
-  - strip the credential values commit a4c4738's L26c notes carried from history (redacted in
-    ba4f7c8);
-  - make the `labcreds` audit catch device-config credentials (`encrypted-password` values,
-    `$1$`/`$5$`/`$6$` hashes, plain-text passwords), and have the capture code redact
-    configuration output.
-- **Parked for the final wave** (per-task review minors):
-  - the flaky `TestPAPLoginThenAuthorizeThenAccount` (`-count=200 -race`);
-  - `checkInertOnProjected` under `all` to read the platforms and inventory (6 N1);
-  - the `drainOnce` comment, and `logHeldGaps` logging under `gapMu` (16);
-  - drop `|` from `argRune`/`anyArg` (7);
-  - run Task 3's row-builder unit tests;
-  - a reflection test that `Result.Clone` covers every field, a mutation fixture, and the
-    `-race` load test near its bound (9);
-  - a Junos blob in `TestAFailClosedReplyIsRecordedByName`, and a `decisions_total` assertion
-    (10);
-  - the Narrower example labels, and the `subjectInstants` duplicate (11 M1, R4);
-  - Task 12's M1–M6, including a comment on why a template rename is no raise;
-  - `compileRule`'s error quoting a pattern, and the backstop's mixed-case non-ASCII gap (12b
-    M-F1, M-F2);
-  - `caretAt`'s prefix match (L26b);
-  - an unread log line should qualify the unauthorized-tier finding as `account_gap` does (18).
+- **Before the branch is pushed:** strip the credential values commit a4c4738's L26c notes
+  carried from history (redacted in ba4f7c8). The rest is done in the final fix wave:
+  `labcreds.NoteLeaks` and `TestResultsNotesCarryNoCredentials` fail on a Junos
+  `encrypted-password`/`plain-text-password-value` value, a `$1$`/`$5$`/`$6$`/`$8$`/`$9$` hash or a
+  lab default password in any results note, naming file and line only, and every notes writer
+  passes what it writes through `labcreds.RedactNote`.
+- **Parked for the final wave** (per-task review minors), done there unless named here: the
+  flaky `TestPAPLoginThenAuthorizeThenAccount` did not reproduce (`-count=200 -race`, final
+  review); the `-race` load test near its bound, Task 12's M2–M6 and 12b's M-F2 (the backstop's
+  mixed-case non-ASCII gap) stay open.
 
 Spec §8 in full: built-in adapters, entity classes, user overrides and layering, pinned
 platform set, `redact` patterns (accounting redaction was deferred from plan 1 and MUST land
