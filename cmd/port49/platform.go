@@ -340,6 +340,19 @@ func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
 		fmt.Fprintf(w, "  shadowed: %s: set %s changes the built-in value and the policy's block keeps its "+
 			"own; compare the two\n", key, after.PlatformSet())
 	}
+	// What the move quarantines or fails closed, before anyone runs the
+	// gate: each fails policy test (plan 5b pre-flight I10).
+	for _, q := range after.Quarantines(now) {
+		for _, e := range q.Entries {
+			fmt.Fprintf(w, "  quarantine on %s: %s (%s): %s\n", after.PlatformSet(), q.Device, q.Platform,
+				quarantineLine(e, now))
+		}
+	}
+	for _, f := range after.Projections(now) {
+		if f.Kind == policy.FindingProjectionRefused || f.Kind == policy.FindingProjectionOverflow {
+			fmt.Fprintf(w, "  %s on %s: %s\n", f.Kind, after.PlatformSet(), f.Message)
+		}
+	}
 	switch {
 	case len(d.Adapters) == 0:
 		fmt.Fprintln(w, "  no adapter changes")

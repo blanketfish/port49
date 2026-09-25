@@ -12,8 +12,8 @@ import (
 	"github.com/rhwendt/port49/platforms"
 )
 
-// shipped is the default set, value for value: the table plan 4 compiled
-// into the binary, and each change plan 5 made to it with the note behind it.
+// shipped is set 1.0.0, value for value: the table plan 4 compiled into the
+// binary, and each change plan 5a made to it with the note behind it.
 var shipped = map[string]Dialect{
 	"arista_eos": {
 		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
@@ -126,12 +126,49 @@ var shipped = map[string]Dialect{
 	},
 }
 
+// shipped110 is set 1.1.0, value for value: 1.0.0 with juniper_junos
+// projected (plan 5b; spec §8, §13 decision 22).
+var shipped110 = func() map[string]Dialect {
+	out := map[string]Dialect{}
+	for name, d := range shipped {
+		out[name] = d.clone()
+	}
+	j := out["juniper_junos"]
+	// What 1.1.0 changes in juniper_junos: the projection and what it rests on.
+	j.CommandProjection, j.BitDelivery = ProjectionJunosRegex, BitDeliveryUserPermissions
+	j.Bits = map[string][]string{
+		BaselineBit: {"help **", "quit **", "exit **", "set cli **", "show cli **", "file **", "load **", "op **",
+			"request **", "save **", "scp **", "set **", "start **", "test **"},
+		"clear":   {"clear **", "request mpls **", "set chassis **"},
+		"network": {"ping **", "traceroute **", "ssh **", "telnet **", "mtrace **", "probe **", "request routing-engine **"},
+		"trace":   {"monitor **"},
+		"view": {"show **", "request flight-recorder **", "request pppoe **", "request snmp **", "request validation **",
+			"test interface **", "test msdp **", "test policy **", "test rib-sharding **", "test services **"},
+		"view-configuration": {"show configuration **", "show log **", "show firewall **", "show policer **",
+			"monitor **", "request mpls **",
+			"request path-computation-client **", "request security **", "request unified-edge **",
+			"request virtual-chassis **", "load dhcp-security-snoop **", "save dhcp-security-snoop **"},
+		"all": {"**"}}
+	j.CarveOuts = map[string][]string{"view-configuration": {"show configuration **", "show log **", "show firewall **",
+		"show policer **"}}
+	j.CeilingBits = map[string][]string{"readonly": {"view", "view-configuration"},
+		"operator": {"clear", "network", "trace", "view", "view-configuration"}, "admin": {"all"}}
+	j.CeilingLevels = map[string]uint8{"readonly": 1, "operator": 15, "admin": 15}
+	j.DeviceConfig = []string{"set system tacplus-options strict-authorization"}
+	j.ConfigChecks = append(j.ConfigChecks, ConfigCheck{Match: `^set\s+system\s+login\s+class\s+p49-remote\s+permissions\b`,
+		Says: "the remote template's class carries bits: every projected session lands in remote, where " +
+			"user-permissions merges with them or is ignored (tests/lab/results/L12-juniper_*.md), and runs them, " +
+			"which port49 never granted; read this check against `show configuration | display set`"})
+	out["juniper_junos"] = j
+	return out
+}()
+
 func TestTheDefaultSetValueForValue(t *testing.T) {
 	got := Dialects()
-	if len(got) != len(shipped) {
-		t.Fatalf("%d platforms, want %d", len(got), len(shipped))
+	if len(got) != len(shipped110) {
+		t.Fatalf("%d platforms, want %d", len(got), len(shipped110))
 	}
-	for name, want := range shipped {
+	for name, want := range shipped110 {
 		if !reflect.DeepEqual(got[name], want) {
 			t.Errorf("%s:\n got %+v\nwant %+v", name, got[name], want)
 		}
@@ -166,6 +203,9 @@ func TestEveryReleasedSetIsFrozen(t *testing.T) {
 // every later binary; a new set with a different generic adds its own entry.
 var releasedGeneric = map[string]Dialect{
 	"1.0.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
+		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
+		EnableUsername: EnablePrincipal},
+	"1.1.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
 		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
 		EnableUsername: EnablePrincipal},
 }
@@ -203,7 +243,7 @@ func TestEmbeddedSetsLoad(t *testing.T) {
 	if _, ok := all[DefaultSet]; !ok {
 		t.Fatalf("no set %s in %v", DefaultSet, Sets())
 	}
-	if !reflect.DeepEqual(Sets(), []string{"1.0.0"}) {
+	if !reflect.DeepEqual(Sets(), []string{"1.0.0", "1.1.0"}) {
 		t.Fatalf("sets: %v", Sets())
 	}
 	set, ok := Set(DefaultSet)

@@ -37,17 +37,33 @@ func TestReferenceClasses(t *testing.T) {
 		"delete system login user p49-readonly",
 		"set system login user p49-readonly class p49-readonly",
 	}
+	if lockTemplates {
+		// Each user's set lines end with the lock (plan 5b Task 14).
+		var locked []string
+		for _, l := range want {
+			locked = append(locked, l)
+			if strings.HasPrefix(l, "set system login user ") {
+				locked = append(locked, strings.Replace(l, "class "+l[strings.LastIndex(l, " ")+1:], lockLine, 1))
+			}
+		}
+		want = locked
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%q", got)
 	}
-	for _, l := range got {
-		if strings.Contains(l, "authentication") {
-			t.Errorf("a template user that can log in locally: %s", l)
-		}
-	}
 	up, _ := ReferenceClasses(junosProjected(BitDeliveryUserPermissions), 30*time.Second)
-	if len(up) != 4 || up[1] != "set system login class p49-remote idle-timeout 1" {
+	if up[1] != "set system login class p49-remote idle-timeout 1" {
 		t.Fatalf("user_permissions: %q", up)
+	}
+	// What export prints for the shipped Junos adapter carries every line
+	// check-config holds a Junos device to.
+	junos, _ := DialectFor("juniper_junos")
+	ref, err := ReferenceClasses(junos, 12*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing, err := Missing([]byte(strings.Join(ref, "\n")), junos.DeviceConfig); err != nil || len(missing) != 0 {
+		t.Fatalf("%q %v", missing, err)
 	}
 	eos, _ := DialectFor("arista_eos")
 	if _, err := ReferenceClasses(eos, time.Hour); err == nil {

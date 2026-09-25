@@ -1,0 +1,137 @@
+# juniper_junos — vSRX 21.4R3.15 and vJunos-router 23.4R2-S2.1 in the port49 lab.
+# Every value is measured and cited, or marked unmeasured and chosen in the
+# direction that fails closed (spec §8, §15).
+platforms:
+  juniper_junos:
+    # Session authorization only: no per-command request in 26 sessions on two
+    # images (L18; decision 21). Its rules reach a session through the
+    # projection below (decision 22).
+    supports: [session]
+    # The composed rules render into the session reply as the Junos login
+    # class model reads it: permission bits, then deny-commands and
+    # allow-commands, a matching allow beating any deny (L11, closed;
+    # tests/lab/results/L12-juniper_*.md). What the regexes rest on — explicit
+    # anchors, case, abbreviations — is L9's (tests/lab/results/L9-juniper_*.md)
+    # and internal/projection's JunosFacts.
+    command_projection: junos_regex
+    # The bits go on the wire as user-permissions, over `remote`'s bitless
+    # p49-remote: on both images a user-permissions value over a bitless
+    # template was applied, both bits of a two-bit value were, and one
+    # session's value left another's permissions unchanged
+    # (tests/lab/results/L12-juniper_*.md; branch C). No template is named, so
+    # the generator sends the smallest bits a grant needs, and a bit a deny
+    # would only carve is dropped instead of sent.
+    bit_delivery: user_permissions
+    # The keyword tree (platforms/keywords/1.1.0/juniper_junos.yaml) is proven
+    # on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 only
+    # (tests/lab/results/L26-juniper_*.md, L26b-juniper_*.md); on another
+    # release or hardware family a word it proves a keyword may take an
+    # argument (spec §8).
+    #
+    # A wire deny binds the CLI and a `<command>` RPC, never a native RPC
+    # (tests/lab/results/L12-netconf-juniper_*.md, L26c-juniper_*.md). So a
+    # projected device runs no management service but the CLI's: `port49
+    # devices check-config` fails NETCONF (`netconf ssh`), the XML API
+    # (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`), REST (`rest`), J-Web
+    # (`web-management`), JET/gRPC/gNMI (`extension-service`), device-initiated
+    # NETCONF (`outbound-ssh`) and any service this build does not know. Junos
+    # cannot turn them off per user, so they are off outright. A CLI session
+    # still reaches RPCs through `xml-mode` and `op url`, with its bits' reach
+    # (L26c): the projection fails closed on a composition whose only guard
+    # beneath a sent bit is a deny.
+    #
+    # Each bit's reach in rule form: every command a class holding that bit
+    # alone ran or completed in the lab, the union of both images, as rules
+    # that hold them, an upper bound (tests/lab/results/L12-bits-juniper_*.md).
+    # A top-level word the baseline reaches is held whole (`request **`):
+    # completion does not list Junos's hidden commands, so a reach word by word
+    # could under-report. A session runs the union of its bits' reach.
+    # `baseline` is what a class with no bits runs, held by every session: the
+    # projection denies each of its commands no permit holds. `all` is every
+    # bit.
+    bits:
+      baseline: ["help **", "quit **", "exit **", "set cli **", "show cli **", "file **", "load **", "op **", "request **",
+        "save **", "scp **", "set **", "start **", "test **"]
+      clear: ["clear **", "request mpls **", "set chassis **"]
+      network: ["ping **", "traceroute **", "ssh **", "telnet **", "mtrace **", "probe **", "request routing-engine **"]
+      trace: ["monitor **"]
+      view: ["show **", "request flight-recorder **", "request pppoe **", "request snmp **", "request validation **",
+        "test interface **", "test msdp **", "test policy **", "test rib-sharding **", "test services **"]
+      view-configuration: ["show configuration **", "show log **", "show firewall **", "show policer **", "monitor **",
+        "request mpls **", "request path-computation-client **", "request security **", "request unified-edge **",
+        "request virtual-chassis **", "load dhcp-security-snoop **", "save dhcp-security-snoop **"]
+      all: ["**"]
+    # The only subtractions from the union: commands a bit alone makes
+    # available, whatever other bit reaches them. Under `view` without
+    # `view-configuration` the configuration is not shown: measured on three
+    # hierarchies, both images (tests/lab/results/L12-bits-juniper_*.md,
+    # "carve-outs"; the bare command is not probed). `show log`, `show
+    # firewall` and `show policer` complete for the `view view-configuration`
+    # pair and for neither bit alone, on both images: completion evidence, no
+    # probe ran them (the same notes, "Reading"), so view-configuration's
+    # reach above holds them too: an upper bound, since neither bit alone
+    # offers them. Only a listed carve-out lets the projection leave a deny
+    # off the wire.
+    carve_outs:
+      view-configuration: ["show configuration **", "show log **", "show firewall **", "show policer **"]
+    # Each level's ceiling in bits. readonly is show and info, operator adds
+    # the non-disruptive state changes and no configuration, admin is
+    # everything (the owner's level definitions, 2026-09-24). Spec §8's
+    # example operator also holds `reset`, which restarts software processes:
+    # disruptive, so not here.
+    privilege:
+      readonly: [view, view-configuration]
+      operator: [clear, network, trace, view, view-configuration]
+      admin: [all]
+    # No priv-lvl is sent: the bits are the fence. The token's ceiling still
+    # needs a number; every Junos request carries priv_lvl 1
+    # (tests/lab/results/junos-session-service-juniper_vjunos-router.md), so
+    # readonly numbers 1, and operator numbers as admin, as decision 23 does
+    # where the device's number fences nothing.
+    ceiling_levels: {readonly: 1, operator: 15, admin: 15}
+    # What the replies depend on, in `show configuration | display set` form.
+    device_config:
+      # Required: without it a port49 denial is advisory and the session opens
+      # in the remote template (L17-juniper_*.md).
+      - set system tacplus-options strict-authorization
+    # The template user and its class are the reference `port49 platform
+    # export --classes` writes, and `port49 devices check-config --config`
+    # holds a device to: `remote` in the bitless p49-remote, where every
+    # projected session lands, since no reply names a template, and where one
+    # naming a template the device lacks would land too (L18-juniper_*.md,
+    # variant 7).
+    # fxp0 is the interface the lab reaches both images on
+    # (tests/lab/configs/vjunos-startup.conf); em0 is spec §8's example and no
+    # lab image uses it.
+    entity_classes:
+      management: ['^(fxp0|em0)$']
+    # Junos sends no command to expand; unmeasured, so false, the direction
+    # that fails closed.
+    expands_abbreviations: false
+    splits_interface_names: false
+    # Junos never authorizes a command (L18; decision 21), so no modifier
+    # reaches port49.
+    pipe_token: "|"
+    pipe_authorized: false
+    # Unmeasured for a command request, which Junos never sends; its
+    # accounting records end `<cr>` (tests/lab/results/L17-juniper_vjunos-router.md), and
+    # true is every measured platform's value.
+    strip_cr: true
+    # No command request to carry one; unmeasured, so false.
+    shows_server_msg: false
+    # Every name the projection sends, and the configuration regexes it never
+    # sends: all carry privilege (spec §8).
+    privilege_attributes: [local-user-name, user-permissions, allow-commands, deny-commands, allow-configuration,
+      deny-configuration, allow-commands-regexps, deny-commands-regexps, allow-configuration-regexps,
+      deny-configuration-regexps]
+    inert_attributes: [home-directory]
+    # `port49 devices check-config` (spec §5.6), set or hierarchical form: a
+    # name quoted or bare, and an account `show configuration` prints under a
+    # protect: or inactive: prefix, which is still an account (an inactive one
+    # is read too, failing closed: one `activate` brings it back).
+    local_accounts: ['^set\s+system\s+login\s+user\s+"?([^\s"]+)', '^\s*(?:(?:protect|inactive):\s+)*user\s+"?([^\s"{]+)"?\s*\{']
+    config_checks:
+      - match: 'authentication-order .*\bpassword\b'
+        says: "a FAIL from port49 falls through to the local password on this platform (tests/lab/results/L4-juniper_vsrx.md, L4-juniper_vjunos-router.md): a denied operator logs in locally"
+      - match: '^set\s+system\s+login\s+class\s+p49-remote\s+permissions\b'
+        says: "the remote template's class carries bits: every projected session lands in remote, where user-permissions merges with them or is ignored (tests/lab/results/L12-juniper_*.md), and runs them, which port49 never granted; read this check against `show configuration | display set`"

@@ -98,7 +98,7 @@ func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
 	if code := run([]string{"platform", "show", "cisco_iosxe"}, &out, &errb); code != 0 {
 		t.Fatalf("code %d %s", code, errb.String())
 	}
-	for _, want := range []string{"# cisco_iosxe: built-in, platform set 1.0.0\n", "      operator:\n        - priv-lvl=7\n",
+	for _, want := range []string{"# cisco_iosxe: built-in, platform set 1.1.0\n", "      operator:\n        - priv-lvl=7\n",
 		"    accepted_attributes:\n      - priv-lvl\n", "      - privilege exec level 7 clear counters\n",
 		"    verified: containerlab\n",
 		"#   {match: ['**'], after: secret}\n"} {
@@ -636,9 +636,9 @@ func TestAnOperatorsUnreachableRulesExportAsTheOperators(t *testing.T) {
 	}
 }
 
-// export --classes prints a projected platform's reference configuration;
-// a platform that projects nothing has none, and the flag goes with export
-// and a config alone.
+// export --classes prints a projected platform's reference configuration,
+// its idle-timeout from port49d.yaml; a platform that projects nothing has
+// none, and the flag goes with export and a config alone.
 func TestPlatformExportClasses(t *testing.T) {
 	cfg := filepath.Join(t.TempDir(), "port49d.yaml")
 	if err := os.WriteFile(cfg, []byte("inventory_file: inventory.yaml\nsession: {max_session_age_default: 8h}\n"),
@@ -649,6 +649,22 @@ func TestPlatformExportClasses(t *testing.T) {
 	if code := run([]string{"platform", "export", "--set", "1.0.0", "--classes", "--config", cfg, "juniper_junos"},
 		&out, &errb); code != 1 || !strings.Contains(errb.String(), "projects nothing") {
 		t.Fatalf("1.0.0: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"platform", "export", "--classes", "--config", cfg, "juniper_junos"}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "platform set 1.1.0") ||
+		!strings.Contains(out.String(), "delete system login class p49-remote\n"+
+			"set system login class p49-remote idle-timeout 480\n") ||
+		!strings.Contains(out.String(), "set system login user remote class p49-remote\n") {
+		t.Fatalf("1.1.0: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// Each level's template, where the delivery is one, is a replace too.
+	if d, _ := platform.DialectFor("juniper_junos"); d.BitDelivery == platform.BitDeliveryLocalUserName &&
+		!strings.Contains(out.String(), "delete system login class p49-readonly\n"+
+			"set system login class p49-readonly permissions view\n"+
+			"set system login class p49-readonly permissions view-configuration\n"+
+			"set system login class p49-readonly idle-timeout 480\n") {
+		t.Fatalf("templates:\n%s", out.String())
 	}
 	for _, args := range [][]string{
 		{"platform", "show", "--classes", "--config", cfg, "juniper_junos"},
@@ -720,5 +736,161 @@ func TestReferenceDeviceConfigNamesTheRedactedLines(t *testing.T) {
 	})
 	if i < 0 || !hidden[i] || len(hidden) != 1 {
 		t.Fatalf("%q %v", shown, hidden)
+	}
+}
+
+// Moving a policy from 1.0.0 to 1.1.0 turns the Junos projection on, and
+// every key that does so is gated: the move is reviewed like any adapter edit
+// (spec §8, §12).
+func TestUpgradingToTheProjectedSet(t *testing.T) {
+	pol, inv := policyFixture(t)
+	if err := os.WriteFile(inv, []byte(strings.Replace(string(readFile(t, inv)), "devices:\n",
+		"devices:\n  - {name: srx-01, platform: juniper_junos, addresses: [10.0.0.9]}\n", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv, "--to", "1.1.0"}, &out, &errb)
+	keys := []string{"command_projection", "bits", "bit_delivery", "privilege"}
+	if d, _ := platform.DialectFor("juniper_junos"); len(d.LocalUserNames) > 0 {
+		keys = append(keys, "local_user_names")
+	}
+	if d, _ := platform.DialectFor("juniper_junos"); len(d.CarveOuts) > 0 {
+		keys = append(keys, "carve_outs")
+	}
+	for _, key := range keys {
+		if !strings.Contains(out.String(), "platforms.juniper_junos."+key+"\n") ||
+			!strings.Contains(out.String(), "field: "+key+", sha256:") {
+			t.Errorf("%s is not reported gated:\n%s%s", key, out.String(), errb.String())
+		}
+	}
+}
+
+// junosFixture is a policy pinned to 1.1.0 with one Junos device: noc
+// permitted every show command, which renders whatever L9 and L12 measured,
+// and for ops a composition the projection cannot carry under any of them,
+// the refused shape (spec §8).
+func junosFixture(t *testing.T) (pol, inv, cfg string) {
+	t.Helper()
+	dir := t.TempDir()
+	pol, inv, cfg = filepath.Join(dir, "policy.yaml"), filepath.Join(dir, "inventory.yaml"),
+		filepath.Join(dir, "port49d.yaml")
+	for path, body := range map[string]string{
+		pol: `platform_set: 1.1.0
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: read_only, privilege: readonly, permit: ["show **"]}
+  - {name: interfaces, privilege: readonly, permit: ["show interfaces **"], deny: ["show interfaces terse"]}
+subjects:
+  - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
+  - {name: ops, identity: "user:ops@example.com", username: ops, token_ttl: 60s}
+grants:
+  - {subject: noc, scope: all_devices, roles: [read_only]}
+  - {subject: ops, scope: all_devices, roles: [interfaces]}
+tests:
+  - {subject: noc, device: srx-01, level: readonly}
+`,
+		inv: `
+devices:
+  - {name: srx-01, platform: juniper_junos, addresses: [10.0.0.9]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`,
+		cfg: "inventory_file: inventory.yaml\nsession: {max_session_age_default: 8h}\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return pol, inv, cfg
+}
+
+// One subject's composition the projection cannot carry fails policy test
+// and policy diff, naming the subject, the device and why, and platform
+// upgrade previews it; the other subject keeps its reply (spec §8, "CI MUST
+// refuse the policy"; §13 decision 26; plan 5b pre-flight I10).
+func TestAProjectionRefusalFailsTheGates(t *testing.T) {
+	pol, inv, _ := junosFixture(t)
+	var out, errb bytes.Buffer
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+	for _, want := range []string{
+		`report: projection_refused: subject "ops" on juniper_junos gets the fail-closed reply (refused_shape): `,
+		"; on 1 device: srx-01\n",
+		`report: projection: subject "noc" on juniper_junos: `,
+		"; 0 quarantined, 1 projection refusals\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
+		}
+	}
+	if code != 1 {
+		t.Fatalf("policy test: code %d", code)
+	}
+	unpinned := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(unpinned, []byte(strings.Replace(string(readFile(t, pol)), "platform_set: 1.1.0\n", "", 1)),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The move from 1.0.0 projects noc, which the diff prints, and refuses
+	// ops, which fails it.
+	out.Reset()
+	if code := run([]string{"policy", "diff", "--old", unpinned, "--new", pol, "--inventory", inv}, &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), `REFUSED: projection_refused: subject "ops" on juniper_junos gets the fail-closed reply (refused_shape)`) ||
+		!strings.Contains(out.String(), "projection: noc on srx-01: none -> ") {
+		t.Fatalf("policy diff: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"platform", "upgrade", "--policy", unpinned, "--inventory", inv, "--to", "1.1.0"}, &out,
+		&errb); code != 0 || !strings.Contains(out.String(),
+		`  projection_refused on 1.1.0: subject "ops" on juniper_junos gets the fail-closed reply (refused_shape)`) {
+		t.Fatalf("platform upgrade: code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// check-config holds a Junos device to the reference export --classes
+// writes: it needs --config for the classes' idle-timeout, passes the
+// reference itself, fails a template class carrying an allow (I8, M8), and
+// fails a management service but the CLI's (branch M; Task 13a).
+func TestCheckConfigHoldsAJunosDeviceToTheReference(t *testing.T) {
+	pol, inv, cfg := junosFixture(t)
+	var ref, errb bytes.Buffer
+	if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
+		"juniper_junos"}, &ref, &errb); code != 0 {
+		t.Fatalf("export: code %d\n%s", code, errb.String())
+	}
+	var lines []string
+	for _, l := range strings.Split(ref.String(), "\n") {
+		if strings.HasPrefix(l, "set ") {
+			lines = append(lines, l)
+		}
+	}
+	device := filepath.Join(t.TempDir(), "srx-01.set")
+	write := func(extra ...string) {
+		if err := os.WriteFile(device, []byte(strings.Join(append(append([]string{"set version 23.4R2-S2.1",
+			"set system host-name srx-01", "set system services ssh"},
+			lines...), extra...), "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	var out bytes.Buffer
+	args := []string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "srx-01"}
+	if code := run(append(args, device), &out, &errb); code != 2 || !strings.Contains(errb.String(), "pass --config") {
+		t.Fatalf("no --config: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run(append(args, "--config", cfg, device), &out, &errb); code != 0 {
+		t.Fatalf("the reference: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	write(`set system login class p49-remote allow-commands "^configure"`)
+	out.Reset()
+	if code := run(append(args, "--config", cfg, device), &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "TEMPLATE: "+device+":") {
+		t.Fatalf("drift: code %d\n%s%s", code, out.String(), errb.String())
+	}
+	write("set system services netconf ssh")
+	out.Reset()
+	if code := run(append(args, "--config", cfg, device), &out, &errb); code != 1 ||
+		!strings.Contains(out.String(), "SERVICE: "+device+":") {
+		t.Fatalf("netconf: code %d\n%s%s", code, out.String(), errb.String())
 	}
 }

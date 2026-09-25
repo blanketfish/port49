@@ -15,14 +15,15 @@ import (
 // (plan 5b pre-flight C1).
 func TestCheckServices(t *testing.T) {
 	d := junosProjected(BitDeliveryLocalUserName)
-	if RPCServicesChecked(d) {
-		t.Fatal("the switch is branch M's; it is off until the lab says denies do not bind RPCs")
+	if !RPCServicesChecked(d) {
+		t.Fatal("the switch is branch M's, on in 1.1.0: no wire deny binds a NETCONF RPC (L12-netconf-juniper_*.md)")
 	}
+	rpcServicesOff = false
+	defer func() { rpcServicesOff = true }()
 	if f, err := CheckServices(d, []byte("set system services netconf ssh\n")); f != nil || err != nil {
 		t.Fatalf("off: %v %v", f, err)
 	}
 	rpcServicesOff = true
-	defer func() { rpcServicesOff = false }()
 	clean := "set version 21.4R3.15\nset system host-name srx1\nset system services ssh root-login deny\n" +
 		"set system services telnet\n" +
 		"set interfaces fxp0 description \"rest of the lab\"\ndeactivate system services netconf\n"
@@ -59,8 +60,9 @@ func TestCheckServices(t *testing.T) {
 // hide one is refused (plan 5b Task 13a).
 func TestCheckServicesBypasses(t *testing.T) {
 	d := junosProjected(BitDeliveryLocalUserName)
-	rpcServicesOff = true
-	defer func() { rpcServicesOff = false }()
+	if !RPCServicesChecked(d) {
+		t.Fatal("branch M's switch is off")
+	}
 	clean := "set version 23.4R2-S2.1\nset system host-name srx1\nset system services ssh\n"
 	// Each is a finding, the line quoted back as it was read.
 	for _, line := range []string{

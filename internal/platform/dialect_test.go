@@ -136,11 +136,13 @@ func TestOperatorIsAdminsLevelWhereTheDeviceCannotFenceIt(t *testing.T) {
 	if n, ok := xe.PrivLvl("operator"); !ok || n != 7 {
 		t.Fatalf("ios-xe operator: %d %v", n, ok)
 	}
-	for _, name := range []string{"juniper_junos", "no_such_platform"} {
-		d, _ := DialectFor(name)
-		if _, ok := d.PrivLvl("operator"); ok {
-			t.Fatalf("%s: operator has no number there yet", name)
-		}
+	// Junos renders no priv-lvl, and its bits are the fence (decision 22):
+	// operator numbers as admin for the token's ceiling, as on NX-OS.
+	if n, ok := func() (uint8, bool) { d, _ := DialectFor("juniper_junos"); return d.PrivLvl("operator") }(); !ok || n != 15 {
+		t.Fatalf("junos operator: %d %v", n, ok)
+	}
+	if d, _ := DialectFor("no_such_platform"); func() bool { _, ok := d.PrivLvl("operator"); return ok }() {
+		t.Fatal("no_such_platform: operator has no number there")
 	}
 }
 

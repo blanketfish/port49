@@ -1,0 +1,101 @@
+# arista_eos — vEOS-lab 4.31.2F (image tagged 4.32.2F) in the port49 lab.
+# Every value is measured and cited, or marked unmeasured and chosen in the
+# direction that fails closed (spec §8, §15).
+platforms:
+  arista_eos:
+    # Every reply this adapter renders was applied by the lab image as the
+    # adapter says, at readonly, operator and admin
+    # (tests/lab/results/L22-arista_eos.md; spec §15, L22).
+    verified: containerlab
+    # Session and per-command authorization (L1, L10). Config-command
+    # authorization is unmeasured, so it is not claimed.
+    supports: [session, commands]
+    # The level and the role travel together: EOS reads the bare `roles=`, and
+    # a role with no `priv-lvl` beside it lands the session at 1
+    # (tests/lab/results/L16-arista_eos.md, 2026-09-22).
+    #
+    # The level is what fences a session while port49 answers: at 1 the parser
+    # refuses `clear counters`, `clear ip bgp *` and `configure terminal`
+    # without asking port49, and at 15 it fences nothing port49 permits, a
+    # network-operator role included (ceiling-arista_eos.md). So operator gets
+    # admin's 15 and port49's rules are its fence (spec §6, decision 23).
+    #
+    # The role is what fences a session when port49 cannot answer and
+    # `aaa authorization commands ... local` takes over: network-operator is
+    # refused `configure`, network-admin is not (L16-arista_eos.md, command
+    # authorization LOCAL). So operator gets readonly's role, and the
+    # fallback never hands an operator configuration (decision 25).
+    privilege:
+      readonly: ["priv-lvl=1", "roles=network-operator"]
+      operator: ["priv-lvl=15", "roles=network-operator"]
+      admin: ["priv-lvl=15", "roles=network-admin"]
+    # network-operator fences more than network-admin: under local command
+    # authorization it was refused `configure` and network-admin was not
+    # (L16-arista_eos.md, command authorization LOCAL). No other role is
+    # measured, so any other value is unranked and ranks above both.
+    role_order:
+      roles: [network-operator, network-admin]
+    # What the renderings above depend on, as the lab device carries it
+    # (tests/lab/configs/eos-startup.cfg). The group name is the lab's.
+    device_config:
+      # Required: the session reply, and with it the level and the role, is
+      # asked for here.
+      - aaa authorization exec default group port49 local
+      # Required, and it must end in local: `none` always succeeds
+      # (L4-error-arista_eos.md), so an operator session at 15 would run
+      # every command when port49 cannot answer (spec §6, decision 23).
+      # What `if-authenticated` does on EOS is unmeasured (L4 measured it
+      # on IOS-XE, where every command ran); do not use it either.
+      - aaa authorization commands all default group port49 local
+    # At 1 the parser refuses these without asking port49
+    # (ceiling-arista_eos.md): a permit for nothing else is dead there.
+    unreachable:
+      readonly: [clear counters **, clear ip bgp **, configure terminal **, show users detail **]
+    # Under `aaa authorization commands ... local`, network-admin configures
+    # and network-operator is refused (L16-arista_eos.md, command
+    # authorization LOCAL). With port49d down under an open session,
+    # operator's network-operator still ran `clear counters`, `clear ip bgp *`
+    # passed authorization (`% BGP inactive`: the lab node runs no BGP), and
+    # `configure terminal` was refused. admin got the same two and
+    # configured (tests/lab/results/L22-arista_eos.md,
+    # L22-carried-arista_eos.md). Only these commands were measured, and the
+    # entry says so. readonly at level 1 was not measured falling back.
+    fallback:
+      operator: "network-operator, of the commands measured: clear counters ran, clear ip bgp * passed authorization (BGP inactive on the lab node), configuration refused (% Authorization denied)"
+      admin: "network-admin, of the commands measured: clear counters ran, clear ip bgp * passed authorization (BGP inactive on the lab node), configuration changed"
+    # `port49 devices check-config`: a local account named as a port49
+    # username inherits that username's context (spec §5.6), and two lines
+    # the spec forbids.
+    local_accounts: ['^username\s+(\S+)']
+    config_checks:
+      - match: '^aaa authorization commands \S+ default .*\b(none|if-authenticated)\s*$'
+        says: "the command method list falls back to none or if-authenticated: an operator session at 15 runs every command when port49 cannot answer; end it in local (spec §6, decision 23)"
+      - match: '^aaa authentication enable default .*\b(local|enable)\s*$'
+        says: "enable falls back to a local secret: a session that reaches enable through it holds the port49 context's level unchecked (spec §5.6)"
+    # Interface names, not device behaviour: spec §8's example.
+    entity_classes:
+      management: ['^Management[0-9]+$']
+      loopback: ['^Loopback[0-9]+$']
+      physical: ['^Ethernet[0-9/.]+$', '^Port-Channel[0-9]+$']
+    # `sh ver` arrived as `show version` over SSH (L21-arista_eos.md); eAPI and
+    # NETCONF are unmeasured.
+    expands_abbreviations: true
+    # `int Et1` arrived as one argument, `Ethernet1` (L21-arista_eos.md).
+    splits_interface_names: false
+    # A typed `show clock | include ...` reached port49 as `show clock` alone
+    # (L2-arista_eos.md, "Truncation length"). Whether any other modifier reaches
+    # port49 is unmeasured.
+    pipe_token: "|"
+    pipe_authorized: false
+    # Every command authorization ends `cmd-arg=<cr>` (L10-arista_eos.md).
+    strip_cr: true
+    # A 61-character server_msg was displayed in full (L2-arista_eos.md).
+    shows_server_msg: true
+    # `priv-lvl` sets the level and a bare `roles=<name>` the role
+    # (L16-arista_eos.md).
+    privilege_attributes: [priv-lvl, roles]
+    # home-directory: spec §6's case. home-directory, idletime and timeout:
+    # admin's session unchanged beside its reply, the same level, both
+    # ceiling commands sent to port49 and `show version` permitted
+    # (tests/lab/results/L22-arista_eos.md, "Inert candidates").
+    inert_attributes: [home-directory, idletime, timeout]

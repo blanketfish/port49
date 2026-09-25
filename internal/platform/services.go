@@ -10,21 +10,24 @@ import (
 )
 
 // rpcServicesOff is whether a projected Junos device must run no management
-// service but the CLI's: true only where tests/lab/results/L12-netconf-juniper_*.md
-// found a wire deny-commands, or the fail-closed reply, not binding a NETCONF
-// RPC on either image (plan 5b Task 14, branch M). A service that runs RPCs
-// under the same TACACS+ login and reply would then walk around every deny
-// port49 sends: `<get-configuration>` past `deny show configuration **`.
+// service but the CLI's (plan 5b Task 14, branch M). It is true: on both
+// images a wire deny-commands, and the fail-closed reply, did not bind a
+// native NETCONF RPC (tests/lab/results/L12-netconf-juniper_*.md), so a
+// service that runs RPCs under the same TACACS+ login and reply would walk
+// around every deny port49 sends: `<get-configuration>` past `deny show
+// configuration **`.
 //
-// The allowlist rests on a premise no lab row has measured: that a projected
-// CLI session, over the ssh or telnet the list admits, cannot reach RPCs
-// itself — by typing `xml-mode netconf need-trailer`, by opening the netconf
-// SSH subsystem on port 22 with only `system services ssh` configured, or by
-// running `op url` or an op script. Flipping this to true requires the Task
-// 19 lab rows for xml-mode, op and the netconf subsystem to show, on both
-// images, that such a session cannot; where one can, no services check
-// closes the hole (task 13a review I1).
-var rpcServicesOff = false
+// It is necessary, not sufficient. A projected CLI session, over the ssh the
+// list admits, reaches RPCs itself by typing `xml-mode netconf need-trailer`
+// and `op url` (tests/lab/results/L26c-juniper_*.md); there RPC reach is the
+// permission bits' (`view` without view-configuration got an empty
+// `<configuration>`), no wire deny binds a native RPC, and the fail-closed
+// reply's `deny-commands .*` refuses both entry points. So the projection
+// fails closed on any composition whose safety beneath a permitted bit rests
+// on a deny (internal/projection, FailRefusedShape naming RPC reach), and this
+// check closes only the services around the CLI. The NETCONF subsystem on
+// port 22 was refused with only `system services ssh` configured (L26c).
+var rpcServicesOff = true
 
 // RPCServicesChecked reports whether `port49 devices check-config` holds a
 // device of d to the management-service allowlist (CheckServices).

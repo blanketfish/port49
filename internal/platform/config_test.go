@@ -95,8 +95,12 @@ func TestALocalAccountPatternCapturesTheName(t *testing.T) {
 // command method list a level-7 command is never asked about (spec §6). The
 // lab's configurations carry every line their adapter names.
 func TestARequiredLineThatIsAbsentIsMissing(t *testing.T) {
+	// The Junos startup config is hierarchical, and predates the projection:
+	// the Junos lab tests apply the reference configuration at run time
+	// (tests/lab/projection_test.go), and what `platform export --classes`
+	// prints carries every device_config line (TestReferenceClasses).
 	for platformName, file := range map[string]string{"arista_eos": "eos-startup.cfg", "cisco_iosxe": "iosxe-startup.cfg",
-		"cisco_nxos": "nxos-startup.cfg", "juniper_junos": "vjunos-startup.conf"} {
+		"cisco_nxos": "nxos-startup.cfg"} {
 		raw, err := os.ReadFile("../../tests/lab/configs/" + file)
 		if err != nil {
 			t.Fatal(err)

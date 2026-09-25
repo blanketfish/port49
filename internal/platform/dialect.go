@@ -289,6 +289,9 @@ var inert = []string{"home-directory"}
 var generics = map[string]Dialect{
 	"1.0.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
 		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
+	// 1.1.0 changes no generic value: the Junos projection is juniper_junos's.
+	"1.1.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
+		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
 }
 
 // Generic returns set version's generic adapter, copied, and whether the
