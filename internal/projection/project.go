@@ -241,11 +241,26 @@ func (g generator) render() (Result, error) {
 	return res2, nil
 }
 
+// shape is the capability shape, or the narrow one where only it can carry
+// the grant, or where the capability shape's deny-commands is past the
+// budget: the narrow shape's `.*` holds every deny in four bytes.
 func (g generator) shape() (Result, error) {
 	res, err := g.capability()
 	if errors.As(err, new(*narrowOnly)) {
-		res, err = g.narrow()
+		return g.finish(g.narrow())
 	}
+	res, err = g.finish(res, err)
+	var r *Refusal
+	if errors.As(err, &r) && r.Category == FailOverflow && r.Attribute == "deny-commands" {
+		if n, nerr := g.finish(g.narrow()); nerr == nil {
+			return n, nil
+		}
+	}
+	return res, err
+}
+
+// finish guards a rendered shape and writes its attributes.
+func (g generator) finish(res Result, err error) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}

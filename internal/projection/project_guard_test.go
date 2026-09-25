@@ -1,6 +1,7 @@
 package projection
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -199,7 +200,7 @@ func measuredInput(delivery, level string, f Facts, rules ...engine.Rule) Input 
 // shape (review I1).
 func TestAPermitOfABaselineCommandIsNotRefused(t *testing.T) {
 	for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
-		for _, f := range []Facts{JunosFacts} {
+		for _, f := range []Facts{measured, JunosFacts} {
 			res, err := Project(measuredInput(delivery, "operator", f, permit("show **"), permit("clear **"),
 				permit("ping **"), permit("request support information **"), permit("quit"), permit("exit")))
 			if err != nil || res.Shape == ShapeFailClosed {
@@ -247,5 +248,25 @@ func TestAnAllowTheBitsDoNotReachIsReported(t *testing.T) {
 	n := res.Narrower(20)
 	if !slices.ContainsFunc(n, func(v []string) bool { return v[0] == "ping" }) {
 		t.Errorf("narrower: %q", n)
+	}
+}
+
+// The measured baseline alone overflows a capability shape's deny-commands;
+// the narrow shape carries the same grant within the budget (review I2).
+func TestAnOverflowingCapabilityShapeGoesNarrow(t *testing.T) {
+	in := measuredInput(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show **"))
+	g := newGenerator(in, in.Bits)
+	c, err := g.capability()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r *Refusal
+	if err := g.attributes(&c); !errors.As(err, &r) || r.Attribute != "deny-commands" || len(r.Value) < 400 {
+		t.Fatalf("the fixture no longer overflows: %v", err)
+	}
+	res, err := Project(in)
+	want := []string{"user-permissions=view view-configuration", "deny-commands=^.*$", "allow-commands=^show( .*)?$"}
+	if err != nil || res.Shape != ShapeNarrow || !reflect.DeepEqual(res.Attributes, want) {
+		t.Fatalf("%s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
 	}
 }
