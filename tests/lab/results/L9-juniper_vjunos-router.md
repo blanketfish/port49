@@ -51,7 +51,7 @@ The templates were committed without a uid (commit complete).
 | `request system reboot` | completes | absent | absent | absent | absent | absent | completes | completes | completes | completes | absent | absent | absent | absent |
 | `restart routing` | completes | absent | absent | absent | absent | absent | completes | completes | completes | completes | absent | absent | absent | absent |
 | `configure` | ran | — | — | — | — | — | — | — | — | — | — | ran | — | — |
-| `set system host-name srx1` | ran | — | — | — | — | — | — | — | — | — | — | refused | — | — |
+| `set system host-name srx1` | ran | — | — | — | — | — | — | — | — | — | — | refused, not isolated: the class lacks system-control (see the Reading section) | — | — |
 | `run show version` | ran | — | — | — | — | — | — | — | — | — | — | refused | — | — |
 | `run show system uptime` | ran | — | — | — | — | — | — | — | — | — | — | ran | — | — |
 | `exit configuration-mode` | ran | — | — | — | — | — | — | — | — | — | — | ran | — | — |
@@ -67,7 +67,7 @@ The templates were committed without a uid (commit complete).
 - under deny .*, the commands a class with no bits runs: `set cli screen-width 200` bitless true, narrow false; `file list /var/tmp` bitless true, narrow false
 - user-permissions over a bitless template applied: true; both bits of a two-bit value applied: true (bit_delivery: user_permissions only if both are true, and per session below)
 - user-permissions over remote: `show cli authorization` lists view-configuration: true (true: merged or ignored; false: replaced)
-- a statement typed in configuration mode under a deny-commands naming it: refused; `run show version` under a deny naming `show version`: refused
+- a statement typed in configuration mode under a deny-commands naming it: refused, **not isolated** (corrected in the Reading section: isolated, the deny did not reach the statement); `run show version` under a deny naming `show version`: refused
 - -regexps: `show version` refused with both deny and allow naming it: true
 - allow-commands2 an attribute of its own: `show system uptime` ran: true
 - per session: A before `show cli authorization Current user: 'p49-l12-none' login: 'alice15' class 'p49-l12-none' Permissions: view -- Can view current values and statistics Individual command authorization: Allow regular expression: none Deny regular expression: none Allow configuration regular expression: none Deny configuration regular expression: none alice15@srx1>`, B `show ^ unknown command. alice16@srx1> show cli ^ unknown command. alice16@srx1> showcli authorization ^ unknown command. alice16@srx1>`, A after B `show cli authorization Current user: 'p49-l12-none' login: 'alice15' class 'p49-l12-none' Permissions: view -- Can view current values and statistics Individual command authorization: Allow regular expression: none Deny regular expression: none Allow configuration regular expression: none Deny configuration regular expression: none alice15@srx1>`
@@ -6804,3 +6804,47 @@ No valid completions
 alice14@srx1> restart   
 ```
 
+## Reading (controller, 2026-09-25; added by hand after the run, not generated)
+
+This section corrects and interprets the generated observation above, which otherwise stands as
+the run wrote it (Task 2 review, fix round 1).
+
+- **Configuration mode (corrects the `set system host-name srx1` cell and its read-off line).** The
+  `configuration mode` variant's class, `p49-l12-cfg`, holds `configure view view-configuration`
+  and no `system-control`, and the refusal's caret sits under `system`, not under `host-name`:
+  Junos hid a hierarchy the class cannot modify, with or without the deny. The cell was not
+  isolated. Measured isolated, with one class holding `system-control` with and without
+  `deny-commands=^set system host-name( .*)?$`, and a sibling statement under the deny:
+  **the deny did not reach the statement**. The device listed the deny and ran
+  `set system host-name srx1` under it, on this image and on vSRX 21.4R3.15 (`tests/lab/results/L12-configuration-juniper_vjunos-router.md`,
+  `L12-configuration-juniper_vsrx.md`). The
+  `run show version` cell stands: `run show system uptime` ran in the same session.
+- **Admin channel.** The class and template changes were made over **SSH as breakglass**, with
+  port49d stopped, by inference: this run did not record its channel, and the isolated run on the
+  same image and startup configuration did (`The admin CLI that configured the class: SSH CLI as
+  breakglass`, `tests/lab/results/L12-configuration-juniper_vjunos-router.md`). `junosCLI` falls back to the console only when SSH fails.
+- **`remote + user-permissions`: merged or ignored is ambiguous.** `remote`'s class already holds
+  `view`, so `user-permissions=view` over it reads the same whether the device merged the value or
+  ignored it. Only "replaced" is excluded.
+- **Per session.** Session B's own permissions are unreadable: `clear` without `view` refuses
+  `show cli authorization`. The per-session reading rests on session A's permissions being
+  unchanged after B opened, which they were.
+- **A deny that names an argument is not enforced (the L9 finding).**
+  `deny-commands=^show interfaces fxp0( .*)?$` over class `all` was listed by the device under
+  `Deny regular expression:` and did not refuse `show interfaces fxp0 terse` or `sh int fxp0 terse`
+  (the `deny argument` column), on this image and on vSRX 21.4R3.15 (`L9-juniper_vsrx.md`). Every cell is
+  consistent with Junos matching `deny-commands` against the **command keywords** as typed and
+  expanded, not the arguments: the anchored deny refused `sh ver` (the CLI echoed the expanded
+  `show version`), and a plain `^…$` deny refused the piped `show version | no-more`.
+- **Ruling (Ryan, 2026-09-25).** port49 sends explicit, keyword-only denies. A policy deny that
+  names an argument fails CI, and a daemon that loads one answers that subject with the
+  fail-closed reply. Nothing is widened automatically.
+- **`JunosFacts.DenyMatchesExpanded`, redefined as keyword abbreviations only: true.** The anchored
+  deny `^show version( *\|.*)?$` refused the abbreviation `sh ver`. The generated line reads
+  `false` only because its rule also required the argument deny to refuse `sh int fxp0 terse`,
+  which is the argument finding above, not an abbreviation fact. The measurement rests on one
+  abbreviation, `sh ver`.
+- **`JunosFacts.CaseSensitive`: not measurable, because the CLI refuses upper case.** The control
+  itself refused `SHOW VERSION` (`unknown command`) and `show interfaces FXP0 terse`
+  (`error: device FXP0 not found`), so no deny was ever asked to read another case. The generated
+  `false` is the rule's default, not a fact.
