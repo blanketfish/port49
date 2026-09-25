@@ -660,8 +660,9 @@ reproduced), and Task 19 is on hold for the owner.
      inheritance | except "^set groups "`, and nothing else, to a file, say `srx-fw-04.set`.
   3. Check it against the candidate: `port49 devices check-config --policy policy.yaml
      --inventory inventory.yaml --device srx-fw-04 --config /etc/port49/port49d.yaml
-     srx-fw-04.set`. Without `--config` a projected platform exits 2, and against a policy that
-     does not pin 1.1.0 the template and services checks do not run.
+     srx-fw-04.set`. Without `--config` it exits 2, saying the platform is projected and to pass
+     `--config`. With `--config` against a policy that does not pin 1.1.0 it exits 2 and prints
+     the usage block: check against the candidate that pins 1.1.0.
   4. Only when every device passes, deploy the policy.
 
   **A class replace does not prove a template; `check-config` does.** It fails on a missing

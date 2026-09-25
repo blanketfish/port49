@@ -58,9 +58,12 @@ const (
 // lengths and depths, piped and ambiguous, was refused or not run under the
 // deny, the control ran every unambiguous one, and the rendered shape was
 // enforced (tests/lab/results/L9-abbreviations-juniper_*.md). DenyBindsRPCs
-// is false: a projected CLI session ran `xml-mode netconf need-trailer` and a
-// native RPC past its wire deny, and `op url`, on both images, its RPC reach
-// bounded by the bits alone (tests/lab/results/L26c-juniper_*.md).
+// is false, provisional on L26c (open; option C, spec §8): on both images a
+// projected CLI session opened NETCONF with `xml-mode netconf need-trailer`
+// and ran a native RPC its deny did not name, within its bits
+// (tests/lab/results/L26c-juniper_*.md). Whether a deny binds such an RPC is
+// unmeasured, so port49 assumes one may reach whatever the bits reach, and
+// fails closed.
 var JunosFacts = Facts{CaseSensitive: false, DenyMatchesExpanded: true, DenyBindsRPCs: false}
 
 // FactsFor is what a projection's device was measured doing: the zero Facts,
@@ -663,10 +666,12 @@ func (g generator) beneath(rule string, bits []string) (string, bool) {
 	return "", false
 }
 
-// rpcEntries are the operational commands a Junos CLI session reaches RPCs
-// through, with its bits' whole reach and no wire deny applied
-// (tests/lab/results/L26c-juniper_*.md): `xml-mode` (hidden, so no keyword
-// tree lists it) and `op`, whose `url` runs a script.
+// rpcEntries are the operational commands through which port49 assumes a
+// Junos CLI session may reach RPCs with whatever its bits reach, a wire deny
+// not binding them there: `xml-mode` (hidden, so no keyword tree lists it),
+// which opened NETCONF in a projected session, and `op`, whose `url` runs a
+// script (tests/lab/results/L26c-juniper_*.md). Whether a deny binds them is
+// unmeasured (L26c, open; option C), so the projection fails closed.
 var rpcEntries = []string{"xml-mode", "op"}
 
 // opensRPC reports whether an allow of rule would run an RPC entry point.
@@ -674,11 +679,13 @@ func (g generator) opensRPC(rule string) bool {
 	return slices.ContainsFunc(rpcEntries, func(e string) bool { return g.mayMeet(rule, e+" **") })
 }
 
-// rpcWhy is why a wire deny is no boundary on a device where it binds no RPC.
+// rpcWhy is why port49 treats a wire deny as no boundary on a device not
+// measured to bind RPCs with it: an assumption, provisional on L26c.
 func (g generator) rpcWhy() string {
-	return fmt.Sprintf("on %s a wire deny binds the CLI only: a CLI session reaches RPCs through `xml-mode` and "+
-		"`op url` with its bits' whole reach, and no deny applies there (tests/lab/results/L26c-juniper_*.md; spec "+
-		"§8), so the composition is CLI-only safe and port49 fails it closed", g.in.Platform)
+	return fmt.Sprintf("on %s port49 assumes a native RPC may reach whatever the bits reach: a CLI session "+
+		"reaches RPCs through `xml-mode` (and possibly `op url`), and whether a wire deny binds them there is "+
+		"unmeasured (tests/lab/results/L26c-juniper_*.md, open; option C, spec §8), so port49 fails the "+
+		"composition closed", g.in.Platform)
 }
 
 // rpcReach is the refusal of a deny that is the only guard beneath bit b.
@@ -718,8 +725,8 @@ func (g generator) omittable(dn engine.Rule, bits []string, allows []engine.Rule
 
 // rpcCarves are the carve-outs measured holding over RPC too: `view` without
 // `view-configuration` got an empty `<configuration>` from a projected CLI
-// session's RPCs (tests/lab/results/L26c-juniper_*.md). Where a wire deny
-// binds no RPC, a deny is left off the wire only through one of these: any
+// session's RPCs (tests/lab/results/L26c-juniper_*.md). Where a wire deny is not
+// known to bind RPCs, a deny is left off the wire only through one of these: any
 // other carve-out is measured on the CLI at most, so the deny is sent, and a
 // deny beneath a sent bit fails closed.
 var rpcCarves = []string{"show configuration **"}

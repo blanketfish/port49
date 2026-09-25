@@ -18,16 +18,18 @@ import (
 // around every deny port49 sends: `<get-configuration>` past `deny show
 // configuration **`.
 //
-// It is necessary, not sufficient. A projected CLI session, over the ssh the
-// list admits, reaches RPCs itself by typing `xml-mode netconf need-trailer`
-// and `op url` (tests/lab/results/L26c-juniper_*.md); there RPC reach is the
-// permission bits' (`view` without view-configuration got an empty
-// `<configuration>`), no wire deny binds a native RPC, and the fail-closed
-// reply's `deny-commands .*` refuses both entry points. So the projection
-// fails closed on any composition whose safety beneath a permitted bit rests
-// on a deny (internal/projection, FailRefusedShape naming RPC reach), and this
-// check closes only the services around the CLI. The NETCONF subsystem on
-// port 22 was refused with only `system services ssh` configured (L26c).
+// Whether it is sufficient is unmeasured (L26c, open). With `netconf ssh`
+// still configured, a projected CLI session opened NETCONF itself by typing
+// `xml-mode netconf need-trailer` and ran a native RPC its deny did not name,
+// within its bits (`view` without view-configuration got an empty
+// `<configuration>`); `op url` was accepted; the fail-closed reply's
+// `deny-commands .*` refused both (tests/lab/results/L26c-juniper_*.md).
+// Whether a wire deny binds an RPC reached that way is unmeasured, so port49
+// assumes a native RPC may reach whatever the bits reach (option C) and the
+// projection fails closed on any composition whose safety beneath a
+// permitted bit rests on a deny (internal/projection, FailRefusedShape naming
+// RPC reach); this check closes only the services around the CLI. The
+// NETCONF subsystem on port 22 was refused with `netconf ssh` deleted (L26c).
 var rpcServicesOff = true
 
 // RPCServicesChecked reports whether `port49 devices check-config` holds a

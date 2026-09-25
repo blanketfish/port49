@@ -454,12 +454,12 @@ func TestAVariantOfConfigureEntersConfiguration(t *testing.T) {
 	}
 }
 
-// On Junos a wire deny binds the CLI and never a native RPC, and a CLI
-// session reaches RPCs through `xml-mode` and `op url` with its bits' whole
-// reach (tests/lab/results/L26c-juniper_*.md). So a composition whose only
-// guard beneath a sent bit is a deny — a grant's or the baseline's — is
-// CLI-only safe, and fails closed, saying so; one the narrow shape's `.*`
-// carries is not, since `.*` refuses both entry points (option C, spec §8).
+// On Junos port49 assumes a native RPC may reach whatever the bits reach: a
+// CLI session opened NETCONF through `xml-mode`, and whether a wire deny
+// binds an RPC there is unmeasured (tests/lab/results/L26c-juniper_*.md, open;
+// option C, spec §8). So a composition whose only guard beneath a sent bit is
+// a deny — a grant's or the baseline's — fails closed, saying so; one the
+// narrow shape's `.*` carries does not, since `.*` refuses both entry points.
 func TestACarveOutBeneathASentBitFailsClosed(t *testing.T) {
 	rpc := func(res Result) bool {
 		return res.Shape == ShapeFailClosed && res.FailClosed == FailRefusedShape &&
@@ -567,5 +567,27 @@ func TestOnlyACarveOutMeasuredOverRPCOmitsADeny(t *testing.T) {
 		deny("show configuration **")))
 	if err != nil || res.Shape != ShapeCapability || len(res.Omitted) != 1 {
 		t.Fatalf("show configuration: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+}
+
+// The refusal an operator reads states RPC reach as port49's assumption,
+// provisional on the open L26c, never as a measurement (Task 20 re-review
+// R-I1).
+func TestTheRPCReachRefusalSaysItIsAnAssumption(t *testing.T) {
+	why := generator{in: Input{Platform: "juniper_junos"}}.rpcWhy()
+	for _, want := range []string{
+		"on juniper_junos port49 assumes a native RPC may reach whatever the bits reach",
+		"whether a wire deny binds them there is unmeasured",
+		"L26c-juniper_*.md, open; option C, spec §8",
+		"so port49 fails the composition closed",
+	} {
+		if !strings.Contains(why, want) {
+			t.Errorf("rpcWhy lacks %q: %s", want, why)
+		}
+	}
+	for _, overclaim := range []string{"binds the CLI only", "whole reach", "no deny applies", "CLI-only safe"} {
+		if strings.Contains(why, overclaim) {
+			t.Errorf("rpcWhy asserts the unmeasured %q: %s", overclaim, why)
+		}
 	}
 }

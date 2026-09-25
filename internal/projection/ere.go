@@ -38,9 +38,10 @@ type Facts struct {
 	// rule 4).
 	DenyMatchesExpanded bool
 	// DenyBindsRPCs: a wire deny binds every RPC a CLI session reaches, by
-	// `xml-mode` or `op url`. Where it does not, RPC reach is the sent bits'
-	// whole reach, so a deny beneath a sent bit guards the CLI alone, and a
-	// composition resting on one fails closed (spec §8).
+	// `xml-mode` or `op url`. Where it is false, the zero value, port49
+	// assumes an RPC may reach whatever the sent bits reach, so a deny beneath
+	// a sent bit is no boundary, and a composition resting on one fails
+	// closed (spec §8, option C; provisional on L26c for Junos).
 	DenyBindsRPCs bool
 }
 
