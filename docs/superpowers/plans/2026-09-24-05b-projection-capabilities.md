@@ -4,52 +4,83 @@
 
 **Goal:** A Junos session gets port49's rules for the first time. They are rendered into the session
 reply as permission bits and command regexes, proven before sending not to let the device run
-anything port49 denies, and measured on both Junos images. And port49 reads its own decision log to
+anything port49 denies, and measured on both Junos images. A composition that cannot be told to
+the device faithfully fails closed for that subject alone. And port49 reads its own decision log to
 say which devices ask it about commands at all.
 
 **Architecture:** A new package, `internal/projection`, turns one composition's rules into a Junos
 session reply under decision 22. Before returning the reply it proves it against a model of the
-device built from the lab's measurements: engine programs over the rules and over each permission
-bit's reach, read the way a login class reads them. `internal/policy` calls it from `compile` for
-any platform whose adapter declares `command_projection`. The reply is then ordinary blob
-attributes, so the daemon, `policy replay` and every offline tool carry it unchanged. The
-projection ships in a new platform set, 1.1.0, so turning it on is a pin move that `port49 policy
-diff` reviews. Another new package, `internal/capability`, reads the decision log to build spec
-§9's supports-versus-observed matrix and its accounting reconciliation. A new `account_gap`
-record, written by the accounting spool whenever it drops a record, qualifies both.
+device built from the lab's measurements: engine programs over the rules, over the union of the
+held bits' reach, and over the measured carve-outs of the bits not held. A composition neither
+shape can carry gets the **fail-closed reply** of decision 26, proven the same way. `internal/policy`
+calls it from `compile` for any platform whose adapter declares `command_projection`, once per
+composition. The reply is then ordinary blob attributes, so the daemon, `policy replay` and every
+offline tool carry it unchanged; a fail-closed one is marked on the blob and recorded
+`projection_fail_closed`. The projection ships in a new platform set, 1.1.0, so turning it on is a
+pin move that `port49 policy diff` reviews. Another new package, `internal/capability`, reads the
+decision log to build spec §9's supports-versus-observed matrix and its accounting reconciliation.
+A new `account_gap` record, written by the accounting spool whenever it drops a record, qualifies
+both.
 
 **Tech Stack:** Go 1.22+ (the module's own `go` line), the standard library, `gopkg.in/yaml.v3`
-(already a dependency); containerlab on the lab host (beehive) for Tasks 2, 3, 4 and 18. No new
+(already a dependency); containerlab on the lab host (beehive) for Tasks 2, 3, 4 and 19. No new
 module dependencies.
 
-**Spec:** `docs/design/2026-08-23-policy-engine-spec.md` §8 ("Projection for session-only
-platforms" in full, the Fields table, "Knowing what is shipped"), §9 (capability inference), §5.6
-("Where these controls do not reach", decision 21's lever), §5.7 (the event table), §5.8 (system
-users), §12 (the gated adapter keys), §13 decisions 21 and 22, §15 L9, L10, L12 and the new L23,
-L24 and L25. Roadmap `docs/superpowers/plans/README.md`, "Plan 5a — As built" and "Plan 5b".
-The lab notes decide every value an adapter ships (`CLAUDE.md`, "The lab register is the source of
+**Spec:** `docs/design/2026-08-23-policy-engine-spec.md` §2 (reserved usernames), §8 ("Projection
+for session-only platforms" in full, the Fields table, "Knowing what is shipped"), §9 (capability
+inference), §5.6 ("Where these controls do not reach", decision 21's lever), §5.7 (the event and
+reason tables), §5.8 (system users), §12 (policy test, the diff's gates, check-config, the gated
+adapter keys), §13 decisions 21, 22 and the new 26, §15 L9, L10, L12 and the new L23, L24 and
+L25. Roadmap `docs/superpowers/plans/README.md`, "Plan 5a — As built" and "Plan 5b". The lab
+notes decide every value an adapter ships (`CLAUDE.md`, "The lab register is the source of
 truth").
 
-**Prerequisite:** plan 5a merged (PR #13). Branch `feature/session-projection` off `main` at
-`444d7da`, or at the plan commit that adds this file.
+**Prerequisite:** plan 5a merged (PR #13). Branch `feature/session-projection` off `main` at the
+plan commit that adds this file.
 
 ## Questions for Ryan
 
-None are open. Every place the design left a choice, this plan took the option that denies more,
-and records it under Decided. Two of those decisions will be visible to anyone writing a Junos
-policy, so they are listed here too:
+None are open. Owner's ruling 2026-09-25 settled the one the pre-flight review raised (decision
+26, below), and the controller ruled each finding that left a choice. Where the design still left
+one, this plan took the option that denies more and records it under Decided.
 
-- **A change to a Junos session reply fails `policy diff` until a `reply:` session test asserts
-  the new reply.** This applies to a narrowing and to an edit that only changes rules. It is the
-  owner's review C4 ruling ("the gate cannot read the direction of such a change, so it fails
-  closed"), and now every rule edit that reaches a Junos composition changes the reply. The diff
-  prints the test to add, the new reply included (Task 11). *Recommendation for later, not this
-  plan:* judge a projected reply by its bits alone, a raise where a bit was added, and leave its
-  regexes to the effective-permission diff. Soundness (Decided 3) makes that safe, but it is a
-  change to a ruling and needs one.
-- **One subject's refused composition quarantines the Junos device for every subject.** This is
-  decision 20's rule for every joint check, and `policy diff` fails on the new quarantine before
-  it ships. An admin role with any deny is one such composition (Decided 6).
+## What changed after the pre-flight review
+
+The pre-flight review of the first version (2 Critical, 15 Important, 8 Minor) is folded in. Each
+finding, and where it is fixed:
+
+- **C1**, the device model read every narrower reach of an unheld bit as a carve-out and dropped
+  denies the device does not enforce: the bits are now a union, and only an explicit, measured
+  `carve_outs` list subtracts. A block adding reach is a gated widening (Decided 3; Tasks 6, 8).
+- **C2**, the overflow report told the operator to put one subject's allows into a shared class:
+  a class line is printed for `deny-commands` only (Decided 9; Task 11).
+- **I1**, numbered and case variants of the projection's names: `Dialect.ProjectionOwns` (Task 6).
+- **I2**, a `$`-anchored deny against a piped line: every deny ends in a pipe tail, and Task 2
+  probes `show version | no-more` (Decided 5; Tasks 2, 7).
+- **I3, I4, I5, I15**, the lab probes: a no-bit control and an `all` control, the host name
+  `srx1`, holds that wait for the prompt, and probes that abbreviate, upper-case and pipe the
+  denied commands, run the baseline, and try configuration mode (Tasks 2, 3, 19).
+- **I6, I7**, lab outcomes with no branch, and a hunk that depended on candidate values: Task 14's
+  Step 4 names every outcome with its fail-closed edit, the tests it adds assert no candidate
+  value, and Task 20 anchors on lines no branch moves.
+- **I8, M8**, the additive export and the unchecked template classes: the export is a replace, and
+  `check-config` holds the device to it (Task 13).
+- **I9**, template users: `remote` and `p49-*` are refused as usernames at load and at the mint,
+  and Task 2 measures whether a template user can log in locally (Decided 18; Tasks 2, 9, 13).
+- **I10, M10**: `policy test` fails on any quarantine or fail-closed reply, and `platform upgrade`
+  previews both (Tasks 11, 14).
+- **I11**: the narrow shape takes the smallest covering bits (Task 8).
+- **I12**: each composition is projected once per policy; 1,000 SRXs and 20 subjects load in about
+  0.2 s, and a test holds the bound at 2 s (Task 9).
+- **I13**: "never seen" is a note and exits 0 (Tasks 17, 18).
+- **I14**: a projected reply is judged by what the device can do under it (Decided 9; Task 12).
+- **M1, M2**: no empty group; a deny's `*` and pattern positions admit a space (Task 7). Task 2
+  also sends a malformed deny.
+- **M3, M5**: every missed prompt fails the test; the watchdog allows the N9Kv's bring-up and
+  cleans up after a `go test` timeout ("Running the lab").
+- **M6**: the `account_gap` text says what the code does (Tasks 1, 16).
+- **M7**: L25 also asks whether an NX-API session as `admin` carries `vsh.bin` (Tasks 4, 15).
+- **M9**: the overflow's value is redacted (Task 11).
 
 ## Why this plan exists, and what 5a left
 
@@ -71,126 +102,143 @@ capability inference as well.
    IOS-XE files and gives `juniper_junos` the projection. `DefaultSet` becomes 1.1.0, so `platform
    show` and `export` default to it, and `UnpinnedSet` stays 1.0.0. A policy that pins no set
    therefore renders Junos exactly as today. `port49 platform upgrade --to 1.1.0` prints every
-   key the move changes, all of them gated (Task 13's test), and 1.1.0 is frozen when this plan
-   merges (Task 19). Every other outcome was worse. Shipping the projection unpinned would change
-   every Junos session on a binary upgrade, which is the unreviewed policy change the pin exists
-   to stop. Editing 1.0.0 would break its freeze.
+   key the move changes, all of them gated, and previews what the move quarantines or fails
+   closed (Task 14). 1.1.0 is frozen when this plan merges (Task 20). Shipping the projection
+   unpinned would change every Junos session on a binary upgrade, which is the unreviewed policy
+   change the pin exists to stop.
 2. **On a projected platform, `privilege:` is each level's ceiling in bits.** The field is
    `Dialect.CeilingBits`, and `Levels` stays nil, so no code path reads a bit name as an
    attribute. `Spec.Over` routes `privilege` by the merged `command_projection`, and `SpecOf`
-   writes the bits back under `privilege`, so export, the diff and the round trip hold. Four keys
-   are new: `command_projection` (`junos_regex` is the one value), `bits`, `bit_delivery` and
-   `local_user_names`. Every one is gated in the diff automatically, because a key is gated until
-   it is listed as reported. Over a set that projects, a block may not remove or change the
-   projection. It may add a rule to a bit's reach, which only makes the generator trust the bit
-   less, but never remove one or declare a bit the set does not (`keepsProjection`). An
-   under-claimed reach is how a device would run what port49 denies.
-3. **A reply is proven before it is sent.** The device model is L11's: a command runs where a
-   matching allow beats every deny, or where the bits reach it and no deny matches. A bit's reach
-   is read as a class reads it, so the most specific reach rule decides and `view-configuration`
-   carves `show configuration **` out of `view`. The generator checks four obligations from the
-   rules' terms (Task 5's `engine.Contains`, `MayMeet`, `AlwaysDominates`, `NeverDominates`):
+   writes the bits back under `privilege`. Five keys are new: `command_projection` (`junos_regex`
+   is the one value), `bits`, `bit_delivery`, `local_user_names` and `carve_outs`. Every one is
+   gated in the diff, because a key is gated until it is listed as reported.
+3. **The device model is a union, and only measured carve-outs subtract** (pre-flight C1). A
+   command runs where a matching allow beats every deny (L11), or where some held bit's reach
+   holds it and no deny matches. Junos permission bits are a union: a command two bits reach runs
+   if either is held. The one subtraction is `carve_outs`, a list of commands a bit alone makes
+   available whatever other bit reaches them, each measured (`view-configuration`'s `show
+   configuration **`, Task 3). A bit not held removes nothing else. The bit `baseline` is what a
+   class with no bits runs, measured by Task 3, held by every session and never sent. The
+   generator denies on the wire each baseline command no permit holds. Over a set that projects,
+   a block may add a rule to a bit's reach, which the diff gates as a widening, and may drop a
+   carve-out; it may never remove reach, add a bit or add a carve-out (`keepsProjection`). The
+   bits' reach and carve-outs are applied by the device's parser, so the model matches them as
+   port49 matches a deny, the widest reading.
+4. **A reply is proven before it is sent.** The generator checks each obligation from the rules'
+   terms (Task 5's `engine.Contains`, `MayMeet`, `AlwaysDominates`):
    - a bit is sent only where every command it reaches is decided by one rule of the grant;
    - a permit is sent as an allow only where it dominates every deny it meets, and only within the
      level's ceiling bits, carve-outs counted;
-   - a deny is left off the wire only where the bits already refuse everything it matches;
-   - bits that enter configuration mode are sent only for a grant of every command (Decided 6).
+   - a deny is left off the wire only where a measured carve-out of a bit not sent holds it;
+   - bits that enter configuration mode, and an allow meeting `configure`, are sent only for a
+     grant of every command (Decided 6).
 
    The same programs then decide one probe for each way the rules can be told apart
-   (`engine.Probes`), and one the device would run and port49 would deny is a defect. Nothing is
-   sent in that case. Where the device is narrower than port49, for example a permit beyond the
-   level's bits, the result fails closed and is reported. A composition the checks cannot pass is
-   a refusal: its device is quarantined through the existing joint check, and `policy test` and
-   `policy diff` name why. This is spec §8's "Where equivalence cannot be established for a shape,
-   CI MUST refuse the policy".
-4. **The built-in adapter delivers bits by template (`local_user_name`) until L12 measures
-   `user-permissions`.** The spec prefers `user_permissions`. L18, though, measured
-   `user-permissions` changing nothing over a template whose class had bits
-   (`tests/lab/results/L18-juniper_*.md`, variants 9 and 10), while `local-user-name` was applied
-   under either flag. Task 13 switches the set to `user_permissions` only if Task 2's note shows
-   it applied over a bitless template, both bits of a two-bit value applied, and per session. A
-   reply naming a template the device lacks degrades to `remote` (L18, variant 7). The adapter's
-   `device_config` therefore requires `remote` to use `p49-remote`, a class with no bits, and a
-   `config_checks` entry flags that class carrying any. With both, a missing template runs
-   nothing.
+   (`engine.Probes`). One the device would run and port49 would deny is a defect, and that
+   subject gets the fail-closed reply. Where the device is narrower than port49, for example a
+   permit beyond the level's bits, the result fails closed and is reported.
 5. **The regex dialect is read in the direction that fails closed until L9 measures it**
    (`projection.JunosFacts`):
-   - every regex has explicit `^` and `$`;
-   - while the device matches case-sensitively, a deny's letters are written in both cases
-     (`[sS][hH][oO][wW]`);
+   - every regex has explicit `^` and `$`, and every deny ends in the pipe tail `( *\|.*)?`,
+     since the engine strips a pipeline before matching (pre-flight I2). The tail only makes a
+     deny match more, so it stays whatever L9 says;
+   - while the device matches case-sensitively, a deny's letters are written in both cases;
    - while a deny may be walked past by abbreviation (`sh conf`), no deny but `.*` is sent, so a
-     capability shape that needs one goes narrow, and a grant the narrow shape cannot carry is
-     refused;
-   - words are printable ASCII with no `{`, `}`, `"` or `\`, and ERE operators are escaped;
-   - regex and class patterns are carried only in the subset of RE2 that means the same in POSIX
-     ERE.
+     capability shape that needs one goes narrow;
+   - a deny is as wide as its rule: runs of spaces between words, and an argument that may hold a
+     space; an allow is as narrow;
+   - words are printable ASCII with no `{`, `}`, `"` or `\`, ERE operators are escaped, patterns
+     are carried only in the subset of RE2 that means the same in POSIX ERE, and never as an empty
+     group or alternative.
 
-   Task 2 measures each fact, and Task 13 sets `JunosFacts` from its note. Where the two images
-   disagree, the fail-closed value is used. If explicit anchors are not taken, the projection
-   does not ship at all (Task 13, Step 4).
+   Task 2 measures each fact, and Task 14 sets `JunosFacts` from its note. Where the two images
+   disagree, the fail-closed value is used.
 6. **Bits that enter configuration mode go only to a grant of every command with no deny.** In
    configuration mode a statement is governed by the class's configuration permissions, and
-   `deny-commands` does not reach it. `show` and `run` there are further paths around a command
-   deny. So for any other composition, port49 could deny a statement the device then runs. An
-   admin role with a deny on Junos is therefore refused, and its devices quarantined, until a
-   later plan measures `deny-configuration` (carried). Task 2 measures whether `deny-commands`
-   reaches a statement or `run`, so the note says whether this refusal is necessary or only
-   cautious.
-7. **A rule whose text carries a value redaction hides is never projected.** A Junos reply is
-   the rules, and it is written whole to the `authorize_session` record and the blob event
-   (§5.7). Such a composition is refused rather than having the secret logged. `rule_secret_literal`
-   already reports those rules.
+   `deny-commands` does not reach it. For decided item 6 of decision 26, an admin composition
+   with a deny: under `user_permissions` the reply is rendered again without the bits that enter
+   configuration mode, and sent that way if it proves sound; the admin keeps every operational
+   command, less the deny, and `configure` is beyond the reply. That needs the deny on the wire,
+   so until L9 measures that a deny reads the expanded command it too is the fail-closed reply.
+   Under `local_user_name` the template's class carries the level's bits whole, so the
+   composition gets the fail-closed reply.
+7. **A composition the projection cannot carry fails closed for that subject alone** (decision
+   26, owner's ruling 2026-09-25). The **fail-closed reply** is `deny-commands=^.*$`, an allow for
+   each permit that is within the level's ceiling bits that do not enter configuration mode,
+   dominates every deny it meets, does not meet `configure` and can be written, and no other bit
+   or template. Under `user_permissions` it carries the smallest of those bits that reach the
+   allows; under `local_user_name` no `local-user-name`, so the session lands in the bitless
+   `p49-remote`. If the allows cannot go out whole, none does. It is proven as any reply is. The
+   session is recorded `authorize_session`, permit, reason `projection_fail_closed`, a code Task 1
+   adds to §5.7 first, and the blob carries why (`fail_closed`: `refused_shape`,
+   `configuration_mode`, `overflow`, `unwritable`, `secret_rule` or `unsound`). Every other
+   subject on the device keeps its reply. Decision 20's quarantine stays for inventory drift and
+   the other joint checks.
 8. **No role or grant sets an attribute the projection renders.** The rule covers
-   `local-user-name`, `user-permissions`, and the four command and four configuration regex
-   families. It applies under a projected platform's key, and under `all` wherever a projected
-   platform exists. It is a load error (spec §8, "Generator constraints" 1, 4 and the new 6).
-9. **The reply gate is unchanged, and the diff also reports the projection.** Under the C4 ruling
-   a reply change is judged whole (Questions). `policy diff` also prints a `projection:` line
-   when a composition's shape, bits or template moved, as spec §8 asks ("any grant whose shape or
-   bits changed").
+   `local-user-name`, `user-permissions`, and the command and configuration regex families, in
+   every case and numbered variant the device reads (`allow-commands2`, `User-Permissions`;
+   pre-flight I1), and every name the adapter lists as bearing privilege. It applies under a
+   projected platform's key, and under `all` wherever a projected platform exists, and it is a
+   load error (spec §8, "Generator constraints" 1, 4 and the new 6).
+9. **CI refuses what the device cannot be told** (spec §8, "CI MUST refuse the policy").
+   `policy test` reports each fail-closed composition as `projection_refused`, or
+   `projection_overflow` for an attribute past 255 bytes, naming the subject, every device and
+   why, and exits non-zero on any of them and on any quarantine, now or at a later expiry
+   (pre-flight I10). `policy diff` exits non-zero on every fail-closed composition in the new
+   version. The overflow's class line is printed for `deny-commands` only, and says it binds every
+   subject at that template; an allow is never moved into a class, where it would run for every
+   subject past their own denies (pre-flight C2). **The reply gate judges a projected reply by
+   what the device can do under it** (pre-flight I14): a bit it did not hold, or a command it did
+   not run, is a raise; a pure narrowing is not, and needs no `reply:` test.
 10. **The ceiling is the projection's.** `exceeds` skips the projection's own attributes, since
-    the generator renders them from the level's bits and never beyond them, so a `max_privilege`
-    on Junos no longer quarantines. 1.1.0 numbers Junos's levels `{readonly: 1, operator: 15,
-    admin: 15}`. Every Junos request carries priv_lvl 1
+    the generator renders them from the level's bits and never beyond them. 1.1.0 numbers Junos's
+    levels `{readonly: 1, operator: 15, admin: 15}`. Every Junos request carries priv_lvl 1
     (`junos-session-service-juniper_vjunos-router.md`), and operator is numbered as admin, as
-    decision 23 does where the number fences nothing. Task 2 records the priv_lvl each variant's
-    request carried.
+    decision 23 does where the number fences nothing. Task 2 records the priv_lvl each request
+    carried.
 11. **Operator's ceiling leaves out `reset`.** Spec §8's example gives operator `reset`, which
     restarts software processes. The owner's level definitions (2026-09-24) bind the adapters:
     operator is non-disruptive state changes and no configuration. 1.1.0's operator is `clear
     network trace view view-configuration`. Each bit's reach is a candidate that Task 3 verifies
-    as an upper bound, and a failure widens it.
-12. **Decision 21's idle-timeout is rendered by export, from `max_session_age`.** `port49
-    platform export --classes --config port49d.yaml juniper_junos` prints the reference
-    configuration: `device_config`, the bitless `remote` class, and each level's template and
-    class. Every class carries `idle-timeout`, set to `session.max_session_age_default` in whole
-    minutes rounded down. `config.MaxSessionAge` reads that key alone, with Load's default and its
-    positivity rule, so no daemon secret is needed to run the export. L24 measures that the timer
-    ends a session a reply landed in.
-13. **Capability inference reads the decision log, and a gap in the accounting stream qualifies
-    it.** `port49 devices capabilities` is offline, like `policy replay`. The spool now writes an
-    `account_gap` record per stage for the records it drops, before the records that follow the
-    drop (§5.7's ninth event, a report), so a reader of the log can tell "the device did not ask"
-    from "we did not receive". A reconciliation finding in a window that has a gap is printed as
-    possible and does not page. Spec §9's heuristics are fixed values: configuration entries
-    followed by silence, over at least 5 entries and at least 80% of them. The join tests whether
-    the accounting text holds the authorization's command. NX-OS's accounting `cmd` is a joined
-    configuration path, so a shape the join does not expect reads as authorized, and the report
-    under-reports rather than accuses. The CI half is the `unenforced_rules` finding.
-14. **An NX-OS system user is keyed on its task_id, never on `admin` alone**, and it is added
-    only if L25 reproduces the production record. Fleets name their break-glass account `admin`,
-    so a name-only entry would attribute a person's local login `system` and hide it.
-    `platform.SystemTasks` pairs the user with `^vsh\.bin\.[0-9]+$`. A `based_on:` variant does
-    not get the pair, and reads such a record `unattributed`: an extra alarm, the safe direction.
-15. **M3 is its own row.** L23 re-measures the inert candidates beside readonly's reply. If one
+    as an upper bound, one level under each word, and a failure widens it.
+12. **The built-in adapter delivers bits by template (`local_user_name`) until L12 measures
+    `user-permissions`.** L18 measured `user-permissions` changing nothing over a template whose
+    class had bits (`tests/lab/results/L18-juniper_*.md`, variants 9 and 10), while
+    `local-user-name` was applied under either flag. Task 14 switches the set to
+    `user_permissions` only if Task 2's note shows it applied over a bitless template, both bits of
+    a two-bit value applied, and per session.
+13. **The reference classes are a replace, and `check-config` holds a device to them**
+    (pre-flight I8, M8). `port49 platform export --classes --config port49d.yaml juniper_junos`
+    prints `device_config`, then each template class and user as a `delete` followed by its `set`
+    lines: the bitless `remote` in `p49-remote`, and each level's template. Every class carries
+    `idle-timeout` from `session.max_session_age_default`, in whole minutes rounded down (decision
+    21; L24 measures it). `port49 devices check-config --config` reads a `display set`
+    configuration and fails on any reference line missing and any line under a template class or
+    user the reference does not write.
+14. **Capability inference reads the decision log, and a gap in the accounting stream qualifies
+    it.** `port49 devices capabilities` is offline, like `policy replay`. The spool writes an
+    `account_gap` record per stage for the records it drops (§5.7), so a reader can tell "the
+    device did not ask" from "we did not receive". A reconciliation finding in a window with a gap
+    is printed as possible and does not page. "Never seen" is a note and exits 0 (pre-flight
+    I13): only a contradiction between what a device declares and what it did pages.
+15. **An NX-OS system user is keyed on its task_id, never on `admin` alone**, and only if L25
+    reproduces the production record over SSH and finds no `vsh.bin` on an NX-API session as
+    `admin` (pre-flight M7). `platform.SystemTasks` pairs the user with `^vsh\.bin\.[0-9]+$`. A
+    `based_on:` variant does not get the pair, and reads such a record `unattributed`.
+16. **M3 is its own row.** L23 re-measures the inert candidates beside readonly's reply. If one
     moves the session, 1.1.0 lists it under that platform's `privilege_attributes`. Every shipped
-    set's privilege attributes are unioned wherever the gate, the ceiling and the placeholder
-    check ask (`platform.PrivilegeAttributeNames`), so a 1.0.0 pin is protected too, without
-    editing 1.0.0.
-16. **No new reason code and no new metric.** The new vocabulary is one event, `account_gap`,
-    which is a report, three finding kinds (`projection`, `projection_overflow`,
-    `unenforced_rules`), four adapter keys and one CLI command. Task 1 writes each into the spec
-    first.
+    set's privilege attributes are unioned wherever the gate, the ceiling and the placeholder check
+    ask (`platform.PrivilegeAttributeNames`), so a 1.0.0 pin is protected too.
+17. **One new reason code, and no new metric.** `projection_fail_closed` is added to §5.7 by Task
+    1 before Task 10 uses it. The other new vocabulary is one event, `account_gap` (a report), four
+    finding kinds (`projection`, `projection_refused`, `projection_overflow`, `unenforced_rules`),
+    five adapter keys and one CLI command.
+18. **`remote` and every `p49-*` name are reserved usernames** (pre-flight I9). A Junos session
+    under a template user's name lands in that template's class whatever the reply says, so a
+    subject told less than port49 permits would run the class's bits. Policy load refuses a
+    subject that declares one, and the broker refuses to mint for one a directory derives. No
+    template user can log in locally: Juniper documents a template user as one with no
+    authentication; Task 2 measures that, and Task 14 locks them if it found otherwise.
 
 ## What the operator sees
 
@@ -200,48 +248,53 @@ The owner's rule is to trace a mechanism on a bad day first.
   renders with 1.0.0. `policy test` newly prints `report: unenforced_rules: subject "noc" on
   juniper_junos (supports: session): its roles carry 3 command rules, and juniper_junos neither
   asks port49 about a command nor has them rendered into its session reply, so they decide
-  nothing there (spec §9)`. That was true before this plan; now the report says so.
+  nothing there (spec §9)`. That was true before this plan; now the report says so. A policy test
+  that passed with a quarantined device now fails: the quarantine was always there, and CI now
+  refuses to ship it.
 - **Turning the projection on, in this order.**
-  1. Push the reference configuration to every Junos device: `port49 platform export --classes
-     --config /etc/port49/port49d.yaml juniper_junos` prints the set lines.
-  2. Check it: `port49 devices check-config` reports a device that lacks `tacplus-options
-     strict-authorization` or `user remote class p49-remote` as MISSING.
-  3. Move the pin: `port49 platform upgrade --to 1.1.0 --write`, then `policy diff`.
+  1. Load the reference on every Junos device: `port49 platform export --classes --config
+     /etc/port49/port49d.yaml juniper_junos` prints the lines; `load set terminal` takes them,
+     and each template class and user is replaced whole.
+  2. Check it: `port49 devices check-config --config /etc/port49/port49d.yaml --device srx-fw-04
+     srx-fw-04.set` on `show configuration | display set` fails on a missing reference line
+     (`TEMPLATE: ...`), on `set system login class p49-remote allow-commands "^configure"`, and
+     on a template user's password.
+  3. Move the pin: `port49 platform upgrade --to 1.1.0` prints the gated keys and every subject
+     the move fails closed, then `--write`, then `policy diff`.
 
   The order matters. A device without the classes lands every session in its old `remote`
-  template, whose bits the reply's regexes then decide over. A device without
-  `strict-authorization` treats every port49 denial as advisory (L17).
-- **A readonly role with a carve-out, before L9 has measured abbreviations:** `quarantine:
-  srx-fw-04 (juniper_junos): subject "noc": on juniper_junos, permit "show **" (role "r") needs an
-  allow-commands the device would let beat deny "show configuration **" (role "r"), which sits
-  beneath it: Junos regex cannot write everything under a permit except a deny, ...` Under
-  `user_permissions` the same carve-out renders as `user-permissions=view`, with the deny dropped
-  because it aligns with the bit.
-- **An admin with a deny on Junos:** `on juniper_junos the reply's bit all enters configuration
-  mode, where a statement is governed by the class's configuration permissions and no command
-  regex reaches it ... and the composition denies "request system reboot **" (role "admin"):
-  port49 would deny what the device runs there`. The device is quarantined, and every login to it
-  falls to its local accounts, exactly as in an outage.
-- **`port49 explain` on a Junos command** notes what the device does under the reply: `under the
-  session reply's projection (capability shape) the device refuses it; what it runs is its class ∩
-  the wire, and the class half is the device's configuration, outside port49`.
-- **`policy test`** prints each composition's projection (`report: projection: subject "noc" on
-  juniper_junos: capability shape, template p49-readonly (bits view view-configuration); refused by
-  the bits, sent as nothing: reload **`). A reply past 255 bytes prints `report:
-  projection_overflow: ... set system login class p49-remote allow-commands "^(...)$"`, the
-  workaround in the same report as the quarantine.
-- **`policy diff` after a rule edit that reaches Junos:** `RAISES: s on srx-fw-04, ... reply
-  [user-permissions=view view-configuration] -> [user-permissions=view]; no session test asserts
-  it: add {subject: s, device: srx-fw-04, reply: [user-permissions=view]}`, and `projection: s on
-  srx-fw-04, ...: capability (bits view view-configuration) -> capability (bits view)`.
+  template. A device without `strict-authorization` treats every port49 denial as advisory (L17).
+- **Until L9 measures that a deny reads the expanded command:** no deny narrower than `.*` goes
+  out, so under the shipped `local_user_name` a Junos composition with a deny beneath a permit —
+  the realistic readonly with its `show configuration` deny included — gets the fail-closed reply:
+  `report: projection_refused: subject "noc" on juniper_junos (srx-fw-04, srx-fw-05, srx-fw-22)
+  gets the fail-closed reply (refused_shape): on juniper_junos, permit "show **" (role "r") needs
+  an allow-commands the device would let beat deny "show configuration **" ...; it is told every
+  command denied, and every other subject on those devices keeps its reply`. `policy test` exits
+  1. The subject's session opens and every command is refused; everyone else on the device works.
+- **An admin with a deny on Junos,** once L9 measures that a deny reads the expanded command and
+  under `user_permissions`: `user-permissions=clear network trace view view-configuration` and the
+  deny, with `configure` beyond the reply. Before that, or under `local_user_name`: the fail-closed
+  reply, reported the same way.
+- **The daemon's log at 3am:** `{"event":"authorize_session","verdict":"permit",
+  "reason":"projection_fail_closed",...,"reply":{"attributes":["deny-commands=^.*$"]}}` names the
+  one subject told less than port49 would permit, and the blob event says why.
+- **A subject whose username is `p49-admin`:** `subject "s": username "p49-admin" is reserved:
+  remote and every p49-* name are the device's template users ...` at load.
+- **`port49 explain` on a Junos command** notes what the device does under the reply, and, for a
+  fail-closed composition, `the composition cannot be told to juniper_junos faithfully
+  (refused_shape): ...`.
+- **`policy diff` after revoking a Junos permit:** a `projection:` line reports the shape or bits
+  change; no `RAISES`, since the device can do less. Adding a permit back is a raise until a
+  `reply:` test asserts it.
 - **At 3am, with a device that has no command authorization configured:** `port49 devices
-  capabilities --policy policy.yaml --inventory inventory.yaml --since 24h
-  /var/log/port49/decisions.jsonl` prints the matrix, then `⚠ UNAUTHORIZED TIER — leaf-04` with
-  three example commands, and exits 1. If the spool dropped records in the window, the first line
-  says so, the block reads `? POSSIBLY AN UNAUTHORIZED TIER`, and the command exits 0.
+  capabilities --since 24h /var/log/port49/decisions.jsonl` prints the matrix, then `⚠
+  UNAUTHORIZED TIER — leaf-04` with three example commands, and exits 1. A device nobody logged
+  into reads `note: never seen` and does not page. If the spool dropped records in the window, the
+  block reads `? POSSIBLY AN UNAUTHORIZED TIER`, and the command exits 0.
 - **An NX-OS `admin` record with task_id `vsh.bin.28561`** (only if L25 reproduced it) is
-  `attribution: system`. The same account logging in from a console or SSH carries
-  `<addr>@pts/<n>` and stays `unattributed` or `foreign`.
+  `attribution: system`. The same account logging in from SSH carries `<addr>@pts/<n>` and stays
+  `unattributed` or `foreign`.
 
 ## Global Constraints
 
@@ -273,9 +326,10 @@ New in this plan:
 - **Code is applied as written.** A whole new file is a diff from `/dev/null`, and a change to an
   existing file is a unified diff. Apply each with `git apply` from the repository root: save the
   block to a file, or pipe it. Every block was generated from a commit that went green against
-  `444d7da`, in order, and the red step of every code task was run and fails as its Step 2 says. A
-  hunk that does not apply means the tree is not where this plan expects: stop and say so, and do
-  not edit by hand.
+  `d1f1ba3` (plan text aside, the same tree as this plan's commit), in order, and the red step of
+  every code task fails as its Step 2 says. A hunk that does not apply means the tree is not where
+  this plan expects: stop and say so, and do not edit by hand. A branch of Task 14's Step 4 is the
+  one hand edit, and each says exactly what to change.
 - **Every commit is preceded by `make test && make vet`**, and by `go vet -tags lab ./tests/lab/...`
   and `make build`. Report their real output.
 - **Lab tasks follow "Running the lab" below:** a deadline on every SSH or pty read, where expiry
@@ -288,16 +342,16 @@ New in this plan:
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
   ```
 
-## Running the lab (Tasks 2, 3, 4 and 18)
+## Running the lab (Tasks 2, 3, 4 and 19)
 
 The lab is beehive's containerlab, and it holds one run at a time. The owner has given standing
 consent for lab runs. Images on hand: vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15, Nexus 9300v
 10.4(2)F and vEOS-lab 4.31.2F. A vJunosEvolved image is on the host but not in the harness, and
 this plan does not measure it.
 
-**One platform per `go test` run, one test per run.** The harness seeds 16 token logins per
-platform per run (`tokenPoolSize`), and Task 2 spends exactly 16. The `make lab` loop is not used
-here. Each run:
+**One platform per `go test` run, one task's tests per run.** The harness seeds 16 token logins per
+platform per run (`tokenPoolSize`). Task 2 spends exactly 16, Task 3 spends 9, Task 4 up to 5, and
+Task 19 none, since the broker mints each token. The `make lab` loop is not used here. Each run:
 
 ```bash
 make build
@@ -315,40 +369,52 @@ and change the number only if the host has changed.
 **Every read has a deadline.** Every command these tests type has a deadline:
 - `junosPer`, 45 s, on each Junos command and completion;
 - `adapterVariant`'s 150 s per command on EOS and NX-OS;
-- 60 s on each L25 prompt;
-- 4 min on an idle-timeout hold (L24);
-- 90 s on each login prompt.
+- 60 s on each L25 prompt, and on the NX-API request;
+- 90 s on each login prompt, and the prompt is waited for before any timer starts;
+- 4 min on an idle-timeout hold (L24), which fails if the session closes in under 50 s.
 
 An expiry is **not observed**. It fails the test, and its cell says "not observed". It is never a
 refusal and never a pass, and a note is not committed from a run that has one: rerun it.
 
 **The controller runs a stall watchdog for the whole run.** The controller is the agent that
-started the run, not the test. A stall is a log that has not grown in 25 minutes, which is longer
-than the slowest step (an 8-minute boot, an 8-minute TACACS+ readiness wait and a 180 s commit). On
-a stall, stop the run and clean up, and report it with the log's last 40 lines. A stalled run is
-never read as a result. With the Monitor tool, or in a shell:
+started the run, not the test. A stall is a log that has not grown in `STALL` minutes: 25 on the
+Junos images and vEOS, which is longer than their slowest silent step (an 8-minute boot, an
+8-minute TACACS+ readiness wait and a 180 s commit), and **40 on the N9Kv**, whose deploy, 15-minute
+boot and 8-minute TACACS+ wait log nothing in between (pre-flight M5). On a stall, stop the run
+and clean up, and report it with the log's last 40 lines. A stalled run is never read as a result.
+**A `go test -timeout` panic skips the harness's deferred teardown**, and can leave
+`strict-authorization` and the reference classes on a device and `port49d` bound, so the watchdog
+cleans up after one too. With the Monitor tool, or in a shell:
 
 ```bash
-LOG=tests/lab/logs/l12-wire-vjunos.log; PID=$(cat tests/lab/logs/l12-wire-vjunos.pid); TOPO=tests/lab/topologies/vjunos.clab.yml
+LOG=tests/lab/logs/l12-wire-vjunos.log; PID=$(cat tests/lab/logs/l12-wire-vjunos.pid)
+TOPO=tests/lab/topologies/vjunos.clab.yml; STALL=25       # 40 for nxos
+cleanup() {
+  sudo containerlab destroy -t "$TOPO" --cleanup
+  pkill -f 'bin/port49d' || true
+  sudo pkill -f 'tcpdump.*tests/lab/captures' || true
+}
 last=-1; still=0
 while kill -0 "$PID" 2>/dev/null; do
   size=$(stat -c %s "$LOG")
   if [ "$size" = "$last" ]; then still=$((still + 1)); else still=0; last=$size; fi
-  if [ "$still" -ge 25 ]; then
-    echo "STALL: $LOG has not grown in 25 minutes"; tail -40 "$LOG"
+  if [ "$still" -ge "$STALL" ]; then
+    echo "STALL: $LOG has not grown in $STALL minutes"; tail -40 "$LOG"
     kill -INT "$PID"; sleep 180                      # the harness's handler tears the lab down
     kill -KILL "$PID" 2>/dev/null
-    sudo containerlab destroy -t "$TOPO" --cleanup
-    pkill -f 'bin/port49d' || true
-    sudo pkill -f 'tcpdump.*tests/lab/captures' || true
-    exit 1
+    cleanup; exit 1
   fi
   sleep 60
 done
+if grep -q 'panic: test timed out' "$LOG"; then
+  echo "TIMEOUT: go test's -timeout expired, and the deferred teardown did not run"; tail -40 "$LOG"
+  cleanup; exit 1
+fi
 ```
 
 Topologies: `vjunos` → `tests/lab/topologies/vjunos.clab.yml`, `vsrx` → `vsrx.clab.yml`, `nxos` →
-`nxos.clab.yml`, `eos` → `eos.clab.yml`.
+`nxos.clab.yml`, `eos` → `eos.clab.yml`. Destroying the topology discards each device's
+configuration, the reference classes included.
 
 **Evidence.** Run `make evidence` after the run. It writes the redacted captures the notes cite
 into `tests/lab/evidence/`; commit those, and never `tests/lab/captures/`. If the run happened in a
@@ -359,77 +425,94 @@ worktree, or the labpcap audit fails. After every run, confirm that no `port49d`
 ## File Structure
 
 ```
-docs/design/2026-08-23-policy-engine-spec.md  MOD  §5.6, §5.7, §6, §8, §9, §12, §13 d21/d22, §15 L9/L12/L23-L25 (Task 1); §5.8 (Task 14); closed rows (Task 19)
-tests/lab/junos_wire_test.go                  NEW  L9 and L12 wire facts; shared Junos helpers: junosSession, junosProbe, junosRun, junosConfigureAdmin (Task 2)
-tests/lab/junos_bits_test.go                  NEW  each bit's reach as an upper bound (L12), class idle-timeout (L24) (Task 3)
-tests/lab/l23_test.go                         NEW  inert candidates beside readonly (L23), NX-OS vsh.bin (L25) (Task 4)
-internal/engine/contain.go                    NEW  Contains, MayMeet, AlwaysDominates, NeverDominates (Task 5)
-internal/platform/dialect.go                  MOD  CommandProjection, Bits, BitDelivery, LocalUserNames, CeilingBits; RemoteClass;
-                                                   ProjectionAttributes, Projected, LevelBits, ExpandBits (Task 6); generics["1.1.0"] (Task 13)
+docs/design/2026-08-23-policy-engine-spec.md  MOD  §2, §5.6, §5.7, §6, §8, §9, §12, §13 d21/d22/d26, §15 (Task 1); §5.8 (Task 15); closed rows (Task 20)
+tests/lab/junos_wire_test.go                  NEW  L9 and L12 wire facts, template logins; shared Junos helpers (Task 2)
+tests/lab/junos_bits_test.go                  NEW  each bit's reach, the baseline and the carve-out (L12); class idle-timeout (L24) (Task 3)
+tests/lab/l23_test.go                         NEW  inert candidates beside readonly (L23), NX-OS vsh.bin over SSH and NX-API (L25) (Task 4)
+internal/engine/contain.go                    NEW  Contains, MayMeet, AlwaysDominates (Task 5)
+internal/platform/dialect.go                  MOD  CommandProjection, Bits, CarveOuts, BitDelivery, LocalUserNames, CeilingBits; BaselineBit,
+                                                   RemoteClass; Projected, ProjectionOwns, LevelBits, ExpandBits (Task 6); generics["1.1.0"] (Task 14)
 internal/platform/adapter.go                  MOD  Spec keys, Over, SpecOf, validateProjection, MonotoneBits (Task 6)
-internal/policy/load.go                       MOD  keepsProjection, checkBlockOrder (Task 6); checkProjected (Task 9)
-internal/projection/ere.go                    NEW  Facts, ruleERE, patternERE, bracket (Task 7)
-internal/projection/project.go                NEW  Input, Result, Refusal, Project, JunosFacts, FactsFor (Task 8)
-internal/projection/model.go                  NEW  the device model, the witness, Result.Device, Result.Narrower (Task 8)
-internal/policy/resolve.go                    MOD  Resolution.Projection, compile → project, layerAttributes, exceeds (Task 9)
-internal/policy/tests.go, explain.go          MOD  Caveats on a projected platform, ProjectionCaveats (Task 10)
-internal/policy/lint.go                       MOD  projection, projection_overflow (Task 10); unenforced_rules (Task 17)
-internal/policy/diff.go, cmd/port49/policy.go MOD  Diff.Projections, ProjectionChange, projectionText (Task 11)
-internal/platform/classes.go                  NEW  ReferenceClasses (Task 12)
-internal/config/config.go                     MOD  DefaultMaxSessionAge, MaxSessionAge (Task 12)
-cmd/port49/platform.go, main.go               MOD  platform export --classes --config (Task 12); devices capabilities (Task 17)
-platforms/1.1.0/*.yaml                        NEW  the set: 1.0.0's three per-command files, juniper_junos projected (Task 13)
-internal/platform/set.go                      MOD  DefaultSet 1.1.0 (Task 13)
-internal/platform/platform.go                 MOD  SystemTask, SystemTasks (Task 14, if L25 measures it)
-internal/daemon/acct/acct.go, cmd/port49d     MOD  WithSystemTasks, isSystemUser on task_id (Task 14)
-internal/decision/log.go, reasons.go          MOD  Gap, EventAccountGap (Task 15)
-internal/daemon/acct/spool.go                 MOD  drop, flushGaps (Task 15)
-internal/capability/capability.go             NEW  Device, Options, Row, Report, Infer (Task 16)
-cmd/port49/capabilities.go                    NEW  devicesCapabilities, readLogs (Task 17)
-tests/lab/projection_test.go                  NEW  the differential test (Task 18)
+internal/policy/load.go                       MOD  keepsProjection, checkBlockOrder (Task 6); checkProjected, reserved usernames, the projection cache (Task 9)
+internal/projection/ere.go                    NEW  Facts, ruleERE with the deny's pipe tail, patternERE, bracket (Task 7)
+internal/projection/project.go                NEW  Input, Result, Refusal, Project, the fail-closed reply, JunosFacts, FactsFor (Task 8)
+internal/projection/model.go                  NEW  the union device model, the witness, Device, Narrower (Task 8); Widens (Task 12)
+internal/policy/resolve.go                    MOD  Resolution.Projection, compile → project (cached), layerAttributes, exceeds (Task 9)
+internal/engine/blob.go                       MOD  Blob.FailClosed (Task 9); Blob.SessionReason (Task 10)
+internal/token/minter.go                      MOD  ReservedUsername, ErrUsernameReserved (Task 9)
+internal/decision/reasons.go                  MOD  projection_fail_closed (Task 10); EventAccountGap (Task 16)
+internal/daemon/author/engine.go, replay      MOD  the session's reason from the blob (Task 10)
+internal/policy/tests.go, explain.go          MOD  Caveats on a projected platform, ProjectionCaveats (Task 11)
+internal/policy/lint.go                       MOD  projection, projection_refused, projection_overflow (Task 11); unenforced_rules (Task 18)
+cmd/port49/policy.go                          MOD  policy test fails on a quarantine or a refusal (Task 11); the diff's projection lines (Task 12)
+internal/policy/diff.go                       MOD  Diff.Projections, ProjectionRefusals, the projected reply gate (Task 12)
+internal/platform/classes.go                  NEW  ReferenceClasses as a replace, TemplateDrift (Task 13)
+internal/config/config.go                     MOD  DefaultMaxSessionAge, MaxSessionAge (Task 13)
+cmd/port49/platform.go, devices.go, main.go   MOD  export --classes, check-config --config (Task 13); upgrade preview (Task 14); capabilities (Task 18)
+platforms/1.1.0/*.yaml                        NEW  the set: 1.0.0's three per-command files, juniper_junos projected (Task 14)
+internal/platform/set.go                      MOD  DefaultSet 1.1.0 (Task 14)
+internal/platform/platform.go                 MOD  SystemTask, SystemTasks (Task 15, if L25 measures it)
+internal/daemon/acct/acct.go, cmd/port49d     MOD  WithSystemTasks, isSystemUser on task_id (Task 15)
+internal/decision/log.go                      MOD  Gap (Task 16)
+internal/daemon/acct/spool.go                 MOD  drop, flushGaps (Task 16)
+internal/capability/capability.go             NEW  Device, Options, Row, Report, Infer (Task 17)
+cmd/port49/capabilities.go                    NEW  devicesCapabilities, readLogs (Task 18)
+tests/lab/projection_test.go                  NEW  the differential test (Task 19)
 tests/lab/results/L9-*, L12-*, L23-*, L24-*, L25-*, L12-bits-*, L12-projection-*   NEW  written by the lab runs
-docs/superpowers/plans/README.md              MOD  plan 5b as built (Task 19)
+docs/superpowers/plans/README.md              MOD  plan 5b as built (Task 20)
 ```
 
-Nineteen tasks:
+Twenty tasks:
 - **Task 1** is docs.
 - **Tasks 2, 3 and 4** are lab measurements, run early because the set's values come from them.
-- **Tasks 5–17** are code. Every one leaves `make test` green.
-- **Task 18** is the differential lab test.
-- **Task 19** is lab closure and docs.
+- **Tasks 5–18** are code. Every one leaves `make test` green.
+- **Task 19** is the differential lab test.
+- **Task 20** is lab closure and docs.
 
-Task 14 runs only if Task 4's L25 note measured the record. Tasks 5–12 depend on no lab result,
-and may proceed while the lab tasks run: the lab holds one run at a time, and the code does not
-need it. Task 13 reads all three lab notes.
+Task 15 runs only if Task 4's L25 note measured the record and found none on NX-API. Tasks 5–13
+depend on no lab result, and may proceed while the lab tasks run: the lab holds one run at a time,
+and the code does not need it. Task 14 reads all three lab notes.
 
 ---
 
-### Task 1: The spec says what plan 5b builds, before the code does
+### Task 1: The spec says what plan 5b builds, decision 26 included, before the code does
 
 **Files:**
-- Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§5.6, §5.7, §6, §8, §9, §12, §13 decisions
-  21 and 22, §15 L9, L12 and new rows L23, L24, L25)
+- Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§2, §5.6, §5.7, §6, §8, §9, §12, §13
+  decisions 21 and 22 and the new 26, §15 L9, L12 and new rows L23, L24, L25)
 
-**Interfaces:** none. Every later task cites a paragraph this one writes.
+**Interfaces:** none. Every later task cites a paragraph this one writes, and Task 10 uses the
+reason code it adds.
 
 What changes, so a reviewer can check each against a task:
 
+- §2: `remote` and every `p49-*` name are reserved usernames (Task 9).
 - §5.6: decision 21's lever is `platform export --classes` rendering `idle-timeout`, measured by
-  L24 (Task 12).
-- §5.7: `account_gap`, the ninth event: a report, one record per spool drop stage (Task 15).
-- §6: a projected platform maps each level to ceiling bits and, under `local_user_name`, a template
-  (Tasks 6, 9).
-- §8, the Fields table: `command_projection`, `bits` / `bit_delivery` and `local_user_names` as
-  built (Task 6). The `bit_delivery` paragraph says why 1.1.0 ships `local_user_name` (L18; Task
-  13). "As built (plan 5b)" gives the device model, the four proof obligations, `JunosFacts`, the
-  ERE subset and the reports (Tasks 7–11). Generator constraint 6 and the quarantine note are new.
-  So is "The reference classes are exported" (Task 12).
-- §9, "As built": `devices capabilities`, its heuristics, the join, `account_gap` qualification and
-  `unenforced_rules` (Tasks 15–17).
-- §12: `local_user_names` joins the gated rendering keys.
-- §13: decision 21 names `export --classes`, and decision 22 records what was built.
-- §15: L9 and L12 gain the clauses Task 2 measures, and L23, L24 and L25 are new and open. Task 19
-  closes them.
+  L24 (Task 13).
+- §5.7: `account_gap`, the ninth event, a report, with when each stage's record is written (Task
+  16; pre-flight M6). The reason table gains `projection_fail_closed` (Task 10). CLAUDE.md: a
+  reason code is added to the spec table first.
+- §6: a projected platform maps each level to ceiling bits and, under `local_user_name`, a
+  template (Tasks 6, 9).
+- §8, the Fields table: `command_projection`, `bits` with the union and `baseline`, the new
+  `carve_outs`, `bit_delivery` and `local_user_names` (Task 6). The `bit_delivery` paragraph says
+  why 1.1.0 ships `local_user_name` (L18; Task 14). The refused shape: CI refuses it, and a daemon
+  answers it fail-closed. "As built (plan 5b)" gives the union device model, the proof
+  obligations, the pipe tail, the ERE subset, the reports and the measured load bound (Tasks
+  7–12). Generator constraint 6 is new, and the paragraph after the constraints is decision 26's
+  fail-closed reply with its operator note. So is "The reference classes are exported", as a
+  replace (Task 13), and the blast radius.
+- §9, "As built": `devices capabilities`, "never seen" as a note, its heuristics, the join,
+  `account_gap` qualification and `unenforced_rules` (Tasks 16–18).
+- §12: check-config's template check (Task 13); the diff and `policy test` fail on a fail-closed
+  composition and on any quarantine (Tasks 11, 12); a projected reply is judged by what the device
+  can do (Task 12); `carve_outs` and `local_user_names` join the gated rendering keys.
+- §13: decision 21 names `export --classes`, decision 22 records what was built, and **decision 26
+  is the owner's ruling of 2026-09-25**: a composition the projection cannot carry fails closed for
+  that subject alone.
+- §15: L9 and L12 gain the clauses Task 2 measures (the pipe tail, the malformed deny, template
+  logins, the baseline under `.*`), L25 names NX-API, and L23, L24 and L25 are new and open. Task
+  20 closes them.
 
 The lab has not yet measured anything this task writes as fact. Each sentence here either cites a
 closed note (L11, L17, L18, L21, L22) or says the value is read in the direction that fails
@@ -440,10 +523,23 @@ closed until its row closes.
 <!-- patch: docs/design/2026-08-23-policy-engine-spec.md -->
 ````diff
 diff --git a/docs/design/2026-08-23-policy-engine-spec.md b/docs/design/2026-08-23-policy-engine-spec.md
-index ebfde3c..a0bfab1 100644
+index ebfde3c..b63fcfe 100644
 --- a/docs/design/2026-08-23-policy-engine-spec.md
 +++ b/docs/design/2026-08-23-policy-engine-spec.md
-@@ -1442,7 +1442,10 @@ Post-login control there is bounded by the device's own session, and port49 can
+@@ -150,6 +150,12 @@ the `(nas, username)` store key and make the audit trail ambiguous; this is a po
+ error. Collision with a device-local account name is the same hazard described in §5.6 and
+ SHOULD be reported where port49 can observe it.
+ 
++**`remote` and every `p49-*` name are reserved.** They are a Junos device's template users: a
++session under one lands in that template's class whatever the reply says, so a subject the
++projection told less than port49 permits (§13, decision 26) would run what the template's
++class runs. A subject declaring one is a policy load error, and the broker refuses to mint for
++one a directory derives (plan 5b pre-flight I9).
++
+ **The username is canonicalized before it is used as a key, not merely compared.** The
+ device sends whatever the operator typed — `alice`, `DOMAIN\alice`, or
+ `alice@corp.example.com`. The broker writes the token under the canonical form — lower-cased,
+@@ -1442,7 +1448,10 @@ Post-login control there is bounded by the device's own session, and port49 can
  nor revoke. This MUST be stated rather than implied: `port49 explain` MUST say so when asked
  about revocation or a ceiling on such a platform, exactly as it must for `pipe_authorized:
  false`. Two levers exist and both are used. The adapter renders the class `idle-timeout` from
@@ -455,45 +551,57 @@ index ebfde3c..a0bfab1 100644
  names the live contexts it could **not** reach, so an incident responder knows which devices
  still need a manual disconnect.
  
-@@ -1674,6 +1677,14 @@ events (`account`, `blob`) that share the envelope and carry no verdict:
+@@ -1674,6 +1683,16 @@ events (`account`, `blob`) that share the envelope and carry no verdict:
  
  Device accounting shares this envelope as the eighth event, `account`, and is specified in
  §5.8. It is not a decision — it is a report — so it carries no `policy` block and no verdict.
 +A ninth, `account_gap`, is a report too: accounting records port49 received and did not write,
 +`{"gap": {"stage": ..., "records": N, "since": ...}}`, one record per spool drop stage —
 +`offer_refused` (answered `ERROR`; the device may send the record again), `drain_unparseable`
-+and `drain_set_aside` (answered `SUCCESS`, and not in the log) — written by the spool before
-+the records after the drop. It is what lets a reader of the log know the accounting stream has
-+a hole, which reconciliation must know before it says a device did not ask (§9). The count is
++and `drain_set_aside` (answered `SUCCESS`, and not in the log). An `offer_refused` drop is written
++before the next drain pass's records; a drop during a pass is written when that pass ends,
++after the records it sat among, its `since` saying when it began. It is what lets a reader of
++the log know the accounting stream has a hole, which reconciliation must know before it says a
++device did not ask (§9). The count is
 +held in memory, so a restart loses what was not yet written; `port49_spool_drops_total{stage}`
 +is the alarm, and this record is the log's own witness.
  
  `escalate` exists as its own event because the device-facing username on those platforms is
  `$enab{level}$`, not a person. The record carries the principal resolved from login context,
-@@ -2653,7 +2664,9 @@ gets readonly's role: `priv-lvl=15`, `roles=network-operator` on EOS and
+@@ -1751,6 +1770,7 @@ not an unvalidated body. A connection with no verified chain names no one.
+ | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
+ | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
+ | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed. On `refresh`, a deny recorded once per context per policy version (bundle): the live context is left as it was until the quarantine lifts |
++| `projection_fail_closed` | `authorize_session`, a permit: the session on a projected platform (§8) was answered with its composition's fail-closed reply — every command denied but what the projection proved — because the projection cannot tell the device that composition faithfully (§13, decision 26). The blob carries why (`fail_closed`: `refused_shape`, `configuration_mode`, `overflow`, `unwritable`, `secret_rule` or `unsound`). Every other subject on the device is answered as before; `policy test` and `policy diff` fail on the composition |
+ 
+ Every event has a success reason and at least one failure reason in this table, so
+ "decisions by event, verdict, and reason" (design document §15) is a complete metric. A
+@@ -2653,7 +2673,10 @@ gets readonly's role: `priv-lvl=15`, `roles=network-operator` on EOS and
  
  **Platforms that are not `priv-lvl`-native** (Junos maps to `local-user-name`) MUST declare
  a mapping for every level. A missing mapping is a **policy load error in CI**, not a broken
 -login at 3am.
 +login at 3am. On a projected platform (§8) the mapping is the level's ceiling in permission
 +bits, and under `bit_delivery: local_user_name` a template user per level; a level with no
-+bits on its parent chain quarantines the device it lands on.
++bits on its parent chain is a load error on the device it lands on, as any level with no
++mapping is.
  
  **Exact attribute spellings are lab-verified, not asserted.** The shipped adapters use bare
  `priv-lvl` for the TACACS+ shell-service reply, the bare `roles=` for EOS roles and
-@@ -2900,8 +2913,9 @@ attribute is complete in four lines:
+@@ -2900,8 +2923,10 @@ attribute is complete in four lines:
  | `expands_abbreviations` | whether the device sends resolved command words | if `commands` |
  | `splits_interface_names` | whether the device sends an interface name and its index as two arguments (§3 rule 5); `true` on `cisco_iosxe` only (L21) | optional |
  | `pipe_token` / `pipe_authorized` | modifier separator; whether it reaches us | if `commands` |
 -| `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
 -| `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |
 +| `command_projection` | how rules render for session-only platforms (below): `junos_regex`, the one this build renders. Where it is set, `privilege` is each level's ceiling in permission bits, never attributes, and `supports` is `[session]` | if `session`-only |
-+| `bits` / `bit_delivery` | each permission bit's reach in rule form, an upper bound measured in the lab (L12), and whether bits travel as `user-permissions` or a `local-user-name` template (below). A block may add to a bit's reach and never take from it, and may not declare a bit the set does not | if `session`-only |
++| `bits` / `bit_delivery` | each permission bit's reach in rule form, an upper bound measured in the lab (L12), and whether bits travel as `user-permissions` or a `local-user-name` template (below). A session runs the union of its bits' reach. The bit `baseline` is what a class with no bits runs, held by every session and never sent or named in `privilege`. A block may add to a bit's reach, an edit the diff gates as widening (§12), and never take from it, and may not declare a bit the set does not | if `session`-only |
++| `carve_outs` | the commands a bit alone makes available, whatever other bit reaches them: each rule held by that bit's own reach, measured in the lab (L12). The only subtraction from the union: a bit not held removes no command another bit reaches except these. A block may drop one and never add one | optional, with `bits` |
 +| `local_user_names` | under `bit_delivery: local_user_name`, each level's template user on the device, whose class `port49 platform export --classes` renders with the level's bits | with `local_user_name` |
  | `redact` | patterns whose argument values are removed before an accounting or authorization record is written (§5.7, §5.8); a block **adds** to the built-in patterns in `platforms/redact.yaml` and never removes one, and an edit to it is gated (§12) | if the platform sends command accounting — session-only platforms included |
  | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
  | `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
-@@ -3055,9 +3069,15 @@ Bits reach the device one of two ways, both in use in real fleets and selected p
+@@ -3055,9 +3080,15 @@ Bits reach the device one of two ways, both in use in real fleets and selected p
  | `user_permissions` | `user-permissions=<bits>` per session, chosen per grant | one template user (`remote` or named) whose class carries no bits of its own |
  | `local_user_name` | `local-user-name=<template>`, one template per level, bits in its class | one class per level, rendered by `port49 platform export` |
  
@@ -512,7 +620,19 @@ index ebfde3c..a0bfab1 100644
  
  **Regexes for what bits cannot separate.** After the bits are chosen:
  
-@@ -3134,6 +3154,52 @@ but has no capture, and neither has the reach of each bit, the `.*` baseline on
+@@ -3090,8 +3121,9 @@ cannot carry a deny beneath a permit.
+ **Refused shape.** Permits narrower than the covering bits *and* a deny beneath one of them —
+ `permit: [show interfaces **], deny: [show interfaces terse]` — fits neither. Junos regex
+ has no lookahead, so "everything under X except Y" cannot be written as one allow. CI MUST
+-refuse the policy at load, naming the grant, the two rules, and the platform, rather than
+-rendering the nearest shape. Junos documents a second attribute family,
++refuse the policy, naming the grant, the two rules, and the platform, rather than rendering
++the nearest shape; a daemon that loads it anyway answers that subject with the fail-closed
++reply, never the nearest shape (decision 26). Junos documents a second attribute family,
+ `allow-commands-regexps` / `deny-commands-regexps`, in which **deny takes precedence by
+ default** and which is mutually exclusive with the plain family on the wire. If that
+ precedence holds over TACACS+ (L12), the refused shape becomes expressible in that family
+@@ -3134,6 +3166,72 @@ but has no capture, and neither has the reach of each bit, the `.*` baseline on
  the `-regexps` family's precedence. The plan's containerlab step closes L12 before the
  generator is final.
  
@@ -521,28 +641,37 @@ index ebfde3c..a0bfab1 100644
 +`port49 policy diff` gates like any adapter edit. `internal/projection` renders each
 +composition, and proves the reply before it is sent: every command the device would run under
 +it is one port49 permits. It reads the device as the lab measured it (L11): a command runs
-+where a matching allow beats every deny, or where the bits reach it and no deny matches, a
-+bit's reach read as the classes read it — the most specific reach rule decides, so
-+`view-configuration`'s `show configuration **` carves out of `view`'s `show **`. The proof's
-+obligations, each checked from the rules' terms (`engine.Contains`, `MayMeet`,
-+`AlwaysDominates`, `NeverDominates`), with a probe of every way the rules can be told apart
-+as its witness:
++where a matching allow beats every deny, or where the bits reach it and no deny matches. The
++bits are a **union**: a command runs where any held bit's reach holds it, `baseline` always
++held, unless a measured `carve_outs` entry of a bit not held takes it out —
++`view-configuration`'s `show configuration **` out of `view`'s `show **`. Nothing else
++subtracts: a bit not held never removes a command another bit reaches (plan 5b pre-flight C1).
++The bits' reach and carve-outs are applied by the device's command parser, which reads a
++command whatever its spacing, case or abbreviation, so both are matched as port49 matches a
++deny, the widest reading. The proof's obligations, each checked from the rules' terms
++(`engine.Contains`, `MayMeet`, `AlwaysDominates`), with a probe of every way the rules can be
++told apart as its witness:
 +
 +- **A bit is sent only where every command it reaches is decided by one rule of the grant**:
 +  held by a permit, or by a deny, which is then sent. Under `local_user_name` the template's
 +  class carries every bit of the level, so each must be; otherwise the grant goes narrow.
++  Every baseline command no permit holds is denied on the wire.
 +- **A permit goes out as an allow only where it dominates every deny it meets**, since on the
 +  device the allow beats them all; one that does not is the refused shape, named with both
 +  rules. And only within the level's ceiling bits, a carve-out counted: a permit beyond them is
 +  not sent, so the device refuses what port49 would permit there — narrower, which fails
 +  closed, and reported.
-+- **A deny is left off the wire only where the bits already refuse every command it matches**:
-+  a dropped bit's reach holds it, no sent bit's reach ever dominates that, and no allow meets
-+  it.
++- **A deny is left off the wire only where a measured carve-out of a bit not sent holds every
++  command it matches**, and no allow meets it. No other bit boundary licenses it.
 +- **Bits that enter configuration mode** (a reach holding `configure`: `configure`, `all`)
-+  **are sent only for a grant of every command with no deny.** A statement typed there is
-+  governed by the class's configuration permissions, which no command regex reaches, so port49
-+  could deny what the device runs; until L12 measures otherwise, such a composition is refused.
++  **are sent, and an allow meeting `configure` is sent, only for a grant of every command with
++  no deny.** A statement typed there is governed by the class's configuration permissions,
++  which no command regex reaches, so port49 could deny what the device runs. Under
++  `user_permissions` such a composition is rendered again without those bits, and sent that way
++  where the rest proves sound (decision 26, decided item 6); otherwise it gets the fail-closed
++  reply.
++- **The narrow shape's bits are the smallest set that reaches its allows**, preferring bits
++  that do not enter configuration mode, so a narrow admin grant is not refused for `all`.
 +- **A rule whose text carries a value redaction hides is never projected**: the reply is written
 +  whole to the `authorize_session` record and the blob event (§5.7, §5.8).
 +
@@ -550,53 +679,93 @@ index ebfde3c..a0bfab1 100644
 +`JunosFacts` in the direction that fails closed until measured: explicit `^` and `$` anchors
 +on every regex; a deny's letters written in both cases (`[sS][hH][oO][wW]`) while the device
 +is case-sensitive; and no deny but `.*` while a deny may be walked past by abbreviating it — a
-+capability shape needing one goes narrow, and a narrow one that cannot carry the grant is
-+refused. A word is ASCII, carries no `{`, `}`, `"` or `\`, and escapes ERE's operators; a
-+regex or class pattern is carried only in the subset of RE2 that reads the same in POSIX ERE
-+(literals, bracket expressions, `.`, grouping, alternation, `*`, `+`, `?`, a repeat of at most
-+8 written out, anchors at its ends), and anything else is refused. Every attribute is sent
-+mandatory, once, and within RFC 8907's 255 bytes including its name; past that the device is
-+quarantined and `policy test` prints the class line that would carry the value instead
-+(`projection_overflow`). A role or grant may not set an attribute the projection renders, on a
++capability shape needing one goes narrow, and a narrow one that cannot carry the grant gets the
++fail-closed reply. Every deny ends in a pipe tail, `( *\|.*)?`, since the engine strips a
++pipeline before matching and a deny anchored at its rule's last word would miss `clear bgp all
++| no-more`; it only makes a deny match more, so it stays whatever L9 measures. A deny is as
++wide as its rule — a run of spaces between words, an argument that may hold a space — and an
++allow as narrow. A word is ASCII, carries no `{`, `}`, `"` or `\`, and escapes ERE's
++operators; a regex or class pattern is carried only in the subset of RE2 that reads the same in
++POSIX ERE (literals, bracket expressions, `.`, grouping, alternation, `*`, `+`, `?`, a repeat
++of at most 8 written out, anchors at its ends), never as an empty group or alternative, and
++anything else is refused. Every attribute is sent mandatory, once, and within RFC 8907's 255
++bytes including its name; past that the subject gets the fail-closed reply, and for
++`deny-commands` `policy test` prints the class line that would carry the denies on the device
++instead, binding every subject at that template (`projection_overflow`). An allow is never
++moved into a class: a class `allow-commands` runs for every subject at that template, past
++their own denies (L11). A role or grant may not set an attribute the projection renders, in any
++case or numbered variant the device reads (`allow-commands2`, `User-Permissions`), on a
 +projected platform or under `all` where one is. Each composition's shape, bits, what each regex
-+carries, what the bits refuse and what is beyond them is reported (`projection`), and `policy
-+diff` reports a composition whose shape or bits moved (§12).
++carries, what the bits refuse and what is beyond them is reported (`projection`), a
++composition that gets the fail-closed reply is reported by subject, device and reason
++(`projection_refused`), and `policy diff` reports a composition whose shape or bits moved
++(§12). A composition is projected once per policy however many devices it lands on: 1,000
++SRXs and 20 subjects load in about 0.2 s (`TestProjectionLoadTime`, bound 2 s).
 +
  #### Generator constraints
  
  None of these are caught by the device. All MUST be enforced at policy load:
-@@ -3147,6 +3213,15 @@ None of these are caught by the device. All MUST be enforced at policy load:
+@@ -3147,10 +3245,33 @@ None of these are caught by the device. All MUST be enforced at policy load:
     voids the entire deny baseline beneath it.
  5. **Reject invalid or over-budget policy loudly at load time**, never silently at session
     time. A server that skips an attribute at session time produces a fail-open shape.
+-
+-**Blast radius.** An invalid projection locks out every user authenticating against that
+-device simultaneously. Lockout is fail-closed, but deployments MUST have a break-glass path
+-independent of TACACS attributes — a local account or console access (design document §4).
 +6. **Never emit an attribute a role or grant also sets.** The projection renders the template,
 +   the bits and the regexes; a hand-written one beside it is a second instance (1), and over it
 +   a regex nothing proved (4). Refused at load (plan 5b).
 +
-+A refusal here is a joint check (§10): the device the composition lands on is quarantined —
-+closed without a reply, so it falls to local at once — and `policy test` and `policy diff`
-+name the cause. **Operator note:** one subject's refused composition quarantines the whole
-+device for every subject, as every joint check does; `policy diff` fails on the new quarantine
-+before it ships.
++A composition the projection cannot tell the device faithfully — the refused shape, bits that
++enter configuration mode where they cannot be dropped, an attribute past the budget, a rule it
++cannot write, a rule redaction hides, or a reply its witness finds unsound — is not a joint
++check (§13, decision 26). That subject alone gets the **fail-closed reply**: `deny-commands`
++`^.*$`, an allow for each permit that is within the level's ceiling bits that do not enter
++configuration mode, dominates every deny it meets, does not meet `configure` and can be
++written, and no other bit or template — under `user_permissions` the smallest of those bits
++that reach the allows, under `local_user_name` no `local-user-name`, so the session lands in
++the bitless `p49-remote`. Where the allows cannot go out whole none does. The reply is proven
++as any other. The session is recorded `projection_fail_closed` (§5.7), and `policy test` and
++`policy diff` exit non-zero on it, naming the subject, the device and why (§8, "CI MUST refuse
++the policy"). **Operator note:** until L9 measures that a deny reads the command as the CLI
++expands it, no deny narrower than `.*` goes out, so under the shipped `local_user_name` a
++composition with any deny beneath a permit — the realistic readonly with its
++`show configuration` deny included — gets the fail-closed reply on Junos; everyone else on the
++device keeps working, and CI names each such subject before it ships.
++
++**Blast radius.** A projection port49 cannot carry fails closed for the one subject it
++belongs to (decision 26). A device whose template classes drift from the reference, or that
++lacks them, can still lock out every user authenticating against it at once: a missing
++template lands every session in `remote`. Lockout is fail-closed, but deployments MUST have a
++break-glass path independent of TACACS attributes — a local account or console access (design
++document §4).
  
- **Blast radius.** An invalid projection locks out every user authenticating against that
- device simultaneously. Lockout is fail-closed, but deployments MUST have a break-glass path
-@@ -3179,6 +3254,14 @@ instrument for the differential test, not a runtime one.
+ #### Verification
+ 
+@@ -3179,6 +3300,21 @@ instrument for the differential test, not a runtime one.
  `start.*` as unanchored would also match `request start …`, diverging from our semantics.
  That belongs in the adapter and is asserted in the lab, never assumed.
  
 +**The reference classes are exported.** `port49 platform export --classes --config
 +port49d.yaml PLATFORM` prints, as `set` lines, the configuration a projected platform's
-+replies rest on: the adapter's `device_config` (on Junos `tacplus-options strict-authorization`
-+and the `remote` template's bitless class), and under `local_user_name` each level's template
-+user and class with the level's bits. Every class carries `idle-timeout` from
-+`session.max_session_age_default`, in whole minutes rounded down (decision 21); the file is
-+read for that key alone, so no key or secret is needed to run it.
++replies rest on: the adapter's `device_config` (on Junos `tacplus-options
++strict-authorization`), the `remote` template user in the bitless class `p49-remote`, and under
++`local_user_name` each level's template user and class with the level's bits, one per line as
++`show configuration | display set` prints them. Each template class and user is written as a
++replace — a `delete` before its `set` lines — so loading it leaves nothing a device carried
++under one: a class `allow-commands`, or a template user's local password. No template user is
++one that can log in locally: Juniper documents a template user as one with no authentication,
++and L12 measures that it refuses a local login; the reference adds a locked
++`authentication encrypted-password "*"` only if that measurement found otherwise. Every class
++carries `idle-timeout` from `session.max_session_age_default`, in whole minutes rounded down
++(decision 21); the file is read for that key alone, so no key or secret is needed to run it.
++`port49 devices check-config --config port49d.yaml` holds a device to it (§12).
 +
  **Importing existing configuration.** Simple alternations of prefix patterns convert to
  token rules mechanically; arbitrary regex does not. A migration tool MUST convert what it can
  and **flag the remainder for human review rather than approximating**, because a
-@@ -3459,6 +3542,33 @@ health over the same window: spool drops, `ERROR` replies, and unattributed-reco
+@@ -3459,6 +3595,35 @@ health over the same window: spool drops, `ERROR` replies, and unattributed-reco
  will eventually accuse a correctly configured device, and once that happens nobody reads the
  report again.
  
@@ -606,9 +775,11 @@ index ebfde3c..a0bfab1 100644
 +shows it asked: `session` for an `authorize_session` record, `commands` for an
 +`authorize_command`, `config_commands` for an authorization request that followed a permitted
 +configuration entry (`configure …`) in the same context. `--since` bounds the window by the
-+newest record's time, never the wall clock. It warns — and exits 1, for a job to page on — on:
++newest record's time, never the wall clock. An admitted device with no record in the window
++is noted **never seen** and exits 0: in a day's window every device nobody logged into is one,
++and a job that pages on them is one nobody reads. It warns — and exits 1, for a job to page on
++— on a contradiction between what a device declares and what it did:
 +
-+- **never seen**: an admitted device with no record in the window;
 +- **config-commands probably off**: on a `commands` platform, at least 5 permitted configuration
 +  entries in the window and at least 80% of them followed by no authorization request in their
 +  context before the session's exec STOP or the window's end. An entry followed only by exec
@@ -630,16 +801,62 @@ index ebfde3c..a0bfab1 100644
  > **Principle.** Never require an operator to assert something the system can observe.
  > Anything declared by hand about device behavior will eventually be wrong, and it will be
  > wrong silently.
-@@ -4407,7 +4517,7 @@ to that list. The gated keys therefore include:
+@@ -4229,7 +4394,12 @@ line the adapter's `config_checks` name: a command method list falling back to `
+ `authentication-order` with `password` in it (L4) — or on a `device_config` line the
+ configuration does not carry as a top-level line of its own, the absence no `config_checks`
+ entry can see: IOS-XE's level-7 command method list, without which a level-7 command is never
+-asked about (§6). A `platforms:` block adds to the set's `device_config`, `local_accounts` and
++asked about (§6). On a projected platform it also reads the configuration, as `show
++configuration | display set` prints it, against the reference `platform export --classes`
++writes, and `--config port49d.yaml`, the classes' idle-timeout, is required: a reference line
++the device lacks, and any line under a template class or template user the reference does not
++write — a class `allow-commands`, a permission, a template password — fails it, the uid Junos
++assigns aside (§8). A `platforms:` block adds to the set's `device_config`, `local_accounts` and
+ `config_checks` and never takes one away, `replace: true` and `based_on:` included: a block
+ that rewrites the set's line ending in `local` to end in `none` still has the set's line
+ required and its own reported by the set's check. A device configuration is full of secrets,
+@@ -4267,9 +4437,13 @@ rules distinguish — each word, `*`, `**`, and each deny word's abbreviations 
+ command whose decision changed, each level or ceiling that changed (a privilege change, §6),
+ and each device the new policy quarantines. It exits non-zero on a command a deny refused that
+ the new policy permits, unless a policy test in the new policy exercises that permit over that
+-deny, on a newly quarantined device, and on a subject whose mint the new policy's broker
+-refuses (`attribute_too_long`, `attribute_unsafe`), since the diff, `policy test` and `explain`
+-run the broker's mint checks and answer as it does.
++deny, on a newly quarantined device, on a subject whose mint the new policy's broker refuses
++(`attribute_too_long`, `attribute_unsafe`), since the diff, `policy test` and `explain` run the
++broker's mint checks and answer as it does, and on every composition the new policy gives a
++projection's fail-closed reply, new or not (§13, decision 26). `port49 policy test` exits
++non-zero on a device quarantined now or at a later expiry and on every fail-closed
++composition too: the daemon still serves the rest (decision 20), and CI ships neither (plan 5b
++pre-flight I10); `port49 platform upgrade` previews both.
+ 
+ **A privilege raise fails the gate too** (owner's rulings 2026-09-24). The gate compares what
+ the device gets and what port49 enforces, not level names, for each subject on each device at
+@@ -4294,7 +4468,13 @@ each instant. Any of these is a raise:
+   fence, so removing one widens access too: without `deny-commands` a Junos session loses its
+   only refusal, and without `local-user-name` it falls back to the device's template user (owner's
+   ruling 2026-09-24, review C4). The gate cannot read the direction of such a change, so it fails
+-  closed.
++  closed. **On a projected platform the projection's own attributes are judged by what the
++  device can do under them** (plan 5b pre-flight I14): a reply under which the device holds a
++  bit it did not, or runs a command it did not, among one command per way either reply's rules
++  can be told apart, is a raise; one that only narrows — a revoked permit, an added deny — is
++  not, whatever its regexes say, and needs no `reply:` test. The proof that the device runs
++  nothing port49 denies (§8) is what makes the direction readable. A projection that went away
++  is a raise.
+ 
+ One change's direction the gate can read: a level's own rendering moving down `role_order`
+ (§8). Where an attribute is the old level's rendering in the old reply and the new level's in
+@@ -4407,7 +4587,7 @@ to that list. The gated keys therefore include:
  - The normalization keys, which change the vector rules match against: `expands_abbreviations`,
    `splits_interface_names`, `strip_cr`, `pipe_token` and `pipe_authorized`.
  - The rendering keys of session-only platforms, which decide what the device enforces:
 -  `command_projection`, `bits` and `bit_delivery`.
-+  `command_projection`, `bits`, `bit_delivery` and `local_user_names`.
++  `command_projection`, `bits`, `bit_delivery`, `carve_outs` and `local_user_names`.
  - The keys the gate reads: `privilege_attributes`, `inert_attributes` and
    `accepted_attributes`.
  - `enable_username`, `shows_server_msg`, and `redact`, which changes what the audit keeps.
-@@ -4791,7 +4901,8 @@ ceiling, revocation, username binding, and the in-session warning all act at the
+@@ -4791,7 +4971,8 @@ ceiling, revocation, username binding, and the in-session warning all act at the
  authorization request, and Junos never makes one. Rather than claim reach that does not exist,
  `explain` states the limit, the adapter renders class `idle-timeout` from `max_session_age` as
  the enforced approximation, and revocation records name the contexts they could not reach.
@@ -649,38 +866,63 @@ index ebfde3c..a0bfab1 100644
  
  **22. Session-only projection is bits first, regexes second, chosen per grant, with one
  shape refused.** *Provisional on L12.* The generator picks the smallest permission-bit set
-@@ -4802,7 +4913,10 @@ as `deny .*` plus one allow alternation, since emitting nothing widens it to the
+@@ -4802,7 +4983,13 @@ as `deny .*` plus one allow alternation, since emitting nothing widens it to the
  travel as `user-permissions` per session by default, or as a `local-user-name` template
  where a deployment provisions classes. A permit narrower than the bits with a deny beneath
  it is refused at load; the `-regexps` family's documented deny-precedence may lift that once
 -measured. The choice is made from the composed grant, never per role. (§8, §15)
 +measured. The choice is made from the composed grant, never per role. (§8, §15) *As built in
-+plan 5b* (§8, "As built"): a reply is proven before it is sent, bits that enter configuration
-+mode are sent only for a grant of everything, the built-in adapter delivers bits by template
-+until L12 measures `user-permissions`, and the projection ships in set 1.1.0.
++plan 5b* (§8, "As built"): a reply is proven before it is sent, against a device model in which
++the bits are a union and only measured carve-outs subtract; bits that enter configuration mode
++are sent only for a grant of everything; the built-in adapter delivers bits by template until
++L12 measures `user-permissions`; the projection ships in set 1.1.0. "Refused at load" is
++amended by decision 26: the refused shape gets that subject the fail-closed reply, and CI
++refuses the policy.
  
  **23. Where the device cannot draw the operator line, `operator` renders as `admin`'s level.**
  *Owner's ruling 2026-09-24.* On `arista_eos` and `cisco_nxos`, with command authorization
-@@ -5295,10 +5409,10 @@ implemented against a guess. This section is the one place the distinction is ke
+@@ -4844,6 +5031,21 @@ role is what fenced operator. On IOS-XE admin's control was refused too — ever
+ and at 15, since a token user has no local account (`L22-carried-cisco_iosxe.md`) — so there
+ it shows that a token session gets nothing from local, not that local fences level 7. (§6, §8)
+ 
++**26. A composition the projection cannot carry fails closed for that subject alone.**
++*Owner's ruling 2026-09-25*, replacing decision 20's quarantine for projection refusals. Where
++the projection cannot safely tell a Junos device one subject's composition, only that subject
++gets a fail-closed reply: no template bits beyond what is proven, `deny-commands=^.*$`, and only
++the allows the generator can prove. Everyone else on the device keeps working. Decision 20's
++quarantine (§10) stays for inventory drift and the other joint checks; it no longer applies to
++projection refusals. `policy test` and `policy diff` exit non-zero on any such composition and
++name the subject, the device and the reason, so CI refuses it before it ships (§8, "CI MUST
++refuse the policy"). For decided item 6, an admin composition with a deny, the reply drops only
++the bits that enter configuration mode where the rest is provably sound, which it can be under
++`user_permissions`; otherwise it is the fail-closed reply. Every such session is recorded
++`projection_fail_closed` (§5.7). The pre-flight review of plan 5b measured the alternative: spec
++§11's own policy quarantined all three SRXs for every user, and `policy test` passed it. (§8,
++§10)
++
+ ### Deferred, with reasons
+ 
+ Neither of these is an open question about the design. Both are closed for v1 on the
+@@ -5295,10 +5497,10 @@ implemented against a guess. This section is the one place the distinction is ke
  | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
  | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | closed — measured 2026-09-24; `tests/lab/results/L7-arista_eos.md`, `L7-login-arista_eos.md`, `L7-cisco_nxos.md`, `L7-nxapi-cookie-cisco_nxos.md`. eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. Both cookies measured: eAPI `/login` 2026-09-23 and NX-API `nxapi_auth` 2026-09-24 — a request carrying the cookie runs no authentication and no session authorization, only its command authorizations (NX-API: the command plus `end`; `configure terminal` too for `cli_conf`). The `nxapi_auth` cookie expires after 10 minutes idle (`NXAPI timeout 10`), ends on `POST /logout`, and wins over a wrong Basic password sent beside it; NAPALM `nxos` never uses it (21 authentications for a six-call job) while Ansible `httpapi` does (one); see below |
  | **L8** | The maximum password length each platform accepts at an interactive prompt. (PAP was split out to L19 on 2026-09-23.) | The 30-character handle (design document §8) | all | closed — measured 2026-09-23; `tests/lab/results/L8-cisco_nxos.md`, `L8-cisco_iosxe.md`; and 2026-09-20, `L8-arista_eos.md`, `L8-juniper_vjunos-router.md`, `L8-juniper_vsrx.md`. The 30-character handle logs in on all five images. Longest intact: **127 on the N9Kv**, which refuses 128 and above locally and never asks port49; at least 1024 on IOS-XE; at least 138 on vEOS and both Junos images, where nothing longer was tried; see below |
 -| **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. | Projection generator constraints (§8) | Junos | open |
-+| **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. Whether explicit `^` and `$` are taken; whether a deny regex reads a command in the case and the abbreviation typed (`SHOW VERSION`, `sh ver`) or as the CLI expands it; whether a value with spaces is taken raw. | Projection generator constraints (§8); `JunosFacts` in `internal/projection`, each fact read in the direction that fails closed until measured | Junos | open |
++| **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. Whether explicit `^` and `$` are taken, with the pipe tail `( *\|.*)?` refusing `show version | no-more`; whether a deny regex reads a command in the case and the abbreviation typed (`SHOW VERSION`, `sh ver`) or as the CLI expands it; whether a value with spaces is taken raw; whether a malformed wire regex (`^(show$`) is ignored, which fails open, or refuses the session. | Projection generator constraints (§8); `JunosFacts` in `internal/projection`, each fact read in the direction that fails closed until measured | Junos | open |
  | **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos. **Reading 3's conclusion is corrected by L17 (2026-09-21):** a denied Junos session authorization is advisory under the configuration this lab deploys, not on this vendor — `tacplus-options strict-authorization` makes the same denial refuse the login; see below. The three per-command adapters' spellings are measured by plan 5a (tests/lab/results/L22-*.md); Junos's wait on L12 (plan 5b), so the row stays open |
  | **L11** | Junos precedence, repetition, and length behavior for wire and class rules. | The projection model (§8) | Junos (SRX) | **closed** — measured 2026-09-03; results in `port49-junos-lab-tests-results.md` |
 -| **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
-+| **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session, and two bits in one value. What each bit reaches, so `bits:` can be declared, and that `view` alone does not show the configuration. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. Whether `deny-commands` reaches a statement typed in configuration mode, and `run`. Whether a template user commits with no uid. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22); the built-in `bit_delivery` and `bits` (set 1.1.0) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
++| **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session, and two bits in one value. What each bit reaches, so `bits:` can be declared, and that `view` alone does not show the configuration. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. Whether `deny-commands` reaches a statement typed in configuration mode, and `run`. Whether a template user commits with no uid, and whether one with no authentication refuses a local login. What a class with no bits runs (`baseline`), and whether `deny-commands .*` refuses it. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22); the built-in `bit_delivery` and `bits` (set 1.1.0) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
  | **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 2s**, which is the "answered with increasing delay" of design document §11. The ceiling was 5s until this row measured device reply timeouts; **2026-09-21 it was lowered to 2s**, which is under every timeout measured here, so a FAIL is always delivered inside it (`tests/lab/results/L13-*.md`). A ceiling above a device's timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX, vEOS, N9Kv and Catalyst 8000V: about 3s on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, which also retransmits, and above 12s on IOS-XE, which this sweep does not bound from above; past that timeout every platform that reached it takes the fall-through branch; other transports and the next-server case unmeasured; see below |
  | **L14** | Whether a NETCONF session over SSH authenticates through TACACS+ the way an interactive login does; whether any authorization request is sent for the session or for an `<edit-config>`, and with what `service`, `cmd` and `cmd-arg`; what `port` and `rem_addr` contain; what accounting arrives for a NETCONF session and for a commit. | Adapter coverage for automation traffic (§8); the login context key (§5.1.1); what reconciliation may conclude from accounting (§9) | Junos, NX-OS, EOS | open — measured 2026-09-20 on vEOS, vJunos-router and vSRX; on the N9Kv the AAA half is measured and the RPC half is not, because the channel closes before any RPC is answered; IOS-XE and key-based SSH unmeasured. **2026-09-21 (L17):** a Junos NETCONF session on port 830 is refused outright when port49 denies its session authorization and `tacplus-options strict-authorization` is committed, so the statement reaches automation traffic and not only interactive logins; see below |
  | **L16** | Role delivery over TACACS+ and its interaction with command authorization. Whether a custom role named in a reply attribute takes effect — verified by a command it forbids being refused, never by the device echoing the name back; whether the device still sends a per-command authorization request for a command its own role forbids; which wins when the device's role and port49 disagree, **in both directions**; two roles at once (NX-OS documents a union with permit winning); a role name the device does not have; no role attribute at all; the accepted spellings (`shell:roles=` / `shell:roles*`, bare or inside `cisco-av-pair`); and the `priv-lvl=N` to `priv-N` mapping under `feature privilege`. | The session-attribute model (§6) and adapter `privilege` blocks (§8) — a custom role is the NX-OS and EOS analogue of a Junos login class, which is what decision 22 projects into. Also what the decision log means (§5.7, §9): if a device can refuse a command port49 permitted, the log records a permit for a command that never ran. | EOS, NX-OS | open — added 2026-09-21. vEOS measured 2026-09-21 (`shell:roles*<name>` **does not deliver a role** — the device reports the session's role as `<unknown>` — port49's per-command deny binds, and a `cisco-av-pair*` attribute sent as OPTIONAL is refused outright) and **2026-09-22, which corrects the reading drawn from it**: EOS reads the **bare** attribute `roles=<name>`, which the first run never sent, under either argument flag; sent by its own name the role is applied, and under `aaa authorization commands ... local` it is the operator's real privilege. `priv-lvl` must be sent too — a reply with a role and no `priv-lvl` lands the session at level 1 — and an OPTIONAL `priv-lvl*N` **is** applied on this image. NX-OS measured 2026-09-21 (delivery: all three spellings work, an unknown name degrades to `network-operator`, and a delivered role's own rules do not bind while `aaa authorization commands` points at TACACS+) and 2026-09-22 (precedence: **`shell:roles` decides the role and a `priv-lvl` beside it is inert, in both directions**, so an NX-OS adapter sends the role and never the privilege level; with command authorization pointed at `local` instead, the delivered role does bind). Open on EOS: the `cisco-av-pair` ambiguity, and whether a role that permits everything carries a read-only one delivered beside it (the pair was measured, the permissive role alone was not). **2026-09-24, the disruptive commands** (`tests/lab/results/ceiling-*.md`, no row of its own yet): with port49 permitting every command, an NX-OS `network-operator` session ran `clear counters`, `clear ip bgp *` and a configuration change, and a vEOS `network-operator` session at level 15 ran `clear counters`, had `clear ip bgp *` parsed and passed (BGP cannot run on that image) and entered `configure`; only the privilege level binds there (level 1 is refused all three by the parser, never asking port49); see below |
-@@ -5309,6 +5423,9 @@ implemented against a guess. This section is the one place the distinction is ke
+@@ -5309,6 +5511,9 @@ implemented against a guess. This section is the one place the distinction is ke
  | **L20** | Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a **wrong password** for the same user inside that window is also accepted; and whether a credential port49 would now refuse is re-checked inside it. | Whether a revocation in port49 reaches an API client at all (§5.1.4), and decision 15's bound on how long a spent token works — the receipt's `receipt_idle_ttl` and `receipt_max_age` act only on exchanges the device sends | IOS-XE; then every HTTP API transport | open — added 2026-09-23. IOS-XE RESTCONF answered a repeat of an already-spent token, 3s later, with `200 OK` and **zero** TACACS+ traffic (`tests/lab/results/L1-restconf-cisco_iosxe.md`), so a revocation in port49 cannot reach that repeat. **Measured 2026-09-24 on IOS-XE** (`tests/lab/results/L20-cisco_iosxe.md`): the cache is per credential (username and password), not per username or client address; a wrong password inside it goes to port49 and is refused; it lasts about 10s fixed from the authentication that filled it; and a cached credential is not re-checked, even with port49 answering every authentication ERROR. Open: every other HTTP API transport, so the row stays open; see below |
  | **L21** | Whether each platform sends the command words the operator typed (`sh run`) or the resolved ones (`show running-config`) on a per-command authorization request, and on the accounting record for it. | `expands_abbreviations` per platform (§3 rule 4, §8): where it is `false` a deny's word matches its own abbreviations, which over-denies, and where it is wrongly `true` an abbreviation slips past a deny | EOS, NX-OS, IOS-XE | closed — measured 2026-09-24; `tests/lab/results/L21-arista_eos.md`, `L21-cisco_nxos.md`, `L21-cisco_iosxe.md`. All three images send the **resolved** words, on the request and on the accounting record, over interactive SSH: `sh ver` arrives as `cmd=show cmd-arg=version`, and `sh clock` was denied by a `show clock` deny on all three. Interface names differ: IOS-XE splits `Gi1` into `GigabitEthernet`, `1`; vEOS and the N9Kv join it (`Ethernet1`, `Ethernet1/1`). Other transports and releases are outside what was measured; see below |
  | **L22** | What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of `clear counters`, `clear ip bgp *` and `configure terminal` it runs, refuses in its own parser, or sends port49 — and which level or role it reports, for the exact reply each built-in adapter sends; and, with port49 stopped under an open session on a command method list ending in `local`, whether operator's reply can change the configuration where admin's can, and whether it runs `clear counters` and `clear ip bgp *`; and, on IOS-XE with `privilege exec level 7 clear counters` configured and no `aaa authorization commands 7` list, whether a level-7 session runs `clear counters` without asking port49. | Decision 25; the adapters' `privilege`, `unreachable` and `fallback` (§8); the dead-rule and fallback-exposure reports (§12) | EOS, NX-OS, IOS-XE | closed — measured 2026-09-24; tests/lab/results/L22-arista_eos.md, L22-cisco_nxos.md, L22-cisco_iosxe.md. Each built-in adapter's reply at readonly, operator and admin was applied as the adapter says: on vEOS level 1 then 15 with network-operator, network-operator and network-admin; on the N9Kv network-operator, network-operator, network-admin, `clear counters` and `configure terminal` both sent to port49 at every level; on IOS-XE 17.13.01a levels 1, 7 and 15, level 7 sending `clear counters` and refusing `configure terminal` in the parser. With port49d stopped under an open session and the method list falling back to local, operator's reply could not change the configuration on any of the three, and admin's could on vEOS and the N9Kv. Beside it (`L22-carried-*.md`): vEOS's network-operator still ran `clear counters` and passed `clear ip bgp *` through authorization, the N9Kv's was refused both, and IOS-XE refused a token session every command at 7 and at 15, admin's included; on IOS-XE with no `aaa authorization commands 7` list, operator's `clear counters` ran without asking port49. Inert beside admin's reply: `home-directory`, `idletime` and `timeout` on vEOS and the N9Kv; `idletime*30` and `timeout*480` on IOS-XE, where they are accepted but held bearing (§6), and which refused the session for `home-directory`. By hand 2026-09-24: tests/lab/results/ceiling-*.md |
 +| **L23** | Whether `home-directory`, `idletime` and `timeout`, each beside readonly's reply, leave the session readonly's on EOS and NX-OS: the same identity, the same reach for `clear counters` and `configure terminal`, and a permitted `show version`. Beside admin's reply (L22) a raise is invisible (5a final review M3). | The inert lists of `arista_eos` and `cisco_nxos` (§6, §8) | EOS, NX-OS | open |
 +| **L24** | Whether a Junos login class's `idle-timeout` ends an idle session a TACACS+ reply landed in that class, through `local-user-name` and through the `remote` template. | Decision 21's enforced approximation; `port49 platform export --classes` (§5.6, §8) | Junos | open |
-+| **L25** | Whether the N9Kv writes an accounting record under `admin` with task_id `vsh.bin.<port>` when a network-operator cancels the sudo prompt of a bare `show interface`, and what distinguishes it from a person's `admin` session. | A `cisco_nxos` system user keyed on its task_id, never the username alone (§5.8) | NX-OS | open — a production observation with no note |
++| **L25** | Whether the N9Kv writes an accounting record under `admin` with task_id `vsh.bin.<port>` when a network-operator cancels the sudo prompt of a bare `show interface`, and what distinguishes it from a person's `admin` session, over SSH and over NX-API. | A `cisco_nxos` system user keyed on its task_id, never the username alone (§5.8) | NX-OS | open — a production observation with no note |
  
  **What has been measured so far, per row.** The measurements exist and the notes are in the
  repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -690,14 +932,15 @@ index ebfde3c..a0bfab1 100644
 
 Run: `git diff --stat` and `make test && make vet`
 Expected: the spec is the only file changed, and every package is `ok` (nothing else moved). Read
-the new rows L23, L24 and L25 in §15's table, and check that each one's Status is `open`.
+the new rows L23, L24 and L25 in §15's table, and check that each one's Status is `open`; read
+decision 26 and the `projection_fail_closed` row.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add docs/design/2026-08-23-policy-engine-spec.md
 git commit -m "$(cat <<'EOF'
-docs: spec says what plan 5b builds before the code does
+docs: spec for plan 5b, the Junos projection, capability inference and decision 26
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -716,30 +959,47 @@ EOF
   `tests/lab/evidence/L12-juniper_*.pcap`
 
 **Interfaces:**
-- Consumes (harness): `eachPlatform`, `l.capture`, `l.derivedConfigCmd`, `l.restart`, `l.nextLogin`,
-  `l.sshCLI`, `c.expect`, `c.sendExpect`, `c.expectFrom`, `junosPrepare`, `junosConfigure`,
-  `l.withAdminCLI`, `l.junosCLI`, `l.drainRecords`, `l.result`, `l.configPath`, `precReply`,
-  `l16TrimEcho`, `l16Slug`, `containsAny`, `oneLine`, `orEmpty`, `str`, `sub`.
-- Produces, for Tasks 3 and 18: `junosPer` (45 s), `junosRefusal`,
-  `type junosProbe struct{ cmd string; complete bool }`, `type junosRun`,
-  `(junosRun).ran(cmd string) bool`, `(junosRun).completes(p junosProbe) bool`,
-  `(junosRun).cell(p, control junosRun) string`,
+- Consumes (harness): `eachPlatform`, `l.capture`, `l.derivedConfigCmd`, `l.restart`, `l.stopDaemon`,
+  `l.nextLogin`, `l.sshCLI`, `l.dial`, `isAuthRejection`, `c.expect`, `c.sendExpect`, `c.expectFrom`,
+  `junosPrepare`, `junosConfigure`, `l.withAdminCLI`, `l.junosCLI`, `l.drainRecords`, `l.result`,
+  `l.configPath`, `precReply`, `l16TrimEcho`, `l16Slug`, `containsAny`, `oneLine`, `orEmpty`, `str`,
+  `sub`; `breakglassUser`, `breakglassPassword`.
+- Produces, for Tasks 3 and 19: `junosHost = "srx1"`, `junosPer` (45 s), `junosRefusal`,
+  `type junosProbe struct{ cmd string; complete bool; evidence string }`, `type junosRun`,
+  `(junosRun).runs(p junosProbe) bool`, `(junosRun).ran(cmd string) bool`,
+  `(junosRun).completes(p junosProbe) bool`, `(junosRun).cell(p, control junosRun) string`,
   `(*lab).junosConfigureAdmin(t, lines []string) string`,
+  `(*lab).junosLogin(t, name, attrs string) (*cliConn, junosRun, bool)`,
   `(*lab).junosSession(t, name, attrs string, probes []junosProbe) junosRun`,
-  `(*lab).junosProbe(c *cliConn, p junosProbe) (string, error)`. And the notes Task 13 reads.
+  `(*lab).junosProbe(c *cliConn, p junosProbe) (string, error)`, `configurationProbes`, `orErr`. And
+  the notes Task 14 reads.
 
 This runs before any code, because 1.1.0's values come from it. The lab authorizer delivers each
 variant's reply (`lab.session_attributes`), and each variant costs one daemon restart and one
 seeded token login. The run spends 16 logins, which is the whole pool: 14 variants and 2 for the
-per-session check. The control is a template holding `all` and no regex. A command the control
-does not run says nothing about a variant, and its cell reads "not comparable".
+per-session check. The control is a template holding `all` and no regex, and it is checked the
+moment its session closes: a control that ran nothing stops the run before a token is wasted.
+A command the control does not run says nothing about a variant, and its cell reads "not
+comparable". A variant whose login is not prepared or whose `show cli authorization` is not
+observed fails the test (pre-flight M3).
+
+The variants measure what the generator writes: explicit anchors with the deny's pipe tail,
+refusing `show version` and `show version | no-more` (pre-flight I2); case and abbreviation;
+a malformed deny `^(show$`, which says whether a bad wire regex fails open or refuses the session
+(pre-flight M1); the narrow shape; a no-bit template, to read the baseline under `deny .*`;
+`user-permissions` over a bitless template, with two bits, and per session; configuration mode;
+the `-regexps` family; and `allow-commands2`. The host-name probe carries evidence (`host-name
+srx1`, the name both images' startup configuration sets), so a filtered empty output reads as
+refused, never as run.
 
 The test configures four template users without a uid (`p49-l12-none`, `-view`, `-cfg`, `-all`)
 over the break-glass CLI with port49d stopped, and deletes them at the end. Committing without a
-uid is itself a measurement: `platform export --classes` renders none. Every probe is harmless.
-One interface's counters are cleared and the loopback is pinged. `request system reboot` and
-`restart routing` are probed by `?` completion and never run. The configuration-mode variant sets
-the host name the device already has, so nothing changes whether or not it is refused.
+uid is itself a measurement. With port49d still stopped it dials a template user locally with an
+empty password and with `x`, then commits a user whose password is `encrypted-password "*"` and
+dials that: whether a template user can log in locally, and whether the lock refuses it
+(pre-flight I9). Every probe is harmless. One interface's counters are cleared and the loopback is
+pinged. `request system reboot` and `restart routing` are probed by `?` completion and never run.
+The configuration-mode variant sets the host name the device already has.
 
 Every command has `junosPer`, 45 s. An expiry is `not observed`, fails the test, and stops that
 session's probes, since the session's state is unknown past a missed prompt.
@@ -750,10 +1010,10 @@ session's probes, since the session's state is unknown past a missed prompt.
 ````diff
 diff --git a/tests/lab/junos_wire_test.go b/tests/lab/junos_wire_test.go
 new file mode 100644
-index 0000000..c007c45
+index 0000000..49305e7
 --- /dev/null
 +++ b/tests/lab/junos_wire_test.go
-@@ -0,0 +1,428 @@
+@@ -0,0 +1,556 @@
 +//go:build lab
 +
 +package lab
@@ -770,18 +1030,24 @@ index 0000000..c007c45
 +// L9 and L12): what a reply's `user-permissions` does over a bitless
 +// template, whether a wire `deny-commands .*` plus one allow alternation
 +// yields exactly the permits, how a deny regex is anchored, whether it reads
-+// a command in the case and the abbreviation typed, whether it reaches a
-+// statement typed in configuration mode, the `-regexps` family's precedence,
-+// and whether numbered names are distinct attributes. Each is a variant of
-+// the lab authorizer's session reply (`lab.session_attributes`) and one
-+// token login; the control is a template holding every bit and no regex, so
-+// a command the control does not run says nothing about a variant.
++// a command in the case, the abbreviation and the pipe typed, what a
++// malformed one does, whether it reaches a statement typed in configuration
++// mode, the `-regexps` family's precedence, whether numbered names are
++// distinct attributes, and whether a template user can be logged into
++// locally. Each is a variant of the lab authorizer's session reply
++// (`lab.session_attributes`) and one token login; the control is a template
++// holding every bit and no regex, so a command the control does not run says
++// nothing about a variant.
 +//
 +// Every command typed has a deadline, junosPer: a prompt that does not come
 +// back within it is "not observed", never a refusal, and fails the test.
 +
 +// junosPer is the deadline on every command a Junos lab test types.
 +const junosPer = 45 * time.Second
++
++// junosHost is the host name both Junos images carry
++// (tests/lab/configs/vjunos-startup.conf), whatever the lab node is named.
++const junosHost = "srx1"
 +
 +// junosRefusal are the words a Junos CLI answers a command it will not run
 +// with. A cell is `refused` only where the control ran the command and the
@@ -793,10 +1059,13 @@ index 0000000..c007c45
 +// junosProbe is one command a variant types, or with complete, whose last
 +// word it asks `?` completion for and never runs: `request system reboot` is
 +// probed by whether `reboot` completes after `request system`. A complete
-+// probe ending in `?` is a listing, `show ?`, kept whole.
++// probe ending in `?` is a listing, `show ?`, kept whole. A probe with
++// evidence ran only where its output holds it: `show configuration` that
++// prints nothing has not shown the configuration.
 +type junosProbe struct {
 +	cmd      string
 +	complete bool
++	evidence string
 +}
 +
 +// junosRun is one variant's session.
@@ -809,10 +1078,21 @@ index 0000000..c007c45
 +	privilege         string            // the authorize_session record's session.privilege
 +}
 +
-+func (r junosRun) ran(cmd string) bool {
-+	out, ok := r.outs[cmd]
-+	return ok && !slices.Contains(r.unobserved, cmd) && !containsAny(strings.ToLower(out), junosRefusal)
++// runs reports whether the session ran the probe: observed, and its output
++// holds the probe's evidence, or no refusal where it has none.
++func (r junosRun) runs(p junosProbe) bool {
++	out, ok := r.outs[p.cmd]
++	if !ok || slices.Contains(r.unobserved, p.cmd) {
++		return false
++	}
++	if p.evidence != "" {
++		return strings.Contains(out, p.evidence)
++	}
++	return !containsAny(strings.ToLower(out), junosRefusal)
 +}
++
++// ran is runs for a probe with no evidence.
++func (r junosRun) ran(cmd string) bool { return r.runs(junosProbe{cmd: cmd}) }
 +
 +func (r junosRun) completes(p junosProbe) bool {
 +	words := strings.Fields(p.cmd)
@@ -831,9 +1111,9 @@ index 0000000..c007c45
 +		return "completes"
 +	case p.complete:
 +		return "absent"
-+	case !control.ran(p.cmd):
++	case !control.runs(p):
 +		return "not comparable (the control did not run it)"
-+	case r.ran(p.cmd):
++	case r.runs(p):
 +		return "ran"
 +	}
 +	return "refused"
@@ -857,11 +1137,10 @@ index 0000000..c007c45
 +	return out
 +}
 +
-+// junosSession restarts port49d with attrs as the session reply, logs in
-+// with the next seeded token, reads `show cli authorization`, and types each
-+// probe with its deadline. A probe sequence that enters configuration mode
-+// ends with `exit configuration-mode` itself (configurationProbes).
-+func (l *lab) junosSession(t *testing.T, name, attrs string, probes []junosProbe) junosRun {
++// junosLogin restarts port49d with attrs as the session reply and logs in
++// with the next seeded token, paging off. A session that did not open is a
++// run with loginErr set and no connection.
++func (l *lab) junosLogin(t *testing.T, name, attrs string) (*cliConn, junosRun, int64) {
 +	t.Helper()
 +	r := junosRun{name: name, attrs: attrs, outs: map[string]string{}}
 +	cfg, err := l.derivedConfigCmd("junos-"+l16Slug(name), attrs, "", "")
@@ -882,17 +1161,32 @@ index 0000000..c007c45
 +	}
 +	if err != nil {
 +		r.loginErr = oneLine(err.Error())
-+		return r
++		return nil, r, off
 +	}
-+	defer c.Close()
 +	if err := junosPrepare(c); err != nil {
 +		r.unobserved = append(r.unobserved, "set cli screen-length 0")
++		t.Errorf("%s: `set cli screen-length 0` not observed within its deadline: %v", name, err)
 +	}
 +	if out, err := c.sendExpect("show cli authorization", junosPer, junosOpPrompt); err != nil {
 +		r.unobserved = append(r.unobserved, "show cli authorization")
++		t.Errorf("%s: `show cli authorization` not observed within %s: %v", name, junosPer, err)
 +	} else {
 +		r.auth = precReply(l16TrimEcho(out, "show cli authorization"))
 +	}
++	return c, r, off
++}
++
++// junosSession is junosLogin, then each probe with its deadline, then the
++// priv_lvl the device put on the session authorization. A probe sequence that
++// enters configuration mode ends with `exit configuration-mode` itself
++// (configurationProbes).
++func (l *lab) junosSession(t *testing.T, name, attrs string, probes []junosProbe) junosRun {
++	t.Helper()
++	c, r, off := l.junosLogin(t, name, attrs)
++	if c == nil {
++		return r
++	}
++	defer c.Close()
 +	for _, p := range probes {
 +		out, err := l.junosProbe(c, p)
 +		r.outs[p.cmd] = out
@@ -903,7 +1197,7 @@ index 0000000..c007c45
 +		}
 +	}
 +	for _, rec := range l.drainRecords(off, 10*time.Second) {
-+		if str(rec, "event") == "authorize_session" && str(sub(rec, "session"), "username") == user {
++		if str(rec, "event") == "authorize_session" && str(sub(rec, "session"), "username") == r.user {
 +			r.privilege = fmt.Sprint(sub(rec, "session")["privilege"])
 +		}
 +	}
@@ -965,36 +1259,39 @@ index 0000000..c007c45
 +// clear of one interface's counters, a ping of the loopback, and the two
 +// disruptive commands by completion only.
 +var junosWireProbes = []junosProbe{
-+	{cmd: "show version"}, {cmd: "show system uptime"}, {cmd: "show interfaces terse"},
-+	{cmd: "show interfaces fxp0 terse"}, {cmd: "show configuration system host-name"},
++	{cmd: "show version"}, {cmd: "show version | no-more"}, {cmd: "show system uptime"},
++	{cmd: "show interfaces terse"}, {cmd: "show interfaces fxp0 terse"},
++	{cmd: "show configuration system host-name", evidence: "host-name " + junosHost},
 +	{cmd: "clear interfaces statistics fxp0"}, {cmd: "ping 127.0.0.1 count 1 rapid"},
 +	{cmd: "SHOW VERSION"}, {cmd: "show interfaces FXP0 terse"}, {cmd: "sh ver"}, {cmd: "sh int fxp0 terse"},
-+	{cmd: "set cli screen-width 200"},
++	{cmd: "set cli screen-width 200"}, {cmd: "file list /var/tmp"},
 +	{cmd: "request system reboot", complete: true}, {cmd: "restart routing", complete: true},
 +}
 +
 +type junosVariant struct{ name, attrs, why string }
 +
++// junosWireVariants are fourteen logins; the per-session check spends two
++// more, the harness's pool of sixteen.
 +var junosWireVariants = []junosVariant{
 +	{"control", `["local-user-name=p49-l12-all"]`, "every bit and no regex: what the device runs at all"},
 +	{"bitless", `["local-user-name=p49-l12-none"]`, "a template with no bits: the baseline every session has"},
 +	{"bitless + user-permissions", `["local-user-name=p49-l12-none", "user-permissions=view"]`,
 +		"L12: is user-permissions applied over a bitless template"},
-+	{"bitless + user-permissions optional", `["local-user-name=p49-l12-none", "user-permissions*view"]`,
-+		"L12: the same, optional"},
 +	{"bitless + two bits", `["local-user-name=p49-l12-none", "user-permissions=view clear"]`,
 +		"L12: two bits in one value, space-separated, as the generator writes them"},
 +	{"remote + user-permissions", `["user-permissions=view"]`,
 +		"L12: over remote's view view-configuration, does it replace (view alone) or merge"},
 +	{"narrow", `["local-user-name=p49-l12-view", "deny-commands=^.*$", "allow-commands=^(show version|show interfaces( .*)?)$"]`,
-+		"L12: deny .* and one allow alternation yield exactly the permits"},
++		"L12: deny .* and one allow alternation yield exactly the permits, and what .* does to the baseline"},
 +	{"deny unanchored word", `["local-user-name=p49-l12-all", "deny-commands=version"]`,
 +		"L9: is a deny regex matched anywhere in the line"},
 +	{"deny prefix", `["local-user-name=p49-l12-all", "deny-commands=show ver"]`, "L9: is it matched as a prefix"},
-+	{"deny anchored", `["local-user-name=p49-l12-all", "deny-commands=^show version$"]`,
-+		"L9: explicit anchors; and the case and abbreviation of `show version`"},
++	{"deny anchored", `["local-user-name=p49-l12-all", "deny-commands=^show version( *\\|.*)?$"]`,
++		"L9: explicit anchors with the pipe tail the generator writes; and the case and abbreviation of `show version`"},
 +	{"deny argument", `["local-user-name=p49-l12-all", "deny-commands=^show interfaces fxp0( .*)?$"]`,
 +		"L9: an argument's case and an abbreviated command against a deny"},
++	{"deny malformed", `["local-user-name=p49-l12-all", "deny-commands=^(show$"]`,
++		"L9: a regex the dialect rejects: refused session, ignored, or applied"},
 +	{"configuration mode", `["local-user-name=p49-l12-cfg", "deny-commands=^(set system host-name.*|show version)$"]`,
 +		"L12: does deny-commands reach a statement typed in configuration mode, and `run`"},
 +	{"regexps family", `["local-user-name=p49-l12-view", "deny-commands-regexps=^show version$", "allow-commands-regexps=^show version$"]`,
@@ -1006,8 +1303,8 @@ index 0000000..c007c45
 +// configurationProbes are typed in the configuration-mode variant after its
 +// probes: the statement sets the host name the device already has, so
 +// nothing changes whether it is refused or not.
-+var configurationProbes = []junosProbe{{cmd: "configure"}, {cmd: "set system host-name srx1"}, {cmd: "run show version"},
-+	{cmd: "run show system uptime"}, {cmd: "exit configuration-mode"}}
++var configurationProbes = []junosProbe{{cmd: "configure"}, {cmd: "set system host-name " + junosHost},
++	{cmd: "run show version"}, {cmd: "run show system uptime"}, {cmd: "exit configuration-mode"}}
 +
 +func TestL12JunosWire(t *testing.T) {
 +	eachPlatform(t, func(t *testing.T, l *lab) {
@@ -1032,15 +1329,20 @@ index 0000000..c007c45
 +				probes = append(slices.Clone(probes), configurationProbes...)
 +			}
 +			runs[v.name] = l.junosSession(t, v.name, v.attrs, probes)
-+			if runs[v.name].loginErr != "" {
++			if runs[v.name].loginErr != "" && v.name != "deny malformed" {
 +				t.Errorf("%s: the session did not open, so nothing was measured: %s", v.name, runs[v.name].loginErr)
++			}
++			// The control is checked before a token more is spent: without it
++			// no cell compares.
++			if c := runs["control"]; v.name == "control" && (!c.ran("show version") || !c.ran("show interfaces terse") ||
++				!c.runs(junosWireProbes[5])) {
++				t.Fatalf("the control did not run `show version`, `show interfaces terse` and show the configuration, "+
++					"so no cell compares: %+v", c)
 +			}
 +		}
 +		perSession := l.junosPerSession(t)
++		locks := l.junosTemplateLogins(t)
 +		control := runs["control"]
-+		if !control.ran("show version") || !control.ran("show interfaces terse") {
-+			t.Fatalf("the control ran neither `show version` nor `show interfaces terse`, so no cell compares: %+v", control)
-+		}
 +		facts := junosFacts(runs)
 +		var b strings.Builder
 +		fmt.Fprintf(&b, "The templates were committed without a uid (%s).\n\n", commitWord(commit))
@@ -1058,17 +1360,22 @@ index 0000000..c007c45
 +			for _, v := range junosWireVariants {
 +				r := runs[v.name]
 +				cell := "—"
-+				if _, ok := r.outs[p.cmd]; ok {
++				if _, ok := r.outs[p.cmd]; ok || r.loginErr != "" {
 +					cell = r.cell(p, control)
 +				}
 +				fmt.Fprintf(&b, " %s |", cell)
 +			}
 +			b.WriteString("\n")
 +		}
-+		fmt.Fprintf(&b, "\n### Read off the table\n\n%s\n%s\n", facts, perSession)
++		fmt.Fprintf(&b, "\n### Read off the table\n\n%s%s\n%s\n", facts, perSession, locks)
 +		for _, v := range junosWireVariants {
 +			r := runs[v.name]
-+			fmt.Fprintf(&b, "\n### %s\n\nReply `%s`. `show cli authorization`:\n\n```\n%s\n```\n", v.name, v.attrs, r.auth)
++			fmt.Fprintf(&b, "\n### %s\n\nReply `%s`.", v.name, v.attrs)
++			if r.loginErr != "" {
++				fmt.Fprintf(&b, " The session did not open: `%s`.\n", r.loginErr)
++				continue
++			}
++			fmt.Fprintf(&b, " `show cli authorization`:\n\n```\n%s\n```\n", r.auth)
 +			for _, p := range append(slices.Clone(junosWireProbes), configurationProbes...) {
 +				if out, ok := r.outs[p.cmd]; ok {
 +					fmt.Fprintf(&b, "\n`%s`:\n\n```\n%s\n```\n", p.cmd, orEmpty([]string{out}, 0))
@@ -1079,27 +1386,32 @@ index 0000000..c007c45
 +		// reads on its own; the capture is the run's (L12-*.pcap).
 +		l.result(t, "L12", "Over TACACS+ on `junos-exec`: whether `user-permissions` is applied over a bitless "+
 +			"template, replacing or merging, per session, and two bits in one value; whether a wire "+
-+			"`deny-commands .*` plus one allow alternation yields exactly the permits; whether deny-commands "+
-+			"reaches a statement typed in configuration mode, and `run`; whether `deny-commands-regexps` beats "+
-+			"`allow-commands-regexps`; whether `allow-commands2` is an attribute of its own; whether a template "+
-+			"user commits with no uid (spec §8, §13 decision 22, §15 L12).", b.String())
++			"`deny-commands .*` plus one allow alternation yields exactly the permits, and what it does to the "+
++			"commands a class with no bits runs; whether deny-commands reaches a statement typed in configuration "+
++			"mode, and `run`; whether `deny-commands-regexps` beats `allow-commands-regexps`; whether "+
++			"`allow-commands2` is an attribute of its own; whether a template user commits with no uid, and "+
++			"whether it can be logged into locally (spec §8, §13 decision 22, §15 L12).", b.String())
 +		l.result(t, "L9", "Over TACACS+ on `junos-exec`: whether a `deny-commands` regex is matched anywhere in "+
-+			"the line, as a prefix, or only as anchored; whether explicit `^` and `$` are taken; whether it reads "+
-+			"a command in the case typed (`SHOW VERSION`, an argument `FXP0`) and in the abbreviation typed "+
-+			"(`sh ver`) or as the CLI expands it; and whether a value with spaces is taken raw (spec §8, §15 L9). "+
-+			"The `JunosFacts` lines below are what internal/projection reads.", b.String())
++			"the line, as a prefix, or only as anchored; whether explicit `^` and `$` are taken with the pipe tail "+
++			"`( *\\|.*)?`; whether it reads a command in the case typed (`SHOW VERSION`, an argument `FXP0`), the "+
++			"abbreviation typed (`sh ver`) and the pipe typed (`| no-more`), or as the CLI expands it; what a "+
++			"malformed regex does; and whether a value with spaces is taken raw (spec §8, §15 L9). The "+
++			"`JunosFacts` lines below are what internal/projection reads.", b.String())
 +	})
 +}
 +
-+// junosFacts reads the facts the generator's JunosFacts and bit_delivery
-+// take off the table, each with the rule it was read by.
++// junosFacts reads the facts the generator's JunosFacts, bit_delivery and
++// the set's fallbacks take off the table, each with the rule it was read by.
 +func junosFacts(runs map[string]junosRun) string {
 +	c := runs["control"]
 +	var b strings.Builder
 +	say := func(format string, args ...any) { fmt.Fprintf(&b, "- "+format+"\n", args...) }
 +	anchored := runs["deny anchored"]
-+	say("explicit anchors: `^show version$` refused `show version` (%v) and ran `show system uptime` (%v)",
-+		!anchored.ran("show version"), anchored.ran("show system uptime"))
++	anchors := !anchored.ran("show version") && !anchored.ran("show version | no-more") &&
++		anchored.ran("show system uptime")
++	say("explicit anchors with the pipe tail: %v: `^show version( *\\|.*)?$` refused `show version` (%v) and "+
++		"`show version | no-more` (%v), and ran `show system uptime` (%v)", anchors, !anchored.ran("show version"),
++		!anchored.ran("show version | no-more"), anchored.ran("show system uptime"))
 +	say("unanchored: `version` refused `show version` (%v); `show ver` refused `show version` (%v)",
 +		!runs["deny unanchored word"].ran("show version"), !runs["deny prefix"].ran("show version"))
 +	caseSafe := func(cmd string, deny junosRun) bool { return !c.ran(cmd) || !deny.ran(cmd) }
@@ -1110,28 +1422,47 @@ index 0000000..c007c45
 +		!runs["deny argument"].ran("sh int fxp0 terse")
 +	say("JunosFacts.DenyMatchesExpanded = %v: true only where the control ran both abbreviations and each "+
 +		"deny refused them", expanded)
++	m := runs["deny malformed"]
++	say("a malformed deny `^(show$`: the session opened %v (%s); `show version` ran %v", m.loginErr == "",
++		orErr(m.loginErr), m.ran("show version"))
 +	n := runs["narrow"]
-+	say("narrow shape exact: ran `show version` %v, `show interfaces terse` %v; refused `show system uptime` %v, "+
-+		"`clear interfaces statistics fxp0` %v, `ping` %v", n.ran("show version"), n.ran("show interfaces terse"),
-+		!n.ran("show system uptime"), !n.ran("clear interfaces statistics fxp0"), !n.ran("ping 127.0.0.1 count 1 rapid"))
++	exact := n.ran("show version") && n.ran("show interfaces terse") && !n.ran("show system uptime") &&
++		!n.ran("clear interfaces statistics fxp0") && !n.ran("ping 127.0.0.1 count 1 rapid") &&
++		!n.runs(junosWireProbes[5]) && n.loginErr == ""
++	say("narrow shape exact: %v: ran `show version` %v and `show interfaces terse` %v; refused `show system "+
++		"uptime` %v, `clear interfaces statistics fxp0` %v, `ping` %v, the configuration %v", exact,
++		n.ran("show version"), n.ran("show interfaces terse"), !n.ran("show system uptime"),
++		!n.ran("clear interfaces statistics fxp0"), !n.ran("ping 127.0.0.1 count 1 rapid"), !n.runs(junosWireProbes[5]))
++	bl := runs["bitless"]
++	say("under deny .*, the commands a class with no bits runs: `set cli screen-width 200` bitless %v, narrow %v; "+
++		"`file list /var/tmp` bitless %v, narrow %v", bl.ran("set cli screen-width 200"), n.ran("set cli screen-width 200"),
++		bl.ran("file list /var/tmp"), n.ran("file list /var/tmp"))
 +	up := strings.Contains(runs["bitless + user-permissions"].auth, "view") &&
 +		!strings.Contains(runs["bitless"].auth, "view")
-+	say("user-permissions over a bitless template applied: %v (bit_delivery: user_permissions only if true, and "+
-+		"per session below)", up)
++	two := runs["bitless + two bits"].auth
++	say("user-permissions over a bitless template applied: %v; both bits of a two-bit value applied: %v "+
++		"(bit_delivery: user_permissions only if both are true, and per session below)", up,
++		strings.Contains(two, "view") && strings.Contains(two, "clear"))
 +	say("user-permissions over remote: `show cli authorization` lists view-configuration: %v (true: merged or "+
 +		"ignored; false: replaced)", strings.Contains(runs["remote + user-permissions"].auth, "view-configuration"))
 +	cfg := runs["configuration mode"]
 +	say("a statement typed in configuration mode under a deny-commands naming it: %s; `run show version` "+
-+		"under a deny naming `show version`: %s", cfg.cell(junosProbe{cmd: "set system host-name srx1"}, c),
-+		cfg.cell(junosProbe{cmd: "run show version"}, c))
++		"under a deny naming `show version`: %s", cfg.cell(configurationProbes[1], c), cfg.cell(configurationProbes[2], c))
 +	say("-regexps: `show version` refused with both deny and allow naming it: %v", !runs["regexps family"].ran("show version"))
 +	say("allow-commands2 an attribute of its own: `show system uptime` ran: %v", runs["numbered name"].ran("show system uptime"))
 +	return b.String()
 +}
 +
++func orErr(s string) string {
++	if s == "" {
++		return "no error"
++	}
++	return s
++}
++
 +// junosPerSession asks whether user-permissions is per session: session A
 +// opens under `view`, port49d restarts under `clear`, session B opens, and A
-+// is asked again. It spends two tokens.
++// is asked again. It spends two tokens. Anything not observed fails the test.
 +func (l *lab) junosPerSession(t *testing.T) string {
 +	t.Helper()
 +	cfgA, err := l.derivedConfigCmd("junos-per-a", `["local-user-name=p49-l12-none", "user-permissions=view"]`, "", "")
@@ -1147,7 +1478,8 @@ index 0000000..c007c45
 +		_, err = a.expect(90*time.Second, junosOpPrompt)
 +	}
 +	if err != nil {
-+		return "- per session: session A did not open (" + oneLine(err.Error()) + "), not measured"
++		t.Errorf("per session: session A did not open: %v", err)
++		return "- per session: not observed (session A did not open)\n"
 +	}
 +	defer a.Close()
 +	before, errA := a.sendExpect("show cli authorization", junosPer, junosOpPrompt)
@@ -1170,10 +1502,66 @@ index 0000000..c007c45
 +	after, errA2 := a.sendExpect("show cli authorization", junosPer, junosOpPrompt)
 +	if errA != nil || errA2 != nil || err != nil {
 +		t.Errorf("per session: not observed (%v %v %v)", errA, errA2, err)
-+		return "- per session: not observed"
++		return "- per session: not observed\n"
 +	}
-+	return fmt.Sprintf("- per session: A before `%s`, B `%s`, A after B `%s`", oneLine(before), oneLine(bAuth),
++	return fmt.Sprintf("- per session: A before `%s`, B `%s`, A after B `%s`\n", oneLine(before), oneLine(bAuth),
 +		oneLine(after))
++}
++
++// junosTemplateLogins asks whether a template user can be logged into on
++// its own, with port49d stopped so the device takes the local password (L4):
++// the reference configuration's templates carry no authentication, and one
++// with class `all` that took an empty password would be a way in for anyone.
++// Then whether `authentication encrypted-password "*"` commits, and whether it
++// locks the account. Each dial has a 30 s deadline; a dial that neither
++// failed nor opened is not observed and fails the test.
++func (l *lab) junosTemplateLogins(t *testing.T) string {
++	t.Helper()
++	if err := l.stopDaemon(); err != nil {
++		t.Fatalf("could not stop port49d for the local logins: %v", err)
++	}
++	defer func() {
++		if std, err := l.configPath(); err == nil {
++			if err := l.restart(std); err != nil {
++				t.Errorf("could not put port49d back on the lab config: %v", err)
++			}
++		}
++	}()
++	var b strings.Builder
++	dial := func(user, password string) string {
++		c, err := l.dial(user, password, 30*time.Second)
++		if err == nil {
++			c.Close()
++			return "**logged in**"
++		}
++		if !isAuthRejection(err) {
++			t.Errorf("a local login as %s was not observed: %v", user, err)
++			return "not observed: " + oneLine(err.Error())
++		}
++		return "refused"
++	}
++	fmt.Fprintf(&b, "- a template user with no authentication, locally: empty password %s, `x` %s\n",
++		dial("p49-l12-none", ""), dial("p49-l12-none", "x"))
++	lock := []string{"set system login user p49-l12-lock class p49-l12-none",
++		`set system login user p49-l12-lock authentication encrypted-password "*"`}
++	c, err := l.junosCLI(breakglassUser, breakglassPassword)
++	if err != nil {
++		t.Fatalf("no admin CLI for the lock measurement: %v", err)
++	}
++	out, cerr := junosConfigure(c, lock...)
++	c.Close()
++	fmt.Fprintf(&b, "- `authentication encrypted-password \"*\"` commits: %v (%s)\n", cerr == nil, commitWord(out))
++	if cerr == nil {
++		fmt.Fprintf(&b, "- that template, locally: empty password %s, `*` %s\n", dial("p49-l12-lock", ""),
++			dial("p49-l12-lock", "*"))
++		if c, err := l.junosCLI(breakglassUser, breakglassPassword); err == nil {
++			if _, err := junosConfigure(c, "delete system login user p49-l12-lock"); err != nil {
++				t.Errorf("removing p49-l12-lock: %v", err)
++			}
++			c.Close()
++		}
++	}
++	return b.String()
 +}
 +
 +func commitWord(out string) string {
@@ -1198,10 +1586,11 @@ PORT49_LAB_PLATFORMS=vjunos go test -tags lab ./tests/lab/ -run '^TestL12JunosWi
 echo $! > tests/lab/logs/l12-wire-vjunos.pid
 ```
 
-Run it in the background as "Running the lab" shows, with the stall watchdog running for the whole run. Boot budget 8 min. Expected: `--- PASS: TestL12JunosWire/juniper_vjunos-router`,
-and `wrote tests/lab/results/L12-juniper_vjunos-router.md` and `L9-...` in the log. A FAIL that
-names `not observed`, or a variant whose session did not open, measured nothing for that cell:
-rerun. A FAIL on the control means the lab is broken, not Junos: stop and report it.
+Run it in the background as "Running the lab" shows, with the stall watchdog running for the whole run and cleaning up after a `go test` timeout. Boot budget 8 min; watchdog `STALL=25`. Expected: `--- PASS:
+TestL12JunosWire/juniper_vjunos-router`, and `wrote tests/lab/results/L12-juniper_vjunos-router.md`
+and `L9-...` in the log. A FAIL that names `not observed`, or a variant whose session did not open,
+measured nothing for that cell: rerun. A FAIL on the control means the lab is broken, not Junos:
+stop and report it.
 
 - [ ] **Step 4: Run it on vSRX**
 
@@ -1209,22 +1598,21 @@ The same, with `PORT49_LAB_PLATFORMS=vsrx`, the log `l12-wire-vsrx.log`, and top
 `vsrx.clab.yml` for the watchdog. Boot budget 6 min. On vSRX `junosCLI` reaches the break-glass CLI
 over the console as root (`results/juniper_vsrx-config-verified.md`), and the note says so.
 
-- [ ] **Step 5: Read the notes, and record what Task 13 takes from them**
+- [ ] **Step 5: Read the notes, and record what Task 14 takes from them**
 
-Each note ends with "Read off the table". Copy these lines into the task's report for Task 13:
+Each note ends with "Read off the table". Copy every line of it into the task's report for Task
+14, which has a branch for each. In particular:
 
-- `explicit anchors: ... refused show version (true) and ran show system uptime (true)`. **If
-  either is false on either image, report it to the controller before Task 13.** The projection
-  writes `^...$` on every regex, and a device that does not take them cannot be sent one. Tasks
-  5–12 still land. Task 13 then ships 1.1.0 without `command_projection` on Junos (Step 4, item
-  1), and Task 18 is skipped.
-- `JunosFacts.CaseSensitive = ...` and `JunosFacts.DenyMatchesExpanded = ...` on both images.
-- `user-permissions over a bitless template applied: ...`, the two-bit variant's `show cli
-  authorization` (both `view` and `clear` listed?) and the per-session line (A's permissions
-  unchanged after B?).
-- The configuration-mode line: the statement's cell, and `run show version`'s.
-- `-regexps` and `allow-commands2`. These are informational: nothing in this plan sends either.
-- The table's `priv_lvl on the request` column. The Junos adapter's ceiling numbers assume 1
+- `explicit anchors with the pipe tail: ...` on both images;
+- `JunosFacts.CaseSensitive = ...` and `JunosFacts.DenyMatchesExpanded = ...` on both images;
+- `narrow shape exact: ...`, with which of its probes ran;
+- `under deny .*, the commands a class with no bits runs: ...` (the baseline under `.*`);
+- the malformed deny line;
+- `user-permissions over a bitless template applied: ...`, the two-bit line and the per-session
+  line;
+- the template-login lines and "The templates were committed without a uid";
+- the configuration-mode line, `-regexps` and `allow-commands2`;
+- the table's `priv_lvl on the request` column. The Junos adapter's ceiling numbers assume 1
   (Decided 10), so if it is not 1, say so in the report.
 
 - [ ] **Step 6: Commit the test, the notes and the evidence**
@@ -1242,12 +1630,12 @@ EOF
 )"
 ```
 
-The rows stay open until Task 19. A note is a measurement, and closing a row is its own commit
+The rows stay open until Task 20. A note is a measurement, and closing a row is its own commit
 (CLAUDE.md, rule 3).
 
 ---
 
-### Task 3: (lab, on beehive) Each bit's reach, and the class idle-timeout: L12 and L24
+### Task 3: (lab, on beehive) Each bit's reach, the baseline, the carve-out, and the class idle-timeout: L12 and L24
 
 **Files:**
 - Create: `tests/lab/junos_bits_test.go`
@@ -1256,25 +1644,33 @@ The rows stay open until Task 19. A note is a measurement, and closing a row is 
   `L12-bits-*.pcap`, `L24-*.pcap`
 
 **Interfaces:**
-- Consumes: Task 2's `junosSession`, `junosProbe`, `junosRun`, `junosConfigureAdmin`, `junosPer`;
-  the harness's `l.dial`, `syncBuf`.
-- Produces: `junosBitReach map[string][]string`, the candidate reach Task 13 ships under `bits:`.
-  Also `(*lab).holdUntilClosed(user, password string, within time.Duration) (time.Duration, string,
-  error)`. And the notes Task 13 reads.
+- Consumes: Task 2's `junosSession`, `junosProbe`, `junosRun`, `junosConfigureAdmin`, `junosPer`,
+  `junosHost`; the harness's `l.dial`, `syncBuf`.
+- Produces: `junosBitReach map[string][]string`, `baseline` included, and `junosCarveOuts
+  map[string][]string`: the candidates Task 14 ships under `bits:` and `carve_outs:`. Also
+  `(*lab).junosSurvey`, `(*lab).holdUntilClosed(user, password string, within time.Duration)
+  (time.Duration, string, error)`. And the notes Task 14 reads.
 
 `junosBitReach` is the candidate each bit's reach is verified against, as an upper bound. For each
 bit a ceiling names (view, view-configuration, clear, network, trace), a template's class holds
-that bit alone. A sixth class, `none`, holds none. The test reads the top-level `?` completion and
-`show ?` completion under each. A word a bit's completion offers and `none`'s does not must be held
-by the bit's candidate reach, or the test fails and names the rule to add. That is the direction
-that fails closed: a reach that says more than the bit does only makes the projection trust the bit
-less. The carve-out the model reads is asserted too. Under `view` alone, `show configuration system
-host-name` must not show the host name, or `view-configuration` carves nothing out of `view` and
-`view`'s reach must hold `show configuration **`.
+that bit alone; a class `none` holds no bit, and a class `all` holds every bit (pre-flight I3).
+Under each the test reads the top-level `?` completion and one level under each word it offers
+(`junosSurvey`). A word a bit's completion offers and `none`'s does not must be held by the bit's
+candidate reach, and every word `none` offers must be held by the candidate `baseline`, or the test
+fails and names the rule to add. That is the direction that fails closed: a reach that says more
+than the bit does makes the projection require more of the grant before it sends the bit, and a
+larger baseline puts more denies on the wire.
+
+The carve-out is asserted against the `all` control, and only where both probes were observed
+(pre-flight I4): under `all`, `show configuration system host-name` shows `host-name srx1`; under
+`view` alone it must not. If it does, `view-configuration` carves nothing, and the note says to
+remove the carve-out. The executed-probe table reads each probe against `all`, never `none`.
 
 L24 lands one session through `local-user-name` in a class with `idle-timeout 1`, and one through
-the `remote` template, whose class gets `idle-timeout 1` for the run. It holds each idle. The
-deadline is 4 minutes: a session still open then is not observed, and fails.
+the `remote` template, whose class gets `idle-timeout 1` for the run. It waits for the operational
+prompt before starting the clock, then holds each idle (pre-flight I5). A session that closes in
+under 50 s was not closed by an idle timer and fails; one still open after 4 minutes is not
+observed, and fails.
 
 - [ ] **Step 1: Add the test**
 
@@ -1282,10 +1678,10 @@ deadline is 4 minutes: a session still open then is not observed, and fails.
 ````diff
 diff --git a/tests/lab/junos_bits_test.go b/tests/lab/junos_bits_test.go
 new file mode 100644
-index 0000000..fd19560
+index 0000000..63bf7b1
 --- /dev/null
 +++ b/tests/lab/junos_bits_test.go
-@@ -0,0 +1,311 @@
+@@ -0,0 +1,392 @@
 +//go:build lab
 +
 +package lab
@@ -1304,11 +1700,13 @@ index 0000000..fd19560
 +
 +// junosBitReach is each permission bit's reach in rule form, the candidate
 +// this test verifies as an upper bound and platforms/1.1.0/juniper_junos.yaml
-+// ships under `bits:` (spec §8, §15 L12). A bit that reaches a command no rule
-+// here holds fails the test: widen the rule, here and in the adapter, since
-+// a reach that says more than the bit does only makes the projection trust
-+// the bit less.
++// ships under `bits:` (spec §8, §15 L12). `baseline` is what a class with no
++// bits runs, held by every session. A bit that reaches a command no rule here
++// holds fails the test: widen the rule, here and in the adapter. Reach is a
++// union, so a wider reach only makes the projection send the bit for fewer
++// grants.
 +var junosBitReach = map[string][]string{
++	"baseline":           {"help **", "quit **", "exit **", "set cli **", "show cli **"},
 +	"view":               {"show **"},
 +	"view-configuration": {"show configuration **"},
 +	"clear":              {"clear **"},
@@ -1316,20 +1714,27 @@ index 0000000..fd19560
 +	"trace":              {"monitor **"},
 +}
 +
-+// junosBitProbes are typed under each single-bit template. Top-level and
-+// `show` completion are the reach; the executed probes are the evidence a
-+// reader checks it against.
++// junosCarveOuts are the commands a bit alone makes available, whatever other
++// bit reaches them: the adapter's `carve_outs:`. The one candidate is the one
++// the projection's realistic readonly rests on, and this test asserts it:
++// under `view` alone the configuration is not shown.
++var junosCarveOuts = map[string][]string{"view-configuration": {"show configuration **"}}
++
++// junosHostProbe shows the configuration only where it prints the host name.
++var junosHostProbe = junosProbe{cmd: "show configuration system host-name", evidence: "host-name " + junosHost}
++
++// junosBitProbes are typed under each single-bit template after the survey,
++// read against the `all` control.
 +var junosBitProbes = []junosProbe{
-+	{cmd: "?", complete: true}, {cmd: "show ?", complete: true},
-+	{cmd: "show version"}, {cmd: "show configuration system host-name"}, {cmd: "show system uptime"},
++	{cmd: "show version"}, junosHostProbe, {cmd: "show system uptime"},
 +	{cmd: "clear interfaces statistics fxp0"}, {cmd: "ping 127.0.0.1 count 1 rapid"},
-+	{cmd: "traceroute 127.0.0.1 ttl 1 wait 1"}, {cmd: "file list /var/tmp"},
++	{cmd: "traceroute 127.0.0.1 ttl 1 wait 1"}, {cmd: "file list /var/tmp"}, {cmd: "set cli screen-width 200"},
 +	{cmd: "monitor interface", complete: true}, {cmd: "request system reboot", complete: true},
 +	{cmd: "restart routing", complete: true}, {cmd: "configure"}, {cmd: "exit configuration-mode"},
 +}
 +
-+// completionWords is the words a `?` listing offers, one per line, the
-+// description after them dropped.
++// completionWord is a word a `?` listing offers, one per line, the
++// description after it dropped.
 +var completionWord = regexp.MustCompile(`(?m)^  ?([a-z][a-z0-9-]*)\s`)
 +
 +func completionWords(out string) []string {
@@ -1342,6 +1747,34 @@ index 0000000..fd19560
 +	return words
 +}
 +
++// junosSurvey is one class's reach as its completion offers it: every word
++// at the top level, and every word one level under each (`show ?`,
++// `request ?`), keyed "word" and "word sub". Each listing has junosPer; a
++// listing not observed fails the test and ends the survey.
++func (l *lab) junosSurvey(t *testing.T, name string, c *cliConn, r *junosRun) []string {
++	t.Helper()
++	top, err := l.junosProbe(c, junosProbe{cmd: "?", complete: true})
++	if err != nil {
++		t.Errorf("%s: the top-level listing not observed within %s: %v", name, junosPer, err)
++		r.unobserved = append(r.unobserved, "?")
++		return nil
++	}
++	var reach []string
++	for _, w := range completionWords(top) {
++		reach = append(reach, w)
++		out, err := l.junosProbe(c, junosProbe{cmd: w + " ?", complete: true})
++		if err != nil {
++			t.Errorf("%s: `%s ?` not observed within %s: %v", name, w, junosPer, err)
++			r.unobserved = append(r.unobserved, w+" ?")
++			return reach
++		}
++		for _, x := range completionWords(out) {
++			reach = append(reach, w+" "+x)
++		}
++	}
++	return reach
++}
++
 +func TestL12JunosBits(t *testing.T) {
 +	eachPlatform(t, func(t *testing.T, l *lab) {
 +		if l.p.name != "juniper_vjunos-router" && l.p.name != "juniper_vsrx" {
@@ -1349,9 +1782,16 @@ index 0000000..fd19560
 +		}
 +		stop := l.capture(t, "L12-bits")
 +		defer stop()
-+		bits := append([]string{"none"}, sortedKeysOf(junosBitReach)...)
++		var bits []string
++		for b := range junosBitReach {
++			if b != "baseline" {
++				bits = append(bits, b)
++			}
++		}
++		slices.Sort(bits)
++		classes := append([]string{"none", "all"}, bits...)
 +		var define, remove []string
-+		for _, b := range bits {
++		for _, b := range classes {
 +			class := "p49-l12-b-" + b
 +			if b == "none" {
 +				define = append(define, "set system login class "+class+" idle-timeout 60")
@@ -1370,84 +1810,104 @@ index 0000000..fd19560
 +				}
 +			}
 +		}()
-+		runs := map[string]junosRun{}
-+		for _, b := range bits {
-+			runs[b] = l.junosSession(t, "bit "+b, `["local-user-name=p49-l12-b-`+b+`"]`, junosBitProbes)
-+			if runs[b].loginErr != "" {
-+				t.Errorf("bit %s: the session did not open: %s", b, runs[b].loginErr)
++		runs, reach := map[string]junosRun{}, map[string][]string{}
++		for _, b := range classes {
++			c, r, _ := l.junosLogin(t, "bit "+b, `["local-user-name=p49-l12-b-`+b+`"]`)
++			if c == nil {
++				t.Errorf("bit %s: the session did not open: %s", b, r.loginErr)
++				runs[b] = r
++				continue
 +			}
++			reach[b] = l.junosSurvey(t, b, c, &r)
++			for _, p := range junosBitProbes {
++				out, err := l.junosProbe(c, p)
++				r.outs[p.cmd] = out
++				if err != nil {
++					r.unobserved = append(r.unobserved, p.cmd)
++					t.Errorf("bit %s: %q not observed within %s: %v", b, p.cmd, junosPer, err)
++					break
++				}
++			}
++			c.Close()
++			runs[b] = r
 +		}
-+		base := runs["none"]
++		all := runs["all"]
++		if !all.runs(junosHostProbe) || !all.ran("show version") {
++			t.Fatalf("the `all` control neither showed the configuration nor ran `show version`, so nothing "+
++				"compares: %+v", all)
++		}
 +		var b strings.Builder
-+		fmt.Fprintf(&b, "Each row is a session whose template's class holds one bit and nothing else; `none` holds "+
-+			"none. A word is the bit's where its completion lists it and `none`'s does not.\n\n"+
-+			"| bit | top-level words beyond none | `show` words beyond none | candidate reach | held |\n|---|---|---|---|---|\n")
-+		for _, bit := range bits[1:] {
-+			r := runs[bit]
-+			top := beyond(completionWords(r.outs["?"]), completionWords(base.outs["?"]))
-+			show := beyond(completionWords(r.outs["show ?"]), completionWords(base.outs["show ?"]))
++		fmt.Fprintf(&b, "Each row is a session whose template's class holds one bit and nothing else; `none` "+
++			"holds none and `all` every bit. A command word, or a word and the word under it, is the bit's where "+
++			"its completion offers it and `none`'s does not; `none`'s own are the baseline.\n\n"+
++			"| bit | words beyond none | candidate reach | held |\n|---|---|---|---|\n")
++		check := func(bit string, words []string) {
 +			var unheld []string
-+			for _, w := range top {
++			for _, w := range words {
 +				if !heldBy(junosBitReach[bit], w+" **") {
 +					unheld = append(unheld, w+" **")
 +				}
 +			}
-+			for _, w := range show {
-+				if !heldBy(junosBitReach[bit], "show "+w+" **") {
-+					unheld = append(unheld, "show "+w+" **")
-+				}
-+			}
-+			fmt.Fprintf(&b, "| %s | %s | %s | `%s` | %s |\n", bit, strings.Join(top, " "), strings.Join(show, " "),
++			fmt.Fprintf(&b, "| %s | %s | `%s` | %s |\n", bit, strings.Join(words, ", "),
 +				strings.Join(junosBitReach[bit], "`, `"), heldCell(unheld))
 +			if len(unheld) > 0 {
-+				t.Errorf("bit %s reaches %v, which its candidate reach does not hold: add each to junosBitReach[%q] "+
-+					"and to platforms/1.1.0/juniper_junos.yaml's bits.%s (an upper bound only fails closed)", bit,
-+					unheld, bit, bit)
++				t.Errorf("%s reaches %v, which its candidate reach does not hold: add each to junosBitReach[%q] "+
++					"and to platforms/1.1.0/juniper_junos.yaml's bits.%s", bit, unheld, bit, bit)
 +			}
 +		}
-+		// The carve-out the projection reads: under view alone, the
-+		// configuration is not shown; view-configuration's reach is narrower
-+		// than view's and holds it.
-+		view := runs["view"].outs["show configuration system host-name"]
-+		carved := !strings.Contains(view, "host-name "+l.p.node)
-+		fmt.Fprintf(&b, "\nUnder `view` alone `show configuration system host-name` shows the host name: %v. "+
-+			"The projection reads `view-configuration` as carving `show configuration **` out of `view` "+
-+			"(the most specific reach decides), which holds only if this is false.\n", !carved)
-+		if !carved {
-+			t.Errorf("under view alone the configuration is shown, so view-configuration carves nothing out of "+
-+				"view: add \"show configuration **\" to view's reach:\n%s", view)
++		check("baseline", reach["none"])
++		for _, bit := range bits {
++			check(bit, beyond(reach[bit], reach["none"]))
++		}
++		// The carve-out the projection reads: under `view` alone the
++		// configuration is not shown, observed, against a control that shows it.
++		view := runs["view"]
++		shown := view.runs(junosHostProbe)
++		_, typed := view.outs[junosHostProbe.cmd]
++		observed := typed && !slices.Contains(view.unobserved, junosHostProbe.cmd)
++		fmt.Fprintf(&b, "\nUnder `view` alone `show configuration system host-name` (observed: %v) shows `host-name "+
++			"%s`: %v; under `all` it does. Under `view-configuration` alone: %v. The adapter's carve-out "+
++			"`view-configuration: [show configuration **]` holds only if `view` alone does not show it.\n", observed,
++			junosHost, shown, runs["view-configuration"].runs(junosHostProbe))
++		if !observed || shown {
++			t.Errorf("the carve-out is not measured: under view alone the probe was observed %v and showed the "+
++				"configuration %v; remove it from junosCarveOuts and from the adapter's carve_outs, and add "+
++				"\"show configuration **\" to view's reach", observed, shown)
 +		}
 +		fmt.Fprintf(&b, "\n| probe |")
-+		for _, bit := range bits {
-+			fmt.Fprintf(&b, " %s |", bit)
++		for _, c := range classes {
++			fmt.Fprintf(&b, " %s |", c)
 +		}
-+		fmt.Fprintf(&b, "\n|---|%s\n", strings.Repeat("---|", len(bits)))
++		fmt.Fprintf(&b, "\n|---|%s\n", strings.Repeat("---|", len(classes)))
 +		for _, p := range junosBitProbes {
-+			if p.cmd == "?" || p.cmd == "show ?" {
-+				continue
-+			}
 +			fmt.Fprintf(&b, "| `%s` |", p.cmd)
-+			for _, bit := range bits {
-+				fmt.Fprintf(&b, " %s |", runs[bit].cell(p, runs["none"]))
++			for _, c := range classes {
++				fmt.Fprintf(&b, " %s |", runs[c].cell(p, all))
 +			}
 +			b.WriteString("\n")
 +		}
-+		fmt.Fprintf(&b, "\nThe reach as measured, ready for `bits:`:\n\n```yaml\n")
++		fmt.Fprintf(&b, "\nThe reach as measured, ready for `bits:` and `carve_outs:`:\n\n```yaml\n    bits:\n")
 +		for _, bit := range sortedKeysOf(junosBitReach) {
 +			fmt.Fprintf(&b, "      %s: [%s]\n", bit, quotedList(junosBitReach[bit]))
 +		}
-+		b.WriteString("      all: [\"**\"]\n```\n")
-+		for _, bit := range bits {
-+			r := runs[bit]
-+			fmt.Fprintf(&b, "\n### %s\n\n`show cli authorization`:\n\n```\n%s\n```\n", bit, r.auth)
++		b.WriteString("      all: [\"**\"]\n    carve_outs:\n")
++		for _, bit := range sortedKeysOf(junosCarveOuts) {
++			fmt.Fprintf(&b, "      %s: [%s]\n", bit, quotedList(junosCarveOuts[bit]))
++		}
++		b.WriteString("```\n")
++		for _, c := range classes {
++			r := runs[c]
++			fmt.Fprintf(&b, "\n### %s\n\n`show cli authorization`:\n\n```\n%s\n```\n\nCompletion: %s\n", c, r.auth,
++				strings.Join(reach[c], ", "))
 +			for _, p := range junosBitProbes {
 +				fmt.Fprintf(&b, "\n`%s`:\n\n```\n%s\n```\n", p.cmd, orEmpty([]string{r.outs[p.cmd]}, 0))
 +			}
 +		}
 +		l.result(t, "L12-bits", "What each permission bit a built-in level's ceiling names reaches, alone in a "+
-+			"template's class, over TACACS+ `local-user-name`: every command word its completion offers that a "+
-+			"class with no bits does not, held by the adapter's `bits:` reach as an upper bound; and that "+
-+			"`view` alone does not show the configuration (spec §8, §15 L12).", b.String())
++			"template's class, over TACACS+ `local-user-name`: every command word, and every word one level under "+
++			"it, its completion offers that a class with no bits does not, held by the adapter's `bits:` reach as "+
++			"an upper bound; what a class with no bits runs (`baseline`); and that `view` alone does not show the "+
++			"configuration, the one carve-out the adapter declares (spec §8, §15 L12).", b.String())
 +	})
 +}
 +
@@ -1500,9 +1960,10 @@ index 0000000..fd19560
 +
 +// TestL24JunosIdleTimeout measures decision 21's approximation: a login
 +// class's idle-timeout ends an idle session a TACACS+ reply landed in that
-+// class, through `local-user-name` and through the `remote` template. Each
-+// session is held idle with a deadline of four minutes on its closing; still
-+// open then is not observed, and fails.
++// class, through `local-user-name` and through the `remote` template. The
++// clock starts at the prompt; a session closed in under 50 s did not idle out
++// (idle-timeout is 1 minute) and fails, and one still open after four minutes
++// is not observed, and fails.
 +func TestL24JunosIdleTimeout(t *testing.T) {
 +	eachPlatform(t, func(t *testing.T, l *lab) {
 +		if l.p.name != "juniper_vjunos-router" && l.p.name != "juniper_vsrx" {
@@ -1524,7 +1985,7 @@ index 0000000..fd19560
 +			}
 +		}()
 +		var b strings.Builder
-+		fmt.Fprintf(&b, "| path | reply | closed after | what the device said |\n|---|---|---|---|\n")
++		fmt.Fprintf(&b, "| path | reply | closed after the prompt | what the device said |\n|---|---|---|---|\n")
 +		for _, v := range []struct{ name, attrs string }{
 +			{"local-user-name", `["local-user-name=p49-l24-idle"]`},
 +			{"remote template", `[]`},
@@ -1539,9 +2000,13 @@ index 0000000..fd19560
 +			user, secret := l.nextLogin(t)
 +			elapsed, said, err := l.holdUntilClosed(user, secret, 4*time.Minute)
 +			cell := elapsed.Round(time.Second).String()
-+			if err != nil {
++			switch {
++			case err != nil:
 +				cell = "not observed: " + oneLine(err.Error())
 +				t.Errorf("%s: %v", v.name, err)
++			case elapsed < 50*time.Second:
++				t.Errorf("%s: closed %s after the prompt, before a 1-minute idle-timeout could: not the timer", v.name,
++					elapsed)
 +			}
 +			fmt.Fprintf(&b, "| %s | `%s` | %s | `%s` |\n", v.name, v.attrs, cell, oneLine(said))
 +		}
@@ -1551,9 +2016,10 @@ index 0000000..fd19560
 +	})
 +}
 +
-+// holdUntilClosed opens an interactive session and types nothing until the
-+// device closes it, within the deadline. An error is a session that did not
-+// open, or one still open at the deadline: not observed.
++// holdUntilClosed opens an interactive session, waits for its prompt (90 s),
++// and types nothing until the device closes it, within the deadline. An error
++// is a session that did not reach a prompt, or one still open at the
++// deadline: not observed.
 +func (l *lab) holdUntilClosed(user, password string, within time.Duration) (time.Duration, string, error) {
 +	c, err := l.dial(user, password, 45*time.Second)
 +	if err != nil {
@@ -1578,9 +2044,20 @@ index 0000000..fd19560
 +	if err := s.Shell(); err != nil {
 +		return 0, "", err
 +	}
-+	start := time.Now()
 +	done := make(chan error, 1)
 +	go func() { done <- s.Wait() }()
++	prompt := time.Now().Add(90 * time.Second)
++	for !strings.Contains(buf.String(), junosOpPrompt) {
++		select {
++		case <-done:
++			return 0, tail(buf.String()), fmt.Errorf("closed before a prompt")
++		case <-time.After(250 * time.Millisecond):
++		}
++		if time.Now().After(prompt) {
++			return 0, tail(buf.String()), fmt.Errorf("no prompt within 90s")
++		}
++	}
++	start := time.Now()
 +	select {
 +	case <-done:
 +		return time.Since(start), tail(buf.String()), nil
@@ -1612,14 +2089,14 @@ PORT49_LAB_PLATFORMS=vjunos go test -tags lab ./tests/lab/ -run '^(TestL12JunosB
 echo $! > tests/lab/logs/l12-bits-vjunos.pid
 ```
 
-Run it in the background as "Running the lab" shows, with the stall watchdog running for the whole run. The run spends 8 of the 16 seeded logins. Then the same with
+Run it in the background as "Running the lab" shows, with the stall watchdog running for the whole run and cleaning up after a `go test` timeout. The run spends 9 of the 16 seeded logins. Then the same with
 `PORT49_LAB_PLATFORMS=vsrx`.
 
 Expected: both tests PASS on both images. If `TestL12JunosBits` fails with `bit X reaches [...],
-which its candidate reach does not hold`, that is a measurement, not a defect. Add each named
-rule to `junosBitReach[X]` in this file, rerun until it passes, and carry the final table to Task
-13 (the note prints it, "ready for `bits:`"). If the carve-out assertion fails, add `"show
-configuration **"` to `view`'s reach the same way.
+which its candidate reach does not hold` (or `baseline`), that is a measurement, not a defect. Add
+each named rule to `junosBitReach[X]` in this file, rerun until it passes, and carry the final
+table to Task 14 (the note prints `bits:` and `carve_outs:` ready to paste). If the carve-out
+assertion fails, remove the entry from `junosCarveOuts` as the failure says, and carry that too.
 
 - [ ] **Step 4: Commit the test, the notes and the evidence**
 
@@ -1647,21 +2124,24 @@ EOF
 
 **Interfaces:**
 - Consumes: 5a's `adapterVariant`, `adapterRow` and its `reach`/`permit` helpers, and
-  `inertCandidates` (`tests/lab/adapters_test.go`); `negativeFinding`; `platform.DialectFor(name).
-  Render("readonly")`.
-- Produces: the notes Task 13 (L23) and Task 14 (L25) read.
+  `inertCandidates` (`tests/lab/adapters_test.go`); `negativeFinding`; the NX-API helpers of
+  `tests/lab/l7_test.go`; `platform.DialectFor(name).Render("readonly")`.
+- Produces: the notes Task 14 (L23) and Task 15 (L25) read.
 
 5a final review M3: beside admin's reply, a candidate that raised the session would look inert,
 because admin already holds everything. Beside readonly's, a raise shows. The control is
 readonly's own reply, and it must open with `show version` permitted, or nothing compares. A
 candidate is inert only where the session opened with readonly's identity, the same reach for
 `clear counters` and `configure terminal`, and a permitted `show version`. A candidate listed
-inert that moved the session fails the test and names Task 13.
+inert that moved the session fails the test and names Task 14.
 
 L25 opens one pty session as a network-operator (readonly's reply), types a bare `show interface`,
 and cancels the sudo prompt with ^C if one appears. It then waits 30 s for an accounting record
 under `admin`. Each prompt has a 60 s deadline. If no record comes, the note carries it as a
-negative finding with the exact transcript (`negativeFinding`), and the row stays open.
+negative finding with the exact transcript (`negativeFinding`), and the row stays open. It then
+sends one NX-API `cli_show` as the NX-API user and records the task_ids that session's accounting
+carried (pre-flight M7): a person's API session whose record carries `vsh.bin.<n>` would make the
+task_id no discriminator, and Task 15 then does not key a system user on it.
 
 - [ ] **Step 1: Add the test**
 
@@ -1669,10 +2149,10 @@ negative finding with the exact transcript (`negativeFinding`), and the row stay
 ````diff
 diff --git a/tests/lab/l23_test.go b/tests/lab/l23_test.go
 new file mode 100644
-index 0000000..b2c7304
+index 0000000..9a8e75f
 --- /dev/null
 +++ b/tests/lab/l23_test.go
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,180 @@
 +//go:build lab
 +
 +package lab
@@ -1733,7 +2213,7 @@ index 0000000..b2c7304
 +				row.permit(row.showVersion), yesNo(inert))
 +			if !inert && slices.Contains(d.InertAttributes, name) {
 +				t.Errorf("%s is listed inert on %s and moved readonly's session: set 1.1.0 lists it bearing "+
-+					"(plan 5b, Task 13)", name, l.p.name)
++					"(plan 5b, Task 14)", name, l.p.name)
 +			}
 +		}
 +		l.result(t, "L23", "Whether home-directory, idletime and timeout, each beside readonly's reply, leave the "+
@@ -1821,9 +2301,36 @@ index 0000000..b2c7304
 +		} else {
 +			fmt.Fprintf(&b, "Accounting records under `admin` after it:\n\n- %s\n", strings.Join(admin, "\n- "))
 +		}
-+		l.result(t, "L25", "On the N9Kv, whether a network-operator's bare `show interface` prompts for sudo, and "+
-+			"whether cancelling it writes an accounting record under `admin` with task_id `vsh.bin.<port>` "+
-+			"(spec §5.8, §15 L25).", b.String())
++		// Whether a person's session can carry a vsh.bin task_id: an NX-API
++		// request, the other path a person's `admin` could take, recorded by
++		// its task_id. A system task keyed on the task_id is sound only if no
++		// person's record carries one (plan 5b pre-flight M7).
++		read := nxapiRead.check(t, l)
++		off = l.mark()
++		body := nxapiBody("cli_show", "show version")
++		if _, err := apiPost("https://"+l.p.addr+"/ins", read.user, read.secret, "application/json", body,
++			60*time.Second); err != nil {
++			t.Errorf("the NX-API request was not observed: %v", err)
++		}
++		var tasks []string
++		for _, r := range l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
++			return slices.ContainsFunc(rs, func(r map[string]any) bool {
++				return str(r, "event") == "account" && str(sub(r, "session"), "username") == read.user
++			})
++		}) {
++			if str(r, "event") == "account" && str(sub(r, "session"), "username") == read.user {
++				tasks = append(tasks, "`"+str(r, "task_id")+"`")
++			}
++		}
++		if len(tasks) == 0 {
++			t.Errorf("no accounting record for the NX-API request in 30s: the task_id it carries is not observed")
++		}
++		vsh := slices.ContainsFunc(tasks, func(s string) bool { return strings.HasPrefix(s, "`vsh.bin.") })
++		fmt.Fprintf(&b, "\nA person's NX-API `cli_show` as %s wrote accounting with task_id %s: a `vsh.bin.` task_id "+
++			"on a person's record: %v.\n", read.user, strings.Join(tasks, ", "), vsh)
++		l.result(t, "L25", "On the N9Kv, whether a network-operator's bare `show interface` prompts for sudo, "+
++			"whether cancelling it writes an accounting record under `admin` with task_id `vsh.bin.<port>`, and "+
++			"whether a person's NX-API request can carry such a task_id (spec §5.8, §15 L25).", b.String())
 +	})
 +}
 ````
@@ -1843,13 +2350,13 @@ echo $! > tests/lab/logs/l23-eos.pid
 
 Then `PORT49_LAB_PLATFORMS=nxos` with `-run '^(TestL23InertBesideReadonly|TestL25NXOSSystemUser)$'` and
 `-timeout 120m` (the N9Kv's boot budget is 15 min, and it takes about two minutes to finish `clear
-counters` on an exec channel). Run it in the background as "Running the lab" shows, with the stall watchdog running for the whole run.
+counters` on an exec channel). Run it in the background as "Running the lab" shows, with the stall watchdog running for the whole run and cleaning up after a `go test` timeout. On the N9Kv the watchdog runs with `STALL=40`.
 
 Expected: PASS, and one note per test per platform. A candidate that is not inert beside readonly
-fails `TestL23InertBesideReadonly` with the name to move: that is a measurement, carried to Task 13.
-`TestL25NXOSSystemUser` passes whether or not the record appears. What it measured is in the note:
-an `admin` record with `task_id vsh.bin.<n>` means Task 14 runs, and a negative finding means Task
-14 is skipped.
+fails `TestL23InertBesideReadonly` with the name to move: that is a measurement, carried to Task 14.
+`TestL25NXOSSystemUser` passes whether or not the record appears; a missed prompt or NX-API
+request fails it. What it measured is in the note: an SSH `admin` record with `task_id vsh.bin.<n>`
+and no `vsh.bin` task_id on the NX-API session means Task 15 runs; anything else means it does not.
 
 - [ ] **Step 4: Commit the test, the notes and the evidence**
 
@@ -1883,16 +2390,16 @@ EOF
     containment it could not see.
   - `func MayMeet(permit, deny string, classes map[string][]string, n Normalize) (bool, error)`
   - `func AlwaysDominates(permit, deny string, classes map[string][]string, n Normalize) (bool, error)`
-  - `func NeverDominates(permit, deny string, classes map[string][]string, n Normalize) (bool, error)`
 
-The projection's proof needs four questions of two rules, answered from their terms. The engine
+The projection's proof needs three questions of two rules, answered from their terms. The engine
 already answers one direction ("does some command match both, with the permit dominating?":
-`overrides`, from the shadowed-deny report). These export it and three more. `Contains` answers
+`overrides`, from the shadowed-deny report). These export it and two more. `Contains` answers
 only what it can decide. A regex or class term holds another only where it is the same term, and
 `*` is held only by `*` or `**`. So a `false` never licenses anything. Dominance is read off term
-ranks, which are the same on every command both rules match (spec §5.4). `NeverDominates` therefore
-does not turn on whether two patterns really share a string, and `AlwaysDominates` refuses wherever
-they only possibly meet.
+ranks, which are the same on every command both rules match (spec §5.4), and `AlwaysDominates`
+refuses wherever two patterns only possibly meet. The first version also exported
+`NeverDominates`, which only the omitted-deny rule used; under the union model (Task 8) nothing
+does, so it is not written.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1970,16 +2477,16 @@ index 0000000..c715c86
 Run: `go test ./internal/engine/`
 Expected: FAIL, build failed: `undefined: Contains`, `undefined: MayMeet`, `undefined: AlwaysDominates`.
 
-- [ ] **Step 3: Add the four functions**
+- [ ] **Step 3: Add the three functions**
 
 <!-- patch: internal/engine/contain.go -->
 ````diff
 diff --git a/internal/engine/contain.go b/internal/engine/contain.go
 new file mode 100644
-index 0000000..1dc7c19
+index 0000000..313c888
 --- /dev/null
 +++ b/internal/engine/contain.go
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,116 @@
 +package engine
 +
 +import "strings"
@@ -2096,24 +2603,6 @@ index 0000000..1dc7c19
 +	}
 +	return pm[0], ds, nil
 +}
-+
-+// NeverDominates reports whether permit dominates deny on no command both
-+// match: wherever they meet, the deny stands. Which of two rules dominates is
-+// read off their terms' ranks, the same on every command both match (spec
-+// §5.4), so it does not turn on whether two patterns really share a string.
-+func NeverDominates(permit, deny string, classes map[string][]string, n Normalize) (bool, error) {
-+	pm, ds, err := compilePair(permit, deny, classes, n)
-+	if err != nil {
-+		return false, err
-+	}
-+	abbrev := n.abbreviated()
-+	for _, d := range ds {
-+		if ok, _ := overrides(pm, d, abbrev); ok {
-+			return false, nil
-+		}
-+	}
-+	return true, nil
-+}
 ````
 
 - [ ] **Step 4: Run everything**
@@ -2136,7 +2625,7 @@ EOF
 
 ---
 
-### Task 6: The adapter declares a session-only platform's projection, bits and templates
+### Task 6: The adapter declares a session-only platform's projection, bits, carve-outs and templates
 
 **Files:**
 - Modify: `internal/platform/dialect.go` (the new fields, constants and methods)
@@ -2145,41 +2634,49 @@ EOF
 - Modify: `internal/policy/load.go` (`keepsProjection`; `checkBlockOrder` reads `local_user_names`
   and `MonotoneBits`)
 - Test: `internal/platform/projection_test.go` (new), `internal/platform/adapter_test.go`,
-  `internal/policy/projection_test.go` (new; Tasks 9–11 and 17 append to it)
+  `internal/policy/projection_test.go` (new; Tasks 9, 11, 12 and 18 append to it)
 
 **Interfaces:**
-- Consumes: `engine.ParseRule`, `engine.Class`, `engine.Regex`; 5a's `Spec.Over`, `SpecOf`,
-  `Validate`, `keepsSetClaims`, `checkBlockOrder`.
+- Consumes: `engine.ParseRule`, `engine.Class`, `engine.Regex`, Task 5's `engine.Contains`; 5a's
+  `Spec.Over`, `SpecOf`, `Validate`, `keepsSetClaims`, `checkBlockOrder`.
 - Produces:
-  - `Dialect` fields `CommandProjection string`, `Bits map[string][]string`, `BitDelivery string`,
-    `LocalUserNames map[string]string`, and `CeilingBits map[string][]string` (the `privilege` key
-    of a projected adapter).
-  - Spec keys `command_projection`, `bits`, `bit_delivery`, `local_user_names` (`*string`,
-    `*map[string][]string`, `*string`, `*map[string]string`).
+  - `Dialect` fields `CommandProjection string`, `Bits map[string][]string`, `CarveOuts
+    map[string][]string`, `BitDelivery string`, `LocalUserNames map[string]string`, and
+    `CeilingBits map[string][]string` (the `privilege` key of a projected adapter).
+  - Spec keys `command_projection`, `bits`, `carve_outs`, `bit_delivery`, `local_user_names`.
   - `const ProjectionJunosRegex = "junos_regex"`, `BitDeliveryUserPermissions = "user_permissions"`,
-    `BitDeliveryLocalUserName = "local_user_name"`, `RemoteClass = "p49-remote"`.
+    `BitDeliveryLocalUserName = "local_user_name"`, `RemoteClass = "p49-remote"`,
+    `BaselineBit = "baseline"`.
   - `func ProjectionAttributes(projection string) []string`, `func (Dialect) Projected() bool`,
-    `func (Dialect) LevelBits(level string) ([]string, bool)`, and `func (Dialect) ExpandBits(bits
-    []string) []string`, which reads `all` as every declared bit.
+    `func (Dialect) ProjectionOwns(name string) bool`, `func (Dialect) LevelBits(level string)
+    ([]string, bool)`, and `func (Dialect) ExpandBits(bits []string) []string`, which reads `all`
+    as every declared bit but `baseline`.
   - `func MonotoneBits(name string, d Dialect, order []string) error`.
   - In `internal/policy`'s tests: `projectedSet = "9.0.0"`, `projectedEnv(delivery string) Env`,
     `parseProjected(t, delivery, body string) *Policy`, `readonlyCarveOut`.
 
 The projection's inputs become adapter data, validated as every adapter is. On a projected
-platform, `privilege` is each level's ceiling in bits (Decided 2). Over routes it by the merged
-`command_projection`, and the one Dialect field with no Spec key of its own is `CeilingBits`: the
-field-count test says so. Validate requires the following of a projected adapter:
+platform, `privilege` is each level's ceiling in bits (Decided 2). Validate requires the following
+of a projected adapter:
 - `supports: [session]`, and no attribute levels;
 - no `accepted_attributes`;
 - every projection-owned name in `privilege_attributes`;
 - a bit's reach made of words, `*` and `**` only;
+- each carve-out named for a declared bit other than `baseline`, and held by that bit's own reach
+  (`engine.Contains`): a carve-out outside the bit would subtract what the bit never reached;
+- `baseline` never named in a level's ceiling, since every session holds it;
 - a known `bit_delivery`;
 - under `local_user_name`, a template per level, a login-name shape, and one class per template.
 
-A projection key on a platform that projects nothing is refused: it would read as enforced. In the
-policy, a block over a set that projects keeps the projection and every rule of each bit's reach
-(`keepsProjection`), and a level's ceiling bits rise with `privilege_levels` (`MonotoneBits`).
-Nothing renders yet. Task 9 wires the policy, and until Task 13 no built-in adapter projects.
+A projection key on a platform that projects nothing is refused: it would read as enforced.
+`ProjectionOwns` answers for every name the projection renders, in any case and with any numeric
+suffix (`allow-commands2`, `User-Permissions`; pre-flight I1), and every name the adapter lists as
+bearing privilege; Task 9 refuses them as role and grant attributes. In the policy, a block over a
+set that projects keeps the projection and every rule of each bit's reach, may add reach, which
+the diff gates as a widening, and may drop a carve-out but never add one the set does not measure
+(`keepsProjection`, pre-flight C1). A level's ceiling bits rise with `privilege_levels`
+(`MonotoneBits`). Nothing renders yet. Task 9 wires the policy, and until Task 14 no built-in
+adapter projects.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2207,10 +2704,10 @@ index ca27484..a884283 100644
 ````diff
 diff --git a/internal/platform/projection_test.go b/internal/platform/projection_test.go
 new file mode 100644
-index 0000000..e1c589b
+index 0000000..ca1d185
 --- /dev/null
 +++ b/internal/platform/projection_test.go
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,153 @@
 +package platform
 +
 +import (
@@ -2229,7 +2726,8 @@ index 0000000..e1c589b
 +		BitDelivery:         ptr(delivery),
 +		PrivilegeAttributes: ptr(ProjectionAttributes(ProjectionJunosRegex)),
 +		Bits: &map[string][]string{"view": {"show **"}, "view-configuration": {"show configuration **"},
-+			"clear": {"clear **"}, "all": {"**"}},
++			"clear": {"clear **"}, "all": {"**"}, BaselineBit: {"quit **", "set cli **"}},
++		CarveOuts: &map[string][]string{"view-configuration": {"show configuration **"}},
 +		Privilege: &map[string][]string{"readonly": {"view", "view-configuration"}, "admin": {"all"}},
 +	}.Over(base)
 +	if delivery == BitDeliveryLocalUserName {
@@ -2285,6 +2783,15 @@ index 0000000..e1c589b
 +			"accepted_attributes"},
 +		{"templates under user_permissions", func(d *Dialect) { d.LocalUserNames = map[string]string{"admin": "a"} },
 +			"read only under bit_delivery"},
++		{"a carve-out of an undeclared bit", func(d *Dialect) { d.CarveOuts["trace"] = []string{"monitor **"} },
++			"carve_outs.trace"},
++		{"a carve-out the bit does not reach", func(d *Dialect) {
++			d.CarveOuts["view-configuration"] = []string{"show log **"}
++		}, "carve_outs.view-configuration[0]: the bit's own reach does not hold it"},
++		{"a carve-out of the baseline", func(d *Dialect) { d.CarveOuts[BaselineBit] = []string{"quit **"} },
++			"never to baseline"},
++		{"a level naming the baseline", func(d *Dialect) { d.CeilingBits["readonly"] = []string{"view", BaselineBit} },
++			"baseline is held by every session"},
 +	} {
 +		d := with(junosProjected(BitDeliveryUserPermissions), c.edit)
 +		if err := Validate("juniper_junos", d); err == nil || !strings.Contains(err.Error(), c.want) {
@@ -2332,16 +2839,38 @@ index 0000000..e1c589b
 +		t.Errorf("readonly above operator: %v", err)
 +	}
 +}
++
++// A projected platform owns every name Junos reads as a class's template,
++// bits or regexes, numbered and in any case, and every name its adapter lists
++// as bearing privilege; a platform that projects nothing owns none.
++func TestProjectionOwns(t *testing.T) {
++	d := junosProjected(BitDeliveryUserPermissions)
++	for _, n := range []string{"allow-commands", "allow-commands2", "Deny-Commands1", "deny-configuration-regexps",
++		"user-permissions2", "LOCAL-USER-NAME", "allow-configuration"} {
++		if !d.ProjectionOwns(n) {
++			t.Errorf("%s is not owned", n)
++		}
++	}
++	for _, n := range []string{"home-directory", "allow-commandsx", "idletime"} {
++		if d.ProjectionOwns(n) {
++			t.Errorf("%s is owned", n)
++		}
++	}
++	eos, _ := DialectFor("arista_eos")
++	if eos.ProjectionOwns("allow-commands") {
++		t.Error("a platform that projects nothing owns nothing")
++	}
++}
 ````
 
 <!-- patch: internal/policy/projection_test.go -->
 ````diff
 diff --git a/internal/policy/projection_test.go b/internal/policy/projection_test.go
 new file mode 100644
-index 0000000..32107a7
+index 0000000..5d206d1
 --- /dev/null
 +++ b/internal/policy/projection_test.go
-@@ -0,0 +1,66 @@
+@@ -0,0 +1,69 @@
 +package policy
 +
 +import (
@@ -2364,6 +2893,7 @@ index 0000000..32107a7
 +	spec := platform.Spec{CommandProjection: &p, BitDelivery: &d,
 +		Bits: &map[string][]string{"view": {"show **"}, "view-configuration": {"show configuration **"},
 +			"clear": {"clear **"}, "network": {"ping **", "traceroute **"}, "all": {"**"}},
++		CarveOuts: &map[string][]string{"view-configuration": {"show configuration **"}},
 +		Privilege: &map[string][]string{"readonly": {"view", "view-configuration"},
 +			"operator": {"view", "view-configuration", "clear", "network"}, "admin": {"all"}},
 +		CeilingLevels: &map[string]uint8{"readonly": 1, "operator": 15, "admin": 15}}
@@ -2397,6 +2927,7 @@ index 0000000..32107a7
 +		{"bits: {maintenance: [\"request system **\"]}", "a block may not add a bit"},
 +		{"privilege: {readonly: [all]}", "privilege.readonly: all is not in operator's bits"},
 +		{"local_user_names: {operator: p49-operator}", "read only under bit_delivery"},
++		{"carve_outs: {view: [\"show log **\"]}", "a block may drop one, not add one"},
 +	} {
 +		_, err := Parse([]byte("platform_set: "+projectedSet+"\nplatforms:\n  juniper_junos:\n    "+c.block+"\n"+
 +			readonlyCarveOut), projectedEnv(platform.BitDeliveryUserPermissions))
@@ -2404,9 +2935,10 @@ index 0000000..32107a7
 +			t.Errorf("%s: %v", c.block, err)
 +		}
 +	}
-+	// Adding to a bit's reach loads: it only trusts the bit less.
++	// Adding to a bit's reach loads, and so does dropping a carve-out: each
++	// claims the bits reach more. The diff gates both as adapter edits.
 +	parseProjected(t, platform.BitDeliveryUserPermissions, "platforms:\n  juniper_junos:\n"+
-+		"    bits: {view: [\"show **\", \"monitor **\"]}\n"+readonlyCarveOut)
++		"    bits: {view: [\"show **\", \"monitor **\"]}\n    carve_outs: {view-configuration: []}\n"+readonlyCarveOut)
 +}
 ````
 
@@ -2414,28 +2946,30 @@ index 0000000..32107a7
 
 Run: `go test ./internal/platform/ ./internal/policy/`
 Expected: FAIL, build failed: `unknown field CommandProjection in struct literal of type Spec`,
-`undefined: ProjectionJunosRegex`, `undefined: ProjectionAttributes`, `d.LocalUserNames undefined`.
+`undefined: ProjectionJunosRegex`, `undefined: ProjectionAttributes`, `undefined: BaselineBit`,
+`unknown field CarveOuts in struct literal of type Spec`.
 
 - [ ] **Step 3: Add the keys, their validation and the block floors**
 
 <!-- patch: internal/platform/adapter.go -->
 ````diff
 diff --git a/internal/platform/adapter.go b/internal/platform/adapter.go
-index cf6b650..06e5780 100644
+index cf6b650..a074b72 100644
 --- a/internal/platform/adapter.go
 +++ b/internal/platform/adapter.go
-@@ -45,6 +45,10 @@ type Spec struct {
+@@ -45,6 +45,11 @@ type Spec struct {
  	FallbackNote         *map[string]string   `yaml:"fallback_note,omitempty"`
  	LocalAccounts        *[]string            `yaml:"local_accounts,omitempty"`
  	ConfigChecks         *[]ConfigCheck       `yaml:"config_checks,omitempty"`
 +	CommandProjection    *string              `yaml:"command_projection,omitempty"`
 +	Bits                 *map[string][]string `yaml:"bits,omitempty"`
++	CarveOuts            *map[string][]string `yaml:"carve_outs,omitempty"`
 +	BitDelivery          *string              `yaml:"bit_delivery,omitempty"`
 +	LocalUserNames       *map[string]string   `yaml:"local_user_names,omitempty"`
  }
  
  // ParseSpecs reads an adapter file: one YAML document whose one key is
-@@ -80,9 +84,30 @@ func (s Spec) Over(base Dialect) Dialect {
+@@ -80,9 +85,33 @@ func (s Spec) Over(base Dialect) Dialect {
  	if s.Supports != nil {
  		d.Supports = slices.Clone(*s.Supports)
  	}
@@ -2453,6 +2987,9 @@ index cf6b650..06e5780 100644
 +	if s.Bits != nil {
 +		d.Bits = mergeLists(d.Bits, *s.Bits)
 +	}
++	if s.CarveOuts != nil {
++		d.CarveOuts = mergeLists(d.CarveOuts, *s.CarveOuts)
++	}
 +	if s.BitDelivery != nil {
 +		d.BitDelivery = *s.BitDelivery
 +	}
@@ -2467,7 +3004,7 @@ index cf6b650..06e5780 100644
  	if s.CeilingLevels != nil {
  		if d.CeilingLevels == nil {
  			d.CeilingLevels = map[string]uint8{}
-@@ -455,6 +480,9 @@ func Validate(name string, d Dialect) error {
+@@ -455,6 +484,9 @@ func Validate(name string, d Dialect) error {
  				field("config_checks"), i)
  		}
  	}
@@ -2477,7 +3014,7 @@ index cf6b650..06e5780 100644
  	if !slices.Contains(verifications, d.Verified) {
  		return fmt.Errorf("%s is not containerlab, community, or unset", field("verified"))
  	}
-@@ -639,6 +667,22 @@ func SpecOf(d Dialect) Spec {
+@@ -639,6 +671,25 @@ func SpecOf(d Dialect) Spec {
  	if d.Levels != nil {
  		s.Privilege = &d.Levels
  	}
@@ -2491,6 +3028,9 @@ index cf6b650..06e5780 100644
 +	if d.Bits != nil {
 +		s.Bits = &d.Bits
 +	}
++	if d.CarveOuts != nil {
++		s.CarveOuts = &d.CarveOuts
++	}
 +	if d.BitDelivery != "" {
 +		s.BitDelivery = &d.BitDelivery
 +	}
@@ -2500,7 +3040,7 @@ index cf6b650..06e5780 100644
  	if d.CeilingLevels != nil {
  		s.CeilingLevels = &d.CeilingLevels
  	}
-@@ -699,3 +743,154 @@ func SpecKeys() []string {
+@@ -699,3 +750,175 @@ func SpecKeys() []string {
  	}
  	return out
  }
@@ -2524,7 +3064,8 @@ index cf6b650..06e5780 100644
 +		for _, k := range []struct {
 +			key string
 +			set bool
-+		}{{"bits", d.Bits != nil}, {"bit_delivery", d.BitDelivery != ""}, {"local_user_names", d.LocalUserNames != nil}} {
++		}{{"bits", d.Bits != nil}, {"carve_outs", d.CarveOuts != nil}, {"bit_delivery", d.BitDelivery != ""},
++			{"local_user_names", d.LocalUserNames != nil}} {
 +			if k.set {
 +				return fmt.Errorf("%s is read only with command_projection; set that, or remove the key", field(k.key))
 +			}
@@ -2579,6 +3120,22 @@ index cf6b650..06e5780 100644
 +			}
 +		}
 +	}
++	for _, bit := range sortedKeys(d.CarveOuts) {
++		if _, ok := d.Bits[bit]; !ok || bit == BaselineBit {
++			return fmt.Errorf("%s.%s: a carve-out belongs to a bit under bits, never to %s", field("carve_outs"), bit,
++				BaselineBit)
++		}
++		for i, rule := range d.CarveOuts[bit] {
++			// Only commands the bit itself reaches can be the bit's alone.
++			held := slices.ContainsFunc(d.Bits[bit], func(r string) bool {
++				ok, err := engine.Contains(r, rule, nil)
++				return err == nil && ok
++			})
++			if !held {
++				return fmt.Errorf("%s[%d]: the bit's own reach does not hold it", field("carve_outs."+bit), i)
++			}
++		}
++	}
 +	switch d.BitDelivery {
 +	case BitDeliveryUserPermissions, BitDeliveryLocalUserName:
 +	default:
@@ -2590,6 +3147,10 @@ index cf6b650..06e5780 100644
 +		for i, bit := range d.CeilingBits[level] {
 +			if _, ok := d.Bits[bit]; !ok {
 +				return fmt.Errorf("%s[%d]: %s is not a bit under bits", field("privilege."+level), i, bit)
++			}
++			if bit == BaselineBit {
++				return fmt.Errorf("%s[%d]: %s is held by every session, so no level names it", field("privilege."+level),
++					i, bit)
 +			}
 +			if seen[bit] {
 +				return fmt.Errorf("%s: %s is listed twice", field("privilege."+level), bit)
@@ -2660,10 +3221,18 @@ index cf6b650..06e5780 100644
 <!-- patch: internal/platform/dialect.go -->
 ````diff
 diff --git a/internal/platform/dialect.go b/internal/platform/dialect.go
-index d0a6256..2e0afc8 100644
+index d0a6256..dec8bec 100644
 --- a/internal/platform/dialect.go
 +++ b/internal/platform/dialect.go
-@@ -146,6 +146,88 @@ type Dialect struct {
+@@ -2,6 +2,7 @@ package platform
+ 
+ import (
+ 	"maps"
++	"regexp"
+ 	"slices"
+ 	"strings"
+ 
+@@ -146,6 +147,115 @@ type Dialect struct {
  	// ConfigChecks are configuration lines the spec says a device must not
  	// carry (§5.6, §6), each with what it costs: the same check names them.
  	ConfigChecks []ConfigCheck
@@ -2675,11 +3244,19 @@ index d0a6256..2e0afc8 100644
 +	CommandProjection string
 +	// Bits maps each permission bit the platform's classes carry to its reach
 +	// in rule form: every command the bit lets a session run, as rules, an
-+	// upper bound measured in the lab (spec §15, L12). The projection trusts
-+	// a bit only as far as this says, so a reach that says less than the bit
-+	// does would let the device run what port49 denies; a block may add to a
-+	// bit's reach and never take from it (spec §8).
++	// upper bound measured in the lab (spec §15, L12). A session's reach is
++	// the union of its bits' (Junos permissions are a union), save what
++	// CarveOuts removes. A reach that says less than the bit does would let
++	// the device run what port49 denies, so a block may add to a bit's reach,
++	// a gated edit, and never take from it (spec §8). The bit named
++	// BaselineBit is what a class with no bits runs: every session holds it.
 +	Bits map[string][]string
++	// CarveOuts maps a bit to the commands that only it makes available,
++	// whatever other bit's reach holds them: `view-configuration`'s `show
++	// configuration **`, which `view` alone does not show (L12). Only a
++	// measured carve-out is listed; a block may drop one and never add one,
++	// since a carve-out says the held bits reach less (spec §8).
++	CarveOuts map[string][]string
 +	// BitDelivery is how the chosen bits reach the device (spec §8):
 +	// BitDeliveryUserPermissions, `user-permissions=<bits>` per session over a
 +	// bitless template, or BitDeliveryLocalUserName, `local-user-name=` one
@@ -2702,6 +3279,24 @@ index d0a6256..2e0afc8 100644
 +	BitDeliveryUserPermissions = "user_permissions"
 +	BitDeliveryLocalUserName   = "local_user_name"
 +)
++
++// BaselineBit names, in Bits, what a class with no bits runs: held by every
++// session on the platform, and never in a level's ceiling (spec §8).
++const BaselineBit = "baseline"
++
++// projectionOwned is every attribute a projection's platform reads as a
++// login class's template, bits or command or configuration regex, numbered
++// variants included (`allow-commands2`, `user-permissions1`), in any case:
++// what a role or grant may not set there (spec §8, "Generator constraints").
++var projectionOwned = regexp.MustCompile(
++	`(?i)^((allow|deny)-(commands|configuration)(-regexps)?|user-permissions|local-user-name)[0-9]*$`)
++
++// ProjectionOwns reports whether an attribute name is one a projected
++// platform reads as a class's template, bits or regexes, or one its adapter
++// lists as bearing privilege: no role or grant sets it there.
++func (d Dialect) ProjectionOwns(name string) bool {
++	return d.Projected() && (projectionOwned.MatchString(name) || ContainsName(d.PrivilegeAttributes, name))
++}
 +
 +// RemoteClass is the login class the reference configuration gives the
 +// device's `remote` template user: no bits, so a session whose reply names no
@@ -2744,7 +3339,8 @@ index d0a6256..2e0afc8 100644
 +// bit the adapter declares. The result is sorted and has no duplicates.
 +func (d Dialect) ExpandBits(bits []string) []string {
 +	if slices.Contains(bits, "all") {
-+		bits = sortedKeys(d.Bits)
++		// The baseline is held by every session and never delivered.
++		bits = slices.DeleteFunc(sortedKeys(d.Bits), func(b string) bool { return b == BaselineBit })
 +	}
 +	out := slices.Clone(bits)
 +	slices.Sort(out)
@@ -2752,11 +3348,12 @@ index d0a6256..2e0afc8 100644
  }
  
  // ConfigCheck is one line a device's configuration must not carry: an RE2
-@@ -269,9 +351,26 @@ func (d Dialect) clone() Dialect {
+@@ -269,9 +379,27 @@ func (d Dialect) clone() Dialect {
  	}
  	d.LocalAccounts = slices.Clone(d.LocalAccounts)
  	d.ConfigChecks = slices.Clone(d.ConfigChecks)
 +	d.Bits = cloneLists(d.Bits)
++	d.CarveOuts = cloneLists(d.CarveOuts)
 +	d.CeilingBits = cloneLists(d.CeilingBits)
 +	if d.LocalUserNames != nil {
 +		d.LocalUserNames = maps.Clone(d.LocalUserNames)
@@ -2784,7 +3381,7 @@ index d0a6256..2e0afc8 100644
 <!-- patch: internal/policy/load.go -->
 ````diff
 diff --git a/internal/policy/load.go b/internal/policy/load.go
-index 28c6729..799d7f9 100644
+index 28c6729..2c4faec 100644
 --- a/internal/policy/load.go
 +++ b/internal/policy/load.go
 @@ -497,6 +497,9 @@ func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version strin
@@ -2797,17 +3394,18 @@ index 28c6729..799d7f9 100644
  	for _, c := range d.Supports {
  		if !slices.Contains(ref.Supports, c) {
  			return fmt.Errorf("%s.supports: %s is not a capability platform set %s measured on %s; a rule would read "+
-@@ -531,6 +534,38 @@ func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version strin
+@@ -531,6 +534,48 @@ func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version strin
  	return nil
  }
  
 +// keepsProjection refuses a merged adapter that loosens what the set's
 +// projection rests on (spec §8): a projected platform stays projected by the
 +// set's projection, since without it the device's own template decides and
-+// no rule reaches the session; and a bit's reach is a floor, since a reach
-+// that says less than the bit does lets the device run what port49 denies.
-+// A block may add to a bit's reach, which only makes the projection trust the
-+// bit less, and may not declare a bit the set did not measure.
++// no rule reaches the session; a bit's reach is a floor, since a reach that
++// says less than the bit does lets the device run what port49 denies; and a
++// carve-out is a ceiling, since one says the held bits reach less. A block may
++// add to a bit's reach, an edit the diff gates like any adapter edit, drop a
++// carve-out, and may not declare a bit the set did not measure.
 +func keepsProjection(at, shippedAs string, d, ref platform.Dialect, version string) error {
 +	if !ref.Projected() {
 +		return nil
@@ -2830,13 +3428,22 @@ index 28c6729..799d7f9 100644
 +			}
 +		}
 +	}
++	for _, bit := range sortedKeys(d.CarveOuts) {
++		for _, rule := range d.CarveOuts[bit] {
++			if !slices.Contains(ref.CarveOuts[bit], rule) {
++				return fmt.Errorf("%s.carve_outs.%s: platform set %s does not measure this carve-out on %s; a carve-out "+
++					"says the held bits reach less, so a block may drop one, not add one (spec §8, §15 L12)", at, bit,
++					version, shippedAs)
++			}
++		}
++	}
 +	return nil
 +}
 +
  // keepsRoleOrder refuses a merged adapter that ranks two values of a role
  // attribute the other way round from the set's adapter it stands for: the
  // diff gate reads a move down role_order as a lowering (spec §12), so a
-@@ -720,7 +755,8 @@ func (p *Policy) checkBlockOrder(file) error {
+@@ -720,7 +765,8 @@ func (p *Policy) checkBlockOrder(file) error {
  			key    string
  			levels []string
  		}{{"privilege", mapKeys(b.Privilege)}, {"ceiling_levels", mapKeys(b.CeilingLevels)},
@@ -2846,7 +3453,7 @@ index 28c6729..799d7f9 100644
  			for _, l := range entries.levels {
  				if !slices.Contains(p.levels, l) {
  					return fmt.Errorf("platforms.%s.%s.%s: level %s is not declared; the levels are %s", name,
-@@ -731,6 +767,9 @@ func (p *Policy) checkBlockOrder(file) error {
+@@ -731,6 +777,9 @@ func (p *Policy) checkBlockOrder(file) error {
  		if err := platform.Monotone(name, p.adapters[name], p.levels); err != nil {
  			return err
  		}
@@ -2878,10 +3485,10 @@ EOF
 
 ---
 
-### Task 7: A rule written as the Junos regex that matches what it matches
+### Task 7: A rule written as the Junos regex that matches what it matches, a deny widest
 
 **Files:**
-- Create: `internal/projection/ere.go` (the package's doc comment, `Facts`, `ruleERE`,
+- Create: `internal/projection/ere.go` (the package's doc comment, `Facts`, `pipeTail`, `ruleERE`,
   `patternERE`, `bracket`)
 - Test: `internal/projection/ere_test.go`
 
@@ -2890,22 +3497,28 @@ EOF
 - Produces, for Task 8:
   - `type Facts struct{ CaseSensitive, DenyMatchesExpanded bool }`;
   - `func ruleERE(rule string, classes map[string][]string, deny bool, f Facts) (string, error)`, a
-    rule as an unanchored extended regex over a whole command line;
+    rule as an unanchored extended regex over a whole command line, a deny ending in `pipeTail`;
   - `var errUnwritable`.
 
-A rule becomes an ERE over the command line: words joined by one space, `*` as `[^ ]+`, and a
-trailing `**` as `( .*)?`. A word is printable ASCII with ERE's operators escaped. A word holding
-`{`, `}`, `"` or `\` is refused, since a brace pair reads as a spec §6 placeholder, and the wire's
-handling of a quote or a backslash is unmeasured. Where the device is case-sensitive, a deny's
-letters are written in both cases (`[sS]`). An allow is written in lower case: it matches only
-less, which fails closed.
+A rule becomes an ERE over the command line, and every choice is the one that fails closed on its
+side. **An allow is as narrow as the rule:** lower case, one space between words, `*` as `[^ ]+`,
+a pattern's position with no space. **A deny is as wide:** each letter in both cases where the
+device is case-sensitive, ` +` between words, `*` as `.+` and a pattern's surrounding and `.` able
+to hold a space, since a quoted argument does and the engine never splits it (pre-flight M2), and
+the **pipe tail** `( *\|.*)?` after it (pre-flight I2). The engine strips a pipeline before
+matching, so port49 denies `clear bgp all | no-more` under `deny clear bgp all`; a deny anchored at
+its last word would miss that line on a device that matches the whole line. The tail only makes a
+deny match more, so it is right whatever Task 2 measures. A trailing `**` is `( .*)?`.
 
-A regex or class pattern is read as the matcher reads it, case-insensitive and unanchored unless
-it anchors. It is carried only in the subset that reads the same in POSIX ERE: literals, bracket
-expressions (over printable ASCII less the space, POSIX's `]`-first, `-`-last rules, runs as
-ranges), `.` as `[^ ]`, grouping, alternation, `*`, `+`, `?`, a repeat of at most 8 written out,
-and anchors at its two ends. Anything else is refused. The test checks the deny ERE with Go's
-regexp, which reads this subset the same way.
+A word is printable ASCII with ERE's operators escaped. A word holding `{`, `}`, `"` or `\` is
+refused, since a brace pair reads as a spec §6 placeholder, and the wire's handling of a quote or a
+backslash is unmeasured. A regex or class pattern is read as the matcher reads it,
+case-insensitive and unanchored unless it anchors, and carried only in the subset that reads the
+same in POSIX ERE: literals, bracket expressions (POSIX's `]`-first, `-`-last rules, runs as
+ranges; a deny's class that also admits a space, a rune past ASCII or a rune the reply cannot
+carry is `.`), grouping, alternation, `*`, `+`, `?`, a repeat of at most 8 written out, and
+anchors at its two ends. An empty group or alternative, which POSIX leaves undefined, is refused
+(pre-flight M1). The tests check the EREs with Go's regexp, which reads this subset the same way.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2913,10 +3526,10 @@ regexp, which reads this subset the same way.
 ````diff
 diff --git a/internal/projection/ere_test.go b/internal/projection/ere_test.go
 new file mode 100644
-index 0000000..b5cdbd7
+index 0000000..55883b0
 --- /dev/null
 +++ b/internal/projection/ere_test.go
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,99 @@
 +package projection
 +
 +import (
@@ -2934,23 +3547,26 @@ index 0000000..b5cdbd7
 +		want string
 +	}{
 +		{"show version", false, "show version"},
-+		{"show version", true, "[sS][hH][oO][wW] [vV][eE][rR][sS][iI][oO][nN]"},
++		{"show version", true, `[sS][hH][oO][wW] +[vV][eE][rR][sS][iI][oO][nN]( *\|.*)?`},
 +		{"SHOW Version", false, "show version"},
 +		{"show interfaces **", false, "show interfaces( .*)?"},
 +		{"**", false, ".*"},
 +		{"show route *", false, "show route [^ ]+"},
++		{"show route *", true, `[sS][hH][oO][wW] +[rR][oO][uU][tT][eE] +.+( *\|.*)?`},
 +		{"file show /var/log/messages", false, `file show /var/log/messages`},
 +		{"ping 10.0.0.1", false, `ping 10\.0\.0\.1`},
 +		{"show interfaces @management", false, "show interfaces ((fxp0|em0))"},
 +		{"show interfaces @uplink **", false, "show interfaces ((et-0/0/[0-3])|(ae1))( .*)?"},
 +		{"show interfaces /^ge-/", false, "show interfaces (ge-)[^ ]*"},
++		{"show interfaces /ge-/", true, `[sS][hH][oO][wW] +[iI][nN][tT][eE][rR][fF][aA][cC][eE][sS] +.*([gG][eE]-).*( *\|.*)?`},
 +	} {
 +		got, err := ruleERE(c.rule, classes, c.deny, folded)
 +		if err != nil || got != c.want {
 +			t.Errorf("ruleERE(%q, deny=%v) = %q, %v; want %q", c.rule, c.deny, got, err, c.want)
 +		}
 +	}
-+	for _, rule := range []string{"echo {username}", `show "x"`, "show /\\bword/", "show café"} {
++	for _, rule := range []string{"echo {username}", `show "x"`, "show /\\bword/", "show café",
++		"show /^(ge|)$/", "show /^()$/", "show /^$/"} {
 +		if _, err := ruleERE(rule, classes, true, folded); err == nil {
 +			t.Errorf("ruleERE(%q) wrote it", rule)
 +		}
@@ -2982,12 +3598,43 @@ index 0000000..b5cdbd7
 +		t.Errorf("non-ASCII: %v", err)
 +	}
 +}
++
++// A deny matches every line port49 denies under its rule, in every spelling
++// the device may be handed: a pipeline after it, a run of spaces between
++// words, and a quoted argument that holds a space. An allow matches only the
++// rule's own narrow shape.
++func TestADenyEREIsWideAndAnAllowNarrow(t *testing.T) {
++	for _, c := range []struct {
++		rule  string
++		deny  bool
++		lines map[string]bool
++	}{
++		{"clear bgp all", true, map[string]bool{"clear bgp all": true, "clear bgp all | no-more": true,
++			"clear bgp all|count": true, "clear  bgp all": true, "clear bgp all x": false}},
++		{"show route *", true, map[string]bool{`show route "a b"`: true, "show route": false}},
++		{"show interfaces @spaced", true, map[string]bool{"show interfaces ge 0": true}},
++		{"show interfaces /^[a-z{]+$/", true, map[string]bool{"show interfaces a{b": true}},
++		{"show route *", false, map[string]bool{"show route x": true, `show route "a b"`: false,
++			"show route x | no-more": false, "show  route x": false}},
++	} {
++		e, err := ruleERE(c.rule, map[string][]string{"spaced": {"^[a-z ]+$"}}, c.deny, Facts{CaseSensitive: true})
++		if err != nil {
++			t.Fatalf("%s: %v", c.rule, err)
++		}
++		re := regexp.MustCompile("^" + e + "$")
++		for line, want := range c.lines {
++			if re.MatchString(line) != want {
++				t.Errorf("%s (deny=%v) against %q: %v", c.rule, c.deny, line, !want)
++			}
++		}
++	}
++}
 ````
 
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `go test ./internal/projection/`
-Expected: FAIL, build failed: `undefined: Facts`, `undefined: ruleERE`, `undefined: errUnwritable`.
+Expected: FAIL, build failed: `undefined: Facts`, `undefined: ruleERE`.
 
 - [ ] **Step 3: Add the translation**
 
@@ -2995,10 +3642,10 @@ Expected: FAIL, build failed: `undefined: Facts`, `undefined: ruleERE`, `undefin
 ````diff
 diff --git a/internal/projection/ere.go b/internal/projection/ere.go
 new file mode 100644
-index 0000000..d435db2
+index 0000000..71172ef
 --- /dev/null
 +++ b/internal/projection/ere.go
-@@ -0,0 +1,314 @@
+@@ -0,0 +1,343 @@
 +// Package projection renders a composition's command rules into the session
 +// reply of a platform that never asks port49 about a command (spec §8,
 +// "Projection for session-only platforms"; §13 decision 22). Junos is the
@@ -3048,11 +3695,22 @@ index 0000000..d435db2
 +// errUnwritable is a rule the device's regex cannot carry faithfully.
 +var errUnwritable = errors.New("unwritable")
 +
-+// ruleERE is one rule as an extended regex over a whole command line, words
-+// joined by one space, without anchors: `show interfaces **` is
-+// `show interfaces( .*)?`. deny says which side of the reply it lands on: a
-+// deny's literals match every case where the device matches case-sensitively,
-+// and an allow's match only the lower case, which the device takes at least.
++// pipeTail ends every deny: the engine matches a command with its pipeline
++// stripped, so port49 denies `clear bgp all | no-more` under a deny of
++// `clear bgp all`, and a deny anchored at the rule's last word would miss
++// that line on a device that matches the whole line. Whether Junos strips
++// the pipeline first is L9's pipe probe; the tail is right either way, since
++// it only makes a deny match more.
++const pipeTail = `( *\|.*)?`
++
++// ruleERE is one rule as an extended regex over a whole command line, without
++// anchors: `show interfaces **` is `show interfaces( .*)?`. deny says which
++// side of the reply it lands on, and every choice below is the one that fails
++// closed on that side. An allow is as narrow as the rule: lower case, one
++// space between words, and no space inside an argument. A deny is as wide:
++// every case where the device matches case-sensitively, any run of spaces
++// between words, an argument that may hold a space (a quoted one does, and
++// the engine never splits it), and the pipe tail.
 +func ruleERE(rule string, classes map[string][]string, deny bool, f Facts) (string, error) {
 +	terms, err := engine.ParseRule(rule)
 +	if err != nil {
@@ -3069,11 +3727,11 @@ index 0000000..d435db2
 +			break
 +		}
 +		if i > 0 {
-+			b.WriteByte(' ')
++			b.WriteString(pick(deny, " +", " "))
 +		}
 +		switch t.Kind {
 +		case engine.Any:
-+			b.WriteString("[^ ]+")
++			b.WriteString(pick(deny, ".+", "[^ ]+"))
 +		case engine.Word:
 +			w, err := wordERE(t.Text, deny, f)
 +			if err != nil {
@@ -3103,7 +3761,17 @@ index 0000000..d435db2
 +			}
 +		}
 +	}
++	if deny {
++		b.WriteString(pipeTail)
++	}
 +	return b.String(), nil
++}
++
++func pick(deny bool, ifDeny, ifAllow string) string {
++	if deny {
++		return ifDeny
++	}
++	return ifAllow
 +}
 +
 +// wordERE is a literal word: printable ASCII only, since the device's
@@ -3139,18 +3807,19 @@ index 0000000..d435db2
 +// patternERE is an RE2 pattern from a regex term or an entity class, read
 +// as the matcher reads it — case-insensitive, and matching the argument
 +// anywhere unless it anchors (engine.compileTerm) — as an ERE over that one
-+// argument: no space, since an argument has none. It takes literals, bracket
++// argument. It takes literals, bracket
 +// expressions, `.`, grouping, alternation, `*`, `+`, `?`, a bounded repeat
 +// written out, and anchors at the pattern's two ends; anything else refuses
 +// the pattern rather than guessing at the device's dialect (spec §8,
-+// "Anchoring is a per-platform property"; §15 L9).
++// "Anchoring is a per-platform property"; §15 L9). So does anything that
++// would write an empty group, `()` or `(ge|)`, which POSIX leaves undefined.
 +func patternERE(pattern string, deny bool, f Facts) (string, error) {
 +	re, err := syntax.Parse("(?i)"+pattern, syntax.Perl)
 +	if err != nil {
 +		return "", err
 +	}
 +	re = re.Simplify()
-+	lead, trail := "[^ ]*", "[^ ]*"
++	lead, trail := pick(deny, ".*", "[^ ]*"), pick(deny, ".*", "[^ ]*")
 +	if re.Op == syntax.OpConcat && len(re.Sub) > 0 {
 +		subs := re.Sub
 +		if subs[0].Op == syntax.OpBeginText {
@@ -3165,13 +3834,16 @@ index 0000000..d435db2
 +	if err != nil {
 +		return "", err
 +	}
++	if body == "" {
++		return "", fmt.Errorf("%w: the pattern matches only the empty argument", errUnwritable)
++	}
 +	return lead + "(" + body + ")" + trail, nil
 +}
 +
 +func ere(re *syntax.Regexp, deny bool, f Facts) (string, error) {
 +	switch re.Op {
 +	case syntax.OpEmptyMatch:
-+		return "", nil
++		return "", fmt.Errorf("%w: an empty alternative or group", errUnwritable)
 +	case syntax.OpLiteral:
 +		var b strings.Builder
 +		for _, r := range re.Rune {
@@ -3193,9 +3865,12 @@ index 0000000..d435db2
 +	case syntax.OpCharClass:
 +		return bracket(re.Rune, deny)
 +	case syntax.OpAnyChar, syntax.OpAnyCharNotNL:
-+		return "[^ ]", nil
++		return pick(deny, ".", "[^ ]"), nil
 +	case syntax.OpCapture:
 +		s, err := ere(re.Sub[0], deny, f)
++		if err == nil && s == "" {
++			err = fmt.Errorf("%w: an empty group", errUnwritable)
++		}
 +		return "(" + s + ")", err
 +	case syntax.OpStar, syntax.OpPlus, syntax.OpQuest:
 +		s, err := ere(re.Sub[0], deny, f)
@@ -3241,9 +3916,10 @@ index 0000000..d435db2
 +}
 +
 +// bracket is a character class as a POSIX bracket expression over printable
-+// ASCII less the space, which no argument holds. A class that also admits a
-+// rune past ASCII is `[^ ]` in a deny, which matches more, and loses that
-+// rune in an allow, which matches less: each the side that fails closed.
++// ASCII less the space. A class that also admits a space, a rune past ASCII or
++// a rune the reply cannot carry is `.` in a deny, which matches more, and
++// loses that rune in an allow, which matches less: each the side that fails
++// closed.
 +func bracket(ranges []rune, deny bool) (string, error) {
 +	in := func(r rune) bool {
 +		for i := 0; i+1 < len(ranges); i += 2 {
@@ -3253,14 +3929,14 @@ index 0000000..d435db2
 +		}
 +		return false
 +	}
-+	beyond := false
++	beyond := in(' ') || in('{') || in('}') || in('"') || in('\\')
 +	for i := 0; i+1 < len(ranges); i += 2 {
-+		if ranges[i+1] > 0x7e {
++		if ranges[i+1] > 0x7e || ranges[i] < 0x21 {
 +			beyond = true
 +		}
 +	}
 +	if deny && beyond {
-+		return "[^ ]", nil
++		return ".", nil
 +	}
 +	var set []rune
 +	for r := rune(0x21); r <= 0x7e; r++ {
@@ -3325,7 +4001,7 @@ Expected: every package `ok`, no `gofmt` output, both binaries built.
 ```bash
 git add internal/projection/ere.go internal/projection/ere_test.go
 git commit -m "$(cat <<'EOF'
-feat: a rule written as the Junos regex that matches what it matches
+feat: a composed rule as the extended regex a Junos class reads
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -3335,30 +4011,48 @@ EOF
 
 ---
 
-### Task 8: The Junos projection, proven before it is sent (decision 22)
+### Task 8: The Junos projection, proven before it is sent, or the fail-closed reply (decisions 22 and 26)
 
 **Files:**
 - Create: `internal/projection/project.go`, `internal/projection/model.go`
 - Test: `internal/projection/project_test.go`
 
 **Interfaces:**
-- Consumes: Task 5's `engine.Contains`, `MayMeet`, `AlwaysDominates`, `NeverDominates`; Task 6's
-  `Dialect.Bits`, `ExpandBits`, `BitDelivery`, `platform.RemoteClass`; Task 7's `ruleERE`, `Facts`;
-  `engine.Compile`, `engine.Probes`, `engine.CheckAttribute`, `engine.MaxAttribute`.
-- Produces, for Tasks 9–11 and 18:
-  - `const ShapeCapability = "capability"`, `ShapeNarrow = "narrow"`;
+- Consumes: Task 5's `engine.Contains`, `MayMeet`, `AlwaysDominates`; Task 6's `Dialect.Bits`,
+  `CarveOuts`, `ExpandBits`, `BitDelivery`, `platform.BaselineBit`, `platform.RemoteClass`; Task 7's
+  `ruleERE`, `Facts`; `engine.Compile`, `engine.Probes`, `engine.CheckAttribute`,
+  `engine.MaxAttribute`.
+- Produces, for Tasks 9–12 and 19:
+  - `const ShapeCapability = "capability"`, `ShapeNarrow = "narrow"`, `ShapeFailClosed =
+    "fail_closed"`;
+  - `const FailRefusedShape, FailConfigurationMode, FailOverflow, FailUnwritable, FailSecretRule,
+    FailUnsound` (`refused_shape`, `configuration_mode`, `overflow`, `unwritable`, `secret_rule`,
+    `unsound`);
   - `var JunosFacts = Facts{CaseSensitive: true, DenyMatchesExpanded: false}` and `func
     FactsFor(projection string) Facts`;
   - `type Input struct{ Platform string; Dialect platform.Dialect; Level string; Bits []string;
     Template string; Rules []engine.Rule; Classes map[string][]string; Normalize engine.Normalize;
     Secret func(rule string) bool; Facts Facts }`;
   - `type Result struct{ Shape string; Bits []string; Template string; Attributes []string; Denies,
-    Allows, Omitted, Beyond []engine.Rule }`, with `(Result).Device(vector []string) bool` and
-    `(Result).Narrower(max int) [][]string`;
-  - `type Refusal struct{ Why, Attribute, Value, Class string }` (an error);
-  - `func Project(in Input) (Result, error)`.
+    Allows, Omitted, Beyond []engine.Rule; ConfigurationDropped []string; FailClosed string;
+    Refusal *Refusal }`, with `(Result).Device(vector []string) bool` and `(Result).Narrower(max
+    int) [][]string`;
+  - `type Refusal struct{ Category, Why, Attribute, Value, Class string }` (an error, never
+    returned: it rides on `Result.Refusal`);
+  - `func Project(in Input) (Result, error)`, whose error is a defect only (a program that does
+    not compile).
 
-`Project` renders one composition and proves it (Decided 3).
+`Project` renders one composition and proves it (Decided 3, 4 and 7).
+
+- **The device model** (`model.go`) is the union of pre-flight C1's fix: a command runs where an
+  allow matches; otherwise not where a deny matches; otherwise where some held bit's reach holds
+  it, `baseline` included, and no carve-out of a bit not held does. The reach and carve-out
+  programs match as port49 matches a deny, the widest reading, because the device's parser
+  applies them to a command whatever its spacing, case or abbreviation. The witness skips a probe
+  vector with a word the parser never sees (empty, or padded with a space), whose trimmed form is
+  probed in its own right.
+- **The baseline.** Each baseline reach rule no permit or deny holds becomes a deny of role
+  `baseline`, so the wire refuses what every session could otherwise run.
 - **Capability shape.**
   - Under `user_permissions`, the bits are the ceiling's usable bits, less those a deny aligns
     with; `all` is sent alone.
@@ -3366,28 +4060,32 @@ EOF
     usable.
   - A permit is sent as an allow only where the bits do not carry it, or where it dominates a
     deny, and then only within the ceiling (`within`, carve-outs counted) and only where it
-    dominates every deny it meets (`allowable`). Otherwise the composition is the refused shape,
-    named with both rules.
-  - A deny the bits already refuse is `Omitted`.
+    dominates every deny it meets (`allowable`). Otherwise the composition is the refused shape.
+  - A deny is `Omitted` only where a carve-out of a bit not sent holds it and no allow meets it.
   - With a deny left to send and a device that may not expand abbreviations, the shape goes
     narrow.
 - **Narrow shape.** `deny-commands=^.*$` and one allow alternation of the permits within the
-  ceiling. Under `user_permissions` it takes the fewest ceiling bits that reach them (greedy);
-  under `local_user_name`, the template's.
-- **Guards.**
-  - Bits that enter configuration mode go only to a grant of everything with no deny (Decided 6).
-  - A rule redaction would hide is refused (Decided 7).
-  - Every attribute is mandatory and within 255 bytes. Past that the result is a `Refusal`
-    carrying the attribute, its value and the class that would hold it.
-- **The witness.** The model decides every probe `engine.Probes` draws from the port49, allow,
-  deny and bits programs. A vector the device would run and port49 would deny is a defect, and
-  nothing is sent.
+  ceiling. Under `user_permissions` it takes the smallest set of ceiling bits that reach them,
+  preferring bits that do not enter configuration mode, then name order (`cover`, pre-flight
+  I11); under `local_user_name`, the template's.
+- **Guards.** Bits that enter configuration mode, or an allow meeting `configure`, go only to a
+  grant of everything with no deny. Under `user_permissions` a composition refused for that is
+  rendered again without those bits, and sent that way if it is sound (`ConfigurationDropped`;
+  Decided 6). A rule redaction would hide refuses the composition. Every attribute is mandatory
+  and within 255 bytes; past that the refusal carries the attribute, its value, and, for
+  `deny-commands` only, the class that would hold it (pre-flight C2).
+- **The fail-closed reply** (`failClosed`, decision 26) answers every refusal and every witness
+  failure: `deny-commands=^.*$`, the allows the generator proves over the ceiling's bits that do
+  not enter configuration mode, the smallest of those bits under `user_permissions`, and no
+  template. Where the allows cannot go out whole, none does. It is proven with the same model.
 
-The tests are spec §8's own examples. The realistic readonly drops `view-configuration` and sends
-`user-permissions=view` alone. `read_only_limited` is `deny .*` plus `(show version|show
-interfaces( .*)?|show route( .*)?)`. The refused shape is `show interfaces **` over `show interfaces
-terse`. The operator, with `network` unusable because nothing permits `traceroute`, sends `ping`
-as an allow. With abbreviations unmeasured, the same operator is refused.
+The tests are spec §8's own examples and the review's reproductions: the realistic readonly
+drops `view-configuration` and sends `user-permissions=view`; `read_only_limited` is `deny .*` plus
+one alternation; the refused shape gets the fail-closed reply under both deliveries, keeping `show
+version`; a bit outside the ceiling claiming `show log **` removes nothing (C1); the baseline is
+denied; a narrow admin grant takes `network view`, not `all` (I11); an admin with a deny drops
+`all` and `configure` under `user_permissions` and fails closed under `local_user_name`; and an
+allow past the budget prints no class line (C2).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3395,14 +4093,14 @@ as an allow. With abbreviations unmeasured, the same operator is refused.
 ````diff
 diff --git a/internal/projection/project_test.go b/internal/projection/project_test.go
 new file mode 100644
-index 0000000..13c9437
+index 0000000..c482916
 --- /dev/null
 +++ b/internal/projection/project_test.go
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,318 @@
 +package projection
 +
 +import (
-+	"errors"
++	"fmt"
 +	"reflect"
 +	"strings"
 +	"testing"
@@ -3412,13 +4110,14 @@ index 0000000..13c9437
 +)
 +
 +// junos is a projected Junos adapter as the tests read one: spec §8's bits,
-+// and the levels' ceilings.
++// view-configuration's measured carve-out, and the levels' ceilings.
 +func junos(delivery string) platform.Dialect {
 +	d := platform.Dialect{Supports: []string{"session"}, PipeToken: "|", StripCR: true,
 +		CommandProjection: platform.ProjectionJunosRegex, BitDelivery: delivery,
 +		Bits: map[string][]string{"view": {"show **"}, "view-configuration": {"show configuration **"},
 +			"clear": {"clear **"}, "network": {"ping **", "traceroute **"}, "configure": {"configure **"},
 +			"all": {"**"}},
++		CarveOuts: map[string][]string{"view-configuration": {"show configuration **"}},
 +		CeilingBits: map[string][]string{"readonly": {"view", "view-configuration"},
 +			"operator": {"view", "view-configuration", "clear", "network"}, "admin": {"all"}}}
 +	if delivery == platform.BitDeliveryLocalUserName {
@@ -3467,7 +4166,7 @@ index 0000000..13c9437
 +		t.Fatal(err)
 +	}
 +	want := []string{"local-user-name=p49-readonly",
-+		"deny-commands=^[sS][hH][oO][wW] [cC][oO][nN][fF][iI][gG][uU][rR][aA][tT][iI][oO][nN]( .*)?$"}
++		`deny-commands=^[sS][hH][oO][wW] +[cC][oO][nN][fF][iI][gG][uU][rR][aA][tT][iI][oO][nN]( .*)?( *\|.*)?$`}
 +	if !reflect.DeepEqual(res.Attributes, want) {
 +		t.Fatalf("%q", res.Attributes)
 +	}
@@ -3506,14 +4205,34 @@ index 0000000..13c9437
 +	}
 +}
 +
-+// The refused shape names the two rules and the platform.
-+func TestTheRefusedShapeNamesBothRules(t *testing.T) {
-+	_, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured,
-+		permit("show interfaces **"), deny("show interfaces terse")))
-+	var r *Refusal
-+	if !errors.As(err, &r) || !strings.Contains(r.Why, `permit "show interfaces **"`) ||
-+		!strings.Contains(r.Why, `deny "show interfaces terse"`) || !strings.Contains(r.Why, "juniper_junos") {
-+		t.Fatalf("%v", err)
++// The refused shape gets the fail-closed reply, which names the two rules
++// and the platform for CI: deny everything, and no allow, since the one
++// permit meets the deny beneath it (decision 26).
++func TestTheRefusedShapeFailsClosed(t *testing.T) {
++	for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
++		res, err := Project(input(delivery, "readonly", measured,
++			permit("show interfaces **"), deny("show interfaces terse"), permit("show version")))
++		if err != nil {
++			t.Fatal(err)
++		}
++		r := res.Refusal
++		if res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape || r == nil ||
++			!strings.Contains(r.Why, `permit "show interfaces **"`) ||
++			!strings.Contains(r.Why, `deny "show interfaces terse"`) || !strings.Contains(r.Why, "juniper_junos") {
++			t.Fatalf("%s: %+v", delivery, res)
++		}
++		// show version is proven and goes out; the template never does, so the
++		// session lands in the bitless p49-remote.
++		want := []string{"deny-commands=^.*$", "allow-commands=^show version$"}
++		if delivery == platform.BitDeliveryUserPermissions {
++			want = append([]string{"user-permissions=view"}, want...)
++		}
++		if !reflect.DeepEqual(res.Attributes, want) || len(res.Beyond) != 1 {
++			t.Errorf("%s: %q, beyond %v", delivery, res.Attributes, res.Beyond)
++		}
++		if res.Device([]string{"show", "interfaces", "terse"}) || res.Device([]string{"show", "interfaces", "em0"}) {
++			t.Errorf("%s: the fail-closed reply runs a command it did not prove", delivery)
++		}
 +	}
 +}
 +
@@ -3539,12 +4258,39 @@ index 0000000..13c9437
 +		t.Fatalf("%q %v", res.Attributes, err)
 +	}
 +	// A deny under bits that enter configuration mode cannot be carried: a
-+	// statement there is no command the regexes reach.
-+	_, err = Project(input(platform.BitDeliveryUserPermissions, "admin", measured, permit("**"),
++	// statement there is no command the regexes reach. Under user_permissions
++	// those bits are dropped and the rest is proven (decision 26): the admin
++	// keeps every operational command the other bits reach, less the deny.
++	res, err = Project(input(platform.BitDeliveryUserPermissions, "admin", measured, permit("**"),
 +		deny("request system reboot **")))
-+	var r *Refusal
-+	if !errors.As(err, &r) || !strings.Contains(r.Why, "enters configuration mode") {
-+		t.Fatalf("%v", err)
++	if err != nil || res.Shape != ShapeCapability ||
++		!reflect.DeepEqual(res.ConfigurationDropped, []string{"all", "configure"}) ||
++		res.Attributes[0] != "user-permissions=clear network view view-configuration" {
++		t.Fatalf("%+v %v", res, err)
++	}
++	if res.Device([]string{"configure"}) || !res.Device([]string{"show", "configuration"}) {
++		t.Error("device model")
++	}
++	// Under local_user_name the template's class carries the level's bits
++	// whole, so there is nothing to drop: the fail-closed reply.
++	res, err = Project(input(platform.BitDeliveryLocalUserName, "admin", measured, permit("**"),
++		deny("request system reboot **")))
++	if err != nil || res.FailClosed != FailConfigurationMode ||
++		!reflect.DeepEqual(res.Attributes, []string{"deny-commands=^.*$"}) ||
++		!strings.Contains(res.Refusal.Why, "enters configuration mode") {
++		t.Fatalf("%+v %v", res, err)
++	}
++}
++
++// A narrow admin grant takes the smallest bits that reach its permits, not
++// all, which would enter configuration mode and be refused (I11).
++func TestANarrowAdminTakesTheSmallestBits(t *testing.T) {
++	res, err := Project(input(platform.BitDeliveryUserPermissions, "admin", measured, permit("show version"),
++		permit("ping **")))
++	want := []string{"user-permissions=network view", "deny-commands=^.*$",
++		"allow-commands=^(show version|ping( .*)?)$"}
++	if err != nil || res.Shape != ShapeNarrow || !reflect.DeepEqual(res.Attributes, want) {
++		t.Fatalf("%s %q %v", res.Shape, res.Attributes, err)
 +	}
 +}
 +
@@ -3561,10 +4307,15 @@ index 0000000..13c9437
 +		t.Fatalf("%+v", res)
 +	}
 +	// Where a deny can be walked past by abbreviating it, only .* is sent, and
-+	// the operator's shape is refused: clear ** would beat clear bgp **.
-+	_, err = Project(input(platform.BitDeliveryUserPermissions, "operator", Facts{CaseSensitive: true}, rules...))
-+	if !errors.As(err, new(*Refusal)) {
-+		t.Fatalf("%v", err)
++	// the operator's shape is refused: clear ** would beat clear bgp **. The
++	// subject keeps what is proven: show and ping, not clear.
++	res, err = Project(input(platform.BitDeliveryUserPermissions, "operator", Facts{CaseSensitive: true}, rules...))
++	want := []string{"user-permissions=network view", "deny-commands=^.*$", "allow-commands=^(show( .*)?|ping( .*)?)$"}
++	if err != nil || res.FailClosed != FailRefusedShape || !reflect.DeepEqual(res.Attributes, want) {
++		t.Fatalf("%q %v", res.Attributes, err)
++	}
++	if res.Device([]string{"clear", "bgp", "neighbor"}) || res.Device([]string{"clear", "arp"}) {
++		t.Error("the fail-closed reply runs clear")
 +	}
 +}
 +
@@ -3579,18 +4330,36 @@ index 0000000..13c9437
 +	in := input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show **"),
 +		deny("show snmp community hunter2"))
 +	in.Secret = func(rule string) bool { return strings.Contains(rule, "hunter2") }
-+	if _, err := Project(in); err == nil || !strings.Contains(err.Error(), "redaction hides") {
-+		t.Fatalf("secret: %v", err)
++	if res, err := Project(in); err != nil || res.FailClosed != FailSecretRule ||
++		!strings.Contains(res.Refusal.Why, "redaction hides") ||
++		!reflect.DeepEqual(res.Attributes, []string{"deny-commands=^.*$"}) {
++		t.Fatalf("secret: %+v %v", res, err)
 +	}
 +	var rules []engine.Rule
 +	rules = append(rules, permit("show **"))
 +	for _, w := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"} {
 +		rules = append(rules, deny("show "+w+" **"))
 +	}
-+	_, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, rules...))
-+	var r *Refusal
-+	if !errors.As(err, &r) || r.Attribute != "deny-commands" || !strings.HasPrefix(r.Value, "^(") {
-+		t.Fatalf("over budget: %v", err)
++	res, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, rules...))
++	r := res.Refusal
++	if err != nil || res.FailClosed != FailOverflow || r.Attribute != "deny-commands" ||
++		!strings.HasPrefix(r.Value, "^(") || r.Class != platform.RemoteClass {
++		t.Fatalf("over budget: %+v %v", res, err)
++	}
++	// An allow past the budget is never moved into a class, where it would
++	// run for every subject past their own denies (C2): no class line.
++	rules = nil
++	for i := range 16 {
++		rules = append(rules, permit(fmt.Sprintf("show interfaces ge-0/0/%d extensive", i)))
++	}
++	res, err = Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, rules...))
++	if r := res.Refusal; err != nil || res.FailClosed != FailOverflow || r.Attribute != "allow-commands" ||
++		r.Class != "" || !strings.Contains(r.Why, "narrow the grant") {
++		t.Fatalf("allow over budget: %+v %v", res, err)
++	}
++	// The allows cannot go out whole, so none does.
++	if !reflect.DeepEqual(res.Attributes, []string{"deny-commands=^.*$"}) || len(res.Beyond) != 16 {
++		t.Errorf("%q", res.Attributes)
 +	}
 +}
 +
@@ -3608,13 +4377,51 @@ index 0000000..13c9437
 +		t.Fatalf("%+v", res)
 +	}
 +}
++
++// A bit's reach is a union (C1): a bit not held never takes a command out of
++// one that is, so a deny under a held bit's reach is sent, whatever reach a
++// bit outside the ceiling claims. Only a measured carve-out licenses leaving
++// a deny off the wire.
++func TestAnUnheldBitRemovesNothing(t *testing.T) {
++	in := input(platform.BitDeliveryLocalUserName, "readonly", measured, permit("show **"), deny("show log **"))
++	in.Dialect.Bits["trace"] = []string{"monitor **", "show log **"}
++	res, err := Project(in)
++	if err != nil || len(res.Omitted) != 0 || len(res.Denies) != 1 || res.Denies[0].Rule != "show log **" {
++		t.Fatalf("%+v %v", res, err)
++	}
++	if res.Device([]string{"show", "log", "messages"}) {
++		t.Error("the device runs a command port49 denies")
++	}
++}
++
++// The baseline runs its commands for every session, so each no permit holds
++// is denied on the wire (I3), and a bit never drops it.
++func TestTheBaselineIsDenied(t *testing.T) {
++	in := input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show **"))
++	in.Dialect.Bits[platform.BaselineBit] = []string{"quit **", "show cli **"}
++	res, err := Project(in)
++	if err != nil || res.Shape != ShapeCapability || len(res.Denies) != 1 ||
++		res.Denies[0].Rule != "quit **" || res.Denies[0].Role != platform.BaselineBit {
++		t.Fatalf("%+v %v", res, err)
++	}
++	if res.Device([]string{"quit"}) || !res.Device([]string{"show", "cli"}) {
++		t.Error("device model")
++	}
++	// Where a deny may be walked past, the baseline's deny sends the grant
++	// narrow, and .* holds it.
++	in.Facts = Facts{CaseSensitive: true}
++	res, err = Project(in)
++	if err != nil || res.Shape != ShapeNarrow || res.Device([]string{"quit"}) {
++		t.Fatalf("%+v %v", res, err)
++	}
++}
 ````
 
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `go test ./internal/projection/`
 Expected: FAIL, build failed: `undefined: Input`, `undefined: Project`, `undefined: ShapeCapability`,
-`undefined: Refusal`.
+`undefined: ShapeNarrow`.
 
 - [ ] **Step 3: Add the generator and the device model**
 
@@ -3622,31 +4429,46 @@ Expected: FAIL, build failed: `undefined: Input`, `undefined: Project`, `undefin
 ````diff
 diff --git a/internal/projection/model.go b/internal/projection/model.go
 new file mode 100644
-index 0000000..6ce2ccf
+index 0000000..d53e729
 --- /dev/null
 +++ b/internal/projection/model.go
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,137 @@
 +package projection
 +
 +import (
 +	"slices"
++	"strings"
 +
 +	"github.com/rhwendt/port49/internal/engine"
 +)
 +
 +// model is the device's decision under a reply, as spec §8 measured it: a
 +// command runs where a matching allow beats every deny, or where the bits
-+// reach it and no deny matches (L11). Each part is an engine program over the
-+// same rules the reply's regexes were written from, so the check below reads
-+// the reply exactly as the translation promises the device reads it.
++// reach it and no deny matches (L11). The bits are a union: a command runs
++// where any held bit's reach holds it, the baseline always held, unless a
++// measured carve-out of a bit not held takes it out (carve_outs). Nothing
++// else subtracts: a bit not held never removes a command another bit reaches.
++// Each part is an engine program over the same rules the reply's regexes were
++// written from, so the check below reads the reply exactly as the translation
++// promises the device reads it. The bits' reach and carve-outs are applied by
++// the device's command parser, which reads a command whatever its spacing,
++// case or abbreviation, so both are matched as port49 matches a deny: the
++// widest reading, which for the reach errs toward the device running more.
 +type model struct {
-+	port, allow, deny, bits *engine.Program
++	port, allow, deny, reach, carve *engine.Program
 +}
 +
 +func (g generator) model(res Result) (*model, error) {
 +	prog := func(rules []engine.Rule) (*engine.Program, error) {
 +		return engine.Compile(engine.Blob{Version: engine.Version, Bundle: "projection", Platform: g.in.Platform,
 +			Normalize: g.in.Normalize, Rules: rules, Classes: g.in.Classes, Pipe: []string{}})
++	}
++	parsed := func(rules []string, role string) []engine.Rule {
++		out := make([]engine.Rule, len(rules))
++		for i, r := range rules {
++			out[i] = engine.Rule{Verdict: engine.Deny, Rule: r, Role: role}
++		}
++		return out
 +	}
 +	var m model
 +	var err error
@@ -3661,26 +4483,17 @@ index 0000000..6ce2ccf
 +		return nil, err
 +	}
 +	denies := slices.Clone(res.Denies)
-+	if res.Shape == ShapeNarrow {
++	if res.Shape != ShapeCapability {
 +		denies = []engine.Rule{{Verdict: engine.Deny, Rule: "**", Role: "projection"}}
 +	}
 +	if m.deny, err = prog(denies); err != nil {
 +		return nil, err
 +	}
-+	// The bits: each reach rule of a bit held as a permit, of a bit not held
-+	// as a deny, so the most specific decides, as it does in a class.
-+	var bits []engine.Rule
-+	held := g.in.Dialect.ExpandBits(res.Bits)
-+	for _, b := range sortedKeys(g.in.Dialect.Bits) {
-+		verdict := engine.Deny
-+		if slices.Contains(held, b) {
-+			verdict = engine.Permit
-+		}
-+		for _, r := range g.in.Dialect.Bits[b] {
-+			bits = append(bits, engine.Rule{Verdict: verdict, Rule: r, Role: b})
-+		}
++	held := g.held(res.Bits)
++	if m.reach, err = prog(parsed(g.reach(held), "reach")); err != nil {
++		return nil, err
 +	}
-+	if m.bits, err = prog(bits); err != nil {
++	if m.carve, err = prog(parsed(g.carves(held), "carve")); err != nil {
 +		return nil, err
 +	}
 +	return &m, nil
@@ -3700,13 +4513,26 @@ index 0000000..6ce2ccf
 +	if len(m.allow.Command(r).Permits) > 0 {
 +		return true
 +	}
-+	return m.bits.Command(r).Permit && len(m.deny.Command(r).Denies) == 0
++	if len(m.deny.Command(r).Denies) > 0 {
++		return false
++	}
++	return len(m.reach.Command(r).Denies) > 0 && len(m.carve.Command(r).Denies) == 0
++}
++
++// probes is one vector per way the rules can be told apart (engine.Probes),
++// less those with a word the device's parser never sees: empty, or with a
++// space at either end. The parser splits a line on whitespace, so such a
++// vector is its trimmed form, which is probed in its own right.
++func (m *model) probes() [][]string {
++	return slices.DeleteFunc(engine.Probes(m.port, m.allow, m.deny, m.reach, m.carve), func(v []string) bool {
++		return slices.ContainsFunc(v, func(w string) bool { return w == "" || strings.TrimSpace(w) != w })
++	})
 +}
 +
 +// unsound is a command the device would run and port49 would deny, among one
 +// vector per way the rules can be told apart (engine.Probes).
 +func (m *model) unsound() ([]string, bool) {
-+	for _, v := range engine.Probes(m.port, m.allow, m.deny, m.bits) {
++	for _, v := range m.probes() {
 +		if len(v) == 0 {
 +			continue
 +		}
@@ -3724,7 +4550,7 @@ index 0000000..6ce2ccf
 +		return nil
 +	}
 +	var out [][]string
-+	for _, v := range engine.Probes(r.model.port, r.model.allow, r.model.deny, r.model.bits) {
++	for _, v := range r.model.probes() {
 +		if len(v) == 0 || slices.Contains(v, engine.OtherArgument) {
 +			continue
 +		}
@@ -3750,15 +4576,16 @@ index 0000000..6ce2ccf
 ````diff
 diff --git a/internal/projection/project.go b/internal/projection/project.go
 new file mode 100644
-index 0000000..a39095b
+index 0000000..3beb309
 --- /dev/null
 +++ b/internal/projection/project.go
-@@ -0,0 +1,538 @@
+@@ -0,0 +1,795 @@
 +package projection
 +
 +import (
 +	"errors"
 +	"fmt"
++	"math/bits"
 +	"slices"
 +	"strings"
 +
@@ -3777,6 +4604,23 @@ index 0000000..a39095b
 +	// under the smallest bits that reach them. It cannot carry a deny
 +	// beneath a permit.
 +	ShapeNarrow = "narrow"
++	// ShapeFailClosed is the reply a composition gets when neither shape can
++	// carry it faithfully (spec §13 decision 26): `deny-commands` `.*`, only
++	// the allows the generator proves, and no bit that enters configuration
++	// mode; no template. The subject is told less than port49 would permit,
++	// every other subject on the device is unaffected, and `policy test` and
++	// `policy diff` fail on it.
++	ShapeFailClosed = "fail_closed"
++)
++
++// Why a composition got the fail-closed reply: Result.FailClosed.
++const (
++	FailRefusedShape      = "refused_shape"
++	FailConfigurationMode = "configuration_mode"
++	FailOverflow          = "overflow"
++	FailUnwritable        = "unwritable"
++	FailSecretRule        = "secret_rule"
++	FailUnsound           = "unsound"
 +)
 +
 +// JunosFacts are what the Junos images were measured doing with a command
@@ -3824,90 +4668,108 @@ index 0000000..a39095b
 +	// Attributes is the reply, in wire order: the bits or the template, then
 +	// deny-commands, then allow-commands.
 +	Attributes []string
-+	Denies     []engine.Rule // sent in deny-commands; none for ShapeNarrow
-+	Allows     []engine.Rule // sent in allow-commands
-+	// Omitted are denies the bits already refuse, sent as nothing: a dropped
-+	// bit where a deny aligns with it.
++	// Denies are sent in deny-commands; none outside ShapeCapability. One
++	// whose Role is platform.BaselineBit is not the grant's: it holds a
++	// command the baseline runs for every session and no permit holds.
++	Denies []engine.Rule
++	Allows []engine.Rule // sent in allow-commands
++	// Omitted are denies the bits already refuse, sent as nothing: a measured
++	// carve-out of a bit not sent holds each.
 +	Omitted []engine.Rule
-+	// Beyond are permits no bit of the level's ceiling reaches: never sent,
-+	// so the device refuses what port49 would permit there, never the
-+	// reverse (spec §8, "never exceeding the level's ceiling").
++	// Beyond are permits no reply sends: beyond the level's ceiling, or, in
++	// the fail-closed reply, not proven. The device refuses what port49 would
++	// permit there, never the reverse (spec §8, "never exceeding the level's
++	// ceiling").
 +	Beyond []engine.Rule
-+	model  *model
++	// ConfigurationDropped are the level's bits that enter configuration
++	// mode, left out because the composition is not a grant of every command
++	// with no deny and the rest proved sound without them (decision 26).
++	ConfigurationDropped []string
++	// FailClosed is why the reply is ShapeFailClosed, one of the Fail*
++	// constants; empty otherwise. Refusal says it for the report.
++	FailClosed string
++	Refusal    *Refusal
++	model      *model
 +}
 +
-+// Refusal is a composition the platform cannot be told faithfully: the
-+// joint check quarantines the device, and `port49 policy test` and `policy
-+// diff` name it, rather than a nearer shape being sent (spec §8, "Refused
-+// shape"; "Generator constraints" 5).
++// Refusal is why a composition cannot be told faithfully, named for `policy
++// test` and `policy diff` (spec §8, "Refused shape"; "Generator constraints"
++// 5). It never leaves the generator as an error: the composition gets the
++// fail-closed reply (decision 26).
 +type Refusal struct {
-+	Why string
++	Category string
++	Why      string
 +	// Attribute and Value are the reply attribute past RFC 8907's length,
-+	// where that is the refusal, and Class the login class that would carry
-+	// the value on the device instead: the workaround the report prints
-+	// beside it (spec §8, "CI MUST report when a grant crosses that line").
++	// where that is the refusal. Class is the login class that would carry
++	// the value on the device instead, the workaround the report prints
++	// beside it (spec §8, "CI MUST report when a grant crosses that line"),
++	// and is set only for deny-commands: a class allow-commands runs for
++	// every session in the class, past each subject's own denies (L11), so
++	// an allow is never moved there.
 +	Attribute, Value, Class string
 +}
 +
 +func (r *Refusal) Error() string { return r.Why }
 +
-+func refuse(format string, args ...any) error { return &Refusal{Why: fmt.Sprintf(format, args...)} }
-+
-+// Project renders one composition (spec §8; §13 decision 22). It proves the
-+// reply sound before it returns it: every command the device would run under
-+// it is one port49 permits.
-+func Project(in Input) (Result, error) {
-+	d := in.Dialect
-+	var permits, denies []engine.Rule
-+	for _, r := range in.Rules {
-+		if in.Secret != nil && in.Secret(r.Rule) {
-+			return Result{}, refuse("role %q has a rule whose text carries a value redaction hides, and %s's "+
-+				"session reply is its rules, logged whole (spec §5.8): write the rule without it", r.Role, in.Platform)
-+		}
-+		if r.Verdict == engine.Permit {
-+			permits = append(permits, r)
-+		} else {
-+			denies = append(denies, r)
-+		}
-+	}
-+	g := generator{in: in, permits: permits, denies: denies, ceiling: d.ExpandBits(in.Bits)}
-+	res, err := g.capability()
-+	if errors.As(err, new(*narrowOnly)) {
-+		res, err = g.narrow()
-+	}
-+	if err != nil {
-+		return Result{}, err
-+	}
-+	if err := g.configuration(res); err != nil {
-+		return Result{}, err
-+	}
-+	if err := g.attributes(&res); err != nil {
-+		return Result{}, err
-+	}
-+	m, err := g.model(res)
-+	if err != nil {
-+		return Result{}, err
-+	}
-+	res.model = m
-+	if v, ok := m.unsound(); ok {
-+		// The checks above are a proof; this is its witness. A vector here is
-+		// a generator defect, and nothing is sent.
-+		return Result{}, refuse("on %s the reply would let the device run %q, which port49 denies; this is a "+
-+			"projection defect, and nothing is sent", in.Platform, strings.Join(v, " "))
-+	}
-+	return res, nil
++func refuse(category, format string, args ...any) error {
++	return &Refusal{Category: category, Why: fmt.Sprintf(format, args...)}
 +}
 +
-+// narrowOnly is capability's answer where only the narrow shape can carry
-+// the grant.
-+type narrowOnly struct{ why string }
-+
-+func (n *narrowOnly) Error() string { return n.why }
++// Project renders one composition (spec §8; §13 decisions 22 and 26). It
++// proves the reply sound before it returns it: every command the device would
++// run under it is one port49 permits. A composition neither shape carries
++// gets the fail-closed reply, which is proven the same way. The error is a
++// defect only: a program that does not compile.
++func Project(in Input) (Result, error) {
++	g := newGenerator(in, in.Bits)
++	res, err := g.render()
++	var r *Refusal
++	if err == nil {
++		m, merr := g.model(res)
++		if merr != nil {
++			return Result{}, merr
++		}
++		res.model = m
++		v, bad := m.unsound()
++		if !bad {
++			return res, nil
++		}
++		// The checks are a proof; this is its witness. A vector here is a
++		// generator defect, and the subject gets the fail-closed reply.
++		err = refuse(FailUnsound, "on %s the reply would let the device run %q, which port49 denies; this is a "+
++			"projection defect", in.Platform, strings.Join(v, " "))
++	}
++	if !errors.As(err, &r) {
++		return Result{}, err
++	}
++	return g.failClosed(r)
++}
 +
 +type generator struct {
 +	in              Input
 +	permits, denies []engine.Rule
 +	ceiling         []string
++}
++
++// newGenerator splits the rules, and adds a deny for each baseline reach rule
++// no permit holds: the baseline runs it for every session, so without the
++// deny the device would run what port49 refuses.
++func newGenerator(in Input, ceiling []string) generator {
++	g := generator{in: in, ceiling: in.Dialect.ExpandBits(ceiling)}
++	for _, r := range in.Rules {
++		if r.Verdict == engine.Permit {
++			g.permits = append(g.permits, r)
++		} else {
++			g.denies = append(g.denies, r)
++		}
++	}
++	for _, b := range in.Dialect.Bits[platform.BaselineBit] {
++		held := func(q engine.Rule) bool { return g.contains(q.Rule, b) }
++		if !slices.ContainsFunc(g.permits, held) && !slices.ContainsFunc(g.denies, held) {
++			g.denies = append(g.denies, engine.Rule{Verdict: engine.Deny, Rule: b, Role: platform.BaselineBit})
++		}
++	}
++	return g
 +}
 +
 +func (g generator) contains(outer, inner string) bool {
@@ -3925,12 +4787,77 @@ index 0000000..a39095b
 +	return err == nil && ok
 +}
 +
++// render is the capability or narrow shape, and, under user_permissions,
++// the same without the bits that enter configuration mode where those are
++// what refused it (decision 26, for spec §13's decided item 6).
++func (g generator) render() (Result, error) {
++	for _, r := range g.in.Rules {
++		if g.in.Secret != nil && g.in.Secret(r.Rule) {
++			return Result{}, refuse(FailSecretRule, "role %q has a rule whose text carries a value redaction "+
++				"hides, and %s's session reply is its rules, logged whole (spec §5.8): write the rule without it",
++				r.Role, g.in.Platform)
++		}
++	}
++	res, err := g.shape()
++	var r *Refusal
++	if !errors.As(err, &r) || r.Category != FailConfigurationMode ||
++		g.in.Dialect.BitDelivery != platform.BitDeliveryUserPermissions {
++		return res, err
++	}
++	lower := g.plain(g.ceiling)
++	if len(lower) == len(g.ceiling) {
++		return res, err
++	}
++	h := newGenerator(g.in, lower)
++	res2, err2 := h.shape()
++	if err2 != nil {
++		return res, err
++	}
++	res2.ConfigurationDropped = slices.DeleteFunc(slices.Clone(g.ceiling), func(b string) bool {
++		return slices.Contains(lower, b)
++	})
++	return res2, nil
++}
++
++func (g generator) shape() (Result, error) {
++	res, err := g.capability()
++	if errors.As(err, new(*narrowOnly)) {
++		res, err = g.narrow()
++	}
++	if err != nil {
++		return Result{}, err
++	}
++	if err := g.configuration(res); err != nil {
++		return Result{}, err
++	}
++	if err := g.attributes(&res); err != nil {
++		return Result{}, err
++	}
++	return res, nil
++}
++
++// narrowOnly is capability's answer where only the narrow shape can carry
++// the grant.
++type narrowOnly struct{ why string }
++
++func (n *narrowOnly) Error() string { return n.why }
++
 +// declared is the level's ceiling bits as the adapter writes them, sorted:
 +// what a template's class carries, `all` unexpanded.
 +func (g generator) declared() []string {
 +	out := slices.Clone(g.in.Bits)
 +	slices.Sort(out)
 +	return slices.Compact(out)
++}
++
++// held is the bits s, `all` read as every bit, and the baseline where the
++// adapter declares one: what a session sent s holds.
++func (g generator) held(s []string) []string {
++	out := g.in.Dialect.ExpandBits(s)
++	if _, ok := g.in.Dialect.Bits[platform.BaselineBit]; ok {
++		out = append(out, platform.BaselineBit)
++	}
++	return out
 +}
 +
 +// reach is every reach rule of bits.
@@ -3940,6 +4867,28 @@ index 0000000..a39095b
 +		out = append(out, g.in.Dialect.Bits[b]...)
 +	}
 +	return out
++}
++
++// carves is every measured carve-out of a declared bit not in held: the
++// commands a session without that bit is refused whatever else it holds.
++func (g generator) carves(held []string) []string {
++	var out []string
++	for _, b := range sortedKeys(g.in.Dialect.CarveOuts) {
++		if !slices.Contains(held, b) {
++			out = append(out, g.in.Dialect.CarveOuts[b]...)
++		}
++	}
++	return out
++}
++
++// entersConfiguration reports whether bit b's reach holds `configure`.
++func (g generator) entersConfiguration(b string) bool {
++	return slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool { return g.contains(r, "configure") })
++}
++
++// plain is bits without the ones that enter configuration mode.
++func (g generator) plain(bits []string) []string {
++	return slices.DeleteFunc(slices.Clone(bits), g.entersConfiguration)
 +}
 +
 +// covered reports whether every command rule r matches is decided by a
@@ -3977,54 +4926,32 @@ index 0000000..a39095b
 +}
 +
 +// within reports whether the level's ceiling bits reach every command
-+// permit p matches, a bit outside the ceiling carving nothing out of it: a
++// permit p matches, no carve-out of a bit outside the ceiling meeting it: a
 +// permit beyond them is never sent, since on the device an allow runs
 +// whatever the bits say (spec §8, "never exceeding the level's ceiling").
 +func (g generator) within(p string) bool { return g.reaches(p, g.ceiling, false) }
 +
-+// outside is every declared bit s does not hold, `all` read as every bit.
-+func (g generator) outside(s []string) []string {
-+	held := g.in.Dialect.ExpandBits(s)
-+	var out []string
-+	for _, b := range sortedKeys(g.in.Dialect.Bits) {
-+		if !slices.Contains(held, b) {
-+			out = append(out, b)
-+		}
-+	}
-+	return out
-+}
-+
-+// byBits reports whether the bits s reach every command of p that port49
-+// does not deny outright. A bit's reach is read as the device's classes read
-+// it (spec §8): the most specific reach rule decides, so a bit outside s whose
-+// reach is narrower carves its commands out of a broader bit's —
-+// `view-configuration` out of `view`. So some reach rule of s holds p, and
-+// each reach rule outside s that meets p and is not beaten by it there is held
-+// by a deny: what it carves out, port49 refuses too.
++// byBits reports whether the bits s run every command of p that port49 does
++// not deny outright: some reach rule of s holds p, and each carve-out of a
++// bit outside s that meets p is held by a deny, so what it carves port49
++// refuses too.
 +func (g generator) byBits(p string, s []string) bool { return g.reaches(p, s, true) }
 +
-+// reaches reports whether some reach rule of the bits s holds p and beats,
-+// on p, every reach rule outside s that meets it. With denied, a rule
-+// outside s that a deny holds may carve p: port49 refuses what it carves too.
++// reaches reports whether some reach rule of the bits s holds p and no
++// carve-out of a bit outside s meets it; with denied, a carve-out a deny
++// holds may.
 +func (g generator) reaches(p string, s []string, denied bool) bool {
-+	carve := g.reach(g.outside(s))
-+	return slices.ContainsFunc(g.reach(g.in.Dialect.ExpandBits(s)), func(r string) bool {
-+		if !g.contains(r, p) {
++	held := g.held(s)
++	if !slices.ContainsFunc(g.reach(held), func(r string) bool { return g.contains(r, p) }) {
++		return false
++	}
++	for _, c := range g.carves(held) {
++		if g.mayMeet(p, c) &&
++			!(denied && slices.ContainsFunc(g.denies, func(d engine.Rule) bool { return g.contains(d.Rule, c) })) {
 +			return false
 +		}
-+		for _, o := range carve {
-+			if g.mayMeet(p, o) && !g.dominates(r, o) &&
-+				!(denied && slices.ContainsFunc(g.denies, func(d engine.Rule) bool { return g.contains(d.Rule, o) })) {
-+				return false
-+			}
-+		}
-+		return true
-+	})
-+}
-+
-+func (g generator) neverDominates(permit, deny string) bool {
-+	ok, err := engine.NeverDominates(permit, deny, g.in.Classes, g.in.Normalize)
-+	return err == nil && ok
++	}
++	return true
 +}
 +
 +// allowable is the deny sending p as an allow would void, if any: on the
@@ -4042,10 +4969,9 @@ index 0000000..a39095b
 +// refusedShape is spec §8's refused shape, naming the grant's two rules and
 +// the platform.
 +func (g generator) refusedShape(p, d engine.Rule) error {
-+	return refuse("on %s, permit %q (role %q) needs an allow-commands the device would let beat deny %q (role %q), "+
-+		"which sits beneath it: Junos regex cannot write everything under a permit except a deny, so the "+
-+		"composition is refused rather than rendered nearer (spec §8, \"Refused shape\")", g.in.Platform, p.Rule,
-+		p.Role, d.Rule, d.Role)
++	return refuse(FailRefusedShape, "on %s, permit %q (role %q) needs an allow-commands the device would let "+
++		"beat deny %q (role %q), which sits beneath it: Junos regex cannot write everything under a permit except "+
++		"a deny (spec §8, \"Refused shape\")", g.in.Platform, p.Rule, p.Role, d.Rule, d.Role)
 +}
 +
 +// capability is the capability shape, or narrowOnly where it cannot carry
@@ -4113,67 +5039,57 @@ index 0000000..a39095b
 +
 +// omittable reports whether the bits already refuse every command deny dn
 +// matches, so nothing is sent for it (spec §8, "drops the bit instead of
-+// emitting a regex"): a reach rule of a bit outside bits holds dn and no
-+// reach rule of bits that meets dn ever dominates it, and no allow reaches
-+// into it.
++// emitting a regex"): a measured carve-out of a bit not sent holds dn, and no
++// allow meets it. Only a carve-out licenses this: under the union, a bit not
++// sent refuses nothing another bit reaches.
 +func (g generator) omittable(dn engine.Rule, bits []string, allows []engine.Rule) bool {
 +	for _, a := range allows {
 +		if g.mayMeet(a.Rule, dn.Rule) {
 +			return false
 +		}
 +	}
-+	return slices.ContainsFunc(g.reach(g.outside(bits)), func(o string) bool {
-+		if !g.contains(o, dn.Rule) {
-+			return false
-+		}
-+		for _, r := range g.reach(g.in.Dialect.ExpandBits(bits)) {
-+			if g.mayMeet(r, dn.Rule) && !g.neverDominates(r, o) {
-+				return false
-+			}
-+		}
-+		return true
-+	})
++	return slices.ContainsFunc(g.carves(g.held(bits)), func(c string) bool { return g.contains(c, dn.Rule) })
 +}
 +
-+// configurationBits is the first bit of bits that enters configuration mode:
-+// whose reach holds `configure`.
-+func (g generator) configurationBits(bits []string) string {
-+	for _, b := range bits {
-+		if slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool { return g.contains(r, "configure") }) {
-+			return b
++// configuration refuses a reply that enters configuration mode for a grant
++// that is not everything — a bit whose reach holds `configure`, or an allow
++// that meets it: a statement typed there is governed by the class's
++// configuration permissions, which no deny-commands or allow-commands
++// reaches (spec §8; §15 L12), so port49 could deny a statement the device
++// then runs. Only a grant that permits every command and denies none is
++// carried faithfully there.
++func (g generator) configuration(res Result) error {
++	what := ""
++	for _, b := range g.held(res.Bits) {
++		if g.entersConfiguration(b) {
++			what = "bit " + b
++			break
 +		}
 +	}
-+	return ""
-+}
-+
-+// configuration refuses a reply whose bits enter configuration mode for a
-+// grant that is not everything: a statement typed there is governed by the
-+// class's configuration permissions, which no deny-commands or
-+// allow-commands reaches (spec §8; §15 L12), so port49 could deny a
-+// statement the device then runs. Only a grant that permits every command
-+// and denies none is carried faithfully there.
-+func (g generator) configuration(res Result) error {
-+	bit := g.configurationBits(res.Bits)
-+	if bit == "" {
++	for _, a := range res.Allows {
++		if what == "" && g.mayMeet(a.Rule, "configure **") {
++			what = fmt.Sprintf("allow %q", a.Rule)
++		}
++	}
++	if what == "" {
 +		return nil
 +	}
 +	everything := slices.ContainsFunc(g.permits, func(p engine.Rule) bool { return g.contains(p.Rule, "**") })
 +	if everything && len(g.denies) == 0 {
 +		return nil
 +	}
-+	what := "permits less than every command"
++	grant := "permits less than every command"
 +	if len(g.denies) > 0 {
-+		what = fmt.Sprintf("denies %q (role %q)", g.denies[0].Rule, g.denies[0].Role)
++		grant = fmt.Sprintf("denies %q (role %q)", g.denies[0].Rule, g.denies[0].Role)
 +	}
-+	return refuse("on %s the reply's bit %s enters configuration mode, where a statement is governed by the "+
-+		"class's configuration permissions and no command regex reaches it (spec §8, §15 L12), and the composition "+
-+		"%s: port49 would deny what the device runs there. Carry it only as a grant of every command with no deny, "+
-+		"or lower the level", g.in.Platform, bit, what)
++	return refuse(FailConfigurationMode, "on %s the reply's %s enters configuration mode, where a statement is "+
++		"governed by the class's configuration permissions and no command regex reaches it (spec §8, §15 L12), "+
++		"and the composition %s: port49 would deny what the device runs there", g.in.Platform, what, grant)
 +}
 +
 +// narrow is the narrow shape: every permit the ceiling reaches as one allow
-+// alternation over `deny-commands .*`, under the fewest ceiling bits that
-+// reach them — the template's, where the delivery is one.
++// alternation over `deny-commands .*`, under the smallest set of ceiling bits
++// that reach them — the template's, where the delivery is one.
 +func (g generator) narrow() (Result, error) {
 +	res := Result{Shape: ShapeNarrow, Template: g.in.Template}
 +	for _, p := range g.permits {
@@ -4190,32 +5106,191 @@ index 0000000..a39095b
 +		res.Bits = g.declared()
 +		return res, nil
 +	}
-+	// Greedy cover: the bit reaching the most allows not yet reached, first
-+	// in name order on a tie.
-+	left := slices.Clone(res.Allows)
-+	for len(left) > 0 {
-+		best, n := "", 0
-+		for _, b := range g.ceiling {
-+			k := 0
-+			for _, p := range left {
-+				if slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool { return g.contains(r, p.Rule) }) {
-+					k++
++	res.Bits = g.cover(g.ceiling, res.Allows)
++	return res, nil
++}
++
++// maxCover bounds cover's exact search, in candidate subsets; past it the
++// cover is greedy.
++const maxCover = 1 << 16
++
++// cover is the smallest set of the bits from that reach every allow: fewest
++// bits, then fewest that enter configuration mode, then first in name order
++// (I11: `all` reaches everything, and a narrow admin grant under it would
++// be refused for entering configuration mode). Bits reaching the same
++// allows are one candidate, the preferred of them.
++func (g generator) cover(from []string, allows []engine.Rule) []string {
++	if len(allows) == 0 {
++		return nil
++	}
++	if len(allows) > 63 {
++		allows = allows[:63] // more never fit in one attribute
++	}
++	type cand struct {
++		bit    string
++		mask   uint64
++		config bool
++	}
++	var cands []cand
++	full := uint64(1)<<len(allows) - 1
++	for _, b := range from {
++		var m uint64
++		for i, p := range allows {
++			if slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool { return g.contains(r, p.Rule) }) {
++				m |= 1 << i
++			}
++		}
++		if m == 0 {
++			continue
++		}
++		c := cand{b, m, g.entersConfiguration(b)}
++		if k := slices.IndexFunc(cands, func(o cand) bool { return o.mask == m }); k >= 0 {
++			if o := cands[k]; o.config && !c.config || o.config == c.config && c.bit < o.bit {
++				cands[k] = c
++			}
++			continue
++		}
++		cands = append(cands, c)
++	}
++	names := func(set uint64) []string {
++		var out []string
++		for i, c := range cands {
++			if set&(1<<i) != 0 {
++				out = append(out, c.bit)
++			}
++		}
++		slices.Sort(out)
++		return out
++	}
++	configs := func(set uint64) int {
++		n := 0
++		for i, c := range cands {
++			if set&(1<<i) != 0 && c.config {
++				n++
++			}
++		}
++		return n
++	}
++	better := func(a, b uint64) bool {
++		if na, nb := bits.OnesCount64(a), bits.OnesCount64(b); na != nb {
++			return na < nb
++		}
++		if ca, cb := configs(a), configs(b); ca != cb {
++			return ca < cb
++		}
++		return slices.Compare(names(a), names(b)) < 0
++	}
++	if len(cands) < 64 && uint64(1)<<len(cands) <= maxCover {
++		best, found := uint64(0), false
++		for set := uint64(1); set < uint64(1)<<len(cands); set++ {
++			var m uint64
++			for i, c := range cands {
++				if set&(1<<i) != 0 {
++					m |= c.mask
 +				}
 +			}
-+			if k > n {
-+				best, n = b, k
++			if m == full && (!found || better(set, best)) {
++				best, found = set, true
 +			}
 +		}
-+		if n == 0 {
-+			break // within() said some ceiling bit reaches each; unreachable
++		if found {
++			return names(best)
 +		}
-+		res.Bits = append(res.Bits, best)
-+		left = slices.DeleteFunc(left, func(p engine.Rule) bool {
-+			return slices.ContainsFunc(g.in.Dialect.Bits[best], func(r string) bool { return g.contains(r, p.Rule) })
-+		})
++		return nil // within() said some ceiling bit reaches each; unreachable
 +	}
-+	slices.Sort(res.Bits)
-+	return res, nil
++	// Greedy: the candidate reaching the most allows not yet reached, one
++	// that does not enter configuration mode first, then name order.
++	var set, got uint64
++	for got != full {
++		pick := -1
++		for i, c := range cands {
++			if set&(1<<i) != 0 {
++				continue
++			}
++			n := bits.OnesCount64(c.mask &^ got)
++			if n == 0 {
++				continue
++			}
++			if pick < 0 {
++				pick = i
++				continue
++			}
++			p := cands[pick]
++			pn := bits.OnesCount64(p.mask &^ got)
++			if n > pn || n == pn && (p.config && !c.config || p.config == c.config && c.bit < p.bit) {
++				pick = i
++			}
++		}
++		if pick < 0 {
++			break
++		}
++		set |= 1 << pick
++		got |= cands[pick].mask
++	}
++	return names(set)
++}
++
++// failClosed is the reply for a composition neither shape carries (spec §13
++// decision 26): `deny-commands` `.*`, an allow for each permit that is
++// within the level's ceiling bits that do not enter configuration mode,
++// dominates every deny it meets, does not meet `configure`, and can be
++// written; under user_permissions the smallest of those bits that reach the
++// allows, and no template under local_user_name, so the session lands in the
++// bitless p49-remote. Where the allows cannot be sent whole, none is.
++func (g generator) failClosed(r *Refusal) (Result, error) {
++	res := Result{Shape: ShapeFailClosed, FailClosed: r.Category, Refusal: r}
++	h := newGenerator(g.in, g.plain(g.ceiling))
++	for _, p := range h.permits {
++		_, ok := h.allowable(p.Rule)
++		secret := g.in.Secret != nil && g.in.Secret(p.Rule)
++		_, werr := ruleERE(p.Rule, g.in.Classes, false, g.in.Facts)
++		if secret || werr != nil || !ok || !h.within(p.Rule) || h.mayMeet(p.Rule, "configure **") {
++			res.Beyond = append(res.Beyond, p)
++			continue
++		}
++		res.Allows = append(res.Allows, p)
++	}
++	send := func() (Result, error) {
++		out := res
++		out.Attributes = nil
++		if g.in.Dialect.BitDelivery == platform.BitDeliveryUserPermissions {
++			out.Bits = h.cover(h.ceiling, out.Allows)
++		}
++		if len(out.Bits) > 0 {
++			out.Attributes = append(out.Attributes, "user-permissions="+strings.Join(out.Bits, " "))
++		}
++		out.Attributes = append(out.Attributes, "deny-commands=^.*$")
++		allow, err := h.alternation(out.Allows, false)
++		if err != nil {
++			return out, err
++		}
++		if allow != "" {
++			out.Attributes = append(out.Attributes, "allow-commands=^"+allow+"$")
++		}
++		for _, a := range out.Attributes {
++			if err := engine.CheckAttribute(a); err != nil {
++				return out, err
++			}
++		}
++		m, err := h.model(out)
++		if err != nil {
++			return Result{}, err
++		}
++		out.model = m
++		if _, bad := m.unsound(); bad {
++			return out, errors.New("unsound")
++		}
++		return out, nil
++	}
++	out, err := send()
++	if err != nil && out.Shape != "" {
++		// The allows cannot go out whole: none does, and the reply is
++		// `deny-commands` `.*` alone.
++		res.Beyond = append(res.Beyond, res.Allows...)
++		res.Allows = nil
++		out, err = send()
++	}
++	return out, err
 +}
 +
 +// attributes renders res as the reply: each attribute once, mandatory, within
@@ -4248,14 +5323,22 @@ index 0000000..a39095b
 +	for _, a := range res.Attributes {
 +		if err := engine.CheckAttribute(a); err != nil {
 +			i := strings.IndexByte(a, '=')
-+			class := res.Template
-+			if class == "" {
-+				class = platform.RemoteClass
++			r := &Refusal{Category: FailOverflow, Attribute: a[:i], Value: a[i+1:],
++				Why: fmt.Sprintf("on %s the reply's %s is %d bytes, and RFC 8907 carries at most %d in one attribute; "+
++					"a device sent part of a deny is sent none of it (spec §8, \"Generator constraints\")",
++					g.in.Platform, engine.AttributeName(a), len(a), engine.MaxAttribute)}
++			if r.Attribute == "deny-commands" {
++				r.Class = res.Template
++				if r.Class == "" {
++					r.Class = platform.RemoteClass
++				}
++				r.Why += ": move the denies into the template's class on the device (port49 platform export " +
++					"--classes), where they bind every subject at that template, or narrow the grant"
++			} else {
++				r.Why += ": narrow the grant; an allow is never moved into a class, where it would run for every " +
++					"subject past their own denies"
 +			}
-+			return &Refusal{Attribute: a[:i], Value: a[i+1:], Class: class, Why: fmt.Sprintf("on %s the reply's %s is %d bytes, and RFC 8907 carries at most %d in one "+
-+				"attribute; a device sent part of a deny is sent none of it (spec §8, \"Generator constraints\"): "+
-+				"move the rules into the template's class on the device (port49 platform export --classes) and out of "+
-+				"the grant, or narrow the grant", g.in.Platform, engine.AttributeName(a), len(a), engine.MaxAttribute)}
++			return r
 +		}
 +	}
 +	return nil
@@ -4268,8 +5351,8 @@ index 0000000..a39095b
 +	for _, r := range rules {
 +		e, err := ruleERE(r.Rule, g.in.Classes, deny, g.in.Facts)
 +		if err != nil {
-+			return "", refuse("on %s, %s %q (role %q) cannot be written as the device's regex: %v (spec §8, §15 L9)",
-+				g.in.Platform, r.Verdict, r.Rule, r.Role, err)
++			return "", refuse(FailUnwritable, "on %s, %s %q (role %q) cannot be written as the device's regex: %v "+
++				"(spec §8, §15 L9)", g.in.Platform, r.Verdict, r.Rule, r.Role, err)
 +		}
 +		if !slices.Contains(alts, e) {
 +			alts = append(alts, e)
@@ -4304,7 +5387,7 @@ Expected: every package `ok`, no `gofmt` output, both binaries built.
 ```bash
 git add internal/projection/model.go internal/projection/project.go internal/projection/project_test.go
 git commit -m "$(cat <<'EOF'
-feat: the Junos projection, proven before it is sent (decision 22)
+feat: project a composition into a Junos reply, proven sound, or the fail-closed reply
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -4314,53 +5397,74 @@ EOF
 
 ---
 
-### Task 9: A pinned 1.1.0 renders the Junos session reply from the rules, and refuses what it cannot
+### Task 9: A pinned projected set renders each subject's Junos reply, fail-closed where it must, once per composition
 
 **Files:**
-- Modify: `internal/policy/resolve.go` (`Resolution.Projection`; `compile` calls `project`;
-  `layerAttributes` puts the projection at the platform layer; `exceeds` skips its names)
-- Modify: `internal/policy/load.go` (`checkProjected`, called from `checkAttributes`)
-- Test: `internal/policy/projection_test.go`
+- Modify: `internal/policy/resolve.go` (`Resolution.Projection`; `compile` calls `project`, which
+  caches; `layerAttributes` puts the projection at the platform layer; `exceeds` skips its names)
+- Modify: `internal/policy/load.go` (`Policy.projected`; `checkProjected`, called from
+  `checkAttributes`; the reserved-username refusal)
+- Modify: `internal/engine/blob.go` (`Blob.FailClosed`, and `Encode` carries it)
+- Modify: `internal/token/minter.go` (`ReservedUsername`, `ErrUsernameReserved`)
+- Test: `internal/policy/projection_test.go`, `internal/token/minter_test.go`
 
 **Interfaces:**
 - Consumes: Task 8's `projection.Project`, `Input`, `Result`, `FactsFor`; Task 6's `Projected`,
-  `LevelBits`, `LocalUserNames`, `ProjectionAttributes`; `platform.Redactions`,
-  `platform.RedactRule`.
+  `ProjectionOwns`, `LevelBits`, `LocalUserNames`; `platform.Redactions`, `platform.RedactRule`.
 - Produces:
   - `Resolution.Projection *projection.Result`, nil on a platform that projects nothing;
   - `compile` now returns `(engine.Blob, []AttributeSource, *projection.Result, error)`;
   - `(*Policy).project(c composition, b engine.Blob, dialect platform.Dialect)
-    (projection.Result, error)`.
+    (projection.Result, error)`, memoized in `Policy.projected sync.Map`;
+  - `engine.Blob.FailClosed string`, JSON `fail_closed`, omitted when empty;
+  - `func token.ReservedUsername(u string) bool` and `var token.ErrUsernameReserved`.
 
 `compile` builds the blob's rules as before and, on a projected platform, hands them to
 `projection.Project` with the level's ceiling bits and template, following the parent chain. The
 projection's attributes go in at the platform layer: source `platform juniper_junos, projection
-(<shape>)`. A level with no bits on its chain, and every projection refusal, is a compile error.
-`checkDevices` already reads a compile error as a joint-check failure, so the device is
-quarantined and the rest of the fleet loads. `exceeds` skips the projection's own names, since the
-generator holds them to the level's ceiling bits, so a Junos grant with `max_privilege` loads.
-`checkProjected` refuses a role or grant attribute the projection renders (Decided 8). Nothing
-changes for a policy on 1.0.0; the test's projected set stands in until Task 13.
+(<shape>)`. A fail-closed result is not an error: its reply is the blob's attributes and its reason
+is `Blob.FailClosed`, so **one subject's composition never quarantines the device** (decision 26).
+A level with no bits on its chain is still a compile error, as a level with no rendering is.
+`FailClosed` is written only when set, so every existing blob keeps its hash.
+
+`project` is memoized per policy on the platform, the level and the blob's rules and classes: the
+adapter, the normalization and the redactions are fixed by the platform within one policy, so
+nothing else can change the result (pre-flight I12). `TestProjectionLoadTime` loads 1,000 SRXs
+and 20 subjects over four compositions, one of them refused; it took 0.22 s on the build host, and
+the test holds it under 2 s.
+
+`exceeds` skips the projection's own names, since the generator holds them to the level's ceiling
+bits. `checkProjected` refuses a role or grant attribute `ProjectionOwns` claims (Decided 8). A
+subject declaring `remote` or a `p49-*` username is a load error, and the mint refuses one a
+directory derives (Decided 18). Nothing changes for a policy on 1.0.0; the test's projected set
+stands in until Task 14.
 
 - [ ] **Step 1: Write the failing tests**
 
 <!-- patch: internal/policy/projection_test.go -->
 ````diff
 diff --git a/internal/policy/projection_test.go b/internal/policy/projection_test.go
-index 32107a7..e0c7e71 100644
+index 5d206d1..f9fc9b1 100644
 --- a/internal/policy/projection_test.go
 +++ b/internal/policy/projection_test.go
-@@ -1,6 +1,7 @@
+@@ -1,8 +1,14 @@
  package policy
  
  import (
++	"fmt"
++	"net/netip"
 +	"reflect"
  	"strings"
  	"testing"
++	"time"
++
++	"github.com/rhwendt/port49/internal/admission"
  
-@@ -64,3 +65,70 @@ func TestABlockKeepsTheProjection(t *testing.T) {
+ 	"github.com/rhwendt/port49/internal/platform"
+ )
+@@ -67,3 +73,138 @@ func TestABlockKeepsTheProjection(t *testing.T) {
  	parseProjected(t, platform.BitDeliveryUserPermissions, "platforms:\n  juniper_junos:\n"+
- 		"    bits: {view: [\"show **\", \"monitor **\"]}\n"+readonlyCarveOut)
+ 		"    bits: {view: [\"show **\", \"monitor **\"]}\n    carve_outs: {view-configuration: []}\n"+readonlyCarveOut)
  }
 +
 +// A pinned set that projects Junos renders the composition's rules into the
@@ -4371,7 +5475,7 @@ index 32107a7..e0c7e71 100644
 +	if err != nil {
 +		t.Fatal(err)
 +	}
-+	if !reflect.DeepEqual(res.Blob.Attributes, []string{"user-permissions=view"}) ||
++	if !reflect.DeepEqual(res.Blob.Attributes, []string{"user-permissions=view"}) || res.Blob.FailClosed != "" ||
 +		res.Attributes[0].Source != "platform juniper_junos, projection (capability)" || res.Projection == nil {
 +		t.Fatalf("%q %+v", res.Blob.Attributes, res.Attributes)
 +	}
@@ -4384,33 +5488,61 @@ index 32107a7..e0c7e71 100644
 +	}
 +}
 +
-+// The refused shape quarantines every device of the platform, naming the two
-+// rules; the rest of the fleet loads (spec §8, §10). So does a bit whose
-+// reach a block widened past what the grant decides.
-+func TestTheRefusedShapeQuarantinesJunos(t *testing.T) {
-+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
++// The refused shape gets that subject the fail-closed reply, and quarantines
++// nothing: every other subject on the device keeps its reply (decision 26).
++// So does a bit whose reach a block widened past what the grant decides.
++func TestTheRefusedShapeFailsClosedForThatSubjectOnly(t *testing.T) {
++	body := scopeOK + `roles:
 +  - {name: r, privilege: readonly, permit: ["show interfaces **"], deny: ["show interfaces terse"]}
-+`+subjOK+grantOK)
-+	q := p.Quarantines(noon)
-+	if len(q) != 4 || q[0].Platform != "juniper_junos" ||
-+		!strings.Contains(q[0].Entries[0].Cause, `permit "show interfaces **"`) {
-+		t.Fatalf("%+v", q)
-+	}
-+	p = parseProjected(t, platform.BitDeliveryUserPermissions, "platforms:\n  juniper_junos:\n"+
-+		"    bits: {view: [\"show **\", \"monitor **\"]}\n"+readonlyCarveOut)
-+	if q := p.Quarantines(noon); len(q) != 4 {
-+		t.Fatalf("view now reaches monitor, which nothing decides, so the carve-out goes narrow and is refused: %+v", q)
++  - {name: ok, privilege: readonly, permit: ["show version"]}
++subjects:
++  - {name: s, identity: ["user:a@example.com"], username: a, token_ttl: 60s}
++  - {name: t, identity: ["user:b@example.com"], username: b, token_ttl: 60s}
++grants:
++  - {subject: s, scope: all_devices, roles: [r]}
++  - {subject: t, scope: all_devices, roles: [ok]}
++`
++	for _, block := range []string{"", "platforms:\n  juniper_junos:\n    bits: {view: [\"show **\", \"monitor **\"]}\n"} {
++		p := parseProjected(t, platform.BitDeliveryUserPermissions, block+body)
++		if q := p.Quarantines(noon); len(q) != 0 {
++			t.Fatalf("a projection refusal quarantines nothing: %+v", q)
++		}
++		res, err := p.ResolveSubject("t", deviceNamed(t, "srx-fw-04"), noon)
++		if err != nil || res.Blob.FailClosed != "" {
++			t.Fatalf("the other subject: %q %v", res.Blob.Attributes, err)
++		}
++		res, err = p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
++		if err != nil || res.Blob.FailClosed != "refused_shape" ||
++			!reflect.DeepEqual(res.Blob.Attributes, []string{"deny-commands=^.*$"}) {
++			t.Fatalf("%q %q %v", res.Blob.Attributes, res.Blob.FailClosed, err)
++		}
 +	}
 +}
 +
-+// No role or grant sets an attribute the projection renders.
++// No role or grant sets an attribute the projection renders, in any case or
++// numbered variant the device reads (I1).
 +func TestARoleCannotSetAProjectedAttribute(t *testing.T) {
 +	for _, key := range []string{"juniper_junos", "all"} {
-+		_, err := Parse([]byte("platform_set: "+projectedSet+"\n"+scopeOK+`roles:
-+  - {name: r, privilege: readonly, permit: ["show **"], attributes: {`+key+`: ["deny-commands=^request.*$"]}}
++		for _, a := range []string{"deny-commands=^request.*$", "allow-commands2=^request.*$",
++			"User-Permissions=all", "local-user-name1=p49-admin", "allow-configuration-regexps=.*"} {
++			_, err := Parse([]byte("platform_set: "+projectedSet+"\n"+scopeOK+`roles:
++  - {name: r, privilege: readonly, permit: ["show **"], attributes: {`+key+`: ["`+a+`"]}}
 +`+subjOK+grantOK), projectedEnv(platform.BitDeliveryUserPermissions))
-+		if err == nil || !strings.Contains(err.Error(), "rendered by juniper_junos's projection") {
-+			t.Errorf("%s: %v", key, err)
++			if err == nil || !strings.Contains(err.Error(), "rendered by juniper_junos's projection") {
++				t.Errorf("%s %s: %v", key, a, err)
++			}
++		}
++	}
++}
++
++// A subject may not take a device template user's name: a session under one
++// lands in that template's class whatever the reply says (I9).
++func TestATemplateUsernameIsReserved(t *testing.T) {
++	for _, u := range []string{"remote", "p49-admin", "p49-remote"} {
++		_, err := Parse([]byte(scopeOK+roleOK+"subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: "+
++			u+", token_ttl: 60s}\n"+grantOK), env())
++		if err == nil || !strings.Contains(err.Error(), "is reserved") {
++			t.Errorf("%s: %v", u, err)
 +		}
 +	}
 +}
@@ -4429,23 +5561,127 @@ index 32107a7..e0c7e71 100644
 +		t.Fatalf("%q %d %v", res.Blob.Attributes, res.MaxPrivilege, err)
 +	}
 +}
++
++// Each composition is projected once per policy, however many devices it
++// lands on: 1,000 SRXs and 20 subjects load within 2 s (I12; spec §8).
++func TestProjectionLoadTime(t *testing.T) {
++	if testing.Short() {
++		t.Skip("load-time bound")
++	}
++	e := projectedEnv(platform.BitDeliveryUserPermissions)
++	e.Devices = nil
++	for i := range 1000 {
++		e.Devices = append(e.Devices, admission.Device{Name: fmt.Sprintf("srx-%04d", i), Platform: "juniper_junos",
++			Addresses:  []netip.Addr{netip.AddrFrom4([4]byte{10, 9, byte(i >> 8), byte(i)})},
++			Attributes: map[string]string{"site": fmt.Sprintf("s%d", i%10)}})
++	}
++	var b strings.Builder
++	b.WriteString("platform_set: " + projectedSet + "\n" + scopeOK + `roles:
++  - {name: ro, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}
++  - {name: narrow, privilege: readonly, permit: ["show version", "show interfaces **"]}
++  - {name: op, privilege: operator, permit: ["show **", "clear **", "ping **"], deny: ["clear bgp **"]}
++  - {name: refused, privilege: readonly, permit: ["show interfaces **"], deny: ["show interfaces terse"]}
++subjects:
++`)
++	roles := []string{"ro", "narrow", "op", "refused"}
++	for i := range 20 {
++		fmt.Fprintf(&b, "  - {name: s%d, identity: [\"user:u%d@example.com\"], username: u%d, token_ttl: 60s}\n", i, i, i)
++	}
++	b.WriteString("grants:\n")
++	for i := range 20 {
++		fmt.Fprintf(&b, "  - {subject: s%d, scope: all_devices, roles: [%s]}\n", i, roles[i%len(roles)])
++	}
++	start := time.Now()
++	if _, err := Parse([]byte(b.String()), e); err != nil {
++		t.Fatal(err)
++	}
++	if d := time.Since(start); d > 2*time.Second {
++		t.Fatalf("1,000 SRXs x 20 subjects loaded in %v; the bound is 2 s", d)
++	} else {
++		t.Logf("1,000 SRXs x 20 subjects loaded in %v", d)
++	}
++}
+````
+
+<!-- patch: internal/token/minter_test.go -->
+````diff
+diff --git a/internal/token/minter_test.go b/internal/token/minter_test.go
+index 6237827..f1ee286 100644
+--- a/internal/token/minter_test.go
++++ b/internal/token/minter_test.go
+@@ -383,3 +383,16 @@ func TestEveryTokenCarriesItsMintTime(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// A device template user's name is never minted for: a directory may derive
++// one the policy never declared (spec §13 decision 26).
++func TestMintRefusesATemplateUsername(t *testing.T) {
++	m, _, _ := minter(t)
++	for _, u := range []string{"remote", "p49-readonly"} {
++		s := subject()
++		s.Username = u
++		if _, err := m.Mint(context.Background(), Request{Subject: s, Device: "leaf-01", TTL: time.Minute}); !errors.Is(err, ErrUsernameReserved) {
++			t.Fatalf("%q: %v", u, err)
++		}
++	}
++}
 ````
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/policy/`
-Expected: FAIL, build failed: `res.Projection undefined (type Resolution has no field or method
-Projection)`.
+Run: `go test ./internal/policy/ ./internal/token/`
+Expected: FAIL, build failed: `res.Blob.FailClosed undefined (type engine.Blob has no field or method
+FailClosed)`, `res.Projection undefined (type Resolution has no field or method Projection)`, and
+`undefined: ErrUsernameReserved`.
 
 - [ ] **Step 3: Render the projection in compile**
+
+<!-- patch: internal/engine/blob.go -->
+````diff
+diff --git a/internal/engine/blob.go b/internal/engine/blob.go
+index 97837b3..861a89d 100644
+--- a/internal/engine/blob.go
++++ b/internal/engine/blob.go
+@@ -63,6 +63,12 @@ type Blob struct {
+ 	// Classes are the patterns behind every `@class` the rules name, as this
+ 	// platform defines them.
+ 	Classes map[string][]string `json:"classes"`
++	// FailClosed is set where Attributes are a projection's fail-closed reply
++	// (spec §13 decision 26): why the composition could not be told
++	// faithfully, one of projection's Fail* categories. The daemon records
++	// the session under projection_fail_closed. Written only when set, so a
++	// blob without it keeps its hash.
++	FailClosed string `json:"fail_closed,omitempty"`
+ }
+ 
+ // Normalize is the platform's dialect as the evaluator needs it (spec §3).
+````
 
 <!-- patch: internal/policy/load.go -->
 ````diff
 diff --git a/internal/policy/load.go b/internal/policy/load.go
-index 799d7f9..a0095f9 100644
+index 2c4faec..5829f3f 100644
 --- a/internal/policy/load.go
 +++ b/internal/policy/load.go
-@@ -884,6 +884,9 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
+@@ -17,6 +17,7 @@ import (
+ 	"slices"
+ 	"strconv"
+ 	"strings"
++	"sync"
+ 	"time"
+ 	"unicode"
+ 
+@@ -64,6 +65,8 @@ type Policy struct {
+ 	set       string
+ 	adapters  map[string]platform.Dialect
+ 	overrides map[string]filePlatform
++	// projected memoizes project, keyed by what a projection reads.
++	projected sync.Map
+ 
+ 	levels  []string          // the declared ordering, lowest first
+ 	parents map[string]string // level → parent, for rendering
+@@ -894,6 +897,9 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
  			if err := engine.CheckAttribute(a); err != nil {
  				return fmt.Errorf("%s: %w", at, err)
  			}
@@ -4455,7 +5691,7 @@ index 799d7f9..a0095f9 100644
  			if err := p.checkPlaceholder(at, key, a); err != nil {
  				return err
  			}
-@@ -892,6 +895,24 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
+@@ -902,6 +908,25 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
  	return nil
  }
  
@@ -4463,13 +5699,14 @@ index 799d7f9..a0095f9 100644
 +// projected platform's key or under `all` where any platform is projected:
 +// beside the projection it would be a second instance the device drops or
 +// keeps first, and over it a regex nothing proved (spec §8, "Generator
-+// constraints" 1 and 4). The projection renders the template, the bits and
-+// the regexes from the rules; write rules.
++// constraints" 1, 4 and 6). A name is caught in every case and numbered
++// variant the device reads (allow-commands2, User-Permissions), and every
++// name the adapter lists as bearing privilege (Dialect.ProjectionOwns).
 +func (p *Policy) checkProjected(at, key, a string) error {
 +	name := engine.AttributeName(a)
 +	for _, plat := range sortedKeys(p.adapters) {
 +		d := p.adapters[plat]
-+		if (key == plat || key == "all") && platform.ContainsName(platform.ProjectionAttributes(d.CommandProjection), name) {
++		if (key == plat || key == "all") && d.ProjectionOwns(name) {
 +			return fmt.Errorf("%s: %s is rendered by %s's projection from the rules (command_projection: %s), so no "+
 +				"role or grant sets it there; write the rule instead (spec §8)", at, name, plat, d.CommandProjection)
 +		}
@@ -4480,15 +5717,35 @@ index 799d7f9..a0095f9 100644
  // checkPlaceholder allows a placeholder only in an attribute listed inert on
  // its platform key, or under `all` on every platform port49 ships and the
  // inventory names (spec §6). Anywhere else the device would get whatever the
+@@ -1094,6 +1119,11 @@ func (p *Policy) buildSubjects(f file) error {
+ 		// Whether a username is required depends on whether a grant names the
+ 		// subject, which checkMinters settles once the grants are read.
+ 		if len(s.Identity) > 0 && s.Username != "" {
++			if token.ReservedUsername(s.Username) {
++				return fmt.Errorf("subject %q: username %q is reserved: `remote` and every p49-* name are the "+
++					"device's template users, and a session under one lands in that template's class whatever "+
++					"the reply says (spec §8, §13 decision 26)", s.Name, s.Username)
++			}
+ 			if !token.CanonicalUsername(s.Username) {
+ 				return fmt.Errorf("subject %q: username %q must be printable ASCII and already canonical — lower "+
+ 					"case, no DOMAIN\\ prefix, no @suffix — because the daemon looks tokens up by the canonical form "+
 ````
 
 <!-- patch: internal/policy/resolve.go -->
 ````diff
 diff --git a/internal/policy/resolve.go b/internal/policy/resolve.go
-index f7b007b..db269ff 100644
+index f7b007b..3a04a7e 100644
 --- a/internal/policy/resolve.go
 +++ b/internal/policy/resolve.go
-@@ -13,6 +13,7 @@ import (
+@@ -1,6 +1,7 @@
+ package policy
+ 
+ import (
++	"encoding/json"
+ 	"errors"
+ 	"fmt"
+ 	"slices"
+@@ -13,6 +14,7 @@ import (
  	"github.com/rhwendt/port49/internal/decision"
  	"github.com/rhwendt/port49/internal/engine"
  	"github.com/rhwendt/port49/internal/platform"
@@ -4496,7 +5753,7 @@ index f7b007b..db269ff 100644
  )
  
  // ErrNoGrants is no_grants_matched: no subject lists the principal, or no
-@@ -45,6 +46,9 @@ type Resolution struct {
+@@ -45,6 +47,9 @@ type Resolution struct {
  	// attributes came from and what it shadowed (spec §6).
  	Blob       engine.Blob
  	Attributes []AttributeSource
@@ -4506,7 +5763,7 @@ index f7b007b..db269ff 100644
  }
  
  // AttributeSource is one attribute of the session reply and its provenance:
-@@ -131,7 +135,7 @@ func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Reso
+@@ -131,7 +136,7 @@ func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Reso
  		res.MaxPrivilege, res.HasCeiling = n, true
  	}
  	var err error
@@ -4515,7 +5772,7 @@ index f7b007b..db269ff 100644
  	return res, err
  }
  
-@@ -139,7 +143,8 @@ func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Reso
+@@ -139,7 +144,8 @@ func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Reso
  // every role's rules, each carrying its role; the pipe allowlist of every
  // role that permits anything; the patterns behind every class a rule names,
  // as this platform defines them; and the session attributes, layered.
@@ -4525,7 +5782,7 @@ index f7b007b..db269ff 100644
  	b := engine.Blob{Version: engine.Version, Bundle: p.Bundle, Platform: d.Platform, Privilege: c.level,
  		Normalize: p.normalizeFor(d.Platform), Classes: map[string][]string{}}
  	pipe := map[string]bool{}
-@@ -173,7 +178,7 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
+@@ -173,7 +179,7 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
  					// A class the platform does not define would silently never
  					// match — a deny that does nothing — so it is an error, and
  					// at load, not at a mint (spec §4, §8).
@@ -4534,7 +5791,7 @@ index f7b007b..db269ff 100644
  						t.Text, platformName(d.Platform))
  				}
  				b.Classes[t.Text] = patterns
-@@ -194,9 +199,17 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
+@@ -194,9 +200,18 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
  		return strings.Compare(x.Verdict+"\x00"+x.Rule+"\x00"+x.Role, y.Verdict+"\x00"+y.Rule+"\x00"+y.Role)
  	})
  	b.Rules = slices.Compact(b.Rules)
@@ -4546,6 +5803,7 @@ index f7b007b..db269ff 100644
 +			return engine.Blob{}, nil, nil, err
 +		}
 +		proj = &r
++		b.FailClosed = r.FailClosed
 +	}
 +	attrs, err := p.layerAttributes(c, d.Platform, dialect, proj)
  	if err != nil {
@@ -4554,7 +5812,7 @@ index f7b007b..db269ff 100644
  	}
  	for _, a := range attrs {
  		b.Attributes = append(b.Attributes, a.Attribute)
-@@ -208,7 +221,39 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
+@@ -208,7 +223,60 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
  		slices.Sort(b.AcceptedAttributes)
  		b.AcceptedAttributes = slices.Compact(b.AcceptedAttributes)
  	}
@@ -4563,12 +5821,33 @@ index f7b007b..db269ff 100644
 +}
 +
 +// project renders the composition's rules into a projected platform's
-+// session reply (spec §8; §13 decision 22): the level's ceiling bits and
-+// template, its parent chain followed as a rendering's is, and the blob's
-+// rules and classes. A composition the projection cannot carry faithfully is
-+// an error, which quarantines the device (checkDevices) and fails `policy
-+// test` and `policy diff` (spec §8, "Refused shape").
++// session reply (spec §8; §13 decisions 22 and 26): the level's ceiling bits
++// and template, its parent chain followed as a rendering's is, and the blob's
++// rules and classes. A composition the projection cannot carry faithfully
++// gets the fail-closed reply, for that subject only; `policy test` and
++// `policy diff` fail on it (projectionRefusals). It is never a quarantine:
++// every other subject on the device keeps working.
++//
++// Compositions repeat across devices, so each is projected once per policy
++// (plan 5b pre-flight I12): the result depends only on the platform, whose
++// adapter, normalization and redactions this policy fixes, the level, and the
++// blob's rules and classes.
 +func (p *Policy) project(c composition, b engine.Blob, dialect platform.Dialect) (projection.Result, error) {
++	key, err := json.Marshal([]any{b.Platform, c.level, b.Rules, b.Classes})
++	if err != nil {
++		return projection.Result{}, err
++	}
++	if r, ok := p.projected.Load(string(key)); ok {
++		return r.(projection.Result), nil
++	}
++	r, err := p.projectOnce(c, b, dialect)
++	if err == nil {
++		p.projected.Store(string(key), r)
++	}
++	return r, err
++}
++
++func (p *Policy) projectOnce(c composition, b engine.Blob, dialect platform.Dialect) (projection.Result, error) {
 +	in := projection.Input{Platform: b.Platform, Dialect: dialect, Rules: b.Rules, Classes: b.Classes,
 +		Normalize: b.Normalize, Facts: projection.FactsFor(dialect.CommandProjection)}
 +	if c.level != "" {
@@ -4595,7 +5874,7 @@ index f7b007b..db269ff 100644
  }
  
  func platformName(name string) string {
-@@ -222,7 +267,8 @@ func platformName(name string) string {
+@@ -222,7 +290,8 @@ func platformName(name string) string {
  // specific winning on a duplicate attribute name and every override recorded.
  // Within one layer, sources are taken in name order — roles by name, grants by
  // scope — so which one wins cannot depend on a file's layout.
@@ -4605,7 +5884,7 @@ index f7b007b..db269ff 100644
  	var out []AttributeSource
  	index := map[string]int{}
  	put := func(a, source string) {
-@@ -236,7 +282,13 @@ func (p *Policy) layerAttributes(c composition, platformName string, dialect pla
+@@ -236,7 +305,13 @@ func (p *Policy) layerAttributes(c composition, platformName string, dialect pla
  		index[name] = len(out)
  		out = append(out, AttributeSource{Attribute: a, Source: source})
  	}
@@ -4620,22 +5899,64 @@ index f7b007b..db269ff 100644
  		attrs, rendered, ok := p.render(dialect, c.level)
  		if !ok {
  			return nil, fmt.Errorf("level %s has no rendering on %s and no parent that has one (spec §6)",
-@@ -459,8 +511,15 @@ func (p *Policy) exceeds(dialect platform.Dialect, bound, level string, reply []
- 	ceiling, _, _ := p.render(dialect, bound)
- 	rendered, _, _ := p.render(dialect, level)
+@@ -461,6 +536,12 @@ func (p *Policy) exceeds(dialect platform.Dialect, bound, level string, reply []
  	held, sent := attributesByName(ceiling), attributesByName(reply)
-+	owned := platform.ProjectionAttributes(dialect.CommandProjection)
  	for i, a := range reply {
  		name := engine.AttributeName(a)
 +		// A projection's own attributes are held to the level's ceiling bits
 +		// by the projection itself, which renders them from the level and
-+		// never past it (spec §8).
-+		if platform.ContainsName(owned, name) {
++		// never past it (spec §8). No role or grant sets one (checkProjected).
++		if dialect.ProjectionOwns(name) {
 +			continue
 +		}
  		if !strings.EqualFold(name, "priv-lvl") && raisesCeiling(name, dialect) &&
  			rose(held[name], sent[name], ceiling, rendered, dialect, dialect) {
  			return i, true
+````
+
+<!-- patch: internal/token/minter.go -->
+````diff
+diff --git a/internal/token/minter.go b/internal/token/minter.go
+index aa39f06..bd20cae 100644
+--- a/internal/token/minter.go
++++ b/internal/token/minter.go
+@@ -8,6 +8,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"io"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/rhwendt/port49/internal/decision"
+@@ -33,6 +34,18 @@ var ErrIdempotencyConflict = errors.New("token: idempotency key reused with a di
+ // The daemon cannot refuse a name a device sends; the mint can.
+ var ErrUsernameNotCanonical = errors.New("token: device-facing username must be printable ASCII and already canonical")
+ 
++// ErrUsernameReserved refuses a device-facing username a Junos device keeps
++// for a template user: `remote`, where a session with no template lands, and
++// every p49-* name port49's reference classes use. A session under such a
++// name lands in that template's class whatever the reply says, so a subject
++// the projection told less (the fail-closed reply) would run what the
++// template's class runs (spec §13 decision 26). Policy load refuses a
++// declared one; this catches one a directory derives.
++var ErrUsernameReserved = errors.New("token: device-facing username is reserved for a device template user (remote, p49-*)")
++
++// ReservedUsername reports whether u is `remote` or a p49-* name.
++func ReservedUsername(u string) bool { return u == "remote" || strings.HasPrefix(u, "p49-") }
++
+ // asciiUsername reports whether every byte of u is printable ASCII
+ // (0x21–0x7E), which excludes the empty name, spaces and control characters.
+ func asciiUsername(u string) bool {
+@@ -164,6 +177,9 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
+ 	if !CanonicalUsername(r.Subject.Username) {
+ 		return Result{}, ErrUsernameNotCanonical
+ 	}
++	if ReservedUsername(r.Subject.Username) {
++		return Result{}, ErrUsernameReserved
++	}
+ 	// idemErr names what a lost idempotency record cost, carried onto the mint
+ 	// record that is emitted anyway. It is Record.IndexError's idiom: the
+ 	// failure does not fail the mint, so the only place it can be said is the
 ````
 
 - [ ] **Step 4: Run everything**
@@ -4646,9 +5967,9 @@ Expected: every package `ok`, no `gofmt` output, both binaries built.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/policy/load.go internal/policy/projection_test.go internal/policy/resolve.go
+git add internal/engine/blob.go internal/policy/load.go internal/policy/projection_test.go internal/policy/resolve.go internal/token/minter.go internal/token/minter_test.go
 git commit -m "$(cat <<'EOF'
-feat: a pinned 1.1.0 renders Junos's session reply from the rules, and refuses what it cannot
+feat: a Junos session reply is its composition's projection, or that subject's fail-closed reply
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -4658,44 +5979,388 @@ EOF
 
 ---
 
-### Task 10: policy test and explain say what the projection sends and what the device runs
+### Task 10: A session answered with the fail-closed reply is recorded as projection_fail_closed
+
+**Files:**
+- Modify: `internal/decision/reasons.go` (`ProjectionFailClosed`)
+- Modify: `internal/engine/blob.go` (`Blob.SessionReason`)
+- Modify: `internal/daemon/author/engine.go` (`Session` records the blob's reason)
+- Modify: `internal/replay/replay.go` (the reason is replayable, and a session replays to it)
+- Modify: `internal/policy/explain.go` (the session line prints it)
+- Test: `internal/engine/blob_test.go`, `internal/daemon/author/engine_test.go`,
+  `internal/replay/replay_test.go`
+
+**Interfaces:**
+- Consumes: Task 9's `Blob.FailClosed`; spec §5.7's `projection_fail_closed`, which Task 1 added.
+- Produces: `decision.ProjectionFailClosed Reason = "projection_fail_closed"`, and `func (b
+  engine.Blob) SessionReason() decision.Reason`.
+
+The fail-closed reply is a permit: the session opens, told less than port49 would permit. Its
+`authorize_session` record says so by reason, so the one subject it reached is in the log by name
+at 3am, and the blob event carries why. The reason is read off the blob in one place,
+`Blob.SessionReason`, which the daemon, `policy replay` and `explain` all call, so a replay of such
+a record agrees and one whose reason was edited to `context_matched` diverges. No metric is added:
+the existing decision counters count it by reason.
+
+- [ ] **Step 1: Write the failing tests**
+
+<!-- patch: internal/daemon/author/engine_test.go -->
+````diff
+diff --git a/internal/daemon/author/engine_test.go b/internal/daemon/author/engine_test.go
+index 65123bf..a0a1b1f 100644
+--- a/internal/daemon/author/engine_test.go
++++ b/internal/daemon/author/engine_test.go
+@@ -423,3 +423,17 @@ func TestASecretOneFormMissesIsRedactedInBoth(t *testing.T) {
+ 		t.Fatalf("%v", r)
+ 	}
+ }
++
++// A blob whose reply is a projection's fail-closed reply opens the session
++// with that reply, recorded as projection_fail_closed: the subject told less
++// than port49 would permit is in the log by name (spec §13 decision 26).
++func TestAFailClosedReplyIsRecordedByName(t *testing.T) {
++	b := eosBlob()
++	b.FailClosed = "refused_shape"
++	f := newEngineFixture(t, b)
++	c := store.Context{Username: "alice", Principal: "user:alice@example.com", BlobHash: f.hash}
++	d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(), Request{Context: c, Device: peer})
++	if !d.Permit || d.Reason != decision.ProjectionFailClosed || len(d.Attributes) == 0 {
++		t.Fatalf("%+v", d)
++	}
++}
+````
+
+<!-- patch: internal/engine/blob_test.go -->
+````diff
+diff --git a/internal/engine/blob_test.go b/internal/engine/blob_test.go
+index 89e78dd..aeeaf60 100644
+--- a/internal/engine/blob_test.go
++++ b/internal/engine/blob_test.go
+@@ -322,3 +322,27 @@ func TestSessionAttributesSubstitute(t *testing.T) {
+ 		t.Errorf("an unused value refused: %v", err)
+ 	}
+ }
++
++// A projection's fail-closed reply is marked on the blob, so the daemon and a
++// replay record the session as projection_fail_closed; a blob without the
++// mark encodes as before and keeps its hash (spec §13 decision 26).
++func TestFailClosedIsCarriedAndOmittedWhenEmpty(t *testing.T) {
++	const v2 = `{"version":2,"bundle":"b","platform":"juniper_junos","normalize":{"pipe_token":"|","pipe_authorized":false,` +
++		`"strip_cr":true,"expands_abbreviations":false,"session_only":true},"privilege":"","attributes":["deny-commands=^.*$"],` +
++		`"rules":[],"pipe":[],"classes":{}}`
++	b, err := Decode(HashOf([]byte(v2)), []byte(v2))
++	if err != nil || b.FailClosed != "" || b.SessionReason() != "context_matched" {
++		t.Fatalf("without the key: %+v, %v", b, err)
++	}
++	if body, _, err := Encode(b); err != nil || string(body) != v2 {
++		t.Fatalf("unset is omitted: %s %v", body, err)
++	}
++	b.FailClosed = "refused_shape"
++	body, hash, err := Encode(b)
++	if err != nil || !strings.HasSuffix(string(body), `"classes":{},"fail_closed":"refused_shape"}`) {
++		t.Fatalf("set: %s %v", body, err)
++	}
++	if got, err := Decode(hash, body); err != nil || got.SessionReason() != "projection_fail_closed" {
++		t.Fatalf("round trip: %+v %v", got, err)
++	}
++}
+````
+
+<!-- patch: internal/replay/replay_test.go -->
+````diff
+diff --git a/internal/replay/replay_test.go b/internal/replay/replay_test.go
+index e6a9153..2a79d09 100644
+--- a/internal/replay/replay_test.go
++++ b/internal/replay/replay_test.go
+@@ -355,3 +355,39 @@ func TestARedactedBlobEventLeavesItsRecordsUnverifiable(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// A session answered with a projection's fail-closed reply replays to the
++// same reason and reply, and editing its reason to context_matched diverges
++// (spec §13 decision 26).
++func TestAFailClosedSessionReplays(t *testing.T) {
++	b := engine.Blob{Bundle: "sha256:policy", Platform: "juniper_junos",
++		Normalize: engine.Normalize{PipeToken: "|", StripCR: true, SessionOnly: true}, Privilege: "readonly",
++		Attributes: []string{"deny-commands=^.*$"}, FailClosed: "refused_shape",
++		Rules: []engine.Rule{{Verdict: engine.Permit, Rule: "show interfaces **", Role: "r"},
++			{Verdict: engine.Deny, Rule: "show interfaces terse", Role: "r"}}}
++	body, hash, err := engine.Encode(b)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var log bytes.Buffer
++	sink := decision.NewJSONLines(&log)
++	sink.Emit(decision.Record{TS: time.Now(), Event: decision.EventBlob, Blob: &decision.Blob{Hash: hash, Body: body}})
++	st := memory.New(time.Now)
++	st.PutBlob(context.Background(), hash, body, time.Hour)
++	st.PutContext(context.Background(), store.ContextKey{NAS: "srx-01", Username: "alice"},
++		store.Context{CtxID: "ctx1", Username: "alice", Principal: "user:alice@example.com", BlobHash: hash}, time.Hour)
++	m := metrics.New(prometheus.NewRegistry())
++	h := author.New(st, &author.Engine{Store: st, Metrics: m}, sink, m, time.Now, platform.Defaults(),
++		time.Hour, time.Minute, time.Hour)
++	h.Handle(context.Background(), authen.Peer{NAS: "srx-01", NASAddr: "10.20.0.9", Platform: "juniper_junos"},
++		wire.AuthorRequest{User: []byte("alice"), Port: []byte("vty0"),
++			Args: [][]byte{[]byte("service=junos-exec"), []byte("cmd=")}})
++	res := replayAll(t, log.String())
++	if len(res) != 1 || res[0].Status != Agree || res[0].Reason != decision.ProjectionFailClosed {
++		t.Fatalf("%+v\n%s", res, log.String())
++	}
++	edited := strings.Replace(log.String(), `"reason":"projection_fail_closed"`, `"reason":"context_matched"`, 1)
++	if res := replayAll(t, edited); res[0].Status != Diverge {
++		t.Fatalf("an edited reason: %+v", res)
++	}
++}
+````
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `go test ./internal/engine/ ./internal/daemon/author/ ./internal/replay/`
+Expected: FAIL, build failed: `b.SessionReason undefined (type Blob has no field or method
+SessionReason)`, `undefined: decision.ProjectionFailClosed`.
+
+- [ ] **Step 3: Record the reason**
+
+<!-- patch: internal/daemon/author/engine.go -->
+````diff
+diff --git a/internal/daemon/author/engine.go b/internal/daemon/author/engine.go
+index 7e114f2..c5072bc 100644
+--- a/internal/daemon/author/engine.go
++++ b/internal/daemon/author/engine.go
+@@ -149,7 +149,7 @@ func (e *Engine) Session(ctx context.Context, r Request) Decision {
+ 			return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg, Policy: pol}
+ 		}
+ 	}
+-	return Decision{Permit: true, Reason: decision.ContextMatched, Attributes: attrs, Policy: pol}
++	return Decision{Permit: true, Reason: p.Blob.SessionReason(), Attributes: attrs, Policy: pol}
+ }
+ 
+ // Command decides one command vector against the blob (spec §5.3).
+````
+
+<!-- patch: internal/decision/reasons.go -->
+````diff
+diff --git a/internal/decision/reasons.go b/internal/decision/reasons.go
+index e4aa1a1..7979f51 100644
+--- a/internal/decision/reasons.go
++++ b/internal/decision/reasons.go
+@@ -57,6 +57,12 @@ const (
+ 	// from; operational, like blob_unavailable (spec §5.7).
+ 	BlobPlatformMismatch Reason = "blob_platform_mismatch"
+ 	DeviceQuarantined    Reason = "device_quarantined"
++	// ProjectionFailClosed: a session on a projected platform answered with
++	// its composition's fail-closed reply, deny every command but what the
++	// projection proved, because the composition cannot be told to the
++	// device faithfully (spec §8; §13 decision 26). A permit: the session
++	// opens, told less than port49 would permit. `policy test` fails on it.
++	ProjectionFailClosed Reason = "projection_fail_closed"
+ )
+ 
+ // Events.
+@@ -89,7 +95,7 @@ var reasons = []Reason{
+ 	ContextMatched, EscalationGranted, PermitDominates, PipeStageDenied, ServiceUnsupported, EnableRefused,
+ 	CeilingExceeded, NoRuleMatched, NoPermitDominatesDeny, ContextMissing, UsernameMismatch, RemAddrMismatch,
+ 	PrivilegeExceeded, SessionExpired, ContextStale, CredentialRevoked, DeviceUnknown, PlatformUnknown,
+-	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined,
++	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined, ProjectionFailClosed,
+ }
+ 
+ // Known reports whether r is in spec §5.7's vocabulary. A policy test's
+````
+
+<!-- patch: internal/engine/blob.go -->
+````diff
+diff --git a/internal/engine/blob.go b/internal/engine/blob.go
+index 861a89d..ce95000 100644
+--- a/internal/engine/blob.go
++++ b/internal/engine/blob.go
+@@ -22,6 +22,8 @@ import (
+ 	"slices"
+ 	"strings"
+ 	"unicode/utf8"
++
++	"github.com/rhwendt/port49/internal/decision"
+ )
+ 
+ // Version is the blob format this package writes and the only one it reads.
+@@ -124,7 +126,7 @@ func HashOf(body []byte) string {
+ func Encode(b Blob) ([]byte, string, error) {
+ 	c := Blob{Version: Version, Bundle: b.Bundle, Platform: b.Platform, Normalize: b.Normalize,
+ 		Privilege: b.Privilege, Attributes: append([]string{}, b.Attributes...),
+-		Rules: []Rule{}, Pipe: []string{}, Classes: map[string][]string{}}
++		Rules: []Rule{}, Pipe: []string{}, Classes: map[string][]string{}, FailClosed: b.FailClosed}
+ 	if len(b.AcceptedAttributes) > 0 {
+ 		c.AcceptedAttributes = slices.Clone(b.AcceptedAttributes)
+ 		slices.Sort(c.AcceptedAttributes)
+@@ -317,3 +319,14 @@ func referencedClasses(b Blob) map[string]bool {
+ 	}
+ 	return out
+ }
++
++// SessionReason is the reason a session answered from b is recorded under:
++// projection_fail_closed where b's reply is a projection's fail-closed reply,
++// so the one subject told less than port49 would permit is in the log by
++// name (spec §13 decision 26), and context_matched otherwise.
++func (b Blob) SessionReason() decision.Reason {
++	if b.FailClosed != "" {
++		return decision.ProjectionFailClosed
++	}
++	return decision.ContextMatched
++}
+````
+
+<!-- patch: internal/policy/explain.go -->
+````diff
+diff --git a/internal/policy/explain.go b/internal/policy/explain.go
+index 828245c..7afdbde 100644
+--- a/internal/policy/explain.go
++++ b/internal/policy/explain.go
+@@ -339,7 +339,7 @@ func (e Explanation) Render(w io.Writer, showAttributes bool) {
+ 	r := e.Resolution
+ 	o := e.Outcome
+ 	if e.Command == "" {
+-		fmt.Fprintf(w, "permit %s (session)\n", decision.ContextMatched)
++		fmt.Fprintf(w, "permit %s (session)\n", r.Blob.SessionReason())
+ 	} else if o.Permit {
+ 		fmt.Fprintf(w, "permit %s\n", o.Reason)
+ 	} else {
+````
+
+<!-- patch: internal/replay/replay.go -->
+````diff
+diff --git a/internal/replay/replay.go b/internal/replay/replay.go
+index 342c0dd..5986021 100644
+--- a/internal/replay/replay.go
++++ b/internal/replay/replay.go
+@@ -53,6 +53,7 @@ type Result struct {
+ var replayable = map[decision.Reason]bool{
+ 	decision.PermitDominates: true, decision.NoRuleMatched: true, decision.NoPermitDominatesDeny: true,
+ 	decision.PipeStageDenied: true, decision.ContextMatched: true, decision.BlobPlatformMismatch: true,
++	decision.ProjectionFailClosed: true,
+ }
+ 
+ // Replay reads a decision log and replays every authorization record that
+@@ -268,6 +269,7 @@ func one(rec decision.Record, p *program) (Status, string) {
+ 		if attrs, err = b.SessionAttributes(v); err != nil {
+ 			return Diverge, "the blob's session attributes do not fit this record's values: " + err.Error()
+ 		}
++		reason = b.SessionReason()
+ 		session = true
+ 	case rec.Event == decision.EventAuthorizeCommand:
+ 		if rec.Request == nil {
+````
+
+- [ ] **Step 4: Run everything**
+
+Run: `make test && make vet && go vet -tags lab ./tests/lab/... && make build`
+Expected: every package `ok`, no `gofmt` output, both binaries built.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/daemon/author/engine.go internal/daemon/author/engine_test.go internal/decision/reasons.go internal/engine/blob.go internal/engine/blob_test.go internal/policy/explain.go internal/replay/replay.go internal/replay/replay_test.go
+git commit -m "$(cat <<'EOF'
+feat: a session answered with the fail-closed reply is recorded as projection_fail_closed
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
+EOF
+)"
+```
+
+---
+
+### Task 11: policy test reports each projection and fails on a fail-closed reply or a quarantine; explain says what the device runs
 
 **Files:**
 - Modify: `internal/policy/tests.go` (`Caveats` on a projected platform; `ProjectionCaveats`;
   `RunTests` appends them)
 - Modify: `internal/policy/explain.go` (session and command caveats)
-- Modify: `internal/policy/lint.go` (`projection` and `projection_overflow` findings; `Projections`)
-- Test: `internal/policy/projection_test.go`
+- Modify: `internal/policy/lint.go` (`projection`, `projection_refused` and `projection_overflow`
+  findings; `Projections`, `ProjectionRefusals`, `refusedMessage`)
+- Modify: `cmd/port49/policy.go` (`policy test` exits 1 on a quarantine or a refusal)
+- Test: `internal/policy/projection_test.go`, `cmd/port49/policy_test.go`
 
 **Interfaces:**
 - Consumes: Task 9's `Resolution.Projection`; Task 8's `Result.Device`, `Result.Narrower`,
-  `Refusal`; 5a's `redacted` (intersect.go); `p.expiryInstants`.
+  `Result.FailClosed`, `Refusal`; 5a's `redacted` (intersect.go); `p.expiryInstants`.
 - Produces:
   - `func ProjectionCaveats(res Resolution, platformName string, o engine.Outcome) []string`;
-  - `FindingProjection = "projection"` and `FindingProjectionOverflow = "projection_overflow"`;
-  - `func (p *Policy) Projections(now time.Time) []Finding`.
+  - `FindingProjection = "projection"`, `FindingProjectionRefused = "projection_refused"`,
+    `FindingProjectionOverflow = "projection_overflow"`;
+  - `func (p *Policy) Projections(now time.Time) []Finding` and `func ProjectionRefusals(findings
+    []Finding) int`.
 
-Spec §8's reporting duties:
+Spec §8's reporting duties, and its "CI MUST refuse the policy":
 - CI names each composition's shape, its bits or template, what each regex carries, what the bits
   refuse, what is beyond the level's bits, and up to three commands where the device is narrower.
-- A reply past the wire's length is reported with the class line that would carry it
-  (`projection_overflow`).
-- `explain` states that the effective set is class ∩ wire, and says what the device does with the
-  command under the reply.
+- A composition that gets the fail-closed reply is `projection_refused`, or `projection_overflow`
+  for an attribute past the budget, with the subject, **every device it lands on**, the reason and
+  what it is told. The overflow prints the class line for `deny-commands` only, and says it binds
+  every subject at that template; for `allow-commands` it says to narrow the grant (pre-flight
+  C2). Every rule and value the findings quote is redacted (M9). The refusal's own sentence quotes
+  only rules the secret check passed, since a composition with a secret rule is refused as
+  `secret_rule`, whose text names only the role.
+- **`policy test` exits 1 on any such finding and on any quarantine**, now or at a later expiry
+  (pre-flight I10). The summary line counts both. The daemon still loads such a policy and serves
+  the rest (decision 20); CI refuses to ship it.
+- `explain` states that the effective set is class ∩ wire, says what the device does with the
+  command under the reply, and names a fail-closed composition's reason.
 
-Every rule and vector the findings print is redacted, as the dead-rule report redacts its rules.
-Rule text is policy, and a probe vector is made of rule words.
+`platform upgrade`'s preview of the same findings lands with set 1.1.0 in Task 14, where a test can
+reach it.
 
 - [ ] **Step 1: Write the failing tests**
+
+<!-- patch: cmd/port49/policy_test.go -->
+````diff
+diff --git a/cmd/port49/policy_test.go b/cmd/port49/policy_test.go
+index ffaf454..45bb4b8 100644
+--- a/cmd/port49/policy_test.go
++++ b/cmd/port49/policy_test.go
+@@ -504,16 +504,22 @@ func TestPolicyTestPrintsReportsNotesAndScheduledQuarantines(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	var out, errb bytes.Buffer
+-	run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
++	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+ 	for _, want := range []string{
+ 		`report: grantless_subject: subject "gone" has no grant`,
+ 		"     note: arista_eos applies output modifiers itself",
+ 		"quarantine: leaf-01 (arista_eos): will be quarantined from 2099-01-01T00:00:00.000Z, when grant all_devices [admin] expires",
++		"; 1 quarantined, 0 projection refusals\n",
+ 	} {
+ 		if !strings.Contains(out.String(), want) {
+ 			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
+ 		}
+ 	}
++	// A quarantine, even one an expiry brings on later, fails the gate
++	// (plan 5b pre-flight I10): the daemon serves the rest, CI ships none.
++	if code != 1 {
++		t.Fatalf("code %d", code)
++	}
+ }
+ 
+ // A session test prints the level and ceiling the subject resolved to, and
+````
 
 <!-- patch: internal/policy/projection_test.go -->
 ````diff
 diff --git a/internal/policy/projection_test.go b/internal/policy/projection_test.go
-index e0c7e71..615f64e 100644
+index f9fc9b1..34aeccc 100644
 --- a/internal/policy/projection_test.go
 +++ b/internal/policy/projection_test.go
-@@ -132,3 +132,63 @@ func TestACeilingOnJunos(t *testing.T) {
- 		t.Fatalf("%q %d %v", res.Blob.Attributes, res.MaxPrivilege, err)
+@@ -11,6 +11,7 @@ import (
+ 	"github.com/rhwendt/port49/internal/admission"
+ 
+ 	"github.com/rhwendt/port49/internal/platform"
++	"github.com/rhwendt/port49/internal/projection"
+ )
+ 
+ // projectedSet is the test's second platform set: 1.0.0 with juniper_junos
+@@ -208,3 +209,121 @@ subjects:
+ 		t.Logf("1,000 SRXs x 20 subjects loaded in %v", d)
  	}
  }
 +
@@ -4750,30 +6415,154 @@ index e0c7e71..615f64e 100644
 +		}
 +		body += `"show ` + w + ` **"`
 +	}
++	// That subject gets the fail-closed reply, and the finding prints no class
++	// line: a class allow would run for every subject at that template, past
++	// their own denies (C2).
 +	p = parseProjected(t, platform.BitDeliveryUserPermissions, body+"]}\n"+subjOK+grantOK)
++	var over []Finding
 +	for _, f := range p.Lint(noon) {
-+		if f.Kind == FindingProjectionOverflow && strings.Contains(f.Message, "set system login class p49-remote allow-commands") {
-+			return
++		if f.Kind == FindingProjectionOverflow {
++			over = append(over, f)
 +		}
 +	}
-+	t.Fatalf("no overflow finding: %+v", p.Lint(noon))
++	if len(over) != 1 || strings.Contains(over[0].Message, "set system login class") ||
++		!strings.Contains(over[0].Message, "narrow the grant") ||
++		!strings.Contains(over[0].Message, `subject "s" on juniper_junos (srx-fw-04, srx-fw-05, srx-fw-22, srx-lab-01)`) ||
++		ProjectionRefusals(p.Lint(noon)) != 1 {
++		t.Fatalf("%+v", over)
++	}
++	// Past the budget in deny-commands, the class line carries the denies,
++	// and says it binds every subject at that template.
++	body = scopeOK + "roles:\n  - {name: r, privilege: readonly, permit: [\"show **\"], deny: ["
++	for i, w := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"} {
++		if i > 0 {
++			body += ", "
++		}
++		body += `"show ` + w + ` **"`
++	}
++	// A deny narrower than every command goes out only once L9 measures that
++	// the device matches it against the expanded command.
++	saved := projection.JunosFacts
++	projection.JunosFacts.DenyMatchesExpanded = true
++	defer func() { projection.JunosFacts = saved }()
++	p = parseProjected(t, platform.BitDeliveryLocalUserName, body+"]}\n"+subjOK+grantOK)
++	over = nil
++	for _, f := range p.Lint(noon) {
++		if f.Kind == FindingProjectionOverflow {
++			over = append(over, f)
++		}
++	}
++	if len(over) != 1 || !strings.Contains(over[0].Message, "binding every subject at that template: "+
++		"set system login class p49-readonly deny-commands \"^([sS]") {
++		t.Fatalf("%+v", over)
++	}
++}
++
++// A refused composition is a projection_refused finding naming the subject,
++// every device, and why, and it is what fails policy test (I10).
++func TestARefusalIsAFinding(t *testing.T) {
++	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
++  - {name: r, privilege: readonly, permit: ["show interfaces **", "show version"], deny: ["show interfaces terse"]}
++`+subjOK+grantOK)
++	var got []string
++	for _, f := range p.Lint(noon) {
++		if f.Kind == FindingProjectionRefused {
++			got = append(got, f.Message)
++		}
++	}
++	if len(got) != 1 || !strings.Contains(got[0], `subject "s" on juniper_junos (srx-fw-04, srx-fw-05, srx-fw-22, `+
++		`srx-lab-01) gets the fail-closed reply (refused_shape)`) ||
++		!strings.Contains(got[0], `it is told every command denied but show version`) {
++		t.Fatalf("%q", got)
++	}
++	e, err := p.Explain("s", "", "srx-fw-04", "show interfaces em0", noon)
++	if err != nil || !strings.Contains(strings.Join(e.Caveats, "\n"), "gets the fail-closed reply there") ||
++		!strings.Contains(strings.Join(e.Caveats, "\n"), "the device refuses it") {
++		t.Fatalf("%q %v", e.Caveats, err)
++	}
 +}
 ````
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/policy/`
-Expected: FAIL, build failed: `undefined: FindingProjection`, `undefined: FindingProjectionOverflow`.
+Run: `go test ./internal/policy/ ./cmd/port49/`
+Expected: FAIL, build failed: `undefined: FindingProjection`, `undefined: FindingProjectionOverflow`,
+`undefined: ProjectionRefusals`, `undefined: FindingProjectionRefused`; and `--- FAIL:
+TestPolicyTestPrintsReportsNotesAndScheduledQuarantines: missing "; 1 quarantined, 0 projection
+refusals\n"`, `code 0`.
 
-- [ ] **Step 3: Add the caveats and the findings**
+- [ ] **Step 3: Add the caveats, the findings and the exit**
+
+<!-- patch: cmd/port49/policy.go -->
+````diff
+diff --git a/cmd/port49/policy.go b/cmd/port49/policy.go
+index 9bc5239..42ab167 100644
+--- a/cmd/port49/policy.go
++++ b/cmd/port49/policy.go
+@@ -111,9 +111,11 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
+ 
+ // policyTest is the CI gate (spec §11, §12): it loads the policy against the
+ // inventory — every load-time check is a failure here — prints what CI must
+-// report without refusing, the shadowed-deny report, then runs the file's
+-// tests. It exits 1 if the policy does not load, any test fails, or a deny is
+-// shadowed and no test exercises it.
++// report, the shadowed-deny report, then runs the file's tests. It exits 1 if
++// the policy does not load, any test fails, a deny is shadowed and no test
++// exercises it, a device is quarantined now or at a later expiry, or a
++// composition gets a projection's fail-closed reply (spec §8, "CI MUST refuse
++// the policy"; §13 decision 26).
+ func policyTest(args []string, stdout, stderr io.Writer) int {
+ 	fs := flag.NewFlagSet("port49 policy test", flag.ContinueOnError)
+ 	fs.SetOutput(stderr)
+@@ -142,18 +144,21 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
+ 	// The set the policy renders with, first: a reviewer reading a rendering
+ 	// change needs to know which adapters produced it (spec §8).
+ 	fmt.Fprintf(stdout, "platform_set: %s\n", p.PlatformSet())
+-	// A quarantined device is reported, not a failure of its own: the policy
+-	// loaded, and decision 20 exists so one device cannot block the rest. A
+-	// test on it fails in the ordinary way, as device_quarantined. An entry an
+-	// expiry will bring on is reported too, so CI sees it before it lands.
++	// A quarantined device fails the gate: the daemon still loads the policy
++	// and serves the rest (decision 20), but CI refuses to ship one. An entry
++	// an expiry will bring on fails it too, so CI sees it before it lands.
++	quarantined := 0
+ 	for _, q := range p.Quarantines(now) {
+ 		for _, e := range q.Entries {
++			quarantined++
+ 			fmt.Fprintf(stdout, "quarantine: %s (%s): %s\n", q.Device, q.Platform, quarantineLine(e, now))
+ 		}
+ 	}
+-	for _, f := range p.Lint(now) {
++	findings := p.Lint(now)
++	for _, f := range findings {
+ 		fmt.Fprintf(stdout, "report: %s: %s\n", f.Kind, f.Message)
+ 	}
++	refused := policy.ProjectionRefusals(findings)
+ 	// An acknowledge: entry is the author's written word for a widening no
+ 	// test can show (spec §12); review reads each one.
+ 	for _, a := range p.Acknowledgments() {
+@@ -253,9 +258,9 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
+ 			fmt.Fprintf(stdout, "     note: %s\n", c)
+ 		}
+ 	}
+-	fmt.Fprintf(stdout, "%d tests, %d failed; %d shadowed denies, %d unacknowledged\n", len(results), failed,
+-		len(shadows), unacknowledged)
+-	if failed > 0 || unacknowledged > 0 {
++	fmt.Fprintf(stdout, "%d tests, %d failed; %d shadowed denies, %d unacknowledged; %d quarantined, %d "+
++		"projection refusals\n", len(results), failed, len(shadows), unacknowledged, quarantined, refused)
++	if failed > 0 || unacknowledged > 0 || quarantined > 0 || refused > 0 {
+ 		return 1
+ 	}
+ 	return 0
+````
 
 <!-- patch: internal/policy/explain.go -->
 ````diff
 diff --git a/internal/policy/explain.go b/internal/policy/explain.go
-index 828245c..b18c661 100644
+index 7afdbde..086cbf8 100644
 --- a/internal/policy/explain.go
 +++ b/internal/policy/explain.go
-@@ -133,10 +133,16 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
+@@ -133,10 +133,21 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
  				"no command in this session is asked of port49, and a revocation or a session ceiling does not "+
  				"reach a live session there (spec §5.6)", d.Platform, strings.Join(dialect.Supports, ", ")))
  		}
@@ -4781,6 +6570,11 @@ index 828245c..b18c661 100644
 +			e.Caveats = append(e.Caveats, fmt.Sprintf("the reply projects these rules as the %s shape (spec §8): what "+
 +				"the device runs is its class ∩ the wire, and the class half is the device's configuration, outside "+
 +				"port49 (port49 platform export --classes prints the reference)", pr.Shape))
++			if pr.FailClosed != "" {
++				e.Caveats = append(e.Caveats, fmt.Sprintf("the composition cannot be told to %s faithfully (%s): %s; "+
++					"this subject gets the fail-closed reply there, and policy test fails on it (spec §13 decision 26)",
++					d.Platform, pr.FailClosed, pr.Refusal.Why))
++			}
 +		}
  		return e, nil
  	}
@@ -4795,18 +6589,10 @@ index 828245c..b18c661 100644
 <!-- patch: internal/policy/lint.go -->
 ````diff
 diff --git a/internal/policy/lint.go b/internal/policy/lint.go
-index 9a91683..cbaaa05 100644
+index 9a91683..ad27049 100644
 --- a/internal/policy/lint.go
 +++ b/internal/policy/lint.go
-@@ -1,6 +1,7 @@
- package policy
- 
- import (
-+	"errors"
- 	"fmt"
- 	"reflect"
- 	"slices"
-@@ -11,6 +12,7 @@ import (
+@@ -11,6 +11,7 @@ import (
  	"github.com/rhwendt/port49/internal/admission"
  	"github.com/rhwendt/port49/internal/engine"
  	"github.com/rhwendt/port49/internal/platform"
@@ -4814,7 +6600,7 @@ index 9a91683..cbaaa05 100644
  )
  
  // Finding is something CI reports about a policy that loads: not an error,
-@@ -40,6 +42,14 @@ const (
+@@ -40,6 +41,23 @@ const (
  	// FindingDeviceConfigSecretLiteral is a `platforms:` block's device_config
  	// line carrying a value redaction hides (spec §5.8).
  	FindingDeviceConfigSecretLiteral = "device_config_secret_literal"
@@ -4822,14 +6608,23 @@ index 9a91683..cbaaa05 100644
 +	// platform: the shape, the bits, what each regex carries, and where the
 +	// device is narrower than port49 (spec §8).
 +	FindingProjection = "projection"
-+	// FindingProjectionOverflow is a reply attribute past RFC 8907's length,
-+	// which quarantines the device, with the class line that would carry it
-+	// on the device instead (spec §8).
++	// FindingProjectionOverflow is a reply attribute past RFC 8907's length:
++	// the subject gets the fail-closed reply, and where the attribute is
++	// deny-commands the finding prints the class line that would carry the
++	// denies on the device instead (spec §8). Never for allow-commands: a
++	// class allow runs for every subject at that template, past their own
++	// denies (L11). It fails `policy test`.
 +	FindingProjectionOverflow = "projection_overflow"
++	// FindingProjectionRefused is a composition a projected platform cannot
++	// be told faithfully, naming the subject, the devices and the reason: the
++	// subject gets the fail-closed reply there and everyone else keeps
++	// theirs (spec §13 decision 26). It fails `policy test`, as spec §8's
++	// "CI MUST refuse the policy" requires.
++	FindingProjectionRefused = "projection_refused"
  )
  
  // Lint computes the findings at now, ordered by kind and then message so two
-@@ -140,6 +150,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
+@@ -140,6 +158,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
  		}
  	}
  	out = append(out, p.redundantOverrides()...)
@@ -4837,7 +6632,7 @@ index 9a91683..cbaaa05 100644
  	out = append(out, p.intersections(now)...)
  	if len(p.tests) == 0 {
  		add(FindingNoTests, "the policy has no tests: nothing in it acknowledges a shadowed deny, an expansion or "+
-@@ -517,3 +528,83 @@ func (p *Policy) onGeneric(name string) bool {
+@@ -517,3 +536,143 @@ func (p *Policy) onGeneric(name string) bool {
  	_, shipped := builtin[name]
  	return b.Replace || !shipped
  }
@@ -4845,8 +6640,10 @@ index 9a91683..cbaaa05 100644
 +// Projections reports each composition on a projected platform (spec §8,
 +// "CI reports which shape each grant rendered under, the bit set it chose"):
 +// once per subject, platform and reply, at now and at every later grant
-+// expiry. A reply attribute past RFC 8907's length quarantines the device;
-+// its finding prints the class line that would carry the value instead.
++// expiry. A composition that gets the fail-closed reply is a
++// projection_refused finding, or projection_overflow where a reply attribute
++// is past RFC 8907's length, naming the subject, every device it lands on
++// and why; both fail `policy test` (spec §13 decision 26).
 +func (p *Policy) Projections(now time.Time) []Finding {
 +	var out []Finding
 +	seen := map[string]bool{}
@@ -4857,6 +6654,12 @@ index 9a91683..cbaaa05 100644
 +		}
 +	}
 +	patterns := p.Redactions()
++	type refusal struct {
++		kind, msg string
++		devices   []string
++	}
++	var refusals []*refusal
++	index := map[string]*refusal{}
 +	for _, name := range sortedKeys(p.subs) {
 +		for _, d := range p.env.Devices {
 +			if !p.dialect(d.Platform).Projected() {
@@ -4864,21 +6667,73 @@ index 9a91683..cbaaa05 100644
 +			}
 +			for _, at := range p.expiryInstants(now) {
 +				res, err := p.resolve(p.subs[name], d, at)
-+				var r *projection.Refusal
-+				switch {
-+				case errors.As(err, &r) && r.Attribute != "":
-+					add(FindingProjectionOverflow, fmt.Sprintf("subject %q on %s: the reply's %s is %d bytes, past RFC "+
-+						"8907's %d, so the device is quarantined; the class line that carries it on the device instead: "+
-+						"set system login class %s %s %q", name, d.Platform, r.Attribute, len(r.Attribute)+1+len(r.Value),
-+						engine.MaxAttribute, r.Class, r.Attribute, r.Value))
-+				case err != nil || res.Projection == nil:
-+				default:
-+					add(FindingProjection, projectionMessage(name, d.Platform, *res.Projection, patterns))
++				if err != nil || res.Projection == nil {
++					continue // a quarantine or a refused mint, reported as one
++				}
++				pr := *res.Projection
++				if pr.FailClosed == "" {
++					add(FindingProjection, projectionMessage(name, d.Platform, pr, patterns))
++					continue
++				}
++				kind, msg := refusedMessage(name, d.Platform, pr, patterns)
++				r := index[kind+msg]
++				if r == nil {
++					r = &refusal{kind: kind, msg: msg}
++					index[kind+msg] = r
++					refusals = append(refusals, r)
++				}
++				if !slices.Contains(r.devices, d.Name) {
++					r.devices = append(r.devices, d.Name)
 +				}
 +			}
 +		}
 +	}
++	for _, r := range refusals {
++		slices.Sort(r.devices)
++		add(r.kind, strings.Replace(r.msg, "%DEVICES%", strings.Join(r.devices, ", "), 1))
++	}
 +	return out
++}
++
++// ProjectionRefusals counts the findings that fail `policy test`: every
++// composition that gets the fail-closed reply (spec §8, "CI MUST refuse").
++func ProjectionRefusals(findings []Finding) int {
++	n := 0
++	for _, f := range findings {
++		if f.Kind == FindingProjectionRefused || f.Kind == FindingProjectionOverflow {
++			n++
++		}
++	}
++	return n
++}
++
++// refusedMessage is a fail-closed composition's finding, the devices left as
++// %DEVICES% for Projections to fill. Every rule and value it quotes is
++// redacted (spec §5.8; plan 5b pre-flight M9). The refusal's own text quotes
++// only rules the secret check passed: a composition with a rule redaction
++// would hide is refused as secret_rule, whose text names only the role.
++func refusedMessage(subject, platformName string, pr projection.Result, patterns []platform.Redaction) (string, string) {
++	r := pr.Refusal
++	var allows []string
++	for _, a := range pr.Allows {
++		allows = append(allows, a.Rule)
++	}
++	told := "every command denied"
++	if len(allows) > 0 {
++		told = "every command denied but " + strings.Join(redacted(patterns, allows), "; ")
++	}
++	msg := fmt.Sprintf("subject %q on %s (%%DEVICES%%) gets the fail-closed reply (%s): %s; it is told %s, and "+
++		"every other subject on those devices keeps its reply (spec §13 decision 26)", subject, platformName,
++		pr.FailClosed, r.Why, told)
++	if pr.FailClosed != projection.FailOverflow {
++		return FindingProjectionRefused, msg
++	}
++	if r.Class != "" {
++		msg += fmt.Sprintf("; the class line that carries the denies on the device instead, binding every subject at "+
++			"that template: set system login class %s %s %q", r.Class, r.Attribute,
++			strings.Join(redacted(patterns, []string{r.Value}), ""))
++	}
++	return FindingProjectionOverflow, msg
 +}
 +
 +func projectionMessage(subject, platformName string, pr projection.Result, patterns []platform.Redaction) string {
@@ -4926,7 +6781,7 @@ index 9a91683..cbaaa05 100644
 <!-- patch: internal/policy/tests.go -->
 ````diff
 diff --git a/internal/policy/tests.go b/internal/policy/tests.go
-index da7e8a2..2ca812a 100644
+index da7e8a2..afe25c2 100644
 --- a/internal/policy/tests.go
 +++ b/internal/policy/tests.go
 @@ -95,7 +95,12 @@ func (p *Policy) Decide(subject, principal string, d admission.Device, line stri
@@ -4943,7 +6798,7 @@ index da7e8a2..2ca812a 100644
  		out = append(out, fmt.Sprintf("%s does not send per-command authorization (supports: %s): the device "+
  			"never asks port49 about this command, and a revocation or a session ceiling does not reach a live "+
  			"session there (spec §5.6)", platformName, strings.Join(dialect.Supports, ", ")))
-@@ -108,6 +113,31 @@ func Caveats(platformName string, dialect platform.Dialect, o engine.Outcome) []
+@@ -108,6 +113,36 @@ func Caveats(platformName string, dialect platform.Dialect, o engine.Outcome) []
  	return out
  }
  
@@ -4965,6 +6820,11 @@ index da7e8a2..2ca812a 100644
 +	out := []string{fmt.Sprintf("under the session reply's projection (%s shape) the device %s it; what it runs is "+
 +		"its class ∩ the wire, and the class half is the device's configuration, outside port49 (spec §8, "+
 +		"\"Verification\")", pr.Shape, verb)}
++	if pr.FailClosed != "" {
++		out = append(out, fmt.Sprintf("the composition cannot be told to %s faithfully (%s), so this subject gets "+
++			"the fail-closed reply there: every command denied but what the projection proved (spec §13 decision "+
++			"26); policy test fails on it", platformName, pr.FailClosed))
++	}
 +	if o.Permit && !runs {
 +		out = append(out, fmt.Sprintf("port49 permits this and the projection does not carry it to %s: the "+
 +			"device refuses it, which fails closed (spec §8)", platformName))
@@ -4975,7 +6835,7 @@ index da7e8a2..2ca812a 100644
  // TestResult is one `tests:` entry's run.
  type TestResult struct {
  	Test    Test
-@@ -198,6 +228,7 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
+@@ -198,6 +233,7 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
  			}
  			r.Permit, r.Reason, r.Outcome = o.Permit, o.Reason, o
  			r.Caveats = append(Caveats(d.Platform, p.dialect(d.Platform), o), p.splitNotes(t.Command, d.Platform)...)
@@ -4993,9 +6853,9 @@ Expected: every package `ok`, no `gofmt` output, both binaries built.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/policy/explain.go internal/policy/lint.go internal/policy/projection_test.go internal/policy/tests.go
+git add cmd/port49/policy.go cmd/port49/policy_test.go internal/policy/explain.go internal/policy/lint.go internal/policy/projection_test.go internal/policy/tests.go
 git commit -m "$(cat <<'EOF'
-feat: policy test and explain say what the projection sends and what the device runs
+feat: policy test reports each projection and fails on a fail-closed reply or a quarantine
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -5005,38 +6865,59 @@ EOF
 
 ---
 
-### Task 11: policy diff reports a Junos reply whose shape or bits moved
+### Task 12: policy diff judges a projected reply by what the device can do, and refuses a fail-closed one
 
 **Files:**
+- Modify: `internal/projection/model.go` (`model.held`, `programs`, `probes`, `Widens`)
 - Modify: `internal/policy/diff.go` (`Diff.Projections`, `ProjectionChange`, `projectionChange`,
-  one check in `group`)
-- Modify: `cmd/port49/policy.go` (the `projection:` line, `projectionText`)
-- Test: `internal/policy/projection_test.go`, `cmd/port49/policy_test.go`
+  `Diff.ProjectionRefusals`, `projectionRose`; `levelChange` takes the two projections)
+- Modify: `cmd/port49/policy.go` (the `projection:` and `REFUSED:` lines, `projectionText`, the exit)
+- Test: `internal/projection/project_test.go`, `internal/policy/projection_test.go`,
+  `cmd/port49/policy_test.go`
 
 **Interfaces:**
-- Consumes: Task 9's `Resolution.Projection`; the diff's `side`, `group`, `once`.
+- Consumes: Task 9's `Resolution.Projection`; Task 11's `Projections` and finding kinds; the
+  diff's `side`, `group`, `once`, `levelChange`, `replyRose`.
 - Produces:
-  - `Diff.Projections []ProjectionChange`;
+  - `func projection.Widens(from, to *Result) ([]string, bool)`;
+  - `Diff.Projections []ProjectionChange` and `Diff.ProjectionRefusals []Finding`;
   - `type ProjectionChange struct{ Subject string; Devices []string; At time.Time; OldShape, NewShape
     string; OldBits, NewBits []string; OldTemplate, NewTemplate string }`;
   - `projectionText(shape string, bits []string, template string) string` in cmd/port49.
 
-The gate is unchanged (Decided 9). A reply that changes is judged whole, and the `RAISES` line
-already prints the `reply:` test to paste. This adds the report spec §8 asks for, "any grant whose
-shape or bits changed between two policy versions, since that is a change in what the wire says
-even when no rule changed". The report is one line per composition group, and it moves nothing
-past the gate. The test is the realistic readonly gaining its carve-out: `view view-configuration`
-becomes `view`. The line is reported, and the reply change is still an unacknowledged raise.
+**The reply gate on a projected platform** (pre-flight I14, ruled by the controller once C1, I2
+and I3 were fixed). The C4 ruling judged a reply change whole because the gate could not read its
+direction. With the device model sound, it can: `projection.Widens` reports a bit the new reply
+holds that the old did not, or a command the device runs under the new reply and not the old,
+among one probe per way either reply's rules can be told apart. Only that is a `reply` raise; a
+pure narrowing — a revoked permit, an added deny — is reported and needs no `reply:` test, so an
+emergency revocation is not held up by snapshot tests. A projection that went away is a raise.
+Attributes the projection does not own keep the existing judgment. The proof that the device runs
+nothing port49 denies is what makes this safe; the effective-permission diff still gates the rule
+changes themselves.
+
+The diff also prints a `projection:` line when a composition's shape, bits or template moved, as
+spec §8 asks, and a `REFUSED:` line for every fail-closed composition in the new version, new or
+not, and exits non-zero on any (decision 26).
 
 - [ ] **Step 1: Write the failing tests**
 
 <!-- patch: cmd/port49/policy_test.go -->
 ````diff
 diff --git a/cmd/port49/policy_test.go b/cmd/port49/policy_test.go
-index ffaf454..6010b33 100644
+index 45bb4b8..ee6d885 100644
 --- a/cmd/port49/policy_test.go
 +++ b/cmd/port49/policy_test.go
-@@ -955,3 +955,17 @@ key_groups:
+@@ -791,7 +791,7 @@ func TestPolicyDiffGatesAnAdapterEdit(t *testing.T) {
+ 	var out, errb bytes.Buffer
+ 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
+ 		!strings.Contains(out.String(), `ADAPTER: platforms.arista_eos.entity_classes {"loopback":`) ||
+-		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits\n") {
++		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits; 0 projection refusals\n") {
+ 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+ 	}
+ 	// The entry is printed ready to paste, bound by digest to this edit.
+@@ -961,3 +961,17 @@ key_groups:
  		}
  	}
  }
@@ -5059,17 +6940,25 @@ index ffaf454..6010b33 100644
 <!-- patch: internal/policy/projection_test.go -->
 ````diff
 diff --git a/internal/policy/projection_test.go b/internal/policy/projection_test.go
-index 615f64e..52b0336 100644
+index 34aeccc..498595f 100644
 --- a/internal/policy/projection_test.go
 +++ b/internal/policy/projection_test.go
-@@ -192,3 +192,21 @@ func TestProjectionFindings(t *testing.T) {
+@@ -4,6 +4,7 @@ import (
+ 	"fmt"
+ 	"net/netip"
+ 	"reflect"
++	"slices"
+ 	"strings"
+ 	"testing"
+ 	"time"
+@@ -327,3 +328,47 @@ func TestARefusalIsAFinding(t *testing.T) {
+ 		t.Fatalf("%q %v", e.Caveats, err)
  	}
- 	t.Fatalf("no overflow finding: %+v", p.Lint(noon))
  }
 +
 +// The diff reports a reply whose shape or bits moved, and the reply gate
-+// judges the reply itself: it cannot read the direction of a change to a
-+// projected attribute, so it fails closed (spec §12, review C4).
++// judges it by what the device can do: a carve-out only narrows, so it is no
++// raise, and lifting it again is (plan 5b pre-flight I14).
 +func TestTheDiffReportsAProjectionChange(t *testing.T) {
 +	before := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
 +  - {name: r, privilege: readonly, permit: ["show **"]}
@@ -5080,27 +6969,101 @@ index 615f64e..52b0336 100644
 +		!reflect.DeepEqual(d.Projections[0].NewBits, []string{"view"}) || len(d.Projections[0].Devices) != 4 {
 +		t.Fatalf("%+v", d.Projections)
 +	}
-+	if d.UnacknowledgedLevels() == 0 {
-+		t.Error("a projected reply's change is a raise until a reply: test asserts it")
++	if d.UnacknowledgedLevels() != 0 {
++		t.Errorf("a narrowing is no raise: %+v", d.Levels)
++	}
++	d = Compare(after, before, noon)
++	if d.UnacknowledgedLevels() == 0 || !slices.Contains(d.Levels[0].Raised, "reply") {
++		t.Errorf("a widening is a raise until a reply: test asserts it: %+v", d.Levels)
++	}
++	// A narrow grant losing a permit is no raise either, though every regex
++	// in its reply changed.
++	narrow := func(permits string) *Policy {
++		return parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
++  - {name: r, privilege: readonly, permit: [`+permits+`]}
++`+subjOK+grantOK)
++	}
++	if d := Compare(narrow(`"show version", "show route **"`), narrow(`"show version"`), noon); d.UnacknowledgedLevels() != 0 {
++		t.Errorf("revoking a narrow permit: %+v", d.Levels)
++	}
++}
++
++// A composition that gets the fail-closed reply fails the diff, whether or
++// not the change brought it (spec §8; §13 decision 26).
++func TestTheDiffRefusesAFailClosedReply(t *testing.T) {
++	refused := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
++  - {name: r, privilege: readonly, permit: ["show interfaces **"], deny: ["show interfaces terse"]}
++`+subjOK+grantOK)
++	d := Compare(refused, refused, noon)
++	if len(d.ProjectionRefusals) != 1 || !strings.Contains(d.ProjectionRefusals[0].Message, "(refused_shape)") {
++		t.Fatalf("%+v", d.ProjectionRefusals)
++	}
++}
+````
+
+<!-- patch: internal/projection/project_test.go -->
+````diff
+diff --git a/internal/projection/project_test.go b/internal/projection/project_test.go
+index c482916..09275da 100644
+--- a/internal/projection/project_test.go
++++ b/internal/projection/project_test.go
+@@ -316,3 +316,39 @@ func TestTheBaselineIsDenied(t *testing.T) {
+ 		t.Fatalf("%+v %v", res, err)
+ 	}
+ }
++
++// A reply widens where the device can do more under it: a bit it did not
++// hold, or a command it did not run. Narrowing the grant is no widening,
++// whatever the regexes say (plan 5b pre-flight I14).
++func TestWidens(t *testing.T) {
++	project := func(rules ...engine.Rule) *Result {
++		res, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, rules...))
++		if err != nil {
++			t.Fatal(err)
++		}
++		return &res
++	}
++	all := project(permit("show **"))
++	carved := project(permit("show **"), deny("show configuration **"))
++	narrow := project(permit("show version"), permit("show interfaces **"))
++	narrower := project(permit("show version"))
++	for _, c := range []struct {
++		name     string
++		from, to *Result
++		want     bool
++	}{
++		{"a carve-out drops a bit", all, carved, false},
++		{"lifting it adds the bit back", carved, all, true},
++		{"a narrow grant loses a permit", narrow, narrower, false},
++		{"and gains it back", narrower, narrow, true},
++		{"nothing before", nil, narrower, true},
++		{"the same reply", narrow, narrow, false},
++	} {
++		if _, got := Widens(c.from, c.to); got != c.want {
++			t.Errorf("%s: %v", c.name, got)
++		}
++	}
++	if v, _ := Widens(narrower, narrow); strings.Join(v, " ") == "" {
++		t.Error("a widening by a command names it")
 +	}
 +}
 ````
 
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `go test ./internal/policy/ ./cmd/port49/`
-Expected: FAIL, build failed: `d.Projections undefined (type Diff has no field or method
-Projections)` and `undefined: projectionText`.
+Run: `go test ./internal/projection/ ./internal/policy/ ./cmd/port49/`
+Expected: FAIL, build failed: `undefined: Widens`, `d.Projections undefined (type Diff has no field
+or method Projections)`, and `undefined: projectionText`.
 
-- [ ] **Step 3: Report the projection change**
+- [ ] **Step 3: Judge the reply and report the projection**
 
 <!-- patch: cmd/port49/policy.go -->
 ````diff
 diff --git a/cmd/port49/policy.go b/cmd/port49/policy.go
-index 9bc5239..952840c 100644
+index 42ab167..7d39f14 100644
 --- a/cmd/port49/policy.go
 +++ b/cmd/port49/policy.go
-@@ -438,6 +438,11 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
+@@ -443,6 +443,11 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
  			label, l.Subject, strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel),
  			orNone(l.OldCeiling), orNone(l.NewCeiling), l.OldPrivLvl, l.NewPrivLvl, l.OldEnable, l.NewEnable, reply, tail)
  	}
@@ -5112,7 +7075,33 @@ index 9bc5239..952840c 100644
  	widen, narrow := 0, 0
  	for _, c := range d.Changes {
  		on := c.Subject + " on " + strings.Join(c.Devices, ", ") + from(c.At)
-@@ -848,3 +853,17 @@ func redactOutput(stdout, stderr io.Writer) (out, errOut *redacting, flush func(
+@@ -500,15 +505,21 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
+ 		fmt.Fprintf(stdout, "%s: %s: %s %q (%s) %s; the commands it matches are not "+
+ 			"enumerated (spec §12)%s\n", label, on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb, tail)
+ 	}
++	// A fail-closed reply fails the diff whether or not the change brought
++	// it: CI refuses a policy that ships one (spec §8; §13 decision 26).
++	for _, f := range d.ProjectionRefusals {
++		fmt.Fprintf(stdout, "REFUSED: %s: %s\n", f.Kind, f.Message)
++	}
+ 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
+ 		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d unacknowledged "+
+ 		"principal or username changes; %d devices newly quarantined, %d released; %d mints newly refused; "+
+-		"%d unresolved; %d unacknowledged adapter edits\n", len(d.Changes), widen, narrow, d.Unacknowledged(),
+-		d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(), len(d.Quarantined),
+-		len(d.Released), len(d.Refused), len(d.Unresolved), d.UnacknowledgedAdapters())
++		"%d unresolved; %d unacknowledged adapter edits; %d projection refusals\n", len(d.Changes), widen, narrow,
++		d.Unacknowledged(), d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(),
++		len(d.Quarantined), len(d.Released), len(d.Refused), len(d.Unresolved), d.UnacknowledgedAdapters(),
++		len(d.ProjectionRefusals))
+ 	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
+ 		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 ||
+-		d.UnacknowledgedAdapters() > 0 {
++		d.UnacknowledgedAdapters() > 0 || len(d.ProjectionRefusals) > 0 {
+ 		return 1
+ 	}
+ 	return 0
+@@ -853,3 +864,17 @@ func redactOutput(stdout, stderr io.Writer) (out, errOut *redacting, flush func(
  		}
  	}
  }
@@ -5135,7 +7124,7 @@ index 9bc5239..952840c 100644
 <!-- patch: internal/policy/diff.go -->
 ````diff
 diff --git a/internal/policy/diff.go b/internal/policy/diff.go
-index a4ce029..8e5a026 100644
+index a4ce029..95a98a5 100644
 --- a/internal/policy/diff.go
 +++ b/internal/policy/diff.go
 @@ -16,6 +16,7 @@ import (
@@ -5146,15 +7135,20 @@ index a4ce029..8e5a026 100644
  )
  
  // Diff is the effective-permission diff between two versions of a policy
-@@ -57,6 +58,35 @@ type Diff struct {
+@@ -57,6 +58,40 @@ type Diff struct {
  	// inventory has devices of: a platform_set moved, or a `platforms:` block
  	// edited (spec §8, §12).
  	Adapters []AdapterChange
 +	// Projections are compositions on a projected platform whose reply
 +	// changed shape, bits or template: a change in what the wire says even
 +	// where no rule changed (spec §8). Reported; the reply gate is what fails
-+	// on them (Levels, "reply").
++	// on one that widens (Levels, "reply"; projection.Widens).
 +	Projections []ProjectionChange
++	// ProjectionRefusals are the new version's compositions that get a
++	// projection's fail-closed reply, each naming the subject, the devices
++	// and why (Policy.Projections). Every one fails the diff, new or not:
++	// spec §8's "CI MUST refuse the policy" (§13 decision 26).
++	ProjectionRefusals []Finding
 +}
 +
 +// ProjectionChange is one composition's projection before and after, on the
@@ -5182,18 +7176,165 @@ index a4ce029..8e5a026 100644
  }
  
  // AdapterChange is one key of one platform's adapter that the two versions
-@@ -645,6 +675,11 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
- 			NewEnable: is.priv.enable, OldReply: splitReply(was.priv.reply), NewReply: splitReply(is.priv.reply)},
- 			was.priv, is.priv))
+@@ -392,6 +427,11 @@ func Compare(before, after *Policy, now time.Time) Diff {
  	}
+ 	c.principals(now)
+ 	c.adapters()
++	for _, f := range after.Projections(now) {
++		if f.Kind == FindingProjectionRefused || f.Kind == FindingProjectionOverflow {
++			c.d.ProjectionRefusals = append(c.d.ProjectionRefusals, f)
++		}
++	}
+ 	for _, a := range after.acked {
+ 		if !c.usedAcks[a] {
+ 			c.d.StaleAcknowledgments = append(c.d.StaleAcknowledgments, a)
+@@ -643,7 +683,12 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
+ 			OldLevel: wr.Level, NewLevel: ir.Level, OldCeiling: wr.Ceiling, NewCeiling: ir.Ceiling,
+ 			OldPrivLvl: was.priv.device, NewPrivLvl: is.priv.device, OldEnable: was.priv.enable,
+ 			NewEnable: is.priv.enable, OldReply: splitReply(was.priv.reply), NewReply: splitReply(is.priv.reply)},
+-			was.priv, is.priv))
++			was.priv, is.priv, wr.Projection, ir.Projection))
++	}
 +	if pc, ok := projectionChange(wr.Projection, ir.Projection); ok && c.once("projection", subject, on, pc.OldShape,
 +		pc.NewShape, strings.Join(pc.OldBits, " "), strings.Join(pc.NewBits, " "), pc.OldTemplate, pc.NewTemplate) {
 +		pc.Subject, pc.Devices, pc.At = subject, devices, at
 +		c.d.Projections = append(c.d.Projections, pc)
-+	}
+ 	}
  	if was.hash == is.hash {
  		return
+@@ -806,8 +851,13 @@ func (p *Policy) regexAcks(before *Policy, instants []time.Time) map[string]bool
+ //   - enable: the mechanism went from none to token, or to auto, which asks
+ //     for nothing more than a login;
+ //   - reply: the session reply gained, changed or lost an attribute that
+-//     bears privilege on the platform, priv-lvl aside.
+-func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
++//     bears privilege on the platform, priv-lvl aside. On a projected
++//     platform the projection's own attributes are judged by what the device
++//     can do under them instead (projection.Widens): a bit it did not hold,
++//     or a command it did not run, is a raise, and a reply that only narrows
++//     is not, whatever its regexes say (plan 5b pre-flight I14). The proof
++//     that the device runs nothing port49 denies is what makes that safe.
++func (c *comparison) levelChange(l LevelChange, was, is privilege, wasProj, isProj *projection.Result) LevelChange {
+ 	rose := func(from, to string) bool {
+ 		return from != to && to != "" && (c.before.levelIndex(to) > c.before.levelIndex(from) ||
+ 			c.after.levelIndex(to) > c.after.levelIndex(from))
+@@ -832,7 +882,17 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
+ 	before, after := c.before.dialect(was.platform), c.after.dialect(is.platform)
+ 	oldRendered, _, _ := c.before.render(before, was.level)
+ 	newRendered, _, _ := c.after.render(after, is.level)
+-	if replyRose(l.OldReply, l.NewReply, oldRendered, newRendered, before, after) {
++	oldReply, newReply := l.OldReply, l.NewReply
++	projected := before.Projected() || after.Projected()
++	if projected {
++		owned := func(a string) bool {
++			return before.ProjectionOwns(engine.AttributeName(a)) || after.ProjectionOwns(engine.AttributeName(a))
++		}
++		oldReply = slices.DeleteFunc(slices.Clone(oldReply), owned)
++		newReply = slices.DeleteFunc(slices.Clone(newReply), owned)
++	}
++	if replyRose(oldReply, newReply, oldRendered, newRendered, before, after) ||
++		projected && projectionRose(wasProj, isProj) {
+ 		l.Raised = append(l.Raised, "reply")
  	}
+ 	l.Raise = len(l.Raised) > 0
+@@ -850,6 +910,18 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
+ 	return l
+ }
+ 
++// projectionRose reports whether a projected reply lets the device do more:
++// it widens (projection.Widens), or the projection went away, after which the
++// device runs whatever its template user's class does, which port49 cannot
++// read.
++func projectionRose(was, is *projection.Result) bool {
++	if is == nil {
++		return was != nil
++	}
++	_, widens := projection.Widens(was, is)
++	return widens
++}
++
+ // replyRose reports whether the session reply gained, changed or lost an
+ // attribute, other than priv-lvl, which priv_lvl judges, that bears privilege
+ // under either version's adapter or any shipped set, other than by provably
+````
+
+<!-- patch: internal/projection/model.go -->
+````diff
+diff --git a/internal/projection/model.go b/internal/projection/model.go
+index d53e729..35be170 100644
+--- a/internal/projection/model.go
++++ b/internal/projection/model.go
+@@ -21,6 +21,9 @@ import (
+ // widest reading, which for the reach errs toward the device running more.
+ type model struct {
+ 	port, allow, deny, reach, carve *engine.Program
++	// held is every bit the session holds, `all` expanded and the baseline
++	// in: what configuration mode, which no probe reaches, is read from.
++	held []string
+ }
+ 
+ func (g generator) model(res Result) (*model, error) {
+@@ -55,6 +58,7 @@ func (g generator) model(res Result) (*model, error) {
+ 		return nil, err
+ 	}
+ 	held := g.held(res.Bits)
++	m.held = held
+ 	if m.reach, err = prog(parsed(g.reach(held), "reach")); err != nil {
+ 		return nil, err
+ 	}
+@@ -88,12 +92,50 @@ func (m *model) device(vector []string) bool {
+ // less those with a word the device's parser never sees: empty, or with a
+ // space at either end. The parser splits a line on whitespace, so such a
+ // vector is its trimmed form, which is probed in its own right.
+-func (m *model) probes() [][]string {
+-	return slices.DeleteFunc(engine.Probes(m.port, m.allow, m.deny, m.reach, m.carve), func(v []string) bool {
++func (m *model) probes() [][]string { return probes(m.programs()...) }
++
++func (m *model) programs() []*engine.Program {
++	return []*engine.Program{m.port, m.allow, m.deny, m.reach, m.carve}
++}
++
++func probes(programs ...*engine.Program) [][]string {
++	return slices.DeleteFunc(engine.Probes(programs...), func(v []string) bool {
+ 		return slices.ContainsFunc(v, func(w string) bool { return w == "" || strings.TrimSpace(w) != w })
+ 	})
+ }
+ 
++// Widens reports whether the device can do more under to than under from:
++// to holds a bit from does not, or runs a command from does not, among one
++// vector per way either reply's rules can be told apart. It is how the diff
++// judges a projected reply (spec §12; plan 5b pre-flight I14): a reply that
++// only narrows is no raise, whatever its regexes say, and one that widens
++// is. A side with no projection runs nothing and holds no bit. The vector is
++// nil where a bit decided it.
++func Widens(from, to *Result) ([]string, bool) {
++	if to == nil || to.model == nil {
++		return nil, false
++	}
++	var was *model
++	if from != nil {
++		was = from.model
++	}
++	for _, b := range to.model.held {
++		if was == nil || !slices.Contains(was.held, b) {
++			return nil, true
++		}
++	}
++	progs := to.model.programs()
++	if was != nil {
++		progs = append(progs, was.programs()...)
++	}
++	for _, v := range probes(progs...) {
++		if len(v) > 0 && to.model.device(v) && (was == nil || !was.device(v)) {
++			return v, true
++		}
++	}
++	return nil, false
++}
++
+ // unsound is a command the device would run and port49 would deny, among one
+ // vector per way the rules can be told apart (engine.Probes).
+ func (m *model) unsound() ([]string, bool) {
 ````
 
 - [ ] **Step 4: Run everything**
@@ -5204,9 +7345,9 @@ Expected: every package `ok`, no `gofmt` output, both binaries built.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add cmd/port49/policy.go cmd/port49/policy_test.go internal/policy/diff.go internal/policy/projection_test.go
+git add cmd/port49/policy.go cmd/port49/policy_test.go internal/policy/diff.go internal/policy/projection_test.go internal/projection/model.go internal/projection/project_test.go
 git commit -m "$(cat <<'EOF'
-feat: policy diff reports a Junos reply whose shape or bits moved
+feat: policy diff judges a projected reply by what the device can do, and refuses a fail-closed one
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -5216,42 +7357,89 @@ EOF
 
 ---
 
-### Task 12: platform export --classes prints the reference classes, idle-timeout from max_session_age (decision 21)
+### Task 13: platform export --classes writes the reference as a replace, and check-config holds a device to it
 
 **Files:**
-- Create: `internal/platform/classes.go` (`ReferenceClasses`)
+- Create: `internal/platform/classes.go` (`lockTemplates`, `ReferenceClasses`, `templates`,
+  `TemplateDrift`)
 - Modify: `internal/config/config.go` (`DefaultMaxSessionAge`, `MaxSessionAge`; Load uses the
   constant)
-- Modify: `cmd/port49/platform.go` (`--classes`, `--config`, `exportClasses`), `cmd/port49/main.go`
-  (usage)
+- Modify: `cmd/port49/platform.go` (`--classes`, `--config`, `exportClasses`), `cmd/port49/devices.go`
+  (`check-config --config` and the template check), `cmd/port49/main.go` (usage)
 - Test: `internal/platform/classes_test.go` (new), `internal/config/config_test.go`,
-  `cmd/port49/platform_test.go`
+  `cmd/port49/platform_test.go`, `cmd/port49/devices_test.go`
 
 **Interfaces:**
 - Consumes: Task 6's `Projected`, `DeviceConfig`, `CeilingBits`, `LocalUserNames`, `BitDelivery`,
-  `RemoteClass`; 5a's `platformShow`, `adapters.load`, `RedactAdapter`.
+  `RemoteClass`; 5a's `platformShow`, `adapters.load`, `RedactAdapter`, `eachLine`, `ConfigFinding`.
 - Produces:
   - `func ReferenceClasses(d Dialect, maxSessionAge time.Duration) ([]string, error)`;
+  - `func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missing []string,
+    extra []ConfigFinding, err error)`;
+  - `var lockTemplates = false`, the one value Task 14's Step 4 may flip;
   - `const config.DefaultMaxSessionAge = 12 * time.Hour`;
   - `func config.MaxSessionAge(raw []byte) (time.Duration, error)`;
-  - `port49 platform export --classes --config PORT49D_YAML PLATFORM`.
+  - `port49 platform export --classes --config PORT49D_YAML PLATFORM` and `port49 devices
+    check-config ... [--config PORT49D_YAML] CONFIGFILE`.
 
-Decision 21's enforced approximation is `idle-timeout` in the class, from `max_session_age`. Spec §8
-also requires the reference class per level to be published for compliance tools. `ReferenceClasses`
-prints, as `set` lines:
+Decision 21's enforced approximation is `idle-timeout` in the class, from `max_session_age`, and
+spec §8 requires the reference class per level to be published. **The reference is a replace**
+(pre-flight I8): each template class and user is a `delete` followed by its `set` lines, so loading
+it leaves nothing a device carried under one, such as a class `allow-commands`, which beats every
+wire deny (L11), or a stale bit. `ReferenceClasses` prints:
 - the adapter's `device_config`;
-- `class p49-remote idle-timeout N` and `user remote class p49-remote`;
-- under `local_user_name`, each template's class with its level's `permissions [ ... ]` and
-  `idle-timeout N`, and its user.
+- `delete system login class p49-remote`, its `idle-timeout N`, `delete system login user remote`
+  and `user remote class p49-remote`;
+- under `local_user_name`, each template the same way, its class carrying the level's bits one
+  `permissions` line each, as `display set` prints them.
 
-N is whole minutes rounded down, at least 1, since rounding down is the stricter direction. No uid
-is written, and Task 2 measured the commit taking none. `config.MaxSessionAge` reads
-`session.max_session_age_default` alone. `config.Load` would demand every key's secret in the
-environment, and an offline tool run in CI has none, so the export does not use it. The flag goes
-with `export`, one platform and `--config`; any other combination is a usage error. On 1.0.0,
-Junos projects nothing and the export says so. Task 13's test covers the success path.
+N is whole minutes rounded down, at least 1. No template user carries `authentication`: Juniper
+documents a template user as one with no authentication, which cannot log in locally, and Task 2
+measures it; `lockTemplates` adds `authentication encrypted-password "*"` to each only if Task 14
+finds otherwise (Decided 18). No uid is written; Task 2 measures that too.
+
+`TemplateDrift` is `check-config`'s half (pre-flight I8, M8). It reads a `show configuration |
+display set` capture: each reference line the device lacks is `TEMPLATE: ...: the configuration
+does not carry this line`, and each line under a template class or user the reference does not
+write is `TEMPLATE: file:N: ...` — a class `allow-commands`, an extra permission, a template's
+password — except the uid Junos assigns. A capture with no `set` line is an error that says to
+use `display set`. On a projected platform `check-config` requires `--config`, since the reference
+carries the idle-timeout; elsewhere `--config` is a usage error. `config.MaxSessionAge` reads
+`session.max_session_age_default` alone, so neither command needs the daemon's secrets. On 1.0.0
+Junos projects nothing and the export says so; Task 14's tests cover the success paths.
 
 - [ ] **Step 1: Write the failing tests**
+
+<!-- patch: cmd/port49/devices_test.go -->
+````diff
+diff --git a/cmd/port49/devices_test.go b/cmd/port49/devices_test.go
+index 3bd2e72..00e7598 100644
+--- a/cmd/port49/devices_test.go
++++ b/cmd/port49/devices_test.go
+@@ -359,3 +359,22 @@ func TestCheckConfigWarnsOnAPartialCapture(t *testing.T) {
+ 		t.Errorf("whole:\n%s", out)
+ 	}
+ }
++
++// --config goes with a projected platform alone: it is the template
++// classes' idle-timeout, and a platform that projects nothing has none.
++func TestCheckConfigTakesConfigOnlyOnAProjectedPlatform(t *testing.T) {
++	pol, inv := policyFixture(t)
++	dir := t.TempDir()
++	cfg, daemon := filepath.Join(dir, "leaf-01.cfg"), filepath.Join(dir, "port49d.yaml")
++	if err := os.WriteFile(cfg, []byte("hostname leaf-01\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(daemon, []byte("session: {max_session_age_default: 8h}\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	var out, errb bytes.Buffer
++	if code := run([]string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "leaf-01",
++		"--config", daemon, cfg}, &out, &errb); code != 2 {
++		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
++	}
++}
+````
 
 <!-- patch: cmd/port49/platform_test.go -->
 ````diff
@@ -5320,10 +7508,10 @@ index da4df0f..8262400 100644
 ````diff
 diff --git a/internal/platform/classes_test.go b/internal/platform/classes_test.go
 new file mode 100644
-index 0000000..0f67a38
+index 0000000..f3a4363
 --- /dev/null
 +++ b/internal/platform/classes_test.go
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,88 @@
 +package platform
 +
 +import (
@@ -5333,8 +7521,11 @@ index 0000000..0f67a38
 +	"time"
 +)
 +
-+// The reference classes carry the level's bits and an idle-timeout from
-+// max_session_age (decision 21); the remote template has no bits.
++// The reference replaces each template class and user, a delete before its
++// set lines, so nothing a device carried under one survives the load (I8).
++// The classes carry the level's bits, one per line, and an idle-timeout from
++// max_session_age (decision 21); the remote template has no bits, and no
++// template user can log in locally (I9).
 +func TestReferenceClasses(t *testing.T) {
 +	d := junosProjected(BitDeliveryLocalUserName)
 +	d.DeviceConfig = []string{"set system tacplus-options strict-authorization"}
@@ -5344,20 +7535,32 @@ index 0000000..0f67a38
 +	}
 +	want := []string{
 +		"set system tacplus-options strict-authorization",
++		"delete system login class p49-remote",
 +		"set system login class p49-remote idle-timeout 720",
++		"delete system login user remote",
 +		"set system login user remote class p49-remote",
-+		"set system login class p49-admin permissions [ all ]",
++		"delete system login class p49-admin",
++		"set system login class p49-admin permissions all",
 +		"set system login class p49-admin idle-timeout 720",
++		"delete system login user p49-admin",
 +		"set system login user p49-admin class p49-admin",
-+		"set system login class p49-readonly permissions [ view view-configuration ]",
++		"delete system login class p49-readonly",
++		"set system login class p49-readonly permissions view",
++		"set system login class p49-readonly permissions view-configuration",
 +		"set system login class p49-readonly idle-timeout 720",
++		"delete system login user p49-readonly",
 +		"set system login user p49-readonly class p49-readonly",
 +	}
 +	if !reflect.DeepEqual(got, want) {
 +		t.Fatalf("%q", got)
 +	}
++	for _, l := range got {
++		if strings.Contains(l, "authentication") {
++			t.Errorf("a template user that can log in locally: %s", l)
++		}
++	}
 +	up, _ := ReferenceClasses(junosProjected(BitDeliveryUserPermissions), 30*time.Second)
-+	if len(up) != 2 || !strings.HasSuffix(up[0], "idle-timeout 1") {
++	if len(up) != 4 || up[1] != "set system login class p49-remote idle-timeout 1" {
 +		t.Fatalf("user_permissions: %q", up)
 +	}
 +	eos, _ := DialectFor("arista_eos")
@@ -5365,23 +7568,139 @@ index 0000000..0f67a38
 +		t.Error("a platform that projects nothing has no classes")
 +	}
 +}
++
++// The template check reads a display-set configuration against the
++// reference: a line it lacks, and any line under a template class or user it
++// does not write — a class allow-commands (M8), a template password — are
++// drift; the uid Junos assigns is not (I8, I9).
++func TestTemplateDrift(t *testing.T) {
++	d := junosProjected(BitDeliveryLocalUserName)
++	ref, _ := ReferenceClasses(d, time.Hour)
++	var config []string
++	for _, l := range ref {
++		if !strings.HasPrefix(l, "delete ") {
++			config = append(config, l)
++		}
++	}
++	config = append(config, "set system login user p49-admin uid 2001", "set system host-name srx1")
++	missing, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour)
++	if err != nil || len(missing) != 0 || len(extra) != 0 {
++		t.Fatalf("clean: %q %+v %v", missing, extra, err)
++	}
++	drifted := append(config[1:], `set system login class p49-remote allow-commands "^configure"`,
++		`set system login user p49-readonly authentication encrypted-password "$6$x"`,
++		"set system login class p49-readonly permissions   clear")
++	missing, extra, err = TemplateDrift([]byte(strings.Join(drifted, "\n")), d, time.Hour)
++	if err != nil || !reflect.DeepEqual(missing, []string{config[0]}) || len(extra) != 3 ||
++		extra[2].Text != "set system login class p49-readonly permissions clear" {
++		t.Fatalf("drift: %q %+v %v", missing, extra, err)
++	}
++	if _, _, err := TemplateDrift([]byte("system {\n  login {\n  }\n}\n"), d, time.Hour); err == nil ||
++		!strings.Contains(err.Error(), "display set") {
++		t.Fatalf("curly form: %v", err)
++	}
++}
 ````
 
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `go test ./internal/platform/ ./internal/config/ ./cmd/port49/`
-Expected: FAIL, build failed: `undefined: ReferenceClasses`, `undefined: DefaultMaxSessionAge`,
-`undefined: MaxSessionAge`; and `--- FAIL: TestPlatformExportClasses`.
+Expected: FAIL, build failed: `undefined: ReferenceClasses`, `undefined: TemplateDrift`,
+`undefined: DefaultMaxSessionAge`, `undefined: MaxSessionAge`.
 
-- [ ] **Step 3: Add the export**
+- [ ] **Step 3: Add the export and the check**
+
+<!-- patch: cmd/port49/devices.go -->
+````diff
+diff --git a/cmd/port49/devices.go b/cmd/port49/devices.go
+index c56188d..fe4847c 100644
+--- a/cmd/port49/devices.go
++++ b/cmd/port49/devices.go
+@@ -9,6 +9,7 @@ import (
+ 	"strings"
+ 	"time"
+ 
++	daemonconfig "github.com/rhwendt/port49/internal/config"
+ 	"github.com/rhwendt/port49/internal/platform"
+ 	"github.com/rhwendt/port49/internal/username"
+ )
+@@ -27,6 +28,13 @@ import (
+ // device; this reads a file a compliance tool fetched (spec §8,
+ // "Verification").
+ //
++// On a projected platform it also reads the configuration, in `display set`
++// form, against the reference `platform export --classes` writes, whose
++// idle-timeout comes from --config's port49d.yaml, which is then required:
++// every reference line the device lacks, and every line under a template
++// class or user the reference does not write (platform.TemplateDrift; plan 5b
++// pre-flight I8).
++//
+ // A device's configuration is full of secrets — communities, keys, enable
+ // secrets, a URL's password — so every line of it this prints is redacted by
+ // every pattern that applies under the policy, and a line that could not be
+@@ -37,6 +45,8 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
+ 	var files policyFiles
+ 	files.register(fs)
+ 	device := fs.String("device", "", "the device the configuration is from, by its inventory name")
++	cfgPath := fs.String("config", "", "port49d.yaml, whose session.max_session_age_default is the template "+
++		"classes' idle-timeout (required on a projected platform)")
+ 	if err := fs.Parse(args); err != nil {
+ 		return 2
+ 	}
+@@ -96,7 +106,44 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
+ 		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
+ 		return 1
+ 	}
++	var templateMissing []string
++	var drift []platform.ConfigFinding
++	if dialect.Projected() {
++		if *cfgPath == "" {
++			fmt.Fprintf(stderr, "port49 devices check-config: %s projects the policy into its session reply, so its "+
++				"template classes are checked against the reference, whose idle-timeout is port49d.yaml's "+
++				"session.max_session_age_default: pass --config\n", d.Platform)
++			return 2
++		}
++		raw, err := os.ReadFile(*cfgPath)
++		if err != nil {
++			fmt.Fprintln(stderr, "port49 devices check-config:", err)
++			return 1
++		}
++		age, err := daemonconfig.MaxSessionAge(raw)
++		if err != nil {
++			fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", *cfgPath, err)
++			return 1
++		}
++		if templateMissing, drift, err = platform.TemplateDrift(config, dialect, age); err != nil {
++			fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
++			return 1
++		}
++	} else if *cfgPath != "" {
++		fmt.Fprint(stderr, usage)
++		return 2
++	}
+ 	failed := 0
++	for _, line := range templateMissing {
++		failed++
++		fmt.Fprintf(stdout, "TEMPLATE: %s: %s: the configuration does not carry this line of the reference "+
++			"(port49 platform export --classes): a session under that template is not what the projection "+
++			"proved (spec §8)\n", fs.Arg(0), line)
++	}
++	for _, f := range drift {
++		failed++
++		fmt.Fprintf(stdout, "TEMPLATE: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
++	}
+ 	for _, a := range accounts {
+ 		// The daemon looks a context up by the canonical form of the username
+ 		// the device sends (spec §2), so a local NOC, CORP\noc or noc@corp
+````
 
 <!-- patch: cmd/port49/main.go -->
 ````diff
 diff --git a/cmd/port49/main.go b/cmd/port49/main.go
-index 0d7804f..30dcc08 100644
+index 0d7804f..0bf8b27 100644
 --- a/cmd/port49/main.go
 +++ b/cmd/port49/main.go
-@@ -41,7 +41,8 @@ const usage = `usage:
+@@ -41,9 +41,10 @@ const usage = `usage:
    port49 grants remove --policy FILE --inventory FILE --subject NAME [--write | --pr [--remote R] [--base B]]
    port49 platform list [--set VERSION | --policy FILE --inventory FILE]
    port49 platform show [--set VERSION | --policy FILE --inventory FILE] PLATFORM
@@ -5389,14 +7708,17 @@ index 0d7804f..30dcc08 100644
 +  port49 platform export [--set VERSION | --policy FILE --inventory FILE] (PLATFORM | --all --dir EMPTY_DIR |
 +                         --classes --config PORT49D_YAML PLATFORM)
    port49 platform upgrade --policy FILE --inventory FILE --to VERSION [--write]
-   port49 devices check-config --policy FILE --inventory FILE --device NAME CONFIGFILE
+-  port49 devices check-config --policy FILE --inventory FILE --device NAME CONFIGFILE
++  port49 devices check-config --policy FILE --inventory FILE --device NAME [--config PORT49D_YAML] CONFIGFILE
  `
+ 
+ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 ````
 
 <!-- patch: cmd/port49/platform.go -->
 ````diff
 diff --git a/cmd/port49/platform.go b/cmd/port49/platform.go
-index a607e68..74762a1 100644
+index a607e68..fc9ed79 100644
 --- a/cmd/port49/platform.go
 +++ b/cmd/port49/platform.go
 @@ -16,6 +16,7 @@ import (
@@ -5435,7 +7757,7 @@ index a607e68..74762a1 100644
  	mode := exportShow
  	if export {
  		mode = exportBlock
-@@ -485,3 +493,39 @@ func sortedNames(set map[string]platform.Dialect) []string {
+@@ -485,3 +493,41 @@ func sortedNames(set map[string]platform.Dialect) []string {
  	slices.Sort(out)
  	return out
  }
@@ -5467,7 +7789,9 @@ index a607e68..74762a1 100644
 +	if p != nil {
 +		setName = p.PlatformSet()
 +	}
-+	fmt.Fprintf(stdout, "# %s: reference configuration, platform set %s (spec §8). idle-timeout is "+
++	fmt.Fprintf(stdout, "# %s: reference configuration, platform set %s (spec §8). Load it with `load set "+
++		"terminal`: each template class and user is deleted before it is set, so nothing a device carried under one "+
++		"survives, and `port49 devices check-config --config` verifies it. idle-timeout is "+
 +		"session.max_session_age_default (%s) in whole minutes: a session-only device never asks port49 again after "+
 +		"login, so this timer is what ends a session there (decision 21).\n", platformName, setName, age)
 +	for _, line := range lines {
@@ -5530,29 +7854,48 @@ index 502602c..221e449 100644
 ````diff
 diff --git a/internal/platform/classes.go b/internal/platform/classes.go
 new file mode 100644
-index 0000000..a140548
+index 0000000..97df33a
 --- /dev/null
 +++ b/internal/platform/classes.go
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,154 @@
 +package platform
 +
 +import (
 +	"errors"
 +	"fmt"
++	"regexp"
 +	"slices"
 +	"strings"
 +	"time"
 +)
 +
++// lockTemplates is whether each template user's reference carries a locked
++// password line. Juniper documents a template user as one with no
++// authentication, which cannot log in locally; tests/lab/results/L12-juniper_*.md
++// ("template logins") measures that, and this is true only if it found a
++// template user that did accept a local login and that the locked line
++// refuses it (plan 5b Task 14).
++var lockTemplates = false
++
++// lockLine is the line that locks a template user's local login.
++const lockLine = `authentication encrypted-password "*"`
++
 +// ReferenceClasses is the device configuration a projected platform's
 +// replies rest on, as `set` lines (spec §8, "publish the reference class per
 +// privilege level through port49 platform export"): the adapter's
-+// device_config lines, the bitless `remote` template, and under
-+// BitDeliveryLocalUserName each level's template user and class, carrying
-+// the level's bits. Every class carries `idle-timeout` from maxSessionAge,
-+// in whole minutes rounded down and at least one: a session-only device never
-+// asks port49 again after login, so the class's own timer is the one limit
-+// that ends a session there (spec §5.6; §13 decision 21).
++// device_config lines, then the bitless `remote` template and, under
++// BitDeliveryLocalUserName, each level's template user and class carrying the
++// level's bits, one bit per line as `show configuration | display set`
++// prints them. Each template class and user is written as a replace, a
++// `delete` before its `set` lines, so loading the reference over a device
++// leaves nothing of what was there: a class allow-commands, which would run
++// for every subject at that template past their own denies (L11), or a
++// template user's local password. No template user is one that can log in
++// locally (lockTemplates). Every class carries `idle-timeout` from
++// maxSessionAge, in whole minutes rounded down and at least one: a
++// session-only device never asks port49 again after login, so the class's
++// own timer is the one limit that ends a session there (spec §5.6; §13
++// decision 21).
 +func ReferenceClasses(d Dialect, maxSessionAge time.Duration) ([]string, error) {
 +	if !d.Projected() {
 +		return nil, errors.New("the platform projects nothing, so it has no reference classes; its device_config " +
@@ -5561,30 +7904,113 @@ index 0000000..a140548
 +	if maxSessionAge <= 0 {
 +		return nil, errors.New("max_session_age must be positive: it is the classes' idle-timeout")
 +	}
-+	minutes := max(int64(maxSessionAge/time.Minute), 1)
 +	out := slices.Clone(d.DeviceConfig)
-+	class := func(name string, bits []string) {
-+		if len(bits) > 0 {
-+			out = append(out, fmt.Sprintf("set system login class %s permissions [ %s ]", name, strings.Join(bits, " ")))
-+		}
-+		out = append(out, fmt.Sprintf("set system login class %s idle-timeout %d", name, minutes))
++	for _, t := range templates(d) {
++		out = append(out, "delete system login class "+t.class)
++		out = append(out, t.lines(maxSessionAge)...)
 +	}
-+	class(RemoteClass, nil)
-+	out = append(out, "set system login user remote class "+RemoteClass)
++	return out, nil
++}
++
++// template is one template user and its class.
++type template struct {
++	user, class string
++	bits        []string
++}
++
++// templates is `remote`, whose class p49-remote carries no bit, then under
++// BitDeliveryLocalUserName each level's template, in name order.
++func templates(d Dialect) []template {
++	out := []template{{user: "remote", class: RemoteClass}}
 +	if d.BitDelivery != BitDeliveryLocalUserName {
-+		return out, nil
++		return out
 +	}
 +	seen := map[string]bool{}
 +	for _, level := range sortedKeys(d.LocalUserNames) {
 +		name := d.LocalUserNames[level]
-+		if seen[name] {
-+			continue
++		if !seen[name] {
++			seen[name] = true
++			out = append(out, template{user: name, class: name, bits: d.CeilingBits[level]})
 +		}
-+		seen[name] = true
-+		class(name, d.CeilingBits[level])
-+		out = append(out, fmt.Sprintf("set system login user %s class %s", name, name))
 +	}
-+	return out, nil
++	return out
++}
++
++// lines is the template's class and user as set lines, without the deletes.
++func (t template) lines(maxSessionAge time.Duration) []string {
++	minutes := max(int64(maxSessionAge/time.Minute), 1)
++	var out []string
++	for _, b := range t.bits {
++		out = append(out, fmt.Sprintf("set system login class %s permissions %s", t.class, b))
++	}
++	out = append(out, fmt.Sprintf("set system login class %s idle-timeout %d", t.class, minutes),
++		"delete system login user "+t.user, fmt.Sprintf("set system login user %s class %s", t.user, t.class))
++	if lockTemplates {
++		out = append(out, fmt.Sprintf("set system login user %s %s", t.user, lockLine))
++	}
++	return out
++}
++
++// uidLine is the uid Junos assigns a login user at commit: the one line under
++// a template user the reference does not write and the check allows.
++var uidLine = regexp.MustCompile(`^set system login user \S+ uid [0-9]+$`)
++
++// TemplateDrift reads a projected platform's device configuration, as `show
++// configuration | display set` prints it, against ReferenceClasses: every
++// reference set line the configuration lacks, and every line under a
++// template class or template user the reference does not write (spec §8; plan
++// 5b pre-flight I8). A class line the reference lacks — an allow-commands,
++// a permission — widens every subject at that template, and a template
++// user's authentication line lets it log in locally, so each is drift. The
++// device_config lines are Missing's. It is an error where the configuration
++// is not in set form, since then nothing could be read.
++func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missing []string, extra []ConfigFinding,
++	err error) {
++	if _, err := ReferenceClasses(d, maxSessionAge); err != nil {
++		return nil, nil, err
++	}
++	var want []string
++	var prefixes []string
++	for _, t := range templates(d) {
++		want = append(want, slices.DeleteFunc(t.lines(maxSessionAge), func(l string) bool {
++			return strings.HasPrefix(l, "delete ")
++		})...)
++		prefixes = append(prefixes, "set system login class "+t.class+" ", "set system login user "+t.user+" ")
++	}
++	carried := map[string]bool{}
++	setForm := false
++	err = eachLine(config, func(n int, line string) {
++		line = strings.Join(strings.Fields(line), " ")
++		if !strings.HasPrefix(line, "set ") {
++			return
++		}
++		setForm = true
++		carried[line] = true
++		if slices.Contains(want, line) || uidLine.MatchString(line) {
++			return
++		}
++		for _, p := range prefixes {
++			if strings.HasPrefix(line, p) {
++				extra = append(extra, ConfigFinding{Line: n, Text: line, Says: "a line under a port49 template the " +
++					"reference does not write: it changes what every subject at that template runs, or lets the " +
++					"template user log in locally; load port49 platform export --classes, which replaces the template"})
++				return
++			}
++		}
++	})
++	if err != nil {
++		return nil, nil, err
++	}
++	if !setForm {
++		return nil, nil, errors.New("the configuration has no set line: the template check reads `show configuration " +
++			"| display set`")
++	}
++	for _, l := range want {
++		if !carried[l] {
++			missing = append(missing, l)
++		}
++	}
++	return missing, extra, nil
 +}
 ````
 
@@ -5596,9 +8022,9 @@ Expected: every package `ok`, no `gofmt` output, both binaries built.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add cmd/port49/main.go cmd/port49/platform.go cmd/port49/platform_test.go internal/config/config.go internal/config/config_test.go internal/platform/classes.go internal/platform/classes_test.go
+git add cmd/port49/devices.go cmd/port49/devices_test.go cmd/port49/main.go cmd/port49/platform.go cmd/port49/platform_test.go internal/config/config.go internal/config/config_test.go internal/platform/classes.go internal/platform/classes_test.go
 git commit -m "$(cat <<'EOF'
-feat: platform export --classes prints the reference classes, idle-timeout from max_session_age (decision 21)
+feat: platform export --classes writes the reference as a replace, and check-config holds a device to it
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -5608,39 +8034,49 @@ EOF
 
 ---
 
-### Task 13: Platform set 1.1.0: Junos projected, from what L9, L12 and L23 measured
+### Task 14: Platform set 1.1.0: Junos projected, from what L9, L12 and L23 measured, with a fail-closed branch for every outcome
 
 **Files:**
 - Create: `platforms/1.1.0/arista_eos.yaml`, `cisco_iosxe.yaml`, `cisco_nxos.yaml` (copies of
   1.0.0's), `platforms/1.1.0/juniper_junos.yaml`
 - Modify: `internal/platform/set.go` (`DefaultSet = "1.1.0"`), `internal/platform/dialect.go`
-  (`generics["1.1.0"]`), `internal/projection/project.go` (`JunosFacts`, Step 4)
+  (`generics["1.1.0"]`), `cmd/port49/platform.go` (`upgradeReport` previews quarantines and
+  refusals)
+- Modify, only in a Step 4 branch: `internal/projection/project.go` (`JunosFacts`),
+  `internal/platform/classes.go`, `cmd/port49/platform.go`'s export header
 - Test: `internal/platform/adapter_test.go` (`shipped110`, `releasedGeneric`, the set list),
   `config_test.go`, `dialect_test.go`, `classes_test.go`, `cmd/port49/platform_test.go`
 
 **Interfaces:**
-- Consumes: the notes of Tasks 2, 3 and 4; Task 6's keys; Task 12's `ReferenceClasses`.
+- Consumes: the notes of Tasks 2, 3 and 4; Task 6's keys; Task 13's `ReferenceClasses`,
+  `TemplateDrift`, `lockTemplates`; Task 11's `Projections`.
 - Produces: set 1.1.0, `platform.DefaultSet == "1.1.0"`, and the test table `shipped110`, which
-  Task 19 freezes.
+  Task 20 freezes. In `shipped110`, the line `// What 1.1.0 changes in juniper_junos: the
+  projection and what it rests on.` directly follows `j := out["juniper_junos"]`, and every Step 4
+  branch edits only below it: Task 20's hunk anchors on those two lines (pre-flight I7).
 
-The patches below are the set as this plan's candidates write it. The candidates are:
+The patches below are the set as this plan's candidates write it:
 - `bit_delivery: local_user_name`, with templates `p49-readonly`, `p49-operator` and `p49-admin`;
-- the bits and ceilings of Decided 11;
+- the bits of Decided 11, `baseline` from Task 3's candidate, and the one carve-out,
+  `view-configuration: ["show configuration **"]`;
 - `ceiling_levels {1, 15, 15}`;
-- `device_config` requiring `strict-authorization` and `remote` on `p49-remote`;
+- `device_config` requiring `strict-authorization`; the templates are the reference's (Task 13);
 - a `config_checks` entry for bits on `p49-remote`;
 - the EOS, NX-OS and IOS-XE files unchanged from 1.0.0.
 
-Step 4 then changes exactly what the lab notes measured differently, each edit named with its
-consequence. Where a note and a candidate agree, the candidate stands. Where the two Junos images
-disagree, the value that denies more stands.
+`platform upgrade` now previews every quarantine and every fail-closed composition the move brings
+(pre-flight I10, M10). The tests this task adds assert no candidate value, so each Step 4 branch
+leaves them green: they read the shape, the delivery and the keys from the shipped adapter
+(pre-flight I6). Step 4 then changes exactly what the lab notes measured differently. Where a note
+and a candidate agree, the candidate stands. Where the two Junos images disagree, the value that
+denies more stands.
 
 - [ ] **Step 1: Write the failing tests**
 
 <!-- patch: cmd/port49/platform_test.go -->
 ````diff
 diff --git a/cmd/port49/platform_test.go b/cmd/port49/platform_test.go
-index 5aeb248..a8e7f49 100644
+index 5aeb248..bdaa6dc 100644
 --- a/cmd/port49/platform_test.go
 +++ b/cmd/port49/platform_test.go
 @@ -97,7 +97,7 @@ func TestPlatformShowAndExportPrintTheAdapter(t *testing.T) {
@@ -5665,22 +8101,30 @@ index 5aeb248..a8e7f49 100644
  func TestPlatformExportClasses(t *testing.T) {
  	cfg := filepath.Join(t.TempDir(), "port49d.yaml")
  	if err := os.WriteFile(cfg, []byte("inventory_file: inventory.yaml\nsession: {max_session_age_default: 8h}\n"),
-@@ -649,6 +649,14 @@ func TestPlatformExportClasses(t *testing.T) {
+@@ -649,6 +649,22 @@ func TestPlatformExportClasses(t *testing.T) {
  		&out, &errb); code != 1 || !strings.Contains(errb.String(), "projects nothing") {
  		t.Fatalf("1.0.0: code %d\n%s%s", code, out.String(), errb.String())
  	}
 +	out.Reset()
 +	if code := run([]string{"platform", "export", "--classes", "--config", cfg, "juniper_junos"}, &out, &errb); code != 0 ||
 +		!strings.Contains(out.String(), "platform set 1.1.0") ||
-+		!strings.Contains(out.String(), "set system login class p49-readonly permissions [ view view-configuration ]\n") ||
-+		!strings.Contains(out.String(), "set system login class p49-readonly idle-timeout 480\n") ||
++		!strings.Contains(out.String(), "delete system login class p49-remote\n"+
++			"set system login class p49-remote idle-timeout 480\n") ||
 +		!strings.Contains(out.String(), "set system login user remote class p49-remote\n") {
 +		t.Fatalf("1.1.0: code %d\n%s%s", code, out.String(), errb.String())
++	}
++	// Each level's template, where the delivery is one, is a replace too.
++	if d, _ := platform.DialectFor("juniper_junos"); d.BitDelivery == platform.BitDeliveryLocalUserName &&
++		!strings.Contains(out.String(), "delete system login class p49-readonly\n"+
++			"set system login class p49-readonly permissions view\n"+
++			"set system login class p49-readonly permissions view-configuration\n"+
++			"set system login class p49-readonly idle-timeout 480\n") {
++		t.Fatalf("templates:\n%s", out.String())
 +	}
  	for _, args := range [][]string{
  		{"platform", "show", "--classes", "--config", cfg, "juniper_junos"},
  		{"platform", "export", "--classes", "juniper_junos"},
-@@ -660,3 +668,22 @@ func TestPlatformExportClasses(t *testing.T) {
+@@ -660,3 +676,147 @@ func TestPlatformExportClasses(t *testing.T) {
  		}
  	}
  }
@@ -5696,11 +8140,136 @@ index 5aeb248..a8e7f49 100644
 +	}
 +	var out, errb bytes.Buffer
 +	run([]string{"platform", "upgrade", "--policy", pol, "--inventory", inv, "--to", "1.1.0"}, &out, &errb)
-+	for _, key := range []string{"command_projection", "bits", "bit_delivery", "local_user_names", "privilege"} {
++	keys := []string{"command_projection", "bits", "bit_delivery", "privilege"}
++	if d, _ := platform.DialectFor("juniper_junos"); len(d.LocalUserNames) > 0 {
++		keys = append(keys, "local_user_names")
++	}
++	if d, _ := platform.DialectFor("juniper_junos"); len(d.CarveOuts) > 0 {
++		keys = append(keys, "carve_outs")
++	}
++	for _, key := range keys {
 +		if !strings.Contains(out.String(), "platforms.juniper_junos."+key+"\n") ||
 +			!strings.Contains(out.String(), "field: "+key+", sha256:") {
 +			t.Errorf("%s is not reported gated:\n%s%s", key, out.String(), errb.String())
 +		}
++	}
++}
++
++// junosFixture is a policy pinned to 1.1.0 with one Junos device: noc
++// permitted every show command, which renders whatever L9 and L12 measured,
++// and for ops a composition the projection cannot carry under any of them,
++// the refused shape (spec §8).
++func junosFixture(t *testing.T) (pol, inv, cfg string) {
++	t.Helper()
++	dir := t.TempDir()
++	pol, inv, cfg = filepath.Join(dir, "policy.yaml"), filepath.Join(dir, "inventory.yaml"),
++		filepath.Join(dir, "port49d.yaml")
++	for path, body := range map[string]string{
++		pol: `platform_set: 1.1.0
++scopes: [{name: all_devices, match: {}}]
++roles:
++  - {name: read_only, privilege: readonly, permit: ["show **"]}
++  - {name: interfaces, privilege: readonly, permit: ["show interfaces **"], deny: ["show interfaces terse"]}
++subjects:
++  - {name: noc, identity: "user:noc@example.com", username: noc, token_ttl: 60s}
++  - {name: ops, identity: "user:ops@example.com", username: ops, token_ttl: 60s}
++grants:
++  - {subject: noc, scope: all_devices, roles: [read_only]}
++  - {subject: ops, scope: all_devices, roles: [interfaces]}
++tests:
++  - {subject: noc, device: srx-01, level: readonly}
++`,
++		inv: `
++devices:
++  - {name: srx-01, platform: juniper_junos, addresses: [10.0.0.9]}
++key_groups:
++  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
++`,
++		cfg: "inventory_file: inventory.yaml\nsession: {max_session_age_default: 8h}\n",
++	} {
++		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	return pol, inv, cfg
++}
++
++// One subject's composition the projection cannot carry fails policy test
++// and policy diff, naming the subject, the device and why, and platform
++// upgrade previews it; the other subject keeps its reply (spec §8, "CI MUST
++// refuse the policy"; §13 decision 26; plan 5b pre-flight I10).
++func TestAProjectionRefusalFailsTheGates(t *testing.T) {
++	pol, inv, _ := junosFixture(t)
++	var out, errb bytes.Buffer
++	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
++	for _, want := range []string{
++		`report: projection_refused: subject "ops" on juniper_junos (srx-01) gets the fail-closed reply (refused_shape)`,
++		`report: projection: subject "noc" on juniper_junos: `,
++		"; 0 quarantined, 1 projection refusals\n",
++	} {
++		if !strings.Contains(out.String(), want) {
++			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
++		}
++	}
++	if code != 1 {
++		t.Fatalf("policy test: code %d", code)
++	}
++	out.Reset()
++	if code := run([]string{"policy", "diff", "--old", pol, "--new", pol, "--inventory", inv}, &out, &errb); code != 1 ||
++		!strings.Contains(out.String(), `REFUSED: projection_refused: subject "ops" on juniper_junos (srx-01)`) {
++		t.Fatalf("policy diff: code %d\n%s%s", code, out.String(), errb.String())
++	}
++	unpinned := filepath.Join(t.TempDir(), "policy.yaml")
++	if err := os.WriteFile(unpinned, []byte(strings.Replace(string(readFile(t, pol)), "platform_set: 1.1.0\n", "", 1)),
++		0o600); err != nil {
++		t.Fatal(err)
++	}
++	out.Reset()
++	if code := run([]string{"platform", "upgrade", "--policy", unpinned, "--inventory", inv, "--to", "1.1.0"}, &out,
++		&errb); code != 0 || !strings.Contains(out.String(),
++		`  projection_refused on 1.1.0: subject "ops" on juniper_junos (srx-01) gets the fail-closed reply`) {
++		t.Fatalf("platform upgrade: code %d\n%s%s", code, out.String(), errb.String())
++	}
++}
++
++// check-config holds a Junos device to the reference export --classes
++// writes: it needs --config for the classes' idle-timeout, passes the
++// reference itself, and fails a template class carrying an allow (I8, M8).
++func TestCheckConfigHoldsAJunosDeviceToTheReference(t *testing.T) {
++	pol, inv, cfg := junosFixture(t)
++	var ref, errb bytes.Buffer
++	if code := run([]string{"platform", "export", "--policy", pol, "--inventory", inv, "--classes", "--config", cfg,
++		"juniper_junos"}, &ref, &errb); code != 0 {
++		t.Fatalf("export: code %d\n%s", code, errb.String())
++	}
++	var lines []string
++	for _, l := range strings.Split(ref.String(), "\n") {
++		if strings.HasPrefix(l, "set ") {
++			lines = append(lines, l)
++		}
++	}
++	device := filepath.Join(t.TempDir(), "srx-01.set")
++	write := func(extra ...string) {
++		if err := os.WriteFile(device, []byte(strings.Join(append(append([]string{"set system host-name srx-01"},
++			lines...), extra...), "\n")+"\n"), 0o600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	write()
++	var out bytes.Buffer
++	args := []string{"devices", "check-config", "--policy", pol, "--inventory", inv, "--device", "srx-01"}
++	if code := run(append(args, device), &out, &errb); code != 2 || !strings.Contains(errb.String(), "pass --config") {
++		t.Fatalf("no --config: code %d\n%s%s", code, out.String(), errb.String())
++	}
++	out.Reset()
++	if code := run(append(args, "--config", cfg, device), &out, &errb); code != 0 {
++		t.Fatalf("the reference: code %d\n%s%s", code, out.String(), errb.String())
++	}
++	write(`set system login class p49-remote allow-commands "^configure"`)
++	out.Reset()
++	if code := run(append(args, "--config", cfg, device), &out, &errb); code != 1 ||
++		!strings.Contains(out.String(), "TEMPLATE: "+device+":") {
++		t.Fatalf("drift: code %d\n%s%s", code, out.String(), errb.String())
 +	}
 +}
 ````
@@ -5708,7 +8277,7 @@ index 5aeb248..a8e7f49 100644
 <!-- patch: internal/platform/adapter_test.go -->
 ````diff
 diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index a884283..9b682dc 100644
+index a884283..f744275 100644
 --- a/internal/platform/adapter_test.go
 +++ b/internal/platform/adapter_test.go
 @@ -12,8 +12,8 @@ import (
@@ -5722,7 +8291,7 @@ index a884283..9b682dc 100644
  var shipped = map[string]Dialect{
  	"arista_eos": {
  		PipeToken: "|", StripCR: true, ExpandsAbbreviations: true, ShowsServerMsg: true,
-@@ -126,12 +126,38 @@ var shipped = map[string]Dialect{
+@@ -126,12 +126,39 @@ var shipped = map[string]Dialect{
  	},
  }
  
@@ -5734,16 +8303,17 @@ index a884283..9b682dc 100644
 +		out[name] = d.clone()
 +	}
 +	j := out["juniper_junos"]
++	// What 1.1.0 changes in juniper_junos: the projection and what it rests on.
 +	j.CommandProjection, j.BitDelivery = ProjectionJunosRegex, BitDeliveryLocalUserName
 +	j.LocalUserNames = map[string]string{"readonly": "p49-readonly", "operator": "p49-operator", "admin": "p49-admin"}
-+	j.Bits = map[string][]string{"view": {"show **"}, "view-configuration": {"show configuration **"},
-+		"clear": {"clear **"}, "network": {"ping **", "traceroute **", "ssh **", "telnet **"}, "trace": {"monitor **"},
-+		"all": {"**"}}
++	j.Bits = map[string][]string{BaselineBit: {"help **", "quit **", "exit **", "set cli **", "show cli **"},
++		"view": {"show **"}, "view-configuration": {"show configuration **"}, "clear": {"clear **"},
++		"network": {"ping **", "traceroute **", "ssh **", "telnet **"}, "trace": {"monitor **"}, "all": {"**"}}
++	j.CarveOuts = map[string][]string{"view-configuration": {"show configuration **"}}
 +	j.CeilingBits = map[string][]string{"readonly": {"view", "view-configuration"},
 +		"operator": {"clear", "network", "trace", "view", "view-configuration"}, "admin": {"all"}}
 +	j.CeilingLevels = map[string]uint8{"readonly": 1, "operator": 15, "admin": 15}
-+	j.DeviceConfig = []string{"set system tacplus-options strict-authorization",
-+		"set system login user remote class p49-remote"}
++	j.DeviceConfig = []string{"set system tacplus-options strict-authorization"}
 +	j.ConfigChecks = append(j.ConfigChecks, ConfigCheck{Match: `^set\s+system\s+login\s+class\s+p49-remote\s+permissions\b`,
 +		Says: "the remote template's class carries bits: a session whose reply names a template the device lacks lands " +
 +			"in remote (tests/lab/results/L18-juniper_vjunos-router.md, variant 7) and runs them, which port49 never " +
@@ -5764,7 +8334,7 @@ index a884283..9b682dc 100644
  		if !reflect.DeepEqual(got[name], want) {
  			t.Errorf("%s:\n got %+v\nwant %+v", name, got[name], want)
  		}
-@@ -168,6 +194,9 @@ var releasedGeneric = map[string]Dialect{
+@@ -168,6 +195,9 @@ var releasedGeneric = map[string]Dialect{
  	"1.0.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
  		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: []string{"home-directory"},
  		EnableUsername: EnablePrincipal},
@@ -5774,7 +8344,7 @@ index a884283..9b682dc 100644
  }
  
  // Each released set's generic adapter is its own and frozen, and every set
-@@ -203,7 +232,7 @@ func TestEmbeddedSetsLoad(t *testing.T) {
+@@ -203,7 +233,7 @@ func TestEmbeddedSetsLoad(t *testing.T) {
  	if _, ok := all[DefaultSet]; !ok {
  		t.Fatalf("no set %s in %v", DefaultSet, Sets())
  	}
@@ -5788,11 +8358,35 @@ index a884283..9b682dc 100644
 <!-- patch: internal/platform/classes_test.go -->
 ````diff
 diff --git a/internal/platform/classes_test.go b/internal/platform/classes_test.go
-index 0f67a38..1aea23d 100644
+index f3a4363..a4faef9 100644
 --- a/internal/platform/classes_test.go
 +++ b/internal/platform/classes_test.go
-@@ -34,6 +34,16 @@ func TestReferenceClasses(t *testing.T) {
- 	if len(up) != 2 || !strings.HasSuffix(up[0], "idle-timeout 1") {
+@@ -37,18 +37,34 @@ func TestReferenceClasses(t *testing.T) {
+ 		"delete system login user p49-readonly",
+ 		"set system login user p49-readonly class p49-readonly",
+ 	}
++	if lockTemplates {
++		// Each user's set lines end with the lock (plan 5b Task 14).
++		var locked []string
++		for _, l := range want {
++			locked = append(locked, l)
++			if strings.HasPrefix(l, "set system login user ") {
++				locked = append(locked, strings.Replace(l, "class "+l[strings.LastIndex(l, " ")+1:], lockLine, 1))
++			}
++		}
++		want = locked
++	}
+ 	if !reflect.DeepEqual(got, want) {
+ 		t.Fatalf("%q", got)
+ 	}
+-	for _, l := range got {
+-		if strings.Contains(l, "authentication") {
+-			t.Errorf("a template user that can log in locally: %s", l)
+-		}
+-	}
+ 	up, _ := ReferenceClasses(junosProjected(BitDeliveryUserPermissions), 30*time.Second)
+-	if len(up) != 4 || up[1] != "set system login class p49-remote idle-timeout 1" {
++	if up[1] != "set system login class p49-remote idle-timeout 1" {
  		t.Fatalf("user_permissions: %q", up)
  	}
 +	// What export prints for the shipped Junos adapter carries every line
@@ -5862,9 +8456,10 @@ index 71f79a7..201ff9e 100644
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `go test ./internal/platform/ ./cmd/port49/`
-Expected: FAIL, among others: `TestEmbeddedSetsLoad: sets: [1.0.0]`, `TestTheGenericAdapterIsFrozen:
-set 1.1.0 generic`, `TestTheDefaultSetValueForValue: juniper_junos`, and `TestReferenceClasses: the
-platform projects nothing`.
+Expected: FAIL, among others: `TestTheDefaultSetValueForValue`, `TestTheGenericAdapterIsFrozen`,
+`TestEmbeddedSetsLoad`, `TestReferenceClasses`, `TestPlatformShowAndExportPrintTheAdapter: missing
+"# cisco_iosxe: built-in, platform set 1.1.0\n"`, `TestPlatformExportClasses: 1.1.0: code 1`, and
+`TestUpgradingToTheProjectedSet: command_projection is not reported gated`.
 
 - [ ] **Step 3: Add the set**
 
@@ -5875,13 +8470,41 @@ cp platforms/1.0.0/arista_eos.yaml platforms/1.0.0/cisco_iosxe.yaml platforms/1.
 
 Then apply:
 
+<!-- patch: cmd/port49/platform.go -->
+````diff
+diff --git a/cmd/port49/platform.go b/cmd/port49/platform.go
+index fc9ed79..432c468 100644
+--- a/cmd/port49/platform.go
++++ b/cmd/port49/platform.go
+@@ -333,6 +333,19 @@ func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
+ 		fmt.Fprintf(w, "  shadowed: %s: set %s changes the built-in value and the policy's block keeps its "+
+ 			"own; compare the two\n", key, after.PlatformSet())
+ 	}
++	// What the move quarantines or fails closed, before anyone runs the
++	// gate: each fails policy test (plan 5b pre-flight I10).
++	for _, q := range after.Quarantines(now) {
++		for _, e := range q.Entries {
++			fmt.Fprintf(w, "  quarantine on %s: %s (%s): %s\n", after.PlatformSet(), q.Device, q.Platform,
++				quarantineLine(e, now))
++		}
++	}
++	for _, f := range after.Projections(now) {
++		if f.Kind == policy.FindingProjectionRefused || f.Kind == policy.FindingProjectionOverflow {
++			fmt.Fprintf(w, "  %s on %s: %s\n", f.Kind, after.PlatformSet(), f.Message)
++		}
++	}
+ 	switch {
+ 	case len(d.Adapters) == 0:
+ 		fmt.Fprintln(w, "  no adapter changes")
+````
+
 <!-- patch: internal/platform/dialect.go -->
 ````diff
 diff --git a/internal/platform/dialect.go b/internal/platform/dialect.go
-index 2e0afc8..efe5ac6 100644
+index dec8bec..25eebc9 100644
 --- a/internal/platform/dialect.go
 +++ b/internal/platform/dialect.go
-@@ -261,6 +261,9 @@ var inert = []string{"home-directory"}
+@@ -289,6 +289,9 @@ var inert = []string{"home-directory"}
  var generics = map[string]Dialect{
  	"1.0.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
  		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
@@ -5914,10 +8537,10 @@ index b512b3a..c63826b 100644
 ````diff
 diff --git a/platforms/1.1.0/juniper_junos.yaml b/platforms/1.1.0/juniper_junos.yaml
 new file mode 100644
-index 0000000..4e42996
+index 0000000..717efa7
 --- /dev/null
 +++ b/platforms/1.1.0/juniper_junos.yaml
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,103 @@
 +# juniper_junos — vSRX 21.4R3.15 and vJunos-router 23.4R2-S2.1 in the port49 lab.
 +# Every value is measured and cited, or marked unmeasured and chosen in the
 +# direction that fails closed (spec §8, §15).
@@ -5941,16 +8564,26 @@ index 0000000..4e42996
 +    bit_delivery: local_user_name
 +    local_user_names: {readonly: p49-readonly, operator: p49-operator, admin: p49-admin}
 +    # Each bit's reach in rule form: every command a class holding that bit
-+    # alone ran or completed in the lab, as rules that hold them, an upper
-+    # bound (tests/lab/results/L12-bits-juniper_*.md). The projection trusts a
-+    # bit no further than this. `all` is every bit.
++    # alone ran or completed in the lab, one level under each word, as rules
++    # that hold them, an upper bound (tests/lab/results/L12-bits-juniper_*.md).
++    # A session runs the union of its bits' reach. `baseline` is what a class
++    # with no bits runs, held by every session: the projection denies each of
++    # its commands no permit holds. `all` is every bit.
 +    bits:
++      baseline: ["help **", "quit **", "exit **", "set cli **", "show cli **"]
 +      view: ["show **"]
 +      view-configuration: ["show configuration **"]
 +      clear: ["clear **"]
 +      network: ["ping **", "traceroute **", "ssh **", "telnet **"]
 +      trace: ["monitor **"]
 +      all: ["**"]
++    # The one subtraction from the union: a command a bit alone makes
++    # available, whatever other bit reaches it. Under `view` without
++    # `view-configuration` the configuration is not shown
++    # (tests/lab/results/L12-bits-juniper_*.md, "carve-outs"). Only a listed
++    # carve-out lets the projection leave a deny off the wire.
++    carve_outs:
++      view-configuration: ["show configuration **"]
 +    # Each level's ceiling in bits. readonly is show and info, operator adds
 +    # the non-disruptive state changes and no configuration, admin is
 +    # everything (the owner's level definitions, 2026-09-24). Spec §8's
@@ -5971,10 +8604,11 @@ index 0000000..4e42996
 +      # Required: without it a port49 denial is advisory and the session opens
 +      # in the remote template (L17-juniper_*.md).
 +      - set system tacplus-options strict-authorization
-+      # Required: a reply naming a template the device lacks lands the
-+      # session in `remote` (L18-juniper_*.md, variant 7), so remote's class
-+      # carries no bits and a missing template runs nothing.
-+      - set system login user remote class p49-remote
++    # The template users and their classes are the reference `port49 platform
++    # export --classes` writes, and `port49 devices check-config --config`
++    # holds a device to: `remote` in the bitless p49-remote, since a reply
++    # naming a template the device lacks lands the session there
++    # (L18-juniper_*.md, variant 7), and each level's template.
 +    # fxp0 is the interface the lab reaches both images on
 +    # (tests/lab/configs/vjunos-startup.conf); em0 is spec §8's example and no
 +    # lab image uses it.
@@ -6012,53 +8646,95 @@ index 0000000..4e42996
 +        says: "the remote template's class carries bits: a session whose reply names a template the device lacks lands in remote (tests/lab/results/L18-juniper_vjunos-router.md, variant 7) and runs them, which port49 never granted; read this check against `show configuration | display set`"
 ````
 
-- [ ] **Step 4: Apply what the lab measured**
+- [ ] **Step 4: Apply what the lab measured: one branch per outcome**
 
-Read Tasks 2–4's notes and make exactly these edits. Each keeps the tests and the adapter in step.
-Record in the commit message which notes each value came from.
+Read Tasks 2–4's notes and take the branch each line selects. Every branch fails closed, and none
+is skipped: where a note and the candidate agree, write that in the commit message instead. Record
+in the commit message which notes each value came from. `shipped110` edits go below its comment
+line `// What 1.1.0 changes in juniper_junos: ...`.
 
-1. **Anchors (L9).** If either Junos note says explicit anchors were not taken, the projection
-   cannot ship. Make these edits, skip items 2–4 and Task 18, and say so in the PR. Otherwise
-   continue with item 2.
-   - In `platforms/1.1.0/juniper_junos.yaml`, delete `command_projection`, `bit_delivery`,
-     `local_user_names` and `bits` (with its body).
-   - Delete the whole `privilege:` block, which would otherwise be read as attributes.
-   - Delete both `device_config` lines and the `p49-remote` config check.
-   - In `shipped110`, keep only the `CeilingLevels` line.
-   - Delete the Junos block of `TestReferenceClasses`, the success block of
-     `TestPlatformExportClasses`, and `TestUpgradingToTheProjectedSet`.
-2. **`JunosFacts` (L9).** In `internal/projection/project.go`, set `var JunosFacts =
-   Facts{CaseSensitive: <A>, DenyMatchesExpanded: <B>}`. Here `<A>` is `false` only if both notes
-   say `JunosFacts.CaseSensitive = false`, and `<B>` is `true` only if both say
-   `JunosFacts.DenyMatchesExpanded = true`. Update the comment above it to cite both notes.
-3. **`bit_delivery` (L12).** Switch to `user_permissions` only if both notes show all three:
-   `user-permissions over a bitless template applied: true`, the two-bit variant's `show cli
-   authorization` listing both `view` and `clear`, and the per-session line showing A's
-   permissions unchanged after B. If so, make these edits:
-   - In the adapter file: `bit_delivery: user_permissions`, delete the `local_user_names` line,
-     and rewrite the comment above to cite `L12-juniper_*.md`.
-   - In `shipped110`: `j.CommandProjection, j.BitDelivery = ProjectionJunosRegex,
-     BitDeliveryUserPermissions`, and delete the `j.LocalUserNames = ...` line.
-   - In `cmd/port49/platform_test.go`'s `TestPlatformExportClasses` success block: replace the
-     two `p49-readonly` expectations with `!strings.Contains(out.String(), "p49-readonly")`, since
-     the export then prints only the `remote` class.
-   - In `TestUpgradingToTheProjectedSet`: drop `"local_user_names"` from the list.
+**A. The projection cannot be sound here** — any of: `explicit anchors with the pipe tail: false`
+on either image; `narrow shape exact: false` because the narrow reply **ran** `show system uptime`,
+`clear interfaces statistics fxp0`, `ping` or the configuration; the baseline line showing a
+command that ran under the no-bit class also ran under `deny .*` (`narrow true`); or a template
+user with no authentication that logged in locally where the locked user did not commit or also
+logged in. Each means a reply port49 writes can let the device run what port49 denies, including
+the fail-closed reply. Junos stays unprojected in 1.1.0, as in 1.0.0:
+1. `cp platforms/1.0.0/juniper_junos.yaml platforms/1.1.0/juniper_junos.yaml`, and add a comment
+   at its top naming the note and the fact that ruled the projection out.
+2. In `shipped110`, delete every line between the comment line and `out["juniper_junos"] = j`.
+3. Delete `TestAProjectionRefusalFailsTheGates`, `TestCheckConfigHoldsAJunosDeviceToTheReference`,
+   `TestUpgradingToTheProjectedSet` and the `1.1.0` success block of `TestPlatformExportClasses`
+   (`cmd/port49/platform_test.go`), and the "What export prints for the shipped Junos adapter"
+   block of `TestReferenceClasses`.
+4. In the spec, §8 "As built": replace "The projection ships in platform set **1.1.0**" with "The
+   projection is built but not shipped: <fact> (<note>) means a reply cannot be proven sound on
+   Junos", and keep decision 22's "*Provisional on L12.*".
+5. Skip Task 19; Task 20 applies only its `released` hunk. Report this to the controller before
+   continuing: it is the one outcome that ships no projection.
 
-   Otherwise leave `local_user_name`.
-4. **Bits (L12-bits).** If Task 3 widened `junosBitReach`, write the same rules under `bits:` here
-   and in `shipped110`'s `j.Bits`. The note prints the YAML ready to paste.
-5. **Inert beside readonly (L23).** For each candidate the note shows not inert on `arista_eos` or
-   `cisco_nxos`:
-   - In that platform's 1.1.0 file, remove it from `inert_attributes` and add it to
-     `privilege_attributes`, citing `L23-<platform>.md` in the comment.
-   - Make the same edit to that platform's entry in `shipped110`, which becomes a copy with the
-     two lists changed.
-   - Note it for Task 19: a 1.0.0 pin is covered through `PrivilegeAttributeNames` (Decided 15).
-6. **priv_lvl (Task 2's table).** If a Junos request carried a priv_lvl other than 1, set
-   `ceiling_levels` so that readonly's number is at least that value, and say so in the commit.
+**B. `JunosFacts` (L9).** In `internal/projection/project.go`, set `var JunosFacts =
+Facts{CaseSensitive: <A>, DenyMatchesExpanded: <B>}`: `<A>` is `false` only if both notes say
+`JunosFacts.CaseSensitive = false`, and `<B>` is `true` only if both say
+`JunosFacts.DenyMatchesExpanded = true`. Rewrite the comment above it to cite both notes.
 
-Add every file these edits touch to the commit in Step 6, including `internal/projection/project.go`
-when item 2 changed it.
+**C. `bit_delivery` (L12).** Switch to `user_permissions` only if both notes show all three:
+`user-permissions over a bitless template applied: true`, both bits of the two-bit value applied,
+and the per-session line showing A's permissions unchanged after B. Then: in the adapter file,
+`bit_delivery: user_permissions`, delete the `local_user_names` line, and rewrite the comment above
+to cite `L12-juniper_*.md`; in `shipped110`, `j.CommandProjection, j.BitDelivery =
+ProjectionJunosRegex, BitDeliveryUserPermissions`, and delete the `j.LocalUserNames = ...` line.
+Otherwise write "local_user_name kept: <which line failed>" in the commit message.
+
+**D. Bits and the baseline (L12-bits).** If Task 3 widened `junosBitReach`, `baseline` included,
+paste the note's `bits:` block under `bits:` here (keeping `all: ["**"]`) and write the same map
+in `shipped110`'s `j.Bits`. A widened reach makes the generator ask more of a grant before it
+sends the bit: the direction that fails closed.
+
+**E. The carve-out (L12-bits).** If the note says `view` alone showed the configuration, delete the
+`carve_outs:` block and its comment here, and the `j.CarveOuts = ...` line in `shipped110`. Every
+deny then goes on the wire.
+
+**F. Template logins (L12).** If the template user with no authentication refused both local
+logins, change nothing. If it logged in, and `authentication encrypted-password "*"` committed and
+refused both logins, set `var lockTemplates = true` in `internal/platform/classes.go` and rewrite
+its comment to cite the note. Any other outcome is branch A.
+
+**G. A template needs a uid (L12).** If "The templates were committed without a uid" says the
+commit did not complete, give each template user a uid. In `internal/platform/classes.go`, add a
+field `uid int` to `template`, give `remote` `templateUID` and each level's template
+`templateUID + len(out)` in `templates`, add `const templateUID = 2101` with a comment citing the
+note, and in `lines` insert `fmt.Sprintf("set system login user %s uid %d", t.user, t.uid)` right
+after the user's `class` line. In `TestReferenceClasses`, insert the same line after each `set
+system login user` line of `want` (`remote` 2101, then `p49-admin`, `p49-operator`, `p49-readonly`
+in order). `TemplateDrift` already allows a uid line.
+
+**H. L24.** If either note says the idle-timeout did not end the session, decision 21's
+approximation is not enforced there: in the spec, §5.6 and decision 21, replace "measured by L24"
+with what L24 measured, citing the note; in `cmd/port49/platform.go`'s export header, replace "so
+this timer is what ends a session there (decision 21)" with "though tests/lab/results/L24-<image>.md
+measured it not ending an idle session there (decision 21)". Keep the idle-timeout lines: they
+bound nothing less than before.
+
+**I. The malformed deny (L9).** Write the line into §15's L9 paragraph in Task 20: a session that
+opened with `show version` running means a malformed wire regex fails open, and Task 7's refusal
+of anything outside the ERE subset is what keeps port49 from sending one. No code changes.
+
+**J. Configuration mode, `-regexps`, `allow-commands2` (L12).** Write each into the commit
+message. Decided 6 stands either way; if `deny-commands` reached the statement and `run`, say that
+the refusal is cautious rather than necessary, for the carried `deny-configuration` item.
+`allow-commands2` is refused as a role attribute whatever it measured (Task 6).
+
+**K. Inert beside readonly (L23).** For each candidate the note shows not inert on `arista_eos` or
+`cisco_nxos`: in that platform's 1.1.0 file, move it from `inert_attributes` to
+`privilege_attributes`, citing `L23-<platform>.md`; make the same edit to that platform's entry in
+`shipped110`, which becomes a copy with the two lists changed. A 1.0.0 pin is covered through
+`PrivilegeAttributeNames` (Decided 16).
+
+**L. priv_lvl (Task 2's table).** If a Junos request carried a priv_lvl other than 1, set
+`ceiling_levels` so that readonly's number is at least that value, and say so in the commit.
+
+Add every file these edits touch to the commit in the last step.
 
 - [ ] **Step 5: Run everything**
 
@@ -6067,14 +8743,15 @@ Expected: every package `ok`, no `gofmt` output, both binaries built.
 
 Also run `./bin/port49 platform upgrade --policy <a policy pinning nothing> --inventory
 tests/lab/inventory-lab.yaml --to 1.1.0` and read the report. Every `platforms.juniper_junos.*` key
-the move changes is listed with its `acknowledge:` entry.
+the move changes is listed with its `acknowledge:` entry, and every subject the move fails closed
+is listed as `projection_refused on 1.1.0`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add cmd/port49/platform_test.go internal/platform/adapter_test.go internal/platform/classes_test.go internal/platform/config_test.go internal/platform/dialect.go internal/platform/dialect_test.go internal/platform/set.go platforms/1.1.0/arista_eos.yaml platforms/1.1.0/cisco_iosxe.yaml platforms/1.1.0/cisco_nxos.yaml platforms/1.1.0/juniper_junos.yaml
+git add cmd/port49/platform.go cmd/port49/platform_test.go internal/platform/adapter_test.go internal/platform/classes_test.go internal/platform/config_test.go internal/platform/dialect.go internal/platform/dialect_test.go internal/platform/set.go platforms/1.1.0/arista_eos.yaml platforms/1.1.0/cisco_iosxe.yaml platforms/1.1.0/cisco_nxos.yaml platforms/1.1.0/juniper_junos.yaml
 git commit -m "$(cat <<'EOF'
-feat: platform set 1.1.0 projects Junos, from what L9, L12 and L23 measured
+feat: platform set 1.1.0 projects juniper_junos
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -6084,7 +8761,7 @@ EOF
 
 ---
 
-### Task 14: NX-OS's vsh.bin record under admin is system, on its task_id only (L25; only if measured)
+### Task 15: NX-OS's vsh.bin record under admin is system, on its task_id only (L25; only if measured)
 
 **Files:**
 - Modify: `internal/platform/platform.go` (`SystemTask`, `systemTasks`, `SystemTasks`)
@@ -6103,12 +8780,18 @@ EOF
   - `func (h *Handler) WithSystemTasks(t map[string][]platform.SystemTask) *Handler`;
   - `isSystemUser(platformName, user, taskID string) bool`.
 
-**Run this task only if L25's note shows an accounting record under `admin` with a task_id of the
-form `vsh.bin.<digits>`.** Otherwise skip it: leave L25 open, and say so in the PR body under
-"Carried". If the note's task_id has another exact shape, write the pattern that shape needs in
-`systemTasks` and in the test, anchored at both ends, and change nothing else.
+**Run this task only if L25's note shows an SSH accounting record under `admin` with a task_id of
+the form `vsh.bin.<digits>`, and the NX-API session's task_ids carry no `vsh.bin`** (pre-flight
+M7). If the NX-API session carried one, the task_id does not tell the device's machinery from a
+person's API call, and keying a system user on it would hide a person: do not apply this task; in
+§5.8, after "One production observation remains **unmeasured in this lab**", add "L25 found the
+same task_id on an NX-API session as `admin` (`tests/lab/results/L25-cisco_nxos.md`), so it is no
+discriminator and no system user is keyed on it", and commit that alone as `docs: L25's task_id is
+no discriminator on NX-OS`. If no record came, skip the task, leave L25 open, and say so in the PR
+body under "Carried". If the note's task_id has another exact shape, write the pattern that shape
+needs in `systemTasks` and in the test, anchored at both ends, and change nothing else.
 
-The pair is keyed on the user and the task_id (Decided 14). It is not among `WireFactsDiffer`'s
+The pair is keyed on the user and the task_id (Decided 15). It is not among `WireFactsDiffer`'s
 facts. A `based_on:` variant does not get it and reads such a record `unattributed`, the safe
 direction, as a missing session discriminator does.
 
@@ -6173,10 +8856,10 @@ index 144280f..65af7bb 100644
 <!-- patch: docs/design/2026-08-23-policy-engine-spec.md -->
 ````diff
 diff --git a/docs/design/2026-08-23-policy-engine-spec.md b/docs/design/2026-08-23-policy-engine-spec.md
-index a0bfab1..353c0b4 100644
+index b63fcfe..28362a9 100644
 --- a/docs/design/2026-08-23-policy-engine-spec.md
 +++ b/docs/design/2026-08-23-policy-engine-spec.md
-@@ -2299,9 +2299,16 @@ for a session port49 was never asked to authenticate. Without the entry those th
+@@ -2308,9 +2308,16 @@ for a session port49 was never asked to authenticate. Without the entry those th
  behaviour is image-specific and unmeasured there. L17's narrower negative stands as written — under
  *that* run's accounting event list, with `enhanced-accounting` committed, every record named the
  logged-in operator (§15, L17) — and does not contradict this: it measured a different
@@ -6196,7 +8879,7 @@ index a0bfab1..353c0b4 100644
  
  `system` is reached only where `unattributed` would otherwise be — after `foreign` has already
  been decided, on a record that resolved to no context at all. A device acting on its own behalf
-@@ -2920,7 +2927,7 @@ attribute is complete in four lines:
+@@ -2931,7 +2938,7 @@ attribute is complete in four lines:
  | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
  | `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
  | `exec_commands` | the `cmd` values that mark an exec record rather than a per-command one; empty means "the exec record carries no `cmd` at all" (§5.8) | defaults per platform |
@@ -6205,7 +8888,7 @@ index a0bfab1..353c0b4 100644
  | `port_pattern` | expected `port` shape, used only for drift detection | optional |
  | `ceiling_levels` | the priv-lvl number each level stands for where the rendering sends no `priv-lvl` (NX-OS is sent a role and no level, L16), for the token's ceiling | if `privilege` sends no `priv-lvl` |
  | `strip_cr` / `shows_server_msg` | whether commands end in `<cr>` (§3 rule 1); whether the device displays a denial's `server_msg` (L2) | defaults from the generic adapter |
-@@ -5168,8 +5175,8 @@ Beyond those already listed in the design document's §14:
+@@ -5256,8 +5263,8 @@ Beyond those already listed in the design document's §14:
    `accounting_state` and moves neither the expiry nor `last_touched_at`.
  - **System users**: a record naming a username the platform's adapter declares a system user is
    attributed `system`, never `foreign` and never `unattributed`. `juniper_junos` declares `root`
@@ -6362,7 +9045,7 @@ Expected: every package `ok`, no `gofmt` output, both binaries built.
 ```bash
 git add cmd/port49d/main.go docs/design/2026-08-23-policy-engine-spec.md internal/daemon/acct/acct.go internal/daemon/acct/acct_test.go internal/platform/platform.go
 git commit -m "$(cat <<'EOF'
-feat: NX-OS's vsh.bin record under admin is system, on its task_id only (L25)
+feat: NX-OS admin is a system user on its vsh.bin task_id only
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -6372,7 +9055,7 @@ EOF
 
 ---
 
-### Task 15: A dropped accounting record is an account_gap in the log
+### Task 16: A dropped accounting record is an account_gap in the log
 
 **Files:**
 - Modify: `internal/decision/reasons.go` (`EventAccountGap`), `internal/decision/log.go` (`Gap`,
@@ -6384,7 +9067,7 @@ EOF
 **Interfaces:**
 - Consumes: the spool's existing drop points: `offerFailed`, the oversized-line and set-aside
   branches of `drainOnce`, and `deliverLine`'s unparseable line.
-- Produces, for Tasks 16 and 17:
+- Produces, for Tasks 17 and 18:
   - `decision.EventAccountGap = "account_gap"`;
   - `type decision.Gap struct{ Stage string; Records int; Since string }`, JSON keys `stage`,
     `records`, `since`;
@@ -6393,10 +9076,12 @@ EOF
 Spec §9 says reconciliation MUST be qualified by the accounting stream's health: spool drops,
 `ERROR` replies and unattributed counts. Two of those were metrics only, and a reader of the log
 could not see them. Now every drop is counted by stage, as before, and also held in memory. The
-drain writes one `account_gap` record per stage before the next records it forwards, and again at
-the end of the pass. A refused write keeps the count for the next pass. `offer_refused` is the
-stage an `ERROR` reply comes from. Two existing tests now see the gap record after the records they
-count, and are updated to expect it.
+drain writes one `account_gap` record per stage **before its pass's records for a drop held since
+the last pass** (an `offer_refused`), and **when the pass ends for a drop during it** (a line
+unparseable or set aside), after the records it sat among, `since` saying when it began: exactly
+what Task 1's §5.7 text says (pre-flight M6). A refused write keeps the count for the next pass.
+`offer_refused` is the stage an `ERROR` reply comes from. Two existing tests now see the gap record
+after the records they count, and are updated to expect it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -6424,7 +9109,7 @@ index a6323c6..0793875 100644
 <!-- patch: internal/daemon/acct/spool_test.go -->
 ````diff
 diff --git a/internal/daemon/acct/spool_test.go b/internal/daemon/acct/spool_test.go
-index d126bba..d56b52a 100644
+index d126bba..d73d0af 100644
 --- a/internal/daemon/acct/spool_test.go
 +++ b/internal/daemon/acct/spool_test.go
 @@ -433,10 +433,13 @@ func TestOversizedLineIsDroppedNotFatal(t *testing.T) {
@@ -6443,14 +9128,15 @@ index d126bba..d56b52a 100644
  	}
  	for _, w := range want {
  		if n := strings.Count(out.String(), w); n != 1 {
-@@ -823,3 +826,34 @@ func TestTheDrainRedactsARecordSpooledBeforeTheUpgrade(t *testing.T) {
+@@ -823,3 +826,35 @@ func TestTheDrainRedactsARecordSpooledBeforeTheUpgrade(t *testing.T) {
  		t.Fatalf("%s", out.String())
  	}
  }
 +
 +// A record the spool drops is written to the log as an account_gap record,
-+// by stage, before the records after it: reconciliation reads the log, and
-+// must know it has a hole before it says a device did not ask (spec §9).
++// by stage: one the drain drops when the pass ends, after the records it sat
++// among, and once. Reconciliation reads the log, and must know it has a hole
++// before it says a device did not ask (spec §9).
 +func TestADropIsAGapInTheLog(t *testing.T) {
 +	path := filepath.Join(t.TempDir(), "overflow.jsonl")
 +	good, err := (decision.Record{Event: decision.EventAccount, TaskID: "after"}).MarshalJSON()
@@ -6491,7 +9177,7 @@ Expected: FAIL: `TestAnUnencodableRecordIsSetAside: delivered ["a" "c"], want a 
 <!-- patch: internal/daemon/acct/spool.go -->
 ````diff
 diff --git a/internal/daemon/acct/spool.go b/internal/daemon/acct/spool.go
-index d04e921..04fc2bc 100644
+index d04e921..5f8d399 100644
 --- a/internal/daemon/acct/spool.go
 +++ b/internal/daemon/acct/spool.go
 @@ -132,6 +132,14 @@ type Spool struct {
@@ -6518,12 +9204,15 @@ index d04e921..04fc2bc 100644
  	s.logThrottled(&s.lastOfferLog,
  		"acct: spool %s failed on %s, accounting records are being refused: %v", stage, s.path, err)
  }
-@@ -503,6 +511,13 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
+@@ -503,6 +511,16 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
  	if s.forceFail { // test-only hook; see spool_test.go
  		return false, 0
  	}
-+	// A hole reported before the records after it, so a reader of the log
-+	// meets the gap where it happened (spec §5.7, §9).
++	// A drop held since the last pass, an offer refused, is written before
++	// this pass's records, so a reader meets the gap before what followed it.
++	// A drop during the pass, a record unparseable or set aside, is written
++	// when the pass ends, after the records it sat among; its `since` says
++	// when it began (spec §5.7, §9).
 +	if !s.flushGaps() {
 +		s.sinkRefused = true
 +		return false, 0
@@ -6532,7 +9221,7 @@ index d04e921..04fc2bc 100644
  
  	draining := s.path + ".draining"
  	s.sinkRefused = false
-@@ -572,7 +587,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
+@@ -572,7 +590,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
  			switch {
  			case oversized:
  				log.Printf("acct: dropping oversized spool line (over %d bytes)", maxLineBytes)
@@ -6541,7 +9230,7 @@ index d04e921..04fc2bc 100644
  			default:
  				err := s.deliverLine(bytes.TrimRight(line, "\n"))
  				if errors.Is(err, decision.ErrUnencodable) {
-@@ -582,7 +597,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
+@@ -582,7 +600,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
  					if err = s.setAside(line); err == nil {
  						log.Printf("acct: an accounting record the decision log cannot encode was set aside in %s",
  							s.path+".unencodable")
@@ -6550,7 +9239,7 @@ index d04e921..04fc2bc 100644
  					}
  				}
  				if err != nil {
-@@ -712,7 +727,7 @@ func (s *Spool) deliverLine(line []byte) error {
+@@ -712,7 +730,7 @@ func (s *Spool) deliverLine(line []byte) error {
  	var r decision.Record
  	if err := r.UnmarshalJSON(line); err != nil {
  		log.Printf("acct: dropping spool line that failed to unmarshal: %v", err)
@@ -6559,7 +9248,7 @@ index d04e921..04fc2bc 100644
  		return nil
  	}
  	// Offer took the record already redacted, but a spool file an earlier
-@@ -794,3 +809,43 @@ func (f *failAfterReader) Read(p []byte) (int, error) {
+@@ -794,3 +812,43 @@ func (f *failAfterReader) Read(p []byte) (int, error) {
  	f.n -= int64(n)
  	return n, err
  }
@@ -6644,10 +9333,10 @@ index 3ffadb4..3ef3da8 100644
 <!-- patch: internal/decision/reasons.go -->
 ````diff
 diff --git a/internal/decision/reasons.go b/internal/decision/reasons.go
-index e4aa1a1..33a8699 100644
+index 7979f51..5a63b41 100644
 --- a/internal/decision/reasons.go
 +++ b/internal/decision/reasons.go
-@@ -69,6 +69,10 @@ const (
+@@ -75,6 +75,10 @@ const (
  	EventBlob             = "blob"
  	EventAccount          = "account"
  	EventUnvalidated      = "unvalidated" // not a decision; header-only diagnosis record (spec §10)
@@ -6670,7 +9359,7 @@ Expected: every package `ok`, no `gofmt` output, both binaries built.
 ```bash
 git add internal/daemon/acct/sink_test.go internal/daemon/acct/spool.go internal/daemon/acct/spool_test.go internal/decision/log.go internal/decision/reasons.go
 git commit -m "$(cat <<'EOF'
-feat: a dropped accounting record is an account_gap in the log
+feat: a dropped accounting record is an account_gap record in the decision log
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -6680,16 +9369,16 @@ EOF
 
 ---
 
-### Task 16: Infer each device's configured capability from the decision log (spec §9)
+### Task 17: Infer each device's configured capability from the decision log (spec §9)
 
 **Files:**
 - Create: `internal/capability/capability.go`
 - Test: `internal/capability/capability_test.go`
 
 **Interfaces:**
-- Consumes: `decision.Record` and its events; Task 15's `EventAccountGap`, `Gap`;
+- Consumes: `decision.Record` and its events; Task 16's `EventAccountGap`, `Gap`;
   `platform.IsExecRecord`.
-- Produces, for Task 17:
+- Produces, for Task 18:
   - `const Session, Commands, ConfigCommands`;
   - `type Device struct{ Name, Platform string; Supports []string; Quarantine string }`;
   - `type Options struct{ From, To time.Time; ConfigEntries int; ConfigSilent float64 }`;
@@ -6703,17 +9392,18 @@ Spec §9's three observations, read off records in log order.
 - **The matrix.** `session` and `commands` come from the authorization events.
   `config_commands` comes from an authorization request that followed a permitted `configure …`
   in the same context before its exec STOP.
-- **Warnings.**
-  - `never seen`: an admitted device with no record.
+- **Warnings**, each a contradiction between what a device declares and what it did:
   - `config-commands probably off`: on a `commands` platform, at least `ConfigEntries` entries
     (default 5), at least `ConfigSilent` (0.8) of them followed by no request.
   - `N commands in accounting had no corresponding authorization request`: resolved command
     accounting whose text holds no authorized command of its context.
-- **Notes.** A capability observed that the adapter does not declare. It is a lab measurement
-  waiting to be made, never a fault.
+- **Notes**, which are no fault: a capability observed that the adapter does not declare, a lab
+  measurement waiting to be made; and `never seen`, an admitted device with no record in the
+  window (pre-flight I13). In a day's window every device nobody logged into is one, and a job
+  that pages on them is one nobody reads.
 - **Gaps.** The window's `account_gap` records.
 
-The join is text containment, lower-cased with `<cr>` dropped (Decided 13), and it runs only on
+The join is text containment, lower-cased with `<cr>` dropped (Decided 14), and it runs only on
 platforms that declare `commands`. A session-only platform decides every command itself by design.
 
 - [ ] **Step 1: Write the failing tests**
@@ -6722,10 +9412,10 @@ platforms that declare `commands`. A session-only platform decides every command
 ````diff
 diff --git a/internal/capability/capability_test.go b/internal/capability/capability_test.go
 new file mode 100644
-index 0000000..8fa34cb
+index 0000000..caf9597
 --- /dev/null
 +++ b/internal/capability/capability_test.go
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,124 @@
 +package capability
 +
 +import (
@@ -6801,7 +9491,8 @@ index 0000000..8fa34cb
 +		"show version"}) || r.Unattributed != 1 || len(r.Warnings) != 1 {
 +		t.Errorf("leaf-04: %+v", r)
 +	}
-+	if r := rep.Rows[2]; !reflect.DeepEqual(r.Warnings, []string{"never seen"}) {
++	if r := rep.Rows[2]; len(r.Warnings) != 0 || !reflect.DeepEqual(r.Notes,
++		[]string{"never seen: no record in the window, so nothing is inferred"}) {
 +		t.Errorf("ntp-01: %+v", r)
 +	}
 +	if r := rep.Rows[3]; len(r.Warnings) != 0 {
@@ -6863,10 +9554,10 @@ Expected: FAIL, build failed: `undefined: Session`, `undefined: Device`, `undefi
 ````diff
 diff --git a/internal/capability/capability.go b/internal/capability/capability.go
 new file mode 100644
-index 0000000..a2df8a3
+index 0000000..74a110a
 --- /dev/null
 +++ b/internal/capability/capability.go
-@@ -0,0 +1,264 @@
+@@ -0,0 +1,266 @@
 +// Package capability infers what each device is configured to authorize from
 +// the decision log it already writes (spec §9): a device capable of command
 +// authorization and not configured for it looks healthy while its commands
@@ -6923,7 +9614,9 @@ index 0000000..a2df8a3
 +	Warnings []string
 +	// Notes are what the matrix says that is no fault: a capability observed
 +	// that the adapter does not declare is a lab measurement waiting to be
-+	// made, never one to assert by hand (spec §9, "Principle").
++	// made, never one to assert by hand (spec §9, "Principle"); a device never
++	// seen in the window is one nobody logged into, which pages nobody (plan
++	// 5b pre-flight I13: "once that happens nobody reads the report again").
 +	Notes []string
 +	// Unauthorized counts command accounting records, in contexts port49
 +	// authenticated, that no authorization request of the same context
@@ -7051,6 +9744,9 @@ index 0000000..a2df8a3
 +			}
 +		}
 +		row.Warnings = warnings(row, opt)
++		if row.Device.Quarantine == "" && len(row.Observed) == 0 {
++			row.Notes = append(row.Notes, "never seen: no record in the window, so nothing is inferred")
++		}
 +		for _, c := range row.Observed {
 +			if !slices.Contains(d.Supports, c) {
 +				row.Notes = append(row.Notes, c+" observed, and the adapter does not declare it")
@@ -7064,9 +9760,6 @@ index 0000000..a2df8a3
 +func warnings(row Row, opt Options) []string {
 +	var out []string
 +	d := row.Device
-+	if d.Quarantine == "" && len(row.Observed) == 0 {
-+		out = append(out, "never seen")
-+	}
 +	if slices.Contains(d.Supports, Commands) && row.ConfigEntered >= opt.ConfigEntries &&
 +		float64(row.ConfigSilent) >= opt.ConfigSilent*float64(row.ConfigEntered) {
 +		out = append(out, fmt.Sprintf("config-commands probably off: %d of %d configuration entries saw no "+
@@ -7143,7 +9836,7 @@ Expected: every package `ok`, no `gofmt` output, both binaries built.
 ```bash
 git add internal/capability/capability.go internal/capability/capability_test.go
 git commit -m "$(cat <<'EOF'
-feat: infer each device's configured capability from the decision log (spec §9)
+feat: infer each device's capabilities and reconcile accounting from the decision log
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -7153,7 +9846,7 @@ EOF
 
 ---
 
-### Task 17: port49 devices capabilities, and CI names rules a platform never enforces (spec §9)
+### Task 18: port49 devices capabilities, and CI names rules a platform never enforces (spec §9)
 
 **Files:**
 - Create: `cmd/port49/capabilities.go`
@@ -7163,7 +9856,7 @@ EOF
   `internal/policy/spec11_test.go`
 
 **Interfaces:**
-- Consumes: Task 16's `capability.Infer` and its types; `policyFiles`, `redactOutput`;
+- Consumes: Task 17's `capability.Infer` and its types; `policyFiles`, `redactOutput`;
   `(*Policy).Quarantined`, `Dialect`, `Devices`, `Redactions`.
 - Produces:
   - `port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-`;
@@ -7173,12 +9866,14 @@ EOF
     time.Time) []Finding`.
 
 The command prints spec §9's matrix with a header line naming the window and the accounting
-stream's health, then one `⚠ UNAUTHORIZED TIER — <device>` block per device with its examples and
-its accounting health. With a gap in the window, the block reads `? POSSIBLY AN UNAUTHORIZED
-TIER` and does not set the exit code. The command exits 1 on a finding a cron job should page on,
-0 otherwise, and 2 on a usage error. A log line that does not parse is counted, never quoted, and
-everything printed passes through the policy's redaction. `--since` is measured back from the
-newest record, never from the wall clock, so a replayed log reports the same thing on any day.
+stream's health, each row's warnings (`⚠`) and notes (`note:`), then one `⚠ UNAUTHORIZED TIER —
+<device>` block per device with its examples and its accounting health. With a gap in the window,
+the block reads `? POSSIBLY AN UNAUTHORIZED TIER` and does not set the exit code. The command exits
+1 on a warning, a contradiction a cron job should page on, 0 otherwise, a device never seen
+included (pre-flight I13), and 2 on a usage error. A log line that does not parse is counted,
+never quoted, and everything printed passes through the policy's redaction. `--since` is measured
+back from the newest record, never from the wall clock, so a replayed log reports the same thing on
+any day.
 
 CI's half: a subject whose roles carry command rules on a platform that neither authorizes
 commands nor projects them is told the rules decide nothing there. That covers Junos under 1.0.0,
@@ -7190,10 +9885,10 @@ and spec §11's example pins no set, so its expected findings gain four.
 ````diff
 diff --git a/cmd/port49/capabilities_test.go b/cmd/port49/capabilities_test.go
 new file mode 100644
-index 0000000..e5670c1
+index 0000000..2209704
 --- /dev/null
 +++ b/cmd/port49/capabilities_test.go
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,63 @@
 +package main
 +
 +import (
@@ -7237,16 +9932,36 @@ index 0000000..e5670c1
 +		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 +	}
 +}
++
++// A device never seen in the window is a note, not a page: exit 0 (I13).
++func TestANeverSeenDeviceIsANote(t *testing.T) {
++	pol, inv := policyFixture(t)
++	if err := os.WriteFile(inv, []byte(strings.Replace(string(readFile(t, inv)), "devices:\n",
++		"devices:\n  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.2]}\n", 1)), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	log := filepath.Join(t.TempDir(), "decisions.jsonl")
++	if err := os.WriteFile(log, []byte(`{"ts":"2026-09-24T12:00:01.000Z","event":"authorize_session","verdict":"permit",`+
++		`"reason":"context_matched","device":{"nas":"10.0.0.1","name":"leaf-01","platform":"arista_eos"},`+
++		`"session":{"ctx_id":"c1","port":"vty4","rem_addr":"","privilege":15}}`+"\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	var out, errb bytes.Buffer
++	code := run([]string{"devices", "capabilities", "--policy", pol, "--inventory", inv, log}, &out, &errb)
++	if code != 0 || !strings.Contains(out.String(), "note: never seen") {
++		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
++	}
++}
 ````
 
 <!-- patch: internal/policy/projection_test.go -->
 ````diff
 diff --git a/internal/policy/projection_test.go b/internal/policy/projection_test.go
-index 52b0336..fb53773 100644
+index 498595f..3d45508 100644
 --- a/internal/policy/projection_test.go
 +++ b/internal/policy/projection_test.go
-@@ -210,3 +210,23 @@ func TestTheDiffReportsAProjectionChange(t *testing.T) {
- 		t.Error("a projected reply's change is a raise until a reply: test asserts it")
+@@ -372,3 +372,23 @@ func TestTheDiffRefusesAFailClosedReply(t *testing.T) {
+ 		t.Fatalf("%+v", d.ProjectionRefusals)
  	}
  }
 +
@@ -7297,7 +10012,8 @@ index def0084..7df6123 100644
 
 Run: `go test ./internal/policy/ ./cmd/port49/`
 Expected: FAIL, build failed: `undefined: FindingUnenforcedRules`; and `--- FAIL:
-TestDevicesCapabilities: code 2` (usage: the command does not exist yet).
+TestDevicesCapabilities: code 2` and `--- FAIL: TestANeverSeenDeviceIsANote: code 2` (usage: the
+command does not exist yet).
 
 - [ ] **Step 3: Add the command and the finding**
 
@@ -7305,10 +10021,10 @@ TestDevicesCapabilities: code 2` (usage: the command does not exist yet).
 ````diff
 diff --git a/cmd/port49/capabilities.go b/cmd/port49/capabilities.go
 new file mode 100644
-index 0000000..7c5eab6
+index 0000000..2450acd
 --- /dev/null
 +++ b/cmd/port49/capabilities.go
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,187 @@
 +package main
 +
 +import (
@@ -7331,8 +10047,12 @@ index 0000000..7c5eab6
 +// it asked, and each device whose accounting holds commands no authorization
 +// request accounts for. It reads the log a daemon wrote; it never contacts a
 +// device, and nobody asserts anything by hand. It exits 1 on a finding a
-+// cron job should page on: a device never seen, config-commands probably off,
-+// or an unauthorized tier in a window whose accounting stream is whole.
++// cron job should page on, a contradiction between what a device declares and
++// what it did: config-commands probably off, or an unauthorized tier in a
++// window whose accounting stream is whole. A device never seen in the window
++// is a note and exits 0: in a day's window every device nobody logged into
++// is one, and a job that pages on them is a job nobody reads (spec §9; plan 5b
++// pre-flight I13).
 +func devicesCapabilities(args []string, stdout, stderr io.Writer) int {
 +	fs := flag.NewFlagSet("port49 devices capabilities", flag.ContinueOnError)
 +	fs.SetOutput(stderr)
@@ -7497,13 +10217,13 @@ index 0000000..7c5eab6
 <!-- patch: cmd/port49/main.go -->
 ````diff
 diff --git a/cmd/port49/main.go b/cmd/port49/main.go
-index 30dcc08..aa00e0c 100644
+index 0bf8b27..9fa5cef 100644
 --- a/cmd/port49/main.go
 +++ b/cmd/port49/main.go
 @@ -45,6 +45,7 @@ const usage = `usage:
                           --classes --config PORT49D_YAML PLATFORM)
    port49 platform upgrade --policy FILE --inventory FILE --to VERSION [--write]
-   port49 devices check-config --policy FILE --inventory FILE --device NAME CONFIGFILE
+   port49 devices check-config --policy FILE --inventory FILE --device NAME [--config PORT49D_YAML] CONFIGFILE
 +  port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
  `
  
@@ -7523,13 +10243,13 @@ index 30dcc08..aa00e0c 100644
 <!-- patch: internal/policy/lint.go -->
 ````diff
 diff --git a/internal/policy/lint.go b/internal/policy/lint.go
-index cbaaa05..4ccd79d 100644
+index ad27049..9eeb4f3 100644
 --- a/internal/policy/lint.go
 +++ b/internal/policy/lint.go
-@@ -50,6 +50,10 @@ const (
- 	// which quarantines the device, with the class line that would carry it
- 	// on the device instead (spec §8).
- 	FindingProjectionOverflow = "projection_overflow"
+@@ -58,6 +58,10 @@ const (
+ 	// theirs (spec §13 decision 26). It fails `policy test`, as spec §8's
+ 	// "CI MUST refuse the policy" requires.
+ 	FindingProjectionRefused = "projection_refused"
 +	// FindingUnenforcedRules is a subject's command rules on a platform that
 +	// neither asks port49 about a command nor has them projected into its
 +	// session reply: they decide nothing there (spec §9, "CI").
@@ -7537,7 +10257,7 @@ index cbaaa05..4ccd79d 100644
  )
  
  // Lint computes the findings at now, ordered by kind and then message so two
-@@ -151,6 +155,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
+@@ -159,6 +163,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
  	}
  	out = append(out, p.redundantOverrides()...)
  	out = append(out, p.Projections(now)...)
@@ -7545,7 +10265,7 @@ index cbaaa05..4ccd79d 100644
  	out = append(out, p.intersections(now)...)
  	if len(p.tests) == 0 {
  		add(FindingNoTests, "the policy has no tests: nothing in it acknowledges a shadowed deny, an expansion or "+
-@@ -608,3 +613,35 @@ func projectionMessage(subject, platformName string, pr projection.Result, patte
+@@ -676,3 +681,35 @@ func projectionMessage(subject, platformName string, pr projection.Result, patte
  	}
  	return msg
  }
@@ -7598,7 +10318,7 @@ tests/lab/logs/*.jsonl`. Read the matrix. The Junos devices show `session` obser
 ```bash
 git add cmd/port49/capabilities.go cmd/port49/capabilities_test.go cmd/port49/main.go internal/policy/lint.go internal/policy/projection_test.go internal/policy/spec11_test.go
 git commit -m "$(cat <<'EOF'
-feat: port49 devices capabilities, and CI names rules a platform never enforces (spec §9)
+feat: port49 devices capabilities, and CI reports rules no platform enforces
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -7608,7 +10328,7 @@ EOF
 
 ---
 
-### Task 18: (lab, on beehive) The projection's differential test
+### Task 19: (lab, on beehive) The projection's differential test, typed as an operator might type it
 
 **Files:**
 - Create: `tests/lab/projection_test.go`
@@ -7616,28 +10336,41 @@ EOF
   `L12-projection-juniper_vsrx.md`; evidence `projection-juniper_*.pcap`
 
 **Interfaces:**
-- Consumes: Task 2's `junosProbe`, `junosRun`, `junosConfigureAdmin`, `junosPer`; Task 12's
-  `platform.ReferenceClasses`; Task 13's set 1.1.0; Task 8's `projection.JunosFacts`,
-  `Result.Device`; `policy.Load`, `Decide`, `ResolveSubject`, `Quarantined`; the slice's `sliceUser`,
-  `slicePrincipal`, `sliceBrokerURL`, `slicePKIDir`, `sliceToken`, `stopSliceAgent`,
-  `tests/lab/slice/broker.yaml`.
-- Produces: the notes Task 19 closes L9, L10 (Junos) and L12 on, and sets `verified` by.
+- Consumes: Task 2's `junosProbe`, `junosRun`, `junosConfigureAdmin`, `junosPer`, `junosHost`;
+  Task 13's `platform.ReferenceClasses`; Task 14's set 1.1.0; Task 8's `projection.JunosFacts`,
+  `Result.Device`, `Result.FailClosed`; `policy.Load`, `Decide`, `ResolveSubject`, `Quarantined`; the
+  slice's `sliceUser`, `slicePrincipal`, `sliceBrokerURL`, `slicePKIDir`, `sliceToken`,
+  `stopSliceAgent`, `tests/lab/slice/broker.yaml`.
+- Produces: the notes Task 20 closes L9, L10 (Junos) and L12 on, and sets `verified` by.
 
 This is spec §8's "Differential testing is required". The test applies the reference
 configuration `ReferenceClasses` renders for 1.1.0, with a 12h max_session_age, over the
-break-glass CLI, and restores the lab's own afterwards: the `remote` user on `p49-readonly`, and
-no `strict-authorization`. For each of nine rule shapes it writes a policy pinning 1.1.0 and
-restarts port49d with the slice's broker on it. It then runs `port49 login` and `port49 token
-<node>`, logs in with the token, reads `show cli authorization`, and types thirteen probes under
-`junosPer`. Each probe's outcome is compared with `policy.Decide` on the command as the device
-expands it:
-- the device running a command port49 denies fails the test, as fail-open;
-- the device refusing one port49 permits must be what `Result.Device` predicted (narrower by
-  design), or it fails as a model mismatch.
+break-glass CLI, and restores the lab's own afterwards: the `remote` user (uid 2001) in
+`p49-readonly` and that class's `view view-configuration`, as the startup configuration writes
+them, every other class and user the reference added deleted, and no `strict-authorization`. For
+each of eleven rule shapes it writes a policy pinning 1.1.0, restarts port49d with the slice's
+broker on it, runs `port49 login` and `port49 token <node>`, logs in with the token, reads `show
+cli authorization` (a miss fails the test), and types the probes under `junosPer`.
 
-A shape the generator refuses must be quarantined, and `port49 token` must be refused for the
-device. Shapes that need a deny render only where `JunosFacts.DenyMatchesExpanded` is true, and
-are expected refused otherwise. `SHOW VERSION` and `sh ver` are asked of port49 as `show version`.
+**The probes type what the projection could let past** (pre-flight I15, M4): each denied command
+in full, abbreviated (`sh int ter`, `sh conf sys host-name`), in upper case and piped (`| no-more`,
+`| display set`); the commands a class with no bits runs (`set cli screen-width 200`, `show cli`,
+`file list /var/tmp`); `request system reboot` and `restart routing` by completion; and
+`configure`, typed last, left at once if it entered configuration mode. A `show configuration`
+probe counts as run only where it printed `host-name srx1`, so a filtered, empty output reads as
+refused. The shapes include an exact deny (`show interfaces terse` under `show **`) and an admin
+with a deny.
+
+Each probe's outcome is compared with `policy.Decide` on the command as the device expands it,
+its pipeline stripped:
+- the device running a command port49 denies fails the test, as fail-open;
+- the device running a command the projection's model says it refuses fails the test too, even
+  where port49 permits it: the proof rests on the model holding everything the device runs;
+- the device refusing one the model says it runs is narrower, which fails closed, and is recorded.
+
+Which shape each composition renders to is the generator's, from the facts the binary ships, and
+the note records it with any fail-closed reason. The refused shape must get the fail-closed reply,
+and no shape may quarantine the device (decision 26).
 
 - [ ] **Step 1: Add the test**
 
@@ -7645,10 +10378,10 @@ are expected refused otherwise. `SHOW VERSION` and `sh ver` are asked of port49 
 ````diff
 diff --git a/tests/lab/projection_test.go b/tests/lab/projection_test.go
 new file mode 100644
-index 0000000..aa78bb8
+index 0000000..70aacec
 --- /dev/null
 +++ b/tests/lab/projection_test.go
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,318 @@
 +//go:build lab
 +
 +package lab
@@ -7677,53 +10410,78 @@ index 0000000..aa78bb8
 +// port49's own decision on the command as the device expands it. The device
 +// running a command port49 denies fails the test; the device refusing one
 +// port49 permits must be what the projection itself predicts (a permit beyond
-+// the level's bits, say), or it fails too. A shape the generator refuses must
-+// quarantine the device: the login is refused and nothing is sent.
++// the level's bits, say), or it fails too. A shape the generator cannot carry
++// gets that subject the fail-closed reply (decision 26): the session opens,
++// and the device runs no more than the allows the generator proved. Nothing
++// quarantines the device.
 +//
-+// Every command typed has junosPer's deadline; a prompt that does not come
-+// back is not observed, and fails.
++// The probes type what the projection could let past: each denied command
++// abbreviated, in upper case and piped; the commands a class with no bits
++// runs; and configuration mode (plan 5b pre-flight I15). Every command typed
++// has junosPer's deadline; a prompt that does not come back is not observed,
++// and fails.
 +
-+// projectionProbe is a command as typed and as the device expands it: port49
-+// is asked about the second, since a session-only device decides on it.
++// projectionProbe is a command as typed and as the device expands it, without
++// its pipeline: port49 is asked about the second, since a session-only device
++// decides on it and the engine strips a pipeline before matching.
 +type projectionProbe struct {
 +	junosProbe
 +	canonical string
 +}
 +
++const hostEvidence = "host-name " + junosHost
++
 +var projectionProbes = []projectionProbe{
 +	{junosProbe{cmd: "show version"}, "show version"},
 +	{junosProbe{cmd: "show system uptime"}, "show system uptime"},
 +	{junosProbe{cmd: "show interfaces terse"}, "show interfaces terse"},
++	{junosProbe{cmd: "sh int ter"}, "show interfaces terse"},
++	{junosProbe{cmd: "SHOW INTERFACES TERSE"}, "show interfaces terse"},
++	{junosProbe{cmd: "show interfaces terse | no-more"}, "show interfaces terse"},
 +	{junosProbe{cmd: "show interfaces fxp0 terse"}, "show interfaces fxp0 terse"},
 +	{junosProbe{cmd: "show interfaces lo0 terse"}, "show interfaces lo0 terse"},
-+	{junosProbe{cmd: "show configuration system host-name"}, "show configuration system host-name"},
++	{junosProbe{cmd: "show configuration system host-name", evidence: hostEvidence}, "show configuration system host-name"},
++	{junosProbe{cmd: "sh conf sys host-name", evidence: hostEvidence}, "show configuration system host-name"},
++	{junosProbe{cmd: "SHOW CONFIGURATION SYSTEM HOST-NAME", evidence: hostEvidence}, "show configuration system host-name"},
++	{junosProbe{cmd: "show configuration system host-name | display set", evidence: hostEvidence},
++		"show configuration system host-name"},
 +	{junosProbe{cmd: "show route summary"}, "show route summary"},
 +	{junosProbe{cmd: "clear interfaces statistics fxp0"}, "clear interfaces statistics fxp0"},
 +	{junosProbe{cmd: "ping 127.0.0.1 count 1 rapid"}, "ping 127.0.0.1 count 1 rapid"},
 +	{junosProbe{cmd: "sh ver"}, "show version"},
 +	{junosProbe{cmd: "SHOW VERSION"}, "show version"},
++	// What a class with no bits runs (the adapter's baseline).
++	{junosProbe{cmd: "set cli screen-width 200"}, "set cli screen-width 200"},
++	{junosProbe{cmd: "show cli"}, "show cli"},
++	{junosProbe{cmd: "file list /var/tmp"}, "file list /var/tmp"},
 +	{junosProbe{cmd: "request system reboot", complete: true}, "request system reboot"},
 +	{junosProbe{cmd: "restart routing", complete: true}, "restart routing"},
++	// Configuration mode, typed last: a statement there is governed by the
++	// class's configuration permissions, which no command regex reaches.
++	{junosProbe{cmd: "configure"}, "configure"},
 +}
 +
 +// projectionShapes are the rule shapes the generator produces, and the one
-+// it refuses. Each is the roles block of a policy pinning set 1.1.0. A shape
-+// that sends a deny beneath a bit renders only where JunosFacts says a deny
-+// reads the expanded command (L9); elsewhere it is refused like the refused
-+// shape, and quarantines the device.
++// no measurement lets it carry. Each is the roles block of a policy pinning
++// set 1.1.0. Which shape a composition renders to is the generator's, from
++// the facts the binary ships, and the note records it; the test asserts only
++// that the refused shape gets the fail-closed reply, since nothing measured
++// can carry it.
 +var projectionShapes = []struct {
-+	name, roles        string
-+	sendsDeny, refused bool
++	name, roles string
++	failClosed  bool
 +}{
-+	{"readonly", `  - {name: r, privilege: readonly, permit: ["show **"]}`, false, false},
-+	{"readonly, a deny aligned with a bit", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}`, true, false},
-+	{"a permit beneath a deny", `  - {name: r, privilege: readonly, permit: ["show **", "show configuration system host-name"], deny: ["show configuration **"]}`, true, false},
-+	{"narrow", `  - {name: r, privilege: readonly, permit: ["show version", "show interfaces **"]}`, false, false},
-+	{"a class term", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show interfaces @management **"]}`, true, false},
-+	{"a permit beyond the bits", `  - {name: r, privilege: readonly, permit: ["show **", "clear interfaces statistics **"]}`, false, false},
-+	{"operator", `  - {name: r, privilege: operator, permit: ["show **", "clear **", "ping **"]}`, false, false},
-+	{"admin", `  - {name: r, privilege: admin, permit: ["**"]}`, false, false},
-+	{"the refused shape", `  - {name: r, privilege: readonly, permit: ["show interfaces **"], deny: ["show interfaces terse"]}`, false, true},
++	{"readonly", `  - {name: r, privilege: readonly, permit: ["show **"]}`, false},
++	{"readonly, a deny aligned with a bit", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}`, false},
++	{"a permit beneath a deny", `  - {name: r, privilege: readonly, permit: ["show **", "show configuration system host-name"], deny: ["show configuration **"]}`, false},
++	{"an exact deny", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show interfaces terse"]}`, false},
++	{"narrow", `  - {name: r, privilege: readonly, permit: ["show version", "show interfaces **"]}`, false},
++	{"a class term", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show interfaces @management **"]}`, false},
++	{"a permit beyond the bits", `  - {name: r, privilege: readonly, permit: ["show **", "clear interfaces statistics **"]}`, false},
++	{"operator", `  - {name: r, privilege: operator, permit: ["show **", "clear **", "ping **"]}`, false},
++	{"admin", `  - {name: r, privilege: admin, permit: ["**"]}`, false},
++	{"admin with a deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["request system reboot **"]}`, false},
++	{"the refused shape", `  - {name: r, privilege: readonly, permit: ["show interfaces **", "show version"], deny: ["show interfaces terse"]}`, true},
 +}
 +
 +func TestProjectionDifferential(t *testing.T) {
@@ -7737,7 +10495,7 @@ index 0000000..aa78bb8
 +		}
 +		set, ok := adapter.Set("1.1.0")
 +		if !ok || !set["juniper_junos"].Projected() {
-+			t.Fatal("set 1.1.0 does not project juniper_junos (plan 5b, Task 13)")
++			t.Fatal("set 1.1.0 does not project juniper_junos (plan 5b, Task 14)")
 +		}
 +		reference, err := adapter.ReferenceClasses(set["juniper_junos"], 12*time.Hour)
 +		if err != nil {
@@ -7768,19 +10526,20 @@ index 0000000..aa78bb8
 +		fmt.Fprintf(&b, "\nThe binary's JunosFacts: %+v.\n", projection.JunosFacts)
 +		for _, shape := range projectionShapes {
 +			fmt.Fprintf(&b, "\n### %s\n\n", shape.name)
-+			refused := shape.refused || (shape.sendsDeny && !projection.JunosFacts.DenyMatchesExpanded)
-+			b.WriteString(l.projectionShape(t, port49, pki, inv.Devices, shape.name, shape.roles, refused))
++			b.WriteString(l.projectionShape(t, port49, pki, inv.Devices, shape.name, shape.roles, shape.failClosed))
 +		}
-+		l.result(t, "L12-projection", "Decision 22's projection, differentially: for each rule shape the generator "+
-+			"produces, what the device runs under the reply port49 renders, compared with port49's own decision on "+
-+			"the command as the device expands it — never more — and, for the refused shape, that the device is "+
-+			"quarantined (spec §8, \"Verification\"; §13 decision 22; §15 L9, L12).", b.String())
++		l.result(t, "L12-projection", "Decisions 22 and 26's projection, differentially: for each rule shape the "+
++			"generator produces, what the device runs under the reply port49 renders, typed as an operator might "+
++			"type it — abbreviated, in upper case, piped — compared with port49's own decision on the command as the "+
++			"device expands it: never more; and, for a composition the projection cannot carry, that the subject "+
++			"gets the fail-closed reply and the device is not quarantined (spec §8, \"Verification\"; §13 decisions "+
++			"22 and 26; §15 L9, L12).", b.String())
 +	})
 +}
 +
 +// projectionShape runs one shape and renders its section of the note.
 +func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admission.Device, name, roles string,
-+	refused bool) string {
++	failClosed bool) string {
 +	t.Helper()
 +	body := "platform_set: 1.1.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
 +		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
@@ -7822,24 +10581,17 @@ index 0000000..aa78bb8
 +	defer stopSliceAgent(t, string(out))
 +	var b strings.Builder
 +	if quarantined {
-+		tok := exec.Command(port49, "token", "--socket", sock, l.p.node)
-+		msg, err := tok.CombinedOutput()
-+		fmt.Fprintf(&b, "port49 quarantines %s under this policy (policy test names why). `port49 token` said: `%s`\n",
-+			l.p.node, oneLine(string(msg)))
-+		if err == nil {
-+			t.Errorf("%s: port49 minted a token for a quarantined device", name)
-+		}
-+		if !refused {
-+			t.Errorf("%s: this shape was expected to render, and port49 quarantined the device", name)
-+		}
-+		return b.String()
-+	}
-+	if refused {
-+		t.Errorf("%s: expected refused, and port49 rendered it", name)
++		// A projection never quarantines: a composition it cannot carry is
++		// that subject's fail-closed reply (decision 26).
++		t.Errorf("%s: port49 quarantined %s", name, l.p.node)
++		return "port49 quarantined the device, which a projection never does.\n"
 +	}
 +	res, err := pol.ResolveSubject("slice_operator", device, time.Now())
 +	if err != nil {
 +		t.Fatalf("%s: %v", name, err)
++	}
++	if failClosed && res.Projection.FailClosed == "" {
++		t.Errorf("%s: expected the fail-closed reply, and port49 rendered the %s shape", name, res.Projection.Shape)
 +	}
 +	tok := sliceToken(t, port49, sock, l.p.node)
 +	c, err := l.sshCLI(sliceUser, tok)
@@ -7856,9 +10608,17 @@ index 0000000..aa78bb8
 +	if err := junosPrepare(c); err != nil {
 +		t.Errorf("%s: set cli screen-length 0 not observed: %v", name, err)
 +	}
-+	auth, _ := c.sendExpect("show cli authorization", junosPer, junosOpPrompt)
-+	fmt.Fprintf(&b, "Reply `%s` (%s shape). `show cli authorization`:\n\n```\n%s\n```\n\n", strings.Join(res.Blob.Attributes,
-+		"`, `"), res.Projection.Shape, precReply(l16TrimEcho(auth, "show cli authorization")))
++	auth, err := c.sendExpect("show cli authorization", junosPer, junosOpPrompt)
++	if err != nil {
++		t.Errorf("%s: show cli authorization not observed within %s: %v", name, junosPer, err)
++		return "`show cli authorization` was not observed: " + oneLine(err.Error()) + "\n"
++	}
++	shape := res.Projection.Shape
++	if res.Projection.FailClosed != "" {
++		shape += ", " + res.Projection.FailClosed
++	}
++	fmt.Fprintf(&b, "Reply `%s` (%s). `show cli authorization`:\n\n```\n%s\n```\n\n", strings.Join(res.Blob.Attributes,
++		"`, `"), shape, precReply(l16TrimEcho(auth, "show cli authorization")))
 +	b.WriteString("| typed | port49 on | port49 | projection predicts | device | agrees |\n|---|---|---|---|---|---|\n")
 +	for _, p := range projectionProbes {
 +		devOut, err := l.junosProbe(c, p.junosProbe)
@@ -7868,20 +10628,31 @@ index 0000000..aa78bb8
 +			break
 +		}
 +		r := junosRun{outs: map[string]string{p.cmd: devOut}}
-+		ran := r.ran(p.cmd)
++		ran := r.runs(p.junosProbe)
 +		if p.complete {
 +			ran = r.completes(p.junosProbe)
++		}
++		if p.cmd == "configure" && strings.Contains(devOut, "configuration mode") {
++			ran = true
++			if _, err := c.sendExpect("exit configuration-mode", junosPer, junosOpPrompt); err != nil {
++				t.Errorf("%s: leaving configuration mode not observed within %s: %v", name, junosPer, err)
++			}
 +		}
 +		_, o, err := pol.Decide("slice_operator", "", device, p.canonical, time.Now())
 +		if err != nil {
 +			t.Fatalf("%s: %v", name, err)
 +		}
 +		predicts := res.Projection.Device(strings.Fields(p.canonical))
++		// The proof rests on the model holding every command the device runs:
++		// a command it runs and the model says it refuses is a model defect
++		// even where port49 permits it. The device refusing what the model
++		// says it runs is narrower, which fails closed, and is recorded.
 +		switch {
 +		case ran && !o.Permit:
 +			t.Errorf("%s: the device ran %q, which port49 denies (%s): the projection fails open", name, p.cmd, o.Reason)
-+		case ran != predicts && !(ran && o.Permit):
-+			t.Errorf("%s: the device %s %q, and the projection predicts it %s", name, verb(ran), p.cmd, verb(predicts))
++		case ran && !predicts:
++			t.Errorf("%s: the device ran %q, and the projection's model says it refuses it: the model the proof "+
++				"rests on is short of the device", name, p.cmd)
 +		}
 +		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s | %s |\n", p.cmd, p.canonical, verdictWord(o.Permit),
 +			verb(predicts), verb(ran), yesNo(ran == o.Permit))
@@ -7904,22 +10675,24 @@ index 0000000..aa78bb8
 +}
 +
 +// projectionRestore is what puts the lab's own configuration back after the
-+// reference configuration: the startup config's remote template and its
-+// p49-readonly class as they were, every other class and user the reference
++// reference configuration, which replaced the startup config's remote user
++// and p49-readonly class: both rebuilt as tests/lab/configs/vjunos-startup.conf
++// writes them, uid 2001 included, every other class and user the reference
 +// added deleted, and strict-authorization removed.
 +func projectionRestore(reference []string) []string {
 +	out := []string{"delete system tacplus-options strict-authorization",
-+		"set system login user remote class p49-readonly", "delete system login class p49-readonly idle-timeout"}
-+	seen := map[string]bool{}
++		"delete system login user remote", "set system login user remote uid 2001",
++		"set system login user remote class p49-readonly", "delete system login class p49-readonly",
++		"set system login class p49-readonly permissions view",
++		"set system login class p49-readonly permissions view-configuration"}
++	seen := map[string]bool{"userremote": true, "classp49-readonly": true}
 +	for _, line := range reference {
 +		f := strings.Fields(line)
 +		if len(f) < 5 || f[0] != "set" || f[1] != "system" || f[2] != "login" {
 +			continue
 +		}
-+		// The startup config's own remote user and p49-readonly class stay,
-+		// put back above; the p49-readonly template user is the reference's.
 +		kind, name := f[3], f[4]
-+		if (kind == "user" && name == "remote") || (kind == "class" && name == "p49-readonly") || seen[kind+name] {
++		if seen[kind+name] {
 +			continue
 +		}
 +		seen[kind+name] = true
@@ -7942,14 +10715,20 @@ PORT49_LAB_PLATFORMS=vjunos go test -tags lab ./tests/lab/ -run '^TestProjection
 echo $! > tests/lab/logs/projection-vjunos.pid
 ```
 
-Run it in the background as "Running the lab" shows, with the stall watchdog running for the whole run. Then the same with `PORT49_LAB_PLATFORMS=vsrx`. The test spends no seeded
-token, because the broker mints each one.
+Run it in the background as "Running the lab" shows, with the stall watchdog running for the whole run and cleaning up after a `go test` timeout. Then the same with `PORT49_LAB_PLATFORMS=vsrx`. The test spends no seeded
+token, because the broker mints each one. A timeout leaves the reference on the device; the
+watchdog's cleanup destroys the topology, which discards it.
 
-Expected: PASS on both images. A `the projection fails open` failure is a defect in this plan, or
-in a measurement a set value rests on. Stop, do not ship 1.1.0's projection, and report the probe,
-the reply and `show cli authorization`. CLAUDE.md rule 4 applies: the device is right. A `the
-projection predicts it runs` failure is a reach or fact the lab contradicts. Fix the set value
-(Task 13, Step 4), rerun Tasks 5–13's tests, and rerun this test.
+Expected: PASS on both images. Otherwise:
+- **`the projection fails open`**: a defect in this plan, or in a measurement a set value rests
+  on. Apply Task 14's branch A as its own commit, so 1.1.0 ships no projection, and report the
+  probe, the reply and `show cli authorization` to the controller. CLAUDE.md rule 4 applies: the
+  device is right.
+- **`the model the proof rests on is short of the device`**: a reach, baseline or carve-out the lab
+  contradicts. Widen the bit or the baseline (Task 14's branch D) or drop the carve-out (branch E),
+  rerun `make test`, and rerun this test.
+- **a shape quarantined, or the refused shape rendered**: a defect in Tasks 8 or 9. Stop and
+  report it.
 
 - [ ] **Step 4: Commit the test, the notes and the evidence**
 
@@ -7958,7 +10737,7 @@ make evidence
 git add tests/lab/projection_test.go tests/lab/results/L12-projection-juniper_*.md \
   tests/lab/evidence/projection-juniper_*.pcap
 git commit -m "$(cat <<'EOF'
-test: the projection's differential lab test (L9, L12)
+test: the projection's differential lab test, typed as an operator might type it (L9, L12)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -7968,7 +10747,7 @@ EOF
 
 ---
 
-### Task 19: Close what the lab measured, freeze set 1.1.0, and write plan 5b as built
+### Task 20: Close what the lab measured, freeze set 1.1.0, and write plan 5b as built
 
 **Files:**
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md` (§15 statuses and per-row paragraphs; §13
@@ -7978,29 +10757,33 @@ EOF
 - Modify: `docs/superpowers/plans/README.md` (plan 5b as built, the carried items)
 
 **Interfaces:**
-- Consumes: every note Tasks 2, 3, 4 and 18 wrote.
+- Consumes: every note Tasks 2, 3, 4 and 19 wrote; the Step 4 branches Task 14 took.
 - Produces: set 1.1.0, frozen (`TestEveryReleasedSetIsFrozen`), and the roadmap entry plan 6 reads.
 
 A row closes only where its lab test passed, and only where `tests/lab/results/L<N>-<platform>.md`
 exists with the platform, the image version, the observation and a capture pointer. The Status
 then reads `closed — measured <date>; tests/lab/results/...` (CLAUDE.md rule 3). A row with a
-platform still open stays open (rule 5).
+platform still open stays open.
+
+The patches below touch only lines no Task 14 branch moves: `j.Verified` goes right after `j :=
+out["juniper_junos"]`, above the comment every branch edits below (pre-flight I7), and the
+`adapter_test.go` block carries one line of context for that reason.
 
 - [ ] **Step 1: Close the rows the notes close**
 
 In §15's table:
 - **L9**: close it if both Junos notes read every fact, with no `not observed` cell. Cite
-  `L9-juniper_vjunos-router.md` and `L9-juniper_vsrx.md`.
+  `L9-juniper_vjunos-router.md` and `L9-juniper_vsrx.md`, and write the malformed-deny line (Task
+  14, branch I) into its paragraph.
 - **L12**: close it if `L12-*`, `L12-bits-*` and `L12-projection-*` all passed on both images.
-  Leave it open, naming the clause, if any clause is unmeasured. The `-regexps` precedence and the
-  numbered names are measured by Task 2 either way.
+  Leave it open, naming the clause, if any clause is unmeasured, or if Task 14 took branch A.
 - **L10**: add "Junos's spellings (`local-user-name`, `user-permissions`, `deny-commands`,
   `allow-commands`) measured by plan 5b (`L12-projection-juniper_*.md`)". Close it: every shipped
-  adapter's spellings are now measured.
+  adapter's spellings are now measured. Under branch A, cite `L12-juniper_*.md` instead.
 - **L23**: close it on `L23-arista_eos.md` and `L23-cisco_nxos.md`.
-- **L24**: close it on `L24-juniper_*.md`.
-- **L25**: close it on `L25-cisco_nxos.md` only if the record was measured. Otherwise leave it open
-  with "not reproduced in the lab (L25-cisco_nxos.md)".
+- **L24**: close it on `L24-juniper_*.md`, whichever way it measured (branch H).
+- **L25**: close it on `L25-cisco_nxos.md` only if the record was measured over SSH and the NX-API
+  line was measured. Otherwise leave it open with what the note found.
 
 Add one paragraph per closed row under "What has been measured so far", in the form the existing
 rows use: what was measured, on which images, and the one-line answer. Remove decision 22's
@@ -8009,14 +10792,14 @@ holds it open. Where a note contradicts the spec, fix the spec and cite the note
 
 - [ ] **Step 2: Mark the Junos adapter verified, and freeze 1.1.0**
 
-If `TestProjectionDifferential` passed on both images, apply all three patches. If it did not,
-1.1.0 is frozen without `verified`: apply only the `internal/platform/adapter_test.go` patch, then
-delete its `j.Verified = "containerlab"` line, and skip the other two.
+If `TestProjectionDifferential` passed on both images, apply all three blocks. If it did not, or
+Task 14 took branch A, apply only the `released` hunk of the `internal/platform/adapter_test.go`
+block (the `var released = ...` line) and skip the other two: 1.1.0 is frozen without `verified`.
 
 <!-- patch: platforms/1.1.0/juniper_junos.yaml -->
 ````diff
 diff --git a/platforms/1.1.0/juniper_junos.yaml b/platforms/1.1.0/juniper_junos.yaml
-index 4e42996..5366ade 100644
+index 717efa7..b0a3ea4 100644
 --- a/platforms/1.1.0/juniper_junos.yaml
 +++ b/platforms/1.1.0/juniper_junos.yaml
 @@ -3,6 +3,10 @@
@@ -8032,10 +10815,27 @@ index 4e42996..5366ade 100644
      # projection below (decision 22).
 ````
 
+<!-- patch: internal/platform/adapter_test.go -->
+````diff
+diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
+index f744275..38ecbf5 100644
+--- a/internal/platform/adapter_test.go
++++ b/internal/platform/adapter_test.go
+@@ -136,2 +136,3 @@ var shipped110 = func() map[string]Dialect {
+ 	j := out["juniper_junos"]
++	j.Verified = "containerlab" // tests/lab/results/L12-projection-juniper_*.md
+ 	// What 1.1.0 changes in juniper_junos: the projection and what it rests on.
+@@ -172,3 +173,3 @@ func TestTheDefaultSetValueForValue(t *testing.T) {
+ // renders without this test failing.
+-var released = map[string]map[string]Dialect{"1.0.0": shipped}
++var released = map[string]map[string]Dialect{"1.0.0": shipped, "1.1.0": shipped110}
+ 
+````
+
 <!-- patch: cmd/port49/platform_test.go -->
 ````diff
 diff --git a/cmd/port49/platform_test.go b/cmd/port49/platform_test.go
-index a8e7f49..e4f95fb 100644
+index bdaa6dc..16d8c84 100644
 --- a/cmd/port49/platform_test.go
 +++ b/cmd/port49/platform_test.go
 @@ -26,7 +26,7 @@ func TestPlatformListSaysWhereEachAdapterComesFrom(t *testing.T) {
@@ -8049,53 +10849,28 @@ index a8e7f49..e4f95fb 100644
  		listRow(out.String(), "cisco_iosxe") != "cisco_iosxe built-in containerlab session,commands" {
 ````
 
-<!-- patch: internal/platform/adapter_test.go -->
-````diff
-diff --git a/internal/platform/adapter_test.go b/internal/platform/adapter_test.go
-index 9b682dc..6ef6f10 100644
---- a/internal/platform/adapter_test.go
-+++ b/internal/platform/adapter_test.go
-@@ -135,6 +135,7 @@ var shipped110 = func() map[string]Dialect {
- 	}
- 	j := out["juniper_junos"]
- 	j.CommandProjection, j.BitDelivery = ProjectionJunosRegex, BitDeliveryLocalUserName
-+	j.Verified = "containerlab" // tests/lab/results/L12-projection-juniper_*.md
- 	j.LocalUserNames = map[string]string{"readonly": "p49-readonly", "operator": "p49-operator", "admin": "p49-admin"}
- 	j.Bits = map[string][]string{"view": {"show **"}, "view-configuration": {"show configuration **"},
- 		"clear": {"clear **"}, "network": {"ping **", "traceroute **", "ssh **", "telnet **"}, "trace": {"monitor **"},
-@@ -169,7 +170,7 @@ func TestTheDefaultSetValueForValue(t *testing.T) {
- // becomes the default, 1.0.0's entry stays here as it is and the new set is
- // added beside it, so a binary upgrade cannot change what a pinned policy
- // renders without this test failing.
--var released = map[string]map[string]Dialect{"1.0.0": shipped}
-+var released = map[string]map[string]Dialect{"1.0.0": shipped, "1.1.0": shipped110}
- 
- func TestEveryReleasedSetIsFrozen(t *testing.T) {
- 	for version, want := range released {
-````
-
 - [ ] **Step 3: Write plan 5b as built into the roadmap**
 
 In `docs/superpowers/plans/README.md`:
 - Update the status line: "**5b merged <date>** (PR #N; `2026-09-24-05b-projection-capabilities.md`,
-  nineteen tasks: one docs, three lab, thirteen code, one lab, one lab-and-docs)". Name the rows
-  it closed.
+  twenty tasks: one docs, three lab, fourteen code, one lab, one lab-and-docs)". Name the rows it
+  closed.
 - Add "Plan 5b — As built" under Plan 5. It covers:
-  - the set 1.1.0 pin and its values as measured, with every Step 4 edit that differed from the
-    candidates;
-  - which JunosFacts closed;
-  - the `bit_delivery` outcome;
-  - the reference-classes rollout order;
+  - the set 1.1.0 pin and its values as measured, with every Task 14 branch taken;
+  - which JunosFacts closed, and whether the realistic readonly still fails closed;
+  - the `bit_delivery` outcome and the template-login outcome;
+  - the reference-classes rollout order and `check-config --config`;
+  - decision 26's fail-closed reply, and the CI gates on it;
   - `devices capabilities` and `account_gap`;
   - whether the NX-OS system task landed.
 - Add these carried items:
-  - `deny-configuration` for statements typed in configuration mode, which would lift Decided 6;
-  - the `-regexps` family if Task 2 measured its deny precedence, which would lift the refused
-    shape;
-  - a way to declare a deny class-resident, the overflow's workaround in policy;
-  - the reply gate's C4 friction (Questions);
-  - `engine.Contains`, `MayMeet` and the rest compile both rules per call, so plan 12 measures the
-    projection at fleet size;
+  - `deny-configuration` for statements typed in configuration mode, which would lift decided
+    item 6;
+  - the `-regexps` family if Task 2 measured its deny precedence, which spec §8 says lifts the
+    refused shape, rendered by a later plan;
+  - a way to declare a deny class-resident, the deny overflow's workaround in policy;
+  - `engine.Contains`, `MayMeet` and the rest compile both rules per call; the per-composition
+    cache bounds the load, and plan 12 measures it at 10k devices;
   - `devices capabilities` reads a whole log into memory (plan 12);
   - an `account_gap` count held in memory is lost on a restart;
   - vJunosEvolved is unmeasured;
@@ -8131,63 +10906,83 @@ Name only the rows actually closed in the subject line. Then open the pull reque
 
 - **New platform set 1.1.0.** It projects Junos's rules into the session reply. An unpinned policy
   still renders with 1.0.0 and changes nothing. Pin it with `port49 platform upgrade --to 1.1.0
-  --write`; `policy diff` gates every Junos key the move changes.
-- **Before pinning,** push `port49 platform export --classes --config port49d.yaml juniper_junos`
-  to every Junos device (`strict-authorization`, `remote` on the bitless `p49-remote`, one template
-  and class per level), and check it with `port49 devices check-config`.
-- **New adapter keys:** `command_projection`, `bits`, `bit_delivery`, `local_user_names`. All are
-  gated in the diff. A block may add to a bit's reach, but may not remove a rule or add a bit.
-- **Refused at load:** a role or grant attribute the projection renders, on a projected platform
-  or under `all`.
-- **Quarantined** (the device falls to local):
-  - a Junos composition in the refused shape;
-  - bits that enter configuration mode for anything but a grant of every command with no deny,
-    which covers an admin role with a deny;
-  - a rule carrying a redacted value;
-  - a reply attribute past 255 bytes.
-- **New `policy test` reports:** `projection`, `projection_overflow` (with the class line that
-  carries the value instead), and `unenforced_rules`.
-- **`policy diff`:** a changed Junos reply fails until a `reply:` test asserts it, and a
-  `projection:` line reports each shape or bits change.
-- **`port49 explain`** on a Junos command says whether the device runs it under the reply.
+  --write`; the report lists every gated key and every subject the move fails closed, and `policy
+  diff` gates the keys.
+- **Before pinning,** load `port49 platform export --classes --config port49d.yaml juniper_junos`
+  on every Junos device with `load set terminal`. Each template class and user is replaced whole.
+  Check each device with `port49 devices check-config --config port49d.yaml` against `show
+  configuration | display set`: a missing reference line, and any extra line under a template
+  (a class `allow-commands`, a template password), fails it.
+- **A composition the projection cannot carry fails closed for that subject alone** (decision 26):
+  the session opens with `deny-commands=^.*$` and only the allows port49 proved, is logged
+  `projection_fail_closed`, and every other subject on the device keeps working. `policy test` and
+  `policy diff` fail on it, naming the subject, the devices and why. Until L9 measures that a deny
+  reads the command as the CLI expands it, that includes every Junos composition with a deny
+  beneath a permit.
+- **`policy test` now fails on any quarantined device**, now or at a later grant expiry, as well
+  as on a fail-closed composition. The daemon still serves the rest of the fleet.
+- **`remote` and `p49-*` are reserved usernames**: refused at load, and never minted for.
+- **New adapter keys:** `command_projection`, `bits`, `carve_outs`, `bit_delivery`,
+  `local_user_names`. All are gated in the diff. A block may add to a bit's reach (a gated
+  widening) and drop a carve-out; it may not remove reach, add a bit or add a carve-out.
+- **Refused at load:** a role or grant attribute the projection renders, in any case or numbered
+  variant, on a projected platform or under `all`.
+- **New `policy test` reports:** `projection`, `projection_refused`, `projection_overflow` (with
+  the class line for an overflowing deny set, never for allows), and `unenforced_rules`.
+- **`policy diff`:** a Junos reply that lets the device do more fails until a `reply:` test
+  asserts it; a pure narrowing is reported and passes. A `projection:` line reports each shape or
+  bits change.
+- **`port49 explain`** on a Junos command says whether the device runs it under the reply, and
+  names a fail-closed composition's reason.
 - **New command: `port49 devices capabilities`.** It gives the supports-versus-observed matrix and
-  the unauthorized tier, read from the decision log. It exits 1 on a finding.
-- **New log event: `account_gap`.** Accounting records the spool dropped, by stage.
+  the unauthorized tier, read from the decision log. It exits 1 on a contradiction; a device never
+  seen in the window is a note.
+- **New log event: `account_gap`.** Accounting records the spool dropped, by stage. **New reason:
+  `projection_fail_closed`.**
 - **NX-OS (if L25 measured it):** an `admin` accounting record with task_id `vsh.bin.<n>` is now
   `system`.
-- **Lab register:** L9, L10, L12, L23, L24 and L25, each closed or left open as Task 19 records.
+- **Lab register:** L9, L10, L12, L23, L24 and L25, each closed or left open as Task 20 records.
 
 ## Self-review against the spec
 
 - **§8 "Projection for session-only platforms":**
   - bits first, regexes second, chosen per composition: Task 8;
-  - the capability, narrow and refused shapes: Task 8;
-  - `bit_delivery`, both ways: Tasks 6, 8 and 13;
-  - `bits`, `privilege` as the ceiling, reference classes by export: Tasks 6 and 12;
-  - CI reporting shape and bits: Task 10, and changes between versions: Task 11;
-  - the class-crossing report with its snippet: Task 10 (`projection_overflow`);
-  - generator constraints 1–5: Task 8's `attributes` and Task 9's `checkProjected` for 1, `CheckAttribute`
-    for 2, 3 by construction (nothing emits `-regexps`), `allowable` and `within` for 4, and
-    quarantine at load for 5;
-  - differential testing: Task 18;
-  - `explain` stating class ∩ wire: Task 10;
-  - anchoring as a platform property: `JunosFacts` from L9 (Tasks 2 and 13).
-- **Decision 21:** the class idle-timeout from `max_session_age` is Task 12, measured by Task 3
+  - the capability, narrow and refused shapes, and the fail-closed reply: Task 8;
+  - `bit_delivery`, both ways: Tasks 6, 8 and 14;
+  - `bits`, `carve_outs`, `privilege` as the ceiling, reference classes by export: Tasks 6 and 13;
+  - CI reporting shape and bits: Task 11, and changes between versions: Task 12;
+  - "CI MUST refuse the policy": Tasks 11 and 12 (`projection_refused`, the diff's refusals);
+  - the class-crossing report with its snippet, for denies: Task 11 (`projection_overflow`);
+  - generator constraints 1–6: Task 8's `attributes` and Task 9's `checkProjected` for 1 and 6,
+    `CheckAttribute` for 2, 3 by construction (nothing emits `-regexps`), `allowable` and `within`
+    for 4, and for 5 the fail-closed reply with CI's refusal (decision 26);
+  - differential testing: Task 19;
+  - `explain` stating class ∩ wire: Task 11;
+  - anchoring as a platform property: `JunosFacts` from L9 (Tasks 2 and 14).
+- **Decision 21:** the class idle-timeout from `max_session_age` is Task 13, measured by Task 3
   (L24). `explain`'s statement already existed. Revocation records naming unreached contexts are
   plan 7's (roadmap), and stay there.
-- **Decision 22:** Tasks 5–13 and 18. It stays provisional until L12 closes (Task 19).
+- **Decision 22:** Tasks 5–14 and 19. It stays provisional until L12 closes (Task 20).
+- **Decision 26:** Tasks 8 (the reply), 9 (per subject, never a quarantine), 10 (the record),
+  11 and 12 (CI), and Task 1 writes it.
+- **§2's reserved usernames:** Task 9.
 - **§9:**
-  - the three observations and the matrix: Task 16;
-  - `devices capabilities`: Task 17;
-  - reconciliation over the tiers `supports` declares: Task 16;
+  - the three observations and the matrix: Task 17;
+  - `devices capabilities`: Task 18;
+  - reconciliation over the tiers `supports` declares: Task 17;
   - qualified by stream health (the spool's drops, ERROR replies and unattributed counts): Tasks
-    15–17;
-  - the CI check: Task 17.
+    16–18;
+  - the CI check: Task 18.
 - **Roadmap carries:**
-  - Junos's inert list and spellings: Tasks 2, 13, 18 and 19;
-  - M3 re-measured beside readonly: Tasks 4 and 13;
-  - the NX-OS `vsh.bin` system user if measured: Tasks 4 and 14.
+  - Junos's inert list and spellings: Tasks 2, 14, 19 and 20;
+  - M3 re-measured beside readonly: Tasks 4 and 14;
+  - the NX-OS `vsh.bin` system user if measured: Tasks 4 and 15.
 - **Lab rules:**
   - every read has a deadline, and expiry is not observed and fails;
   - boot budgets are the harness's, per image;
-  - the controller runs the stall watchdog, per "Running the lab".
+  - the controller runs the stall watchdog, 40 minutes on the N9Kv, and cleans up after a
+    `go test` timeout, per "Running the lab".
+- **Carried, not built here:** the `-regexps` family, which spec §8 says lifts the refused shape
+  once L12 measures its deny precedence (Task 2 measures it; the generator keeps the fail-closed
+  reply until a later plan renders it); `deny-configuration` for statements typed in configuration
+  mode, which would lift decided item 6.

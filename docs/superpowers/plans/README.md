@@ -25,8 +25,9 @@ changed, rewrite every live context on every reload, leave a quarantined device'
 **5a merged 2026-09-24** (PR #13; `2026-09-24-05a-platform-adapters.md`, eighteen tasks: one
 docs, fifteen code, one lab, one lab-and-docs; reviewed per task, then a final whole-branch
 review, one fix wave and two scoped re-reviews; L22 closed, and the EOS, NX-OS and IOS-XE
-adapters `verified: containerlab`); plan 5 is split at the seam below. **5b written 2026-09-24**
-(`2026-09-24-05b-projection-capabilities.md`, nineteen tasks: one docs, three lab, thirteen code,
+adapters `verified: containerlab`); plan 5 is split at the seam below. **5b written 2026-09-24,
+revised 2026-09-25** after its pre-flight review and the owner's ruling of that day (decision 26)
+(`2026-09-24-05b-projection-capabilities.md`, twenty tasks: one docs, three lab, fourteen code,
 one lab, one lab-and-docs; not yet executed). 6–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -532,13 +533,19 @@ than 25 tasks. The seam is the kind of platform:
 
   **Written 2026-09-24** as `2026-09-24-05b-projection-capabilities.md`. The lab measures L9, L12,
   L23, L24 and L25 first (Tasks 2–4), and the new platform set 1.1.0 takes its values from those
-  notes (Task 13). The projection ships in 1.1.0, so an unpinned policy still gets nothing on Junos.
-  Each reply is proven not to let the device run what port49 denies before it is sent, and a
-  composition that cannot be proven quarantines the device. Bits reach the device by template
-  (`local_user_name`) until L12 measures `user-permissions` over a bitless template. `port49
-  platform export --classes` renders the reference classes with decision 21's `idle-timeout`.
-  `port49 devices capabilities` reads the decision log, qualified by a new `account_gap` record.
-  Task 18 is the differential test.
+  notes (Task 14, with a fail-closed branch for every outcome). The projection ships in 1.1.0, so
+  an unpinned policy still gets nothing on Junos. Each reply is proven not to let the device run
+  what port49 denies before it is sent, against a model in which the bits are a union and only
+  measured carve-outs subtract. **Revised 2026-09-25:** a composition that cannot be proven gets
+  that subject alone a fail-closed reply (`deny-commands=^.*$` and only the proven allows),
+  recorded `projection_fail_closed`, and `policy test` and `policy diff` fail on it (decision 26,
+  the owner's ruling, replacing the device quarantine). `policy test` also fails on any
+  quarantine; a projected reply is gated by what the device can do under it; `remote` and `p49-*`
+  are reserved usernames. Bits reach the device by template (`local_user_name`) until L12
+  measures `user-permissions` over a bitless template. `port49 platform export --classes` renders
+  the reference classes as a replace with decision 21's `idle-timeout`, and `devices check-config
+  --config` holds a device to them. `port49 devices capabilities` reads the decision log,
+  qualified by a new `account_gap` record. Task 19 is the differential test.
 
 Spec §8 in full: built-in adapters, entity classes, user overrides and layering, pinned
 platform set, `redact` patterns (accounting redaction was deferred from plan 1 and MUST land
