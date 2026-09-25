@@ -28,7 +28,11 @@ func junos(delivery string) platform.Dialect {
 	return d
 }
 
-var measured = Facts{CaseSensitive: true, DenyMatchesExpanded: true}
+// measured is a device whose every fact is the permissive one, a wire deny
+// binding every RPC a CLI session reaches included: what the capability
+// shape's own logic is tested under. JunosFacts is the shipped device, where
+// a deny beneath a sent bit fails closed (TestACarveOutBeneathASentBitFailsClosed).
+var measured = Facts{CaseSensitive: true, DenyMatchesExpanded: true, DenyBindsRPCs: true}
 
 func input(delivery, level string, f Facts, rules ...engine.Rule) Input {
 	d := junos(delivery)

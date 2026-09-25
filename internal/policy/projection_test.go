@@ -401,20 +401,33 @@ func TestProjectionFindings(t *testing.T) {
 		t.Fatalf("%+v", over)
 	}
 	// Past the budget in deny-commands, the class line carries the denies,
-	// and says it binds every subject at that template.
+	// and says it binds every subject at that template. On Junos the denies
+	// sit beneath the template's view, and a wire deny binds no RPC, so the
+	// composition is refused first, naming RPC reach (L26c); on a device
+	// whose denies bound RPCs, the overflow would be what CI reports.
 	body = scopeOK + "roles:\n  - {name: r, privilege: readonly, permit: [\"show **\"], deny: ["
-	for i, w := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"} {
+	for i, w := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india",
+		"juliett", "kilo", "lima", "mike", "november", "oscar", "papa"} {
 		if i > 0 {
 			body += ", "
 		}
 		body += `"show ` + w + ` **"`
 	}
-	// A deny narrower than every command goes out only once L9 measures that
-	// the device matches it against the expanded command.
+	body += "]}\n" + subjOK + grantOK
+	p = parseProjected(t, platform.BitDeliveryLocalUserName, body)
+	var refused []Finding
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjectionRefused {
+			refused = append(refused, f)
+		}
+	}
+	if len(refused) != 1 || !strings.Contains(refused[0].Message, "xml-mode") {
+		t.Fatalf("junos: %+v", refused)
+	}
 	saved := projection.JunosFacts
-	projection.JunosFacts.DenyMatchesExpanded = true
+	projection.JunosFacts.DenyBindsRPCs = true
 	defer func() { projection.JunosFacts = saved }()
-	p = parseProjected(t, platform.BitDeliveryLocalUserName, body+"]}\n"+subjOK+grantOK)
+	p = parseProjected(t, platform.BitDeliveryLocalUserName, body)
 	over = nil
 	for _, f := range p.Lint(noon) {
 		if f.Kind == FindingProjectionOverflow {
@@ -422,7 +435,7 @@ func TestProjectionFindings(t *testing.T) {
 		}
 	}
 	if len(over) != 1 || !strings.Contains(over[0].Message, "binding every subject at that template: "+
-		"set system login class p49-readonly deny-commands \"^( *[sS]") {
+		"set system login class p49-readonly deny-commands \"^( *s") {
 		t.Fatalf("%+v", over)
 	}
 }

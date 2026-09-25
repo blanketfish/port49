@@ -453,3 +453,85 @@ func TestAVariantOfConfigureEntersConfiguration(t *testing.T) {
 		t.Error("a reach that names configuration elsewhere enters configuration mode")
 	}
 }
+
+// On Junos a wire deny binds the CLI and never a native RPC, and a CLI
+// session reaches RPCs through `xml-mode` and `op url` with its bits' whole
+// reach (tests/lab/results/L26c-juniper_*.md). So a composition whose only
+// guard beneath a sent bit is a deny — a grant's or the baseline's — is
+// CLI-only safe, and fails closed, saying so; one the narrow shape's `.*`
+// carries is not, since `.*` refuses both entry points (option C, spec §8).
+func TestACarveOutBeneathASentBitFailsClosed(t *testing.T) {
+	rpc := func(res Result) bool {
+		return res.Shape == ShapeFailClosed && res.FailClosed == FailRefusedShape &&
+			strings.Contains(res.Refusal.Why, "xml-mode") && strings.Contains(res.Refusal.Why, "L26c")
+	}
+	// admin, everything but one command view-configuration reaches: the
+	// capability shape where a deny binds RPCs, refused on Junos.
+	rules := []engine.Rule{permit("**"), deny("request security **")}
+	res, err := Project(measuredInput(platform.BitDeliveryUserPermissions, "admin", measured, rules...))
+	if err != nil || res.Shape != ShapeCapability || len(res.Denies) != 1 {
+		t.Fatalf("binding: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "admin", JunosFacts, rules...))
+	if err != nil || !rpc(res) || !strings.Contains(res.Refusal.Why, `"request security **"`) ||
+		!strings.Contains(res.Refusal.Why, "view-configuration") {
+		t.Fatalf("junos: %s %+v %v", res.Shape, res.Refusal, err)
+	}
+	if !reflect.DeepEqual(res.Attributes[len(res.Attributes)-1:], []string{"deny-commands=^.*$"}) {
+		t.Errorf("the fail-closed reply: %q", res.Attributes)
+	}
+	// The baseline's deny is one too: every session holds what it reaches.
+	// operator, every command its bits and the baseline reach but `start`.
+	rules = []engine.Rule{permit("show **"), permit("clear **"), permit("request **"), permit("test **")}
+	for _, w := range []string{"help", "quit", "exit", "set", "file", "load", "op", "save", "scp", "ping",
+		"traceroute", "ssh", "telnet", "mtrace", "probe", "monitor"} {
+		rules = append(rules, permit(w+" **"))
+	}
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "operator", measured, rules...))
+	if err != nil || res.Shape != ShapeCapability || len(res.Denies) != 1 || res.Denies[0].Rule != "start **" {
+		t.Fatalf("baseline, binding: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts, rules...))
+	if err != nil || !rpc(res) || !strings.Contains(res.Refusal.Why, `"start **"`) ||
+		!strings.Contains(res.Refusal.Why, "baseline") {
+		t.Fatalf("baseline: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	rules = append(rules, permit("start **"))
+	// A deny no sent bit, and not the baseline, reaches stays projectable:
+	// `restart` is `all`'s alone, and operator holds no `all`.
+	in := measuredInput(platform.BitDeliveryUserPermissions, "operator", JunosFacts, append(rules, deny("restart **"))...)
+	in.Keywords = keywordTree(append(reachOf(in.Dialect), "restart **")...)
+	res, err = Project(in)
+	if err != nil || res.Shape != ShapeCapability || len(res.Denies) != 1 || res.Denies[0].Rule != "restart **" {
+		t.Fatalf("beyond every bit: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	// The narrow shape's `.*` refuses xml-mode and op url: show ** alone
+	// projects.
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **")))
+	if err != nil || res.Shape != ShapeNarrow ||
+		!reflect.DeepEqual(res.Attributes, []string{"user-permissions=view view-configuration", "deny-commands=^.*$",
+			"allow-commands=^ *show( .*)?$"}) && !reflect.DeepEqual(res.Attributes,
+			[]string{"user-permissions=view view-configuration", "deny-commands=^.*$", "allow-commands=^show( .*)?$"}) {
+		t.Fatalf("narrow: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	// An allow that opens an entry point voids the `.*` for RPCs: refused,
+	// and the fail-closed reply leaves it off.
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"),
+		permit("op **")))
+	if err != nil || !rpc(res) || !strings.Contains(res.Refusal.Why, `"op **"`) ||
+		slices.ContainsFunc(res.Allows, func(a engine.Rule) bool { return a.Rule == "op **" }) {
+		t.Fatalf("op: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	if res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show **"),
+		permit("op **"))); err != nil || res.Shape == ShapeFailClosed {
+		t.Fatalf("op, binding: %s %+v %v", res.Shape, res.Refusal, err)
+	}
+}
+
+func reachOf(d platform.Dialect) []string {
+	var out []string
+	for _, rules := range d.Bits {
+		out = append(out, rules...)
+	}
+	return out
+}

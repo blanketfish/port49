@@ -50,8 +50,18 @@ const (
 )
 
 // JunosFacts are what the Junos images were measured doing with a command
-// regex (spec §15, L9): tests/lab/results/L9-juniper_*.md.
-var JunosFacts = Facts{CaseSensitive: true, DenyMatchesExpanded: false}
+// regex (spec §15, L9). CaseSensitive is false: the CLI refuses a keyword
+// typed in upper case itself (tests/lab/results/L9-juniper_*.md), so a deny
+// spelled in lower case holds every spelling that runs. DenyMatchesExpanded
+// is true for keywords, the only words a rule reaches the wire with (decision
+// 27): on both images every abbreviation of a keyword deny, at several
+// lengths and depths, piped and ambiguous, was refused or not run under the
+// deny, the control ran every unambiguous one, and the rendered shape was
+// enforced (tests/lab/results/L9-abbreviations-juniper_*.md). DenyBindsRPCs
+// is false: a projected CLI session ran `xml-mode netconf need-trailer` and a
+// native RPC past its wire deny, and `op url`, on both images, its RPC reach
+// bounded by the bits alone (tests/lab/results/L26c-juniper_*.md).
+var JunosFacts = Facts{CaseSensitive: false, DenyMatchesExpanded: true, DenyBindsRPCs: false}
 
 // FactsFor is what a projection's device was measured doing: the zero Facts,
 // which fail closed, for a projection with no measurement.
@@ -315,14 +325,41 @@ func (g generator) render() (Result, error) {
 // budget: the narrow shape's `.*` holds every deny in four bytes.
 func (g generator) shape() (Result, error) {
 	res, err := g.capability()
-	if errors.As(err, new(*narrowOnly)) {
-		return g.finish(g.narrow())
+	var no *narrowOnly
+	if errors.As(err, &no) {
+		n, nerr := g.finish(g.narrow())
+		// Where the capability shape was ruled out by a refusal of its own,
+		// and the narrow shape cannot carry the grant either, the report says
+		// both: the narrow shape's first, the one the grant can change — unless
+		// it is its bits entering configuration mode, which render recovers
+		// from, and which is passed on as it is.
+		var nr, cr *Refusal
+		if nerr != nil && errors.As(no.refusal, &cr) && errors.As(nerr, &nr) && nr.Category != FailConfigurationMode {
+			both := *nr
+			both.Why += "; and without `deny-commands .*`, " + cr.Why
+			return Result{}, &both
+		}
+		// Nor does a narrow shape that carries the grant only by leaving off a
+		// permit the capability shape carried, or that allows none of it:
+		// that is the refusal too, not a quiet shortfall.
+		if nerr == nil && no.refusal != nil && (len(n.Allows) == 0 && len(g.permits) > 0 ||
+			slices.ContainsFunc(n.Beyond, func(p engine.Rule) bool { return !slices.Contains(no.beyond, p) })) {
+			return Result{}, no.refusal
+		}
+		return n, nerr
 	}
 	res, err = g.finish(res, err)
 	var r *Refusal
 	if errors.As(err, &r) && r.Category == FailOverflow && r.Attribute == "deny-commands" {
-		if n, nerr := g.finish(g.narrow()); nerr == nil {
+		n, nerr := g.finish(g.narrow())
+		if nerr == nil {
 			return n, nil
+		}
+		// The narrow shape's bits entering configuration mode is what render
+		// can recover from, by dropping them: say that, not the overflow.
+		var nr *Refusal
+		if errors.As(nerr, &nr) && nr.Category == FailConfigurationMode {
+			return Result{}, nerr
 		}
 	}
 	return res, err
@@ -344,8 +381,13 @@ func (g generator) finish(res Result, err error) (Result, error) {
 }
 
 // narrowOnly is capability's answer where only the narrow shape can carry
-// the grant.
-type narrowOnly struct{ why string }
+// the grant; refusal, where set, is why the capability shape cannot, for
+// the report where the narrow shape cannot either.
+type narrowOnly struct {
+	why     string
+	refusal error
+	beyond  []engine.Rule // the capability shape's Beyond, where refusal is set
+}
 
 func (n *narrowOnly) Error() string { return n.why }
 
@@ -509,7 +551,7 @@ func (g generator) capability() (Result, error) {
 		// be covered, or the class lets the device run what port49 denies.
 		for _, b := range g.ceiling {
 			if !g.usable(b) {
-				return Result{}, &narrowOnly{fmt.Sprintf("the template's bit %s reaches commands no rule decides", b)}
+				return Result{}, &narrowOnly{why: fmt.Sprintf("the template's bit %s reaches commands no rule decides", b)}
 			}
 		}
 		bits = g.declared()
@@ -527,7 +569,7 @@ func (g generator) capability() (Result, error) {
 	if len(bits) == 0 {
 		// No bit's reach is decided by the grant whole and permitted in part:
 		// the permits are narrower than every bit (spec §8, "Narrow shape").
-		return Result{}, &narrowOnly{"no bit of the ceiling is the grant's whole"}
+		return Result{}, &narrowOnly{why: "no bit of the ceiling is the grant's whole"}
 	}
 	res := Result{Shape: ShapeCapability, Bits: bits, Template: g.in.Template}
 	for _, p := range g.permits {
@@ -561,16 +603,79 @@ func (g generator) capability() (Result, error) {
 		res.Denies = append(res.Denies, dn)
 	}
 	if len(res.Denies) > 0 && !g.in.Facts.DenyMatchesExpanded {
-		return Result{}, &narrowOnly{"a deny narrower than every command is walked past by abbreviating it"}
+		return Result{}, &narrowOnly{why: "a deny narrower than every command is walked past by abbreviating it"}
 	}
 	for _, dn := range res.Denies {
 		if !g.denyProvable(dn.Rule) {
 			// A deny the device would not enforce, of a command no permit
 			// meets: the narrow shape's `.*` holds it instead.
-			return Result{}, &narrowOnly{"a deny under the bits names an argument"}
+			return Result{}, &narrowOnly{why: "a deny under the bits names an argument"}
+		}
+	}
+	if !g.in.Facts.DenyBindsRPCs {
+		for _, dn := range res.Denies {
+			if b, ok := g.beneath(dn.Rule, bits); ok {
+				// The reply's own configuration refusal comes first: render
+				// recovers from it by dropping those bits, which may leave
+				// the deny beneath none.
+				if err := g.configuration(res); err != nil {
+					return Result{}, err
+				}
+				return Result{}, &narrowOnly{why: "a deny beneath a sent bit guards the CLI alone",
+					refusal: g.rpcReach(dn, b), beyond: res.Beyond}
+			}
 		}
 	}
 	return res, nil
+}
+
+// beneath is the first bit a session sent bits holds whose reach meets rule,
+// a sent bit before the baseline: a deny of rule is the only guard there.
+func (g generator) beneath(rule string, bits []string) (string, bool) {
+	held := g.held(bits)
+	slices.SortFunc(held, func(a, b string) int {
+		if (a == platform.BaselineBit) != (b == platform.BaselineBit) {
+			if a == platform.BaselineBit {
+				return 1
+			}
+			return -1
+		}
+		return strings.Compare(a, b)
+	})
+	for _, b := range held {
+		if slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool { return g.mayMeet(rule, r) }) {
+			return b, true
+		}
+	}
+	return "", false
+}
+
+// rpcEntries are the operational commands a Junos CLI session reaches RPCs
+// through, with its bits' whole reach and no wire deny applied
+// (tests/lab/results/L26c-juniper_*.md): `xml-mode` (hidden, so no keyword
+// tree lists it) and `op`, whose `url` runs a script.
+var rpcEntries = []string{"xml-mode", "op"}
+
+// opensRPC reports whether an allow of rule would run an RPC entry point.
+func (g generator) opensRPC(rule string) bool {
+	return slices.ContainsFunc(rpcEntries, func(e string) bool { return g.mayMeet(rule, e+" **") })
+}
+
+// rpcWhy is why a wire deny is no boundary on a device where it binds no RPC.
+func (g generator) rpcWhy() string {
+	return fmt.Sprintf("on %s a wire deny binds the CLI only: a CLI session reaches RPCs through `xml-mode` and "+
+		"`op url` with its bits' whole reach, and no deny applies there (tests/lab/results/L26c-juniper_*.md; spec "+
+		"§8), so the composition is CLI-only safe and port49 fails it closed", g.in.Platform)
+}
+
+// rpcReach is the refusal of a deny that is the only guard beneath bit b.
+func (g generator) rpcReach(dn engine.Rule, b string) error {
+	what := "bit " + b + ", which the reply sends"
+	if b == platform.BaselineBit {
+		what = "the baseline, which every session runs and no rule of the grant decides there"
+	}
+	return refuse(FailRefusedShape, "deny %s (role %q) is the only guard beneath %s: %s; permit what it reaches "+
+		"whole, or narrow the grant so that no sent bit reaches the deny", g.quote(dn.Rule), dn.Role, what, g.rpcWhy())
 }
 
 // omittable reports whether the bits already refuse every command deny dn
@@ -649,6 +754,13 @@ func (g generator) narrow() (Result, error) {
 		if why := g.unsendableAllow(p.Rule); why != "" {
 			res.Unsent = append(res.Unsent, Unsent{Rule: p, Why: why})
 			continue
+		}
+		// `deny-commands .*` is the narrow shape's guard beneath its bits, and
+		// it refuses the RPC entry points: an allow running one voids it.
+		if !g.in.Facts.DenyBindsRPCs && g.opensRPC(p.Rule) {
+			return Result{}, refuse(FailRefusedShape, "permit %s (role %q) needs an allow-commands that runs an RPC "+
+				"entry point past the reply's `deny-commands .*`: %s; drop the permit, or narrow it past `op` and "+
+				"`xml-mode`", g.quote(p.Rule), p.Role, g.rpcWhy())
 		}
 		res.Allows = append(res.Allows, p)
 	}
@@ -809,7 +921,8 @@ func (g generator) failClosed(r *Refusal) (Result, error) {
 		_, ok := h.allowable(p.Rule)
 		secret := g.in.Secret != nil && g.in.Secret(p.Rule)
 		_, werr := ruleERE(p.Rule, g.in.Classes, false, g.in.Facts)
-		if secret || werr != nil || !ok || !h.within(p.Rule) || h.meetsConfiguration(p.Rule) {
+		rpc := !g.in.Facts.DenyBindsRPCs && h.opensRPC(p.Rule)
+		if secret || werr != nil || !ok || !h.within(p.Rule) || h.meetsConfiguration(p.Rule) || rpc {
 			res.Beyond = append(res.Beyond, p)
 			continue
 		}
