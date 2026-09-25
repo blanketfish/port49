@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp/syntax"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -206,15 +207,20 @@ func ere(re *syntax.Regexp, deny bool, f Facts) (string, error) {
 			if re.Flags&syntax.FoldCase == 0 {
 				// A literal the pattern made case-sensitive: an allow may take
 				// it as written; a deny policy refuses a (?-i) (checkRule).
-				s = string(r)
-				if strings.ContainsRune(ereLiteral, r) {
-					s = `\` + s
+				// A device that ignores case would read it wider than port49
+				// does, so an allow refuses it there.
+				if !deny && !f.CaseSensitive && cased(r) {
+					return "", fmt.Errorf("%w: a case-sensitive letter on a device that ignores case", errUnwritable)
 				}
+				s = escaped(r)
 			}
 			b.WriteString(s)
 		}
 		return b.String(), nil
 	case syntax.OpCharClass:
+		if !deny && !f.CaseSensitive && re.Flags&syntax.FoldCase == 0 && slices.ContainsFunc(classRunes(re.Rune), cased) {
+			return "", fmt.Errorf("%w: a case-sensitive class on a device that ignores case", errUnwritable)
+		}
 		return bracket(re.Rune, deny)
 	case syntax.OpAnyChar, syntax.OpAnyCharNotNL:
 		return pick(deny, ".", "[^ ]"), nil
@@ -267,6 +273,29 @@ func ere(re *syntax.Regexp, deny bool, f Facts) (string, error) {
 	return "", fmt.Errorf("%w: the pattern uses an operator the device's regex is not measured to take", errUnwritable)
 }
 
+// escaped is one printable rune as an ERE literal, in the case it is written.
+func escaped(r rune) string {
+	if strings.ContainsRune(ereLiteral, r) {
+		return `\` + string(r)
+	}
+	return string(r)
+}
+
+// cased reports whether r has another case.
+func cased(r rune) bool { return unicode.SimpleFold(r) != r }
+
+// classRunes are the printable ASCII runes a class's ranges hold, the only
+// ones bracket writes.
+func classRunes(ranges []rune) []rune {
+	var out []rune
+	for i := 0; i+1 < len(ranges); i += 2 {
+		for r := max(ranges[i], 0x21); r <= min(ranges[i+1], 0x7e); r++ {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // bracket is a character class as a POSIX bracket expression over printable
 // ASCII less the space. A class that also admits a space, a rune past ASCII or
 // a rune the reply cannot carry is `.` in a deny, which matches more, and
@@ -300,7 +329,9 @@ func bracket(ranges []rune, deny bool) (string, error) {
 		return "", fmt.Errorf("%w: a character class with nothing printable in it", errUnwritable)
 	}
 	if len(set) == 1 {
-		return wordERE(string(set), false, Facts{})
+		// As the class holds it: lower-casing it would take a rune a
+		// case-sensitive class does not.
+		return escaped(set[0]), nil
 	}
 	// POSIX: `]` first, `-` last, `^` anywhere but first; runs of three or
 	// more of the rest as a range. A backslash is literal inside brackets,
