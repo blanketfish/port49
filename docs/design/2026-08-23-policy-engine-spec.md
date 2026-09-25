@@ -3307,7 +3307,8 @@ opens NETCONF and returns a hello; a native RPC the probed deny did not name
 (`<get-software-information/>`) ran; the deny did bind a `<command>…</command>` RPC (as over
 NETCONF, where the deny session refused one the control ran, L12-netconf); and RPC reach there is
 bounded above by the permission bits (`view` without `view-configuration` got an empty
-`<configuration>`). `op url` was accepted up to the copy, with no RPC observed through it.
+`<configuration>`, in one RPC's raw output; the note's table records every `get-configuration`
+cell as not observed, and the rerun is owed). `op url` was accepted up to the copy, with no RPC observed through it.
 `start shell` is refused by the bits unless a shell permission is held, and the fail-closed
 reply's `deny-commands .*` refuses `xml-mode` and `op` both. No probe ran with the services off
 that the allowlist leaves, and no native RPC was observed passing a deny that named what it
@@ -3318,10 +3319,14 @@ beneath the baseline every session holds, is a wire deny is treated as CLI-only 
 falls to the narrow one, whose `.*` refuses both entry points, and where that cannot carry it the
 subject gets the fail-closed reply (`refused_shape`, its message naming RPC reach). A narrow
 allow that would run `xml-mode` or `op` is refused the same way, and the fail-closed reply leaves
-it off. What stays projectable: a deny no sent bit reaches, a bit a deny aligns with (dropped,
-not denied), and the one carve-out measured over RPC, `view-configuration`'s `show configuration
-**` out of `view` (the empty `<configuration>`). Every other carve-out is measured on the CLI at
-most, so a deny it would cover is sent, and fails closed where it lies beneath a sent bit. Denying the entry points themselves, `xml-mode` and `op`, is future work
+it off. What stays projectable: a deny no sent bit reaches, and a bit a deny aligns with (dropped,
+not denied). **No carve-out leaves a deny off the wire in set 1.1.0.** `view-configuration`'s
+`show configuration **` out of `view` is *provisional on L26c* over RPC — the empty
+`<configuration>` above is one raw output, not a recorded observation — and every other
+carve-out is measured on the CLI at most. So a deny a carve-out would cover is sent, and fails
+closed where it lies beneath a sent bit: a readonly denying `show configuration **` gets the
+fail-closed reply, not `view` alone, until L26c closes and a set records the carve-out as
+holding over RPC. Denying the entry points themselves, `xml-mode` and `op`, is future work
 pending measurement on production devices; `start` is never denied, since admins need `start
 shell` and the bits already refuse it.
 

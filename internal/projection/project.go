@@ -712,7 +712,7 @@ func (g generator) rpcReach(dn engine.Rule, b string) error {
 // emitting a regex"): a measured carve-out of a bit not sent holds dn, and no
 // allow meets it. Only a carve-out licenses this: under the union, a bit not
 // sent refuses nothing another bit reaches. Where a deny binds no RPC, only
-// a carve-out measured over RPC does (rpcCarves).
+// a carve-out measured over RPC does (rpcCarves), and set 1.1.0 has none.
 //
 // Contains reads dn as received, where port49 reads a deny wider. Where the
 // platform neither abbreviates nor splits a name, the one widening is
@@ -732,13 +732,18 @@ func (g generator) omittable(dn engine.Rule, bits []string, allows []engine.Rule
 	})
 }
 
-// rpcCarves are the carve-outs measured holding over RPC too: `view` without
-// `view-configuration` got an empty `<configuration>` from a projected CLI
-// session's RPCs (tests/lab/results/L26c-juniper_*.md). Where a wire deny is not
-// known to bind RPCs, a deny is left off the wire only through one of these: any
-// other carve-out is measured on the CLI at most, so the deny is sent, and a
-// deny beneath a sent bit fails closed.
-var rpcCarves = []string{"show configuration **"}
+// rpcCarves are the carve-outs measured holding over RPC too. Where a wire
+// deny is not known to bind RPCs, a deny is left off the wire only through
+// one of these: any other carve-out is measured on the CLI at most, so the
+// deny is sent, and a deny beneath a sent bit fails closed.
+//
+// It is empty until L26c closes (final review I-3). `view` without
+// `view-configuration` got an empty `<configuration>` from one projected CLI
+// session's RPC, but the note's own table reads "not observed" for every
+// `get-configuration` cell, and its reruns are owed
+// (tests/lab/results/L26c-juniper_*.md, open): so `show configuration **` is
+// provisional on L26c, and no deny is left off the wire on its strength.
+var rpcCarves []string
 
 // configuration refuses a reply that enters configuration mode for a grant
 // that is not everything — a bit whose reach holds `configure`, or an allow

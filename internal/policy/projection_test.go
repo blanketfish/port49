@@ -55,6 +55,18 @@ const readonlyCarveOut = scopeOK + `roles:
   - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}
 ` + subjOK + grantOK
 
+// bindingRPCs stands in a Junos whose wire deny binds native RPCs, where a
+// carve-out leaves its deny off the wire (readonlyCarveOut's `view` alone).
+// Set 1.1.0 is not one until L26c closes, and no carve-out omits a deny there
+// (final review I-3); the tests that call it are about what the reply, CI and
+// explain say of an omitted deny, not whether one is omitted. Parse after it.
+func bindingRPCs(t *testing.T) {
+	t.Helper()
+	saved := projection.JunosFacts
+	projection.JunosFacts.DenyBindsRPCs = true
+	t.Cleanup(func() { projection.JunosFacts = saved })
+}
+
 // A block keeps the set's projection and every rule of a bit's reach, and a
 // level's ceiling bits rise with the policy's level order.
 func TestABlockKeepsTheProjection(t *testing.T) {
@@ -80,8 +92,17 @@ func TestABlockKeepsTheProjection(t *testing.T) {
 // A pinned set that projects Junos renders the composition's rules into the
 // session reply, at the platform layer, and every other platform as before.
 func TestAJunosSessionReplyIsTheProjection(t *testing.T) {
+	// On the shipped facts the carve-out omits nothing until L26c closes: the
+	// deny is sent beneath `view`, and the subject fails closed (I-3).
+	res, err := parseProjected(t, platform.BitDeliveryUserPermissions, readonlyCarveOut).
+		ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
+	if err != nil || res.Blob.FailClosed != projection.FailRefusedShape ||
+		!reflect.DeepEqual(res.Blob.Attributes, []string{"deny-commands=^.*$"}) {
+		t.Fatalf("shipped facts: %q %q %v", res.Blob.Attributes, res.Blob.FailClosed, err)
+	}
+	bindingRPCs(t)
 	p := parseProjected(t, platform.BitDeliveryUserPermissions, readonlyCarveOut)
-	res, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
+	res, err = p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,6 +427,7 @@ func TestAProjectionDoesNotMaskALevelAboveTheCeiling(t *testing.T) {
 // that the class half of what it runs is outside port49 (spec §8,
 // "Verification").
 func TestExplainSaysWhatTheDeviceDoes(t *testing.T) {
+	bindingRPCs(t)
 	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
   - {name: r, privilege: readonly, permit: ["show **", "clear counters"], deny: ["show configuration **"]}
 `+subjOK+grantOK)
@@ -428,9 +450,12 @@ func TestExplainSaysWhatTheDeviceDoes(t *testing.T) {
 // policy test reports each composition's projection, and a reply past RFC
 // 8907's length with the class line that carries it instead.
 func TestProjectionFindings(t *testing.T) {
+	saved := projection.JunosFacts
+	projection.JunosFacts.DenyBindsRPCs = true // as bindingRPCs, for this composition only
 	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
   - {name: r, privilege: readonly, permit: ["show **", "clear counters"], deny: ["show configuration **"]}
 `+subjOK+grantOK)
+	projection.JunosFacts = saved
 	var got []string
 	for _, f := range p.Lint(noon) {
 		if f.Kind == FindingProjection {
@@ -494,9 +519,7 @@ func TestProjectionFindings(t *testing.T) {
 	if len(refused) != 1 || !strings.Contains(refused[0].Message, "xml-mode") {
 		t.Fatalf("junos: %+v", refused)
 	}
-	saved := projection.JunosFacts
-	projection.JunosFacts.DenyBindsRPCs = true
-	defer func() { projection.JunosFacts = saved }()
+	bindingRPCs(t)
 	p = parseProjected(t, platform.BitDeliveryLocalUserName, body)
 	over = nil
 	for _, f := range p.Lint(noon) {
@@ -539,6 +562,7 @@ func TestARefusalIsAFinding(t *testing.T) {
 // is unmeasured, so the operator sees both what was narrowed and what may not
 // be reached, and explain says the device may refuse it.
 func TestAnUnreachedAllowIsReported(t *testing.T) {
+	bindingRPCs(t)
 	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
   - {name: r, privilege: operator, permit: ["show **", "clear counters", "ping **"], deny: ["show configuration **"]}
 `+subjOK+grantOK)
@@ -619,6 +643,7 @@ func TestAProjectionFindingNamesItsDevicesWhereTheyDiffer(t *testing.T) {
 	// A device-scoped grant that expires splits the moments by device: each
 	// moment then has one reply, and still names the devices it is on, so a
 	// grant to one SRX never reads as every SRX's (re-review R2).
+	bindingRPCs(t)
 	p = parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+
 		"  - {name: few, match: {os_version: 21.4R3-S4}}\n"+`roles:
   - {name: ro, privilege: operator, permit: ["show **"], deny: ["show configuration **"]}
@@ -785,6 +810,7 @@ func TestAProbeArgumentOfNoKnownSourcePrintsRedacted(t *testing.T) {
 // judges it by what the device can do: a carve-out only narrows, so it is no
 // raise, and lifting it again is (plan 5b pre-flight I14).
 func TestTheDiffReportsAProjectionChange(t *testing.T) {
+	bindingRPCs(t)
 	before := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
   - {name: r, privilege: readonly, permit: ["show **"]}
 `+subjOK+grantOK)
@@ -852,6 +878,7 @@ func TestAFailClosedReplyIsNoRaise(t *testing.T) {
 // policy test does: the commands the device refuses, and beside them the
 // allows sent under bits that do not reach them (task 8 review; Result.Unreached).
 func TestAProjectionChangeSaysWhereTheDeviceIsNarrower(t *testing.T) {
+	bindingRPCs(t)
 	before := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
   - {name: r, privilege: operator, permit: ["show **"], deny: ["show configuration **"]}
 `+subjOK+grantOK)

@@ -575,7 +575,9 @@ reproduced), and Task 19 is on hold for the owner.
     in `p49-remote`, and `user-permissions` carries the bits.
   - D: `bits` is the measured reach, the same on both images.
   - E: `carve_outs` is `view-configuration`'s `show configuration **` out of `view`. `show log
-    **`, `show firewall **` and `show policer **` join it on completion evidence only.
+    **`, `show firewall **` and `show policer **` join it on completion evidence only. None
+    leaves a deny off the wire in 1.1.0: over RPC even `show configuration **` is provisional on
+    L26c, so its deny is sent and fails closed beneath `view` (final review I-3).
   - F, G: a template user commits with no uid, and one with no authentication refuses a local
     login, so nothing is locked.
   - H: L24's class `idle-timeout` closed idle sessions on both images, so the export's
@@ -692,7 +694,9 @@ reproduced), and Task 19 is on hold for the owner.
   only relax this.
 - **You cannot deny a single `show configuration` hierarchy on Junos.** A deny naming one (`show
   configuration system`) is not enforced by the device (L26b), so port49 refuses it as an
-  argument deny. Deny all of `show configuration`, or none of it.
+  argument deny. Deny all of `show configuration`, or none of it; and on 1.1.0 denying all of it
+  under `view` still fails closed until L26c closes, since no carve-out leaves the deny off the
+  wire and a deny beneath a sent bit is not a boundary (option C).
 - **`port49 devices capabilities` output goes to cron mail, and its redaction is best effort.**
   A password typed as a command may appear in an example line.
 - **The Junos adapter is unverified.** The differential test (Task 19) is pending, so

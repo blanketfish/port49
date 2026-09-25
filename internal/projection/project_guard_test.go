@@ -538,11 +538,12 @@ func reachOf(d platform.Dialect) []string {
 }
 
 // A deny is left off the wire through a carve-out only where that carve-out
-// was measured holding over RPC too: `show configuration **` (L26c's empty
-// `<configuration>`). An adapter carving `show log **` out of `view`, as
-// set 1.1.0 does on completion evidence alone, gets the deny sent, and on
-// Junos, where it guards the CLI alone beneath `view`, fails closed (review
-// I-1).
+// was measured holding over RPC too, and until L26c closes none was: even
+// `show configuration **`, whose empty `<configuration>` the note's table
+// does not record, is provisional (final review I-3). So on Junos each deny a
+// carve-out holds is sent, and where it guards the CLI alone beneath `view`
+// the subject fails closed (review I-1). Where a deny binds RPCs, the
+// carve-outs omit both.
 func TestOnlyACarveOutMeasuredOverRPCOmitsADeny(t *testing.T) {
 	in := func(f Facts) Input {
 		in := input(platform.BitDeliveryUserPermissions, "readonly", f, permit("show **"),
@@ -559,14 +560,19 @@ func TestOnlyACarveOutMeasuredOverRPCOmitsADeny(t *testing.T) {
 	}
 	res, err = Project(in(JunosFacts))
 	if err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape ||
-		!strings.Contains(res.Refusal.Why, `deny "show log **"`) || !strings.Contains(res.Refusal.Why, "L26c") {
+		len(res.Omitted) != 0 || !strings.Contains(res.Refusal.Why, "L26c") {
 		t.Fatalf("junos: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
 	}
-	// The measured one alone still omits its deny.
+	// Nor does `show configuration **` alone: its deny is sent, and fails
+	// closed beneath `view`.
 	res, err = Project(input(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"),
 		deny("show configuration **")))
-	if err != nil || res.Shape != ShapeCapability || len(res.Omitted) != 1 {
+	if err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape || len(res.Omitted) != 0 ||
+		!strings.Contains(res.Refusal.Why, `deny "show configuration **"`) || !strings.Contains(res.Refusal.Why, "L26c") {
 		t.Fatalf("show configuration: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	if len(rpcCarves) != 0 {
+		t.Fatalf("a carve-out omits a deny over RPC before L26c closes: %q", rpcCarves)
 	}
 }
 
