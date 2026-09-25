@@ -1233,3 +1233,39 @@ func TestShutdownLogsHeldGaps(t *testing.T) {
 		t.Fatalf("%q", logged.String())
 	}
 }
+
+// lockProbe is a log writer that records whether gapMu was free when the
+// spool wrote to it.
+type lockProbe struct {
+	sp    *Spool
+	held  bool
+	wrote bool
+}
+
+func (p *lockProbe) Write(b []byte) (int, error) {
+	p.wrote = true
+	if p.sp.gapMu.TryLock() {
+		p.sp.gapMu.Unlock()
+	} else {
+		p.held = true
+	}
+	return len(b), nil
+}
+
+// The shutdown line is written with gapMu released: a log writer that blocks
+// never holds up a drop (Task 16 re-review).
+func TestShutdownLogsHeldGapsWithoutTheLock(t *testing.T) {
+	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "overflow.jsonl"), &flakySink{down: true},
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := &lockProbe{sp: sp}
+	log.SetOutput(probe)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	sp.drop(dropOfferRefused, time.Time{})
+	sp.logHeldGaps()
+	if !probe.wrote || probe.held {
+		t.Fatalf("wrote %v, under gapMu %v", probe.wrote, probe.held)
+	}
+}

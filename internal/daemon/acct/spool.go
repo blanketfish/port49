@@ -520,7 +520,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 	// this pass's records, so a reader meets the gap before what followed it.
 	// A drop during the pass, a record unparseable or set aside, is written
 	// when the pass ends, after the records it sat among; its `since` says
-	// when it began (spec §5.7, §9).
+	// when the earliest record it counts arrived (drop; spec §5.7, §9).
 	if !s.flushGaps() {
 		s.sinkRefused = true
 		return false, 0
@@ -897,15 +897,17 @@ func (s *Spool) flushGaps() bool {
 
 // logHeldGaps says, at shutdown, how many dropped records by stage were never
 // written as an account_gap record: counts and stages only, never content.
+// It formats under gapMu and logs with it released, as flushGaps writes: no
+// I/O is done holding it.
 func (s *Spool) logHeldGaps() {
 	s.gapMu.Lock()
-	defer s.gapMu.Unlock()
-	if len(s.gaps) == 0 {
-		return
-	}
 	held := make([]string, 0, len(s.gaps))
 	for stage, n := range s.gaps {
 		held = append(held, fmt.Sprintf("%s=%d", stage, n))
+	}
+	s.gapMu.Unlock()
+	if len(held) == 0 {
+		return
 	}
 	sort.Strings(held)
 	log.Printf("acct: shutting down with dropped accounting records not written to the decision log as account_gap: %s",
