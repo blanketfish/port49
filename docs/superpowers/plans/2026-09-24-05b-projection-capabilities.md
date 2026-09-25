@@ -2792,10 +2792,13 @@ In Step 4's branch table:
 - **Branch B2**, new (Task 7's fix `eaf7975` changed the rendered deny to ` *… *(\|.*)?`, which no
   lab has measured; Task 2 measured `( *\|.*)?`). Read `the rendered deny shape … enforced` in
   both `L9-abbreviations-juniper_*.md` notes. If both say true, change nothing. If either says
-  false, the device does not enforce the rendered shape: in `internal/projection/ere.go` set
-  `denyLead = ""` and `pipeTail = `( *\|.*)?``, the shape Task 2 measured refusing `show version`,
-  `show version | no-more` and `sh ver` on both images, update Task 7's and Task 8's expected
-  strings to it, and say so in the commit message. If Task 2's shape is not enforced either, take
+  false, the device does not enforce the rendered shape: revert to exactly the shape Task 2
+  measured refusing `show version`, `show version | no-more` and `sh ver` on both images,
+  `^show version( *\|.*)?$` (re-pre-flight R-M7). In `internal/projection/ere.go` set `denyLead =
+  ""` and `pipeTail = `( *\|.*)?``, and in `ruleERE` write a deny's words joined by one space,
+  as an allow's are (`pick(deny, " +", " ")` becomes `" "`), since Task 2 measured single spaces
+  and ` +` is unmeasured. Update Task 7's and Task 8's expected strings to that shape, and say so in
+  the commit message. If Task 2's shape is not enforced either, take
   branch A.
 - **Branch M**, new (pre-flight B1, re-pre-flight C1): read `L12-netconf-juniper_*.md`. If both
   notes say deny-commands and the fail-closed reply bind NETCONF RPCs, record it in the commit
@@ -2839,19 +2842,32 @@ where the device runs one whose command (`show configuration`, `show version`) p
 Task 14's branch M made set 1.1.0 forbid NETCONF, the run disables it on the device, as an operator
 must, puts `netconf ssh` back after, and expects every NETCONF session refused; `netconfForbidden`
 reads Task 13a's switch. The check sends the same four RPCs as Task 3b. "Admin with a deny" now
-expects the fail-closed reply: nothing under `request` is proven in 1.1.0 (re-pre-flight R-M2). The
+expects the fail-closed reply: nothing under `request` is proven in 1.1.0 (re-pre-flight R-M2).
+
+A new shape, "admin keeping a keyword deny" (`permit **`, `deny show configuration **`), exercises
+the admin that keeps its deny with the configuration bits dropped. Its probes include the denied
+command in full, abbreviated, in upper case, piped and padded with spaces, and `edit` beside
+`configure`. For it the test asserts that the device never enters configuration mode by
+`configure` or `edit`; that every form of the denied command is refused, on the CLI and over
+NETCONF (the fail-open checks); and, where it renders rather than failing closed, that the device
+runs every command the reply was proven to let run. Under 1.1.0's facts as shipped
+(`DenyMatchesExpanded` false) it gets the fail-closed reply, where the refusals still hold; it
+renders once Task 14's branches B and C allow, and the note says which. The
 test's fail-open check is what catches a misclassified value: if the tree called it a keyword and
 the device ignores the deny, the device runs a command port49 denies, and the test fails.
 
 <!-- patch: tests/lab/projection_test.go -->
 ````diff
 diff --git a/tests/lab/projection_test.go b/tests/lab/projection_test.go
-index 70aacec..ac913bc 100644
+index 70aacec..b5bc6d3 100644
 --- a/tests/lab/projection_test.go
 +++ b/tests/lab/projection_test.go
-@@ -62,6 +62,9 @@ var projectionProbes = []projectionProbe{
+@@ -61,7 +61,12 @@ var projectionProbes = []projectionProbe{
+ 	{junosProbe{cmd: "SHOW CONFIGURATION SYSTEM HOST-NAME", evidence: hostEvidence}, "show configuration system host-name"},
  	{junosProbe{cmd: "show configuration system host-name | display set", evidence: hostEvidence},
  		"show configuration system host-name"},
++	{junosProbe{cmd: "   show configuration system host-name   ", evidence: hostEvidence},
++		"show configuration system host-name"},
  	{junosProbe{cmd: "show route summary"}, "show route summary"},
 +	// An enumerated value: the keyword tree must not prove `static` a keyword
 +	// unless Junos matches a deny against it (decision 27).
@@ -2859,7 +2875,20 @@ index 70aacec..ac913bc 100644
  	{junosProbe{cmd: "clear interfaces statistics fxp0"}, "clear interfaces statistics fxp0"},
  	{junosProbe{cmd: "ping 127.0.0.1 count 1 rapid"}, "ping 127.0.0.1 count 1 rapid"},
  	{junosProbe{cmd: "sh ver"}, "show version"},
-@@ -96,8 +99,24 @@ var projectionShapes = []struct {
+@@ -75,8 +80,12 @@ var projectionProbes = []projectionProbe{
+ 	// Configuration mode, typed last: a statement there is governed by the
+ 	// class's configuration permissions, which no command regex reaches.
+ 	{junosProbe{cmd: "configure"}, "configure"},
++	{junosProbe{cmd: "edit"}, "edit"},
+ }
+ 
++// configEntry reports whether cmd enters configuration mode.
++func configEntry(cmd string) bool { return cmd == "configure" || cmd == "edit" }
++
+ // projectionShapes are the rule shapes the generator produces, and the one
+ // no measurement lets it carry. Each is the roles block of a policy pinning
+ // set 1.1.0. Which shape a composition renders to is the generator's, from
+@@ -96,8 +105,32 @@ var projectionShapes = []struct {
  	{"a permit beyond the bits", `  - {name: r, privilege: readonly, permit: ["show **", "clear interfaces statistics **"]}`, false},
  	{"operator", `  - {name: r, privilege: operator, permit: ["show **", "clear **", "ping **"]}`, false},
  	{"admin", `  - {name: r, privilege: admin, permit: ["**"]}`, false},
@@ -2868,6 +2897,14 @@ index 70aacec..ac913bc 100644
 +	// deny fails closed (re-pre-flight R-M2), and no shape in this list
 +	// exercises a capability shape carrying a deny on the device.
 +	{"admin with a deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["request system reboot **"]}`, true},
++	// An admin keeping a keyword deny under `show` (re-pre-flight minor):
++	// with the bits that enter configuration mode dropped, the reply carries
++	// the deny, the device refuses the configuration in every form typed and
++	// over NETCONF, runs everything else the model says it runs, and never
++	// enters configure or edit. Under set 1.1.0's facts as shipped
++	// (DenyMatchesExpanded false) it is the fail-closed reply, where the
++	// same refusals hold; it renders once Task 14's branches B and C allow.
++	{"admin keeping a keyword deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["show configuration **"]}`, false},
  	{"the refused shape", `  - {name: r, privilege: readonly, permit: ["show interfaces **", "show version"], deny: ["show interfaces terse"]}`, true},
 +	// Junos matches keywords only (decision 27): a deny naming an argument
 +	// fails closed, an allow naming one is not sent, and a deny naming an
@@ -2885,7 +2922,7 @@ index 70aacec..ac913bc 100644
  }
  
  func TestProjectionDifferential(t *testing.T) {
-@@ -121,6 +140,14 @@ func TestProjectionDifferential(t *testing.T) {
+@@ -121,6 +154,14 @@ func TestProjectionDifferential(t *testing.T) {
  		defer stop()
  		l.junosConfigureAdmin(t, reference)
  		defer l.junosConfigureAdmin(t, projectionRestore(reference))
@@ -2900,7 +2937,7 @@ index 70aacec..ac913bc 100644
  		pki := filepath.Join(root, slicePKIDir)
  		if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
  			t.Fatal(err)
-@@ -142,7 +169,8 @@ func TestProjectionDifferential(t *testing.T) {
+@@ -142,7 +183,8 @@ func TestProjectionDifferential(t *testing.T) {
  		fmt.Fprintf(&b, "\nThe binary's JunosFacts: %+v.\n", projection.JunosFacts)
  		for _, shape := range projectionShapes {
  			fmt.Fprintf(&b, "\n### %s\n\n", shape.name)
@@ -2910,7 +2947,7 @@ index 70aacec..ac913bc 100644
  		}
  		l.result(t, "L12-projection", "Decisions 22 and 26's projection, differentially: for each rule shape the "+
  			"generator produces, what the device runs under the reply port49 renders, typed as an operator might "+
-@@ -155,7 +183,7 @@ func TestProjectionDifferential(t *testing.T) {
+@@ -155,7 +197,7 @@ func TestProjectionDifferential(t *testing.T) {
  
  // projectionShape runs one shape and renders its section of the note.
  func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admission.Device, name, roles string,
@@ -2919,7 +2956,30 @@ index 70aacec..ac913bc 100644
  	t.Helper()
  	body := "platform_set: 1.1.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
  		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
-@@ -273,6 +301,58 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
+@@ -248,7 +290,7 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
+ 		if p.complete {
+ 			ran = r.completes(p.junosProbe)
+ 		}
+-		if p.cmd == "configure" && strings.Contains(devOut, "configuration mode") {
++		if configEntry(p.cmd) && strings.Contains(devOut, "configuration mode") {
+ 			ran = true
+ 			if _, err := c.sendExpect("exit configuration-mode", junosPer, junosOpPrompt); err != nil {
+ 				t.Errorf("%s: leaving configuration mode not observed within %s: %v", name, junosPer, err)
+@@ -263,7 +305,13 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
+ 		// a command it runs and the model says it refuses is a model defect
+ 		// even where port49 permits it. The device refusing what the model
+ 		// says it runs is narrower, which fails closed, and is recorded.
++		keepsDeny := name == "admin keeping a keyword deny"
+ 		switch {
++		case keepsDeny && configEntry(p.cmd) && ran:
++			t.Errorf("%s: the device entered configuration mode by %q under a reply that carries a deny", name, p.cmd)
++		case keepsDeny && res.Projection.FailClosed == "" && predicts && o.Permit && !ran && !p.complete &&
++			!configEntry(p.cmd):
++			t.Errorf("%s: the device refused %q, which port49 permits and the reply was proven to let run", name, p.cmd)
+ 		case ran && !o.Permit:
+ 			t.Errorf("%s: the device ran %q, which port49 denies (%s): the projection fails open", name, p.cmd, o.Reason)
+ 		case ran && !predicts:
+@@ -273,6 +321,58 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
  		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s | %s |\n", p.cmd, p.canonical, verdictWord(o.Permit),
  			verb(predicts), verb(ran), yesNo(ran == o.Permit))
  	}
