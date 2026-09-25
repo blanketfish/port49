@@ -26,11 +26,12 @@ const (
 // Device is one inventory device as the report reads it: what its adapter
 // declares, and whether policy admits it now.
 type Device struct {
-	Name, Platform string
-	Supports       []string
+	Name     string   `json:"name"`
+	Platform string   `json:"platform"`
+	Supports []string `json:"supports"`
 	// Quarantine is the first cause the device is quarantined for at the
 	// report's end, empty where it is admitted (spec §10).
-	Quarantine string
+	Quarantine string `json:"quarantine,omitempty"`
 }
 
 // Options bound the inference. The zero value takes every record and the
@@ -52,26 +53,29 @@ type Options struct {
 
 // Row is one device's line of the matrix, and its reconciliation.
 type Row struct {
-	Device   Device
-	Observed []string
-	Warnings []string
+	Device   Device   `json:"device"`
+	Observed []string `json:"observed"`
+	Warnings []string `json:"warnings"`
 	// Notes are what the matrix says that is no fault: a capability observed
 	// that the adapter does not declare is a lab measurement waiting to be
 	// made, never one to assert by hand (spec §9, "Principle"); a device never
 	// seen in the window is one nobody logged into, which pages nobody (plan
 	// 5b pre-flight I13: "once that happens nobody reads the report again").
-	Notes []string
+	Notes []string `json:"notes"`
 	// Unauthorized counts command accounting records, in contexts port49
 	// authenticated, that no authorization request of the same context
 	// accounts for; Examples are up to three of their commands.
-	Unauthorized int
-	Examples     []string
+	Unauthorized int      `json:"unauthorized"`
+	Examples     []string `json:"examples"`
 	// ConfigEntered and ConfigSilent are the permitted configuration entries
 	// and those no authorization request followed in their context.
-	ConfigEntered, ConfigSilent int
+	ConfigEntered int `json:"config_entered"`
+	ConfigSilent  int `json:"config_silent"`
 	// Unattributed, Foreign and System count the device's accounting records
 	// by attribution (spec §5.8): the stream's health for this device.
-	Unattributed, Foreign, System int
+	Unattributed int `json:"unattributed"`
+	Foreign      int `json:"foreign"`
+	System       int `json:"system"`
 }
 
 // Report is the inference over one window.
@@ -79,14 +83,15 @@ type Report struct {
 	// From and To are the window searched: the options' bounds where they set
 	// them, and the span of the records read where they do not. A side still
 	// zero is one no bound and no record fixes; Window says so.
-	From, To time.Time
-	Rows     []Row
+	From time.Time `json:"from"`
+	To   time.Time `json:"to"`
+	Rows []Row     `json:"rows"`
 	// Gaps are the account_gap records whose drops can fall in the window,
 	// from their since to when they were written: records port49 received
 	// and did not write. Where there are any, a reconciliation
 	// finding says "possibly": the gap may be the authorization it did not
 	// find (spec §9, "What silence can and cannot mean").
-	Gaps []decision.Gap
+	Gaps []decision.Gap `json:"gaps"`
 }
 
 // Qualified reports whether the window's accounting stream is whole, so a
@@ -115,7 +120,10 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 	}
 	var rep Report
 	type ctxKey struct{ device, ctx string }
-	byDevice := map[string][]decision.Record{}
+	byDevice := map[string][]decision.Record{} // the inventory's devices only
+	for _, d := range devices {
+		byDevice[d.Name] = nil
+	}
 	authorized := map[ctxKey][]string{} // context → each authorized command, as text
 	for _, r := range records {
 		if r.Event == decision.EventAccountGap && r.Gap != nil {
@@ -146,7 +154,9 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 		if r.Device == nil {
 			continue
 		}
-		byDevice[r.Device.Name] = append(byDevice[r.Device.Name], r)
+		if recs, ok := byDevice[r.Device.Name]; ok {
+			byDevice[r.Device.Name] = append(recs, r)
+		}
 	}
 	if !opt.From.IsZero() {
 		rep.From = opt.From
@@ -158,23 +168,36 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 		row := Row{Device: d}
 		recs := byDevice[d.Name]
 		observed := map[string]bool{}
-		var entries []decision.Record    // permitted configuration entries
+		// pending counts, per context, the permitted configuration entries no
+		// authorization request has followed yet. A request in the context
+		// answers them all; its exec STOP ends the session and leaves them
+		// silent, and so does the window's end, where a STOP is missing: spec
+		// §9's third observation reads silence up to the session's end.
+		pending := map[string]int{}
 		unmatched := map[string]string{} // context and command → the command, redacted
-		for i, r := range recs {
+		for _, r := range recs {
 			switch r.Event {
 			case decision.EventAuthorizeSession:
 				observed[Session] = true
 			case decision.EventAuthorizeCommand:
 				observed[Commands] = true
+				if r.Session != nil && pending[r.Session.CtxID] > 0 {
+					observed[ConfigCommands] = true
+					delete(pending, r.Session.CtxID)
+				}
 				if r.Verdict == decision.VerdictPermit && r.Request != nil && configEntry(r.Request.Vector) {
-					entries = append(entries, r)
-					if followed(recs[i+1:], r.Session) {
-						observed[ConfigCommands] = true
+					row.ConfigEntered++
+					if r.Session != nil {
+						pending[r.Session.CtxID]++
 					} else {
 						row.ConfigSilent++
 					}
 				}
 			case decision.EventAccount:
+				if r.Flags == "stop" && r.Session != nil && r.AcctRecord != nil && isExec(d.Platform, r.AcctRecord.Raw) {
+					row.ConfigSilent += pending[r.Session.CtxID]
+					delete(pending, r.Session.CtxID)
+				}
 				switch r.Attribution {
 				case "unattributed":
 					row.Unattributed++
@@ -199,7 +222,9 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 				}
 			}
 		}
-		row.ConfigEntered = len(entries)
+		for _, n := range pending {
+			row.ConfigSilent += n
+		}
 		for _, c := range []string{Session, Commands, ConfigCommands} {
 			if observed[c] {
 				row.Observed = append(row.Observed, c)
@@ -226,7 +251,7 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 			row.Notes = append(row.Notes, fmt.Sprintf("qualified: account_gap records overlapping this window say %d "+
 				"accounting records port49 received are not in the log, so a reconciliation finding is possible, not certain", n))
 		}
-		if row.Device.Quarantine == "" && len(row.Observed) == 0 {
+		if row.Device.Quarantine == "" && len(recs) == 0 {
 			row.Notes = append(row.Notes, "never seen: no record in the window, so nothing is inferred")
 		}
 		for _, c := range row.Observed {
@@ -244,8 +269,14 @@ func warnings(row Row, opt Options, qualified bool) []string {
 	d := row.Device
 	if slices.Contains(d.Supports, Commands) && row.ConfigEntered >= opt.ConfigEntries &&
 		float64(row.ConfigSilent) >= opt.ConfigSilent*float64(row.ConfigEntered) {
-		out = append(out, fmt.Sprintf("config-commands probably off: %d of %d configuration entries saw no "+
-			"authorization request after them in their session", row.ConfigSilent, row.ConfigEntered))
+		w := fmt.Sprintf("config-commands probably off: %d of %d configuration entries saw no "+
+			"authorization request after them in their session", row.ConfigSilent, row.ConfigEntered)
+		// The matrix shows config_commands observed where any entry was
+		// followed; say what those likely were, so the row agrees with itself.
+		if n := row.ConfigEntered - row.ConfigSilent; n > 0 {
+			w += fmt.Sprintf(", and the %d that did may have been an exec command such as end or write memory", n)
+		}
+		out = append(out, w)
 	}
 	if row.Unauthorized > 0 {
 		possibly := ""
@@ -291,28 +322,6 @@ func text(vector []string) string {
 // that authorize commands: `configure`, and what follows it.
 func configEntry(vector []string) bool {
 	return len(vector) > 0 && strings.EqualFold(vector[0], "configure")
-}
-
-// followed reports whether an authorization request of the same context
-// comes after a configuration entry, before the context's session ends:
-// spec §9's third observation reads silence up to the session's end.
-func followed(after []decision.Record, s *decision.Session) bool {
-	if s == nil {
-		return false
-	}
-	for _, r := range after {
-		if r.Session == nil || r.Session.CtxID != s.CtxID {
-			continue
-		}
-		switch {
-		case r.Event == decision.EventAuthorizeCommand:
-			return true
-		case r.Event == decision.EventAccount && r.Flags == "stop" && r.AcctRecord != nil &&
-			len(r.AcctRecord.Vector) == 0:
-			return false // the exec STOP: the session ended
-		}
-	}
-	return false
 }
 
 // isExec reports whether an accounting record is the session's own exec

@@ -1,6 +1,7 @@
 package capability
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
@@ -221,5 +222,79 @@ func TestTheWindowIsWhatWasSearched(t *testing.T) {
 	}
 	if w := Infer(nil, devices, Options{From: from}).Window(); w != "no records" {
 		t.Errorf("an empty log, open after: %q", w)
+	}
+}
+
+// "never seen" is a device with no record at all in the window: one whose
+// only records are accounting has been seen, and nothing about it is unseen.
+func TestNeverSeenIsNoRecordAtAll(t *testing.T) {
+	var l logb
+	l.account("leaf-01", "", "system", "show", "clock")
+	devices := []Device{{Name: "leaf-01", Platform: "arista_eos", Supports: eos}}
+	if r := Infer(l.recs, devices, Options{}).Rows[0]; len(r.Notes) != 0 || r.System != 1 {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// Where one configuration entry in five saw a request after it, the matrix
+// shows config_commands observed, and the warning says what that one was
+// likely to be, so the row does not contradict itself.
+func TestProbablyOffNamesTheEntriesThatWereFollowed(t *testing.T) {
+	var l logb
+	for i, ctx := range []string{"a", "b", "c", "d", "e"} {
+		l.command("leaf-04", ctx, decision.VerdictPermit, "configure", "terminal")
+		if i == 0 {
+			l.command("leaf-04", ctx, decision.VerdictPermit, "write", "memory")
+		}
+		l.account("leaf-04", ctx, "resolved")
+	}
+	devices := []Device{{Name: "leaf-04", Platform: "arista_eos", Supports: eos}}
+	r := Infer(l.recs, devices, Options{}).Rows[0]
+	if w := strings.Join(r.Warnings, ";"); !strings.Contains(w, "4 of 5") || !strings.Contains(w, "the 1 that did") {
+		t.Fatalf("%q", w)
+	}
+}
+
+// An entry whose session's STOP never arrives, because it crosses the
+// window's end or a gap took it, is silent: nothing after it answered.
+func TestAnEntryWithNoStopIsSilent(t *testing.T) {
+	var l logb
+	for _, ctx := range []string{"a", "b", "c", "d", "e"} {
+		l.command("leaf-04", ctx, decision.VerdictPermit, "configure", "terminal")
+	}
+	devices := []Device{{Name: "leaf-04", Platform: "arista_eos", Supports: eos}}
+	if r := Infer(l.recs, devices, Options{}).Rows[0]; r.ConfigEntered != 5 || r.ConfigSilent != 5 {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// The session ends at its platform's exec STOP, by the same definition the
+// join uses: Junos's carries cmd=logout, and a request after it in a reused
+// context does not answer an entry before it.
+func TestTheSessionEndsAtThePlatformsExecStop(t *testing.T) {
+	var l logb
+	l.command("srx-1", "a", decision.VerdictPermit, "configure")
+	l.account("srx-1", "a", "resolved", "logout")
+	l.command("srx-1", "a", decision.VerdictPermit, "show", "version")
+	devices := []Device{{Name: "srx-1", Platform: "juniper_junos", Supports: eos}}
+	if r := Infer(l.recs, devices, Options{}).Rows[0]; r.ConfigSilent != 1 {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// Row and Report marshal with snake_case keys, as all port49 data does.
+func TestReportKeysAreSnakeCase(t *testing.T) {
+	var l logb
+	l.add(decision.EventAuthorizeSession, "leaf-01", "arista_eos", "c1", nil)
+	devices := []Device{{Name: "leaf-01", Platform: "arista_eos", Supports: eos}}
+	b, err := json.Marshal(Infer(l.recs, devices, Options{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{`"from"`, `"rows"`, `"device"`, `"platform"`, `"observed"`, `"config_entered"`,
+		`"config_silent"`, `"unattributed"`} {
+		if !strings.Contains(string(b), k) {
+			t.Errorf("no %s in %s", k, b)
+		}
 	}
 }
