@@ -62,21 +62,35 @@ func probeRules(programs []*Program) []probeRule {
 	return rules
 }
 
-// ProbeSources maps each argument Probes may try for the programs to the
-// words of their rules it was made from: a word as written, split into a
-// name and an index, cut to an abbreviation, or padded with whitespace. A
+// ProbeSources maps each argument Probes and PipeProbes may try for the
+// programs to the terms of their rules it was made from, as each rule writes
+// the term (a word, `@class`, `/regex/`, or a wildcard): the term as written,
+// a class or regex witness, either split into a name and an index, cut to an
+// abbreviation, or padded with whitespace; and the pipe token to itself.
+// Every argument but OtherArgument has a source. A
 // report printing a probe reads it to print, as redacted, every argument
 // made from a word redaction hides, which no writer would recognize once
 // split or cut (spec §5.8).
 func ProbeSources(programs ...*Program) map[string][]string {
-	rules := probeRules(programs)
 	src := map[string][]string{}
-	maxLen := 0
-	for _, r := range rules {
-		maxLen = max(maxLen, r.fixed+1)
+	for _, rules := range [][]probeRule{probeRules(programs), pipeRules(programs)} {
+		maxLen := 0
+		for _, r := range rules {
+			maxLen = max(maxLen, r.fixed+1)
+		}
+		for i := 0; i < maxLen; i++ {
+			candidates(rules, i, src)
+		}
 	}
-	for i := 0; i < maxLen; i++ {
-		candidates(rules, i, src)
+	// The pipe token joins a command and a stage; the platform's, not a
+	// rule's.
+	for _, p := range programs {
+		if p != nil && p.Blob.Normalize.PipeToken != "" {
+			tok := p.Blob.Normalize.PipeToken
+			if !slices.Contains(src[tok], tok) {
+				src[tok] = append(src[tok], tok)
+			}
+		}
 	}
 	return src
 }
@@ -86,6 +100,11 @@ func ProbeSources(programs ...*Program) map[string][]string {
 // among them. A stage is matched as written (pipePermits), so there are no
 // abbreviations or whitespace shapes to try.
 func PipeProbes(programs ...*Program) [][]string {
+	return walkProbes(pipeRules(programs), true)
+}
+
+// pipeRules is the programs' pipe allowlists as PipeProbes walks them.
+func pipeRules(programs []*Program) []probeRule {
 	var rules []probeRule
 	for _, p := range programs {
 		if p == nil {
@@ -96,7 +115,7 @@ func PipeProbes(programs ...*Program) [][]string {
 			rules = append(rules, probeRule{c: r, fixed: fixed, rest: rest})
 		}
 	}
-	return walkProbes(rules, true)
+	return rules
 }
 
 // PipeEntry is the first allowlist entry that permits stage, or "" when none
@@ -214,9 +233,9 @@ func candidates(rules []probeRule, i int, src map[string][]string) []string {
 			for _, w := range joined {
 				for _, sp := range splitsOf(w) {
 					if t.joinHead {
-						from(words, sp[0], w)
+						from(words, sp[0], t.source())
 					} else {
-						from(words, sp[1], w)
+						from(words, sp[1], t.source())
 					}
 				}
 			}
@@ -226,7 +245,7 @@ func candidates(rules []probeRule, i int, src map[string][]string) []string {
 		case Regex, Class:
 			for _, re := range t.res {
 				if w, ok := witness(re); ok {
-					matched[w] = true
+					from(matched, w, t.source())
 				}
 			}
 			continue
@@ -235,16 +254,16 @@ func candidates(rules []probeRule, i int, src map[string][]string) []string {
 			continue
 		}
 		w := t.word
-		from(words, w, w)
+		from(words, w, t.source())
 		if r.c.verdict != Deny {
 			continue
 		}
-		from(padded, " "+w, w)
+		from(padded, " "+w, t.source())
 		if r.abbrev {
 			for k := range w {
 				if k > 0 {
-					from(abbrevs, w[:k], w)
-					from(padded, " "+w[:k], w)
+					from(abbrevs, w[:k], t.source())
+					from(padded, " "+w[:k], t.source())
 				}
 			}
 		}
@@ -254,6 +273,23 @@ func candidates(rules []probeRule, i int, src map[string][]string) []string {
 		out = append(out, sortedSet(set)...)
 	}
 	return out
+}
+
+// source is the term as its rule writes it: a word, `@class`, `/regex/`,
+// or the wildcard. A probe argument made from the term is recorded against
+// it (ProbeSources), which is the text a redaction hides in the rule.
+func (t cterm) source() string {
+	switch t.kind {
+	case Class:
+		return "@" + t.word
+	case Regex:
+		return "/" + t.word + "/"
+	case Any:
+		return "*"
+	case Rest:
+		return "**"
+	}
+	return t.word
 }
 
 func sortedSet(set map[string]bool) []string {

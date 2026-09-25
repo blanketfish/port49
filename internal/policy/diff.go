@@ -990,15 +990,20 @@ func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
 }
 
 // probeShown is a probe vector with every argument made from a value
-// redaction hides printed Redacted: the value, or a piece of it a probe
-// split or cut short, which no writer recognizes as the secret (src is
-// engine.ProbeSources; spec §5.8). The vector probed is left as it was.
+// redaction hides printed Redacted: the value, a piece of it a probe split
+// or cut short, or a witness of a class or regex term whose text is hidden,
+// none of which a writer recognizes as the secret (src is
+// engine.ProbeSources; spec §5.8). An argument with no source recorded is
+// one nothing says is safe, and prints Redacted too; OtherArgument is no
+// rule's text. The vector probed is left as it was.
 func probeShown(v []string, src map[string][]string, secrets []string) []string {
 	out := slices.Clone(v)
 	for i, a := range out {
-		if hidden(secrets, strings.TrimSpace(a)) || slices.ContainsFunc(src[a], func(w string) bool {
-			return hidden(secrets, w)
-		}) {
+		if a == engine.OtherArgument {
+			continue
+		}
+		if len(src[a]) == 0 || hidden(secrets, strings.TrimSpace(a)) || slices.ContainsFunc(src[a],
+			func(w string) bool { return hidden(secrets, w) }) {
 			out[i] = platform.Redacted
 		}
 	}

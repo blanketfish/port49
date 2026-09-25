@@ -627,10 +627,23 @@ func TestTheFailClosedCaveatSaysWhy(t *testing.T) {
 // argument as probed (re-review 2, R5): diff's changed commands and a
 // projection's narrower examples both print through it.
 func TestAProbeMadeFromAHiddenValuePrintsRedacted(t *testing.T) {
-	src := map[string][]string{"Kilo": {"Kilo7"}, "7": {"Kilo7"}, " Kilo7": {"Kilo7"}, "community": {"community"}}
+	src := map[string][]string{"Kilo": {"Kilo7"}, "7": {"Kilo7"}, " Kilo7": {"Kilo7"}, "community": {"community"},
+		"username": {"username"}, "kilo7": {"Kilo7"}}
 	got := probeShown([]string{"username", "community", "Kilo", "7", " Kilo7", "kilo7"}, src, []string{"KILO7"})
 	want := []string{"username", "community", platform.Redacted, platform.Redacted, platform.Redacted, platform.Redacted}
 	if !slices.Equal(got, want) {
+		t.Fatalf("%q", got)
+	}
+}
+
+// An argument with no recorded source prints redacted: what a probe made it
+// from is unknown, so it may be a secret (re-review 3, R6, fail closed).
+// The stand-in for every other argument is no rule's text and prints as it
+// is.
+func TestAProbeArgumentOfNoKnownSourcePrintsRedacted(t *testing.T) {
+	src := map[string][]string{"username": {"username"}}
+	got := probeShown([]string{"username", "Mango", engine.OtherArgument}, src, nil)
+	if want := []string{"username", platform.Redacted, engine.OtherArgument}; !slices.Equal(got, want) {
 		t.Fatalf("%q", got)
 	}
 }

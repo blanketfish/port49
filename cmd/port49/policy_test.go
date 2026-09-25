@@ -1053,3 +1053,45 @@ key_groups:
 		t.Fatalf("policy diff:\n%s", got)
 	}
 }
+
+// A probe tries a witness of each class and regex term, whole and split,
+// under every command head that reaches its position: made from a term
+// whose values redaction hides, a secret entity class or a secret regex,
+// each prints «redacted», and the narrowing is still reported (task 11
+// re-review 3, R6).
+func TestPolicyDiffNeverPrintsAWitnessOfASecretClassOrRegex(t *testing.T) {
+	for name, c := range map[string]struct{ block, deny string }{
+		"entity class": {"platforms: {cisco_iosxe: {entity_classes: {bad_comm: ['^Mango55$', '^Papaya$']}}}\n",
+			`"snmp-server community @bad_comm **"`},
+		"regex": {"", `"snmp-server community /^Mango5[5-6]$/ **"`},
+	} {
+		oldPol, inv := policyFixture(t)
+		if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: xe-01, platform: cisco_iosxe, addresses: [10.0.0.3]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		raw := string(readFile(t, oldPol))
+		before := strings.Replace(raw, "permit: [show **]}", `permit: [show **, "username **"]}`, 1)
+		before = strings.Replace(before, "deny: [reload **]}", "deny: [reload **, "+c.deny+"]}", 1)
+		before = c.block + before[:strings.Index(before, "tests:\n")]
+		after := strings.Replace(before, `, "username **"`, "", 1)
+		newPol := filepath.Join(t.TempDir(), "policy.yaml")
+		if err := os.WriteFile(oldPol, []byte(before), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(newPol, []byte(after), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb)
+		got := out.String() + errb.String()
+		if u := strings.ToUpper(got); strings.Contains(u, "MANGO") || strings.Contains(u, "PAPAYA") ||
+			!strings.Contains(got, "narrows: noc on xe-01: \"username community") {
+			t.Fatalf("%s: policy diff:\n%s", name, got)
+		}
+	}
+}
