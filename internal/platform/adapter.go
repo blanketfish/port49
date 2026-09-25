@@ -759,6 +759,26 @@ var bitName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 // Junos takes as a login name, lower case so no two differ only by case.
 var templateName = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
 
+// p49Template is port49's template namespace: a template the device already
+// has for another reason, `root` or `remote`, would put the session in that
+// account's class whatever bits the projection proved (spec §8,
+// local_user_names). No subject may take a p49- name either.
+var p49Template = regexp.MustCompile(`^p49-[a-z0-9][a-z0-9._-]*$`)
+
+// remoteUser is the device's own fallback template: the user a session with
+// no template, or one the device lacks, lands under (RemoteClass).
+const remoteUser = "remote"
+
+// systemUserNames is every platform's system users as one list: no template
+// user takes one, whatever platform it is declared on.
+func systemUserNames() []string {
+	var out []string
+	for _, users := range systemUsers {
+		out = append(out, users...)
+	}
+	return out
+}
+
 // validateProjection is Validate for the projection keys (spec §8): a
 // projection this build renders, a session-only platform, `privilege` as
 // ceiling bits the adapter declares, each bit's reach in rule form, a
@@ -827,9 +847,13 @@ func validateProjection(field func(string) string, d Dialect) error {
 		}
 	}
 	for _, bit := range sortedKeys(d.CarveOuts) {
-		if _, ok := d.Bits[bit]; !ok || bit == BaselineBit {
-			return fmt.Errorf("%s.%s: a carve-out belongs to a bit under bits, never to %s", field("carve_outs"), bit,
-				BaselineBit)
+		if bit == BaselineBit {
+			return fmt.Errorf("%s.%s: a carve-out belongs to a bit a level may hold, never to %s, which every "+
+				"session holds", field("carve_outs"), bit, BaselineBit)
+		}
+		if _, ok := d.Bits[bit]; !ok {
+			return fmt.Errorf("%s.%s: %s is not a bit under bits, so it has no reach to carve out of",
+				field("carve_outs"), bit, bit)
 		}
 		for i, rule := range d.CarveOuts[bit] {
 			// Only commands the bit itself reaches can be the bit's alone.
@@ -847,6 +871,12 @@ func validateProjection(field func(string) string, d Dialect) error {
 	default:
 		return fmt.Errorf("%s is %s or %s (spec §8)", field("bit_delivery"), BitDeliveryUserPermissions,
 			BitDeliveryLocalUserName)
+	}
+	// With no ceiling bits a level would be projected against nothing the
+	// adapter says; every projected level names its bits.
+	if len(d.CeilingBits) == 0 {
+		return fmt.Errorf("%s is required with command_projection: each level's ceiling in permission bits (spec §8)",
+			field("privilege"))
 	}
 	for _, level := range sortedKeys(d.CeilingBits) {
 		seen := map[string]bool{}
@@ -880,6 +910,16 @@ func validateProjection(field func(string) string, d Dialect) error {
 		if !templateName.MatchString(name) {
 			return fmt.Errorf("%s is not a login name: lower case letters, digits, `.`, `-` and `_`, starting with "+
 				"a letter, at most 64", field("local_user_names."+level))
+		}
+		if name == remoteUser {
+			return fmt.Errorf("%s: %s is the device's own fallback template, the bitless one a session lands under "+
+				"when its template is missing; a level's template is p49-<name> (spec §8)",
+				field("local_user_names."+level), name)
+		}
+		if !p49Template.MatchString(name) || ContainsName(systemUserNames(), name) {
+			return fmt.Errorf("%s: %s is not a p49- template: a level's template is p49-<name>, since one the "+
+				"device already has, root or a local account, puts the session in its own class whatever bits the "+
+				"projection proved (spec §8)", field("local_user_names."+level), name)
 		}
 		// One template is one class: two levels sharing it get the same bits.
 		if other, ok := byName[name]; ok && !slices.Equal(d.ExpandBits(d.CeilingBits[other]),
