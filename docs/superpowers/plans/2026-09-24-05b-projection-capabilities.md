@@ -220,13 +220,17 @@ them edits `internal/platform/adapter.go`, `dialect.go` or `internal/policy/load
 
 **Changes to existing tasks, in one place:**
 - **Task 7**: unchanged; see item 5.
-- **Task 8**: unchanged; Task 12a adds the keyword checks to the generator it writes.
-- **Task 11**: unchanged; an `argument_deny` composition is a `projection_refused` finding with the
+- **Task 8**: Task 12a adds the keyword checks to the generator it writes. Its test
+  `TestATemplateCarriesTheLevelsBits` now expects the deny as Task 7's fix `eaf7975` renders it,
+  `^ *[sS]…( .*)? *(\|.*)?$`, so the block applies and passes on the branch.
+- **Task 11**: its `TestProjectionFindings` now expects the overflowing deny's class line to open
+  `^( *[sS]`, the rendered shape since `eaf7975`. An `argument_deny` composition is a `projection_refused` finding with the
   ruling's message, and fails `policy test` as every fail-closed composition does. Task 12b adds the
   warning.
 - **Task 12**: unchanged; `policy diff` fails on the same finding.
 - **Task 14**: new step, "Ship the keyword tree"; branch B keeps `DenyMatchesExpanded` false unless
-  every Task 3b abbreviation probe is refused on both images; new branch M acts on the NETCONF
+  every Task 3b abbreviation probe is refused on both images; new branch B2 reverts the rendered deny
+  shape if the device does not enforce it; new branch M acts on the NETCONF
   measurement; branch J records that deny-commands does not reach configuration mode; branch A lists nothing about arguments, which decision 27
   handles.
 - **Task 19**: five more shapes and one more probe.
@@ -302,7 +306,11 @@ no-more`, `sh int ter | count`), and `sh i terse`, which is ambiguous after `sho
 answer says which probe is ambiguous on the image; one it refused for any other reason measured
 nothing and fails the test. The note's line `JunosFacts.DenyMatchesExpanded (keywords) = true`
 holds only where the deny refused every probe and the control ran every unambiguous one. The deny
-is written exactly as the generator renders one (`show +version( *\|.*)?`, …; pre-flight B-M3).
+is written exactly as the generator renders one since Task 7's fix `eaf7975`: a leading ` *`,
+words joined by ` +`, the tail ` *(\|.*)?` that takes trailing spaces and a pipeline, and one
+alternation (` *show +version *(\|.*)?`, …; pre-flight B-M3). Before the abbreviations, the note
+reads whether that shape is enforced at all: every one of the five commands in full, and `show
+version | no-more`, run by the control and refused under the deny (Task 14's branch B2).
 Four odd probes, from the Task 7 review, are recorded whatever the control does: `ſhow version`
 (U+017F, which case-folds to `s`), and a denied command padded with leading and with trailing
 spaces, no pipe. Where the control runs one, the deny must refuse it, or the fact stays false. It
@@ -752,10 +760,10 @@ index 0000000..6719eb0
 ````diff
 diff --git a/tests/lab/junos_abbrev_test.go b/tests/lab/junos_abbrev_test.go
 new file mode 100644
-index 0000000..424a830
+index 0000000..b8f4bef
 --- /dev/null
 +++ b/tests/lab/junos_abbrev_test.go
-@@ -0,0 +1,145 @@
+@@ -0,0 +1,160 @@
 +//go:build lab
 +
 +package lab
@@ -766,7 +774,11 @@ index 0000000..424a830
 +	"testing"
 +)
 +
-+// TestL9JunosAbbreviations measures JunosFacts.DenyMatchesExpanded for
++// TestL9JunosAbbreviations first reads whether the rendered deny is enforced
++// at all: every command typed in full, plain and piped, refused under it. A
++// shape the device does not enforce is Task 14's branch B2, which reverts
++// the deny to the shape Task 2 measured or ships Junos unprojected. It then
++// measures JunosFacts.DenyMatchesExpanded for
 +// keywords (spec §15 L9; decision 27; the lead's ruling of 2026-09-25): that a
 +// keyword deny refuses the command however its keywords are abbreviated, at
 +// several lengths and command depths, piped, and where an abbreviation is
@@ -788,13 +800,14 @@ index 0000000..424a830
 +var junosAbbrevDelete = []string{"delete system login user p49-l9-all", "delete system login class p49-l9-all"}
 +
 +// junosAbbrevDeny names five commands of two and three keywords exactly as
-+// the generator renders a deny (ruleERE, pre-flight B-M3): words joined by
-+// ` +`, each rule with its pipe tail, one alternation, anchored. Its letters
-+// are lower case, as with CaseSensitive false; the bracketed form a
++// the generator renders a deny (ruleERE, Task 7 as fixed in eaf7975;
++// pre-flight B-M3): a leading ` *`, words joined by ` +`, the tail ` *(\|.*)?`
++// taking trailing spaces and a pipeline, one alternation, anchored. Its
++// letters are lower case, as with CaseSensitive false; the bracketed form a
 +// case-sensitive device gets matches everything this does and more, so a
 +// probe this refuses, that refuses too.
-+const junosAbbrevDeny = `^(show +version( *\\|.*)?|show +interfaces +terse( *\\|.*)?|show +system +uptime( *\\|.*)?|` +
-+	`show +route +summary( *\\|.*)?|show +chassis +hardware( *\\|.*)?)$`
++const junosAbbrevDeny = `^( *show +version *(\\|.*)?| *show +interfaces +terse *(\\|.*)?| *show +system +uptime *(\\|.*)?|` +
++	` *show +route +summary *(\\|.*)?| *show +chassis +hardware *(\\|.*)?)$`
 +
 +// junosAbbrevProbe is one abbreviation, and whether the CLI may find it
 +// ambiguous, in which case the control need not run it. An odd probe is one
@@ -807,7 +820,7 @@ index 0000000..424a830
 +}
 +
 +var junosAbbrevProbes = []junosAbbrevProbe{
-+	{cmd: "show version"}, {cmd: "sh ver"}, {cmd: "sho vers"}, {cmd: "show versi"},
++	{cmd: "show version"}, {cmd: "show version | no-more"}, {cmd: "sh ver"}, {cmd: "sho vers"}, {cmd: "show versi"},
 +	{cmd: "sh ver | no-more"},
 +	{cmd: "show interfaces terse"}, {cmd: "sh int ter"}, {cmd: "sh interfaces te"}, {cmd: "show int terse"},
 +	{cmd: "sh int ter | count"},
@@ -853,7 +866,15 @@ index 0000000..424a830
 +			}
 +		}
 +		ambiguous := func(r junosRun, cmd string) bool { return strings.Contains(r.outs[cmd], "ambiguous") }
-+		expanded := true
++		// The rendered shape is enforced where every full form, plain and
++		// piped, is refused under the deny and run by the control.
++		full := []string{"show version", "show version | no-more", "show interfaces terse", "show system uptime",
++			"show route summary", "show chassis hardware"}
++		enforced := true
++		for _, cmd := range full {
++			enforced = enforced && control.ran(cmd) && !deny.ran(cmd)
++		}
++		expanded := enforced
 +		var b strings.Builder
 +		fmt.Fprintf(&b, "The class was committed: %s.\n\n```\n%s\n```\n\nThe deny: `deny-commands=%s`.\n\n",
 +			commitWord(commit), strings.Join(junosAbbrevClass, "\n"), tableCell(junosAbbrevDeny))
@@ -877,9 +898,11 @@ index 0000000..424a830
 +			fmt.Fprintf(&b, "| %s | %s | %s |\n", tableCell(fmt.Sprintf("%q", p.cmd)), ranWord(ranControl, ambiguous(control, p.cmd)),
 +				ranWord(ranDeny, ambiguous(deny, p.cmd)))
 +		}
-+		fmt.Fprintf(&b, "\n### Read off the table\n\n- JunosFacts.DenyMatchesExpanded (keywords) = %v: true only "+
-+			"where the deny refused every probe and the control ran every unambiguous one; set 1.1.0 takes true "+
-+			"only where both images say true\n", expanded)
++		fmt.Fprintf(&b, "\n### Read off the table\n\n- the rendered deny shape (` *... *(\\|.*)?`) enforced: %v: every "+
++			"full form, plain and piped, refused under it and run by the control\n", enforced)
++		fmt.Fprintf(&b, "- JunosFacts.DenyMatchesExpanded (keywords) = %v: true only where the shape is enforced, the "+
++			"deny refused every probe and the control ran every unambiguous one; set 1.1.0 takes true only where "+
++			"both images say true\n", expanded)
 +		for _, r := range []junosRun{control, deny} {
 +			fmt.Fprintf(&b, "\n### %s\n\nReply `%s`. `show cli authorization`:\n\n```\n%s\n```\n", r.name, r.attrs, r.auth)
 +			for _, p := range junosAbbrevProbes {
@@ -907,10 +930,10 @@ index 0000000..424a830
 ````diff
 diff --git a/tests/lab/junos_netconf_test.go b/tests/lab/junos_netconf_test.go
 new file mode 100644
-index 0000000..ea99735
+index 0000000..20d6093
 --- /dev/null
 +++ b/tests/lab/junos_netconf_test.go
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,164 @@
 +//go:build lab
 +
 +package lab
@@ -954,8 +977,9 @@ index 0000000..ea99735
 +	"delete system login user p49-nc-none", "delete system login class p49-nc-none"}
 +
 +// junosNetconfDeny names `show configuration **` and `show version` as the
-+// generator renders a deny (ruleERE; words joined by ` +`, the pipe tail).
-+const junosNetconfDeny = `^(show +configuration( .*)?( *\\|.*)?|show +version( *\\|.*)?)$`
++// generator renders a deny (ruleERE, as fixed in eaf7975: a leading ` *`,
++// words joined by ` +`, the tail ` *(\|.*)?`).
++const junosNetconfDeny = `^( *show +configuration( .*)? *(\\|.*)?| *show +version *(\\|.*)?)$`
 +
 +var junosNetconfVariants = []junosVariant{
 +	{"control", `["local-user-name=p49-nc-ro"]`, "view and view-configuration, no regex: both RPCs run"},
@@ -2474,6 +2498,14 @@ In Step 4's branch table:
   line, which mixed in the argument deny. Write `var JunosFacts = Facts{CaseSensitive: false,
   DenyMatchesExpanded: <true only as above>}`, citing the notes and decision 27 in the comment above
   it. While it is false, a composition that needs a deny on the wire keeps the fail-closed reply.
+- **Branch B2**, new (Task 7's fix `eaf7975` changed the rendered deny to ` *… *(\|.*)?`, which no
+  lab has measured; Task 2 measured `( *\|.*)?`). Read `the rendered deny shape … enforced` in
+  both `L9-abbreviations-juniper_*.md` notes. If both say true, change nothing. If either says
+  false, the device does not enforce the rendered shape: in `internal/projection/ere.go` set
+  `denyLead = ""` and `pipeTail = `( *\|.*)?``, the shape Task 2 measured refusing `show version`,
+  `show version | no-more` and `sh ver` on both images, update Task 7's and Task 8's expected
+  strings to it, and say so in the commit message. If Task 2's shape is not enforced either, take
+  branch A.
 - **Branch M**, new (pre-flight B1): read `L12-netconf-juniper_*.md`. If both notes say deny-commands
   and the fail-closed reply bind NETCONF RPCs, record it in the commit message and change nothing.
   If either says not, or the images disagree, a deny port49 sends is walked around over NETCONF, so
@@ -6796,7 +6828,7 @@ index 0000000..c482916
 +		t.Fatal(err)
 +	}
 +	want := []string{"local-user-name=p49-readonly",
-+		`deny-commands=^[sS][hH][oO][wW] +[cC][oO][nN][fF][iI][gG][uU][rR][aA][tT][iI][oO][nN]( .*)?( *\|.*)?$`}
++		`deny-commands=^ *[sS][hH][oO][wW] +[cC][oO][nN][fF][iI][gG][uU][rR][aA][tT][iI][oO][nN]( .*)? *(\|.*)?$`}
 +	if !reflect.DeepEqual(res.Attributes, want) {
 +		t.Fatalf("%q", res.Attributes)
 +	}
@@ -9083,7 +9115,7 @@ index f9fc9b1..34aeccc 100644
 +		}
 +	}
 +	if len(over) != 1 || !strings.Contains(over[0].Message, "binding every subject at that template: "+
-+		"set system login class p49-readonly deny-commands \"^([sS]") {
++		"set system login class p49-readonly deny-commands \"^( *[sS]") {
 +		t.Fatalf("%+v", over)
 +	}
 +}
