@@ -285,3 +285,25 @@ func TestADenyIsOmittedOnlyWhereItIsReadAsReceived(t *testing.T) {
 		}
 	}
 }
+
+// A refusal names only rules the operator wrote, and a failed retry
+// without the configuration bits says what stopped it (review M3).
+func TestRefusalsNameTheRealBlocker(t *testing.T) {
+	res, err := Project(measuredInput(platform.BitDeliveryLocalUserName, "admin", measured, permit("show **"),
+		permit("clear **")))
+	if err != nil || res.Refusal == nil || strings.Contains(res.Refusal.Why, "baseline") ||
+		!strings.Contains(res.Refusal.Why, "permits less than every command") {
+		t.Fatalf("%+v %v", res.Refusal, err)
+	}
+	// Without all and configure the allows beneath the deny overflow: that is
+	// the blocker, not configuration mode.
+	var rules []engine.Rule
+	rules = append(rules, permit("**"), deny("show log **"))
+	for i := range 16 {
+		rules = append(rules, permit(fmt.Sprintf("show log messages.%d extensive", i)))
+	}
+	res, err = Project(input(platform.BitDeliveryUserPermissions, "admin", measured, rules...))
+	if err != nil || res.FailClosed != FailOverflow || res.Refusal.Attribute != "allow-commands" {
+		t.Fatalf("%s: %+v %v", res.FailClosed, res.Refusal, err)
+	}
+}

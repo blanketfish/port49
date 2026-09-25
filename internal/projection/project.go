@@ -233,6 +233,12 @@ func (g generator) render() (Result, error) {
 	h := newGenerator(g.in, lower)
 	res2, err2 := h.shape()
 	if err2 != nil {
+		// Without those bits something else stops it: that is what the
+		// operator has to change.
+		var r2 *Refusal
+		if errors.As(err2, &r2) && r2.Category != FailConfigurationMode {
+			return Result{}, err2
+		}
 		return res, err
 	}
 	res2.ConfigurationDropped = slices.DeleteFunc(slices.Clone(g.ceiling), func(b string) bool {
@@ -529,9 +535,11 @@ func (g generator) configuration(res Result) error {
 	if everything && len(g.denies) == 0 {
 		return nil
 	}
+	// A baseline deny is none the operator wrote: a grant with only those
+	// permits less than every command.
 	grant := "permits less than every command"
-	if len(g.denies) > 0 {
-		grant = fmt.Sprintf("denies %q (role %q)", g.denies[0].Rule, g.denies[0].Role)
+	if i := slices.IndexFunc(g.denies, func(d engine.Rule) bool { return d.Role != platform.BaselineBit }); i >= 0 {
+		grant = fmt.Sprintf("denies %q (role %q)", g.denies[i].Rule, g.denies[i].Role)
 	}
 	return refuse(FailConfigurationMode, "on %s the reply's %s enters configuration mode, where a statement is "+
 		"governed by the class's configuration permissions and no command regex reaches it (spec §8, §15 L12), "+
