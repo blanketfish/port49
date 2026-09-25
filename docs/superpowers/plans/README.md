@@ -544,8 +544,9 @@ than 25 tasks. The seam is the kind of platform:
   recorded `projection_fail_closed`, and `policy test` and `policy diff` fail on it (decision 26,
   the owner's ruling, replacing the device quarantine). `policy test` also fails on any
   quarantine; a projected reply is gated by what the device can do under it; `remote` and `p49-*`
-  are reserved usernames. Bits reach the device by template (`local_user_name`) until L12
-  measures `user-permissions` over a bitless template. `port49 platform export --classes` renders
+  are reserved usernames. Bits reach the device as `user-permissions` over the bitless
+  `p49-remote` template, which L12 measured applied on both images (branch C); `local_user_name`
+  stays an adapter choice. `port49 platform export --classes` renders
   the reference classes as a replace with decision 21's `idle-timeout`, and `devices check-config
   --config` holds a device to them. `port49 devices capabilities` reads the decision log,
   qualified by a new `account_gap` record. Task 19 is the differential test.
@@ -835,10 +836,10 @@ not ignored:**
   session service is; `session_pid` is the per-session discriminator. **Attributes, measured on
   both images and agreeing cell for cell (L18):** `local-user-name=<template>` **is applied**
   under either flag — the session leaves the `remote` template for the class the reply names —
-  and **`user-permissions` does nothing at all**, mandatory, optional, or sent beside
-  `local-user-name`. So decision 22's projection has one working attribute and one inert one on
-  these releases, and the shape it would send is indistinguishable from `local-user-name` alone;
-  L12 still has to close on the rest. A template name the device does not have degrades silently
+  and `user-permissions` did nothing over a template whose class carried bits, mandatory,
+  optional, or sent beside `local-user-name`. L12 later measured it applied over a bitless
+  template, both bits of a two-bit value, per session, so set 1.1.0 sends it over `p49-remote`
+  (`tests/lab/results/L12-juniper_*.md`; branch C); L12 stays open for the differential. A template name the device does not have degrades silently
   to the default `remote` template. Everything Junos does not understand is ignored under either
   flag, so nothing port49 sends can end a Junos session by attribute. No variant produced a
   per-command authorization request, on either image, in any of 26 sessions — decision 21's

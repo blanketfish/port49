@@ -1453,7 +1453,7 @@ about revocation or a ceiling on such a platform, exactly as it must for `pipe_a
 false`. Two levers exist and both are used. The adapter renders the class `idle-timeout` from
 `max_session_age`, which is an approximation but an enforced one: `port49 platform export
 --classes` prints each class a projected platform's replies rest on with `idle-timeout` set to
-`session.max_session_age_default` in whole minutes, rounded down (§8), and it ends an idle
+`session.max_session_age_default` in whole minutes, rounded down and at least one (§8), and it ends an idle
 session a reply landed in that class: `idle-timeout 1` closed one at 1m0s through
 `local-user-name` and through the `remote` template, on both Junos images (L24, closed;
 `tests/lab/results/L24-juniper_*.md`). The largest value the device takes is unmeasured
@@ -3098,8 +3098,10 @@ carry a deny beneath a permit, so the subject gets the fail-closed reply (`refus
 What does project on set 1.1.0: `permit: [show **]` alone, as the narrow shape
 (`user-permissions=view view-configuration`, `deny-commands .*`, `allow-commands` `show **`); a
 narrow grant of a few show commands; and an admin `permit: [**]` with `deny: [restart **]`,
-which no bit but `all` reaches — every bit but the ones that enter configuration mode, and the
-deny (decision 26).
+which no bit but `all` reaches — the adapter's declared bits that do not enter configuration
+mode, `user-permissions=clear network trace view view-configuration`, and the deny (decision
+26). Only declared bits are sent: an admin expecting `maintenance` or any other bit set 1.1.0
+does not declare does not get it.
 
 Bits reach the device one of two ways, both in use in real fleets and selected per adapter:
 
@@ -3156,9 +3158,11 @@ refuse the policy, naming the grant, the two rules, and the platform, rather tha
 the nearest shape; a daemon that loads it anyway answers that subject with the fail-closed
 reply, never the nearest shape (decision 26). Junos documents a second attribute family,
 `allow-commands-regexps` / `deny-commands-regexps`, in which **deny takes precedence by
-default** and which is mutually exclusive with the plain family on the wire. If that
-precedence holds over TACACS+ (L12), the refused shape becomes expressible in that family
-and the generator picks a family per grant; until it is measured, the shape is refused.
+default** and which is mutually exclusive with the plain family on the wire. L12 measured
+that precedence over TACACS+ on both images (the `-regexps` deny beat its allow;
+`tests/lab/results/L12-juniper_*.md`), so the refused shape is expressible in that family.
+Generating it is not built: a per-grant family choice needs its own proof and the projection
+differential (L12, open), so in set 1.1.0 the shape is refused.
 
 For the generator to choose bits and to tell "narrower than the bits" from "covered by
 them", the adapter declares each bit's reach in rule form and each level's ceiling:
@@ -3193,10 +3197,11 @@ overflow, so the workaround is in the same report as the warning.
 
 This rendering rule is decision 22 and is **provisional on L9 and L12**: L9 for the regex
 dialect every wire regex rests on (`JunosFacts`, below), L12 for the bits. The SRX tests measured
-class-resident bits with wire regexes; `user-permissions` over TACACS+ is in production use
-but has no capture, and neither has the reach of each bit, the `.*` baseline on the wire, nor
-the `-regexps` family's precedence. The plan's containerlab step closes L12 before the
-generator is final.
+class-resident bits with wire regexes. L12 has since measured, on both images, `user-permissions`
+applied over a bitless template, the reach of each bit, the `.*` baseline on the wire, and the
+`-regexps` family's precedence (`tests/lab/results/L12-juniper_*.md`, `L12-bits-juniper_*.md`); it
+stays open for the projection differential (Task 19), and the rule stays provisional until it
+closes.
 
 **As built (plan 5b).** The projection ships in platform set **1.1.0**; a policy that pins
 none renders with 1.0.0 and Junos gets nothing, as before, so turning it on is a pin move
@@ -3466,7 +3471,7 @@ one that can log in locally: Juniper documents a template user as one with no au
 and L12 measures whether it refuses a local login; the reference adds a locked
 `authentication encrypted-password "*"` only if that measurement finds it does not. Every class
 carries `idle-timeout` from `session.max_session_age_default`, in whole minutes rounded down
-(decision 21); the file is parsed strictly, as the daemon parses it, but only that key is used
+and at least one, so a 30 s default exports `idle-timeout 1` (decision 21); the file is parsed strictly, as the daemon parses it, but only that key is used
 and no key or secret is read, so none is needed to run it.
 `port49 devices check-config --config port49d.yaml` holds a device to it (§12).
 
@@ -4578,7 +4583,8 @@ line the adapter's `config_checks` name: a command method list falling back to `
 configuration does not carry as a top-level line of its own, the absence no `config_checks`
 entry can see: IOS-XE's level-7 command method list, without which a level-7 command is never
 asked about (§6). On a projected platform it also reads the configuration, as `show
-configuration | display set` prints it, against the reference `platform export --classes`
+configuration | display set | display inheritance | except "^set groups "` prints it (the one
+capture it takes, refusing any other form; §8), against the reference `platform export --classes`
 writes, and `--config port49d.yaml`, the classes' idle-timeout, is required: a reference line
 the device lacks, and any line under a template class or template user the reference does not
 write — a class `allow-commands`, a permission, a template password — fails it, the uid Junos
@@ -5173,8 +5179,8 @@ and permits that dominate a deny under §5.4. A grant narrower than any covering
 as `deny .*` plus one allow alternation, since emitting nothing widens it to the bit. Bits
 travel as `user-permissions` per session by default, or as a `local-user-name` template
 where a deployment provisions classes. A permit narrower than the bits with a deny beneath
-it is refused at load; the `-regexps` family's documented deny-precedence may lift that once
-measured. The choice is made from the composed grant, never per role. (§8, §15) *As built in
+it is refused at load; L12 measured the `-regexps` family's deny-precedence on both images, and
+generating that family for the refused shape, which would lift it, is not built. The choice is made from the composed grant, never per role. (§8, §15) *As built in
 plan 5b* (§8, "As built"): a reply is proven before it is sent, against a device model in which
 the bits are a union and only measured carve-outs subtract; bits that enter configuration mode
 are sent only for a grant of everything; the built-in adapter delivers bits as `user-permissions`,
