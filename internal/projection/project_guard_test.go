@@ -117,6 +117,39 @@ func TestTheFailClosedReplyIsBounded(t *testing.T) {
 	}
 }
 
+// The fail-closed and narrow replies deny exactly ^.*$, once: the only deny
+// seen to refuse `xml-mode` (L26c). On SRX hardware (23.4R2-S8.7,
+// operator-reported) every deny naming it, `^xml-mode.*` and `xml.*` among
+// them, let it in, so no other catch-all may stand in.
+func TestTheCatchAllDenyIsExactlyAnchoredDotStar(t *testing.T) {
+	for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
+		for _, c := range []struct {
+			in    Input
+			shape string
+		}{
+			{measuredInput(delivery, "admin", JunosFacts, permit("**"), deny("request security **")), ShapeFailClosed},
+			{measuredInput(delivery, "readonly", measured, permit("show **")), ShapeNarrow},
+		} {
+			res, err := Project(c.in)
+			if err != nil || res.Shape != c.shape {
+				t.Fatalf("%s: %s, want %s: %q %v", delivery, res.Shape, c.shape, res.Attributes, err)
+			}
+			var denies []string
+			for _, a := range res.Attributes {
+				if strings.HasPrefix(a, "deny-commands=") {
+					denies = append(denies, a)
+				}
+			}
+			if !reflect.DeepEqual(denies, []string{"deny-commands=^.*$"}) {
+				t.Errorf("%s %s: denies %q", delivery, c.shape, denies)
+			}
+			if res.Device([]string{"xml-mode", "netconf"}) {
+				t.Errorf("%s %s: the reply runs xml-mode", delivery, c.shape)
+			}
+		}
+	}
+}
+
 // A bit's reach is a union under both deliveries (C1): an unheld bit's
 // reach, however it overlaps a held one, never takes a command out of it.
 func TestAnUnheldBitRemovesNothingUnderEitherDelivery(t *testing.T) {
