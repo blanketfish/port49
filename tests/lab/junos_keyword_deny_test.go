@@ -176,10 +176,17 @@ func caretAt(out string, promptLen int) string {
 // command, is not observed.
 func l26bDenyCell(out, word string, evidence *regexp.Regexp, promptLen int) string {
 	c := l26bCell(out, evidence)
-	if c == "refused" && !strings.HasPrefix(caretAt(out, promptLen), word) {
+	if c == "refused" && !caretOn(caretAt(out, promptLen), word) {
 		return "not observed"
 	}
 	return c
+}
+
+// caretOn reports whether the text from the caret on, at, begins with word
+// whole: a caret under `clients` is not one under `cli` (parked item 167).
+func caretOn(at, word string) bool {
+	rest, ok := strings.CutPrefix(at, word)
+	return ok && (rest == "" || strings.ContainsAny(rest[:1], " \t|"))
 }
 
 // l26bVerdict is a word's verdict on one image from its two cells, whether

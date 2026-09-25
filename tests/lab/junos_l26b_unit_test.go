@@ -290,4 +290,14 @@ func TestCaretAt(t *testing.T) {
 	if l26bDenyCell(first, "cli", nil, len("alice02@srx1> ")) != "refused" {
 		t.Error("a refusal at the word is not refused")
 	}
+	// A caret under a longer word that begins with it is not at the word.
+	longer := "show clients\n                   ^\nsyntax error.\n"
+	if l26bDenyCell(longer, "cli", nil, len("alice02@srx1> ")) != "not observed" {
+		t.Error("a caret under clients is read as one under cli")
+	}
+	for at, want := range map[string]bool{"cli": true, "cli   |": true, "cli\t": true, "clients": false, "": false} {
+		if caretOn(at, "cli") != want {
+			t.Errorf("caretOn(%q, cli) = %v", at, !want)
+		}
+	}
 }
