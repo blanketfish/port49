@@ -1,0 +1,138 @@
+platform: juniper_junos
+nodes:
+  "": {words: ["clear", "configure", "file", "help", "load", "monitor", "mtrace", "op", "ping", "probe", "quit", "request", "restart", "save", "scp", "set", "show", "ssh", "start", "telnet", "test", "traceroute"], argument: false}
+  "show": {words: ["access-cac", "access-security", "accounting", "agent", "amt", "ancp", "aps", "arp", "as-path", "authentication-whitelist", "auto-bandwidth", "auto-configuration", "backup-selection", "bfd", "bgp", "bier", "bridge", "captive-portal", "chassis", "class-of-service", "configuration", "congestion-protection", "connections", "database-replication", "ddos-protection", "dhcp", "dhcp-security", "dhcpv6", "diameter", "dot1x", "dual-phase-bootup-status", "dynamic-profile", "dynamic-tunnels", "ephemeral-configuration", "esis", "event-options", "evpn", "express-segments", "extensible-subscriber-services", "extension-provider", "extension-service", "fib-streaming", "firewall", "flexible-tunnels", "flight-recorder", "forwarding-options", "helper", "hfrr", "iccp", "igmp", "igp-compute", "ike", "ilmi", "interfaces", "ipsec", "ipv6", "isis", "jdaf", "l2-learning", "l2circuit", "l2cpd", "l2pt", "l2vpn", "lacp", "layer2-control", "ldp", "link-management", "lldp", "log", "loop-detect", "mac-rewrite", "mac-vrf", "mld", "mpls", "msdp", "multi-chassis", "multicast", "mvpn", "mvrp", "network-access", "network-agent", "nonstop-routing", "ntp", "oam", "ospf", "ospf3", "path-computation-client", "performance-monitoring", "pfe", "pim", "poe", "policer", "ppp", "pppoe", "programmable-rpd", "protection-group", "remote-device-management", "rip", "ripng", "route", "rsvp", "sap", "security", "services", "sflow", "shmlog", "snmp", "spanning-tree", "spring-traffic-engineering", "srv6", "ssl-certificates", "static-subscribers", "subscribers", "system", "tcp-forwarding", "ted", "unified-edge", "user-plane", "v4ov6-tunnels", "validation", "version", "virtual-chassis", "vpls", "vrrp"], argument: true}
+  "show access-cac": {words: ["interface-set", "pool", "session"], argument: false}
+  "show access-security": {words: ["router-advertisement-guard"], argument: false}
+  "show accounting": {words: ["pending-accounting-stops", "profile"], argument: true}
+  "show agent": {words: ["sensors"], argument: false}
+  "show amt": {words: ["statistics", "summary", "tunnel"], argument: false}
+  "show ancp": {words: ["cos", "neighbor", "statistics", "subscriber", "summary"], argument: false}
+  "show aps": {words: ["brief", "detail", "extensive", "summary"], argument: true}
+  "show arp": {words: ["expiration-time", "no-resolve", "reference-count", "state"], argument: true}
+  "show as-path": {words: ["brief", "detail", "summary"], argument: true}
+  "show authentication-whitelist": {words: [], argument: true}
+  "show auto-bandwidth": {words: ["history-log", "traffic"], argument: false}
+  "show auto-configuration": {words: ["out-of-band"], argument: false}
+  "show backup-selection": {words: [], argument: true}
+  "show bfd": {words: ["seamless", "session", "subscriber"], argument: false}
+  "show bgp": {words: ["bmp", "global-load-balancing", "group", "neighbor", "output-scheduler", "replication", "source-packet-routing", "summary", "tunnel-attribute", "validation"], argument: false}
+  "show bgp neighbor": {words: ["allowed-neighbors", "auto-discovered"], argument: true}
+  "show bgp summary": {words: ["allowed-neighbors", "auto-discovered"], argument: true}
+  "show bier": {words: ["neighbor"], argument: false}
+  "show bridge": {words: ["domain", "evpn", "flood", "interface", "mac-ip-table", "mac-table", "satellite", "statistics"], argument: false}
+  "show captive-portal": {words: ["authentication-failed-users", "firewall", "interface"], argument: false}
+  "show chassis": {words: ["adc", "alarms", "craft-interface", "environment", "errors", "ethernet-switch", "fan", "firmware", "fpc", "fru", "hardware", "hss", "in-service-upgrade", "jam-test", "led", "location", "mac-addresses", "memory-usage-chassisd", "network-services", "pic", "power", "routing-engine", "satellite-cluster", "sfb", "spmb", "temperature-thresholds", "zones"], argument: false}
+  "show chassis hardware": {words: ["clei-models", "detail", "extensive", "models"], argument: false}
+  "show chassis routing-engine": {words: [], argument: true}
+  "show class-of-service": {words: ["scheduler-hierarchy", "scheduler-resources"], argument: true}
+  "show configuration": {words: [], argument: true}
+  "show congestion-protection": {words: ["interface", "overview", "template"], argument: false}
+  "show connections": {words: ["all", "brief", "down", "extensive", "history", "interface-switch", "labels", "lsp-switch", "p2mp-receive-switch", "p2mp-transmit-switch", "remote-interface-switch", "status", "up", "up-down"], argument: true}
+  "show database-replication": {words: ["statistics", "summary"], argument: false}
+  "show ddos-protection": {words: ["protocols", "statistics", "version"], argument: false}
+  "show dhcp": {words: ["active-leasequery", "client", "relay", "server", "statistics"], argument: false}
+  "show dhcp-security": {words: ["arp", "binding", "statistics"], argument: false}
+  "show dhcpv6": {words: ["active-leasequery", "client", "relay", "server", "statistics"], argument: false}
+  "show diameter": {words: ["brief", "detail", "summary"], argument: true}
+  "show dot1x": {words: ["accounting-attributes", "authentication-bypassed-users", "authentication-failed-users", "firewall", "interface", "static-mac-address", "statistics", "supplicant"], argument: false}
+  "show dual-phase-bootup-status": {words: [], argument: false}
+  "show dynamic-profile": {words: ["session"], argument: false}
+  "show dynamic-tunnels": {words: ["database", "pfe-tunnel-localization"], argument: false}
+  "show ephemeral-configuration": {words: ["merge"], argument: true}
+  "show esis": {words: ["adjacency", "interface", "statistics"], argument: false}
+  "show event-options": {words: ["event-scripts"], argument: false}
+  "show evpn": {words: ["arp-table", "database", "flood", "igmp-snooping", "instance", "ip-prefix-database", "l3-context", "mac-ip-table", "mac-table", "mld-snooping", "multicast-snooping", "nd-table", "oism", "p2mp", "peer-gateway-macs", "statistics", "vpws-instance"], argument: false}
+  "show express-segments": {words: ["all", "brief", "detail", "terse"], argument: true}
+  "show extensible-subscriber-services": {words: ["counters", "dictionary", "services", "sessions"], argument: false}
+  "show extension-provider": {words: ["system"], argument: false}
+  "show extension-service": {words: ["request-response"], argument: true}
+  "show fib-streaming": {words: ["next-hop-groups", "next-hops", "route-tables", "routes", "state"], argument: false}
+  "show firewall": {words: ["detail", "prefix-action-stats", "terse"], argument: true}
+  "show flexible-tunnels": {words: ["profiles"], argument: false}
+  "show flight-recorder": {words: ["status"], argument: false}
+  "show forwarding-options": {words: ["analyzer", "hyper-mode", "load-balance", "next-hop-group", "port-mirroring"], argument: false}
+  "show helper": {words: ["statistics"], argument: false}
+  "show hfrr": {words: ["profiles"], argument: false}
+  "show iccp": {words: ["brief", "detail"], argument: true}
+  "show igmp": {words: ["group", "interface", "output-group", "snooping", "statistics"], argument: false}
+  "show igp-compute": {words: ["database", "prefix", "spf"], argument: false}
+  "show ike": {words: ["security-associations"], argument: false}
+  "show ilmi": {words: ["all"], argument: true}
+  "show interfaces": {words: ["brief", "descriptions", "detail", "extensive", "media", "statistics", "terse"], argument: true}
+  "show interfaces extensive": {words: ["brief", "descriptions", "detail", "extensive", "terse"], argument: true}
+  "show interfaces terse": {words: ["extensive", "media", "statistics"], argument: true}
+  "show ipsec": {words: ["redundancy", "security-associations"], argument: false}
+  "show ipv6": {words: ["neighbors", "router-advertisement"], argument: false}
+  "show isis": {words: ["adjacency", "authentication", "backup", "bgp-orr", "context-identifier", "database", "hostname", "interface", "interface-group", "layer2-map", "overview", "purge", "route", "spf", "spring", "statistics"], argument: false}
+  "show jdaf": {words: ["service"], argument: false}
+  "show l2-learning": {words: ["backbone-instance", "context-history", "event-queue-stats", "evpn", "flood-group", "global-information", "global-mac-count", "global-mac-ip-count", "instance", "interface", "interface-state", "mac-move-buffer", "mgrp-policy", "nh-learn-entity", "provider-instance", "redundancy-groups", "remote-backbone-edge-bridges", "vxlan-tunnel-end-point"], argument: false}
+  "show l2circuit": {words: ["auto-sensing", "connections"], argument: false}
+  "show l2cpd": {words: ["task"], argument: false}
+  "show l2pt": {words: ["interface"], argument: false}
+  "show l2vpn": {words: ["connections"], argument: false}
+  "show lacp": {words: ["interfaces", "statistics", "timeouts"], argument: false}
+  "show layer2-control": {words: ["bpdu-block"], argument: false}
+  "show ldp": {words: ["database", "database-label-requests", "fec-filters", "interface", "neighbor", "oam", "overview", "p2mp", "path", "rib-groups", "route", "session", "statistics", "traffic-statistics"], argument: false}
+  "show link-management": {words: [], argument: true}
+  "show lldp": {words: ["neighbors-vlan-name-tlv-list"], argument: true}
+  "show log": {words: [], argument: true}
+  "show loop-detect": {words: ["enhanced", "interface", "statistics"], argument: false}
+  "show mac-rewrite": {words: ["interface"], argument: false}
+  "show mac-vrf": {words: ["forwarding", "routing"], argument: false}
+  "show mld": {words: ["group", "interface", "output-group", "snooping", "statistics"], argument: false}
+  "show mpls": {words: ["abstract-hop-membership", "admin-groups", "admin-groups-extended", "association", "call-admission-control", "container-lsp", "context-identifier", "correlation", "cspf", "diffserv-te", "egress-protection", "interface", "label", "lsp", "path", "srlg", "static-lsp", "traceroute", "tunnel-manager-statistics"], argument: false}
+  "show msdp": {words: ["brief", "detail"], argument: true}
+  "show multi-chassis": {words: ["mc-lag"], argument: false}
+  "show multicast": {words: ["backup-pe-groups", "ecid-mapping", "flow-map", "forwarding-cache", "interface", "next-hops", "pim-to-igmp-proxy", "pim-to-mld-proxy", "route", "rpf", "scope", "sessions", "snooping", "statistics", "summary", "usage"], argument: true}
+  "show mvpn": {words: ["c-multicast", "instance", "neighbor", "source", "suppressed"], argument: false}
+  "show mvrp": {words: [], argument: true}
+  "show network-access": {words: ["aaa", "address-assignment", "domain-map", "gx-plus", "jsrc", "local-certificate", "nas-5g", "nasreq", "ocs", "pcrf", "radsec", "requests", "s6a", "securid-node-secret-file"], argument: false}
+  "show network-agent": {words: ["statistics"], argument: false}
+  "show nonstop-routing": {words: [], argument: true}
+  "show ntp": {words: ["associations", "status"], argument: false}
+  "show oam": {words: ["ethernet", "gre-keepalive"], argument: false}
+  "show ospf": {words: ["backup", "bgp-orr", "context-identifier", "database", "interface", "io-statistics", "log", "neighbor", "overview", "route", "spring", "statistics"], argument: false}
+  "show ospf neighbor": {words: ["brief", "detail", "extensive"], argument: true}
+  "show ospf3": {words: ["backup", "bgp-orr", "database", "interface", "io-statistics", "log", "neighbor", "overview", "route", "statistics"], argument: false}
+  "show path-computation-client": {words: ["active-pce", "lsp", "lsp-retry-pending", "object-class", "rfc-8231-compliance", "statistics", "status", "tlv-types", "traffic-steering"], argument: false}
+  "show performance-monitoring": {words: ["mpls"], argument: false}
+  "show pfe": {words: ["pfem", "route", "statistics", "terse", "version"], argument: true}
+  "show pim": {words: ["bidirectional", "bootstrap", "interfaces", "join", "mvpn", "neighbors", "rps", "snooping", "source", "statistics"], argument: true}
+  "show poe": {words: ["controller", "interface", "notification-control", "telemetries"], argument: false}
+  "show policer": {words: ["detail"], argument: true}
+  "show ppp": {words: ["statistics", "summary"], argument: true}
+  "show pppoe": {words: ["interface-sets", "interfaces", "lockout", "service-name-tables", "sessions", "statistics", "underlying-interfaces", "version"], argument: false}
+  "show programmable-rpd": {words: ["clients"], argument: false}
+  "show protection-group": {words: ["ethernet-aps", "ethernet-ring"], argument: false}
+  "show remote-device-management": {words: ["service-devices", "services", "statistics", "subscribers", "summary"], argument: false}
+  "show rip": {words: ["general-statistics", "neighbor", "statistics"], argument: false}
+  "show ripng": {words: ["general-statistics", "neighbor", "statistics"], argument: false}
+  "show route": {words: ["active-path", "all", "best", "brief", "detail", "display-client-data", "exact", "expanded-nh", "extensive", "fib-expanded-nh", "hidden", "inactive-path", "inactive-prefix", "nh-detail", "no-community", "private", "programmed", "range", "terse"], argument: true}
+  "show rsvp": {words: ["interface", "neighbor", "pop-and-forward", "route-session-id", "session", "statistics", "version"], argument: false}
+  "show sap": {words: ["listen"], argument: false}
+  "show security": {words: ["alarms", "group-vpn", "keychain", "log", "macsec", "mka", "pki"], argument: false}
+  "show services": {words: ["accounting", "alg", "analytics", "application-identification", "captive-portal-content-delivery", "cos", "crtp", "fixed-wireless-access", "flows", "ha", "hcm", "ids", "inline", "inline-monitoring", "l2tp", "link-services", "logging", "lrf", "match-policies", "mobile", "mobile-edge", "nat", "pcef", "pcp", "redundancy-group", "rpm", "service-sets", "sessions", "soft-gre", "softwire", "stateful-firewall", "subscriber", "tcp-log", "traffic-detection-function", "traffic-load-balance", "video-monitoring", "web-filter"], argument: true}
+  "show sflow": {words: [], argument: true}
+  "show shmlog": {words: ["argument-mappings", "configuration", "logs-summary", "statistics"], argument: true}
+  "show snmp": {words: ["health-monitor", "inform-statistics", "mib", "proxy", "rmon", "statistics", "stats-response-statistics", "v3"], argument: false}
+  "show spanning-tree": {words: ["bridge", "interface", "mstp", "statistics", "stp-buffer"], argument: false}
+  "show spring-traffic-engineering": {words: ["binding-sid", "lsp", "overview", "route", "sbfd"], argument: false}
+  "show srv6": {words: ["block", "locator"], argument: false}
+  "show ssl-certificates": {words: ["brief", "detail"], argument: false}
+  "show static-subscribers": {words: ["sessions"], argument: false}
+  "show subscribers": {words: ["accounting-statistics", "count", "detail", "extensive", "terse"], argument: true}
+  "show system": {words: ["alarms", "buffers", "commit", "configuration", "core-dumps", "directory-usage", "errors", "firmware", "health-monitor", "information", "license", "login", "macsec", "memory", "monitor", "ntp", "processes", "queues", "reboot", "resource-cleanup", "resource-monitor", "schema", "services", "snapshot", "statistics", "storage", "subscriber-management", "uptime", "users", "virtual-memory", "yang", "ztp"], argument: true}
+  "show system processes": {words: ["detail", "wide"], argument: true}
+  "show system uptime": {words: ["invoke-on"], argument: false}
+  "show system users": {words: ["no-resolve"], argument: false}
+  "show tcp-forwarding": {words: ["status"], argument: false}
+  "show ted": {words: ["database", "export", "ipv4-prefix", "ipv6-prefix", "link", "protocol", "spring", "spring-te-policy"], argument: false}
+  "show unified-edge": {words: ["gateways", "ggsn-pgw", "sgw", "tdf"], argument: false}
+  "show user-plane": {words: ["class-of-service", "firewall", "interfaces", "subscribers"], argument: false}
+  "show v4ov6-tunnels": {words: ["count", "information"], argument: false}
+  "show validation": {words: ["database", "group", "replication", "session", "source-file", "statistics"], argument: false}
+  "show version": {words: ["brief", "detail", "invoke-on"], argument: false}
+  "show virtual-chassis": {words: ["protocol"], argument: true}
+  "show vpls": {words: ["connections", "flood", "mac-move-action", "mac-table", "statistics"], argument: false}
+  "show vrrp": {words: ["brief", "detail", "extensive", "nsr", "summary"], argument: true}
