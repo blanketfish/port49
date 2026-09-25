@@ -387,3 +387,25 @@ func TestTheShippedJunosTreeIsTheLabs(t *testing.T) {
 		t.Errorf("%s", got)
 	}
 }
+
+// releasedKeywords is each released set's keyword tree by the sha256 of its
+// file: a released set's tree is never edited, and a new capture ships in a
+// new set. 1.1.0's is the merge of every L26 run on both images with the L26b
+// overlays (tests/lab/results/L26*-keywords-*.yaml; spec §15, L26), frozen
+// by plan 5b Task 20.
+var releasedKeywords = map[string]string{
+	"1.1.0/juniper_junos": "aa1440897d46146ee4f6ae0b5be8b0ec89643b95f0bd0992b5062c142a4b0168",
+}
+
+func TestReleasedKeywordTreesAreFrozen(t *testing.T) {
+	for file, want := range releasedKeywords {
+		raw, err := fs.ReadFile(platforms.Keywords, "keywords/"+file+".yaml")
+		if err != nil {
+			t.Errorf("%s: %v", file, err)
+			continue
+		}
+		if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != want {
+			t.Errorf("%s: sha256 %s, released as %s: a released tree is never edited; ship a new set", file, got, want)
+		}
+	}
+}

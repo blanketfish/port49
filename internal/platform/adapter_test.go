@@ -180,7 +180,7 @@ func TestTheDefaultSetValueForValue(t *testing.T) {
 // becomes the default, 1.0.0's entry stays here as it is and the new set is
 // added beside it, so a binary upgrade cannot change what a pinned policy
 // renders without this test failing.
-var released = map[string]map[string]Dialect{"1.0.0": shipped}
+var released = map[string]map[string]Dialect{"1.0.0": shipped, "1.1.0": shipped110}
 
 func TestEveryReleasedSetIsFrozen(t *testing.T) {
 	for version, want := range released {
