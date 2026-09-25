@@ -348,3 +348,108 @@ func TestRefusalsNameTheRealBlocker(t *testing.T) {
 		t.Fatalf("%s: %+v %v", res.FailClosed, res.Refusal, err)
 	}
 }
+
+// treeOf is a keyword tree from nodes written as the capture writes them.
+func treeOf(t *testing.T, nodes ...string) *platform.Keywords {
+	t.Helper()
+	_, k, err := platform.ParseKeywords([]byte("platform: juniper_junos\nnodes:\n  " + strings.Join(nodes, "\n  ") + "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// An allow goes out only where no argument may be typed among its words: at
+// the root, after any word, and after the last unless `**` ends it. Each
+// shape checks it, the fail-closed reply included (decision 27; review I2).
+// The device model reads every word as a keyword, so these assert the reply,
+// not Device.
+func TestNoShapeSendsAnAllowAnArgumentWidens(t *testing.T) {
+	unsent := func(res Result, rule string) bool {
+		return slices.ContainsFunc(res.Unsent, func(u Unsent) bool { return u.Rule.Rule == rule }) &&
+			!slices.ContainsFunc(res.Allows, func(a engine.Rule) bool { return a.Rule == rule })
+	}
+	// Capability: the permit beneath a deny it dominates needs an allow, and
+	// `show interfaces` takes an argument, so `allow show interfaces terse`
+	// would also run `show interfaces ge-0/0/0 terse`, which the deny holds.
+	res, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show **"),
+		deny("show interfaces **"), permit("show interfaces terse")))
+	if err != nil || res.Shape != ShapeCapability || !unsent(res, "show interfaces terse") ||
+		!reflect.DeepEqual(res.Attributes, []string{"user-permissions=view view-configuration", `deny-commands=^ *[sS][hH][oO][wW] +` +
+			`[iI][nN][tT][eE][rR][fF][aA][cC][eE][sS]( .*)? *(\|.*)?$`}) {
+		t.Errorf("capability: %s %q %+v %v", res.Shape, res.Attributes, res.Unsent, err)
+	}
+	// The fail-closed reply: `deny show route summary` names an argument,
+	// and of the permits only `show version` goes out.
+	res, err = Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show version"),
+		permit("show interfaces terse"), permit("show route **"), deny("show route summary")))
+	if err != nil || res.FailClosed != FailArgumentDeny || !unsent(res, "show interfaces terse") ||
+		!reflect.DeepEqual(res.Attributes, []string{"user-permissions=view", "deny-commands=^.*$",
+			"allow-commands=^show version$"}) {
+		t.Errorf("fail-closed: %s %q %+v %v", res.FailClosed, res.Attributes, res.Unsent, err)
+	}
+	// After the last word: where `show version` takes an argument, `allow
+	// show version` would run `show version <argument>`.
+	in := input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show version"), permit("show log **"))
+	in.Keywords = treeOf(t, `"": {words: [show], argument: false}`, `"show": {words: [log, version], argument: false}`,
+		`"show version": {words: [], argument: true}`, `"show log": {words: [], argument: true}`)
+	if res, err := Project(in); err != nil || !unsent(res, "show version") || unsent(res, "show log **") {
+		t.Errorf("trailing: %q %+v %v", res.Attributes, res.Unsent, err)
+	}
+	// At the root: where a command may begin with an argument, even `allow
+	// show **` would run `<argument> show`.
+	in = input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show version"), permit("show log **"))
+	in.Keywords = treeOf(t, `"": {words: [show], argument: true}`, `"show": {words: [log, version], argument: false}`,
+		`"show version": {words: [], argument: false}`, `"show log": {words: [], argument: true}`)
+	if res, err := Project(in); err != nil || !unsent(res, "show log **") || !unsent(res, "show version") {
+		t.Errorf("root: %q %+v %v", res.Attributes, res.Unsent, err)
+	}
+}
+
+// A deny the bits would carry and the device would not enforce, one no
+// permit meets, is never sent in the capability shape: a baseline command
+// the tree does not prove a keyword goes narrow, `.*` holding it, and is
+// never dropped (review I3).
+func TestAnUnprovableDenyUnderTheBitsGoesNarrow(t *testing.T) {
+	for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
+		in := input(delivery, "readonly", measured, permit("show **"))
+		in.Dialect.Bits[platform.BaselineBit] = []string{"help **", "exit **", "set cli **"}
+		// `help` is proven; `exit` and `set cli` are not, as on the lab's tree.
+		in.Keywords = treeOf(t, `"": {words: [help, set, show], argument: false}`,
+			`"show": {words: [], argument: true}`, `"help": {words: [], argument: true}`,
+			`"set": {words: [], argument: true}`)
+		res, err := Project(in)
+		if err != nil || res.Shape != ShapeNarrow || !slices.Contains(res.Attributes, "deny-commands=^.*$") {
+			t.Fatalf("%s: %s %q %v", delivery, res.Shape, res.Attributes, err)
+		}
+		for _, v := range [][]string{{"exit"}, {"set", "cli", "x"}, {"help", "topic"}} {
+			if res.Device(v) {
+				t.Errorf("%s: the reply runs %q", delivery, v)
+			}
+		}
+		// With the tree proving them the same grant is the capability shape,
+		// the baseline's denies sent.
+		in.Keywords = keywordTree("help", "exit", "set cli")
+		if res, err := Project(in); err != nil || res.Shape != ShapeCapability || len(res.Denies) != 3 {
+			t.Errorf("%s proven: %s %q %v", delivery, res.Shape, res.Attributes, err)
+		}
+	}
+}
+
+// A reach rule that is a variant of `configure` or `edit` enters
+// configuration mode as the bare command does (review M1).
+func TestAVariantOfConfigureEntersConfiguration(t *testing.T) {
+	for _, r := range []string{"configure", "configure **", "configure private **", "configure exclusive", "edit",
+		"edit private", "**"} {
+		in := input(platform.BitDeliveryUserPermissions, "operator", measured)
+		in.Dialect.Bits["x"] = []string{"show **", r}
+		if !newGenerator(in, in.Bits).entersConfiguration("x") {
+			t.Errorf("%q does not enter configuration mode", r)
+		}
+	}
+	in := input(platform.BitDeliveryUserPermissions, "operator", measured)
+	in.Dialect.Bits["x"] = []string{"show configuration **", "request system configuration rescue **"}
+	if newGenerator(in, in.Bits).entersConfiguration("x") {
+		t.Error("a reach that names configuration elsewhere enters configuration mode")
+	}
+}

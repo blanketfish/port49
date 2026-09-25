@@ -15,7 +15,13 @@ import (
 // else subtracts: a bit not held never removes a command another bit reaches.
 // Each part is an engine program over the same rules the reply's regexes were
 // written from, so the check below reads the reply exactly as the translation
-// promises the device reads it. The bits' reach and carve-outs are applied by
+// promises the device reads it, except in one respect: it matches a regex
+// against every word of a command, where Junos matches its keywords only
+// (decision 27). A rule whose match would differ, one naming an argument or
+// with an argument possible among its words, is kept off the wire by
+// denyProvable and unsendableAllow, which carry that proof alone: the
+// witness below cannot catch a keyword widening, and Device answers as if
+// every word were a keyword. The bits' reach and carve-outs are applied by
 // the device's command parser, which reads a command whatever its spacing,
 // case or abbreviation, so both are matched as port49 matches a deny: the
 // widest reading, which for the reach errs toward the device running more.

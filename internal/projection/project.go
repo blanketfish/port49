@@ -375,12 +375,11 @@ func (g generator) carves(held []string) []string {
 	return out
 }
 
-// entersConfiguration reports whether bit b's reach holds a command that enters
-// configuration mode (configurationEntries).
+// entersConfiguration reports whether bit b's reach meets a command that
+// enters configuration mode (configurationEntries), a variant such as
+// `configure private` or `edit exclusive` included.
 func (g generator) entersConfiguration(b string) bool {
-	return slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool {
-		return slices.ContainsFunc(configurationEntries, func(e string) bool { return g.contains(r, e) })
-	})
+	return slices.ContainsFunc(g.in.Dialect.Bits[b], g.meetsConfiguration)
 }
 
 // configurationEntries are the operational commands that enter configuration
