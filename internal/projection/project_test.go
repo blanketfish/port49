@@ -317,3 +317,39 @@ func TestTheBaselineIsDenied(t *testing.T) {
 		t.Fatalf("%+v %v", res, err)
 	}
 }
+
+// A reply widens where the device can do more under it: a bit it did not
+// hold, or a command it did not run. Narrowing the grant is no widening,
+// whatever the regexes say (plan 5b pre-flight I14).
+func TestWidens(t *testing.T) {
+	project := func(rules ...engine.Rule) *Result {
+		res, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, rules...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &res
+	}
+	all := project(permit("show **"))
+	carved := project(permit("show **"), deny("show configuration **"))
+	narrow := project(permit("show version"), permit("show interfaces **"))
+	narrower := project(permit("show version"))
+	for _, c := range []struct {
+		name     string
+		from, to *Result
+		want     bool
+	}{
+		{"a carve-out drops a bit", all, carved, false},
+		{"lifting it adds the bit back", carved, all, true},
+		{"a narrow grant loses a permit", narrow, narrower, false},
+		{"and gains it back", narrower, narrow, true},
+		{"nothing before", nil, narrower, true},
+		{"the same reply", narrow, narrow, false},
+	} {
+		if _, got := Widens(c.from, c.to); got != c.want {
+			t.Errorf("%s: %v", c.name, got)
+		}
+	}
+	if v, _ := Widens(narrower, narrow); strings.Join(v, " ") == "" {
+		t.Error("a widening by a command names it")
+	}
+}

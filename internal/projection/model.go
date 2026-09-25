@@ -21,6 +21,9 @@ import (
 // widest reading, which for the reach errs toward the device running more.
 type model struct {
 	port, allow, deny, reach, carve *engine.Program
+	// held is every bit the session holds, `all` expanded and the baseline
+	// in: what configuration mode, which no probe reaches, is read from.
+	held []string
 }
 
 func (g generator) model(res Result) (*model, error) {
@@ -55,6 +58,7 @@ func (g generator) model(res Result) (*model, error) {
 		return nil, err
 	}
 	held := g.held(res.Bits)
+	m.held = held
 	if m.reach, err = prog(parsed(g.reach(held), "reach")); err != nil {
 		return nil, err
 	}
@@ -88,10 +92,52 @@ func (m *model) device(vector []string) bool {
 // less those with a word the device's parser never sees: empty, or with a
 // space at either end. The parser splits a line on whitespace, so such a
 // vector is its trimmed form, which is probed in its own right.
-func (m *model) probes() [][]string {
-	return slices.DeleteFunc(engine.Probes(m.port, m.allow, m.deny, m.reach, m.carve), func(v []string) bool {
+func (m *model) probes() [][]string { return probes(m.programs()...) }
+
+func (m *model) programs() []*engine.Program {
+	return []*engine.Program{m.port, m.allow, m.deny, m.reach, m.carve}
+}
+
+func probes(programs ...*engine.Program) [][]string {
+	return slices.DeleteFunc(engine.Probes(programs...), func(v []string) bool {
 		return slices.ContainsFunc(v, func(w string) bool { return w == "" || strings.TrimSpace(w) != w })
 	})
+}
+
+// Widens reports whether the device can do more under to than under from:
+// to holds a bit from does not, or runs a command from does not, among one
+// vector per way either reply's rules can be told apart. It is how the diff
+// judges a projected reply (spec §12; plan 5b pre-flight I14): a reply that
+// only narrows is no raise, whatever its regexes say, and one that widens
+// is. A side with no projection runs nothing and holds no bit; a reply with
+// no model, which Project never returns, cannot be read, and widens. The
+// vector is nil where a bit decided it.
+func Widens(from, to *Result) ([]string, bool) {
+	if to == nil {
+		return nil, false
+	}
+	if to.model == nil {
+		return nil, true
+	}
+	var was *model
+	if from != nil {
+		was = from.model
+	}
+	for _, b := range to.model.held {
+		if was == nil || !slices.Contains(was.held, b) {
+			return nil, true
+		}
+	}
+	progs := to.model.programs()
+	if was != nil {
+		progs = append(progs, was.programs()...)
+	}
+	for _, v := range probes(progs...) {
+		if len(v) > 0 && to.model.device(v) && (was == nil || !was.device(v)) {
+			return v, true
+		}
+	}
+	return nil, false
 }
 
 // ProbeSources maps each argument Narrower's commands may carry to the rule

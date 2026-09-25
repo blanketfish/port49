@@ -446,6 +446,11 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			label, l.Subject, strings.Join(l.Devices, ", "), from(l.At), orNone(l.OldLevel), orNone(l.NewLevel),
 			orNone(l.OldCeiling), orNone(l.NewCeiling), l.OldPrivLvl, l.NewPrivLvl, l.OldEnable, l.NewEnable, reply, tail)
 	}
+	for _, pc := range d.Projections {
+		fmt.Fprintf(stdout, "projection: %s on %s%s: %s -> %s (spec §8; the reply gate above judges it)\n", pc.Subject,
+			strings.Join(pc.Devices, ", "), from(pc.At), projectionText(pc.OldShape, pc.OldBits, pc.OldTemplate),
+			projectionText(pc.NewShape, pc.NewBits, pc.NewTemplate))
+	}
 	widen, narrow := 0, 0
 	for _, c := range d.Changes {
 		on := c.Subject + " on " + strings.Join(c.Devices, ", ") + from(c.At)
@@ -503,15 +508,21 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s: %s: %s %q (%s) %s; the commands it matches are not "+
 			"enumerated (spec §12)%s\n", label, on, r.Rule.Verdict, r.Rule.Rule, r.Rule.Role, verb, tail)
 	}
+	// A fail-closed reply fails the diff whether or not the change brought
+	// it: CI refuses a policy that ships one (spec §8; §13 decision 26).
+	for _, f := range d.ProjectionRefusals {
+		fmt.Fprintf(stdout, "REFUSED: %s: %s\n", f.Kind, f.Message)
+	}
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
 		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d unacknowledged "+
 		"principal or username changes; %d devices newly quarantined, %d released; %d mints newly refused; "+
-		"%d unresolved; %d unacknowledged adapter edits\n", len(d.Changes), widen, narrow, d.Unacknowledged(),
-		d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(), len(d.Quarantined),
-		len(d.Released), len(d.Refused), len(d.Unresolved), d.UnacknowledgedAdapters())
+		"%d unresolved; %d unacknowledged adapter edits; %d projection refusals\n", len(d.Changes), widen, narrow,
+		d.Unacknowledged(), d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(),
+		len(d.Quarantined), len(d.Released), len(d.Refused), len(d.Unresolved), d.UnacknowledgedAdapters(),
+		len(d.ProjectionRefusals))
 	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
 		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 ||
-		d.UnacknowledgedAdapters() > 0 {
+		d.UnacknowledgedAdapters() > 0 || len(d.ProjectionRefusals) > 0 {
 		return 1
 	}
 	return 0
@@ -875,4 +886,18 @@ func redactOutput(stdout, stderr io.Writer) (out, errOut *redacting, flush func(
 			}
 		}
 	}
+}
+
+// projectionText is one side of a projection change: its shape and what
+// carries the bits, or none.
+func projectionText(shape string, bits []string, template string) string {
+	switch {
+	case shape == "":
+		return "none"
+	case template != "":
+		return shape + " (template " + template + ", bits " + strings.Join(bits, " ") + ")"
+	case len(bits) == 0:
+		return shape + " (no bits)"
+	}
+	return shape + " (bits " + strings.Join(bits, " ") + ")"
 }

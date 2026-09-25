@@ -647,3 +647,70 @@ func TestAProbeArgumentOfNoKnownSourcePrintsRedacted(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// The diff reports a reply whose shape or bits moved, and the reply gate
+// judges it by what the device can do: a carve-out only narrows, so it is no
+// raise, and lifting it again is (plan 5b pre-flight I14).
+func TestTheDiffReportsAProjectionChange(t *testing.T) {
+	before := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"]}
+`+subjOK+grantOK)
+	after := parseProjected(t, platform.BitDeliveryUserPermissions, readonlyCarveOut)
+	d := Compare(before, after, noon)
+	if len(d.Projections) != 1 || !reflect.DeepEqual(d.Projections[0].OldBits, []string{"view", "view-configuration"}) ||
+		!reflect.DeepEqual(d.Projections[0].NewBits, []string{"view"}) || len(d.Projections[0].Devices) != 4 {
+		t.Fatalf("%+v", d.Projections)
+	}
+	if d.UnacknowledgedLevels() != 0 {
+		t.Errorf("a narrowing is no raise: %+v", d.Levels)
+	}
+	d = Compare(after, before, noon)
+	if d.UnacknowledgedLevels() == 0 || !slices.Contains(d.Levels[0].Raised, "reply") {
+		t.Errorf("a widening is a raise until a reply: test asserts it: %+v", d.Levels)
+	}
+	// A narrow grant losing a permit is no raise either, though every regex
+	// in its reply changed.
+	narrow := func(permits string) *Policy {
+		return parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: [`+permits+`]}
+`+subjOK+grantOK)
+	}
+	if d := Compare(narrow(`"show version", "show route **"`), narrow(`"show version"`), noon); d.UnacknowledgedLevels() != 0 {
+		t.Errorf("revoking a narrow permit: %+v", d.Levels)
+	}
+}
+
+// A composition that gets the fail-closed reply fails the diff, whether or
+// not the change brought it (spec §8; §13 decision 26).
+func TestTheDiffRefusesAFailClosedReply(t *testing.T) {
+	refused := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show interfaces **"], deny: ["show interfaces terse"]}
+`+subjOK+grantOK)
+	d := Compare(refused, refused, noon)
+	if len(d.ProjectionRefusals) != 1 || !strings.Contains(d.ProjectionRefusals[0].Message, "(refused_shape)") {
+		t.Fatalf("%+v", d.ProjectionRefusals)
+	}
+}
+
+// A fail-closed reply is no raise, whatever it replaced: it is refused
+// instead, which fails the diff on its own (plan 5b pre-flight R-M8).
+func TestAFailClosedReplyIsNoRaise(t *testing.T) {
+	grant := func(role string) *Policy {
+		return parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+"roles:\n"+role+subjOK+grantOK)
+	}
+	// The fail-closed reply allows show version, which the first reply did
+	// not run: the device does more, and the refusal is what fails the diff.
+	for _, was := range []string{
+		"  - {name: r, privilege: readonly, permit: [\"show route\"]}\n",
+		"  - {name: r, privilege: readonly, permit: [\"show **\"]}\n",
+	} {
+		d := Compare(grant(was), grant(`  - {name: r, privilege: readonly, permit: ["show version", "show interfaces **"], `+
+			`deny: ["show interfaces terse"]}
+`), noon)
+		if len(d.ProjectionRefusals) != 1 || slices.ContainsFunc(d.Levels, func(l LevelChange) bool {
+			return slices.Contains(l.Raised, "reply")
+		}) {
+			t.Errorf("%s: %+v %+v", was, d.ProjectionRefusals, d.Levels)
+		}
+	}
+}

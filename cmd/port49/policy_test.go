@@ -791,7 +791,7 @@ func TestPolicyDiffGatesAnAdapterEdit(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
 		!strings.Contains(out.String(), `ADAPTER: platforms.arista_eos.entity_classes {"loopback":`) ||
-		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits\n") {
+		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits; 0 projection refusals\n") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 	// The entry is printed ready to paste, bound by digest to this edit.
@@ -1093,5 +1093,19 @@ key_groups:
 			!strings.Contains(got, "narrows: noc on xe-01: \"username community") {
 			t.Fatalf("%s: policy diff:\n%s", name, got)
 		}
+	}
+}
+
+// policy diff prints a projection whose shape or bits moved (spec §8, §12).
+func TestPolicyDiffPrintsAProjectionChange(t *testing.T) {
+	if got := projectionText("", nil, ""); got != "none" {
+		t.Errorf("%q", got)
+	}
+	if got := projectionText("capability", []string{"view"}, ""); got != "capability (bits view)" {
+		t.Errorf("%q", got)
+	}
+	if got := projectionText("narrow", []string{"view", "view-configuration"}, "p49-readonly"); got !=
+		"narrow (template p49-readonly, bits view view-configuration)" {
+		t.Errorf("%q", got)
 	}
 }
