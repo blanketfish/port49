@@ -7,7 +7,8 @@
 // intersect: a word is a keyword only where each run proves it, and unproven
 // fails closed. So every run of an image must be given: the tool refuses an
 // image whose latest run is not given, or with a run file beside a given
-// capture that is not, and two captures with the same content.
+// capture that is not, an image committed beside a given capture and not
+// given at all, and two captures with the same content.
 //
 // Each -overlay, tests/lab/results/L26b-keywords-<image>.yaml, pins the
 // latest run of its image, L26-keywords-<image>.yaml, by the sha256 its first
@@ -134,6 +135,28 @@ func run(args []string) error {
 			return err
 		}
 		given[abs] = true
+	}
+	// So would an image left off: every image committed beside a capture
+	// given is one more tree to intersect (kw-merge review M4).
+	dirs := map[string]bool{}
+	for _, f := range captures {
+		dirs[filepath.Dir(f)] = true
+	}
+	for dir := range dirs {
+		committed, err := filepath.Glob(filepath.Join(dir, "L26-keywords-*.yaml"))
+		if err != nil {
+			return err
+		}
+		for _, f := range committed {
+			image, _, err := imageOf(f)
+			if err != nil {
+				return err
+			}
+			if !slices.Contains(images, image) {
+				return fmt.Errorf("%s: image %s is committed beside the captures and not given: give every "+
+					"image, or the merge proves what it lacks", f, image)
+			}
+		}
 	}
 	for _, image := range images {
 		if !hasLatest[image] {

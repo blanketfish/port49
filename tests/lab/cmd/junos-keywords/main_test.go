@@ -106,6 +106,20 @@ func TestEveryRunIsGiven(t *testing.T) {
 		t.Error("ran with a stray run file beside the captures")
 	}
 
+	// An image committed beside the captures and left off the command line
+	// is refused: its tree is one more to intersect (kw-merge review M4).
+	third := t.TempDir()
+	ta := copyTo(third, "L26-keywords-juniper_vjunos-router.yaml", must(os.ReadFile(a)))
+	tb := copyTo(third, "L26-keywords-juniper_vsrx.yaml", must(os.ReadFile(b)))
+	tb1 := copyTo(third, "L26-keywords-juniper_vsrx.run1.yaml", run1)
+	if err := run([]string{ta, tb, tb1}); err != nil {
+		t.Fatalf("two images: %v", err)
+	}
+	copyTo(third, "L26-keywords-juniper_vmx.yaml", append([]byte("# a third image\n"), must(os.ReadFile(a))...))
+	if err := run([]string{ta, tb, tb1}); err == nil || !strings.Contains(err.Error(), "image juniper_vmx is committed") {
+		t.Errorf("ran with a committed image left off: %v", err)
+	}
+
 	lone := t.TempDir()
 	la := copyTo(lone, "L26-keywords-juniper_vjunos-router.yaml", must(os.ReadFile(a)))
 	lb1 := copyTo(lone, "L26-keywords-juniper_vsrx.run1.yaml", run1)
