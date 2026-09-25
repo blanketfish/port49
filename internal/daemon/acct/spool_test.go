@@ -3,6 +3,7 @@ package acct
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
@@ -433,10 +434,13 @@ func TestOversizedLineIsDroppedNotFatal(t *testing.T) {
 		sp.drainOnce()
 	}
 
-	want := []string{`"task_id":"1"`, `"task_id":"2"`, `"task_id":"4"`, `"task_id":"5"`}
+	// The drop is written as an account_gap record after the pass
+	// (TestADropIsAGapInTheLog).
+	want := []string{`"task_id":"1"`, `"task_id":"2"`, `"task_id":"4"`, `"task_id":"5"`, `"event":"account_gap"`}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if len(lines) != len(want) {
-		t.Fatalf("want %d records (1,2,4,5; 3 dropped as oversized), got %d: %q", len(want), len(lines), out.String())
+		t.Fatalf("want %d records (1,2,4,5; 3 dropped as oversized, and its gap), got %d: %q", len(want), len(lines),
+			out.String())
 	}
 	for _, w := range want {
 		if n := strings.Count(out.String(), w); n != 1 {
@@ -821,5 +825,123 @@ func TestTheDrainRedactsARecordSpooledBeforeTheUpgrade(t *testing.T) {
 	if strings.Contains(out.String(), "Hunter2") || strings.Contains(out.String(), "s3cret") ||
 		strings.Count(out.String(), `"redacted":true`) != 2 {
 		t.Fatalf("%s", out.String())
+	}
+}
+
+// A record the spool drops is written to the log as an account_gap record,
+// by stage: one the drain drops when the pass ends, after the records it sat
+// among, and once. Reconciliation reads the log, and must know it has a hole
+// before it says a device did not ask (spec §9).
+func TestADropIsAGapInTheLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	good, err := (decision.Record{Event: decision.EventAccount, TaskID: "after"}).MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".draining", append([]byte("{not json at all}\n"), append(good, '\n')...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	sp, err := NewSpool(4, path, decision.NewJSONLines(out), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.drainOnce()
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"task_id":"after"`) ||
+		!strings.Contains(lines[1], `"event":"account_gap"`) || !strings.Contains(lines[1], `"stage":"drain_unparseable"`) ||
+		!strings.Contains(lines[1], `"records":1`) {
+		t.Fatalf("%q", out.String())
+	}
+	out.Reset()
+	sp.drainOnce()
+	if out.Len() != 0 {
+		t.Fatalf("a gap is reported once: %q", out.String())
+	}
+}
+
+// An account_gap record says only that records were dropped: its stage, how
+// many, and since when. It never carries what was dropped, at any drop point,
+// because what was dropped is device accounting that may hold a command, a
+// token or a password, and a set-aside or unparseable one never reaches the
+// log redacted (spec §5.8, §9).
+func TestAGapRecordCarriesNoRecordContent(t *testing.T) {
+	secret := decision.Record{Event: decision.EventAccount, TaskID: "b",
+		Device: &decision.Device{NAS: "10.20.0.7", Name: "leaf-01", Platform: "arista_eos"},
+		AcctRecord: &decision.AcctRecord{Raw: []string{"cmd=username", "cmd-arg=bob", "cmd-arg=secret", "cmd-arg=Hunter2"},
+			Vector: []string{"username", "bob", "secret", "Hunter2"}}}
+	secretLine, err := secret.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	withDraining := func(t *testing.T, line []byte, sink func(decision.Sink) decision.Sink) (*Spool, *bytes.Buffer) {
+		path := filepath.Join(t.TempDir(), "overflow.jsonl")
+		if err := os.WriteFile(path+".draining", append(append([]byte(nil), line...), '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out := &bytes.Buffer{}
+		sp, err := NewSpool(4, path, sink(decision.NewJSONLines(out)), metrics.New(prometheus.NewRegistry()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sp, out
+	}
+	plain := func(s decision.Sink) decision.Sink { return s }
+
+	cases := []struct {
+		stage string
+		drop  func(t *testing.T) (*Spool, *bytes.Buffer)
+	}{
+		{dropOfferRefused, func(t *testing.T) (*Spool, *bytes.Buffer) {
+			dir := filepath.Join(t.TempDir(), "spool")
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			out := &bytes.Buffer{}
+			sp, err := NewSpool(4, filepath.Join(dir, "overflow.jsonl"), decision.NewJSONLines(out),
+				metrics.New(prometheus.NewRegistry()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := sp.Offer(secret); err != ErrSpoolFull {
+				t.Fatalf("want ErrSpoolFull, got %v", err)
+			}
+			return sp, out
+		}},
+		{dropDrainUnparseable, func(t *testing.T) (*Spool, *bytes.Buffer) {
+			return withDraining(t, secretLine[:len(secretLine)-1], plain) // torn: no closing brace
+		}},
+		{dropDrainUnparseable, func(t *testing.T) (*Spool, *bytes.Buffer) {
+			oversized := append(append([]byte(nil), secretLine...), bytes.Repeat([]byte("x"), 2*1024*1024)...)
+			return withDraining(t, oversized, plain)
+		}},
+		{dropDrainSetAside, func(t *testing.T) (*Spool, *bytes.Buffer) {
+			return withDraining(t, secretLine, func(s decision.Sink) decision.Sink { return &unencodable{next: s, bad: "b"} })
+		}},
+	}
+	for _, c := range cases {
+		sp, out := c.drop(t)
+		sp.drainOnce()
+		got := out.String()
+		for _, leak := range []string{"Hunter2", "username", "bob", "leaf-01", "10.20.0.7", "task_id", `"record":`} {
+			if strings.Contains(got, leak) {
+				t.Fatalf("%s: the log holds %q: %s", c.stage, leak, got)
+			}
+		}
+		var rec map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &rec); err != nil {
+			t.Fatalf("%s: want one account_gap record, got %q: %v", c.stage, got, err)
+		}
+		var gap map[string]json.RawMessage
+		if err := json.Unmarshal(rec["gap"], &gap); err != nil {
+			t.Fatalf("%s: %s: %v", c.stage, got, err)
+		}
+		if len(rec) != 3 || string(rec["event"]) != `"account_gap"` || rec["ts"] == nil ||
+			len(gap) != 3 || string(gap["stage"]) != `"`+c.stage+`"` || string(gap["records"]) != "1" || gap["since"] == nil {
+			t.Fatalf("%s: want only ts, event and gap{stage, records, since}: %s", c.stage, got)
+		}
 	}
 }

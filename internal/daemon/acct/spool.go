@@ -132,6 +132,14 @@ type Spool struct {
 	mu    sync.Mutex
 	depth int // records durably written but not yet forwarded; shared with Offer, so mutex-protected
 
+	// gaps counts, by stage, records dropped and not yet reported to the sink
+	// as an account_gap record, and gapSince when the first was (flushGaps).
+	// Its own lock: a drop at Offer happens under mu, and one on the drain
+	// path does not.
+	gapMu    sync.Mutex
+	gaps     map[string]int
+	gapSince map[string]time.Time
+
 	// needNewline is set whenever the file may end mid-record: a write or sync
 	// that failed, or an existing file whose last byte is not "\n" at
 	// construction. The next Offer writes a leading newline so its record
@@ -387,7 +395,7 @@ func (s *Spool) Offer(r decision.Record) error {
 //
 // Called with mu held.
 func (s *Spool) offerFailed(stage string, err error) {
-	s.metrics.SpoolDrops.WithLabelValues(dropOfferRefused).Inc()
+	s.drop(dropOfferRefused)
 	s.logThrottled(&s.lastOfferLog,
 		"acct: spool %s failed on %s, accounting records are being refused: %v", stage, s.path, err)
 }
@@ -503,6 +511,16 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 	if s.forceFail { // test-only hook; see spool_test.go
 		return false, 0
 	}
+	// A drop held since the last pass, an offer refused, is written before
+	// this pass's records, so a reader meets the gap before what followed it.
+	// A drop during the pass, a record unparseable or set aside, is written
+	// when the pass ends, after the records it sat among; its `since` says
+	// when it began (spec §5.7, §9).
+	if !s.flushGaps() {
+		s.sinkRefused = true
+		return false, 0
+	}
+	defer s.flushGaps()
 
 	draining := s.path + ".draining"
 	s.sinkRefused = false
@@ -572,7 +590,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 			switch {
 			case oversized:
 				log.Printf("acct: dropping oversized spool line (over %d bytes)", maxLineBytes)
-				s.metrics.SpoolDrops.WithLabelValues(dropDrainUnparseable).Inc()
+				s.drop(dropDrainUnparseable)
 			default:
 				err := s.deliverLine(bytes.TrimRight(line, "\n"))
 				if errors.Is(err, decision.ErrUnencodable) {
@@ -582,7 +600,7 @@ func (s *Spool) drainOnce() (ok bool, forwarded int) {
 					if err = s.setAside(line); err == nil {
 						log.Printf("acct: an accounting record the decision log cannot encode was set aside in %s",
 							s.path+".unencodable")
-						s.metrics.SpoolDrops.WithLabelValues(dropDrainSetAside).Inc()
+						s.drop(dropDrainSetAside)
 					}
 				}
 				if err != nil {
@@ -712,7 +730,7 @@ func (s *Spool) deliverLine(line []byte) error {
 	var r decision.Record
 	if err := r.UnmarshalJSON(line); err != nil {
 		log.Printf("acct: dropping spool line that failed to unmarshal: %v", err)
-		s.metrics.SpoolDrops.WithLabelValues(dropDrainUnparseable).Inc()
+		s.drop(dropDrainUnparseable)
 		return nil
 	}
 	// Offer took the record already redacted, but a spool file an earlier
@@ -793,4 +811,44 @@ func (f *failAfterReader) Read(p []byte) (int, error) {
 	n, err := f.r.Read(p)
 	f.n -= int64(n)
 	return n, err
+}
+
+// drop counts a record the spool will not write to the sink, by stage, and
+// holds it for the next account_gap record: the metric is the alarm, and the
+// record is what tells a reader of the log that the stream has a hole, which
+// reconciliation must know before it says a device did not ask (spec §9).
+func (s *Spool) drop(stage string) {
+	s.metrics.SpoolDrops.WithLabelValues(stage).Inc()
+	s.gapMu.Lock()
+	defer s.gapMu.Unlock()
+	if s.gaps == nil {
+		s.gaps, s.gapSince = map[string]int{}, map[string]time.Time{}
+	}
+	if s.gaps[stage] == 0 {
+		s.gapSince[stage] = time.Now()
+	}
+	s.gaps[stage]++
+}
+
+// flushGaps writes one account_gap record per stage with drops held, and
+// forgets each the sink took. It reports whether the sink took them all; a
+// refusal leaves the rest for the next pass. The count lives in memory, so a
+// restart loses what was not yet written; a restart is itself in port49d's
+// log.
+func (s *Spool) flushGaps() bool {
+	s.gapMu.Lock()
+	defer s.gapMu.Unlock()
+	for _, stage := range []string{dropOfferRefused, dropDrainUnparseable, dropDrainSetAside} {
+		n := s.gaps[stage]
+		if n == 0 {
+			continue
+		}
+		rec := decision.Record{TS: time.Now(), Event: decision.EventAccountGap,
+			Gap: &decision.Gap{Stage: stage, Records: n, Since: decision.FormatTime(s.gapSince[stage])}}
+		if err := s.sink.Write(rec); err != nil {
+			return false
+		}
+		delete(s.gaps, stage)
+	}
+	return true
 }

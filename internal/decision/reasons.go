@@ -69,6 +69,10 @@ const (
 	EventBlob             = "blob"
 	EventAccount          = "account"
 	EventUnvalidated      = "unvalidated" // not a decision; header-only diagnosis record (spec §10)
+	// EventAccountGap is not a decision: accounting records port49 received
+	// and could not write, by stage, so a reader of the log knows the stream
+	// has a hole there (spec §5.7, §9).
+	EventAccountGap = "account_gap"
 )
 
 // EventRefresh is the broker carrying the policy in force into a live login
