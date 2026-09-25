@@ -121,9 +121,12 @@ func TestClassIdleUnderAllIsNotSent(t *testing.T) {
 	}
 }
 
-// Under `all`, the rule is read for each platform a device in the inventory
-// has: a projected adapter no device uses refuses nothing there (review M3).
-func TestAllIsReadPerDevicePlatform(t *testing.T) {
+// Under `all`, the rule is read for each projected platform of the pinned
+// set, whether or not a device in the inventory has it yet: the pin is
+// refused in CI, not the reload at the first inventory sync that adds an SRX
+// (Task 6 re-review N1, superseding review M3). The same attribute under the
+// key of a platform that is not projected loads.
+func TestAllIsReadForThePinnedSet(t *testing.T) {
 	e := projectedEnv(platform.BitDeliveryUserPermissions)
 	e.Devices = slices.DeleteFunc(slices.Clone(e.Devices), func(d admission.Device) bool {
 		return d.Platform == "juniper_junos"
@@ -131,8 +134,13 @@ func TestAllIsReadPerDevicePlatform(t *testing.T) {
 	body := scopeOK + `roles:
   - {name: r, privilege: readonly, permit: ["show **"], attributes: {all: ["foo-bar=1"]}}
 ` + subjOK + grantOK
-	if _, err := Parse([]byte("platform_set: "+projectedSet+"\n"+body), e); err != nil {
+	_, err := Parse([]byte("platform_set: "+projectedSet+"\n"+body), e)
+	if err == nil || !strings.Contains(err.Error(), "foo-bar is not listed inert on juniper_junos") {
 		t.Errorf("no Junos device: %v", err)
+	}
+	if _, err := Parse([]byte("platform_set: "+projectedSet+"\n"+strings.Replace(body, "all:", "arista_eos:", 1)),
+		e); err != nil {
+		t.Errorf("under arista_eos: %v", err)
 	}
 }
 

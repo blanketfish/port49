@@ -992,13 +992,18 @@ func (p *Policy) checkPlaceholder(at, key, a string) error {
 }
 
 // checkInertOnProjected refuses, under a projected platform's key or under
-// `all` where a device in the inventory has a projected platform, an
+// `all` where the pinned set or the inventory has a projected platform, an
 // attribute that platform's adapter does not list inert: whether the device
 // reads a name outside the projection's (`shell:allow-commands`, `foo-bar`) is
 // unmeasured, and one it read would stand beside what the projection proved
 // (spec §8, "Generator constraints" 7; plan 5b pre-flight R-M3). A name is
 // read as written, so a case or numbered variant is refused too. Under `all`,
 // classIdle's names are left off a projected platform instead (leftOff).
+//
+// Under `all` it reads the whole pinned set as well as the inventory, as
+// checkProjected does: the pin is where the policy meets the projection, and
+// a refusal there is CI's, where one at the first inventory sync that adds an
+// SRX is the reload's (Task 6 re-review N1).
 func (p *Policy) checkInertOnProjected(at, key, a string) error {
 	name := engine.AttributeName(a)
 	platforms := []string{key}
@@ -1007,6 +1012,9 @@ func (p *Policy) checkInertOnProjected(at, key, a string) error {
 			return nil
 		}
 		platforms = nil
+		for plat := range p.platforms() {
+			platforms = append(platforms, plat)
+		}
 		for _, d := range p.env.Devices {
 			if !slices.Contains(platforms, d.Platform) {
 				platforms = append(platforms, d.Platform)

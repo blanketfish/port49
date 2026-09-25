@@ -3387,7 +3387,8 @@ composition is projected:
    or grant attribute is taken only where the adapter lists its name, as written, in
    `inert_attributes`: `shell:*`, a name the platform does not document, and a numbered or
    case variant are refused at load, since whether the device reads one is unmeasured. Under
-   `all`, the same holds for each projected platform a device in the inventory has, save
+   `all`, the same holds for each projected platform of the pinned set or the inventory, so
+   the pin is refused in CI rather than a reload at the first sync that adds such a device, save
    `idletime` and `timeout`: those are not sent there, since the device's idle limit is its
    login class's (decision 21), and `policy test` notes it. Spec §6's example
    (`all: ["idletime*30", "timeout*480"]`) loads on a projected set.
