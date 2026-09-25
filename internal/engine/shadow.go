@@ -124,6 +124,9 @@ func termAt(terms []cterm, fixed, i int) cterm {
 // terms exactly as the matcher does: a permit matches an argument only as
 // received; a deny also matches it trimmed and, where the platform may send
 // what was typed (abbrev), a deny's word also matches its own abbreviations.
+// A word stands for every case-fold of itself, and a pattern is asked about
+// all of them (someTaken), since one that turns case folding off takes some
+// and not others.
 func overlap(a, b cterm, abbrev bool) (meet, possible bool) {
 	switch {
 	case a.kind == Rest || b.kind == Rest || a.kind == Any || b.kind == Any:
@@ -132,22 +135,18 @@ func overlap(a, b cterm, abbrev bool) (meet, possible bool) {
 		// A permit's word holds no whitespace, so trimming it changes nothing.
 		return strings.EqualFold(a.word, b.word) || (abbrev && abbreviates(a.word, b.word)), false
 	case a.kind == Word:
-		// The permit's word matches every case-fold of itself, and a pattern
-		// compiles case-insensitive, so testing the literal tests them all.
-		// A policy refuses a deny regex that turns that off (spec §4).
-		return anyMatch(b.res, a.word), false
+		return someTaken(b.res, a.word, false)
 	case b.kind == Word:
-		if anyMatch(a.res, b.word) {
-			return true, false
-		}
-		if abbrev {
-			for i := 1; i < len(b.word); i++ {
-				if anyMatch(a.res, b.word[:i]) {
-					return true, false
-				}
+		// The permit's pattern may take the deny's word, or an abbreviation
+		// of it, with whitespace the deny trims.
+		for _, w := range denyWords(b.word, abbrev) {
+			m, p := permitMayTake(a, w)
+			if m && !p {
+				return true, false
 			}
+			possible = possible || m
 		}
-		return false, false
+		return possible, possible
 	case a.kind == b.kind && a.word == b.word:
 		return true, false
 	}
@@ -172,39 +171,66 @@ func overlapAt(pterms []cterm, pf int, dterms []cterm, df int, i int, abbrev boo
 // joinOverlap decides whether some name the permit term h takes and some
 // index the permit term x takes join to what the deny's split term t takes. A
 // deny word lists its own names and indexes, and two permit words are one
-// candidate; any other pair turns on two patterns and is only possible.
+// candidate; any other pair turns on two patterns and is only possible. A
+// deny trims both before joining them, so a name that is only whitespace
+// trims to nothing and the index alone may be the deny's word.
 func joinOverlap(h, x, t cterm, abbrev bool) (meet, possible bool) {
 	if h.kind == Word && x.kind == Word {
-		return t.joins(h.word, x.word, abbrev), false
+		switch {
+		case t.kind == Word:
+			return t.joins(h.word, x.word, abbrev), false
+		case !indexShape.MatchString(x.word):
+			return false, false
+		case t.kind == Any:
+			return someTaken([]*regexp.Regexp{nameShape}, h.word, false)
+		}
+		return someTaken(t.res, h.word+x.word, false)
 	}
 	if t.kind != Word {
 		return true, true
 	}
-	joined := []string{t.word}
-	if abbrev {
-		for k := 1; k < len(t.word); k++ {
-			joined = append(joined, t.word[:k])
+	for _, w := range denyWords(t.word, abbrev) {
+		for k := 0; k < len(w); k++ {
+			if !indexShape.MatchString(w[k:]) {
+				continue
+			}
+			hm, hp := permitMayTake(h, w[:k])
+			xm, xp := permitMayTake(x, w[k:])
+			if hm && xm && !hp && !xp {
+				return true, false
+			}
+			possible = possible || (hm && xm)
 		}
 	}
-	for _, w := range joined {
-		for _, sp := range splitsOf(w) {
-			if permitTakes(h, sp[0]) && permitTakes(x, sp[1]) {
-				return true, false
+	return possible, possible
+}
+
+// denyWords are the arguments a deny's word takes, trimmed: the word, and
+// where abbrev every proper prefix of it, rune by rune as abbreviates reads
+// one.
+func denyWords(word string, abbrev bool) []string {
+	out := []string{word}
+	if abbrev {
+		for k := range word {
+			if k > 0 {
+				out = append(out, word[:k])
 			}
 		}
 	}
-	return false, false
+	return out
 }
 
-// permitTakes reports whether a permit's term matches arg as received.
-func permitTakes(t cterm, arg string) bool {
+// permitMayTake reports whether a permit's term takes some argument that,
+// trimmed, is a case-fold of w: what a deny's word would take of it.
+func permitMayTake(t cterm, w string) (meet, possible bool) {
 	switch t.kind {
 	case Any, Rest:
-		return true
+		return true, false
 	case Word:
-		return strings.EqualFold(t.word, arg)
+		// A permit's word holds no whitespace, so trimming it changes nothing.
+		return strings.EqualFold(t.word, w), false
 	}
-	return anyMatch(t.res, arg)
+	return someTaken(t.res, w, true)
 }
 
 func anyMatch(res []*regexp.Regexp, s string) bool {
