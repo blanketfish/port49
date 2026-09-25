@@ -78,20 +78,27 @@ func (s spelling) moves(node int) []move {
 }
 
 // progOf compiles a term's patterns, which compileTerm compiled, into one
-// program taking what any of them takes. ok is false where it cannot.
+// program taking what any of them takes. Each pattern is parsed on its own,
+// as regexp parsed it, and the trees are joined: pasted into one string, a
+// `\Q` with no `\E` would quote the text after it. ok is false where it
+// cannot, which regexp's own compile of the same patterns rules out.
 func progOf(res []*regexp.Regexp) (prog *syntax.Prog, ok bool) {
 	if len(res) == 0 {
 		return nil, true
 	}
-	alts := make([]string, len(res))
-	for i, re := range res {
-		alts[i] = "(?:" + re.String() + ")"
+	alt := &syntax.Regexp{Op: syntax.OpAlternate}
+	for _, re := range res {
+		tree, err := syntax.Parse(re.String(), syntax.Perl)
+		if err != nil {
+			return nil, false
+		}
+		alt.Sub = append(alt.Sub, tree)
 	}
-	re, err := syntax.Parse(strings.Join(alts, "|"), syntax.Perl)
-	if err != nil {
-		return nil, false
+	tree := alt
+	if len(alt.Sub) == 1 {
+		tree = alt.Sub[0]
 	}
-	prog, err = syntax.Compile(re.Simplify())
+	prog, err := syntax.Compile(tree.Simplify())
 	return prog, err == nil
 }
 
@@ -158,11 +165,13 @@ func stateOf(node int, prev rune, pcs []uint32) state {
 
 // someTaken reports whether some argument w stands for, padded or not, is
 // taken by one of res, in the (meet, possible) reading overlap gives: a
-// reading past maxStates is a possible meet.
+// reading past maxStates is a possible meet, and patterns it cannot compile
+// are a certain one, so neither turns a meet the report must fail on into
+// one it only prints.
 func someTaken(res []*regexp.Regexp, w string, padded bool) (meet, possible bool) {
 	prog, ok := progOf(res)
 	if !ok {
-		return true, true
+		return true, false
 	}
 	if prog == nil {
 		return false, false

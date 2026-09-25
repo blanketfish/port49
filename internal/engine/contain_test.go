@@ -223,3 +223,19 @@ func TestContainAgreesWithTheMatcher(t *testing.T) {
 		}
 	}
 }
+
+// A pattern is read on its own, never pasted into a larger one: `\Q` with no
+// `\E` quotes to the pattern's end and would swallow whatever followed it,
+// and the meet it hid would come back only possible.
+func TestAQuotedPatternIsReadWhole(t *testing.T) {
+	for _, expands := range []bool{false, true} {
+		p := program(t, expands, `a:permit show fxp0`, `a:deny show /^\Qfxp0/`)
+		ss := p.Shadows()
+		if len(ss) != 1 || ss[0].Possible {
+			t.Errorf("expands=%v: Shadows() = %+v; want one certain shadow", expands, ss)
+		}
+	}
+	if ok, err := Contains(`show /\Qfxp0/`, "show fxp0", nil); err != nil || !ok {
+		t.Errorf(`Contains("show /\Qfxp0/", "show fxp0") = %v, %v; want true`, ok, err)
+	}
+}
