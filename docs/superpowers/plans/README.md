@@ -649,7 +649,8 @@ reproduced), and Task 19 is on hold for the owner.
   - Closed: L23; L24 (both Junos images); L26, and L26b, a new row.
   - Open: L9 (whether the commit checker takes every rendered shape, carried to Task 19); L10
     (Junos spellings, Task 19); L12 (the differential, Task 19, so decision 22 stays provisional);
-    L25 (not reproduced); and L26c, a new row (RPC reach; a rerun is owed).
+    L25 (not reproduced); and L26c, a new row (RPC reach; a rerun is owed; the owner's SRX
+    hardware results are in `L26c-operator-juniper_srx.md`, without a capture).
 
 **Operator-facing notes (for the pull request body).**
 - **Upgrade every daemon before pinning set 1.1.0.** A daemon that does not ship 1.1.0 refuses
@@ -684,11 +685,14 @@ reproduced), and Task 19 is on hold for the owner.
   REST, J-Web, JET/gRPC/gNMI and `outbound-ssh` are off, because over NETCONF a native RPC ran
   past every wire deny (`L12-netconf-juniper_*.md`). Whether that is enough is unmeasured (L26c).
 - **On 1.1.0 a Junos capability reply needs `xml-mode` permitted, so most broad grants fail
-  closed and only narrow grants project** (option C, provisional on L26c). A capability reply
+  closed and only narrow grants project** (option C, provisional on L26c, and borne out on SRX
+  hardware). A capability reply
   (bits, and no `deny-commands .*`) leaves `xml-mode` and `op` runnable. In the lab (L26c,
   still open), `xml-mode netconf` opened NETCONF inside a projected CLI session, and a native
   RPC the session's deny did not name ran there, within the bits' reach. Whether such an RPC
-  passes a deny that names what it reads is not yet measured, so port49 assumes it does. It
+  passes a deny that names what it reads is not yet measured in the lab, so port49 assumes it
+  does; on SRX hardware (23.4R2-S8.7, operator-reported, `L26c-operator-juniper_srx.md`)
+  `<get-configuration/>` did, and no deny naming `xml-mode` refused it. It
   sends a capability reply only where the grant permits everything its bits reach, `xml-mode`
   included, and does not treat a deny beneath a permitted bit as a boundary. Such a subject
   gets the narrow shape or the fail-closed reply, and `policy test` names it. A measurement can
@@ -698,6 +702,11 @@ reproduced), and Task 19 is on hold for the owner.
   argument deny. Deny all of `show configuration`, or none of it; and on 1.1.0 denying all of it
   under `view` still fails closed until L26c closes, since no carve-out leaves the deny off the
   wire and a deny beneath a sent bit is not a boundary (option C).
+- **`deny-commands` cannot keep the configuration from a user who holds `view-configuration`.**
+  From any CLI session such a user can run `xml-mode netconf` and send `<get-configuration/>`,
+  which returns the whole configuration (secrets masked) past a deny of `show configuration`
+  (SRX hardware, operator-reported). To withhold the configuration, withhold the bit. port49
+  never relies on such a deny: that composition fails closed.
 - **`port49 devices capabilities` output goes to cron mail, and its redaction is best effort.**
   A password typed as a command may appear in an example line.
 - **The Junos adapter is unverified.** The differential test (Task 19) is pending, so
