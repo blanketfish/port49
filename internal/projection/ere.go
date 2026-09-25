@@ -53,14 +53,16 @@ type Facts struct {
 // backslash in an attribute value is unmeasured.
 const ereLiteral = `.[()*+?|^$`
 
-// An allow's argument is printable ASCII less the space, the quote and the
-// braces, none of which the reply carries: argRune is one rune of it, and
-// anyArg one whole argument, never empty and never a lone `|`, which the
-// engine reads as a pipeline and no rule permits. A tab is not in it: the
-// device completes on one.
+// An allow's argument is printable ASCII less the space, the quote, the
+// braces and the pipe, none of which the reply carries: argRune is one rune
+// of it, and anyArg one whole argument, never empty. A `|` is left out
+// anywhere in one, not only alone: the engine reads a lone one as a pipeline
+// no rule permits, and one that begins or ends an argument (`show route |v`)
+// is where a device that splits a pipeline off without a space would read a
+// stage. A tab is not in it: the device completes on one.
 const (
-	argRune = `[!#-z|~]`
-	anyArg  = `([!#-z~]|[!#-z|~][!#-z|~]+)`
+	argRune = `[!#-z~]`
+	anyArg  = argRune + `+`
 )
 
 // errUnwritable is a rule the device's regex cannot carry faithfully.

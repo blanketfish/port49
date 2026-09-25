@@ -74,7 +74,7 @@ var bruteRules = []string{
 // and each class's and pattern's members and near-misses.
 var bruteAlphabet = []string{"show", "SHOW", "interfaces", "version", "route", "ge-0/0/0", "GE-0/0/0",
 	"fxp0", "em0", "ae1", "et-0/0/2", "et-0/0/9", "x", "a b", "A", "a", "|", "no-more",
-	"ge-0", "xe-0", "ab", "abx", "cdx", "x\ty", ""}
+	"ge-0", "xe-0", "ab", "abx", "cdx", "x\ty", "", "|v", "v|"}
 
 // commands is every command of up to three words over bruteAlphabet, and of
 // four where the first two are `show interfaces`: no rule has more than
@@ -163,6 +163,26 @@ func TestEREAgreesWithTheEngineOnEveryCommand(t *testing.T) {
 	}
 }
 
+// No allow's argument holds a `|`, at its start, end or inside: a device that
+// splits a pipeline off without a space would read a stage there (Task 7
+// review, parked).
+func TestAnAllowArgumentNeverHoldsAPipe(t *testing.T) {
+	for _, rule := range []string{"show route *", "show *", "show interfaces /^ge-/", "show interfaces /ge-/",
+		"show interfaces /^.e-.*$/"} {
+		e, err := ruleERE(rule, bruteClasses, false, Facts{CaseSensitive: true})
+		if err != nil {
+			t.Fatalf("%s: %v", rule, err)
+		}
+		device := regexp.MustCompile("^(" + e + ")$").MatchString
+		for _, line := range []string{"show route |v", "show route v|", "show route a|b", "show |", "show |v",
+			"show interfaces ge-|", "show interfaces ge-0|", "show interfaces |ge-0"} {
+			if device(line) {
+				t.Errorf("allow %s: the ERE %q matches %q", rule, e, line)
+			}
+		}
+	}
+}
+
 // A case-sensitive pattern in an allow is written in the case it holds, and
 // refused where the device ignores case, which would read it wider.
 func TestACaseSensitiveAllowIsNeverWidened(t *testing.T) {
@@ -175,7 +195,7 @@ func TestACaseSensitiveAllowIsNeverWidened(t *testing.T) {
 			t.Errorf("%s on a case-insensitive device: %v", rule, err)
 		}
 	}
-	if got, err := ruleERE("show /(?-i)^Ge-/", nil, false, Facts{CaseSensitive: true}); err != nil || got != "show (Ge-)[!#-z|~]*" {
+	if got, err := ruleERE("show /(?-i)^Ge-/", nil, false, Facts{CaseSensitive: true}); err != nil || got != "show (Ge-)[!#-z~]*" {
 		t.Errorf("case-sensitive device: %q %v", got, err)
 	}
 }

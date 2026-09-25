@@ -19,13 +19,13 @@ func TestRuleERE(t *testing.T) {
 		{"SHOW Version", false, "show version"},
 		{"show interfaces **", false, "show interfaces( .*)?"},
 		{"**", false, "[!#-z~].*"},
-		{"show route *", false, "show route ([!#-z~]|[!#-z|~][!#-z|~]+)"},
+		{"show route *", false, "show route [!#-z~]+"},
 		{"show route *", true, ` *[sS][hH][oO][wW] +[rR][oO][uU][tT][eE] +.+ *(\|.*)?`},
 		{"file show /var/log/messages", false, `file show /var/log/messages`},
 		{"ping 10.0.0.1", false, `ping 10\.0\.0\.1`},
 		{"show interfaces @management", false, "show interfaces ((fxp0|em0))"},
 		{"show interfaces @uplink **", false, "show interfaces ((et-0/0/[0-3])|(ae1))( .*)?"},
-		{"show interfaces /^ge-/", false, "show interfaces (ge-)[!#-z|~]*"},
+		{"show interfaces /^ge-/", false, "show interfaces (ge-)[!#-z~]*"},
 		{"show interfaces /ge-/", true, ` *[sS][hH][oO][wW] +[iI][nN][tT][eE][rR][fF][aA][cC][eE][sS] +.*([gG][eE]-).* *(\|.*)?`},
 	} {
 		got, err := ruleERE(c.rule, classes, c.deny, folded)
