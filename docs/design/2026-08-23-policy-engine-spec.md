@@ -1450,8 +1450,10 @@ about revocation or a ceiling on such a platform, exactly as it must for `pipe_a
 false`. Two levers exist and both are used. The adapter renders the class `idle-timeout` from
 `max_session_age`, which is an approximation but an enforced one: `port49 platform export
 --classes` prints each class a projected platform's replies rest on with `idle-timeout` set to
-`session.max_session_age_default` in whole minutes, rounded down (§8), and L24 measures whether
-it ends an idle session a reply landed in that class; this lever is *provisional on L24*
+`session.max_session_age_default` in whole minutes, rounded down (§8), and it ends an idle
+session a reply landed in that class: `idle-timeout 1` closed one at 1m0s through
+`local-user-name` and through the `remote` template, on both Junos images (L24, closed;
+`tests/lab/results/L24-juniper_*.md`). The largest value the device takes is unmeasured
 (decision 21). And every revocation record
 names the live contexts it could **not** reach, so an incident responder knows which devices
 still need a manual disconnect.
@@ -3086,8 +3088,9 @@ reaches more than `show **` (`request flight-recorder **`, `test policy **` and 
 every session runs the baseline (`help`, `file`, `request`, `start`, …;
 `tests/lab/results/L12-bits-juniper_*.md`), so each command those reach and the grant does not
 permit needs a wire deny. Those denies render to 469 bytes, past RFC 8907's 255; `save`, one of
-them, is not a keyword on both images, so its deny cannot be sent (decision 27); and a deny
-beneath a sent bit or the baseline guards the CLI only (L26c, below). The narrow shape cannot
+them, is not a keyword on both images, so its deny cannot be sent (decision 27); and port49
+treats a deny beneath a sent bit or the baseline as guarding the CLI only (*provisional on L26c*,
+below). The narrow shape cannot
 carry a deny beneath a permit, so the subject gets the fail-closed reply (`refused_shape`).
 What does project on set 1.1.0: `permit: [show **]` alone, as the narrow shape
 (`user-permissions=view view-configuration`, `deny-commands .*`, `allow-commands` `show **`); a
@@ -3284,8 +3287,8 @@ verb (`set`, `delete`, `edit`, `activate`, …) and is not an operational comman
 proves fails closed as `configuration_deny`, with a message saying so. `deny-configuration` is not
 measured over the wire and not sent.
 
-**A wire deny binds the CLI, never a native RPC** (`tests/lab/results/L12-netconf-juniper_*.md`,
-`L26c-juniper_*.md`, both images). The token that opens the CLI opens NETCONF with the same
+**A wire deny does not bind a native NETCONF RPC** (`tests/lab/results/L12-netconf-juniper_*.md`,
+both images). The token that opens the CLI opens NETCONF with the same
 reply, and there a native RPC ran past every wire deny (`<get-configuration>` past `deny show
 configuration **`); only a `<command>` RPC was refused. So a projected Junos device must run no
 management service but the CLI's, checked as an allowlist: `devices check-config` passes it only
@@ -3295,16 +3298,20 @@ configuration | display set | display inheritance | except "^set groups "` and r
 other input. That rules out NETCONF, the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`), REST,
 J-Web, JET/gRPC/gNMI and `outbound-ssh`, outright, since Junos cannot turn them off per user.
 
-That is necessary, not sufficient. From a projected CLI session, `xml-mode netconf
-need-trailer` returns a NETCONF hello and a native RPC (`<get-software-information/>`) runs
-past the wire denies, and `op url` is accepted. There RPC reach is the permission bits': `view`
-without `view-configuration` got an empty `<configuration>`. `start shell` is refused by the
-bits unless a shell permission is held, and the fail-closed reply's `deny-commands .*` refuses
-`xml-mode` and `op` both (L26c). A wire deny does bind a `<command>…</command>` RPC: over NETCONF
-the deny session refused one the control ran (L12-netconf). So
-**a deny beneath a sent bit is not a boundary**, and in set 1.1.0 port49 fails closed on it
-(`JunosFacts.DenyBindsRPCs` false). A composition whose only guard beneath a sent bit, or
-beneath the baseline every session holds, is a wire deny is CLI-only safe: the capability shape
+Whether that is sufficient is not measured. L26c (open) measured, with `netconf ssh` still
+configured, what a projected CLI session reaches inside itself: `xml-mode netconf need-trailer`
+opens NETCONF and returns a hello; a native RPC the probed deny did not name
+(`<get-software-information/>`) ran; the deny did bind a `<command>…</command>` RPC (as over
+NETCONF, where the deny session refused one the control ran, L12-netconf); and RPC reach there is
+bounded above by the permission bits (`view` without `view-configuration` got an empty
+`<configuration>`). `op url` was accepted up to the copy, with no RPC observed through it.
+`start shell` is refused by the bits unless a shell permission is held, and the fail-closed
+reply's `deny-commands .*` refuses `xml-mode` and `op` both. No probe ran with the services off
+that the allowlist leaves, and no native RPC was observed passing a deny that named what it
+reached. **port49 therefore assumes, until L26c closes, that a deny beneath a sent bit is not a
+boundary**, and in set 1.1.0 fails closed on it (`JunosFacts.DenyBindsRPCs` false; option C,
+*provisional on L26c* — the conservative reading, which a measurement can only relax). A composition whose only guard beneath a sent bit, or
+beneath the baseline every session holds, is a wire deny is treated as CLI-only safe: the capability shape
 falls to the narrow one, whose `.*` refuses both entry points, and where that cannot carry it the
 subject gets the fail-closed reply (`refused_shape`, its message naming RPC reach). A narrow
 allow that would run `xml-mode` or `op` is refused the same way, and the fail-closed reply leaves
@@ -5131,8 +5138,10 @@ ceiling, revocation, username binding, and the in-session warning all act at the
 authorization request, and Junos never makes one. Rather than claim reach that does not exist,
 `explain` states the limit, the adapter renders class `idle-timeout` from `max_session_age` as
 the enforced approximation, and revocation records name the contexts they could not reach.
-(§5.6) *Plan 5b:* `port49 platform export --classes` renders the idle-timeout (§8); that it
-ends an idle session is *provisional on L24*, which measures whether it does. Revocation
+(§5.6) *Plan 5b:* `port49 platform export --classes` renders the idle-timeout (§8), and it
+ends an idle session: at 1m0s for `idle-timeout 1`, through `local-user-name` and the `remote`
+template, on both Junos images (L24, closed; `tests/lab/results/L24-juniper_*.md`); the largest
+value the device takes is unmeasured. Revocation
 records naming contexts are plan 7's.
 
 **22. Session-only projection is bits first, regexes second, chosen per grant, with one
@@ -5149,8 +5158,8 @@ plan 5b* (§8, "As built"): a reply is proven before it is sent, against a devic
 the bits are a union and only measured carve-outs subtract; bits that enter configuration mode
 are sent only for a grant of everything; the built-in adapter delivers bits as `user-permissions`,
 which L12 measured applied over a bitless template on both images; the projection ships in set
-1.1.0, where a deny beneath a sent bit fails closed, since no wire deny binds an RPC the session
-reaches (L26c). "Refused at load" is
+1.1.0, where a deny beneath a sent bit fails closed, since port49 assumes no wire deny binds an
+RPC the session reaches (option C, *provisional on L26c*). "Refused at load" is
 amended by decision 26: the refused shape gets that subject the fail-closed reply, and CI
 refuses the policy.
 
@@ -5221,7 +5230,8 @@ against it (§8).
 A deny whose every word is proven a keyword is sent as written, and so is one whose other words
 are all proven keywords and which ends in a trailing `**`: the device refuses by keyword prefix, so
 it refuses at least what port49 denies (`deny show configuration **` and `deny show chassis hardware
-**` are keyword denies; whether one may guard a sent bit is §8's, since no wire deny binds an RPC). A deny naming any word not proven a keyword — a `*` or a `**` anywhere but that
+**` are keyword denies; whether one may guard a sent bit is §8's, which assumes no wire deny binds a native RPC until L26c
+closes; a `<command>` RPC is bound). A deny naming any word not proven a keyword — a `*` or a `**` anywhere but that
 trailing place, a trailing `**` after an argument, an entity class, a regex, or a word the tree
 does not list there — cannot be enforced on Junos: `policy test` and `policy diff` fail, naming the word and the whole
 command to deny instead, and at runtime that subject gets decision 26's fail-closed reply.
@@ -5710,9 +5720,9 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L23** | Whether `home-directory`, `idletime` and `timeout`, each beside readonly's reply, leave the session readonly's on EOS and NX-OS: the same identity, the same reach for `clear counters` and `configure terminal`, and a permitted `show version`. Beside admin's reply (L22) a raise is invisible (5a final review M3). | The inert lists of `arista_eos` and `cisco_nxos` (§6, §8) | EOS, NX-OS | closed — measured 2026-09-25; `tests/lab/results/L23-arista_eos.md`, `tests/lab/results/L23-cisco_nxos.md` |
 | **L24** | Whether a Junos login class's `idle-timeout` ends an idle session a TACACS+ reply landed in that class, through `local-user-name` and through the `remote` template. | Decision 21's enforced approximation; `port49 platform export --classes` (§5.6, §8) | Junos | closed — measured 2026-09-25; `tests/lab/results/L24-juniper_vjunos-router.md`, `L24-juniper_vsrx.md`. With `idle-timeout 1` on the class, an idle session closed 1m0s after its prompt with the device's `Idle timeout exceeded: closing session`, through `local-user-name` and through the `remote` template, on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15. The largest `idle-timeout` the device takes is not this row's question and is unmeasured; see below |
 | **L25** | Whether the N9Kv writes an accounting record under `admin` with task_id `vsh.bin.<port>` when a network-operator cancels the sudo prompt of a bare `show interface`, and what distinguishes it from a person's `admin` session, over SSH and over NX-API. | A `cisco_nxos` system user keyed on its task_id, never the username alone (§5.8) | NX-OS | open — a production observation, not reproduced. Measured 2026-09-25 on Nexus 9300v 10.4(2)F (`tests/lab/results/L25-cisco_nxos.md`): a network-operator's bare `show interface`, paged to its end, asked for no sudo password on this image, so there was no prompt to cancel and no record under `admin` followed. No system user ships, and plan 5b's Task 15 did not run |
-| **L26** | The Junos operational CLI keyword tree under `show`: at each command path, the words proven keywords — offered by completion there, and shown a keyword by `\| display xml rpc` (an element named as the word, none holding it as text, or a path still asking for a `<command>`) — and whether an argument may be typed there; anything without that evidence is an argument. The pipe is first proven to run nothing. Walked over the break-glass CLI, seeds first, bounded in breadth, depth, nodes and commands. Scope: the images captured, and no hidden argument. | Which denies and allows the projection may send (decision 27; §8); `platforms/keywords/<set>/juniper_junos.yaml` | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26-juniper_vjunos-router.md`, `L26-juniper_vsrx.md`. The pipe ran nothing on either image, and neither walk stopped at a bound: vJunos-router 23.4R2-S2.1, 136 nodes and 755 keywords; vSRX 21.4R3.15, 118 nodes and 668. vSRX was walked twice, and the runs disagreed, so a keyword is one only where every run on every image proves it: set 1.1.0's tree intersects all three runs, 528 keywords, and adds L26b's seven (535, frozen with the set). Nothing under `show configuration` is proven. Scope: these two images, and no hidden argument; see below |
+| **L26** | The Junos operational CLI keyword tree under `show`: at each command path, the words proven keywords — offered by completion there, and shown a keyword by `\| display xml rpc` (an element named as the word, none holding it as text, or a path still asking for a `<command>`) — and whether an argument may be typed there; anything without that evidence is an argument. The pipe is first proven to run nothing. Walked over the break-glass CLI, seeds first, bounded in breadth, depth, nodes and commands. Scope: the images captured, and no hidden argument. | Which denies and allows the projection may send (decision 27; §8); `platforms/keywords/<set>/juniper_junos.yaml` | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26-juniper_vjunos-router.md`, `L26-juniper_vsrx.md`. The pipe ran nothing on either image, and neither walk stopped at a bound: vJunos-router 23.4R2-S2.1, 136 nodes and 755 keywords; vSRX 21.4R3.15, 118 nodes and 668. Both images were walked twice: vJunos-router's rerun reproduced its first tree byte for byte, and vSRX's runs disagreed, so a keyword is one only where every run on every image proves it: set 1.1.0's tree intersects every committed run (three trees), 528 keywords, and adds L26b's seven (535, frozen with the set). Nothing under `show configuration` is proven. Scope: these two images, and no hidden argument; see below |
 | **L26b** | Whether a word is a keyword to `deny-commands`, by the deny itself: a deny naming the word at its path refuses the command, the CLI's caret under the word, while a paired control without the deny runs it with positive evidence. Probed: the words after `show` that L26 offered and did not prove (`cli`, `host`, `ingress-replication`, `policy`, `task`), `exit`, `save`, `set cli`, and every `show configuration` hierarchy the image offers. | The L26b overlays laid over L26's trees (`tests/lab/results/L26b-keywords-juniper_*.yaml`), and so set 1.1.0's keyword tree; whether a deny naming a `show configuration` hierarchy may be sent (decision 27; §8) | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26b-juniper_vjunos-router.md`, `L26b-juniper_vsrx.md`. Proven on both images: `show cli`, `show host`, `show ingress-replication`, `show policy`, `show task`, `set cli` and `exit`. `save` is proven on vJunos-router and unproven on vSRX, so it is not a keyword in the set. **A deny naming a `show configuration` hierarchy is not enforced**: every offered hierarchy, 32 on vJunos-router and 25 on vSRX, ran under a deny naming it; see below |
-| **L26c** | Whether a projected Junos CLI session reaches a native RPC with the NETCONF service off: `xml-mode netconf need-trailer` and `xml-mode netconf`, then `<get-software-information/>`, `<get-configuration/>` and a `<command>` RPC; `op url`; `start shell`; the NETCONF subsystem on port 22 with `netconf ssh` deleted; and whether the fail-closed reply's `deny-commands .*` refuses those entry points. Beside it, unmeasured: whether a deny naming the entry points (`xml-mode`, `op`) binds, with their abbreviations and through a class's own deny list; whether an RPC reaches past a deny beneath `view-configuration`; the SSH exec channel (`ssh <device> xml-mode …`); and `scp`. | `JunosFacts.DenyBindsRPCs`, false in set 1.1.0: a deny beneath a sent bit or the baseline guards the CLI only, so it fails closed (§8, option C); the management-services allowlist is necessary, not sufficient (§8) | Junos (vSRX / vJunos-router in containerlab) | open — measured 2026-09-25 on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (`tests/lab/results/L26c-juniper_*.md`), the two agreeing: under a projected class (`view`, a rendered deny naming `show configuration`), `xml-mode netconf` returned a hello and `<get-software-information/>` ran, as in the control; `<get-configuration/>` returned an empty `<configuration>` there and in the control alike, `view` lacking `view-configuration`; a `<command>show configuration</command>` RPC was refused, which the control's own bits leave unisolated here (over NETCONF the deny refused one the control ran, `L12-netconf-juniper_*.md`); `op url` was accepted up to the copy; `start shell` was refused by the bits, as in the control; `deny-commands .*` refused `xml-mode` and `op url`; and with `netconf ssh` deleted port 22's NETCONF subsystem was refused in every class, break-glass included. The run failed its four `view`-only `get-configuration` cells (reclassified since as bits-limited, not rerun); the `xml-mode` probes ran before `netconf ssh` was deleted; and `view` alone cannot set a deny against RPC reach: a rerun is owed (L26c review I-1, I-4). The questions beside it are open, and the owner is measuring some on production devices |
+| **L26c** | Whether a projected Junos CLI session reaches a native RPC with the NETCONF service off: `xml-mode netconf need-trailer` and `xml-mode netconf`, then `<get-software-information/>`, `<get-configuration/>` and a `<command>` RPC; `op url`; `start shell`; the NETCONF subsystem on port 22 with `netconf ssh` deleted; and whether the fail-closed reply's `deny-commands .*` refuses those entry points. Beside it, unmeasured: whether a deny naming the entry points (`xml-mode`, `op`) binds, with their abbreviations and through a class's own deny list; whether an RPC reaches past a deny beneath `view-configuration`; the SSH exec channel (`ssh <device> xml-mode …`); and `scp`. | `JunosFacts.DenyBindsRPCs`, false in set 1.1.0 and provisional on this row: port49 assumes a deny beneath a sent bit or the baseline guards the CLI only, so it fails closed (§8, option C); whether the management-services allowlist is sufficient (§8) | Junos (vSRX / vJunos-router in containerlab) | open — measured 2026-09-25 on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (`tests/lab/results/L26c-juniper_*.md`), the two agreeing: under a projected class (`view`, a rendered deny naming `show configuration`), `xml-mode netconf` returned a hello and `<get-software-information/>` ran, as in the control; `<get-configuration/>` returned an empty `<configuration>` there and in the control alike, `view` lacking `view-configuration`; a `<command>show configuration</command>` RPC was refused, which the control's own bits leave unisolated here (over NETCONF the deny refused one the control ran, `L12-netconf-juniper_*.md`); `op url` was accepted up to the copy; `start shell` was refused by the bits, as in the control; `deny-commands .*` refused `xml-mode` and `op url`; and with `netconf ssh` deleted port 22's NETCONF subsystem was refused in every class, break-glass included. The run failed its four `view`-only `get-configuration` cells (reclassified since as bits-limited, not rerun); the `xml-mode` probes ran before `netconf ssh` was deleted; and `view` alone cannot set a deny against RPC reach: a rerun is owed (L26c review I-1, I-4). The questions beside it are open, and the owner is measuring some on production devices |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -7173,7 +7183,8 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   image stopped at a bound. vJunos-router 23.4R2-S2.1: 136 nodes, 1291 commands, 755 keywords.
   vSRX 21.4R3.15: 118 nodes, 1161 commands, 668 keywords. Nothing under `show configuration` is
   proven, and `show cli`, `show route summary` and `show chassis cluster` (absent on
-  vJunos-router) are not proven on both. **vSRX was walked twice, and the runs disagree.** The
+  vJunos-router) are not proven on both. **Both images were walked twice.** vJunos-router's rerun reproduced its first tree byte for
+  byte; **vSRX's runs disagree.** The
   rerun (eb17886) used a classifier that no longer reads `syntax error, expecting <command>:
   <word>` as proof: it dropped `show rsvp interface`, a false keyword the first run proved, so
   `show rsvp` takes an argument; and it proved `show interfaces terse extensive` and `show system
@@ -7207,14 +7218,19 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   to the rerun L26 tree (569c8c2), whose nodes and words it touches are the first run's.
 - **L26c** — added by plan 5b and measured 2026-09-25 (`tests/lab/results/L26c-juniper_*.md`;
   `tests/lab/junos_rpc_reach_test.go`); open. From a projected CLI session (class `view`, a
-  rendered deny naming `show configuration`), `xml-mode netconf` and `xml-mode netconf
-  need-trailer` return a NETCONF hello and `<get-software-information/>` runs, on both images, as
-  in the control; `op url` is accepted. So an RPC is reachable from the CLI itself, and turning
-  the management services off (§8's allowlist) is necessary, not sufficient. The fail-closed
-  reply's `deny-commands .*` refuses `xml-mode` and `op url`. This is why set 1.1.0 fails closed
-  on a deny beneath a sent bit (option C, `JunosFacts.DenyBindsRPCs` false), and why a broad
-  Junos grant with a deny rarely projects. **Open, and not asserted anywhere in this document:**
-  whether a deny naming `xml-mode` or `op` binds, with abbreviations and through a class's deny
+  rendered deny naming `show configuration`), with `netconf ssh` still configured,
+  `xml-mode netconf` and `xml-mode netconf need-trailer` open NETCONF inside the session and
+  return a hello, on both images, as in the control. There a native RPC the deny did not name,
+  `<get-software-information/>`, ran; the deny did bind a `<command>` RPC; and reach is bounded
+  above by the bits (`view` alone got an empty `<configuration>`). `op url` was accepted up to the
+  copy, with no RPC observed through it. The fail-closed reply's `deny-commands .*` refuses
+  `xml-mode` and `op url`. Whether turning the management services off (§8's allowlist) is
+  sufficient is **not measured**: no probe ran with only the services the allowlist leaves. Set
+  1.1.0 fails closed on a deny beneath a sent bit (option C, `JunosFacts.DenyBindsRPCs` false),
+  *provisional on L26c*: the conservative reading, which this row can only relax. It is why a
+  broad Junos grant with a deny rarely projects. **Open, and not asserted anywhere in this document:**
+  whether a native RPC reached this way passes a deny that names what it reads; whether a deny
+  naming `xml-mode` or `op` binds, with abbreviations and through a class's deny
   list; whether an RPC reaches past a deny beneath `view-configuration` (this run's `view` class
   cannot say); the SSH exec channel; `scp`. The run failed four cells since reclassified, and its
   `xml-mode` probes ran before `netconf ssh` was deleted, so a rerun is owed (L26c review I-1,

@@ -588,36 +588,46 @@ reproduced), and Task 19 is on hold for the owner.
   - M: `rpcServicesOff` is on (below).
   - Not A: Junos is projected.
 - **`JunosFacts` is `{CaseSensitive: false, DenyMatchesExpanded: true, DenyBindsRPCs: false}`.**
-  Case is not measurable, because the CLI refuses upper case itself. `DenyBindsRPCs` is false
-  because of L26c: a projected CLI session reaches native RPCs through `xml-mode netconf` and
-  `op url`, past every wire deny, with its bits' reach. So under option C (the owner's ruling
-  until their device results) a deny beneath a sent bit or the baseline is not a boundary. The
-  composition falls to the narrow shape, whose `deny-commands .*` refuses both entry points, or
+  Case is not measurable, because the CLI refuses upper case itself. `DenyBindsRPCs: false` and
+  option C are **provisional on L26c** (open), the conservative reading. L26c measured, with
+  `netconf ssh` still configured, that `xml-mode netconf` opens NETCONF inside a projected CLI
+  session; that a native RPC the probed deny did not name (`<get-software-information/>`) ran
+  there; that the deny did bind a `<command>` RPC; and that RPC reach is bounded above by the
+  bits. It did not observe a native RPC passing a deny that named what it reached, and whether
+  the services allowlist is sufficient is unmeasured. So under option C (the owner's ruling until
+  their device results) port49 assumes a deny beneath a sent bit or the baseline is not a
+  boundary. The composition falls to the narrow shape, whose `deny-commands .*` refuses both entry points, or
   gets the fail-closed reply (`refused_shape`, naming RPC reach). **The realistic readonly still
   fails closed** on 1.1.0, now for three reasons: its baseline denies overflow 255 bytes, `save`
-  cannot be proven a keyword, and the denies beneath `view` guard the CLI only. What does project:
+  cannot be proven a keyword, and port49 treats the denies beneath `view` as guarding the CLI only
+  (option C). What does project:
   `permit: [show **]` alone as the narrow shape, a narrow grant of a few show commands, and an
   admin `permit: [**]` with a deny no bit but `all` reaches (decision 26).
 - **Decision 27's keyword tree.** L26 walked `show` on both images (136 nodes and 755 keywords on
-  vJunos-router, 118 and 668 on vSRX, no bound hit). The vSRX rerun showed the walk is not
-  reproducible, dropping one false keyword (`show rsvp interface`) and gaining two. So
-  `tests/lab/cmd/junos-keywords` intersects every run on every image and refuses a merge missing
-  one: 528 keywords. L26b's overlays add the seven proven by deny enforcement (`show cli`,
+  vJunos-router, 118 and 668 on vSRX, no bound hit), and then again. vJunos-router's rerun
+  reproduced its tree byte for byte. The vSRX rerun, under the hardened classifier, dropped one
+  false keyword (`show rsvp interface`, the classifier's doing) and gained two its first run left
+  out (`show interfaces terse extensive`, `show system processes detail`), which shows the walk is
+  not reproducible there. So `tests/lab/cmd/junos-keywords` intersects every committed run (three
+  trees) and refuses a merge missing one: 528 keywords. L26b's overlays add the seven proven by deny enforcement (`show cli`,
   `host`, `ingress-replication`, `policy`, `task`, `set cli`, `exit`), for 535. What it proves
   for the spec's denies:
   - `deny show configuration **` and `deny show chassis hardware **` are keyword denies;
   - §11's `deny show chassis cluster **` is not (vJunos-router has no `cluster`), nor is `deny
     show route summary`;
   - no `show configuration` hierarchy is a keyword, and a hierarchy deny is not enforced (L26b).
-- **Reference classes and rollout.** `port49 platform export --classes --config port49d.yaml
-  juniper_junos` prints `device_config`, then each template class and user as a `delete` and
-  its `set` lines. A redacted `device_config` line is printed as a `#` comment, with a count on
-  stderr, so loading the export never overwrites the TACACS+ secret. `port49 devices
-  check-config --config` reads `show configuration | display set | display inheritance | except
-  "^set groups "` and refuses any other input. It fails on a missing reference line, on any line
-  under a template class or user that the reference does not write, and on a management service
-  outside the allowlist. The order is: load the classes on every device, check each, then move
-  the pin.
+- **Reference classes and rollout.** `port49 platform export --policy <candidate> --inventory
+  <file> --classes --config port49d.yaml juniper_junos` prints `device_config`, then each
+  template class and user as a `delete` and its `set` lines. A redacted `device_config` line is
+  printed as a `#` comment, with a count on stderr, so loading the export never overwrites the
+  TACACS+ secret. `port49 devices check-config --policy <candidate> --inventory <file> --device
+  <name> --config port49d.yaml <capture>` holds a device to the set the policy pins, so it runs
+  against the candidate policy that pins 1.1.0. The capture must be `show configuration |
+  display set | display inheritance | except "^set groups "`, and any other input is refused.
+  It fails on a missing reference line, on any line under a template class or user that the
+  reference does not write, on a management service outside the allowlist, and on any capture
+  holding a group definition or an `apply-groups` line. The order is: load the classes on every
+  device, check each against the candidate policy, then deploy the policy that moves the pin.
 - **Decision 26's fail-closed reply.** A composition the projection cannot carry gets that
   subject alone `deny-commands=^.*$` and only the allows port49 proved, recorded
   `authorize_session` permit `projection_fail_closed`, with the blob's `fail_closed` giving why.
@@ -640,27 +650,44 @@ reproduced), and Task 19 is on hold for the owner.
 **Operator-facing notes (for the pull request body).**
 - **Upgrade every daemon before pinning set 1.1.0.** A daemon that does not ship 1.1.0 refuses
   a policy that pins it, so a mixed fleet of daemons splits on the pin.
-- **Before pinning,** load `port49 platform export --classes --config port49d.yaml
-  juniper_junos` on every Junos device with `load set terminal`, then run `port49 devices
-  check-config --config port49d.yaml --device <name>` against `show configuration | display
-  set | display inheritance | except "^set groups "`. **A class replace does not prove a
-  template; `check-config` does.** It fails on a missing reference line and on anything extra
-  under a template, such as a class `allow-commands` or a template password.
+- **Before deploying a policy that pins 1.1.0**, with that candidate policy in hand
+  (`port49 platform upgrade --policy policy.yaml --inventory inventory.yaml --to 1.1.0 --write`
+  writes it; do not deploy it yet):
+  1. Print the classes from the candidate: `port49 platform export --policy policy.yaml
+     --inventory inventory.yaml --classes --config /etc/port49/port49d.yaml juniper_junos >
+     classes.set`, and load them on every Junos device with `load set terminal` and `commit`.
+  2. On each device, save the output of `show configuration | display set | display
+     inheritance | except "^set groups "`, and nothing else, to a file, say `srx-fw-04.set`.
+  3. Check it against the candidate: `port49 devices check-config --policy policy.yaml
+     --inventory inventory.yaml --device srx-fw-04 --config /etc/port49/port49d.yaml
+     srx-fw-04.set`. Without `--config` a projected platform exits 2, and against a policy that
+     does not pin 1.1.0 the template and services checks do not run.
+  4. Only when every device passes, deploy the policy.
+
+  **A class replace does not prove a template; `check-config` does.** It fails on a missing
+  reference line and on anything extra under a template, such as a class `allow-commands` or a
+  template password. **A device whose configuration uses groups is refused outright**: the check
+  refuses any capture holding a group definition or an `apply-groups` line, since it cannot tell
+  whether a group's statements were expanded (whether `display inheritance` drops them is
+  unmeasured; Task 19).
 - **Management services: only the CLI's.** A projected Junos device passes `check-config` only
   where nothing under `system services` is on but `ssh` and `telnet`. Under `ssh` only its
   transport options are allowed (ciphers, limits, `port`, `root-login`, `no-tcp-forwarding`, and
-  the like); `sftp-server`, `tcp-forwarding` and any unknown statement fail. `rest`,
+  the like), and under `telnet` only `authentication-order`, `connection-limit` and
+  `rate-limit`; `sftp-server`, `tcp-forwarding` and any unknown statement fail. `rest`,
   `web-management` and `extension-service` fail wherever they appear. So NETCONF, the XML API,
-  REST, J-Web, JET/gRPC/gNMI and `outbound-ssh` are off, because a wire deny binds no native RPC
-  (`L12-netconf-juniper_*.md`).
+  REST, J-Web, JET/gRPC/gNMI and `outbound-ssh` are off, because over NETCONF a native RPC ran
+  past every wire deny (`L12-netconf-juniper_*.md`). Whether that is enough is unmeasured (L26c).
 - **On 1.1.0 a Junos capability reply needs `xml-mode` permitted, so most broad grants fail
-  closed and only narrow grants project** (option C). The reason is L26c. A capability reply
-  (bits, and no `deny-commands .*`) leaves `xml-mode` and `op` runnable. From a projected CLI,
-  `xml-mode netconf` and `op url` reach native RPCs past every wire deny, with the bits' whole
-  reach. So port49 sends a capability reply only where the grant permits everything its bits
-  reach, `xml-mode` included. A deny beneath a permitted bit protects the CLI only, and port49
-  does not send it as though it were a boundary. Such a subject gets the narrow shape or the
-  fail-closed reply, and `policy test` names it.
+  closed and only narrow grants project** (option C, provisional on L26c). A capability reply
+  (bits, and no `deny-commands .*`) leaves `xml-mode` and `op` runnable. In the lab (L26c,
+  still open), `xml-mode netconf` opened NETCONF inside a projected CLI session, and a native
+  RPC the session's deny did not name ran there, within the bits' reach. Whether such an RPC
+  passes a deny that names what it reads is not yet measured, so port49 assumes it does. It
+  sends a capability reply only where the grant permits everything its bits reach, `xml-mode`
+  included, and does not treat a deny beneath a permitted bit as a boundary. Such a subject
+  gets the narrow shape or the fail-closed reply, and `policy test` names it. A measurement can
+  only relax this.
 - **You cannot deny a single `show configuration` hierarchy on Junos.** A deny naming one (`show
   configuration system`) is not enforced by the device (L26b), so port49 refuses it as an
   argument deny. Deny all of `show configuration`, or none of it.
@@ -672,13 +699,17 @@ reproduced), and Task 19 is on hold for the owner.
   ones above: a new set; per-subject fail-closed with `projection_fail_closed`; `policy test` fails
   on a quarantine; reserved usernames; the new adapter keys and reports; `policy diff`'s
   `projection:` lines; `explain`; `account_gap`. One is superseded: the deny beneath a permit no
-  longer fails closed for want of L9, which measured it. It fails closed for RPC reach, as above.
+  longer fails closed for want of L9, which measured it. It fails closed for assumed RPC reach,
+  as above.
 
 **Carried, for later plans.**
 - **Task 19**, the differential lab test, on hold for the owner. It carries:
   - the commit checker taking every rendered shape (L9);
   - L12's differential and L10's Junos spellings;
-  - `verified: containerlab`;
+  - `verified: containerlab`. If Task 19 passes before this branch merges, it is set on 1.1.0,
+    as 5a set it on 1.0.0 before merge, and the `released` entry changes with it. After the
+    merge 1.1.0 is released and frozen, `Verified` included, so marking it verified, or any other
+    Task 19 change to `juniper_junos`, ships in a new set;
   - `DenyMatchesExpanded` re-measured;
   - the uid range and the class `idle-timeout` upper bound;
   - whether `set version` and `apply-groups` lines survive `display inheritance | except`;
@@ -687,7 +718,9 @@ reproduced), and Task 19 is on hold for the owner.
 - **The owner's device measurements:**
   - whether a deny naming `xml-mode` or `op` binds, which would lift option C;
   - whether an RPC reaches past a deny beneath `view-configuration`;
-  - the L26c rerun (review I-1, I-4);
+  - the L26c rerun (review I-1, I-4), with only the allowlist's services on, which closes
+    whether the allowlist is sufficient and so option C's provisional marker;
+  - the bitless (baseline) session's RPC reach, which Task 14 counts as a carve-out;
   - the L26d probes (the short `*`-form deny and allow, and whether wire and class lists merge),
     which safety checks stopped.
 - **The device-class deny-list design** (the owner's production approach). Exported `p49-*`
@@ -707,6 +740,10 @@ reproduced), and Task 19 is on hold for the owner.
     `clear` or `monitor` can be sent;
   - make `junos-keywords` refuse a committed image left off the command line (kw-merge M4).
 - A way to declare a deny class-resident, the deny overflow's workaround in policy.
+- A bit's reach per child word, not the literal `W **` upper bound, once a lab proves a path has
+  no hidden subcommands (Task 3 ruling (a)).
+- Task 3b's deferred minors: the harness does not wait on `^U` (M2), and the notes' capture
+  counts run below their pcaps (M6).
 - **Scale, for plan 12:**
   - `engine.Contains`, `MayMeet` and the rest compile both rules per call, and only the
     per-composition cache bounds the load; measure it at 10k devices;
