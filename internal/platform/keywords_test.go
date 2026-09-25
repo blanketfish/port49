@@ -171,13 +171,17 @@ func TestShippedKeywordTreesLoad(t *testing.T) {
 	}
 }
 
-// The lab's captures (Task 3b, both images) load as they are written, and
-// merge to what both prove: 529 keywords. Nothing under `show configuration`
-// is one (a hierarchy is not proven a keyword to deny-commands), and neither
-// `summary` after `show route` nor `cli` after `show` is proven on both.
+// The lab's captures (Task 3b, both images, and the first vSRX run the rerun
+// replaced) load as they are written, and merge to what every run proves:
+// 528 keywords. Nothing under `show configuration` is one (a hierarchy is
+// not proven a keyword to deny-commands), and neither `summary` after `show
+// route` nor `cli` after `show` is proven on both. `show rsvp interface`,
+// which the first vSRX run proved and the rerun did not, is not one, and
+// `show rsvp` takes an argument; `show interfaces terse extensive`, which
+// only the rerun proved on vSRX, is not one either.
 func TestTheLabCapturesLoadAndMerge(t *testing.T) {
 	var trees []*Keywords
-	for _, image := range []string{"juniper_vjunos-router", "juniper_vsrx"} {
+	for _, image := range []string{"juniper_vjunos-router", "juniper_vsrx", "juniper_vsrx.run1"} {
 		raw, err := os.ReadFile("../../tests/lab/results/L26-keywords-" + image + ".yaml")
 		if err != nil {
 			t.Fatal(err)
@@ -193,8 +197,13 @@ func TestTheLabCapturesLoadAndMerge(t *testing.T) {
 	for _, n := range m.nodes {
 		words += len(n.Words)
 	}
-	if words != 529 {
+	if words != 528 {
 		t.Errorf("the merged tree proves %d keywords", words)
+	}
+	if m.Keyword([]string{"show", "rsvp"}, "interface") || !m.TakesArgument([]string{"show", "rsvp"}) ||
+		m.Keyword([]string{"show", "interfaces", "terse"}, "extensive") ||
+		m.Keyword([]string{"show", "system", "processes"}, "detail") {
+		t.Error("a word one vSRX run does not prove is a keyword")
 	}
 	if !m.Keyword(nil, "show") || !m.Keyword([]string{"show"}, "version") ||
 		!m.Keyword([]string{"show"}, "configuration") || !m.Keyword([]string{"show", "interfaces"}, "terse") {
@@ -258,26 +267,82 @@ nodes:
 	}
 }
 
+// An overlay pins an image's latest run and is laid over each earlier run
+// too, at its nodes only: its words join and its argument replaces there,
+// every other node stays the run's own for the merge to intersect, and an
+// earlier run that offers other words at an overlay node is refused.
+func TestOverlayRuns(t *testing.T) {
+	sum := sha256.Sum256([]byte(keywordFixture))
+	overlay := fmt.Sprintf("# computed against keywords.yaml sha256 %x\n", sum) + `platform: juniper_junos
+nodes:
+  "": {words: [show], argument: false}
+  "show": {words: [cli], argument: false}
+`
+	earlier := `# an earlier run
+platform: juniper_junos
+nodes:
+  "": {words: [show], argument: true}
+  "show": {words: [interfaces, version], argument: true}
+  "show interfaces": {words: [extensive, terse], argument: false}
+`
+	ks, err := OverlayRuns([]byte(overlay), []byte(keywordFixture), []byte(earlier))
+	if err != nil || len(ks) != 2 {
+		t.Fatalf("%d %v", len(ks), err)
+	}
+	e := ks[1]
+	if !e.Keyword([]string{"show"}, "cli") || e.TakesArgument(nil) || e.TakesArgument([]string{"show"}) ||
+		!e.Keyword([]string{"show", "interfaces"}, "extensive") || e.TakesArgument([]string{"show", "interfaces"}) {
+		t.Fatalf("%s", MarshalKeywords("juniper_junos", e))
+	}
+	m := MergeKeywords(ks...)
+	if m.Keyword([]string{"show", "interfaces"}, "extensive") || !m.TakesArgument([]string{"show", "interfaces"}) ||
+		!m.Keyword([]string{"show"}, "cli") || m.TakesArgument([]string{"show"}) {
+		t.Fatalf("%s", MarshalKeywords("juniper_junos", m))
+	}
+	for _, bad := range []string{
+		strings.Replace(earlier, "[interfaces, version]", "[interfaces]", 1), // other words at an overlay node
+		strings.Replace(earlier, "platform: juniper_junos", "platform: other", 1),
+	} {
+		if _, err := OverlayRuns([]byte(overlay), []byte(keywordFixture), []byte(bad)); err == nil {
+			t.Errorf("laid: %.120q", bad)
+		}
+	}
+	// The overlay is pinned to the latest run: given an earlier one first, it
+	// is refused.
+	if _, err := OverlayRuns([]byte(overlay), []byte(earlier), []byte(keywordFixture)); err == nil {
+		t.Error("an overlay laid with an earlier run as the one it pins")
+	}
+}
+
 // The shipped Junos tree is exactly what the lab's captures and overlays
-// merge to (tests/lab/cmd/junos-keywords): L26b's words proven on both images
-// are keywords, `save` (proven on vJunos only) and every `show configuration`
-// hierarchy are not, and no argument follows `show`.
+// merge to (tests/lab/cmd/junos-keywords), each overlay laid over every run
+// of its image: L26b's words proven on both images are keywords, `save`
+// (proven on vJunos only) and every `show configuration` hierarchy are not,
+// no argument follows `show`, and `show rsvp interface` (proven by one vSRX
+// run of two) is not a keyword.
 func TestTheShippedJunosTreeIsTheLabs(t *testing.T) {
 	var trees []*Keywords
-	for _, image := range []string{"juniper_vjunos-router", "juniper_vsrx"} {
-		base, err := os.ReadFile("../../tests/lab/results/L26-keywords-" + image + ".yaml")
-		if err != nil {
-			t.Fatal(err)
+	for image, runs := range map[string][]string{
+		"juniper_vjunos-router": {""},
+		"juniper_vsrx":          {"", ".run1"},
+	} {
+		var raws [][]byte
+		for _, run := range runs {
+			raw, err := os.ReadFile("../../tests/lab/results/L26-keywords-" + image + run + ".yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			raws = append(raws, raw)
 		}
 		overlay, err := os.ReadFile("../../tests/lab/results/L26b-keywords-" + image + ".yaml")
 		if err != nil {
 			t.Fatal(err)
 		}
-		k, err := OverlayKeywords(base, overlay)
+		ks, err := OverlayRuns(overlay, raws...)
 		if err != nil {
 			t.Fatalf("%s: %v", image, err)
 		}
-		trees = append(trees, k)
+		trees = append(trees, ks...)
 	}
 	want := MarshalKeywords("juniper_junos", MergeKeywords(trees...))
 	got, err := fs.ReadFile(platforms.Keywords, "keywords/1.1.0/juniper_junos.yaml")
@@ -292,7 +357,8 @@ func TestTheShippedJunosTreeIsTheLabs(t *testing.T) {
 	}
 	if !k.Keyword(nil, "exit") || !k.Keyword([]string{"set"}, "cli") || k.Keyword(nil, "save") ||
 		k.Keyword([]string{"show", "configuration"}, "system") || !k.TakesArgument([]string{"show", "configuration"}) ||
-		k.TakesArgument([]string{"show"}) || k.TakesArgument(nil) {
+		k.TakesArgument([]string{"show"}) || k.TakesArgument(nil) ||
+		k.Keyword([]string{"show", "rsvp"}, "interface") || !k.TakesArgument([]string{"show", "rsvp"}) {
 		t.Errorf("%s", got)
 	}
 }

@@ -1,18 +1,23 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// An overlay is laid over the capture its sha256 names and no other: one that
-// names none of the captures given, or a second for the same capture, is
-// refused, and so is a single capture.
+// An overlay pins the latest capture of its image by sha256 and is laid over
+// every run of that image: one that names none of the captures given, or an
+// earlier run, or a second for the same image, is refused, and so are a
+// single image, two latest runs of one image, and a file not named as a
+// capture.
 func TestOverlaysMatchTheirCaptures(t *testing.T) {
 	r := "../../results/"
 	a, b := r+"L26-keywords-juniper_vjunos-router.yaml", r+"L26-keywords-juniper_vsrx.yaml"
+	b1 := r + "L26-keywords-juniper_vsrx.run1.yaml"
 	oa, ob := r+"L26b-keywords-juniper_vjunos-router.yaml", r+"L26b-keywords-juniper_vsrx.yaml"
 	stale := filepath.Join(t.TempDir(), "stale.yaml")
 	raw, err := os.ReadFile(ob)
@@ -23,10 +28,20 @@ func TestOverlaysMatchTheirCaptures(t *testing.T) {
 	if err := os.WriteFile(stale, []byte(first[:len(first)-64]+strings.Repeat("0", 64)+"\n"+rest), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The overlay re-pinned to the earlier run: its sha256 names b1.
+	sum := sha256.Sum256(must(os.ReadFile(b1)))
+	early := filepath.Join(t.TempDir(), "early.yaml")
+	if err := os.WriteFile(early, []byte(first[:len(first)-64]+hex.EncodeToString(sum[:])+"\n"+rest), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, args := range [][]string{
 		{a},
+		{b, b1},
+		{a, b, b},
+		{a, b, r + "L26b-keywords-juniper_vsrx.yaml"},
 		{"-overlay", stale, a, b},
 		{"-overlay", oa, "-overlay", oa, a, b},
+		{"-overlay", early, a, b, b1},
 	} {
 		if err := run(args); err == nil {
 			t.Errorf("ran: %q", args)
@@ -40,7 +55,14 @@ func TestOverlaysMatchTheirCaptures(t *testing.T) {
 	stdout := os.Stdout
 	os.Stdout = devnull
 	defer func() { os.Stdout = stdout }()
-	if err := run([]string{"-overlay", oa, "-overlay", ob, a, b}); err != nil {
+	if err := run([]string{"-overlay", oa, "-overlay", ob, a, b1, b}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func must(raw []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return raw
 }

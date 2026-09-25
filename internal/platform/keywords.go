@@ -276,6 +276,55 @@ func OverlayKeywords(capture, overlay []byte) (*Keywords, error) {
 	return &Keywords{nodes: nodes}, nil
 }
 
+// OverlayRuns lays an overlay over every capture run of one image: runs[0]
+// is the run the overlay was computed against, the latest, and is laid as
+// OverlayKeywords lays it; at each node the overlay lists, its words join
+// every other run's too and its argument replaces that run's. The overlay's
+// argument was computed from the words its run offers at those nodes, so an
+// other run whose words differ from runs[0]'s at one of them is refused: the
+// overlay is recomputed in a new L26b run rather than laid over words it did
+// not read. Every other node is each run's own, and MergeKeywords intersects
+// the runs as it does images: a keyword one run lacks is not proven.
+func OverlayRuns(overlay []byte, runs ...[]byte) ([]*Keywords, error) {
+	if len(runs) == 0 {
+		return nil, errors.New("keywords overlay: no capture")
+	}
+	latest, err := OverlayKeywords(runs[0], overlay)
+	if err != nil {
+		return nil, err
+	}
+	name, pinned, err := ParseKeywords(runs[0])
+	if err != nil {
+		return nil, err
+	}
+	_, over, err := ParseKeywords(overlay)
+	if err != nil {
+		return nil, fmt.Errorf("keywords overlay: %w", err)
+	}
+	out := []*Keywords{latest}
+	for i, raw := range runs[1:] {
+		rname, run, err := ParseKeywords(raw)
+		if err != nil {
+			return nil, fmt.Errorf("run %d: %w", i+2, err)
+		}
+		if rname != name {
+			return nil, fmt.Errorf("run %d: names platform %q, and the overlay's run %q", i+2, rname, name)
+		}
+		nodes := maps.Clone(run.nodes)
+		for p, n := range over.nodes {
+			if !slices.Equal(nodes[p].Words, pinned.nodes[p].Words) {
+				return nil, fmt.Errorf("keywords overlay: run %d offers other words than the overlay's run at %q: "+
+					"rerun L26b", i+2, p)
+			}
+			words := slices.Concat(nodes[p].Words, n.Words)
+			slices.Sort(words)
+			nodes[p] = KeywordNode{Words: slices.Compact(words), Argument: n.Argument}
+		}
+		out = append(out, &Keywords{nodes: nodes})
+	}
+	return out, nil
+}
+
 func (k *Keywords) nodeMap() map[string]KeywordNode {
 	if k == nil {
 		return nil
