@@ -3394,13 +3394,17 @@ replies rest on: the adapter's `device_config` (on Junos `tacplus-options
 strict-authorization`), the `remote` template user in the bitless class `p49-remote`, and under
 `local_user_name` each level's template user and class with the level's bits, one per line as
 `show configuration | display set` prints them. Each template class and user is written as a
-replace — a `delete` before its `set` lines — so loading it leaves nothing a device carried
-under one: a class `allow-commands`, or a template user's local password. No template user is
+replace — a `delete` before its `set` lines — so loading it clears what a device carried
+directly under one: a class `allow-commands`, or a template user's local password. A replace does
+not clear what reaches a template from above — a configuration group applied at a higher level,
+or a deactivated or protected ancestor — so the export does not prove the template;
+`devices check-config` does, and fails on each of those. No template user is
 one that can log in locally: Juniper documents a template user as one with no authentication,
 and L12 measures whether it refuses a local login; the reference adds a locked
 `authentication encrypted-password "*"` only if that measurement finds it does not. Every class
 carries `idle-timeout` from `session.max_session_age_default`, in whole minutes rounded down
-(decision 21); the file is read for that key alone, so no key or secret is needed to run it.
+(decision 21); the file is parsed strictly, as the daemon parses it, but only that key is used
+and no key or secret is read, so none is needed to run it.
 `port49 devices check-config --config port49d.yaml` holds a device to it (§12).
 
 **Importing existing configuration.** Simple alternations of prefix patterns convert to
