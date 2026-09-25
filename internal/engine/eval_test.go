@@ -585,3 +585,17 @@ func TestTheWidenedReportQuotesNoTermText(t *testing.T) {
 		}
 	}
 }
+
+// A pattern compileRule cannot compile is named by position, never quoted: a
+// syntax error's text holds the pattern, which may carry a value redaction
+// hides (spec §5.8; task 12b follow-up M-F1).
+func TestACompileErrorNeverQuotesThePattern(t *testing.T) {
+	classes := map[string][]string{"c": {"^ok$", "HUNTER2(("}}
+	for _, verdict := range []string{Permit, Deny} {
+		_, err := compileRule(verdict, "show @c", "r", classes, Normalize{})
+		if err == nil || strings.Contains(err.Error(), "HUNTER2") ||
+			err.Error() != "term 2, pattern #2 does not compile: missing closing )" {
+			t.Errorf("%s: %v", verdict, err)
+		}
+	}
+}

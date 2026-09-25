@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp/syntax"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -240,12 +239,7 @@ func (b Blob) check() error {
 		// code does not (spec §5.8).
 		for i, p := range patterns {
 			if _, err := compileTerm(p); err != nil {
-				why := "RE2 refuses it"
-				var serr *syntax.Error
-				if errors.As(err, &serr) {
-					why = string(serr.Code)
-				}
-				return fmt.Errorf("engine: @%s pattern #%d does not compile: %s", name, i+1, why)
+				return fmt.Errorf("engine: @%s pattern #%d does not compile: %s", name, i+1, compileWhy(err))
 			}
 		}
 	}

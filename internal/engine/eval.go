@@ -97,9 +97,9 @@ func compileRule(verdict, rule, role string, classes map[string][]string, n Norm
 	}
 	canon := CanonicalRule(rule)
 	out := []compiled{{verdict: verdict, rule: canon, role: role}}
-	for _, t := range terms {
+	for i, t := range terms {
 		ct := cterm{kind: t.Kind, word: t.Text}
-		for _, pat := range termPatterns(t, classes) {
+		for j, pat := range termPatterns(t, classes) {
 			patterns := []string{pat}
 			if verdict == Deny {
 				// An unreadable pattern comes back widened to any argument;
@@ -109,7 +109,8 @@ func compileRule(verdict, rule, role string, classes map[string][]string, n Norm
 			for _, p := range patterns {
 				re, err := compileTerm(p)
 				if err != nil {
-					return nil, err
+					// Named by position, never quoted (compileWhy).
+					return nil, fmt.Errorf("term %d, pattern #%d does not compile: %s", i+1, j+1, compileWhy(err))
 				}
 				ct.res = append(ct.res, re)
 			}
