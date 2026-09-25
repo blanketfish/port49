@@ -35,7 +35,9 @@ import (
 // class or user the reference does not write (templateCheck; plan 5b
 // pre-flight I8). A class carrying more than the reference is every subject
 // at that template running more than port49 proved, so it fails, as does a
-// capture it cannot read.
+// capture it cannot read. Where a deny does not bind a management service's
+// RPCs, each service but the CLI's is a finding too, read from the capture
+// platform.ServicesCapture names (platform.CheckServices).
 //
 // A device's configuration is full of secrets — communities, keys, enable
 // secrets, a URL's password — so every line of it this prints is redacted by
@@ -120,10 +122,17 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	var templateMissing []string
-	var drift []platform.ConfigFinding
+	var drift, services []platform.ConfigFinding
 	if dialect.Projected() {
 		if templateMissing, drift, err = templateCheck(dialect, *cfgPath, fs.Arg(0), config); err != nil {
 			fmt.Fprintln(stderr, "port49 devices check-config:", err)
+			return 1
+		}
+		// Where a deny does not bind the RPCs a management service serves,
+		// every such service but the CLI's fails the device (plan 5b
+		// Task 14, branch M).
+		if services, err = platform.CheckServices(dialect, config); err != nil {
+			fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
 			return 1
 		}
 	}
@@ -137,6 +146,10 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	for _, f := range drift {
 		failed++
 		fmt.Fprintf(stdout, "TEMPLATE: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
+	}
+	for _, f := range services {
+		failed++
+		fmt.Fprintf(stdout, "SERVICE: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
 	}
 	for _, a := range accounts {
 		// The daemon looks a context up by the canonical form of the username
