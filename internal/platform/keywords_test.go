@@ -398,6 +398,20 @@ var releasedKeywords = map[string]string{
 }
 
 func TestReleasedKeywordTreesAreFrozen(t *testing.T) {
+	// A tree added to a released set later is an edit of that set too.
+	err := fs.WalkDir(platforms.Keywords, "keywords", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		file := strings.TrimSuffix(strings.TrimPrefix(p, "keywords/"), ".yaml")
+		if _, ok := released[strings.Split(file, "/")[0]]; ok && releasedKeywords[file] == "" {
+			t.Errorf("%s: a tree in a released set that was not released with it", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for file, want := range releasedKeywords {
 		raw, err := fs.ReadFile(platforms.Keywords, "keywords/"+file+".yaml")
 		if err != nil {
