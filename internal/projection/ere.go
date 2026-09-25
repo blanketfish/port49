@@ -12,6 +12,7 @@ package projection
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"regexp/syntax"
 	"slices"
 	"strings"
@@ -39,11 +40,22 @@ type Facts struct {
 }
 
 // ereLiteral are the runes ERE reads as operators outside a bracket
-// expression, escaped with a backslash. `{`, `}`, `"` and `\` are refused
-// rather than escaped: a brace pair is read as a spec §6 placeholder by the
-// attribute check, and the wire's handling of a quote or a backslash in an
-// attribute value is unmeasured.
-const ereLiteral = `.[]()*+?|^$`
+// expression, escaped with a backslash. `]` is not one, and is written bare:
+// POSIX leaves a backslash before an ordinary rune undefined. `{`, `}`, `"`
+// and `\` are refused rather than escaped: a brace pair is read as a spec §6
+// placeholder by the attribute check, and the wire's handling of a quote or a
+// backslash in an attribute value is unmeasured.
+const ereLiteral = `.[()*+?|^$`
+
+// An allow's argument is printable ASCII less the space, the quote and the
+// braces, none of which the reply carries: argRune is one rune of it, and
+// anyArg one whole argument, never empty and never a lone `|`, which the
+// engine reads as a pipeline and no rule permits. A tab is not in it: the
+// device completes on one.
+const (
+	argRune = `[!#-z|~]`
+	anyArg  = `([!#-z~]|[!#-z|~][!#-z|~]+)`
+)
 
 // errUnwritable is a rule the device's regex cannot carry faithfully.
 var errUnwritable = errors.New("unwritable")
@@ -53,8 +65,14 @@ var errUnwritable = errors.New("unwritable")
 // `clear bgp all`, and a deny anchored at the rule's last word would miss
 // that line on a device that matches the whole line. Whether Junos strips
 // the pipeline first is L9's pipe probe; the tail is right either way, since
-// it only makes a deny match more.
-const pipeTail = `( *\|.*)?`
+// it only makes a deny match more. It also takes trailing spaces, as
+// denyLead takes leading ones: whether the device hands its regex a line
+// with either is unmeasured, and tolerating them only widens a deny. The
+// measured tail, `( *\|.*)?`, is a subset of it.
+const pipeTail = ` *(\|.*)?`
+
+// denyLead opens every deny.
+const denyLead = ` *`
 
 // ruleERE is one rule as an extended regex over a whole command line, without
 // anchors: `show interfaces **` is `show interfaces( .*)?`. deny says which
@@ -62,7 +80,7 @@ const pipeTail = `( *\|.*)?`
 // closed on that side. An allow is as narrow as the rule: lower case, one
 // space between words, and no space inside an argument. A deny is as wide:
 // every case where the device matches case-sensitively, any run of spaces
-// between words, an argument that may hold a space (a quoted one does, and
+// between words and around the command, an argument that may hold a space (a quoted one does, and
 // the engine never splits it), and the pipe tail.
 func ruleERE(rule string, classes map[string][]string, deny bool, f Facts) (string, error) {
 	terms, err := engine.ParseRule(rule)
@@ -70,10 +88,15 @@ func ruleERE(rule string, classes map[string][]string, deny bool, f Facts) (stri
 		return "", err
 	}
 	var b strings.Builder
+	if deny {
+		b.WriteString(denyLead)
+	}
 	for i, t := range terms {
 		if t.Kind == engine.Rest {
 			if i == 0 {
-				b.WriteString(".*")
+				// An allow's first word is not a lone pipe, which is no
+				// command.
+				b.WriteString(pick(deny, ".*", "[!#-z~].*"))
 			} else {
 				b.WriteString("( .*)?")
 			}
@@ -84,7 +107,7 @@ func ruleERE(rule string, classes map[string][]string, deny bool, f Facts) (stri
 		}
 		switch t.Kind {
 		case engine.Any:
-			b.WriteString(pick(deny, ".+", "[^ ]+"))
+			b.WriteString(pick(deny, ".+", anyArg))
 		case engine.Word:
 			w, err := wordERE(t.Text, deny, f)
 			if err != nil {
@@ -106,6 +129,15 @@ func ruleERE(rule string, classes map[string][]string, deny bool, f Facts) (stri
 					return "", fmt.Errorf("term %d, pattern %d: %w", i+1, k+1, err)
 				}
 				alts = append(alts, e)
+			}
+			if !deny {
+				// An allow's pattern position holds an argument: never the
+				// empty one, which the device reads as no word at all, and
+				// never a lone pipe.
+				pos := regexp.MustCompile("^(" + strings.Join(alts, "|") + ")$")
+				if pos.MatchString("") || pos.MatchString("|") {
+					return "", fmt.Errorf("term %d: %w: an allow's pattern may match an empty argument or a lone pipe", i+1, errUnwritable)
+				}
 			}
 			if len(alts) == 1 {
 				b.WriteString(alts[0])
@@ -171,8 +203,12 @@ func patternERE(pattern string, deny bool, f Facts) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := repeatsWithin(re, 8); err != nil {
+		return "", err
+	}
+	// Simplify writes every repeat out, so ere never meets one.
 	re = re.Simplify()
-	lead, trail := pick(deny, ".*", "[^ ]*"), pick(deny, ".*", "[^ ]*")
+	lead, trail := pick(deny, ".*", argRune+"*"), pick(deny, ".*", argRune+"*")
 	if re.Op == syntax.OpConcat && len(re.Sub) > 0 {
 		subs := re.Sub
 		if subs[0].Op == syntax.OpBeginText {
@@ -223,7 +259,7 @@ func ere(re *syntax.Regexp, deny bool, f Facts) (string, error) {
 		}
 		return bracket(re.Rune, deny)
 	case syntax.OpAnyChar, syntax.OpAnyCharNotNL:
-		return pick(deny, ".", "[^ ]"), nil
+		return pick(deny, ".", argRune), nil
 	case syntax.OpCapture:
 		s, err := ere(re.Sub[0], deny, f)
 		if err == nil && s == "" {
@@ -234,27 +270,17 @@ func ere(re *syntax.Regexp, deny bool, f Facts) (string, error) {
 		s, err := ere(re.Sub[0], deny, f)
 		op := map[syntax.Op]string{syntax.OpStar: "*", syntax.OpPlus: "+", syntax.OpQuest: "?"}[re.Op]
 		return "(" + s + ")" + op, err
-	case syntax.OpRepeat:
-		// A brace is read as a placeholder by the attribute check, so a
-		// bounded repeat is written out; an unbounded one is n copies and a star.
-		if re.Max > 8 || (re.Max < 0 && re.Min > 8) {
-			return "", fmt.Errorf("%w: a repeat above 8", errUnwritable)
-		}
-		s, err := ere(re.Sub[0], deny, f)
-		if err != nil {
-			return "", err
-		}
-		out := strings.Repeat("("+s+")", re.Min)
-		if re.Max < 0 {
-			return out + "(" + s + ")*", nil
-		}
-		return out + strings.Repeat("("+s+")?", re.Max-re.Min), nil
 	case syntax.OpConcat:
 		var b strings.Builder
 		for _, sub := range re.Sub {
 			s, err := ere(sub, deny, f)
 			if err != nil {
 				return "", err
+			}
+			if sub.Op == syntax.OpAlternate {
+				// RE2 drops a `(?:…)`: `(?:ge|xe)-0` is an alternation
+				// beside a literal, and `ge|xe-0` would be `ge` or `xe-0`.
+				s = "(" + s + ")"
 			}
 			b.WriteString(s)
 		}
@@ -271,6 +297,21 @@ func ere(re *syntax.Regexp, deny bool, f Facts) (string, error) {
 		return strings.Join(alts, "|"), nil
 	}
 	return "", fmt.Errorf("%w: the pattern uses an operator the device's regex is not measured to take", errUnwritable)
+}
+
+// repeatsWithin refuses a pattern with a repeat past limit: a brace is read as
+// a placeholder by the attribute check, so Simplify's writing out is what
+// reaches the reply, and it grows with the count.
+func repeatsWithin(re *syntax.Regexp, limit int) error {
+	if re.Op == syntax.OpRepeat && (re.Max > limit || (re.Max < 0 && re.Min > limit)) {
+		return fmt.Errorf("%w: a repeat above %d", errUnwritable, limit)
+	}
+	for _, sub := range re.Sub {
+		if err := repeatsWithin(sub, limit); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // escaped is one printable rune as an ERE literal, in the case it is written.
