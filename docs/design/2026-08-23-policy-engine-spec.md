@@ -1450,8 +1450,9 @@ about revocation or a ceiling on such a platform, exactly as it must for `pipe_a
 false`. Two levers exist and both are used. The adapter renders the class `idle-timeout` from
 `max_session_age`, which is an approximation but an enforced one: `port49 platform export
 --classes` prints each class a projected platform's replies rest on with `idle-timeout` set to
-`session.max_session_age_default` in whole minutes, rounded down (§8), and L24 measures that it
-ends an idle session a reply landed in that class. And every revocation record
+`session.max_session_age_default` in whole minutes, rounded down (§8), and L24 measures whether
+it ends an idle session a reply landed in that class; this lever is *provisional on L24*
+(decision 21). And every revocation record
 names the live contexts it could **not** reach, so an incident responder knows which devices
 still need a manual disconnect.
 
@@ -1668,8 +1669,8 @@ of the product, not a problem to optimize away.
 
 #### Events
 
-One envelope. Six decision events, one at each point a decision is made, plus two report
-events (`account`, `blob`) that share the envelope and carry no verdict:
+One envelope. Six decision events, one at each point a decision is made, plus three report
+events (`account`, `account_gap`, `blob`) that share the envelope and carry no verdict:
 
 | `event` | Emitted by | Decides |
 |---|---|---|
@@ -2789,7 +2790,10 @@ strictly below it, the reply rendered at the session's own level; a value `role_
 rank counts as the highest, and an attribute the ceiling's level does not render at all is
 above it. So `shell:roles*network-admin` from a readonly role under `max_privilege: readonly`
 quarantines `cisco_nxos`, as `roles=network-admin` does `arista_eos` and any `local-user-name`
-or unmeasured `idletime` does `juniper_junos`, which renders no level yet. **Under a ceiling at
+or unmeasured `idletime` does `juniper_junos` under set 1.0.0, which renders no level there.
+Under set 1.1.0 the attributes the projection renders — the template, the bits, the regexes —
+are not judged by this check: the projection itself holds them to the level's ceiling bits
+(§8), and a role or grant may not set one (generator constraint 6). **Under a ceiling at
 the highest level in `privilege_levels` nothing is bounded**: no level sits above it, so no
 attribute can exceed it. The judgment of whether a value went up is the policy diff's (§12): the
 joint check asks the one function the diff gate asks of a changed reply, so the two cannot
@@ -3160,7 +3164,8 @@ cost of a config push, so CI MUST report when a grant crosses that line rather t
 it happen quietly — naming the grant, and emitting the class snippet that would carry the
 overflow, so the workaround is in the same report as the warning.
 
-This rendering rule is decision 22 and is **provisional on L12**. The SRX tests measured
+This rendering rule is decision 22 and is **provisional on L9 and L12**: L9 for the regex
+dialect every wire regex rests on (`JunosFacts`, below), L12 for the bits. The SRX tests measured
 class-resident bits with wire regexes; `user-permissions` over TACACS+ is in production use
 but has no capture, and neither has the reach of each bit, the `.*` baseline on the wire, nor
 the `-regexps` family's precedence. The plan's containerlab step closes L12 before the
@@ -3198,7 +3203,7 @@ told apart as its witness:
   no deny.** A statement typed there is governed by the class's configuration permissions,
   which no command regex reaches, so port49 could deny what the device runs. Under
   `user_permissions` such a composition is rendered again without those bits, and sent that way
-  where the rest proves sound (decision 26, decided item 6); otherwise it gets the fail-closed
+  where the rest proves sound (decision 26, an admin composition with a deny); otherwise it gets the fail-closed
   reply.
 - **The narrow shape's bits are the smallest set that reaches its allows**, preferring bits
   that do not enter configuration mode, so a narrow admin grant is not refused for `all`.
@@ -3234,7 +3239,8 @@ SRXs and 20 subjects load in about 0.2 s (`TestProjectionLoadTime`, bound 2 s).
 
 #### Generator constraints
 
-None of these are caught by the device. All MUST be enforced at policy load:
+None of these are caught by the device. All MUST be enforced at policy load, where each
+composition is projected:
 
 1. **One instance per attribute name.** Duplicates are silently discarded after the first.
 2. **240 bytes for a wire attribute**, enforced in the encoder — the one-octet argument length
@@ -3243,8 +3249,12 @@ None of these are caught by the device. All MUST be enforced at policy load:
 3. **Never emit `allow-commands` together with `allow-commands-regexps`.**
 4. **Never emit a permit broader than its intended grant.** An over-broad permit silently
    voids the entire deny baseline beneath it.
-5. **Reject invalid or over-budget policy loudly at load time**, never silently at session
-   time. A server that skips an attribute at session time produces a fail-open shape.
+5. **Never emit a partial or unproven reply, and say so loudly before it ships**, never
+   silently at session time. A server that skips an attribute at session time produces a
+   fail-open shape. A composition the projection cannot carry — over budget, the refused shape,
+   or any other cause below — is not a policy the daemon refuses: CI refuses it (`policy test`
+   and `policy diff` exit non-zero, naming the subject, the device and why), and a daemon that
+   loads it answers that subject alone with the fail-closed reply (decision 26).
 6. **Never emit an attribute a role or grant also sets.** The projection renders the template,
    the bits and the regexes; a hand-written one beside it is a second instance (1), and over it
    a regex nothing proved (4). Refused at load (plan 5b).
@@ -3309,8 +3319,8 @@ strict-authorization`), the `remote` template user in the bitless class `p49-rem
 replace — a `delete` before its `set` lines — so loading it leaves nothing a device carried
 under one: a class `allow-commands`, or a template user's local password. No template user is
 one that can log in locally: Juniper documents a template user as one with no authentication,
-and L12 measures that it refuses a local login; the reference adds a locked
-`authentication encrypted-password "*"` only if that measurement found otherwise. Every class
+and L12 measures whether it refuses a local login; the reference adds a locked
+`authentication encrypted-password "*"` only if that measurement finds it does not. Every class
 carries `idle-timeout` from `session.max_session_age_default`, in whole minutes rounded down
 (decision 21); the file is read for that key alone, so no key or secret is needed to run it.
 `port49 devices check-config --config port49d.yaml` holds a device to it (§12).
@@ -3690,7 +3700,9 @@ refuses.** Several load checks are joint over policy and inventory — a privile
 mapping on a platform present in inventory (§6), a session reply whose `priv-lvl`, or any
 other attribute that bears privilege there, exceeds the grants' `max_privilege` (§7), roles
 landing above the ceiling's level (§7), `enable: auto` reaching a platform whose enable exchange
-carries no principal (§5.6). A device racked tomorrow with a new platform can
+carries no principal (§5.6). A composition the Junos projection cannot carry is not one of
+them: it gets that subject alone the fail-closed reply and never quarantines the device (§8;
+§13, decision 26). A device racked tomorrow with a new platform can
 fail them against a policy that was valid today. Refusing the whole bundle would block every
 inventory change fleet-wide until someone edits policy, including the leaf racked in another
 site — a ticket-queue bottleneck created by the safety mechanism. Instead the offending
@@ -4481,7 +4493,9 @@ each instant. Any of these is a raise:
   is a raise. **A fail-closed reply (§13, decision 26) is a narrowing, never a raise**, though it
   drops `local-user-name` and lands the session in the bitless `p49-remote`: this overrides, for
   that reply, the rule above that losing `local-user-name` is a raise. It still fails the diff as
-  a fail-closed composition (above).
+  a fail-closed composition (above). That it narrows rests on the device honouring
+  `deny-commands=^.*$` over the bitless class, which L9 (anchors, a malformed regex) and L12
+  (the baseline under `.*`) measure; until they close, the set-release rule (§8) is what holds it.
 
 One change's direction the gate can read: a level's own rendering moving down `role_order`
 (§8). Where an attribute is the old level's rendering in the old reply and the new level's in
@@ -4978,11 +4992,12 @@ ceiling, revocation, username binding, and the in-session warning all act at the
 authorization request, and Junos never makes one. Rather than claim reach that does not exist,
 `explain` states the limit, the adapter renders class `idle-timeout` from `max_session_age` as
 the enforced approximation, and revocation records name the contexts they could not reach.
-(§5.6) *Plan 5b:* `port49 platform export --classes` renders the idle-timeout (§8), measured by
-L24; revocation records naming contexts are plan 7's.
+(§5.6) *Plan 5b:* `port49 platform export --classes` renders the idle-timeout (§8); that it
+ends an idle session is *provisional on L24*, which measures whether it does. Revocation
+records naming contexts are plan 7's.
 
 **22. Session-only projection is bits first, regexes second, chosen per grant, with one
-shape refused.** *Provisional on L12.* The generator picks the smallest permission-bit set
+shape refused.** *Provisional on L9 and L12.* The generator picks the smallest permission-bit set
 covering the composed grant's permits within the level's ceiling, drops a bit where a deny
 aligns with it, and emits regexes only for what bits cannot separate: denies beneath a bit,
 and permits that dominate a deny under §5.4. A grant narrower than any covering bit renders
@@ -5046,7 +5061,7 @@ the allows the generator can prove. Everyone else on the device keeps working. D
 quarantine (§10) stays for inventory drift and the other joint checks; it no longer applies to
 projection refusals. `policy test` and `policy diff` exit non-zero on any such composition and
 name the subject, the device and the reason, so CI refuses it before it ships (§8, "CI MUST
-refuse the policy"). For decided item 6, an admin composition with a deny, the reply drops only
+refuse the policy"). For an admin composition with a deny, the reply drops only
 the bits that enter configuration mode where the rest is provably sound, which it can be under
 `user_permissions`; otherwise it is the fail-closed reply. Every such session is recorded
 `projection_fail_closed` (§5.7). The pre-flight review of plan 5b measured the alternative: spec
@@ -5361,14 +5376,19 @@ Beyond those already listed in the design document's §14:
   command.
 - **Projection generator constraints**: duplicate attribute names, an over-length argument,
   `allow-commands` with `allow-commands-regexps`, and a permit broader than its grant are each
-  rejected at policy load rather than emitted.
+  never emitted: the composition gets the fail-closed reply, and `policy test` and `policy diff`
+  exit non-zero naming it (decision 26).
 - **Projection shape selection**: a readonly grant denying `show configuration **` renders
   as `view` without `view-configuration` and no deny regex; a grant whose composed permits
   are narrower than any covering bit renders as `deny .*` plus one allow alternation and the
   device's effective set is exactly the permits (`read_only_limited` on Junos reaches three
   commands, not all of `view`); a grant never receives a bit outside its level's `privilege:`
-  ceiling; the mixed shape is refused at load naming the grant, both rules, and the platform.
-  A session-only platform without `bits:` is a load error.
+  ceiling; the mixed shape gets that subject the fail-closed reply, and `policy test` and
+  `policy diff` exit non-zero naming the grant, both rules, and the platform. A session-only
+  platform without `bits:` is a load error.
+- **A fail-closed composition binds only its subject** (decision 26): on a device where one
+  subject's composition gets the fail-closed reply, the daemon loads the policy, the device is
+  not quarantined, and every other subject on it is answered with its own projected reply.
 - **Wire-to-class escalation**: a role whose deny set exceeds the wire budget is reported by
   CI as requiring a class baseline, and is never silently truncated.
 - **Class overflow is reported with its remedy**: a role whose deny set exceeds the wire budget
