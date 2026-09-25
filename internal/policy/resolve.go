@@ -530,18 +530,7 @@ func (p *Policy) checkDevices() {
 // every later instant one of its grants expires, as the spans each failure
 // holds over; none is none failed.
 func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []QuarantineEntry {
-	lapsing := map[time.Time][]string{}
-	instants := []time.Time{now}
-	for _, g := range p.grants {
-		if g.Subject != sub.Name || !g.Expires.After(now) {
-			continue
-		}
-		if _, ok := lapsing[g.Expires]; !ok {
-			instants = append(instants, g.Expires)
-		}
-		lapsing[g.Expires] = append(lapsing[g.Expires], "grant "+g.Scope+" ["+strings.Join(g.Roles, " ")+"]")
-	}
-	sort.Slice(instants[1:], func(i, j int) bool { return instants[1+i].Before(instants[1+j]) })
+	instants, lapsing := p.subjectInstants(sub, now)
 	var out []QuarantineEntry
 	open := false // whether the last entry is still failing
 	for _, at := range instants {
@@ -557,7 +546,7 @@ func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []
 		}
 		open = cause != ""
 		if open {
-			out = append(out, QuarantineEntry{From: at, Lapsing: strings.Join(lapsing[at], " and "), Cause: cause})
+			out = append(out, QuarantineEntry{From: at, Lapsing: lapsing[at], Cause: cause})
 		}
 	}
 	return out
