@@ -45,8 +45,8 @@ None are open. Owner's ruling 2026-09-25 settled the one the pre-flight review r
 one, this plan took the option that denies more and records it under Decided.
 
 
-Amendment 1 (below) carries one question, on how decision 27 reads a trailing `**`. The plan
-proceeds on the reading under which the device refuses at least what port49 denies.
+Amendment 1's one question, how decision 27 reads a trailing `**`, is ruled (below): the plan's
+reading stands.
 
 ## What changed after the pre-flight review
 
@@ -175,14 +175,13 @@ grammar, so it cannot tell a keyword from an argument.
    (Task 20). A pin move that changes the tree changes replies, which the diff's reply gate judges
    (Task 12).
 
-**Question for the owner.** The ruling lists `**` among the terms that get the argument
-treatment. This plan reads it as a `**` that could stand for an argument *before* a keyword, which
-the grammar never allows, and proves a trailing `**` on a keyword-only deny, because the device
-refuses by keyword prefix and so refuses at least what port49 denies. Reading every `**` as an
-argument would fail the realistic readonly's `deny show configuration **` and every deny of a
-command family on Junos. Task 19's "a deny aligned with a bit" and "a class term" shapes measure the
-trailing case on the device. If the owner means every `**`, `keywordShape` returns `**` as the
-offending term and nothing else changes.
+**Ruled: a trailing `**`** (the lead, 2026-09-25; the `**` in the ruling's wording was the lead's,
+not the owner's). A trailing `**` on a deny whose other words are all proven keywords is proven,
+because the device refuses by keyword prefix and so refuses at least what port49 denies: `deny show
+configuration **` and `deny show chassis cluster **` are sent. A `**` or `*` anywhere else, or a
+trailing `**` after an argument, counts as naming an argument. This is what `keywordShape` and
+`argument` already do (Task 12a), and decision 27 says it. Task 19's "a deny aligned with a bit"
+and "a class term" shapes exercise the trailing case on the device.
 
 **Order of execution.** 1 → **1a** → 2 → 3 → **3b** → 4 → 5 … 12 → **12a** → **12b** → 13 → 14
 (amended) → 15 … 18 → 19 (amended) → 20 (amended). Tasks 1, 2 and 5 are done; Task 6 is in its fix

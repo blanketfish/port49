@@ -5142,9 +5142,12 @@ the bits that enter configuration mode where the rest is provably sound, which i
 never against its arguments: `^show interfaces fxp0( .*)?$` did not stop `show interfaces fxp0
 terse` or `sh int fxp0 terse`. port49 has no Junos grammar, so the proof of a keyword comes from
 a keyword tree captured in the lab on every image a set measures and shipped with the set (L26).
-A deny whose every word is proven a keyword is sent as written. A deny naming any word not
-proven a keyword — a `*`, an entity class, a regex, or a word the tree does not list there —
-cannot be enforced on Junos: `policy test` and `policy diff` fail, naming the word and the whole
+A deny whose every word is proven a keyword is sent as written, and so is one whose other words
+are all proven keywords and which ends in a trailing `**`: the device refuses by keyword prefix, so
+it refuses at least what port49 denies (`deny show configuration **` and `deny show chassis cluster
+**` are sent). A deny naming any word not proven a keyword — a `*` or a `**` anywhere but that
+trailing place, a trailing `**` after an argument, an entity class, a regex, or a word the tree
+does not list there — cannot be enforced on Junos: `policy test` and `policy diff` fail, naming the word and the whole
 command to deny instead, and at runtime that subject gets decision 26's fail-closed reply.
 port49 never widens the deny itself. An allow naming an argument never matches on Junos, so it
 fails closed: it is not sent, the user cannot run it, and `policy test` warns. A keyword on one
