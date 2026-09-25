@@ -1040,6 +1040,9 @@ roles:
     permit: [show chassis cluster status]
 ```
 
+This is port49's evaluation. What a Junos device is told of it is §8's: on set 1.1.0 this deny
+fails closed, since `cluster` is no proven keyword, and so would any deny beneath `view` (§11).
+
 **Two consequences for CI.** A deny may be inert if shadowed, so *"adding a deny is always
 safe"* no longer holds; and a permit may override a deny, so *"only permit growth widens
 access"* becomes the check that matters. Both are computable from the trie, and the gate is
@@ -4433,10 +4436,21 @@ Three things this example is chosen to show.
 the command rules, `elevated_session` supplies the privilege, and the reason the elevation
 exists is recorded on the role that carries it.
 
-**The CVE mitigation is three lines and self-limiting.** It applies to every principal on
-every unpatched SRX including devices not yet racked, lapses per device as inventory reflects
-the upgrade, and admits a deliberate, narrow exemption for incident response through the same
-mechanism as everything else.
+**The CVE mitigation is three lines and self-limiting in port49's evaluation.** It applies to
+every principal on every unpatched SRX including devices not yet racked, lapses per device as
+inventory reflects the upgrade, and admits a deliberate, narrow exemption for incident response
+through the same mechanism as everything else. **It does not reach an SRX.** Under the
+example's own pin, set 1.0.0, Junos is not projected and never asks per command (decision 21),
+so the device is told nothing of the deny. Pinned to set 1.1.0, it fails closed: `cluster` is
+not a keyword the shipped tree proves (vJunos-router has no `show chassis cluster`; L26), so
+every subject on an unpatched SRX gets the fail-closed reply (`argument_deny`, decision 27),
+netops_admins included, and `policy test` fails naming each. A proven word does not rescue it:
+`deny show chassis alarms **` lies beneath `view`, which every one of those subjects is sent,
+and a deny beneath a sent bit is not a boundary until L26c closes (`refused_shape`, §8). What
+a deny projects as on set 1.1.0 is one no sent bit reaches: with `deny: [restart **]` in place
+of the cluster deny, netops_admins on srx-fw-04 get `user-permissions=clear network trace view
+view-configuration` and `deny-commands=^ *restart( .*)? *(\|.*)?$`, and noc_tier1 and
+svc_oxidized keep the narrow `show **` reply they get without it.
 
 ---
 

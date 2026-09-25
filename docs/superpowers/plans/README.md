@@ -612,7 +612,8 @@ reproduced), and Task 19 is on hold for the owner.
   trees) and refuses a merge missing one: 528 keywords. L26b's overlays add the seven proven by deny enforcement (`show cli`,
   `host`, `ingress-replication`, `policy`, `task`, `set cli`, `exit`), for 535. What it proves
   for the spec's denies:
-  - `deny show configuration **` and `deny show chassis hardware **` are keyword denies;
+  - `deny show configuration **` and `deny show chassis hardware **` are keyword denies, though
+    either beneath a sent `view` still fails closed until L26c closes (option C);
   - §11's `deny show chassis cluster **` is not (vJunos-router has no `cluster`), nor is `deny
     show route summary`;
   - no `show configuration` hierarchy is a keyword, and a hierarchy deny is not enforced (L26b).

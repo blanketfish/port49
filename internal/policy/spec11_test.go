@@ -310,3 +310,52 @@ func shuffleDeep(r *rand.Rand, n *yaml.Node) {
 		shuffleDeep(r, c)
 	}
 }
+
+// What spec §11 says its CVE mitigation does pinned to the shipped set 1.1.0
+// (final review I-2): `cluster` is no proven keyword, so every subject on an
+// unpatched SRX gets the fail-closed reply; a proven word beneath `view`
+// fails closed too (option C); a deny no sent bit reaches projects.
+func TestTheCompletePolicyExampleOnTheShippedSet(t *testing.T) {
+	raw := strings.Replace(string(spec11Raw(t)), "\nroles:\n", "\nplatform_set: 1.1.0\nroles:\n", 1)
+	srx := func(p *Policy, subject string) Resolution {
+		t.Helper()
+		for _, d := range p.env.Devices {
+			if d.Name == "srx-fw-04" {
+				res, err := p.ResolveSubject(subject, d, noon)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return res
+			}
+		}
+		t.Fatal("no srx-fw-04")
+		return Resolution{}
+	}
+	subjects := []string{"netops_admins", "noc_tier1", "security_ir", "svc_oxidized"}
+	for deny, want := range map[string]string{"show chassis cluster **": "argument_deny",
+		"show chassis alarms **": "refused_shape"} {
+		p := spec11(t, []byte(strings.Replace(raw, "show chassis cluster **", deny, 1)))
+		if q := p.Quarantines(noon); len(q) != 0 {
+			t.Fatalf("%s: %+v", deny, q)
+		}
+		for _, s := range subjects {
+			if s == "security_ir" && want == "refused_shape" {
+				continue // its permit is unsent, so no deny meets it
+			}
+			if res := srx(p, s); res.Blob.FailClosed != want {
+				t.Errorf("deny %s, %s: %q %q", deny, s, res.Blob.Attributes, res.Blob.FailClosed)
+			}
+		}
+	}
+	p := spec11(t, []byte(strings.Replace(raw, "show chassis cluster **", "restart **", 1)))
+	for s, want := range map[string][]string{
+		"netops_admins": {"user-permissions=clear network trace view view-configuration",
+			`deny-commands=^ *restart( .*)? *(\|.*)?$`},
+		"noc_tier1":    {"user-permissions=view view-configuration", "deny-commands=^.*$", "allow-commands=^show( .*)?$"},
+		"svc_oxidized": {"user-permissions=view view-configuration", "deny-commands=^.*$", "allow-commands=^show( .*)?$"},
+	} {
+		if res := srx(p, s); res.Blob.FailClosed != "" || !reflect.DeepEqual(res.Blob.Attributes, want) {
+			t.Errorf("deny restart **, %s: %q %q", s, res.Blob.Attributes, res.Blob.FailClosed)
+		}
+	}
+}
