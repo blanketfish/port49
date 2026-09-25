@@ -45,6 +45,9 @@ type Options struct {
 	// window, never per session. Defaults 5 and 0.8.
 	ConfigEntries int
 	ConfigSilent  float64
+	// Redactor gives each platform's redaction patterns, which every example
+	// echoed from the log goes through (spec §5.8); nil is the built-in ones.
+	Redactor platform.Redactor
 }
 
 // Row is one device's line of the matrix, and its reconciliation.
@@ -75,8 +78,9 @@ type Row struct {
 type Report struct {
 	From, To time.Time
 	Rows     []Row
-	// Gaps are the account_gap records in the window: records port49
-	// received and did not write. Where there are any, a reconciliation
+	// Gaps are the account_gap records whose drops can fall in the window,
+	// from their since to when they were written: records port49 received
+	// and did not write. Where there are any, a reconciliation
 	// finding says "possibly": the gap may be the authorization it did not
 	// find (spec §9, "What silence can and cannot mean").
 	Gaps []decision.Gap
@@ -94,11 +98,20 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 	if opt.ConfigSilent == 0 {
 		opt.ConfigSilent = 0.8
 	}
+	if opt.Redactor == nil {
+		opt.Redactor = platform.BuiltInRedactor
+	}
 	var rep Report
 	type ctxKey struct{ device, ctx string }
 	byDevice := map[string][]decision.Record{}
 	authorized := map[ctxKey][]string{} // context → each authorized command, as text
 	for _, r := range records {
+		if r.Event == decision.EventAccountGap && r.Gap != nil {
+			if gapOverlaps(r, opt) {
+				rep.Gaps = append(rep.Gaps, *r.Gap)
+			}
+			continue
+		}
 		if (!opt.From.IsZero() && r.TS.Before(opt.From)) || (!opt.To.IsZero() && r.TS.After(opt.To)) {
 			continue
 		}
@@ -107,10 +120,6 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 		}
 		if r.TS.After(rep.To) {
 			rep.To = r.TS
-		}
-		if r.Event == decision.EventAccountGap && r.Gap != nil {
-			rep.Gaps = append(rep.Gaps, *r.Gap)
-			continue
 		}
 		if r.Device == nil {
 			continue
@@ -125,8 +134,8 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 		row := Row{Device: d}
 		recs := byDevice[d.Name]
 		observed := map[string]bool{}
-		var entries []decision.Record // permitted configuration entries
-		unmatched := map[string]bool{}
+		var entries []decision.Record    // permitted configuration entries
+		unmatched := map[string]string{} // context and command → the command, redacted
 		for i, r := range recs {
 			switch r.Event {
 			case decision.EventAuthorizeSession:
@@ -161,7 +170,8 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 				if !slices.ContainsFunc(authorized[ctxKey{d.Name, r.Session.CtxID}], func(a string) bool {
 					return a != "" && strings.Contains(cmd, a)
 				}) {
-					unmatched[r.Session.CtxID+"\x00"+cmd] = true
+					_, vector, _ := platform.RedactRecord(opt.Redactor(d.Platform), r.AcctRecord.Raw, r.AcctRecord.Vector)
+					unmatched[r.Session.CtxID+"\x00"+cmd] = text(vector)
 				}
 			}
 		}
@@ -178,12 +188,20 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 		sort.Strings(keys)
 		row.Unauthorized = len(keys)
 		for _, k := range keys {
-			_, cmd, _ := strings.Cut(k, "\x00")
+			cmd := unmatched[k]
 			if len(row.Examples) < 3 && !slices.Contains(row.Examples, cmd) {
 				row.Examples = append(row.Examples, cmd)
 			}
 		}
-		row.Warnings = warnings(row, opt)
+		row.Warnings = warnings(row, opt, rep.Qualified())
+		if !rep.Qualified() {
+			n := 0
+			for _, g := range rep.Gaps {
+				n += g.Records
+			}
+			row.Notes = append(row.Notes, fmt.Sprintf("qualified: account_gap records overlapping this window say %d "+
+				"accounting records port49 received are not in the log, so a reconciliation finding is possible, not certain", n))
+		}
 		if row.Device.Quarantine == "" && len(row.Observed) == 0 {
 			row.Notes = append(row.Notes, "never seen: no record in the window, so nothing is inferred")
 		}
@@ -197,7 +215,7 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 	return rep
 }
 
-func warnings(row Row, opt Options) []string {
+func warnings(row Row, opt Options, qualified bool) []string {
 	var out []string
 	d := row.Device
 	if slices.Contains(d.Supports, Commands) && row.ConfigEntered >= opt.ConfigEntries &&
@@ -206,10 +224,30 @@ func warnings(row Row, opt Options) []string {
 			"authorization request after them in their session", row.ConfigSilent, row.ConfigEntered))
 	}
 	if row.Unauthorized > 0 {
-		out = append(out, fmt.Sprintf("%d commands in accounting had no corresponding authorization request",
-			row.Unauthorized))
+		possibly := ""
+		if !qualified {
+			possibly = "possibly "
+		}
+		out = append(out, fmt.Sprintf("%d commands in accounting %shad no corresponding authorization request",
+			row.Unauthorized, possibly))
 	}
 	return out
+}
+
+// gapOverlaps reports whether an account_gap record's drops can fall in the
+// window: they arrived from its since through its ts, when it was written, so
+// a backlog drained after the window still qualifies it (spec §5.7). A since
+// that does not read is taken as unbounded before, which qualifies more
+// windows rather than fewer.
+func gapOverlaps(r decision.Record, opt Options) bool {
+	if !opt.From.IsZero() && r.TS.Before(opt.From) {
+		return false
+	}
+	since, err := time.Parse(time.RFC3339Nano, r.Gap.Since)
+	if err != nil {
+		return true
+	}
+	return opt.To.IsZero() || !since.After(opt.To)
 }
 
 // text is a command vector as one lower-case line with no trailing `<cr>`:

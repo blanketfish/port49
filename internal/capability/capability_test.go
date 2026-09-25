@@ -1,7 +1,9 @@
 package capability
 
 import (
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -120,5 +122,62 @@ func TestGapsWindowsAndSessionOnly(t *testing.T) {
 	}
 	if rep := Infer(l.recs, devices, Options{From: t0.Add(90 * time.Minute)}); len(rep.Gaps) != 0 {
 		t.Fatalf("window: %+v", rep)
+	}
+}
+
+// An example is echoed from the log, so it goes through the platform's
+// redaction first: a secret typed on a device that never asked about it is
+// no safer in a report than in a log (spec §5.8).
+func TestExamplesAreRedacted(t *testing.T) {
+	var l logb
+	l.add(decision.EventAuthorizeSession, "leaf-04", "arista_eos", "c4", nil)
+	l.account("leaf-04", "c4", "resolved", "username", "bob", "secret", "Hunter2")
+	devices := []Device{{Name: "leaf-04", Platform: "arista_eos", Supports: eos}}
+	r := Infer(l.recs, devices, Options{}).Rows[0]
+	if r.Unauthorized != 1 || len(r.Examples) != 1 || !strings.HasPrefix(r.Examples[0], "username bob secret ") {
+		t.Fatalf("%+v", r)
+	}
+	if s := strings.ToLower(fmt.Sprintf("%+v", r)); strings.Contains(s, "hunter2") {
+		t.Fatalf("the secret reached the report: %s", s)
+	}
+}
+
+// A gap is charged to when its records arrived, since, through when it was
+// written: one written after the window for drops inside it qualifies the
+// window, and one whose drops all came before it does not. Every row of an
+// unqualified report says so, and its reconciliation says "possibly".
+func TestGapsOverlapTheWindowBySince(t *testing.T) {
+	var l logb
+	l.add(decision.EventAuthorizeSession, "leaf-04", "arista_eos", "c4", nil)
+	l.account("leaf-04", "c4", "resolved", "show", "clock")
+	l.add(decision.EventAccountGap, "", "", "", func(r *decision.Record) {
+		r.TS = t0.Add(3 * time.Hour) // drained hours late
+		r.Device, r.Session, r.Gap = nil, nil, &decision.Gap{Stage: "drain_unparseable", Records: 2,
+			Since: decision.FormatTime(t0.Add(30 * time.Minute))}
+	})
+	devices := []Device{{Name: "leaf-04", Platform: "arista_eos", Supports: eos},
+		{Name: "leaf-05", Platform: "arista_eos", Supports: eos}}
+	rep := Infer(l.recs, devices, Options{To: t0.Add(time.Hour)})
+	if rep.Qualified() || len(rep.Gaps) != 1 {
+		t.Fatalf("a late-written gap for drops in the window: %+v", rep)
+	}
+	for _, r := range rep.Rows {
+		if !slices.ContainsFunc(r.Notes, func(n string) bool { return strings.Contains(n, "account_gap") }) {
+			t.Errorf("row does not say the window is qualified: %+v", r)
+		}
+	}
+	if w := strings.Join(rep.Rows[0].Warnings, ";"); !strings.Contains(w, "possibly") {
+		t.Errorf("an unqualified reconciliation is stated as fact: %q", w)
+	}
+	if rep := Infer(l.recs, devices, Options{From: t0.Add(4 * time.Hour)}); !rep.Qualified() {
+		t.Fatalf("a gap written before the window: %+v", rep)
+	}
+	if rep := Infer(l.recs, devices, Options{From: t0.Add(2 * time.Hour)}); rep.Qualified() {
+		t.Fatalf("a gap whose drops span into the window: %+v", rep)
+	}
+	rep = Infer(l.recs[:2], devices, Options{})
+	if !rep.Qualified() || strings.Contains(strings.Join(rep.Rows[0].Warnings, ";"), "possibly") ||
+		len(rep.Rows[0].Notes) != 0 {
+		t.Fatalf("a whole stream: %+v", rep)
 	}
 }
