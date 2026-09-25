@@ -583,8 +583,8 @@ func (p *Policy) onGeneric(name string) bool {
 // is a projection_refused finding, or projection_overflow where a reply
 // attribute is past RFC 8907's length, naming the subject, every device it
 // lands on and why; both fail `policy test` (spec §13 decision 26). A
-// projection finding names its devices only where the subject's reply
-// differs by device at that moment.
+// projection finding names its devices where it is not on every device the
+// subject has a reply on there.
 func (p *Policy) Projections(now time.Time) []Finding {
 	patterns := p.Redactions()
 	type group struct {
@@ -646,16 +646,23 @@ func (p *Policy) Projections(now time.Time) []Finding {
 					index[key] = g
 					groups = append(groups, g)
 				}
-				g.devices = append(g.devices, d.Name)
+				if !slices.Contains(g.devices, d.Name) {
+					g.devices = append(g.devices, d.Name)
+				}
 			}
 		}
 	}
-	// How many replies a subject has on a platform at a moment: past one,
-	// each projection finding names its devices.
-	replies := map[string]int{}
+	// The devices a subject has a reply on, per platform: a projection
+	// finding on fewer names them, so a grant to one device, or one that
+	// expires on one device, never reads as every device's.
+	lands := map[string]map[string]bool{}
 	for _, g := range groups {
-		if g.kind == FindingProjection {
-			replies[g.subject+"\x00"+g.platform+"\x00"+g.moment]++
+		k := g.subject + "\x00" + g.platform
+		if lands[k] == nil {
+			lands[k] = map[string]bool{}
+		}
+		for _, d := range g.devices {
+			lands[k][d] = true
 		}
 	}
 	var out []Finding
@@ -672,7 +679,7 @@ func (p *Policy) Projections(now time.Time) []Finding {
 			}
 			msg += g.msg
 		}
-		if g.kind != FindingProjection || replies[g.subject+"\x00"+g.platform+"\x00"+g.moment] > 1 {
+		if g.kind != FindingProjection || len(g.devices) < len(lands[g.subject+"\x00"+g.platform]) {
 			slices.Sort(g.devices)
 			noun := "devices"
 			if len(g.devices) == 1 {

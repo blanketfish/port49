@@ -519,6 +519,31 @@ func TestAProjectionFindingNamesItsDevicesWhereTheyDiffer(t *testing.T) {
 		!strings.HasSuffix(got[1], "; on 3 devices: srx-fw-05, srx-fw-22, srx-lab-01") {
 		t.Fatalf("%q", got)
 	}
+	// A device-scoped grant that expires splits the moments by device: each
+	// moment then has one reply, and still names the devices it is on, so a
+	// grant to one SRX never reads as every SRX's (re-review R2).
+	p = parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+
+		"  - {name: few, match: {os_version: 21.4R3-S4}}\n"+`roles:
+  - {name: ro, privilege: operator, permit: ["show **"], deny: ["show configuration **"]}
+  - {name: op, privilege: operator, permit: ["ping **"]}
+`+subjOK+`grants:
+  - {subject: s, scope: all_devices, roles: [ro]}
+  - {subject: s, scope: few, roles: [op], expires: 2099-01-01}
+`)
+	got = nil
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjection {
+			got = append(got, f.Message)
+		}
+	}
+	slices.Sort(got)
+	if len(got) != 3 || !strings.HasPrefix(got[0], `subject "s" on juniper_junos, from 2099-01-01T00:00:00.000Z`) ||
+		!strings.HasSuffix(got[0], "; on 1 device: srx-fw-04") ||
+		!strings.HasPrefix(got[1], `subject "s" on juniper_junos, until 2099-01-01T00:00:00.000Z`) ||
+		!strings.Contains(got[1], "allow-commands: ping **") || !strings.HasSuffix(got[1], "; on 1 device: srx-fw-04") ||
+		!strings.HasSuffix(got[2], "; on 3 devices: srx-fw-05, srx-fw-22, srx-lab-01") {
+		t.Fatalf("%q", got)
+	}
 }
 
 // No projection finding and no explain caveat prints a value redaction
