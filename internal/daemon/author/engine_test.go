@@ -428,12 +428,31 @@ func TestASecretOneFormMissesIsRedactedInBoth(t *testing.T) {
 // with that reply, recorded as projection_fail_closed: the subject told less
 // than port49 would permit is in the log by name (spec §13 decision 26).
 func TestAFailClosedReplyIsRecordedByName(t *testing.T) {
-	b := eosBlob()
-	b.FailClosed = "refused_shape"
+	// A Junos blob as the broker writes a fail-closed composition: the reply
+	// is `deny-commands` `.*` alone, and the rules are what port49 decides
+	// (Task 10 review, parked M1).
+	b := engine.Blob{Bundle: "sha256:policy", Platform: "juniper_junos",
+		Normalize: engine.Normalize{PipeToken: "|", StripCR: true, SessionOnly: true}, Privilege: "readonly",
+		Attributes: []string{"deny-commands=^.*$"}, FailClosed: "refused_shape",
+		Rules: []engine.Rule{
+			{Verdict: engine.Permit, Rule: "show **", Role: "read_only"},
+			{Verdict: engine.Deny, Rule: "show interfaces terse", Role: "read_only"},
+		}}
 	f := newEngineFixture(t, b)
 	c := store.Context{Username: "alice", Principal: "user:alice@example.com", BlobHash: f.hash}
-	d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(), Request{Context: c, Device: peer})
-	if !d.Permit || d.Reason != decision.ProjectionFailClosed || len(d.Attributes) == 0 {
+	d := (&Engine{Store: f.st, Metrics: f.m}).Session(context.Background(), Request{Context: c, Device: junosPeer})
+	if !d.Permit || d.Reason != decision.ProjectionFailClosed || !reflect.DeepEqual(d.Attributes, b.Attributes) {
 		t.Fatalf("%+v", d)
+	}
+	// Through the handler, as Junos asks, the record and the metric name it
+	// (M2).
+	resp := f.h.Handle(context.Background(), junosPeer, req("alice", "", "service=junos-exec"))
+	rec := lastRecord(t, f.log)
+	if resp.Status != wire.AuthorStatusPassAdd || rec["reason"] != string(decision.ProjectionFailClosed) {
+		t.Fatalf("%+v %v", resp, rec)
+	}
+	if got := testutil.ToFloat64(f.m.Decisions.WithLabelValues("authorize_session", "permit",
+		string(decision.ProjectionFailClosed))); got != 1 {
+		t.Fatalf("port49_decisions_total{reason=%q} = %v", decision.ProjectionFailClosed, got)
 	}
 }
