@@ -109,7 +109,9 @@ func (m *model) unsound() ([]string, bool) {
 }
 
 // Narrower lists up to max commands port49 permits and the device, under the
-// reply, does not: what CI reports as the reply's shortfall (spec §8).
+// reply, does not, or may not: an allow runs one its bits do not reach,
+// which is unmeasured (Result.Unreached). It is what CI reports as the
+// reply's shortfall (spec §8).
 func (r Result) Narrower(max int) [][]string {
 	if r.model == nil {
 		return nil
@@ -119,7 +121,7 @@ func (r Result) Narrower(max int) [][]string {
 		if len(v) == 0 || slices.Contains(v, engine.OtherArgument) {
 			continue
 		}
-		if r.model.port.Command(raw(v)).Permit && !r.model.device(v) {
+		if r.model.port.Command(raw(v)).Permit && (!r.model.device(v) || r.model.allowOnly(v)) {
 			out = append(out, v)
 			if len(out) == max {
 				break
@@ -134,4 +136,13 @@ func (r Result) Narrower(max int) [][]string {
 // platform (spec §8, "Verification").
 func (r Result) Device(vector []string) bool {
 	return r.model != nil && len(vector) > 0 && r.model.device(vector)
+}
+
+// allowOnly reports whether only an allow runs vector: no held bit reaches it,
+// or a carve-out takes it out. The model runs it, the reading that errs toward
+// the device running more; whether the device does is unmeasured.
+func (m *model) allowOnly(vector []string) bool {
+	r := raw(vector)
+	return len(m.allow.Command(r).Permits) > 0 &&
+		(len(m.reach.Command(r).Denies) == 0 || len(m.carve.Command(r).Denies) > 0)
 }

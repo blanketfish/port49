@@ -212,3 +212,40 @@ func TestAPermitOfABaselineCommandIsNotRefused(t *testing.T) {
 		}
 	}
 }
+
+// cover gives each allow a bit that proves it runs: a carve-out counted, and
+// the baseline's reach needing no bit (review I3).
+func TestCoverCountsCarveOutsAndTheBaseline(t *testing.T) {
+	// Only view-configuration runs show configuration: view alone is carved.
+	res, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured,
+		permit("show configuration interfaces **")))
+	if err != nil || res.Shape != ShapeNarrow || !reflect.DeepEqual(res.Bits, []string{"view-configuration"}) {
+		t.Fatalf("carved: %s %q %v", res.Shape, res.Attributes, err)
+	}
+	// request support information is the baseline's; show still needs view.
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "admin", JunosFacts, permit("show **"),
+		permit("request support information **")))
+	if err != nil || res.Shape != ShapeNarrow || !reflect.DeepEqual(res.Bits, []string{"view", "view-configuration"}) {
+		t.Fatalf("baseline and view: %s %q %v", res.Shape, res.Attributes, err)
+	}
+	// A grant the baseline alone reaches takes no bit, and loses nothing.
+	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("quit")))
+	if err != nil || res.Shape != ShapeNarrow || len(res.Bits) != 0 || len(res.Narrower(5)) != 0 ||
+		!reflect.DeepEqual(res.Attributes, []string{"deny-commands=^.*$", "allow-commands=^quit$"}) {
+		t.Fatalf("baseline only: %s %q %v", res.Shape, res.Attributes, err)
+	}
+}
+
+// An allow sent under bits that do not reach it may not run: whether a Junos
+// allow runs without its bit is unmeasured, so CI says so (review I3).
+func TestAnAllowTheBitsDoNotReachIsReported(t *testing.T) {
+	res, err := Project(input(platform.BitDeliveryUserPermissions, "operator", measured, permit("show **"),
+		permit("clear **"), permit("ping **"), deny("clear bgp **")))
+	if err != nil || len(res.Unreached) != 1 || res.Unreached[0].Rule != "ping **" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	n := res.Narrower(20)
+	if !slices.ContainsFunc(n, func(v []string) bool { return v[0] == "ping" }) {
+		t.Errorf("narrower: %q", n)
+	}
+}

@@ -3,7 +3,6 @@ package projection
 import (
 	"errors"
 	"fmt"
-	"math/bits"
 	"slices"
 	"strings"
 
@@ -99,6 +98,11 @@ type Result struct {
 	// permit there, never the reverse (spec §8, "never exceeding the level's
 	// ceiling").
 	Beyond []engine.Rule
+	// Unreached are allows sent under bits that do not reach them, carve-outs
+	// counted: whether a Junos allow runs a command its bits do not reach is
+	// unmeasured, so the device may refuse what port49 permits there, and CI
+	// says so (Narrower).
+	Unreached []engine.Rule
 	// ConfigurationDropped are the level's bits that enter configuration
 	// mode, left out because the composition is not a grant of every command
 	// with no deny and the rest proved sound without them (decision 26).
@@ -251,6 +255,7 @@ func (g generator) shape() (Result, error) {
 	if err := g.attributes(&res); err != nil {
 		return Result{}, err
 	}
+	res.Unreached = g.unreached(res)
 	return res, nil
 }
 
@@ -537,120 +542,135 @@ func (g generator) narrow() (Result, error) {
 // cover is greedy.
 const maxCover = 1 << 16
 
-// cover is the smallest set of the bits from that reach every allow: fewest
-// bits, then fewest that enter configuration mode, then first in name order
-// (I11: `all` reaches everything, and a narrow admin grant under it would
-// be refused for entering configuration mode). Bits reaching the same
-// allows are one candidate, the preferred of them.
+// cover is the smallest set of the bits from under which every allow is a
+// command the bits run too (reaches, carve-outs counted): fewest bits, then
+// fewest that enter configuration mode, then first in name order (I11: `all`
+// reaches everything, and a narrow admin grant under it would be refused for
+// entering configuration mode). Whether a Junos allow runs a command its bits
+// do not reach is unmeasured, so the bits are what prove it runs. An allow
+// the baseline runs needs no bit. Where the search finds no smaller set, or
+// the greedy one stalls, it is every bit of from, which within proved reaches
+// each allow: never none.
 func (g generator) cover(from []string, allows []engine.Rule) []string {
-	if len(allows) == 0 {
+	// For each allow the baseline does not run: the bits whose reach holds
+	// it, one of which the set must hold, and the bits whose carve-out meets
+	// it, all of which it must hold.
+	type need struct{ reachers, carvers []string }
+	var needs []need
+	for _, a := range allows {
+		if g.reaches(a.Rule, nil, false) {
+			continue
+		}
+		var n need
+		for _, b := range sortedKeys(g.in.Dialect.Bits) {
+			if slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool { return g.contains(r, a.Rule) }) {
+				n.reachers = append(n.reachers, b)
+			}
+		}
+		for _, b := range sortedKeys(g.in.Dialect.CarveOuts) {
+			if slices.ContainsFunc(g.in.Dialect.CarveOuts[b], func(c string) bool { return g.mayMeet(a.Rule, c) }) {
+				n.carvers = append(n.carvers, b)
+			}
+		}
+		needs = append(needs, n)
+	}
+	if len(needs) == 0 {
 		return nil
 	}
-	if len(allows) > 63 {
-		allows = allows[:63] // more never fit in one attribute
-	}
-	type cand struct {
-		bit    string
-		mask   uint64
-		config bool
-	}
-	var cands []cand
-	full := uint64(1)<<len(allows) - 1
-	for _, b := range from {
-		var m uint64
-		for i, p := range allows {
-			if slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool { return g.contains(r, p.Rule) }) {
-				m |= 1 << i
+	every := slices.Clone(from)
+	slices.Sort(every)
+	every = slices.Compact(every)
+	// satisfied counts the allows the bits s run.
+	satisfied := func(s []string) int {
+		held := g.held(s)
+		in := func(b string) bool { return slices.Contains(held, b) }
+		k := 0
+		for _, n := range needs {
+			if slices.ContainsFunc(n.reachers, in) && !slices.ContainsFunc(n.carvers, func(b string) bool { return !in(b) }) {
+				k++
 			}
 		}
-		if m == 0 {
-			continue
-		}
-		c := cand{b, m, g.entersConfiguration(b)}
-		if k := slices.IndexFunc(cands, func(o cand) bool { return o.mask == m }); k >= 0 {
-			if o := cands[k]; o.config && !c.config || o.config == c.config && c.bit < o.bit {
-				cands[k] = c
-			}
-			continue
-		}
-		cands = append(cands, c)
+		return k
 	}
-	names := func(set uint64) []string {
-		var out []string
-		for i, c := range cands {
-			if set&(1<<i) != 0 {
-				out = append(out, c.bit)
+	// Only a bit that reaches or carves some allow, or `all`, which holds
+	// every bit, can be in the smallest set.
+	cands := slices.DeleteFunc(slices.Clone(every), func(b string) bool {
+		return b != "all" && !slices.ContainsFunc(needs, func(n need) bool {
+			return slices.Contains(n.reachers, b) || slices.Contains(n.carvers, b)
+		})
+	})
+	configs := func(s []string) int {
+		k := 0
+		for _, b := range s {
+			if g.entersConfiguration(b) {
+				k++
 			}
 		}
-		slices.Sort(out)
-		return out
+		return k
 	}
-	configs := func(set uint64) int {
-		n := 0
-		for i, c := range cands {
-			if set&(1<<i) != 0 && c.config {
-				n++
-			}
-		}
-		return n
-	}
-	better := func(a, b uint64) bool {
-		if na, nb := bits.OnesCount64(a), bits.OnesCount64(b); na != nb {
-			return na < nb
+	better := func(a, b []string) bool {
+		if len(a) != len(b) {
+			return len(a) < len(b)
 		}
 		if ca, cb := configs(a), configs(b); ca != cb {
 			return ca < cb
 		}
-		return slices.Compare(names(a), names(b)) < 0
+		return slices.Compare(a, b) < 0
 	}
 	if len(cands) < 64 && uint64(1)<<len(cands) <= maxCover {
-		best, found := uint64(0), false
+		var best []string
 		for set := uint64(1); set < uint64(1)<<len(cands); set++ {
-			var m uint64
-			for i, c := range cands {
+			var s []string
+			for i, b := range cands {
 				if set&(1<<i) != 0 {
-					m |= c.mask
+					s = append(s, b)
 				}
 			}
-			if m == full && (!found || better(set, best)) {
-				best, found = set, true
+			if (best == nil || better(s, best)) && satisfied(s) == len(needs) {
+				best = s
 			}
 		}
-		if found {
-			return names(best)
+		if best != nil {
+			return best
 		}
-		return nil // within() said some ceiling bit reaches each; unreachable
+		return every
 	}
-	// Greedy: the candidate reaching the most allows not yet reached, one
-	// that does not enter configuration mode first, then name order.
-	var set, got uint64
-	for got != full {
-		pick := -1
-		for i, c := range cands {
-			if set&(1<<i) != 0 {
+	// Greedy: the bit that runs the most allows not yet run, one that does
+	// not enter configuration mode first, then name order.
+	var set []string
+	for got := 0; got < len(needs); {
+		pick, pn := "", got
+		for _, b := range cands {
+			if slices.Contains(set, b) {
 				continue
 			}
-			n := bits.OnesCount64(c.mask &^ got)
-			if n == 0 {
+			n := satisfied(append(slices.Clone(set), b))
+			if n <= got {
 				continue
 			}
-			if pick < 0 {
-				pick = i
-				continue
-			}
-			p := cands[pick]
-			pn := bits.OnesCount64(p.mask &^ got)
-			if n > pn || n == pn && (p.config && !c.config || p.config == c.config && c.bit < p.bit) {
-				pick = i
+			if pick == "" || n > pn || n == pn && g.entersConfiguration(pick) && !g.entersConfiguration(b) {
+				pick, pn = b, n
 			}
 		}
-		if pick < 0 {
-			break
+		if pick == "" {
+			return every
 		}
-		set |= 1 << pick
-		got |= cands[pick].mask
+		set = append(set, pick)
+		got = pn
 	}
-	return names(set)
+	slices.Sort(set)
+	return set
+}
+
+// unreached is the allows of res its bits do not run (Result.Unreached).
+func (g generator) unreached(res Result) []engine.Rule {
+	var out []engine.Rule
+	for _, a := range res.Allows {
+		if !g.reaches(a.Rule, res.Bits, false) {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // failClosed is the reply for a composition neither shape carries (spec §13
@@ -695,6 +715,7 @@ func (g generator) failClosed(r *Refusal) (Result, error) {
 				return out, err
 			}
 		}
+		out.Unreached = h.unreached(out)
 		m, err := h.model(out)
 		if err != nil {
 			return Result{}, err

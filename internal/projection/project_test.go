@@ -211,7 +211,8 @@ func TestOperator(t *testing.T) {
 	// the operator's shape is refused: clear ** would beat clear bgp **. The
 	// subject keeps what is proven: show and ping, not clear.
 	res, err = Project(input(platform.BitDeliveryUserPermissions, "operator", Facts{CaseSensitive: true}, rules...))
-	want := []string{"user-permissions=network view", "deny-commands=^.*$", "allow-commands=^(show( .*)?|ping( .*)?)$"}
+	want := []string{"user-permissions=network view view-configuration", "deny-commands=^.*$",
+		"allow-commands=^(show( .*)?|ping( .*)?)$"}
 	if err != nil || res.FailClosed != FailRefusedShape || !reflect.DeepEqual(res.Attributes, want) {
 		t.Fatalf("%q %v", res.Attributes, err)
 	}
