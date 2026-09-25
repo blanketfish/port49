@@ -545,29 +545,50 @@ func TestADenyOfAConfigurationStatementFailsClosed(t *testing.T) {
 	}
 }
 
-// Clone copies every slice of a Result, Unsent included, so a caller's
-// append or write to its copy never reaches another's (Task 9).
+// Clone copies every slice and pointer of a Result, Unsent included, so a
+// caller's append or write to its copy never reaches another's (Task 9). Every
+// field is accounted for by kind: a field added later that Clone would share
+// (a map, a pointer, a slice left unset here) fails this test until it is
+// copied and set below. The model alone is shared: nothing writes it after
+// Project returns.
 func TestCloneCopiesEverySlice(t *testing.T) {
 	r := permit("show version")
 	fresh := func() Result {
-		return Result{Bits: []string{"view"}, Attributes: []string{"a"}, Denies: []engine.Rule{r},
-			Allows: []engine.Rule{r}, Omitted: []engine.Rule{r}, Beyond: []engine.Rule{r}, Unreached: []engine.Rule{r},
-			ConfigurationDropped: []string{"all"}, Unsent: []Unsent{{Rule: r, Why: "why"}}, Refusal: &Refusal{Why: "w"}}
+		return Result{Shape: ShapeFailClosed, Bits: []string{"view"}, Template: "p49-readonly",
+			Attributes: []string{"a"}, Denies: []engine.Rule{r}, Allows: []engine.Rule{r}, Omitted: []engine.Rule{r},
+			Beyond: []engine.Rule{r}, Unreached: []engine.Rule{r}, ConfigurationDropped: []string{"all"},
+			Unsent: []Unsent{{Rule: r, Why: "why"}}, FailClosed: FailRefusedShape, Refusal: &Refusal{Why: "w"}}
 	}
 	res := fresh()
 	c := res.Clone()
 	v := reflect.ValueOf(&c).Elem()
 	for i := range v.NumField() {
-		f := v.Field(i)
-		if f.Kind() != reflect.Slice || !v.Type().Field(i).IsExported() {
+		f, name := v.Field(i), v.Type().Field(i).Name
+		if !v.Type().Field(i).IsExported() {
+			if name != "model" {
+				t.Fatalf("%s: say whether Clone shares or copies it", name)
+			}
 			continue
 		}
-		if f.Len() == 0 {
-			t.Fatalf("%s: set it in this test", v.Type().Field(i).Name)
+		switch f.Kind() {
+		case reflect.String:
+			if f.Len() == 0 {
+				t.Fatalf("%s: set it in this test", name)
+			}
+		case reflect.Slice:
+			if f.Len() == 0 {
+				t.Fatalf("%s: set it in this test", name)
+			}
+			f.Index(0).Set(reflect.Zero(f.Type().Elem()))
+		case reflect.Pointer:
+			if f.IsNil() {
+				t.Fatalf("%s: set it in this test", name)
+			}
+			f.Elem().Set(reflect.Zero(f.Type().Elem()))
+		default:
+			t.Fatalf("%s is a %s: copy it in Clone, and cover it here", name, f.Kind())
 		}
-		f.Index(0).Set(reflect.Zero(f.Type().Elem()))
 	}
-	c.Refusal.Why = "changed"
 	if !reflect.DeepEqual(res, fresh()) {
 		t.Fatalf("a clone's write reached the original: %+v", res)
 	}

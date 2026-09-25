@@ -367,19 +367,29 @@ func memoized(p *Policy) int {
 // A resolution's projection is its own: what one caller does to it never
 // reaches another resolution of the same composition, however concurrent.
 func TestAProjectionIsNotSharedAcrossResolutions(t *testing.T) {
-	// The second composition leaves an allow off the wire (Result.Unsent).
-	for _, body := range []string{readonlyCarveOut, scopeOK + `roles:
+	// The second composition leaves an allow off the wire (Result.Unsent);
+	// the third, on the shipped set, sends a deny (the baseline's and its
+	// own) and leaves `**` beyond the bits it keeps (Task 9 review, parked).
+	for i, p := range []*Policy{
+		parseProjected(t, platform.BitDeliveryUserPermissions, readonlyCarveOut),
+		parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
   - {name: r, privilege: readonly, permit: ["show version", "show interfaces terse"]}
-` + subjOK + grantOK} {
-		p := parseProjected(t, platform.BitDeliveryUserPermissions, body)
+`+subjOK+grantOK),
+		mustParse(t, "platform_set: 1.1.0\n"+scopeOK+`roles:
+  - {name: r, privilege: admin, permit: ["**"], deny: ["restart **"]}
+`+subjOK+grantOK),
+	} {
 		want, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
 		if err != nil {
 			t.Fatal(err)
 		}
 		wantAttrs, wantBeyond := slices.Clone(want.Projection.Attributes), slices.Clone(want.Projection.Beyond)
-		wantUnsent := slices.Clone(want.Projection.Unsent)
-		if body != readonlyCarveOut && len(wantUnsent) != 1 {
+		wantUnsent, wantDenies := slices.Clone(want.Projection.Unsent), slices.Clone(want.Projection.Denies)
+		if i == 1 && len(wantUnsent) != 1 {
 			t.Fatalf("unsent: %+v", want.Projection)
+		}
+		if i == 2 && (len(wantDenies) == 0 || len(wantBeyond) == 0) {
+			t.Fatalf("denies and beyond: %+v", want.Projection)
 		}
 		var wg sync.WaitGroup
 		for range 8 {
@@ -392,7 +402,13 @@ func TestAProjectionIsNotSharedAcrossResolutions(t *testing.T) {
 					return
 				}
 				res.Projection.Attributes[0] = "user-permissions=all"
+				if len(res.Projection.Beyond) > 0 {
+					res.Projection.Beyond[0].Rule = "changed"
+				}
 				res.Projection.Beyond = append(res.Projection.Beyond[:0], engine.Rule{Verdict: engine.Permit, Rule: "**"})
+				if len(res.Projection.Denies) > 0 {
+					res.Projection.Denies[0].Rule = "changed"
+				}
 				res.Projection.Denies = slices.DeleteFunc(res.Projection.Denies, func(engine.Rule) bool { return true })
 				if len(res.Projection.Unsent) > 0 {
 					res.Projection.Unsent[0].Why = "changed"
@@ -404,7 +420,7 @@ func TestAProjectionIsNotSharedAcrossResolutions(t *testing.T) {
 		got, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
 		if err != nil || !reflect.DeepEqual(got.Projection.Attributes, wantAttrs) ||
 			!reflect.DeepEqual(got.Projection.Beyond, wantBeyond) ||
-			!reflect.DeepEqual(got.Projection.Denies, want.Projection.Denies) ||
+			!reflect.DeepEqual(got.Projection.Denies, wantDenies) ||
 			!reflect.DeepEqual(got.Projection.Unsent, wantUnsent) {
 			t.Fatalf("%q %+v %v", got.Projection.Attributes, got.Projection.Unsent, err)
 		}
