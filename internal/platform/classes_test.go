@@ -84,7 +84,8 @@ func TestTemplateDrift(t *testing.T) {
 			config = append(config, l)
 		}
 	}
-	config = append(config, "set system login user p49-admin uid 2001", "set system host-name srx1")
+	config = append(config, "set system login user p49-admin uid 2001", "set system host-name srx1",
+		"set version 21.4R3")
 	missing, extra, err := TemplateDrift([]byte(strings.Join(config, "\n")), d, time.Hour)
 	if err != nil || len(missing) != 0 || len(extra) != 0 {
 		t.Fatalf("clean: %q %+v %v", missing, extra, err)
@@ -100,6 +101,18 @@ func TestTemplateDrift(t *testing.T) {
 	if _, _, err := TemplateDrift([]byte("system {\n  login {\n  }\n}\n"), d, time.Hour); err == nil ||
 		!strings.Contains(err.Error(), "display set") {
 		t.Fatalf("curly form: %v", err)
+	}
+	// A capture of the subtree the templates live in, `show configuration
+	// system login | display set`, lacks the set version line a whole one
+	// prints: the rest was never read, so it is not a clean device (task
+	// 13a review I4).
+	for _, partial := range [][]string{config[:len(config)-1],
+		append(config[:len(config)-1:len(config)-1], "set logical-systems ls1 version 21.4R3"),
+		append(config[:len(config)-1:len(config)-1], "deactivate version")} {
+		if _, _, err := TemplateDrift([]byte(strings.Join(partial, "\n")), d, time.Hour); err == nil ||
+			!strings.Contains(err.Error(), "set version") {
+			t.Errorf("partial %q: %v", partial[len(partial)-1], err)
+		}
 	}
 }
 

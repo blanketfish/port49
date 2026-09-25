@@ -545,7 +545,7 @@ func exportClasses(stdout, stderr io.Writer, name, platformName string, d platfo
 		"terminal`: each template class and user is deleted before it is set, which clears what was written under "+
 		"one. It does not clear what reaches a template from outside it: a configuration group applied from above "+
 		"still applies to the loaded class, a deactivated ancestor leaves the loaded lines inactive, and a protected "+
-		"one fails the load. `port49 devices check-config --config` on a `show configuration | display set` "+
+		"one fails the load. `port49 devices check-config --config` on a whole `show configuration | display set` "+
 		"capture is what proves the device carries the template and nothing more. idle-timeout is "+
 		"session.max_session_age_default (%s) in whole minutes: a session-only device never asks port49 again after "+
 		"login, so this timer is what ends a session there (decision 21).\n", platformName, setName, age)

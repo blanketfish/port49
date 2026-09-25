@@ -1,8 +1,10 @@
 package platform
 
 import (
+	"slices"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // With branch M's switch on, a projected Junos device passes only with no
@@ -21,7 +23,8 @@ func TestCheckServices(t *testing.T) {
 	}
 	rpcServicesOff = true
 	defer func() { rpcServicesOff = false }()
-	clean := "set system host-name srx1\nset system services ssh root-login deny\nset system services telnet\n" +
+	clean := "set version 21.4R3.15\nset system host-name srx1\nset system services ssh root-login deny\n" +
+		"set system services telnet\n" +
 		"set interfaces fxp0 description \"rest of the lab\"\ndeactivate system services netconf\n"
 	if f, err := CheckServices(d, []byte(clean)); len(f) != 0 || err != nil {
 		t.Fatalf("clean: %+v %v", f, err)
@@ -73,6 +76,12 @@ func TestCheckServicesBypasses(t *testing.T) {
 		"set system \"services\" netconf ssh",
 		"set logical-systems ls1 system services netconf ssh",
 		"set tenants t1 system services netconf ssh",
+		"set Logical-Systems ls1 system services netconf ssh",
+		"set Tenants t1 system services netconf ssh",
+		"set \"logical-systems\" ls1 system services netconf ssh",
+		"set system services telnet netconf ssh",
+		"set system services telnet xnm-clear-text",
+		"set system services telnet \"connection-limit 5\"",
 		"set logical-systems ls1 system services rest http",
 		"set logical-systems \"ls1\" system services web-management http",
 		"set system services ssh sftp-server extension-service",
@@ -111,12 +120,34 @@ func TestCheckServicesBypasses(t *testing.T) {
 		"set system services net​conf",
 		"set system services netconf\x00 ssh",
 		"set system services \xffnetconf",
+		"set system services telnet\vset system services netconf ssh",
+		"set system services telnet\vnetconf ssh",
+		"set system services telnet\fnetconf ssh",
+		"set system services telnet\u0085netconf",
+		"set system services telnet\u2028netconf",
+		"set system services telnet\u2029netconf",
+		"set system services telnet\u00a0netconf",
+		"set system services telnet\u3000netconf",
+		"\vset system services netconf ssh",
+		"set system services netconf ssh\v",
+		"set Groups g system services netconf ssh",
+		"set logical-systems ls1 Apply-Groups g",
 	} {
 		_, err := CheckServices(d, []byte(clean+bad+"\n"))
 		if err == nil || !strings.Contains(err.Error(), ServicesCapture) {
 			t.Errorf("%q: %v", bad, err)
-		} else if strings.Contains(err.Error(), "netconf") && !strings.Contains(ServicesCapture, "netconf") {
-			t.Errorf("%q: the error quotes the line: %v", bad, err)
+			continue
+		}
+		// Apart from the capture it names and its own wording, the error
+		// holds no word of the line.
+		words := func(s string) []string {
+			return strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && r != '-' })
+		}
+		said := words(strings.ReplaceAll(err.Error(), ServicesCapture, ""))
+		for _, w := range words(bad) {
+			if len(w) > 3 && !slices.Contains([]string{"configuration", "display"}, w) && slices.Contains(said, w) {
+				t.Errorf("%q: the error quotes %q: %v", bad, w, err)
+			}
 		}
 	}
 	// Neither a deactivate nor a protect enables anything, a terminal's
@@ -136,6 +167,9 @@ func TestCheckServicesBypasses(t *testing.T) {
 		"set system services ssh root-login deny",
 		"set system services ssh protocol-version v2",
 		"set system services telnet connection-limit 5",
+		"set system services telnet rate-limit 5",
+		"set system services telnet authentication-order tacplus",
+		"set system services telnet",
 		"set system services ssh \"client-alive-count-max\" 3",
 		"set system login class c allow-configuration-regexps \"system services .*\"",
 		"set system apply-groups-except g",
@@ -173,9 +207,19 @@ func TestCheckServicesBypasses(t *testing.T) {
 			t.Errorf("%q: %+v %v", ok, f, err)
 		}
 	}
-	// A capture of nothing but a prompt holds no statement.
-	if _, err := CheckServices(d, []byte("{master:0}\n\n")); err == nil {
-		t.Error("a prompt alone is no configuration")
+	// A capture of nothing but a prompt holds no statement, and one of a
+	// subtree — the system login port49 cares about — is not the whole
+	// configuration, which begins with its set version line: a service
+	// outside the subtree was never read (task 13a review I4).
+	for _, partial := range []string{"{master:0}\n\n",
+		"set system login class p49-readonly permissions view\nset system login user p49-readonly class p49-readonly\n",
+		"set system services ssh\nset logical-systems ls1 version 21.4R3.15\n",
+		"set system services ssh\ndeactivate version\n",
+		"set system services ssh\nset version\n",
+	} {
+		if _, err := CheckServices(d, []byte(partial)); err == nil || !strings.Contains(err.Error(), ServicesCapture) {
+			t.Errorf("%q: %v", partial, err)
+		}
 	}
 	// A line longer than eachLine reads is an error, never a clean device.
 	if _, err := CheckServices(d, []byte(clean+"set system host-name "+strings.Repeat("a", 2<<20)+"\n")); err == nil {

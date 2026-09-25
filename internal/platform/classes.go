@@ -155,7 +155,10 @@ const templateDriftSays = "a line under a port49 template the reference does not
 // read as matching, lands under one, since display set prints a group's lines
 // where they are written and not where they apply. The device_config lines
 // are Missing's. It is an error where the configuration is not all in set
-// form, since a curly-form part could carry anything under a template unread.
+// form, since a curly-form part could carry anything under a template unread,
+// and where it lacks the top-level `set version` line a whole display set
+// prints, since a capture of a subtree, `show configuration system login`,
+// leaves a group or deactivate outside it unread (task 13a review I4).
 func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missing []string, extra []ConfigFinding,
 	err error) {
 	ts, err := templates(d, maxSessionAge)
@@ -171,7 +174,7 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 		paths = append(paths, t.paths()...)
 	}
 	carried := map[string]bool{}
-	setForm, curly := false, false
+	setForm, curly, version := false, false, false
 	err = eachLine(config, func(n int, line string) {
 		words := strings.Fields(line)
 		if len(words) == 0 {
@@ -182,6 +185,9 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 		case "set":
 			setForm = true
 			carried[line] = true
+			if len(words) == 3 && strings.EqualFold(strings.Trim(words[1], `"`), "version") {
+				version = true
+			}
 			if slices.Contains(want, line) || uidLine.MatchString(line) {
 				return
 			}
@@ -219,6 +225,10 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 	case !setForm:
 		return nil, nil, errors.New("the configuration has no set line: the template check reads `show configuration " +
 			"| display set`")
+	case !version:
+		return nil, nil, errors.New("the configuration has no top-level set version line, which a whole `show " +
+			"configuration | display set` prints: a capture of part of it leaves what reaches a template from " +
+			"outside that part unread: capture the whole configuration")
 	case curly:
 		return nil, nil, errors.New("the configuration mixes curly-form statements into set form, and the template " +
 			"check cannot read what a curly block carries under a template: capture the whole `show configuration " +
