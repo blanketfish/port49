@@ -149,10 +149,11 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	// A quarantined device fails the gate: the daemon still loads the policy
 	// and serves the rest (decision 20), but CI refuses to ship one. An entry
 	// an expiry will bring on fails it too, so CI sees it before it lands.
-	quarantined := 0
-	for _, q := range p.Quarantines(now) {
+	// Counted by device, as the summary says, however many entries each has.
+	quarantines := p.Quarantines(now)
+	quarantined := len(quarantines)
+	for _, q := range quarantines {
 		for _, e := range q.Entries {
-			quarantined++
 			fmt.Fprintf(stdout, "quarantine: %s (%s): %s\n", q.Device, q.Platform, quarantineLine(e, now))
 		}
 	}

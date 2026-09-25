@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/projection"
@@ -567,60 +568,135 @@ func (p *Policy) onGeneric(name string) bool {
 
 // Projections reports each composition on a projected platform (spec §8,
 // "CI reports which shape each grant rendered under, the bit set it chose"):
-// once per subject, platform and reply, at now and at every later grant
-// expiry. A composition that gets the fail-closed reply is a
-// projection_refused finding, or projection_overflow where a reply attribute
-// is past RFC 8907's length, naming the subject, every device it lands on
-// and why; both fail `policy test` (spec §13 decision 26).
+// once per subject, platform, reply and moment, at now and at every later
+// expiry of the subject's grants. A reply that holds only until a grant
+// expires says until when, and one an expiry brings on says from when, as a
+// scheduled quarantine does. A composition that gets the fail-closed reply
+// is a projection_refused finding, or projection_overflow where a reply
+// attribute is past RFC 8907's length, naming the subject, every device it
+// lands on and why; both fail `policy test` (spec §13 decision 26). A
+// projection finding names its devices only where the subject's reply
+// differs by device at that moment.
 func (p *Policy) Projections(now time.Time) []Finding {
-	var out []Finding
-	seen := map[string]bool{}
-	add := func(kind, msg string) {
-		if !seen[msg] {
-			seen[msg] = true
-			out = append(out, Finding{Kind: kind, Message: msg})
-		}
-	}
 	patterns := p.Redactions()
-	type refusal struct {
-		kind, msg string
-		devices   []string
+	type group struct {
+		kind, msg, subject, platform, moment string
+		devices                              []string
 	}
-	var refusals []*refusal
-	index := map[string]*refusal{}
+	var groups []*group
+	index := map[string]*group{}
 	for _, name := range sortedKeys(p.subs) {
+		instants, lapsing := p.subjectInstants(p.subs[name], now)
 		for _, d := range p.env.Devices {
 			if !p.dialect(d.Platform).Projected() {
 				continue
 			}
-			for _, at := range p.expiryInstants(now) {
-				res, err := p.resolve(p.subs[name], d, at)
-				if err != nil || res.Projection == nil {
-					continue // a quarantine or a refused mint, reported as one
+			// What the device is told at each instant: a quarantine or a
+			// refused mint is none, reported as one.
+			replies := make([]*projection.Result, len(instants))
+			for i, at := range instants {
+				if res, err := p.resolve(p.subs[name], d, at); err == nil && res.Projection != nil {
+					replies[i] = res.Projection
 				}
-				pr := *res.Projection
+			}
+			head := func(pr *projection.Result) (string, string) {
 				if pr.FailClosed == "" {
-					add(FindingProjection, projectionMessage(name, d.Platform, pr, patterns))
+					return FindingProjection, projectionMessage(*pr, patterns)
+				}
+				return refusedMessage(*pr, patterns)
+			}
+			for i, pr := range replies {
+				if pr == nil {
 					continue
 				}
-				kind, msg := refusedMessage(name, d.Platform, pr, patterns)
-				r := index[kind+msg]
-				if r == nil {
-					r = &refusal{kind: kind, msg: msg}
-					index[kind+msg] = r
-					refusals = append(refusals, r)
+				kind, msg := head(pr)
+				if i > 0 && replies[i-1] != nil {
+					if k, m := head(replies[i-1]); k == kind && m == msg {
+						continue
+					}
 				}
-				if !slices.Contains(r.devices, d.Name) {
-					r.devices = append(r.devices, d.Name)
+				var moment []string
+				if i > 0 {
+					moment = append(moment, fmt.Sprintf("from %s, when %s expires", decision.FormatTime(instants[i]),
+						lapsing[instants[i]]))
 				}
+				for j := i + 1; j < len(replies); j++ {
+					if replies[j] != nil {
+						if k, m := head(replies[j]); k == kind && m == msg {
+							continue
+						}
+					}
+					moment = append(moment, fmt.Sprintf("until %s, when %s expires", decision.FormatTime(instants[j]),
+						lapsing[instants[j]]))
+					break
+				}
+				key := strings.Join([]string{name, d.Platform, kind, strings.Join(moment, ", "), msg}, "\x00")
+				g := index[key]
+				if g == nil {
+					g = &group{kind: kind, msg: msg, subject: name, platform: d.Platform,
+						moment: strings.Join(moment, ", ")}
+					index[key] = g
+					groups = append(groups, g)
+				}
+				g.devices = append(g.devices, d.Name)
 			}
 		}
 	}
-	for _, r := range refusals {
-		slices.Sort(r.devices)
-		add(r.kind, strings.Replace(r.msg, "%DEVICES%", strings.Join(r.devices, ", "), 1))
+	// How many replies a subject has on a platform at a moment: past one,
+	// each projection finding names its devices.
+	replies := map[string]int{}
+	for _, g := range groups {
+		if g.kind == FindingProjection {
+			replies[g.subject+"\x00"+g.platform+"\x00"+g.moment]++
+		}
+	}
+	var out []Finding
+	for _, g := range groups {
+		msg := fmt.Sprintf("subject %q on %s", g.subject, g.platform)
+		if g.moment != "" {
+			msg += ", " + g.moment
+		}
+		if g.kind == FindingProjection {
+			msg += ":" + g.msg
+		} else {
+			if g.moment != "" {
+				msg += ","
+			}
+			msg += g.msg
+		}
+		if g.kind != FindingProjection || replies[g.subject+"\x00"+g.platform+"\x00"+g.moment] > 1 {
+			slices.Sort(g.devices)
+			noun := "devices"
+			if len(g.devices) == 1 {
+				noun = "device"
+			}
+			msg += fmt.Sprintf("; on %d %s: %s", len(g.devices), noun, strings.Join(g.devices, ", "))
+		}
+		out = append(out, Finding{Kind: g.kind, Message: msg})
 	}
 	return out
+}
+
+// subjectInstants is now and every later instant one of sub's grants
+// expires, in order, with the grants lapsing at each, named as a scheduled
+// quarantine names them: the only instants at which sub's composition can
+// change.
+func (p *Policy) subjectInstants(sub *Subject, now time.Time) ([]time.Time, map[time.Time]string) {
+	instants := []time.Time{now}
+	lapsing := map[time.Time]string{}
+	for _, g := range p.grants {
+		if g.Subject != sub.Name || !g.Expires.After(now) {
+			continue
+		}
+		if _, ok := lapsing[g.Expires]; ok {
+			lapsing[g.Expires] += " and "
+		} else {
+			instants = append(instants, g.Expires)
+		}
+		lapsing[g.Expires] += "grant " + g.Scope + " [" + strings.Join(g.Roles, " ") + "]"
+	}
+	slices.SortFunc(instants[1:], func(a, b time.Time) int { return a.Compare(b) })
+	return instants, lapsing
 }
 
 // ProjectionRefusals counts the findings that fail `policy test`: every
@@ -635,12 +711,13 @@ func ProjectionRefusals(findings []Finding) int {
 	return n
 }
 
-// refusedMessage is a fail-closed composition's finding, the devices left as
-// %DEVICES% for Projections to fill. Every rule and value it quotes is
+// refusedMessage is a fail-closed composition's finding after its subject,
+// platform and moment, which Projections writes before it, and before the
+// devices, which it writes after. Every rule and value it quotes is
 // redacted (spec §5.8; plan 5b pre-flight M9). The refusal's own text quotes
 // only rules the secret check passed: a composition with a rule redaction
 // would hide is refused as secret_rule, whose text names only the role.
-func refusedMessage(subject, platformName string, pr projection.Result, patterns []platform.Redaction) (string, string) {
+func refusedMessage(pr projection.Result, patterns []platform.Redaction) (string, string) {
 	r := pr.Refusal
 	var allows []string
 	for _, a := range pr.Allows {
@@ -650,9 +727,8 @@ func refusedMessage(subject, platformName string, pr projection.Result, patterns
 	if len(allows) > 0 {
 		told = "every command denied but " + strings.Join(redacted(patterns, allows), "; ")
 	}
-	msg := fmt.Sprintf("subject %q on %s (%%DEVICES%%) gets the fail-closed reply (%s): %s; it is told %s, and "+
-		"every other subject on those devices keeps its reply (spec §13 decision 26)", subject, platformName,
-		pr.FailClosed, r.Why, told)
+	msg := fmt.Sprintf(" gets the fail-closed reply (%s): %s; it is told %s, and every other subject on those "+
+		"devices keeps its reply (spec §13 decision 26)", pr.FailClosed, r.Why, told)
 	if pr.FailClosed != projection.FailOverflow {
 		return FindingProjectionRefused, msg
 	}
@@ -664,7 +740,9 @@ func refusedMessage(subject, platformName string, pr projection.Result, patterns
 	return FindingProjectionOverflow, msg
 }
 
-func projectionMessage(subject, platformName string, pr projection.Result, patterns []platform.Redaction) string {
+// projectionMessage is a composition's finding after its subject, platform
+// and moment, which Projections writes before it.
+func projectionMessage(pr projection.Result, patterns []platform.Redaction) string {
 	rules := func(rs []engine.Rule) string {
 		var texts []string
 		for _, r := range rs {
@@ -679,7 +757,7 @@ func projectionMessage(subject, platformName string, pr projection.Result, patte
 	case len(pr.Bits) > 0:
 		carrier = "bits " + strings.Join(pr.Bits, " ")
 	}
-	msg := fmt.Sprintf("subject %q on %s: %s shape, %s", subject, platformName, pr.Shape, carrier)
+	msg := fmt.Sprintf(" %s shape, %s", pr.Shape, carrier)
 	if len(pr.Denies) > 0 {
 		msg += "; deny-commands: " + rules(pr.Denies)
 	}

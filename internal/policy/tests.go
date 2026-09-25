@@ -120,22 +120,28 @@ func Caveats(platformName string, dialect platform.Dialect, o engine.Outcome) []
 // narrower there, which fails closed and is said.
 func ProjectionCaveats(res Resolution, platformName string, o engine.Outcome) []string {
 	pr := res.Projection
-	if pr == nil || len(o.Vector) == 0 {
+	if pr == nil {
 		return nil
+	}
+	var out []string
+	// Said whatever the line: a line with no command is still answered
+	// under that reply.
+	if pr.FailClosed != "" {
+		out = append(out, fmt.Sprintf("the composition cannot be told to %s faithfully (%s): %s; this subject "+
+			"gets the fail-closed reply there, every command denied but what the projection proved (spec §13 "+
+			"decision 26), and policy test fails on it", platformName, pr.FailClosed, pr.Refusal.Why))
+	}
+	if len(o.Vector) == 0 {
+		return out
 	}
 	runs := pr.Device(o.Vector)
 	verb := "refuses"
 	if runs {
 		verb = "runs"
 	}
-	out := []string{fmt.Sprintf("under the session reply's projection (%s shape) the device %s it; what it runs is "+
-		"its class ∩ the wire, and the class half is the device's configuration, outside port49 (spec §8, "+
-		"\"Verification\")", pr.Shape, verb)}
-	if pr.FailClosed != "" {
-		out = append(out, fmt.Sprintf("the composition cannot be told to %s faithfully (%s), so this subject gets "+
-			"the fail-closed reply there: every command denied but what the projection proved (spec §13 decision "+
-			"26); policy test fails on it", platformName, pr.FailClosed))
-	}
+	out = append([]string{fmt.Sprintf("under the session reply's projection (%s shape) the device %s it; what it "+
+		"runs is its class ∩ the wire, and the class half is the device's configuration, outside port49 (spec §8, "+
+		"\"Verification\")", pr.Shape, verb)}, out...)
 	if o.Permit && !runs {
 		out = append(out, fmt.Sprintf("port49 permits this and the projection does not carry it to %s: the "+
 			"device refuses it, which fails closed (spec §8)", platformName))

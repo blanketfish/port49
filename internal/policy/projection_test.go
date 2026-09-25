@@ -381,7 +381,8 @@ func TestProjectionFindings(t *testing.T) {
 	}
 	if len(over) != 1 || strings.Contains(over[0].Message, "set system login class") ||
 		!strings.Contains(over[0].Message, "narrow the grant") ||
-		!strings.Contains(over[0].Message, `subject "s" on juniper_junos (srx-fw-04, srx-fw-05, srx-fw-22, srx-lab-01)`) ||
+		!strings.HasPrefix(over[0].Message, `subject "s" on juniper_junos gets the fail-closed reply (overflow)`) ||
+		!strings.HasSuffix(over[0].Message, "; on 4 devices: srx-fw-04, srx-fw-05, srx-fw-22, srx-lab-01") ||
 		ProjectionRefusals(p.Lint(noon)) != 1 {
 		t.Fatalf("%+v", over)
 	}
@@ -424,8 +425,8 @@ func TestARefusalIsAFinding(t *testing.T) {
 			got = append(got, f.Message)
 		}
 	}
-	if len(got) != 1 || !strings.Contains(got[0], `subject "s" on juniper_junos (srx-fw-04, srx-fw-05, srx-fw-22, `+
-		`srx-lab-01) gets the fail-closed reply (refused_shape)`) ||
+	if len(got) != 1 || !strings.HasPrefix(got[0], `subject "s" on juniper_junos gets the fail-closed reply `+
+		`(refused_shape)`) || !strings.HasSuffix(got[0], "; on 4 devices: srx-fw-04, srx-fw-05, srx-fw-22, srx-lab-01") ||
 		!strings.Contains(got[0], `it is told every command denied but show version`) {
 		t.Fatalf("%q", got)
 	}
@@ -462,5 +463,136 @@ func TestAnUnreachedAllowIsReported(t *testing.T) {
 	e, err = p.Explain("s", "", "srx-fw-04", "show version", noon)
 	if c := strings.Join(e.Caveats, "\n"); err != nil || strings.Contains(c, "may refuse") {
 		t.Fatalf("%q %v", e.Caveats, err)
+	}
+}
+
+// Each finding says which moment it applies to (task 11 review I1): a
+// composition that holds until a grant expires says until when, and the one
+// that follows says from when, as a scheduled quarantine does.
+func TestAProjectionFindingSaysWhenItHolds(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: ok, privilege: readonly, permit: ["show version"]}
+  - {name: r, privilege: readonly, permit: ["show interfaces **"], deny: ["show interfaces terse"]}
+`+subjOK+`grants:
+  - {subject: s, scope: all_devices, roles: [ok]}
+  - {subject: s, scope: all_devices, roles: [r], expires: 2099-01-01}
+`)
+	var refused, projected []string
+	for _, f := range p.Lint(noon) {
+		switch f.Kind {
+		case FindingProjectionRefused:
+			refused = append(refused, f.Message)
+		case FindingProjection:
+			projected = append(projected, f.Message)
+		}
+	}
+	if len(refused) != 1 || !strings.HasPrefix(refused[0], `subject "s" on juniper_junos, until `+
+		`2099-01-01T00:00:00.000Z, when grant all_devices [r] expires, gets the fail-closed reply (refused_shape)`) {
+		t.Fatalf("refused: %q", refused)
+	}
+	if len(projected) != 1 || !strings.HasPrefix(projected[0], `subject "s" on juniper_junos, from `+
+		`2099-01-01T00:00:00.000Z, when grant all_devices [r] expires: narrow shape`) {
+		t.Fatalf("projected: %q", projected)
+	}
+}
+
+// Where one subject's composition differs by device, each projection
+// finding names its devices; a refusal names them after its reason, with a
+// count, so a fleet's list does not bury why (task 11 review M4, M5).
+func TestAProjectionFindingNamesItsDevicesWhereTheyDiffer(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+
+		"  - {name: fw04, match: {os_version: 21.4R3-S4}}\n"+`roles:
+  - {name: ok, privilege: readonly, permit: ["show version"]}
+  - {name: more, privilege: readonly, permit: ["show route"]}
+`+subjOK+`grants:
+  - {subject: s, scope: all_devices, roles: [ok]}
+  - {subject: s, scope: fw04, roles: [more]}
+`)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjection {
+			got = append(got, f.Message)
+		}
+	}
+	slices.Sort(got)
+	if len(got) != 2 || !strings.HasSuffix(got[0], "; on 1 device: srx-fw-04") ||
+		!strings.HasSuffix(got[1], "; on 3 devices: srx-fw-05, srx-fw-22, srx-lab-01") {
+		t.Fatalf("%q", got)
+	}
+}
+
+// No projection finding and no explain caveat prints a value redaction
+// hides (spec §5.8; task 11 review I2): a composition with such a rule is
+// refused as secret_rule, naming only the role, and the messages redact
+// every rule they list.
+func TestProjectionFindingsNeverPrintASecret(t *testing.T) {
+	const secret = "show system radius-server 10.0.0.1 secret HUNTER2"
+	for _, roles := range []string{
+		`permit: ["show **", "` + secret + `"]`,
+		`permit: ["show **"], deny: ["` + secret + `"]`,
+		`permit: ["show interfaces **", "show version", "` + secret + `"], deny: ["show interfaces terse"]`,
+	} {
+		p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+"roles:\n  - {name: r, privilege: readonly, "+
+			roles+"}\n"+subjOK+grantOK)
+		var all []string
+		secretRule := false
+		for _, f := range p.Lint(noon) {
+			if strings.HasPrefix(f.Kind, "projection") {
+				all = append(all, f.Message)
+				secretRule = secretRule || strings.Contains(f.Message, `(secret_rule): role "r" has a rule`)
+			}
+		}
+		for _, line := range []string{"", "show version", secret} {
+			e, err := p.Explain("s", "", "srx-fw-04", line, noon)
+			if err != nil {
+				t.Fatal(err)
+			}
+			all = append(all, e.Caveats...)
+		}
+		if !secretRule || strings.Contains(strings.Join(all, "\n"), "HUNTER2") {
+			t.Fatalf("%s:\n%s", roles, strings.Join(all, "\n"))
+		}
+	}
+	// Each message redacts what it lists itself, whatever reached it.
+	patterns := mustParse(t, readonlyCarveOut).Redactions()
+	rule := engine.Rule{Verdict: engine.Permit, Rule: secret, Role: "r"}
+	for _, msg := range []string{
+		projectionMessage(projection.Result{Shape: projection.ShapeCapability,
+			Denies: []engine.Rule{rule}, Allows: []engine.Rule{rule}, Omitted: []engine.Rule{rule},
+			Beyond: []engine.Rule{rule}, Unreached: []engine.Rule{rule}}, patterns),
+		second(refusedMessage(projection.Result{FailClosed: projection.FailOverflow,
+			Allows: []engine.Rule{rule}, Refusal: &projection.Refusal{Why: "w", Attribute: "deny-commands",
+				Value: "^(" + secret + ")$", Class: "p49-readonly"}}, patterns)),
+		second(refusedMessage(projection.Result{FailClosed: projection.FailRefusedShape,
+			Allows: []engine.Rule{rule}, Refusal: &projection.Refusal{Why: "w"}}, patterns)),
+	} {
+		if strings.Contains(msg, "HUNTER2") || !strings.Contains(msg, platform.Redacted) {
+			t.Errorf("%s", msg)
+		}
+	}
+}
+
+func second(_, b string) string { return b }
+
+// On the command path, a fail-closed composition's caveat names why, as the
+// session path and the finding do, and a line with no command still gets it
+// (task 11 review M2, M3).
+func TestTheFailClosedCaveatSaysWhy(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show interfaces **", "show version"], deny: ["show interfaces terse"]}
+`+subjOK+grantOK)
+	e, err := p.Explain("s", "", "srx-fw-04", "show version", noon)
+	if c := strings.Join(e.Caveats, "\n"); err != nil || !strings.Contains(c, "(refused_shape): on juniper_junos, "+
+		`permit "show interfaces **" (role "r") needs an allow-commands`) {
+		t.Fatalf("%q %v", e.Caveats, err)
+	}
+	res, _, err := p.Decide("s", "", p.env.Devices[slices.IndexFunc(p.env.Devices,
+		func(d admission.Device) bool { return d.Name == "srx-fw-04" })], "show version", noon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := strings.Join(ProjectionCaveats(res, "juniper_junos", engine.Outcome{}), "\n"); !strings.Contains(c,
+		"gets the fail-closed reply there") || strings.Contains(c, "the device runs") {
+		t.Fatalf("%q", c)
 	}
 }
