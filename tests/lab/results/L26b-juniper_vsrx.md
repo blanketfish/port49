@@ -92,10 +92,10 @@ Each hierarchy deny session that does not name `system` also typed `show configu
 
 ### The overlay
 
-`tests/lab/results/L26b-keywords-juniper_vsrx.yaml`, in platform.ParseKeywords form: a node's words are those this run proves (and, for the parent chain, `set`, `show` and `configuration`, which L26 proves); its `argument` is the node once the overlay is laid over this image's L26 tree: true where a placeholder is offered there, or a word offered there is proven by neither. It was computed against `tests/lab/results/L26-keywords-juniper_vsrx.yaml`, sha256 `9a7013ee7595d93571faea0987ee5a36036cb84a8bdccba447761770a455ad76`, and holds only against the tree that hashes to that.
+`tests/lab/results/L26b-keywords-juniper_vsrx.yaml`, in platform.ParseKeywords form: a node's words are those this run proves (and, for the parent chain, `set`, `show` and `configuration`, which L26 proves); its `argument` is the node once the overlay is laid over this image's L26 tree: true where a placeholder is offered there, or a word offered there is proven by neither. It was computed against `tests/lab/results/L26-keywords-juniper_vsrx.yaml`, sha256 `22616fc523baaef1618dc75dff972079485f121543c515f04054141f31300f80`, and holds only against the tree that hashes to that. This run computed it against an earlier L26 run of the image, whose tree hashed to 9a7013ee7595d93571faea0987ee5a36036cb84a8bdccba447761770a455ad76; an L26 rerun changed the tree, and the overlay was re-pinned to it from this run's listings and verdicts, with its nodes, words and arguments unchanged.
 
 ```yaml
-# computed against tests/lab/results/L26-keywords-juniper_vsrx.yaml sha256 9a7013ee7595d93571faea0987ee5a36036cb84a8bdccba447761770a455ad76
+# computed against tests/lab/results/L26-keywords-juniper_vsrx.yaml sha256 22616fc523baaef1618dc75dff972079485f121543c515f04054141f31300f80
 platform: juniper_junos
 nodes:
   "": {words: ["exit", "set", "show"], argument: false}

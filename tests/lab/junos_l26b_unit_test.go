@@ -214,7 +214,7 @@ func TestCommittedL26bVerdictsHold(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := l26bTreeSum(tree); got != m[2] {
+		if got := l26bTreeSum(tree); got != m[2] && os.Getenv("PORT49_L26B_REPIN") == "" {
 			t.Errorf("%s: %s hashes to %s, the overlay was computed against %s: rerun L26b", img, m[1], got, m[2])
 		}
 		want, err := l26bOverlay(img, tree, listings, proven)
@@ -225,6 +225,9 @@ func TestCommittedL26bVerdictsHold(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if os.Getenv("PORT49_L26B_REPIN") != "" && string(committed) != string(want) {
+			committed, note = l26bRepin(t, img, m[2], committed, want, note)
+		}
 		if string(committed) != string(want) {
 			t.Errorf("%s: the committed overlay is not what the note's listings and verdicts make:\n%s\nwant:\n%s", img,
 				committed, want)
@@ -233,6 +236,41 @@ func TestCommittedL26bVerdictsHold(t *testing.T) {
 			t.Errorf("%s: the note's overlay is not the committed one", img)
 		}
 	}
+}
+
+// l26bRepin re-pins an image's committed overlay, and its note, to the L26
+// tree now committed, when PORT49_L26B_REPIN is set: an L26 rerun changes the
+// tree's sha256, and the overlay the note's listings and verdicts make
+// against the new tree, want, is written in its place. It is refused, and
+// L26b rerun instead, unless want lists the same nodes, words and arguments
+// as the committed overlay: the new tree offers the same words where the
+// overlay reads it, so only the pinned sha256 changes. The note keeps the
+// sha256 its run was computed against, now the earlier run's, in a sentence.
+func l26bRepin(t *testing.T, img, was string, committed, want []byte, note string) ([]byte, string) {
+	t.Helper()
+	_, oldBody, _ := strings.Cut(string(committed), "\n")
+	_, newBody, _ := strings.Cut(string(want), "\n")
+	if oldBody != newBody {
+		t.Fatalf("%s: against the new L26 tree the overlay's nodes change: rerun L26b\n%s\nwas:\n%s", img, want, committed)
+	}
+	now := strings.Fields(strings.SplitN(string(want), "\n", 2)[0])[5]
+	lead := "and holds only against the tree that hashes to that."
+	if !strings.Contains(note, lead) {
+		t.Fatalf("%s: the note has no overlay paragraph to re-pin", img)
+	}
+	note = strings.Replace(note, "```yaml\n"+string(committed)+"```", "```yaml\n"+string(want)+"```", 1)
+	note = strings.Replace(note, "sha256 `"+was+"`", "sha256 `"+now+"`", 1)
+	note = strings.Replace(note, lead, lead+fmt.Sprintf(" This run computed it against an earlier L26 run of the image, "+
+		"whose tree hashed to %s; an L26 rerun changed the tree, and the overlay was re-pinned to it from this run's "+
+		"listings and verdicts, with its nodes, words and arguments unchanged.", was), 1)
+	if err := os.WriteFile(filepath.Join("results", "L26b-keywords-"+img+".yaml"), want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("results", "L26b-"+img+".md"), []byte(note), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%s: re-pinned the overlay from %s to %s", img, was, now)
+	return want, note
 }
 
 func TestCaretAt(t *testing.T) {

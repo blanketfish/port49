@@ -1,4 +1,4 @@
-# computed against tests/lab/results/L26-keywords-juniper_vsrx.yaml sha256 9a7013ee7595d93571faea0987ee5a36036cb84a8bdccba447761770a455ad76
+# computed against tests/lab/results/L26-keywords-juniper_vsrx.yaml sha256 22616fc523baaef1618dc75dff972079485f121543c515f04054141f31300f80
 platform: juniper_junos
 nodes:
   "": {words: ["exit", "set", "show"], argument: false}
