@@ -613,19 +613,21 @@ func HiddenValues(rules []Redaction, words []string) []string {
 }
 
 // RedactValues is line with every occurrence of each value that stands as a
-// word of its own, bounded by anything but a letter, a digit or `_`,
-// replaced by Redacted: a report that derives text from a secret-bearing
-// rule, a word it names or a fix it suggests, prints no more of the secret
-// than the rule's own quoted form does (spec §5.8).
+// word of its own, bounded by anything but a letter, a digit or `_`, and in
+// any letter case, replaced by Redacted: a report that derives text from a
+// secret-bearing rule, a word it names, prints no more of the secret than
+// the rule's own quoted form does (spec §5.8). A value split or otherwise
+// rewritten is past it, and is left out where the text is made.
 func RedactValues(values []string, line string) string {
 	for _, v := range values {
 		if v == "" || v == Redacted {
 			continue
 		}
+		lv := asciiLower(v)
 		var b strings.Builder
 		rest := line
 		for {
-			i := strings.Index(rest, v)
+			i := strings.Index(asciiLower(rest), lv)
 			if i < 0 {
 				b.WriteString(rest)
 				break
@@ -643,6 +645,18 @@ func RedactValues(values []string, line string) string {
 		line = b.String()
 	}
 	return line
+}
+
+// asciiLower is s with its ASCII letters lowered and every other byte kept,
+// so an index into it is an index into s.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 func wordByte(c byte) bool {

@@ -239,7 +239,7 @@ func (p *Policy) JoinedNamePermits() []Finding {
 			platforms[d.Platform] = true
 		}
 	}
-	patterns := p.Redactions()
+	secrets := p.HiddenValues()
 	var out []Finding
 	for _, name := range sortedKeys(p.roles) {
 		for _, rule := range p.roles[name].Permit {
@@ -247,13 +247,13 @@ func (p *Policy) JoinedNamePermits() []Finding {
 			if err != nil {
 				continue
 			}
-			// A word redaction hides is never named, nor split into the fix:
-			// rule_secret_literal reports that rule, and `HUNTER 2` would
-			// print the secret past any writer (spec §5.8).
-			hidden := platform.HiddenValues(patterns, strings.Fields(rule))
+			// A word redaction hides, in this rule or any other, is never
+			// named, nor split into the fix: rule_secret_literal reports the
+			// rule that carries it, and `HUNTER 2` would print the secret
+			// past any writer (spec §5.8).
 			for _, plat := range sortedKeys(platforms) {
 				for _, t := range terms {
-					if slices.Contains(hidden, t.Text) {
+					if hidden(secrets, t.Text) {
 						continue
 					}
 					if head, index, ok := engine.SplitName(t.Text); ok && t.Kind == engine.Word {
@@ -299,6 +299,14 @@ func (p *Policy) HiddenValues() []string {
 		}
 	}
 	return out
+}
+
+// hidden reports whether word is, in any letter case, one of values, the
+// values a redaction hides (HiddenValues): text derived from it, split,
+// joined or re-cased, is left out where it is made, since no writer
+// recognizes a rewritten secret (spec §5.8).
+func hidden(values []string, word string) bool {
+	return slices.ContainsFunc(values, func(v string) bool { return strings.EqualFold(v, word) })
 }
 
 // SecretClasses is every entity class a role's rule names where a value is

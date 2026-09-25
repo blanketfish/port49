@@ -979,22 +979,39 @@ key_groups:
 		t.Fatal(err)
 	}
 	raw := string(readFile(t, pol))
+	// A second rule names the value re-cased and with no secret keyword
+	// before it, and a test types it on IOS-XE, which splits it: no text
+	// derived from the value, joined, split or re-cased, prints (re-review
+	// R1).
 	withSecret := strings.Replace(raw, "permit: [show **]}",
-		`permit: [show **, "show system radius-server 10.0.0.1 secret HUNTER2", "show interfaces Gi1"]}`, 1)
+		`permit: [show **, "show system radius-server 10.0.0.1 secret HUNTER2", "show interfaces Gi1", `+
+			`"show running-config HunTer2"]}`, 1)
 	if withSecret == raw {
 		t.Fatal("the fixture's permit moved")
 	}
+	withSecret += "  - {subject: noc, device: xe-01, command: \"show system radius-server 10.0.0.1 secret HunTer2\", " +
+		"expect: deny}\n"
 	if err := os.WriteFile(pol, []byte(withSecret), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
 	run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
 	got := out.String() + errb.String()
-	if strings.Contains(got, "HUNTER") {
+	if strings.Contains(strings.ToUpper(got), "HUNTER") {
 		t.Fatalf("policy test printed the secret:\n%s", got)
 	}
 	// The finding still fires for a joined name that is no secret.
 	if !strings.Contains(got, "`Gi1` never matches on cisco_iosxe") {
 		t.Fatalf("the joined-name finding is gone:\n%s", got)
+	}
+	// explain types a value the policy never wrote: the line's own
+	// redaction hides it, and the split note is left out with it.
+	out.Reset()
+	errb.Reset()
+	run([]string{"explain", "--policy", pol, "--inventory", inv, "--subject", "noc", "--device", "xe-01",
+		"--command", "show system radius-server 10.0.0.1 secret SEKRIT9"}, &out, &errb)
+	if got := strings.ToUpper(out.String() + errb.String()); strings.Contains(got, "SEKRIT") ||
+		!strings.Contains(got, "SECRET «REDACTED»") {
+		t.Fatalf("explain printed the secret:\n%s%s", out.String(), errb.String())
 	}
 }

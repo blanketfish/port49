@@ -544,7 +544,7 @@ func TestHiddenValuesAreRedactedWhereverALinePrintsThem(t *testing.T) {
 	if got := HiddenValues(rules, strings.Fields("show version")); got != nil {
 		t.Fatalf("%q", got)
 	}
-	line := "`HUNTER2` never matches; write `HUNTER2x` or HUNTER2, not xHUNTER2"
+	line := "`HUNTER2` never matches; write `HUNTER2x` or HunTer2, not xHUNTER2"
 	if got, want := RedactValues([]string{"HUNTER2"}, line),
 		"`«redacted»` never matches; write `HUNTER2x` or «redacted», not xHUNTER2"; got != want {
 		t.Fatalf("%q", got)

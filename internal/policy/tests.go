@@ -52,11 +52,21 @@ func (p *Policy) commandRaw(line, platformName string) (raw, split []string) {
 	return out, split
 }
 
-// splitNotes is the caveat for a line commandRaw split on platformName.
+// splitNotes is the caveat for a line commandRaw split on platformName. It
+// is left out where a word split is a value redaction hides, in the line or
+// in the policy's rules: the note would print it split, which no writer
+// recognizes (spec §5.8).
 func (p *Policy) splitNotes(line, platformName string) []string {
 	_, split := p.commandRaw(line, platformName)
 	if len(split) == 0 {
 		return nil
+	}
+	words := strings.Fields(line)
+	secrets := append(platform.HiddenValues(p.Redactions(), words), p.HiddenValues()...)
+	for _, w := range words {
+		if _, _, ok := engine.SplitName(w); ok && hidden(secrets, w) {
+			return nil
+		}
 	}
 	return []string{fmt.Sprintf("%s splits an interface name from its index, so this was evaluated as IOS-XE sends "+
 		"an interface name (tests/lab/results/L21-cisco_iosxe.md): %s; a word here that is not an interface name "+
