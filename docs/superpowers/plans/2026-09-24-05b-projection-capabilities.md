@@ -115,8 +115,15 @@ grammar, so it cannot tell a keyword from an argument.
   configuration mode under `deny-commands=^set system host-name( .*)?$`, as in the control. The
   generator must never rely on deny-commands to stop a configuration statement. A deny naming one,
   or able to match one, fails like an argument deny: `policy test` fails with a clear message, and
-  that subject gets the fail-closed reply. The exception is a composition whose configuration bits
-  are dropped entirely. `deny-configuration` support is not added here; it is carried.
+  that subject gets the fail-closed reply. The lead's exception, a composition whose configuration
+  bits are dropped entirely, is not taken (pre-flight B-M2): such a deny still fails closed,
+  because port49 cannot prove its words are not an operational command the capture never saw, and
+  the message says to drop the rule. `deny-configuration` support is not added here; it is carried.
+- **Whether deny-commands binds a NETCONF RPC is unmeasured** (pre-flight B1). The token that opens
+  the CLI opens `ssh -s netconf` with the same reply. If denies bind CLI lines only, every deny is
+  walked around by the equivalent RPC (`<get-configuration>` past `deny show configuration **`).
+  Task 3b measures it, because the answer can change set 1.1.0 (Task 14, branch M), and Task 19
+  keeps a NETCONF check.
 - **`DenyMatchesExpanded` stays false in set 1.1.0** (the lead's ruling) until more abbreviations are
   measured: Task 2's reading rests on one (`sh ver`). Task 3b adds a probe set, and Task 14's branch B
   sets it true only if every probe is refused on both images. Until then compositions that rely on
@@ -175,7 +182,8 @@ grammar, so it cannot tell a keyword from an argument.
    two and three keywords, each abbreviated at several lengths, two piped, and one ambiguous at the
    second level. Branch B sets the fact `true` only where both images' notes say `true`.
 7. **Configuration mode never depends on `deny-commands`.** A reply that lets the session enter
-   configuration mode — a bit whose reach holds `configure`, or an allow meeting it — carries no deny
+   configuration mode — a bit whose reach holds `configure` or `edit`, its alias, or an allow meeting
+   either (pre-flight B-M1) — carries no deny
    at all (Task 8's `configuration`; the grant must be every command with no deny), so nothing a
    deny names is ever left to deny-commands in configuration mode. The admin-with-deny path under
    `user_permissions` drops every bit that enters configuration mode and refuses an allow meeting
@@ -218,8 +226,8 @@ them edits `internal/platform/adapter.go`, `dialect.go` or `internal/policy/load
   warning.
 - **Task 12**: unchanged; `policy diff` fails on the same finding.
 - **Task 14**: new step, "Ship the keyword tree"; branch B keeps `DenyMatchesExpanded` false unless
-  every Task 3b abbreviation probe is refused on both images; branch J records that deny-commands
-  does not reach configuration mode; branch A lists nothing about arguments, which decision 27
+  every Task 3b abbreviation probe is refused on both images; new branch M acts on the NETCONF
+  measurement; branch J records that deny-commands does not reach configuration mode; branch A lists nothing about arguments, which decision 27
   handles.
 - **Task 19**: five more shapes and one more probe.
 - **Task 20**: L26 closes, the tree is frozen, and the roadmap records decision 27.
@@ -246,17 +254,20 @@ Check: `git show --stat <this amendment's commit>` lists the spec and this plan 
 ### Task 3b: (lab, on beehive) The Junos CLI keyword tree, and keyword abbreviations: L26 and L9
 
 **Files:**
-- Create: `tests/lab/junos_keywords_test.go`, `tests/lab/junos_abbrev_test.go`
+- Create: `tests/lab/junos_keywords_test.go`, `tests/lab/junos_abbrev_test.go`,
+  `tests/lab/junos_netconf_test.go`
 - Results (written by the run): `tests/lab/results/L26-juniper_vjunos-router.md`,
   `L26-juniper_vsrx.md`, the trees `L26-keywords-juniper_vjunos-router.yaml`,
-  `L26-keywords-juniper_vsrx.yaml`, and `L9-abbreviations-juniper_*.md`; evidence
-  `L26-juniper_*.pcap`, `L9-abbreviations-juniper_*.pcap`
+  `L26-keywords-juniper_vsrx.yaml`, `L9-abbreviations-juniper_*.md` and `L12-netconf-juniper_*.md`;
+  evidence `L26-juniper_*.pcap`, `L9-abbreviations-juniper_*.pcap`, `L12-netconf-juniper_*.pcap`
 
 **Interfaces:**
 - Consumes (harness): `eachPlatform`, `l.capture`, `l.junosCLI`, `junosPrepare`, `c.sendExpect`,
   `c.expectFrom`, `junosOpPrompt`, `junosPer`, `l.result`, `root`, `breakglassUser`,
   `breakglassPassword`; Task 2's `junosSession`, `junosConfigureAdmin`, `junosRun`, `tableCell`,
-  `commitWord`, `l.configPath`, `l.restart`.
+  `commitWord`, `l.configPath`, `l.restart`, `l.derivedConfigCmd`, `l.nextLogin`; the harness's
+  `netconfDial`, `netconfConn.rpc`, `netconfPort`.
+- Produces, for Task 19: `junosNetconfRPCs` and `netconfCell`.
 - Produces: the two per-image trees Task 14 merges, in the form `platform.ParseKeywords` (Task 12a)
   reads.
 
@@ -290,8 +301,23 @@ lengths (`sh ver`, `sho vers`, `show versi`; `sh int ter`, `sh interfaces te`), 
 no-more`, `sh int ter | count`), and `sh i terse`, which is ambiguous after `show`. The control's
 answer says which probe is ambiguous on the image; one it refused for any other reason measured
 nothing and fails the test. The note's line `JunosFacts.DenyMatchesExpanded (keywords) = true`
-holds only where the deny refused every probe and the control ran every unambiguous one. It spends
-two seeded tokens.
+holds only where the deny refused every probe and the control ran every unambiguous one. The deny
+is written exactly as the generator renders one (`show +version( *\|.*)?`, …; pre-flight B-M3).
+Four odd probes, from the Task 7 review, are recorded whatever the control does: `ſhow version`
+(U+017F, which case-folds to `s`), and a denied command padded with leading and with trailing
+spaces, no pipe. Where the control runs one, the deny must refuse it, or the fact stays false. It
+spends two seeded tokens.
+
+`TestL12JunosNetconf` measures whether a wire deny, and the fail-closed reply, bind a NETCONF RPC
+(pre-flight B1). Four NETCONF sessions, each opened with a fresh token under its own reply, send
+`<get-configuration/>` and `<get-software-information/>`, the equivalents of `show configuration`
+and `show version`: a control class holding view and view-configuration; the same class under a
+deny naming both commands, as rendered; the fail-closed reply with no template (`remote`'s class);
+and the fail-closed reply over a bitless template with `user-permissions=view view-configuration`.
+The hello has 45 s and each RPC 60 s; a reply that is neither the output nor an `<rpc-error>` is
+not observed and fails the test. The note's line `deny-commands and the fail-closed reply bind
+NETCONF RPCs: true` holds only where the control ran both and every other session refused both. It
+spends four seeded tokens, six with the abbreviations, of the sixteen.
 
 - [ ] **Step 1: Add the test**
 
@@ -726,10 +752,10 @@ index 0000000..6719eb0
 ````diff
 diff --git a/tests/lab/junos_abbrev_test.go b/tests/lab/junos_abbrev_test.go
 new file mode 100644
-index 0000000..c6f5999
+index 0000000..424a830
 --- /dev/null
 +++ b/tests/lab/junos_abbrev_test.go
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,145 @@
 +//go:build lab
 +
 +package lab
@@ -761,16 +787,23 @@ index 0000000..c6f5999
 +
 +var junosAbbrevDelete = []string{"delete system login user p49-l9-all", "delete system login class p49-l9-all"}
 +
-+// junosAbbrevDeny names five commands of two and three keywords, the pipe tail
-+// the projection writes after each.
-+const junosAbbrevDeny = `^(show version|show interfaces terse|show system uptime|show route summary|` +
-+	`show chassis hardware)( *\\|.*)?$`
++// junosAbbrevDeny names five commands of two and three keywords exactly as
++// the generator renders a deny (ruleERE, pre-flight B-M3): words joined by
++// ` +`, each rule with its pipe tail, one alternation, anchored. Its letters
++// are lower case, as with CaseSensitive false; the bracketed form a
++// case-sensitive device gets matches everything this does and more, so a
++// probe this refuses, that refuses too.
++const junosAbbrevDeny = `^(show +version( *\\|.*)?|show +interfaces +terse( *\\|.*)?|show +system +uptime( *\\|.*)?|` +
++	`show +route +summary( *\\|.*)?|show +chassis +hardware( *\\|.*)?)$`
 +
 +// junosAbbrevProbe is one abbreviation, and whether the CLI may find it
-+// ambiguous, in which case the control need not run it.
++// ambiguous, in which case the control need not run it. An odd probe is one
++// the CLI may refuse outright in the control, which is recorded, not failed:
++// where the control runs it, the deny must refuse it as any other.
 +type junosAbbrevProbe struct {
 +	cmd       string
 +	ambiguous bool
++	odd       bool
 +}
 +
 +var junosAbbrevProbes = []junosAbbrevProbe{
@@ -783,6 +816,10 @@ index 0000000..c6f5999
 +	{cmd: "show chassis hardware"}, {cmd: "sh chas hard"}, {cmd: "sh chassis hardw"},
 +	// `i` is ambiguous after `show` (interfaces, igmp, ike, ...).
 +	{cmd: "sh i terse", ambiguous: true},
++	// The Task 7 review's: a lookalike letter (U+017F, which case-folds to
++	// `s`), and a denied command padded with spaces, no pipe.
++	{cmd: "\u017fhow version", odd: true}, {cmd: "   show version", odd: true}, {cmd: "show version   ", odd: true},
++	{cmd: "   sh int ter   ", odd: true},
 +}
 +
 +func TestL9JunosAbbreviations(t *testing.T) {
@@ -826,7 +863,7 @@ index 0000000..c6f5999
 +			ranDeny := deny.ran(p.cmd) && !ambiguous(deny, p.cmd)
 +			// The control's own answer says which abbreviation is ambiguous on
 +			// this image; one it refused for any other reason measures nothing.
-+			if !ranControl && !ambiguous(control, p.cmd) {
++			if !ranControl && !ambiguous(control, p.cmd) && !p.odd {
 +				t.Errorf("the control did not run %q, so the deny's cell measures nothing: %s", p.cmd,
 +					oneLine(control.outs[p.cmd]))
 +				expanded = false
@@ -837,7 +874,7 @@ index 0000000..c6f5999
 +			if ranDeny {
 +				expanded = false
 +			}
-+			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", tableCell(p.cmd), ranWord(ranControl, ambiguous(control, p.cmd)),
++			fmt.Fprintf(&b, "| %s | %s | %s |\n", tableCell(fmt.Sprintf("%q", p.cmd)), ranWord(ranControl, ambiguous(control, p.cmd)),
 +				ranWord(ranDeny, ambiguous(deny, p.cmd)))
 +		}
 +		fmt.Fprintf(&b, "\n### Read off the table\n\n- JunosFacts.DenyMatchesExpanded (keywords) = %v: true only "+
@@ -866,6 +903,179 @@ index 0000000..c6f5999
 +}
 ````
 
+<!-- patch: tests/lab/junos_netconf_test.go -->
+````diff
+diff --git a/tests/lab/junos_netconf_test.go b/tests/lab/junos_netconf_test.go
+new file mode 100644
+index 0000000..ea99735
+--- /dev/null
++++ b/tests/lab/junos_netconf_test.go
+@@ -0,0 +1,163 @@
++//go:build lab
++
++package lab
++
++import (
++	"fmt"
++	"strings"
++	"testing"
++)
++
++// TestL12JunosNetconf asks whether a wire deny-commands, and the fail-closed
++// reply, bind a NETCONF RPC (spec §15 L12; decision 27; plan 5b pre-flight
++// B1). The token that opens an SSH CLI also opens `ssh -s netconf`, and the
++// session gets the same reply (L14). If Junos applies deny-commands to CLI
++// command lines only, every deny port49 sends is walked around by the RPC
++// that does the same thing: `<get-configuration>` past `deny show
++// configuration **`. The answer can change set 1.1.0 (Task 14, branch M), so
++// it is measured here, before the code is final.
++//
++// Four sessions, each a NETCONF session opened with a fresh seeded token
++// under its own reply, each sending two RPCs, the equivalents of two denied
++// commands: `<get-configuration/>` (`show configuration`) and
++// `<get-software-information/>` (`show version`). The control's class holds
++// view and view-configuration and no regex, so both run. Then the same class
++// under a deny naming both commands, as the generator renders it; the
++// fail-closed reply under local_user_name (no template: the `remote` user's
++// class, which in the lab holds the same bits); and the fail-closed reply
++// under user_permissions, the same bits sent over a bitless template. Every
++// read has a deadline (the hello 45 s, each RPC 60 s); a reply that is
++// neither the RPC's output nor an `<rpc-error>` is not observed and fails the
++// test. Four seeded tokens.
++
++var junosNetconfClass = []string{
++	"set system login class p49-nc-ro permissions [ view view-configuration ]",
++	"set system login user p49-nc-ro class p49-nc-ro",
++	"set system login class p49-nc-none idle-timeout 60",
++	"set system login user p49-nc-none class p49-nc-none",
++}
++
++var junosNetconfDelete = []string{"delete system login user p49-nc-ro", "delete system login class p49-nc-ro",
++	"delete system login user p49-nc-none", "delete system login class p49-nc-none"}
++
++// junosNetconfDeny names `show configuration **` and `show version` as the
++// generator renders a deny (ruleERE; words joined by ` +`, the pipe tail).
++const junosNetconfDeny = `^(show +configuration( .*)?( *\\|.*)?|show +version( *\\|.*)?)$`
++
++var junosNetconfVariants = []junosVariant{
++	{"control", `["local-user-name=p49-nc-ro"]`, "view and view-configuration, no regex: both RPCs run"},
++	{"deny", `["local-user-name=p49-nc-ro", "deny-commands=` + junosNetconfDeny + `"]`,
++		"the same class under a deny naming both commands"},
++	{"fail-closed, local_user_name", `["deny-commands=^.*$"]`,
++		"decision 26's reply with no template: the session lands in remote's class"},
++	{"fail-closed, user_permissions", `["local-user-name=p49-nc-none", "user-permissions=view view-configuration", "deny-commands=^.*$"]`,
++		"decision 26's reply with bits over a bitless template"},
++}
++
++// junosNetconfRPCs are the RPCs sent in each session, each with the element
++// its output holds and the CLI command it stands for.
++var junosNetconfRPCs = []struct{ rpc, evidence, command string }{
++	{"<get-configuration/>", "<configuration", "show configuration"},
++	{"<get-software-information/>", "<software-information", "show version"},
++}
++
++// netconfCell is one RPC's outcome: ran, refused, or not observed.
++func netconfCell(reply, evidence string) string {
++	switch {
++	case strings.Contains(reply, "<rpc-error>"):
++		return "refused"
++	case strings.Contains(reply, evidence):
++		return "ran"
++	}
++	return "not observed"
++}
++
++func TestL12JunosNetconf(t *testing.T) {
++	eachPlatform(t, func(t *testing.T, l *lab) {
++		if l.p.name != "juniper_vjunos-router" && l.p.name != "juniper_vsrx" {
++			t.Skip("Junos only")
++		}
++		if netconfPort(l.p) == "" {
++			t.Fatalf("%s: this lab does not enable NETCONF, so nothing can be measured", l.p.name)
++		}
++		stop := l.capture(t, "L12-netconf")
++		defer stop()
++		commit := l.junosConfigureAdmin(t, junosNetconfClass)
++		defer l.junosConfigureAdmin(t, junosNetconfDelete)
++		defer func() {
++			if std, err := l.configPath(); err == nil {
++				if err := l.restart(std); err != nil {
++					t.Errorf("could not put port49d back on the lab config: %v", err)
++				}
++			}
++		}()
++		cells := make([][]string, len(junosNetconfVariants))
++		replies := make([][]string, len(junosNetconfVariants))
++		for i, v := range junosNetconfVariants {
++			cfg, err := l.derivedConfigCmd("junos-nc-"+l16Slug(v.name), v.attrs, "", "")
++			if err == nil {
++				err = l.restart(cfg)
++			}
++			if err != nil {
++				t.Fatalf("%s: port49d with %s: %v", v.name, v.attrs, err)
++			}
++			user, secret := l.nextLogin(t)
++			n, hello, err := l.netconfDial(user, secret)
++			if err != nil {
++				t.Fatalf("%s: the NETCONF session did not open, so nothing was measured: %v (%s)", v.name, err,
++					oneLine(hello))
++			}
++			for k, r := range junosNetconfRPCs {
++				reply, err := n.rpc(k+1, r.rpc)
++				cell := netconfCell(reply, r.evidence)
++				if err != nil || cell == "not observed" {
++					t.Errorf("%s: %s not observed: %v %s", v.name, r.rpc, err, oneLine(reply))
++					cell = "not observed"
++				}
++				cells[i] = append(cells[i], cell)
++				replies[i] = append(replies[i], reply)
++			}
++			n.Close()
++		}
++		ranControl := cells[0][0] == "ran" && cells[0][1] == "ran"
++		if !ranControl {
++			t.Errorf("the control did not run both RPCs, so no deny is measured: %v", cells[0])
++		}
++		bound := ranControl
++		for _, row := range cells[1:] {
++			for _, c := range row {
++				bound = bound && c == "refused"
++			}
++		}
++		var b strings.Builder
++		fmt.Fprintf(&b, "The classes were committed: %s.\n\n```\n%s\n```\n\n", commitWord(commit),
++			strings.Join(junosNetconfClass, "\n"))
++		b.WriteString("| session | reply | why | `get-configuration` | `get-software-information` |\n|---|---|---|---|---|\n")
++		for i, v := range junosNetconfVariants {
++			fmt.Fprintf(&b, "| %s | `%s` | %s | %s | %s |\n", v.name, tableCell(v.attrs), v.why, cells[i][0], cells[i][1])
++		}
++		fmt.Fprintf(&b, "\n### Read off the table\n\n- deny-commands and the fail-closed reply bind NETCONF RPCs: %v "+
++			"(true only where the control ran both RPCs and every other session refused both; set 1.1.0 takes it "+
++			"as bound only where both images say true)\n", bound)
++		for i, v := range junosNetconfVariants {
++			fmt.Fprintf(&b, "\n### %s\n", v.name)
++			for k, r := range junosNetconfRPCs {
++				fmt.Fprintf(&b, "\n`%s`:\n\n```\n%s\n```\n", r.rpc, orEmpty([]string{firstLines(replies[i][k], 30)}, 0))
++			}
++		}
++		l.result(t, "L12-netconf", "Over TACACS+ on `junos-exec`: whether a wire deny-commands, and decision 26's "+
++			"fail-closed reply, bind a NETCONF RPC opened with the same token and reply, "+
++			"`<get-configuration>` and `<get-software-information>` beside `show configuration` and `show version` "+
++			"(spec §15 L12; decision 27).", b.String())
++	})
++}
++
++// firstLines is at most n lines of s: an RPC's output is the configuration,
++// and the note needs only enough of it to show what ran.
++func firstLines(s string, n int) string {
++	lines := strings.Split(s, "\n")
++	if len(lines) <= n {
++		return s
++	}
++	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\n… (%d more lines)", len(lines)-n)
++}
+````
+
 - [ ] **Step 2: Compile it**
 
 Run: `go vet -tags lab ./tests/lab/...`
@@ -874,7 +1084,7 @@ Expected: no output.
 - [ ] **Step 3: Run it on vJunos-router, then vSRX**
 
 ```bash
-PORT49_LAB_PLATFORMS=vjunos go test -tags lab ./tests/lab/ -run '^(TestL26JunosKeywords|TestL9JunosAbbreviations)$' \
+PORT49_LAB_PLATFORMS=vjunos go test -tags lab ./tests/lab/ -run '^(TestL26JunosKeywords|TestL9JunosAbbreviations|TestL12JunosNetconf)$' \
   -count=1 -v -timeout 240m > tests/lab/logs/l26-keywords-vjunos.log 2>&1 &
 echo $! > tests/lab/logs/l26-keywords-vjunos.pid
 ```
@@ -885,18 +1095,21 @@ well inside the stall bound. Then the same with `PORT49_LAB_PLATFORMS=vsrx`. Nob
 build` during a run: the harness grants `bin/port49d` its capability once, at the start.
 
 Expected: PASS on both images, `wrote tests/lab/results/L26-juniper_<image>.md` and
-`L9-abbreviations-juniper_<image>.md`, and the two `L26-keywords-*.yaml` files. A `not observed`
+`L9-abbreviations-juniper_<image>.md` and `L12-netconf-juniper_<image>.md`, and the two
+`L26-keywords-*.yaml` files. A `not observed`
 failure measured nothing: rerun.
 
 - [ ] **Step 4: Commit the test, the notes, the trees and the evidence**
 
 ```bash
 make evidence
-git add tests/lab/junos_keywords_test.go tests/lab/junos_abbrev_test.go tests/lab/results/L26-juniper_*.md \
-  tests/lab/results/L26-keywords-juniper_*.yaml tests/lab/results/L9-abbreviations-juniper_*.md \
-  tests/lab/evidence/L26-juniper_*.pcap tests/lab/evidence/L9-abbreviations-juniper_*.pcap
+git add tests/lab/junos_keywords_test.go tests/lab/junos_abbrev_test.go tests/lab/junos_netconf_test.go \
+  tests/lab/results/L26-juniper_*.md tests/lab/results/L26-keywords-juniper_*.yaml \
+  tests/lab/results/L9-abbreviations-juniper_*.md tests/lab/results/L12-netconf-juniper_*.md \
+  tests/lab/evidence/L26-juniper_*.pcap tests/lab/evidence/L9-abbreviations-juniper_*.pcap \
+  tests/lab/evidence/L12-netconf-juniper_*.pcap
 git commit -m "$(cat <<'EOF'
-test: capture the Junos CLI keyword tree, and measure keyword abbreviations (L26, L9)
+test: capture the Junos CLI keyword tree, keyword abbreviations and NETCONF (L26, L9, L12)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -937,8 +1150,10 @@ nothing: on a projected platform with no tree every live deny fails closed and n
 `render` refuses, before any shape, a deny that meets a permit and is not keyword-only, with the
 ruling's message and the proven keyword prefix as the whole command to deny instead; where the deny
 begins with a configuration verb the refusal is `configuration_deny`, saying deny-commands never
-reaches configuration mode (item 7 above). The tests also assert that no reply carrying a deny lets
-the device run `configure`. `capability`
+reaches configuration mode (item 7 above). The configuration guard names `edit`, the operational
+alias for `configure`, beside it (pre-flight B-M1), and the tests assert that no reply carrying a
+deny lets the device run `configure`, `configure private`, `configure exclusive`, `configure
+batch` or `edit`. `capability`
 goes narrow where a deny it would send is not keyword-only (no permit meets it; `.*` holds it).
 `capability`, `narrow` and `failClosed` leave an allow off where `unsendableAllow` says why, into
 `Result.Unsent`. The policy passes the pinned set's tree (`setKeywords`, which the tests point at the
@@ -1154,7 +1369,7 @@ index 0000000..beafd6c
 <!-- patch: internal/projection/project_test.go -->
 ````diff
 diff --git a/internal/projection/project_test.go b/internal/projection/project_test.go
-index 09275da..254db9f 100644
+index 09275da..7dbf379 100644
 --- a/internal/projection/project_test.go
 +++ b/internal/projection/project_test.go
 @@ -3,6 +3,7 @@ package projection
@@ -1241,7 +1456,7 @@ index 09275da..254db9f 100644
  	}
  	res, err = Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, rules...))
  	if r := res.Refusal; err != nil || res.FailClosed != FailOverflow || r.Attribute != "allow-commands" ||
-@@ -352,3 +407,105 @@ func TestWidens(t *testing.T) {
+@@ -352,3 +407,117 @@ func TestWidens(t *testing.T) {
  		t.Error("a widening by a command names it")
  	}
  }
@@ -1336,13 +1551,25 @@ index 09275da..254db9f 100644
 +		res.Device([]string{"configure"}) || res.Device([]string{"set", "cli", "screen-width", "80"}) {
 +		t.Fatalf("%+v %v", res, err)
 +	}
-+	// No reply that carries a deny can enter configuration mode.
++	// No reply that carries a deny can enter configuration mode, by
++	// `configure`, its variants or `edit`, its alias (pre-flight B-M1).
++	entries := [][]string{{"configure"}, {"configure", "private"}, {"configure", "exclusive"},
++		{"configure", "batch"}, {"edit"}}
 +	for _, rules := range [][]engine.Rule{{permit("**"), deny("request system reboot")},
-+		{permit("show **"), permit("configure"), deny("show version")}} {
++		{permit("show **"), permit("configure"), deny("show version")},
++		{permit("show **"), permit("edit **"), deny("show version")}} {
 +		for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
 +			res, err := Project(input(delivery, "admin", measured, rules...))
-+			if err != nil || (len(res.Denies) > 0 || res.Shape != ShapeCapability) && res.Device([]string{"configure"}) {
-+				t.Errorf("%s %v: a reply with a deny enters configuration mode: %q %v", delivery, rules, res.Attributes, err)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if len(res.Denies) == 0 && res.Shape == ShapeCapability {
++				continue
++			}
++			for _, e := range entries {
++				if res.Device(e) {
++					t.Errorf("%s %v: a reply with a deny runs %q: %q", delivery, rules, e, res.Attributes)
++				}
 +			}
 +		}
 +	}
@@ -1799,7 +2026,7 @@ index 0000000..146c797
 <!-- patch: internal/projection/project.go -->
 ````diff
 diff --git a/internal/projection/project.go b/internal/projection/project.go
-index 3beb309..1eb1439 100644
+index 3beb309..321c77d 100644
 --- a/internal/projection/project.go
 +++ b/internal/projection/project.go
 @@ -39,6 +39,15 @@ const (
@@ -1871,7 +2098,33 @@ index 3beb309..1eb1439 100644
  	res, err := g.shape()
  	var r *Refusal
  	if !errors.As(err, &r) || r.Category != FailConfigurationMode ||
-@@ -440,6 +474,10 @@ func (g generator) capability() (Result, error) {
+@@ -299,9 +333,23 @@ func (g generator) carves(held []string) []string {
+ 	return out
+ }
+ 
+-// entersConfiguration reports whether bit b's reach holds `configure`.
++// entersConfiguration reports whether bit b's reach holds a command that enters
++// configuration mode (configurationEntries).
+ func (g generator) entersConfiguration(b string) bool {
+-	return slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool { return g.contains(r, "configure") })
++	return slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool {
++		return slices.ContainsFunc(configurationEntries, func(e string) bool { return g.contains(r, e) })
++	})
++}
++
++// configurationEntries are the operational commands that enter configuration
++// mode: `configure` and its variants (`configure private`, `exclusive`,
++// `batch` begin with it), and `edit`, its alias (plan 5b pre-flight B-M1).
++var configurationEntries = []string{"configure", "edit"}
++
++// meetsConfiguration reports whether rule meets a command that enters
++// configuration mode.
++func (g generator) meetsConfiguration(rule string) bool {
++	return slices.ContainsFunc(configurationEntries, func(e string) bool { return g.mayMeet(rule, e+" **") })
+ }
+ 
+ // plain is bits without the ones that enter configuration mode.
+@@ -440,6 +488,10 @@ func (g generator) capability() (Result, error) {
  		if dn, ok := g.allowable(p.Rule); !ok {
  			return Result{}, g.refusedShape(p, dn)
  		}
@@ -1882,7 +2135,7 @@ index 3beb309..1eb1439 100644
  		res.Allows = append(res.Allows, p)
  	}
  	for _, dn := range g.denies {
-@@ -452,6 +490,13 @@ func (g generator) capability() (Result, error) {
+@@ -452,6 +504,13 @@ func (g generator) capability() (Result, error) {
  	if len(res.Denies) > 0 && !g.in.Facts.DenyMatchesExpanded {
  		return Result{}, &narrowOnly{"a deny narrower than every command is walked past by abbreviating it"}
  	}
@@ -1896,7 +2149,16 @@ index 3beb309..1eb1439 100644
  	return res, nil
  }
  
-@@ -518,6 +563,10 @@ func (g generator) narrow() (Result, error) {
+@@ -485,7 +544,7 @@ func (g generator) configuration(res Result) error {
+ 		}
+ 	}
+ 	for _, a := range res.Allows {
+-		if what == "" && g.mayMeet(a.Rule, "configure **") {
++		if what == "" && g.meetsConfiguration(a.Rule) {
+ 			what = fmt.Sprintf("allow %q", a.Rule)
+ 		}
+ 	}
+@@ -518,6 +577,10 @@ func (g generator) narrow() (Result, error) {
  		if dn, ok := g.allowable(p.Rule); !ok {
  			return Result{}, g.refusedShape(p, dn)
  		}
@@ -1907,7 +2169,12 @@ index 3beb309..1eb1439 100644
  		res.Allows = append(res.Allows, p)
  	}
  	if g.in.Dialect.BitDelivery == platform.BitDeliveryLocalUserName {
-@@ -666,6 +715,10 @@ func (g generator) failClosed(r *Refusal) (Result, error) {
+@@ -662,10 +725,14 @@ func (g generator) failClosed(r *Refusal) (Result, error) {
+ 		_, ok := h.allowable(p.Rule)
+ 		secret := g.in.Secret != nil && g.in.Secret(p.Rule)
+ 		_, werr := ruleERE(p.Rule, g.in.Classes, false, g.in.Facts)
+-		if secret || werr != nil || !ok || !h.within(p.Rule) || h.mayMeet(p.Rule, "configure **") {
++		if secret || werr != nil || !ok || !h.within(p.Rule) || h.meetsConfiguration(p.Rule) {
  			res.Beyond = append(res.Beyond, p)
  			continue
  		}
@@ -2207,6 +2474,22 @@ In Step 4's branch table:
   line, which mixed in the argument deny. Write `var JunosFacts = Facts{CaseSensitive: false,
   DenyMatchesExpanded: <true only as above>}`, citing the notes and decision 27 in the comment above
   it. While it is false, a composition that needs a deny on the wire keeps the fail-closed reply.
+- **Branch M**, new (pre-flight B1): read `L12-netconf-juniper_*.md`. If both notes say deny-commands
+  and the fail-closed reply bind NETCONF RPCs, record it in the commit message and change nothing.
+  If either says not, or the images disagree, a deny port49 sends is walked around over NETCONF, so
+  the projected adapter must require NETCONF and the XML API over SSH off on the device. Add to
+  `platforms/1.1.0/juniper_junos.yaml`'s `config_checks`:
+  ```yaml
+      - match: '^set\s+system\s+services\s+(netconf|xnm-ssh|xnm-clear-text)\b'
+        says: "NETCONF or the XML API is enabled, and a port49 deny-commands does not bind its RPCs (tests/lab/results/L12-netconf-juniper_*.md): a session walks around every deny; disable the service on a projected device"
+  ```
+  and the same `ConfigCheck` to `shipped110`'s `j.ConfigChecks` (below the comment line). `devices
+  check-config` then fails a projected Junos device that enables any of them, in set form or
+  hierarchical (`show configuration | display set` is what check-config reads). Junos cannot
+  disable NETCONF per user, so it is off outright; say so in the adapter comment and the operator
+  notes. Task 19 then disables NETCONF for its run and expects the session refused
+  (`netconfForbidden`). If the check cannot be written for an image (the note shows NETCONF served
+  with no `system services` line), take branch A.
 - **Branch J**, rewritten: `deny-commands` does not reach configuration mode, measured on both
   images (`L12-configuration-juniper_*.md`). Nothing changes in code: no reply that can configure
   carries a deny, and a configuration-statement deny fails closed (Task 12a). Write it into the
@@ -2222,14 +2505,20 @@ interface fxp0 **` beside `permit monitor **` (a value under a command with no R
 routing-instance mgmt_junos **` beside `permit ping **` (a value under a command that still needs
 a host), each of which must get the fail-closed reply, and so fail CI — and the probe `show route
 protocol static`. No probe streams: under the fail-closed reply `monitor` and `ping` are refused
-outright, and a reply that let them run would fail the test's fail-open check at the first probe. The
+outright, and a reply that let them run would fail the test's fail-open check at the first probe.
+
+It also adds a NETCONF check to every shape (pre-flight B1): with the shape's own token, which gets
+the same reply, it sends `<get-configuration/>` and `<get-software-information/>` and fails the test
+where the device runs one whose command (`show configuration`, `show version`) port49 denies. Where
+Task 14's branch M made set 1.1.0 forbid NETCONF, the run disables it on the device, as an operator
+must, puts `netconf ssh` back after, and expects every NETCONF session refused. The
 test's fail-open check is what catches a misclassified value: if the tree called it a keyword and
 the device ignores the deny, the device runs a command port49 denies, and the test fails.
 
 <!-- patch: tests/lab/projection_test.go -->
 ````diff
 diff --git a/tests/lab/projection_test.go b/tests/lab/projection_test.go
-index 70aacec..0176bd0 100644
+index 70aacec..f053a62 100644
 --- a/tests/lab/projection_test.go
 +++ b/tests/lab/projection_test.go
 @@ -62,6 +62,9 @@ var projectionProbes = []projectionProbe{
@@ -2262,6 +2551,105 @@ index 70aacec..0176bd0 100644
  }
  
  func TestProjectionDifferential(t *testing.T) {
+@@ -121,6 +137,14 @@ func TestProjectionDifferential(t *testing.T) {
+ 		defer stop()
+ 		l.junosConfigureAdmin(t, reference)
+ 		defer l.junosConfigureAdmin(t, projectionRestore(reference))
++		// Where set 1.1.0 requires NETCONF disabled (plan 5b Task 14, branch
++		// M), the run disables it as the operator must, and puts the lab's
++		// `netconf ssh` back after.
++		netconfOff := netconfForbidden(set["juniper_junos"])
++		if netconfOff {
++			l.junosConfigureAdmin(t, []string{"delete system services netconf"})
++			defer l.junosConfigureAdmin(t, []string{"set system services netconf ssh"})
++		}
+ 		pki := filepath.Join(root, slicePKIDir)
+ 		if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
+ 			t.Fatal(err)
+@@ -142,7 +166,8 @@ func TestProjectionDifferential(t *testing.T) {
+ 		fmt.Fprintf(&b, "\nThe binary's JunosFacts: %+v.\n", projection.JunosFacts)
+ 		for _, shape := range projectionShapes {
+ 			fmt.Fprintf(&b, "\n### %s\n\n", shape.name)
+-			b.WriteString(l.projectionShape(t, port49, pki, inv.Devices, shape.name, shape.roles, shape.failClosed))
++			b.WriteString(l.projectionShape(t, port49, pki, inv.Devices, shape.name, shape.roles, shape.failClosed,
++				netconfOff))
+ 		}
+ 		l.result(t, "L12-projection", "Decisions 22 and 26's projection, differentially: for each rule shape the "+
+ 			"generator produces, what the device runs under the reply port49 renders, typed as an operator might "+
+@@ -155,7 +180,7 @@ func TestProjectionDifferential(t *testing.T) {
+ 
+ // projectionShape runs one shape and renders its section of the note.
+ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admission.Device, name, roles string,
+-	failClosed bool) string {
++	failClosed, netconfOff bool) string {
+ 	t.Helper()
+ 	body := "platform_set: 1.1.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
+ 		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
+@@ -273,6 +298,64 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
+ 		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s | %s |\n", p.cmd, p.canonical, verdictWord(o.Permit),
+ 			verb(predicts), verb(ran), yesNo(ran == o.Permit))
+ 	}
++	b.WriteString(l.projectionNetconf(t, name, pol, device, tok, netconfOff))
++	return b.String()
++}
++
++// netconfForbidden reports whether the adapter's configuration checks fail a
++// device that enables NETCONF (plan 5b Task 14, branch M).
++func netconfForbidden(d adapter.Dialect) bool {
++	for _, c := range d.ConfigChecks {
++		if strings.Contains(c.Match, "netconf") {
++			return true
++		}
++	}
++	return false
++}
++
++// projectionNetconf opens NETCONF with the shape's token, which gets the same
++// reply, and sends the RPC equivalents of `show configuration` and `show
++// version` (TestL12JunosNetconf's): an RPC the device runs where port49
++// denies its command fails the test, as the CLI's fail-open check does (plan
++// 5b pre-flight B1). Where the set requires NETCONF disabled, the session
++// must not open. Each RPC has its deadline; a reply that is neither output
++// nor an `<rpc-error>` is not observed.
++func (l *lab) projectionNetconf(t *testing.T, name string, pol *policy.Policy, device admission.Device, tok string,
++	off bool) string {
++	t.Helper()
++	n, hello, err := l.netconfDial(sliceUser, tok)
++	if off {
++		if err == nil {
++			n.Close()
++			t.Errorf("%s: NETCONF opened, and set 1.1.0 requires it disabled", name)
++			return "\nNETCONF opened, although set 1.1.0 requires it disabled.\n"
++		}
++		return "\nNETCONF is disabled, as set 1.1.0 requires: `" + oneLine(err.Error()) + "`\n"
++	}
++	if err != nil {
++		t.Errorf("%s: the NETCONF session did not open: %v (%s)", name, err, oneLine(hello))
++		return "\nNETCONF: not observed, `" + oneLine(err.Error()) + "`\n"
++	}
++	defer n.Close()
++	var b strings.Builder
++	b.WriteString("\n| NETCONF RPC | as the command | port49 | device |\n|---|---|---|---|\n")
++	for k, r := range junosNetconfRPCs {
++		reply, err := n.rpc(k+1, r.rpc)
++		cell := netconfCell(reply, r.evidence)
++		if err != nil || cell == "not observed" {
++			t.Errorf("%s: %s not observed: %v %s", name, r.rpc, err, oneLine(reply))
++			cell = "not observed"
++		}
++		_, o, err := pol.Decide("slice_operator", "", device, r.command, time.Now())
++		if err != nil {
++			t.Fatalf("%s: %v", name, err)
++		}
++		if cell == "ran" && !o.Permit {
++			t.Errorf("%s: over NETCONF the device ran %s, and port49 denies %q (%s): the projection fails open "+
++				"over RPC", name, r.rpc, r.command, o.Reason)
++		}
++		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s |\n", r.rpc, r.command, verdictWord(o.Permit), cell)
++	}
+ 	return b.String()
+ }
+ 
 ````
 
 The run's token count is unchanged (the broker mints each), and the shapes add about three
@@ -2316,7 +2704,9 @@ passed. Its paragraph under "What has been measured so far" gives each tree's si
 the walk stopped at a bound; a path it did not reach proves nothing, by design. Add `platforms/keywords/1.1.0/juniper_junos.yaml` to the
 commit. In the roadmap's "Plan 5b — As built", record decision 27, the tree's size, and which
 spec §11 denies it proves. Carry, for a later plan: "measure deny-configuration(-regexps) over the
-wire", which would let a configuration statement be denied in configuration mode; "grow the
+wire", which would let a configuration statement be denied in configuration mode; where branch M
+disabled NETCONF, "measure whether an RPC-level deny (deny-commands on RPC names, or a class
+setting) can bind NETCONF, so it can be enabled again"; "grow the
 keyword capture's seed list where a fleet's denies fail as unproven"; "capture the keyword tree per
 fleet release and hardware family" (A-M5); and "prove keywords outside `show`" with a mechanism that
 runs nothing, so a deny under `request`, `clear` or `monitor` can be sent. Close **L9** only if both
