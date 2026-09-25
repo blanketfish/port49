@@ -76,6 +76,9 @@ type Row struct {
 
 // Report is the inference over one window.
 type Report struct {
+	// From and To are the window searched: the options' bounds where they set
+	// them, and the span of the records read where they do not. A side still
+	// zero is one no bound and no record fixes; Window says so.
 	From, To time.Time
 	Rows     []Row
 	// Gaps are the account_gap records whose drops can fall in the window,
@@ -89,6 +92,15 @@ type Report struct {
 // Qualified reports whether the window's accounting stream is whole, so a
 // reconciliation finding stands as a finding.
 func (r Report) Qualified() bool { return len(r.Gaps) == 0 }
+
+// Window is the window searched as a reader sees it, and "no records" where
+// neither a bound nor a record fixes one of its ends.
+func (r Report) Window() string {
+	if r.From.IsZero() || r.To.IsZero() {
+		return "no records"
+	}
+	return decision.FormatTime(r.From) + " to " + decision.FormatTime(r.To)
+}
 
 // Infer reads records, in log order, against devices (spec §9).
 func Infer(records []decision.Record, devices []Device, opt Options) Report {
@@ -135,6 +147,12 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 			continue
 		}
 		byDevice[r.Device.Name] = append(byDevice[r.Device.Name], r)
+	}
+	if !opt.From.IsZero() {
+		rep.From = opt.From
+	}
+	if !opt.To.IsZero() {
+		rep.To = opt.To
 	}
 	for _, d := range devices {
 		row := Row{Device: d}

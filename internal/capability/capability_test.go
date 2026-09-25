@@ -196,3 +196,30 @@ func TestAuthorizationBeforeTheWindowCounts(t *testing.T) {
 		t.Fatalf("an authorization before From was not counted: %+v", r)
 	}
 }
+
+// The report's window is what was searched: the requested bounds where the
+// options set them, the records' span only where they do not, and "no
+// records" where neither says, never year 0001.
+func TestTheWindowIsWhatWasSearched(t *testing.T) {
+	var l logb
+	l.add(decision.EventAuthorizeSession, "leaf-01", "arista_eos", "c1", nil) // t0+1s
+	l.add(decision.EventAuthorizeSession, "leaf-01", "arista_eos", "c2", nil) // t0+2s
+	devices := []Device{{Name: "leaf-01", Platform: "arista_eos", Supports: eos}}
+	from, to := t0.Add(-24*time.Hour), t0.Add(time.Hour)
+	if rep := Infer(l.recs, devices, Options{From: from, To: to}); !rep.From.Equal(from) || !rep.To.Equal(to) {
+		t.Errorf("bounded: %v to %v", rep.From, rep.To)
+	}
+	if rep := Infer(l.recs, devices, Options{From: from}); !rep.From.Equal(from) || !rep.To.Equal(t0.Add(2*time.Second)) {
+		t.Errorf("open after: %v to %v", rep.From, rep.To)
+	}
+	if w := Infer(l.recs, devices, Options{From: from}).Window(); w != decision.FormatTime(from)+" to "+
+		decision.FormatTime(t0.Add(2*time.Second)) {
+		t.Errorf("window: %q", w)
+	}
+	if w := Infer(nil, devices, Options{}).Window(); w != "no records" {
+		t.Errorf("an empty log: %q", w)
+	}
+	if w := Infer(nil, devices, Options{From: from}).Window(); w != "no records" {
+		t.Errorf("an empty log, open after: %q", w)
+	}
+}
