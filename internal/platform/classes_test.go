@@ -51,6 +51,11 @@ func TestReferenceClasses(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("%q", got)
 	}
+	for _, l := range got {
+		if strings.Contains(l, "authentication") && !strings.HasSuffix(l, lockLine) {
+			t.Errorf("a template user that can log in locally: %s", l)
+		}
+	}
 	up, _ := ReferenceClasses(junosProjected(BitDeliveryUserPermissions), 30*time.Second)
 	if up[1] != "set system login class p49-remote idle-timeout 1" {
 		t.Fatalf("user_permissions: %q", up)

@@ -815,7 +815,8 @@ func TestAProjectionRefusalFailsTheGates(t *testing.T) {
 	for _, want := range []string{
 		`report: projection_refused: subject "ops" on juniper_junos gets the fail-closed reply (refused_shape): `,
 		"; on 1 device: srx-01\n",
-		`report: projection: subject "noc" on juniper_junos: `,
+		`report: projection: subject "noc" on juniper_junos: narrow shape, bits view view-configuration; ` +
+			"deny-commands: everything; allow-commands: show **\n",
 		"; 0 quarantined, 1 projection refusals\n",
 	} {
 		if !strings.Contains(out.String(), want) {

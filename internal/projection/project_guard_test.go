@@ -519,6 +519,7 @@ func TestACarveOutBeneathASentBitFailsClosed(t *testing.T) {
 	res, err = Project(measuredInput(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"),
 		permit("op **")))
 	if err != nil || !rpc(res) || !strings.Contains(res.Refusal.Why, `"op **"`) ||
+		strings.Count(res.Refusal.Why, "L26c-juniper") != 1 ||
 		slices.ContainsFunc(res.Allows, func(a engine.Rule) bool { return a.Rule == "op **" }) {
 		t.Fatalf("op: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
 	}
@@ -534,4 +535,37 @@ func reachOf(d platform.Dialect) []string {
 		out = append(out, rules...)
 	}
 	return out
+}
+
+// A deny is left off the wire through a carve-out only where that carve-out
+// was measured holding over RPC too: `show configuration **` (L26c's empty
+// `<configuration>`). An adapter carving `show log **` out of `view`, as
+// set 1.1.0 does on completion evidence alone, gets the deny sent, and on
+// Junos, where it guards the CLI alone beneath `view`, fails closed (review
+// I-1).
+func TestOnlyACarveOutMeasuredOverRPCOmitsADeny(t *testing.T) {
+	in := func(f Facts) Input {
+		in := input(platform.BitDeliveryUserPermissions, "readonly", f, permit("show **"),
+			deny("show configuration **"), deny("show log **"))
+		in.Dialect.Bits["view-configuration"] = []string{"show configuration **", "show log **"}
+		in.Dialect.CarveOuts["view-configuration"] = []string{"show configuration **", "show log **"}
+		in.Keywords = keywordTree("show log **", "show configuration **")
+		return in
+	}
+	res, err := Project(in(measured))
+	if err != nil || res.Shape != ShapeCapability || len(res.Omitted) != 2 ||
+		!reflect.DeepEqual(res.Attributes, []string{"user-permissions=view"}) {
+		t.Fatalf("binding: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	res, err = Project(in(JunosFacts))
+	if err != nil || res.Shape != ShapeFailClosed || res.FailClosed != FailRefusedShape ||
+		!strings.Contains(res.Refusal.Why, `deny "show log **"`) || !strings.Contains(res.Refusal.Why, "L26c") {
+		t.Fatalf("junos: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
+	// The measured one alone still omits its deny.
+	res, err = Project(input(platform.BitDeliveryUserPermissions, "readonly", JunosFacts, permit("show **"),
+		deny("show configuration **")))
+	if err != nil || res.Shape != ShapeCapability || len(res.Omitted) != 1 {
+		t.Fatalf("show configuration: %s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
+	}
 }

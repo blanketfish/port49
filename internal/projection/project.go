@@ -332,11 +332,16 @@ func (g generator) shape() (Result, error) {
 		// and the narrow shape cannot carry the grant either, the report says
 		// both: the narrow shape's first, the one the grant can change — unless
 		// it is its bits entering configuration mode, which render recovers
-		// from, and which is passed on as it is.
+		// from, and which is passed on as it is. Why a deny binds no RPC is
+		// said once.
 		var nr, cr *Refusal
-		if nerr != nil && errors.As(no.refusal, &cr) && errors.As(nerr, &nr) && nr.Category != FailConfigurationMode {
+		if nerr != nil && errors.As(no.refusal, &cr) && errors.As(nerr, &nr) && !g.recoverable(nr) {
 			both := *nr
-			both.Why += "; and without `deny-commands .*`, " + cr.Why
+			why := cr.Why
+			if strings.Contains(nr.Why, g.rpcWhy()) {
+				why = strings.Replace(why, ": "+g.rpcWhy(), "", 1)
+			}
+			both.Why += "; and without `deny-commands .*`, " + why
 			return Result{}, &both
 		}
 		// Nor does a narrow shape that carries the grant only by leaving off a
@@ -358,11 +363,18 @@ func (g generator) shape() (Result, error) {
 		// The narrow shape's bits entering configuration mode is what render
 		// can recover from, by dropping them: say that, not the overflow.
 		var nr *Refusal
-		if errors.As(nerr, &nr) && nr.Category == FailConfigurationMode {
+		if errors.As(nerr, &nr) && g.recoverable(nr) {
 			return Result{}, nerr
 		}
 	}
 	return res, err
+}
+
+// recoverable reports whether render recovers from r by dropping the bits
+// that enter configuration mode, which it does only under user_permissions:
+// a template's class carries every bit of the level.
+func (g generator) recoverable(r *Refusal) bool {
+	return r.Category == FailConfigurationMode && g.in.Dialect.BitDelivery == platform.BitDeliveryUserPermissions
 }
 
 // finish guards a rendered shape and writes its attributes.
@@ -615,10 +627,11 @@ func (g generator) capability() (Result, error) {
 	if !g.in.Facts.DenyBindsRPCs {
 		for _, dn := range res.Denies {
 			if b, ok := g.beneath(dn.Rule, bits); ok {
-				// The reply's own configuration refusal comes first: render
-				// recovers from it by dropping those bits, which may leave
-				// the deny beneath none.
-				if err := g.configuration(res); err != nil {
+				// The reply's own configuration refusal comes first where
+				// render recovers from it by dropping those bits, which may
+				// leave the deny beneath none.
+				var cr *Refusal
+				if err := g.configuration(res); errors.As(err, &cr) && g.recoverable(cr) {
 					return Result{}, err
 				}
 				return Result{}, &narrowOnly{why: "a deny beneath a sent bit guards the CLI alone",
@@ -682,7 +695,8 @@ func (g generator) rpcReach(dn engine.Rule, b string) error {
 // matches, so nothing is sent for it (spec §8, "drops the bit instead of
 // emitting a regex"): a measured carve-out of a bit not sent holds dn, and no
 // allow meets it. Only a carve-out licenses this: under the union, a bit not
-// sent refuses nothing another bit reaches.
+// sent refuses nothing another bit reaches. Where a deny binds no RPC, only
+// a carve-out measured over RPC does (rpcCarves).
 //
 // Contains reads dn as received, where port49 reads a deny wider. Where the
 // platform neither abbreviates nor splits a name, the one widening is
@@ -697,8 +711,18 @@ func (g generator) omittable(dn engine.Rule, bits []string, allows []engine.Rule
 			return false
 		}
 	}
-	return slices.ContainsFunc(g.carves(g.held(bits)), func(c string) bool { return g.contains(c, dn.Rule) })
+	return slices.ContainsFunc(g.carves(g.held(bits)), func(c string) bool {
+		return g.contains(c, dn.Rule) && (g.in.Facts.DenyBindsRPCs || slices.Contains(rpcCarves, c))
+	})
 }
+
+// rpcCarves are the carve-outs measured holding over RPC too: `view` without
+// `view-configuration` got an empty `<configuration>` from a projected CLI
+// session's RPCs (tests/lab/results/L26c-juniper_*.md). Where a wire deny
+// binds no RPC, a deny is left off the wire only through one of these: any
+// other carve-out is measured on the CLI at most, so the deny is sent, and a
+// deny beneath a sent bit fails closed.
+var rpcCarves = []string{"show configuration **"}
 
 // configuration refuses a reply that enters configuration mode for a grant
 // that is not everything — a bit whose reach holds `configure`, or an allow

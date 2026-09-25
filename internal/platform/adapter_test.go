@@ -138,7 +138,7 @@ var shipped110 = func() map[string]Dialect {
 	j.CommandProjection, j.BitDelivery = ProjectionJunosRegex, BitDeliveryUserPermissions
 	j.Bits = map[string][]string{
 		BaselineBit: {"help **", "quit **", "exit **", "set cli **", "show cli **", "file **", "load **", "op **",
-			"request **", "save **", "scp **", "set **", "start **", "test **"},
+			"request **", "save **", "scp **", "set **", "start **", "test **", "xml-mode **"},
 		"clear":   {"clear **", "request mpls **", "set chassis **"},
 		"network": {"ping **", "traceroute **", "ssh **", "telnet **", "mtrace **", "probe **", "request routing-engine **"},
 		"trace":   {"monitor **"},

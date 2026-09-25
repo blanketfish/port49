@@ -45,13 +45,16 @@ platforms:
     # that hold them, an upper bound (tests/lab/results/L12-bits-juniper_*.md).
     # A top-level word the baseline reaches is held whole (`request **`):
     # completion does not list Junos's hidden commands, so a reach word by word
-    # could under-report. A session runs the union of its bits' reach.
+    # could under-report. `xml-mode` is hidden, so no completion lists it, yet
+    # a class holding `view` alone ran it (tests/lab/results/L26c-juniper_*.md):
+    # the baseline holds it, an upper bound. A session runs the union of its
+    # bits' reach.
     # `baseline` is what a class with no bits runs, held by every session: the
     # projection denies each of its commands no permit holds. `all` is every
     # bit.
     bits:
       baseline: ["help **", "quit **", "exit **", "set cli **", "show cli **", "file **", "load **", "op **", "request **",
-        "save **", "scp **", "set **", "start **", "test **"]
+        "save **", "scp **", "set **", "start **", "test **", "xml-mode **"]
       clear: ["clear **", "request mpls **", "set chassis **"]
       network: ["ping **", "traceroute **", "ssh **", "telnet **", "mtrace **", "probe **", "request routing-engine **"]
       trace: ["monitor **"]
@@ -71,7 +74,8 @@ platforms:
     # probe ran them (the same notes, "Reading"), so view-configuration's
     # reach above holds them too: an upper bound, since neither bit alone
     # offers them. Only a listed carve-out lets the projection leave a deny
-    # off the wire.
+    # off the wire, and on Junos, where a deny binds no RPC, only `show
+    # configuration **`, the one measured holding over RPC too (L26c).
     carve_outs:
       view-configuration: ["show configuration **", "show log **", "show firewall **", "show policer **"]
     # Each level's ceiling in bits. readonly is show and info, operator adds

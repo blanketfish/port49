@@ -11,8 +11,9 @@ import (
 
 // rpcServicesOff is whether a projected Junos device must run no management
 // service but the CLI's (plan 5b Task 14, branch M). It is true: on both
-// images a wire deny-commands, and the fail-closed reply, did not bind a
-// native NETCONF RPC (tests/lab/results/L12-netconf-juniper_*.md), so a
+// images a wire deny-commands did not bind a native NETCONF RPC, and the
+// fail-closed reply refused the session before hello
+// (tests/lab/results/L12-netconf-juniper_*.md), so a
 // service that runs RPCs under the same TACACS+ login and reply would walk
 // around every deny port49 sends: `<get-configuration>` past `deny show
 // configuration **`.

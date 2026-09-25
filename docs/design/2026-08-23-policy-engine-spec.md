@@ -3289,9 +3289,10 @@ J-Web, JET/gRPC/gNMI and `outbound-ssh`, outright, since Junos cannot turn them 
 That is necessary, not sufficient. From a projected CLI session, `xml-mode netconf
 need-trailer` returns a NETCONF hello and a native RPC (`<get-software-information/>`) runs
 past the wire denies, and `op url` is accepted. There RPC reach is the permission bits': `view`
-without `view-configuration` got an empty `<configuration>`. The wire deny does bind a
-`<command>…</command>` RPC, `start shell` is refused by the bits unless a shell permission is
-held, and the fail-closed reply's `deny-commands .*` refuses `xml-mode` and `op` both (L26c). So
+without `view-configuration` got an empty `<configuration>`. `start shell` is refused by the
+bits unless a shell permission is held, and the fail-closed reply's `deny-commands .*` refuses
+`xml-mode` and `op` both (L26c). A wire deny does bind a `<command>…</command>` RPC: over NETCONF
+the deny session refused one the control ran (L12-netconf). So
 **a deny beneath a sent bit is not a boundary**, and in set 1.1.0 port49 fails closed on it
 (`JunosFacts.DenyBindsRPCs` false). A composition whose only guard beneath a sent bit, or
 beneath the baseline every session holds, is a wire deny is CLI-only safe: the capability shape
@@ -3299,8 +3300,9 @@ falls to the narrow one, whose `.*` refuses both entry points, and where that ca
 subject gets the fail-closed reply (`refused_shape`, its message naming RPC reach). A narrow
 allow that would run `xml-mode` or `op` is refused the same way, and the fail-closed reply leaves
 it off. What stays projectable: a deny no sent bit reaches, a bit a deny aligns with (dropped,
-not denied), and a measured carve-out of a bit not sent, which the RPCs honor too (the empty
-`<configuration>`). Denying the entry points themselves, `xml-mode` and `op`, is future work
+not denied), and the one carve-out measured over RPC, `view-configuration`'s `show configuration
+**` out of `view` (the empty `<configuration>`). Every other carve-out is measured on the CLI at
+most, so a deny it would cover is sent, and fails closed where it lies beneath a sent bit. Denying the entry points themselves, `xml-mode` and `op`, is future work
 pending measurement on production devices; `start` is never denied, since admins need `start
 shell` and the bits already refuse it.
 
