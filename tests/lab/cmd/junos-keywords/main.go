@@ -3,9 +3,11 @@
 // ships (spec §13 decision 27; §15 L26): what every run on every image
 // proves, a keyword one run lacks left out, an argument any run takes kept.
 // An image measured more than once keeps each earlier run beside the latest,
-// as L26-keywords-<image>.<run>.yaml, and every run is one more capture to
+// as L26-keywords-<image>.run<N>.yaml, and every run is one more capture to
 // intersect: a word is a keyword only where each run proves it, and unproven
-// fails closed.
+// fails closed. So every run of an image must be given: the tool refuses an
+// image whose latest run is not given, or with a run file beside a given
+// capture that is not, and two captures with the same content.
 //
 // Each -overlay, tests/lab/results/L26b-keywords-<image>.yaml, pins the
 // latest run of its image, L26-keywords-<image>.yaml, by the sha256 its first
@@ -31,6 +33,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -49,20 +52,33 @@ func main() {
 	}
 }
 
+var earlierRun = regexp.MustCompile(`^(.+)\.run[0-9]+$`)
+
 // imageOf is the image a capture file measures, and whether it is the
 // image's latest run: L26-keywords-<image>.yaml is, and
-// L26-keywords-<image>.<run>.yaml is an earlier one.
+// L26-keywords-<image>.run<N>.yaml is an earlier one. An image name holds no
+// dot, so a file is never read as an earlier run of a shorter image.
 func imageOf(file string) (string, bool, error) {
 	base := filepath.Base(file)
 	rest, ok := strings.CutPrefix(base, "L26-keywords-")
 	if !ok || !strings.HasSuffix(rest, ".yaml") {
-		return "", false, fmt.Errorf("%s: not an L26-keywords-<image>[.<run>].yaml capture", file)
+		return "", false, fmt.Errorf("%s: not an L26-keywords-<image>[.run<N>].yaml capture", file)
 	}
-	image, run, earlier := strings.Cut(strings.TrimSuffix(rest, ".yaml"), ".")
-	if image == "" || (earlier && run == "") {
-		return "", false, fmt.Errorf("%s: not an L26-keywords-<image>[.<run>].yaml capture", file)
+	image, earlier := strings.TrimSuffix(rest, ".yaml"), false
+	if m := earlierRun.FindStringSubmatch(image); m != nil {
+		image, earlier = m[1], true
+	}
+	if image == "" || strings.Contains(image, ".") {
+		return "", false, fmt.Errorf("%s: not an L26-keywords-<image>[.run<N>].yaml capture", file)
 	}
 	return image, !earlier, nil
+}
+
+// runsBeside is every capture of image in dir: its latest run and each
+// earlier one, and any other file named as one of its runs, which imageOf
+// then refuses.
+func runsBeside(dir, image string) ([]string, error) {
+	return filepath.Glob(filepath.Join(dir, "L26-keywords-"+image+".*yaml"))
 }
 
 func run(args []string) error {
@@ -100,10 +116,47 @@ func run(args []string) error {
 			return err
 		}
 		raws[i] = raw
-		byHash[fmt.Sprintf("%x", sha256.Sum256(raw))] = i
+		h := fmt.Sprintf("%x", sha256.Sum256(raw))
+		if j, dup := byHash[h]; dup {
+			return fmt.Errorf("%s: the same capture as %s", f, captures[j])
+		}
+		byHash[h] = i
 	}
 	if len(images) < 2 {
 		return fmt.Errorf("give every image's captures, at least two images: a keyword one image lacks is not proven")
+	}
+	// A run left off would prove what it does not: every run of an image
+	// beside a capture given must be given too, and the latest among them.
+	given := map[string]bool{}
+	for _, f := range captures {
+		abs, err := filepath.Abs(f)
+		if err != nil {
+			return err
+		}
+		given[abs] = true
+	}
+	for _, image := range images {
+		if !hasLatest[image] {
+			return fmt.Errorf("%s: no latest run, L26-keywords-%s.yaml, given", image, image)
+		}
+		for _, i := range runs[image] {
+			beside, err := runsBeside(filepath.Dir(captures[i]), image)
+			if err != nil {
+				return err
+			}
+			for _, f := range beside {
+				if _, _, err := imageOf(f); err != nil {
+					return err
+				}
+				abs, err := filepath.Abs(f)
+				if err != nil {
+					return err
+				}
+				if !given[abs] {
+					return fmt.Errorf("%s: a run of %s not given: give every run, or the merge proves what it lacks", f, image)
+				}
+			}
+		}
 	}
 	laid := map[string][]byte{}
 	for _, f := range overlays {

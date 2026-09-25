@@ -283,7 +283,11 @@ func OverlayKeywords(capture, overlay []byte) (*Keywords, error) {
 // argument was computed from the words its run offers at those nodes, so an
 // other run whose words differ from runs[0]'s at one of them is refused: the
 // overlay is recomputed in a new L26b run rather than laid over words it did
-// not read. Every other node is each run's own, and MergeKeywords intersects
+// not read. Only words are compared, not argument: the L26b overlay's
+// argument is computed from its listings and the words its run proves there,
+// never from the run's argument (tests/lab l26bOverlay); were it to read the
+// run's argument, this check would compare that too. Every other node is
+// each run's own, and MergeKeywords intersects
 // the runs as it does images: a keyword one run lacks is not proven.
 func OverlayRuns(overlay []byte, runs ...[]byte) ([]*Keywords, error) {
 	if len(runs) == 0 {

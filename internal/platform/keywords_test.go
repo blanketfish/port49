@@ -6,6 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -181,16 +183,14 @@ func TestShippedKeywordTreesLoad(t *testing.T) {
 // only the rerun proved on vSRX, is not one either.
 func TestTheLabCapturesLoadAndMerge(t *testing.T) {
 	var trees []*Keywords
-	for _, image := range []string{"juniper_vjunos-router", "juniper_vsrx", "juniper_vsrx.run1"} {
-		raw, err := os.ReadFile("../../tests/lab/results/L26-keywords-" + image + ".yaml")
-		if err != nil {
-			t.Fatal(err)
+	for image, runs := range labRuns(t) {
+		for i, raw := range runs {
+			name, k, err := ParseKeywords(raw)
+			if err != nil || name != "juniper_junos" || k.Len() == 0 {
+				t.Fatalf("%s run %d: %s %d %v", image, i, name, k.Len(), err)
+			}
+			trees = append(trees, k)
 		}
-		name, k, err := ParseKeywords(raw)
-		if err != nil || name != "juniper_junos" || k.Len() == 0 {
-			t.Fatalf("%s: %s %d %v", image, name, k.Len(), err)
-		}
-		trees = append(trees, k)
 	}
 	m := MergeKeywords(trees...)
 	words := 0
@@ -314,6 +314,42 @@ nodes:
 	}
 }
 
+// labRuns is every L26 capture the lab committed, by image, the latest run
+// first: tests/lab/results/L26-keywords-<image>.yaml and each earlier
+// L26-keywords-<image>.run<N>.yaml, as tests/lab/cmd/junos-keywords reads
+// them. A run committed later is in it without a change here; a file named
+// as a capture otherwise, or an image with no latest run, fails the test.
+func labRuns(t *testing.T) map[string][][]byte {
+	t.Helper()
+	files, err := filepath.Glob("../../tests/lab/results/L26-keywords-*.yaml")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no L26 captures: %v", err)
+	}
+	named := regexp.MustCompile(`^L26-keywords-([^.]+)(\.run[0-9]+)?\.yaml$`)
+	runs := map[string][][]byte{}
+	for _, f := range files {
+		m := named.FindStringSubmatch(filepath.Base(f))
+		if m == nil {
+			t.Fatalf("%s: not an L26-keywords-<image>[.run<N>].yaml capture", f)
+		}
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m[2] == "" {
+			runs[m[1]] = append([][]byte{raw}, runs[m[1]]...)
+		} else {
+			runs[m[1]] = append(runs[m[1]], raw)
+		}
+	}
+	for image, rs := range runs {
+		if _, err := os.Stat("../../tests/lab/results/L26-keywords-" + image + ".yaml"); err != nil {
+			t.Fatalf("%s: %d earlier runs and no latest: %v", image, len(rs), err)
+		}
+	}
+	return runs
+}
+
 // The shipped Junos tree is exactly what the lab's captures and overlays
 // merge to (tests/lab/cmd/junos-keywords), each overlay laid over every run
 // of its image: L26b's words proven on both images are keywords, `save`
@@ -322,18 +358,7 @@ nodes:
 // run of two) is not a keyword.
 func TestTheShippedJunosTreeIsTheLabs(t *testing.T) {
 	var trees []*Keywords
-	for image, runs := range map[string][]string{
-		"juniper_vjunos-router": {""},
-		"juniper_vsrx":          {"", ".run1"},
-	} {
-		var raws [][]byte
-		for _, run := range runs {
-			raw, err := os.ReadFile("../../tests/lab/results/L26-keywords-" + image + run + ".yaml")
-			if err != nil {
-				t.Fatal(err)
-			}
-			raws = append(raws, raw)
-		}
+	for image, raws := range labRuns(t) {
 		overlay, err := os.ReadFile("../../tests/lab/results/L26b-keywords-" + image + ".yaml")
 		if err != nil {
 			t.Fatal(err)

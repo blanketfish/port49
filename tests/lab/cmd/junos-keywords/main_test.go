@@ -37,10 +37,10 @@ func TestOverlaysMatchTheirCaptures(t *testing.T) {
 	for _, args := range [][]string{
 		{a},
 		{b, b1},
-		{a, b, b},
-		{a, b, r + "L26b-keywords-juniper_vsrx.yaml"},
-		{"-overlay", stale, a, b},
-		{"-overlay", oa, "-overlay", oa, a, b},
+		{a, b, b1, b1},
+		{a, b, b1, r + "L26b-keywords-juniper_vsrx.yaml"},
+		{"-overlay", stale, a, b, b1},
+		{"-overlay", oa, "-overlay", oa, a, b, b1},
 		{"-overlay", early, a, b, b1},
 	} {
 		if err := run(args); err == nil {
@@ -57,6 +57,60 @@ func TestOverlaysMatchTheirCaptures(t *testing.T) {
 	defer func() { os.Stdout = stdout }()
 	if err := run([]string{"-overlay", oa, "-overlay", ob, a, b1, b}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Every run of an image beside a capture given must be given too: a run left
+// off, a run committed later (run2) and not named, and an image with no
+// latest run are each refused, and so is a file beside them named as a run
+// of the image in no form the tool reads.
+func TestEveryRunIsGiven(t *testing.T) {
+	r := "../../results/"
+	dir := t.TempDir()
+	copyTo := func(dir, name string, raw []byte) string {
+		f := filepath.Join(dir, name)
+		if err := os.WriteFile(f, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	a := copyTo(dir, "L26-keywords-juniper_vjunos-router.yaml", must(os.ReadFile(r+"L26-keywords-juniper_vjunos-router.yaml")))
+	b := copyTo(dir, "L26-keywords-juniper_vsrx.yaml", must(os.ReadFile(r+"L26-keywords-juniper_vsrx.yaml")))
+	run1 := must(os.ReadFile(r + "L26-keywords-juniper_vsrx.run1.yaml"))
+	b1 := copyTo(dir, "L26-keywords-juniper_vsrx.run1.yaml", run1)
+
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+	stdout := os.Stdout
+	os.Stdout = devnull
+	defer func() { os.Stdout = stdout }()
+
+	if err := run([]string{a, b, b1}); err != nil {
+		t.Fatalf("every run given: %v", err)
+	}
+	if err := run([]string{a, b}); err == nil {
+		t.Error("ran with run1 left off")
+	}
+	b2 := copyTo(dir, "L26-keywords-juniper_vsrx.run2.yaml", append([]byte("# another run\n"), run1...))
+	if err := run([]string{a, b, b1}); err == nil {
+		t.Error("ran with run2 beside the captures and not given")
+	}
+	if err := run([]string{a, b, b1, b2}); err != nil {
+		t.Errorf("run2 given: %v", err)
+	}
+	copyTo(dir, "L26-keywords-juniper_vsrx.bak.yaml", run1)
+	if err := run([]string{a, b, b1, b2}); err == nil {
+		t.Error("ran with a stray run file beside the captures")
+	}
+
+	lone := t.TempDir()
+	la := copyTo(lone, "L26-keywords-juniper_vjunos-router.yaml", must(os.ReadFile(a)))
+	lb1 := copyTo(lone, "L26-keywords-juniper_vsrx.run1.yaml", run1)
+	if err := run([]string{la, lb1}); err == nil {
+		t.Error("ran with no latest vSRX run")
 	}
 }
 
