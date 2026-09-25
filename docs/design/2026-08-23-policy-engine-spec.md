@@ -3784,7 +3784,9 @@ and a job that pages on them is one nobody reads. It warns — and exits 1, for 
 A capability observed that the adapter does not declare is a note, never a warning: it is a lab
 measurement waiting to be made. The window's `account_gap` records (§5.7) qualify the whole
 report: with any, it says so on its first line, an unauthorized tier is printed as possible, not
-found, and does not set the exit code. CI's half is `report: unenforced_rules`: a subject whose
+found, and does not set the exit code. A log line that did not read as a record is counted on
+the first line, and an unauthorized tier is then printed as possible too, since that line may
+have held the authorization; it still sets the exit code, since a torn log is worth a look. CI's half is `report: unenforced_rules`: a subject whose
 roles carry command rules on a platform that neither authorizes commands nor projects them —
 Junos under set 1.0.0 — is told they decide nothing there.
 

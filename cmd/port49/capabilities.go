@@ -115,9 +115,17 @@ func devicesCapabilities(args []string, stdout, stderr io.Writer) int {
 			continue
 		}
 		head := "⚠ UNAUTHORIZED TIER"
-		if !rep.Qualified() {
+		switch {
+		case !rep.Qualified():
 			head = "? POSSIBLY AN UNAUTHORIZED TIER (the accounting stream has a gap in this window)"
-		} else {
+		case unread > 0:
+			// A line that did not read may have held the authorization: the
+			// finding still pages, as a torn log line is itself worth a look,
+			// but says it is possible, not proven (final review minor 7).
+			head = fmt.Sprintf("? POSSIBLY AN UNAUTHORIZED TIER (%d log lines did not read as records, and one "+
+				"may have held the authorization)", unread)
+			code = 1
+		default:
 			code = 1
 		}
 		quoted := make([]string, len(r.Examples))

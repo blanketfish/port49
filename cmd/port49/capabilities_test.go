@@ -24,10 +24,22 @@ func TestDevicesCapabilities(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	code := run([]string{"devices", "capabilities", "--policy", pol, "--inventory", inv, log}, &out, &errb)
+	// A line that did not read may have held the authorization: the finding
+	// pages, and says it is possible (final review minor 7).
 	if code != 1 || !strings.Contains(out.String(), "leaf-01  arista_eos  admitted   session,commands  session") ||
-		!strings.Contains(out.String(), "⚠ UNAUTHORIZED TIER — leaf-01") ||
+		!strings.Contains(out.String(), "? POSSIBLY AN UNAUTHORIZED TIER (1 log lines did not read as records, and "+
+			"one may have held the authorization) — leaf-01") ||
 		!strings.Contains(out.String(), `example: "show interfaces"`) ||
 		!strings.Contains(out.String(), "1 log lines did not read as records") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+	// With every line read, it is the finding itself.
+	if err := os.WriteFile(log, []byte(strings.Join(lines[:2], "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	code = run([]string{"devices", "capabilities", "--policy", pol, "--inventory", inv, log}, &out, &errb)
+	if code != 1 || !strings.Contains(out.String(), "⚠ UNAUTHORIZED TIER — leaf-01") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 	gap := `{"ts":"2026-09-24T12:00:03.000Z","event":"account_gap","gap":{"stage":"drain_unparseable","records":2,"since":"2026-09-24T12:00:00.000Z"}}`
@@ -133,7 +145,7 @@ func TestDevicesCapabilitiesNeverPrintsASecret(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := run([]string{"devices", "capabilities", "--policy", pol, "--inventory", inv, log}, &out, &errb)
 	if text := out.String() + errb.String(); code != 1 || strings.Contains(text, "HUNTER2") || strings.Contains(text, "TER2") ||
-		!strings.Contains(text, "⚠ UNAUTHORIZED TIER — leaf-01") || !strings.Contains(text, "«redacted»") ||
+		!strings.Contains(text, "UNAUTHORIZED TIER (1 log lines") || !strings.Contains(text, "«redacted»") ||
 		!strings.Contains(text, "1 log lines did not read as records") {
 		t.Fatalf("code %d\n%s", code, text)
 	}
