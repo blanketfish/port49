@@ -135,18 +135,11 @@ func overlap(a, b cterm, abbrev bool) (meet, possible bool) {
 		// A permit's word holds no whitespace, so trimming it changes nothing.
 		return strings.EqualFold(a.word, b.word) || (abbrev && abbreviates(a.word, b.word)), false
 	case a.kind == Word:
-		return someTaken(b.res, a.word, false)
+		return someTaken(b.rd, a.word, false, false)
 	case b.kind == Word:
 		// The permit's pattern may take the deny's word, or an abbreviation
 		// of it, with whitespace the deny trims.
-		for _, w := range denyWords(b.word, abbrev) {
-			m, p := permitMayTake(a, w)
-			if m && !p {
-				return true, false
-			}
-			possible = possible || m
-		}
-		return possible, possible
+		return someTaken(a.rd, b.word, true, abbrev)
 	case a.kind == b.kind && a.word == b.word:
 		return true, false
 	}
@@ -182,9 +175,9 @@ func joinOverlap(h, x, t cterm, abbrev bool) (meet, possible bool) {
 		case !indexShape.MatchString(x.word):
 			return false, false
 		case t.kind == Any:
-			return someTaken([]*regexp.Regexp{nameShape}, h.word, false)
+			return someTaken(nameReader, h.word, false, false)
 		}
-		return someTaken(t.res, h.word+x.word, false)
+		return someTaken(t.rd, h.word+x.word, false, false)
 	}
 	if t.kind != Word {
 		return true, true
@@ -230,7 +223,7 @@ func permitMayTake(t cterm, w string) (meet, possible bool) {
 		// A permit's word holds no whitespace, so trimming it changes nothing.
 		return strings.EqualFold(t.word, w), false
 	}
-	return someTaken(t.res, w, true)
+	return someTaken(t.rd, w, true, false)
 }
 
 func anyMatch(res []*regexp.Regexp, s string) bool {

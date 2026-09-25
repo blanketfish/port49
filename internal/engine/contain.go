@@ -55,7 +55,7 @@ func termHolds(o, n cterm) bool {
 	// o is a regex or a class.
 	switch n.kind {
 	case Word:
-		return everyTaken(o.res, n.word)
+		return everyTaken(o.rd, n.word)
 	case o.kind:
 		return o.word == n.word
 	}

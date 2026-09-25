@@ -28,6 +28,7 @@ type cterm struct {
 	kind Kind
 	word string
 	res  []*regexp.Regexp // a regex term's one pattern, or a class's patterns
+	rd   *reader          // res as one program, for what a word stands for
 	// joinHead and joinTail are a deny term in its split shape (compileRule):
 	// the head takes any argument, and the tail an index-shaped one the term
 	// matches joined to the argument before it. Both keep the term's rank.
@@ -111,6 +112,7 @@ func compileRule(verdict, rule, role string, classes map[string][]string, n Norm
 				ct.res = append(ct.res, re)
 			}
 		}
+		ct.rd = newReader(ct.res)
 		shapes := [][]cterm{{ct}}
 		if verdict == Deny && n.SplitsInterfaceNames && joinable(ct) {
 			head, tail := ct, ct
