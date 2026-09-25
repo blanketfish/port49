@@ -1,6 +1,9 @@
 package engine
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestContains(t *testing.T) {
 	classes := map[string][]string{"management": {"^(fxp0|em0)$"}}
@@ -137,91 +140,142 @@ func TestMayMeetStaysPrecise(t *testing.T) {
 	}
 }
 
-// Every answer is checked against the matcher over every vector of up to
-// three of words chosen to reach the edges: case-folds (the Kelvin sign
-// folds to `k`), padding a deny trims, abbreviations and split names. A
-// vector matching both rules is a meet MayMeet must see; one where the permit
-// does not dominate a matching deny refutes AlwaysDominates; one the inner
-// rule matches and the outer does not refutes Contains.
+// Every answer is checked against the matcher over every short vector of
+// words chosen to reach the edges: case-folds (the Kelvin sign folds to `k`,
+// `ſ` to `s`), padding a deny trims (tab, newline, NBSP, U+3000), the empty
+// argument, U+FFFD and a byte that is not UTF-8, abbreviations and split
+// names. A vector matching both rules is a meet MayMeet must see; one where
+// the permit does not dominate a matching deny refutes AlwaysDominates; one
+// the inner rule matches and the outer does not refutes Contains. The narrow
+// set is read to three words and the wide set, which adds the harder
+// patterns and words, to two, to keep the run short.
+//
+// Soundness alone would pass an engine that never proves anything, so each
+// set must also give every answer that licenses something: a Contains that is
+// true of two different rules, a MayMeet that is false, and an
+// AlwaysDominates that is true of rules that do meet.
 func TestContainAgreesWithTheMatcher(t *testing.T) {
-	classes := map[string][]string{"management": {"^(fxp0|em0)$"}}
-	rules := []string{"**", "show **", "show *", "show * *", "sh **", "show version", "show /(?-i)^VERSION$/",
-		`show /^\bk$/`, "show k", "show /^sh/", `show /^\s/`, "show /^fxp0$/", "show fxp0", "show @management",
-		"* 1/0", "show gi1", "show /(?-i)^gi$/ 1", "show /(?-i)^GI$/ 1", "show /(?-i)^GI1$/", `show /^k\s$/`,
-		"show 1/0", "show * 1/0"}
-	words := []string{"show", "SHOW", "sh", "VERSION", "version", "show ", "k", "\u212a", "fxp0", "FXP0",
-		" ", "1/0", "1", "gi", "GI", "Gi1", "k "}
-	vectors := universe(words, 3)
+	narrowRules := []string{"**", "show **", "show *", "show * *", "sh **", "show version",
+		"show /(?-i)^VERSION$/", `show /^\bk$/`, "show k", "show /^sh/", `show /^\s/`, "show /^fxp0$/",
+		"show fxp0", "show @management", "* 1/0", "show gi1", "show /(?-i)^gi$/ 1", "show /(?-i)^GI$/ 1",
+		"show /(?-i)^GI1$/", `show /^k\s$/`, "show 1/0", "show * 1/0"}
+	narrowWords := []string{"show", "SHOW", "sh", "VERSION", "version", "show ", "k", "\u212a", "fxp0",
+		"FXP0", " ", "1/0", "1", "gi", "GI", "Gi1", "k "}
+	wideRules := append(slices.Clone(narrowRules), `show /^\Qfxp0/`, "show /^(ver|VER)(sion)?$/",
+		"show /^.{2,}$/", "show /(?m)^k$/", `show /\Bk/`, `show /^\w+$/`, "show @two", "show @mixed",
+		`show /\x{FFFD}/`, "ſhow **", "show /(?-i)^ſ/", "show /(?-i)^s/", `show /\s+k/`, "show /^$/")
+	wideWords := append(slices.Clone(narrowWords), "ſ", "ſh", "ſhow", "", "\t", "\tk", "k\n", "\n",
+		"\u00a0k", "k\u3000", "\ufffd", "\xff", "em0", "gi\u212a")
+	for _, set := range []struct {
+		name         string
+		rules, words []string
+		n            int
+	}{
+		{"narrow", narrowRules, narrowWords, 3},
+		{"wide", wideRules, wideWords, 2},
+	} {
+		c := agreeWithTheMatcher(t, set.rules, set.words, set.n)
+		t.Logf("%s: %d Contains true, %d MayMeet false, %d AlwaysDominates true of rules that meet",
+			set.name, c.contains, c.apart, c.dominates)
+		if c.contains == 0 || c.apart == 0 || c.dominates == 0 {
+			t.Errorf("%s: an answer that licenses something never came back: %+v", set.name, c)
+		}
+	}
+}
+
+type licensed struct{ contains, apart, dominates int }
+
+func agreeWithTheMatcher(t *testing.T, rules, words []string, n int) licensed {
+	t.Helper()
+	classes := map[string][]string{
+		"management": {"^(fxp0|em0)$"},
+		"two":        {"^fxp0$", "^em[0-9]$"},
+		"mixed":      {"^(?-i)GI[0-9]+$", "^em0$"},
+	}
+	vectors := universe(words, n)
 	dialects := []Normalize{
 		{PipeToken: "|", StripCR: true, SessionOnly: true},
 		{PipeToken: "|", StripCR: true},
 		{PipeToken: "|", StripCR: true, SplitsInterfaceNames: true},
 	}
-	permitSpecs := func(rule string) [][]int {
-		cs, err := compileRule(Permit, rule, "", classes, dialects[0])
+	permits := map[string][][]int{}
+	for _, r := range rules {
+		cs, err := compileRule(Permit, r, "", classes, dialects[0])
 		if err != nil {
 			t.Fatal(err)
 		}
-		out := make([][]int, len(vectors))
+		specs := make([][]int, len(vectors))
 		for i, v := range vectors {
-			out[i], _ = cs[0].match(v, false)
+			specs[i], _ = cs[0].match(v, false)
 		}
-		return out
+		permits[r] = specs
 	}
-	permits := map[string][][]int{}
-	for _, r := range rules {
-		permits[r] = permitSpecs(r)
-	}
+	var c licensed
 	for _, outer := range rules {
 		for _, inner := range rules {
 			ok, err := Contains(outer, inner, classes)
 			if err != nil {
 				t.Fatal(err)
 			}
+			if !ok {
+				continue
+			}
+			if outer != inner {
+				c.contains++
+			}
 			for i, v := range vectors {
-				if ok && permits[inner][i] != nil && permits[outer][i] == nil {
+				if permits[inner][i] != nil && permits[outer][i] == nil {
 					t.Errorf("Contains(%q, %q) is true and %q refutes it", outer, inner, v)
 					break
 				}
 			}
 		}
 	}
-	for _, n := range dialects {
+	for _, d := range dialects {
 		for _, deny := range rules {
-			ds, err := compileRule(Deny, deny, "", classes, n)
+			ds, err := compileRule(Deny, deny, "", classes, d)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, permit := range rules {
-				meet, err := MayMeet(permit, deny, classes, n)
+				meet, err := MayMeet(permit, deny, classes, d)
 				if err != nil {
 					t.Fatal(err)
 				}
-				dom, err := AlwaysDominates(permit, deny, classes, n)
+				dom, err := AlwaysDominates(permit, deny, classes, d)
 				if err != nil {
 					t.Fatal(err)
 				}
+				met := false
 				for i, v := range vectors {
 					ps := permits[permit][i]
 					if ps == nil {
 						continue
 					}
-					for _, d := range ds {
-						spec, ok := d.match(v, n.abbreviated())
+					for _, shape := range ds {
+						spec, ok := shape.match(v, d.abbreviated())
 						if !ok {
 							continue
 						}
+						met = true
 						if !meet {
-							t.Errorf("%+v: MayMeet(%q, %q) is false and %q matches both", n, permit, deny, v)
+							t.Errorf("%+v: MayMeet(%q, %q) is false and %q matches both", d, permit, deny, v)
 						}
 						if dom && !Dominates(ps, spec) {
-							t.Errorf("%+v: AlwaysDominates(%q, %q) is true and the deny wins %q", n, permit, deny, v)
+							t.Errorf("%+v: AlwaysDominates(%q, %q) is true and the deny wins %q", d, permit, deny, v)
 						}
 					}
+				}
+				if !meet {
+					c.apart++
+				}
+				if dom && met {
+					c.dominates++
 				}
 			}
 		}
 	}
+	return c
 }
 
 // A pattern is read on its own, never pasted into a larger one: `\Q` with no
