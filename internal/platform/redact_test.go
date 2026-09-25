@@ -595,3 +595,25 @@ func TestARegexCarryingAHiddenValueIsRedactedWhole(t *testing.T) {
 		t.Errorf("%s redacted", re)
 	}
 }
+
+// A value is matched in any letter case by Unicode case folding, not ASCII
+// only: `PÄ"ss9` hidden is `pä"ss9` typed, as written, %q-quoted or quoted
+// in ASCII (task 12b review).
+func TestAValueIsMatchedInAnyUnicodeCase(t *testing.T) {
+	v := `PÄ"ss9`
+	for _, line := range []string{
+		`show pä"ss9 **`,
+		fmt.Sprintf("allow %q", `show pä"SS9 **`),
+		strconv.QuoteToASCII(`show pä"ss9`),
+		`the word ΣΑΣ, and ſtop`,
+	} {
+		got := RedactValues([]string{v, "σας", "stop"}, line)
+		if low := strings.ToLower(got); strings.Contains(low, "ss9") || strings.Contains(low, "σας") ||
+			strings.Contains(got, "ſtop") || !strings.Contains(got, Redacted) {
+			t.Errorf("%s -> %s", line, got)
+		}
+	}
+	if got := QuoteShown([]string{v}, `show pä"SS9 **`); got != `"show `+Redacted+` **"` {
+		t.Errorf("%s", got)
+	}
+}

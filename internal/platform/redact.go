@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -614,7 +615,7 @@ func HiddenValues(rules []Redaction, words []string) []string {
 
 // RedactValues is line with every occurrence of each value that stands as a
 // word of its own, bounded by anything but a letter, a digit or `_`, and in
-// any letter case, replaced by Redacted: a report that derives text from a
+// any letter case by Unicode case folding, replaced by Redacted: a report that derives text from a
 // secret-bearing rule, a word it names, prints no more of the secret than
 // the rule's own quoted form does (spec §5.8). A value is matched as %q and
 // QuoteToASCII write it too, so a `"` or `\` escaped in a quoted rule does
@@ -625,8 +626,11 @@ func RedactValues(values []string, line string) string {
 		if v == "" || v == Redacted {
 			continue
 		}
+		// QuoteToASCII writes a non-ASCII letter as its code point, which
+		// folding cannot match across case: each case is its own form.
 		forms := []string{v}
-		for _, q := range []string{strconv.Quote(v), strconv.QuoteToASCII(v)} {
+		for _, q := range []string{strconv.Quote(v), strconv.QuoteToASCII(v), strconv.QuoteToASCII(strings.ToLower(v)),
+			strconv.QuoteToASCII(strings.ToUpper(v))} {
 			if f := q[1 : len(q)-1]; !slices.Contains(forms, f) {
 				forms = append(forms, f)
 			}
@@ -639,28 +643,42 @@ func RedactValues(values []string, line string) string {
 }
 
 // redactValue is line with every occurrence of v that stands as a word of
-// its own, in any letter case, replaced by Redacted.
+// its own, in any letter case by Unicode case folding, replaced by Redacted:
+// a folded occurrence may differ from v in bytes, `ſ` for `s`.
 func redactValue(v, line string) string {
-	lv := asciiLower(v)
 	var b strings.Builder
-	rest := line
-	for {
-		i := strings.Index(asciiLower(rest), lv)
-		if i < 0 {
-			b.WriteString(rest)
-			break
-		}
-		end := i + len(v)
-		if (i > 0 && wordByte(rest[i-1])) || (end < len(rest) && wordByte(rest[end])) {
-			b.WriteString(rest[:end])
-			rest = rest[end:]
+	last := 0
+	for i := 0; i < len(line); {
+		end, ok := foldPrefix(line[i:], v)
+		if ok && !(i > 0 && wordByte(line[i-1])) && !(i+end < len(line) && wordByte(line[i+end])) {
+			b.WriteString(line[last:i])
+			b.WriteString(Redacted)
+			i += end
+			last = i
 			continue
 		}
-		b.WriteString(rest[:i])
-		b.WriteString(Redacted)
-		rest = rest[end:]
+		_, size := utf8.DecodeRuneInString(line[i:])
+		i += size
 	}
+	b.WriteString(line[last:])
 	return b.String()
+}
+
+// foldPrefix reports whether s begins with v under Unicode simple case
+// folding, as strings.EqualFold compares, and how many bytes of s that is.
+func foldPrefix(s, v string) (int, bool) {
+	n := 0
+	for _, want := range v {
+		if n >= len(s) {
+			return 0, false
+		}
+		got, size := utf8.DecodeRuneInString(s[n:])
+		if !strings.EqualFold(string(got), string(want)) {
+			return 0, false
+		}
+		n += size
+	}
+	return n, n > 0
 }
 
 // RegexShown is a reply attribute's regex as a report prints it: whole, or
@@ -692,18 +710,6 @@ var (
 // line in its escaped form (spec §5.8; task 12b review I1).
 func QuoteShown(values []string, s string) string {
 	return strconv.Quote(RedactValues(values, s))
-}
-
-// asciiLower is s with its ASCII letters lowered and every other byte kept,
-// so an index into it is an index into s.
-func asciiLower(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			b[i] = c + 'a' - 'A'
-		}
-	}
-	return string(b)
 }
 
 func wordByte(c byte) bool {
