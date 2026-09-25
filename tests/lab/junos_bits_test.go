@@ -102,6 +102,22 @@ func junosCloser(c *cliConn, word string) (string, error) {
 	return "", fmt.Errorf("%q: neither a prompt nor a closed channel within %s: %w", word, junosPer, err)
 }
 
+// junosCarveRefused reports whether the carve-out probe p was measured under
+// the view-only run: observed, and answered with a refusal. An empty answer, a
+// stale prompt read as the reply, is not a refusal and never counts.
+func junosCarveRefused(view junosRun, p junosProbe) bool {
+	out, typed := view.outs[p.cmd]
+	return typed && !slices.Contains(view.unobserved, p.cmd) && containsAny(strings.ToLower(out), junosRefusal)
+}
+
+// junosCloserRefused reports whether a closer's outcome is the device refusing
+// it: a prompt back, with a refusal in what came before it. `prompt back: `
+// with nothing is a stale prompt, not a refusal.
+func junosCloserRefused(said string) bool {
+	rest, ok := strings.CutPrefix(said, "prompt back: ")
+	return ok && containsAny(strings.ToLower(rest), junosRefusal)
+}
+
 // junosSettle waits, within junosPer, until the device has said nothing for a
 // second. A completion probe's ^U makes the device redraw its prompt after the
 // probe has returned; a command typed before that redraw lands would read the
@@ -147,6 +163,7 @@ func (l *lab) junosSurvey(t *testing.T, name string, c *cliConn, r *junosRun) []
 		r.unobserved = append(r.unobserved, "?")
 		return nil
 	}
+	r.outs["?"] = top
 	var reach []string
 	for _, w := range completionWords(top) {
 		reach = append(reach, w)
@@ -156,6 +173,7 @@ func (l *lab) junosSurvey(t *testing.T, name string, c *cliConn, r *junosRun) []
 			r.unobserved = append(r.unobserved, w+" ?")
 			return reach
 		}
+		r.outs[w+" ?"] = out
 		for _, x := range completionWords(out) {
 			reach = append(reach, w+" "+x)
 		}
@@ -237,6 +255,11 @@ func TestL12JunosBits(t *testing.T) {
 			for _, p := range probes {
 				out, err := l.junosProbe(c, p)
 				r.outs[p.cmd] = out
+				if err == nil && p.complete {
+					// The ^U's prompt redraw lands late; the next probe must not
+					// read it as its own answer.
+					err = junosSettle(c)
+				}
 				if err != nil {
 					r.unobserved = append(r.unobserved, p.cmd)
 					t.Errorf("bit %s: %q not observed within %s: %v", name, p.cmd, junosPer, err)
@@ -298,6 +321,17 @@ func TestL12JunosBits(t *testing.T) {
 			"`?` does not list Junos's hidden commands, so a per-word reach could under-report what the device "+
 			"runs. A per-word reach is a possible later refinement, and needs proof, not measured here, that no "+
 			"hidden command sits under each word.\n")
+		// What the pair is offered that none of its parts is: a command view
+		// needs view-configuration for, a carve-out candidate beyond
+		// `show configuration` (completion evidence, not a probe).
+		parts := slices.Concat(reach["view"], reach["view-configuration"], reach["none"])
+		pairOnly := beyond(reach[junosPairClass], parts)
+		if len(pairOnly) == 0 {
+			pairOnly = []string{"no word"}
+		}
+		fmt.Fprintf(&b, "\nWords `view view-configuration` is offered that `view`, `view-configuration` and `none` "+
+			"are not (a carve-out candidate for view-configuration, by completion only): %s.\n",
+			strings.Join(pairOnly, ", "))
 		// The carve-out the projection reads: under `view` alone the
 		// configuration is not shown, observed, against a control that shows it,
 		// on every hierarchy the `all` control shows, and at least two of them
@@ -305,14 +339,13 @@ func TestL12JunosBits(t *testing.T) {
 		// `view-configuration` together show it, so view-configuration is the
 		// one bit that withholds it.
 		view, pair := runs["view"], runs[junosPairClass]
-		fmt.Fprintf(&b, "\n| hierarchy probe | `all` shows it | `view` alone: observed | `view` alone shows it | "+
+		fmt.Fprintf(&b, "\n| hierarchy probe | `all` shows it | `view` alone: observed and refused | `view` alone shows it | "+
 			"`view-configuration` alone shows it | `view view-configuration` shows it | isolated |\n"+
 			"|---|---|---|---|---|---|---|\n")
 		hierarchies := 0
 		for _, p := range junosCarveProbes {
 			shown := view.runs(p)
-			_, typed := view.outs[p.cmd]
-			observed := typed && !slices.Contains(view.unobserved, p.cmd)
+			observed := junosCarveRefused(view, p)
 			isolated := "no: the `all` control did not show it, so the row says nothing"
 			if all.runs(p) {
 				hierarchies++
@@ -322,7 +355,7 @@ func TestL12JunosBits(t *testing.T) {
 						"beyond view-configuration withholds it"
 				}
 				if !observed || shown {
-					t.Errorf("the carve-out is not measured on `%s`: under view alone the probe was observed %v and "+
+					t.Errorf("the carve-out is not measured on `%s`: under view alone the probe was observed with a refusal %v and "+
 						"showed the configuration %v; remove it from junosCarveOuts and from the adapter's carve_outs, "+
 						"and add \"show configuration **\" to view's reach", p.cmd, observed, shown)
 				}
@@ -331,7 +364,8 @@ func TestL12JunosBits(t *testing.T) {
 				runs["view-configuration"].runs(p), pair.runs(p), isolated)
 		}
 		fmt.Fprintf(&b, "\nThe adapter's carve-out `view-configuration: [show configuration **]` holds only if `view` "+
-			"alone shows none of them; it was measured on %d hierarchies the `all` control shows.\n", hierarchies)
+			"alone shows none of them; it was measured on %d hierarchies the `all` control shows. Bare `show configuration` "+
+			"under `view` alone: not probed.\n", hierarchies)
 		if hierarchies < 2 {
 			t.Errorf("the carve-out was measured on %d hierarchies; pre-flight R-M5 needs two the `all` control shows",
 				hierarchies)
@@ -357,7 +391,7 @@ func TestL12JunosBits(t *testing.T) {
 			}
 		}
 		if len(enters) == 0 {
-			enters = []string{"none"}
+			enters = []string{"no class"}
 		}
 		fmt.Fprintf(&b, "\nClasses other than `all` that entered configuration mode (`configure` ran): %s.\n",
 			strings.Join(enters, ", "))
@@ -383,8 +417,9 @@ func TestL12JunosBits(t *testing.T) {
 				denied = closers[noneDeny+", exit"][w]
 			}
 			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", w, tableCell(orNotTyped(under)), tableCell(orNotTyped(denied)))
-			if denied == "" || denied == "closed the session" {
-				t.Errorf("baseline: `%s` under `deny-commands=^.*$`: %q, not a prompt back: Task 14 branch A", w, denied)
+			if !junosCloserRefused(denied) {
+				t.Errorf("baseline: `%s` under `deny-commands=^.*$`: %q, not a prompt back with a refusal: Task 14 "+
+					"branch A, or not observed", w, denied)
 			}
 		}
 		fmt.Fprintf(&b, "\nThe reach as measured, ready for `bits:` and `carve_outs:`:\n\n```yaml\n    bits:\n")
@@ -408,6 +443,13 @@ func TestL12JunosBits(t *testing.T) {
 			}
 			fmt.Fprintf(&b, " `show cli authorization`:\n\n```\n%s\n```\n\nCompletion: %s\n", r.auth,
 				strings.Join(reach[c], ", "))
+			// The raw listings the survey parsed, so a word the parser missed
+			// can be seen (the top level and the words the baseline holds whole).
+			for _, k := range []string{"?", "request ?", "test ?", "set ?"} {
+				if out, ok := r.outs[k]; ok {
+					fmt.Fprintf(&b, "\nRaw `%s`:\n\n```\n%s\n```\n", k, out)
+				}
+			}
 			for _, p := range junosBitProbes {
 				if out, ok := r.outs[p.cmd]; ok {
 					fmt.Fprintf(&b, "\n`%s`:\n\n```\n%s\n```\n", p.cmd, orEmpty([]string{out}, 0))
@@ -484,9 +526,9 @@ func quotedList(rules []string) string {
 // TestL24JunosIdleTimeout measures decision 21's approximation: a login
 // class's idle-timeout ends an idle session a TACACS+ reply landed in that
 // class, through `local-user-name` and through the `remote` template. The
-// clock starts at the prompt; a session closed in under 50 s did not idle out
-// (idle-timeout is 1 minute) and fails, and one still open after four minutes
-// is not observed, and fails.
+// clock starts at the prompt; a session closed outside 50–75 s, or without the
+// device's `Idle timeout exceeded`, did not idle out (idle-timeout is 1 minute)
+// and fails, and one still open after four minutes is not observed, and fails.
 func TestL24JunosIdleTimeout(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		if l.p.name != "juniper_vjunos-router" && l.p.name != "juniper_vsrx" {
@@ -527,9 +569,10 @@ func TestL24JunosIdleTimeout(t *testing.T) {
 			case err != nil:
 				cell = "not observed: " + oneLine(err.Error())
 				t.Errorf("%s: %v", v.name, err)
-			case elapsed < 50*time.Second:
-				t.Errorf("%s: closed %s after the prompt, before a 1-minute idle-timeout could: not the timer", v.name,
-					elapsed)
+			default:
+				if err := junosIdleVerdict(elapsed, said); err != nil {
+					t.Errorf("%s: %v", v.name, err)
+				}
 			}
 			fmt.Fprintf(&b, "| %s | `%s` | %s | `%s` |\n", v.name, v.attrs, cell, oneLine(said))
 		}
@@ -537,6 +580,23 @@ func TestL24JunosIdleTimeout(t *testing.T) {
 			"that class, through `local-user-name` and through the `remote` template (spec §5.6; §13 decision 21).",
 			b.String())
 	})
+}
+
+// junosIdleVerdict reports whether a hold closed by the 1-minute idle timer:
+// within 50–75 s of the prompt, and with the device's own `Idle timeout
+// exceeded` message. Anything else, an unrelated disconnect included, is not
+// the timer.
+func junosIdleVerdict(elapsed time.Duration, said string) error {
+	switch {
+	case elapsed < 50*time.Second:
+		return fmt.Errorf("closed %s after the prompt, before a 1-minute idle-timeout could: not the timer", elapsed)
+	case elapsed > 75*time.Second:
+		return fmt.Errorf("closed %s after the prompt, past a 1-minute idle-timeout's 75 s bound: not the timer",
+			elapsed)
+	case !strings.Contains(said, "Idle timeout exceeded"):
+		return fmt.Errorf("closed %s after the prompt without `Idle timeout exceeded`: not shown to be the timer", elapsed)
+	}
+	return nil
 }
 
 // holdUntilClosed opens an interactive session, waits for its prompt (90 s),
