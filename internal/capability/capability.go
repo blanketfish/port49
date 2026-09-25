@@ -112,7 +112,17 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 			}
 			continue
 		}
-		if (!opt.From.IsZero() && r.TS.Before(opt.From)) || (!opt.To.IsZero() && r.TS.After(opt.To)) {
+		if !opt.To.IsZero() && r.TS.After(opt.To) {
+			continue
+		}
+		// An authorization before the window still answers accounting inside
+		// it: a command straddling From was asked about, and cutting its
+		// request away would accuse a correctly configured device (spec §9).
+		if r.Event == decision.EventAuthorizeCommand && r.Device != nil && r.Session != nil && r.Request != nil {
+			k := ctxKey{r.Device.Name, r.Session.CtxID}
+			authorized[k] = append(authorized[k], text(r.Request.Vector))
+		}
+		if !opt.From.IsZero() && r.TS.Before(opt.From) {
 			continue
 		}
 		if rep.From.IsZero() || r.TS.Before(rep.From) {
@@ -125,10 +135,6 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 			continue
 		}
 		byDevice[r.Device.Name] = append(byDevice[r.Device.Name], r)
-		if r.Event == decision.EventAuthorizeCommand && r.Session != nil && r.Request != nil {
-			k := ctxKey{r.Device.Name, r.Session.CtxID}
-			authorized[k] = append(authorized[k], text(r.Request.Vector))
-		}
 	}
 	for _, d := range devices {
 		row := Row{Device: d}

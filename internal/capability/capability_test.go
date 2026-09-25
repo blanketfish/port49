@@ -181,3 +181,18 @@ func TestGapsOverlapTheWindowBySince(t *testing.T) {
 		t.Fatalf("a whole stream: %+v", rep)
 	}
 }
+
+// A command authorized just before the window and accounted just inside it
+// was asked about: the From bound applies to what is judged, never to the
+// authorizations that answer it, or every boundary a command straddles
+// accuses a correctly configured device.
+func TestAuthorizationBeforeTheWindowCounts(t *testing.T) {
+	l := logb{at: time.Second}
+	l.command("leaf-01", "c1", decision.VerdictPermit, "show", "tech")     // t0+2s
+	l.account("leaf-01", "c1", "resolved", "show", "tech-support", "<cr>") // t0+3s
+	devices := []Device{{Name: "leaf-01", Platform: "arista_eos", Supports: eos}}
+	r := Infer(l.recs, devices, Options{From: t0.Add(2500 * time.Millisecond)}).Rows[0]
+	if r.Unauthorized != 0 || len(r.Warnings) != 0 {
+		t.Fatalf("an authorization before From was not counted: %+v", r)
+	}
+}
