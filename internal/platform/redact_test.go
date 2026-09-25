@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
@@ -548,5 +549,49 @@ func TestHiddenValuesAreRedactedWhereverALinePrintsThem(t *testing.T) {
 	if got, want := RedactValues([]string{"HUNTER2"}, line),
 		"`«redacted»` never matches; write `HUNTER2x` or «redacted», not xHUNTER2"; got != want {
 		t.Fatalf("%q", got)
+	}
+}
+
+// A value with a `"` or `\` in it is past the writer's pass once %q quotes
+// it, so the pass matches its quoted forms too, in any letter case, and
+// QuoteShown redacts before it quotes, which is how a report quotes text
+// derived from a rule (task 12b review I1).
+func TestAQuotedValueIsStillRedacted(t *testing.T) {
+	for _, v := range []string{`pa"ss9`, `a\b9`, `Mi"X\d9`} {
+		leaks := func(got string) bool {
+			low := strings.ToLower(got)
+			return strings.Contains(low, strings.ToLower(v)) ||
+				strings.Contains(low, strings.ToLower(strings.Trim(strconv.Quote(v), `"`)))
+		}
+		for _, line := range []string{
+			fmt.Sprintf("allow %q is not sent: %q is not a keyword", "show "+v+" **", v),
+			fmt.Sprintf("%q", strings.ToUpper(v)),
+			strconv.QuoteToASCII(strings.ToLower(v)),
+			"`" + v + "`",
+		} {
+			if got := RedactValues([]string{v}, line); leaks(got) || !strings.Contains(got, Redacted) {
+				t.Errorf("%s: %s -> %s", v, line, got)
+			}
+		}
+		if got := QuoteShown([]string{v}, "show "+strings.ToUpper(v)+" **"); got != `"show `+Redacted+` **"` {
+			t.Errorf("%s: %s", v, got)
+		}
+	}
+}
+
+// A reply regex writes a word re-cased, a letter as `[hH]`, or escaped, which
+// no writer's pass recognizes: one that carries a hidden value prints
+// redacted whole, and any other as it is (task 12b review I1).
+func TestARegexCarryingAHiddenValueIsRedactedWhole(t *testing.T) {
+	for _, re := range []string{`^(show [hH][uU][nN][tT][eE][rR]2)$`, `^(show hunter2( .*)?)$`, `^(show x\.y|show HUNTER2)$`} {
+		if got := RegexShown([]string{"HUNTER2"}, re); got != Redacted {
+			t.Errorf("%s: %s", re, got)
+		}
+	}
+	if got := RegexShown([]string{"x.y"}, `^(show x\.y)$`); got != Redacted {
+		t.Errorf("escaped: %s", got)
+	}
+	if re := `^(show [hH]unter( .*)?)$`; RegexShown([]string{"HUNTER2"}, re) != re {
+		t.Errorf("%s redacted", re)
 	}
 }

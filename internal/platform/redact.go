@@ -616,35 +616,82 @@ func HiddenValues(rules []Redaction, words []string) []string {
 // word of its own, bounded by anything but a letter, a digit or `_`, and in
 // any letter case, replaced by Redacted: a report that derives text from a
 // secret-bearing rule, a word it names, prints no more of the secret than
-// the rule's own quoted form does (spec §5.8). A value split or otherwise
-// rewritten is past it, and is left out where the text is made.
+// the rule's own quoted form does (spec §5.8). A value is matched as %q and
+// QuoteToASCII write it too, so a `"` or `\` escaped in a quoted rule does
+// not carry it past (task 12b review I1). A value split or otherwise
+// rewritten is past it, and is left out where the text is made (QuoteShown).
 func RedactValues(values []string, line string) string {
 	for _, v := range values {
 		if v == "" || v == Redacted {
 			continue
 		}
-		lv := asciiLower(v)
-		var b strings.Builder
-		rest := line
-		for {
-			i := strings.Index(asciiLower(rest), lv)
-			if i < 0 {
-				b.WriteString(rest)
-				break
+		forms := []string{v}
+		for _, q := range []string{strconv.Quote(v), strconv.QuoteToASCII(v)} {
+			if f := q[1 : len(q)-1]; !slices.Contains(forms, f) {
+				forms = append(forms, f)
 			}
-			end := i + len(v)
-			if (i > 0 && wordByte(rest[i-1])) || (end < len(rest) && wordByte(rest[end])) {
-				b.WriteString(rest[:end])
-				rest = rest[end:]
-				continue
-			}
-			b.WriteString(rest[:i])
-			b.WriteString(Redacted)
-			rest = rest[end:]
 		}
-		line = b.String()
+		for _, f := range forms {
+			line = redactValue(f, line)
+		}
 	}
 	return line
+}
+
+// redactValue is line with every occurrence of v that stands as a word of
+// its own, in any letter case, replaced by Redacted.
+func redactValue(v, line string) string {
+	lv := asciiLower(v)
+	var b strings.Builder
+	rest := line
+	for {
+		i := strings.Index(asciiLower(rest), lv)
+		if i < 0 {
+			b.WriteString(rest)
+			break
+		}
+		end := i + len(v)
+		if (i > 0 && wordByte(rest[i-1])) || (end < len(rest) && wordByte(rest[end])) {
+			b.WriteString(rest[:end])
+			rest = rest[end:]
+			continue
+		}
+		b.WriteString(rest[:i])
+		b.WriteString(Redacted)
+		rest = rest[end:]
+	}
+	return b.String()
+}
+
+// RegexShown is a reply attribute's regex as a report prints it: whole, or
+// Redacted where it carries one of values in any form the regex writes a
+// word, a letter as `[hH]` or a character escaped, which no writer's pass
+// recognizes (spec §5.8; task 12b review I1).
+func RegexShown(values []string, re string) string {
+	plain := regexLetter.ReplaceAllStringFunc(re, func(m string) string {
+		if strings.EqualFold(m[1:2], m[2:3]) {
+			return m[1:2]
+		}
+		return m
+	})
+	plain = regexEscape.ReplaceAllString(plain, "$1")
+	if RedactValues(values, plain) != plain {
+		return Redacted
+	}
+	return re
+}
+
+var (
+	regexLetter = regexp.MustCompile(`\[[a-zA-Z][a-zA-Z]\]`)
+	regexEscape = regexp.MustCompile(`\\(.)`)
+)
+
+// QuoteShown is s quoted as %q quotes it, with every value in values
+// redacted first (RedactValues): how a report quotes text derived from a
+// rule, so a value %q would escape, one with a `"` or `\`, never reaches a
+// line in its escaped form (spec §5.8; task 12b review I1).
+func QuoteShown(values []string, s string) string {
+	return strconv.Quote(RedactValues(values, s))
 }
 
 // asciiLower is s with its ASCII letters lowered and every other byte kept,
