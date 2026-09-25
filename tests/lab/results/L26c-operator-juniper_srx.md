@@ -25,7 +25,7 @@ deny list as sent.
 | 5 | `view`, `deny-commands "show version"` | CLI `show version` | Refused. |
 | 6 | same as 5 | `xml-mode netconf`, then `<rpc><get-software-information/></rpc>` | Refused (permission denied). |
 | 7 | `view`, no deny (control for 5 and 6) | the same two | Both run. |
-| 8 | denies `(show configuration\|xml-mode)`, `(show configuration\|xml mode netconf)`, `^xml-mode.*`, `.*xml-mode.*`, `xml.*` | CLI `xml-mode netconf` | Enters NETCONF in every case. |
+| 8 | denies `(show configuration\|xml-mode)`, `(show configuration\|xml mode netconf)`, `^xml-mode.*`, `.*xml-mode.*`, `xml.*`, `^xml.*$`, `^.*xml.*$` | CLI `xml-mode netconf` | Enters NETCONF in every case. |
 | 9 | `deny-commands "^.*$"` | CLI `xml-mode netconf`, and other commands | Refused, as is every other command. |
 
 `xml-mode netconf need-trailer` is not a valid command on this release; plain `xml-mode netconf`
