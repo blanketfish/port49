@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/projection"
 )
 
 // projectedKeywords is the test set's keyword tree: every word these tests
@@ -108,5 +110,110 @@ func TestAnArgumentDenyNeverPrintsASecret(t *testing.T) {
 	}
 	if text := strings.Join(shown, "\n"); strings.Contains(text, "HUNTER2") || !strings.Contains(text, "secret_rule") {
 		t.Fatalf("%s", text)
+	}
+}
+
+// An allow Junos would not match as port49 does is left off the reply, and
+// policy test warns, naming the rule and why, without failing (decision 27).
+func TestAnArgumentAllowIsAWarning(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show version", "show interfaces fxp0 **", "show interfaces terse"]}
+`+subjOK+grantOK)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjectionArgumentAllow {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 2 || got[0] != `subject "s" on juniper_junos: allow "show interfaces fxp0 **" (role "r") is not sent: `+
+		`"fxp0" is not a keyword the lab measured after "show interfaces", so an allow of it never matches on the `+
+		"device; the device refuses what port49 permits there. Permit the whole command with `**` after its "+
+		"keywords, or drop the rule (spec §13 decision 27)" ||
+		!strings.Contains(got[1], `would also run "show interfaces <argument> terse"`) || ProjectionRefusals(p.Lint(noon)) != 0 {
+		t.Fatalf("%q", got)
+	}
+	// It fails neither policy test nor policy diff: the device refuses what
+	// port49 permits there, which fails closed.
+	if d := Compare(p, p, noon); len(d.ProjectionRefusals) != 0 {
+		t.Fatalf("policy diff: %+v", d.ProjectionRefusals)
+	}
+}
+
+// The warning says when it holds and names its devices where it is on fewer
+// than all of the subject's, as a projection finding does (task 11).
+func TestAnArgumentAllowWarningSaysWhenAndWhere(t *testing.T) {
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+
+		"  - {name: few, match: {os_version: 21.4R3-S4}}\n"+`roles:
+  - {name: ok, privilege: readonly, permit: ["show version"]}
+  - {name: r, privilege: readonly, permit: ["show interfaces fxp0 **"]}
+`+subjOK+`grants:
+  - {subject: s, scope: all_devices, roles: [ok]}
+  - {subject: s, scope: few, roles: [r], expires: 2099-01-01}
+`)
+	var got []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjectionArgumentAllow {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.HasPrefix(got[0], `subject "s" on juniper_junos, until 2099-01-01T00:00:00.000Z, `+
+		`when grant few [r] expires: allow "show interfaces fxp0 **" (role "r") is not sent: `) ||
+		!strings.HasSuffix(got[0], "(spec §13 decision 27); on 1 device: srx-fw-04") {
+		t.Fatalf("%q", got)
+	}
+}
+
+// The warning prints no value redaction hides (spec §5.8). A rule that
+// carries one never reaches Unsent: its composition is refused as
+// secret_rule first, naming only the role. A value another rule hides,
+// written in a rule that is sent nowhere, the writer redacts in any letter
+// case, since the reason quotes the rule's own words unchanged.
+func TestAnArgumentAllowWarningNeverPrintsASecret(t *testing.T) {
+	const secret = "show system radius-server 10.0.0.1 secret HUNTER2"
+	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show version", "`+secret+`"]}
+`+subjOK+grantOK)
+	var all []string
+	secretRule := false
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjectionArgumentAllow {
+			t.Errorf("a secret rule reached Unsent: %s", f.Message)
+		}
+		all = append(all, f.Message)
+		secretRule = secretRule || strings.Contains(f.Message, `(secret_rule): role "r" has a rule`)
+	}
+	if !secretRule || strings.Contains(strings.Join(all, "\n"), "HUNTER2") {
+		t.Fatalf("%s", strings.Join(all, "\n"))
+	}
+	for _, d := range p.env.Devices {
+		if res, err := p.ResolveSubject("s", d, noon); err == nil && res.Projection != nil && len(res.Projection.Unsent) != 0 {
+			t.Errorf("%s: %+v", d.Name, res.Projection.Unsent)
+		}
+	}
+
+	p = parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show version", "show interfaces hunter2 **"]}
+  - {name: sec, privilege: readonly, permit: ["`+secret+`"]}
+`+subjOK+grantOK)
+	writer := func(line string) string {
+		return platform.RedactValues(p.HiddenValues(), platform.RedactQuoted(p.Redactions(), line))
+	}
+	var warned []string
+	for _, f := range p.Lint(noon) {
+		if f.Kind == FindingProjectionArgumentAllow {
+			warned = append(warned, writer(f.Message))
+		}
+	}
+	if len(warned) != 1 || strings.Contains(strings.ToUpper(warned[0]), "HUNTER") ||
+		!strings.Contains(warned[0], `is not a keyword the lab measured after "show interfaces"`) {
+		t.Fatalf("%q", warned)
+	}
+
+	// The message redacts the rule it quotes itself, whatever reached it.
+	patterns := p.Redactions()
+	msg := unsentMessage(projection.Unsent{Rule: engine.Rule{Verdict: engine.Permit, Rule: secret, Role: "r"},
+		Why: "w"}, patterns)
+	if strings.Contains(msg, "HUNTER2") || !strings.Contains(msg, platform.Redacted) {
+		t.Errorf("%s", msg)
 	}
 }

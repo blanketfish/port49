@@ -574,6 +574,14 @@ func (p *Policy) onGeneric(name string) bool {
 	return b.Replace || !shipped
 }
 
+// FindingProjectionArgumentAllow is a permit whose allow is left off a
+// Junos reply because the device would not match it as port49 does: it names
+// a word the keyword tree does not prove a keyword, or an argument may be
+// typed among its words (spec §13 decision 27). The device refuses what port49
+// permits there, which fails closed, so it is a warning and does not fail
+// `policy test` or `policy diff` (ProjectionRefusals does not count it).
+const FindingProjectionArgumentAllow = "projection_argument_allow"
+
 // Projections reports each composition on a projected platform (spec §8,
 // "CI reports which shape each grant rendered under, the bit set it chose"):
 // once per subject, platform, reply and moment, at now and at every later
@@ -582,9 +590,10 @@ func (p *Policy) onGeneric(name string) bool {
 // scheduled quarantine does. A composition that gets the fail-closed reply
 // is a projection_refused finding, or projection_overflow where a reply
 // attribute is past RFC 8907's length, naming the subject, every device it
-// lands on and why; both fail `policy test` (spec §13 decision 26). A
-// projection finding names its devices where it is not on every device the
-// subject has a reply on there.
+// lands on and why; both fail `policy test` (spec §13 decision 26). Each
+// allow a reply leaves unsent is a projection_argument_allow warning, which
+// fails nothing (decision 27). A projection finding or warning names its
+// devices where it is not on every device the subject has a reply on there.
 func (p *Policy) Projections(now time.Time) []Finding {
 	patterns, secrets := p.Redactions(), p.HiddenValues()
 	type group struct {
@@ -607,54 +616,61 @@ func (p *Policy) Projections(now time.Time) []Finding {
 					replies[i] = res.Projection
 				}
 			}
-			head := func(pr *projection.Result) (string, string) {
-				if pr.FailClosed == "" {
-					return FindingProjection, projectionMessage(*pr, patterns, secrets)
-				}
-				return refusedMessage(*pr, patterns)
-			}
+			// What each reply reports: its composition, and a warning for
+			// each allow it leaves unsent. Each holds from the instant it
+			// first appears until the first it does not.
+			type item struct{ kind, msg string }
+			reports := make([][]item, len(replies))
 			for i, pr := range replies {
 				if pr == nil {
 					continue
 				}
-				kind, msg := head(pr)
-				if i > 0 && replies[i-1] != nil {
-					if k, m := head(replies[i-1]); k == kind && m == msg {
+				if pr.FailClosed == "" {
+					reports[i] = append(reports[i], item{FindingProjection, projectionMessage(*pr, patterns, secrets)})
+				} else {
+					kind, msg := refusedMessage(*pr, patterns)
+					reports[i] = append(reports[i], item{kind, msg})
+				}
+				for _, u := range pr.Unsent {
+					reports[i] = append(reports[i], item{FindingProjectionArgumentAllow, unsentMessage(u, patterns)})
+				}
+			}
+			for i := range replies {
+				for _, it := range reports[i] {
+					if i > 0 && slices.Contains(reports[i-1], it) {
 						continue
 					}
-				}
-				var moment []string
-				if i > 0 {
-					moment = append(moment, fmt.Sprintf("from %s, when %s expires", decision.FormatTime(instants[i]),
-						lapsing[instants[i]]))
-				}
-				for j := i + 1; j < len(replies); j++ {
-					if replies[j] != nil {
-						if k, m := head(replies[j]); k == kind && m == msg {
+					var moment []string
+					if i > 0 {
+						moment = append(moment, fmt.Sprintf("from %s, when %s expires", decision.FormatTime(instants[i]),
+							lapsing[instants[i]]))
+					}
+					for j := i + 1; j < len(replies); j++ {
+						if slices.Contains(reports[j], it) {
 							continue
 						}
+						moment = append(moment, fmt.Sprintf("until %s, when %s expires", decision.FormatTime(instants[j]),
+							lapsing[instants[j]]))
+						break
 					}
-					moment = append(moment, fmt.Sprintf("until %s, when %s expires", decision.FormatTime(instants[j]),
-						lapsing[instants[j]]))
-					break
-				}
-				key := strings.Join([]string{name, d.Platform, kind, strings.Join(moment, ", "), msg}, "\x00")
-				g := index[key]
-				if g == nil {
-					g = &group{kind: kind, msg: msg, subject: name, platform: d.Platform,
-						moment: strings.Join(moment, ", ")}
-					index[key] = g
-					groups = append(groups, g)
-				}
-				if !slices.Contains(g.devices, d.Name) {
-					g.devices = append(g.devices, d.Name)
+					key := strings.Join([]string{name, d.Platform, it.kind, strings.Join(moment, ", "), it.msg}, "\x00")
+					g := index[key]
+					if g == nil {
+						g = &group{kind: it.kind, msg: it.msg, subject: name, platform: d.Platform,
+							moment: strings.Join(moment, ", ")}
+						index[key] = g
+						groups = append(groups, g)
+					}
+					if !slices.Contains(g.devices, d.Name) {
+						g.devices = append(g.devices, d.Name)
+					}
 				}
 			}
 		}
 	}
 	// The devices a subject has a reply on, per platform: a projection
-	// finding on fewer names them, so a grant to one device, or one that
-	// expires on one device, never reads as every device's.
+	// finding or warning on fewer names them, so a grant to one device, or
+	// one that expires on one device, never reads as every device's.
 	lands := map[string]map[string]bool{}
 	for _, g := range groups {
 		k := g.subject + "\x00" + g.platform
@@ -671,7 +687,7 @@ func (p *Policy) Projections(now time.Time) []Finding {
 		if g.moment != "" {
 			msg += ", " + g.moment
 		}
-		if g.kind == FindingProjection {
+		if g.kind == FindingProjection || g.kind == FindingProjectionArgumentAllow {
 			msg += ":" + g.msg
 		} else {
 			if g.moment != "" {
@@ -679,7 +695,8 @@ func (p *Policy) Projections(now time.Time) []Finding {
 			}
 			msg += g.msg
 		}
-		if g.kind != FindingProjection || len(g.devices) < len(lands[g.subject+"\x00"+g.platform]) {
+		named := g.kind == FindingProjection || g.kind == FindingProjectionArgumentAllow
+		if !named || len(g.devices) < len(lands[g.subject+"\x00"+g.platform]) {
 			slices.Sort(g.devices)
 			noun := "devices"
 			if len(g.devices) == 1 {
@@ -753,6 +770,17 @@ func refusedMessage(pr projection.Result, patterns []platform.Redaction) (string
 			strings.Join(redacted(patterns, []string{r.Value}), ""))
 	}
 	return FindingProjectionOverflow, msg
+}
+
+// unsentMessage is an unsent allow's warning after its subject, platform
+// and moment, which Projections writes before it. The rule is redacted; Why
+// quotes only the rule's own words, unchanged, and a rule redaction would
+// hide is never among Unsent: its composition is refused as secret_rule
+// first, and a fail-closed reply puts it beyond the allows.
+func unsentMessage(u projection.Unsent, patterns []platform.Redaction) string {
+	return fmt.Sprintf(" allow %q (role %q) is not sent: %s; the device refuses what port49 permits there. "+
+		"Permit the whole command with `**` after its keywords, or drop the rule (spec §13 decision 27)",
+		strings.Join(redacted(patterns, []string{u.Rule.Rule}), ""), u.Rule.Role, u.Why)
 }
 
 // projectionMessage is a composition's finding after its subject, platform
