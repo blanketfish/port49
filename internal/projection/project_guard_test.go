@@ -270,3 +270,18 @@ func TestAnOverflowingCapabilityShapeGoesNarrow(t *testing.T) {
 		t.Fatalf("%s %q %+v %v", res.Shape, res.Attributes, res.Refusal, err)
 	}
 }
+
+// omittable leans on Contains reading a deny as received, which holds only
+// where port49 widens a deny by trimming alone (review M1).
+func TestADenyIsOmittedOnlyWhereItIsReadAsReceived(t *testing.T) {
+	for _, n := range []engine.Normalize{{PipeToken: "|", StripCR: true},
+		{PipeToken: "|", StripCR: true, SessionOnly: true, SplitsInterfaceNames: true}} {
+		in := input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show **"),
+			deny("show configuration **"))
+		in.Normalize = n
+		g := newGenerator(in, in.Bits)
+		if g.omittable(g.denies[0], []string{"view"}, nil) {
+			t.Errorf("%+v: omitted", n)
+		}
+	}
+}

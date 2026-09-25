@@ -485,7 +485,15 @@ func (g generator) capability() (Result, error) {
 // emitting a regex"): a measured carve-out of a bit not sent holds dn, and no
 // allow meets it. Only a carve-out licenses this: under the union, a bit not
 // sent refuses nothing another bit reaches.
+//
+// Contains reads dn as received, where port49 reads a deny wider. Where the
+// platform neither abbreviates nor splits a name, the one widening is
+// trimming each argument, which the carve-out, read as a deny, takes alike;
+// anywhere else the deny is sent.
 func (g generator) omittable(dn engine.Rule, bits []string, allows []engine.Rule) bool {
+	if n := g.in.Normalize; !n.SessionOnly || n.SplitsInterfaceNames {
+		return false
+	}
 	for _, a := range allows {
 		if g.mayMeet(a.Rule, dn.Rule) {
 			return false
