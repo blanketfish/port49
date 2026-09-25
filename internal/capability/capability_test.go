@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 )
 
 var t0 = time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
@@ -77,7 +78,7 @@ func TestTheMatrix(t *testing.T) {
 		t.Errorf("leaf-04: %+v", r)
 	}
 	if r := rep.Rows[2]; len(r.Warnings) != 0 || !reflect.DeepEqual(r.Notes,
-		[]string{"never seen: no record in the window, so nothing is inferred"}) {
+		[]string{"never seen: no TACACS+ record in the window, so nothing is inferred"}) {
 		t.Errorf("ntp-01: %+v", r)
 	}
 	if r := rep.Rows[3]; len(r.Warnings) != 0 {
@@ -232,6 +233,40 @@ func TestNeverSeenIsNoRecordAtAll(t *testing.T) {
 	l.account("leaf-01", "", "system", "show", "clock")
 	devices := []Device{{Name: "leaf-01", Platform: "arista_eos", Supports: eos}}
 	if r := Infer(l.recs, devices, Options{}).Rows[0]; len(r.Notes) != 0 || r.System != 1 {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// A device only the broker's mints name never sent a TACACS+ packet: it is
+// never seen, and the note says tokens were minted for it, the one fact
+// worth knowing (its AAA may not point at port49). It stays a note.
+func TestMintsAloneAreNeverSeen(t *testing.T) {
+	var l logb
+	for range 2 {
+		l.add(decision.EventMint, "xe1", "lab", "", func(r *decision.Record) {
+			r.Session, r.Verdict = nil, decision.VerdictPermit
+			r.Mint = &decision.Mint{TokenSHA256: []string{"a", "b"}}
+		})
+	}
+	devices := []Device{{Name: "xe1", Platform: "cisco_iosxe", Supports: eos}}
+	r := Infer(l.recs, devices, Options{}).Rows[0]
+	if len(r.Warnings) != 0 || !slices.Equal(r.Notes,
+		[]string{"never seen: no TACACS+ record in the window, so nothing is inferred (4 tokens minted for it)"}) {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// The Redactor is the one a caller passes, not only the built-in patterns:
+// a policy's own pattern hides its secret in an example, for a consumer of
+// Report with no redacting writer in front of it (task 18 review M1).
+func TestExamplesUseTheCallersRedactor(t *testing.T) {
+	var l logb
+	l.add(decision.EventAuthorizeSession, "leaf-04", "arista_eos", "c4", nil)
+	l.account("leaf-04", "c4", "resolved", "crypto", "key", "psk", "Hunter2")
+	devices := []Device{{Name: "leaf-04", Platform: "arista_eos", Supports: eos}}
+	psk := func(string) []platform.Redaction { return []platform.Redaction{{Match: []string{"**"}, After: "psk"}} }
+	r := Infer(l.recs, devices, Options{Redactor: psk}).Rows[0]
+	if len(r.Examples) != 1 || r.Examples[0] != "crypto key psk "+platform.Redacted {
 		t.Fatalf("%+v", r)
 	}
 }

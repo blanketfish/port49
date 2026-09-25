@@ -60,6 +60,49 @@ func TestANeverSeenDeviceIsANote(t *testing.T) {
 	if code != 0 || !strings.Contains(out.String(), "note: never seen") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
+	// Tokens minted for leaf-02 are no TACACS+ record from it: it is still
+	// never seen, the note says what was minted, and nothing pages (task 18
+	// review I1, the lab's xe1).
+	mint := `{"ts":"2026-09-24T12:00:02.000Z","event":"mint","verdict":"permit","reason":"grants_matched",` +
+		`"principal":"user:noc@example.com","device":{"nas":"","name":"leaf-02","platform":"lab"},` +
+		`"mint":{"token_sha256":["0f54"],"ttl_seconds":60}}`
+	f, err := os.OpenFile(log, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(mint + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out.Reset()
+	code = run([]string{"devices", "capabilities", "--policy", pol, "--inventory", inv, log}, &out, &errb)
+	if code != 0 || !strings.Contains(out.String(),
+		"note: never seen: no TACACS+ record in the window, so nothing is inferred (1 token minted for it)") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
+}
+
+// A gap stage the command does not know still says what was dropped, and a
+// line past the longest a record may be is counted as unread, not a failure
+// that exits 1 as a finding does (task 18 review M3, M5).
+func TestDevicesCapabilitiesReadsPastWhatItDoesNotKnow(t *testing.T) {
+	pol, inv := policyFixture(t)
+	log := filepath.Join(t.TempDir(), "decisions.jsonl")
+	lines := []string{
+		`{"ts":"2026-09-24T12:00:01.000Z","event":"authorize_session","verdict":"permit","reason":"context_matched","device":{"nas":"10.0.0.1","name":"leaf-01","platform":"arista_eos"},"session":{"ctx_id":"c1","port":"vty4","rem_addr":"","privilege":15}}`,
+		`{"ts":"` + strings.Repeat("x", maxLogLine) + `"}`,
+		`{"ts":"2026-09-24T12:00:03.000Z","event":"account_gap","gap":{"stage":"a_later_stage","records":3,"since":"2026-09-24T12:00:00.000Z"}}`,
+	}
+	if err := os.WriteFile(log, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	code := run([]string{"devices", "capabilities", "--policy", pol, "--inventory", inv, log}, &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "(a_later_stage 3)") ||
+		!strings.Contains(out.String(), "1 log lines did not read as records") ||
+		!strings.Contains(out.String(), "leaf-01  arista_eos  admitted   session,commands  session") {
+		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
+	}
 }
 
 // An example echoed from the log is redacted by the built-in patterns and by

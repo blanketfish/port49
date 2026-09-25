@@ -16,6 +16,14 @@ import (
 	"github.com/rhwendt/port49/internal/platform"
 )
 
+// deviceSent is the events a device's own TACACS+ packet produces. A device
+// is seen when it sent one; the broker's mint and refresh name a device
+// without it ever having asked (task 18 review I1).
+var deviceSent = map[string]bool{
+	decision.EventRedeem: true, decision.EventAuthorizeSession: true, decision.EventAuthorizeCommand: true,
+	decision.EventEscalate: true, decision.EventAccount: true, decision.EventUnvalidated: true,
+}
+
 // The capabilities of spec §9's vocabulary, as `supports` names them.
 const (
 	Session        = "session"
@@ -55,6 +63,9 @@ type Options struct {
 type Row struct {
 	Device   Device   `json:"device"`
 	Observed []string `json:"observed"`
+	// Warnings are contradictions to page on. Where Unauthorized is not
+	// zero, the last one is the reconciliation's, which a reader may print
+	// apart from the matrix.
 	Warnings []string `json:"warnings"`
 	// Notes are what the matrix says that is no fault: a capability observed
 	// that the adapter does not declare is a lab measurement waiting to be
@@ -175,7 +186,12 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 		// §9's third observation reads silence up to the session's end.
 		pending := map[string]int{}
 		unmatched := map[string]string{} // context and command → the command, redacted
+		seen, minted := false, 0
 		for _, r := range recs {
+			if r.Event == decision.EventMint && r.Mint != nil {
+				minted += len(r.Mint.TokenSHA256)
+			}
+			seen = seen || deviceSent[r.Event]
 			switch r.Event {
 			case decision.EventAuthorizeSession:
 				observed[Session] = true
@@ -251,8 +267,18 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 			row.Notes = append(row.Notes, fmt.Sprintf("qualified: account_gap records overlapping this window say %d "+
 				"accounting records port49 received are not in the log, so a reconciliation finding is possible, not certain", n))
 		}
-		if row.Device.Quarantine == "" && len(recs) == 0 {
-			row.Notes = append(row.Notes, "never seen: no record in the window, so nothing is inferred")
+		if row.Device.Quarantine == "" && !seen {
+			note := "never seen: no TACACS+ record in the window, so nothing is inferred"
+			if minted > 0 {
+				// Credentials were issued for a device that never asked: its
+				// AAA may not point at port49 (task 18 review I1).
+				tokens := "tokens"
+				if minted == 1 {
+					tokens = "token"
+				}
+				note += fmt.Sprintf(" (%d %s minted for it)", minted, tokens)
+			}
+			row.Notes = append(row.Notes, note)
 		}
 		for _, c := range row.Observed {
 			if !slices.Contains(d.Supports, c) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -92,10 +93,13 @@ func devicesCapabilities(args []string, stdout, stderr io.Writer) int {
 			admission = "quarantined"
 			flags = append(flags, "✗ "+r.Device.Quarantine)
 		}
-		for _, w := range r.Warnings {
-			if r.Unauthorized > 0 && strings.HasSuffix(w, "had no corresponding authorization request") {
-				continue // the reconciliation section says it, qualified
-			}
+		warnings := r.Warnings
+		if r.Unauthorized > 0 {
+			// The reconciliation's warning is the last one: the section
+			// below says it, qualified by the stream's health.
+			warnings = warnings[:len(warnings)-1]
+		}
+		for _, w := range warnings {
 			flags = append(flags, "⚠ "+w)
 			code = 1
 		}
@@ -136,11 +140,14 @@ func streamHealth(rep capability.Report, unread int) string {
 		for _, g := range rep.Gaps {
 			by[g.Stage] += g.Records
 		}
+		stages := make([]string, 0, len(by))
+		for stage := range by {
+			stages = append(stages, stage)
+		}
+		sort.Strings(stages)
 		var parts []string
-		for _, stage := range []string{"offer_refused", "drain_unparseable", "drain_set_aside"} {
-			if by[stage] > 0 {
-				parts = append(parts, fmt.Sprintf("%s %d", stage, by[stage]))
-			}
+		for _, stage := range stages {
+			parts = append(parts, fmt.Sprintf("%s %d", stage, by[stage]))
 		}
 		s = "accounting stream: records dropped in the window (" + strings.Join(parts, ", ") +
 			"), so a reconciliation finding below is possible, not proven"
@@ -152,7 +159,9 @@ func streamHealth(rep capability.Report, unread int) string {
 }
 
 // readLogs reads decision-log files, `-` for stdin, one JSON record a line.
-// A line that does not read as a record is counted, never quoted.
+// A line that does not read as a record is counted, never quoted, and so is
+// one past maxLogLine: a huge line is not a reason to fail the report with
+// the exit code that pages on a finding.
 func readLogs(names []string) (recs []decision.Record, unread int, err error) {
 	for _, name := range names {
 		if err := readLog(name, &recs, &unread); err != nil {
@@ -172,21 +181,43 @@ func readLog(name string, recs *[]decision.Record, unread *int) error {
 		defer f.Close()
 		in = f
 	}
-	sc := bufio.NewScanner(in)
-	sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
-	for sc.Scan() {
-		if strings.TrimSpace(sc.Text()) == "" {
-			continue
-		}
-		var r decision.Record
-		if r.UnmarshalJSON(sc.Bytes()) != nil {
+	rd := bufio.NewReaderSize(in, 64*1024)
+	for {
+		line, long, err := nextLine(rd, maxLogLine)
+		if long {
 			*unread++
-			continue
+		} else if len(bytes.TrimSpace(line)) > 0 {
+			var r decision.Record
+			if r.UnmarshalJSON(line) != nil {
+				*unread++
+			} else {
+				*recs = append(*recs, r)
+			}
 		}
-		*recs = append(*recs, r)
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("%s was not read to the end: %w", name, err)
+		}
 	}
-	if err := sc.Err(); err != nil {
-		return fmt.Errorf("%s was not read to the end: %w", name, err)
+}
+
+// maxLogLine is the longest line readLog parses as a record.
+const maxLogLine = 4 << 20
+
+// nextLine is rd's next line without its newline, and long where it ran
+// past max bytes, whose bytes are read to the newline and dropped.
+func nextLine(rd *bufio.Reader, max int) (line []byte, long bool, err error) {
+	for {
+		frag, err := rd.ReadSlice('\n')
+		if !long && len(line)+len(frag) > max {
+			line, long = nil, true
+		} else if !long {
+			line = append(line, frag...)
+		}
+		if err != bufio.ErrBufferFull {
+			return bytes.TrimSuffix(line, []byte("\n")), long, err
+		}
 	}
-	return nil
 }
