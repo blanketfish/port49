@@ -266,19 +266,6 @@ func (p *Policy) projectOnce(c composition, b engine.Blob, dialect platform.Dial
 	in := projection.Input{Platform: b.Platform, Dialect: dialect, Rules: b.Rules, Classes: b.Classes,
 		Normalize: b.Normalize, Facts: projection.FactsFor(dialect.CommandProjection),
 		Keywords: setKeywords(p.set, b.Platform)}
-	if c.level != "" {
-		level, ok := "", false
-		for l := c.level; l != "" && !ok; l = p.parents[l] {
-			if in.Bits, ok = dialect.LevelBits(l); ok {
-				level = l
-			}
-		}
-		if !ok {
-			return projection.Result{}, fmt.Errorf("level %s has no ceiling bits on %s and no parent that has "+
-				"(spec §6, §8)", c.level, b.Platform)
-		}
-		in.Level, in.Template = level, dialect.LocalUserNames[level]
-	}
 	// The reply is logged whole, in the authorize_session record and the
 	// blob event, so a rule redaction would hide is never sent (spec §5.8).
 	patterns := append(platform.Redactions(b.Platform), dialect.Redact...)
@@ -289,6 +276,26 @@ func (p *Policy) projectOnce(c composition, b engine.Blob, dialect platform.Dial
 	// What a refusal or a why quotes of a rule prints each value any rule
 	// hides redacted (spec §5.8; task 12b review I1).
 	in.Hidden = p.HiddenValues()
+	if c.level != "" {
+		level, ok := "", false
+		for l := c.level; l != "" && !ok; l = p.parents[l] {
+			if in.Bits, ok = dialect.LevelBits(l); ok {
+				level = l
+			}
+		}
+		if !ok {
+			// The level cannot be written in the device's bits: that
+			// subject's ceiling there is none, and it alone gets the
+			// fail-closed reply (spec §8, "Generator constraints" 5;
+			// decision 26). A quarantine would take every subject on the
+			// device dark for one composition.
+			return projection.FailClosed(in, projection.FailUnwritable, fmt.Sprintf("on %s, level %s maps to "+
+				"no permission bits and has no parent that does, so its ceiling cannot be written as the "+
+				"device's bits: map it under privilege, or give it a parent that is mapped (spec §6, §8)",
+				b.Platform, c.level))
+		}
+		in.Level, in.Template = level, dialect.LocalUserNames[level]
+	}
 	return projection.Project(in)
 }
 

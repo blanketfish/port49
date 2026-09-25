@@ -224,6 +224,15 @@ func Project(in Input) (Result, error) {
 	return g.failClosed(r)
 }
 
+// FailClosed is the fail-closed reply for a composition refused before it
+// can be rendered, with in's Bits the ceiling the reply stays within: a level
+// the adapter maps to no bits, whose ceiling is none, gets `deny-commands`
+// `.*` alone (spec §8, "Generator constraints" 5; decision 26). category is
+// one of the Fail* constants.
+func FailClosed(in Input, category, why string) (Result, error) {
+	return newGenerator(in, in.Bits).failClosed(&Refusal{Category: category, Why: why})
+}
+
 type generator struct {
 	in              Input
 	permits, denies []engine.Rule

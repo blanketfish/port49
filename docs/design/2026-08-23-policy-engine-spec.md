@@ -3392,7 +3392,8 @@ composition is projected:
 
 A composition the projection cannot tell the device faithfully — the refused shape, bits that
 enter configuration mode where they cannot be dropped, an attribute past the budget, a rule it
-cannot write, a rule redaction hides, a deny that names an argument (decision 27), or a reply
+cannot write, a level the adapter maps to no bits (`unwritable`: its ceiling cannot be written
+in the device's bits, so the reply carries no allow), a rule redaction hides, a deny that names an argument (decision 27), or a reply
 its witness finds unsound — is not a joint
 check (§13, decision 26). That subject alone gets the **fail-closed reply**: `deny-commands`
 `^.*$`, an allow for each permit that is within the level's ceiling bits that do not enter
@@ -5213,7 +5214,10 @@ projection refusals. `policy test` and `policy diff` exit non-zero on any such c
 name the subject, the device and the reason, so CI refuses it before it ships (§8, "CI MUST
 refuse the policy"). For an admin composition with a deny, the reply drops only
 the bits that enter configuration mode where the rest is provably sound, which it can be under
-`user_permissions`; otherwise it is the fail-closed reply. Every such session is recorded
+`user_permissions`; otherwise it is the fail-closed reply. A level the adapter maps to no bits,
+its parents' included, is such a composition too (`unwritable`): its ceiling on Junos is none,
+so its reply is `deny-commands=^.*$` alone, where on a platform that renders levels a missing
+rendering stays decision 20's quarantine. Every such session is recorded
 `projection_fail_closed` (§5.7). The pre-flight review of plan 5b measured the alternative: spec
 §11's own policy quarantined all three SRXs for every user, and `policy test` passed it. (§8,
 §10)

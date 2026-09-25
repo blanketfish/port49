@@ -50,8 +50,9 @@ func mustParse(t *testing.T, body string) *Policy {
 // built-in platform renders or numbers: a role landing a session there
 // quarantines every device whose platform renders levels — arista_eos,
 // cisco_nxos and cisco_iosxe since plan 5 — and a ceiling naming it loads
-// nowhere. juniper_junos renders nothing until plan 5b's projection, so its
-// devices are the tests' devices that still mint.
+// nowhere. juniper_junos renders no level, and a projected set gives that
+// subject alone the fail-closed reply there (decision 26), so its devices are
+// the tests' devices that still mint.
 const unmappedLevel = "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"
 
 // good is spec §11's shape, cut to what every platform in inventory() can

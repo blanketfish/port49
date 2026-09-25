@@ -134,6 +134,76 @@ grants:
 	}
 }
 
+// A level the adapter maps to no bits is that subject's fail-closed reply,
+// `deny-commands` `.*` and nothing else, not a quarantine: the other subjects
+// on the device keep theirs, and CI names the subject, device and why (spec
+// §8, "Generator constraints" 5; decision 26; final review I-1).
+func TestALevelWithNoBitsFailsClosedForThatSubjectOnly(t *testing.T) {
+	body := unmappedLevel + scopeOK + `roles:
+  - {name: r, privilege: unmapped, permit: ["show **"]}
+  - {name: ok, privilege: readonly, permit: ["show version"]}
+subjects:
+  - {name: s, identity: ["user:a@example.com"], username: a, token_ttl: 60s}
+  - {name: t, identity: ["user:b@example.com"], username: b, token_ttl: 60s}
+grants:
+  - {subject: s, scope: all_devices, roles: [r]}
+  - {subject: t, scope: all_devices, roles: [ok]}
+`
+	for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
+		p := parseProjected(t, delivery, body)
+		for _, q := range p.Quarantines(noon) {
+			if q.Platform == "juniper_junos" {
+				t.Fatalf("%s: a level with no bits quarantines %s: %+v", delivery, q.Device, q)
+			}
+		}
+		res, err := p.ResolveSubject("t", deviceNamed(t, "srx-fw-04"), noon)
+		if err != nil || res.Blob.FailClosed != "" {
+			t.Fatalf("%s: the other subject: %q %v", delivery, res.Blob.Attributes, err)
+		}
+		res, err = p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
+		if err != nil || res.Blob.FailClosed != projection.FailUnwritable ||
+			!reflect.DeepEqual(res.Blob.Attributes, []string{"deny-commands=^.*$"}) {
+			t.Fatalf("%s: %q %q %v", delivery, res.Blob.Attributes, res.Blob.FailClosed, err)
+		}
+		if r := res.Projection.Refusal; r == nil || !strings.Contains(r.Why, "level unmapped maps to no permission bits") {
+			t.Fatalf("%s: %+v", delivery, res.Projection.Refusal)
+		}
+		var got []string
+		for _, f := range p.Lint(noon) {
+			if f.Kind == FindingProjectionRefused {
+				got = append(got, f.Message)
+			}
+		}
+		if len(got) != 1 || !strings.HasPrefix(got[0], `subject "s" on juniper_junos gets the fail-closed reply `+
+			`(unwritable)`) || !strings.Contains(got[0], "level unmapped maps to no permission bits") ||
+			!strings.HasSuffix(got[0], "srx-fw-04, srx-fw-05, srx-fw-22, srx-lab-01") {
+			t.Errorf("%s: CI does not name s, the devices and why: %q", delivery, got)
+		}
+	}
+}
+
+// Moving the pin to the shipped set 1.1.0 with a custom level no adapter maps
+// quarantines no SRX: the platforms that render levels quarantine as before
+// (decision 20), and every Junos device still mints (final review I-1).
+func TestPinningTheShippedSetWithABitlessLevelQuarantinesNoSRX(t *testing.T) {
+	p := mustParse(t, "platform_set: 1.1.0\n"+unmappedLevel+scopeOK+`roles:
+  - {name: r, privilege: unmapped, permit: ["show **"]}
+`+subjOK+grantOK)
+	var got []string
+	for _, q := range p.Quarantines(noon) {
+		got = append(got, q.Device)
+	}
+	if want := []string{"campus-sw-7", "leaf-01", "nx-01", "xe-01"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("quarantined %v, want %v", got, want)
+	}
+	for _, d := range []string{"srx-fw-04", "srx-fw-05", "srx-fw-22", "srx-lab-01"} {
+		res, err := p.ResolveSubject("s", deviceNamed(t, d), noon)
+		if err != nil || res.Blob.FailClosed != projection.FailUnwritable {
+			t.Errorf("%s: %q %q %v", d, res.Blob.Attributes, res.Blob.FailClosed, err)
+		}
+	}
+}
+
 // No role or grant sets an attribute the projection renders, in any case or
 // numbered variant the device reads (I1).
 func TestARoleCannotSetAProjectedAttribute(t *testing.T) {
