@@ -376,6 +376,15 @@ func (p *Policy) buildPlatforms(f file) error {
 		// the block gives a level the set measured nothing for is the
 		// operator's note, never read as a measurement.
 		ref, measured := builtin[shippedAs]
+		// Only a measured set subtracts reach (spec §8, carve_outs): a block
+		// for a platform the pinned set does not project declares none, or a
+		// deny its carve-out claims would be sent as nothing (plan 5b
+		// pre-flight R-I1). keepsProjection holds a projected one to the set's.
+		if b.Spec.CarveOuts != nil && !(measured && ref.Projected()) {
+			return fmt.Errorf("%s.carve_outs: platform set %s does not project %s, so no carve-out on it is "+
+				"measured; a carve-out says the held bits reach less, and only a measured set subtracts reach, so "+
+				"remove the key (spec §8, §15 L12)", at, p.set, shippedAs)
+		}
 		if measured {
 			d = platform.KeepMeasured(d, ref)
 		}
@@ -497,6 +506,9 @@ func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version strin
 				shippedAs)
 		}
 	}
+	if err := keepsProjection(at, shippedAs, d, ref, version); err != nil {
+		return err
+	}
 	for _, c := range d.Supports {
 		if !slices.Contains(ref.Supports, c) {
 			return fmt.Errorf("%s.supports: %s is not a capability platform set %s measured on %s; a rule would read "+
@@ -526,6 +538,52 @@ func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version strin
 			return fmt.Errorf("%s.%s: platform set %s measured %v on %s, and %v would let a command past a deny "+
 				"or a rule the device does not enforce; a block may not loosen it (spec §8)", at, f.key, version,
 				f.set, shippedAs, f.is)
+		}
+	}
+	return nil
+}
+
+// keepsProjection refuses a merged adapter that loosens what the set's
+// projection rests on (spec §8): a projected platform stays projected by the
+// set's projection, since without it the device's own template decides and
+// no rule reaches the session; a bit's reach is a floor, since a reach that
+// says less than the bit does lets the device run what port49 denies; and a
+// carve-out is a ceiling, since one says the held bits reach less. A block may
+// add to a bit's reach, an edit the diff gates like any adapter edit, drop a
+// carve-out, and may not declare a bit the set did not measure.
+func keepsProjection(at, shippedAs string, d, ref platform.Dialect, version string) error {
+	if !ref.Projected() {
+		return nil
+	}
+	if d.CommandProjection != ref.CommandProjection {
+		return fmt.Errorf("%s.command_projection: platform set %s projects %s's rules as %s, and without it no rule "+
+			"reaches a session there; a block may not remove or change it (spec §8)", at, version, shippedAs,
+			ref.CommandProjection)
+	}
+	for _, bit := range sortedKeys(d.Bits) {
+		if _, measured := ref.Bits[bit]; !measured {
+			return fmt.Errorf("%s.bits.%s: platform set %s does not declare this bit on %s, so its reach is "+
+				"unmeasured; a block may not add a bit (spec §8, §15 L12)", at, bit, version, shippedAs)
+		}
+	}
+	// Every bit the set declares, read from the set's side: a `replace: true`
+	// block that leaves one out would stop counting reach the device still
+	// gives (the baseline's, every session's).
+	for _, bit := range sortedKeys(ref.Bits) {
+		for _, rule := range ref.Bits[bit] {
+			if !slices.Contains(d.Bits[bit], rule) {
+				return fmt.Errorf("%s.bits.%s: a rule platform set %s measured in this bit's reach is missing; a "+
+					"block may add to a bit's reach, not take from it (spec §8)", at, bit, version)
+			}
+		}
+	}
+	for _, bit := range sortedKeys(d.CarveOuts) {
+		for _, rule := range d.CarveOuts[bit] {
+			if !slices.Contains(ref.CarveOuts[bit], rule) {
+				return fmt.Errorf("%s.carve_outs.%s: platform set %s does not measure this carve-out on %s; a carve-out "+
+					"says the held bits reach less, so a block may drop one, not add one (spec §8, §15 L12)", at, bit,
+					version, shippedAs)
+			}
 		}
 	}
 	return nil
@@ -720,7 +778,8 @@ func (p *Policy) checkBlockOrder(file) error {
 			key    string
 			levels []string
 		}{{"privilege", mapKeys(b.Privilege)}, {"ceiling_levels", mapKeys(b.CeilingLevels)},
-			{"unreachable", mapKeys(b.Unreachable)}, {"fallback", mapKeys(b.Fallback)}} {
+			{"unreachable", mapKeys(b.Unreachable)}, {"fallback", mapKeys(b.Fallback)},
+			{"local_user_names", mapKeys(b.LocalUserNames)}} {
 			for _, l := range entries.levels {
 				if !slices.Contains(p.levels, l) {
 					return fmt.Errorf("platforms.%s.%s.%s: level %s is not declared; the levels are %s", name,
@@ -729,6 +788,9 @@ func (p *Policy) checkBlockOrder(file) error {
 			}
 		}
 		if err := platform.Monotone(name, p.adapters[name], p.levels); err != nil {
+			return err
+		}
+		if err := platform.MonotoneBits(name, p.adapters[name], p.levels); err != nil {
 			return err
 		}
 	}
@@ -848,6 +910,9 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
 			if err := p.checkPlaceholder(at, key, a); err != nil {
 				return err
 			}
+			if err := p.checkInertOnProjected(at, key, a); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -885,6 +950,26 @@ func (p *Policy) checkPlaceholder(at, key, a string) error {
 		if p.dialect(name2).BearsPrivilege(name) {
 			return fmt.Errorf("%s: %s is not listed inert on %s, so it takes no placeholder: only an "+
 				"attribute an adapter holds to carry no privilege may (spec §6)", at, name, platformName(name2))
+		}
+	}
+	return nil
+}
+
+// checkInertOnProjected refuses, under a projected platform's key or under
+// `all` where any platform is projected, an attribute that platform's adapter
+// does not list inert: whether the device reads a name outside the
+// projection's (`shell:allow-commands`, `foo-bar`) is unmeasured, and one it
+// read would stand beside what the projection proved (spec §8, "Generator
+// constraints" 6; plan 5b pre-flight R-M3). A name is read as written, so a
+// case variant of an inert one is refused too.
+func (p *Policy) checkInertOnProjected(at, key, a string) error {
+	name := engine.AttributeName(a)
+	for _, plat := range sortedKeys(p.adapters) {
+		d := p.adapters[plat]
+		if (key == plat || key == "all") && d.Projected() && d.BearsPrivilege(name) {
+			return fmt.Errorf("%s: %s is not listed inert on %s, whose reply is its projection's: whether the "+
+				"device reads it is unmeasured, and one it read would stand beside what the projection proved, so "+
+				"only an attribute the adapter lists inert is set there (spec §8)", at, name, plat)
 		}
 	}
 	return nil

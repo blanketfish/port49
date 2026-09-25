@@ -543,8 +543,9 @@ func TestSpecOfRoundTrips(t *testing.T) {
 		}
 	}
 	// A Dialect field with no Spec key would be one no block sets and the
-	// diff never compares (task 9 review M1).
-	if n, m := reflect.TypeOf(Dialect{}).NumField(), reflect.TypeOf(Spec{}).NumField(); n != m {
+	// diff never compares (task 9 review M1). CeilingBits is the one field
+	// that shares a key: `privilege`, on a projected platform (spec §8).
+	if n, m := reflect.TypeOf(Dialect{}).NumField(), reflect.TypeOf(Spec{}).NumField(); n != m+1 {
 		t.Fatalf("Dialect has %d fields and Spec %d keys", n, m)
 	}
 	keys := SpecKeys()
