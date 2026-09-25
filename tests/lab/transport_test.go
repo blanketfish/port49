@@ -775,6 +775,12 @@ func (l *lab) netconfDial(user, password string) (*netconfConn, string, error) {
 	if port == "" {
 		return nil, "", fmt.Errorf("this lab does not enable NETCONF on %s", l.p.name)
 	}
+	return l.netconfDialPort(user, password, port)
+}
+
+// netconfDialPort is netconfDial on a port named by the caller: the NETCONF
+// subsystem on 22, which Junos may serve with no `netconf ssh` (L26c).
+func (l *lab) netconfDialPort(user, password, port string) (*netconfConn, string, error) {
 	c, err := l.dialHostPort(user, password, l.p.addr+":"+port, 60*time.Second)
 	if err != nil {
 		return nil, "", fmt.Errorf("SSH to the NETCONF port %s: %w", port, err)
