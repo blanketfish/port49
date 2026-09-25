@@ -150,6 +150,12 @@ the `(nas, username)` store key and make the audit trail ambiguous; this is a po
 error. Collision with a device-local account name is the same hazard described in §5.6 and
 SHOULD be reported where port49 can observe it.
 
+**`remote` and every `p49-*` name are reserved.** They are a Junos device's template users: a
+session under one lands in that template's class whatever the reply says, so a subject the
+projection told less than port49 permits (§13, decision 26) would run what the template's
+class runs. A subject declaring one is a policy load error, and the broker refuses to mint for
+one a directory derives (plan 5b pre-flight I9).
+
 **The username is canonicalized before it is used as a key, not merely compared.** The
 device sends whatever the operator typed — `alice`, `DOMAIN\alice`, or
 `alice@corp.example.com`. The broker writes the token under the canonical form — lower-cased,
@@ -1442,7 +1448,10 @@ Post-login control there is bounded by the device's own session, and port49 can 
 nor revoke. This MUST be stated rather than implied: `port49 explain` MUST say so when asked
 about revocation or a ceiling on such a platform, exactly as it must for `pipe_authorized:
 false`. Two levers exist and both are used. The adapter renders the class `idle-timeout` from
-`max_session_age`, which is an approximation but an enforced one. And every revocation record
+`max_session_age`, which is an approximation but an enforced one: `port49 platform export
+--classes` prints each class a projected platform's replies rest on with `idle-timeout` set to
+`session.max_session_age_default` in whole minutes, rounded down (§8), and L24 measures that it
+ends an idle session a reply landed in that class. And every revocation record
 names the live contexts it could **not** reach, so an incident responder knows which devices
 still need a manual disconnect.
 
@@ -1674,6 +1683,16 @@ events (`account`, `blob`) that share the envelope and carry no verdict:
 
 Device accounting shares this envelope as the eighth event, `account`, and is specified in
 §5.8. It is not a decision — it is a report — so it carries no `policy` block and no verdict.
+A ninth, `account_gap`, is a report too: accounting records port49 received and did not write,
+`{"gap": {"stage": ..., "records": N, "since": ...}}`, one record per spool drop stage —
+`offer_refused` (answered `ERROR`; the device may send the record again), `drain_unparseable`
+and `drain_set_aside` (answered `SUCCESS`, and not in the log). An `offer_refused` drop is written
+before the next drain pass's records; a drop during a pass is written when that pass ends,
+after the records it sat among, its `since` saying when it began. It is what lets a reader of
+the log know the accounting stream has a hole, which reconciliation must know before it says a
+device did not ask (§9). The count is
+held in memory, so a restart loses what was not yet written; `port49_spool_drops_total{stage}`
+is the alarm, and this record is the log's own witness.
 
 `escalate` exists as its own event because the device-facing username on those platforms is
 `$enab{level}$`, not a person. The record carries the principal resolved from login context,
@@ -1751,6 +1770,7 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
 | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
 | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed. On `refresh`, a deny recorded once per context per policy version (bundle): the live context is left as it was until the quarantine lifts |
+| `projection_fail_closed` | `authorize_session`, a permit: the session on a projected platform (§8) was answered with its composition's fail-closed reply — every command denied but what the projection proved — because the projection cannot tell the device that composition faithfully (§13, decision 26). The blob carries why (`fail_closed`: `refused_shape`, `configuration_mode`, `overflow`, `unwritable`, `secret_rule` or `unsound`). Every other subject on the device is answered as before; `policy test` and `policy diff` fail on the composition |
 
 Every event has a success reason and at least one failure reason in this table, so
 "decisions by event, verdict, and reason" (design document §15) is a complete metric. A
@@ -2653,7 +2673,10 @@ gets readonly's role: `priv-lvl=15`, `roles=network-operator` on EOS and
 
 **Platforms that are not `priv-lvl`-native** (Junos maps to `local-user-name`) MUST declare
 a mapping for every level. A missing mapping is a **policy load error in CI**, not a broken
-login at 3am.
+login at 3am. On a projected platform (§8) the mapping is the level's ceiling in permission
+bits, and under `bit_delivery: local_user_name` a template user per level; a level with no
+bits on its parent chain is a load error on the device it lands on, as any level with no
+mapping is.
 
 **Exact attribute spellings are lab-verified, not asserted.** The shipped adapters use bare
 `priv-lvl` for the TACACS+ shell-service reply, the bare `roles=` for EOS roles and
@@ -2900,8 +2923,10 @@ attribute is complete in four lines:
 | `expands_abbreviations` | whether the device sends resolved command words | if `commands` |
 | `splits_interface_names` | whether the device sends an interface name and its index as two arguments (§3 rule 5); `true` on `cisco_iosxe` only (L21) | optional |
 | `pipe_token` / `pipe_authorized` | modifier separator; whether it reaches us | if `commands` |
-| `command_projection` | how rules render for session-only platforms (below) | if `session`-only |
-| `bits` / `bit_delivery` | each permission bit's reach in rule form, and whether bits travel as `user-permissions` or a `local-user-name` template (below) | if `session`-only |
+| `command_projection` | how rules render for session-only platforms (below): `junos_regex`, the one this build renders. Where it is set, `privilege` is each level's ceiling in permission bits, never attributes, and `supports` is `[session]` | if `session`-only |
+| `bits` / `bit_delivery` | each permission bit's reach in rule form, an upper bound measured in the lab (L12), and whether bits travel as `user-permissions` or a `local-user-name` template (below). A session runs the union of its bits' reach. The bit `baseline` is what a class with no bits runs, held by every session and never sent or named in `privilege`. A block may add to a bit's reach, an edit the diff gates as widening (§12), and never take from it, and may not declare a bit the set does not | if `session`-only |
+| `carve_outs` | the commands a bit alone makes available, whatever other bit reaches them: each rule held by that bit's own reach, measured in the lab (L12). The only subtraction from the union: a bit not held removes no command another bit reaches except these. A block may drop one and never add one | optional, with `bits` |
+| `local_user_names` | under `bit_delivery: local_user_name`, each level's template user on the device, whose class `port49 platform export --classes` renders with the level's bits | with `local_user_name` |
 | `redact` | patterns whose argument values are removed before an accounting or authorization record is written (§5.7, §5.8); a block **adds** to the built-in patterns in `platforms/redact.yaml` and never removes one, and an edit to it is gated (§12) | if the platform sends command accounting — session-only platforms included |
 | `session_services` | the authorization `service` values this platform's sessions arrive with; a **list**, because the name is device-configurable on Junos | defaults per platform |
 | `session_discriminator` | the accounting AV pair whose value separates two sessions of one user on one device (§5.8) | defaults per platform |
@@ -3055,9 +3080,15 @@ Bits reach the device one of two ways, both in use in real fleets and selected p
 | `user_permissions` | `user-permissions=<bits>` per session, chosen per grant | one template user (`remote` or named) whose class carries no bits of its own |
 | `local_user_name` | `local-user-name=<template>`, one template per level, bits in its class | one class per level, rendered by `port49 platform export` |
 
-`user_permissions` is the default: zero per-level provisioning, and the bit set follows the
-grant rather than the level. `local_user_name` is for deployments that already provision
-classes and want the ceiling in device config where their compliance tooling can see it.
+`user_permissions` is the design's preference: zero per-level provisioning, and the bit set
+follows the grant rather than the level. `local_user_name` is for deployments that already
+provision classes and want the ceiling in device config where their compliance tooling can see
+it. **The built-in adapter ships `local_user_name`** until L12 measures `user-permissions`
+applied over a bitless template, per session: over a template whose class carried bits, it
+changed nothing, mandatory or optional (`tests/lab/results/L18-juniper_*.md`, variants 9 and
+10), while `local-user-name` was applied under either flag. A reply naming a template the device
+lacks lands the session in `remote` (L18, variant 7), so the reference configuration gives
+`remote` a class with no bits, `p49-remote`, and a missing template runs nothing.
 
 **Regexes for what bits cannot separate.** After the bits are chosen:
 
@@ -3090,8 +3121,9 @@ cannot carry a deny beneath a permit.
 **Refused shape.** Permits narrower than the covering bits *and* a deny beneath one of them —
 `permit: [show interfaces **], deny: [show interfaces terse]` — fits neither. Junos regex
 has no lookahead, so "everything under X except Y" cannot be written as one allow. CI MUST
-refuse the policy at load, naming the grant, the two rules, and the platform, rather than
-rendering the nearest shape. Junos documents a second attribute family,
+refuse the policy, naming the grant, the two rules, and the platform, rather than rendering
+the nearest shape; a daemon that loads it anyway answers that subject with the fail-closed
+reply, never the nearest shape (decision 26). Junos documents a second attribute family,
 `allow-commands-regexps` / `deny-commands-regexps`, in which **deny takes precedence by
 default** and which is mutually exclusive with the plain family on the wire. If that
 precedence holds over TACACS+ (L12), the refused shape becomes expressible in that family
@@ -3134,6 +3166,72 @@ but has no capture, and neither has the reach of each bit, the `.*` baseline on 
 the `-regexps` family's precedence. The plan's containerlab step closes L12 before the
 generator is final.
 
+**As built (plan 5b).** The projection ships in platform set **1.1.0**; a policy that pins
+none renders with 1.0.0 and Junos gets nothing, as before, so turning it on is a pin move
+`port49 policy diff` gates like any adapter edit. `internal/projection` renders each
+composition, and proves the reply before it is sent: every command the device would run under
+it is one port49 permits. It reads the device as the lab measured it (L11): a command runs
+where a matching allow beats every deny, or where the bits reach it and no deny matches. The
+bits are a **union**: a command runs where any held bit's reach holds it, `baseline` always
+held, unless a measured `carve_outs` entry of a bit not held takes it out —
+`view-configuration`'s `show configuration **` out of `view`'s `show **`. Nothing else
+subtracts: a bit not held never removes a command another bit reaches (plan 5b pre-flight C1).
+The bits' reach and carve-outs are applied by the device's command parser, which reads a
+command whatever its spacing, case or abbreviation, so both are matched as port49 matches a
+deny, the widest reading. The proof's obligations, each checked from the rules' terms
+(`engine.Contains`, `MayMeet`, `AlwaysDominates`), with a probe of every way the rules can be
+told apart as its witness:
+
+- **A bit is sent only where every command it reaches is decided by one rule of the grant**:
+  held by a permit, or by a deny, which is then sent. Under `local_user_name` the template's
+  class carries every bit of the level, so each must be; otherwise the grant goes narrow.
+  Every baseline command no permit holds is denied on the wire.
+- **A permit goes out as an allow only where it dominates every deny it meets**, since on the
+  device the allow beats them all; one that does not is the refused shape, named with both
+  rules. And only within the level's ceiling bits, a carve-out counted: a permit beyond them is
+  not sent, so the device refuses what port49 would permit there — narrower, which fails
+  closed, and reported.
+- **A deny is left off the wire only where a measured carve-out of a bit not sent holds every
+  command it matches**, and no allow meets it. No other bit boundary licenses it.
+- **Bits that enter configuration mode** (a reach holding `configure`: `configure`, `all`)
+  **are sent, and an allow meeting `configure` is sent, only for a grant of every command with
+  no deny.** A statement typed there is governed by the class's configuration permissions,
+  which no command regex reaches, so port49 could deny what the device runs. Under
+  `user_permissions` such a composition is rendered again without those bits, and sent that way
+  where the rest proves sound (decision 26, decided item 6); otherwise it gets the fail-closed
+  reply.
+- **The narrow shape's bits are the smallest set that reaches its allows**, preferring bits
+  that do not enter configuration mode, so a narrow admin grant is not refused for `all`.
+- **A rule whose text carries a value redaction hides is never projected**: the reply is written
+  whole to the `authorize_session` record and the blob event (§5.7, §5.8).
+
+What the regexes rest on is the device's regex dialect, measured by L9 and read into
+`JunosFacts` in the direction that fails closed until measured: explicit `^` and `$` anchors
+on every regex; a deny's letters written in both cases (`[sS][hH][oO][wW]`) while the device
+is case-sensitive; and no deny but `.*` while a deny may be walked past by abbreviating it — a
+capability shape needing one goes narrow, and a narrow one that cannot carry the grant gets the
+fail-closed reply. Every deny ends in a pipe tail, `( *\|.*)?`, since the engine strips a
+pipeline before matching and a deny anchored at its rule's last word would miss `clear bgp all
+| no-more`; it only makes a deny match more, so it stays whatever L9 measures. A deny is as
+wide as its rule — a run of spaces between words, an argument that may hold a space — and an
+allow as narrow. A word is ASCII, carries no `{`, `}`, `"` or `\`, and escapes ERE's
+operators; a regex or class pattern is carried only in the subset of RE2 that reads the same in
+POSIX ERE (literals, bracket expressions, `.`, grouping, alternation, `*`, `+`, `?`, a repeat
+of at most 8 written out, anchors at its ends), never as an empty group or alternative, and
+anything else is refused. Every attribute is sent mandatory, once, and within RFC 8907's 255
+bytes including its name; past that the subject gets the fail-closed reply, and for
+`deny-commands` `policy test` prints the class line that would carry the denies on the device
+instead, binding every subject at that template (`projection_overflow`). An allow is never
+moved into a class: a class `allow-commands` runs for every subject at that template, past
+their own denies (L11). A role or grant may not set an attribute the projection renders, in any
+case or numbered variant the device reads (`allow-commands2`, `User-Permissions`), on a
+projected platform or under `all` where one is. Each composition's shape, bits, what each regex
+carries, what the bits refuse and what is beyond them is reported (`projection`), a
+composition that gets the fail-closed reply is reported by subject, device and reason
+(`projection_refused`), and `policy diff` reports a composition whose shape or bits moved
+(§12). A composition is projected once per policy however many devices it lands on: 1,000
+SRXs and 20 subjects load in about 0.2 s (`TestProjectionLoadTime`, bound 2 s).
+
 #### Generator constraints
 
 None of these are caught by the device. All MUST be enforced at policy load:
@@ -3147,10 +3245,33 @@ None of these are caught by the device. All MUST be enforced at policy load:
    voids the entire deny baseline beneath it.
 5. **Reject invalid or over-budget policy loudly at load time**, never silently at session
    time. A server that skips an attribute at session time produces a fail-open shape.
+6. **Never emit an attribute a role or grant also sets.** The projection renders the template,
+   the bits and the regexes; a hand-written one beside it is a second instance (1), and over it
+   a regex nothing proved (4). Refused at load (plan 5b).
 
-**Blast radius.** An invalid projection locks out every user authenticating against that
-device simultaneously. Lockout is fail-closed, but deployments MUST have a break-glass path
-independent of TACACS attributes — a local account or console access (design document §4).
+A composition the projection cannot tell the device faithfully — the refused shape, bits that
+enter configuration mode where they cannot be dropped, an attribute past the budget, a rule it
+cannot write, a rule redaction hides, or a reply its witness finds unsound — is not a joint
+check (§13, decision 26). That subject alone gets the **fail-closed reply**: `deny-commands`
+`^.*$`, an allow for each permit that is within the level's ceiling bits that do not enter
+configuration mode, dominates every deny it meets, does not meet `configure` and can be
+written, and no other bit or template — under `user_permissions` the smallest of those bits
+that reach the allows, under `local_user_name` no `local-user-name`, so the session lands in
+the bitless `p49-remote`. Where the allows cannot go out whole none does. The reply is proven
+as any other. The session is recorded `projection_fail_closed` (§5.7), and `policy test` and
+`policy diff` exit non-zero on it, naming the subject, the device and why (§8, "CI MUST refuse
+the policy"). **Operator note:** until L9 measures that a deny reads the command as the CLI
+expands it, no deny narrower than `.*` goes out, so under the shipped `local_user_name` a
+composition with any deny beneath a permit — the realistic readonly with its
+`show configuration` deny included — gets the fail-closed reply on Junos; everyone else on the
+device keeps working, and CI names each such subject before it ships.
+
+**Blast radius.** A projection port49 cannot carry fails closed for the one subject it
+belongs to (decision 26). A device whose template classes drift from the reference, or that
+lacks them, can still lock out every user authenticating against it at once: a missing
+template lands every session in `remote`. Lockout is fail-closed, but deployments MUST have a
+break-glass path independent of TACACS attributes — a local account or console access (design
+document §4).
 
 #### Verification
 
@@ -3178,6 +3299,21 @@ instrument for the differential test, not a runtime one.
 **Anchoring is a per-platform property.** Our rules match the full vector. A device treating
 `start.*` as unanchored would also match `request start …`, diverging from our semantics.
 That belongs in the adapter and is asserted in the lab, never assumed.
+
+**The reference classes are exported.** `port49 platform export --classes --config
+port49d.yaml PLATFORM` prints, as `set` lines, the configuration a projected platform's
+replies rest on: the adapter's `device_config` (on Junos `tacplus-options
+strict-authorization`), the `remote` template user in the bitless class `p49-remote`, and under
+`local_user_name` each level's template user and class with the level's bits, one per line as
+`show configuration | display set` prints them. Each template class and user is written as a
+replace — a `delete` before its `set` lines — so loading it leaves nothing a device carried
+under one: a class `allow-commands`, or a template user's local password. No template user is
+one that can log in locally: Juniper documents a template user as one with no authentication,
+and L12 measures that it refuses a local login; the reference adds a locked
+`authentication encrypted-password "*"` only if that measurement found otherwise. Every class
+carries `idle-timeout` from `session.max_session_age_default`, in whole minutes rounded down
+(decision 21); the file is read for that key alone, so no key or secret is needed to run it.
+`port49 devices check-config --config port49d.yaml` holds a device to it (§12).
 
 **Importing existing configuration.** Simple alternations of prefix patterns convert to
 token rules mechanically; arbitrary regex does not. A migration tool MUST convert what it can
@@ -3458,6 +3594,35 @@ health over the same window: spool drops, `ERROR` replies, and unattributed-reco
 (§5.8). A report that cannot distinguish "the device did not ask" from "we did not receive"
 will eventually accuse a correctly configured device, and once that happens nobody reads the
 report again.
+
+**As built (plan 5b).** `port49 devices capabilities --policy FILE --inventory FILE [--since
+DURATION] LOGFILE...` reads the decision log a daemon wrote (`-` for stdin) and prints, per
+inventory device, its admission, what its adapter declares under `supports`, and what the log
+shows it asked: `session` for an `authorize_session` record, `commands` for an
+`authorize_command`, `config_commands` for an authorization request that followed a permitted
+configuration entry (`configure …`) in the same context. `--since` bounds the window by the
+newest record's time, never the wall clock. An admitted device with no record in the window
+is noted **never seen** and exits 0: in a day's window every device nobody logged into is one,
+and a job that pages on them is one nobody reads. It warns — and exits 1, for a job to page on
+— on a contradiction between what a device declares and what it did:
+
+- **config-commands probably off**: on a `commands` platform, at least 5 permitted configuration
+  entries in the window and at least 80% of them followed by no authorization request in their
+  context before the session's exec STOP or the window's end. An entry followed only by exec
+  commands is read as followed, so the inference under-reports rather than accuses;
+- **an unauthorized tier**: on a `commands` platform, command accounting records of contexts
+  port49 authenticated (`attribution: resolved`) whose command text holds no authorized command
+  of the same context. Holding, not equality, is the join, because NX-OS's accounting `cmd` is
+  the configuration path joined with ` ; ` and a result (L21), so a shape the join does not
+  expect reads as authorized. Printed as spec §9's block, with the device's unattributed, foreign
+  and system counts beside it.
+
+A capability observed that the adapter does not declare is a note, never a warning: it is a lab
+measurement waiting to be made. The window's `account_gap` records (§5.7) qualify the whole
+report: with any, it says so on its first line, an unauthorized tier is printed as possible, not
+found, and does not set the exit code. CI's half is `report: unenforced_rules`: a subject whose
+roles carry command rules on a platform that neither authorizes commands nor projects them —
+Junos under set 1.0.0 — is told they decide nothing there.
 
 > **Principle.** Never require an operator to assert something the system can observe.
 > Anything declared by hand about device behavior will eventually be wrong, and it will be
@@ -4229,7 +4394,12 @@ line the adapter's `config_checks` name: a command method list falling back to `
 `authentication-order` with `password` in it (L4) — or on a `device_config` line the
 configuration does not carry as a top-level line of its own, the absence no `config_checks`
 entry can see: IOS-XE's level-7 command method list, without which a level-7 command is never
-asked about (§6). A `platforms:` block adds to the set's `device_config`, `local_accounts` and
+asked about (§6). On a projected platform it also reads the configuration, as `show
+configuration | display set` prints it, against the reference `platform export --classes`
+writes, and `--config port49d.yaml`, the classes' idle-timeout, is required: a reference line
+the device lacks, and any line under a template class or template user the reference does not
+write — a class `allow-commands`, a permission, a template password — fails it, the uid Junos
+assigns aside (§8). A `platforms:` block adds to the set's `device_config`, `local_accounts` and
 `config_checks` and never takes one away, `replace: true` and `based_on:` included: a block
 that rewrites the set's line ending in `local` to end in `none` still has the set's line
 required and its own reported by the set's check. A device configuration is full of secrets,
@@ -4267,9 +4437,13 @@ rules distinguish — each word, `*`, `**`, and each deny word's abbreviations �
 command whose decision changed, each level or ceiling that changed (a privilege change, §6),
 and each device the new policy quarantines. It exits non-zero on a command a deny refused that
 the new policy permits, unless a policy test in the new policy exercises that permit over that
-deny, on a newly quarantined device, and on a subject whose mint the new policy's broker
-refuses (`attribute_too_long`, `attribute_unsafe`), since the diff, `policy test` and `explain`
-run the broker's mint checks and answer as it does.
+deny, on a newly quarantined device, on a subject whose mint the new policy's broker refuses
+(`attribute_too_long`, `attribute_unsafe`), since the diff, `policy test` and `explain` run the
+broker's mint checks and answer as it does, and on every composition the new policy gives a
+projection's fail-closed reply, new or not (§13, decision 26). `port49 policy test` exits
+non-zero on a device quarantined now or at a later expiry and on every fail-closed
+composition too: the daemon still serves the rest (decision 20), and CI ships neither (plan 5b
+pre-flight I10); `port49 platform upgrade` previews both.
 
 **A privilege raise fails the gate too** (owner's rulings 2026-09-24). The gate compares what
 the device gets and what port49 enforces, not level names, for each subject on each device at
@@ -4294,7 +4468,13 @@ each instant. Any of these is a raise:
   fence, so removing one widens access too: without `deny-commands` a Junos session loses its
   only refusal, and without `local-user-name` it falls back to the device's template user (owner's
   ruling 2026-09-24, review C4). The gate cannot read the direction of such a change, so it fails
-  closed.
+  closed. **On a projected platform the projection's own attributes are judged by what the
+  device can do under them** (plan 5b pre-flight I14): a reply under which the device holds a
+  bit it did not, or runs a command it did not, among one command per way either reply's rules
+  can be told apart, is a raise; one that only narrows — a revoked permit, an added deny — is
+  not, whatever its regexes say, and needs no `reply:` test. The proof that the device runs
+  nothing port49 denies (§8) is what makes the direction readable. A projection that went away
+  is a raise.
 
 One change's direction the gate can read: a level's own rendering moving down `role_order`
 (§8). Where an attribute is the old level's rendering in the old reply and the new level's in
@@ -4407,7 +4587,7 @@ to that list. The gated keys therefore include:
 - The normalization keys, which change the vector rules match against: `expands_abbreviations`,
   `splits_interface_names`, `strip_cr`, `pipe_token` and `pipe_authorized`.
 - The rendering keys of session-only platforms, which decide what the device enforces:
-  `command_projection`, `bits` and `bit_delivery`.
+  `command_projection`, `bits`, `bit_delivery`, `carve_outs` and `local_user_names`.
 - The keys the gate reads: `privilege_attributes`, `inert_attributes` and
   `accepted_attributes`.
 - `enable_username`, `shows_server_msg`, and `redact`, which changes what the audit keeps.
@@ -4791,7 +4971,8 @@ ceiling, revocation, username binding, and the in-session warning all act at the
 authorization request, and Junos never makes one. Rather than claim reach that does not exist,
 `explain` states the limit, the adapter renders class `idle-timeout` from `max_session_age` as
 the enforced approximation, and revocation records name the contexts they could not reach.
-(§5.6)
+(§5.6) *Plan 5b:* `port49 platform export --classes` renders the idle-timeout (§8), measured by
+L24; revocation records naming contexts are plan 7's.
 
 **22. Session-only projection is bits first, regexes second, chosen per grant, with one
 shape refused.** *Provisional on L12.* The generator picks the smallest permission-bit set
@@ -4802,7 +4983,13 @@ as `deny .*` plus one allow alternation, since emitting nothing widens it to the
 travel as `user-permissions` per session by default, or as a `local-user-name` template
 where a deployment provisions classes. A permit narrower than the bits with a deny beneath
 it is refused at load; the `-regexps` family's documented deny-precedence may lift that once
-measured. The choice is made from the composed grant, never per role. (§8, §15)
+measured. The choice is made from the composed grant, never per role. (§8, §15) *As built in
+plan 5b* (§8, "As built"): a reply is proven before it is sent, against a device model in which
+the bits are a union and only measured carve-outs subtract; bits that enter configuration mode
+are sent only for a grant of everything; the built-in adapter delivers bits by template until
+L12 measures `user-permissions`; the projection ships in set 1.1.0. "Refused at load" is
+amended by decision 26: the refused shape gets that subject the fail-closed reply, and CI
+refuses the policy.
 
 **23. Where the device cannot draw the operator line, `operator` renders as `admin`'s level.**
 *Owner's ruling 2026-09-24.* On `arista_eos` and `cisco_nxos`, with command authorization
@@ -4843,6 +5030,21 @@ operator's reply refused a configuration change on all three platforms
 role is what fenced operator. On IOS-XE admin's control was refused too — every command, at 7
 and at 15, since a token user has no local account (`L22-carried-cisco_iosxe.md`) — so there
 it shows that a token session gets nothing from local, not that local fences level 7. (§6, §8)
+
+**26. A composition the projection cannot carry fails closed for that subject alone.**
+*Owner's ruling 2026-09-25*, replacing decision 20's quarantine for projection refusals. Where
+the projection cannot safely tell a Junos device one subject's composition, only that subject
+gets a fail-closed reply: no template bits beyond what is proven, `deny-commands=^.*$`, and only
+the allows the generator can prove. Everyone else on the device keeps working. Decision 20's
+quarantine (§10) stays for inventory drift and the other joint checks; it no longer applies to
+projection refusals. `policy test` and `policy diff` exit non-zero on any such composition and
+name the subject, the device and the reason, so CI refuses it before it ships (§8, "CI MUST
+refuse the policy"). For decided item 6, an admin composition with a deny, the reply drops only
+the bits that enter configuration mode where the rest is provably sound, which it can be under
+`user_permissions`; otherwise it is the fail-closed reply. Every such session is recorded
+`projection_fail_closed` (§5.7). The pre-flight review of plan 5b measured the alternative: spec
+§11's own policy quarantined all three SRXs for every user, and `policy test` passed it. (§8,
+§10)
 
 ### Deferred, with reasons
 
@@ -5295,10 +5497,10 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L6** | How reliably and how late exec accounting START and STOP arrive, and whether a device retries accounting to the same server or fails to the next. | The `task_id` binding tolerance (§5.8); what reconciliation may conclude from silence (§9); `ERROR` semantics | all | open — arrival and latency measured on EOS and Junos; retry unmeasured; see below |
 | **L7** | Whether eAPI and NX-API run each HTTP request through AAA authentication, whether session cookies (`/login`) change that, and whether API commands produce per-command authorization requests. | Reusable tokens (§13, decision 15); capability inference (§9) | EOS, NX-OS | closed — measured 2026-09-24; `tests/lab/results/L7-arista_eos.md`, `L7-login-arista_eos.md`, `L7-cisco_nxos.md`, `L7-nxapi-cookie-cisco_nxos.md`. eAPI and NX-API both measured 2026-09-20: one authentication per HTTP request on both, with per-command authorization and per-command accounting. Both cookies measured: eAPI `/login` 2026-09-23 and NX-API `nxapi_auth` 2026-09-24 — a request carrying the cookie runs no authentication and no session authorization, only its command authorizations (NX-API: the command plus `end`; `configure terminal` too for `cli_conf`). The `nxapi_auth` cookie expires after 10 minutes idle (`NXAPI timeout 10`), ends on `POST /logout`, and wins over a wrong Basic password sent beside it; NAPALM `nxos` never uses it (21 authentications for a six-call job) while Ansible `httpapi` does (one); see below |
 | **L8** | The maximum password length each platform accepts at an interactive prompt. (PAP was split out to L19 on 2026-09-23.) | The 30-character handle (design document §8) | all | closed — measured 2026-09-23; `tests/lab/results/L8-cisco_nxos.md`, `L8-cisco_iosxe.md`; and 2026-09-20, `L8-arista_eos.md`, `L8-juniper_vjunos-router.md`, `L8-juniper_vsrx.md`. The 30-character handle logs in on all five images. Longest intact: **127 on the N9Kv**, which refuses 128 and above locally and never asks port49; at least 1024 on IOS-XE; at least 138 on vEOS and both Junos images, where nothing longer was tried; see below |
-| **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. | Projection generator constraints (§8) | Junos | open |
+| **L9** | Whether Junos anchors `allow-commands` / `deny-commands` regexes, and which RE2 constructs its regex dialect rejects. Whether explicit `^` and `$` are taken, with the pipe tail `( *\|.*)?` refusing `show version | no-more`; whether a deny regex reads a command in the case and the abbreviation typed (`SHOW VERSION`, `sh ver`) or as the CLI expands it; whether a value with spaces is taken raw; whether a malformed wire regex (`^(show$`) is ignored, which fails open, or refuses the session. | Projection generator constraints (§8); `JunosFacts` in `internal/projection`, each fact read in the direction that fails closed until measured | Junos | open |
 | **L10** | Whether `service` arrives as `shell` or `junos-exec`, and the exact spelling of every attribute in a shipped adapter. | Adapter `VERIFIED` status (§8) | all shipped adapters | open — `shell` on EOS, `junos-exec` on Junos. **Reading 3's conclusion is corrected by L17 (2026-09-21):** a denied Junos session authorization is advisory under the configuration this lab deploys, not on this vendor — `tacplus-options strict-authorization` makes the same denial refuse the login; see below. The three per-command adapters' spellings are measured by plan 5a (tests/lab/results/L22-*.md); Junos's wait on L12 (plan 5b), so the row stays open |
 | **L11** | Junos precedence, repetition, and length behavior for wire and class rules. | The projection model (§8) | Junos (SRX) | **closed** — measured 2026-09-03; results in `port49-junos-lab-tests-results.md` |
-| **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session. What each bit reaches, so `bits:` can be declared. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
+| **L12** | `user-permissions` over TACACS+: accepted with a bitless template, replaces rather than merges with the class, per-session, and two bits in one value. What each bit reaches, so `bits:` can be declared, and that `view` alone does not show the configuration. Whether a wire `deny-commands .*` plus one allow alternation yields exactly the permits. Whether `deny-commands-regexps` beats `allow-commands-regexps` over the wire as documented, and whether numbered names (`allow-commands1`, `allow-commands2`) are distinct attributes. Whether `deny-commands` reaches a statement typed in configuration mode, and `run`. Whether a template user commits with no uid, and whether one with no authentication refuses a local login. What a class with no bits runs (`baseline`), and whether `deny-commands .*` refuses it. | The projection rule, its default shape, and its refused shape (§8; §13, decision 22); the built-in `bit_delivery` and `bits` (set 1.1.0) | Junos (vSRX / vJunos-router in containerlab) | open — `user-permissions` and class bits are in production use; no capture yet |
 | **L13** | How long a device waits for a TACACS+ reply, and what it does when a FAIL arrives after that — reports an authentication failure, or treats the server as unreachable and falls through to the next method or the next server. | port49 delays a FAIL on purpose: `limits.auth_failure_delay_base` doubling to `limits.auth_failure_delay_max`, **default 500ms and 2s**, which is the "answered with increasing delay" of design document §11. The ceiling was 5s until this row measured device reply timeouts; **2026-09-21 it was lowered to 2s**, which is under every timeout measured here, so a FAIL is always delivered inside it (`tests/lab/results/L13-*.md`). A ceiling above a device's timeout turns a denial into silence, and silence is the fall-through condition of §5.6 and L4. | all | open — measured 2026-09-20 over SSH on vJunos-router, vSRX, vEOS, N9Kv and Catalyst 8000V: about 3s on both Junos images, 5.0s on vEOS, about 6s on the N9Kv, which also retransmits, and above 12s on IOS-XE, which this sweep does not bound from above; past that timeout every platform that reached it takes the fall-through branch; other transports and the next-server case unmeasured; see below |
 | **L14** | Whether a NETCONF session over SSH authenticates through TACACS+ the way an interactive login does; whether any authorization request is sent for the session or for an `<edit-config>`, and with what `service`, `cmd` and `cmd-arg`; what `port` and `rem_addr` contain; what accounting arrives for a NETCONF session and for a commit. | Adapter coverage for automation traffic (§8); the login context key (§5.1.1); what reconciliation may conclude from accounting (§9) | Junos, NX-OS, EOS | open — measured 2026-09-20 on vEOS, vJunos-router and vSRX; on the N9Kv the AAA half is measured and the RPC half is not, because the channel closes before any RPC is answered; IOS-XE and key-based SSH unmeasured. **2026-09-21 (L17):** a Junos NETCONF session on port 830 is refused outright when port49 denies its session authorization and `tacplus-options strict-authorization` is committed, so the statement reaches automation traffic and not only interactive logins; see below |
 | **L16** | Role delivery over TACACS+ and its interaction with command authorization. Whether a custom role named in a reply attribute takes effect — verified by a command it forbids being refused, never by the device echoing the name back; whether the device still sends a per-command authorization request for a command its own role forbids; which wins when the device's role and port49 disagree, **in both directions**; two roles at once (NX-OS documents a union with permit winning); a role name the device does not have; no role attribute at all; the accepted spellings (`shell:roles=` / `shell:roles*`, bare or inside `cisco-av-pair`); and the `priv-lvl=N` to `priv-N` mapping under `feature privilege`. | The session-attribute model (§6) and adapter `privilege` blocks (§8) — a custom role is the NX-OS and EOS analogue of a Junos login class, which is what decision 22 projects into. Also what the decision log means (§5.7, §9): if a device can refuse a command port49 permitted, the log records a permit for a command that never ran. | EOS, NX-OS | open — added 2026-09-21. vEOS measured 2026-09-21 (`shell:roles*<name>` **does not deliver a role** — the device reports the session's role as `<unknown>` — port49's per-command deny binds, and a `cisco-av-pair*` attribute sent as OPTIONAL is refused outright) and **2026-09-22, which corrects the reading drawn from it**: EOS reads the **bare** attribute `roles=<name>`, which the first run never sent, under either argument flag; sent by its own name the role is applied, and under `aaa authorization commands ... local` it is the operator's real privilege. `priv-lvl` must be sent too — a reply with a role and no `priv-lvl` lands the session at level 1 — and an OPTIONAL `priv-lvl*N` **is** applied on this image. NX-OS measured 2026-09-21 (delivery: all three spellings work, an unknown name degrades to `network-operator`, and a delivered role's own rules do not bind while `aaa authorization commands` points at TACACS+) and 2026-09-22 (precedence: **`shell:roles` decides the role and a `priv-lvl` beside it is inert, in both directions**, so an NX-OS adapter sends the role and never the privilege level; with command authorization pointed at `local` instead, the delivered role does bind). Open on EOS: the `cisco-av-pair` ambiguity, and whether a role that permits everything carries a read-only one delivered beside it (the pair was measured, the permissive role alone was not). **2026-09-24, the disruptive commands** (`tests/lab/results/ceiling-*.md`, no row of its own yet): with port49 permitting every command, an NX-OS `network-operator` session ran `clear counters`, `clear ip bgp *` and a configuration change, and a vEOS `network-operator` session at level 15 ran `clear counters`, had `clear ip bgp *` parsed and passed (BGP cannot run on that image) and entered `configure`; only the privilege level binds there (level 1 is refused all three by the parser, never asking port49); see below |
@@ -5309,6 +5511,9 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L20** | Whether a device answers a repeat API request without asking TACACS+; for how long; what it keys that answer on (the credential, the username, the client); whether a **wrong password** for the same user inside that window is also accepted; and whether a credential port49 would now refuse is re-checked inside it. | Whether a revocation in port49 reaches an API client at all (§5.1.4), and decision 15's bound on how long a spent token works — the receipt's `receipt_idle_ttl` and `receipt_max_age` act only on exchanges the device sends | IOS-XE; then every HTTP API transport | open — added 2026-09-23. IOS-XE RESTCONF answered a repeat of an already-spent token, 3s later, with `200 OK` and **zero** TACACS+ traffic (`tests/lab/results/L1-restconf-cisco_iosxe.md`), so a revocation in port49 cannot reach that repeat. **Measured 2026-09-24 on IOS-XE** (`tests/lab/results/L20-cisco_iosxe.md`): the cache is per credential (username and password), not per username or client address; a wrong password inside it goes to port49 and is refused; it lasts about 10s fixed from the authentication that filled it; and a cached credential is not re-checked, even with port49 answering every authentication ERROR. Open: every other HTTP API transport, so the row stays open; see below |
 | **L21** | Whether each platform sends the command words the operator typed (`sh run`) or the resolved ones (`show running-config`) on a per-command authorization request, and on the accounting record for it. | `expands_abbreviations` per platform (§3 rule 4, §8): where it is `false` a deny's word matches its own abbreviations, which over-denies, and where it is wrongly `true` an abbreviation slips past a deny | EOS, NX-OS, IOS-XE | closed — measured 2026-09-24; `tests/lab/results/L21-arista_eos.md`, `L21-cisco_nxos.md`, `L21-cisco_iosxe.md`. All three images send the **resolved** words, on the request and on the accounting record, over interactive SSH: `sh ver` arrives as `cmd=show cmd-arg=version`, and `sh clock` was denied by a `show clock` deny on all three. Interface names differ: IOS-XE splits `Gi1` into `GigabitEthernet`, `1`; vEOS and the N9Kv join it (`Ethernet1`, `Ethernet1/1`). Other transports and releases are outside what was measured; see below |
 | **L22** | What each per-command platform's device lets a session run at each level port49 renders — with port49 permitting every command, which of `clear counters`, `clear ip bgp *` and `configure terminal` it runs, refuses in its own parser, or sends port49 — and which level or role it reports, for the exact reply each built-in adapter sends; and, with port49 stopped under an open session on a command method list ending in `local`, whether operator's reply can change the configuration where admin's can, and whether it runs `clear counters` and `clear ip bgp *`; and, on IOS-XE with `privilege exec level 7 clear counters` configured and no `aaa authorization commands 7` list, whether a level-7 session runs `clear counters` without asking port49. | Decision 25; the adapters' `privilege`, `unreachable` and `fallback` (§8); the dead-rule and fallback-exposure reports (§12) | EOS, NX-OS, IOS-XE | closed — measured 2026-09-24; tests/lab/results/L22-arista_eos.md, L22-cisco_nxos.md, L22-cisco_iosxe.md. Each built-in adapter's reply at readonly, operator and admin was applied as the adapter says: on vEOS level 1 then 15 with network-operator, network-operator and network-admin; on the N9Kv network-operator, network-operator, network-admin, `clear counters` and `configure terminal` both sent to port49 at every level; on IOS-XE 17.13.01a levels 1, 7 and 15, level 7 sending `clear counters` and refusing `configure terminal` in the parser. With port49d stopped under an open session and the method list falling back to local, operator's reply could not change the configuration on any of the three, and admin's could on vEOS and the N9Kv. Beside it (`L22-carried-*.md`): vEOS's network-operator still ran `clear counters` and passed `clear ip bgp *` through authorization, the N9Kv's was refused both, and IOS-XE refused a token session every command at 7 and at 15, admin's included; on IOS-XE with no `aaa authorization commands 7` list, operator's `clear counters` ran without asking port49. Inert beside admin's reply: `home-directory`, `idletime` and `timeout` on vEOS and the N9Kv; `idletime*30` and `timeout*480` on IOS-XE, where they are accepted but held bearing (§6), and which refused the session for `home-directory`. By hand 2026-09-24: tests/lab/results/ceiling-*.md |
+| **L23** | Whether `home-directory`, `idletime` and `timeout`, each beside readonly's reply, leave the session readonly's on EOS and NX-OS: the same identity, the same reach for `clear counters` and `configure terminal`, and a permitted `show version`. Beside admin's reply (L22) a raise is invisible (5a final review M3). | The inert lists of `arista_eos` and `cisco_nxos` (§6, §8) | EOS, NX-OS | open |
+| **L24** | Whether a Junos login class's `idle-timeout` ends an idle session a TACACS+ reply landed in that class, through `local-user-name` and through the `remote` template. | Decision 21's enforced approximation; `port49 platform export --classes` (§5.6, §8) | Junos | open |
+| **L25** | Whether the N9Kv writes an accounting record under `admin` with task_id `vsh.bin.<port>` when a network-operator cancels the sudo prompt of a bare `show interface`, and what distinguishes it from a person's `admin` session, over SSH and over NX-API. | A `cisco_nxos` system user keyed on its task_id, never the username alone (§5.8) | NX-OS | open — a production observation with no note |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
