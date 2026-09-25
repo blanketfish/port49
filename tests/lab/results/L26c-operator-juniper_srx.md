@@ -26,10 +26,12 @@ deny list as sent.
 | 6 | same as 5 | `xml-mode netconf`, then `<rpc><get-software-information/></rpc>` | Refused (permission denied). |
 | 7 | `view`, no deny (control for 5 and 6) | the same two | Both run. |
 | 8 | denies `(show configuration\|xml-mode)`, `(show configuration\|xml mode netconf)`, `^xml-mode.*`, `.*xml-mode.*`, `xml.*` | CLI `xml-mode netconf` | Enters NETCONF in every case. |
+| 9 | `deny-commands "^.*$"` | CLI `xml-mode netconf`, and other commands | Refused, as is every other command. |
 
 `xml-mode netconf need-trailer` is not a valid command on this release; plain `xml-mode netconf`
 works, and the results do not depend on the argument. No configuration statement was found that
-controls `xml-mode`.
+controls `xml-mode`. Where `xml-mode` ran, TACACS+ accounting recorded it as
+`cmd=xml-mode netconf <cr>`.
 
 ## What it means for port49
 
@@ -38,6 +40,6 @@ controls `xml-mode`.
   an RPC reaches past a deny beneath `view-configuration`"), and it is what option C assumes.
 - A deny does bind an operational RPC mapped to its CLI command (rows 5–7), as L26c saw for a
   `<command>` RPC.
-- No deny naming `xml-mode` refuses it (row 8). The lab saw only `^.*$` refuse it, which is why
+- No deny naming `xml-mode` refuses it (row 8); `^.*$` does (row 9, as in the lab). That is why
   the fail-closed and narrow replies send exactly that (`TestTheCatchAllDenyIsExactlyAnchoredDotStar`).
-- `^.*$` refusing `xml-mode` was not re-run on this hardware.
+- Entering `xml-mode` is visible in accounting, so `port49 devices capabilities` input can show it.

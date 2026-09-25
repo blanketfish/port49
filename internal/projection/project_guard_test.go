@@ -118,9 +118,9 @@ func TestTheFailClosedReplyIsBounded(t *testing.T) {
 }
 
 // The fail-closed and narrow replies deny exactly ^.*$, once: the only deny
-// seen to refuse `xml-mode` (L26c). On SRX hardware (23.4R2-S8.7,
-// operator-reported) every deny naming it, `^xml-mode.*` and `xml.*` among
-// them, let it in, so no other catch-all may stand in.
+// seen to refuse `xml-mode`, in the lab (L26c) and on SRX hardware
+// (23.4R2-S8.7, operator-reported), where every deny naming it, `^xml-mode.*`
+// and `xml.*` among them, let it in. No other catch-all may stand in.
 func TestTheCatchAllDenyIsExactlyAnchoredDotStar(t *testing.T) {
 	for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
 		for _, c := range []struct {
