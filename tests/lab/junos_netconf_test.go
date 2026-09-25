@@ -4,6 +4,7 @@ package lab
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -84,13 +85,34 @@ var junosNetconfRPCs = []struct{ rpc, evidence, command string }{
 	{"<get-software-information/>", "<software-information", "show version"},
 }
 
-// netconfCell is one RPC's outcome: ran, refused, or not observed.
+var netconfSeverityError = regexp.MustCompile(`<error-severity>\s*error\s*</error-severity>`)
+
+// netconfCell is one RPC's outcome: ran, refused, or not observed. The
+// output's evidence is a run, whatever else the reply holds: Junos sends an
+// `<rpc-error>` of severity warning beside real output. A refusal is an
+// `<rpc-error>` of severity error, and no evidence.
 func netconfCell(reply, evidence string) string {
 	switch {
-	case strings.Contains(reply, "<rpc-error>"):
-		return "refused"
 	case strings.Contains(reply, evidence):
 		return "ran"
+	case strings.Contains(reply, "<rpc-error>") && netconfSeverityError.MatchString(reply):
+		return "refused"
+	}
+	return "not observed"
+}
+
+// netconfDialCell is the outcome of a NETCONF session that did not open. It
+// is a refusal only where the device closed the channel after port49d
+// authorized the session, and the paired controls, opened without the deny
+// before and after it, each got a hello. A login the device rejected is a
+// refused login, a different finding; anything else (a hello or SSH deadline,
+// a refused subsystem) is not observed.
+func netconfDialCell(err error, authorized, isolated bool) string {
+	switch {
+	case isAuthRejection(err):
+		return "login refused"
+	case authorized && isolated && strings.Contains(err.Error(), "the NETCONF channel closed:"):
+		return junosNetconfClosed
 	}
 	return "not observed"
 }
@@ -117,8 +139,9 @@ func TestL12JunosNetconf(t *testing.T) {
 		cells := make([][]string, len(junosNetconfVariants))
 		replies := make([][]string, len(junosNetconfVariants))
 		// dial opens a NETCONF session under attrs with the next seeded
-		// token, and says what port49d recorded for it where it did not open.
-		dial := func(name, attrs string) (*netconfConn, string, error) {
+		// token. Where it did not open, it says whether port49d authorized
+		// the session, and what port49d recorded.
+		dial := func(name, attrs string) (*netconfConn, string, bool, error) {
 			cfg, err := l.derivedConfigCmd("junos-nc-"+l16Slug(name), attrs, "", "")
 			if err == nil {
 				err = l.restart(cfg)
@@ -130,13 +153,15 @@ func TestL12JunosNetconf(t *testing.T) {
 			user, secret := l.nextLogin(t)
 			n, hello, err := l.netconfDial(user, secret)
 			if err == nil {
-				return n, hello, nil
+				return n, hello, true, nil
 			}
 			var events []string
+			authorized := false
 			for _, rec := range l.drainRecords(off, 10*time.Second) {
 				events = append(events, str(rec, "event")+" "+str(rec, "decision")+" "+str(rec, "reason"))
+				authorized = authorized || str(rec, "event") == "authorize_session"
 			}
-			return nil, "", fmt.Errorf("%s: %v (%s); port49d recorded %v", user, err, oneLine(hello), events)
+			return nil, "", authorized, fmt.Errorf("%s: %w (%s); port49d recorded %v", user, err, oneLine(hello), events)
 		}
 		for i, v := range junosNetconfVariants {
 			pair, paired := junosNetconfPairs[v.name]
@@ -148,7 +173,7 @@ func TestL12JunosNetconf(t *testing.T) {
 				if !paired {
 					return false
 				}
-				n, hello, err := dial(v.name+" pair "+when, pair)
+				n, hello, _, err := dial(v.name+" pair "+when, pair)
 				if err != nil {
 					pairs = append(pairs, fmt.Sprintf("paired control %s (`%s`): no hello: %v", when, pair, err))
 					return false
@@ -158,32 +183,14 @@ func TestL12JunosNetconf(t *testing.T) {
 				return true
 			}
 			before := openPair("before")
-			n, _, err := dial(v.name, v.attrs)
+			n, _, authorized, err := dial(v.name, v.attrs)
 			if err != nil {
 				after := openPair("after")
-				var devLog string
-				l.withAdminCLI(t, func(l *lab) (*cliConn, error) {
-					return l.junosCLI(breakglassUser, breakglassPassword)
-				}, func(c *cliConn) error {
-					if err := junosPrepare(c); err != nil {
-						return err
-					}
-					out, err := c.sendExpect(`show log messages | last 60 | no-more`,
-						junosPer, junosOpPrompt)
-					devLog = out
-					return err
-				})
-				// A channel that closes before the hello is a refusal only
-				// where the paired control proved it opens without the deny,
-				// both before and after; otherwise it measured nothing.
-				cell := "not observed"
-				if before && after {
-					cell = junosNetconfClosed
-				} else {
-					t.Errorf("%s: the NETCONF session did not open, and no paired control proved that it opens "+
-						"without the deny, so nothing was measured: %v; %v", v.name, err, pairs)
+				cell := netconfDialCell(err, authorized, before && after)
+				if cell != junosNetconfClosed {
+					t.Errorf("%s: the NETCONF session did not open (%s): %v; %v", v.name, cell, err, pairs)
 				}
-				why := fmt.Sprintf("no session: %v\n%s\n\nthe device's log:\n%s", err, strings.Join(pairs, "\n"), devLog)
+				why := fmt.Sprintf("no session: %v\n%s", err, strings.Join(pairs, "\n"))
 				for range junosNetconfRPCs {
 					cells[i] = append(cells[i], cell)
 					replies[i] = append(replies[i], why)
@@ -238,11 +245,13 @@ func TestL12JunosNetconf(t *testing.T) {
 			"takes it as bound only where both images say true)\n", bound)
 		for i, v := range junosNetconfVariants {
 			fmt.Fprintf(&b, "\n### %s\n", v.name)
+			if len(replies[i]) > 0 && strings.HasPrefix(replies[i][0], "no session: ") {
+				// Why it did not open, once: every RPC's cell shares it.
+				fmt.Fprintf(&b, "\nEvery RPC:\n\n```\n%s\n```\n", replies[i][0])
+				continue
+			}
 			for k, r := range junosNetconfRPCs {
 				reply := firstLines(replies[i][k], 30)
-				if strings.HasPrefix(replies[i][k], "no session: ") {
-					reply = replies[i][k] // why it did not open, whole
-				}
 				fmt.Fprintf(&b, "\n`%s`:\n\n```\n%s\n```\n", r.rpc, orEmpty([]string{reply}, 0))
 			}
 		}

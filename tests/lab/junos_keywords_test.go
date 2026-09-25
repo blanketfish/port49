@@ -270,6 +270,37 @@ func unproven(path []string) bool {
 	return false
 }
 
+// unprovenSeeds names each seed the walk did not prove in full, with the
+// first word not proven and why: offered and not proven (its reason), not
+// offered by completion there, or its path not reached.
+func (w *keywordWalk) unprovenSeeds() []string {
+	var out []string
+	for _, s := range junosKeywordSeeds {
+		f := strings.Fields(s)
+		for i := 1; i < len(f); i++ {
+			p := strings.Join(f[:i], " ")
+			n := w.nodes[p]
+			if n == nil {
+				out = append(out, fmt.Sprintf("`%s`: `%s` not reached", s, p))
+				break
+			}
+			if slices.Contains(n.words, f[i]) {
+				continue
+			}
+			why := "not offered by completion there"
+			for _, v := range w.values {
+				if rest, ok := strings.CutPrefix(v, p+" "+f[i]+" ("); ok {
+					why = "offered, not proven: " + strings.TrimSuffix(rest, ")")
+					break
+				}
+			}
+			out = append(out, fmt.Sprintf("`%s`: `%s` after `%s`, %s", s, f[i], p, why))
+			break
+		}
+	}
+	return out
+}
+
 // seeded reports whether path is a prefix of a seed, word for word.
 func seeded(path []string) bool {
 	for _, s := range junosKeywordSeeds {
@@ -448,6 +479,12 @@ func TestL26JunosKeywords(t *testing.T) {
 			junosKeywordDepth, junosKeywordNodes, junosKeywordCommands)
 		fmt.Fprintf(&b, "Words offered by completion and not proven keywords (%d), the first 60: `%s`\n\n",
 			len(w.values), strings.Join(w.values[:min(60, len(w.values))], "`, `"))
+		fmt.Fprintf(&b, "Seeds not proven in full (%d of %d), each at the first word not proven:\n\n",
+			len(w.unprovenSeeds()), len(junosKeywordSeeds))
+		for _, u := range w.unprovenSeeds() {
+			fmt.Fprintf(&b, "- %s\n", u)
+		}
+		b.WriteString("\n")
 		b.WriteString("Nothing under `show configuration` is proven, whatever its RPC shows: the RPC names each " +
 			"hierarchy level as an element, which proves the word exists, not that deny-commands matches it as a " +
 			"keyword (the lead's ruling of 2026-09-25), so a deny naming one fails closed until a lab run measures it.\n\n")
