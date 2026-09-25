@@ -108,6 +108,20 @@ grammar, so it cannot tell a keyword from an argument.
 - Class, regex and `*` terms get the same treatment: anything port49 cannot prove keyword-only
   counts as naming an argument.
 
+**Two more inputs, the same day.**
+- **`deny-commands` does not reach configuration mode**, measured on both images
+  (`tests/lab/results/L12-configuration-juniper_vjunos-router.md`, `L12-configuration-juniper_vsrx.md`):
+  in a class holding `configure`, `system` and `system-control`, `set system host-name srx1` ran in
+  configuration mode under `deny-commands=^set system host-name( .*)?$`, as in the control. The
+  generator must never rely on deny-commands to stop a configuration statement. A deny naming one,
+  or able to match one, fails like an argument deny: `policy test` fails with a clear message, and
+  that subject gets the fail-closed reply. The exception is a composition whose configuration bits
+  are dropped entirely. `deny-configuration` support is not added here; it is carried.
+- **`DenyMatchesExpanded` stays false in set 1.1.0** (the lead's ruling) until more abbreviations are
+  measured: Task 2's reading rests on one (`sh ver`). Task 3b adds a probe set, and Task 14's branch B
+  sets it true only if every probe is refused on both images. Until then compositions that rely on
+  it keep the fail-closed reply.
+
 **How the plan reads it** (each the option that denies more, or the one the measurement proves):
 1. **A rule is keyword-only** where its terms are words, optionally ending in `**` (the grammar
    allows `**` last only), and each word is a keyword the tree lists at its place. A trailing `**`
@@ -138,11 +152,25 @@ grammar, so it cannot tell a keyword from an argument.
    what its allow program matches, so the model remains an over-approximation of what the device
    runs. Task 7's handling of arguments inside a deny (spaces, `.+`) now decides nothing, since no
    such rule is sent; it stays, harmless.
-6. **`DenyMatchesExpanded` is about keyword abbreviations only.** Task 2's read-off line printed
-   `false` because it also required the argument deny to refuse `sh int fxp0 terse`. The keyword
-   cell, `sh ver` under the anchored deny, was refused on both images with the control running it,
-   so Task 14's branch B reads the fact as `true`.
-7. **A set update refreshes the tree** by rerunning Task 3b on the new set's images, merging with
+6. **`DenyMatchesExpanded` is about keyword abbreviations only**, and stays `false` until Task 3b's
+   abbreviation probes are all refused on both images. Task 2 read `sh ver` refused under the anchored
+   deny, one sample; Task 3b's `TestL9JunosAbbreviations` types twenty-one: five denied commands of
+   two and three keywords, each abbreviated at several lengths, two piped, and one ambiguous at the
+   second level. Branch B sets the fact `true` only where both images' notes say `true`.
+7. **Configuration mode never depends on `deny-commands`.** A reply that lets the session enter
+   configuration mode — a bit whose reach holds `configure`, or an allow meeting it — carries no deny
+   at all (Task 8's `configuration`; the grant must be every command with no deny), so nothing a
+   deny names is ever left to deny-commands in configuration mode. The admin-with-deny path under
+   `user_permissions` drops every bit that enters configuration mode and refuses an allow meeting
+   `configure`, so the device refuses `configure` itself (Task 12a's test asserts it), and its safety
+   rests on the bits, not on any regex. A deny that meets a permit, begins with a configuration verb
+   (`set`, `delete`, `edit`, `activate`, …) and is not an operational command the keyword tree proves
+   fails closed as `configuration_deny`, whose message says why: "`deny set system host-name **`
+   names a configuration statement, and Junos never applies deny-commands in configuration mode …
+   port49 cannot enforce it: drop the rule". One the tree proves an operational command (`set cli
+   **`, the baseline's) is sent, since no reply that carries it can configure. `deny-configuration`
+   and `-regexps` over the wire are carried to a later plan.
+8. **A set update refreshes the tree** by rerunning Task 3b on the new set's images, merging with
    `junos-keywords`, and shipping it under the new set's directory. A released set's tree is frozen
    (Task 20). A pin move that changes the tree changes replies, which the diff's reply gate judges
    (Task 12).
@@ -171,15 +199,17 @@ them edits `internal/platform/adapter.go`, `dialect.go` or `internal/policy/load
   ruling's message, and fails `policy test` as every fail-closed composition does. Task 12b adds the
   warning.
 - **Task 12**: unchanged; `policy diff` fails on the same finding.
-- **Task 14**: new step, "Ship the keyword tree"; branch B reads `DenyMatchesExpanded` from the
-  keyword cell; branch A no longer lists anything about arguments, which decision 27 handles.
+- **Task 14**: new step, "Ship the keyword tree"; branch B keeps `DenyMatchesExpanded` false unless
+  every Task 3b abbreviation probe is refused on both images; branch J records that deny-commands
+  does not reach configuration mode; branch A lists nothing about arguments, which decision 27
+  handles.
 - **Task 19**: three more shapes and one more probe.
 - **Task 20**: L26 closes, the tree is frozen, and the roadmap records decision 27.
 
 ### Task 1a: The spec records decision 27, before the code
 
 **Done in the amendment's own commit** (docs only). It changed `docs/design/2026-08-23-policy-engine-spec.md`:
-- §5.7: `projection_fail_closed`'s reasons gain `argument_deny`.
+- §5.7: `projection_fail_closed`'s reasons gain `argument_deny` and `configuration_deny`.
 - §8 "As built": a paragraph "Junos matches keywords only", the keyword tree, what is sent and
   what fails; `DenyMatchesExpanded` is about keyword abbreviations; Task 7's argument handling
   decides nothing now.
@@ -188,23 +218,27 @@ them edits `internal/platform/adapter.go`, `dialect.go` or `internal/policy/load
 - §12: a table of the projection report codes, `projection_argument_allow` new, and which fail
   `policy test` and `policy diff`.
 - §13: decision 27, the owner's ruling of 2026-09-25, amending decision 22.
-- §15: L9 and L12 gain the argument clause and Task 2's measurement; L26, the keyword tree, is new
-  and open.
+- §15: L9 and L12 gain the argument clause and Task 2's measurement, L12 the configuration-mode
+  measurement, and L9 the abbreviation probes; L26, the keyword tree, is new and open.
+- §8 and decision 27 also say that deny-commands never reaches configuration mode, that no reply able
+  to configure carries a deny, and that `configuration_deny` fails closed.
 
 Check: `git show --stat <this amendment's commit>` lists the spec and this plan and nothing else.
 
-### Task 3b: (lab, on beehive) The Junos CLI keyword tree: L26
+### Task 3b: (lab, on beehive) The Junos CLI keyword tree, and keyword abbreviations: L26 and L9
 
 **Files:**
-- Create: `tests/lab/junos_keywords_test.go`
+- Create: `tests/lab/junos_keywords_test.go`, `tests/lab/junos_abbrev_test.go`
 - Results (written by the run): `tests/lab/results/L26-juniper_vjunos-router.md`,
-  `L26-juniper_vsrx.md`, and the trees `L26-keywords-juniper_vjunos-router.yaml`,
-  `L26-keywords-juniper_vsrx.yaml`; evidence `L26-juniper_*.pcap`
+  `L26-juniper_vsrx.md`, the trees `L26-keywords-juniper_vjunos-router.yaml`,
+  `L26-keywords-juniper_vsrx.yaml`, and `L9-abbreviations-juniper_*.md`; evidence
+  `L26-juniper_*.pcap`, `L9-abbreviations-juniper_*.pcap`
 
 **Interfaces:**
 - Consumes (harness): `eachPlatform`, `l.capture`, `l.junosCLI`, `junosPrepare`, `c.sendExpect`,
   `c.expectFrom`, `junosOpPrompt`, `junosPer`, `l.result`, `root`, `breakglassUser`,
-  `breakglassPassword`.
+  `breakglassPassword`; Task 2's `junosSession`, `junosConfigureAdmin`, `junosRun`, `tableCell`,
+  `commitWord`, `l.configPath`, `l.restart`.
 - Produces: the two per-image trees Task 14 merges, in the form `platform.ParseKeywords` (Task 12a)
   reads.
 
@@ -226,6 +260,16 @@ it did not reach proves nothing. The test fails if the capture does not list `sh
 interfaces`, `show version`, `show interfaces terse` or `request system` as keywords, since then it
 misread the listing. It spends no token: the break-glass account is local. Every command has
 `junosPer`; a missed prompt is not observed, fails the test and ends the walk.
+
+`TestL9JunosAbbreviations` measures `DenyMatchesExpanded` for keywords. Over a class holding every
+bit, a control session and a session under one deny naming five commands of two and three keywords
+(with the pipe tail) each type twenty-one probes: every command in full, abbreviated at several
+lengths (`sh ver`, `sho vers`, `show versi`; `sh int ter`, `sh interfaces te`), piped (`sh ver |
+no-more`, `sh int ter | count`), and `sh i terse`, which is ambiguous after `show`. The control's
+answer says which probe is ambiguous on the image; one it refused for any other reason measured
+nothing and fails the test. The note's line `JunosFacts.DenyMatchesExpanded (keywords) = true`
+holds only where the deny refused every probe and the control ran every unambiguous one. It spends
+two seeded tokens.
 
 - [ ] **Step 1: Add the test**
 
@@ -555,6 +599,150 @@ index 0000000..5d8cf1f
 +}
 ````
 
+<!-- patch: tests/lab/junos_abbrev_test.go -->
+````diff
+diff --git a/tests/lab/junos_abbrev_test.go b/tests/lab/junos_abbrev_test.go
+new file mode 100644
+index 0000000..c6f5999
+--- /dev/null
++++ b/tests/lab/junos_abbrev_test.go
+@@ -0,0 +1,134 @@
++//go:build lab
++
++package lab
++
++import (
++	"fmt"
++	"strings"
++	"testing"
++)
++
++// TestL9JunosAbbreviations measures JunosFacts.DenyMatchesExpanded for
++// keywords (spec §15 L9; decision 27; the lead's ruling of 2026-09-25): that a
++// keyword deny refuses the command however its keywords are abbreviated, at
++// several lengths and command depths, piped, and where an abbreviation is
++// ambiguous at one level. Task 2 measured one abbreviation, `sh ver`, which is
++// too little to trust a deny against every abbreviated form, so the fact stays
++// false in set 1.1.0 unless every probe here is refused under the deny on both
++// images, while the control, a class holding every bit and no regex, ran each
++// unambiguous one. An ambiguous abbreviation the CLI refuses in the control
++// is recorded, and must be refused under the deny too.
++//
++// Two sessions, two seeded tokens. Every command has junosPer; a missed
++// prompt is not observed and fails the test.
++
++var junosAbbrevClass = []string{
++	"set system login class p49-l9-all permissions all",
++	"set system login user p49-l9-all class p49-l9-all",
++}
++
++var junosAbbrevDelete = []string{"delete system login user p49-l9-all", "delete system login class p49-l9-all"}
++
++// junosAbbrevDeny names five commands of two and three keywords, the pipe tail
++// the projection writes after each.
++const junosAbbrevDeny = `^(show version|show interfaces terse|show system uptime|show route summary|` +
++	`show chassis hardware)( *\\|.*)?$`
++
++// junosAbbrevProbe is one abbreviation, and whether the CLI may find it
++// ambiguous, in which case the control need not run it.
++type junosAbbrevProbe struct {
++	cmd       string
++	ambiguous bool
++}
++
++var junosAbbrevProbes = []junosAbbrevProbe{
++	{cmd: "show version"}, {cmd: "sh ver"}, {cmd: "sho vers"}, {cmd: "show versi"},
++	{cmd: "sh ver | no-more"},
++	{cmd: "show interfaces terse"}, {cmd: "sh int ter"}, {cmd: "sh interfaces te"}, {cmd: "show int terse"},
++	{cmd: "sh int ter | count"},
++	{cmd: "show system uptime"}, {cmd: "sh sys upt"}, {cmd: "sh system up"}, {cmd: "show sy uptime"},
++	{cmd: "show route summary"}, {cmd: "sh rou sum"}, {cmd: "sh route summ"},
++	{cmd: "show chassis hardware"}, {cmd: "sh chas hard"}, {cmd: "sh chassis hardw"},
++	// `i` is ambiguous after `show` (interfaces, igmp, ike, ...).
++	{cmd: "sh i terse", ambiguous: true},
++}
++
++func TestL9JunosAbbreviations(t *testing.T) {
++	eachPlatform(t, func(t *testing.T, l *lab) {
++		if l.p.name != "juniper_vjunos-router" && l.p.name != "juniper_vsrx" {
++			t.Skip("Junos only")
++		}
++		stop := l.capture(t, "L9-abbreviations")
++		defer stop()
++		commit := l.junosConfigureAdmin(t, junosAbbrevClass)
++		defer l.junosConfigureAdmin(t, junosAbbrevDelete)
++		defer func() {
++			if std, err := l.configPath(); err == nil {
++				if err := l.restart(std); err != nil {
++					t.Errorf("could not put port49d back on the lab config: %v", err)
++				}
++			}
++		}()
++		probes := make([]junosProbe, len(junosAbbrevProbes))
++		for i, p := range junosAbbrevProbes {
++			probes[i] = junosProbe{cmd: p.cmd}
++		}
++		control := l.junosSession(t, "control", `["local-user-name=p49-l9-all"]`, probes)
++		deny := l.junosSession(t, "deny", `["local-user-name=p49-l9-all", "deny-commands=`+junosAbbrevDeny+`"]`, probes)
++		for _, r := range []junosRun{control, deny} {
++			if r.loginErr != "" {
++				t.Fatalf("%s: the session did not open, so nothing was measured: %s", r.name, r.loginErr)
++			}
++			if len(r.unobserved) > 0 {
++				t.Fatalf("%s: not observed: %v", r.name, r.unobserved)
++			}
++		}
++		ambiguous := func(r junosRun, cmd string) bool { return strings.Contains(r.outs[cmd], "ambiguous") }
++		expanded := true
++		var b strings.Builder
++		fmt.Fprintf(&b, "The class was committed: %s.\n\n```\n%s\n```\n\nThe deny: `deny-commands=%s`.\n\n",
++			commitWord(commit), strings.Join(junosAbbrevClass, "\n"), tableCell(junosAbbrevDeny))
++		b.WriteString("| probe | control | under the deny |\n|---|---|---|\n")
++		for _, p := range junosAbbrevProbes {
++			ranControl := control.ran(p.cmd) && !ambiguous(control, p.cmd)
++			ranDeny := deny.ran(p.cmd) && !ambiguous(deny, p.cmd)
++			// The control's own answer says which abbreviation is ambiguous on
++			// this image; one it refused for any other reason measures nothing.
++			if !ranControl && !ambiguous(control, p.cmd) {
++				t.Errorf("the control did not run %q, so the deny's cell measures nothing: %s", p.cmd,
++					oneLine(control.outs[p.cmd]))
++				expanded = false
++			}
++			if p.ambiguous && !ambiguous(control, p.cmd) {
++				t.Logf("%q was expected ambiguous and was not on this image", p.cmd)
++			}
++			if ranDeny {
++				expanded = false
++			}
++			fmt.Fprintf(&b, "| `%s` | %s | %s |\n", tableCell(p.cmd), ranWord(ranControl, ambiguous(control, p.cmd)),
++				ranWord(ranDeny, ambiguous(deny, p.cmd)))
++		}
++		fmt.Fprintf(&b, "\n### Read off the table\n\n- JunosFacts.DenyMatchesExpanded (keywords) = %v: true only "+
++			"where the deny refused every probe and the control ran every unambiguous one; set 1.1.0 takes true "+
++			"only where both images say true\n", expanded)
++		for _, r := range []junosRun{control, deny} {
++			fmt.Fprintf(&b, "\n### %s\n\nReply `%s`. `show cli authorization`:\n\n```\n%s\n```\n", r.name, r.attrs, r.auth)
++			for _, p := range junosAbbrevProbes {
++				fmt.Fprintf(&b, "\n`%s`:\n\n```\n%s\n```\n", p.cmd, orEmpty([]string{r.outs[p.cmd]}, 0))
++			}
++		}
++		l.result(t, "L9-abbreviations", "Whether a keyword deny-commands refuses its command however the keywords "+
++			"are abbreviated, at several lengths and depths, piped, and ambiguous at one level: "+
++			"JunosFacts.DenyMatchesExpanded for keywords (spec §15 L9; decision 27).", b.String())
++	})
++}
++
++func ranWord(ran, ambiguous bool) string {
++	switch {
++	case ambiguous:
++		return "ambiguous"
++	case ran:
++		return "ran"
++	}
++	return "refused"
++}
+````
+
 - [ ] **Step 2: Compile it**
 
 Run: `go vet -tags lab ./tests/lab/...`
@@ -563,8 +751,8 @@ Expected: no output.
 - [ ] **Step 3: Run it on vJunos-router, then vSRX**
 
 ```bash
-PORT49_LAB_PLATFORMS=vjunos go test -tags lab ./tests/lab/ -run '^TestL26JunosKeywords$' -count=1 -v -timeout 240m \
-  > tests/lab/logs/l26-keywords-vjunos.log 2>&1 &
+PORT49_LAB_PLATFORMS=vjunos go test -tags lab ./tests/lab/ -run '^(TestL26JunosKeywords|TestL9JunosAbbreviations)$' \
+  -count=1 -v -timeout 240m > tests/lab/logs/l26-keywords-vjunos.log 2>&1 &
 echo $! > tests/lab/logs/l26-keywords-vjunos.pid
 ```
 
@@ -573,17 +761,19 @@ cleanup after a `go test` timeout. The walk logs a progress line every 20 nodes,
 well inside the stall bound. Then the same with `PORT49_LAB_PLATFORMS=vsrx`. Nobody runs `make
 build` during a run: the harness grants `bin/port49d` its capability once, at the start.
 
-Expected: PASS on both images, `wrote tests/lab/results/L26-juniper_<image>.md`, and the two
-`L26-keywords-*.yaml` files. A `not observed` failure measured nothing: rerun.
+Expected: PASS on both images, `wrote tests/lab/results/L26-juniper_<image>.md` and
+`L9-abbreviations-juniper_<image>.md`, and the two `L26-keywords-*.yaml` files. A `not observed`
+failure measured nothing: rerun.
 
 - [ ] **Step 4: Commit the test, the notes, the trees and the evidence**
 
 ```bash
 make evidence
-git add tests/lab/junos_keywords_test.go tests/lab/results/L26-juniper_*.md tests/lab/results/L26-keywords-juniper_*.yaml \
-  tests/lab/evidence/L26-juniper_*.pcap
+git add tests/lab/junos_keywords_test.go tests/lab/junos_abbrev_test.go tests/lab/results/L26-juniper_*.md \
+  tests/lab/results/L26-keywords-juniper_*.yaml tests/lab/results/L9-abbreviations-juniper_*.md \
+  tests/lab/evidence/L26-juniper_*.pcap tests/lab/evidence/L9-abbreviations-juniper_*.pcap
 git commit -m "$(cat <<'EOF'
-test: capture the Junos CLI keyword tree the projection proves rules against (L26)
+test: capture the Junos CLI keyword tree, and measure keyword abbreviations (L26, L9)
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
@@ -597,9 +787,9 @@ EOF
 - Create: `internal/platform/keywords.go` (`Keywords`, `KeywordNode`, `ParseKeywords`,
   `KeywordsFor`, `MergeKeywords`, `MarshalKeywords`, the bounds), `platforms/keywords/README.md`,
   `internal/projection/keywords.go` (`keywordShape`, `argument`, `denyProvable`, `unsendableAllow`,
-  `argumentDeny`), `internal/policy/keywords.go` (`setKeywords`)
+  `configurationVerbs`, `denyRefusal`, `argumentDeny`), `internal/policy/keywords.go` (`setKeywords`)
 - Modify: `platforms/platforms.go` (`Keywords embed.FS`), `internal/projection/project.go`
-  (`Input.Keywords`, `Result.Unsent`, `Unsent`, `FailArgumentDeny`; the checks in `render`,
+  (`Input.Keywords`, `Result.Unsent`, `Unsent`, `FailArgumentDeny`, `FailConfigurationDeny`; the checks in `render`,
   `capability`, `narrow`, `failClosed`), `internal/policy/resolve.go` (`projectOnce` passes the
   pinned set's tree)
 - Test: `internal/platform/keywords_test.go`, `internal/projection/project_test.go`,
@@ -615,13 +805,17 @@ EOF
     `MaxKeywordNodes = 5000`, `MaxKeywordBytes = 1 << 20`;
   - `platforms.Keywords embed.FS` (`keywords/<version>/<platform>.yaml`);
   - `projection.Input.Keywords *platform.Keywords`, `Result.Unsent []Unsent`, `type Unsent struct{
-    Rule engine.Rule; Why string }`, `FailArgumentDeny = "argument_deny"`.
+    Rule engine.Rule; Why string }`, `FailArgumentDeny = "argument_deny"`, `FailConfigurationDeny =
+    "configuration_deny"`.
 
 The tree lives outside the set directories, whose loader takes one adapter file per platform and
 nothing else, so no `platforms:` block can reach it and Task 6's files are untouched. Nil proves
 nothing: on a projected platform with no tree every live deny fails closed and no allow is sent.
 `render` refuses, before any shape, a deny that meets a permit and is not keyword-only, with the
-ruling's message and the proven keyword prefix as the whole command to deny instead. `capability`
+ruling's message and the proven keyword prefix as the whole command to deny instead; where the deny
+begins with a configuration verb the refusal is `configuration_deny`, saying deny-commands never
+reaches configuration mode (item 7 above). The tests also assert that no reply carrying a deny lets
+the device run `configure`. `capability`
 goes narrow where a deny it would send is not keyword-only (no permit meets it; `.*` holds it).
 `capability`, `narrow` and `failClosed` leave an allow off where `unsendableAllow` says why, into
 `Result.Unsent`. The policy passes the pinned set's tree (`setKeywords`, which the tests point at the
@@ -837,7 +1031,7 @@ index 0000000..beafd6c
 <!-- patch: internal/projection/project_test.go -->
 ````diff
 diff --git a/internal/projection/project_test.go b/internal/projection/project_test.go
-index 09275da..b41e363 100644
+index 09275da..254db9f 100644
 --- a/internal/projection/project_test.go
 +++ b/internal/projection/project_test.go
 @@ -3,6 +3,7 @@ package projection
@@ -924,7 +1118,7 @@ index 09275da..b41e363 100644
  	}
  	res, err = Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, rules...))
  	if r := res.Refusal; err != nil || res.FailClosed != FailOverflow || r.Attribute != "allow-commands" ||
-@@ -352,3 +407,70 @@ func TestWidens(t *testing.T) {
+@@ -352,3 +407,105 @@ func TestWidens(t *testing.T) {
  		t.Error("a widening by a command names it")
  	}
  }
@@ -993,6 +1187,41 @@ index 09275da..b41e363 100644
 +	}
 +	if res.Device([]string{"show", "interfaces", "fxp0", "terse"}) || !res.Device([]string{"show", "route", "x"}) {
 +		t.Error("device model")
++	}
++}
++
++// deny-commands never reaches configuration mode (decision 27;
++// L12-configuration-juniper_*.md). A reply that can enter it carries no deny,
++// so a deny of a configuration statement is enforced only as an operational
++// command: where the keyword tree does not prove it one, the subject gets the
++// fail-closed reply, saying why. The admin path that drops the configuration
++// bits relies on no deny in configuration mode: the device cannot enter it.
++func TestADenyOfAConfigurationStatementFailsClosed(t *testing.T) {
++	res, err := Project(input(platform.BitDeliveryUserPermissions, "admin", measured, permit("**"),
++		deny("set system host-name **")))
++	if err != nil || res.FailClosed != FailConfigurationDeny || !strings.Contains(res.Refusal.Why,
++		"names a configuration statement, and Junos never applies deny-commands in configuration mode") {
++		t.Fatalf("%+v %v", res.Refusal, err)
++	}
++	if res.Device([]string{"configure"}) {
++		t.Error("the fail-closed reply enters configuration mode")
++	}
++	// An operational command that begins with a configuration verb, which
++	// the tree proves, is sent, under bits that cannot configure.
++	res, err = Project(input(platform.BitDeliveryUserPermissions, "admin", measured, permit("**"), deny("set cli **")))
++	if err != nil || res.FailClosed != "" || !slices.Contains(res.ConfigurationDropped, "configure") ||
++		res.Device([]string{"configure"}) || res.Device([]string{"set", "cli", "screen-width", "80"}) {
++		t.Fatalf("%+v %v", res, err)
++	}
++	// No reply that carries a deny can enter configuration mode.
++	for _, rules := range [][]engine.Rule{{permit("**"), deny("request system reboot")},
++		{permit("show **"), permit("configure"), deny("show version")}} {
++		for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
++			res, err := Project(input(delivery, "admin", measured, rules...))
++			if err != nil || (len(res.Denies) > 0 || res.Shape != ShapeCapability) && res.Device([]string{"configure"}) {
++				t.Errorf("%s %v: a reply with a deny enters configuration mode: %q %v", delivery, rules, res.Attributes, err)
++			}
++		}
 +	}
 +}
 ````
@@ -1284,14 +1513,15 @@ index 89226ec..28dd332 100644
 ````diff
 diff --git a/internal/projection/keywords.go b/internal/projection/keywords.go
 new file mode 100644
-index 0000000..a7e2603
+index 0000000..146c797
 --- /dev/null
 +++ b/internal/projection/keywords.go
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,154 @@
 +package projection
 +
 +import (
 +	"fmt"
++	"slices"
 +	"strings"
 +
 +	"github.com/rhwendt/port49/internal/engine"
@@ -1401,6 +1631,33 @@ index 0000000..a7e2603
 +	return fmt.Sprintf("%q is not a keyword the lab measured after %q", term, at)
 +}
 +
++// configurationVerbs are the configuration-mode commands that change the
++// configuration. deny-commands never reaches a statement typed there: under a
++// deny naming `set system host-name`, the statement ran on both images
++// (tests/lab/results/L12-configuration-juniper_*.md). A reply that can enter
++// configuration mode carries no deny at all (configuration), so a deny
++// starting with one of these is enforced only as an operational command, where
++// the keyword tree proves it or it fails closed.
++var configurationVerbs = []string{"activate", "annotate", "commit", "copy", "deactivate", "delete", "edit",
++	"insert", "load", "protect", "rename", "replace", "rollback", "save", "set", "top", "unprotect", "up",
++	"wildcard"}
++
++// denyRefusal is the refusal of a deny that meets a permit and is not proven
++// keyword-only: configuration_deny where its first word is a configuration
++// verb, argument_deny otherwise.
++func (g generator) denyRefusal(d engine.Rule) error {
++	words, _, _ := keywordShape(d.Rule)
++	if len(words) == 0 || !slices.Contains(configurationVerbs, strings.ToLower(words[0])) {
++		return g.argumentDeny(d)
++	}
++	term, prefix, _ := g.argument(d.Rule)
++	return refuse(FailConfigurationDeny, "on %s, `deny %s` (role %q) names a configuration statement, and Junos "+
++		"never applies deny-commands in configuration mode: on both images a statement ran there under a "+
++		"deny-commands naming it (tests/lab/results/L12-configuration-juniper_*.md), and deny-configuration is not "+
++		"measured; as an operational command it is not proven either (%s). port49 cannot enforce it: drop the rule",
++		g.in.Platform, d.Rule, d.Role, argumentWhy(term, prefix))
++}
++
 +// argumentDeny is decision 27's refusal of a deny port49 needs enforced and
 +// the device cannot: the subject gets the fail-closed reply, and `policy
 +// test` and `policy diff` name the word and the whole command to deny instead.
@@ -1419,10 +1676,10 @@ index 0000000..a7e2603
 <!-- patch: internal/projection/project.go -->
 ````diff
 diff --git a/internal/projection/project.go b/internal/projection/project.go
-index 3beb309..923268e 100644
+index 3beb309..1eb1439 100644
 --- a/internal/projection/project.go
 +++ b/internal/projection/project.go
-@@ -39,6 +39,10 @@ const (
+@@ -39,6 +39,15 @@ const (
  	FailUnwritable        = "unwritable"
  	FailSecretRule        = "secret_rule"
  	FailUnsound           = "unsound"
@@ -1430,10 +1687,15 @@ index 3beb309..923268e 100644
 +	// keyword tree does not prove a keyword: Junos never matches it
 +	// (decision 27).
 +	FailArgumentDeny = "argument_deny"
++	// FailConfigurationDeny is a deny that meets a permit, names a
++	// configuration statement, and is no operational command the keyword
++	// tree proves: deny-commands never reaches configuration mode, and
++	// deny-configuration is not measured (decision 27).
++	FailConfigurationDeny = "configuration_deny"
  )
  
  // JunosFacts are what the Junos images were measured doing with a command
-@@ -74,6 +78,10 @@ type Input struct {
+@@ -74,6 +83,10 @@ type Input struct {
  	// sent (spec §5.8).
  	Secret func(rule string) bool
  	Facts  Facts
@@ -1444,7 +1706,7 @@ index 3beb309..923268e 100644
  }
  
  // Result is the reply a composition renders to, and what CI reports of it
-@@ -103,6 +111,10 @@ type Result struct {
+@@ -103,6 +116,10 @@ type Result struct {
  	// mode, left out because the composition is not a grant of every command
  	// with no deny and the rest proved sound without them (decision 26).
  	ConfigurationDropped []string
@@ -1455,7 +1717,7 @@ index 3beb309..923268e 100644
  	// FailClosed is why the reply is ShapeFailClosed, one of the Fail*
  	// constants; empty otherwise. Refusal says it for the report.
  	FailClosed string
-@@ -129,6 +141,12 @@ type Refusal struct {
+@@ -129,6 +146,12 @@ type Refusal struct {
  
  func (r *Refusal) Error() string { return r.Why }
  
@@ -1468,7 +1730,7 @@ index 3beb309..923268e 100644
  func refuse(category, format string, args ...any) error {
  	return &Refusal{Category: category, Why: fmt.Sprintf(format, args...)}
  }
-@@ -216,6 +234,17 @@ func (g generator) render() (Result, error) {
+@@ -216,6 +239,17 @@ func (g generator) render() (Result, error) {
  				r.Role, g.in.Platform)
  		}
  	}
@@ -1480,13 +1742,13 @@ index 3beb309..923268e 100644
 +			continue
 +		}
 +		if slices.ContainsFunc(g.permits, func(p engine.Rule) bool { return g.mayMeet(p.Rule, d.Rule) }) {
-+			return Result{}, g.argumentDeny(d)
++			return Result{}, g.denyRefusal(d)
 +		}
 +	}
  	res, err := g.shape()
  	var r *Refusal
  	if !errors.As(err, &r) || r.Category != FailConfigurationMode ||
-@@ -440,6 +469,10 @@ func (g generator) capability() (Result, error) {
+@@ -440,6 +474,10 @@ func (g generator) capability() (Result, error) {
  		if dn, ok := g.allowable(p.Rule); !ok {
  			return Result{}, g.refusedShape(p, dn)
  		}
@@ -1497,7 +1759,7 @@ index 3beb309..923268e 100644
  		res.Allows = append(res.Allows, p)
  	}
  	for _, dn := range g.denies {
-@@ -452,6 +485,13 @@ func (g generator) capability() (Result, error) {
+@@ -452,6 +490,13 @@ func (g generator) capability() (Result, error) {
  	if len(res.Denies) > 0 && !g.in.Facts.DenyMatchesExpanded {
  		return Result{}, &narrowOnly{"a deny narrower than every command is walked past by abbreviating it"}
  	}
@@ -1511,7 +1773,7 @@ index 3beb309..923268e 100644
  	return res, nil
  }
  
-@@ -518,6 +558,10 @@ func (g generator) narrow() (Result, error) {
+@@ -518,6 +563,10 @@ func (g generator) narrow() (Result, error) {
  		if dn, ok := g.allowable(p.Rule); !ok {
  			return Result{}, g.refusedShape(p, dn)
  		}
@@ -1522,7 +1784,7 @@ index 3beb309..923268e 100644
  		res.Allows = append(res.Allows, p)
  	}
  	if g.in.Dialect.BitDelivery == platform.BitDeliveryLocalUserName {
-@@ -666,6 +710,10 @@ func (g generator) failClosed(r *Refusal) (Result, error) {
+@@ -666,6 +715,10 @@ func (g generator) failClosed(r *Refusal) (Result, error) {
  			res.Beyond = append(res.Beyond, p)
  			continue
  		}
@@ -1803,12 +2065,18 @@ an argument on either is kept. Add `platforms/keywords/1.1.0/juniper_junos.yaml`
 In Step 4's branch table:
 - **Branch A** loses nothing and gains nothing: a deny naming an argument is decision 27's, handled
   by Task 12a, and is never a reason to ship Junos unprojected.
-- **Branch B** reads `DenyMatchesExpanded` from the keyword cells only: `true` where, on both
-  images, the control ran `sh ver` and the anchored deny refused it, whatever the note's read-off
-  line says (it also required the argument deny, which decision 27 has made a different fact).
-  Task 2 measured exactly that, so the fact is `true`, and `CaseSensitive` is `false`: set
-  `var JunosFacts = Facts{CaseSensitive: false, DenyMatchesExpanded: true}`, citing both L9 notes
-  and decision 27 in the comment above it.
+- **Branch B**, replaced (the lead's ruling of 2026-09-25): `CaseSensitive` is `false` (Task 2: the
+  CLI refuses an upper-case keyword itself). `DenyMatchesExpanded` stays **false** unless **both**
+  `L9-abbreviations-juniper_*.md` notes (Task 3b) read `JunosFacts.DenyMatchesExpanded (keywords) =
+  true`: every one of their twenty-one probes refused under the deny, and the control ran every
+  unambiguous one. Task 2's single `sh ver` cell does not set it, and neither does its read-off
+  line, which mixed in the argument deny. Write `var JunosFacts = Facts{CaseSensitive: false,
+  DenyMatchesExpanded: <true only as above>}`, citing the notes and decision 27 in the comment above
+  it. While it is false, a composition that needs a deny on the wire keeps the fail-closed reply.
+- **Branch J**, rewritten: `deny-commands` does not reach configuration mode, measured on both
+  images (`L12-configuration-juniper_*.md`). Nothing changes in code: no reply that can configure
+  carries a deny, and a configuration-statement deny fails closed (Task 12a). Write it into the
+  commit message, and carry "measure deny-configuration(-regexps) over the wire" (Task 20).
 
 ### Task 19, amended: an argument deny, an argument allow, an enumerated value
 
@@ -1902,8 +2170,10 @@ In §15, close **L26** on `L26-juniper_vjunos-router.md` and `L26-juniper_vsrx.m
 passed. Its paragraph under "What has been measured so far" gives each tree's size and says whether
 the walk stopped at a bound; a path it did not reach proves nothing, by design. Add `platforms/keywords/1.1.0/juniper_junos.yaml` to the
 commit. In the roadmap's "Plan 5b — As built", record decision 27, the tree's size, and which
-spec §11 denies it proves; carry "grow the keyword capture's seed list where a fleet's denies fail
-as unproven" to the next set.
+spec §11 denies it proves. Carry, for a later plan: "measure deny-configuration(-regexps) over the
+wire", which would let a configuration statement be denied in configuration mode; and "grow the
+keyword capture's seed list where a fleet's denies fail as unproven". Close **L9** only if both
+`L9-abbreviations-juniper_*.md` notes passed, citing them beside Task 2's.
 
 ## Why this plan exists, and what 5a left
 
@@ -2386,7 +2656,7 @@ index ebfde3c..b63fcfe 100644
 +after the records it sat among, its `since` saying when it began. It is what lets a reader of
 +the log know the accounting stream has a hole, which reconciliation must know before it says a
 +device did not ask (§9). The count is
-+held in memory, so a restart loses what was not yet written; `port49_spool_drops_total{stage}`
++held in memory, so a restart loses what was not yet written; `port49_accounting_spool_drops_total{stage}`
 +is the alarm, and this record is the log's own witness.
  
  `escalate` exists as its own event because the device-facing username on those platforms is
