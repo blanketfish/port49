@@ -198,8 +198,12 @@ func TestTheCompletePolicyExampleReportsWhatItShould(t *testing.T) {
 	// Two exposures on EOS: svc_oxidized at admin, and noc_tier1 at operator,
 	// whose network-operator still ran clear counters and clear ip bgp * with
 	// port49 down (tests/lab/results/L22-arista_eos.md).
+	// And the example pins no set, so it renders with 1.0.0, which projects
+	// nothing onto Junos: each subject granted there with rules is told its
+	// rules decide nothing on the SRXs (spec §9).
 	want := []string{FindingFallbackExposure, FindingFallbackExposure, FindingGroupSubject, FindingGroupSubject,
-		FindingGroupSubject, FindingIncomparableVersion}
+		FindingGroupSubject, FindingIncomparableVersion, FindingUnenforcedRules, FindingUnenforcedRules,
+		FindingUnenforcedRules, FindingUnenforcedRules}
 	if !reflect.DeepEqual(kinds, want) {
 		t.Fatalf("findings %q, want %q", kinds, want)
 	}

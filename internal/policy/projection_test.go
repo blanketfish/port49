@@ -802,3 +802,23 @@ func TestAProjectionChangeSaysWhereTheDeviceIsNarrower(t *testing.T) {
 		t.Fatalf("%v %q", ok, shown)
 	}
 }
+
+// Rules on a platform that neither asks port49 nor has them projected decide
+// nothing, and CI says so (spec §9); projected, they are the reply.
+func TestUnenforcedRules(t *testing.T) {
+	count := func(p *Policy) int {
+		n := 0
+		for _, f := range p.Lint(noon) {
+			if f.Kind == FindingUnenforcedRules {
+				n++
+			}
+		}
+		return n
+	}
+	if n := count(mustParse(t, readonlyCarveOut)); n != 1 {
+		t.Errorf("1.0.0: %d", n)
+	}
+	if n := count(parseProjected(t, platform.BitDeliveryUserPermissions, readonlyCarveOut)); n != 0 {
+		t.Errorf("projected: %d", n)
+	}
+}

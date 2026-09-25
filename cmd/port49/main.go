@@ -45,6 +45,7 @@ const usage = `usage:
                          --classes --config PORT49D_YAML PLATFORM)
   port49 platform upgrade --policy FILE --inventory FILE --to VERSION [--write]
   port49 devices check-config --policy FILE --inventory FILE --device NAME [--config PORT49D_YAML] CONFIGFILE
+  port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -79,6 +80,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "devices":
 		if len(args) > 1 && args[1] == "check-config" {
 			return checkConfig(args[2:], stdout, stderr)
+		}
+		if len(args) > 1 && args[1] == "capabilities" {
+			return devicesCapabilities(args[2:], stdout, stderr)
 		}
 	}
 	fmt.Fprint(stderr, usage)

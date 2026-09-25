@@ -59,6 +59,10 @@ const (
 	// theirs (spec §13 decision 26). It fails `policy test`, as spec §8's
 	// "CI MUST refuse the policy" requires.
 	FindingProjectionRefused = "projection_refused"
+	// FindingUnenforcedRules is a subject's command rules on a platform that
+	// neither asks port49 about a command nor has them projected into its
+	// session reply: they decide nothing there (spec §9, "CI").
+	FindingUnenforcedRules = "unenforced_rules"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -162,6 +166,7 @@ func (p *Policy) Lint(now time.Time) []Finding {
 	}
 	out = append(out, p.redundantOverrides()...)
 	out = append(out, p.Projections(now)...)
+	out = append(out, p.UnenforcedRules(now)...)
 	out = append(out, p.intersections(now)...)
 	if len(p.tests) == 0 {
 		add(FindingNoTests, "the policy has no tests: nothing in it acknowledges a shadowed deny, an expansion or "+
@@ -870,4 +875,36 @@ func ShortfallText(narrower, unreached []string) string {
 			"runs without its bit is unmeasured): " + strings.Join(unreached, "; ")
 	}
 	return msg
+}
+
+// UnenforcedRules reports every subject whose roles carry command rules on
+// a platform that authorizes no command and projects none into its session
+// reply (spec §9, "CI: a granted role carries command rules that the
+// platform's supports cannot enforce"), once per subject and platform: the
+// device never asks, so the rules decide nothing there. On a pinned set that
+// projects the platform the rules are its reply, and nothing is reported.
+func (p *Policy) UnenforcedRules(now time.Time) []Finding {
+	var out []Finding
+	seen := map[string]bool{}
+	for _, name := range sortedKeys(p.subs) {
+		for _, d := range p.env.Devices {
+			dialect := p.dialect(d.Platform)
+			if dialect.Authorizes("commands") || dialect.Projected() || seen[name+"\x00"+d.Platform] {
+				continue
+			}
+			for _, at := range p.expiryInstants(now) {
+				res, err := p.resolve(p.subs[name], d, at)
+				if err != nil || len(res.Blob.Rules) == 0 {
+					continue
+				}
+				seen[name+"\x00"+d.Platform] = true
+				out = append(out, Finding{Kind: FindingUnenforcedRules, Message: fmt.Sprintf("subject %q on %s "+
+					"(supports: %s): its roles carry %d command rules, and %s neither asks port49 about a command nor "+
+					"has them rendered into its session reply, so they decide nothing there (spec §9)", name,
+					d.Platform, strings.Join(dialect.Supports, ", "), len(res.Blob.Rules), d.Platform)})
+				break
+			}
+		}
+	}
+	return out
 }
