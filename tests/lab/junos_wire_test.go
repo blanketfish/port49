@@ -60,6 +60,7 @@ type junosProbe struct {
 type junosRun struct {
 	name, attrs, user string
 	loginErr          string
+	loginRefused      bool              // loginErr is the device refusing the login (isAuthRejection)
 	auth              string            // `show cli authorization`
 	outs              map[string]string // probe → the device's reply
 	unobserved        []string          // probes whose prompt never came back
@@ -149,6 +150,7 @@ func (l *lab) junosLogin(t *testing.T, name, attrs string) (*cliConn, junosRun, 
 	}
 	if err != nil {
 		r.loginErr = oneLine(err.Error())
+		r.loginRefused = isAuthRejection(err)
 		return nil, r, off
 	}
 	if err := junosPrepare(c); err != nil {
@@ -225,7 +227,11 @@ func (l *lab) junosProbe(c *cliConn, p junosProbe) (string, error) {
 		out, err = c.expectFrom(from+i+len(none), junosPer, junosOpPrompt)
 		out = c.out.String()[from:]
 	}
-	fmt.Fprint(c.in, "\x15")
+	// A ^U that did not reach the device leaves the words on the line, and
+	// they would prefix the next probe: not observed, never a refusal.
+	if _, werr := fmt.Fprint(c.in, "\x15"); werr != nil && err == nil {
+		err = fmt.Errorf("clearing the line with ^U: %w", werr)
+	}
 	return out, err
 }
 
@@ -326,8 +332,8 @@ func TestL12JunosWire(t *testing.T) {
 				probes = append(slices.Clone(probes), configurationProbes...)
 			}
 			runs[v.name] = l.junosSession(t, v.name, v.attrs, probes)
-			if runs[v.name].loginErr != "" && v.name != "deny malformed" {
-				t.Errorf("%s: the session did not open, so nothing was measured: %s", v.name, runs[v.name].loginErr)
+			if r := runs[v.name]; !loginMeasured(v.name, r) {
+				t.Errorf("%s: the session did not open, so nothing was measured: %s", v.name, r.loginErr)
 			}
 			// The control is checked before a token more is spent: without it
 			// no cell compares.
@@ -420,8 +426,8 @@ func junosFacts(runs map[string]junosRun) string {
 	say("JunosFacts.DenyMatchesExpanded = %v: true only where the control ran both abbreviations and each "+
 		"deny refused them", expanded)
 	m := runs["deny malformed"]
-	say("a malformed deny `^(show$`: the session opened %v (%s); `show version` ran %v", m.loginErr == "",
-		orErr(m.loginErr), m.ran("show version"))
+	say("a malformed deny `^(show$`: the session opened %v; the device refused the login %v (%s); `show version` "+
+		"ran %v", m.loginErr == "", m.loginRefused, orErr(m.loginErr), m.ran("show version"))
 	n := runs["narrow"]
 	exact := n.ran("show version") && n.ran("show interfaces terse") && !n.ran("show system uptime") &&
 		!n.ran("clear interfaces statistics fxp0") && !n.ran("ping 127.0.0.1 count 1 rapid") &&
@@ -454,6 +460,15 @@ func junosFacts(runs map[string]junosRun) string {
 // reply's alternation would otherwise split the row, and every cell after
 // them would read under the wrong variant.
 func tableCell(s string) string { return strings.ReplaceAll(s, "|", `\|`) }
+
+// loginMeasured reports whether a variant's login outcome is a measurement:
+// a session that opened, or, for the malformed deny alone, the device
+// refusing the login, which is the verdict that variant asks about. Anything
+// else, a deadline or a dropped connection, is not observed and fails the
+// test: it would otherwise read as the device refusing the session.
+func loginMeasured(variant string, r junosRun) bool {
+	return r.loginErr == "" || (variant == "deny malformed" && r.loginRefused)
+}
 
 func orErr(s string) string {
 	if s == "" {
