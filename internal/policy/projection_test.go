@@ -480,7 +480,7 @@ func TestProjectionFindings(t *testing.T) {
 	}
 	want := `subject "s" on juniper_junos: capability shape, bits view; refused by the bits, sent as nothing: ` +
 		`show configuration **; beyond the level's bits, not sent: clear counters; the device refuses what port49 ` +
-		`permits, e.g. clear counters`
+		`permits, e.g. these probe commands: clear counters`
 	if len(got) != 1 || got[0] != want {
 		t.Fatalf("%q", got)
 	}

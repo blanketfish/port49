@@ -864,11 +864,14 @@ func shortfall(pr projection.Result, patterns []platform.Redaction, secrets []st
 
 // ShortfallText is a shortfall as a report's clauses, each after "; ": a
 // projection finding's, and a projection change's in policy diff
-// (ProjectionChange.Narrower, Unreached).
+// (ProjectionChange.Narrower, Unreached). The examples are the model's probe
+// commands, built from the rules' words and placeholders rather than typed
+// by anyone (`ping configuration`), so the text says so: a reader at 3am
+// should not doubt a real command they do not recognize (task 11 review M1).
 func ShortfallText(narrower, unreached []string) string {
 	var msg string
 	if len(narrower) > 0 {
-		msg += "; the device refuses what port49 permits, e.g. " + strings.Join(narrower, "; ")
+		msg += "; the device refuses what port49 permits, e.g. these probe commands: " + strings.Join(narrower, "; ")
 	}
 	if len(unreached) > 0 {
 		msg += "; sent under bits that do not reach them, which the device may refuse (whether a Junos allow " +

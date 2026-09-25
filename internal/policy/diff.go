@@ -938,7 +938,9 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege, wasProj, isPr
 // read. A fail-closed reply is no raise, whatever it replaced: it is a
 // projection refusal, which fails the diff with no acknowledgment, and a
 // reply: test would only pin a reply the policy must not ship (plan 5b
-// pre-flight R-M8).
+// pre-flight R-M8). A template renamed with the same bits is no raise
+// either: the adapter fixes its bits, and drift is check-config's
+// (projection.Widens; task 12 review M1).
 func projectionRose(was, is *projection.Result) bool {
 	if is == nil {
 		return was != nil

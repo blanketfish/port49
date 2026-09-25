@@ -118,6 +118,13 @@ func probes(programs ...*engine.Program) [][]string {
 // is. A side with no projection runs nothing and holds no bit; a reply with
 // no model, which Project never returns, cannot be read, and widens. The
 // vector is nil where a bit decided it.
+//
+// A template's name is not judged, deliberately: renaming it with the same
+// bits is no raise. The adapter fixes each template's bits and an adapter
+// edit is gated, and a device class that drifted from the reference is
+// check-config's (TemplateDrift), which no reply: test could see either.
+// Raising on every template change would block a revocation that moves a
+// subject between templates (task 12 review M1).
 func Widens(from, to *Result) ([]string, bool) {
 	if to == nil {
 		return nil, false
