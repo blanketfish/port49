@@ -187,3 +187,91 @@ func TestSecretsOfTakesTheUnionAcrossDaemonStarts(t *testing.T) {
 		t.Error("no pair at all must be refused, exactly as an empty file is")
 	}
 }
+
+// TestResultsNotesCarryNoCredentials is the gate a4c4738 lacked: a results
+// note is committed, and one that copied a device's configuration carried the
+// vSRX root password and every account's hash. It names the file and line
+// only, never what matched (plan 5b final review I-4).
+func TestResultsNotesCarryNoCredentials(t *testing.T) {
+	notes, err := filepath.Glob(filepath.Join("..", "results", "*.md"))
+	if err != nil || len(notes) == 0 {
+		t.Fatalf("no results notes found (%v): an audit of nothing passes", err)
+	}
+	for _, note := range notes {
+		raw, err := os.ReadFile(note)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, n := range NoteLeaks(string(raw)) {
+			t.Errorf("%s:%d carries a credential; redact it (labcreds.RedactNote)", note, n)
+		}
+	}
+}
+
+// credentialLines are one of each form a note can carry a credential in. The
+// values are made up, save the published break-glass password.
+var credentialLines = []string{
+	`        encrypted-password "$6$p49labsalt$abcdefghijklmnop"; ## SECRET-DATA`,
+	`        plain-text-password-value "not-a-real-one"; ## SECRET-DATA`,
+	`        encrypted-password madeupvalue;`,
+	`            <encrypted-password>madeupvalue</encrypted-password>`,
+	`            <plain-text-password-value>madeupvalue</plain-text-password-value>`,
+	`set system login user breakglass authentication encrypted-password "madeupvalue"`,
+	`set system root-authentication plain-text-password-value madeupvalue`,
+	`    secret "madeupvalue"; ## SECRET-DATA`,
+	`the hash was $1$salt$hash in the output`,
+	`a $9$abcDEF.123 value`,
+	`the account's password is ` + BreakglassPassword,
+	"`" + BreakglassPassword + "`",
+}
+
+// TestNoteLeaksFindsEachForm: every form is caught, on its own line, and the
+// device's own markers, its help text and prose naming the statements are
+// not.
+func TestNoteLeaksFindsEachForm(t *testing.T) {
+	for i, line := range credentialLines {
+		if got := NoteLeaks("# note\n\n" + line + "\n"); len(got) != 1 || got[0] != 3 {
+			t.Errorf("form %d: lines %v, want [3]", i, got)
+		}
+	}
+	for _, clean := range []string{
+		`            <plain-text-password-value>/* SECRET-DATA */</plain-text-password-value>`,
+		`        encrypted-password /* SECRET-DATA */; ## SECRET-DATA`,
+		`    plain-text-password-value <value withheld>; ## SECRET-DATA`,
+		"converts that form to `encrypted-password \"<hash>\"` at commit; here it did not.",
+		`                   It is a hash rather than plain-text-password-value because`,
+		`                   encrypted-password at commit; on that image it does not, and`,
+		`  decrypt              Decrypt a $8$ or $9$ password`,
+		"carries an **`encrypted-password` line** (the value is not reproduced here).",
+		`set system login user breakglass authentication encrypted-password /* SECRET-DATA */`,
+		`breakglass logged in with the lab password`,
+		`        encrypted-password "«redacted»"; ## SECRET-DATA`,
+	} {
+		if got := NoteLeaks(clean); len(got) != 0 {
+			t.Errorf("a clean line is flagged: %q", clean)
+		}
+	}
+}
+
+// TestRedactNoteLeavesNothing: what the notes writers write passes the audit,
+// and the rest of each line survives.
+func TestRedactNoteLeavesNothing(t *testing.T) {
+	in := strings.Join(credentialLines, "\n")
+	out := RedactNote(in)
+	if got := NoteLeaks(out); len(got) != 0 {
+		t.Fatalf("lines %v still carry a credential after RedactNote", got)
+	}
+	if strings.Contains(out, "madeupvalue") || strings.Contains(out, BreakglassPassword) {
+		t.Fatal("a value survived RedactNote")
+	}
+	for _, kept := range []string{"set system login user breakglass authentication encrypted-password ",
+		"<encrypted-password>" + SecretData + "</encrypted-password>", "## SECRET-DATA", "in the output"} {
+		if !strings.Contains(out, kept) {
+			t.Errorf("RedactNote dropped %q", kept)
+		}
+	}
+	clean := "Decrypt a $8$ or $9$ password\n<plain-text-password-value>/* SECRET-DATA */</plain-text-password-value>\n"
+	if RedactNote(clean) != clean {
+		t.Errorf("RedactNote rewrote a clean note: %q", RedactNote(clean))
+	}
+}

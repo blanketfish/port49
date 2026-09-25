@@ -51,6 +51,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 	"github.com/rhwendt/port49/tests/lab/labpcap"
 )
 
@@ -483,7 +484,7 @@ func (l *lab) resultOver(t *testing.T, entry, transport, claim, observation stri
 		fmt.Fprintf(&b, "- **Caveat:** %s\n", l.configWarn)
 	}
 	fmt.Fprintf(&b, "\n## Claim\n\n%s\n\n## Observation\n\n%s\n", claim, observation)
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(labcreds.RedactNote(b.String())), 0o644); err != nil { // as result()
 		t.Fatalf("write %s: %v", path, err)
 	}
 	t.Logf("wrote %s", path)
