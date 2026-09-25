@@ -1689,10 +1689,16 @@ A ninth, `account_gap`, is a report too: accounting records port49 received and 
 `offer_refused` (answered `ERROR`; the device may send the record again), `drain_unparseable`
 and `drain_set_aside` (answered `SUCCESS`, and not in the log). An `offer_refused` drop is written
 before the next drain pass's records; a drop during a pass is written when that pass ends,
-after the records it sat among, its `since` saying when it began. It is what lets a reader of
-the log know the accounting stream has a hole, which reconciliation must know before it says a
-device did not ask (§9). The count is
-held in memory, so a restart loses what was not yet written; `port49_spool_drops_total{stage}`
+after the records it sat among. `since` is the earliest arrival among the drops the record
+counts, as far as the spool knows it: the refusal itself for `offer_refused`; a set-aside
+record's own `ts`; for a line the drain could not read, the `ts` of the record before it in the
+spool, which that line arrived no earlier than, or the drop time when there is none. A backlog
+drained hours late is therefore charged to when it arrived, not to when it drained. A gap write
+the log refuses is kept and written by the next pass, before its records. It is what lets a
+reader of the log know the accounting stream has a hole, which reconciliation must know before
+it says a device did not ask (§9). The count is held in memory, so a restart loses what was not
+yet written, and port49d logs the held counts by stage when it shuts down;
+`port49_accounting_spool_drops_total{stage}`
 is the alarm, and this record is the log's own witness.
 
 `escalate` exists as its own event because the device-facing username on those platforms is
