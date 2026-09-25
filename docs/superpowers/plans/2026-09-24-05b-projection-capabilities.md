@@ -209,7 +209,8 @@ grammar, so it cannot tell a keyword from an argument.
 **Ruled: a trailing `**`** (the lead, 2026-09-25; the `**` in the ruling's wording was the lead's,
 not the owner's). A trailing `**` on a deny whose other words are all proven keywords is proven,
 because the device refuses by keyword prefix and so refuses at least what port49 denies: `deny show
-configuration **` and `deny show chassis cluster **` are sent. A `**` or `*` anywhere else, or a
+configuration **` and `deny show chassis hardware **` are keyword denies (`cluster` is not a keyword
+on vJunos, so `deny show chassis cluster **` fails closed on the merged tree). A `**` or `*` anywhere else, or a
 trailing `**` after an argument, counts as naming an argument. This is what `keywordShape` and
 `argument` already do (Task 12a), and decision 27 says it. Task 19's "a deny aligned with a bit"
 and "a class term" shapes exercise the trailing case on the device.

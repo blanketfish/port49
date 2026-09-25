@@ -3077,11 +3077,23 @@ per role, since two roles that each render can compose into a shape that does no
 
 **Bits first.** The generator chooses the smallest bit set that covers the grant's permits,
 never exceeding the level's ceiling. A deny that aligns with a bit boundary drops the bit
-instead of emitting a regex: a readonly role that denies `show configuration **` sends
-`view` without `view-configuration`, and nothing on the wire has to be beaten by anything.
-The realistic readonly is exactly that — `view view-configuration` plus a short
-`deny-commands` for the carve-outs the bits cannot separate — and it is the shape this
-generator produces by default.
+instead of emitting a regex: a readonly role that denies `show configuration **` would send
+`view` without `view-configuration`, whose carve-out takes the configuration out of `view`, and
+nothing on the wire has to be beaten by anything.
+
+**On the measured adapter (set 1.1.0) that readonly fails closed**, and CI names it. `view`
+reaches more than `show **` (`request flight-recorder **`, `test policy **` and the rest), and
+every session runs the baseline (`help`, `file`, `request`, `start`, …;
+`tests/lab/results/L12-bits-juniper_*.md`), so each command those reach and the grant does not
+permit needs a wire deny. Those denies render to 469 bytes, past RFC 8907's 255; `save`, one of
+them, is not a keyword on both images, so its deny cannot be sent (decision 27); and a deny
+beneath a sent bit or the baseline guards the CLI only (L26c, below). The narrow shape cannot
+carry a deny beneath a permit, so the subject gets the fail-closed reply (`refused_shape`).
+What does project on set 1.1.0: `permit: [show **]` alone, as the narrow shape
+(`user-permissions=view view-configuration`, `deny-commands .*`, `allow-commands` `show **`); a
+narrow grant of a few show commands; and an admin `permit: [**]` with `deny: [restart **]`,
+which no bit but `all` reaches — every bit but the ones that enter configuration mode, and the
+deny (decision 26).
 
 Bits reach the device one of two ways, both in use in real fleets and selected per adapter:
 
@@ -3093,12 +3105,15 @@ Bits reach the device one of two ways, both in use in real fleets and selected p
 `user_permissions` is the design's preference: zero per-level provisioning, and the bit set
 follows the grant rather than the level. `local_user_name` is for deployments that already
 provision classes and want the ceiling in device config where their compliance tooling can see
-it. **The built-in adapter ships `local_user_name`** until L12 measures `user-permissions`
-applied over a bitless template, per session: over a template whose class carried bits, it
-changed nothing, mandatory or optional (`tests/lab/results/L18-juniper_*.md`, variants 9 and
-10), while `local-user-name` was applied under either flag. A reply naming a template the device
-lacks lands the session in `remote` (L18, variant 7), so the reference configuration gives
-`remote` a class with no bits, `p49-remote`, and a missing template runs nothing.
+it. **The built-in adapter ships `user_permissions`** (set 1.1.0): on both images
+`user-permissions` was applied over a bitless template, both bits of a two-bit value were, and
+one session's value left another's permissions unchanged (`tests/lab/results/L12-juniper_*.md`).
+Over a template whose class carried bits it had changed nothing
+(`tests/lab/results/L18-juniper_*.md`, variants 9 and 10), and over a `remote` whose class held
+`view`, merged cannot be told from ignored. So the reference configuration gives `remote` a
+class with no bits, `p49-remote`, where every projected session lands: a session whose bits
+were not applied runs nothing, and neither does one whose reply names a template the device
+lacks (L18, variant 7).
 
 **Regexes for what bits cannot separate.** After the bits are chosen:
 
@@ -3260,10 +3275,10 @@ verb (`set`, `delete`, `edit`, `activate`, …) and is not an operational comman
 proves fails closed as `configuration_deny`, with a message saying so. `deny-configuration` is not
 measured over the wire and not sent.
 
-**Whether a deny binds a NETCONF RPC is L12's** (plan 5b Task 3b). The token that opens the CLI
-opens `ssh -s netconf` with the same reply, so a deny that binds CLI lines only is walked around by
-the equivalent RPC (`<get-configuration>` past `deny show configuration **`). Until both images
-show deny-commands and the fail-closed reply binding RPCs, a projected Junos device must run no
+**A wire deny binds the CLI, never a native RPC** (`tests/lab/results/L12-netconf-juniper_*.md`,
+`L26c-juniper_*.md`, both images). The token that opens the CLI opens NETCONF with the same
+reply, and there a native RPC ran past every wire deny (`<get-configuration>` past `deny show
+configuration **`); only a `<command>` RPC was refused. So a projected Junos device must run no
 management service but the CLI's, checked as an allowlist: `devices check-config` passes it only
 where nothing under `system services` is on but `ssh` and `telnet`, an unknown service included,
 and `rest`, `web-management` and `extension-service` appear nowhere, reading only `show
@@ -3271,16 +3286,37 @@ configuration | display set | display inheritance | except "^set groups "` and r
 other input. That rules out NETCONF, the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`), REST,
 J-Web, JET/gRPC/gNMI and `outbound-ssh`, outright, since Junos cannot turn them off per user.
 
+That is necessary, not sufficient. From a projected CLI session, `xml-mode netconf
+need-trailer` returns a NETCONF hello and a native RPC (`<get-software-information/>`) runs
+past the wire denies, and `op url` is accepted. There RPC reach is the permission bits': `view`
+without `view-configuration` got an empty `<configuration>`. The wire deny does bind a
+`<command>…</command>` RPC, `start shell` is refused by the bits unless a shell permission is
+held, and the fail-closed reply's `deny-commands .*` refuses `xml-mode` and `op` both (L26c). So
+**a deny beneath a sent bit is not a boundary**, and in set 1.1.0 port49 fails closed on it
+(`JunosFacts.DenyBindsRPCs` false). A composition whose only guard beneath a sent bit, or
+beneath the baseline every session holds, is a wire deny is CLI-only safe: the capability shape
+falls to the narrow one, whose `.*` refuses both entry points, and where that cannot carry it the
+subject gets the fail-closed reply (`refused_shape`, its message naming RPC reach). A narrow
+allow that would run `xml-mode` or `op` is refused the same way, and the fail-closed reply leaves
+it off. What stays projectable: a deny no sent bit reaches, a bit a deny aligns with (dropped,
+not denied), and a measured carve-out of a bit not sent, which the RPCs honor too (the empty
+`<configuration>`). Denying the entry points themselves, `xml-mode` and `op`, is future work
+pending measurement on production devices; `start` is never denied, since admins need `start
+shell` and the bits already refuse it.
+
 What the regexes rest on is the device's regex dialect, measured by L9 and read into
-`JunosFacts` in the direction that fails closed until measured: explicit `^` and `$` anchors
-on every regex; a deny's letters written in both cases (`[sS][hH][oO][wW]`) while the device
-is case-sensitive; and no deny but `.*` while a keyword deny may be walked past by abbreviating
-its keywords (`DenyMatchesExpanded`, which is about keyword abbreviations only: arguments are
-never matched) — a capability shape needing one goes narrow, and a narrow one that cannot carry
-the grant gets the fail-closed reply. Every deny ends in a pipe tail, `( *\|.*)?`, since the engine strips a
-pipeline before matching and a deny anchored at its rule's last word would miss `clear bgp all
-| no-more`; it only makes a deny match more, so it stays whatever L9 measures (L9 measured a
-plain `^…$` deny refusing the piped line too). The ERE's handling of arguments — a run of
+`JunosFacts`: explicit `^` and `$` anchors on every regex; a deny's letters in lower case, since
+the CLI refuses a keyword typed in upper case itself (`CaseSensitive` false;
+`tests/lab/results/L9-juniper_*.md`); and a keyword deny narrower than `.*`, since on both images
+every abbreviation of one, at several lengths and depths, piped and ambiguous, was refused or not
+run under it while the control ran it (`DenyMatchesExpanded` true, which is about keyword
+abbreviations only: arguments are never matched; `L9-abbreviations-juniper_*.md`). A projection
+with no measurement gets the zero facts, which fail closed: a deny's letters in both cases
+(`[sS][hH][oO][wW]`), and no deny but `.*`. A deny is written `^ *show +configuration( .*)?
+*(\|.*)?$`, spaces allowed before and between its words and a pipe tail after, since the engine
+strips a pipeline before matching and a deny anchored at its rule's last word would miss `clear
+bgp all | no-more`; both images enforced that shape, plain and piped
+(`L9-abbreviations-juniper_*.md`). The ERE's handling of arguments — a run of
 spaces, an argument that may hold a space — no longer decides anything: a rule that names an
 argument never reaches the wire (decision 27). A word is ASCII, carries no `{`, `}`, `"` or `\`, and escapes ERE's
 operators; a regex or class pattern is carried only in the subset of RE2 that reads the same in
@@ -3343,15 +3379,14 @@ its witness finds unsound — is not a joint
 check (§13, decision 26). That subject alone gets the **fail-closed reply**: `deny-commands`
 `^.*$`, an allow for each permit that is within the level's ceiling bits that do not enter
 configuration mode, dominates every deny it meets, does not meet `configure` and can be
-written, and no other bit or template — under `user_permissions` the smallest of those bits
+written, and, where a deny binds no RPC, does not run `xml-mode` or `op`, and no other bit or template — under `user_permissions` the smallest of those bits
 that reach the allows, under `local_user_name` no `local-user-name`, so the session lands in
 the bitless `p49-remote`. Where the allows cannot go out whole none does. The reply is proven
 as any other. The session is recorded `projection_fail_closed` (§5.7), and `policy test` and
 `policy diff` exit non-zero on it, naming the subject, the device and why (§8, "CI MUST refuse
-the policy"). **Operator note:** until L9 measures that a deny reads the command as the CLI
-expands it, no deny narrower than `.*` goes out, so under the shipped `local_user_name` a
-composition with any deny beneath a permit — the realistic readonly with its
-`show configuration` deny included — gets the fail-closed reply on Junos; everyone else on the
+the policy"). **Operator note:** on set 1.1.0 a composition with a deny beneath a permit — the
+realistic readonly with its `show configuration` deny included — gets the fail-closed reply on
+Junos (the refused shape, and a deny beneath a bit binding no RPC, above); everyone else on the
 device keeps working, and CI names each such subject before it ships.
 
 **Blast radius.** A projection port49 cannot carry fails closed for the one subject it
@@ -5101,8 +5136,10 @@ it is refused at load; the `-regexps` family's documented deny-precedence may li
 measured. The choice is made from the composed grant, never per role. (§8, §15) *As built in
 plan 5b* (§8, "As built"): a reply is proven before it is sent, against a device model in which
 the bits are a union and only measured carve-outs subtract; bits that enter configuration mode
-are sent only for a grant of everything; the built-in adapter delivers bits by template until
-L12 measures `user-permissions`; the projection ships in set 1.1.0. "Refused at load" is
+are sent only for a grant of everything; the built-in adapter delivers bits as `user-permissions`,
+which L12 measured applied over a bitless template on both images; the projection ships in set
+1.1.0, where a deny beneath a sent bit fails closed, since no wire deny binds an RPC the session
+reaches (L26c). "Refused at load" is
 amended by decision 26: the refused shape gets that subject the fail-closed reply, and CI
 refuses the policy.
 
@@ -5172,8 +5209,8 @@ in which a word is a keyword only on positive evidence from the device, never fo
 against it (§8).
 A deny whose every word is proven a keyword is sent as written, and so is one whose other words
 are all proven keywords and which ends in a trailing `**`: the device refuses by keyword prefix, so
-it refuses at least what port49 denies (`deny show configuration **` and `deny show chassis cluster
-**` are sent). A deny naming any word not proven a keyword — a `*` or a `**` anywhere but that
+it refuses at least what port49 denies (`deny show configuration **` and `deny show chassis hardware
+**` are keyword denies; whether one may guard a sent bit is §8's, since no wire deny binds an RPC). A deny naming any word not proven a keyword — a `*` or a `**` anywhere but that
 trailing place, a trailing `**` after an argument, an entity class, a regex, or a word the tree
 does not list there — cannot be enforced on Junos: `policy test` and `policy diff` fail, naming the word and the whole
 command to deny instead, and at runtime that subject gets decision 26's fail-closed reply.
@@ -5183,8 +5220,9 @@ image only is not proven. The same day, both images showed that deny-commands ne
 configuration mode (`L12-configuration-juniper_*.md`): no reply that can enter configuration mode
 carries a deny, a deny of a configuration statement that is not a proven operational command fails
 closed (`configuration_deny`) and fails CI, and `deny-configuration` is left for a later plan to
-measure. `DenyMatchesExpanded` stays false in set 1.1.0 until a probe set of abbreviations, at
-several lengths and depths, piped and ambiguous, is refused on both images (L9). The ruling amends
+measure. `DenyMatchesExpanded` is true in set 1.1.0: a probe set of abbreviations, at several
+lengths and depths, piped and ambiguous, was refused or not run under a keyword deny on both
+images (`L9-abbreviations-juniper_*.md`). The ruling amends
 decision 22's "regexes for what bits cannot separate" to regexes over keywords only. (§8, §12,
 §15)
 
