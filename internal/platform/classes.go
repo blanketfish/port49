@@ -232,8 +232,10 @@ func TemplateDrift(config []byte, d Dialect, maxSessionAge time.Duration) (missi
 	return missing, extra, nil
 }
 
-// prompt is a Junos prompt's routing-engine line, {master:0}.
-var prompt = regexp.MustCompile(`^\{[^\s{}]*\}$`)
+// prompt is a Junos prompt's routing-engine line, {master:0}, with the
+// configuration-mode tail a capture taken there carries, {master:0}[edit]
+// (task 13 re-review M6).
+var prompt = regexp.MustCompile(`^\{[^\s{}]*\}(\[edit[^\]]*\])?$`)
 
 // located is a statement's path, the words after its verb, unquoted and with
 // every `groups NAME`, `logical-systems NAME` and `tenants NAME` it sits

@@ -182,7 +182,8 @@ func TestTemplateDriftFailsEveryWayToCarryMore(t *testing.T) {
 	}
 	// A prompt, a comment and a blank line are what a captured terminal
 	// carries around display set's output.
-	session := append([]string{"{master:0}", "admin@srx1> show configuration | display set", "## Last commit: x", ""},
+	session := append([]string{"{master:0}", "admin@srx1> show configuration | display set", "## Last commit: x", "",
+		"{master:0}[edit]", "[edit]", "{primary:node0}[edit system login]", "admin@srx1# run show configuration | display set"},
 		cleanCapture(t, d)...)
 	if missing, extra, err := TemplateDrift([]byte(strings.Join(session, "\n")), d, time.Hour); err != nil ||
 		len(missing) != 0 || len(extra) != 0 {

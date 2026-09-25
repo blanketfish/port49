@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -658,5 +659,66 @@ func TestPlatformExportClasses(t *testing.T) {
 		if code := run(args, &out, &errb); code != 2 {
 			t.Errorf("%q: code %d", args, code)
 		}
+	}
+}
+
+// A device_config line redaction changed is never printed as a line `load
+// set terminal` applies: loaded, `secret «redacted»` would replace the
+// device's TACACS+ secret with the marker and every login would fall to
+// local. It prints as a comment, stderr says how many lines need a secret
+// written by hand, and the export succeeds (task 13 re-review I4).
+func TestExportClassesCommentsARedactedLine(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "port49d.yaml")
+	if err := os.WriteFile(cfg, []byte("session: {max_session_age_default: 8h}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := platform.Dialect{CommandProjection: platform.ProjectionJunosRegex, DeviceConfig: []string{
+		"set system tacplus-options strict-authorization",
+		"set system tacplus-server 10.0.0.1 secret " + platform.Redacted,
+		"set system tacplus-server 10.0.0.2 secret-file x",
+	}}
+	var out, errb bytes.Buffer
+	if code := exportClasses(&out, &errb, "port49 platform export", "juniper_junos", d, cfg, adapters{},
+		nil, map[int]bool{2: true}); code != 0 {
+		t.Fatalf("code %d\n%s", code, errb.String())
+	}
+	for _, line := range strings.Split(out.String(), "\n") {
+		if !strings.HasPrefix(line, "#") && (strings.Contains(line, platform.Redacted) || strings.Contains(line, "10.0.0.")) {
+			t.Errorf("loadable: %s", line)
+		}
+	}
+	for _, want := range []string{"\nset system tacplus-options strict-authorization\n",
+		"\n# set system tacplus-server 10.0.0.1 secret <set this yourself: redacted>\n",
+		"\n# set system tacplus-server 10.0.0.2 secret-file x\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("want %q in\n%s", want, out.String())
+		}
+	}
+	if !strings.Contains(errb.String(), "2 device_config lines carry a secret") {
+		t.Errorf("stderr: %s", errb.String())
+	}
+}
+
+// Which floor lines redaction changed is read against the unredacted floor.
+func TestReferenceDeviceConfigNamesTheRedactedLines(t *testing.T) {
+	pol, inv := policyFixture(t)
+	block := "platforms:\n  arista_eos:\n    device_config: [\"tacacs-server host 10.0.0.1 key 7 070C285F4D06\"]\n"
+	if err := os.WriteFile(pol, append([]byte(block), readFile(t, pol)...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := policyFiles{policy: pol, inventory: inv}
+	p, err := files.load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown, hidden, err := referenceDeviceConfig(p, "arista_eos", p.Redactions(), p.SecretClasses())
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(shown, func(l string) bool {
+		return strings.HasPrefix(l, "tacacs-server host 10.0.0.1 key ") && !strings.Contains(l, "070C285F4D06")
+	})
+	if i < 0 || !hidden[i] || len(hidden) != 1 {
+		t.Fatalf("%q %v", shown, hidden)
 	}
 }

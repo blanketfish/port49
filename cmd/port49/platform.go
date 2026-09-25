@@ -201,19 +201,14 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		return 1
 	}
 	if *classes {
+		var hidden map[int]bool
 		if p != nil {
-			// check-config holds a device to the set's device_config under a
-			// block's (Policy.ConfigDialect), so the reference prints the same
-			// lines: one a `replace: true` block drops is still one the check
-			// reports missing.
-			floor, err := p.ConfigDialect(platformName)
-			if err != nil {
+			if d.DeviceConfig, hidden, err = referenceDeviceConfig(p, platformName, patterns, secret); err != nil {
 				fmt.Fprintf(stderr, "%s: %v\n", name, err)
 				return 1
 			}
-			d.DeviceConfig = platform.RedactAdapter(patterns, secret, floor).DeviceConfig
 		}
-		return exportClasses(stdout, stderr, name, platformName, d, *cfgPath, a, p)
+		return exportClasses(stdout, stderr, name, platformName, d, *cfgPath, a, p, hidden)
 	}
 	mode := exportShow
 	if export {
@@ -516,8 +511,17 @@ func sortedNames(set map[string]platform.Dialect) []string {
 // (platform.ReferenceClasses) — so the header says check-config is what
 // proves the device. A compliance tool checks devices against it; port49
 // never logs into one.
+//
+// A device_config line redaction changed — a block's `tacplus-server ...
+// secret` — prints as a `#` comment, which `load set terminal` does not
+// apply: loaded, the marker would replace the device's TACACS+ secret, and
+// every login would fall to local. stderr counts those lines, each one the
+// operator writes by hand with its real value; check-config reads the
+// unredacted floor, so it reports the line missing until the device carries
+// it (task 13 re-review I4). hidden names them by index in d.DeviceConfig,
+// and any line carrying the marker is one whatever hidden says.
 func exportClasses(stdout, stderr io.Writer, name, platformName string, d platform.Dialect, cfgPath string, a adapters,
-	p *policy.Policy) int {
+	p *policy.Policy, hidden map[int]bool) int {
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", name, err)
@@ -545,8 +549,38 @@ func exportClasses(stdout, stderr io.Writer, name, platformName string, d platfo
 		"capture is what proves the device carries the template and nothing more. idle-timeout is "+
 		"session.max_session_age_default (%s) in whole minutes: a session-only device never asks port49 again after "+
 		"login, so this timer is what ends a session there (decision 21).\n", platformName, setName, age)
-	for _, line := range lines {
+	held := 0
+	for i, line := range lines {
+		if i < len(d.DeviceConfig) && hidden[i] || strings.Contains(line, platform.Redacted) {
+			held++
+			line = "# " + strings.ReplaceAll(line, platform.Redacted, "<set this yourself: redacted>")
+		}
 		fmt.Fprintln(stdout, line)
 	}
+	if held > 0 {
+		fmt.Fprintf(stderr, "%s: %s: %d device_config lines carry a secret, so each is printed as a # comment that "+
+			"`load set terminal` does not apply: write each by hand with its real value; check-config reports it "+
+			"MISSING until the device carries it\n", name, platformName, held)
+	}
 	return 0
+}
+
+// referenceDeviceConfig is the device_config floor check-config holds a
+// device to (Policy.ConfigDialect), so the reference prints the same lines —
+// one a `replace: true` block drops is still one the check reports missing —
+// redacted, with the index of every line redaction changed.
+func referenceDeviceConfig(p *policy.Policy, platformName string, patterns []platform.Redaction,
+	secret map[string]bool) ([]string, map[int]bool, error) {
+	floor, err := p.ConfigDialect(platformName)
+	if err != nil {
+		return nil, nil, err
+	}
+	shown := platform.RedactAdapter(patterns, secret, floor).DeviceConfig
+	hidden := map[int]bool{}
+	for i, line := range shown {
+		if line != floor.DeviceConfig[i] {
+			hidden[i] = true
+		}
+	}
+	return shown, hidden, nil
 }
