@@ -203,3 +203,20 @@ func TestCommittedNetconfVerdictsHold(t *testing.T) {
 		}
 	}
 }
+
+func TestAskingForCommand(t *testing.T) {
+	for _, c := range []struct {
+		out  string
+		want bool
+	}{
+		{"show chassis | display xml rpc\n                                 ^\nsyntax error, expecting <command>.\n", true},
+		{"show route foo | display xml rpc\n           ^\nsyntax error, expecting <command>: foo\n", false},
+		{"show chassis\nsyntax error, expecting <command>.\nsyntax error, expecting <command>: bar", false},
+		{"show interfaces fxp0 | display xml rpc\n<rpc><get-interface-information>", false},
+		{"error: syntax error, expecting <argument>", false},
+	} {
+		if got := askingForCommand(c.out); got != c.want {
+			t.Errorf("askingForCommand(%q) = %v, want %v", c.out, got, c.want)
+		}
+	}
+}

@@ -85,9 +85,11 @@ var junosKeywordSeeds = []string{
 var junosPlaceholder = regexp.MustCompile(`^<[^\[].*>$`)
 
 var (
-	junosRPCTag     = regexp.MustCompile(`<([A-Za-z][A-Za-z0-9_.-]*)[\s/>]`)
-	junosRPCText    = regexp.MustCompile(`>([^<>]+)<`)
-	junosRPCCommand = regexp.MustCompile(`expecting <command>`)
+	junosRPCTag  = regexp.MustCompile(`<([A-Za-z][A-Za-z0-9_.-]*)[\s/>]`)
+	junosRPCText = regexp.MustCompile(`>([^<>]+)<`)
+	// junosRPCCommand is the CLI still asking for a <command>; its `: <word>`
+	// form names a word the CLI rejected (review M1), and is captured apart.
+	junosRPCCommand = regexp.MustCompile(`expecting <command>(:\s*\S+)?`)
 )
 
 type keywordWalk struct {
@@ -210,7 +212,7 @@ func (w *keywordWalk) rpc(cmd string) (rpcAnswer, error) {
 			}
 		}
 	} else {
-		a.command = junosRPCCommand.MatchString(out)
+		a.command = askingForCommand(out)
 	}
 	w.rpcs[cmd] = a
 	return a, nil
@@ -299,6 +301,21 @@ func (w *keywordWalk) unprovenSeeds() []string {
 		}
 	}
 	return out
+}
+
+// askingForCommand reports whether the CLI's answer is still asking for a
+// <command> after the words typed: "syntax error, expecting <command>." A
+// "syntax error, expecting <command>: <word>" names the word the CLI
+// rejected, and so proves no keyword (review M1): a false proof is the unsafe
+// direction, a deny sent as keyword-only that the device never enforces.
+func askingForCommand(out string) bool {
+	ms := junosRPCCommand.FindAllStringSubmatch(out, -1)
+	for _, m := range ms {
+		if m[1] != "" {
+			return false
+		}
+	}
+	return len(ms) > 0
 }
 
 // seeded reports whether path is a prefix of a seed, word for word.
