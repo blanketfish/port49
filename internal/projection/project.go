@@ -38,6 +38,15 @@ const (
 	FailUnwritable        = "unwritable"
 	FailSecretRule        = "secret_rule"
 	FailUnsound           = "unsound"
+	// FailArgumentDeny is a deny that meets a permit and names a word the
+	// keyword tree does not prove a keyword: Junos never matches it
+	// (decision 27).
+	FailArgumentDeny = "argument_deny"
+	// FailConfigurationDeny is a deny that meets a permit, names a
+	// configuration statement, and is no operational command the keyword
+	// tree proves: deny-commands never reaches configuration mode, and
+	// deny-configuration is not measured (decision 27).
+	FailConfigurationDeny = "configuration_deny"
 )
 
 // JunosFacts are what the Junos images were measured doing with a command
@@ -73,6 +82,10 @@ type Input struct {
 	// sent (spec §5.8).
 	Secret func(rule string) bool
 	Facts  Facts
+	// Keywords is the platform's keyword tree, from the policy's pinned set
+	// (platform.KeywordsFor): a rule reaches the wire only where it proves
+	// the rule's words keywords. Nil proves nothing.
+	Keywords *platform.Keywords
 }
 
 // Result is the reply a composition renders to, and what CI reports of it
@@ -107,6 +120,10 @@ type Result struct {
 	// mode, left out because the composition is not a grant of every command
 	// with no deny and the rest proved sound without them (decision 26).
 	ConfigurationDropped []string
+	// Unsent are permits whose allow the device would not match as port49
+	// does, left off the wire: the device refuses what port49 permits there,
+	// and `policy test` warns (projection_argument_allow; decision 27).
+	Unsent []Unsent
 	// FailClosed is why the reply is ShapeFailClosed, one of the Fail*
 	// constants; empty otherwise. Refusal says it for the report.
 	FailClosed string
@@ -133,6 +150,12 @@ type Refusal struct {
 
 func (r *Refusal) Error() string { return r.Why }
 
+// Unsent is a permit left off the wire, and why.
+type Unsent struct {
+	Rule engine.Rule
+	Why  string
+}
+
 // Clone is r with every slice and the Refusal copied, so a caller may sort,
 // filter or append to its copy without touching another's: a policy hands
 // one composition's Result to every device it lands on. The model is shared;
@@ -141,7 +164,7 @@ func (r Result) Clone() Result {
 	r.Bits, r.Attributes = slices.Clone(r.Bits), slices.Clone(r.Attributes)
 	r.Denies, r.Allows, r.Omitted = slices.Clone(r.Denies), slices.Clone(r.Allows), slices.Clone(r.Omitted)
 	r.Beyond, r.Unreached = slices.Clone(r.Beyond), slices.Clone(r.Unreached)
-	r.ConfigurationDropped = slices.Clone(r.ConfigurationDropped)
+	r.ConfigurationDropped, r.Unsent = slices.Clone(r.ConfigurationDropped), slices.Clone(r.Unsent)
 	if r.Refusal != nil {
 		rf := *r.Refusal
 		r.Refusal = &rf
@@ -234,6 +257,17 @@ func (g generator) render() (Result, error) {
 			return Result{}, refuse(FailSecretRule, "role %q has a rule whose text carries a value redaction "+
 				"hides, and %s's session reply is its rules, logged whole (spec §5.8): write the rule without it",
 				r.Role, g.in.Platform)
+		}
+	}
+	// A deny that meets a permit is one port49 needs the device to enforce,
+	// under an allow or under bits; one naming an argument never is (decision
+	// 27). A deny no permit meets is port49's no_rule_matched either way.
+	for _, d := range g.denies {
+		if d.Role == platform.BaselineBit || g.denyProvable(d.Rule) {
+			continue
+		}
+		if slices.ContainsFunc(g.permits, func(p engine.Rule) bool { return g.mayMeet(p.Rule, d.Rule) }) {
+			return Result{}, g.denyRefusal(d)
 		}
 	}
 	res, err := g.shape()
@@ -341,9 +375,23 @@ func (g generator) carves(held []string) []string {
 	return out
 }
 
-// entersConfiguration reports whether bit b's reach holds `configure`.
+// entersConfiguration reports whether bit b's reach holds a command that enters
+// configuration mode (configurationEntries).
 func (g generator) entersConfiguration(b string) bool {
-	return slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool { return g.contains(r, "configure") })
+	return slices.ContainsFunc(g.in.Dialect.Bits[b], func(r string) bool {
+		return slices.ContainsFunc(configurationEntries, func(e string) bool { return g.contains(r, e) })
+	})
+}
+
+// configurationEntries are the operational commands that enter configuration
+// mode: `configure` and its variants (`configure private`, `exclusive`,
+// `batch` begin with it), and `edit`, its alias (plan 5b pre-flight B-M1).
+var configurationEntries = []string{"configure", "edit"}
+
+// meetsConfiguration reports whether rule meets a command that enters
+// configuration mode.
+func (g generator) meetsConfiguration(rule string) bool {
+	return slices.ContainsFunc(configurationEntries, func(e string) bool { return g.mayMeet(rule, e+" **") })
 }
 
 // plain is bits without the ones that enter configuration mode.
@@ -487,6 +535,10 @@ func (g generator) capability() (Result, error) {
 		if dn, ok := g.allowable(p.Rule); !ok {
 			return Result{}, g.refusedShape(p, dn)
 		}
+		if why := g.unsendableAllow(p.Rule); why != "" {
+			res.Unsent = append(res.Unsent, Unsent{Rule: p, Why: why})
+			continue
+		}
 		res.Allows = append(res.Allows, p)
 	}
 	for _, dn := range g.denies {
@@ -498,6 +550,13 @@ func (g generator) capability() (Result, error) {
 	}
 	if len(res.Denies) > 0 && !g.in.Facts.DenyMatchesExpanded {
 		return Result{}, &narrowOnly{"a deny narrower than every command is walked past by abbreviating it"}
+	}
+	for _, dn := range res.Denies {
+		if !g.denyProvable(dn.Rule) {
+			// A deny the device would not enforce, of a command no permit
+			// meets: the narrow shape's `.*` holds it instead.
+			return Result{}, &narrowOnly{"a deny under the bits names an argument"}
+		}
 	}
 	return res, nil
 }
@@ -540,7 +599,7 @@ func (g generator) configuration(res Result) error {
 		}
 	}
 	for _, a := range res.Allows {
-		if what == "" && g.mayMeet(a.Rule, "configure **") {
+		if what == "" && g.meetsConfiguration(a.Rule) {
 			what = fmt.Sprintf("allow %q", a.Rule)
 		}
 	}
@@ -574,6 +633,10 @@ func (g generator) narrow() (Result, error) {
 		}
 		if dn, ok := g.allowable(p.Rule); !ok {
 			return Result{}, g.refusedShape(p, dn)
+		}
+		if why := g.unsendableAllow(p.Rule); why != "" {
+			res.Unsent = append(res.Unsent, Unsent{Rule: p, Why: why})
+			continue
 		}
 		res.Allows = append(res.Allows, p)
 	}
@@ -734,8 +797,12 @@ func (g generator) failClosed(r *Refusal) (Result, error) {
 		_, ok := h.allowable(p.Rule)
 		secret := g.in.Secret != nil && g.in.Secret(p.Rule)
 		_, werr := ruleERE(p.Rule, g.in.Classes, false, g.in.Facts)
-		if secret || werr != nil || !ok || !h.within(p.Rule) || h.mayMeet(p.Rule, "configure **") {
+		if secret || werr != nil || !ok || !h.within(p.Rule) || h.meetsConfiguration(p.Rule) {
 			res.Beyond = append(res.Beyond, p)
+			continue
+		}
+		if why := h.unsendableAllow(p.Rule); why != "" {
+			res.Unsent = append(res.Unsent, Unsent{Rule: p, Why: why})
 			continue
 		}
 		res.Allows = append(res.Allows, p)

@@ -276,33 +276,47 @@ func memoized(p *Policy) int {
 // A resolution's projection is its own: what one caller does to it never
 // reaches another resolution of the same composition, however concurrent.
 func TestAProjectionIsNotSharedAcrossResolutions(t *testing.T) {
-	p := parseProjected(t, platform.BitDeliveryUserPermissions, readonlyCarveOut)
-	want, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantAttrs, wantBeyond := slices.Clone(want.Projection.Attributes), slices.Clone(want.Projection.Beyond)
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			res, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			res.Projection.Attributes[0] = "user-permissions=all"
-			res.Projection.Beyond = append(res.Projection.Beyond[:0], engine.Rule{Verdict: engine.Permit, Rule: "**"})
-			res.Projection.Denies = slices.DeleteFunc(res.Projection.Denies, func(engine.Rule) bool { return true })
-		}()
-	}
-	wg.Wait()
-	got, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
-	if err != nil || !reflect.DeepEqual(got.Projection.Attributes, wantAttrs) ||
-		!reflect.DeepEqual(got.Projection.Beyond, wantBeyond) ||
-		!reflect.DeepEqual(got.Projection.Denies, want.Projection.Denies) {
-		t.Fatalf("%q %v", got.Projection.Attributes, err)
+	// The second composition leaves an allow off the wire (Result.Unsent).
+	for _, body := range []string{readonlyCarveOut, scopeOK + `roles:
+  - {name: r, privilege: readonly, permit: ["show version", "show interfaces terse"]}
+` + subjOK + grantOK} {
+		p := parseProjected(t, platform.BitDeliveryUserPermissions, body)
+		want, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantAttrs, wantBeyond := slices.Clone(want.Projection.Attributes), slices.Clone(want.Projection.Beyond)
+		wantUnsent := slices.Clone(want.Projection.Unsent)
+		if body != readonlyCarveOut && len(wantUnsent) != 1 {
+			t.Fatalf("unsent: %+v", want.Projection)
+		}
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				res, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				res.Projection.Attributes[0] = "user-permissions=all"
+				res.Projection.Beyond = append(res.Projection.Beyond[:0], engine.Rule{Verdict: engine.Permit, Rule: "**"})
+				res.Projection.Denies = slices.DeleteFunc(res.Projection.Denies, func(engine.Rule) bool { return true })
+				if len(res.Projection.Unsent) > 0 {
+					res.Projection.Unsent[0].Why = "changed"
+				}
+				res.Projection.Unsent = append(res.Projection.Unsent[:0], projection.Unsent{Why: "added"})
+			}()
+		}
+		wg.Wait()
+		got, err := p.ResolveSubject("s", deviceNamed(t, "srx-fw-04"), noon)
+		if err != nil || !reflect.DeepEqual(got.Projection.Attributes, wantAttrs) ||
+			!reflect.DeepEqual(got.Projection.Beyond, wantBeyond) ||
+			!reflect.DeepEqual(got.Projection.Denies, want.Projection.Denies) ||
+			!reflect.DeepEqual(got.Projection.Unsent, wantUnsent) {
+			t.Fatalf("%q %+v %v", got.Projection.Attributes, got.Projection.Unsent, err)
+		}
 	}
 }
 
@@ -503,7 +517,7 @@ func TestAProjectionFindingNamesItsDevicesWhereTheyDiffer(t *testing.T) {
 	p := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+
 		"  - {name: fw04, match: {os_version: 21.4R3-S4}}\n"+`roles:
   - {name: ok, privilege: readonly, permit: ["show version"]}
-  - {name: more, privilege: readonly, permit: ["show route"]}
+  - {name: more, privilege: readonly, permit: ["show route **"]}
 `+subjOK+`grants:
   - {subject: s, scope: all_devices, roles: [ok]}
   - {subject: s, scope: fw04, roles: [more]}

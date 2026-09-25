@@ -1,0 +1,228 @@
+package platform
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io/fs"
+	"path"
+	"slices"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/platforms"
+)
+
+// MaxKeywordNodes and MaxKeywordBytes bound a keyword tree: the lab's capture
+// stops at the node cap, and a file past either is refused, since the tree
+// is embedded in both binaries and read at every policy load.
+const (
+	MaxKeywordNodes = 5000
+	MaxKeywordBytes = 1 << 20
+)
+
+// Keywords is a projected platform's CLI keyword tree as the lab captured it
+// on every image a set measures (spec §8; §15 L26): for each command path
+// the capture reached, the words the CLI completes there that are keywords,
+// and whether an argument may be typed there. Junos matches a deny-commands
+// or allow-commands regex against a command's keywords only, never its
+// arguments (tests/lab/results/L12-juniper_*.md), so the projection sends a
+// rule only where this tree proves every word of it a keyword. A path the
+// capture did not reach proves nothing: a word under it is not a keyword,
+// and an argument may be typed there. It is the set's measurement, so no
+// `platforms:` block can change it.
+type Keywords struct {
+	nodes map[string]KeywordNode
+}
+
+// KeywordNode is one captured command path: Words are the keywords the CLI
+// completes after it, lower case and sorted, and Argument whether it takes an
+// argument there, on any image.
+type KeywordNode struct {
+	Words    []string `yaml:"words"`
+	Argument bool     `yaml:"argument"`
+}
+
+type keywordFile struct {
+	Platform string                 `yaml:"platform"`
+	Nodes    map[string]KeywordNode `yaml:"nodes"`
+}
+
+// ParseKeywords reads a keyword file: `platform:` and `nodes:`, keyed by
+// command path, the root as "". Every word is a lower-case run of printable
+// ASCII with no space, every node but the root is listed by its parent, and
+// the file is within MaxKeywordBytes and MaxKeywordNodes.
+func ParseKeywords(raw []byte) (string, *Keywords, error) {
+	if len(raw) > MaxKeywordBytes {
+		return "", nil, fmt.Errorf("keywords: %d bytes, past the bound of %d", len(raw), MaxKeywordBytes)
+	}
+	var f keywordFile
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		return "", nil, fmt.Errorf("keywords: %w", err)
+	}
+	if f.Platform == "" {
+		return "", nil, errors.New("keywords: no platform")
+	}
+	if len(f.Nodes) > MaxKeywordNodes {
+		return "", nil, fmt.Errorf("keywords: %d nodes, past the bound of %d", len(f.Nodes), MaxKeywordNodes)
+	}
+	if _, ok := f.Nodes[""]; !ok {
+		return "", nil, errors.New("keywords: no root node (\"\")")
+	}
+	for p, n := range f.Nodes {
+		for _, w := range n.Words {
+			if w == "" || w != strings.ToLower(w) || strings.IndexFunc(w, func(r rune) bool { return r <= ' ' || r > '~' }) >= 0 {
+				return "", nil, fmt.Errorf("keywords: node %q: word %q is not a lower-case printable word", p, w)
+			}
+		}
+		if !slices.IsSorted(n.Words) {
+			return "", nil, fmt.Errorf("keywords: node %q: words are not sorted", p)
+		}
+		if p == "" {
+			continue
+		}
+		i := strings.LastIndexByte(p, ' ')
+		parent, last := "", p
+		if i >= 0 {
+			parent, last = p[:i], p[i+1:]
+		}
+		if pn, ok := f.Nodes[parent]; !ok || !slices.Contains(pn.Words, last) {
+			return "", nil, fmt.Errorf("keywords: node %q: its parent %q does not list %q", p, parent, last)
+		}
+	}
+	return f.Platform, &Keywords{nodes: f.Nodes}, nil
+}
+
+// Keyword reports whether word is a keyword after path: the capture reached
+// path and the CLI completes word there. Case is ignored, as port49 ignores
+// it in a rule's word.
+func (k *Keywords) Keyword(path []string, word string) bool {
+	if k == nil {
+		return false
+	}
+	n, ok := k.nodes[strings.ToLower(strings.Join(path, " "))]
+	if !ok {
+		return false
+	}
+	_, found := slices.BinarySearch(n.Words, strings.ToLower(word))
+	return found
+}
+
+// TakesArgument reports whether an argument may be typed after path: true
+// where the capture found one on any image, and true where it did not reach
+// path, which proves nothing.
+func (k *Keywords) TakesArgument(path []string) bool {
+	if k == nil {
+		return true
+	}
+	n, ok := k.nodes[strings.ToLower(strings.Join(path, " "))]
+	return !ok || n.Argument
+}
+
+// Len is the number of captured nodes.
+func (k *Keywords) Len() int {
+	if k == nil {
+		return 0
+	}
+	return len(k.nodes)
+}
+
+// KeywordsFor is set version's keyword tree for platform, from the embedded
+// `platforms/keywords/<version>/<platform>.yaml`, or nil where the set ships
+// none. A file that does not load is a build defect, and panics, as a set's
+// adapter file does.
+func KeywordsFor(version, platformName string) *Keywords {
+	return keywordsIn(platforms.Keywords, version, platformName)
+}
+
+func keywordsIn(fsys fs.FS, version, platformName string) *Keywords {
+	raw, err := fs.ReadFile(fsys, path.Join("keywords", version, platformName+".yaml"))
+	if err != nil {
+		return nil
+	}
+	name, k, err := ParseKeywords(raw)
+	if err == nil && name != platformName {
+		err = fmt.Errorf("keywords: the file names platform %q", name)
+	}
+	if err != nil {
+		panic(fmt.Sprintf("platforms/keywords/%s/%s.yaml: %v", version, platformName, err))
+	}
+	return k
+}
+
+// MergeKeywords is what every capture proves: a node captured on each image,
+// the keywords each completes there, and an argument where any image takes
+// one. A keyword only one image has is not proven, and fails closed; a node
+// whose last word is not a keyword of its merged parent is dropped with its
+// subtree. Nil is the empty tree.
+func MergeKeywords(trees ...*Keywords) *Keywords {
+	if len(trees) == 0 {
+		return &Keywords{nodes: map[string]KeywordNode{}}
+	}
+	merged := map[string]KeywordNode{}
+	for p, n := range trees[0].nodeMap() {
+		words, arg, ok := slices.Clone(n.Words), n.Argument, true
+		for _, other := range trees[1:] {
+			o, found := other.nodeMap()[p]
+			if !found {
+				ok = false
+				break
+			}
+			words = slices.DeleteFunc(words, func(w string) bool { return !slices.Contains(o.Words, w) })
+			arg = arg || o.Argument
+		}
+		if ok {
+			merged[p] = KeywordNode{Words: words, Argument: arg}
+		}
+	}
+	paths := make([]string, 0, len(merged))
+	for p := range merged {
+		paths = append(paths, p)
+	}
+	slices.SortFunc(paths, func(a, b string) int { return strings.Count(a, " ") - strings.Count(b, " ") })
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		i := strings.LastIndexByte(p, ' ')
+		parent, last := "", p
+		if i >= 0 {
+			parent, last = p[:i], p[i+1:]
+		}
+		if pn, ok := merged[parent]; !ok || !slices.Contains(pn.Words, last) {
+			delete(merged, p)
+		}
+	}
+	return &Keywords{nodes: merged}
+}
+
+func (k *Keywords) nodeMap() map[string]KeywordNode {
+	if k == nil {
+		return nil
+	}
+	return k.nodes
+}
+
+// MarshalKeywords writes k as ParseKeywords reads it, paths sorted, so a
+// capture diffs line by line against the last one.
+func MarshalKeywords(platformName string, k *Keywords) []byte {
+	var b strings.Builder
+	fmt.Fprintf(&b, "platform: %s\nnodes:\n", platformName)
+	paths := make([]string, 0, k.Len())
+	for p := range k.nodeMap() {
+		paths = append(paths, p)
+	}
+	slices.Sort(paths)
+	for _, p := range paths {
+		n := k.nodes[p]
+		quoted := make([]string, len(n.Words))
+		for i, w := range n.Words {
+			quoted[i] = fmt.Sprintf("%q", w)
+		}
+		fmt.Fprintf(&b, "  %q: {words: [%s], argument: %v}\n", p, strings.Join(quoted, ", "), n.Argument)
+	}
+	return []byte(b.String())
+}

@@ -14,17 +14,20 @@ import (
 )
 
 // No reply that carries a deny lets the device enter configuration mode,
-// where no deny-commands reaches a statement (L12). Task 12a adds `edit`,
-// the alias, to the guard and to this assertion.
+// where no deny-commands reaches a statement (L12), by `configure`, its
+// variants or `edit`, its alias (pre-flight B-M1).
 func TestAReplyWithADenyNeverConfigures(t *testing.T) {
 	entries := [][]string{{"configure"}, {"configure", "private"}, {"configure", "exclusive"},
-		{"configure", "batch"}}
+		{"configure", "batch"}, {"edit"}, {"edit", "private"}}
 	for _, rules := range [][]engine.Rule{
 		{permit("**"), deny("request system reboot **")},
 		{permit("**"), deny("show configuration **")},
 		{permit("show **"), permit("configure **"), deny("show version")},
 		{permit("configure **"), deny("configure exclusive")},
 		{permit("show version"), permit("configure")},
+		{permit("show **"), permit("edit **"), deny("show version")},
+		{permit("show **"), permit("edit"), deny("show version")},
+		{permit("edit **"), deny("edit exclusive")},
 	} {
 		for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
 			for _, f := range []Facts{measured, JunosFacts} {
@@ -40,6 +43,35 @@ func TestAReplyWithADenyNeverConfigures(t *testing.T) {
 						t.Errorf("%s %v: a reply with a deny runs %q: %q", delivery, rules, e, res.Attributes)
 					}
 				}
+			}
+		}
+	}
+}
+
+// A bit whose reach holds `edit` enters configuration mode as one holding
+// `configure` does (Task 8 left it unguarded; pre-flight B-M1): a reply that
+// carries a deny holds neither, and an allow of `edit` is never sent beside a
+// deny, in any shape.
+func TestABitReachingEditEntersConfiguration(t *testing.T) {
+	for _, rules := range [][]engine.Rule{{permit("show **"), permit("edit **"), deny("show version")},
+		{permit("show **"), permit("edit"), deny("show version")}} {
+		for _, f := range []Facts{measured, JunosFacts, {CaseSensitive: true}} {
+			in := input(platform.BitDeliveryUserPermissions, "operator", f, rules...)
+			in.Dialect.Bits["edit"] = []string{"edit **"}
+			in.Bits = append(slices.Clone(in.Bits), "edit")
+			in.Keywords = keywordTree("edit")
+			g := newGenerator(in, in.Bits)
+			if !g.entersConfiguration("edit") {
+				t.Fatal("a bit reaching edit does not enter configuration mode")
+			}
+			res, err := Project(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if slices.Contains(res.Bits, "edit") || res.Device([]string{"edit"}) ||
+				res.Device([]string{"edit", "private"}) {
+				t.Errorf("%v %+v: a reply with a deny enters configuration mode: %s %q", rules, f, res.Shape,
+					res.Attributes)
 			}
 		}
 	}
@@ -192,6 +224,14 @@ func measuredInput(delivery, level string, f Facts, rules ...engine.Rule) Input 
 	in := input(delivery, level, f, rules...)
 	in.Dialect = measuredJunos(delivery)
 	in.Bits = in.Dialect.CeilingBits[level]
+	// Every word of the measured reach is a keyword, as the lab's capture
+	// proves most of them (tests/lab/results/L26-keywords-juniper_vsrx.yaml):
+	// these tests are about the bits, not the tree.
+	var reach []string
+	for _, rules := range in.Dialect.Bits {
+		reach = append(reach, rules...)
+	}
+	in.Keywords = keywordTree(reach...)
 	return in
 }
 
@@ -298,9 +338,10 @@ func TestRefusalsNameTheRealBlocker(t *testing.T) {
 	// Without all and configure the allows beneath the deny overflow: that is
 	// the blocker, not configuration mode.
 	var rules []engine.Rule
-	rules = append(rules, permit("**"), deny("show log **"))
-	for i := range 16 {
-		rules = append(rules, permit(fmt.Sprintf("show log messages.%d extensive", i)))
+	// The allows are of keywords, which alone Junos matches (decision 27).
+	rules = append(rules, permit("**"), deny("show **"))
+	for _, w := range strings.Fields("alpha bravo charlie delta echo foxtrot golf hotel india juliett kilo lima mike november oscar papa") {
+		rules = append(rules, permit("show "+w+" **"))
 	}
 	res, err = Project(input(platform.BitDeliveryUserPermissions, "admin", measured, rules...))
 	if err != nil || res.FailClosed != FailOverflow || res.Refusal.Attribute != "allow-commands" {

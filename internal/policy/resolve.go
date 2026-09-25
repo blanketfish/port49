@@ -264,7 +264,8 @@ func (p *Policy) project(c composition, b engine.Blob, dialect platform.Dialect)
 
 func (p *Policy) projectOnce(c composition, b engine.Blob, dialect platform.Dialect) (projection.Result, error) {
 	in := projection.Input{Platform: b.Platform, Dialect: dialect, Rules: b.Rules, Classes: b.Classes,
-		Normalize: b.Normalize, Facts: projection.FactsFor(dialect.CommandProjection)}
+		Normalize: b.Normalize, Facts: projection.FactsFor(dialect.CommandProjection),
+		Keywords: setKeywords(p.set, b.Platform)}
 	if c.level != "" {
 		level, ok := "", false
 		for l := c.level; l != "" && !ok; l = p.parents[l] {

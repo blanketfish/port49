@@ -3,6 +3,7 @@ package projection
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,7 +34,79 @@ func input(delivery, level string, f Facts, rules ...engine.Rule) Input {
 	d := junos(delivery)
 	return Input{Platform: "juniper_junos", Dialect: d, Level: level, Bits: d.CeilingBits[level],
 		Template: d.LocalUserNames[level], Rules: rules,
-		Normalize: engine.Normalize{PipeToken: "|", StripCR: true, SessionOnly: true}, Facts: f}
+		Normalize: engine.Normalize{PipeToken: "|", StripCR: true, SessionOnly: true}, Facts: f,
+		Keywords: testKeywords}
+}
+
+// testKeywords is a keyword tree in the shape the lab captures (Task 3b):
+// every word these tests deny or allow as a keyword, and an argument after
+// `show interfaces`, `show route`, `show log`, `ping` and the rest, as Junos
+// takes one there.
+var testKeywords = keywordTree()
+
+// keywordTree is testKeywords with every word of each proven rule a keyword
+// at its place, and no argument after it where the tree has no node there:
+// the tree a fixture whose adapter reaches more than testKeywords needs.
+func keywordTree(proven ...string) *platform.Keywords {
+	type node struct {
+		words string
+		arg   bool
+	}
+	nodes := map[string]node{
+		"":                              {"clear configure exit help monitor ping quit request set show traceroute", false},
+		"show":                          {"alpha bravo charlie chassis cli configuration delta echo foxtrot golf hotel india interfaces juliett kilo lima log mike november oscar papa route snmp system version", false},
+		"show interfaces":               {"extensive terse", true},
+		"show interfaces terse":         {"", true},
+		"show configuration":            {"interfaces system", false},
+		"show configuration interfaces": {"", true},
+		"show configuration system":     {"", false},
+		"show version":                  {"", false},
+		"show route":                    {"", true},
+		"show log":                      {"", true},
+		"show system":                   {"uptime", false},
+		"clear":                         {"bgp counters interfaces", false},
+		"clear bgp":                     {"neighbor", false},
+		"clear counters":                {"", false},
+		"request":                       {"system", false},
+		"request system":                {"reboot", false},
+		"ping":                          {"", true},
+		"traceroute":                    {"", true},
+		"monitor":                       {"", true},
+		"set":                           {"cli", false},
+		"set cli":                       {"", true},
+		"quit":                          {"", false},
+		"exit":                          {"", false},
+		"configure":                     {"", false},
+	}
+	for _, w := range strings.Fields("alpha bravo charlie delta echo foxtrot golf hotel india juliett kilo lima mike november oscar papa") {
+		nodes["show "+w] = node{"", false}
+	}
+	for _, r := range proven {
+		var path []string
+		for _, w := range strings.Fields(strings.TrimSuffix(r, "**")) {
+			n := nodes[strings.Join(path, " ")]
+			if !slices.Contains(strings.Fields(n.words), w) {
+				n.words += " " + w
+				nodes[strings.Join(path, " ")] = n
+			}
+			path = append(path, w)
+			if _, ok := nodes[strings.Join(path, " ")]; !ok {
+				nodes[strings.Join(path, " ")] = node{}
+			}
+		}
+	}
+	var b strings.Builder
+	b.WriteString("platform: juniper_junos\nnodes:\n")
+	for path, n := range nodes {
+		words := strings.Fields(n.words)
+		slices.Sort(words)
+		fmt.Fprintf(&b, "  %q: {words: [%s], argument: %v}\n", path, strings.Join(words, ", "), n.arg)
+	}
+	_, k, err := platform.ParseKeywords([]byte(b.String()))
+	if err != nil {
+		panic(err)
+	}
+	return k
 }
 
 func permit(rule string) engine.Rule {
@@ -251,8 +324,8 @@ func TestSecretsAndBudget(t *testing.T) {
 	// An allow past the budget is never moved into a class, where it would
 	// run for every subject past their own denies (C2): no class line.
 	rules = nil
-	for i := range 16 {
-		rules = append(rules, permit(fmt.Sprintf("show interfaces ge-0/0/%d extensive", i)))
+	for _, w := range strings.Fields("alpha bravo charlie delta echo foxtrot golf hotel india juliett kilo lima mike november oscar papa") {
+		rules = append(rules, permit("show "+w+" **"))
 	}
 	res, err = Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, rules...))
 	if r := res.Refusal; err != nil || res.FailClosed != FailOverflow || r.Attribute != "allow-commands" ||
@@ -351,5 +424,175 @@ func TestWidens(t *testing.T) {
 	}
 	if v, _ := Widens(narrower, narrow); strings.Join(v, " ") == "" {
 		t.Error("a widening by a command names it")
+	}
+}
+
+// Junos matches a deny against a command's keywords only (decision 27): a
+// deny that meets a permit and names an argument is one the device never
+// enforces, so the subject gets the fail-closed reply, and the refusal names
+// the word and the whole command to deny instead. Classes, regexes and `*`
+// stand for arguments; a deny no permit meets is no_rule_matched anyway.
+func TestADenyNamingAnArgumentFailsClosed(t *testing.T) {
+	for _, c := range []struct{ deny, word, instead string }{
+		{"show interfaces fxp0", "`fxp0` in `deny show interfaces fxp0`", "deny the whole command (`show interfaces`)"},
+		{"show interfaces fxp0 **", "`fxp0`", "deny the whole command (`show interfaces`)"},
+		{"show interfaces @management", "`@management`", "@management stands for an argument"},
+		{"show route *", "`*`", "deny the whole command (`show route`)"},
+		{"show /^int/ **", "`/^int/`", "deny the whole command (`show`)"},
+		{"show frobnicate", "`frobnicate`", "not a keyword the lab measured after \"show\""},
+	} {
+		in := input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show **"), deny(c.deny))
+		in.Classes = map[string][]string{"management": {"^fxp0$"}}
+		res, err := Project(in)
+		if err != nil || res.FailClosed != FailArgumentDeny || !strings.Contains(res.Refusal.Why, "Junos can't deny by argument") ||
+			!strings.Contains(res.Refusal.Why, c.word) || !strings.Contains(res.Refusal.Why, c.instead) {
+			t.Errorf("%s: %+v %v", c.deny, res.Refusal, err)
+		}
+		if res.Device([]string{"show", "interfaces", "fxp0", "terse"}) {
+			t.Errorf("%s: the fail-closed reply runs a command", c.deny)
+		}
+	}
+	// No permit meets it: port49 refuses those commands for want of a
+	// permit, and the reply needs no deny.
+	res, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show version"),
+		deny("clear interfaces fxp0")))
+	if err != nil || res.FailClosed != "" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	// A deny of keywords, `**` or not, goes out.
+	res, err = Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show **"),
+		deny("show system **"), deny("show version")))
+	if err != nil || res.FailClosed != "" || len(res.Denies) != 2 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	// With no keyword tree nothing is proven.
+	in := input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show **"), deny("show version"))
+	in.Keywords = nil
+	if res, err := Project(in); err != nil || res.FailClosed != FailArgumentDeny {
+		t.Fatalf("no tree: %+v %v", res, err)
+	}
+}
+
+// An allow naming an argument never matches on Junos, and one with an
+// argument possible among its words would run more than port49 permits:
+// neither is sent, the device refuses what port49 permits there, and the
+// result says why (decision 27).
+func TestAnAllowNamingAnArgumentIsNotSent(t *testing.T) {
+	res, err := Project(input(platform.BitDeliveryUserPermissions, "readonly", measured, permit("show version"),
+		permit("show interfaces fxp0 **"), permit("show interfaces terse"), permit("show route **")))
+	if err != nil || res.Shape != ShapeNarrow {
+		t.Fatalf("%+v %v", res, err)
+	}
+	want := []string{"user-permissions=view", "deny-commands=^.*$", "allow-commands=^(show version|show route( .*)?)$"}
+	if !reflect.DeepEqual(res.Attributes, want) || len(res.Unsent) != 2 ||
+		!strings.Contains(res.Unsent[0].Why, `"fxp0" is not a keyword the lab measured after "show interfaces"`) ||
+		!strings.Contains(res.Unsent[1].Why, `would also run "show interfaces <argument> terse"`) {
+		t.Fatalf("%q %+v", res.Attributes, res.Unsent)
+	}
+	if res.Device([]string{"show", "interfaces", "fxp0", "terse"}) || !res.Device([]string{"show", "route", "x"}) {
+		t.Error("device model")
+	}
+}
+
+// deny-commands never reaches configuration mode (decision 27;
+// L12-configuration-juniper_*.md). A reply that can enter it carries no deny,
+// so a deny of a configuration statement is enforced only as an operational
+// command: where the keyword tree does not prove it one, the subject gets the
+// fail-closed reply, saying why. The admin path that drops the configuration
+// bits relies on no deny in configuration mode: the device cannot enter it.
+func TestADenyOfAConfigurationStatementFailsClosed(t *testing.T) {
+	res, err := Project(input(platform.BitDeliveryUserPermissions, "admin", measured, permit("**"),
+		deny("set system host-name **")))
+	if err != nil || res.FailClosed != FailConfigurationDeny || !strings.Contains(res.Refusal.Why,
+		"names a configuration statement, and Junos never applies deny-commands in configuration mode") {
+		t.Fatalf("%+v %v", res.Refusal, err)
+	}
+	if res.Device([]string{"configure"}) {
+		t.Error("the fail-closed reply enters configuration mode")
+	}
+	// An operational command that begins with a configuration verb, which
+	// the tree proves, is sent, under bits that cannot configure.
+	res, err = Project(input(platform.BitDeliveryUserPermissions, "admin", measured, permit("**"), deny("set cli **")))
+	if err != nil || res.FailClosed != "" || !slices.Contains(res.ConfigurationDropped, "configure") ||
+		res.Device([]string{"configure"}) || res.Device([]string{"set", "cli", "screen-width", "80"}) {
+		t.Fatalf("%+v %v", res, err)
+	}
+	// No reply that carries a deny can enter configuration mode, by
+	// `configure`, its variants or `edit`, its alias (pre-flight B-M1).
+	entries := [][]string{{"configure"}, {"configure", "private"}, {"configure", "exclusive"},
+		{"configure", "batch"}, {"edit"}}
+	for _, rules := range [][]engine.Rule{{permit("**"), deny("request system reboot")},
+		{permit("show **"), permit("configure"), deny("show version")},
+		{permit("show **"), permit("edit **"), deny("show version")}} {
+		for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
+			res, err := Project(input(delivery, "admin", measured, rules...))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Denies) == 0 && res.Shape == ShapeCapability {
+				continue
+			}
+			for _, e := range entries {
+				if res.Device(e) {
+					t.Errorf("%s %v: a reply with a deny runs %q: %q", delivery, rules, e, res.Attributes)
+				}
+			}
+		}
+	}
+}
+
+// Clone copies every slice of a Result, Unsent included, so a caller's
+// append or write to its copy never reaches another's (Task 9).
+func TestCloneCopiesEverySlice(t *testing.T) {
+	r := permit("show version")
+	fresh := func() Result {
+		return Result{Bits: []string{"view"}, Attributes: []string{"a"}, Denies: []engine.Rule{r},
+			Allows: []engine.Rule{r}, Omitted: []engine.Rule{r}, Beyond: []engine.Rule{r}, Unreached: []engine.Rule{r},
+			ConfigurationDropped: []string{"all"}, Unsent: []Unsent{{Rule: r, Why: "why"}}, Refusal: &Refusal{Why: "w"}}
+	}
+	res := fresh()
+	c := res.Clone()
+	v := reflect.ValueOf(&c).Elem()
+	for i := range v.NumField() {
+		f := v.Field(i)
+		if f.Kind() != reflect.Slice || !v.Type().Field(i).IsExported() {
+			continue
+		}
+		if f.Len() == 0 {
+			t.Fatalf("%s: set it in this test", v.Type().Field(i).Name)
+		}
+		f.Index(0).Set(reflect.Zero(f.Type().Elem()))
+	}
+	c.Refusal.Why = "changed"
+	if !reflect.DeepEqual(res, fresh()) {
+		t.Fatalf("a clone's write reached the original: %+v", res)
+	}
+}
+
+// Neither a refusal nor an Unsent's why quotes a rule that carries a value
+// redaction hides: the composition is refused as secret_rule first, whose
+// text names only the role, and the fail-closed reply puts the rule in
+// Beyond, never Unsent (spec §5.8; decision 27).
+func TestAnUnsentAllowNeverCarriesASecret(t *testing.T) {
+	for _, rules := range [][]engine.Rule{
+		{permit("show version"), permit("show interfaces HUNTER2 **")},
+		{permit("show **"), deny("show interfaces HUNTER2")},
+		{permit("show version"), permit("show interfaces terse"), deny("show route HUNTER2")},
+	} {
+		for _, delivery := range []string{platform.BitDeliveryUserPermissions, platform.BitDeliveryLocalUserName} {
+			in := input(delivery, "readonly", measured, rules...)
+			in.Secret = func(rule string) bool { return strings.Contains(rule, "HUNTER2") }
+			res, err := Project(in)
+			if err != nil || res.FailClosed != FailSecretRule {
+				t.Fatalf("%v: %+v %v", rules, res, err)
+			}
+			shown := res.Refusal.Why
+			for _, u := range res.Unsent {
+				shown += u.Why + u.Rule.Rule
+			}
+			if strings.Contains(shown, "HUNTER2") {
+				t.Errorf("%v: %q", rules, shown)
+			}
+		}
 	}
 }
