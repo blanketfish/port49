@@ -1,0 +1,6 @@
+platform: juniper_junos
+nodes:
+  "": {words: ["exit", "set", "show"], argument: false}
+  "set": {words: ["cli"], argument: true}
+  "show": {words: ["cli", "configuration", "host", "ingress-replication", "policy", "task"], argument: false}
+  "show configuration": {words: [], argument: true}

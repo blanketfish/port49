@@ -33,6 +33,9 @@ type cliConn struct {
 	in     io.Writer
 	out    *syncBuf
 	close  func()
+	// done is closed when the remote shell exits (an SSH CLI only; nil on the
+	// console): the positive evidence that a session ended, as `exit` ends it.
+	done <-chan struct{}
 }
 
 // syncBuf collects device output. The ssh package writes to it from its own
@@ -145,13 +148,18 @@ func (l *lab) sshCLI(user, password string) (*cliConn, error) {
 		c.Close()
 		return nil, fmt.Errorf("start shell: %w", err)
 	}
+	done := make(chan struct{})
+	go func() {
+		s.Wait()
+		close(done)
+	}()
 	return &cliConn{
 		name: "SSH CLI as " + user,
 		in:   in,
 		out:  buf,
+		done: done,
 		close: func() {
 			in.Close()
-			go s.Wait()
 			s.Close()
 			c.Close()
 		},
