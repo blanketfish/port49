@@ -719,6 +719,12 @@ reproduced), and Task 19 is on hold for the owner.
   as above.
 
 **Carried, for later plans.**
+- **Revisit `check-config`'s NETCONF-off requirement.** On SRX hardware `xml-mode` opens NETCONF
+  with the service off (`L26c-operator-juniper_srx.md`), so turning the service off doesn't close
+  RPC reach. Under option C a capability reply goes out only where the grant permits everything
+  the bits reach, so RPC reach over the NETCONF service may already be bounded the same way.
+  Fleets that automate over NETCONF can't pass the check today. Settle it in the lab before
+  relaxing anything.
 - **Task 19**, the differential lab test, on hold for the owner. It carries:
   - the commit checker taking every rendered shape (L9);
   - L12's differential and L10's Junos spellings;
