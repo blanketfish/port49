@@ -3,6 +3,8 @@
 package lab
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,26 +32,34 @@ import (
 // ingress-replication, policy, task), `exit` and `save` at the root, `cli`
 // after `set`, and every hierarchy after `show configuration` either image
 // offers. A command head absent on an image (not in its listing, and the
-// control's CLI calls it unknown, typed in full as a hidden command would be)
-// is recorded absent there; a deny naming it is vacuous on that image, and it
-// is never an allow. Anything else is not observed, and the word stays
-// unproven, which fails closed.
+// control's CLI calls it an unknown command, typed in full as a hidden command
+// would be) is recorded absent there; a deny naming it is vacuous on that
+// image, and it is never an allow. Anything else is unproven, which fails
+// closed in projection. Unproven is a result, not a test failure (review L26b
+// I-5): the test fails on a harness failure (a login that did not open, a read
+// past junosPer) and on a regression, a word below that was proven and is not,
+// or a `show configuration` hierarchy that no longer runs under a deny naming
+// it.
 //
-// Evidence of a run is positive: `<command> | count` prints "Count: N
-// lines" only where the CLI took the command and ran it (a deny refuses the
-// line as it is parsed, before any pipe), `set cli screen-length 0` says
-// "Screen length set to 0", and `exit` ends the SSH session (cliConn.done).
-// Every read has junosPer.
+// Evidence of a run is positive, and counts only where the window holds no
+// refusal: a `Count: N lines` line from `| count` (a deny refuses the line as
+// it is parsed, before any pipe; the redrawn line after a syntax error can
+// count too, which the no-refusal rule excludes), `set cli screen-length 0`
+// says "Screen length set to 0", and `exit` ends the SSH session
+// (cliConn.done). No evidence is matched in a command's echo. Every read has
+// junosPer.
 //
 // Before any token, the break-glass CLI lists the completions at the root,
-// `set`, `show` and `show configuration`, so the note records whether each
-// offers an `<argument>` placeholder apart from whether its words are proven.
-// The test writes an overlay per image, tests/lab/results/L26b-keywords-
-// <image>.yaml, in platform.ParseKeywords form: each node's words are those
-// this run proves (with the parents L26 proves, so every node's parent lists
-// it), and its `argument` is what the node is once the overlay is laid over
-// the image's L26 tree: true where completion offers a placeholder there or
-// any word it offers is proven by neither.
+// `set`, `show` and `show configuration`; the note records each listing's
+// words and whether it offers an `<argument>` placeholder, apart from whether
+// its words are proven. The test writes an overlay per image,
+// tests/lab/results/L26b-keywords-<image>.yaml, in platform.ParseKeywords
+// form: each node's words are those this run proves (with the parents L26
+// proves, so every node's parent lists it), and its `argument` is what the
+// node is once the overlay is laid over the image's L26 tree: true where
+// completion offers a placeholder there or any word it offers is proven by
+// neither. The note and the overlay's comment record that tree's sha256, and
+// an overlay is only good against the tree that hashes to it.
 
 // junosL26bClass is a class with every bit and no regex: the control, and
 // under a deny each deny session.
@@ -67,7 +77,9 @@ type l26bWord struct {
 	evidence        *regexp.Regexp
 }
 
-var junosL26bCount = regexp.MustCompile(`Count: \d+ lines`)
+// junosL26bCount is `| count`'s answer, on a line of its own: the echo
+// carries `| count`, never this.
+var junosL26bCount = regexp.MustCompile(`(?m)^Count: \d+ lines`)
 
 // junosL26bShowWords are L26's five unproven words after `show`, each with a
 // command that runs on both images (the survey, tests/lab/logs, not
@@ -82,12 +94,23 @@ var junosL26bShowWords = []l26bWord{
 
 // junosL26bRootWords are the baseline's root and `set` words. `save` offers
 // only `dhcp-security-snoop` on vJunos and nothing on vSRX; its file is in
-// /var/tmp on a lab device the run destroys. `exit` is typed last.
+// /var/tmp on a lab device the run destroys. Its evidence is `| count`'s, as
+// the show words' is (review L26b I-1: what a save prints was never
+// measured, and a guessed word matched the echo). `exit` is typed last.
 var junosL26bRootWords = []l26bWord{
-	{path: "set", word: "cli", cmd: "set cli screen-length 0", evidence: regexp.MustCompile(`Screen length set to 0`)},
-	{path: "", word: "save", cmd: "save dhcp-security-snoop /var/tmp/p49-l26b.snoop",
-		evidence: regexp.MustCompile(`(?i)(saved|wrote|written|entries)`)},
+	{path: "set", word: "cli", cmd: "set cli screen-length 0", evidence: regexp.MustCompile(`(?m)^Screen length set to 0`)},
+	{path: "", word: "save", cmd: "save dhcp-security-snoop /var/tmp/p49-l26b.snoop | count"},
 }
+
+// junosL26bMustProve are the words the first run proved on both images; one
+// that is not proven is a regression, and fails the test.
+var junosL26bMustProve = []string{"show cli", "show host", "show ingress-replication", "show policy", "show task",
+	"set cli", "exit"}
+
+// junosL26bSentinel is typed in every hierarchy deny session that does not
+// name `system` (review L26b M-2): a hierarchy with a count well above zero,
+// so each session carries a strong "ran under deny".
+const junosL26bSentinel = "show configuration system | count"
 
 // junosL26bHierarchies is every word either image's `show configuration ?`
 // offers (vJunos 32, vSRX 25; the survey), probed on both, so a hierarchy one
@@ -291,7 +314,7 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 				t.Fatalf("set cli screen-length 0 not observed within %s: %v", junosPer, err)
 			}
 			w := &keywordWalk{c: c, logf: t.Logf, prompt: "@" + junosHost + "> "}
-			for _, p := range []string{"", "set", "show", "show configuration"} {
+			for _, p := range junosL26bPaths {
 				words, ph, err := w.completion(p)
 				if err != nil {
 					t.Fatalf("completion after %q: not observed: %v", p, err)
@@ -310,12 +333,7 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 			}
 		}()
 
-		// Every word, the command it is proven by, in one list.
-		words := slices.Clone(junosL26bShowWords)
-		words = append(words, junosL26bRootWords...)
-		for _, h := range junosL26bHierarchies {
-			words = append(words, l26bWord{path: "show configuration", word: h, cmd: "show configuration " + h + " | count"})
-		}
+		words := junosL26bWords()
 		var cmds []string
 		for _, w := range words {
 			cmds = append(cmds, w.cmd)
@@ -330,6 +348,7 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 			name, deny string
 			words      []l26bWord
 			exit       bool
+			sentinel   bool
 		}
 		var sessions []denySession
 		quote := func(re string) string { return strings.ReplaceAll(re, `\`, `\\`) }
@@ -349,13 +368,16 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 				ws = append(ws, l26bWord{path: "show configuration", word: h, cmd: "show configuration " + h + " | count"})
 			}
 			sessions = append(sessions, denySession{name: fmt.Sprintf("deny hierarchies %d", i+1),
-				deny: "^(" + l26bDeny("show configuration", chunk) + ")$", words: ws})
+				deny: "^(" + l26bDeny("show configuration", chunk) + ")$", words: ws,
+				sentinel: !slices.Contains(chunk, "system")})
 		}
 
 		denyCells := map[string]string{} // "<path> <word>" → the deny's cell
 		denyOuts := map[string]string{}
 		denyOf := map[string]string{}
-		var denyAuth []string
+		var sessionNotes []string
+		type sentinelRow struct{ session, cell, out string }
+		var sentinels []sentinelRow
 		for _, s := range sessions {
 			if n := len("deny-commands=" + s.deny); n > 255 {
 				t.Fatalf("%s: the deny is %d bytes, past the attribute's 255", s.name, n)
@@ -364,14 +386,22 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 			for _, w := range s.words {
 				sc = append(sc, w.cmd)
 			}
+			if s.sentinel {
+				sc = append(sc, junosL26bSentinel)
+			}
 			outs, exitCell, auth := l.l26bSession(t, s.name, "["+class+`, "deny-commands=`+quote(s.deny)+`"]`, sc, s.exit)
 			promptLen := len(outs[l26bUserKey] + "@" + junosHost + "> ")
-			denyAuth = append(denyAuth, fmt.Sprintf("%s: `deny-commands=%s`\n\n```\n%s\n```", s.name, tableCell(s.deny), auth))
+			sessionNotes = append(sessionNotes, fmt.Sprintf("#### %s, user `%s`\n\n`deny-commands=%s`\n\n```\n%s\n```",
+				s.name, outs[l26bUserKey], tableCell(s.deny), auth))
 			for _, w := range s.words {
 				key := strings.TrimSpace(w.path + " " + w.word)
 				denyCells[key] = l26bDenyCell(outs[w.cmd], w.word, w.evidence, promptLen)
 				denyOuts[key] = outs[w.cmd]
 				denyOf[key] = s.name
+			}
+			if s.sentinel {
+				out := outs[junosL26bSentinel]
+				sentinels = append(sentinels, sentinelRow{s.name, l26bDenyCell(out, "system", nil, promptLen), out})
 			}
 			if s.exit {
 				denyCells["exit"] = exitCell
@@ -384,18 +414,13 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 		type row struct{ path, word, cmd, control, deny, verdict string }
 		var rows []row
 		proven := map[string][]string{}
+		verdictOf := map[string]string{}
 		add := func(path, word, cmd, cc, dc, controlOut string) {
-			offered := slices.Contains(listings[path].words, word)
-			if word == "exit" {
-				offered = true // a hidden command every image runs in full; never absent
-			}
-			v := l26bVerdict(cc, dc, offered, controlOut)
-			if v == "unproven" {
-				t.Errorf("%q after %q: unproven (control %s, deny %s)", word, path, cc, dc)
-			}
+			v := l26bVerdict(cc, dc, l26bOffered(listings, path, word), controlOut)
 			if v == "proven" {
 				proven[path] = append(proven[path], word)
 			}
+			verdictOf[strings.TrimSpace(path+" "+word)] = v
 			rows = append(rows, row{path, word, cmd, cc, dc, v})
 		}
 		for _, w := range words {
@@ -404,7 +429,39 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 		}
 		add("", "exit", "exit", controlExit, denyCells["exit"], controlOuts["exit"])
 
-		overlay, err := l26bOverlay(l.p.name, listings, proven)
+		// Regressions (review L26b I-5): an unproven word is a result; a
+		// word the first run proved that is not proven now, or a hierarchy
+		// that no longer runs under a deny naming it, is news.
+		for _, k := range junosL26bMustProve {
+			if verdictOf[k] != "proven" {
+				t.Errorf("%q: %s, where the first run proved it", k, verdictOf[k])
+			}
+		}
+		notEnforced, offeredHier := 0, 0
+		for _, r := range rows {
+			if r.path != "show configuration" || !slices.Contains(listings[r.path].words, r.word) {
+				continue
+			}
+			offeredHier++
+			if r.control == "ran" && r.deny == "ran" {
+				notEnforced++
+			} else {
+				t.Errorf("hierarchy %q: control %s, deny %s, where every offered hierarchy ran under its deny", r.word,
+					r.control, r.deny)
+			}
+		}
+		for _, s := range sentinels {
+			if s.cell != "ran" {
+				t.Errorf("%s: %q under the deny: %s, not ran", s.session, junosL26bSentinel, s.cell)
+			}
+		}
+
+		treeFile := filepath.Join("tests", "lab", "results", "L26-keywords-"+l.p.name+".yaml")
+		tree, err := os.ReadFile(filepath.Join(root, treeFile))
+		if err != nil {
+			t.Fatalf("the L26 tree: %v", err)
+		}
+		overlay, err := l26bOverlay(l.p.name, tree, listings, proven)
 		if err != nil {
 			t.Fatalf("the overlay: %v", err)
 		}
@@ -416,26 +473,48 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 		var b strings.Builder
 		fmt.Fprintf(&b, "The class was committed: %s.\n\n```\n%s\n```\n\n", commitWord(commit), strings.Join(junosL26bClass, "\n"))
 		b.WriteString("A word is **proven** a keyword where the control (the class, no deny) ran the command with " +
-			"positive evidence (`Count: N lines` from `| count`, which only a command the CLI took and ran prints; " +
-			"`Screen length set to 0`; for `exit`, the SSH session ending) and the deny session refused it with the " +
-			"CLI's refusal; **absent** where the image does not offer the word and the control's CLI refused it too, " +
-			"typed in full as a hidden command would be (a deny naming it is vacuous there, and it is never an " +
-			"allow); anything else is **unproven**, and fails closed.\n\n")
-		b.WriteString("### Completion listings (break-glass)\n\n| path | placeholder offered | words offered |\n|---|---|---|\n")
-		for _, p := range []string{"", "set", "show", "show configuration"} {
-			fmt.Fprintf(&b, "| `%s` | %v | %d |\n", p, listings[p].placeholder, len(listings[p].words))
+			"positive evidence and no refusal in its window (a `Count: N lines` line from `| count`; `Screen length " +
+			"set to 0`; for `exit`, the SSH session ending; never a match in the command's own echo), and the deny " +
+			"session refused it with the CLI's refusal, its caret under the word; **absent** only where the image " +
+			"does not offer the word and the control's CLI answered `unknown command`, typed in full as a hidden " +
+			"command would be (a deny naming it is vacuous there, and it is never an allow); anything else is " +
+			"**unproven**, and fails closed. Unproven is a result, not a test failure: the test fails on a harness " +
+			"failure and on a regression of the words the first run proved.\n\n")
+		b.WriteString("### Completion listings (break-glass)\n\n| path | placeholder offered | words offered | words |\n|---|---|---|---|\n")
+		for _, p := range junosL26bPaths {
+			q := make([]string, len(listings[p].words))
+			for i, w := range listings[p].words {
+				q[i] = "`" + w + "`"
+			}
+			fmt.Fprintf(&b, "| `%s` | %v | %d | %s |\n", p, listings[p].placeholder, len(listings[p].words), strings.Join(q, ", "))
 		}
 		b.WriteString("\n### Verdicts\n\n| path | word | command | control | deny | verdict | deny session |\n|---|---|---|---|---|---|---|\n")
 		for _, r := range rows {
 			fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | %s | %s | **%s** | %s |\n", r.path, r.word, tableCell(r.cmd), r.control,
 				r.deny, r.verdict, denyOf[strings.TrimSpace(r.path+" "+r.word)])
 		}
+		b.WriteString("\n### Hierarchies\n\n")
+		if notEnforced == offeredHier {
+			fmt.Fprintf(&b, "**A deny naming a `show configuration` hierarchy is not enforced.** Every one of the %d "+
+				"hierarchies this image offers ran under a deny naming it, as it did in the control; the same deny "+
+				"shape refused the `show` words above. Each hierarchy word stays unproven.\n\n", offeredHier)
+		} else {
+			fmt.Fprintf(&b, "%d of the %d hierarchies this image offers ran under a deny naming them; the rest are "+
+				"in the table above.\n\n", notEnforced, offeredHier)
+		}
+		fmt.Fprintf(&b, "Each hierarchy deny session that does not name `system` also typed `%s`, a hierarchy with "+
+			"lines to count, under its deny:\n\n| deny session | deny |\n|---|---|\n", tableCell(junosL26bSentinel))
+		for _, s := range sentinels {
+			fmt.Fprintf(&b, "| %s | %s |\n", s.session, s.cell)
+		}
 		fmt.Fprintf(&b, "\n### The overlay\n\n`tests/lab/results/L26b-keywords-%s.yaml`, in platform.ParseKeywords form: "+
 			"a node's words are those this run proves (and, for the parent chain, `set`, `show` and `configuration`, "+
 			"which L26 proves); its `argument` is the node once the overlay is laid over this image's L26 tree: true "+
-			"where a placeholder is offered there, or a word offered there is proven by neither.\n\n```yaml\n%s```\n",
-			l.p.name, overlay)
-		b.WriteString("\n### Sessions\n\ncontrol:\n\n```\n" + controlAuth + "\n```\n\n" + strings.Join(denyAuth, "\n\n") + "\n")
+			"where a placeholder is offered there, or a word offered there is proven by neither. It was computed "+
+			"against `%s`, sha256 `%s`, and holds only against the tree that hashes to that.\n\n```yaml\n%s```\n",
+			l.p.name, filepath.ToSlash(treeFile), l26bTreeSum(tree), overlay)
+		fmt.Fprintf(&b, "\n### Sessions\n\n#### control, user `%s`\n\n```\n%s\n```\n\n%s\n", controlOuts[l26bUserKey],
+			controlAuth, strings.Join(sessionNotes, "\n\n"))
 		b.WriteString("\n### Outputs\n")
 		for _, r := range rows {
 			key := strings.TrimSpace(r.path + " " + r.word)
@@ -444,7 +523,10 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 				co = controlOuts["exit"]
 			}
 			fmt.Fprintf(&b, "\n#### `%s`\n\ncontrol:\n\n```\n%s\n```\n\ndeny:\n\n```\n%s\n```\n", r.cmd,
-				firstLines(orEmpty([]string{co}, 0), 12), firstLines(orEmpty([]string{denyOuts[key]}, 0), 12))
+				orEmpty([]string{co}, 0), orEmpty([]string{denyOuts[key]}, 0))
+		}
+		for _, s := range sentinels {
+			fmt.Fprintf(&b, "\n#### sentinel, %s\n\ndeny:\n\n```\n%s\n```\n", s.session, orEmpty([]string{s.out}, 0))
 		}
 		l.result(t, "L26b", "Junos keywords proven by deny-commands enforcement against a paired control: L26's "+
 			"unproven words after `show`, `exit`, `save` and `set cli`, and every `show configuration` hierarchy "+
@@ -452,22 +534,51 @@ func TestL26bJunosKeywordDeny(t *testing.T) {
 	})
 }
 
-// l26bOverlay is the overlay for one image, checked by platform.ParseKeywords.
-// argument is computed against the image's committed L26 tree: a node takes
-// an argument where its completion offered a placeholder, or a word it
-// offered is proven neither there nor here.
-func l26bOverlay(image string, listings map[string]l26bListing, proven map[string][]string) ([]byte, error) {
-	raw, err := os.ReadFile(filepath.Join(root, "tests", "lab", "results", "L26-keywords-"+image+".yaml"))
-	if err != nil {
-		return nil, err
+// junosL26bPaths are the paths whose completion the break-glass CLI lists.
+var junosL26bPaths = []string{"", "set", "show", "show configuration"}
+
+// junosL26bWords is every word, with the command it is proven by, in the
+// order the control types them.
+func junosL26bWords() []l26bWord {
+	words := slices.Clone(junosL26bShowWords)
+	words = append(words, junosL26bRootWords...)
+	for _, h := range junosL26bHierarchies {
+		words = append(words, l26bWord{path: "show configuration", word: h, cmd: "show configuration " + h + " | count"})
 	}
-	_, base, err := keywords.ParseKeywords(raw)
+	return words
+}
+
+// l26bOffered is whether the image's completion at path offers word. `exit`
+// is a hidden command every image runs in full: never absent.
+func l26bOffered(listings map[string]l26bListing, path, word string) bool {
+	return (path == "" && word == "exit") || slices.Contains(listings[path].words, word)
+}
+
+// l26bTreeSum is the sha256 of an L26 tree file, in hex.
+func l26bTreeSum(tree []byte) string {
+	sum := sha256.Sum256(tree)
+	return hex.EncodeToString(sum[:])
+}
+
+// l26bOverlay is the overlay for one image, checked by platform.ParseKeywords.
+// argument is computed against tree, the image's L26 tree, whose sha256 the
+// overlay's first line records: a node takes an argument where its completion
+// offered a placeholder, or a word it offered is proven neither there nor
+// here. A parent word the overlay adds must be one the tree proves (review
+// L26b M-4).
+func l26bOverlay(image string, tree []byte, listings map[string]l26bListing, proven map[string][]string) ([]byte, error) {
+	_, base, err := keywords.ParseKeywords(tree)
 	if err != nil {
 		return nil, fmt.Errorf("the L26 tree: %w", err)
 	}
-	node := func(path string, extra ...string) (string, []string, bool) {
+	node := func(path string, parents ...string) (string, []string, bool, error) {
+		for _, w := range parents {
+			if !base.Keyword(strings.Fields(path), w) {
+				return "", nil, false, fmt.Errorf("%q after %q: the L26 tree does not prove it", w, path)
+			}
+		}
 		ws := slices.Clone(proven[path])
-		ws = append(ws, extra...)
+		ws = append(ws, parents...)
 		slices.Sort(ws)
 		ws = slices.Compact(ws)
 		li := listings[path]
@@ -477,12 +588,16 @@ func l26bOverlay(image string, listings map[string]l26bListing, proven map[strin
 				arg = true
 			}
 		}
-		return path, ws, arg
+		return path, ws, arg, nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "platform: juniper_junos\nnodes:\n")
+	fmt.Fprintf(&b, "# computed against tests/lab/results/L26-keywords-%s.yaml sha256 %s\nplatform: juniper_junos\nnodes:\n",
+		image, l26bTreeSum(tree))
 	for _, n := range [][]string{{"", "set", "show"}, {"set"}, {"show", "configuration"}, {"show configuration"}} {
-		p, ws, arg := node(n[0], n[1:]...)
+		p, ws, arg, err := node(n[0], n[1:]...)
+		if err != nil {
+			return nil, err
+		}
 		q := make([]string, len(ws))
 		for i, w := range ws {
 			q[i] = fmt.Sprintf("%q", w)

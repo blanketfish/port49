@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,7 +15,7 @@ import (
 // These run without a device: the L26b classifiers and the denies it renders.
 
 func TestL26bCell(t *testing.T) {
-	screen := regexp.MustCompile(`Screen length set to 0`)
+	screen := junosL26bRootWords[0].evidence
 	for _, c := range []struct {
 		out  string
 		ev   *regexp.Regexp
@@ -31,6 +32,9 @@ func TestL26bCell(t *testing.T) {
 		{"", nil, "not observed"},
 		// Both: not observed, never a run nor a refusal.
 		{"Count: 1 lines\nsyntax error.", nil, "not observed"},
+		// Evidence counts only at a line's start, never inside an echo.
+		{"echo Count: 3 lines\n", nil, "not observed"},
+		{"set cli Screen length set to 0\n", screen, "not observed"},
 	} {
 		if got := l26bCell(c.out, c.ev); got != c.want {
 			t.Errorf("l26bCell(%q) = %q, want %q", c.out, got, c.want)
@@ -93,60 +97,140 @@ func TestL26bDenies(t *testing.T) {
 	t.Logf("%d hierarchy denies: %s", len(chunks), strings.Repeat("·", len(chunks)))
 }
 
-// junosL26bOffered is what each image's completion offered at the root and
-// after `show configuration` (the run's break-glass listings; the survey,
-// tests/lab/logs), for the note re-reads below.
-var junosL26bOffered = map[string]map[string][]string{
-	"juniper_vjunos-router": {
-		"":                   {"save"},
-		"show configuration": {"access", "access-profile", "accounting-options", "applications", "apply-groups", "bridge-domains", "chassis", "class-of-service", "diameter", "dynamic-profiles", "event-options", "firewall", "forwarding-options", "groups", "interfaces", "jsrc", "jsrc-partition", "logical-systems", "multi-chassis", "multicast-snooping-options", "poe", "policy-options", "protocols", "routing-instances", "routing-options", "security", "services", "snmp", "switch-options", "system", "unified-edge", "virtual-chassis"},
-	},
-	"juniper_vsrx": {
-		"":                   {},
-		"show configuration": {"access", "access-profile", "accounting-options", "applications", "apply-groups", "chassis", "class-of-service", "diameter", "event-options", "firewall", "forwarding-options", "groups", "interfaces", "policy-options", "protocols", "routing-instances", "routing-options", "schedulers", "security", "services", "smtp", "snmp", "switch-options", "system", "vlans"},
-	},
-}
-
-// TestCommittedL26bVerdictsHold re-reads both committed L26b notes: every
-// row's control and deny cells, recomputed from the recorded outputs (but
-// `exit`'s, which is the session ending, not an output), and every verdict.
+// TestCommittedL26bVerdictsHold re-reads both committed L26b notes from
+// committed files alone (review L26b I-4, M-3): the listings the note
+// records decide `offered`; every row's control and deny cells are
+// recomputed from its full recorded outputs, with each deny session's prompt
+// from the user the note names (but the control's `exit`, which is the
+// session ending: its output must hold no refusal); every verdict follows;
+// the sentinels are recomputed; the L26 tree still hashes to what the note
+// records; and the committed overlay is what l26bOverlay makes from the
+// listings, the proven words and that tree.
 func TestCommittedL26bVerdictsHold(t *testing.T) {
 	block := regexp.MustCompile("(?s)\n#### `([^`\n]+)`\n\ncontrol:\n\n```\n(.*?)\n```\n\ndeny:\n\n```\n(.*?)\n```\n")
-	for img, offered := range junosL26bOffered {
+	sentinel := regexp.MustCompile("(?s)\n#### sentinel, ([^\n]+)\n\ndeny:\n\n```\n(.*?)\n```\n")
+	userOf := regexp.MustCompile("(?m)^#### ([^\n`]+), user `([^`]+)`$")
+	sumOf := regexp.MustCompile("against `(tests/lab/results/L26-keywords-[^`]+\\.yaml)`, sha256 `([0-9a-f]{64})`")
+	for _, img := range []string{"juniper_vjunos-router", "juniper_vsrx"} {
 		raw, err := os.ReadFile(filepath.Join("results", "L26b-"+img+".md"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		note := string(raw)
+		rowOf := func(first ...string) []string {
+			prefix := "| " + strings.Join(first, " | ") + " |"
+			for _, line := range strings.Split(note, "\n") {
+				if strings.HasPrefix(line, prefix) {
+					cells := strings.Split(strings.Trim(strings.ReplaceAll(line, `\|`, "\x00"), "| "), " | ")
+					for i := range cells {
+						cells[i] = strings.ReplaceAll(cells[i], "\x00", "|")
+					}
+					return cells
+				}
+			}
+			return nil
+		}
+
+		listings := map[string]l26bListing{}
+		for _, p := range junosL26bPaths {
+			row := rowOf("`" + p + "`")
+			if len(row) < 3 {
+				t.Fatalf("%s: no listing row for %q", img, p)
+			}
+			var li l26bListing
+			li.placeholder = row[1] == "true"
+			if len(row) > 3 {
+				for _, w := range strings.Split(row[3], ", ") {
+					if w = strings.Trim(w, "`"); w != "" {
+						li.words = append(li.words, w)
+					}
+				}
+			}
+			if n := fmt.Sprint(len(li.words)); n != row[2] {
+				t.Errorf("%s: listing %q counts %s, lists %s words", img, p, row[2], n)
+			}
+			listings[p] = li
+		}
+		users := map[string]int{}
+		for _, m := range userOf.FindAllStringSubmatch(note, -1) {
+			users[m[1]] = len(m[2] + "@" + junosHost + "> ")
+		}
 		outs := map[string][2]string{}
 		for _, m := range block.FindAllStringSubmatch(note, -1) {
 			outs[m[1]] = [2]string{m[2], m[3]}
 		}
-		words := slices.Clone(junosL26bShowWords)
-		words = append(words, junosL26bRootWords...)
-		for _, h := range junosL26bHierarchies {
-			words = append(words, l26bWord{path: "show configuration", word: h, cmd: "show configuration " + h + " | count"})
-		}
-		for _, w := range words {
-			row := tableRow(note, "`"+w.path+"`")
-			for _, line := range strings.Split(note, "\n") {
-				if strings.HasPrefix(line, "| `"+w.path+"` | `"+w.word+"` |") {
-					row = strings.Split(strings.Trim(strings.ReplaceAll(line, `\|`, "\x00"), "| "), " | ")
-				}
-			}
+
+		proven := map[string][]string{}
+		check := func(w l26bWord, recompute bool) {
+			row := rowOf("`"+w.path+"`", "`"+w.word+"`")
 			o, ok := outs[w.cmd]
-			if !ok || len(row) < 6 {
+			if !ok || len(row) < 7 {
 				t.Errorf("%s: no row or outputs for %q", img, w.cmd)
-				continue
+				return
 			}
-			cc, dc := l26bCell(o[0], w.evidence), l26bDenyCell(o[1], w.word, w.evidence, len("alice01@"+junosHost+"> "))
-			isOffered := slices.Contains(offered[w.path], w.word) || w.path == "show" || w.path == "set"
-			v := l26bVerdict(cc, dc, isOffered, o[0])
-			got := strings.Trim(strings.Fields(row[5])[0], "*")
+			promptLen, ok := users[row[6]]
+			if !ok {
+				t.Errorf("%s: %q: the note names no user for %q", img, w.cmd, row[6])
+				return
+			}
+			cc, dc := row[3], l26bDenyCell(o[1], w.word, w.evidence, promptLen)
+			if recompute {
+				cc = l26bCell(o[0], w.evidence)
+			} else if cc == "ran" && containsAny(strings.ToLower(o[0]), junosL26bRefusal) {
+				t.Errorf("%s: the control's %q ran, and its output holds a refusal", img, w.cmd)
+			}
+			v := l26bVerdict(cc, dc, l26bOffered(listings, w.path, w.word), o[0])
+			got := strings.Trim(row[5], "*")
 			if cc != row[3] || dc != row[4] || v != got {
 				t.Errorf("%s %q after %q: the note reads %s / %s / %s, the classifier now %s / %s / %s", img, w.word,
 					w.path, row[3], row[4], got, cc, dc, v)
 			}
+			if got == "proven" {
+				proven[w.path] = append(proven[w.path], w.word)
+			}
+		}
+		for _, w := range junosL26bWords() {
+			check(w, true)
+		}
+		check(l26bWord{path: "", word: "exit", cmd: "exit"}, false)
+
+		sentinels := 0
+		for _, m := range sentinel.FindAllStringSubmatch(note, -1) {
+			sentinels++
+			row := rowOf(m[1])
+			if len(row) < 2 || row[1] != l26bDenyCell(m[2], "system", nil, users[m[1]]) {
+				t.Errorf("%s: sentinel in %s: the note reads %v", img, m[1], row)
+			}
+		}
+		if sentinels == 0 {
+			t.Errorf("%s: no sentinels", img)
+		}
+
+		m := sumOf.FindStringSubmatch(note)
+		if m == nil {
+			t.Fatalf("%s: the note records no L26 tree sha256", img)
+		}
+		tree, err := os.ReadFile(filepath.Join("..", "..", m[1]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := l26bTreeSum(tree); got != m[2] {
+			t.Errorf("%s: %s hashes to %s, the overlay was computed against %s: rerun L26b", img, m[1], got, m[2])
+		}
+		want, err := l26bOverlay(img, tree, listings, proven)
+		if err != nil {
+			t.Fatal(err)
+		}
+		committed, err := os.ReadFile(filepath.Join("results", "L26b-keywords-"+img+".yaml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(committed) != string(want) {
+			t.Errorf("%s: the committed overlay is not what the note's listings and verdicts make:\n%s\nwant:\n%s", img,
+				committed, want)
+		}
+		if !strings.Contains(note, "```yaml\n"+string(committed)+"```") {
+			t.Errorf("%s: the note's overlay is not the committed one", img)
 		}
 	}
 }
