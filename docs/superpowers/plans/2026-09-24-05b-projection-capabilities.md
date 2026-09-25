@@ -160,7 +160,11 @@ grammar, so it cannot tell a keyword from an argument.
    then walks only under `show`. Every other top-level word is proven a command name by the top-level
    listing, and nothing under it is proven, so `deny request system reboot **`, `deny clear bgp **`
    and `deny monitor traffic **` fail closed as argument denies; `deny clear **`, `deny request **`
-   and `deny monitor **` go out. A path the capture did not reach proves nothing, a keyword on one image only is not proven (the merge
+   and `deny monitor **` go out. So, in set 1.1.0 as the lab's facts stand (re-pre-flight R-M2,
+   R-M6): with `DenyMatchesExpanded` false no deny but `.*` reaches the wire, and **any Junos
+   composition with a deny beneath a permit gets the fail-closed reply**; the device differential
+   covers the narrow shape, the fail-closed reply and capability shapes with no deny. A path the
+   capture did not reach proves nothing, a keyword on one image only is not proven (the merge
    keeps what every image proves, and an argument on any image), and the tree is the set's
    measurement: it lives outside the adapter, in `platforms/keywords/<set>/<platform>.yaml`, and no
    `platforms:` block can touch it. It is bounded: the capture walks its seeds' prefixes first and
@@ -210,7 +214,7 @@ trailing `**` after an argument, counts as naming an argument. This is what `key
 `argument` already do (Task 12a), and decision 27 says it. Task 19's "a deny aligned with a bit"
 and "a class term" shapes exercise the trailing case on the device.
 
-**Order of execution.** 1 → **1a** → 2 → 3 → **3b** → 4 → 5 … 12 → **12a** → **12b** → 13 → 14
+**Order of execution.** 1 → **1a** → 2 → 3 → **3b** → 4 → 5 … 12 → **12a** → **12b** → 13 → **13a** → 14
 (amended) → 15 … 18 → 19 (amended) → 20 (amended). Tasks 1, 2 and 5 are done; Task 6 is in its fix
 round. Every block below was generated from a commit that went green, and the whole order was
 verified from the branch head `813b910`: each block applies in order, and `gofmt`, `go vet`, `go vet
@@ -228,6 +232,8 @@ them edits `internal/platform/adapter.go`, `dialect.go` or `internal/policy/load
   ruling's message, and fails `policy test` as every fail-closed composition does. Task 12b adds the
   warning.
 - **Task 12**: unchanged; `policy diff` fails on the same finding.
+- **Task 13a**, new: the management-service allowlist `check-config` applies when branch M turns it
+  on (`platform.CheckServices`), off by default.
 - **Task 14**: new step, "Ship the keyword tree"; branch B keeps `DenyMatchesExpanded` false unless
   every Task 3b abbreviation probe is refused on both images; new branch B2 reverts the rendered deny
   shape if the device does not enforce it; new branch M acts on the NETCONF
@@ -287,7 +293,9 @@ keyword only on positive evidence from `<path> <word> | display xml rpc` (item 4
 else — no RPC, an error asking for anything but a `<command>`, the word as an element's text, text
 that differs from it — is an argument and marks the path as taking one. A prompt that does not come
 back within `junosPer` is interrupted with ^C and the word is an argument; one that does not come
-back after that either is not observed and fails the test.
+back after that either is not observed and fails the test. Where the path's completion offered an
+`<argument>` placeholder, only an RPC naming the word proves it: "expecting <command>" after an
+argument could also mean a mandatory keyword follows the value (re-pre-flight R-M1).
 
 Bounds: the prefixes of the seed list (spec §11's `show chassis cluster status`, the carve-out,
 the lab's and the fleet's show commands) first, so the bounds never cut them off (A-M1); then every
@@ -317,14 +325,17 @@ spaces, no pipe. Where the control runs one, the deny must refuse it, or the fac
 spends two seeded tokens.
 
 `TestL12JunosNetconf` measures whether a wire deny, and the fail-closed reply, bind a NETCONF RPC
-(pre-flight B1). Four NETCONF sessions, each opened with a fresh token under its own reply, send
-`<get-configuration/>` and `<get-software-information/>`, the equivalents of `show configuration`
-and `show version`: a control class holding view and view-configuration; the same class under a
+(pre-flight B1). Four NETCONF sessions, each opened with a fresh token under its own reply, send four RPCs:
+`<get-configuration/>`, a filtered `<get-configuration>` of `<system/>`, `<command>show
+configuration</command>`, which runs CLI text over NETCONF (re-pre-flight R-M3), and
+`<get-software-information/>`, the equivalents of `show configuration`, `show configuration
+system` and `show version`: a control class holding view and view-configuration; the same class under a
 deny naming both commands, as rendered; the fail-closed reply with no template (`remote`'s class);
 and the fail-closed reply over a bitless template with `user-permissions=view view-configuration`.
 The hello has 45 s and each RPC 60 s; a reply that is neither the output nor an `<rpc-error>` is
 not observed and fails the test. The note's line `deny-commands and the fail-closed reply bind
-NETCONF RPCs: true` holds only where the control ran both and every other session refused both. It
+NETCONF RPCs: true` holds only where the control ran every RPC and every other session refused
+every one. It
 spends four seeded tokens, six with the abbreviations, of the sixteen.
 
 - [ ] **Step 1: Add the test**
@@ -333,10 +344,10 @@ spends four seeded tokens, six with the abbreviations, of the sixteen.
 ````diff
 diff --git a/tests/lab/junos_keywords_test.go b/tests/lab/junos_keywords_test.go
 new file mode 100644
-index 0000000..6719eb0
+index 0000000..e3f2239
 --- /dev/null
 +++ b/tests/lab/junos_keywords_test.go
-@@ -0,0 +1,417 @@
+@@ -0,0 +1,423 @@
 +//go:build lab
 +
 +package lab
@@ -366,7 +377,10 @@ index 0000000..6719eb0
 +// an RPC in which the word is an element's name and no element's text
 +// (`show interfaces terse` is `<terse/>`), or an RPC with no text at all
 +// where `<path>` alone was still asking for a `<command>` (`show route`), or
-+// is itself still asking for a `<command>` (`show chassis`). Anything else is
++// is itself still asking for a `<command>` (`show chassis`); the last two only
++// where `<path>`'s completion offered no `<argument>` placeholder, since after
++// an argument a mandatory keyword could also be "expecting <command>"
++// (re-pre-flight R-M1). Anything else is
 +// an argument: an RPC holding the word as text (`<interface-name>fxp0`), text
 +// that differs from the word, no RPC, an error naming anything but
 +// `<command>`, and a prompt that did not come back. The two images' trees are
@@ -544,8 +558,9 @@ index 0000000..6719eb0
 +}
 +
 +// keyword reports whether word, offered after path, is proven a keyword
-+// there, and if not, why.
-+func (w *keywordWalk) keyword(path, word string) (bool, string, error) {
++// there, and if not, why. placeholder is whether path's completion offered an
++// `<argument>` placeholder, in which case only an RPC naming the word proves it.
++func (w *keywordWalk) keyword(path, word string, placeholder bool) (bool, string, error) {
 +	a, err := w.rpc(path + " " + word)
 +	if err != nil {
 +		return false, "", err
@@ -557,6 +572,8 @@ index 0000000..6719eb0
 +		return false, "the RPC holds it as text", nil
 +	case a.rpc && slices.Contains(a.tags, word):
 +		return true, "", nil
++	case placeholder:
++		return false, "an argument may be typed here, and no RPC names the word", nil
 +	case a.rpc && len(a.values) == 0:
 +		parent, err := w.rpc(path)
 +		if err != nil {
@@ -602,7 +619,7 @@ index 0000000..6719eb0
 +			n.words = append(n.words, word)
 +			continue
 +		}
-+		ok, why, err := w.keyword(p, word)
++		ok, why, err := w.keyword(p, word, argument)
 +		if err != nil {
 +			return nil, err
 +		}
@@ -930,16 +947,17 @@ index 0000000..b8f4bef
 ````diff
 diff --git a/tests/lab/junos_netconf_test.go b/tests/lab/junos_netconf_test.go
 new file mode 100644
-index 0000000..20d6093
+index 0000000..7f79cd6
 --- /dev/null
 +++ b/tests/lab/junos_netconf_test.go
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,176 @@
 +//go:build lab
 +
 +package lab
 +
 +import (
 +	"fmt"
++	"slices"
 +	"strings"
 +	"testing"
 +)
@@ -954,10 +972,11 @@ index 0000000..20d6093
 +// it is measured here, before the code is final.
 +//
 +// Four sessions, each a NETCONF session opened with a fresh seeded token
-+// under its own reply, each sending two RPCs, the equivalents of two denied
-+// commands: `<get-configuration/>` (`show configuration`) and
++// under its own reply, each sending the RPCs of junosNetconfRPCs, the
++// equivalents of denied commands: `<get-configuration/>` whole and filtered
++// and `<command>show configuration</command>` (`show configuration`), and
 +// `<get-software-information/>` (`show version`). The control's class holds
-+// view and view-configuration and no regex, so both run. Then the same class
++// view and view-configuration and no regex, so every one runs. Then the same class
 +// under a deny naming both commands, as the generator renders it; the
 +// fail-closed reply under local_user_name (no template: the `remote` user's
 +// class, which in the lab holds the same bits); and the fail-closed reply
@@ -982,7 +1001,7 @@ index 0000000..20d6093
 +const junosNetconfDeny = `^( *show +configuration( .*)? *(\\|.*)?| *show +version *(\\|.*)?)$`
 +
 +var junosNetconfVariants = []junosVariant{
-+	{"control", `["local-user-name=p49-nc-ro"]`, "view and view-configuration, no regex: both RPCs run"},
++	{"control", `["local-user-name=p49-nc-ro"]`, "view and view-configuration, no regex: every RPC runs"},
 +	{"deny", `["local-user-name=p49-nc-ro", "deny-commands=` + junosNetconfDeny + `"]`,
 +		"the same class under a deny naming both commands"},
 +	{"fail-closed, local_user_name", `["deny-commands=^.*$"]`,
@@ -991,10 +1010,16 @@ index 0000000..20d6093
 +		"decision 26's reply with bits over a bitless template"},
 +}
 +
-+// junosNetconfRPCs are the RPCs sent in each session, each with the element
-+// its output holds and the CLI command it stands for.
++// junosNetconfRPCs are the RPCs sent in each session, each with what its
++// output holds and the CLI command it stands for: the configuration whole and
++// filtered, the CLI text itself over `<command>` (re-pre-flight R-M3), and the
++// software version. The configuration's evidence is the host name, which each
++// form prints.
 +var junosNetconfRPCs = []struct{ rpc, evidence, command string }{
-+	{"<get-configuration/>", "<configuration", "show configuration"},
++	{"<get-configuration/>", "host-name", "show configuration"},
++	{"<get-configuration><configuration><system/></configuration></get-configuration>", "host-name",
++		"show configuration system"},
++	{"<command>show configuration</command>", "host-name", "show configuration"},
 +	{"<get-software-information/>", "<software-information", "show version"},
 +}
 +
@@ -1056,9 +1081,9 @@ index 0000000..20d6093
 +			}
 +			n.Close()
 +		}
-+		ranControl := cells[0][0] == "ran" && cells[0][1] == "ran"
++		ranControl := !slices.ContainsFunc(cells[0], func(c string) bool { return c != "ran" })
 +		if !ranControl {
-+			t.Errorf("the control did not run both RPCs, so no deny is measured: %v", cells[0])
++			t.Errorf("the control did not run every RPC, so no deny is measured: %v", cells[0])
 +		}
 +		bound := ranControl
 +		for _, row := range cells[1:] {
@@ -1069,13 +1094,17 @@ index 0000000..20d6093
 +		var b strings.Builder
 +		fmt.Fprintf(&b, "The classes were committed: %s.\n\n```\n%s\n```\n\n", commitWord(commit),
 +			strings.Join(junosNetconfClass, "\n"))
-+		b.WriteString("| session | reply | why | `get-configuration` | `get-software-information` |\n|---|---|---|---|---|\n")
++		b.WriteString("| session | reply | why |")
++		for _, r := range junosNetconfRPCs {
++			fmt.Fprintf(&b, " %s |", tableCell(r.rpc))
++		}
++		b.WriteString("\n|---|---|---|" + strings.Repeat("---|", len(junosNetconfRPCs)) + "\n")
 +		for i, v := range junosNetconfVariants {
-+			fmt.Fprintf(&b, "| %s | `%s` | %s | %s | %s |\n", v.name, tableCell(v.attrs), v.why, cells[i][0], cells[i][1])
++			fmt.Fprintf(&b, "| %s | `%s` | %s | %s |\n", v.name, tableCell(v.attrs), v.why, strings.Join(cells[i], " | "))
 +		}
 +		fmt.Fprintf(&b, "\n### Read off the table\n\n- deny-commands and the fail-closed reply bind NETCONF RPCs: %v "+
-+			"(true only where the control ran both RPCs and every other session refused both; set 1.1.0 takes it "+
-+			"as bound only where both images say true)\n", bound)
++			"(true only where the control ran every RPC and every other session refused every one; set 1.1.0 "+
++			"takes it as bound only where both images say true)\n", bound)
 +		for i, v := range junosNetconfVariants {
 +			fmt.Fprintf(&b, "\n### %s\n", v.name)
 +			for k, r := range junosNetconfRPCs {
@@ -1393,7 +1422,7 @@ index 0000000..beafd6c
 <!-- patch: internal/projection/project_test.go -->
 ````diff
 diff --git a/internal/projection/project_test.go b/internal/projection/project_test.go
-index 09275da..7dbf379 100644
+index defb11b..d6d9a2e 100644
 --- a/internal/projection/project_test.go
 +++ b/internal/projection/project_test.go
 @@ -3,6 +3,7 @@ package projection
@@ -2394,6 +2423,268 @@ EOF
 )"
 ```
 
+### Task 13a: check-config's management-service allowlist, for Task 14's branch M
+
+**Files:**
+- Create: `internal/platform/services.go` (`rpcServicesOff`, `RPCServicesChecked`, `CheckServices`,
+  `ServicesCapture`)
+- Modify: `cmd/port49/devices.go` (`check-config` prints a `SERVICE:` line per finding)
+- Test: `internal/platform/services_test.go`
+
+**Interfaces:**
+- Consumes: Task 13's projected block in `check-config`; `eachLine`, `ConfigFinding`.
+- Produces: `var platform.rpcServicesOff = false`, the switch branch M flips; `func
+  RPCServicesChecked(d Dialect) bool`; `func CheckServices(d Dialect, config []byte)
+  ([]ConfigFinding, error)`; `const ServicesCapture`.
+
+Re-pre-flight C1, ruled by the lead: where Task 3b finds that a deny does not bind an RPC, the
+device must run no management service but the CLI's, checked as an **allowlist**. Only `system
+services ssh` and `telnet` may be on; anything else under `system services`, an unknown name
+included, fails, and so does `rest`, `web-management` or `extension-service` anywhere in the
+hierarchy. The input must be `show configuration | display set | display inheritance | except
+"^set groups "`: groups' statements expanded where they apply, their definitions left out. Any
+other form, a `set groups` line included, is refused with that capture named, since a service
+behind it could be missed. A `deactivate` line enables nothing. The code ships now and does
+nothing until branch M sets `rpcServicesOff = true`, so no Task 14 edit depends on the lab's answer
+beyond that one line. The test turns the switch on to exercise the check.
+
+- [ ] **Step 1: Write the failing test**
+
+<!-- patch: internal/platform/services_test.go -->
+````diff
+diff --git a/internal/platform/services_test.go b/internal/platform/services_test.go
+new file mode 100644
+index 0000000..88d8398
+--- /dev/null
++++ b/internal/platform/services_test.go
+@@ -0,0 +1,51 @@
++package platform
++
++import (
++	"strings"
++	"testing"
++)
++
++// With branch M's switch on, a projected Junos device passes only with no
++// management service but the CLI's: anything else under system services,
++// an unknown name included, and REST, J-Web or extension-service at any
++// hierarchy fail. Input not in the one form the check reads is refused, a
++// group definition included, since a service behind one could be missed
++// (plan 5b pre-flight C1).
++func TestCheckServices(t *testing.T) {
++	d := junosProjected(BitDeliveryLocalUserName)
++	if RPCServicesChecked(d) {
++		t.Fatal("the switch is branch M's; it is off until the lab says denies do not bind RPCs")
++	}
++	if f, err := CheckServices(d, []byte("set system services netconf ssh\n")); f != nil || err != nil {
++		t.Fatalf("off: %v %v", f, err)
++	}
++	rpcServicesOff = true
++	defer func() { rpcServicesOff = false }()
++	clean := "set system host-name srx1\nset system services ssh root-login deny\nset system services telnet\n" +
++		"set interfaces fxp0 description \"rest of the lab\"\ndeactivate system services netconf\n"
++	if f, err := CheckServices(d, []byte(clean)); len(f) != 0 || err != nil {
++		t.Fatalf("clean: %+v %v", f, err)
++	}
++	for _, line := range []string{"set system services netconf ssh", "set system services xnm-ssl",
++		"set system services rest http port 3000", "set system services web-management https interface fxp0",
++		"set system services extension-service request-response grpc", "set system services outbound-ssh client c",
++		"set system services frobnicate", "set services rest control", "set system services dhcp-local-server group g"} {
++		f, err := CheckServices(d, []byte(clean+line+"\n"))
++		if err != nil || len(f) != 1 || f[0].Text != line || !strings.Contains(f[0].Says, "only `system services ssh`") {
++			t.Errorf("%s: %+v %v", line, f, err)
++		}
++	}
++	for _, bad := range []string{
++		clean + "set groups g system services rest\n",
++		"system {\n    services {\n        rest;\n    }\n}\n",
++		"",
++	} {
++		if _, err := CheckServices(d, []byte(bad)); err == nil || !strings.Contains(err.Error(), "display inheritance") {
++			t.Errorf("%.40q: %v", bad, err)
++		}
++	}
++	eos, _ := DialectFor("arista_eos")
++	if RPCServicesChecked(eos) {
++		t.Error("the check is a projected Junos adapter's")
++	}
++}
+````
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `go test ./internal/platform/`
+Expected: FAIL, build failed: `undefined: RPCServicesChecked`, `undefined: CheckServices`,
+`undefined: rpcServicesOff`.
+
+- [ ] **Step 3: Add the check**
+
+<!-- patch: cmd/port49/devices.go -->
+````diff
+diff --git a/cmd/port49/devices.go b/cmd/port49/devices.go
+index fe4847c..4e9e5e8 100644
+--- a/cmd/port49/devices.go
++++ b/cmd/port49/devices.go
+@@ -107,7 +107,7 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
+ 		return 1
+ 	}
+ 	var templateMissing []string
+-	var drift []platform.ConfigFinding
++	var drift, services []platform.ConfigFinding
+ 	if dialect.Projected() {
+ 		if *cfgPath == "" {
+ 			fmt.Fprintf(stderr, "port49 devices check-config: %s projects the policy into its session reply, so its "+
+@@ -129,6 +129,13 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
+ 			fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
+ 			return 1
+ 		}
++		// Where a deny does not bind the RPCs a management service serves,
++		// every such service but the CLI's fails the device (plan 5b
++		// Task 14, branch M).
++		if services, err = platform.CheckServices(dialect, config); err != nil {
++			fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
++			return 1
++		}
+ 	} else if *cfgPath != "" {
+ 		fmt.Fprint(stderr, usage)
+ 		return 2
+@@ -144,6 +151,10 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
+ 		failed++
+ 		fmt.Fprintf(stdout, "TEMPLATE: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
+ 	}
++	for _, f := range services {
++		failed++
++		fmt.Fprintf(stdout, "SERVICE: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
++	}
+ 	for _, a := range accounts {
+ 		// The daemon looks a context up by the canonical form of the username
+ 		// the device sends (spec §2), so a local NOC, CORP\noc or noc@corp
+````
+
+<!-- patch: internal/platform/services.go -->
+````diff
+diff --git a/internal/platform/services.go b/internal/platform/services.go
+new file mode 100644
+index 0000000..96bb153
+--- /dev/null
++++ b/internal/platform/services.go
+@@ -0,0 +1,96 @@
++package platform
++
++import (
++	"errors"
++	"regexp"
++	"slices"
++	"strings"
++)
++
++// rpcServicesOff is whether a projected Junos device must run no management
++// service but the CLI's: true only where tests/lab/results/L12-netconf-juniper_*.md
++// found a wire deny-commands, or the fail-closed reply, not binding a NETCONF
++// RPC on either image (plan 5b Task 14, branch M). A service that runs RPCs
++// under the same TACACS+ login and reply would then walk around every deny
++// port49 sends: `<get-configuration>` past `deny show configuration **`.
++var rpcServicesOff = false
++
++// RPCServicesChecked reports whether `port49 devices check-config` holds a
++// device of d to the management-service allowlist (CheckServices).
++func RPCServicesChecked(d Dialect) bool {
++	return rpcServicesOff && d.CommandProjection == ProjectionJunosRegex
++}
++
++// cliServices are the only services under `system services` a checked
++// device may enable: the CLI's own transports. `ssh` serves NETCONF only
++// through `system services netconf ssh`, which is not on the list. Anything
++// else under `system services`, a name this list does not know included,
++// fails (plan 5b pre-flight C1: an allowlist, not a denylist).
++var cliServices = []string{"ssh", "telnet"}
++
++// rpcAnywhere are service names that run RPCs wherever in the hierarchy they
++// appear: the REST API, J-Web, and JET/gRPC/gNMI.
++var rpcAnywhere = []string{"rest", "web-management", "extension-service"}
++
++// ServicesCapture is the one form CheckServices reads: set form, groups'
++// statements expanded where they apply, and the group definitions left out,
++// so no statement is hidden behind a group the check cannot resolve.
++const ServicesCapture = `show configuration | display set | display inheritance | except "^set groups "`
++
++var quoted = regexp.MustCompile(`"[^"]*"`)
++
++// CheckServices reads a device's configuration, as ServicesCapture prints
++// it, where RPCServicesChecked(d): every management service but the CLI's is
++// a finding. It is an error where the input is not in that form — a line
++// that is not a set statement, or a `set groups` line whose statements the
++// check cannot resolve — since then a service could be missed. Where d is not
++// checked it reads nothing.
++func CheckServices(d Dialect, config []byte) ([]ConfigFinding, error) {
++	if !RPCServicesChecked(d) {
++		return nil, nil
++	}
++	var findings []ConfigFinding
++	var formErr error
++	statements := 0
++	err := eachLine(config, func(n int, line string) {
++		line = strings.Join(strings.Fields(line), " ")
++		if formErr != nil || line == "" {
++			return
++		}
++		switch {
++		case strings.HasPrefix(line, "set groups "):
++			formErr = errors.New("the configuration holds a group definition, whose statements the check cannot " +
++				"resolve: capture it with `" + ServicesCapture + "`")
++			return
++		case strings.HasPrefix(line, "deactivate "):
++			return // an inactive statement enables nothing
++		case !strings.HasPrefix(line, "set "):
++			formErr = errors.New("the configuration is not in set form: capture it with `" + ServicesCapture + "`")
++			return
++		}
++		statements++
++		words := strings.Fields(quoted.ReplaceAllString(line, `""`))
++		if len(words) >= 4 && words[1] == "system" && words[2] == "services" && !slices.Contains(cliServices, words[3]) {
++			findings = append(findings, ConfigFinding{Line: n, Text: line, Says: servicesSays})
++			return
++		}
++		if slices.ContainsFunc(words, func(w string) bool { return slices.Contains(rpcAnywhere, w) }) {
++			findings = append(findings, ConfigFinding{Line: n, Text: line, Says: servicesSays})
++		}
++	})
++	if err != nil {
++		return nil, err
++	}
++	if formErr != nil {
++		return nil, formErr
++	}
++	if statements == 0 {
++		return nil, errors.New("the configuration holds no set statement: capture it with `" + ServicesCapture + "`")
++	}
++	return findings, nil
++}
++
++const servicesSays = "a management service other than the CLI's is enabled, and a port49 deny does not bind the RPCs " +
++	"it serves (tests/lab/results/L12-netconf-juniper_*.md): a session walks around every deny port49 sends. On a " +
++	"projected Junos device only `system services ssh` and `telnet` may be on: disable this one, or pin a set that " +
++	"does not project Junos"
+````
+
+- [ ] **Step 4: Run everything**
+
+Run: `make test && make vet && go vet -tags lab ./tests/lab/...`
+Expected: every package `ok`, no `gofmt` output. Do not run `make build` while a lab run is in progress: the lab uses `bin/`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add cmd/port49/devices.go internal/platform/services.go internal/platform/services_test.go
+git commit -m "$(cat <<'EOF'
+feat: check-config's management-service allowlist, for a device whose RPCs no deny binds
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc
+EOF
+)"
+```
+
 ### Task 14, amended: ship the keyword tree, and read `DenyMatchesExpanded` from the keyword cell
 
 Insert this step after "Add the set", before "Apply what the lab measured":
@@ -2506,22 +2797,25 @@ In Step 4's branch table:
   `show version | no-more` and `sh ver` on both images, update Task 7's and Task 8's expected
   strings to it, and say so in the commit message. If Task 2's shape is not enforced either, take
   branch A.
-- **Branch M**, new (pre-flight B1): read `L12-netconf-juniper_*.md`. If both notes say deny-commands
-  and the fail-closed reply bind NETCONF RPCs, record it in the commit message and change nothing.
-  If either says not, or the images disagree, a deny port49 sends is walked around over NETCONF, so
-  the projected adapter must require NETCONF and the XML API over SSH off on the device. Add to
-  `platforms/1.1.0/juniper_junos.yaml`'s `config_checks`:
-  ```yaml
-      - match: '^set\s+system\s+services\s+(netconf|xnm-ssh|xnm-clear-text)\b'
-        says: "NETCONF or the XML API is enabled, and a port49 deny-commands does not bind its RPCs (tests/lab/results/L12-netconf-juniper_*.md): a session walks around every deny; disable the service on a projected device"
-  ```
-  and the same `ConfigCheck` to `shipped110`'s `j.ConfigChecks` (below the comment line). `devices
-  check-config` then fails a projected Junos device that enables any of them, in set form or
-  hierarchical (`show configuration | display set` is what check-config reads). Junos cannot
-  disable NETCONF per user, so it is off outright; say so in the adapter comment and the operator
-  notes. Task 19 then disables NETCONF for its run and expects the session refused
-  (`netconfForbidden`). If the check cannot be written for an image (the note shows NETCONF served
-  with no `system services` line), take branch A.
+- **Branch M**, new (pre-flight B1, re-pre-flight C1): read `L12-netconf-juniper_*.md`. If both
+  notes say deny-commands and the fail-closed reply bind NETCONF RPCs, record it in the commit
+  message and change nothing. If either says not, or the images disagree, a deny port49 sends is
+  walked around by any service that runs Junos RPCs under the same login and reply, so a projected
+  Junos device must run none but the CLI's. In `internal/platform/services.go` (Task 13a) set `var
+  rpcServicesOff = true` and rewrite its comment to cite both notes. That turns on Task 13a's
+  **allowlist**: `devices check-config` passes a projected Junos device only where nothing under
+  `system services` is on but `ssh` (whose NETCONF is the separate `netconf ssh`) and `telnet`,
+  an unknown service name included, and where `rest`, `web-management` and `extension-service`
+  appear nowhere in the hierarchy. It reads only `show configuration | display set | display
+  inheritance | except "^set groups "`, so a service a group applies is expanded where it applies,
+  and it refuses any other input, a leftover `set groups` line included, saying which capture to
+  make. The services this rules out, to name in the adapter comment (above `bits:`) and the
+  operator notes: NETCONF (`netconf ssh`), the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`),
+  REST (`rest`), J-Web (`web-management`), JET/gRPC/gNMI (`extension-service`), device-initiated
+  NETCONF (`outbound-ssh`) and anything this build does not know. Junos cannot turn them off per
+  user, so they are off outright. Task 19 then disables NETCONF for its run and expects every
+  NETCONF session refused (`netconfForbidden` reads the same switch). If an image serves RPCs with
+  no `system services` statement the capture shows, the check cannot see it: take branch A.
 - **Branch J**, rewritten: `deny-commands` does not reach configuration mode, measured on both
   images (`L12-configuration-juniper_*.md`). Nothing changes in code: no reply that can configure
   carries a deny, and a configuration-statement deny fails closed (Task 12a). Write it into the
@@ -2543,14 +2837,16 @@ It also adds a NETCONF check to every shape (pre-flight B1): with the shape's ow
 the same reply, it sends `<get-configuration/>` and `<get-software-information/>` and fails the test
 where the device runs one whose command (`show configuration`, `show version`) port49 denies. Where
 Task 14's branch M made set 1.1.0 forbid NETCONF, the run disables it on the device, as an operator
-must, puts `netconf ssh` back after, and expects every NETCONF session refused. The
+must, puts `netconf ssh` back after, and expects every NETCONF session refused; `netconfForbidden`
+reads Task 13a's switch. The check sends the same four RPCs as Task 3b. "Admin with a deny" now
+expects the fail-closed reply: nothing under `request` is proven in 1.1.0 (re-pre-flight R-M2). The
 test's fail-open check is what catches a misclassified value: if the tree called it a keyword and
 the device ignores the deny, the device runs a command port49 denies, and the test fails.
 
 <!-- patch: tests/lab/projection_test.go -->
 ````diff
 diff --git a/tests/lab/projection_test.go b/tests/lab/projection_test.go
-index 70aacec..f053a62 100644
+index 70aacec..ac913bc 100644
 --- a/tests/lab/projection_test.go
 +++ b/tests/lab/projection_test.go
 @@ -62,6 +62,9 @@ var projectionProbes = []projectionProbe{
@@ -2563,9 +2859,15 @@ index 70aacec..f053a62 100644
  	{junosProbe{cmd: "clear interfaces statistics fxp0"}, "clear interfaces statistics fxp0"},
  	{junosProbe{cmd: "ping 127.0.0.1 count 1 rapid"}, "ping 127.0.0.1 count 1 rapid"},
  	{junosProbe{cmd: "sh ver"}, "show version"},
-@@ -98,6 +101,19 @@ var projectionShapes = []struct {
+@@ -96,8 +99,24 @@ var projectionShapes = []struct {
+ 	{"a permit beyond the bits", `  - {name: r, privilege: readonly, permit: ["show **", "clear interfaces statistics **"]}`, false},
+ 	{"operator", `  - {name: r, privilege: operator, permit: ["show **", "clear **", "ping **"]}`, false},
  	{"admin", `  - {name: r, privilege: admin, permit: ["**"]}`, false},
- 	{"admin with a deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["request system reboot **"]}`, false},
+-	{"admin with a deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["request system reboot **"]}`, false},
++	// Under 1.1.0's keyword tree nothing under `request` is proven, so this
++	// deny fails closed (re-pre-flight R-M2), and no shape in this list
++	// exercises a capability shape carrying a deny on the device.
++	{"admin with a deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["request system reboot **"]}`, true},
  	{"the refused shape", `  - {name: r, privilege: readonly, permit: ["show interfaces **", "show version"], deny: ["show interfaces terse"]}`, true},
 +	// Junos matches keywords only (decision 27): a deny naming an argument
 +	// fails closed, an allow naming one is not sent, and a deny naming an
@@ -2583,7 +2885,7 @@ index 70aacec..f053a62 100644
  }
  
  func TestProjectionDifferential(t *testing.T) {
-@@ -121,6 +137,14 @@ func TestProjectionDifferential(t *testing.T) {
+@@ -121,6 +140,14 @@ func TestProjectionDifferential(t *testing.T) {
  		defer stop()
  		l.junosConfigureAdmin(t, reference)
  		defer l.junosConfigureAdmin(t, projectionRestore(reference))
@@ -2598,7 +2900,7 @@ index 70aacec..f053a62 100644
  		pki := filepath.Join(root, slicePKIDir)
  		if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
  			t.Fatal(err)
-@@ -142,7 +166,8 @@ func TestProjectionDifferential(t *testing.T) {
+@@ -142,7 +169,8 @@ func TestProjectionDifferential(t *testing.T) {
  		fmt.Fprintf(&b, "\nThe binary's JunosFacts: %+v.\n", projection.JunosFacts)
  		for _, shape := range projectionShapes {
  			fmt.Fprintf(&b, "\n### %s\n\n", shape.name)
@@ -2608,7 +2910,7 @@ index 70aacec..f053a62 100644
  		}
  		l.result(t, "L12-projection", "Decisions 22 and 26's projection, differentially: for each rule shape the "+
  			"generator produces, what the device runs under the reply port49 renders, typed as an operator might "+
-@@ -155,7 +180,7 @@ func TestProjectionDifferential(t *testing.T) {
+@@ -155,7 +183,7 @@ func TestProjectionDifferential(t *testing.T) {
  
  // projectionShape runs one shape and renders its section of the note.
  func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admission.Device, name, roles string,
@@ -2617,7 +2919,7 @@ index 70aacec..f053a62 100644
  	t.Helper()
  	body := "platform_set: 1.1.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
  		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
-@@ -273,6 +298,64 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
+@@ -273,6 +301,58 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
  		fmt.Fprintf(&b, "| `%s` | `%s` | %s | %s | %s | %s |\n", p.cmd, p.canonical, verdictWord(o.Permit),
  			verb(predicts), verb(ran), yesNo(ran == o.Permit))
  	}
@@ -2625,16 +2927,10 @@ index 70aacec..f053a62 100644
 +	return b.String()
 +}
 +
-+// netconfForbidden reports whether the adapter's configuration checks fail a
-+// device that enables NETCONF (plan 5b Task 14, branch M).
-+func netconfForbidden(d adapter.Dialect) bool {
-+	for _, c := range d.ConfigChecks {
-+		if strings.Contains(c.Match, "netconf") {
-+			return true
-+		}
-+	}
-+	return false
-+}
++// netconfForbidden reports whether check-config holds a device of d to the
++// management-service allowlist, which fails one serving NETCONF (plan 5b
++// Task 14, branch M; platform.CheckServices).
++func netconfForbidden(d adapter.Dialect) bool { return adapter.RPCServicesChecked(d) }
 +
 +// projectionNetconf opens NETCONF with the shape's token, which gets the same
 +// reply, and sends the RPC equivalents of `show configuration` and `show

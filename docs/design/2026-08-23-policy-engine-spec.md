@@ -3263,9 +3263,13 @@ measured over the wire and not sent.
 **Whether a deny binds a NETCONF RPC is L12's** (plan 5b Task 3b). The token that opens the CLI
 opens `ssh -s netconf` with the same reply, so a deny that binds CLI lines only is walked around by
 the equivalent RPC (`<get-configuration>` past `deny show configuration **`). Until both images
-show deny-commands and the fail-closed reply binding RPCs, the projected adapter requires NETCONF
-and the XML API off on the device, and `devices check-config` fails a projected Junos device that
-enables them.
+show deny-commands and the fail-closed reply binding RPCs, a projected Junos device must run no
+management service but the CLI's, checked as an allowlist: `devices check-config` passes it only
+where nothing under `system services` is on but `ssh` and `telnet`, an unknown service included,
+and `rest`, `web-management` and `extension-service` appear nowhere, reading only `show
+configuration | display set | display inheritance | except "^set groups "` and refusing any
+other input. That rules out NETCONF, the XML API (`xnm-ssh`, `xnm-ssl`, `xnm-clear-text`), REST,
+J-Web, JET/gRPC/gNMI and `outbound-ssh`, outright, since Junos cannot turn them off per user.
 
 What the regexes rest on is the device's regex dialect, measured by L9 and read into
 `JunosFacts` in the direction that fails closed until measured: explicit `^` and `$` anchors
