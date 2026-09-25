@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -64,6 +65,8 @@ type Policy struct {
 	set       string
 	adapters  map[string]platform.Dialect
 	overrides map[string]filePlatform
+	// projected memoizes project, keyed by what a projection reads.
+	projected sync.Map
 
 	levels  []string          // the declared ordering, lowest first
 	parents map[string]string // level → parent, for rendering
@@ -918,12 +921,34 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
 			if err := engine.CheckAttribute(a); err != nil {
 				return fmt.Errorf("%s: %w", at, err)
 			}
+			if err := p.checkProjected(at, key, a); err != nil {
+				return err
+			}
 			if err := p.checkPlaceholder(at, key, a); err != nil {
 				return err
 			}
 			if err := p.checkInertOnProjected(at, key, a); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// checkProjected refuses an attribute a projection renders, under a
+// projected platform's key or under `all` where any platform is projected:
+// beside the projection it would be a second instance the device drops or
+// keeps first, and over it a regex nothing proved (spec §8, "Generator
+// constraints" 1, 4 and 6). A name is caught in every case and numbered
+// variant the device reads (allow-commands2, User-Permissions), and every
+// name the adapter lists as bearing privilege (Dialect.ProjectionOwns).
+func (p *Policy) checkProjected(at, key, a string) error {
+	name := engine.AttributeName(a)
+	for _, plat := range sortedKeys(p.adapters) {
+		d := p.adapters[plat]
+		if (key == plat || key == "all") && d.ProjectionOwns(name) {
+			return fmt.Errorf("%s: %s is rendered by %s's projection from the rules (command_projection: %s), so no "+
+				"role or grant sets it there; write the rule instead (spec §8)", at, name, plat, d.CommandProjection)
 		}
 	}
 	return nil
@@ -1154,6 +1179,11 @@ func (p *Policy) buildSubjects(f file) error {
 		// Whether a username is required depends on whether a grant names the
 		// subject, which checkMinters settles once the grants are read.
 		if len(s.Identity) > 0 && s.Username != "" {
+			if token.ReservedUsername(s.Username) {
+				return fmt.Errorf("subject %q: username %q is reserved: `remote`, every p49-* name and every "+
+					"platform's system user are the device's own accounts, and a session under one lands in that "+
+					"account's class whatever the reply says (spec §8, §13 decision 26)", s.Name, s.Username)
+			}
 			if !token.CanonicalUsername(s.Username) {
 				return fmt.Errorf("subject %q: username %q must be printable ASCII and already canonical — lower "+
 					"case, no DOMAIN\\ prefix, no @suffix — because the daemon looks tokens up by the canonical form "+

@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/username"
 )
@@ -32,6 +35,30 @@ var ErrIdempotencyConflict = errors.New("token: idempotency key reused with a di
 //
 // The daemon cannot refuse a name a device sends; the mint can.
 var ErrUsernameNotCanonical = errors.New("token: device-facing username must be printable ASCII and already canonical")
+
+// ErrUsernameReserved refuses a device-facing username a device keeps for
+// its own account: `remote`, the Junos template a session with no template
+// lands under; every p49-* name, port49's template namespace, which every
+// level's local_user_names entry is in; and every platform's system user
+// (`root`). A session under such a name lands in that account's class
+// whatever the reply says, so a subject the projection told less (the
+// fail-closed reply) would run what that class runs (spec §13 decision 26).
+// Policy load refuses a declared one; this catches one a directory derives.
+var ErrUsernameReserved = errors.New("token: device-facing username is reserved for a device account (remote, p49-*, a system user)")
+
+// ReservedUsername reports whether u is `remote`, a p49-* name, or a
+// platform's system user.
+func ReservedUsername(u string) bool {
+	if u == "remote" || strings.HasPrefix(u, "p49-") {
+		return true
+	}
+	for _, users := range platform.SystemUsers() {
+		if slices.Contains(users, u) {
+			return true
+		}
+	}
+	return false
+}
 
 // asciiUsername reports whether every byte of u is printable ASCII
 // (0x21–0x7E), which excludes the empty name, spaces and control characters.
@@ -163,6 +190,9 @@ func NewMinter(s store.Store, e decision.Emitter, r io.Reader, tagKey []byte, no
 func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	if !CanonicalUsername(r.Subject.Username) {
 		return Result{}, ErrUsernameNotCanonical
+	}
+	if ReservedUsername(r.Subject.Username) {
+		return Result{}, ErrUsernameReserved
 	}
 	// idemErr names what a lost idempotency record cost, carried onto the mint
 	// record that is emitted anyway. It is Record.IndexError's idiom: the

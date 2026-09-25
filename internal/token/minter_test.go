@@ -383,3 +383,16 @@ func TestEveryTokenCarriesItsMintTime(t *testing.T) {
 		}
 	}
 }
+
+// A device template user's name is never minted for: a directory may derive
+// one the policy never declared (spec §13 decision 26).
+func TestMintRefusesATemplateUsername(t *testing.T) {
+	m, _, _ := minter(t)
+	for _, u := range []string{"remote", "p49-readonly", "root"} {
+		s := subject()
+		s.Username = u
+		if _, err := m.Mint(context.Background(), Request{Subject: s, Device: "leaf-01", TTL: time.Minute}); !errors.Is(err, ErrUsernameReserved) {
+			t.Fatalf("%q: %v", u, err)
+		}
+	}
+}

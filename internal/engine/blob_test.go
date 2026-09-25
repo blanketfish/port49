@@ -322,3 +322,24 @@ func TestSessionAttributesSubstitute(t *testing.T) {
 		t.Errorf("an unused value refused: %v", err)
 	}
 }
+
+// A projection's fail-closed reason rides in the blob, so the daemon records
+// the session as one (spec §13 decision 26). A blob without it keeps its
+// hash; set, it changes the hash and round-trips.
+func TestFailClosedIsCarriedAndOmittedWhenEmpty(t *testing.T) {
+	const v2 = `{"version":2,"bundle":"b","platform":"juniper_junos","normalize":{"pipe_token":"|","pipe_authorized":false,` +
+		`"strip_cr":true,"expands_abbreviations":true},"privilege":"","attributes":["deny-commands=^.*$"],"rules":[],"pipe":[],"classes":{}}`
+	b, err := Decode(HashOf([]byte(v2)), []byte(v2))
+	if err != nil || b.FailClosed != "" {
+		t.Fatalf("a v2 blob without the key: %q, %v", b.FailClosed, err)
+	}
+	b.FailClosed = "refused_shape"
+	body, hash, err := Encode(b)
+	if err != nil || hash == HashOf([]byte(v2)) || !strings.HasSuffix(string(body), `"classes":{},"fail_closed":"refused_shape"}`) {
+		t.Fatalf("set: %s %v", body, err)
+	}
+	got, err := Decode(hash, body)
+	if err != nil || got.FailClosed != "refused_shape" {
+		t.Fatalf("round trip: %q %v", got.FailClosed, err)
+	}
+}

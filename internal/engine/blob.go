@@ -63,6 +63,12 @@ type Blob struct {
 	// Classes are the patterns behind every `@class` the rules name, as this
 	// platform defines them.
 	Classes map[string][]string `json:"classes"`
+	// FailClosed is set where Attributes are a projection's fail-closed reply
+	// (spec §13 decision 26): why the composition could not be told
+	// faithfully, one of projection's Fail* categories. The daemon records
+	// the session under projection_fail_closed. Written only when set, so a
+	// blob without it keeps its hash.
+	FailClosed string `json:"fail_closed,omitempty"`
 }
 
 // Normalize is the platform's dialect as the evaluator needs it (spec §3).
@@ -118,7 +124,7 @@ func HashOf(body []byte) string {
 func Encode(b Blob) ([]byte, string, error) {
 	c := Blob{Version: Version, Bundle: b.Bundle, Platform: b.Platform, Normalize: b.Normalize,
 		Privilege: b.Privilege, Attributes: append([]string{}, b.Attributes...),
-		Rules: []Rule{}, Pipe: []string{}, Classes: map[string][]string{}}
+		Rules: []Rule{}, Pipe: []string{}, Classes: map[string][]string{}, FailClosed: b.FailClosed}
 	if len(b.AcceptedAttributes) > 0 {
 		c.AcceptedAttributes = slices.Clone(b.AcceptedAttributes)
 		slices.Sort(c.AcceptedAttributes)
