@@ -714,3 +714,28 @@ func TestAFailClosedReplyIsNoRaise(t *testing.T) {
 		}
 	}
 }
+
+// A projection change says where the new reply is narrower than port49, as
+// policy test does: the commands the device refuses, and beside them the
+// allows sent under bits that do not reach them (task 8 review; Result.Unreached).
+func TestAProjectionChangeSaysWhereTheDeviceIsNarrower(t *testing.T) {
+	before := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: operator, permit: ["show **"], deny: ["show configuration **"]}
+`+subjOK+grantOK)
+	after := parseProjected(t, platform.BitDeliveryUserPermissions, scopeOK+`roles:
+  - {name: r, privilege: operator, permit: ["show **", "clear counters", "ping **"], deny: ["show configuration **"]}
+`+subjOK+grantOK)
+	d := Compare(before, after, noon)
+	if len(d.Projections) != 1 || !slices.Equal(d.Projections[0].Unreached, []string{"clear counters", "ping **"}) {
+		t.Fatalf("%+v", d.Projections)
+	}
+	// What it lists is redacted, whatever reached it (spec §5.8).
+	const secret = "show system radius-server 10.0.0.1 secret HUNTER2"
+	rule := engine.Rule{Verdict: engine.Permit, Rule: secret, Role: "r"}
+	pc, ok := projectionChange(nil, &projection.Result{Shape: projection.ShapeCapability,
+		Unreached: []engine.Rule{rule}}, mustParse(t, readonlyCarveOut).Redactions(), nil)
+	if shown := strings.Join(slices.Concat(pc.Narrower, pc.Unreached), "\n"); !ok ||
+		strings.Contains(shown, "HUNTER2") || !strings.Contains(shown, platform.Redacted) {
+		t.Fatalf("%v %q", ok, shown)
+	}
+}

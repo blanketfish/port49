@@ -790,19 +790,42 @@ func projectionMessage(pr projection.Result, patterns []platform.Redaction, secr
 	if len(pr.Beyond) > 0 {
 		msg += "; beyond the level's bits, not sent: " + rules(pr.Beyond)
 	}
-	var narrower []string
+	return msg + ShortfallText(shortfall(pr, patterns, secrets))
+}
+
+// shortfall is where the device is narrower than port49 under pr, as a
+// report prints it: up to three commands port49 permits and the device
+// refuses, each argument made from a value redaction hides printed redacted
+// (probeShown), and beside them the allows sent under bits that do not reach
+// them, which may not run (Result.Unreached), redacted.
+func shortfall(pr projection.Result, patterns []platform.Redaction, secrets []string) (narrower, unreached []string) {
 	src := pr.ProbeSources()
 	for _, v := range pr.Narrower(3) {
 		narrower = append(narrower, strings.Join(probeShown(v, src, secrets), " "))
 	}
-	if len(narrower) > 0 {
-		msg += "; the device refuses what port49 permits, e.g. " + strings.Join(redacted(patterns, narrower), "; ")
+	for _, u := range pr.Unreached {
+		unreached = append(unreached, u.Rule)
 	}
-	// Beside what was narrowed, what may not be reached: an allow its bits do
-	// not reach may not run (Result.Unreached).
-	if len(pr.Unreached) > 0 {
+	if len(narrower) > 0 {
+		narrower = redacted(patterns, narrower)
+	}
+	if len(unreached) > 0 {
+		unreached = redacted(patterns, unreached)
+	}
+	return narrower, unreached
+}
+
+// ShortfallText is a shortfall as a report's clauses, each after "; ": a
+// projection finding's, and a projection change's in policy diff
+// (ProjectionChange.Narrower, Unreached).
+func ShortfallText(narrower, unreached []string) string {
+	var msg string
+	if len(narrower) > 0 {
+		msg += "; the device refuses what port49 permits, e.g. " + strings.Join(narrower, "; ")
+	}
+	if len(unreached) > 0 {
 		msg += "; sent under bits that do not reach them, which the device may refuse (whether a Junos allow " +
-			"runs without its bit is unmeasured): " + rules(pr.Unreached)
+			"runs without its bit is unmeasured): " + strings.Join(unreached, "; ")
 	}
 	return msg
 }

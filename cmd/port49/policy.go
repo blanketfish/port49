@@ -447,9 +447,10 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 			orNone(l.OldCeiling), orNone(l.NewCeiling), l.OldPrivLvl, l.NewPrivLvl, l.OldEnable, l.NewEnable, reply, tail)
 	}
 	for _, pc := range d.Projections {
-		fmt.Fprintf(stdout, "projection: %s on %s%s: %s -> %s (spec §8; the reply gate above judges it)\n", pc.Subject,
-			strings.Join(pc.Devices, ", "), from(pc.At), projectionText(pc.OldShape, pc.OldBits, pc.OldTemplate),
-			projectionText(pc.NewShape, pc.NewBits, pc.NewTemplate))
+		fmt.Fprintf(stdout, "projection: %s on %s%s: %s -> %s (spec §8; the reply gate above judges it)%s\n",
+			pc.Subject, strings.Join(pc.Devices, ", "), from(pc.At), projectionText(pc.OldShape, pc.OldBits,
+				pc.OldTemplate), projectionText(pc.NewShape, pc.NewBits, pc.NewTemplate),
+			policy.ShortfallText(pc.Narrower, pc.Unreached))
 	}
 	widen, narrow := 0, 0
 	for _, c := range d.Changes {

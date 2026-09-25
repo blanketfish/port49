@@ -72,6 +72,9 @@ type Diff struct {
 
 // ProjectionChange is one composition's projection before and after, on the
 // devices that hold the same blobs. A side with no projection has Shape "".
+// Narrower and Unreached are where the new reply is narrower than port49, as
+// policy test reports it (shortfall): commands the device refuses, and
+// allows sent under bits that do not reach them, both redacted.
 type ProjectionChange struct {
 	Subject                  string
 	Devices                  []string
@@ -79,19 +82,27 @@ type ProjectionChange struct {
 	OldShape, NewShape       string
 	OldBits, NewBits         []string
 	OldTemplate, NewTemplate string
+	Narrower, Unreached      []string
 }
 
 // projectionChange compares two resolutions' projections, ok where the
-// shape, the bits or the template moved.
-func projectionChange(was, is *projection.Result) (ProjectionChange, bool) {
+// shape, the bits, the template, or where the device is narrower than
+// port49, moved.
+func projectionChange(was, is *projection.Result, patterns []platform.Redaction, secrets []string) (ProjectionChange,
+	bool) {
 	var pc ProjectionChange
+	var oldNarrower, oldUnreached []string
 	if was != nil {
 		pc.OldShape, pc.OldBits, pc.OldTemplate = was.Shape, was.Bits, was.Template
+		oldNarrower, oldUnreached = shortfall(*was, patterns, secrets)
 	}
 	if is != nil {
 		pc.NewShape, pc.NewBits, pc.NewTemplate = is.Shape, is.Bits, is.Template
+		pc.Narrower, pc.Unreached = shortfall(*is, patterns, secrets)
 	}
-	return pc, pc.OldShape != pc.NewShape || !slices.Equal(pc.OldBits, pc.NewBits) || pc.OldTemplate != pc.NewTemplate
+	return pc, pc.OldShape != pc.NewShape || !slices.Equal(pc.OldBits, pc.NewBits) ||
+		pc.OldTemplate != pc.NewTemplate || !slices.Equal(oldNarrower, pc.Narrower) ||
+		!slices.Equal(oldUnreached, pc.Unreached)
 }
 
 // AdapterChange is one key of one platform's adapter that the two versions
@@ -415,7 +426,8 @@ func Compare(before, after *Policy, now time.Time) Diff {
 	}
 	slices.SortFunc(instants, func(a, b time.Time) int { return a.Compare(b) })
 	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{},
-		usedAcks: map[Acknowledgment]bool{}, secrets: append(before.HiddenValues(), after.HiddenValues()...)}
+		usedAcks: map[Acknowledgment]bool{}, secrets: append(before.HiddenValues(), after.HiddenValues()...),
+		patterns: slices.Concat(before.Redactions(), after.Redactions())}
 	for k := range after.sessionAcks(instants) {
 		c.acks[k] = true
 	}
@@ -542,7 +554,10 @@ type comparison struct {
 	// compared was made from: a changed command prints through probeShown.
 	secrets []string
 	src     map[string][]string
-	d       Diff
+	// patterns are both versions' redactions, which a projection change's
+	// rules print through.
+	patterns []platform.Redaction
+	d        Diff
 }
 
 func (c *comparison) once(parts ...string) bool {
@@ -691,8 +706,9 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 			NewEnable: is.priv.enable, OldReply: splitReply(was.priv.reply), NewReply: splitReply(is.priv.reply)},
 			was.priv, is.priv, wr.Projection, ir.Projection))
 	}
-	if pc, ok := projectionChange(wr.Projection, ir.Projection); ok && c.once("projection", subject, on, pc.OldShape,
-		pc.NewShape, strings.Join(pc.OldBits, " "), strings.Join(pc.NewBits, " "), pc.OldTemplate, pc.NewTemplate) {
+	if pc, ok := projectionChange(wr.Projection, ir.Projection, c.patterns, c.secrets); ok && c.once("projection",
+		subject, on, pc.OldShape, pc.NewShape, strings.Join(pc.OldBits, " "), strings.Join(pc.NewBits, " "),
+		pc.OldTemplate, pc.NewTemplate, strings.Join(pc.Narrower, "\n"), strings.Join(pc.Unreached, "\n")) {
 		pc.Subject, pc.Devices, pc.At = subject, devices, at
 		c.d.Projections = append(c.d.Projections, pc)
 	}
