@@ -32,8 +32,10 @@ deny list as sent.
 works, and the results do not depend on the argument. No configuration statement was found that
 controls `xml-mode`. Where `xml-mode` ran, TACACS+ accounting recorded it as
 `cmd=xml-mode netconf <cr>`, and the authorization syslog showed the command as typed, followed
-by a UI login event with client mode `netconf`. The NETCONF service (`system services netconf
-ssh`) was on throughout; whether `xml-mode` works with it off was not tested here.
+by a UI login event with client mode `netconf`. Rows 1–9 ran with the NETCONF service
+(`system services netconf ssh`, on port 830) on. With it deactivated and committed, port 830
+stopped listening, and `xml-mode netconf` from an SSH CLI session on port 22 still opened NETCONF.
+Turning the NETCONF service off does not close `xml-mode`; only turning SSH off would.
 
 ## What it means for port49
 
@@ -44,4 +46,7 @@ ssh`) was on throughout; whether `xml-mode` works with it off was not tested her
   `<command>` RPC.
 - No deny naming `xml-mode` refuses it (row 8); `^.*$` does (row 9, as in the lab). That is why
   the fail-closed and narrow replies send exactly that (`TestTheCatchAllDenyIsExactlyAnchoredDotStar`).
+- The management-services allowlist (§8, `devices check-config`) does not close `xml-mode`: it
+  runs inside the CLI session, with the NETCONF service off. What keeps port49 safe is option C
+  and the `^.*$` catch-all, not the allowlist.
 - Entering `xml-mode` is visible in accounting, so `port49 devices capabilities` input can show it.
