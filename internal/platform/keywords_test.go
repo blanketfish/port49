@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io/fs"
 	"os"
@@ -206,5 +207,92 @@ func TestTheLabCapturesLoadAndMerge(t *testing.T) {
 	name, back, err := ParseKeywords(MarshalKeywords("juniper_junos", m))
 	if err != nil || name != "juniper_junos" || back.Len() != m.Len() {
 		t.Fatalf("round trip: %d %v", back.Len(), err)
+	}
+}
+
+// An overlay (tests/lab/results/L26b-keywords-<image>.yaml) is laid over the
+// capture it names by sha256 and no other: its words join the capture's at
+// its nodes, its argument replaces the capture's there, and a node the
+// capture lacks is added (spec §15 L26; decision 27).
+func TestOverlayKeywords(t *testing.T) {
+	sum := sha256.Sum256([]byte(keywordFixture))
+	overlay := fmt.Sprintf("# computed against keywords.yaml sha256 %x\n", sum) + `platform: juniper_junos
+nodes:
+  "": {words: [set, show], argument: false}
+  "set": {words: [cli], argument: true}
+  "show": {words: [cli], argument: true}
+`
+	k, err := OverlayKeywords([]byte(keywordFixture), []byte(overlay))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !k.Keyword(nil, "set") || !k.Keyword([]string{"set"}, "cli") || !k.Keyword([]string{"show"}, "cli") ||
+		!k.Keyword([]string{"show"}, "version") || !k.Keyword([]string{"show", "interfaces"}, "terse") ||
+		!k.TakesArgument([]string{"show"}) || !k.TakesArgument([]string{"set"}) || k.Len() != 4 {
+		t.Fatalf("%s", MarshalKeywords("juniper_junos", k))
+	}
+	// A capture that changed since the overlay was computed is refused.
+	_, err = OverlayKeywords([]byte(strings.Replace(keywordFixture, `"show": {words: [interfaces, version], argument: false}`,
+		`"show": {words: [interfaces, version], argument: true}`, 1)), []byte(overlay))
+	if err == nil {
+		t.Fatal("an overlay laid over a tree it was not computed against")
+	}
+	for _, bad := range []string{
+		strings.SplitN(overlay, "\n", 2)[1], // no header
+		strings.Replace(overlay, fmt.Sprintf("%x", sum), strings.Repeat("0", 64), 1),
+		strings.Replace(overlay, "platform: juniper_junos", "platform: other", 1),
+	} {
+		if _, err := OverlayKeywords([]byte(keywordFixture), []byte(bad)); err == nil {
+			t.Errorf("laid: %.120q", bad)
+		}
+	}
+	// The overlay's argument wins either way: here it proves `show` takes
+	// none where the capture said it may.
+	off := strings.Replace(overlay, `"show": {words: [cli], argument: true}`, `"show": {words: [cli], argument: false}`, 1)
+	base := strings.Replace(keywordFixture, `"show": {words: [interfaces, version], argument: false}`,
+		`"show": {words: [interfaces, version], argument: true}`, 1)
+	sum = sha256.Sum256([]byte(base))
+	off = fmt.Sprintf("# computed against keywords.yaml sha256 %x\n", sum) + strings.SplitN(off, "\n", 2)[1]
+	if k, err := OverlayKeywords([]byte(base), []byte(off)); err != nil || k.TakesArgument([]string{"show"}) {
+		t.Fatalf("the overlay's argument: %v", err)
+	}
+}
+
+// The shipped Junos tree is exactly what the lab's captures and overlays
+// merge to (tests/lab/cmd/junos-keywords): L26b's words proven on both images
+// are keywords, `save` (proven on vJunos only) and every `show configuration`
+// hierarchy are not, and no argument follows `show`.
+func TestTheShippedJunosTreeIsTheLabs(t *testing.T) {
+	var trees []*Keywords
+	for _, image := range []string{"juniper_vjunos-router", "juniper_vsrx"} {
+		base, err := os.ReadFile("../../tests/lab/results/L26-keywords-" + image + ".yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		overlay, err := os.ReadFile("../../tests/lab/results/L26b-keywords-" + image + ".yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		k, err := OverlayKeywords(base, overlay)
+		if err != nil {
+			t.Fatalf("%s: %v", image, err)
+		}
+		trees = append(trees, k)
+	}
+	want := MarshalKeywords("juniper_junos", MergeKeywords(trees...))
+	got, err := fs.ReadFile(platforms.Keywords, "keywords/1.1.0/juniper_junos.yaml")
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("platforms/keywords/1.1.0/juniper_junos.yaml is not the merge (%v): rerun tests/lab/cmd/junos-keywords", err)
+	}
+	k := KeywordsFor("1.1.0", "juniper_junos")
+	for _, w := range []string{"cli", "host", "ingress-replication", "policy", "task", "version", "interfaces"} {
+		if !k.Keyword([]string{"show"}, w) {
+			t.Errorf("show %s is not a keyword", w)
+		}
+	}
+	if !k.Keyword(nil, "exit") || !k.Keyword([]string{"set"}, "cli") || k.Keyword(nil, "save") ||
+		k.Keyword([]string{"show", "configuration"}, "system") || !k.TakesArgument([]string{"show", "configuration"}) ||
+		k.TakesArgument([]string{"show"}) || k.TakesArgument(nil) {
+		t.Errorf("%s", got)
 	}
 }

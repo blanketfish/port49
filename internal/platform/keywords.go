@@ -2,10 +2,12 @@ package platform
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -231,6 +233,47 @@ func MergeKeywords(trees ...*Keywords) *Keywords {
 		return nil
 	}
 	return &Keywords{nodes: merged}
+}
+
+// OverlayKeywords lays a lab overlay over the capture it was computed
+// against: tests/lab/results/L26b-keywords-<image>.yaml over that image's
+// L26-keywords file (spec §15 L26; decision 27). L26b proves a word a keyword
+// by deny-commands enforcement against a paired control, so at each node the
+// overlay lists, its words join the capture's and its argument replaces the
+// capture's, and a node the capture lacks is added. The overlay's first line,
+// `# computed against <file> sha256 <hex>`, names the capture: an overlay
+// holds only against the tree that hashes to that, so any other is refused,
+// and the overlay is recomputed rather than laid over a capture it did not
+// read.
+func OverlayKeywords(capture, overlay []byte) (*Keywords, error) {
+	first, _, _ := strings.Cut(string(overlay), "\n")
+	fields := strings.Fields(first)
+	if len(fields) != 6 || fields[0] != "#" || fields[1] != "computed" || fields[2] != "against" ||
+		fields[4] != "sha256" {
+		return nil, errors.New("keywords overlay: the first line is not `# computed against <file> sha256 <hex>`")
+	}
+	if got := fmt.Sprintf("%x", sha256.Sum256(capture)); got != fields[5] {
+		return nil, fmt.Errorf("keywords overlay: computed against %s at sha256 %s, and this capture hashes to %s: "+
+			"recompute the overlay against it", fields[3], fields[5], got)
+	}
+	name, base, err := ParseKeywords(capture)
+	if err != nil {
+		return nil, err
+	}
+	oname, over, err := ParseKeywords(overlay)
+	if err != nil {
+		return nil, fmt.Errorf("keywords overlay: %w", err)
+	}
+	if oname != name {
+		return nil, fmt.Errorf("keywords overlay: names platform %q, and the capture %q", oname, name)
+	}
+	nodes := maps.Clone(base.nodes)
+	for p, n := range over.nodes {
+		words := slices.Concat(nodes[p].Words, n.Words)
+		slices.Sort(words)
+		nodes[p] = KeywordNode{Words: slices.Compact(words), Argument: n.Argument}
+	}
+	return &Keywords{nodes: nodes}, nil
 }
 
 func (k *Keywords) nodeMap() map[string]KeywordNode {
