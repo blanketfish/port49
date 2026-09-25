@@ -345,16 +345,38 @@ func TestADenyAnyTermMatchesTheSplitName(t *testing.T) {
 // names; a rule long enough to pass the bound is refused, which quarantines
 // every such device (spec §10), so the bound sits far past any rule an
 // operator writes: seven `*` compile, and eleven are refused with the rule
-// named.
+// named by its position and role, never quoted: it may carry a value
+// redaction hides (spec §5.8; plan 5a).
 func TestASplitDenyIsBoundedFarPastARealRule(t *testing.T) {
 	b := testBlob(true, "admin:permit **", "d:deny * * * * * * *")
 	b.Normalize.SplitsInterfaceNames = true
 	expect(t, compileBlob(t, b), "a b c d e f GigabitEthernet 1", false, decision.NoPermitDominatesDeny)
-	b.Rules[1].Rule = "* * * * * * * * * * *"
-	if _, err := Compile(b); err == nil || !strings.Contains(err.Error(), `deny "* * * * * * * * * * *" splits more than`) {
-		t.Fatalf("Compile = %v", err)
+	b.Rules[1].Rule = "* * * * * * * * * * * secret HUNTER2"
+	for _, err := range []error{second(Compile(b)), b.check()} {
+		if err == nil || !strings.Contains(err.Error(), `rule #2 (role "d"): the deny splits more than`) ||
+			strings.Contains(err.Error(), "HUNTER2") || strings.Contains(err.Error(), "* *") {
+			t.Errorf("%v", err)
+		}
 	}
 }
+
+// A blob's load errors name a rule or a class pattern by its position,
+// never quote it: a rule or a class's pattern may carry a value redaction
+// hides (spec §5.8).
+func TestABlobLoadErrorQuotesNoRuleText(t *testing.T) {
+	bad := testBlob(true, "admin:permit **", "d:deny show secret HUNTER2\xff")
+	if err := bad.check(); err == nil || !strings.Contains(err.Error(), "rule #2") || strings.Contains(err.Error(), "HUNTER2") {
+		t.Errorf("invalid UTF-8: %v", err)
+	}
+	cls := testBlob(true, "admin:permit **", "d:deny show @bad")
+	cls.Classes = map[string][]string{"bad": {"HUNTER2(("}}
+	if err := cls.check(); err == nil || !strings.Contains(err.Error(), "@bad pattern #1") ||
+		strings.Contains(err.Error(), "HUNTER2") {
+		t.Errorf("class pattern: %v", err)
+	}
+}
+
+func second[T any](_ T, err error) error { return err }
 
 // A platform measured sending no per-command authorization (Junos; spec §13
 // decision 21) has no command to widen for, so no deny is widened or refused

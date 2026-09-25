@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp/syntax"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -205,8 +206,8 @@ func (b Blob) check() error {
 	if b.Platform == "" {
 		return errors.New("engine: blob names no platform")
 	}
-	if s, ok := invalidUTF8(b); !ok {
-		return fmt.Errorf("engine: blob carries invalid UTF-8 in %q", s)
+	if where, ok := invalidUTF8(b); !ok {
+		return fmt.Errorf("engine: blob carries invalid UTF-8 in %s", where)
 	}
 	if b.Normalize.PipeToken == "" {
 		return errors.New("engine: blob has no pipe token")
@@ -234,19 +235,27 @@ func (b Blob) check() error {
 		if len(patterns) == 0 {
 			return fmt.Errorf("engine: a rule names @%s and the blob carries no pattern for it", name)
 		}
-		for _, p := range patterns {
+		// A pattern is named by its position: a class may hold values
+		// redaction hides, and a syntax error's text quotes the pattern; its
+		// code does not (spec §5.8).
+		for i, p := range patterns {
 			if _, err := compileTerm(p); err != nil {
-				return fmt.Errorf("engine: @%s pattern %q: %w", name, p, err)
+				why := "RE2 refuses it"
+				var serr *syntax.Error
+				if errors.As(err, &serr) {
+					why = string(serr.Code)
+				}
+				return fmt.Errorf("engine: @%s pattern #%d does not compile: %s", name, i+1, why)
 			}
 		}
 	}
 	// A deny with more split shapes than the matcher compiles would not run.
-	for _, r := range b.Rules {
+	for i, r := range b.Rules {
 		if r.Verdict != Deny {
 			continue
 		}
 		if _, err := compileRule(r.Verdict, r.Rule, r.Role, b.Classes, b.Normalize); err != nil {
-			return fmt.Errorf("engine: on %s, %w", b.Platform, err)
+			return fmt.Errorf("engine: on %s, rule #%d (role %q): %w", b.Platform, i+1, r.Role, err)
 		}
 	}
 	names := map[string]bool{}
@@ -273,27 +282,50 @@ func (b Blob) Accepts(a string) bool {
 	return len(b.AcceptedAttributes) == 0 || slices.Contains(b.AcceptedAttributes, AttributeName(a))
 }
 
-// invalidUTF8 finds a string in b that is not valid UTF-8. json.Marshal would
+// invalidUTF8 names where b holds a string that is not valid UTF-8, by
+// position, never quoting it (spec §5.8). json.Marshal would
 // rewrite it to U+FFFD, so the body would name a different blob from the one
 // check validated.
 func invalidUTF8(b Blob) (string, bool) {
-	all := []string{b.Bundle, b.Platform, b.Normalize.PipeToken, b.Privilege}
-	all = append(all, b.Attributes...)
-	all = append(all, b.AcceptedAttributes...)
-	all = append(all, b.Pipe...)
-	for _, r := range b.Rules {
-		all = append(all, r.Verdict, r.Rule, r.Role)
+	type field struct{ where, s string }
+	all := []field{{"the bundle", b.Bundle}, {"the platform", b.Platform}, {"the pipe token", b.Normalize.PipeToken},
+		{"the privilege", b.Privilege}}
+	for i, a := range b.Attributes {
+		all = append(all, field{fmt.Sprintf("attribute #%d", i+1), a})
 	}
-	for name, patterns := range b.Classes {
-		all = append(all, name)
-		all = append(all, patterns...)
+	for i, a := range b.AcceptedAttributes {
+		all = append(all, field{fmt.Sprintf("accepted attribute #%d", i+1), a})
 	}
-	for _, s := range all {
-		if !utf8.ValidString(s) {
-			return s, false
+	for i, p := range b.Pipe {
+		all = append(all, field{fmt.Sprintf("pipe rule #%d", i+1), p})
+	}
+	for i, r := range b.Rules {
+		at := fmt.Sprintf("rule #%d", i+1)
+		all = append(all, field{at, r.Verdict}, field{at, r.Rule}, field{at, r.Role})
+	}
+	for _, name := range sortedClassNames(b.Classes) {
+		all = append(all, field{"a class name", name})
+		for i, p := range b.Classes[name] {
+			all = append(all, field{fmt.Sprintf("a class's pattern #%d", i+1), p})
+		}
+	}
+	for _, f := range all {
+		if !utf8.ValidString(f.s) {
+			return f.where, false
 		}
 	}
 	return "", true
+}
+
+// sortedClassNames is classes' names in order, so an error names the same
+// one every run.
+func sortedClassNames(classes map[string][]string) []string {
+	names := make([]string, 0, len(classes))
+	for name := range classes {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // referencedClasses is the set of class names b's rules and pipe list use.

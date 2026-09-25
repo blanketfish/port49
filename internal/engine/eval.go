@@ -65,17 +65,19 @@ func Compile(b Blob) (*Program, error) {
 		return nil, err
 	}
 	p := &Program{Blob: b}
-	for _, r := range b.Rules {
+	// A rule is named by its position and role, never quoted: it may carry a
+	// value redaction hides (spec §5.8).
+	for i, r := range b.Rules {
 		cs, err := compileRule(r.Verdict, r.Rule, r.Role, b.Classes, b.Normalize)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("engine: rule #%d (role %q): %w", i+1, r.Role, err)
 		}
 		p.rules = append(p.rules, cs...)
 	}
-	for _, r := range b.Pipe {
+	for i, r := range b.Pipe {
 		cs, err := compileRule(Permit, r, "", b.Classes, b.Normalize)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("engine: pipe rule #%d: %w", i+1, err)
 		}
 		p.pipe = append(p.pipe, cs...)
 	}
@@ -120,7 +122,7 @@ func compileRule(verdict, rule, role string, classes map[string][]string, n Norm
 			shapes = append(shapes, []cterm{head, tail})
 		}
 		if len(out)*len(shapes) > maxSplits {
-			return nil, fmt.Errorf("deny %q splits more than %d ways; write it as more than one rule", canon, maxSplits)
+			return nil, fmt.Errorf("the deny splits more than %d ways; write it as more than one rule", maxSplits)
 		}
 		var next []compiled
 		for _, c := range out {
