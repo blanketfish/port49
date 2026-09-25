@@ -17,6 +17,8 @@ type Shadow struct {
 	// Possible is an overlap that turns on two regex or class terms meeting
 	// at one position. Whether two patterns share a string cannot be decided
 	// cheaply, so it is reported as possible rather than asserted (spec §12).
+	// A pattern read against a word is decided (someTaken), except where the
+	// reading passes maxStates, which is reported possible too.
 	Possible bool
 }
 
