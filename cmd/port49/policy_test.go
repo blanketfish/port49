@@ -1015,3 +1015,41 @@ key_groups:
 		t.Fatalf("explain printed the secret:\n%s%s", out.String(), errb.String())
 	}
 }
+
+// policy diff prints each probe command whose verdict moved, and on IOS-XE a
+// probe splits a deny's joined word into the name and index it may be sent
+// as: made from a value redaction hides, each piece prints «redacted», and
+// the narrowing is still reported (task 11 re-review 2, R5).
+func TestPolicyDiffNeverPrintsAPieceOfASecretAProbeSplits(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: xe-01, platform: cisco_iosxe, addresses: [10.0.0.3]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := string(readFile(t, oldPol))
+	before := strings.Replace(raw, "permit: [show **]}", `permit: [show **, "username **"]}`, 1)
+	before = strings.Replace(before, "deny: [reload **]}", `deny: [reload **, "snmp-server community Kilo7 **"]}`, 1)
+	if !strings.Contains(before, "Kilo7") || !strings.Contains(before, "username **") {
+		t.Fatal("the fixture's roles moved")
+	}
+	before = before[:strings.Index(before, "tests:\n")]
+	after := strings.Replace(before, `, "username **"`, "", 1)
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(oldPol, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPol, []byte(after), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb)
+	got := out.String() + errb.String()
+	if strings.Contains(strings.ToUpper(got), "KILO") || !strings.Contains(got, "narrows: noc on xe-01: \"username") ||
+		!strings.Contains(got, "«redacted»") {
+		t.Fatalf("policy diff:\n%s", got)
+	}
+}

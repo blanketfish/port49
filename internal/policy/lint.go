@@ -586,7 +586,7 @@ func (p *Policy) onGeneric(name string) bool {
 // projection finding names its devices where it is not on every device the
 // subject has a reply on there.
 func (p *Policy) Projections(now time.Time) []Finding {
-	patterns := p.Redactions()
+	patterns, secrets := p.Redactions(), p.HiddenValues()
 	type group struct {
 		kind, msg, subject, platform, moment string
 		devices                              []string
@@ -609,7 +609,7 @@ func (p *Policy) Projections(now time.Time) []Finding {
 			}
 			head := func(pr *projection.Result) (string, string) {
 				if pr.FailClosed == "" {
-					return FindingProjection, projectionMessage(*pr, patterns)
+					return FindingProjection, projectionMessage(*pr, patterns, secrets)
 				}
 				return refusedMessage(*pr, patterns)
 			}
@@ -756,8 +756,10 @@ func refusedMessage(pr projection.Result, patterns []platform.Redaction) (string
 }
 
 // projectionMessage is a composition's finding after its subject, platform
-// and moment, which Projections writes before it.
-func projectionMessage(pr projection.Result, patterns []platform.Redaction) string {
+// and moment, which Projections writes before it. The commands it gives
+// where the device is narrower are probes, each argument made from a value
+// redaction hides printed redacted (probeShown).
+func projectionMessage(pr projection.Result, patterns []platform.Redaction, secrets []string) string {
 	rules := func(rs []engine.Rule) string {
 		var texts []string
 		for _, r := range rs {
@@ -789,8 +791,9 @@ func projectionMessage(pr projection.Result, patterns []platform.Redaction) stri
 		msg += "; beyond the level's bits, not sent: " + rules(pr.Beyond)
 	}
 	var narrower []string
+	src := pr.ProbeSources()
 	for _, v := range pr.Narrower(3) {
-		narrower = append(narrower, strings.Join(v, " "))
+		narrower = append(narrower, strings.Join(probeShown(v, src, secrets), " "))
 	}
 	if len(narrower) > 0 {
 		msg += "; the device refuses what port49 permits, e.g. " + strings.Join(redacted(patterns, narrower), "; ")

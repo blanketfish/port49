@@ -94,6 +94,17 @@ func (m *model) probes() [][]string {
 	})
 }
 
+// ProbeSources maps each argument Narrower's commands may carry to the rule
+// words it was made from (engine.ProbeSources), so a report prints one made
+// from a value redaction hides as redacted.
+func (r Result) ProbeSources() map[string][]string {
+	if r.model == nil {
+		return nil
+	}
+	m := r.model
+	return engine.ProbeSources(m.port, m.allow, m.deny, m.reach, m.carve)
+}
+
 // unsound is a command the device would run and port49 would deny, among one
 // vector per way the rules can be told apart (engine.Probes).
 func (m *model) unsound() ([]string, bool) {

@@ -380,7 +380,7 @@ func Compare(before, after *Policy, now time.Time) Diff {
 	}
 	slices.SortFunc(instants, func(a, b time.Time) int { return a.Compare(b) })
 	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{},
-		usedAcks: map[Acknowledgment]bool{}}
+		usedAcks: map[Acknowledgment]bool{}, secrets: append(before.HiddenValues(), after.HiddenValues()...)}
 	for k := range after.sessionAcks(instants) {
 		c.acks[k] = true
 	}
@@ -497,7 +497,12 @@ type comparison struct {
 	seen map[string]bool
 	// usedAcks are the acknowledge: entries that acknowledged a widening.
 	usedAcks map[Acknowledgment]bool
-	d        Diff
+	// secrets are the values either version's redactions hide in its
+	// rules, and src the rule words each probe argument of the group being
+	// compared was made from: a changed command prints through probeShown.
+	secrets []string
+	src     map[string][]string
+	d       Diff
 }
 
 func (c *comparison) once(parts ...string) bool {
@@ -615,6 +620,7 @@ func currentEntries(p *Policy, device string, at time.Time) []QuarantineEntry {
 // group compares one subject on devices that hold the same blobs.
 func (c *comparison) group(subject string, devices []string, was, is side, at time.Time) {
 	on := strings.Join(devices, ",")
+	c.src = engine.ProbeSources(was.prog, is.prog)
 	if was.quarantined || was.refused != "" {
 		// The old version refused everything here, by quarantine or at the
 		// mint, so everything the new one permits is a change from refused
@@ -689,7 +695,7 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 // change records one command whose verdict moved, and whether it is gated.
 func (c *comparison) change(subject string, devices []string, at time.Time, v []string, from, to engine.Outcome,
 	is side, oldRefused string) {
-	ch := Change{Subject: subject, Devices: devices, At: at, Command: display(v), Vector: v, Old: from, New: to,
+	ch := Change{Subject: subject, Devices: devices, At: at, Command: display(probeShown(v, c.src, c.secrets)), Vector: v, Old: from, New: to,
 		OldRefused: oldRefused}
 	if to.Permit && !from.Permit {
 		switch {
@@ -981,6 +987,22 @@ func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
 		}
 	}
 	return acks
+}
+
+// probeShown is a probe vector with every argument made from a value
+// redaction hides printed Redacted: the value, or a piece of it a probe
+// split or cut short, which no writer recognizes as the secret (src is
+// engine.ProbeSources; spec §5.8). The vector probed is left as it was.
+func probeShown(v []string, src map[string][]string, secrets []string) []string {
+	out := slices.Clone(v)
+	for i, a := range out {
+		if hidden(secrets, strings.TrimSpace(a)) || slices.ContainsFunc(src[a], func(w string) bool {
+			return hidden(secrets, w)
+		}) {
+			out[i] = platform.Redacted
+		}
+	}
+	return out
 }
 
 // display is a probe vector as a person reads it.

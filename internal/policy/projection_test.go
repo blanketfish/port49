@@ -584,7 +584,7 @@ func TestProjectionFindingsNeverPrintASecret(t *testing.T) {
 	for _, msg := range []string{
 		projectionMessage(projection.Result{Shape: projection.ShapeCapability,
 			Denies: []engine.Rule{rule}, Allows: []engine.Rule{rule}, Omitted: []engine.Rule{rule},
-			Beyond: []engine.Rule{rule}, Unreached: []engine.Rule{rule}}, patterns),
+			Beyond: []engine.Rule{rule}, Unreached: []engine.Rule{rule}}, patterns, nil),
 		second(refusedMessage(projection.Result{FailClosed: projection.FailOverflow,
 			Allows: []engine.Rule{rule}, Refusal: &projection.Refusal{Why: "w", Attribute: "deny-commands",
 				Value: "^(" + secret + ")$", Class: "p49-readonly"}}, patterns)),
@@ -619,5 +619,18 @@ func TestTheFailClosedCaveatSaysWhy(t *testing.T) {
 	if c := strings.Join(ProjectionCaveats(res, "juniper_junos", engine.Outcome{}), "\n"); !strings.Contains(c,
 		"gets the fail-closed reply there") || strings.Contains(c, "the device runs") {
 		t.Fatalf("%q", c)
+	}
+}
+
+// A probe prints each argument made from a hidden value, the value itself,
+// padded, or a piece a probe split or cut short, as redacted, and every other
+// argument as probed (re-review 2, R5): diff's changed commands and a
+// projection's narrower examples both print through it.
+func TestAProbeMadeFromAHiddenValuePrintsRedacted(t *testing.T) {
+	src := map[string][]string{"Kilo": {"Kilo7"}, "7": {"Kilo7"}, " Kilo7": {"Kilo7"}, "community": {"community"}}
+	got := probeShown([]string{"username", "community", "Kilo", "7", " Kilo7", "kilo7"}, src, []string{"KILO7"})
+	want := []string{"username", "community", platform.Redacted, platform.Redacted, platform.Redacted, platform.Redacted}
+	if !slices.Equal(got, want) {
+		t.Fatalf("%q", got)
 	}
 }

@@ -42,6 +42,12 @@ type probeRule struct {
 //
 // Nil programs are skipped. The vectors come in a fixed order.
 func Probes(programs ...*Program) [][]string {
+	return walkProbes(probeRules(programs), false)
+}
+
+// probeRules is the programs' rules as Probes walks them; nil programs are
+// skipped.
+func probeRules(programs []*Program) []probeRule {
 	var rules []probeRule
 	for _, p := range programs {
 		if p == nil {
@@ -53,7 +59,26 @@ func Probes(programs ...*Program) [][]string {
 			rules = append(rules, probeRule{c: r, fixed: fixed, rest: rest, abbrev: r.verdict == Deny && abbrev})
 		}
 	}
-	return walkProbes(rules, false)
+	return rules
+}
+
+// ProbeSources maps each argument Probes may try for the programs to the
+// words of their rules it was made from: a word as written, split into a
+// name and an index, cut to an abbreviation, or padded with whitespace. A
+// report printing a probe reads it to print, as redacted, every argument
+// made from a word redaction hides, which no writer would recognize once
+// split or cut (spec §5.8).
+func ProbeSources(programs ...*Program) map[string][]string {
+	rules := probeRules(programs)
+	src := map[string][]string{}
+	maxLen := 0
+	for _, r := range rules {
+		maxLen = max(maxLen, r.fixed+1)
+	}
+	for i := 0; i < maxLen; i++ {
+		candidates(rules, i, src)
+	}
+	return src
 }
 
 // PipeProbes is Probes for the programs' pipe allowlists: one pipeline stage
@@ -101,7 +126,7 @@ func walkProbes(rules []probeRule, empty bool) [][]string {
 	}
 	cands := make([][]string, maxLen)
 	for i := range cands {
-		cands[i] = candidates(rules, i)
+		cands[i] = candidates(rules, i, nil)
 	}
 
 	all := make([]int, len(rules))
@@ -160,9 +185,17 @@ func walkProbes(rules []probeRule, empty bool) [][]string {
 // candidates are the arguments tried at position i. The rules' own words come
 // first, so a group's representative is spelled as a rule spells it, then
 // OtherArgument, then what the regex and class patterns match, then the
-// abbreviations, and the whitespace shapes last.
-func candidates(rules []probeRule, i int) []string {
+// abbreviations, and the whitespace shapes last. Where src is not nil, each
+// candidate made from a rule's word, split, cut short or padded, is recorded
+// in it against that word (ProbeSources).
+func candidates(rules []probeRule, i int, src map[string][]string) []string {
 	words, matched, abbrevs, padded := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	from := func(set map[string]bool, w, word string) {
+		set[w] = true
+		if src != nil && word != "" && !slices.Contains(src[w], word) {
+			src[w] = append(src[w], word)
+		}
+	}
 	for _, r := range rules {
 		if i >= r.fixed {
 			continue
@@ -181,9 +214,9 @@ func candidates(rules []probeRule, i int) []string {
 			for _, w := range joined {
 				for _, sp := range splitsOf(w) {
 					if t.joinHead {
-						words[sp[0]] = true
+						from(words, sp[0], w)
 					} else {
-						words[sp[1]] = true
+						from(words, sp[1], w)
 					}
 				}
 			}
@@ -202,16 +235,16 @@ func candidates(rules []probeRule, i int) []string {
 			continue
 		}
 		w := t.word
-		words[w] = true
+		from(words, w, w)
 		if r.c.verdict != Deny {
 			continue
 		}
-		padded[" "+w] = true
+		from(padded, " "+w, w)
 		if r.abbrev {
 			for k := range w {
 				if k > 0 {
-					abbrevs[w[:k]] = true
-					padded[" "+w[:k]] = true
+					from(abbrevs, w[:k], w)
+					from(padded, " "+w[:k], w)
 				}
 			}
 		}
