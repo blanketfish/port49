@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"path"
 	"slices"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -44,9 +46,18 @@ type KeywordNode struct {
 	Argument bool     `yaml:"argument"`
 }
 
+// keywordFile is the file as written. A node's keys are pointers so that
+// one left out, or a null node, is told apart from one the capture wrote:
+// an argument is proven absent only where the file says `argument: false`.
+// A key a later capture adds is one more field here, required the same way.
 type keywordFile struct {
-	Platform string                 `yaml:"platform"`
-	Nodes    map[string]KeywordNode `yaml:"nodes"`
+	Platform string                      `yaml:"platform"`
+	Nodes    map[string]*keywordFileNode `yaml:"nodes"`
+}
+
+type keywordFileNode struct {
+	Words    []string `yaml:"words"`
+	Argument *bool    `yaml:"argument"`
 }
 
 // ParseKeywords reads a keyword file: `platform:` and `nodes:`, keyed by
@@ -63,6 +74,9 @@ func ParseKeywords(raw []byte) (string, *Keywords, error) {
 	if err := dec.Decode(&f); err != nil {
 		return "", nil, fmt.Errorf("keywords: %w", err)
 	}
+	if err := dec.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return "", nil, errors.New("keywords: more than one document")
+	}
 	if f.Platform == "" {
 		return "", nil, errors.New("keywords: no platform")
 	}
@@ -72,7 +86,12 @@ func ParseKeywords(raw []byte) (string, *Keywords, error) {
 	if _, ok := f.Nodes[""]; !ok {
 		return "", nil, errors.New("keywords: no root node (\"\")")
 	}
+	nodes := make(map[string]KeywordNode, len(f.Nodes))
 	for p, n := range f.Nodes {
+		if n == nil || n.Argument == nil {
+			return "", nil, fmt.Errorf("keywords: node %q: no argument: key; the capture writes one for every node", p)
+		}
+		nodes[p] = KeywordNode{Words: n.Words, Argument: *n.Argument}
 		for _, w := range n.Words {
 			if w == "" || w != strings.ToLower(w) || strings.IndexFunc(w, func(r rune) bool { return r <= ' ' || r > '~' }) >= 0 {
 				return "", nil, fmt.Errorf("keywords: node %q: word %q is not a lower-case printable word", p, w)
@@ -89,11 +108,11 @@ func ParseKeywords(raw []byte) (string, *Keywords, error) {
 		if i >= 0 {
 			parent, last = p[:i], p[i+1:]
 		}
-		if pn, ok := f.Nodes[parent]; !ok || !slices.Contains(pn.Words, last) {
+		if pn, ok := f.Nodes[parent]; !ok || pn == nil || !slices.Contains(pn.Words, last) {
 			return "", nil, fmt.Errorf("keywords: node %q: its parent %q does not list %q", p, parent, last)
 		}
 	}
-	return f.Platform, &Keywords{nodes: f.Nodes}, nil
+	return f.Platform, &Keywords{nodes: nodes}, nil
 }
 
 // Keyword reports whether word is a keyword after path: the capture reached
@@ -133,10 +152,18 @@ func (k *Keywords) Len() int {
 // KeywordsFor is set version's keyword tree for platform, from the embedded
 // `platforms/keywords/<version>/<platform>.yaml`, or nil where the set ships
 // none. A file that does not load is a build defect, and panics, as a set's
-// adapter file does.
+// adapter file does. Each file is read once: a tree is never written after
+// ParseKeywords returns it, so every policy load shares it.
 func KeywordsFor(version, platformName string) *Keywords {
-	return keywordsIn(platforms.Keywords, version, platformName)
+	key := version + "/" + platformName
+	if k, ok := shippedKeywords.Load(key); ok {
+		return k.(*Keywords)
+	}
+	k, _ := shippedKeywords.LoadOrStore(key, keywordsIn(platforms.Keywords, version, platformName))
+	return k.(*Keywords)
 }
+
+var shippedKeywords sync.Map // "<version>/<platform>" → *Keywords, nil where none ships
 
 func keywordsIn(fsys fs.FS, version, platformName string) *Keywords {
 	raw, err := fs.ReadFile(fsys, path.Join("keywords", version, platformName+".yaml"))
@@ -157,10 +184,14 @@ func keywordsIn(fsys fs.FS, version, platformName string) *Keywords {
 // the keywords each completes there, and an argument where any image takes
 // one. A keyword only one image has is not proven, and fails closed; a node
 // whose last word is not a keyword of its merged parent is dropped with its
-// subtree. Nil is the empty tree.
+// subtree (none is, of trees ParseKeywords read, whose every node its parent
+// lists on each image: the drop guards a tree built otherwise). The tree is evidence from every image or none: with no tree, a
+// nil one among them, or no root every image holds, the merge is nil, which
+// proves nothing, and MarshalKeywords writes it as a file ParseKeywords
+// refuses, so it never ships.
 func MergeKeywords(trees ...*Keywords) *Keywords {
-	if len(trees) == 0 {
-		return &Keywords{nodes: map[string]KeywordNode{}}
+	if len(trees) == 0 || slices.Contains(trees, nil) {
+		return nil
 	}
 	merged := map[string]KeywordNode{}
 	for p, n := range trees[0].nodeMap() {
@@ -195,6 +226,9 @@ func MergeKeywords(trees ...*Keywords) *Keywords {
 		if pn, ok := merged[parent]; !ok || !slices.Contains(pn.Words, last) {
 			delete(merged, p)
 		}
+	}
+	if _, ok := merged[""]; !ok {
+		return nil
 	}
 	return &Keywords{nodes: merged}
 }

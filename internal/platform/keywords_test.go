@@ -66,6 +66,13 @@ func TestParseKeywordsRefuses(t *testing.T) {
 		"platform: juniper_junos\nnodes:\n  \"show\": {words: []}\n",
 		"nodes:\n  \"\": {words: []}\n",
 		"platform: juniper_junos\nnodes:\n  \"\": {words: [x]}\n" + strings.Repeat("#", MaxKeywordBytes),
+		// An argument is proven absent only by the capture saying so: a
+		// node that omits the key, or is null, is not read as false.
+		"platform: juniper_junos\nnodes:\n  \"\": {words: [show], argument: false}\n  \"show\": {words: []}\n",
+		"platform: juniper_junos\nnodes:\n  \"\": {words: [show], argument: false}\n  \"show\": ~\n",
+		"platform: juniper_junos\nnodes:\n  \"\": {words: [show], argument: false}\n  \"show\": {words: [], argument: ~}\n",
+		// A second document is not read past.
+		"platform: juniper_junos\nnodes:\n  \"\": {words: [], argument: false}\n---\nplatform: other\n",
 	} {
 		if _, _, err := ParseKeywords([]byte(bad)); err == nil {
 			t.Errorf("parsed: %.80q", bad)
@@ -119,9 +126,21 @@ nodes:
 		t.Fatal(err)
 	}
 	m := MergeKeywords(a, b)
+	// The argument is either image's, whichever holds it: `show` takes one
+	// on b only, `show interfaces` on a only.
 	if !m.Keyword(nil, "show") || m.Keyword(nil, "request") || m.Keyword([]string{"show"}, "version") ||
-		!m.Keyword([]string{"show", "interfaces"}, "terse") || !m.TakesArgument([]string{"show"}) || m.Len() != 3 {
+		!m.Keyword([]string{"show", "interfaces"}, "terse") || !m.TakesArgument([]string{"show"}) ||
+		!m.TakesArgument([]string{"show", "interfaces"}) || m.TakesArgument(nil) || m.Len() != 3 {
 		t.Fatalf("%s", MarshalKeywords("juniper_junos", m))
+	}
+	// A merge that proves nothing is nil, and so proves nothing: an image
+	// missing, or no root both hold.
+	_, rootless, _ := ParseKeywords([]byte("platform: juniper_junos\nnodes:\n  \"\": {words: [], argument: false}\n"))
+	if MergeKeywords() != nil || MergeKeywords(a, nil) != nil || MergeKeywords(nil, a) != nil {
+		t.Error("a merge with no image, or a missing one, proves something")
+	}
+	if MergeKeywords(a, rootless).Keyword(nil, "show") {
+		t.Error("a word one image lacks is proven")
 	}
 	name, back, err := ParseKeywords(MarshalKeywords("juniper_junos", m))
 	if err != nil || name != "juniper_junos" || back.Len() != 3 || !back.TakesArgument([]string{"show"}) {
