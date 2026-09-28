@@ -721,7 +721,9 @@ reproduced), and Task 19 is on hold for the owner.
 **Carried, for later plans.**
 - **A `junoscript` deny may lift option C.** On SRX hardware (operator-reported,
   `L26c-operator-juniper_srx.md`), `deny-commands "junoscript"`, sent by TACACS+ or set on the
-  class, refused `xml-mode netconf` while other commands ran. Measure it in the lab on both
+  class, refused `xml-mode netconf` while other commands ran, and refused that user's NETCONF
+  sessions on port 830 too (`unknown command: xml-mode`). So it may also replace `check-config`'s
+  NETCONF-off requirement: automation accounts keep NETCONF in a class without the deny. Measure it in the lab on both
   images, with a capture: abbreviations, `op`, and whether anything else reaches RPCs. If it
   holds, port49 can send it on capability replies, and grants now failing closed under option C
   could project.
