@@ -38,6 +38,16 @@ stopped listening, and `xml-mode netconf` from an SSH CLI session on port 22 sti
 `<get-configuration/>` there returned the configuration.
 Turning the NETCONF service off does not close `xml-mode`; only turning SSH off would.
 
+## Local class and `junoscript` (reported 2026-09-28)
+
+With the deny set on the local login class instead of sent by TACACS+, the result was the same:
+`xml-mode netconf` still opened NETCONF and the configuration could still be read. A
+`deny-commands "junoscript"` refused `xml-mode netconf`. The PyEZ list reported the same name
+from the allow side (Junos 18.4R3-S2: NETCONF needed `junoscript` allowed, not `xml-mode`), so
+Junos appears to authorize `xml-mode` as `junoscript`, which is why no deny naming `xml` matched
+(row 8). Not yet recorded: whether a TACACS+-sent `junoscript` deny also refuses it, and that
+other commands still run beside it.
+
 ## What it means for port49
 
 - **A wire deny beneath `view-configuration` is not a boundary.** `<get-configuration/>` is
@@ -50,4 +60,6 @@ Turning the NETCONF service off does not close `xml-mode`; only turning SSH off 
 - The management-services allowlist (§8, `devices check-config`) does not close `xml-mode`: it
   runs inside the CLI session, with the NETCONF service off. What keeps port49 safe is option C
   and the `^.*$` catch-all, not the allowlist.
+- A `junoscript` deny may close `xml-mode` without denying everything. If a TACACS+-sent one is
+  measured to, option C could be lifted for grants whose only RPC path is `xml-mode`.
 - Entering `xml-mode` is visible in accounting, so `port49 devices capabilities` input can show it.
