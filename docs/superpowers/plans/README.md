@@ -719,6 +719,12 @@ reproduced), and Task 19 is on hold for the owner.
   as above.
 
 **Carried, for later plans.**
+- **A `junoscript` deny may lift option C.** On SRX hardware (operator-reported,
+  `L26c-operator-juniper_srx.md`), `deny-commands "junoscript"`, sent by TACACS+ or set on the
+  class, refused `xml-mode netconf` while other commands ran. Measure it in the lab on both
+  images, with a capture: abbreviations, `op`, and whether anything else reaches RPCs. If it
+  holds, port49 can send it on capability replies, and grants now failing closed under option C
+  could project.
 - **Revisit `check-config`'s NETCONF-off requirement.** On SRX hardware `xml-mode` opens NETCONF
   with the service off (`L26c-operator-juniper_srx.md`), so turning the service off doesn't close
   RPC reach. Under option C a capability reply goes out only where the grant permits everything
