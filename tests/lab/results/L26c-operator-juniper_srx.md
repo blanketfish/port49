@@ -46,7 +46,10 @@ With the deny set on the local login class instead of sent by TACACS+, the resul
 from the allow side (Junos 18.4R3-S2: NETCONF needed `junoscript` allowed, not `xml-mode`), so
 Junos appears to authorize `xml-mode` as `junoscript`, which is why no deny naming `xml` matched
 (row 8). The owner then found `junoscript` behaves as an alias of `xml-mode`: the device matches
-the deny list against that name, not the one typed. A `junoscript` deny sent by TACACS+ refused `xml-mode netconf` as the class-level one
+the deny list against that name, not the one typed. With `junoscript` denied and
+`junoscript version` allowed, `xml-mode version` was still refused: the allow never matched, so
+the string checked is likely `junoscript` alone, its options unseen (as decision 27 has it for
+arguments). `xml-mode` is all-or-nothing. A `junoscript` deny sent by TACACS+ refused `xml-mode netconf` as the class-level one
 did, and in both cases `show version` still ran beside it. The same user connecting to the NETCONF
 service on port 830 was refused with `error: unknown command: xml-mode`: the deny closes the
 NETCONF service for that user as well.
