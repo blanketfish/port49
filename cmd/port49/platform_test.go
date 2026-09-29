@@ -27,7 +27,7 @@ func TestPlatformListSaysWhereEachAdapterComesFrom(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"platform", "list"}, &out, &errb); code != 0 ||
 		!strings.HasPrefix(out.String(), "PLATFORM") || strings.Count(out.String(), "built-in") != 4 ||
-		listRow(out.String(), "juniper_junos") != "juniper_junos built-in — session" ||
+		listRow(out.String(), "juniper_junos") != "juniper_junos built-in containerlab session" ||
 		listRow(out.String(), "arista_eos") != "arista_eos built-in containerlab session,commands" ||
 		listRow(out.String(), "cisco_nxos") != "cisco_nxos built-in containerlab session,commands" ||
 		listRow(out.String(), "cisco_iosxe") != "cisco_iosxe built-in containerlab session,commands" {

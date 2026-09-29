@@ -3,6 +3,11 @@
 # direction that fails closed (spec §8, §15).
 platforms:
   juniper_junos:
+    # Every reply this adapter renders was applied by both lab images as the
+    # adapter says, no wider than port49 permits, and every wire regex it
+    # renders was taken by the commit checker
+    # (tests/lab/results/L12-projection-juniper_*.md; spec §15, L9, L10, L12).
+    verified: containerlab
     # Session authorization only: no per-command request in 26 sessions on two
     # images (L18; decision 21). Its rules reach a session through the
     # projection below (decision 22).

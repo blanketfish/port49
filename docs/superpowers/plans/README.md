@@ -28,8 +28,7 @@ review, one fix wave and two scoped re-reviews; L22 closed, and the EOS, NX-OS a
 adapters `verified: containerlab`); plan 5 is split at the seam below. **5b written 2026-09-24,
 revised 2026-09-25** after its pre-flight review and the owner's ruling of that day (decision 26)
 (`2026-09-24-05b-projection-capabilities.md`, twenty tasks: one docs, three lab, fourteen code,
-one lab, one lab-and-docs), **executed 2026-09-25 but for Task 19**, the differential lab test,
-which is on hold for the owner, and amended in flight with decision 27 and four lab tasks (3b,
+one lab, one lab-and-docs), **executed 2026-09-25, and Task 19**, the differential lab test, **on 2026-09-29**, and amended in flight with decision 27 and four lab tasks (3b,
 L26b, L26c, the L26 rerun); reviewed per task; not yet merged. It closed L23, L24, L26 and L26b;
 L9, L10, L12, L25 and the new L26c stay open (Plan 5b — As built, below). 6–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
@@ -553,20 +552,23 @@ than 25 tasks. The seam is the kind of platform:
 
 ### Plan 5b — As built
 
-Executed 2026-09-25 on `feature/session-projection`, every task but Task 19. The plan was amended
+Executed 2026-09-25 on `feature/session-projection`, every task but Task 19, which ran on
+2026-09-29 (`feature/projection-differential`, merged into it). The plan was amended
 in flight: decision 27 (Junos matches keywords only) and the lab tasks it needed, 3b (the keyword
 tree, L26; keyword abbreviations, L9; NETCONF, L12), L26b (keyword proof by deny enforcement),
 L26c (RPC reach from a projected CLI) and a rerun of L26. Task 15 did not run (L25 not
-reproduced), and Task 19 is on hold for the owner.
+reproduced). Task 19 passed on both images after two review rounds added shapes the plan
+missed (the capability reply with one and two keyword denies, bits short of `all`) and a
+commit-checker step (`L12-projection-juniper_*.md`).
 
 - **Set 1.1.0 is frozen and the default.** It is 1.0.0's EOS, NX-OS and IOS-XE files unchanged
   (branch K: L23 found all three candidates inert) and `juniper_junos` projected. `DefaultSet` is
   1.1.0 and `UnpinnedSet` stays 1.0.0, so an unpinned policy renders Junos as before.
   `TestEveryReleasedSetIsFrozen` holds 1.1.0 value for value, and
   `TestReleasedKeywordTreesAreFrozen` holds its keyword tree by sha256
-  (`platforms/keywords/1.1.0/juniper_junos.yaml`, `aa144089…0168`). **The Junos adapter is not
-  `verified: containerlab`**: that waits on Task 19's differential, so `platform list` prints `—`
-  for it.
+  (`platforms/keywords/1.1.0/juniper_junos.yaml`, `aa144089…0168`). **The Junos adapter is
+  `verified: containerlab`**: Task 19's differential passed on both images before the merge, so
+  it was set on 1.1.0 and the `released` entry changed with it, as 5a did for 1.0.0.
 - **Task 14's branches, as the notes read:**
   - B: `DenyMatchesExpanded` true (`L9-abbreviations-juniper_*.md`: no abbreviation of a
     keyword deny ran on either image).
@@ -646,10 +648,9 @@ reproduced), and Task 19 is on hold for the owner.
 - **NX-OS system task: not landed.** L25's note found no sudo prompt on the N9Kv, so there was
   nothing to cancel and no `admin` record, and Task 15 did not run.
 - **Lab register.**
-  - Closed: L23; L24 (both Junos images); L26, and L26b, a new row.
-  - Open: L9 (whether the commit checker takes every rendered shape, carried to Task 19); L10
-    (Junos spellings, Task 19); L12 (the differential, Task 19, so decision 22 stays provisional);
-    L25 (not reproduced); and L26c, a new row (RPC reach; a rerun is owed; the owner's SRX
+  - Closed: L23; L24 (both Junos images); L26, and L26b, a new row; and, by Task 19 on
+    2026-09-29, L9, L10 and L12, so decision 22 is no longer provisional.
+  - Open: L25 (not reproduced); and L26c, a new row (RPC reach; a rerun is owed; the owner's SRX
     hardware results are in `L26c-operator-juniper_srx.md`, without a capture).
 
 **Operator-facing notes (for the pull request body).**
@@ -709,8 +710,8 @@ reproduced), and Task 19 is on hold for the owner.
   never relies on such a deny: that composition fails closed.
 - **`port49 devices capabilities` output goes to cron mail, and its redaction is best effort.**
   A password typed as a command may appear in an example line.
-- **The Junos adapter is unverified.** The differential test (Task 19) is pending, so
-  `juniper_junos` in set 1.1.0 is not `verified: containerlab`.
+- **The Junos adapter is `verified: containerlab`.** Task 19's differential ran every shape set
+  1.1.0 renders on vJunos-router and vSRX, none wider than port49 permits.
 - The notes already in the plan's "Operator-facing notes" stand where they do not contradict the
   ones above: a new set; per-subject fail-closed with `projection_fail_closed`; `policy test` fails
   on a quarantine; reserved usernames; the new adapter keys and reports; `policy diff`'s
@@ -733,21 +734,16 @@ reproduced), and Task 19 is on hold for the owner.
   the bits reach, so RPC reach over the NETCONF service may already be bounded the same way.
   Fleets that automate over NETCONF can't pass the check today. Settle it in the lab before
   relaxing anything.
-- **Task 19**, the differential lab test, on hold for the owner. It carries:
-  - the commit checker taking every rendered shape (L9);
-  - L12's differential and L10's Junos spellings;
-  - `verified: containerlab`. If Task 19 passes before this branch merges, it is set on 1.1.0,
-    as 5a set it on 1.0.0 before merge, and the `released` entry changes with it. After the
-    merge 1.1.0 is released and frozen, `Verified` included, so marking it verified, or any other
-    Task 19 change to `juniper_junos`, ships in a new set;
+- **Carried from Task 19** (it ran and closed L9, L10 and L12; these were never its test's):
   - `DenyMatchesExpanded` re-measured;
   - the uid range and the class `idle-timeout` upper bound;
   - whether `set version` and `apply-groups` lines survive `display inheritance | except`;
   - ssh TCP forwarding's default;
   - whether a deny binds `scp` and the SSH exec channel.
 - **The owner's device measurements:**
-  - whether a deny naming `xml-mode` or `op` binds, which would lift option C;
-  - whether an RPC reaches past a deny beneath `view-configuration`;
+  - answered on SRX hardware, without a capture (`L26c-operator-juniper_srx.md`): a deny naming
+    `xml-mode` does not bind, a `junoscript` deny does (see the carried item above), and
+    `<get-configuration/>` reaches past a deny beneath `view-configuration`; `op` is unmeasured;
   - the L26c rerun (review I-1, I-4), with only the allowlist's services on, which closes
     whether the allowlist is sufficient and so option C's provisional marker;
   - the bitless (baseline) session's RPC reach, which Task 14 counts as a carve-out;
