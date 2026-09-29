@@ -4,7 +4,7 @@
 - **Platform:** juniper_vjunos-router (containerlab node `srx1`, 172.100.100.21)
 - **Image version:** vJunos-router 23.4R2-S2.1 (`vrnetlab/juniper_vjunos-router:23.4R2-S2.1`)
 - **Topology:** `tests/lab/topologies/vjunos.clab.yml`
-- **Capture:** `tests/lab/evidence/projection-juniper_vjunos-router.pcap` — 5678 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/projection-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/projection-juniper_vjunos-router.pcap` — 8103 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/projection-juniper_vjunos-router.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -73,7 +73,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:37478->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:56614->172.100.100.21:830: read: connection reset by peer`
 
 ### readonly, a deny aligned with a bit
 
@@ -122,7 +122,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:59290->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:48484->172.100.100.21:830: read: connection reset by peer`
 
 ### a permit beneath a deny
 
@@ -171,7 +171,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:33052->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:58780->172.100.100.21:830: read: connection reset by peer`
 
 ### an exact deny
 
@@ -220,7 +220,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:37376->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:58256->172.100.100.21:830: read: connection reset by peer`
 
 ### narrow
 
@@ -266,7 +266,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:44406->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:35900->172.100.100.21:830: read: connection reset by peer`
 
 ### a class term
 
@@ -315,7 +315,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:42578->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:43340->172.100.100.21:830: read: connection reset by peer`
 
 ### a permit beyond the bits
 
@@ -365,7 +365,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:33312->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:34210->172.100.100.21:830: read: connection reset by peer`
 
 ### operator
 
@@ -417,7 +417,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:59640->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:35630->172.100.100.21:830: read: connection reset by peer`
 
 ### admin
 
@@ -509,7 +509,165 @@ slice01@srx1>
 | `configure` | `configure` | permit | runs | runs | yes |
 | `edit` | `edit` | permit | runs | runs | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:59010->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:34886->172.100.100.21:830: read: connection reset by peer`
+
+### operator, all it reaches
+
+Reply `user-permissions=clear network trace view view-configuration` (capability). `show cli authorization`:
+
+```
+ 
+Current user: 'remote' login: 'slice01' class 'p49-remote'
+Permissions:
+    clear       -- Can clear learned network info
+    network     -- Can access the network
+    trace       -- Can view trace file settings
+    view        -- Can view current values and statistics
+    view-configuration-- Can view all configuration (not including secrets)
+Individual command authorization:
+    Allow regular expression: none
+    Deny regular expression: none
+    Allow configuration regular expression: none
+    Deny configuration regular expression: none
+
+slice01@srx1> 
+```
+
+| typed | port49 on | port49 | projection predicts | device | agrees |
+|---|---|---|---|---|---|
+| `show version` | `show version` | permit | runs | runs | yes |
+| `show system uptime` | `show system uptime` | permit | runs | runs | yes |
+| `show interfaces terse` | `show interfaces terse` | permit | runs | runs | yes |
+| `sh int ter` | `show interfaces terse` | permit | runs | runs | yes |
+| `SHOW INTERFACES TERSE` | `show interfaces terse` | permit | runs | refuses | no |
+| `show interfaces terse | no-more` | `show interfaces terse` | permit | runs | runs | yes |
+| `show interfaces fxp0 terse` | `show interfaces fxp0 terse` | permit | runs | runs | yes |
+| `show interfaces lo0 terse` | `show interfaces lo0 terse` | permit | runs | runs | yes |
+| `show configuration system host-name` | `show configuration system host-name` | permit | runs | runs | yes |
+| `sh conf sys host-name` | `show configuration system host-name` | permit | runs | runs | yes |
+| `SHOW CONFIGURATION SYSTEM HOST-NAME` | `show configuration system host-name` | permit | runs | refuses | no |
+| `show configuration system host-name | display set` | `show configuration system host-name` | permit | runs | runs | yes |
+| `   show configuration system host-name   ` | `show configuration system host-name` | permit | runs | runs | yes |
+| `show route summary` | `show route summary` | permit | runs | runs | yes |
+| `show route protocol static` | `show route protocol static` | permit | runs | runs | yes |
+| `clear interfaces statistics fxp0` | `clear interfaces statistics fxp0` | permit | runs | runs | yes |
+| `ping 127.0.0.1 count 1 rapid` | `ping 127.0.0.1 count 1 rapid` | permit | runs | runs | yes |
+| `sh ver` | `show version` | permit | runs | runs | yes |
+| `SHOW VERSION` | `show version` | permit | runs | refuses | no |
+| `set cli screen-width 200` | `set cli screen-width 200` | permit | runs | runs | yes |
+| `show cli` | `show cli` | permit | runs | runs | yes |
+| `file list /var/tmp` | `file list /var/tmp` | permit | runs | runs | yes |
+| `request system reboot` | `request system reboot` | permit | runs | refuses | no |
+| `restart routing` | `restart routing` | permit | refuses | refuses | no |
+| `configure` | `configure` | permit | refuses | refuses | no |
+| `edit` | `edit` | permit | refuses | refuses | no |
+
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:50454->172.100.100.21:830: read: connection reset by peer`
+
+### operator, a capability with a keyword deny
+
+Reply `user-permissions=clear network trace view view-configuration`, `deny-commands=^ *restart( .*)? *(\|.*)?$` (capability). `show cli authorization`:
+
+```
+ 
+Current user: 'remote' login: 'slice01' class 'p49-remote'
+Permissions:
+    clear       -- Can clear learned network info
+    network     -- Can access the network
+    trace       -- Can view trace file settings
+    view        -- Can view current values and statistics
+    view-configuration-- Can view all configuration (not including secrets)
+Individual command authorization:
+    Allow regular expression: none
+    Deny regular expression: (^ *restart( .*)? *(\|.*)?$)
+    Allow configuration regular expression: none
+    Deny configuration regular expression: none
+
+slice01@srx1> 
+```
+
+| typed | port49 on | port49 | projection predicts | device | agrees |
+|---|---|---|---|---|---|
+| `show version` | `show version` | permit | runs | runs | yes |
+| `show system uptime` | `show system uptime` | permit | runs | runs | yes |
+| `show interfaces terse` | `show interfaces terse` | permit | runs | runs | yes |
+| `sh int ter` | `show interfaces terse` | permit | runs | runs | yes |
+| `SHOW INTERFACES TERSE` | `show interfaces terse` | permit | runs | refuses | no |
+| `show interfaces terse | no-more` | `show interfaces terse` | permit | runs | runs | yes |
+| `show interfaces fxp0 terse` | `show interfaces fxp0 terse` | permit | runs | runs | yes |
+| `show interfaces lo0 terse` | `show interfaces lo0 terse` | permit | runs | runs | yes |
+| `show configuration system host-name` | `show configuration system host-name` | permit | runs | runs | yes |
+| `sh conf sys host-name` | `show configuration system host-name` | permit | runs | runs | yes |
+| `SHOW CONFIGURATION SYSTEM HOST-NAME` | `show configuration system host-name` | permit | runs | refuses | no |
+| `show configuration system host-name | display set` | `show configuration system host-name` | permit | runs | runs | yes |
+| `   show configuration system host-name   ` | `show configuration system host-name` | permit | runs | runs | yes |
+| `show route summary` | `show route summary` | permit | runs | runs | yes |
+| `show route protocol static` | `show route protocol static` | permit | runs | runs | yes |
+| `clear interfaces statistics fxp0` | `clear interfaces statistics fxp0` | permit | runs | runs | yes |
+| `ping 127.0.0.1 count 1 rapid` | `ping 127.0.0.1 count 1 rapid` | permit | runs | runs | yes |
+| `sh ver` | `show version` | permit | runs | runs | yes |
+| `SHOW VERSION` | `show version` | permit | runs | refuses | no |
+| `set cli screen-width 200` | `set cli screen-width 200` | permit | runs | runs | yes |
+| `show cli` | `show cli` | permit | runs | runs | yes |
+| `file list /var/tmp` | `file list /var/tmp` | permit | runs | runs | yes |
+| `request system reboot` | `request system reboot` | permit | runs | refuses | no |
+| `restart routing` | `restart routing` | deny | refuses | refuses | yes |
+| `configure` | `configure` | permit | refuses | refuses | no |
+| `edit` | `edit` | permit | refuses | refuses | no |
+
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:37748->172.100.100.21:830: read: connection reset by peer`
+
+### operator, a capability with a keyword deny and allows
+
+Reply `user-permissions=clear trace view view-configuration`, `deny-commands=^ *restart( .*)? *(\|.*)?$`, `allow-commands=^(mtrace( .*)?|ping( .*)?|ssh( .*)?|telnet( .*)?|traceroute( .*)?)$` (capability). `show cli authorization`:
+
+```
+ 
+Current user: 'remote' login: 'slice01' class 'p49-remote'
+Permissions:
+    clear       -- Can clear learned network info
+    trace       -- Can view trace file settings
+    view        -- Can view current values and statistics
+    view-configuration-- Can view all configuration (not including secrets)
+Individual command authorization:
+    Allow regular expression: (^(mtrace( .*)?|ping( .*)?|ssh( .*)?|telnet( .*)?|traceroute( .*)?)$)
+    Deny regular expression: (^ *restart( .*)? *(\|.*)?$)
+    Allow configuration regular expression: none
+    Deny configuration regular expression: none
+
+slice01@srx1> 
+```
+
+| typed | port49 on | port49 | projection predicts | device | agrees |
+|---|---|---|---|---|---|
+| `show version` | `show version` | permit | runs | runs | yes |
+| `show system uptime` | `show system uptime` | permit | runs | runs | yes |
+| `show interfaces terse` | `show interfaces terse` | permit | runs | runs | yes |
+| `sh int ter` | `show interfaces terse` | permit | runs | runs | yes |
+| `SHOW INTERFACES TERSE` | `show interfaces terse` | permit | runs | refuses | no |
+| `show interfaces terse | no-more` | `show interfaces terse` | permit | runs | runs | yes |
+| `show interfaces fxp0 terse` | `show interfaces fxp0 terse` | permit | runs | runs | yes |
+| `show interfaces lo0 terse` | `show interfaces lo0 terse` | permit | runs | runs | yes |
+| `show configuration system host-name` | `show configuration system host-name` | permit | runs | runs | yes |
+| `sh conf sys host-name` | `show configuration system host-name` | permit | runs | runs | yes |
+| `SHOW CONFIGURATION SYSTEM HOST-NAME` | `show configuration system host-name` | permit | runs | refuses | no |
+| `show configuration system host-name | display set` | `show configuration system host-name` | permit | runs | runs | yes |
+| `   show configuration system host-name   ` | `show configuration system host-name` | permit | runs | runs | yes |
+| `show route summary` | `show route summary` | permit | runs | runs | yes |
+| `show route protocol static` | `show route protocol static` | permit | runs | runs | yes |
+| `clear interfaces statistics fxp0` | `clear interfaces statistics fxp0` | permit | runs | runs | yes |
+| `ping 127.0.0.1 count 1 rapid` | `ping 127.0.0.1 count 1 rapid` | permit | runs | runs | yes |
+| `sh ver` | `show version` | permit | runs | runs | yes |
+| `SHOW VERSION` | `show version` | permit | runs | refuses | no |
+| `set cli screen-width 200` | `set cli screen-width 200` | permit | runs | runs | yes |
+| `show cli` | `show cli` | permit | runs | runs | yes |
+| `file list /var/tmp` | `file list /var/tmp` | permit | runs | runs | yes |
+| `request system reboot` | `request system reboot` | permit | runs | refuses | no |
+| `restart routing` | `restart routing` | deny | refuses | refuses | yes |
+| `configure` | `configure` | deny | refuses | refuses | yes |
+| `edit` | `edit` | deny | refuses | refuses | yes |
+
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:44484->172.100.100.21:830: read: connection reset by peer`
 
 ### admin with a deny
 
@@ -558,7 +716,7 @@ slice01@srx1>
 | `configure` | `configure` | permit | refuses | refuses | no |
 | `edit` | `edit` | permit | refuses | refuses | no |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:55520->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:59124->172.100.100.21:830: read: connection reset by peer`
 
 ### admin keeping a keyword deny
 
@@ -607,7 +765,7 @@ slice01@srx1>
 | `configure` | `configure` | permit | refuses | refuses | no |
 | `edit` | `edit` | permit | refuses | refuses | no |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:38520->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:37402->172.100.100.21:830: read: connection reset by peer`
 
 ### the refused shape
 
@@ -653,7 +811,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:47030->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:40894->172.100.100.21:830: read: connection reset by peer`
 
 ### a deny naming an argument
 
@@ -702,7 +860,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:44578->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:53466->172.100.100.21:830: read: connection reset by peer`
 
 ### an allow naming an argument
 
@@ -748,7 +906,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:35704->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:46108->172.100.100.21:830: read: connection reset by peer`
 
 ### a deny naming an enumerated value
 
@@ -797,7 +955,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:36080->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:60320->172.100.100.21:830: read: connection reset by peer`
 
 ### a deny of a value under a command with no RPC
 
@@ -847,7 +1005,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:53522->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:58576->172.100.100.21:830: read: connection reset by peer`
 
 ### a deny of a value under an incomplete command
 
@@ -897,5 +1055,17 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:40482->172.100.100.21:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:58764->172.100.100.21:830: read: connection reset by peer`
+
+### the commit checker (L9)
+
+| attribute | regex | commit | read back |
+|---|---|---|---|
+| `deny-commands` | `^.*$` | accepted | `set system login class p49-l9-commit deny-commands "^.*$"` |
+| `allow-commands` | `^show( .*)?$` | accepted | `set system login class p49-l9-commit allow-commands "^show( .*)?$"` |
+| `allow-commands` | `^(show interfaces( .*)?\|show version)$` | accepted | `set system login class p49-l9-commit allow-commands "^(show interfaces( .*)?\|show version)$"` |
+| `allow-commands` | `^(clear( .*)?\|ping( .*)?\|show( .*)?)$` | accepted | `set system login class p49-l9-commit allow-commands "^(clear( .*)?\|ping( .*)?\|show( .*)?)$"` |
+| `deny-commands` | `^ *restart( .*)? *(\\|.*)?$` | accepted | `set system login class p49-l9-commit deny-commands "^ *restart( .*)? *(\\|.*)?$"` |
+| `allow-commands` | `^(mtrace( .*)?\|ping( .*)?\|ssh( .*)?\|telnet( .*)?\|traceroute( .*)?)$` | accepted | `set system login class p49-l9-commit allow-commands "^(mtrace( .*)?\|ping( .*)?\|ssh( .*)?\|telnet( .*)?\|traceroute( .*)?)$"` |
+| `allow-commands` | `^show version$` | accepted | `set system login class p49-l9-commit allow-commands "^show version$"` |
 
