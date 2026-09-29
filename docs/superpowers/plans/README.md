@@ -30,7 +30,8 @@ revised 2026-09-25** after its pre-flight review and the owner's ruling of that 
 (`2026-09-24-05b-projection-capabilities.md`, twenty tasks: one docs, three lab, fourteen code,
 one lab, one lab-and-docs), **executed 2026-09-25, and Task 19**, the differential lab test, **on 2026-09-29**, and amended in flight with decision 27 and four lab tasks (3b,
 L26b, L26c, the L26 rerun); reviewed per task; not yet merged. It closed L23, L24, L26 and L26b;
-L9, L10, L12, L25 and the new L26c stay open (Plan 5b — As built, below). 6–13 not yet.
+Task 19, run 2026-09-29, closed L9, L10 and L12; L25 and the new L26c stay open (Plan 5b — As
+built, below). 6–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -791,8 +792,8 @@ Spec §8 in full: built-in adapters, entity classes, user overrides and layering
 platform set, `redact` patterns (accounting redaction was deferred from plan 1 and MUST land
 here), `capability`/`bits`/`bit_delivery`, the **Junos projection** under decision 22
 (bits first, regexes second, refused shape), differential testing in containerlab,
-`port49 platform export`. Spec §9 capability inference. **Lab:** L9, L11 (closed), L12; the
-projection generator is not final until L12 closes.
+`port49 platform export`. Spec §9 capability inference. **Lab:** L9, L11 and L12, all closed
+(L9 and L12 by plan 5b's Task 19, 2026-09-29).
 
 **Inherits from the lab (PR #3), per platform — a wrong or extra reply attribute is fatal,
 not ignored:**
