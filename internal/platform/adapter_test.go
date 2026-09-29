@@ -155,6 +155,7 @@ var shipped110 = func() map[string]Dialect {
 		"operator": {"clear", "network", "trace", "view", "view-configuration"}, "admin": {"all"}}
 	j.CeilingLevels = map[string]uint8{"readonly": 1, "operator": 15, "admin": 15}
 	j.DeviceConfig = []string{"set system tacplus-options strict-authorization"}
+	j.Verified = "containerlab" // tests/lab/results/L12-projection-juniper_*.md
 	j.ConfigChecks = append(j.ConfigChecks, ConfigCheck{Match: `^set\s+system\s+login\s+class\s+p49-remote\s+permissions\b`,
 		Says: "the remote template's class carries bits: every projected session lands in remote, where " +
 			"user-permissions merges with them or is ignored (tests/lab/results/L12-juniper_*.md), and runs them, " +
