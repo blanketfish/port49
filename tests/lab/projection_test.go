@@ -89,48 +89,60 @@ func configEntry(cmd string) bool { return cmd == "configure" || cmd == "edit" }
 // projectionShapes are the rule shapes the generator produces, and the one
 // no measurement lets it carry. Each is the roles block of a policy pinning
 // set 1.1.0. Which shape a composition renders to is the generator's, from
-// the facts the binary ships, and the note records it; the test asserts only
-// that the refused shape gets the fail-closed reply, since nothing measured
-// can carry it.
+// the facts the binary ships, and the note records it; the test asserts the
+// shape each renders to under set 1.1.0 as shipped, both ways, so a shape that
+// silently fails closed, or stops failing closed, fails the run (Task 19
+// review, finding 3).
 var projectionShapes = []struct {
-	name, roles string
-	failClosed  bool
+	name, roles, want string
 }{
-	{"readonly", `  - {name: r, privilege: readonly, permit: ["show **"]}`, false},
-	{"readonly, a deny aligned with a bit", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}`, false},
-	{"a permit beneath a deny", `  - {name: r, privilege: readonly, permit: ["show **", "show configuration system host-name"], deny: ["show configuration **"]}`, false},
-	{"an exact deny", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show interfaces terse"]}`, false},
-	{"narrow", `  - {name: r, privilege: readonly, permit: ["show version", "show interfaces **"]}`, false},
-	{"a class term", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show interfaces @management **"]}`, false},
-	{"a permit beyond the bits", `  - {name: r, privilege: readonly, permit: ["show **", "clear interfaces statistics **"]}`, false},
-	{"operator", `  - {name: r, privilege: operator, permit: ["show **", "clear **", "ping **"]}`, false},
-	{"admin", `  - {name: r, privilege: admin, permit: ["**"]}`, false},
+	{"readonly", `  - {name: r, privilege: readonly, permit: ["show **"]}`, projection.ShapeNarrow},
+	{"readonly, a deny aligned with a bit", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show configuration **"]}`, projection.ShapeFailClosed},
+	{"a permit beneath a deny", `  - {name: r, privilege: readonly, permit: ["show **", "show configuration system host-name"], deny: ["show configuration **"]}`, projection.ShapeFailClosed},
+	{"an exact deny", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show interfaces terse"]}`, projection.ShapeFailClosed},
+	{"narrow", `  - {name: r, privilege: readonly, permit: ["show version", "show interfaces **"]}`, projection.ShapeNarrow},
+	{"a class term", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show interfaces @management **"]}`, projection.ShapeFailClosed},
+	{"a permit beyond the bits", `  - {name: r, privilege: readonly, permit: ["show **", "clear interfaces statistics **"]}`, projection.ShapeNarrow},
+	{"operator", `  - {name: r, privilege: operator, permit: ["show **", "clear **", "ping **"]}`, projection.ShapeNarrow},
+	{"admin", `  - {name: r, privilege: admin, permit: ["**"]}`, projection.ShapeCapability},
+	// The capability shapes carrying a keyword deny, and bits short of `all`:
+	// the only shapes set 1.1.0 renders that put a deny regex on the wire
+	// beside the bits (Task 19 review, finding 1). `restart` is a keyword on
+	// both images, and no sent bit reaches it.
+	{"operator, all it reaches", `  - {name: r, privilege: operator, permit: ["**"]}`, projection.ShapeCapability},
+	{"operator, a capability with a keyword deny", `  - {name: r, privilege: operator, permit: ["**"], deny: ["restart **"]}`,
+		projection.ShapeCapability},
+	{"operator, a capability with a keyword deny and allows", `  - {name: r, privilege: operator, permit: ["show **", ` +
+		`"clear **", "ping **", "traceroute **", "restart **", "request **", "test **", "monitor **", "file **", ` +
+		`"help **", "set **", "start **", "op **", "save **", "load **", "scp **", "ssh **", "telnet **", ` +
+		`"mtrace **", "quit **", "exit **", "junoscript **", "xml-mode **"], deny: ["restart **"]}`,
+		projection.ShapeCapability},
 	// Under 1.1.0's keyword tree nothing under `request` is proven, so this
 	// deny fails closed (re-pre-flight R-M2), and no shape in this list
 	// exercises a capability shape carrying a deny on the device.
-	{"admin with a deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["request system reboot **"]}`, true},
+	{"admin with a deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["request system reboot **"]}`, projection.ShapeFailClosed},
 	// An admin keeping a keyword deny under `show` (re-pre-flight minor):
 	// with the bits that enter configuration mode dropped, the reply carries
 	// the deny, the device refuses the configuration in every form typed and
 	// over NETCONF, runs everything else the model says it runs, and never
 	// enters configure or edit. Under set 1.1.0's facts as shipped
-	// (DenyMatchesExpanded false) it is the fail-closed reply, where the
-	// same refusals hold; it renders once Task 14's branches B and C allow.
-	{"admin keeping a keyword deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["show configuration **"]}`, false},
-	{"the refused shape", `  - {name: r, privilege: readonly, permit: ["show interfaces **", "show version"], deny: ["show interfaces terse"]}`, true},
+	// (DenyBindsRPCs false: a deny beneath a sent bit guards the CLI alone,
+	// option C) it is the fail-closed reply, where the same refusals hold.
+	{"admin keeping a keyword deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["show configuration **"]}`, projection.ShapeFailClosed},
+	{"the refused shape", `  - {name: r, privilege: readonly, permit: ["show interfaces **", "show version"], deny: ["show interfaces terse"]}`, projection.ShapeFailClosed},
 	// Junos matches keywords only (decision 27): a deny naming an argument
 	// fails closed, an allow naming one is not sent, and a deny naming an
 	// enumerated value runs only if the keyword tree proved it a keyword, which
 	// the fail-open check then tests on the device.
-	{"a deny naming an argument", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show interfaces fxp0 **"]}`, true},
-	{"an allow naming an argument", `  - {name: r, privilege: readonly, permit: ["show version", "show interfaces fxp0 **"]}`, false},
-	{"a deny naming an enumerated value", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show route protocol static"]}`, false},
+	{"a deny naming an argument", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show interfaces fxp0 **"]}`, projection.ShapeFailClosed},
+	{"an allow naming an argument", `  - {name: r, privilege: readonly, permit: ["show version", "show interfaces fxp0 **"]}`, projection.ShapeNarrow},
+	{"a deny naming an enumerated value", `  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show route protocol static"]}`, projection.ShapeFailClosed},
 	// A value under a command with no RPC, and one under a command that still
 	// needs another argument: neither is proven a keyword (pre-flight A1), so
 	// each deny fails closed and fails CI. Nothing here streams: the
 	// fail-closed reply refuses `monitor` and `ping` outright.
-	{"a deny of a value under a command with no RPC", `  - {name: r, privilege: operator, permit: ["show **", "monitor **"], deny: ["monitor traffic interface fxp0 **"]}`, true},
-	{"a deny of a value under an incomplete command", `  - {name: r, privilege: operator, permit: ["show **", "ping **"], deny: ["ping routing-instance mgmt_junos **"]}`, true},
+	{"a deny of a value under a command with no RPC", `  - {name: r, privilege: operator, permit: ["show **", "monitor **"], deny: ["monitor traffic interface fxp0 **"]}`, projection.ShapeFailClosed},
+	{"a deny of a value under an incomplete command", `  - {name: r, privilege: operator, permit: ["show **", "ping **"], deny: ["ping routing-instance mgmt_junos **"]}`, projection.ShapeFailClosed},
 }
 
 func TestProjectionDifferential(t *testing.T) {
@@ -181,11 +193,14 @@ func TestProjectionDifferential(t *testing.T) {
 		fmt.Fprintf(&b, "The reference configuration applied, as `port49 platform export --classes` prints it for set "+
 			"1.1.0 with a 12h max_session_age:\n\n```\n%s\n```\n", strings.Join(reference, "\n"))
 		fmt.Fprintf(&b, "\nThe binary's JunosFacts: %+v.\n", projection.JunosFacts)
+		var rendered []string
 		for _, shape := range projectionShapes {
 			fmt.Fprintf(&b, "\n### %s\n\n", shape.name)
-			b.WriteString(l.projectionShape(t, port49, pki, inv.Devices, shape.name, shape.roles, shape.failClosed,
-				netconfOff))
+			b.WriteString(l.projectionShape(t, port49, pki, inv.Devices, shape.name, shape.roles, shape.want,
+				netconfOff, &rendered))
 		}
+		b.WriteString("\n### the commit checker (L9)\n\n")
+		b.WriteString(l.projectionCommitCheck(t, rendered))
 		l.result(t, "L12-projection", "Decisions 22 and 26's projection, differentially: for each rule shape the "+
 			"generator produces, what the device runs under the reply port49 renders, typed as an operator might "+
 			"type it — abbreviated, in upper case, piped — compared with port49's own decision on the command as the "+
@@ -197,7 +212,7 @@ func TestProjectionDifferential(t *testing.T) {
 
 // projectionShape runs one shape and renders its section of the note.
 func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admission.Device, name, roles string,
-	failClosed, netconfOff bool) string {
+	want string, netconfOff bool, rendered *[]string) string {
 	t.Helper()
 	body := "platform_set: 1.1.0\nscopes:\n  - {name: all_devices, match: {}}\nroles:\n" + roles + "\n" +
 		"subjects:\n  - {name: slice_operator, identity: [\"" + slicePrincipal + "\"], username: " + sliceUser +
@@ -248,9 +263,14 @@ func (l *lab) projectionShape(t *testing.T, port49, pki string, devices []admiss
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
-	if failClosed && res.Projection.FailClosed == "" {
-		t.Errorf("%s: expected the fail-closed reply, and port49 rendered the %s shape", name, res.Projection.Shape)
+	got := res.Projection.Shape
+	if res.Projection.FailClosed != "" {
+		got = projection.ShapeFailClosed
 	}
+	if got != want {
+		t.Errorf("%s: expected the %s shape, and port49 rendered %s (%s)", name, want, got, res.Projection.FailClosed)
+	}
+	*rendered = append(*rendered, res.Blob.Attributes...)
 	tok := sliceToken(t, port49, sock, l.p.node)
 	c, err := l.sshCLI(sliceUser, tok)
 	if err == nil {
@@ -415,4 +435,55 @@ func projectionRestore(reference []string) []string {
 		out = append(out, "delete system login "+kind+" "+name)
 	}
 	return out
+}
+
+// projectionCommitCheck commits each deny-commands and allow-commands regex
+// the shapes rendered as a login class's own, over the break-glass CLI, reads
+// it back and deletes the class: spec §15 L9's "whether the commit checker
+// takes, as class configuration, every wire regex shape the projection
+// renders" (Task 19 review, finding 2). A rejected one fails the test.
+func (l *lab) projectionCommitCheck(t *testing.T, rendered []string) string {
+	seen := map[string]bool{}
+	var checks [][2]string
+	for _, a := range rendered {
+		name, value, ok := strings.Cut(a, "=")
+		if !ok || (name != "deny-commands" && name != "allow-commands") || seen[a] {
+			continue
+		}
+		seen[a] = true
+		checks = append(checks, [2]string{name, value})
+	}
+	var b strings.Builder
+	b.WriteString("| attribute | regex | commit | read back |\n|---|---|---|---|\n")
+	const class = "p49-l9-commit"
+	for _, c := range checks {
+		var out, back string
+		var cerr error
+		l.withAdminCLI(t, func(l *lab) (*cliConn, error) {
+			return l.junosCLI(breakglassUser, breakglassPassword)
+		}, func(cli *cliConn) error {
+			out, cerr = junosConfigure(cli, "set system login class "+class+" permissions view",
+				"set system login class "+class+" "+c[0]+" \""+c[1]+"\"")
+			if cerr == nil {
+				back, _ = cli.sendExpect("show configuration system login class "+class+" | display set",
+					junosPer, junosOpPrompt)
+			}
+			_, _ = junosConfigure(cli, "delete system login class "+class)
+			return nil
+		})
+		verdict := "accepted"
+		if cerr != nil {
+			verdict = "rejected: " + oneLine(cerr.Error()+" "+out)
+			t.Errorf("the commit checker rejected %s %q: %v", c[0], c[1], cerr)
+		}
+		var kept string
+		for _, line := range strings.Split(back, "\n") {
+			if strings.Contains(line, " "+c[0]+" ") {
+				kept = strings.TrimSpace(line)
+			}
+		}
+		fmt.Fprintf(&b, "| `%s` | `%s` | %s | `%s` |\n", c[0], strings.ReplaceAll(c[1], "|", "\\|"), verdict,
+			strings.ReplaceAll(kept, "|", "\\|"))
+	}
+	return b.String()
 }
