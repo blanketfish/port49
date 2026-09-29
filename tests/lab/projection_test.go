@@ -117,9 +117,13 @@ var projectionShapes = []struct {
 		`"help **", "set **", "start **", "op **", "save **", "load **", "scp **", "ssh **", "telnet **", ` +
 		`"mtrace **", "quit **", "exit **", "junoscript **", "xml-mode **"], deny: ["restart **"]}`,
 		projection.ShapeCapability},
+	// Two keyword denies alternated in one regex, the form every deny list of
+	// more than one command renders to (Task 19 re-review).
+	{"operator, a capability with two keyword denies", `  - {name: r, privilege: operator, permit: ["**"], ` +
+		`deny: ["restart **", "configure **"]}`, projection.ShapeCapability},
 	// Under 1.1.0's keyword tree nothing under `request` is proven, so this
-	// deny fails closed (re-pre-flight R-M2), and no shape in this list
-	// exercises a capability shape carrying a deny on the device.
+	// deny fails closed (re-pre-flight R-M2); the operator shapes below carry
+	// the capability shape with a deny on the device.
 	{"admin with a deny", `  - {name: r, privilege: admin, permit: ["**"], deny: ["request system reboot **"]}`, projection.ShapeFailClosed},
 	// An admin keeping a keyword deny under `show` (re-pre-flight minor):
 	// with the bits that enter configuration mode dropped, the reply carries
@@ -468,7 +472,9 @@ func (l *lab) projectionCommitCheck(t *testing.T, rendered []string) string {
 				back, _ = cli.sendExpect("show configuration system login class "+class+" | display set",
 					junosPer, junosOpPrompt)
 			}
-			_, _ = junosConfigure(cli, "delete system login class "+class)
+			if _, derr := junosConfigure(cli, "delete system login class "+class); derr != nil {
+				t.Errorf("could not delete the scratch class %s: %v", class, derr)
+			}
 			return nil
 		})
 		verdict := "accepted"
@@ -481,6 +487,10 @@ func (l *lab) projectionCommitCheck(t *testing.T, rendered []string) string {
 			if strings.Contains(line, " "+c[0]+" ") {
 				kept = strings.TrimSpace(line)
 			}
+		}
+		if cerr == nil && kept != "set system login class "+class+" "+c[0]+" \""+c[1]+"\"" {
+			verdict += ", read back changed"
+			t.Errorf("%s %q read back as %q", c[0], c[1], kept)
 		}
 		fmt.Fprintf(&b, "| `%s` | `%s` | %s | `%s` |\n", c[0], strings.ReplaceAll(c[1], "|", "\\|"), verdict,
 			strings.ReplaceAll(kept, "|", "\\|"))
