@@ -441,6 +441,16 @@ func projectionRestore(reference []string) []string {
 	return out
 }
 
+// projectionCommitForms are wire regexes set 1.1.0 renders only under a
+// policy's own platforms: block, where a privilege's ceiling drops `view` and
+// a multi-word deny reaches the wire: the ` +` between its words, alone and
+// alternated (Task 19 re-review 2). The commit check commits them beside the
+// shapes' own.
+var projectionCommitForms = []string{
+	`deny-commands=^ *show +version *(\|.*)?$`,
+	`deny-commands=^( *restart( .*)? *(\|.*)?| *show +version *(\|.*)?)$`,
+}
+
 // projectionCommitCheck commits each deny-commands and allow-commands regex
 // the shapes rendered as a login class's own, over the break-glass CLI, reads
 // it back and deletes the class: spec §15 L9's "whether the commit checker
@@ -449,7 +459,7 @@ func projectionRestore(reference []string) []string {
 func (l *lab) projectionCommitCheck(t *testing.T, rendered []string) string {
 	seen := map[string]bool{}
 	var checks [][2]string
-	for _, a := range rendered {
+	for _, a := range append(rendered, projectionCommitForms...) {
 		name, value, ok := strings.Cut(a, "=")
 		if !ok || (name != "deny-commands" && name != "allow-commands") || seen[a] {
 			continue
