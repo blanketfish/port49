@@ -4,7 +4,7 @@
 - **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
 - **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
 - **Topology:** `tests/lab/topologies/vsrx.clab.yml`
-- **Capture:** `tests/lab/evidence/projection-juniper_vsrx.pcap` — 7796 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/projection-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/projection-juniper_vsrx.pcap` — 8246 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/projection-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -73,7 +73,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:57196->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:56404->172.100.100.22:830: read: connection reset by peer`
 
 ### readonly, a deny aligned with a bit
 
@@ -122,7 +122,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:48672->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:58212->172.100.100.22:830: read: connection reset by peer`
 
 ### a permit beneath a deny
 
@@ -171,7 +171,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:49388->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:50064->172.100.100.22:830: read: connection reset by peer`
 
 ### an exact deny
 
@@ -220,7 +220,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:37454->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:40568->172.100.100.22:830: read: connection reset by peer`
 
 ### narrow
 
@@ -266,7 +266,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:47304->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:35764->172.100.100.22:830: read: connection reset by peer`
 
 ### a class term
 
@@ -315,7 +315,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:45814->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:54996->172.100.100.22:830: read: connection reset by peer`
 
 ### a permit beyond the bits
 
@@ -365,7 +365,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:41104->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:34992->172.100.100.22:830: read: connection reset by peer`
 
 ### operator
 
@@ -417,7 +417,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:51550->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:41702->172.100.100.22:830: read: connection reset by peer`
 
 ### admin
 
@@ -509,7 +509,7 @@ slice01@srx1>
 | `configure` | `configure` | permit | runs | runs | yes |
 | `edit` | `edit` | permit | runs | runs | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:35372->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:37138->172.100.100.22:830: read: connection reset by peer`
 
 ### operator, all it reaches
 
@@ -562,7 +562,7 @@ slice01@srx1>
 | `configure` | `configure` | permit | refuses | refuses | no |
 | `edit` | `edit` | permit | refuses | refuses | no |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:41822->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:58140->172.100.100.22:830: read: connection reset by peer`
 
 ### operator, a capability with a keyword deny
 
@@ -615,7 +615,7 @@ slice01@srx1>
 | `configure` | `configure` | permit | refuses | refuses | no |
 | `edit` | `edit` | permit | refuses | refuses | no |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:38348->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:51066->172.100.100.22:830: read: connection reset by peer`
 
 ### operator, a capability with a keyword deny and allows
 
@@ -667,7 +667,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:40860->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:45986->172.100.100.22:830: read: connection reset by peer`
 
 ### operator, a capability with two keyword denies
 
@@ -720,7 +720,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | permit | refuses | refuses | no |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:47290->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:43752->172.100.100.22:830: read: connection reset by peer`
 
 ### admin with a deny
 
@@ -769,7 +769,7 @@ slice01@srx1>
 | `configure` | `configure` | permit | refuses | refuses | no |
 | `edit` | `edit` | permit | refuses | refuses | no |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:55956->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:57078->172.100.100.22:830: read: connection reset by peer`
 
 ### admin keeping a keyword deny
 
@@ -818,7 +818,7 @@ slice01@srx1>
 | `configure` | `configure` | permit | refuses | refuses | no |
 | `edit` | `edit` | permit | refuses | refuses | no |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:34640->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:42462->172.100.100.22:830: read: connection reset by peer`
 
 ### the refused shape
 
@@ -864,7 +864,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:46858->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:44614->172.100.100.22:830: read: connection reset by peer`
 
 ### a deny naming an argument
 
@@ -913,7 +913,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:54002->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:45736->172.100.100.22:830: read: connection reset by peer`
 
 ### an allow naming an argument
 
@@ -959,7 +959,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:37772->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:53938->172.100.100.22:830: read: connection reset by peer`
 
 ### a deny naming an enumerated value
 
@@ -1008,7 +1008,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:49014->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:34170->172.100.100.22:830: read: connection reset by peer`
 
 ### a deny of a value under a command with no RPC
 
@@ -1058,7 +1058,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:58598->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:41086->172.100.100.22:830: read: connection reset by peer`
 
 ### a deny of a value under an incomplete command
 
@@ -1108,7 +1108,7 @@ slice01@srx1>
 | `configure` | `configure` | deny | refuses | refuses | yes |
 | `edit` | `edit` | deny | refuses | refuses | yes |
 
-NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:40464->172.100.100.22:830: read: connection reset by peer`
+NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: handshake failed: read tcp 172.100.100.1:53240->172.100.100.22:830: read: connection reset by peer`
 
 ### the commit checker (L9)
 
@@ -1122,4 +1122,6 @@ NETCONF is disabled, as set 1.1.0 requires: `SSH to the NETCONF port 830: ssh: h
 | `allow-commands` | `^(mtrace( .*)?\|ping( .*)?\|ssh( .*)?\|telnet( .*)?\|traceroute( .*)?)$` | accepted | `set system login class p49-l9-commit allow-commands "^(mtrace( .*)?\|ping( .*)?\|ssh( .*)?\|telnet( .*)?\|traceroute( .*)?)$"` |
 | `deny-commands` | `^( *configure( .*)? *(\\|.*)?\| *restart( .*)? *(\\|.*)?)$` | accepted | `set system login class p49-l9-commit deny-commands "^( *configure( .*)? *(\\|.*)?\| *restart( .*)? *(\\|.*)?)$"` |
 | `allow-commands` | `^show version$` | accepted | `set system login class p49-l9-commit allow-commands "^show version$"` |
+| `deny-commands` | `^ *show +version *(\\|.*)?$` | accepted | `set system login class p49-l9-commit deny-commands "^ *show +version *(\\|.*)?$"` |
+| `deny-commands` | `^( *restart( .*)? *(\\|.*)?\| *show +version *(\\|.*)?)$` | accepted | `set system login class p49-l9-commit deny-commands "^( *restart( .*)? *(\\|.*)?\| *show +version *(\\|.*)?)$"` |
 
