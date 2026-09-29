@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/projection"
 )
 
 // ErrNoGrants is no_grants_matched: no subject lists the principal, or no
@@ -41,10 +43,17 @@ type Resolution struct {
 	// Incomparable names scopes that selected the device only because a
 	// version could not be compared (spec §5.5).
 	Incomparable []string
+	// LeftOff are the attributes under `all` the reply does not carry on a
+	// projected platform, each with its source (leftOff): policy test notes
+	// them, so an idle limit written once is never silently dropped.
+	LeftOff []AttributeSource
 	// Blob is the compiled decision; Attributes says where each of its
 	// attributes came from and what it shadowed (spec §6).
 	Blob       engine.Blob
 	Attributes []AttributeSource
+	// Projection is the session reply's projection of the rules on a
+	// projected platform (spec §8), and what it reports: nil elsewhere.
+	Projection *projection.Result
 }
 
 // AttributeSource is one attribute of the session reply and its provenance:
@@ -116,6 +125,7 @@ func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Reso
 		res.Grants = append(res.Grants, pg)
 	}
 	dialect := p.dialect(d.Platform)
+	res.LeftOff = p.leftOffAttributes(c, dialect)
 	if c.ceiling != "" {
 		n, ok := p.privLvl(dialect, c.ceiling)
 		if !ok {
@@ -131,7 +141,7 @@ func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Reso
 		res.MaxPrivilege, res.HasCeiling = n, true
 	}
 	var err error
-	res.Blob, res.Attributes, err = p.compile(c, d, dialect)
+	res.Blob, res.Attributes, res.Projection, err = p.compile(c, d, dialect)
 	return res, err
 }
 
@@ -139,7 +149,8 @@ func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Reso
 // every role's rules, each carrying its role; the pipe allowlist of every
 // role that permits anything; the patterns behind every class a rule names,
 // as this platform defines them; and the session attributes, layered.
-func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dialect) (engine.Blob, []AttributeSource, error) {
+func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dialect) (engine.Blob, []AttributeSource,
+	*projection.Result, error) {
 	b := engine.Blob{Version: engine.Version, Bundle: p.Bundle, Platform: d.Platform, Privilege: c.level,
 		Normalize: p.normalizeFor(d.Platform), Classes: map[string][]string{}}
 	pipe := map[string]bool{}
@@ -173,7 +184,7 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
 					// A class the platform does not define would silently never
 					// match — a deny that does nothing — so it is an error, and
 					// at load, not at a mint (spec §4, §8).
-					return engine.Blob{}, nil, fmt.Errorf("role %q names @%s, which %s does not define", name,
+					return engine.Blob{}, nil, nil, fmt.Errorf("role %q names @%s, which %s does not define", name,
 						t.Text, platformName(d.Platform))
 				}
 				b.Classes[t.Text] = patterns
@@ -194,9 +205,18 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
 		return strings.Compare(x.Verdict+"\x00"+x.Rule+"\x00"+x.Role, y.Verdict+"\x00"+y.Rule+"\x00"+y.Role)
 	})
 	b.Rules = slices.Compact(b.Rules)
-	attrs, err := p.layerAttributes(c, d.Platform, dialect)
+	var proj *projection.Result
+	if dialect.Projected() {
+		r, err := p.project(c, b, dialect)
+		if err != nil {
+			return engine.Blob{}, nil, nil, err
+		}
+		proj = &r
+		b.FailClosed = r.FailClosed
+	}
+	attrs, err := p.layerAttributes(c, d.Platform, dialect, proj)
 	if err != nil {
-		return engine.Blob{}, nil, err
+		return engine.Blob{}, nil, nil, err
 	}
 	for _, a := range attrs {
 		b.Attributes = append(b.Attributes, a.Attribute)
@@ -208,7 +228,75 @@ func (p *Policy) compile(c composition, d admission.Device, dialect platform.Dia
 		slices.Sort(b.AcceptedAttributes)
 		b.AcceptedAttributes = slices.Compact(b.AcceptedAttributes)
 	}
-	return b, attrs, nil
+	return b, attrs, proj, nil
+}
+
+// project renders the composition's rules into a projected platform's
+// session reply (spec §8; §13 decisions 22 and 26): the level's ceiling bits
+// and template, its parent chain followed as a rendering's is, and the blob's
+// rules and classes. A composition the projection cannot carry faithfully
+// gets the fail-closed reply, for that subject only; `policy test` and
+// `policy diff` fail on it (projectionRefusals). It is never a quarantine:
+// every other subject on the device keeps working.
+//
+// Compositions repeat across devices, so each is projected once per policy
+// (plan 5b pre-flight I12): the result depends only on the platform, whose
+// adapter, normalization and redactions this policy fixes, the level, and the
+// blob's rules and classes. Each call returns its own copy.
+func (p *Policy) project(c composition, b engine.Blob, dialect platform.Dialect) (projection.Result, error) {
+	key, err := json.Marshal([]any{b.Platform, c.level, b.Rules, b.Classes})
+	if err != nil {
+		return projection.Result{}, err
+	}
+	if r, ok := p.projected.Load(string(key)); ok {
+		return r.(projection.Result).Clone(), nil
+	}
+	r, err := p.projectOnce(c, b, dialect)
+	if err != nil {
+		return projection.Result{}, err
+	}
+	// The memo's value is never handed out, only a clone of it: a caller
+	// that sorts or filters its Resolution's projection would otherwise
+	// rewrite every other device's. A concurrent miss keeps the first.
+	stored, _ := p.projected.LoadOrStore(string(key), r)
+	return stored.(projection.Result).Clone(), nil
+}
+
+func (p *Policy) projectOnce(c composition, b engine.Blob, dialect platform.Dialect) (projection.Result, error) {
+	in := projection.Input{Platform: b.Platform, Dialect: dialect, Rules: b.Rules, Classes: b.Classes,
+		Normalize: b.Normalize, Facts: projection.FactsFor(dialect.CommandProjection),
+		Keywords: setKeywords(p.set, b.Platform)}
+	// The reply is logged whole, in the authorize_session record and the
+	// blob event, so a rule redaction would hide is never sent (spec §5.8).
+	patterns := append(platform.Redactions(b.Platform), dialect.Redact...)
+	in.Secret = func(rule string) bool {
+		_, hidden := platform.RedactRule(patterns, strings.Fields(rule))
+		return hidden
+	}
+	// What a refusal or a why quotes of a rule prints each value any rule
+	// hides redacted (spec §5.8; task 12b review I1).
+	in.Hidden = p.HiddenValues()
+	if c.level != "" {
+		level, ok := "", false
+		for l := c.level; l != "" && !ok; l = p.parents[l] {
+			if in.Bits, ok = dialect.LevelBits(l); ok {
+				level = l
+			}
+		}
+		if !ok {
+			// The level cannot be written in the device's bits: that
+			// subject's ceiling there is none, and it alone gets the
+			// fail-closed reply (spec §8, "Generator constraints" 5;
+			// decision 26). A quarantine would take every subject on the
+			// device dark for one composition.
+			return projection.FailClosed(in, projection.FailUnwritable, fmt.Sprintf("on %s, level %s maps to "+
+				"no permission bits and has no parent that does, so its ceiling cannot be written as the "+
+				"device's bits: map it under privilege, or give it a parent that is mapped (spec §6, §8)",
+				b.Platform, c.level))
+		}
+		in.Level, in.Template = level, dialect.LocalUserNames[level]
+	}
+	return projection.Project(in)
 }
 
 func platformName(name string) string {
@@ -222,7 +310,8 @@ func platformName(name string) string {
 // specific winning on a duplicate attribute name and every override recorded.
 // Within one layer, sources are taken in name order — roles by name, grants by
 // scope — so which one wins cannot depend on a file's layout.
-func (p *Policy) layerAttributes(c composition, platformName string, dialect platform.Dialect) ([]AttributeSource, error) {
+func (p *Policy) layerAttributes(c composition, platformName string, dialect platform.Dialect,
+	proj *projection.Result) ([]AttributeSource, error) {
 	var out []AttributeSource
 	index := map[string]int{}
 	put := func(a, source string) {
@@ -236,7 +325,13 @@ func (p *Policy) layerAttributes(c composition, platformName string, dialect pla
 		index[name] = len(out)
 		out = append(out, AttributeSource{Attribute: a, Source: source})
 	}
-	if c.level != "" {
+	if proj != nil {
+		// A projected platform's level is its bits, which the projection
+		// sends with the regexes: the platform layer (spec §6, §8).
+		for _, a := range proj.Attributes {
+			put(a, "platform "+platformName+", projection ("+proj.Shape+")")
+		}
+	} else if c.level != "" {
 		attrs, rendered, ok := p.render(dialect, c.level)
 		if !ok {
 			return nil, fmt.Errorf("level %s has no rendering on %s and no parent that has one (spec §6)",
@@ -248,16 +343,56 @@ func (p *Policy) layerAttributes(c composition, platformName string, dialect pla
 	}
 	for _, name := range c.roles {
 		attrs := p.roles[name].Attributes
-		for _, a := range slices.Concat(attrs["all"], attrs[platformName]) {
+		for _, a := range slices.Concat(sentUnderAll(dialect, attrs["all"]), attrs[platformName]) {
 			put(a, "role "+name)
 		}
 	}
 	for _, g := range c.grants {
-		for _, a := range slices.Concat(g.Attributes["all"], g.Attributes[platformName]) {
+		for _, a := range slices.Concat(sentUnderAll(dialect, g.Attributes["all"]), g.Attributes[platformName]) {
 			put(a, "grant "+g.Scope+" ["+strings.Join(g.Roles, " ")+"]")
 		}
 	}
 	return out, nil
+}
+
+// classIdle are the attribute names that, under `all`, a projected platform
+// is not sent: its device's idle limit is its login class's (spec §8,
+// "Generator constraints" 7; decision 21). Under the platform's own key they
+// are refused unless listed inert (checkInertOnProjected).
+var classIdle = []string{"idletime", "timeout"}
+
+// leftOff reports whether an attribute under `all` is left off this platform.
+func leftOff(dialect platform.Dialect, a string) bool {
+	return dialect.Projected() && slices.Contains(classIdle, engine.AttributeName(a))
+}
+
+// sentUnderAll is the `all` attributes this platform is sent: every one but
+// those leftOff.
+func sentUnderAll(dialect platform.Dialect, all []string) []string {
+	return slices.DeleteFunc(slices.Clone(all), func(a string) bool { return leftOff(dialect, a) })
+}
+
+// leftOffAttributes is every `all` attribute of the composition's roles and
+// grants that layerAttributes leaves off this platform, sourced as it would
+// have been.
+func (p *Policy) leftOffAttributes(c composition, dialect platform.Dialect) []AttributeSource {
+	var out []AttributeSource
+	for _, name := range c.roles {
+		for _, a := range p.roles[name].Attributes["all"] {
+			if leftOff(dialect, a) {
+				out = append(out, AttributeSource{Attribute: a, Source: "role " + name})
+			}
+		}
+	}
+	for _, g := range c.grants {
+		for _, a := range g.Attributes["all"] {
+			if leftOff(dialect, a) {
+				out = append(out, AttributeSource{Attribute: a, Source: "grant " + g.Scope + " [" +
+					strings.Join(g.Roles, " ") + "]"})
+			}
+		}
+	}
+	return out
 }
 
 // render follows a level's parent chain to the first level the platform maps
@@ -395,18 +530,7 @@ func (p *Policy) checkDevices() {
 // every later instant one of its grants expires, as the spans each failure
 // holds over; none is none failed.
 func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []QuarantineEntry {
-	lapsing := map[time.Time][]string{}
-	instants := []time.Time{now}
-	for _, g := range p.grants {
-		if g.Subject != sub.Name || !g.Expires.After(now) {
-			continue
-		}
-		if _, ok := lapsing[g.Expires]; !ok {
-			instants = append(instants, g.Expires)
-		}
-		lapsing[g.Expires] = append(lapsing[g.Expires], "grant "+g.Scope+" ["+strings.Join(g.Roles, " ")+"]")
-	}
-	sort.Slice(instants[1:], func(i, j int) bool { return instants[1+i].Before(instants[1+j]) })
+	instants, lapsing := p.subjectInstants(sub, now)
 	var out []QuarantineEntry
 	open := false // whether the last entry is still failing
 	for _, at := range instants {
@@ -422,7 +546,7 @@ func (p *Policy) checkDevice(sub *Subject, d admission.Device, now time.Time) []
 		}
 		open = cause != ""
 		if open {
-			out = append(out, QuarantineEntry{From: at, Lapsing: strings.Join(lapsing[at], " and "), Cause: cause})
+			out = append(out, QuarantineEntry{From: at, Lapsing: lapsing[at], Cause: cause})
 		}
 	}
 	return out
@@ -461,6 +585,12 @@ func (p *Policy) exceeds(dialect platform.Dialect, bound, level string, reply []
 	held, sent := attributesByName(ceiling), attributesByName(reply)
 	for i, a := range reply {
 		name := engine.AttributeName(a)
+		// A projection's own attributes are held to the level's ceiling bits
+		// by the projection itself, which renders them from the level and
+		// never past it (spec §8). No role or grant sets one (checkProjected).
+		if dialect.ProjectionOwns(name) {
+			continue
+		}
 		if !strings.EqualFold(name, "priv-lvl") && raisesCeiling(name, dialect) &&
 			rose(held[name], sent[name], ceiling, rendered, dialect, dialect) {
 			return i, true

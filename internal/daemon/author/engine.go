@@ -149,7 +149,7 @@ func (e *Engine) Session(ctx context.Context, r Request) Decision {
 			return Decision{Reason: decision.BlobUnavailable, ServerMsg: blobUnavailableMsg, Policy: pol}
 		}
 	}
-	return Decision{Permit: true, Reason: decision.ContextMatched, Attributes: attrs, Policy: pol}
+	return Decision{Permit: true, Reason: p.Blob.SessionReason(), Attributes: attrs, Policy: pol}
 }
 
 // Command decides one command vector against the blob (spec §5.3).

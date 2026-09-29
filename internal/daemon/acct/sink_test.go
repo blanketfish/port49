@@ -238,8 +238,10 @@ func TestAnUnencodableRecordIsSetAside(t *testing.T) {
 	if ok, n := sp.drainOnce(); !ok || n != 3 {
 		t.Fatalf("ok=%v forwarded=%d", ok, n)
 	}
-	if len(sink.got) != 2 || sink.got[0] != "a" || sink.got[1] != "c" {
-		t.Fatalf("delivered %q, want a c", sink.got)
+	// The third is the account_gap record naming the one set aside, which
+	// carries no task_id (TestADropIsAGapInTheLog).
+	if len(sink.got) != 3 || sink.got[0] != "a" || sink.got[1] != "c" || sink.got[2] != "" {
+		t.Fatalf("delivered %q, want a c and the gap", sink.got)
 	}
 	aside, err := os.ReadFile(path + ".unencodable")
 	if err != nil || strings.Count(string(aside), "\n") != 1 || !strings.Contains(string(aside), `"task_id":"b"`) {

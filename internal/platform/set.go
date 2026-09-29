@@ -13,7 +13,7 @@ import (
 
 // DefaultSet is the newest set this build ships: what `port49 platform`
 // shows and exports unless asked for another.
-const DefaultSet = "1.0.0"
+const DefaultSet = "1.1.0"
 
 // UnpinnedSet is the set a policy that pins none renders with, and it never
 // moves: 1.0.0 is the first set, so a policy written before pinning existed

@@ -22,3 +22,10 @@ var FS embed.FS
 //
 //go:embed redact.yaml
 var Redact []byte
+
+// Keywords is every set's CLI keyword trees: `keywords/<version>/<platform>.yaml`
+// (internal/platform.KeywordsFor). They sit outside the set directories, which
+// hold one adapter file per platform and nothing else.
+//
+//go:embed keywords
+var Keywords embed.FS

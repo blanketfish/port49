@@ -53,6 +53,7 @@ type Result struct {
 var replayable = map[decision.Reason]bool{
 	decision.PermitDominates: true, decision.NoRuleMatched: true, decision.NoPermitDominatesDeny: true,
 	decision.PipeStageDenied: true, decision.ContextMatched: true, decision.BlobPlatformMismatch: true,
+	decision.ProjectionFailClosed: true,
 }
 
 // Replay reads a decision log and replays every authorization record that
@@ -268,6 +269,7 @@ func one(rec decision.Record, p *program) (Status, string) {
 		if attrs, err = b.SessionAttributes(v); err != nil {
 			return Diverge, "the blob's session attributes do not fit this record's values: " + err.Error()
 		}
+		reason = b.SessionReason()
 		session = true
 	case rec.Event == decision.EventAuthorizeCommand:
 		if rec.Request == nil {

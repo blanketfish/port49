@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -219,5 +220,52 @@ func TestExposuresNameASplitDenyOnce(t *testing.T) {
 	after := compileBlob(t, b)
 	if got := Exposures(before, after); len(got) != 1 || got[0].Deny.Rule != "interface /^Gig.*/ **" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// ProbeSources names the rule word each probe argument was made from: split
+// into a name and an index, cut to an abbreviation, or padded, so a report
+// can print one made from a secret as redacted.
+func TestProbeSourcesNameTheWordEachArgumentWasMadeFrom(t *testing.T) {
+	b := testBlob(false, "any:permit **", "nd:deny snmp-server community Kilo7 **")
+	b.Normalize.SplitsInterfaceNames = true
+	src := ProbeSources(compileBlob(t, b))
+	for arg, want := range map[string]string{"Kilo": "Kilo7", "7": "Kilo7", "Kil": "Kilo7", " Kilo7": "Kilo7",
+		"community": "community"} {
+		if !slices.Contains(src[arg], want) {
+			t.Errorf("%q: %q", arg, src[arg])
+		}
+	}
+	// Every argument Probes tries that a rule's word made is named.
+	for _, v := range Probes(compileBlob(t, b)) {
+		for _, a := range v {
+			if a != OtherArgument && strings.Contains(strings.ToLower(a), "kil") && len(src[a]) == 0 {
+				t.Errorf("%q has no source", a)
+			}
+		}
+	}
+}
+
+// Every argument Probes and PipeProbes try but OtherArgument has a source,
+// whatever term kind made it: a class or regex witness, whole or split, is
+// recorded against the term as its rule writes it (task 11 re-review 3, R6).
+func TestEveryProbeArgumentHasASource(t *testing.T) {
+	b := testBlob(false, "any:permit **", "nd:deny snmp-server community @backup_targets **",
+		"nr:deny snmp-server community /^Mango5[5-6]$/ **", "ni:deny interface @physical", "na:deny default * now")
+	b.Classes["backup_targets"] = []string{`^Mango55$`}
+	b.Normalize.SplitsInterfaceNames = true
+	p := compileBlob(t, b)
+	src := ProbeSources(p)
+	for _, v := range slices.Concat(Probes(p), PipeProbes(p)) {
+		for _, a := range v {
+			if a != OtherArgument && len(src[a]) == 0 {
+				t.Errorf("%q in %q has no source", a, v)
+			}
+		}
+	}
+	for arg, want := range map[string]string{"MANGO55": "@backup_targets", "MANGO": "/^Mango5[5-6]$/", "|": "|"} {
+		if !slices.Contains(src[arg], want) {
+			t.Errorf("%q: %q", arg, src[arg])
+		}
 	}
 }

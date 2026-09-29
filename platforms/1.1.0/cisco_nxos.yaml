@@ -1,0 +1,106 @@
+# cisco_nxos — Nexus 9300v 10.4(2)F in the port49 lab.
+# Every value is measured and cited, or marked unmeasured and chosen in the
+# direction that fails closed (spec §8, §15).
+platforms:
+  cisco_nxos:
+    # Every reply this adapter renders was applied by the lab image as the
+    # adapter says, at readonly, operator and admin
+    # (tests/lab/results/L22-cisco_nxos.md; spec §15, L22).
+    verified: containerlab
+    # Session and per-command authorization (L1, L10). Config-command
+    # authorization is unmeasured, so it is not claimed.
+    supports: [session, commands]
+    # The role alone, never priv-lvl: `shell:roles` decides the role in both
+    # directions and a priv-lvl beside it is inert, the role alone suffices,
+    # and priv-lvl with no role picks one by a per-release table
+    # (tests/lab/results/L16-cisco_nxos.md, 2026-09-22). The flag changes
+    # nothing on this image (L16, L18), so the attribute is optional, the
+    # spelling a device that does not read it must ignore (spec §6).
+    #
+    # While command authorization points at port49 no role narrows anything:
+    # network-operator ran `clear counters`, `clear ip bgp *` and a
+    # configuration change (ceiling-cisco_nxos.md), so port49's rules are the
+    # fence for every level (decision 23). When the device falls back to
+    # local, the role binds: network-operator is refused a configuration
+    # command, network-admin is not (L16-cisco_nxos.md, command authorization
+    # LOCAL). So operator gets readonly's role (decision 25).
+    privilege:
+      readonly: ["shell:roles*network-operator"]
+      operator: ["shell:roles*network-operator"]
+      admin: ["shell:roles*network-admin"]
+    # network-operator fences more than network-admin: under local command
+    # authorization it was refused a configuration command and network-admin
+    # was not (L16-cisco_nxos.md, command authorization LOCAL). vdc-operator
+    # was delivered only while port49 answered, where no role narrows
+    # anything (ceiling-cisco_nxos.md), so it is unranked, with every other
+    # value, and ranks above both.
+    role_order:
+      shell:roles: [network-operator, network-admin]
+    # What the renderings above depend on, as the lab device carries it
+    # (tests/lab/configs/nxos-startup.cfg). The group name is the lab's.
+    device_config:
+      # Required: the lab device carries no exec authorization list, and
+      # asks for the session reply, and with it the role, at a login through
+      # this one: L16-cisco_nxos.md measured the role delivered under that
+      # configuration.
+      - aaa authentication login default group port49 local
+      # Required, and they must end in local, where the delivered role binds
+      # (L16-cisco_nxos.md, command authorization LOCAL; spec §6,
+      # decision 23).
+      - aaa authorization commands default group port49 local
+      - aaa authorization config-commands default group port49 local
+    # No role refuses a command while port49 answers (ceiling-cisco_nxos.md),
+    # so nothing is unreachable. Under local authorization network-admin
+    # changed configuration (L16-cisco_nxos.md, command authorization LOCAL).
+    # With port49d down under an open session, network-operator was refused
+    # `clear counters`, `clear ip bgp *` and the configuration change, `%
+    # Permission denied for the role`, and network-admin ran all three
+    # (tests/lab/results/L22-cisco_nxos.md, L22-carried-cisco_nxos.md).
+    # A fallback entry names more than the policy grants, and the lab
+    # measured none of that for network-operator, so readonly and operator
+    # (the same reply) list none.
+    fallback:
+      admin: "network-admin, of the commands measured: clear counters and clear ip bgp * ran, configuration changed"
+    # `port49 devices check-config` (spec §5.6). NX-OS 10.x has no enable
+    # exchange (L3-nxos-cisco_nxos.md).
+    local_accounts: ['^username\s+(\S+)']
+    # This check alone does not catch the case it names: NX-OS 10.4(2) takes
+    # a typed `... group port49 none` and keeps `... group port49`, with no
+    # `none` in the running-config (tests/lab/results/L4-error-cisco_nxos.md,
+    # "(b)"). What catches that device is device_config's `... group port49
+    # local` line, reported MISSING. The check stays for a release that keeps
+    # the word.
+    config_checks:
+      - match: '^aaa authorization (config-)?commands default .*\b(none|if-authenticated)\s*$'
+        says: "the command method list falls back to none or if-authenticated: an operator session runs every command when port49 cannot answer; end it in local (spec §6, decision 23)"
+    # No priv-lvl is rendered, so the token's ceiling takes its number here:
+    # operator numbers 15, admin's, on the owner's ruling of 2026-09-24
+    # (spec §6, decision 23).
+    ceiling_levels: {readonly: 1, operator: 15, admin: 15}
+    # mgmt0 is the interface the lab reaches the device on
+    # (tests/lab/configs/nxos-startup.cfg).
+    entity_classes:
+      management: ['^mgmt[0-9]+$']
+    # `sh ver` arrived as `show version` over SSH (L21-cisco_nxos.md); NX-API
+    # and NETCONF are unmeasured.
+    expands_abbreviations: true
+    # `int e1/1` arrived as one argument, `Ethernet1/1` (L21-cisco_nxos.md).
+    splits_interface_names: false
+    # A typed `show clock | include ...` reached port49 as `show clock` alone
+    # (L2-cisco_nxos.md, "Truncation length"). Whether any other modifier reaches
+    # port49 is unmeasured.
+    pipe_token: "|"
+    pipe_authorized: false
+    # Every command authorization ends `cmd-arg=<cr>` (L10-cisco_nxos.md).
+    strip_cr: true
+    # NX-OS printed its own error and never port49's server_msg
+    # (L2-cisco_nxos.md).
+    shows_server_msg: false
+    # `priv-lvl` picks a role by a per-release table, and `shell:roles`, bare
+    # or inside `cisco-av-pair`, names one (L16-cisco_nxos.md).
+    privilege_attributes: [priv-lvl, shell:roles, cisco-av-pair]
+    # home-directory: spec §6's case. home-directory, idletime and timeout:
+    # admin's session unchanged beside its reply, the same role, both
+    # ceiling commands sent to port49 and `show version` permitted
+    # (tests/lab/results/L22-cisco_nxos.md, "Inert candidates").
+    inert_attributes: [home-directory, idletime, timeout]

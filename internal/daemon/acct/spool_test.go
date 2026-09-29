@@ -3,11 +3,14 @@ package acct
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -433,10 +436,13 @@ func TestOversizedLineIsDroppedNotFatal(t *testing.T) {
 		sp.drainOnce()
 	}
 
-	want := []string{`"task_id":"1"`, `"task_id":"2"`, `"task_id":"4"`, `"task_id":"5"`}
+	// The drop is written as an account_gap record after the pass
+	// (TestADropIsAGapInTheLog).
+	want := []string{`"task_id":"1"`, `"task_id":"2"`, `"task_id":"4"`, `"task_id":"5"`, `"event":"account_gap"`}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if len(lines) != len(want) {
-		t.Fatalf("want %d records (1,2,4,5; 3 dropped as oversized), got %d: %q", len(want), len(lines), out.String())
+		t.Fatalf("want %d records (1,2,4,5; 3 dropped as oversized, and its gap), got %d: %q", len(want), len(lines),
+			out.String())
 	}
 	for _, w := range want {
 		if n := strings.Count(out.String(), w); n != 1 {
@@ -821,5 +827,445 @@ func TestTheDrainRedactsARecordSpooledBeforeTheUpgrade(t *testing.T) {
 	if strings.Contains(out.String(), "Hunter2") || strings.Contains(out.String(), "s3cret") ||
 		strings.Count(out.String(), `"redacted":true`) != 2 {
 		t.Fatalf("%s", out.String())
+	}
+}
+
+// A record the spool drops is written to the log as an account_gap record,
+// by stage: one the drain drops when the pass ends, after the records it sat
+// among, and once. Reconciliation reads the log, and must know it has a hole
+// before it says a device did not ask (spec §9).
+func TestADropIsAGapInTheLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	good, err := (decision.Record{Event: decision.EventAccount, TaskID: "after"}).MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".draining", append([]byte("{not json at all}\n"), append(good, '\n')...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	sp, err := NewSpool(4, path, decision.NewJSONLines(out), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.drainOnce()
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"task_id":"after"`) ||
+		!strings.Contains(lines[1], `"event":"account_gap"`) || !strings.Contains(lines[1], `"stage":"drain_unparseable"`) ||
+		!strings.Contains(lines[1], `"records":1`) {
+		t.Fatalf("%q", out.String())
+	}
+	out.Reset()
+	sp.drainOnce()
+	if out.Len() != 0 {
+		t.Fatalf("a gap is reported once: %q", out.String())
+	}
+}
+
+// An account_gap record says only that records were dropped: its stage, how
+// many, and since when. It never carries what was dropped, at any drop point,
+// because what was dropped is device accounting that may hold a command, a
+// token or a password, and a set-aside or unparseable one never reaches the
+// log redacted (spec §5.8, §9).
+func TestAGapRecordCarriesNoRecordContent(t *testing.T) {
+	secret := decision.Record{Event: decision.EventAccount, TaskID: "b",
+		Device: &decision.Device{NAS: "10.20.0.7", Name: "leaf-01", Platform: "arista_eos"},
+		AcctRecord: &decision.AcctRecord{Raw: []string{"cmd=username", "cmd-arg=bob", "cmd-arg=secret", "cmd-arg=Hunter2"},
+			Vector: []string{"username", "bob", "secret", "Hunter2"}}}
+	secretLine, err := secret.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	withDraining := func(t *testing.T, line []byte, sink func(decision.Sink) decision.Sink) (*Spool, *bytes.Buffer) {
+		path := filepath.Join(t.TempDir(), "overflow.jsonl")
+		if err := os.WriteFile(path+".draining", append(append([]byte(nil), line...), '\n'), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out := &bytes.Buffer{}
+		sp, err := NewSpool(4, path, sink(decision.NewJSONLines(out)), metrics.New(prometheus.NewRegistry()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sp, out
+	}
+	plain := func(s decision.Sink) decision.Sink { return s }
+
+	cases := []struct {
+		stage string
+		drop  func(t *testing.T) (*Spool, *bytes.Buffer)
+	}{
+		{dropOfferRefused, func(t *testing.T) (*Spool, *bytes.Buffer) {
+			dir := filepath.Join(t.TempDir(), "spool")
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			out := &bytes.Buffer{}
+			sp, err := NewSpool(4, filepath.Join(dir, "overflow.jsonl"), decision.NewJSONLines(out),
+				metrics.New(prometheus.NewRegistry()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(dir); err != nil {
+				t.Fatal(err)
+			}
+			if err := sp.Offer(secret); err != ErrSpoolFull {
+				t.Fatalf("want ErrSpoolFull, got %v", err)
+			}
+			return sp, out
+		}},
+		{dropDrainUnparseable, func(t *testing.T) (*Spool, *bytes.Buffer) {
+			return withDraining(t, secretLine[:len(secretLine)-1], plain) // torn: no closing brace
+		}},
+		{dropDrainUnparseable, func(t *testing.T) (*Spool, *bytes.Buffer) {
+			oversized := append(append([]byte(nil), secretLine...), bytes.Repeat([]byte("x"), 2*1024*1024)...)
+			return withDraining(t, oversized, plain)
+		}},
+		{dropDrainSetAside, func(t *testing.T) (*Spool, *bytes.Buffer) {
+			return withDraining(t, secretLine, func(s decision.Sink) decision.Sink { return &unencodable{next: s, bad: "b"} })
+		}},
+	}
+	for _, c := range cases {
+		sp, out := c.drop(t)
+		sp.drainOnce()
+		got := out.String()
+		for _, leak := range []string{"Hunter2", "username", "bob", "leaf-01", "10.20.0.7", "task_id", `"record":`} {
+			if strings.Contains(got, leak) {
+				t.Fatalf("%s: the log holds %q: %s", c.stage, leak, got)
+			}
+		}
+		var rec map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &rec); err != nil {
+			t.Fatalf("%s: want one account_gap record, got %q: %v", c.stage, got, err)
+		}
+		var gap map[string]json.RawMessage
+		if err := json.Unmarshal(rec["gap"], &gap); err != nil {
+			t.Fatalf("%s: %s: %v", c.stage, got, err)
+		}
+		if len(rec) != 3 || string(rec["event"]) != `"account_gap"` || rec["ts"] == nil ||
+			len(gap) != 3 || string(gap["stage"]) != `"`+c.stage+`"` || string(gap["records"]) != "1" || gap["since"] == nil {
+			t.Fatalf("%s: want only ts, event and gap{stage, records, since}: %s", c.stage, got)
+		}
+	}
+}
+
+// gateSink holds its first Write until release says what it returns, and
+// passes the rest to next: a log sink that has wedged mid-write.
+type gateSink struct {
+	next    decision.Sink
+	entered chan struct{}
+	release chan error
+	once    sync.Once
+}
+
+func (g *gateSink) Emit(r decision.Record) { _ = g.Write(r) }
+
+func (g *gateSink) Write(r decision.Record) error {
+	gated := false
+	g.once.Do(func() { gated = true })
+	if gated {
+		close(g.entered)
+		return <-g.release
+	}
+	return g.next.Write(r)
+}
+
+// offerWithin runs Offer and fails the test if it has not returned in a
+// second: an accounting reply must never wait on the log sink.
+func offerWithin(t *testing.T, sp *Spool, r decision.Record) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- sp.Offer(r) }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(time.Second):
+		t.Fatal("Offer waited on the log sink")
+		return nil
+	}
+}
+
+// A log sink that wedges while an account_gap record is being written holds
+// up no Offer, one that succeeds or one refused, and the drops it had not
+// written are kept, with those made meanwhile, from the earliest.
+func TestAWedgedGapWriteNeverHoldsUpAnOffer(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	gate := &gateSink{next: decision.NewJSONLines(out), entered: make(chan struct{}), release: make(chan error)}
+	sp, err := NewSpool(4, filepath.Join(dir, "overflow.jsonl"), gate, metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	away := func() {
+		if err := os.Rename(dir, dir+".away"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	back := func() {
+		if err := os.Rename(dir+".away", dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	away()
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount}); err != ErrSpoolFull {
+		t.Fatalf("want ErrSpoolFull, got %v", err)
+	}
+	first := sp.gapSince[dropOfferRefused]
+	back()
+
+	drained := make(chan struct{})
+	go func() { sp.drainOnce(); close(drained) }()
+	<-gate.entered
+	if err := offerWithin(t, sp, decision.Record{Event: decision.EventAccount, TaskID: "during"}); err != nil {
+		t.Fatalf("an Offer the spool can take: %v", err)
+	}
+	away()
+	if err := offerWithin(t, sp, decision.Record{Event: decision.EventAccount}); err != ErrSpoolFull {
+		t.Fatalf("want ErrSpoolFull, got %v", err)
+	}
+	back()
+	gate.release <- errors.New("sink: wedged, then refused")
+	<-drained
+
+	sp.gapMu.Lock()
+	n, since := sp.gaps[dropOfferRefused], sp.gapSince[dropOfferRefused]
+	sp.gapMu.Unlock()
+	if n != 2 || !since.Equal(first) {
+		t.Fatalf("held %d since %v, want 2 since %v", n, since, first)
+	}
+	sp.drainOnce()
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"stage":"offer_refused","records":2`) ||
+		!strings.Contains(lines[1], `"task_id":"during"`) {
+		t.Fatalf("%q", out.String())
+	}
+}
+
+// refuseGaps refuses the first `n` account_gap records and passes the rest.
+type refuseGaps struct {
+	next  decision.Sink
+	n     int
+	tries int
+}
+
+func (r *refuseGaps) Emit(rec decision.Record) { _ = r.Write(rec) }
+
+func (r *refuseGaps) Write(rec decision.Record) error {
+	if rec.Event == decision.EventAccountGap {
+		r.tries++
+		if r.n > 0 {
+			r.n--
+			return errors.New("sink: refused")
+		}
+	}
+	return r.next.Write(rec)
+}
+
+// A gap record the sink refuses is kept, and written once, by the next pass,
+// before that pass's records.
+func TestARefusedGapIsKeptAndWrittenOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	if err := os.WriteFile(path+".draining", []byte("{not json at all}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	sink := &refuseGaps{next: decision.NewJSONLines(out), n: 1}
+	sp, err := NewSpool(4, path, sink, metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.drainOnce()
+	if out.Len() != 0 || !sp.sinkRefused {
+		t.Fatalf("a refused gap: wrote %q, sinkRefused=%v", out.String(), sp.sinkRefused)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "next"}); err != nil {
+		t.Fatal(err)
+	}
+	sp.drainOnce()
+	sp.drainOnce()
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"stage":"drain_unparseable","records":1`) ||
+		!strings.Contains(lines[1], `"task_id":"next"`) || sink.tries != 2 {
+		t.Fatalf("tries=%d: %q", sink.tries, out.String())
+	}
+}
+
+// An offer_refused gap is written before the next pass's records: the device
+// was answered ERROR before they arrived.
+func TestAnOfferRefusedGapPrecedesTheNextPassRecords(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "spool")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	sp, err := NewSpool(4, filepath.Join(dir, "overflow.jsonl"), decision.NewJSONLines(out),
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(dir, dir+".away"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount}); err != ErrSpoolFull {
+		t.Fatalf("want ErrSpoolFull, got %v", err)
+	}
+	if err := os.Rename(dir+".away", dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.Offer(decision.Record{Event: decision.EventAccount, TaskID: "after"}); err != nil {
+		t.Fatal(err)
+	}
+	sp.drainOnce()
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"stage":"offer_refused"`) ||
+		!strings.Contains(lines[1], `"task_id":"after"`) {
+		t.Fatalf("%q", out.String())
+	}
+}
+
+// A pass that stopped at a record the sink refused does not offer the sink
+// a gap record too; the next pass does, after the backoff.
+func TestNoGapIsWrittenToASinkThatJustRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	good, err := (decision.Record{Event: decision.EventAccount, TaskID: "a"}).MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".draining", append([]byte("{not json at all}\n"), append(good, '\n')...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sink := &flakySink{down: true}
+	sp, err := NewSpool(4, path, sink, metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := sp.drainOnce(); ok || sink.tries != 1 {
+		t.Fatalf("ok=%v tries=%d, want the one refused record only", ok, sink.tries)
+	}
+	sink.setDown(false)
+	sp.drainOnce()
+	if len(sink.got) != 2 || sink.got[0] != "" || sink.got[1] != "a" {
+		t.Fatalf("delivered %q, want the gap then a", sink.got)
+	}
+}
+
+// Every stage drop is given is written, a new one included: flushGaps writes
+// what is held, not a list that could drift from drop's callers.
+func TestEveryDropStageIsWritten(t *testing.T) {
+	out := &bytes.Buffer{}
+	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "overflow.jsonl"), decision.NewJSONLines(out),
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stages := []string{dropOfferRefused, dropDrainUnparseable, dropDrainSetAside, "a_stage_not_yet_written"}
+	for _, stage := range stages {
+		sp.drop(stage, time.Time{})
+	}
+	if !sp.flushGaps() {
+		t.Fatal("flush refused")
+	}
+	for _, stage := range stages {
+		if !strings.Contains(out.String(), `"stage":"`+stage+`","records":1`) {
+			t.Fatalf("%s not written: %q", stage, out.String())
+		}
+	}
+}
+
+// A gap's since is when the dropped record arrived, where the spool knows
+// it: a set-aside record's own ts, and for a line it cannot read, the ts of
+// the record before it, which that line arrived no earlier than. A backlog
+// drained hours later is not charged to the hour it drained.
+func TestAGapSinceIsWhenTheDroppedRecordArrived(t *testing.T) {
+	t1 := time.Date(2026, 9, 1, 3, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
+	line := func(id string, ts time.Time) []byte {
+		b, err := (decision.Record{TS: ts, Event: decision.EventAccount, TaskID: id}).MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return append(b, '\n')
+	}
+	var data []byte
+	data = append(data, line("a", t1)...)
+	data = append(data, "{not json at all}\n"...)
+	data = append(data, line("b", t2)...)
+	path := filepath.Join(t.TempDir(), "overflow.jsonl")
+	if err := os.WriteFile(path+".draining", data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	sp, err := NewSpool(4, path, &unencodable{next: decision.NewJSONLines(out), bad: "b"},
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.drainOnce()
+	got := out.String()
+	if !strings.Contains(got, `"stage":"drain_unparseable","records":1,"since":"`+decision.FormatTime(t1)+`"`) ||
+		!strings.Contains(got, `"stage":"drain_set_aside","records":1,"since":"`+decision.FormatTime(t2)+`"`) {
+		t.Fatalf("%q", got)
+	}
+}
+
+// At shutdown the drops never written as a gap record are logged: counts and
+// stages, never content.
+func TestShutdownLogsHeldGaps(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(os.Stderr); log.SetFlags(log.LstdFlags) })
+
+	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "overflow.jsonl"), &flakySink{down: true},
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp.drop(dropOfferRefused, time.Time{})
+	sp.drop(dropOfferRefused, time.Time{})
+	sp.drop(dropDrainSetAside, time.Time{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	sp.Run(ctx)
+	if !strings.Contains(logged.String(), "not written to the decision log as account_gap: drain_set_aside=1 offer_refused=2") {
+		t.Fatalf("%q", logged.String())
+	}
+}
+
+// lockProbe is a log writer that records whether gapMu was free when the
+// spool wrote to it.
+type lockProbe struct {
+	sp    *Spool
+	held  bool
+	wrote bool
+}
+
+func (p *lockProbe) Write(b []byte) (int, error) {
+	p.wrote = true
+	if p.sp.gapMu.TryLock() {
+		p.sp.gapMu.Unlock()
+	} else {
+		p.held = true
+	}
+	return len(b), nil
+}
+
+// The shutdown line is written with gapMu released: a log writer that blocks
+// never holds up a drop (Task 16 re-review).
+func TestShutdownLogsHeldGapsWithoutTheLock(t *testing.T) {
+	sp, err := NewSpool(4, filepath.Join(t.TempDir(), "overflow.jsonl"), &flakySink{down: true},
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := &lockProbe{sp: sp}
+	log.SetOutput(probe)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	sp.drop(dropOfferRefused, time.Time{})
+	sp.logHeldGaps()
+	if !probe.wrote || probe.held {
+		t.Fatalf("wrote %v, under gapMu %v", probe.wrote, probe.held)
 	}
 }

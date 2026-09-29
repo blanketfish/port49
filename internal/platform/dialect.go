@@ -2,6 +2,7 @@ package platform
 
 import (
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -146,6 +147,115 @@ type Dialect struct {
 	// ConfigChecks are configuration lines the spec says a device must not
 	// carry (§5.6, §6), each with what it costs: the same check names them.
 	ConfigChecks []ConfigCheck
+	// CommandProjection names how a session-only platform's rules are
+	// rendered into its session reply (spec §8, "Projection for session-only
+	// platforms"): ProjectionJunosRegex, or empty for none. Where it is set,
+	// the adapter's `privilege` is each level's ceiling in permission bits
+	// (CeilingBits), not attributes, and Levels is nil.
+	CommandProjection string
+	// Bits maps each permission bit the platform's classes carry to its reach
+	// in rule form: every command the bit lets a session run, as rules, an
+	// upper bound measured in the lab (spec §15, L12). A session's reach is
+	// the union of its bits' (Junos permissions are a union), save what
+	// CarveOuts removes. A reach that says less than the bit does would let
+	// the device run what port49 denies, so a block may add to a bit's reach,
+	// a gated edit, and never take from it (spec §8). The bit named
+	// BaselineBit is what a class with no bits runs: every session holds it.
+	Bits map[string][]string
+	// CarveOuts maps a bit to the commands that only it makes available,
+	// whatever other bit's reach holds them: `view-configuration`'s `show
+	// configuration **`, which `view` alone does not show (L12). Only a
+	// measured carve-out is listed; a block may drop one and never add one,
+	// since a carve-out says the held bits reach less (spec §8).
+	CarveOuts map[string][]string
+	// BitDelivery is how the chosen bits reach the device (spec §8):
+	// BitDeliveryUserPermissions, `user-permissions=<bits>` per session over a
+	// bitless template, or BitDeliveryLocalUserName, `local-user-name=` one
+	// template per level whose class carries the level's bits.
+	BitDelivery string
+	// LocalUserNames maps a level to the device's template user for it under
+	// BitDeliveryLocalUserName; `port49 platform export --classes` renders
+	// each with its class.
+	LocalUserNames map[string]string
+	// CeilingBits maps a level to the permission bits that are its ceiling on
+	// a projected platform: the `privilege` key of such an adapter.
+	CeilingBits map[string][]string
+}
+
+// The command projections port49 renders (spec §8).
+const ProjectionJunosRegex = "junos_regex"
+
+// The ways bits reach a projected device (spec §8, "bit_delivery").
+const (
+	BitDeliveryUserPermissions = "user_permissions"
+	BitDeliveryLocalUserName   = "local_user_name"
+)
+
+// BaselineBit names, in Bits, what a class with no bits runs: held by every
+// session on the platform, and never in a level's ceiling (spec §8).
+const BaselineBit = "baseline"
+
+// projectionOwned is every attribute a projection's platform reads as a
+// login class's template, bits or command or configuration regex, numbered
+// variants included (`allow-commands2`, `user-permissions1`), in any case:
+// what a role or grant may not set there (spec §8, "Generator constraints").
+var projectionOwned = regexp.MustCompile(
+	`(?i)^((allow|deny)-(commands|configuration)(-regexps)?|user-permissions|local-user-name)[0-9]*$`)
+
+// ProjectionOwns reports whether an attribute name is one a projected
+// platform reads as a class's template, bits or regexes, or one its adapter
+// lists as bearing privilege: no role or grant sets it there.
+func (d Dialect) ProjectionOwns(name string) bool {
+	return d.Projected() && (projectionOwned.MatchString(name) || ContainsName(d.PrivilegeAttributes, name))
+}
+
+// RemoteClass is the login class the reference configuration gives the
+// device's `remote` template user: no bits, so a session whose reply names no
+// template, or names one the device does not have, runs nothing a bit
+// reaches (spec §8; tests/lab/results/L18-juniper_*.md: an unknown template
+// degrades to `remote`).
+const RemoteClass = "p49-remote"
+
+// projectionAttributes are the reply attributes a projection renders and
+// owns on its platform: every name Junos documents for a login class's
+// template, bits and command and configuration regexes (spec §8). No role or
+// grant may set one on a projected platform, or it would stand beside, or
+// over, what the generator proved (Policy.checkAttributes).
+var projectionAttributes = map[string][]string{
+	ProjectionJunosRegex: {"local-user-name", "user-permissions", "allow-commands", "deny-commands",
+		"allow-configuration", "deny-configuration", "allow-commands-regexps", "deny-commands-regexps",
+		"allow-configuration-regexps", "deny-configuration-regexps"},
+}
+
+// ProjectionAttributes is the attribute names projection owns, copied; none
+// for no projection.
+func ProjectionAttributes(projection string) []string {
+	return slices.Clone(projectionAttributes[projection])
+}
+
+// Projected reports whether the platform's rules are rendered into its
+// session reply.
+func (d Dialect) Projected() bool { return d.CommandProjection != "" }
+
+// LevelBits returns the permission bits that are exactly this level's
+// ceiling on a projected platform, without following a parent chain (the
+// policy's to follow), and whether the adapter names the level.
+func (d Dialect) LevelBits(level string) ([]string, bool) {
+	bits, ok := d.CeilingBits[level]
+	return slices.Clone(bits), ok
+}
+
+// ExpandBits is bits with every bit `all` implies: on Junos the `all`
+// permission is every permission (spec §8), so a set holding it holds every
+// bit the adapter declares. The result is sorted and has no duplicates.
+func (d Dialect) ExpandBits(bits []string) []string {
+	if slices.Contains(bits, "all") {
+		// The baseline is held by every session and never delivered.
+		bits = slices.DeleteFunc(sortedKeys(d.Bits), func(b string) bool { return b == BaselineBit })
+	}
+	out := slices.Clone(bits)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // ConfigCheck is one line a device's configuration must not carry: an RE2
@@ -178,6 +288,9 @@ var inert = []string{"home-directory"}
 // likely reads.
 var generics = map[string]Dialect{
 	"1.0.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
+		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
+	// 1.1.0 changes no generic value: the Junos projection is juniper_junos's.
+	"1.1.0": {PipeToken: "|", StripCR: true, Supports: []string{"session"},
 		PrivilegeAttributes: []string{"priv-lvl"}, InertAttributes: inert, EnableUsername: EnablePrincipal},
 }
 
@@ -269,7 +382,25 @@ func (d Dialect) clone() Dialect {
 	}
 	d.LocalAccounts = slices.Clone(d.LocalAccounts)
 	d.ConfigChecks = slices.Clone(d.ConfigChecks)
+	d.Bits = cloneLists(d.Bits)
+	d.CarveOuts = cloneLists(d.CarveOuts)
+	d.CeilingBits = cloneLists(d.CeilingBits)
+	if d.LocalUserNames != nil {
+		d.LocalUserNames = maps.Clone(d.LocalUserNames)
+	}
 	return d
+}
+
+// cloneLists is a map of lists copied deep; nil stays nil.
+func cloneLists(m map[string][]string) map[string][]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(m))
+	for k, v := range m {
+		out[k] = slices.Clone(v)
+	}
+	return out
 }
 
 // BearsPrivilege reports whether an attribute name may carry privilege on

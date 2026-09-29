@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	daemonconfig "github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/username"
 )
@@ -27,6 +28,17 @@ import (
 // device; this reads a file a compliance tool fetched (spec §8,
 // "Verification").
 //
+// On a projected platform it also reads the configuration, in `display set`
+// form, against the reference `platform export --classes` writes, whose
+// idle-timeout comes from --config's port49d.yaml, which is then required:
+// every reference line the device lacks, and every line under a template
+// class or user the reference does not write (templateCheck; plan 5b
+// pre-flight I8). A class carrying more than the reference is every subject
+// at that template running more than port49 proved, so it fails, as does a
+// capture it cannot read. Where a deny does not bind a management service's
+// RPCs, each service but the CLI's is a finding too, read from the capture
+// platform.ServicesCapture names (platform.CheckServices).
+//
 // A device's configuration is full of secrets — communities, keys, enable
 // secrets, a URL's password — so every line of it this prints is redacted by
 // every pattern that applies under the policy, and a line that could not be
@@ -37,6 +49,8 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	var files policyFiles
 	files.register(fs)
 	device := fs.String("device", "", "the device the configuration is from, by its inventory name")
+	cfgPath := fs.String("config", "", "port49d.yaml, whose session.max_session_age_default is the template "+
+		"classes' idle-timeout (required on a projected platform)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -53,7 +67,8 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	rules := p.Redactions()
-	out.rules, errOut.rules = rules, rules
+	out.learn(p)
+	errOut.learn(p)
 	redact := func(line string) string { return platform.RedactConfigLine(rules, line) }
 	d, ok := p.Device(*device)
 	if !ok {
@@ -74,6 +89,16 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 devices check-config:", err)
 		return 1
+	}
+	switch {
+	case dialect.Projected() && *cfgPath == "":
+		fmt.Fprintf(stderr, "port49 devices check-config: %s projects the policy into its session reply, so its "+
+			"template classes are checked against the reference, whose idle-timeout is port49d.yaml's "+
+			"session.max_session_age_default: pass --config\n", d.Platform)
+		return 2
+	case !dialect.Projected() && *cfgPath != "":
+		fmt.Fprint(stderr, usage)
+		return 2
 	}
 	// An adapter with nothing to read a configuration against — the generic
 	// one an unknown platform gets, as the daemon resolves it — would report
@@ -96,7 +121,36 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
 		return 1
 	}
+	var templateMissing []string
+	var drift, services []platform.ConfigFinding
+	if dialect.Projected() {
+		if templateMissing, drift, err = templateCheck(dialect, *cfgPath, fs.Arg(0), config); err != nil {
+			fmt.Fprintln(stderr, "port49 devices check-config:", err)
+			return 1
+		}
+		// Where a deny does not bind the RPCs a management service serves,
+		// every such service but the CLI's fails the device (plan 5b
+		// Task 14, branch M).
+		if services, err = platform.CheckServices(dialect, config); err != nil {
+			fmt.Fprintf(stderr, "port49 devices check-config: %s: %v\n", fs.Arg(0), err)
+			return 1
+		}
+	}
 	failed := 0
+	for _, line := range templateMissing {
+		failed++
+		fmt.Fprintf(stdout, "TEMPLATE: %s: %s: the configuration does not carry this line of the reference "+
+			"(port49 platform export --classes): a session under that template is not what the projection "+
+			"proved (spec §8)\n", fs.Arg(0), line)
+	}
+	for _, f := range drift {
+		failed++
+		fmt.Fprintf(stdout, "TEMPLATE: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
+	}
+	for _, f := range services {
+		failed++
+		fmt.Fprintf(stdout, "SERVICE: %s:%d: %s: %s\n", fs.Arg(0), f.Line, redact(f.Text), f.Says)
+	}
 	for _, a := range accounts {
 		// The daemon looks a context up by the canonical form of the username
 		// the device sends (spec §2), so a local NOC, CORP\noc or noc@corp
@@ -134,7 +188,7 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 	// A partial capture, `| section aaa`, reads every line outside it as
 	// missing (task 17 review, parked). A whole running-config names its
 	// host; one that does not is said to be possibly partial.
-	if len(missing) > 0 && !hasHostname(config) {
+	if len(missing)+len(templateMissing) > 0 && !hasHostname(config) {
 		fmt.Fprintf(stdout, "note: the configuration has no hostname line, so it may be a partial capture (| section "+
 			"...): a MISSING line may be in the part left out; check-config reads the whole show running-config\n")
 	}
@@ -158,6 +212,30 @@ func checkConfig(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// templateCheck is check-config's reading of a projected platform's
+// configuration against the reference (platform.TemplateDrift), at the
+// idle-timeout cfgPath's session.max_session_age_default gives: the reference
+// lines the device lacks, and the lines under a template it does not write.
+// The file is decoded as strictly as the daemon decodes it and no key or
+// secret is resolved, so none is needed (config.MaxSessionAge; spec §13,
+// decision 21). Anything it cannot read is an error, never a clean device.
+func templateCheck(dialect platform.Dialect, cfgPath, configName string, config []byte) ([]string,
+	[]platform.ConfigFinding, error) {
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	age, err := daemonconfig.MaxSessionAge(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", cfgPath, err)
+	}
+	missing, drift, err := platform.TemplateDrift(config, dialect, age)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", configName, err)
+	}
+	return missing, drift, nil
 }
 
 // whereWritten is where a device_config line check-config requires can be

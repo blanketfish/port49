@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -64,6 +65,8 @@ type Policy struct {
 	set       string
 	adapters  map[string]platform.Dialect
 	overrides map[string]filePlatform
+	// projected memoizes project, keyed by what a projection reads.
+	projected sync.Map
 
 	levels  []string          // the declared ordering, lowest first
 	parents map[string]string // level → parent, for rendering
@@ -376,6 +379,26 @@ func (p *Policy) buildPlatforms(f file) error {
 		// the block gives a level the set measured nothing for is the
 		// operator's note, never read as a measurement.
 		ref, measured := builtin[shippedAs]
+		// Only a platform the pinned set projects is projected (spec §8,
+		// command_projection): anywhere else nothing measured sets a floor
+		// under a bit's reach or measures a carve-out, so an understated one
+		// would send a deny as nothing (plan 5b pre-flight R-I1; Task 6 review
+		// I3). keepsProjection holds a projected platform to the set's.
+		if !(measured && ref.Projected()) {
+			for _, k := range []struct {
+				key string
+				set bool
+			}{{"command_projection", b.Spec.CommandProjection != nil}, {"bits", b.Spec.Bits != nil},
+				{"carve_outs", b.Spec.CarveOuts != nil}, {"bit_delivery", b.Spec.BitDelivery != nil},
+				{"local_user_names", b.Spec.LocalUserNames != nil}} {
+				if k.set {
+					return fmt.Errorf("%s.%s: platform set %s does not project %s, and only a platform the pinned set "+
+						"projects is projected: nothing measured there sets a floor under a bit's reach or measures a "+
+						"carve-out, so a deny could be sent as nothing; remove the key (spec §8, §15 L12)", at, k.key,
+						p.set, shippedAs)
+				}
+			}
+		}
 		if measured {
 			d = platform.KeepMeasured(d, ref)
 		}
@@ -497,6 +520,9 @@ func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version strin
 				shippedAs)
 		}
 	}
+	if err := keepsProjection(at, shippedAs, d, ref, version); err != nil {
+		return err
+	}
 	for _, c := range d.Supports {
 		if !slices.Contains(ref.Supports, c) {
 			return fmt.Errorf("%s.supports: %s is not a capability platform set %s measured on %s; a rule would read "+
@@ -526,6 +552,52 @@ func keepsSetClaims(at, shippedAs string, d, ref platform.Dialect, version strin
 			return fmt.Errorf("%s.%s: platform set %s measured %v on %s, and %v would let a command past a deny "+
 				"or a rule the device does not enforce; a block may not loosen it (spec §8)", at, f.key, version,
 				f.set, shippedAs, f.is)
+		}
+	}
+	return nil
+}
+
+// keepsProjection refuses a merged adapter that loosens what the set's
+// projection rests on (spec §8): a projected platform stays projected by the
+// set's projection, since without it the device's own template decides and
+// no rule reaches the session; a bit's reach is a floor, since a reach that
+// says less than the bit does lets the device run what port49 denies; and a
+// carve-out is a ceiling, since one says the held bits reach less. A block may
+// add to a bit's reach, an edit the diff gates like any adapter edit, drop a
+// carve-out, and may not declare a bit the set did not measure.
+func keepsProjection(at, shippedAs string, d, ref platform.Dialect, version string) error {
+	if !ref.Projected() {
+		return nil
+	}
+	if d.CommandProjection != ref.CommandProjection {
+		return fmt.Errorf("%s.command_projection: platform set %s projects %s's rules as %s, and without it no rule "+
+			"reaches a session there; a block may not remove or change it (spec §8)", at, version, shippedAs,
+			ref.CommandProjection)
+	}
+	for _, bit := range sortedKeys(d.Bits) {
+		if _, measured := ref.Bits[bit]; !measured {
+			return fmt.Errorf("%s.bits.%s: platform set %s does not declare this bit on %s, so its reach is "+
+				"unmeasured; a block may not add a bit (spec §8, §15 L12)", at, bit, version, shippedAs)
+		}
+	}
+	// Every bit the set declares, read from the set's side: a `replace: true`
+	// block that leaves one out would stop counting reach the device still
+	// gives (the baseline's, every session's).
+	for _, bit := range sortedKeys(ref.Bits) {
+		for _, rule := range ref.Bits[bit] {
+			if !slices.Contains(d.Bits[bit], rule) {
+				return fmt.Errorf("%s.bits.%s: a rule platform set %s measured in this bit's reach is missing; a "+
+					"block may add to a bit's reach, not take from it (spec §8)", at, bit, version)
+			}
+		}
+	}
+	for _, bit := range sortedKeys(d.CarveOuts) {
+		for _, rule := range d.CarveOuts[bit] {
+			if !slices.Contains(ref.CarveOuts[bit], rule) {
+				return fmt.Errorf("%s.carve_outs.%s: platform set %s does not measure this carve-out on %s; a carve-out "+
+					"says the held bits reach less, so a block may drop one, not add one (spec §8, §15 L12)", at, bit,
+					version, shippedAs)
+			}
 		}
 	}
 	return nil
@@ -720,7 +792,8 @@ func (p *Policy) checkBlockOrder(file) error {
 			key    string
 			levels []string
 		}{{"privilege", mapKeys(b.Privilege)}, {"ceiling_levels", mapKeys(b.CeilingLevels)},
-			{"unreachable", mapKeys(b.Unreachable)}, {"fallback", mapKeys(b.Fallback)}} {
+			{"unreachable", mapKeys(b.Unreachable)}, {"fallback", mapKeys(b.Fallback)},
+			{"local_user_names", mapKeys(b.LocalUserNames)}} {
 			for _, l := range entries.levels {
 				if !slices.Contains(p.levels, l) {
 					return fmt.Errorf("platforms.%s.%s.%s: level %s is not declared; the levels are %s", name,
@@ -729,6 +802,9 @@ func (p *Policy) checkBlockOrder(file) error {
 			}
 		}
 		if err := platform.Monotone(name, p.adapters[name], p.levels); err != nil {
+			return err
+		}
+		if err := platform.MonotoneBits(name, p.adapters[name], p.levels); err != nil {
 			return err
 		}
 	}
@@ -845,9 +921,34 @@ func (p *Policy) checkAttributes(attrs map[string][]string) error {
 			if err := engine.CheckAttribute(a); err != nil {
 				return fmt.Errorf("%s: %w", at, err)
 			}
+			if err := p.checkProjected(at, key, a); err != nil {
+				return err
+			}
 			if err := p.checkPlaceholder(at, key, a); err != nil {
 				return err
 			}
+			if err := p.checkInertOnProjected(at, key, a); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkProjected refuses an attribute a projection renders, under a
+// projected platform's key or under `all` where any platform is projected:
+// beside the projection it would be a second instance the device drops or
+// keeps first, and over it a regex nothing proved (spec §8, "Generator
+// constraints" 1, 4 and 6). A name is caught in every case and numbered
+// variant the device reads (allow-commands2, User-Permissions), and every
+// name the adapter lists as bearing privilege (Dialect.ProjectionOwns).
+func (p *Policy) checkProjected(at, key, a string) error {
+	name := engine.AttributeName(a)
+	for _, plat := range sortedKeys(p.adapters) {
+		d := p.adapters[plat]
+		if (key == plat || key == "all") && d.ProjectionOwns(name) {
+			return fmt.Errorf("%s: %s is rendered by %s's projection from the rules (command_projection: %s), so no "+
+				"role or grant sets it there; write the rule instead (spec §8)", at, name, plat, d.CommandProjection)
 		}
 	}
 	return nil
@@ -885,6 +986,47 @@ func (p *Policy) checkPlaceholder(at, key, a string) error {
 		if p.dialect(name2).BearsPrivilege(name) {
 			return fmt.Errorf("%s: %s is not listed inert on %s, so it takes no placeholder: only an "+
 				"attribute an adapter holds to carry no privilege may (spec §6)", at, name, platformName(name2))
+		}
+	}
+	return nil
+}
+
+// checkInertOnProjected refuses, under a projected platform's key or under
+// `all` where the pinned set or the inventory has a projected platform, an
+// attribute that platform's adapter does not list inert: whether the device
+// reads a name outside the projection's (`shell:allow-commands`, `foo-bar`) is
+// unmeasured, and one it read would stand beside what the projection proved
+// (spec §8, "Generator constraints" 7; plan 5b pre-flight R-M3). A name is
+// read as written, so a case or numbered variant is refused too. Under `all`,
+// classIdle's names are left off a projected platform instead (leftOff).
+//
+// Under `all` it reads the whole pinned set as well as the inventory, as
+// checkProjected does: the pin is where the policy meets the projection, and
+// a refusal there is CI's, where one at the first inventory sync that adds an
+// SRX is the reload's (Task 6 re-review N1).
+func (p *Policy) checkInertOnProjected(at, key, a string) error {
+	name := engine.AttributeName(a)
+	platforms := []string{key}
+	if key == "all" {
+		if slices.Contains(classIdle, name) {
+			return nil
+		}
+		platforms = nil
+		for plat := range p.platforms() {
+			platforms = append(platforms, plat)
+		}
+		for _, d := range p.env.Devices {
+			if !slices.Contains(platforms, d.Platform) {
+				platforms = append(platforms, d.Platform)
+			}
+		}
+		slices.Sort(platforms)
+	}
+	for _, plat := range platforms {
+		if d := p.dialect(plat); d.Projected() && d.BearsPrivilege(name) {
+			return fmt.Errorf("%s: %s is not listed inert on %s, whose reply is its projection's: whether the "+
+				"device reads it is unmeasured, and one it read would stand beside what the projection proved, so "+
+				"only an attribute the adapter lists inert is set there (spec §8)", at, name, plat)
 		}
 	}
 	return nil
@@ -1045,6 +1187,11 @@ func (p *Policy) buildSubjects(f file) error {
 		// Whether a username is required depends on whether a grant names the
 		// subject, which checkMinters settles once the grants are read.
 		if len(s.Identity) > 0 && s.Username != "" {
+			if token.ReservedUsername(s.Username) {
+				return fmt.Errorf("subject %q: username %q is reserved: `remote`, every p49-* name and every "+
+					"platform's system user are the device's own accounts, and a session under one lands in that "+
+					"account's class whatever the reply says (spec §8, §13 decision 26)", s.Name, s.Username)
+			}
 			if !token.CanonicalUsername(s.Username) {
 				return fmt.Errorf("subject %q: username %q must be printable ASCII and already canonical — lower "+
 					"case, no DOMAIN\\ prefix, no @suffix — because the daemon looks tokens up by the canonical form "+

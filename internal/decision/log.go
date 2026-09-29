@@ -34,6 +34,7 @@ type Record struct {
 	Blob        *Blob        `json:"blob,omitempty"`
 	Unvalidated *Unvalidated `json:"unvalidated,omitempty"`
 	ServerMsg   string       `json:"server_msg,omitempty"`
+	Gap         *Gap         `json:"gap,omitempty"`
 	// IndexError names what a failed index write cost, on the record for the
 	// session that lost it. Revocation must report the contexts it could not
 	// reach (spec §5.6), and this is the only place that says which they are.
@@ -205,6 +206,19 @@ type Blob struct {
 	// (spec §5.8), so Body is not the blob Hash names and replay reports
 	// every record naming it unverifiable. The store keeps the blob verbatim.
 	Redacted bool `json:"redacted,omitempty"`
+}
+
+// Gap is the `account_gap` record's body: how many accounting records port49
+// received and did not write to this log, at which stage, since when (spec
+// §5.7, §9). offer_refused was answered ERROR, and the device may send the
+// record again; drain_unparseable and drain_set_aside were answered SUCCESS
+// and are not in the log (a set-aside one is in the spool's .unencodable
+// file). Reconciliation reads it: a window with a gap cannot say a device
+// did not ask.
+type Gap struct {
+	Stage   string `json:"stage"`
+	Records int    `json:"records"`
+	Since   string `json:"since"`
 }
 
 // Unvalidated is what is recorded for a packet no key validated: cleartext header

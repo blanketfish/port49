@@ -50,8 +50,9 @@ func mustParse(t *testing.T, body string) *Policy {
 // built-in platform renders or numbers: a role landing a session there
 // quarantines every device whose platform renders levels — arista_eos,
 // cisco_nxos and cisco_iosxe since plan 5 — and a ceiling naming it loads
-// nowhere. juniper_junos renders nothing until plan 5b's projection, so its
-// devices are the tests' devices that still mint.
+// nowhere. juniper_junos renders no level, and a projected set gives that
+// subject alone the fail-closed reply there (decision 26), so its devices are
+// the tests' devices that still mint.
 const unmappedLevel = "privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]\n"
 
 // good is spec §11's shape, cut to what every platform in inventory() can
@@ -528,5 +529,32 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]`
 		if _, err := Parse([]byte(body), env()); err == nil || !strings.Contains(err.Error(), `"aa_os"`) {
 			t.Fatalf("%v", err)
 		}
+	}
+}
+
+// A rule that fails to load or compile is named by its role and position,
+// never quoted: it may carry a value redaction hides (spec §5.8; plan 5a).
+// The load error of a deny whose regex does not compile, and the quarantine
+// cause of one that splits past the matcher's bound on IOS-XE, print no
+// secret (task 12b review).
+func TestALoadErrorOnASecretRuleQuotesNoSecret(t *testing.T) {
+	_, err := Parse([]byte(scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show secret /HUNTER2((/"]}
+`+subjOK+grantOK), env())
+	if err == nil || !strings.Contains(err.Error(), `role "r": deny #1: term 3`) || strings.Contains(err.Error(), "HUNTER2") {
+		t.Errorf("load: %v", err)
+	}
+	p := mustParse(t, scopeOK+`roles:
+  - {name: r, privilege: readonly, permit: ["show **"], deny: ["show * * * * * * * * * * * secret HUNTER2"]}
+`+subjOK+grantOK)
+	var causes []string
+	for _, q := range p.Quarantines(noon) {
+		for _, e := range q.Entries {
+			causes = append(causes, e.Cause)
+		}
+	}
+	if text := strings.Join(causes, "\n"); !strings.Contains(text, `rule #1 (role "r"): the deny splits more than`) ||
+		strings.Contains(text, "HUNTER2") {
+		t.Errorf("quarantine: %s", text)
 	}
 }

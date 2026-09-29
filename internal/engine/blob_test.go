@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/rhwendt/port49/internal/decision"
 )
 
 // eos is a small compiled blob in the shape the broker writes.
@@ -320,5 +322,27 @@ func TestSessionAttributesSubstitute(t *testing.T) {
 	plain.Attributes = []string{"priv-lvl=15"}
 	if _, err := plain.SessionAttributes(Values{Username: "a=b"}); err != nil {
 		t.Errorf("an unused value refused: %v", err)
+	}
+}
+
+// A projection's fail-closed reason rides in the blob, so the daemon records
+// the session as projection_fail_closed (spec §13 decision 26). A blob
+// without it keeps its hash and records context_matched; set, it changes the
+// hash and round-trips.
+func TestFailClosedIsCarriedAndOmittedWhenEmpty(t *testing.T) {
+	const v2 = `{"version":2,"bundle":"b","platform":"juniper_junos","normalize":{"pipe_token":"|","pipe_authorized":false,` +
+		`"strip_cr":true,"expands_abbreviations":true},"privilege":"","attributes":["deny-commands=^.*$"],"rules":[],"pipe":[],"classes":{}}`
+	b, err := Decode(HashOf([]byte(v2)), []byte(v2))
+	if err != nil || b.FailClosed != "" || b.SessionReason() != decision.ContextMatched {
+		t.Fatalf("a v2 blob without the key: %q, %v", b.FailClosed, err)
+	}
+	b.FailClosed = "refused_shape"
+	body, hash, err := Encode(b)
+	if err != nil || hash == HashOf([]byte(v2)) || !strings.HasSuffix(string(body), `"classes":{},"fail_closed":"refused_shape"}`) {
+		t.Fatalf("set: %s %v", body, err)
+	}
+	got, err := Decode(hash, body)
+	if err != nil || got.FailClosed != "refused_shape" || got.SessionReason() != decision.ProjectionFailClosed {
+		t.Fatalf("round trip: %q %v", got.FailClosed, err)
 	}
 }

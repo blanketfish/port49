@@ -1,0 +1,7 @@
+# computed against tests/lab/results/L26-keywords-juniper_vsrx.yaml sha256 22616fc523baaef1618dc75dff972079485f121543c515f04054141f31300f80
+platform: juniper_junos
+nodes:
+  "": {words: ["exit", "set", "show"], argument: false}
+  "set": {words: ["cli"], argument: true}
+  "show": {words: ["cli", "configuration", "host", "ingress-replication", "policy", "task"], argument: false}
+  "show configuration": {words: [], argument: true}

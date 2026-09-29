@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -504,15 +505,21 @@ func TestPolicyTestPrintsReportsNotesAndScheduledQuarantines(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
-	run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
 	for _, want := range []string{
 		`report: grantless_subject: subject "gone" has no grant`,
 		"     note: arista_eos applies output modifiers itself",
 		"quarantine: leaf-01 (arista_eos): will be quarantined from 2099-01-01T00:00:00.000Z, when grant all_devices [admin] expires",
+		"; 1 quarantined, 0 projection refusals\n",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in\n%s%s", want, out.String(), errb.String())
 		}
+	}
+	// A quarantine, even one an expiry brings on later, fails the gate
+	// (plan 5b pre-flight I10): the daemon serves the rest, CI ships none.
+	if code != 1 {
+		t.Fatalf("code %d", code)
 	}
 }
 
@@ -785,7 +792,7 @@ func TestPolicyDiffGatesAnAdapterEdit(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
 		!strings.Contains(out.String(), `ADAPTER: platforms.arista_eos.entity_classes {"loopback":`) ||
-		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits\n") {
+		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits; 0 projection refusals\n") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 	// The entry is printed ready to paste, bound by digest to this edit.
@@ -953,5 +960,175 @@ key_groups:
 		if !strings.Contains(out.String(), device) {
 			t.Errorf("%s: the raise is not reported:\n%s", device, out.String())
 		}
+	}
+}
+
+// A finding that derives text from a rule, not only quotes it, still prints
+// no secret: permit_joined_name names the joined word and the fix, and the
+// word here is the secret. The writer redacts every value the policy's rules
+// hide wherever it appears in a line, not only inside a quoted rule (task 11
+// review, pre-existing leak from f426892).
+func TestPolicyTestNeverPrintsASecretAJoinedNameFindingDerives(t *testing.T) {
+	pol, inv := policyFixture(t)
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: xe-01, platform: cisco_iosxe, addresses: [10.0.0.3]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := string(readFile(t, pol))
+	// A second rule names the value re-cased and with no secret keyword
+	// before it, and a test types it on IOS-XE, which splits it: no text
+	// derived from the value, joined, split or re-cased, prints (re-review
+	// R1).
+	withSecret := strings.Replace(raw, "permit: [show **]}",
+		`permit: [show **, "show system radius-server 10.0.0.1 secret HUNTER2", "show interfaces Gi1", `+
+			`"show running-config HunTer2"]}`, 1)
+	if withSecret == raw {
+		t.Fatal("the fixture's permit moved")
+	}
+	withSecret += "  - {subject: noc, device: xe-01, command: \"show system radius-server 10.0.0.1 secret HunTer2\", " +
+		"expect: deny}\n"
+	if err := os.WriteFile(pol, []byte(withSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+	got := out.String() + errb.String()
+	if strings.Contains(strings.ToUpper(got), "HUNTER") {
+		t.Fatalf("policy test printed the secret:\n%s", got)
+	}
+	// The finding still fires for a joined name that is no secret.
+	if !strings.Contains(got, "`Gi1` never matches on cisco_iosxe") {
+		t.Fatalf("the joined-name finding is gone:\n%s", got)
+	}
+	// explain types a value the policy never wrote: the line's own
+	// redaction hides it, and the split note is left out with it.
+	out.Reset()
+	errb.Reset()
+	run([]string{"explain", "--policy", pol, "--inventory", inv, "--subject", "noc", "--device", "xe-01",
+		"--command", "show system radius-server 10.0.0.1 secret SEKRIT9"}, &out, &errb)
+	if got := strings.ToUpper(out.String() + errb.String()); strings.Contains(got, "SEKRIT") ||
+		!strings.Contains(got, "SECRET «REDACTED»") {
+		t.Fatalf("explain printed the secret:\n%s%s", out.String(), errb.String())
+	}
+	// A value with a `"` or `\` in it, which %q escapes past the writer's
+	// pass, in any letter case: a finding quoting a rule that carries it and
+	// a test line typing it print it redacted (task 12b review I1).
+	for _, c := range []struct{ hides, typed, test string }{
+		{`PA"sS9`, `pa"ss9`, `Pa"Ss9`}, {`A\B9`, `a\b9`, `a\B9`}, {`Mi"X\d9`, `mI"x\D9`, `MI"x\d9`},
+	} {
+		with := strings.Replace(raw, "permit: [show **]}", `permit: [show **, 'show system radius-server 10.0.0.1 `+
+			`secret `+c.hides+`', 'show interfaces Gi1 `+c.typed+`']}`, 1) + "  - {subject: noc, device: xe-01, " +
+			"command: 'show running-config " + c.test + "', expect: permit}\n"
+		if err := os.WriteFile(pol, []byte(with), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		errb.Reset()
+		run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errb)
+		got := out.String() + errb.String()
+		low, escaped := strings.ToLower(got), strings.ToLower(strings.Trim(strconv.Quote(c.hides), `"`))
+		if strings.Contains(low, strings.ToLower(c.hides)) || strings.Contains(low, escaped) ||
+			!strings.Contains(got, "`Gi1` never matches on cisco_iosxe") || !strings.Contains(got, "show running-config «redacted»") {
+			t.Errorf("%s: policy test printed the secret:\n%s", c.typed, got)
+		}
+	}
+}
+
+// policy diff prints each probe command whose verdict moved, and on IOS-XE a
+// probe splits a deny's joined word into the name and index it may be sent
+// as: made from a value redaction hides, each piece prints «redacted», and
+// the narrowing is still reported (task 11 re-review 2, R5).
+func TestPolicyDiffNeverPrintsAPieceOfASecretAProbeSplits(t *testing.T) {
+	oldPol, inv := policyFixture(t)
+	if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: xe-01, platform: cisco_iosxe, addresses: [10.0.0.3]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raw := string(readFile(t, oldPol))
+	before := strings.Replace(raw, "permit: [show **]}", `permit: [show **, "username **"]}`, 1)
+	before = strings.Replace(before, "deny: [reload **]}", `deny: [reload **, "snmp-server community Kilo7 **"]}`, 1)
+	if !strings.Contains(before, "Kilo7") || !strings.Contains(before, "username **") {
+		t.Fatal("the fixture's roles moved")
+	}
+	before = before[:strings.Index(before, "tests:\n")]
+	after := strings.Replace(before, `, "username **"`, "", 1)
+	newPol := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(oldPol, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPol, []byte(after), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb)
+	got := out.String() + errb.String()
+	if strings.Contains(strings.ToUpper(got), "KILO") || !strings.Contains(got, "narrows: noc on xe-01: \"username") ||
+		!strings.Contains(got, "«redacted»") {
+		t.Fatalf("policy diff:\n%s", got)
+	}
+}
+
+// A probe tries a witness of each class and regex term, whole and split,
+// under every command head that reaches its position: made from a term
+// whose values redaction hides, a secret entity class or a secret regex,
+// each prints «redacted», and the narrowing is still reported (task 11
+// re-review 3, R6).
+func TestPolicyDiffNeverPrintsAWitnessOfASecretClassOrRegex(t *testing.T) {
+	for name, c := range map[string]struct{ block, deny string }{
+		"entity class": {"platforms: {cisco_iosxe: {entity_classes: {bad_comm: ['^Mango55$', '^Papaya$']}}}\n",
+			`"snmp-server community @bad_comm **"`},
+		"regex": {"", `"snmp-server community /^Mango5[5-6]$/ **"`},
+	} {
+		oldPol, inv := policyFixture(t)
+		if err := os.WriteFile(inv, []byte(`
+devices:
+  - {name: xe-01, platform: cisco_iosxe, addresses: [10.0.0.3]}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		raw := string(readFile(t, oldPol))
+		before := strings.Replace(raw, "permit: [show **]}", `permit: [show **, "username **"]}`, 1)
+		before = strings.Replace(before, "deny: [reload **]}", "deny: [reload **, "+c.deny+"]}", 1)
+		before = c.block + before[:strings.Index(before, "tests:\n")]
+		after := strings.Replace(before, `, "username **"`, "", 1)
+		newPol := filepath.Join(t.TempDir(), "policy.yaml")
+		if err := os.WriteFile(oldPol, []byte(before), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(newPol, []byte(after), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out, errb bytes.Buffer
+		run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb)
+		got := out.String() + errb.String()
+		if u := strings.ToUpper(got); strings.Contains(u, "MANGO") || strings.Contains(u, "PAPAYA") ||
+			!strings.Contains(got, "narrows: noc on xe-01: \"username community") {
+			t.Fatalf("%s: policy diff:\n%s", name, got)
+		}
+	}
+}
+
+// policy diff prints a projection whose shape or bits moved (spec §8, §12).
+func TestPolicyDiffPrintsAProjectionChange(t *testing.T) {
+	if got := projectionText("", nil, ""); got != "none" {
+		t.Errorf("%q", got)
+	}
+	if got := projectionText("capability", []string{"view"}, ""); got != "capability (bits view)" {
+		t.Errorf("%q", got)
+	}
+	if got := projectionText("narrow", []string{"view", "view-configuration"}, "p49-readonly"); got !=
+		"narrow (template p49-readonly, bits view view-configuration)" {
+		t.Errorf("%q", got)
 	}
 }

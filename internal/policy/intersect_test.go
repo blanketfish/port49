@@ -324,7 +324,7 @@ func TestABlocksUnreachableRulesAreTheOperators(t *testing.T) {
 // unquote (task 14 re-review 2, M6).
 func TestAnOperatorNoteQuotesValidly(t *testing.T) {
 	for _, note := range []string{`\\u00abredacted»`, `x \` + platform.Redacted + ` y`, `password Hunter2 \`} {
-		text := fallbackText(platform.AllRedactions(), "", note)
+		text := fallbackText(platform.AllRedactions(), nil, "", note)
 		i := strings.Index(text, "(operator note: ")
 		if i < 0 || !strings.HasSuffix(text, ")") {
 			t.Fatalf("%s", text)

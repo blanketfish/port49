@@ -1,0 +1,7 @@
+# computed against tests/lab/results/L26-keywords-juniper_vjunos-router.yaml sha256 94791e17081c6d17351174914f858a6c29ab9329104cafe743b30edbbb4d5074
+platform: juniper_junos
+nodes:
+  "": {words: ["exit", "save", "set", "show"], argument: false}
+  "set": {words: ["cli"], argument: true}
+  "show": {words: ["cli", "configuration", "host", "ingress-replication", "policy", "task"], argument: false}
+  "show configuration": {words: [], argument: true}

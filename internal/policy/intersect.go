@@ -33,7 +33,7 @@ func (p *Policy) intersections(now time.Time) []Finding {
 			out = append(out, Finding{Kind: kind, Message: fmt.Sprintf(format, args...)})
 		}
 	}
-	instants, redact := p.expiryInstants(now), p.Redactions()
+	instants, redact, secrets := p.expiryInstants(now), p.Redactions(), p.HiddenValues()
 	for _, name := range sortedKeys(p.subs) {
 		for _, d := range p.env.Devices {
 			for _, at := range instants {
@@ -56,16 +56,16 @@ func (p *Policy) intersections(now time.Time) []Finding {
 						switch {
 						case len(unreachable) > 0 && p.dead(rule, unreachable, d.Platform, dialect):
 							add(FindingDeadRule, key,
-								"role %q: permit %q cannot be reached at %s: the device refuses every command it "+
+								"role %q: permit %s cannot be reached at %s: the device refuses every command it "+
 									"matches in its own parser and never asks port49 (unreachable: %s; "+
-									"tests/lab/results/ceiling-%s.md)", role, rule, on,
+									"tests/lab/results/ceiling-%s.md)", role, platform.QuoteShown(secrets, rule), on,
 								strings.Join(redacted(redact, unreachable), ", "),
 								d.Platform)
 						case len(operator) > 0 && p.dead(rule, slices.Concat(unreachable, operator), d.Platform, dialect):
 							add(FindingDeadRule, key,
-								"role %q: permit %q cannot be reached at %s: the policy's platforms: block says the "+
+								"role %q: permit %s cannot be reached at %s: the policy's platforms: block says the "+
 									"device refuses every command it matches in its own parser (operator-listed "+
-									"unreachable, not measured: %s)", role, rule, on,
+									"unreachable, not measured: %s)", role, platform.QuoteShown(secrets, rule), on,
 								strings.Join(redacted(redact, operator), ", "))
 						}
 					}
@@ -86,7 +86,8 @@ func (p *Policy) intersections(now time.Time) []Finding {
 					add(FindingFallbackExposure, name+"\x00"+d.Platform+"\x00"+exposed,
 						"subject %q at %s: port49's rules confine it to %s, and if port49 cannot answer and the device "+
 							"falls back to local it gets %s: more than the policy grants (spec §6, §12)", name, on,
-						strings.Join(redacted(redact, permitsOf(res.Blob)), ", "), fallbackText(redact, fallback, note))
+						strings.Join(redacted(redact, permitsOf(res.Blob)), ", "), fallbackText(redact, secrets, fallback,
+							note))
 				}
 			}
 		}
@@ -167,8 +168,10 @@ func permitsOf(b engine.Blob) []string {
 // operator's note. The note is quoted in ASCII, so nothing in it can close
 // it or read as the measurement, a printable look-alike of a parenthesis or
 // a quote included (spec §12); only the redaction marker is left as it reads. Both are prose a `platforms:` block
-// can write, redacted here (platform.RedactProse).
-func fallbackText(patterns []platform.Redaction, set, note string) string {
+// can write, redacted here (platform.RedactProse), and the note with every
+// value secrets holds redacted before it is quoted, which would escape one
+// past any writer (platform.RedactValues; task 12b review I1).
+func fallbackText(patterns []platform.Redaction, secrets []string, set, note string) string {
 	text := "what no platform set measured"
 	if set != "" {
 		text = platform.RedactProse(patterns, set)
@@ -177,7 +180,8 @@ func fallbackText(patterns []platform.Redaction, set, note string) string {
 		// Each fragment between markers is quoted on its own and the markers
 		// laid back between them, so no escape in the note can run into one
 		// and leave a string no reader unquotes (task 14 re-review 2, M6).
-		fragments := strings.Split(platform.RedactProse(patterns, note), platform.Redacted)
+		fragments := strings.Split(platform.RedactValues(secrets, platform.RedactProse(patterns, note)),
+			platform.Redacted)
 		for i, f := range fragments {
 			fragments[i] = strings.TrimSuffix(strings.TrimPrefix(strconv.QuoteToASCII(f), `"`), `"`)
 		}

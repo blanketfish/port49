@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -580,4 +581,137 @@ func RedactProse(patterns []Redaction, text string) string {
 	}
 	b.WriteString(text[last:])
 	return b.String()
+}
+
+// HiddenValues are the values RedactRule hides in a rule's words: each word
+// it changed, less what it kept of the word, so `key=X` gives `X`. A writer
+// that knows them can redact a value wherever a line prints it, not only in
+// a quoted rule (RedactValues).
+func HiddenValues(rules []Redaction, words []string) []string {
+	out, ok := RedactRule(rules, words)
+	if !ok || len(out) != len(words) {
+		return nil
+	}
+	var values []string
+	for i, w := range words {
+		o := out[i]
+		if o == w {
+			continue
+		}
+		pre := 0
+		for pre < len(w) && pre < len(o) && w[pre] == o[pre] {
+			pre++
+		}
+		suf := 0
+		for suf < len(w)-pre && suf < len(o)-pre && w[len(w)-1-suf] == o[len(o)-1-suf] {
+			suf++
+		}
+		if v := w[pre : len(w)-suf]; v != "" {
+			values = append(values, v)
+		}
+	}
+	return values
+}
+
+// RedactValues is line with every occurrence of each value that stands as a
+// word of its own, bounded by anything but a letter, a digit or `_`, and in
+// any letter case by Unicode case folding, replaced by Redacted: a report that derives text from a
+// secret-bearing rule, a word it names, prints no more of the secret than
+// the rule's own quoted form does (spec §5.8). A value is matched as %q and
+// QuoteToASCII write it too, so a `"` or `\` escaped in a quoted rule does
+// not carry it past (task 12b review I1). A value split or otherwise
+// rewritten is past it, and is left out where the text is made (QuoteShown).
+func RedactValues(values []string, line string) string {
+	for _, v := range values {
+		if v == "" || v == Redacted {
+			continue
+		}
+		// QuoteToASCII writes a non-ASCII letter as its code point, which
+		// folding cannot match across case: each case is its own form.
+		forms := []string{v}
+		for _, q := range []string{strconv.Quote(v), strconv.QuoteToASCII(v), strconv.QuoteToASCII(strings.ToLower(v)),
+			strconv.QuoteToASCII(strings.ToUpper(v))} {
+			if f := q[1 : len(q)-1]; !slices.Contains(forms, f) {
+				forms = append(forms, f)
+			}
+		}
+		for _, f := range forms {
+			line = redactValue(f, line)
+		}
+	}
+	return line
+}
+
+// redactValue is line with every occurrence of v that stands as a word of
+// its own, in any letter case by Unicode case folding, replaced by Redacted:
+// a folded occurrence may differ from v in bytes, `ſ` for `s`.
+func redactValue(v, line string) string {
+	var b strings.Builder
+	last := 0
+	for i := 0; i < len(line); {
+		end, ok := foldPrefix(line[i:], v)
+		if ok && !(i > 0 && wordByte(line[i-1])) && !(i+end < len(line) && wordByte(line[i+end])) {
+			b.WriteString(line[last:i])
+			b.WriteString(Redacted)
+			i += end
+			last = i
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(line[i:])
+		i += size
+	}
+	b.WriteString(line[last:])
+	return b.String()
+}
+
+// foldPrefix reports whether s begins with v under Unicode simple case
+// folding, as strings.EqualFold compares, and how many bytes of s that is.
+func foldPrefix(s, v string) (int, bool) {
+	n := 0
+	for _, want := range v {
+		if n >= len(s) {
+			return 0, false
+		}
+		got, size := utf8.DecodeRuneInString(s[n:])
+		if !strings.EqualFold(string(got), string(want)) {
+			return 0, false
+		}
+		n += size
+	}
+	return n, n > 0
+}
+
+// RegexShown is a reply attribute's regex as a report prints it: whole, or
+// Redacted where it carries one of values in any form the regex writes a
+// word, a letter as `[hH]` or a character escaped, which no writer's pass
+// recognizes (spec §5.8; task 12b review I1).
+func RegexShown(values []string, re string) string {
+	plain := regexLetter.ReplaceAllStringFunc(re, func(m string) string {
+		if strings.EqualFold(m[1:2], m[2:3]) {
+			return m[1:2]
+		}
+		return m
+	})
+	plain = regexEscape.ReplaceAllString(plain, "$1")
+	if RedactValues(values, plain) != plain {
+		return Redacted
+	}
+	return re
+}
+
+var (
+	regexLetter = regexp.MustCompile(`\[[a-zA-Z][a-zA-Z]\]`)
+	regexEscape = regexp.MustCompile(`\\(.)`)
+)
+
+// QuoteShown is s quoted as %q quotes it, with every value in values
+// redacted first (RedactValues): how a report quotes text derived from a
+// rule, so a value %q would escape, one with a `"` or `\`, never reaches a
+// line in its escaped form (spec §5.8; task 12b review I1).
+func QuoteShown(values []string, s string) string {
+	return strconv.Quote(RedactValues(values, s))
+}
+
+func wordByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }

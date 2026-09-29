@@ -114,3 +114,14 @@ func CanonicalRule(rule string) string { return strings.Join(strings.Fields(rule
 func compileTerm(pattern string) (*regexp.Regexp, error) {
 	return regexp.Compile("(?i)" + pattern)
 }
+
+// compileWhy is why compileTerm refused a pattern, without the pattern: a
+// syntax error's text quotes it, and it may carry a value redaction hides;
+// its code does not (spec §5.8).
+func compileWhy(err error) string {
+	var serr *syntax.Error
+	if errors.As(err, &serr) {
+		return string(serr.Code)
+	}
+	return "RE2 refuses it"
+}

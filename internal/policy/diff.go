@@ -16,6 +16,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/projection"
 )
 
 // Diff is the effective-permission diff between two versions of a policy
@@ -57,6 +58,51 @@ type Diff struct {
 	// inventory has devices of: a platform_set moved, or a `platforms:` block
 	// edited (spec §8, §12).
 	Adapters []AdapterChange
+	// Projections are compositions on a projected platform whose reply
+	// changed shape, bits or template: a change in what the wire says even
+	// where no rule changed (spec §8). Reported; the reply gate is what fails
+	// on one that widens (Levels, "reply"; projection.Widens).
+	Projections []ProjectionChange
+	// ProjectionRefusals are the new version's compositions that get a
+	// projection's fail-closed reply, each naming the subject, the devices
+	// and why (Policy.Projections). Every one fails the diff, new or not:
+	// spec §8's "CI MUST refuse the policy" (§13 decision 26).
+	ProjectionRefusals []Finding
+}
+
+// ProjectionChange is one composition's projection before and after, on the
+// devices that hold the same blobs. A side with no projection has Shape "".
+// Narrower and Unreached are where the new reply is narrower than port49, as
+// policy test reports it (shortfall): commands the device refuses, and
+// allows sent under bits that do not reach them, both redacted.
+type ProjectionChange struct {
+	Subject                  string
+	Devices                  []string
+	At                       time.Time
+	OldShape, NewShape       string
+	OldBits, NewBits         []string
+	OldTemplate, NewTemplate string
+	Narrower, Unreached      []string
+}
+
+// projectionChange compares two resolutions' projections, ok where the
+// shape, the bits, the template, or where the device is narrower than
+// port49, moved.
+func projectionChange(was, is *projection.Result, patterns []platform.Redaction, secrets []string) (ProjectionChange,
+	bool) {
+	var pc ProjectionChange
+	var oldNarrower, oldUnreached []string
+	if was != nil {
+		pc.OldShape, pc.OldBits, pc.OldTemplate = was.Shape, was.Bits, was.Template
+		oldNarrower, oldUnreached = shortfall(*was, patterns, secrets)
+	}
+	if is != nil {
+		pc.NewShape, pc.NewBits, pc.NewTemplate = is.Shape, is.Bits, is.Template
+		pc.Narrower, pc.Unreached = shortfall(*is, patterns, secrets)
+	}
+	return pc, pc.OldShape != pc.NewShape || !slices.Equal(pc.OldBits, pc.NewBits) ||
+		pc.OldTemplate != pc.NewTemplate || !slices.Equal(oldNarrower, pc.Narrower) ||
+		!slices.Equal(oldUnreached, pc.Unreached)
 }
 
 // AdapterChange is one key of one platform's adapter that the two versions
@@ -380,7 +426,8 @@ func Compare(before, after *Policy, now time.Time) Diff {
 	}
 	slices.SortFunc(instants, func(a, b time.Time) int { return a.Compare(b) })
 	c := comparison{before: before, after: after, acks: after.expansionAcks(before, instants), seen: map[string]bool{},
-		usedAcks: map[Acknowledgment]bool{}}
+		usedAcks: map[Acknowledgment]bool{}, secrets: append(before.HiddenValues(), after.HiddenValues()...),
+		patterns: slices.Concat(before.Redactions(), after.Redactions())}
 	for k := range after.sessionAcks(instants) {
 		c.acks[k] = true
 	}
@@ -392,6 +439,11 @@ func Compare(before, after *Policy, now time.Time) Diff {
 	}
 	c.principals(now)
 	c.adapters()
+	for _, f := range after.Projections(now) {
+		if f.Kind == FindingProjectionRefused || f.Kind == FindingProjectionOverflow {
+			c.d.ProjectionRefusals = append(c.d.ProjectionRefusals, f)
+		}
+	}
 	for _, a := range after.acked {
 		if !c.usedAcks[a] {
 			c.d.StaleAcknowledgments = append(c.d.StaleAcknowledgments, a)
@@ -497,6 +549,14 @@ type comparison struct {
 	seen map[string]bool
 	// usedAcks are the acknowledge: entries that acknowledged a widening.
 	usedAcks map[Acknowledgment]bool
+	// secrets are the values either version's redactions hide in its
+	// rules, and src the rule words each probe argument of the group being
+	// compared was made from: a changed command prints through probeShown.
+	secrets []string
+	src     map[string][]string
+	// patterns are both versions' redactions, which a projection change's
+	// rules print through.
+	patterns []platform.Redaction
 	d        Diff
 }
 
@@ -615,6 +675,7 @@ func currentEntries(p *Policy, device string, at time.Time) []QuarantineEntry {
 // group compares one subject on devices that hold the same blobs.
 func (c *comparison) group(subject string, devices []string, was, is side, at time.Time) {
 	on := strings.Join(devices, ",")
+	c.src = engine.ProbeSources(was.prog, is.prog)
 	if was.quarantined || was.refused != "" {
 		// The old version refused everything here, by quarantine or at the
 		// mint, so everything the new one permits is a change from refused
@@ -643,7 +704,13 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 			OldLevel: wr.Level, NewLevel: ir.Level, OldCeiling: wr.Ceiling, NewCeiling: ir.Ceiling,
 			OldPrivLvl: was.priv.device, NewPrivLvl: is.priv.device, OldEnable: was.priv.enable,
 			NewEnable: is.priv.enable, OldReply: splitReply(was.priv.reply), NewReply: splitReply(is.priv.reply)},
-			was.priv, is.priv))
+			was.priv, is.priv, wr.Projection, ir.Projection))
+	}
+	if pc, ok := projectionChange(wr.Projection, ir.Projection, c.patterns, c.secrets); ok && c.once("projection",
+		subject, on, pc.OldShape, pc.NewShape, strings.Join(pc.OldBits, " "), strings.Join(pc.NewBits, " "),
+		pc.OldTemplate, pc.NewTemplate, strings.Join(pc.Narrower, "\n"), strings.Join(pc.Unreached, "\n")) {
+		pc.Subject, pc.Devices, pc.At = subject, devices, at
+		c.d.Projections = append(c.d.Projections, pc)
 	}
 	if was.hash == is.hash {
 		return
@@ -689,7 +756,7 @@ func (c *comparison) group(subject string, devices []string, was, is side, at ti
 // change records one command whose verdict moved, and whether it is gated.
 func (c *comparison) change(subject string, devices []string, at time.Time, v []string, from, to engine.Outcome,
 	is side, oldRefused string) {
-	ch := Change{Subject: subject, Devices: devices, At: at, Command: display(v), Vector: v, Old: from, New: to,
+	ch := Change{Subject: subject, Devices: devices, At: at, Command: display(probeShown(v, c.src, c.secrets)), Vector: v, Old: from, New: to,
 		OldRefused: oldRefused}
 	if to.Permit && !from.Permit {
 		switch {
@@ -806,8 +873,13 @@ func (p *Policy) regexAcks(before *Policy, instants []time.Time) map[string]bool
 //   - enable: the mechanism went from none to token, or to auto, which asks
 //     for nothing more than a login;
 //   - reply: the session reply gained, changed or lost an attribute that
-//     bears privilege on the platform, priv-lvl aside.
-func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
+//     bears privilege on the platform, priv-lvl aside. On a projected
+//     platform the projection's own attributes are judged by what the device
+//     can do under them instead (projection.Widens): a bit it did not hold,
+//     or a command it did not run, is a raise, and a reply that only narrows
+//     is not, whatever its regexes say (plan 5b pre-flight I14). The proof
+//     that the device runs nothing port49 denies is what makes that safe.
+func (c *comparison) levelChange(l LevelChange, was, is privilege, wasProj, isProj *projection.Result) LevelChange {
 	rose := func(from, to string) bool {
 		return from != to && to != "" && (c.before.levelIndex(to) > c.before.levelIndex(from) ||
 			c.after.levelIndex(to) > c.after.levelIndex(from))
@@ -832,7 +904,17 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 	before, after := c.before.dialect(was.platform), c.after.dialect(is.platform)
 	oldRendered, _, _ := c.before.render(before, was.level)
 	newRendered, _, _ := c.after.render(after, is.level)
-	if replyRose(l.OldReply, l.NewReply, oldRendered, newRendered, before, after) {
+	oldReply, newReply := l.OldReply, l.NewReply
+	projected := before.Projected() || after.Projected()
+	if projected {
+		owned := func(a string) bool {
+			return before.ProjectionOwns(engine.AttributeName(a)) || after.ProjectionOwns(engine.AttributeName(a))
+		}
+		oldReply = slices.DeleteFunc(slices.Clone(oldReply), owned)
+		newReply = slices.DeleteFunc(slices.Clone(newReply), owned)
+	}
+	if replyRose(oldReply, newReply, oldRendered, newRendered, before, after) ||
+		projected && projectionRose(wasProj, isProj) {
 		l.Raised = append(l.Raised, "reply")
 	}
 	l.Raise = len(l.Raised) > 0
@@ -848,6 +930,26 @@ func (c *comparison) levelChange(l LevelChange, was, is privilege) LevelChange {
 		return true
 	})
 	return l
+}
+
+// projectionRose reports whether a projected reply lets the device do more:
+// it widens (projection.Widens), or the projection went away, after which the
+// device runs whatever its template user's class does, which port49 cannot
+// read. A fail-closed reply is no raise, whatever it replaced: it is a
+// projection refusal, which fails the diff with no acknowledgment, and a
+// reply: test would only pin a reply the policy must not ship (plan 5b
+// pre-flight R-M8). A template renamed with the same bits is no raise
+// either: the adapter fixes its bits, and drift is check-config's
+// (projection.Widens; task 12 review M1).
+func projectionRose(was, is *projection.Result) bool {
+	if is == nil {
+		return was != nil
+	}
+	if is.FailClosed != "" {
+		return false
+	}
+	_, widens := projection.Widens(was, is)
+	return widens
 }
 
 // replyRose reports whether the session reply gained, changed or lost an
@@ -981,6 +1083,27 @@ func (p *Policy) sessionAcks(instants []time.Time) map[string]bool {
 		}
 	}
 	return acks
+}
+
+// probeShown is a probe vector with every argument made from a value
+// redaction hides printed Redacted: the value, a piece of it a probe split
+// or cut short, or a witness of a class or regex term whose text is hidden,
+// none of which a writer recognizes as the secret (src is
+// engine.ProbeSources; spec §5.8). An argument with no source recorded is
+// one nothing says is safe, and prints Redacted too; OtherArgument is no
+// rule's text. The vector probed is left as it was.
+func probeShown(v []string, src map[string][]string, secrets []string) []string {
+	out := slices.Clone(v)
+	for i, a := range out {
+		if a == engine.OtherArgument {
+			continue
+		}
+		if len(src[a]) == 0 || hidden(secrets, strings.TrimSpace(a)) || slices.ContainsFunc(src[a],
+			func(w string) bool { return hidden(secrets, w) }) {
+			out[i] = platform.Redacted
+		}
+	}
+	return out
 }
 
 // display is a probe vector as a person reads it.

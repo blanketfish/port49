@@ -2023,7 +2023,10 @@ func (l *lab) result(t *testing.T, entry, claim, observation string) {
 		fmt.Fprintf(&b, "- **Caveat:** %s\n", l.configWarn)
 	}
 	fmt.Fprintf(&b, "\n## Claim\n\n%s\n\n## Observation\n\n%s\n", claim, observation)
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	// A note is committed, and an observation may copy a device's
+	// configuration: every password and hash in it is redacted here, whatever
+	// the test put in (a4c4738; plan 5b final review I-4).
+	if err := os.WriteFile(path, []byte(labcreds.RedactNote(b.String())), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 	t.Logf("wrote %s", path)

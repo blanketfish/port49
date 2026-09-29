@@ -45,6 +45,11 @@ type Spec struct {
 	FallbackNote         *map[string]string   `yaml:"fallback_note,omitempty"`
 	LocalAccounts        *[]string            `yaml:"local_accounts,omitempty"`
 	ConfigChecks         *[]ConfigCheck       `yaml:"config_checks,omitempty"`
+	CommandProjection    *string              `yaml:"command_projection,omitempty"`
+	Bits                 *map[string][]string `yaml:"bits,omitempty"`
+	CarveOuts            *map[string][]string `yaml:"carve_outs,omitempty"`
+	BitDelivery          *string              `yaml:"bit_delivery,omitempty"`
+	LocalUserNames       *map[string]string   `yaml:"local_user_names,omitempty"`
 }
 
 // ParseSpecs reads an adapter file: one YAML document whose one key is
@@ -80,8 +85,32 @@ func (s Spec) Over(base Dialect) Dialect {
 	if s.Supports != nil {
 		d.Supports = slices.Clone(*s.Supports)
 	}
-	if s.Privilege != nil {
+	if s.CommandProjection != nil {
+		d.CommandProjection = *s.CommandProjection
+	}
+	// On a projected platform `privilege` is each level's ceiling in bits
+	// (spec §8), read by the projection and never sent as attributes.
+	if s.Privilege != nil && d.Projected() {
+		d.CeilingBits = mergeLists(d.CeilingBits, *s.Privilege)
+	} else if s.Privilege != nil {
 		d.Levels = mergeLists(d.Levels, *s.Privilege)
+	}
+	if s.Bits != nil {
+		d.Bits = mergeLists(d.Bits, *s.Bits)
+	}
+	if s.CarveOuts != nil {
+		d.CarveOuts = mergeLists(d.CarveOuts, *s.CarveOuts)
+	}
+	if s.BitDelivery != nil {
+		d.BitDelivery = *s.BitDelivery
+	}
+	if s.LocalUserNames != nil {
+		if d.LocalUserNames == nil {
+			d.LocalUserNames = map[string]string{}
+		}
+		for k, v := range *s.LocalUserNames {
+			d.LocalUserNames[k] = v
+		}
 	}
 	if s.CeilingLevels != nil {
 		if d.CeilingLevels == nil {
@@ -455,6 +484,9 @@ func Validate(name string, d Dialect) error {
 				field("config_checks"), i)
 		}
 	}
+	if err := validateProjection(field, d); err != nil {
+		return err
+	}
 	if !slices.Contains(verifications, d.Verified) {
 		return fmt.Errorf("%s is not containerlab, community, or unset", field("verified"))
 	}
@@ -639,6 +671,25 @@ func SpecOf(d Dialect) Spec {
 	if d.Levels != nil {
 		s.Privilege = &d.Levels
 	}
+	if d.Projected() {
+		s.CommandProjection = &d.CommandProjection
+		s.Privilege = nil
+		if d.CeilingBits != nil {
+			s.Privilege = &d.CeilingBits
+		}
+	}
+	if d.Bits != nil {
+		s.Bits = &d.Bits
+	}
+	if d.CarveOuts != nil {
+		s.CarveOuts = &d.CarveOuts
+	}
+	if d.BitDelivery != "" {
+		s.BitDelivery = &d.BitDelivery
+	}
+	if d.LocalUserNames != nil {
+		s.LocalUserNames = &d.LocalUserNames
+	}
 	if d.CeilingLevels != nil {
 		s.CeilingLevels = &d.CeilingLevels
 	}
@@ -698,4 +749,234 @@ func SpecKeys() []string {
 		out[i] = strings.Split(t.Field(i).Tag.Get("yaml"), ",")[0]
 	}
 	return out
+}
+
+// bitName is the shape of a permission bit's name, as Junos spells them
+// (`view-configuration`).
+var bitName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// templateName is the shape of a template user this build renders: what
+// Junos takes as a login name, lower case so no two differ only by case.
+var templateName = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
+
+// p49Template is port49's template namespace: a template the device already
+// has for another reason, `root` or `remote`, would put the session in that
+// account's class whatever bits the projection proved (spec §8,
+// local_user_names). No subject may take a p49- name either
+// (ReservedUsername).
+var p49Template = regexp.MustCompile(`^` + templatePrefix + `[a-z0-9][a-z0-9._-]*$`)
+
+const templatePrefix = "p49-"
+
+// remoteUser is the device's own fallback template: the user a session with
+// no template, or one the device lacks, lands under (RemoteClass).
+const remoteUser = "remote"
+
+// ReservedUsername reports whether u names one of a device's own accounts,
+// in any case: `remote`, any p49- name, or any platform's system user. A
+// session under one lands in that account's class whatever the reply says,
+// so no subject takes one: policy load refuses a declared one and the mint
+// one a directory derives (spec §8; §13 decision 26).
+func ReservedUsername(u string) bool {
+	return strings.EqualFold(u, remoteUser) || strings.HasPrefix(strings.ToLower(u), templatePrefix) ||
+		ContainsName(systemUserNames(), u)
+}
+
+// systemUserNames is every platform's system users as one list: no template
+// user takes one, whatever platform it is declared on.
+func systemUserNames() []string {
+	var out []string
+	for _, users := range systemUsers {
+		out = append(out, users...)
+	}
+	return out
+}
+
+// validateProjection is Validate for the projection keys (spec §8): a
+// projection this build renders, a session-only platform, `privilege` as
+// ceiling bits the adapter declares, each bit's reach in rule form, a
+// delivery, and a template per level where the delivery needs one. Where
+// there is no projection, none of the keys is set: a key nothing reads reads
+// as enforced.
+func validateProjection(field func(string) string, d Dialect) error {
+	if !d.Projected() {
+		for _, k := range []struct {
+			key string
+			set bool
+		}{{"bits", d.Bits != nil}, {"carve_outs", d.CarveOuts != nil}, {"bit_delivery", d.BitDelivery != ""},
+			{"local_user_names", d.LocalUserNames != nil}} {
+			if k.set {
+				return fmt.Errorf("%s is read only with command_projection; set that, or remove the key", field(k.key))
+			}
+		}
+		return nil
+	}
+	if d.CommandProjection != ProjectionJunosRegex {
+		return fmt.Errorf("%s is not a projection this build renders; the one it renders is %s",
+			field("command_projection"), ProjectionJunosRegex)
+	}
+	if !slices.Equal(d.Supports, []string{"session"}) {
+		return fmt.Errorf("%s: a projected platform authorizes its sessions and nothing else, so supports is "+
+			"[session]; a platform that asks port49 about commands is answered per command (spec §8)", field("supports"))
+	}
+	if d.Levels != nil {
+		// Unreachable through a file: Over routes `privilege` to CeilingBits
+		// on a projected platform. A Dialect built by hand could carry both.
+		return fmt.Errorf("%s names permission bits on a projected platform, never attributes", field("privilege"))
+	}
+	if d.AcceptedAttributes != nil {
+		return fmt.Errorf("%s: a projected platform's reply is the projection's own names; remove the key",
+			field("accepted_attributes"))
+	}
+	for _, n := range ProjectionAttributes(d.CommandProjection) {
+		if !slices.Contains(d.PrivilegeAttributes, n) {
+			return fmt.Errorf("%s: %s is missing: the projection sends it, and it carries privilege (spec §8)",
+				field("privilege_attributes"), n)
+		}
+	}
+	if len(d.Bits) == 0 {
+		return fmt.Errorf("%s is required with command_projection: each permission bit's reach in rule form "+
+			"(spec §8)", field("bits"))
+	}
+	for k, bit := range sortedKeys(d.Bits) {
+		if !bitName.MatchString(bit) {
+			return fmt.Errorf("%s: bit %d in name order is not a permission bit's name", field("bits"), k+1)
+		}
+		if len(d.Bits[bit]) == 0 {
+			return fmt.Errorf("%s is empty: a bit that reaches nothing is not declared", field("bits."+bit))
+		}
+		for i, rule := range d.Bits[bit] {
+			terms, err := engine.ParseRule(rule)
+			if err != nil {
+				return fmt.Errorf("%s[%d]: %w", field("bits."+bit), i, err)
+			}
+			// A bit's reach is the device's: a class is a policy's names and a
+			// regex no containment can read (engine.Contains).
+			for j, t := range terms {
+				if t.Kind == engine.Class || t.Kind == engine.Regex {
+					return fmt.Errorf("%s[%d]: term %d: a bit's reach is words, `*` and `**`", field("bits."+bit), i, j+1)
+				}
+			}
+		}
+	}
+	for _, bit := range sortedKeys(d.CarveOuts) {
+		if bit == BaselineBit {
+			return fmt.Errorf("%s.%s: a carve-out belongs to a bit a level may hold, never to %s, which every "+
+				"session holds", field("carve_outs"), bit, BaselineBit)
+		}
+		if _, ok := d.Bits[bit]; !ok {
+			return fmt.Errorf("%s.%s: %s is not a bit under bits, so it has no reach to carve out of",
+				field("carve_outs"), bit, bit)
+		}
+		for i, rule := range d.CarveOuts[bit] {
+			// Only commands the bit itself reaches can be the bit's alone.
+			held := slices.ContainsFunc(d.Bits[bit], func(r string) bool {
+				ok, err := engine.Contains(r, rule, nil)
+				return err == nil && ok
+			})
+			if !held {
+				return fmt.Errorf("%s[%d]: the bit's own reach does not hold it", field("carve_outs."+bit), i)
+			}
+		}
+	}
+	switch d.BitDelivery {
+	case BitDeliveryUserPermissions, BitDeliveryLocalUserName:
+	default:
+		return fmt.Errorf("%s is %s or %s (spec §8)", field("bit_delivery"), BitDeliveryUserPermissions,
+			BitDeliveryLocalUserName)
+	}
+	// With no ceiling bits a level would be projected against nothing the
+	// adapter says; every projected level names its bits.
+	if len(d.CeilingBits) == 0 {
+		return fmt.Errorf("%s is required with command_projection: each level's ceiling in permission bits (spec §8)",
+			field("privilege"))
+	}
+	for _, level := range sortedKeys(d.CeilingBits) {
+		seen := map[string]bool{}
+		for i, bit := range d.CeilingBits[level] {
+			if _, ok := d.Bits[bit]; !ok {
+				return fmt.Errorf("%s[%d]: %s is not a bit under bits", field("privilege."+level), i, bit)
+			}
+			if bit == BaselineBit {
+				return fmt.Errorf("%s[%d]: %s is held by every session, so no level names it", field("privilege."+level),
+					i, bit)
+			}
+			if seen[bit] {
+				return fmt.Errorf("%s: %s is listed twice", field("privilege."+level), bit)
+			}
+			seen[bit] = true
+		}
+	}
+	if d.BitDelivery != BitDeliveryLocalUserName {
+		if d.LocalUserNames != nil {
+			return fmt.Errorf("%s is read only under bit_delivery: %s", field("local_user_names"), BitDeliveryLocalUserName)
+		}
+		return nil
+	}
+	byName := map[string]string{}
+	for _, level := range sortedKeys(d.CeilingBits) {
+		name, ok := d.LocalUserNames[level]
+		if !ok {
+			return fmt.Errorf("%s: level %s has no template user; bit_delivery: %s sends one per level", field(
+				"local_user_names"), level, BitDeliveryLocalUserName)
+		}
+		if !templateName.MatchString(name) {
+			return fmt.Errorf("%s is not a login name: lower case letters, digits, `.`, `-` and `_`, starting with "+
+				"a letter, at most 64", field("local_user_names."+level))
+		}
+		if name == remoteUser {
+			return fmt.Errorf("%s: %s is the device's own fallback template, the bitless one a session lands under "+
+				"when its template is missing; a level's template is p49-<name> (spec §8)",
+				field("local_user_names."+level), name)
+		}
+		if strings.EqualFold(name, RemoteClass) {
+			return fmt.Errorf("%s: %s is the fallback remote user's bitless class, which a session whose template "+
+				"the device lacks lands in; a level under it would give every such session the level's bits (spec §8)",
+				field("local_user_names."+level), name)
+		}
+		if !p49Template.MatchString(name) || ContainsName(systemUserNames(), name) {
+			return fmt.Errorf("%s: %s is not a p49- template: a level's template is p49-<name>, since one the "+
+				"device already has, root or a local account, puts the session in its own class whatever bits the "+
+				"projection proved (spec §8)", field("local_user_names."+level), name)
+		}
+		// One template is one class: two levels sharing it get the same bits.
+		if other, ok := byName[name]; ok && !slices.Equal(d.ExpandBits(d.CeilingBits[other]),
+			d.ExpandBits(d.CeilingBits[level])) {
+			return fmt.Errorf("%s: levels %s and %s share template %s and have different bits; one template is one "+
+				"class", field("local_user_names"), other, level, name)
+		}
+		byName[name] = level
+	}
+	for _, level := range sortedKeys(d.LocalUserNames) {
+		if _, ok := d.CeilingBits[level]; !ok {
+			return fmt.Errorf("%s: level %s has no bits under privilege", field("local_user_names"), level)
+		}
+	}
+	return nil
+}
+
+// MonotoneBits refuses a projected adapter whose ceiling bits do not rise
+// with order, the policy's levels lowest first: every bit a lower level's
+// ceiling holds, `all` read as every bit, a higher level's holds too. It is
+// Monotone for a platform whose levels are bits (spec §8).
+func MonotoneBits(name string, d Dialect, order []string) error {
+	var levels []string
+	for _, l := range order {
+		if _, ok := d.CeilingBits[l]; ok {
+			levels = append(levels, l)
+		}
+	}
+	for i, lower := range levels {
+		low := d.ExpandBits(d.CeilingBits[lower])
+		for _, higher := range levels[i+1:] {
+			high := d.ExpandBits(d.CeilingBits[higher])
+			for _, bit := range low {
+				if !slices.Contains(high, bit) {
+					return fmt.Errorf("platforms.%s.privilege.%s: %s is not in %s's bits, above it; a level's ceiling "+
+						"holds no bit the levels above it lack", name, lower, bit, higher)
+				}
+			}
+		}
+	}
+	return nil
 }

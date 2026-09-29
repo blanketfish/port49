@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
 // L16, the precedence half: what an NX-OS session holds when the reply carries
@@ -980,7 +982,7 @@ func (l *lab) appendResultSection(t *testing.T, entry, heading, body string) {
 		old = old[:i]
 	}
 	out := strings.TrimRight(old, "\n") + "\n" + marker + body
-	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(labcreds.RedactNote(out)), 0o644); err != nil { // as result()
 		t.Fatalf("write %s: %v", path, err)
 	}
 	t.Logf("wrote the %q section of %s", heading, path)

@@ -52,11 +52,21 @@ func (p *Policy) commandRaw(line, platformName string) (raw, split []string) {
 	return out, split
 }
 
-// splitNotes is the caveat for a line commandRaw split on platformName.
+// splitNotes is the caveat for a line commandRaw split on platformName. It
+// is left out where a word split is a value redaction hides, in the line or
+// in the policy's rules: the note would print it split, which no writer
+// recognizes (spec §5.8).
 func (p *Policy) splitNotes(line, platformName string) []string {
 	_, split := p.commandRaw(line, platformName)
 	if len(split) == 0 {
 		return nil
+	}
+	words := strings.Fields(line)
+	secrets := append(platform.HiddenValues(p.Redactions(), words), p.HiddenValues()...)
+	for _, w := range words {
+		if _, _, ok := engine.SplitName(w); ok && hidden(secrets, w) {
+			return nil
+		}
 	}
 	return []string{fmt.Sprintf("%s splits an interface name from its index, so this was evaluated as IOS-XE sends "+
 		"an interface name (tests/lab/results/L21-cisco_iosxe.md): %s; a word here that is not an interface name "+
@@ -95,7 +105,12 @@ func (p *Policy) Decide(subject, principal string, d admission.Device, line stri
 // device will not honor.
 func Caveats(platformName string, dialect platform.Dialect, o engine.Outcome) []string {
 	var out []string
-	if !dialect.Authorizes("commands") {
+	if dialect.Projected() {
+		out = append(out, fmt.Sprintf("%s does not send per-command authorization (supports: %s): the device "+
+			"decides this command itself, from the session reply's projection of these rules (command_projection: %s), "+
+			"and a revocation or a session ceiling does not reach a live session there (spec §5.6, §8)", platformName,
+			strings.Join(dialect.Supports, ", "), dialect.CommandProjection))
+	} else if !dialect.Authorizes("commands") {
 		out = append(out, fmt.Sprintf("%s does not send per-command authorization (supports: %s): the device "+
 			"never asks port49 about this command, and a revocation or a session ceiling does not reach a live "+
 			"session there (spec §5.6)", platformName, strings.Join(dialect.Supports, ", ")))
@@ -104,6 +119,56 @@ func Caveats(platformName string, dialect platform.Dialect, o engine.Outcome) []
 		out = append(out, fmt.Sprintf("%s applies output modifiers itself after port49 authorizes the bare "+
 			"command (pipe_authorized: false; tests/lab/results/L2-*.md), so the device never sends this "+
 			"pipeline and no pipe rule protects it; the control is on the device", platformName))
+	}
+	return out
+}
+
+// ProjectionCaveats say what the device does with a command under a
+// projected session reply (spec §8, "Verification"): whether it runs it, and
+// that its effective set is its class ∩ the wire, the class half outside
+// port49. Where port49 permits what the device refuses, the projection is
+// narrower there, which fails closed and is said. A rule it quotes has each
+// value secrets holds redacted first (platform.QuoteShown).
+func ProjectionCaveats(res Resolution, platformName string, o engine.Outcome, secrets []string) []string {
+	pr := res.Projection
+	if pr == nil {
+		return nil
+	}
+	var out []string
+	// Said whatever the line: a line with no command is still answered
+	// under that reply.
+	if pr.FailClosed != "" {
+		out = append(out, fmt.Sprintf("the composition cannot be told to %s faithfully (%s): %s; this subject "+
+			"gets the fail-closed reply there, every command denied but what the projection proved (spec §13 "+
+			"decision 26), and policy test fails on it", platformName, pr.FailClosed, pr.Refusal.Why))
+	}
+	if len(o.Vector) == 0 {
+		return out
+	}
+	runs := pr.Device(o.Vector)
+	verb := "refuses"
+	if runs {
+		verb = "runs"
+	}
+	out = append([]string{fmt.Sprintf("under the session reply's projection (%s shape) the device %s it; what it "+
+		"runs is its class ∩ the wire, and the class half is the device's configuration, outside port49 (spec §8, "+
+		"\"Verification\")", pr.Shape, verb)}, out...)
+	if o.Permit && !runs {
+		out = append(out, fmt.Sprintf("port49 permits this and the projection does not carry it to %s: the "+
+			"device refuses it, which fails closed (spec §8)", platformName))
+	}
+	// The model runs an allow its bits do not reach, the reading that errs
+	// toward the device running more; whether it does is unmeasured
+	// (Result.Unreached).
+	if runs && o.Decided != nil {
+		for _, u := range pr.Unreached {
+			if u.Rule == o.Decided.Rule {
+				out = append(out, fmt.Sprintf("the device may refuse it: the allow that carries it, %s, is sent "+
+					"under bits that do not reach it, and whether a Junos allow runs without its bit is unmeasured "+
+					"(spec §8)", platform.QuoteShown(secrets, u.Rule)))
+				break
+			}
+		}
 	}
 	return out
 }
@@ -198,6 +263,7 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 			}
 			r.Permit, r.Reason, r.Outcome = o.Permit, o.Reason, o
 			r.Caveats = append(Caveats(d.Platform, p.dialect(d.Platform), o), p.splitNotes(t.Command, d.Platform)...)
+			r.Caveats = append(r.Caveats, ProjectionCaveats(res, d.Platform, o, p.HiddenValues())...)
 		}
 		// API rights belong to the subject, not to a session on a device, so
 		// they are read whether or not the mint would be made (spec §12).
@@ -208,6 +274,13 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 		// A level or ceiling is asserted of a session the mint would make,
 		// so it fails wherever no level was resolved.
 		minted := r.Err == nil && r.Ceiling != ""
+		if minted {
+			for _, a := range res.LeftOff {
+				r.Caveats = append(r.Caveats, fmt.Sprintf("%s (%s) is not sent to %s: under `all`, idletime and "+
+					"timeout are left off a projected platform, whose idle limit is the device's login class's "+
+					"(spec §8, decision 21)", a.Attribute, a.Source, d.Platform))
+			}
+		}
 		r.Pass = r.Err == nil && (t.Level == "" || minted && t.Level == r.Level) &&
 			(t.MaxPrivilege == "" || minted && t.MaxPrivilege == r.Ceiling) &&
 			(t.PrivLvl == "" || minted && samePrivLvl(t.PrivLvl, r.PrivLvl)) &&

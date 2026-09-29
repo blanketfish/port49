@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
@@ -530,5 +531,89 @@ func TestAURLQueryCredentialIsRedacted(t *testing.T) {
 	}
 	if got, _ := Redact(Redactions("default"), []string{"security wpa psk set-key ascii 0 Hunter2"}); strings.Contains(got[0], "Hunter2") {
 		t.Errorf("%q", got)
+	}
+}
+
+// The values a rule's redaction hides are what a writer redacts wherever a
+// line prints them, as a word of its own, and nowhere else.
+func TestHiddenValuesAreRedactedWhereverALinePrintsThem(t *testing.T) {
+	rules := Redactions("cisco_iosxe")
+	got := HiddenValues(rules, strings.Fields("show system radius-server 10.0.0.1 secret HUNTER2"))
+	if !slices.Equal(got, []string{"HUNTER2"}) {
+		t.Fatalf("%q", got)
+	}
+	if got := HiddenValues(rules, strings.Fields("show version")); got != nil {
+		t.Fatalf("%q", got)
+	}
+	line := "`HUNTER2` never matches; write `HUNTER2x` or HunTer2, not xHUNTER2"
+	if got, want := RedactValues([]string{"HUNTER2"}, line),
+		"`«redacted»` never matches; write `HUNTER2x` or «redacted», not xHUNTER2"; got != want {
+		t.Fatalf("%q", got)
+	}
+}
+
+// A value with a `"` or `\` in it is past the writer's pass once %q quotes
+// it, so the pass matches its quoted forms too, in any letter case, and
+// QuoteShown redacts before it quotes, which is how a report quotes text
+// derived from a rule (task 12b review I1).
+func TestAQuotedValueIsStillRedacted(t *testing.T) {
+	for _, v := range []string{`pa"ss9`, `a\b9`, `Mi"X\d9`} {
+		leaks := func(got string) bool {
+			low := strings.ToLower(got)
+			return strings.Contains(low, strings.ToLower(v)) ||
+				strings.Contains(low, strings.ToLower(strings.Trim(strconv.Quote(v), `"`)))
+		}
+		for _, line := range []string{
+			fmt.Sprintf("allow %q is not sent: %q is not a keyword", "show "+v+" **", v),
+			fmt.Sprintf("%q", strings.ToUpper(v)),
+			strconv.QuoteToASCII(strings.ToLower(v)),
+			"`" + v + "`",
+		} {
+			if got := RedactValues([]string{v}, line); leaks(got) || !strings.Contains(got, Redacted) {
+				t.Errorf("%s: %s -> %s", v, line, got)
+			}
+		}
+		if got := QuoteShown([]string{v}, "show "+strings.ToUpper(v)+" **"); got != `"show `+Redacted+` **"` {
+			t.Errorf("%s: %s", v, got)
+		}
+	}
+}
+
+// A reply regex writes a word re-cased, a letter as `[hH]`, or escaped, which
+// no writer's pass recognizes: one that carries a hidden value prints
+// redacted whole, and any other as it is (task 12b review I1).
+func TestARegexCarryingAHiddenValueIsRedactedWhole(t *testing.T) {
+	for _, re := range []string{`^(show [hH][uU][nN][tT][eE][rR]2)$`, `^(show hunter2( .*)?)$`, `^(show x\.y|show HUNTER2)$`} {
+		if got := RegexShown([]string{"HUNTER2"}, re); got != Redacted {
+			t.Errorf("%s: %s", re, got)
+		}
+	}
+	if got := RegexShown([]string{"x.y"}, `^(show x\.y)$`); got != Redacted {
+		t.Errorf("escaped: %s", got)
+	}
+	if re := `^(show [hH]unter( .*)?)$`; RegexShown([]string{"HUNTER2"}, re) != re {
+		t.Errorf("%s redacted", re)
+	}
+}
+
+// A value is matched in any letter case by Unicode case folding, not ASCII
+// only: `PÄ"ss9` hidden is `pä"ss9` typed, as written, %q-quoted or quoted
+// in ASCII (task 12b review).
+func TestAValueIsMatchedInAnyUnicodeCase(t *testing.T) {
+	v := `PÄ"ss9`
+	for _, line := range []string{
+		`show pä"ss9 **`,
+		fmt.Sprintf("allow %q", `show pä"SS9 **`),
+		strconv.QuoteToASCII(`show pä"ss9`),
+		`the word ΣΑΣ, and ſtop`,
+	} {
+		got := RedactValues([]string{v, "σας", "stop"}, line)
+		if low := strings.ToLower(got); strings.Contains(low, "ss9") || strings.Contains(low, "σας") ||
+			strings.Contains(got, "ſtop") || !strings.Contains(got, Redacted) {
+			t.Errorf("%s -> %s", line, got)
+		}
+	}
+	if got := QuoteShown([]string{v}, `show pä"SS9 **`); got != `"show `+Redacted+` **"` {
+		t.Errorf("%s", got)
 	}
 }

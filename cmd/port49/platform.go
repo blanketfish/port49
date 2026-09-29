@@ -16,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 )
@@ -142,12 +143,16 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 	a.register(fs)
 	all := fs.Bool("all", false, "every platform, one file each in --dir (export only)")
 	dir := fs.String("dir", "", "the directory --all writes to")
+	classes := fs.Bool("classes", false, "a projected platform's reference device configuration, as set lines "+
+		"(export only)")
+	cfgPath := fs.String("config", "", "port49d.yaml: its session.max_session_age_default is the classes' "+
+		"idle-timeout (with --classes)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	switch {
 	case *all && (!export || *dir == "" || fs.NArg() != 0), !*all && (*dir != "" || fs.NArg() != 1),
-		a.conflicting():
+		a.conflicting(), *classes && (!export || *all || *cfgPath == ""), !*classes && *cfgPath != "":
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -194,6 +199,16 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 		fmt.Fprintf(stderr, "%s: %q has no adapter here; the platforms are %s\n", name, platformName,
 			strings.Join(sortedNames(set), ", "))
 		return 1
+	}
+	if *classes {
+		var hidden map[int]bool
+		if p != nil {
+			if d.DeviceConfig, hidden, err = referenceDeviceConfig(p, platformName, patterns, secret); err != nil {
+				fmt.Fprintf(stderr, "%s: %v\n", name, err)
+				return 1
+			}
+		}
+		return exportClasses(stdout, stderr, name, platformName, d, *cfgPath, a, p, hidden)
 	}
 	mode := exportShow
 	if export {
@@ -286,8 +301,8 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 			after.PlatformSet(), *to)
 		return 1
 	}
-	out.rules = append(before.Redactions(), after.Redactions()...)
-	errOut.rules = out.rules
+	out.learn(before, after)
+	errOut.learn(before, after)
 	upgradeReport(stdout, before, after, time.Now())
 	if *write {
 		if err := replaceFile(files.policy, moved); err != nil {
@@ -324,6 +339,19 @@ func upgradeReport(w io.Writer, before, after *policy.Policy, now time.Time) {
 	for _, key := range after.ShadowedBuiltIns(before.PlatformSet()) {
 		fmt.Fprintf(w, "  shadowed: %s: set %s changes the built-in value and the policy's block keeps its "+
 			"own; compare the two\n", key, after.PlatformSet())
+	}
+	// What the move quarantines or fails closed, before anyone runs the
+	// gate: each fails policy test (plan 5b pre-flight I10).
+	for _, q := range after.Quarantines(now) {
+		for _, e := range q.Entries {
+			fmt.Fprintf(w, "  quarantine on %s: %s (%s): %s\n", after.PlatformSet(), q.Device, q.Platform,
+				quarantineLine(e, now))
+		}
+	}
+	for _, f := range after.Projections(now) {
+		if f.Kind == policy.FindingProjectionRefused || f.Kind == policy.FindingProjectionOverflow {
+			fmt.Fprintf(w, "  %s on %s: %s\n", f.Kind, after.PlatformSet(), f.Message)
+		}
 	}
 	switch {
 	case len(d.Adapters) == 0:
@@ -484,4 +512,88 @@ func sortedNames(set map[string]platform.Dialect) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// exportClasses prints a projected platform's reference device configuration
+// (spec §8): the configuration its replies rest on, the bitless `remote`
+// template, and each level's template and class where the adapter sends one,
+// every class carrying idle-timeout from port49d.yaml's
+// session.max_session_age_default (spec §5.6; §13 decision 21). Loading it
+// clears what is written under each template, and not what reaches one from
+// outside — a group applied from above, a deactivated or protected ancestor
+// (platform.ReferenceClasses) — so the header says check-config is what
+// proves the device. A compliance tool checks devices against it; port49
+// never logs into one.
+//
+// A device_config line redaction changed — a block's `tacplus-server ...
+// secret` — prints as a `#` comment, which `load set terminal` does not
+// apply: loaded, the marker would replace the device's TACACS+ secret, and
+// every login would fall to local. stderr counts those lines, each one the
+// operator writes by hand with its real value; check-config reads the
+// unredacted floor, so it reports the line missing until the device carries
+// it (task 13 re-review I4). hidden names them by index in d.DeviceConfig,
+// and any line carrying the marker is one whatever hidden says.
+func exportClasses(stdout, stderr io.Writer, name, platformName string, d platform.Dialect, cfgPath string, a adapters,
+	p *policy.Policy, hidden map[int]bool) int {
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", name, err)
+		return 1
+	}
+	age, err := config.MaxSessionAge(raw)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %s: %v\n", name, cfgPath, err)
+		return 1
+	}
+	lines, err := platform.ReferenceClasses(d, age)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %s: %v\n", name, platformName, err)
+		return 1
+	}
+	setName := a.set
+	if p != nil {
+		setName = p.PlatformSet()
+	}
+	fmt.Fprintf(stdout, "# %s: reference configuration, platform set %s (spec §8). Load it with `load set "+
+		"terminal`: each template class and user is deleted before it is set, which clears what was written under "+
+		"one. It does not clear what reaches a template from outside it: a configuration group applied from above "+
+		"still applies to the loaded class, a deactivated ancestor leaves the loaded lines inactive, and a protected "+
+		"one fails the load. `port49 devices check-config --config` on a whole `show configuration | display set` "+
+		"capture is what proves the device carries the template and nothing more. idle-timeout is "+
+		"session.max_session_age_default (%s) in whole minutes: a session-only device never asks port49 again after "+
+		"login, so this timer is what ends a session there (decision 21).\n", platformName, setName, age)
+	held := 0
+	for i, line := range lines {
+		if i < len(d.DeviceConfig) && hidden[i] || strings.Contains(line, platform.Redacted) {
+			held++
+			line = "# " + strings.ReplaceAll(line, platform.Redacted, "<set this yourself: redacted>")
+		}
+		fmt.Fprintln(stdout, line)
+	}
+	if held > 0 {
+		fmt.Fprintf(stderr, "%s: %s: %d device_config lines carry a secret, so each is printed as a # comment that "+
+			"`load set terminal` does not apply: write each by hand with its real value; check-config reports it "+
+			"MISSING until the device carries it\n", name, platformName, held)
+	}
+	return 0
+}
+
+// referenceDeviceConfig is the device_config floor check-config holds a
+// device to (Policy.ConfigDialect), so the reference prints the same lines —
+// one a `replace: true` block drops is still one the check reports missing —
+// redacted, with the index of every line redaction changed.
+func referenceDeviceConfig(p *policy.Policy, platformName string, patterns []platform.Redaction,
+	secret map[string]bool) ([]string, map[int]bool, error) {
+	floor, err := p.ConfigDialect(platformName)
+	if err != nil {
+		return nil, nil, err
+	}
+	shown := platform.RedactAdapter(patterns, secret, floor).DeviceConfig
+	hidden := map[int]bool{}
+	for i, line := range shown {
+		if line != floor.DeviceConfig[i] {
+			hidden[i] = true
+		}
+	}
+	return shown, hidden, nil
 }
