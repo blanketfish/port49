@@ -29,7 +29,7 @@ adapters `verified: containerlab`); plan 5 is split at the seam below. **5b writ
 revised 2026-09-25** after its pre-flight review and the owner's ruling of that day (decision 26)
 (`2026-09-24-05b-projection-capabilities.md`, twenty tasks: one docs, three lab, fourteen code,
 one lab, one lab-and-docs), **executed 2026-09-25, and Task 19**, the differential lab test, **on 2026-09-29**, and amended in flight with decision 27 and four lab tasks (3b,
-L26b, L26c, the L26 rerun); reviewed per task; not yet merged. It closed L23, L24, L26 and L26b;
+L26b, L26c, the L26 rerun); reviewed per task and whole-branch; **merged 2026-09-29** (PR #14). It closed L23, L24, L26 and L26b;
 Task 19, run 2026-09-29, closed L9, L10 and L12; L25 and the new L26c stay open (Plan 5b — As
 built, below). 6–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
