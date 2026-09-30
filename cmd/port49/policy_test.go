@@ -2,15 +2,22 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/policy"
 )
 
 // unmappedLevel declares a level no built-in platform renders: a role landing
@@ -464,9 +471,6 @@ func TestGrantsRemoveFailsWhenStdoutFails(t *testing.T) {
 // adapter fact from the policy file itself, so an enable-username the file
 // declares refuses the load in CI exactly as it refuses port49d's start.
 func TestOfflineToolsReadTheAdaptersFromThePolicyFile(t *testing.T) {
-	if e := offlineEnv(nil); e.Dialects != nil || !e.Now.IsZero() {
-		t.Fatalf("%+v", e)
-	}
 	pol, inv := policyFixture(t)
 	raw := readFile(t, pol)
 	if err := os.WriteFile(pol, append([]byte("platforms: {arista_eos: {enable_username: enab}}\n"), raw...), 0o600); err != nil {
@@ -792,7 +796,7 @@ func TestPolicyDiffGatesAnAdapterEdit(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"policy", "diff", "--old", oldPol, "--new", newPol, "--inventory", inv}, &out, &errb); code != 1 ||
 		!strings.Contains(out.String(), `ADAPTER: platforms.arista_eos.entity_classes {"loopback":`) ||
-		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits; 0 projection refusals\n") {
+		!strings.Contains(out.String(), "; 1 unacknowledged adapter edits; 0 projection refusals; 0 devices newly refused admission\n") {
 		t.Fatalf("code %d\n%s%s", code, out.String(), errb.String())
 	}
 	// The entry is printed ready to paste, bound by digest to this edit.
@@ -1131,4 +1135,493 @@ func TestPolicyDiffPrintsAProjectionChange(t *testing.T) {
 		"narrow (template p49-readonly, bits view view-configuration)" {
 		t.Errorf("%q", got)
 	}
+}
+
+// I7: every tool loads the bundle port49d loads for the same two files: diff
+// loads, and explain refuses a device only the inventory's key groups decide.
+func TestToolsLoadTheBundleAsPort49dDoes(t *testing.T) {
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "policy.yaml")
+	inv := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(pol, []byte("scopes: [{name: all_devices, match: {}}]\n"+
+		"roles: [{name: r, privilege: readonly, permit: [show **]}]\n"+
+		"subjects: [{name: s, identity: [\"user:alice@example.com\"], username: alice, token_ttl: 60s}]\n"+
+		"grants: [{subject: s, scope: all_devices, roles: [r]}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte("devices: [{name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]},\n"+
+		"  {name: lab-01, platform: arista_eos, addresses: [192.168.0.1]}]\n"+
+		"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", pol, "--new", pol, "--inventory", inv}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	// explain reads the inventory's key groups as port49d does, so a device
+	// none of them admits is refused, not minted for.
+	out.Reset()
+	if code := run([]string{"explain", "--policy", pol, "--inventory", inv, "--subject", "s", "--device", "lab-01",
+		"--command", "show version"}, &out, &errOut); code != 0 || !strings.HasPrefix(out.String(), "deny device_unknown") {
+		t.Fatalf("lab-01, which no key group admits: exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	p, err := bundle.Load(pol, inv, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := p.Admitted("leaf-01"); r.KeyRef != "prod_key" {
+		t.Fatalf("the inventory's key groups were not read: %+v", r)
+	}
+	if !strings.HasPrefix(p.Bundle, "sha256:") || p.Bundle == p.Source {
+		t.Fatalf("bundle %s source %s", p.Bundle, p.Source)
+	}
+}
+
+// policy diff says which side's inventory failed, and names the inventory
+// file, not a policy file, as the fault.
+func TestPolicyDiffNamesTheInventoryForAnInventoryFault(t *testing.T) {
+	pol, inv := policyFixture(t)
+	if err := os.WriteFile(inv, []byte("devices: [{name: a, platform: arista_eos, addresses: [10.0.0.1]},\n"+
+		"  {name: b, platform: arista_eos, addresses: [10.0.0.1]}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "diff", "--old", pol, "--new", pol, "--inventory", inv}, &out, &errOut)
+	if code != 1 || !strings.HasPrefix(errOut.String(), "port49 policy diff: --old inventory "+inv+": ") ||
+		strings.Contains(errOut.String(), "policy: "+pol) {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+}
+
+// grants remove and platform upgrade name the inventory file for its fault,
+// never the policy or its platform set (Task 6 review I1).
+func TestToolsNameTheInventoryFileOnItsFault(t *testing.T) {
+	for _, args := range [][]string{
+		{"grants", "remove", "--subject", "noc"},
+		{"platform", "upgrade", "--to", "1.0.0"},
+	} {
+		pol, inv := policyFixture(t)
+		if err := os.WriteFile(inv, []byte("devices: [{name: a, platform: arista_eos, addresses: [10.0.0.1]},\n"+
+			"  {name: b, platform: arista_eos, addresses: [10.0.0.1]}]\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before := readFile(t, pol)
+		var out, errOut bytes.Buffer
+		code := run(append(args, "--policy", pol, "--inventory", inv, "--write"), &out, &errOut)
+		want := "port49 " + args[0] + " " + args[1] + ": inventory_file " + inv + ": "
+		if code != 1 || !strings.HasPrefix(errOut.String(), want) || strings.Contains(errOut.String(), "does not load") ||
+			strings.Contains(errOut.String(), "platform_set") {
+			t.Errorf("%s: exit %d: %s", args[1], code, errOut.String())
+		}
+		if string(readFile(t, pol)) != string(before) {
+			t.Errorf("%s wrote the policy", args[1])
+		}
+	}
+}
+
+// Spec §10, §12: CI fails on every device admission refuses — a key-group tie
+// (owner decision 1), a device no group admits, and, given port49d.yaml, one
+// assigned a key_ref it does not define — since port49d serves none of them;
+// retire_after problems are reported.
+func TestPolicyTestJudgesAdmissionAndKeys(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	base := strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]",
+		"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}, {match: {attributes: {site: lab}}, key_ref: lab_key}]", 1)
+	inv := write("inventory.yaml", `devices:
+  - {name: leaf-01, platform: arista_eos, addresses: [10.20.0.7]}
+  - {name: stray, platform: arista_eos, addresses: [192.0.2.9]}
+`)
+	var out, errOut bytes.Buffer
+	if code := run([]string{"policy", "test", "--policy", write("p.yaml", base), "--inventory", inv}, &out, &errOut); code != 1 {
+		t.Fatalf("a device in no group passed the gate: exit %d\n%s%s", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "admission: stray (arista_eos) refused: matches no key group") {
+		t.Fatalf("%s", out.String())
+	}
+	out.Reset()
+	cfg := write("port49d.yaml", keysConfig)
+	code := run([]string{"policy", "test", "--policy", write("p.yaml", base), "--inventory", inv, "--config", cfg}, &out, &errOut)
+	if code != 1 || !strings.Contains(out.String(), "keys: key group attributes {site: lab} → lab_key names key_ref lab_key") {
+		t.Fatalf("an undefined key_ref: exit %d\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "report: key prod_key version 2: retire_after 2026-10-01") &&
+		!strings.Contains(out.String(), "report: key prod_key version 2 retires after 2026-10-01") {
+		t.Fatalf("the date is not reported: %s", out.String())
+	}
+}
+
+// I3: a test on a device the inventory no longer has fails CI, where the
+// load that port49d would make succeeds.
+func TestPolicyTestFailsATestOnAnAbsentDevice(t *testing.T) {
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "p.yaml")
+	inv := filepath.Join(dir, "i.yaml")
+	body := keysPolicy + "tests: [{subject: s, device: leaf-gone, command: \"show version\", expect: permit}]\n"
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte(keysInventory), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errOut)
+	if code != 1 || !strings.Contains(out.String()+errOut.String(), `device "leaf-gone" is not in the inventory`) {
+		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
+	}
+}
+
+func TestPolicyDiffFailsOnADeviceTheNewPolicyRefuses(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old := write("old.yaml", keysPolicy)
+	typo := write("new.yaml", strings.Replace(keysPolicy, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1))
+	inv := write("inventory.yaml", keysInventory)
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "diff", "--old", old, "--new", typo, "--inventory", inv}, &out, &errOut)
+	if code != 1 || !strings.Contains(out.String(), "REFUSED: admission: leaf-01 (arista_eos) is newly refused") {
+		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
+	}
+}
+
+// A key_groups edit that refuses a fleet names the first 20 devices and
+// counts the rest, so the cause is not buried; the exit still fails (Task 17
+// review).
+func TestPolicyDiffCapsTheNewlyRefusedLines(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	var inv strings.Builder
+	inv.WriteString("devices:\n")
+	for i := range 25 {
+		fmt.Fprintf(&inv, "  - {name: leaf-%02d, platform: arista_eos, addresses: [10.20.0.%d]}\n", i, i+1)
+	}
+	old := write("old.yaml", keysPolicy)
+	typo := write("new.yaml", strings.Replace(keysPolicy, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1))
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "diff", "--old", old, "--new", typo, "--inventory", write("inventory.yaml",
+		inv.String())}, &out, &errOut)
+	if code != 1 || strings.Count(out.String(), "is newly refused: ") != 20 ||
+		!strings.Contains(out.String(), "REFUSED: admission: and 5 more devices newly refused\n") {
+		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
+	}
+}
+
+// A tie and a device assigned a key_ref port49d.yaml does not define each
+// fail the gate by name; nothing from port49d.yaml's secret side is printed.
+func TestPolicyTestFailsATieAndAnUndefinedKeyByDevice(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	pol := write("p.yaml", strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]",
+		"key_groups: [{match: {attributes: {site: campus}}, key_ref: prod_key}, "+
+			"{match: {attributes: {role: leaf}}, key_ref: prod_key}, {match: {cidr: 192.0.2.0/24}, key_ref: lab_key}]", 1))
+	inv := write("inventory.yaml", `devices:
+  - {name: leaf-19, platform: arista_eos, addresses: [10.20.4.9], attributes: {site: campus, role: leaf}}
+  - {name: lab-01, platform: arista_eos, addresses: [192.0.2.9]}
+  - {name: spine-01, platform: arista_eos, addresses: [10.30.0.1], attributes: {site: campus}}
+`)
+	cfg := write("port49d.yaml", keysConfig)
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv, "--config", cfg}, &out, &errOut)
+	got := out.String() + errOut.String()
+	if code != 1 {
+		t.Fatalf("exit %d:\n%s", code, got)
+	}
+	for _, want := range []string{
+		"admission: leaf-19 (arista_eos) refused: ",
+		"attributes {site: campus} → prod_key",
+		"attributes {role: leaf} → prod_key",
+		"admission: lab-01 (arista_eos) refused: ",
+		"keys: key group cidr 192.0.2.0/24 → lab_key names key_ref lab_key",
+		"2 admission refusal(s), 1 key fault(s)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "spine-01") || strings.Contains(got, "NEVER_READ") {
+		t.Errorf("an admitted device or a secret_env is printed:\n%s", got)
+	}
+}
+
+// M3: a port49d.yaml with no keys defines none (readKeySets returns an
+// empty map, never nil), so every key group's key_ref is undefined and the
+// gate fails, rather than having nothing to check.
+func TestPolicyTestReadsAnEmptyKeysBlockAsUndefined(t *testing.T) {
+	pol, inv, _, _ := keysFiles(t)
+	cfg := filepath.Join(t.TempDir(), "port49d.yaml")
+	if err := os.WriteFile(cfg, []byte("keys: {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{"keys: {}\n", "listen: \":49\"\n", ""} {
+		none := filepath.Join(t.TempDir(), "port49d.yaml")
+		if err := os.WriteFile(none, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if sets, err := readKeySets(none); err != nil || sets == nil {
+			t.Fatalf("%q: sets %v, err %v: a file with no keys must define none, not be unchecked", body, sets, err)
+		}
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv, "--config", cfg}, &out, &errOut)
+	if code != 1 || !strings.Contains(out.String(), "keys: key group cidr 10.0.0.0/8 → prod_key names key_ref prod_key") ||
+		!strings.Contains(out.String(), "admission: leaf-01 (arista_eos) refused: ") {
+		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
+	}
+}
+
+// I1: port49d always assesses admission, so a bundle with no key_groups in
+// either file admits only pinned devices, and none here: its start and every
+// reload refuse it. `policy test` fails it with or without --config, and
+// `policy diff` fails the edit that deletes the block, naming each device.
+func TestCIFailsWhenTheKeyGroupsBlockIsRemoved(t *testing.T) {
+	pol, inv, cfg, _ := keysFiles(t)
+	gone := filepath.Join(t.TempDir(), "nogroups.yaml")
+	body := strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n", "", 1)
+	if body == keysPolicy {
+		t.Fatal("the fixture kept its key_groups")
+	}
+	if err := os.WriteFile(gone, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range [][]string{nil, {"--config", cfg}} {
+		var out, errOut bytes.Buffer
+		args := append([]string{"policy", "test", "--policy", gone, "--inventory", inv}, extra...)
+		code := run(args, &out, &errOut)
+		got := out.String() + errOut.String()
+		if code != 1 || !strings.Contains(got, "admission: neither the policy nor the inventory declares key_groups") ||
+			!strings.Contains(got, "port49d admits none of the 2 device(s)") ||
+			!strings.Contains(got, "admission: leaf-19 (arista_eos) refused: matches no key group") {
+			t.Fatalf("%v: exit %d:\n%s", extra, code, got)
+		}
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "diff", "--old", pol, "--new", gone, "--inventory", inv}, &out, &errOut)
+	got := out.String() + errOut.String()
+	if code != 1 || !strings.Contains(got, "REFUSED: admission: the key_groups block was removed") ||
+		!strings.Contains(got, "REFUSED: admission: leaf-01 (arista_eos) is newly refused") ||
+		!strings.Contains(got, "REFUSED: admission: leaf-19 (arista_eos) is newly refused") ||
+		!strings.Contains(got, "; 2 devices newly refused admission") {
+		t.Fatalf("diff: exit %d:\n%s", code, got)
+	}
+}
+
+// A device pinned to a key_ref on its inventory record is admitted with no
+// key group, as port49d admits it; the gate fails only the unpinned.
+func TestPolicyTestWithNoKeyGroupsFailsOnlyTheUnpinned(t *testing.T) {
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "p.yaml")
+	inv := filepath.Join(dir, "i.yaml")
+	body := strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n", "", 1)
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte(`devices:
+  - {name: leaf-01, platform: arista_eos, addresses: [10.20.0.7], key_ref: prod_key}
+  - {name: leaf-19, platform: arista_eos, addresses: [10.20.4.9]}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errOut)
+	got := out.String()
+	if code != 1 || !strings.Contains(got, "admission: leaf-19 (arista_eos) refused: matches no key group") ||
+		strings.Contains(got, "leaf-01") || strings.Contains(got, "admits none") {
+		t.Fatalf("exit %d:\n%s%s", code, got, errOut.String())
+	}
+}
+
+// An inventory with no devices has no admission to judge: port49d's own
+// admit-none check passes an empty inventory, so the gate says nothing.
+func TestPolicyTestOnAnEmptyInventorySaysNothingOfAdmission(t *testing.T) {
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "p.yaml")
+	inv := filepath.Join(dir, "i.yaml")
+	body := strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n", "", 1)
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte("devices: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errOut)
+	if strings.Contains(out.String()+errOut.String(), "admission") {
+		t.Fatalf("%s%s", out.String(), errOut.String())
+	}
+}
+
+func TestPolicyReplayTakesBothFilesOrNeither(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"policy", "replay", "--policy", "p.yaml", "-"}, &out, &errOut); code != 2 {
+		t.Fatalf("one file exits %d", code)
+	}
+	if code := run([]string{"policy", "replay", "--inventory", "i.yaml", "-"}, &out, &errOut); code != 2 ||
+		!strings.Contains(errOut.String(), "port49 policy replay [--line N] [--policy FILE --inventory FILE] LOGFILE|-") {
+		t.Fatalf("the other file exits %d\n%s", code, errOut.String())
+	}
+}
+
+// A log whose blob event was redacted replays from the policy and inventory
+// files: its records agree, where without them they are unverifiable, and
+// nothing replay prints carries the value the log redacted, even for a
+// record edited to drop its redacted mark, which diverges.
+func TestPolicyReplayVerifiesARedactedBlobFromTheFiles(t *testing.T) {
+	const secret = "Xk9vQ7pLm2Zr"
+	pol, inv := policyFixture(t)
+	raw, err := os.ReadFile(pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withSecret := strings.Replace(string(raw), `permit: ["**"]}`,
+		`permit: ["**"], deny: ["snmp-server community /^(public)?(`+secret+`)?$/ **"]}`, 1)
+	if withSecret == string(raw) {
+		t.Fatal("the fixture's admin role was not found to edit")
+	}
+	if err := os.WriteFile(pol, []byte(withSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := bundle.Load(pol, inv, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, ok := p.Device("leaf-01")
+	if !ok {
+		t.Fatal("no leaf-01")
+	}
+	compiled := time.Now().UTC().Truncate(time.Second)
+	res, err := p.Resolve("user:ops@example.com", d, compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, hash, err := engine.Encode(res.Blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), secret) {
+		t.Fatal("the fixture's blob does not carry the secret")
+	}
+	blob, err := engine.Decode(hash, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := engine.Compile(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := blob.SessionAttributes(engine.Values{Principal: "user:ops@example.com", Username: "ops",
+		Device: "leaf-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := strings.ReplaceAll(string(body), "/^(public)?("+secret+")?$/", platform.Redacted)
+	device := &decision.Device{Name: "leaf-01", Platform: "arista_eos"}
+	write := func(edit func(*decision.Record)) string {
+		command := []string{"service=shell", "cmd=snmp-server", "cmd-arg=community", "cmd-arg=public", "cmd-arg=<cr>"}
+		o := prog.Command(command)
+		if o.Reason != decision.NoPermitDominatesDeny {
+			t.Fatalf("the secret deny does not decide the command: %+v", o)
+		}
+		logged := o.Policy(p.Bundle, hash)
+		logged.MatchedDeny.Rule = []string{"snmp-server", "community", platform.Redacted, "**"}
+		redacted := []string{"service=shell", "cmd=snmp-server", "cmd-arg=community", "cmd-arg=" + platform.Redacted,
+			"cmd-arg=<cr>"}
+		show := []string{"service=shell", "cmd=show", "cmd-arg=version", "cmd-arg=<cr>"}
+		cmd := decision.Record{TS: compiled, Event: decision.EventAuthorizeCommand, Verdict: decision.VerdictDeny,
+			Reason: o.Reason, Principal: "user:ops@example.com", Device: device,
+			Request: &decision.Request{Raw: redacted, Redacted: true}, Policy: logged}
+		edit(&cmd)
+		var log bytes.Buffer
+		sink := decision.NewJSONLines(&log)
+		sink.Emit(decision.Record{TS: compiled, Event: decision.EventBlob,
+			Blob: &decision.Blob{Hash: hash, Body: []byte(shown), Redacted: true}})
+		sink.Emit(decision.Record{TS: compiled, Event: decision.EventAuthorizeSession,
+			Verdict: decision.VerdictPermit, Reason: blob.SessionReason(), Principal: "user:ops@example.com",
+			Device: device, Session: &decision.Session{Username: "ops"}, Reply: &decision.Reply{Attributes: attrs},
+			Policy: &decision.Policy{Bundle: p.Bundle, Blob: hash}})
+		s := prog.Command(show)
+		sink.Emit(decision.Record{TS: compiled, Event: decision.EventAuthorizeCommand,
+			Verdict: decision.VerdictPermit, Reason: s.Reason, Principal: "user:ops@example.com", Device: device,
+			Request: &decision.Request{Raw: show}, Policy: s.Policy(p.Bundle, hash)})
+		sink.Emit(cmd)
+		path := filepath.Join(t.TempDir(), "decisions.jsonl")
+		if strings.Contains(log.String(), secret) {
+			t.Fatal("the fixture's log carries the secret")
+		}
+		if err := os.WriteFile(path, log.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	check := func(name string, args []string, code int, want string) {
+		t.Helper()
+		var out, errb bytes.Buffer
+		got := run(append([]string{"policy", "replay"}, args...), &out, &errb)
+		printed := out.String() + errb.String()
+		if got != code || !strings.Contains(printed, want) {
+			t.Fatalf("%s: code %d\n%s", name, got, printed)
+		}
+		for _, f := range []string{secret, strings.ToLower(secret), strings.ToUpper(secret), secret[:5], secret[4:9],
+			secret[7:], hex.EncodeToString([]byte(secret)), base64.StdEncoding.EncodeToString([]byte(secret))} {
+			if strings.Contains(strings.ToLower(printed), strings.ToLower(f)) {
+				t.Fatalf("%s: replay prints %q:\n%s", name, f, printed)
+			}
+		}
+	}
+	files := []string{"--policy", pol, "--inventory", inv}
+	asLogged := write(func(*decision.Record) {})
+	check("no files", []string{asLogged}, 1, "replayed 3 records: 0 agree, 0 diverge, 3 unverifiable")
+	check("the files", append(files, asLogged), 1, "replayed 3 records: 2 agree, 0 diverge, 1 unverifiable")
+	check("the files, --line 4", append(files, "--line", "4", asLogged), 1,
+		"line 4 authorize_command: unverifiable the record was redacted before it was written")
+	// An edit that drops the redacted mark and restores the command replays
+	// against the verbatim blob, whose deny names the secret: it diverges, and
+	// what the blob matched is not printed.
+	unmarked := write(func(cmd *decision.Record) {
+		cmd.Request = &decision.Request{Raw: []string{"service=shell", "cmd=snmp-server", "cmd-arg=community",
+			"cmd-arg=public", "cmd-arg=<cr>"}}
+	})
+	check("unmarked", append(files, "--line", "4", unmarked), 1,
+		"line 4 authorize_command: diverge the verdict agrees but the matched rules do not")
+	check("unmarked, all", append(files, unmarked), 1, "replayed 3 records: 2 agree, 1 diverge, 0 unverifiable")
+	// Files that name another bundle give no blob: the blob they give
+	// leaf-01 names that bundle, not the one the record was decided by.
+	other, err := os.ReadFile(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv2 := filepath.Join(t.TempDir(), "inventory.yaml")
+	another := strings.Replace(string(other), "devices:\n", "devices:\n  - {name: leaf-02, platform: arista_eos, "+
+		"addresses: [10.0.0.2]}\n", 1)
+	if another == string(other) {
+		t.Fatal("the fixture's devices were not found to edit")
+	}
+	if err := os.WriteFile(inv2, []byte(another), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check("another bundle", []string{"--policy", pol, "--inventory", inv2, asLogged}, 1,
+		"replayed 3 records: 0 agree, 0 diverge, 3 unverifiable")
 }

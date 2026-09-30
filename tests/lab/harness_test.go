@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -330,7 +331,7 @@ func writeEvidence() error {
 	if err != nil {
 		return err
 	}
-	res, err := labpcap.RedactDir(in, out, labpcap.Options{Key: key, Secrets: secrets, Subnet: subnet})
+	res, err := labpcap.RedactDir(in, out, labpcap.Options{Key: key, KeyFor: labcreds.CaptureKey, Secrets: secrets, Subnet: subnet})
 	if err != nil {
 		return fmt.Errorf("evidence: %w", err)
 	}
@@ -852,16 +853,36 @@ func (l *lab) derivedConfigCmd(suffix, attrs, cmdAttrs, extra string) (string, e
 // port49d refuses a policy file anyone else could have written, or one in a
 // directory they could (spec §5.1.3), and a checkout under a umask of 002 —
 // the usual one on a desktop distribution — leaves the repository's policy
-// files and their directories group-writable.
+// files and their directories group-writable. A config with a broker reads its
+// inventory_file behind the same fence (plan 6a C2), so its top-level
+// `inventory_file:` line is given a private copy too; the standing config,
+// with no broker, is left reading the repository's file.
 func privatePolicy(cfg, dir string) (string, error) {
-	const anchor = "  policy_file: "
+	cfg, found, err := privateCopy(cfg, "  policy_file: ", dir, "policy.yaml")
+	if err != nil || !found {
+		return cfg, err
+	}
+	// A top-level key starts a line; the config's first line is a comment.
+	cfg, found, err = privateCopy(cfg, "\ninventory_file: ", dir, "inventory.yaml")
+	if err == nil && !found {
+		err = errors.New("a broker config has no top-level `inventory_file:` line to give a private copy")
+	}
+	return cfg, err
+}
+
+// privateCopy copies the file the line starting at anchor names to name in
+// dir, mode 0700, as mode 0600, and points the line at the copy. found is
+// false, and cfg unchanged, when no line starts at anchor.
+func privateCopy(cfg, anchor, dir, name string) (string, bool, error) {
 	i := strings.Index(cfg, anchor)
 	if i < 0 {
-		return cfg, nil
+		return cfg, false, nil
 	}
-	j := strings.Index(cfg[i:], "\n")
+	j := strings.Index(cfg[i+1:], "\n")
 	if j < 0 {
 		j = len(cfg) - i
+	} else {
+		j++
 	}
 	src := strings.TrimSpace(cfg[i+len(anchor) : i+j])
 	if !filepath.IsAbs(src) {
@@ -869,22 +890,22 @@ func privatePolicy(cfg, dir string) (string, error) {
 	}
 	raw, err := os.ReadFile(src)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if err := os.Chmod(dir, 0o700); err != nil {
-		return "", err
+		return "", false, err
 	}
-	dst := filepath.Join(dir, "policy.yaml")
+	dst := filepath.Join(dir, name)
 	if err := os.WriteFile(dst, raw, 0o600); err != nil {
-		return "", err
+		return "", false, err
 	}
 	if err := os.Chmod(dst, 0o600); err != nil {
-		return "", err
+		return "", false, err
 	}
-	return cfg[:i] + anchor + dst + cfg[i+j:], nil
+	return cfg[:i] + anchor + dst + cfg[i+j:], true, nil
 }
 
 // startDaemonWith starts port49d against cfgPath. resume appends to this
@@ -1871,8 +1892,12 @@ func (l *lab) captureLine(t *testing.T) string {
 		line += fmt.Sprintf(" — %d packets to or from the device, countable with "+
 			"`tcpdump -r %s -n 'net %s' | wc -l`.", device, l.evidencePath, labSubnet)
 	}
+	key := "the lab key (`tests/lab/README.md`)"
+	if labcreds.CaptureKey(filepath.Base(l.evidencePath)) != "" {
+		key = "the rotation key (`labcreds.RotationKey`, or `PORT49_L28_NEW_KEY`)"
+	}
 	return line + " A redacted copy of this run's capture: credential bytes overwritten with `x`, " +
-		"everything else byte-identical, decodable with the lab key (`tests/lab/README.md`)."
+		"everything else byte-identical, decodable with " + key + "."
 }
 
 // withAdminCLI runs fn against a break-glass CLI with port49d **stopped**, and

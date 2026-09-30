@@ -131,7 +131,6 @@ const grantOK = "grants:\n  - {subject: s, scope: all_devices, roles: [r]}\n"
 func TestLoadRefusesByName(t *testing.T) {
 	for _, tt := range []struct{ name, yaml, want string }{
 		{"a platform set this binary does not ship", "platform_set: 1.4.0\n" + roleOK + subjOK, "it ships 1.0.0"},
-		{"key_groups", "key_groups: []\n" + roleOK + subjOK, "inventory file"},
 		{"a role's max_session_age", "roles:\n  - {name: r, max_session_age: 8h}\n" + subjOK, "plan 7"},
 		{"an unknown key", scopeOK + roleOK + subjOK + "gratns: []\n", "line 7: an unknown field in type policy.file"},
 		{"an acknowledgment of two shapes", scopeOK + roleOK + subjOK +
@@ -201,7 +200,6 @@ func TestLoadRefusesByName(t *testing.T) {
 		{"a bad max_privilege", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r], max_privilege: root}\n", "max_privilege"},
 		{"a bad expiry", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r], expires: soon}\n", "expires"},
 		{"a test with both", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, principal: p, device: leaf-01, command: x, expect: permit}\n", "one of the two"},
-		{"a test on no device", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: nowhere, command: x, expect: permit}\n", "not in the inventory"},
 		{"a test expecting maybe", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {subject: s, device: leaf-01, command: x, expect: maybe}\n", "permit or deny"},
 		{"a test principal in no form", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {principal: alice, device: leaf-01, command: x, expect: deny}\n", "no recognized form"},
 		{"an upper-case test principal", scopeOK + roleOK + subjOK + grantOK + "tests:\n  - {principal: \"user:A@example.com\", device: leaf-01, command: x, expect: deny}\n", `write "user:a@example.com"`},

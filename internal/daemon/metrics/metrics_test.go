@@ -3,6 +3,7 @@ package metrics
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -36,6 +37,9 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.PolicyReloads.WithLabelValues("applied").Inc()
 	m.PolicyFileRefused.Set(0)
 	m.PolicyRefreshPending.Set(0)
+	m.InventoryReloads.WithLabelValues("applied").Inc()
+	m.InventoryFileRefused.Set(0)
+	m.WatchInventoryAge(func() float64 { return 1 })
 
 	// Gather all metrics from registry.
 	families, err := reg.Gather()
@@ -67,12 +71,25 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_policy_reloads_total":              false,
 		"port49_policy_file_refused":               false,
 		"port49_policy_refresh_pending":            false,
+		"port49_inventory_reloads_total":           false,
+		"port49_inventory_file_refused":            false,
+		"port49_inventory_snapshot_age_seconds":    false,
+		// The key-version alert gates on uptime with it (spec §10).
+		"process_start_time_seconds": false,
 	}
 
 	// Check that all expected metrics are present and all gathered metrics are snake_case.
 	gatheredNames := make(map[string]bool)
 	for _, fam := range families {
 		gatheredNames[fam.GetName()] = true
+		// The process collector's series describe port49d itself, never a device.
+		if strings.HasPrefix(fam.GetName(), "process_") {
+			for _, m := range fam.GetMetric() {
+				if len(m.GetLabel()) != 0 {
+					t.Errorf("%s carries labels %v", fam.GetName(), m.GetLabel())
+				}
+			}
+		}
 
 		// Check metric name is lowercase snake_case.
 		if !isLowercaseSnakeCase(fam.GetName()) {
@@ -146,4 +163,27 @@ func isLowercaseSnakeCase(s string) bool {
 	}
 	// Only lowercase, digits, and underscores allowed.
 	return !strings.ContainsAny(s, " \t\n")
+}
+
+func TestKeySeriesAreSampledAtScrape(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	now := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	m.WatchKeys(func() []KeySample {
+		return []KeySample{{KeyRef: "prod_key", Version: 3, Devices: 8},
+			{KeyRef: "prod_key", Version: 2, Devices: 1, RetireAt: now.Add(48 * time.Hour)}}
+	}, func() time.Time { return now })
+	want := `
+# HELP port49_key_retirement_seconds Seconds until a key version's retire_after passes; negative once it has.
+# TYPE port49_key_retirement_seconds gauge
+port49_key_retirement_seconds{key_ref="prod_key",version="2"} 172800
+# HELP port49_key_version_devices Devices whose latest validated connection since start used this key version.
+# TYPE port49_key_version_devices gauge
+port49_key_version_devices{key_ref="prod_key",version="2"} 1
+port49_key_version_devices{key_ref="prod_key",version="3"} 8
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), "port49_key_version_devices",
+		"port49_key_retirement_seconds"); err != nil {
+		t.Fatal(err)
+	}
 }

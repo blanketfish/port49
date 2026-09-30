@@ -306,23 +306,13 @@ func TestAPolicyInASearchOnlyDirectoryIsRead(t *testing.T) {
 func TestARefusalQuotesAtMost64Characters(t *testing.T) {
 	cfg := brokerConfig(t, minimalPolicy)
 	long := strings.Repeat("x", 200)
-	_, err := parsePolicy(cfg, []byte(strings.Replace(minimalPolicy, "roles: [r]", "roles: ["+long+"]", 1)))
+	_, err := parseBundle(cfg, []byte(strings.Replace(minimalPolicy, "roles: [r]", "roles: ["+long+"]", 1)), cfg.Inventory)
 	if err == nil {
 		t.Fatal("a grant naming no role must not load")
 	}
 	if strings.Contains(err.Error(), strings.Repeat("x", 65)) || !strings.Contains(err.Error(), strings.Repeat("x", 64)) {
 		t.Fatalf("the quoted role name is cut to 64 characters: %v", err)
 	}
-}
-
-// safeDir is a fresh directory only its owner can write, whatever the umask.
-func safeDir(t *testing.T) string {
-	t.Helper()
-	d := t.TempDir()
-	if err := os.Chmod(d, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return d
 }
 
 // A symlink is followed, and the target and its directory are what is
@@ -379,5 +369,169 @@ func TestAPolicyDirectoryAnotherUserOwnsIsRefused(t *testing.T) {
 	if _, err := readPolicyFile(path); err == nil || !strings.Contains(err.Error(), "the directory "+filepath.Dir(path)) ||
 		!strings.Contains(err.Error(), "chown it") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// C2: the inventory file is read behind the policy file's fence, with its
+// own size bound.
+func TestTheInventoryFileIsFenced(t *testing.T) {
+	dir := safeDir(t)
+	path := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(path, []byte("devices: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := readInventoryFile(path); err != nil || string(raw) != "devices: []\n" {
+		t.Fatalf("a private file: %q, %v", raw, err)
+	}
+	if err := os.Chmod(path, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readInventoryFile(path); err == nil || !strings.Contains(err.Error(), "the file "+path) {
+		t.Fatalf("a group-writable file: %v", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, maxInventorySize+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readInventoryFile(path); err == nil || !strings.Contains(err.Error(), "not an inventory file") {
+		t.Fatalf("an oversized file: %v", err)
+	}
+}
+
+// inventoryAt writes an inventory file with mode perm in a fresh directory
+// of mode dirPerm, and returns its path.
+func inventoryAt(t *testing.T, perm, dirPerm os.FileMode) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "etc")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(path, []byte("devices: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, perm); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, dirPerm); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// Every refusal the policy file has, the inventory file has: whoever can
+// write it decides scope membership, capture addresses and key pins.
+func TestAnInventoryFileOthersCouldWriteIsRefused(t *testing.T) {
+	for name, c := range map[string]struct {
+		perm, dirPerm os.FileMode
+		want          string
+	}{
+		"world-writable file":      {0o602, 0o755, "the file"},
+		"group-writable directory": {0o644, 0o775, "the directory"},
+		"world-writable directory": {0o644, 0o1777, "the directory"},
+	} {
+		path := inventoryAt(t, c.perm, c.dirPerm)
+		if _, err := readInventoryFile(path); err == nil || !strings.Contains(err.Error(), c.want) ||
+			!strings.Contains(err.Error(), "chmod go-w") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if raw, err := readInventoryFile(inventoryAt(t, 0o644, 0o755)); err != nil || string(raw) != "devices: []\n" {
+		t.Fatalf("a file only its owner can write is read: %v", err)
+	}
+}
+
+// A file or directory another user owns is refused. No second uid exists in
+// a test, so the owner lookup is swapped: for the file, then for directories.
+func TestAnInventoryFileAnotherUserOwnsIsRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("as root every file is owned by an accepted uid")
+	}
+	real := fileOwner
+	defer func() { fileOwner = real }()
+	for name, other := range map[string]func(fs.FileInfo) bool{
+		"the file":      func(fi fs.FileInfo) bool { return !fi.IsDir() },
+		"the directory": func(fi fs.FileInfo) bool { return fi.IsDir() },
+	} {
+		fileOwner = func(fi fs.FileInfo) (uint32, bool) {
+			if other(fi) {
+				return uint32(os.Geteuid() + 1), true
+			}
+			return real(fi)
+		}
+		if _, err := readInventoryFile(inventoryAt(t, 0o600, 0o700)); err == nil ||
+			!strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "chown it") {
+			t.Errorf("%s owned by another uid: %v", name, err)
+		}
+	}
+}
+
+// A link is judged by its target, and a link whose own directory others can
+// write is refused: they could re-point it at any file that passes.
+func TestAnInventorySymlinkIsFenced(t *testing.T) {
+	good := inventoryAt(t, 0o600, 0o700)
+	link := filepath.Join(safeDir(t), "inventory.yaml")
+	if err := os.Symlink(good, link); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := readInventoryFile(link); err != nil || string(raw) != "devices: []\n" {
+		t.Fatalf("a link to a safe file is read: %q, %v", raw, err)
+	}
+
+	// A link to a file in a directory others can write.
+	writable := inventoryAt(t, 0o644, 0o777)
+	toWritable := filepath.Join(safeDir(t), "inventory.yaml")
+	if err := os.Symlink(writable, toWritable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readInventoryFile(toWritable); err == nil ||
+		!strings.Contains(err.Error(), "the directory "+filepath.Dir(writable)) {
+		t.Fatalf("a link into a writable directory: %v", err)
+	}
+
+	// A safe target behind a link in a directory others can write: the link
+	// can be swapped.
+	swappable := t.TempDir()
+	if err := os.Chmod(swappable, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	inSwappable := filepath.Join(swappable, "inventory.yaml")
+	if err := os.Symlink(good, inSwappable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readInventoryFile(inSwappable); err == nil ||
+		!strings.Contains(err.Error(), "holding the symbolic link "+inSwappable) {
+		t.Fatalf("a link others could re-point: %v", err)
+	}
+}
+
+// A named pipe is refused rather than hanging a start or a reload.
+func TestAnInventoryFIFOIsRefused(t *testing.T) {
+	path := filepath.Join(safeDir(t), "inventory.yaml")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readInventoryFile(path); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// With a broker nothing reads the inventory before the fence: a FIFO at its
+// path is refused with the fence's words, and the start returns rather than
+// hanging in a plain read (runExpectingRefusal's deadline).
+func TestRunRefusesAnInventoryFIFOWithoutHanging(t *testing.T) {
+	cfgPath := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
+	inv := filepath.Join(filepath.Dir(cfgPath), "inventory.yaml")
+	if err := os.Remove(inv); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(inv, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runExpectingRefusal(t, cfgPath); err == nil || !strings.Contains(err.Error(), "inventory_file "+inv) ||
+		!strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("run: %v", err)
 	}
 }

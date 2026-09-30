@@ -19,6 +19,7 @@ import (
 	stdlog "log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
@@ -30,14 +31,18 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/acct"
+	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/author"
 	"github.com/rhwendt/port49/internal/daemon/limits"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/daemon/server"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
@@ -221,22 +226,8 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 				"logins will fail\n", leaf.NotBefore.UTC().Format(time.RFC3339), cfg.Broker.TLSCertFile)
 		}
 	}
-	// The broker mints by name, and a token redeems on any device the name
-	// tags. Two entries sharing one would collapse, last wins: a blob compiled
-	// for one platform would be answered on the other, sending attributes that
-	// device may not know while port49 logs permit. IOS-XE refuses the session
-	// over any attribute it does not recognise, optional or mandatory, and every
-	// command whose reply carries one (tests/lab/results/L18-cisco_iosxe.md).
-	// admission.LoadFile does not refuse the repeat, so the broker does.
-	devices := make(map[string]admission.Device, len(cfg.Inventory.Devices))
-	for _, d := range cfg.Inventory.Devices {
-		if _, seen := devices[d.Name]; seen {
-			return nil, nil, fmt.Errorf("inventory names device %q twice; the broker mints by name", d.Name)
-		}
-		devices[d.Name] = d
-	}
-	b := &broker.Broker{Policy: policy.NewLive(pol), Devices: devices, Minter: minter, Store: st, Log: log, Metrics: m,
-		Now: time.Now, MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax}
+	b := &broker.Broker{Policy: policy.NewLive(pol), Minter: minter, Store: st, Log: log, Metrics: m, Now: time.Now,
+		MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax}
 	// The blob event's rule text is redacted as the daemon's records are,
 	// with the policy in force's patterns (spec §5.8).
 	b.Redact = redactorFor(b.Policy)
@@ -264,14 +255,53 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
 	}
-	return parsePolicy(cfg, raw)
+	pol, err := parseBundle(cfg, raw, cfg.Inventory)
+	if err != nil {
+		return nil, err
+	}
+	// A start whose bundle admits none of a non-empty inventory is refused
+	// (plan 6a Decided 5, C3): no device caused that, and a daemon admitting
+	// nothing is a misconfiguration to say at start, not a fleet to close
+	// silently. A reload never reaches this: bundle.CheckAdmission refuses a
+	// snapshot that newly refuses the fleet, in the same words.
+	if n := len(pol.Devices()); n > 0 && len(pol.AdmissionRefusals()) == n {
+		r := pol.AdmissionRefusals()[0]
+		return nil, fmt.Errorf("broker.policy_file %s with inventory_file %s: %w", cfg.Broker.PolicyFile,
+			cfg.InventoryFile, quotesCut{fmt.Errorf("the bundle admits none of the %d device(s) in the inventory "+
+				"(%s: %s); check key_groups and the key_refs port49d.yaml defines, and if key_groups was deleted "+
+				"from the inventory file, add it to the policy file; to take the whole fleet off deliberately, "+
+				"stop port49d", n, r.Device.Name, r.Refused)})
+	}
+	return pol, nil
 }
 
-// parsePolicy is loadPolicy for bytes already read: a reload loads exactly the
-// bytes it hashed, so the version it remembers refusing is the version it
-// refused, and the version the watch saw agree twice is the version loaded.
-func parsePolicy(cfg config.Config, raw []byte) (*policy.Policy, error) {
-	pol, err := policy.Parse(raw, policy.Env{Devices: cfg.Inventory.Devices})
+// fencedInventory reads inventory_file behind the fence (readInventoryFile)
+// and returns it with the version the reloader starts from: the hash of the
+// bytes loaded, so an edit between config.Load's read and this one is loaded,
+// never skipped (plan 6a, M1). With a broker config.Load leaves the file
+// unread, so these are the only bytes of it port49d reads at start. A fault is a
+// *bundle.InventoryError, as bundle.LoadInventory's is, naming the file.
+func fencedInventory(cfg config.Config) (admission.Inventory, string, error) {
+	raw, err := readInventoryFile(cfg.InventoryFile)
+	if err != nil {
+		return admission.Inventory{}, "", &bundle.InventoryError{Path: cfg.InventoryFile, Err: err}
+	}
+	inv, err := admission.ParseFile(raw, "") // the InventoryError names the file
+	if err == nil {
+		err = admission.Validate(inv.Devices)
+	}
+	if err != nil {
+		return admission.Inventory{}, "", &bundle.InventoryError{Path: cfg.InventoryFile, Err: quotesCut{err}}
+	}
+	return inv, engine.HashOf(raw), nil
+}
+
+// parseBundle builds the bundle from the policy file's bytes and an
+// inventory (bundle.Parse): a reload of either loads the one it read against
+// the other in force, so the version it remembers refusing is the version it
+// refused.
+func parseBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
+	pol, err := bundle.Parse(raw, inv, policy.Env{KeyRefs: cfg.KeyRefs()})
 	if err != nil {
 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, quotesCut{err})
 	}
@@ -364,6 +394,24 @@ func sayPolicy(pol *policy.Policy, now time.Time) {
 	for _, f := range pol.RuleSecretLiterals() {
 		say("port49d: broker: %s", f.Message)
 	}
+	// A device admission refuses is refused alone (spec §10): named, with
+	// why, so the line says what to fix.
+	for _, r := range pol.AdmissionRefusals() {
+		say("port49d: admission: device %s (%s) is refused: %s", r.Device.Name, r.Device.Platform, r.Refused)
+	}
+	for _, n := range pol.Notices() {
+		say("port49d: policy: %s", n)
+	}
+}
+
+// liveAdmission is the policy in force's admission index, read at each
+// Accept and at every packet: a reload reaches the next connection, and ends
+// an open one whose device it refused, removed, renamed, re-keyed or
+// re-platformed (spec §10).
+type liveAdmission struct{ live *policy.Live }
+
+func (a liveAdmission) Lookup(addr netip.Addr) (admission.Resolved, bool) {
+	return a.live.Load().Admission().Lookup(addr)
 }
 
 // redactorFor is the redaction port49d applies before any record is written
@@ -375,7 +423,8 @@ func redactorFor(live *policy.Live) platform.Redactor {
 		return platform.BuiltInRedactor
 	}
 	return func(name string) []platform.Redaction {
-		return append(platform.Redactions(name), live.Load().Dialect(name).Redact...)
+		pol := live.Load()
+		return append(platform.Redactions(pol.WirePlatform(name)), pol.Dialect(name).Redact...)
 	}
 }
 
@@ -412,9 +461,18 @@ func run(parent context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	// The inventory as loaded, hashed now rather than when the reloader
-	// starts: an edit in between would otherwise never be said (checkInventory).
-	_, inventoryAtStart, _ := fileVersion(cfg.InventoryFile)
+	// With a broker the inventory is live, so it is read behind the policy
+	// file's fence, first and only there (config.Load leaves it unread), and
+	// hashed now rather than when the reloader starts: the reloader starts
+	// from the bytes loaded, so an edit in between is loaded (M1).
+	var inventoryAtStart string
+	if cfg.Broker != nil {
+		inv, v, err := fencedInventory(cfg)
+		if err != nil {
+			return err
+		}
+		cfg.Inventory, inventoryAtStart = inv, v
+	}
 	announce(stderr, &cfg)
 
 	ctx, cancel := context.WithCancel(parent)
@@ -540,7 +598,26 @@ func run(parent context.Context, cfgPath string) error {
 	// The drain redacts too: a spool file an earlier build left holds records
 	// it never redacted (spec §5.8).
 	spool.WithRedactor(redactorFor(live))
-	deps := server.Deps{Admission: cfg.Admission, Quarantined: watchQuarantine(live, m, time.Now), Keys: cfg.Keyring(),
+	// With a broker, admission is the policy in force's (spec §10); without
+	// one, the index config.Load built from the inventory's own key groups.
+	admit := server.Admitter(cfg.Admission)
+	if live != nil {
+		admit = liveAdmission{live}
+		m.CountAdmissionRefused(func() int { return len(live.Load().AdmissionRefusals()) })
+	}
+	keySets := cfg.Keyring()
+	seen := &keyring.Seen{}
+	m.WatchKeys(func() []metrics.KeySample {
+		var out []metrics.KeySample
+		for _, ref := range cfg.KeyRefs() {
+			for _, v := range keySets[ref].Versions {
+				out = append(out, metrics.KeySample{KeyRef: ref, Version: v.Number, Devices: seen.Count(ref, v.Number),
+					RetireAt: v.RetireAt})
+			}
+		}
+		return out
+	}, time.Now)
+	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keySets, KeySeen: seen.Mark,
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
@@ -603,10 +680,36 @@ func run(parent context.Context, cfgPath string) error {
 			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
 		}
 	}
+	// The admin socket binds before anything says "listening", as the broker
+	// does, and a failure lets go of every listener already bound (pre-flight
+	// M6). Only with it configured is any packet held: off, nothing is.
+	if cfg.AdminSocket != "" {
+		held := &keyring.Held{}
+		deps.Held = held
+		aln, err := admin.Listen(cfg.AdminSocket)
+		if err != nil {
+			if bln != nil {
+				bln.Close()
+			}
+			ln.Close()
+			mln.Close()
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
+		}
+		srv := &admin.Server{Held: held, Keys: keySets, Now: time.Now, Assigned: assignedKeyRef(cfg, live)}
+		go srv.Serve(ctx, aln)
+		fmt.Fprintf(stderr, "port49d: admin socket on %s (port49 keys diagnose)\n", cfg.AdminSocket)
+	}
+
 	// The bound address, not the configured one: `:49` says nothing about
 	// which address answered, and `:0` says nothing about which port.
+	admitted := len(cfg.Inventory.Devices)
+	if live != nil {
+		admitted -= len(live.Load().AdmissionRefusals())
+	}
 	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
-		ln.Addr(), mln.Addr(), len(cfg.Inventory.Devices))
+		ln.Addr(), mln.Addr(), admitted)
 
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {
@@ -632,7 +735,8 @@ func run(parent context.Context, cfgPath string) error {
 			}
 		}
 		r := newReloader(cfg, brk, m, time.Now)
-		r.inventory = inventoryAtStart
+		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
+		r.seen, r.held = seen, deps.Held
 		r.run(ctx, hup)
 	}()
 
@@ -671,6 +775,29 @@ func run(parent context.Context, cfgPath string) error {
 	fmt.Fprintln(stderr, "port49d: accounting spool drained, exiting")
 	mln.Close()
 	return runErr
+}
+
+// assignedKeyRef is the key_ref a device is assigned now, for keys diagnose:
+// the policy in force's with a broker, and without one the admission index
+// config.Load built, by the device's first address. Empty is a name port49d
+// does not admit.
+func assignedKeyRef(cfg config.Config, live *policy.Live) func(string) string {
+	return func(name string) string {
+		if live != nil {
+			r, _ := live.Load().Admitted(name)
+			return r.KeyRef
+		}
+		if cfg.Admission == nil {
+			return ""
+		}
+		for _, d := range cfg.Inventory.Devices {
+			if d.Name == name && len(d.Addresses) > 0 {
+				r, _ := cfg.Admission.Lookup(d.Addresses[0])
+				return r.KeyRef
+			}
+		}
+		return ""
+	}
 }
 
 // labHandlerStore is the store the request handlers see: st itself unless the

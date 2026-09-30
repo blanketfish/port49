@@ -1,0 +1,1031 @@
+{
+  "calls": [
+    {
+      "step": "webhook",
+      "method": "POST",
+      "path": "/api/extras/webhooks/",
+      "request": {
+        "enabled": true,
+        "http_content_type": "application/json",
+        "http_method": "POST",
+        "name": "l27",
+        "payload_url": "http://172.19.0.1:18999/",
+        "secret": "l27-lab-webhook-secret"
+      },
+      "status": 201,
+      "headers": {
+        "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "3.7",
+        "Content-Length": "444",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 30 Sep 2026 06:40:13 GMT",
+        "Location": "http://127.0.0.1:18037/api/extras/webhooks/1/",
+        "Referrer-Policy": "same-origin",
+        "Server": "Unit/1.31.1",
+        "Vary": "HX-Request, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-Request-Id": "1bb0c34e-accd-42c8-92a9-f7ad47d6e2fb"
+      },
+      "body": {
+        "id": 1,
+        "url": "http://127.0.0.1:18037/api/extras/webhooks/1/",
+        "display": "l27",
+        "name": "l27",
+        "description": "",
+        "payload_url": "http://172.19.0.1:18999/",
+        "http_method": "POST",
+        "http_content_type": "application/json",
+        "additional_headers": "",
+        "body_template": "",
+        "secret": "l27-lab-webhook-secret",
+        "ssl_verification": true,
+        "ca_file_path": null,
+        "custom_fields": {},
+        "tags": [],
+        "created": "2026-09-30T06:40:13.068584Z",
+        "last_updated": "2026-09-30T06:40:13.068592Z"
+      }
+    },
+    {
+      "step": "event_rule",
+      "method": "POST",
+      "path": "/api/extras/event-rules/",
+      "request": {
+        "action_object_id": 1,
+        "action_object_type": "extras.webhook",
+        "action_type": "webhook",
+        "enabled": true,
+        "event_types": [
+          "object_created",
+          "object_updated",
+          "object_deleted"
+        ],
+        "name": "l27",
+        "object_types": [
+          "dcim.device"
+        ]
+      },
+      "status": 400,
+      "headers": {
+        "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "3.7",
+        "Content-Length": "45",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 30 Sep 2026 06:40:13 GMT",
+        "Referrer-Policy": "same-origin",
+        "Server": "Unit/1.31.1",
+        "Vary": "HX-Request, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-Request-Id": "1f3743ec-bc03-4cf5-8f56-b3a526845c10"
+      },
+      "body": {
+        "content_types": [
+          "This field is required."
+        ]
+      }
+    },
+    {
+      "step": "webhook_v3",
+      "method": "POST",
+      "path": "/api/extras/webhooks/",
+      "request": {
+        "content_types": [
+          "dcim.device"
+        ],
+        "enabled": true,
+        "http_content_type": "application/json",
+        "http_method": "POST",
+        "name": "l27",
+        "payload_url": "http://172.19.0.1:18999/",
+        "secret": "l27-lab-webhook-secret",
+        "type_create": true,
+        "type_delete": true,
+        "type_update": true
+      },
+      "status": 400,
+      "headers": {
+        "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "3.7",
+        "Content-Length": "51",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 30 Sep 2026 06:40:13 GMT",
+        "Referrer-Policy": "same-origin",
+        "Server": "Unit/1.31.1",
+        "Vary": "HX-Request, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-Request-Id": "a52a65d8-8a45-4206-a76c-aefab4d3ab1f"
+      },
+      "body": {
+        "name": [
+          "webhook with this name already exists."
+        ]
+      }
+    },
+    {
+      "step": "event_rule_v3",
+      "method": "POST",
+      "path": "/api/extras/event-rules/",
+      "request": {
+        "action_object_id": 1,
+        "action_object_type": "extras.webhook",
+        "action_type": "webhook",
+        "content_types": [
+          "dcim.device"
+        ],
+        "enabled": true,
+        "name": "l27",
+        "type_create": true,
+        "type_delete": true,
+        "type_update": true
+      },
+      "status": 201,
+      "headers": {
+        "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "3.7",
+        "Content-Length": "610",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 30 Sep 2026 06:40:13 GMT",
+        "Location": "http://127.0.0.1:18037/api/extras/event-rules/1/",
+        "Referrer-Policy": "same-origin",
+        "Server": "Unit/1.31.1",
+        "Vary": "HX-Request, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-Request-Id": "26a7b07c-2b1e-4550-9f13-39f5ffda4206"
+      },
+      "body": {
+        "id": 1,
+        "url": "http://127.0.0.1:18037/api/extras/event-rules/1/",
+        "display": "l27",
+        "content_types": [
+          "dcim.device"
+        ],
+        "name": "l27",
+        "type_create": true,
+        "type_update": true,
+        "type_delete": true,
+        "type_job_start": false,
+        "type_job_end": false,
+        "enabled": true,
+        "conditions": null,
+        "action_type": {
+          "value": "webhook",
+          "label": "Webhook"
+        },
+        "action_object_type": "extras.webhook",
+        "action_object_id": 1,
+        "action_object": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/extras/webhooks/1/",
+          "display": "l27",
+          "name": "l27"
+        },
+        "description": "",
+        "custom_fields": {},
+        "tags": [],
+        "created": "2026-09-30T06:40:13.098524Z",
+        "last_updated": "2026-09-30T06:40:13.098532Z"
+      }
+    },
+    {
+      "step": "update",
+      "method": "PATCH",
+      "path": "/api/dcim/devices/1/",
+      "request": {
+        "custom_fields": {
+          "os_version": "4.32.2F"
+        }
+      },
+      "status": 200,
+      "headers": {
+        "Allow": "GET, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "3.7",
+        "Content-Length": "2000",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 30 Sep 2026 06:40:13 GMT",
+        "Referrer-Policy": "same-origin",
+        "Server": "Unit/1.31.1",
+        "Vary": "HX-Request, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-Request-Id": "06542bd9-7394-40a6-83f9-ddc42ff8ac16"
+      },
+      "body": {
+        "id": 1,
+        "url": "http://127.0.0.1:18037/api/dcim/devices/1/",
+        "display": "leaf-01",
+        "name": "leaf-01",
+        "device_type": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/device-types/1/",
+          "display": "vEOS",
+          "manufacturer": {
+            "id": 1,
+            "url": "http://127.0.0.1:18037/api/dcim/manufacturers/1/",
+            "display": "Arista",
+            "name": "Arista",
+            "slug": "arista"
+          },
+          "model": "vEOS",
+          "slug": "veos"
+        },
+        "role": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/device-roles/1/",
+          "display": "leaf",
+          "name": "leaf",
+          "slug": "leaf"
+        },
+        "device_role": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/device-roles/1/",
+          "display": "leaf",
+          "name": "leaf",
+          "slug": "leaf"
+        },
+        "tenant": null,
+        "platform": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/platforms/1/",
+          "display": "eos",
+          "name": "eos",
+          "slug": "eos"
+        },
+        "serial": "",
+        "asset_tag": null,
+        "site": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/sites/1/",
+          "display": "dc1",
+          "name": "dc1",
+          "slug": "dc1"
+        },
+        "location": null,
+        "rack": null,
+        "position": null,
+        "face": null,
+        "latitude": null,
+        "longitude": null,
+        "parent_device": null,
+        "status": {
+          "value": "active",
+          "label": "Active"
+        },
+        "airflow": null,
+        "primary_ip": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/ipam/ip-addresses/1/",
+          "display": "10.0.1.5/32",
+          "family": 4,
+          "address": "10.0.1.5/32"
+        },
+        "primary_ip4": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/ipam/ip-addresses/1/",
+          "display": "10.0.1.5/32",
+          "family": 4,
+          "address": "10.0.1.5/32"
+        },
+        "primary_ip6": null,
+        "oob_ip": null,
+        "cluster": null,
+        "virtual_chassis": null,
+        "vc_position": null,
+        "vc_priority": null,
+        "description": "",
+        "comments": "",
+        "config_template": null,
+        "config_context": {},
+        "local_context_data": null,
+        "tags": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:18037/api/extras/tags/1/",
+            "display": "port49",
+            "name": "port49",
+            "slug": "port49",
+            "color": "9e9e9e"
+          }
+        ],
+        "custom_fields": {
+          "os_version": "4.32.2F"
+        },
+        "created": "2026-09-30T06:40:12.609690Z",
+        "last_updated": "2026-09-30T06:40:13.172991Z",
+        "console_port_count": 0,
+        "console_server_port_count": 0,
+        "power_port_count": 0,
+        "power_outlet_count": 0,
+        "interface_count": 2,
+        "front_port_count": 0,
+        "rear_port_count": 0,
+        "device_bay_count": 0,
+        "module_bay_count": 0,
+        "inventory_item_count": 0
+      }
+    },
+    {
+      "step": "create_2",
+      "method": "POST",
+      "path": "/api/dcim/devices/",
+      "request": {
+        "device_type": 1,
+        "name": "leaf-02",
+        "role": 1,
+        "site": 1,
+        "status": "active"
+      },
+      "status": 201,
+      "headers": {
+        "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "3.7",
+        "Content-Length": "1532",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 30 Sep 2026 06:40:13 GMT",
+        "Location": "http://127.0.0.1:18037/api/dcim/devices/2/",
+        "Referrer-Policy": "same-origin",
+        "Server": "Unit/1.31.1",
+        "Vary": "HX-Request, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-Request-Id": "c722bcf6-d461-499c-91f2-86745d5a65ef"
+      },
+      "body": {
+        "id": 2,
+        "url": "http://127.0.0.1:18037/api/dcim/devices/2/",
+        "display": "leaf-02",
+        "name": "leaf-02",
+        "device_type": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/device-types/1/",
+          "display": "vEOS",
+          "manufacturer": {
+            "id": 1,
+            "url": "http://127.0.0.1:18037/api/dcim/manufacturers/1/",
+            "display": "Arista",
+            "name": "Arista",
+            "slug": "arista"
+          },
+          "model": "vEOS",
+          "slug": "veos"
+        },
+        "role": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/device-roles/1/",
+          "display": "leaf",
+          "name": "leaf",
+          "slug": "leaf"
+        },
+        "device_role": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/device-roles/1/",
+          "display": "leaf",
+          "name": "leaf",
+          "slug": "leaf"
+        },
+        "tenant": null,
+        "platform": null,
+        "serial": "",
+        "asset_tag": null,
+        "site": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/sites/1/",
+          "display": "dc1",
+          "name": "dc1",
+          "slug": "dc1"
+        },
+        "location": null,
+        "rack": null,
+        "position": null,
+        "face": null,
+        "latitude": null,
+        "longitude": null,
+        "parent_device": null,
+        "status": {
+          "value": "active",
+          "label": "Active"
+        },
+        "airflow": null,
+        "primary_ip": null,
+        "primary_ip4": null,
+        "primary_ip6": null,
+        "oob_ip": null,
+        "cluster": null,
+        "virtual_chassis": null,
+        "vc_position": null,
+        "vc_priority": null,
+        "description": "",
+        "comments": "",
+        "config_template": null,
+        "config_context": {},
+        "local_context_data": null,
+        "tags": [],
+        "custom_fields": {
+          "os_version": null
+        },
+        "created": "2026-09-30T06:40:13.206479Z",
+        "last_updated": "2026-09-30T06:40:13.206489Z",
+        "console_port_count": 0,
+        "console_server_port_count": 0,
+        "power_port_count": 0,
+        "power_outlet_count": 0,
+        "interface_count": 0,
+        "front_port_count": 0,
+        "rear_port_count": 0,
+        "device_bay_count": 0,
+        "module_bay_count": 0,
+        "inventory_item_count": 0
+      }
+    },
+    {
+      "step": "create_2_v3",
+      "method": "POST",
+      "path": "/api/dcim/devices/",
+      "request": {
+        "device_role": 1,
+        "device_type": 1,
+        "name": "leaf-02",
+        "site": 1,
+        "status": "active"
+      },
+      "status": 400,
+      "headers": {
+        "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "3.7",
+        "Content-Length": "36",
+        "Content-Type": "application/json",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 30 Sep 2026 06:40:13 GMT",
+        "Referrer-Policy": "same-origin",
+        "Server": "Unit/1.31.1",
+        "Vary": "HX-Request, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-Request-Id": "abadd467-0fb1-436f-af40-9ecdec9119e3"
+      },
+      "body": {
+        "role": [
+          "This field is required."
+        ]
+      }
+    },
+    {
+      "step": "delete_2",
+      "method": "DELETE",
+      "path": "/api/dcim/devices/2/",
+      "request": {},
+      "status": 204,
+      "headers": {
+        "Allow": "GET, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "3.7",
+        "Content-Length": "0",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Date": "Wed, 30 Sep 2026 06:40:13 GMT",
+        "Referrer-Policy": "same-origin",
+        "Server": "Unit/1.31.1",
+        "Vary": "HX-Request, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "X-Request-Id": "a5e449bb-d2ea-4f63-b833-1398eb27d37b"
+      },
+      "body": ""
+    }
+  ],
+  "deliveries": [
+    {
+      "at": "2026-09-30T06:40:13.223654705Z",
+      "headers": {
+        "Accept-Encoding": "identity",
+        "Content-Length": "3869",
+        "Content-Type": "application/json",
+        "User-Agent": "python-urllib3/2.2.1",
+        "X-Hook-Signature": "93ef78304a39e4290a419acfe7ba08121dd7ce2045b157747fd07e8b0843cbaca0991b06a9fd8029f55cb474112a046f7797ed55650d71fe36b4fcf1b3e3c791"
+      },
+      "body": {
+        "event": "updated",
+        "timestamp": "2026-09-30T06:40:13.188053+00:00",
+        "model": "device",
+        "username": "admin",
+        "request_id": "06542bd9-7394-40a6-83f9-ddc42ff8ac16",
+        "data": {
+          "id": 1,
+          "url": "/api/dcim/devices/1/",
+          "display": "leaf-01",
+          "name": "leaf-01",
+          "device_type": {
+            "id": 1,
+            "url": "/api/dcim/device-types/1/",
+            "display": "vEOS",
+            "manufacturer": {
+              "id": 1,
+              "url": "/api/dcim/manufacturers/1/",
+              "display": "Arista",
+              "name": "Arista",
+              "slug": "arista"
+            },
+            "model": "vEOS",
+            "slug": "veos"
+          },
+          "role": {
+            "id": 1,
+            "url": "/api/dcim/device-roles/1/",
+            "display": "leaf",
+            "name": "leaf",
+            "slug": "leaf"
+          },
+          "device_role": {
+            "id": 1,
+            "url": "/api/dcim/device-roles/1/",
+            "display": "leaf",
+            "name": "leaf",
+            "slug": "leaf"
+          },
+          "tenant": null,
+          "platform": {
+            "id": 1,
+            "url": "/api/dcim/platforms/1/",
+            "display": "eos",
+            "name": "eos",
+            "slug": "eos"
+          },
+          "serial": "",
+          "asset_tag": null,
+          "site": {
+            "id": 1,
+            "url": "/api/dcim/sites/1/",
+            "display": "dc1",
+            "name": "dc1",
+            "slug": "dc1"
+          },
+          "location": null,
+          "rack": null,
+          "position": null,
+          "face": null,
+          "latitude": null,
+          "longitude": null,
+          "parent_device": null,
+          "status": {
+            "value": "active",
+            "label": "Active"
+          },
+          "airflow": null,
+          "primary_ip": {
+            "id": 1,
+            "url": "/api/ipam/ip-addresses/1/",
+            "display": "10.0.1.5/32",
+            "family": 4,
+            "address": "10.0.1.5/32"
+          },
+          "primary_ip4": {
+            "id": 1,
+            "url": "/api/ipam/ip-addresses/1/",
+            "display": "10.0.1.5/32",
+            "family": 4,
+            "address": "10.0.1.5/32"
+          },
+          "primary_ip6": null,
+          "oob_ip": null,
+          "cluster": null,
+          "virtual_chassis": null,
+          "vc_position": null,
+          "vc_priority": null,
+          "description": "",
+          "comments": "",
+          "config_template": null,
+          "local_context_data": null,
+          "tags": [
+            {
+              "id": 1,
+              "url": "/api/extras/tags/1/",
+              "display": "port49",
+              "name": "port49",
+              "slug": "port49",
+              "color": "9e9e9e"
+            }
+          ],
+          "custom_fields": {
+            "os_version": "4.32.2F"
+          },
+          "created": "2026-09-30T06:40:12.609690Z",
+          "last_updated": "2026-09-30T06:40:13.172991Z",
+          "console_port_count": 0,
+          "console_server_port_count": 0,
+          "power_port_count": 0,
+          "power_outlet_count": 0,
+          "interface_count": 2,
+          "front_port_count": 0,
+          "rear_port_count": 0,
+          "device_bay_count": 0,
+          "module_bay_count": 0,
+          "inventory_item_count": 0
+        },
+        "snapshots": {
+          "prechange": {
+            "created": "2026-09-30T06:40:12.609Z",
+            "description": "",
+            "comments": "",
+            "local_context_data": null,
+            "config_template": null,
+            "device_type": 1,
+            "role": 1,
+            "tenant": null,
+            "platform": 1,
+            "name": "leaf-01",
+            "serial": "",
+            "asset_tag": null,
+            "site": 1,
+            "location": null,
+            "rack": null,
+            "position": null,
+            "face": "",
+            "status": "active",
+            "airflow": "",
+            "primary_ip4": 1,
+            "primary_ip6": null,
+            "oob_ip": null,
+            "cluster": null,
+            "virtual_chassis": null,
+            "vc_position": null,
+            "vc_priority": null,
+            "latitude": null,
+            "longitude": null,
+            "console_port_count": 0,
+            "console_server_port_count": 0,
+            "power_port_count": 0,
+            "power_outlet_count": 0,
+            "interface_count": 2,
+            "front_port_count": 0,
+            "rear_port_count": 0,
+            "device_bay_count": 0,
+            "module_bay_count": 0,
+            "inventory_item_count": 0,
+            "custom_fields": {
+              "os_version": "4.31.2F"
+            },
+            "tags": [
+              "port49"
+            ]
+          },
+          "postchange": {
+            "created": "2026-09-30T06:40:12.609Z",
+            "last_updated": "2026-09-30T06:40:13.172Z",
+            "description": "",
+            "comments": "",
+            "local_context_data": null,
+            "config_template": null,
+            "device_type": 1,
+            "role": 1,
+            "tenant": null,
+            "platform": 1,
+            "name": "leaf-01",
+            "serial": "",
+            "asset_tag": null,
+            "site": 1,
+            "location": null,
+            "rack": null,
+            "position": null,
+            "face": "",
+            "status": "active",
+            "airflow": "",
+            "primary_ip4": 1,
+            "primary_ip6": null,
+            "oob_ip": null,
+            "cluster": null,
+            "virtual_chassis": null,
+            "vc_position": null,
+            "vc_priority": null,
+            "latitude": null,
+            "longitude": null,
+            "console_port_count": 0,
+            "console_server_port_count": 0,
+            "power_port_count": 0,
+            "power_outlet_count": 0,
+            "interface_count": 2,
+            "front_port_count": 0,
+            "rear_port_count": 0,
+            "device_bay_count": 0,
+            "module_bay_count": 0,
+            "inventory_item_count": 0,
+            "custom_fields": {
+              "os_version": "4.32.2F"
+            },
+            "tags": [
+              "port49"
+            ]
+          }
+        }
+      },
+      "signature_is_hmac_sha512_of_body": true
+    },
+    {
+      "at": "2026-09-30T06:40:13.273231502Z",
+      "headers": {
+        "Accept-Encoding": "identity",
+        "Content-Length": "2616",
+        "Content-Type": "application/json",
+        "User-Agent": "python-urllib3/2.2.1",
+        "X-Hook-Signature": "0baed122ec4a9588db8a637edcceafd61cd9115da6523ea8c59940606aaf2769c013af5df86d5aba5ac4f935ae527e7e38d310fd6ca912cc2e0a0d88d8eb463a"
+      },
+      "body": {
+        "event": "created",
+        "timestamp": "2026-09-30T06:40:13.241998+00:00",
+        "model": "device",
+        "username": "admin",
+        "request_id": "c722bcf6-d461-499c-91f2-86745d5a65ef",
+        "data": {
+          "id": 2,
+          "url": "/api/dcim/devices/2/",
+          "display": "leaf-02",
+          "name": "leaf-02",
+          "device_type": {
+            "id": 1,
+            "url": "/api/dcim/device-types/1/",
+            "display": "vEOS",
+            "manufacturer": {
+              "id": 1,
+              "url": "/api/dcim/manufacturers/1/",
+              "display": "Arista",
+              "name": "Arista",
+              "slug": "arista"
+            },
+            "model": "vEOS",
+            "slug": "veos"
+          },
+          "role": {
+            "id": 1,
+            "url": "/api/dcim/device-roles/1/",
+            "display": "leaf",
+            "name": "leaf",
+            "slug": "leaf"
+          },
+          "device_role": {
+            "id": 1,
+            "url": "/api/dcim/device-roles/1/",
+            "display": "leaf",
+            "name": "leaf",
+            "slug": "leaf"
+          },
+          "tenant": null,
+          "platform": null,
+          "serial": "",
+          "asset_tag": null,
+          "site": {
+            "id": 1,
+            "url": "/api/dcim/sites/1/",
+            "display": "dc1",
+            "name": "dc1",
+            "slug": "dc1"
+          },
+          "location": null,
+          "rack": null,
+          "position": null,
+          "face": null,
+          "latitude": null,
+          "longitude": null,
+          "parent_device": null,
+          "status": {
+            "value": "active",
+            "label": "Active"
+          },
+          "airflow": null,
+          "primary_ip": null,
+          "primary_ip4": null,
+          "primary_ip6": null,
+          "oob_ip": null,
+          "cluster": null,
+          "virtual_chassis": null,
+          "vc_position": null,
+          "vc_priority": null,
+          "description": "",
+          "comments": "",
+          "config_template": null,
+          "local_context_data": null,
+          "tags": [],
+          "custom_fields": {
+            "os_version": null
+          },
+          "created": "2026-09-30T06:40:13.206479Z",
+          "last_updated": "2026-09-30T06:40:13.206489Z",
+          "console_port_count": 0,
+          "console_server_port_count": 0,
+          "power_port_count": 0,
+          "power_outlet_count": 0,
+          "interface_count": 0,
+          "front_port_count": 0,
+          "rear_port_count": 0,
+          "device_bay_count": 0,
+          "module_bay_count": 0,
+          "inventory_item_count": 0
+        },
+        "snapshots": {
+          "prechange": null,
+          "postchange": {
+            "created": "2026-09-30T06:40:13.206Z",
+            "last_updated": "2026-09-30T06:40:13.206Z",
+            "description": "",
+            "comments": "",
+            "local_context_data": null,
+            "config_template": null,
+            "device_type": 1,
+            "role": 1,
+            "tenant": null,
+            "platform": null,
+            "name": "leaf-02",
+            "serial": "",
+            "asset_tag": null,
+            "site": 1,
+            "location": null,
+            "rack": null,
+            "position": null,
+            "face": "",
+            "status": "active",
+            "airflow": "",
+            "primary_ip4": null,
+            "primary_ip6": null,
+            "oob_ip": null,
+            "cluster": null,
+            "virtual_chassis": null,
+            "vc_position": null,
+            "vc_priority": null,
+            "latitude": null,
+            "longitude": null,
+            "console_port_count": 0,
+            "console_server_port_count": 0,
+            "power_port_count": 0,
+            "power_outlet_count": 0,
+            "interface_count": 0,
+            "front_port_count": 0,
+            "rear_port_count": 0,
+            "device_bay_count": 0,
+            "module_bay_count": 0,
+            "inventory_item_count": 0,
+            "custom_fields": {
+              "os_version": null
+            },
+            "tags": []
+          }
+        }
+      },
+      "signature_is_hmac_sha512_of_body": true
+    },
+    {
+      "at": "2026-09-30T06:40:13.375322042Z",
+      "headers": {
+        "Accept-Encoding": "identity",
+        "Content-Length": "2572",
+        "Content-Type": "application/json",
+        "User-Agent": "python-urllib3/2.2.1",
+        "X-Hook-Signature": "939faf586063f8b72b7f91c4f35fc5a92fc6447d5952fc6300e47c704622a561e4cee7316462610fa8226a8cb0c1c720e6e92b230bee27147584d7362a2ac2e8"
+      },
+      "body": {
+        "event": "deleted",
+        "timestamp": "2026-09-30T06:40:13.345365+00:00",
+        "model": "device",
+        "username": "admin",
+        "request_id": "a5e449bb-d2ea-4f63-b833-1398eb27d37b",
+        "data": {
+          "id": 2,
+          "url": "/api/dcim/devices/2/",
+          "display": "leaf-02",
+          "name": "leaf-02",
+          "device_type": {
+            "id": 1,
+            "url": "/api/dcim/device-types/1/",
+            "display": "vEOS",
+            "manufacturer": {
+              "id": 1,
+              "url": "/api/dcim/manufacturers/1/",
+              "display": "Arista",
+              "name": "Arista",
+              "slug": "arista"
+            },
+            "model": "vEOS",
+            "slug": "veos"
+          },
+          "role": {
+            "id": 1,
+            "url": "/api/dcim/device-roles/1/",
+            "display": "leaf",
+            "name": "leaf",
+            "slug": "leaf"
+          },
+          "device_role": {
+            "id": 1,
+            "url": "/api/dcim/device-roles/1/",
+            "display": "leaf",
+            "name": "leaf",
+            "slug": "leaf"
+          },
+          "tenant": null,
+          "platform": null,
+          "serial": "",
+          "asset_tag": null,
+          "site": {
+            "id": 1,
+            "url": "/api/dcim/sites/1/",
+            "display": "dc1",
+            "name": "dc1",
+            "slug": "dc1"
+          },
+          "location": null,
+          "rack": null,
+          "position": null,
+          "face": null,
+          "latitude": null,
+          "longitude": null,
+          "parent_device": null,
+          "status": {
+            "value": "active",
+            "label": "Active"
+          },
+          "airflow": null,
+          "primary_ip": null,
+          "primary_ip4": null,
+          "primary_ip6": null,
+          "oob_ip": null,
+          "cluster": null,
+          "virtual_chassis": null,
+          "vc_position": null,
+          "vc_priority": null,
+          "description": "",
+          "comments": "",
+          "config_template": null,
+          "local_context_data": null,
+          "tags": [],
+          "custom_fields": {
+            "os_version": null
+          },
+          "created": "2026-09-30T06:40:13.206479Z",
+          "last_updated": "2026-09-30T06:40:13.206489Z",
+          "console_port_count": 0,
+          "console_server_port_count": 0,
+          "power_port_count": 0,
+          "power_outlet_count": 0,
+          "interface_count": 0,
+          "front_port_count": 0,
+          "rear_port_count": 0,
+          "device_bay_count": 0,
+          "module_bay_count": 0,
+          "inventory_item_count": 0
+        },
+        "snapshots": {
+          "prechange": {
+            "created": "2026-09-30T06:40:13.206Z",
+            "description": "",
+            "comments": "",
+            "local_context_data": null,
+            "config_template": null,
+            "device_type": 1,
+            "role": 1,
+            "tenant": null,
+            "platform": null,
+            "name": "leaf-02",
+            "serial": "",
+            "asset_tag": null,
+            "site": 1,
+            "location": null,
+            "rack": null,
+            "position": null,
+            "face": "",
+            "status": "active",
+            "airflow": "",
+            "primary_ip4": null,
+            "primary_ip6": null,
+            "oob_ip": null,
+            "cluster": null,
+            "virtual_chassis": null,
+            "vc_position": null,
+            "vc_priority": null,
+            "latitude": null,
+            "longitude": null,
+            "console_port_count": 0,
+            "console_server_port_count": 0,
+            "power_port_count": 0,
+            "power_outlet_count": 0,
+            "interface_count": 0,
+            "front_port_count": 0,
+            "rear_port_count": 0,
+            "device_bay_count": 0,
+            "module_bay_count": 0,
+            "inventory_item_count": 0,
+            "custom_fields": {
+              "os_version": null
+            },
+            "tags": []
+          },
+          "postchange": null
+        }
+      },
+      "signature_is_hmac_sha512_of_body": true
+    }
+  ]
+}

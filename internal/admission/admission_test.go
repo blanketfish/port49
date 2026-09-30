@@ -88,8 +88,11 @@ func TestLoadFileRefusesUnknownKeys(t *testing.T) {
 	if err == nil {
 		t.Fatal("a misspelled inventory key must be refused at load")
 	}
-	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "keyref") {
-		t.Fatalf("the error must name the file and the key, got %v", err)
+	// The key by its line, not its text: a decode error quotes nothing from
+	// the file, where a secret may be pasted (yamlfault).
+	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "line 2: an unknown field") ||
+		strings.Contains(err.Error(), "keyref") {
+		t.Fatalf("the error must name the file and the key's line, and quote nothing, got %v", err)
 	}
 }
 
@@ -189,5 +192,178 @@ func TestBuildRefusesDisagreeingAddresses(t *testing.T) {
 	r2, ok2 := tr.Lookup(netip.MustParseAddr("10.0.1.5"))
 	if !ok1 || !ok2 || r1.KeyRef != "unified_key" || r2.KeyRef != "unified_key" {
 		t.Fatalf("both addresses should resolve to unified_key: %v, %v", r1, r2)
+	}
+}
+
+func TestAssignNamesTheTierAndTheGroup(t *testing.T) {
+	inv, err := LoadFile("testdata/inventory.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Device{}
+	for _, d := range inv.Devices {
+		byName[d.Name] = d
+	}
+	for _, c := range []struct {
+		device string
+		want   Assignment
+	}{
+		{"leaf-01", Assignment{KeyRef: "prod_key", Tier: TierCIDR, Group: "cidr 10.0.0.0/8 → prod_key"}},
+		{"lab-sw-1", Assignment{KeyRef: "lab_key", Tier: TierAttribute, Group: "attributes {env: lab} → lab_key"}},
+		{"pinned-1", Assignment{KeyRef: "special_key", Tier: TierPin, Group: "key_ref pinned on the device record"}},
+	} {
+		got, err := Assign(byName[c.device], inv.KeyGroups)
+		if err != nil || got != c.want {
+			t.Errorf("%s: %+v, %v; want %+v", c.device, got, err, c.want)
+		}
+	}
+	stray := Device{Name: "stray", Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.1")}}
+	if got, err := Assign(stray, inv.KeyGroups); err != nil || got != (Assignment{}) {
+		t.Errorf("a device no group matches is the zero assignment, not an error: %+v, %v", got, err)
+	}
+}
+
+func TestAssignRefusesATieOnTheDevice(t *testing.T) {
+	groups := []KeyGroup{{Attributes: map[string]string{"site": "campus"}, KeyRef: "a"},
+		{Attributes: map[string]string{"role": "leaf"}, KeyRef: "b"}}
+	both := Device{Name: "both", Attributes: map[string]string{"site": "campus", "role": "leaf"}}
+	if _, err := Assign(both, groups); err == nil || !strings.Contains(err.Error(), "attribute tier") {
+		t.Fatalf("want the attribute-tier tie, got %v", err)
+	}
+}
+
+// A refused device is still in the index, so its packets are told apart from
+// an unknown source's (spec §10's admission_refused bucket).
+func TestNewTrieIndexesARefusedDevice(t *testing.T) {
+	d := Device{Name: "stray", Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.1")}}
+	tr, err := NewTrie([]Resolved{{Device: d, Refused: "matches no key group"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok := tr.Lookup(netip.MustParseAddr("192.0.2.1"))
+	if !ok || r.Refused == "" || r.Device.Name != "stray" {
+		t.Fatalf("got %+v, %v", r, ok)
+	}
+	a := Device{Name: "a", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
+	b := Device{Name: "b", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
+	if _, err := NewTrie([]Resolved{{Device: a}, {Device: b}}); err == nil {
+		t.Fatal("two devices on one address were indexed")
+	}
+}
+
+func TestValidateNamesBothDevicesOfACollision(t *testing.T) {
+	err := Validate([]Device{{Name: "a", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
+		{Name: "b", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}})
+	if err == nil || !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), `"b"`) {
+		t.Fatalf("want both named, got %v", err)
+	}
+	if err := Validate([]Device{{Name: "a"}, {Name: "a"}}); err == nil {
+		t.Fatal("a repeated name passed")
+	}
+}
+
+// An unsupported transport refuses its device alone, never the file: a sync
+// can write one, and refusing the file would stop every inventory change
+// fleet-wide (spec §10).
+func TestAnUnsupportedTransportRefusesTheDeviceAlone(t *testing.T) {
+	inv, err := ParseFile([]byte(`devices:
+  - {name: plain, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: tcp-1, platform: arista_eos, addresses: [10.0.0.2], transport: tcp}
+  - {name: tls-1, platform: arista_eos, addresses: [10.0.0.3], transport: tls}
+  - {name: udp-1, platform: arista_eos, addresses: [10.0.0.4], transport: udp}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: prod_key}
+`), "inventory.yaml")
+	if err != nil {
+		t.Fatalf("one device's transport refused the file: %v", err)
+	}
+	byName := map[string]Device{}
+	for _, d := range inv.Devices {
+		byName[d.Name] = d
+	}
+	if byName["plain"].Transport != TransportTCP {
+		t.Errorf("an absent transport is %q, want tcp", byName["plain"].Transport)
+	}
+	for _, name := range []string{"plain", "tcp-1"} {
+		if r := Resolve(byName[name], inv.KeyGroups); r.Refused != "" || r.KeyRef != "prod_key" {
+			t.Errorf("%s: %+v", name, r)
+		}
+	}
+	for name, why := range map[string]string{"tls-1": "plan 11", "udp-1": `transport "udp"`} {
+		r := Resolve(byName[name], inv.KeyGroups)
+		if r.Refusal != RefusedTransport || r.KeyRef != "" || !strings.Contains(r.Refused, why) {
+			t.Errorf("%s: want refused_transport naming %s, got %+v", name, why, r)
+		}
+	}
+	tr, err := Build(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for addr, admitted := range map[string]bool{"10.0.0.1": true, "10.0.0.2": true, "10.0.0.3": false, "10.0.0.4": false} {
+		if _, ok := tr.Lookup(netip.MustParseAddr(addr)); ok != admitted {
+			t.Errorf("%s: admitted %v, want %v", addr, ok, admitted)
+		}
+	}
+}
+
+func TestResolveRefusesATieAndANoMatch(t *testing.T) {
+	groups := []KeyGroup{{Attributes: map[string]string{"site": "campus"}, KeyRef: "a"},
+		{Attributes: map[string]string{"role": "leaf"}, KeyRef: "b"}}
+	both := Device{Name: "both", Attributes: map[string]string{"site": "campus", "role": "leaf"}}
+	if r := Resolve(both, groups); r.Refusal != RefusedTie || r.KeyRef != "" || !strings.Contains(r.Refused, "attribute tier") {
+		t.Errorf("tie: %+v", r)
+	}
+	if r := Resolve(Device{Name: "none"}, groups); r.Refusal != RefusedNoGroup || r.KeyRef != "" || r.Refused == "" {
+		t.Errorf("no match: %+v", r)
+	}
+}
+
+// Two attribute groups can share a key_ref, so a tie names each group by what
+// it matches, not only by the key_ref.
+func TestATieNamesTheGroupsByWhatTheyMatch(t *testing.T) {
+	groups := []KeyGroup{{Attributes: map[string]string{"site": "campus"}, KeyRef: "k"},
+		{Attributes: map[string]string{"role": "leaf"}, KeyRef: "k"}}
+	both := Device{Name: "both", Attributes: map[string]string{"site": "campus", "role": "leaf"}}
+	_, err := Assign(both, groups)
+	if err == nil || !strings.Contains(err.Error(), "attributes {site: campus} → k") ||
+		!strings.Contains(err.Error(), "attributes {role: leaf} → k") {
+		t.Fatalf("want both groups named, got %v", err)
+	}
+}
+
+// A pin that is not a key_ref name, most likely a secret pasted there,
+// refuses that device alone and is never printed.
+func TestAPinThatIsNoNameRefusesTheDeviceUnprinted(t *testing.T) {
+	const secret = "Sx9qT4vLm2pR7zK0wYh5"
+	bad := Device{Name: "bad", KeyRef: secret, Transport: TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
+	good := Device{Name: "good", KeyRef: "prod_key", Transport: TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.2")}}
+	r := Resolve(bad, nil)
+	if r.Refusal != RefusedUnknownKey || r.KeyRef != "" || !strings.Contains(r.Refused, "not a valid key_ref name") ||
+		strings.Contains(r.Refused, "Sx9qT") {
+		t.Fatalf("%+v", r)
+	}
+	tr, err := Build(Inventory{Devices: []Device{bad, good}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tr.Lookup(bad.Addresses[0]); ok {
+		t.Fatal("the bad pin was admitted")
+	}
+	if r, ok := tr.Lookup(good.Addresses[0]); !ok || r.KeyRef != "prod_key" {
+		t.Fatalf("the rest of the inventory: %+v", r)
+	}
+}
+
+// An inventory key group's key_ref is shape-checked as a policy's is, and a
+// bad one is refused without being printed.
+func TestAnInventoryKeyGroupKeyRefThatIsNoNameIsRefusedUnprinted(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "inventory.yaml")
+	body := "devices: []\nkey_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: Sx9qT4vLm2pR7zK0wYh5}\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFile(p); err == nil || !strings.Contains(err.Error(), "not a valid key_ref name") ||
+		strings.Contains(err.Error(), "Sx9qT") {
+		t.Fatalf("%v", err)
 	}
 }

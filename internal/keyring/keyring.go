@@ -5,6 +5,7 @@ package keyring
 
 import (
 	"errors"
+	"time"
 
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
@@ -13,6 +14,10 @@ type Version struct {
 	Number  int
 	Secret  []byte
 	Retired bool // kept for diagnosis; never admits, never builds a reply
+	// RetireAt is the first instant this version is refused: past it, it
+	// identifies a device and never admits one, as a retired version does
+	// (spec §10, "Retirement is enforced"). Zero is never.
+	RetireAt time.Time
 }
 
 // Set is one key_ref's versions, ordered current, accepted..., retired...
@@ -33,6 +38,8 @@ const (
 	DiagUnadmittedSource         Diagnosis = "unadmitted_source"          // source address not in the inventory
 	DiagMalformedAfterValidation Diagnosis = "malformed_after_validation" // key validated, body did not decode
 	DiagDeviceQuarantined        Diagnosis = "device_quarantined"         // admitted, but quarantined by policy (spec §10)
+	DiagAdmissionRefused         Diagnosis = "admission_refused"          // in inventory, and admission refused it (spec §10)
+	DiagAdmissionWithdrawn       Diagnosis = "admission_withdrawn"        // an open connection's device renamed, re-keyed or re-platformed by a reload (spec §10)
 )
 
 type Result struct {
@@ -44,24 +51,37 @@ type Result struct {
 // Resolve tries every version in order and returns the first that validates.
 // Header validation happens first so an unencrypted or non-TACACS packet never
 // costs a pad computation or reaches a decoder.
-func (s Set) Resolve(h wire.Header, obfuscated []byte) Result {
+func (s Set) Resolve(h wire.Header, obfuscated []byte, now time.Time) Result {
 	if err := h.Validate(); err != nil {
 		if errors.Is(err, wire.ErrUnencrypted) {
 			return Result{Diagnosis: DiagUnencrypted}
 		}
 		return Result{Diagnosis: DiagNotTACACS}
 	}
-	for _, v := range s.Versions {
+	for i, v := range s.Versions {
 		body := wire.Obfuscate(h, v.Secret, obfuscated)
 		if !Validates(h, body) {
 			continue
 		}
-		if v.Retired {
+		if s.State(i, now) == "retired" {
 			return Result{Diagnosis: DiagMatchesRetired, Version: v.Number}
 		}
 		return Result{Diagnosis: DiagValidated, Version: v.Number, Body: body}
 	}
 	return Result{Diagnosis: DiagNoKnownKey}
+}
+
+// State is version i's role at now: "current" (the first), "retired"
+// (listed retired, or past its RetireAt), or "accept".
+func (s Set) State(i int, now time.Time) string {
+	v := s.Versions[i]
+	switch {
+	case v.Retired || (!v.RetireAt.IsZero() && !now.Before(v.RetireAt)):
+		return "retired"
+	case i == 0:
+		return "current"
+	}
+	return "accept"
 }
 
 // Secret returns the secret for a version number, or nil if it is absent or retired.

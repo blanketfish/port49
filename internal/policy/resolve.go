@@ -100,6 +100,14 @@ func (p *Policy) resolveNow(sub *Subject, d admission.Device, now time.Time) (Re
 	if err := p.quarantined(d, now); err != nil {
 		return Resolution{}, err
 	}
+	// A device this policy's inventory does not name was never assessed,
+	// so it is refused as well: nothing mints for it (fails closed).
+	if r, ok := p.admitted[d.Name]; p.AdmissionAssessed() && (!ok || r.Refused != "") {
+		if !ok {
+			r.Refused = "is not in the inventory admission assessed"
+		}
+		return Resolution{}, fmt.Errorf("%w: %s", ErrDeviceRefused, r.Refused)
+	}
 	return p.resolved(sub, d, c)
 }
 
@@ -265,10 +273,10 @@ func (p *Policy) project(c composition, b engine.Blob, dialect platform.Dialect)
 func (p *Policy) projectOnce(c composition, b engine.Blob, dialect platform.Dialect) (projection.Result, error) {
 	in := projection.Input{Platform: b.Platform, Dialect: dialect, Rules: b.Rules, Classes: b.Classes,
 		Normalize: b.Normalize, Facts: projection.FactsFor(dialect.CommandProjection),
-		Keywords: setKeywords(p.set, b.Platform)}
+		Keywords: setKeywords(p.set, p.WirePlatform(b.Platform))}
 	// The reply is logged whole, in the authorize_session record and the
 	// blob event, so a rule redaction would hide is never sent (spec §5.8).
-	patterns := append(platform.Redactions(b.Platform), dialect.Redact...)
+	patterns := append(platform.Redactions(p.WirePlatform(b.Platform)), dialect.Redact...)
 	in.Secret = func(rule string) bool {
 		_, hidden := platform.RedactRule(patterns, strings.Fields(rule))
 		return hidden
@@ -410,6 +418,13 @@ func (p *Policy) render(dialect platform.Dialect, level string) ([]string, strin
 // policy-and-inventory check at load, so nothing is minted for it (spec §10,
 // §13 decision 20). The wrapped message names the cause.
 var ErrDeviceQuarantined = errors.New("policy: the device is quarantined")
+
+// ErrDeviceRefused is a device the inventory names and admission refuses
+// (spec §10): no key group admits it, two tie on it, or its key_ref is one
+// port49d holds no key for. It cannot reach port49d, so nothing is minted for
+// it, and a refresh revokes its contexts; the mint denies it device_unknown
+// (spec §5.7). The wrapped message names the cause.
+var ErrDeviceRefused = errors.New("policy: admission refuses the device")
 
 // Quarantine is one device a joint check fails on, now or once a grant
 // expires, and every entry: which subject's composition fails, from when,

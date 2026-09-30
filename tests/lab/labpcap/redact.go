@@ -24,6 +24,12 @@ type Options struct {
 	// Wireshark decodes the output with the same key.
 	Key string
 
+	// KeyFor, when non-nil, names the key a capture was taken under by its
+	// base name, overriding Key for that file in RedactDir; "" keeps Key.
+	// L28's rotation capture is the one taken under another key
+	// (labcreds.CaptureKey).
+	KeyFor func(name string) string
+
 	// Secrets are the strings that must not survive. Verify fails if any of
 	// them is found anywhere in the output.
 	Secrets []string

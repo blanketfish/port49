@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,9 +20,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -37,10 +42,39 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 	}
 	return config.Config{
 		Session:   config.SessionConfig{MaxSessionAgeDefault: time.Hour},
-		Inventory: admission.Inventory{Devices: []admission.Device{{Name: "leaf1", Platform: "arista_eos"}}},
+		Keys:      map[string]config.KeySet{"lab_key": {Current: config.KeyVersion{Version: 1, SecretEnv: "UNUSED"}}},
+		Inventory: admission.Inventory{Devices: []admission.Device{{Name: "leaf1", Platform: "arista_eos", KeyRef: "lab_key"}}},
 		Broker: &config.BrokerConfig{Listen: "127.0.0.1:0", TLSCertFile: filepath.Join(dir, testpki.LabServerCert),
 			TLSKeyFile: filepath.Join(dir, testpki.LabServerKey), ClientCAFile: filepath.Join(dir, testpki.LabCA),
 			PolicyFile: pol, BatchMax: 10},
+	}
+}
+
+// port49d names the bundle an offline tool names for the same two files, so a
+// bundle in a record is one CI can load (Task 6 review M2).
+func TestPort49dAndTheToolsNameOneBundle(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy+"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]\n")
+	cfg.InventoryFile = filepath.Join(t.TempDir(), "inventory.yaml")
+	if err := os.WriteFile(cfg.InventoryFile, []byte("devices:\n"+
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.3], attributes: {site: dc1}}\n"+
+		"  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.2, 10.0.0.1]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := admission.LoadFile(cfg.InventoryFile) // as config.Load reads it
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Inventory = inv
+	daemon, err := loadPolicy(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err := bundle.Load(cfg.Broker.PolicyFile, cfg.InventoryFile, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if daemon.Bundle != tool.Bundle || daemon.Bundle == daemon.Source {
+		t.Fatalf("port49d %s, the tools %s (source %s)", daemon.Bundle, tool.Bundle, daemon.Source)
 	}
 }
 
@@ -131,7 +165,7 @@ func TestAWidenedDenyIsSaidAtStart(t *testing.T) {
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = &out
 	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`, `permit: ["**"], deny: ["* * /tftp/"]}`, 1))
-	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "ntp1", Platform: "meinberg_lantime"})
+	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "ntp1", Platform: "meinberg_lantime", KeyRef: "lab_key"})
 	_, b, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
 		metrics.New(prometheus.NewRegistry()))
 	if err != nil {
@@ -153,7 +187,7 @@ func TestAJoinedInterfacePermitIsSaidAtStart(t *testing.T) {
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = &out
 	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`, `permit: ["**", "interface Gi1 **"]}`, 1))
-	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "xe1", Platform: "cisco_iosxe"})
+	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "xe1", Platform: "cisco_iosxe", KeyRef: "lab_key"})
 	if _, _, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
 		metrics.New(prometheus.NewRegistry())); err != nil {
 		t.Fatal(err)
@@ -361,11 +395,22 @@ func TestBrokerTLSErrorsReachPort49dsLog(t *testing.T) {
 // writeRunConfig writes a complete port49d.yaml whose broker block uses b,
 // and returns its path. It has no lab: block: it is the production shape, a
 // daemon answering only what the broker minted (plan 4, Decided 12).
+// safeDir is a fresh directory only its owner can write, whatever the umask.
+func safeDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 func writeRunConfig(t *testing.T, b *config.BrokerConfig) string {
 	t.Helper()
 	t.Setenv("T_RUN_SECRET", "run-test-secret")
 	t.Setenv("T_RUN_ENC", "33333333333333333333333333333333")
-	dir := t.TempDir()
+	// safeDir: the inventory is read behind the policy file's fence.
+	dir := safeDir(t)
 	inv := filepath.Join(dir, "inventory.yaml")
 	if err := os.WriteFile(inv, []byte(`
 devices:
@@ -453,8 +498,99 @@ func TestRunWithTheBrokerPortTakenNeverSaysListening(t *testing.T) {
 // compiled for a platform it is not.
 func TestABrokerRefusesADeviceNamedTwice(t *testing.T) {
 	cfg := brokerConfig(t, minimalPolicy)
-	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "leaf1", Platform: "cisco_iosxe"})
+	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "leaf1", Platform: "cisco_iosxe", KeyRef: "lab_key"})
 	if err := buildWith(cfg); err == nil || !strings.Contains(err.Error(), `"leaf1"`) {
 		t.Fatalf("a device named twice: %v", err)
+	}
+}
+
+// port49d admits from the policy in force: a device the policy refuses is in
+// the index as refused, and a reload's index reaches the next Accept.
+func TestPort49dAdmitsFromThePolicyInForce(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "stray", Platform: "arista_eos",
+		Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.9")}})
+	_, b, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+		metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok := liveAdmission{b.Policy}.Lookup(netip.MustParseAddr("192.0.2.9"))
+	if !ok || !strings.Contains(r.Refused, "matches no key group") {
+		t.Fatalf("stray: %+v, %v", r, ok)
+	}
+}
+
+// C3: a restart in the middle of the key-group move loads (both files carry
+// the block, the policy's wins), and a start whose bundle admits nothing is
+// refused with the fix named.
+func TestTheKeyGroupMoveNeverStopsAStartThatCouldServe(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy+"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]\n")
+	cfg.Inventory.Devices[0].KeyRef = ""
+	cfg.Inventory.Devices[0].Addresses = []netip.Addr{netip.MustParseAddr("10.0.0.1")}
+	cfg.Inventory.KeyGroups = []admission.KeyGroup{{CIDR: netip.MustParsePrefix("10.0.0.0/8"), KeyRef: "lab_key"}}
+	if err := buildWith(cfg); err != nil {
+		t.Fatalf("both files carry the block: %v", err)
+	}
+	none := brokerConfig(t, minimalPolicy)
+	none.Inventory.Devices[0].KeyRef = ""
+	if err := buildWith(none); err == nil || !strings.Contains(err.Error(), "admits none of the 1 device(s)") {
+		t.Fatalf("a bundle admitting nothing: %v", err)
+	}
+}
+
+// C2 at start: with a broker, a world-writable inventory file refuses the
+// start, and a private one is what the reloader starts from.
+func TestAStartReadsTheInventoryBehindTheFence(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	cfg.InventoryFile = filepath.Join(safeDir(t), "inventory.yaml")
+	body := "devices: [{name: leaf1, platform: arista_eos, key_ref: lab_key}]\n"
+	if err := os.WriteFile(cfg.InventoryFile, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inv, v, err := fencedInventory(cfg)
+	if err != nil || len(inv.Devices) != 1 || v != engine.HashOf([]byte(body)) {
+		t.Fatalf("%+v %s %v", inv, v, err)
+	}
+	if err := os.Chmod(cfg.InventoryFile, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fencedInventory(cfg); err == nil || !strings.Contains(err.Error(), "inventory_file") {
+		t.Fatalf("a world-writable inventory started: %v", err)
+	}
+}
+
+// A fault in the fenced bytes names the inventory file, as bundle.LoadInventory
+// does, so the operator is sent to the inventory, not the policy.
+func TestAFencedInventoryFaultNamesTheInventoryFile(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	cfg.InventoryFile = filepath.Join(safeDir(t), "inventory.yaml")
+	for name, body := range map[string]string{
+		"malformed": "devices: [{name: leaf1, keyref: lab_key}]\n",
+		"invalid":   "devices: [{name: leaf1, platform: arista_eos}, {name: leaf1, platform: arista_eos}]\n",
+		"one address twice": "devices: [{name: a, platform: arista_eos, addresses: [10.0.0.1]}, " +
+			"{name: b, platform: arista_eos, addresses: [10.0.0.1]}]\n",
+	} {
+		if err := os.WriteFile(cfg.InventoryFile, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var ie *bundle.InventoryError
+		if _, _, err := fencedInventory(cfg); !errors.As(err, &ie) || ie.Path != cfg.InventoryFile {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// With a broker, run refuses to start on an inventory file others could
+// write, naming it, rather than serve from bytes anyone could have chosen.
+func TestRunRefusesAnInventoryFileOthersCouldWrite(t *testing.T) {
+	cfgPath := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
+	inv := filepath.Join(filepath.Dir(cfgPath), "inventory.yaml")
+	if err := os.Chmod(inv, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runExpectingRefusal(t, cfgPath); err == nil || !strings.Contains(err.Error(), "inventory_file "+inv) ||
+		!strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("run: %v", err)
 	}
 }

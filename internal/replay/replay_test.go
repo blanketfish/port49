@@ -3,6 +3,8 @@ package replay
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -401,6 +403,249 @@ func TestAFailClosedSessionReplays(t *testing.T) {
 		}
 		if res := replayAll(t, edited); res[0].Status != Diverge {
 			t.Fatalf("%s edited to %s: %+v", tc.reason, tc.edited, res)
+		}
+	}
+}
+
+// Plan 5a's debt (spec §5.8): a redacted blob event leaves its records
+// unverifiable from the log; a Source that supplies the verbatim blob, checked
+// against the hash the record names, makes them verifiable again, and a
+// Source that supplies the wrong bytes changes nothing.
+func TestAVerbatimBlobFromOutsideTheLogReplaysARedactedBlobsRecords(t *testing.T) {
+	log, _ := daemonLog(t)
+	lines := strings.Split(strings.TrimSpace(log), "\n")
+	var rec decision.Record
+	if err := rec.UnmarshalJSON([]byte(lines[0])); err != nil {
+		t.Fatal(err)
+	}
+	verbatim := append([]byte(nil), rec.Blob.Body...)
+	rec.Blob.Body = []byte(strings.Replace(string(rec.Blob.Body), "tftp", platform.Redacted, 1))
+	rec.Blob.Redacted = true
+	edited, _ := json.Marshal(rec)
+	lines[0] = string(edited)
+	redacted := strings.Join(lines, "\n")
+	for _, c := range []struct {
+		name string
+		body []byte
+		want Status
+	}{{"verbatim", verbatim, Agree}, {"wrong", []byte(`{"version":1}`), Unverifiable}} {
+		src := func(decision.Record, time.Time) ([]byte, bool) { return c.body, true }
+		res, err := ReplayWith(strings.NewReader(redacted), 0, src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// daemonLog's last record, carol's, was decided before any policy
+		// ran and is not_replayed whatever the source: it is left out.
+		judged := 0
+		for _, r := range res[:len(res)-1] {
+			if r.Event == decision.EventBlob {
+				continue
+			}
+			judged++
+			if r.Status != c.want {
+				t.Fatalf("%s: %+v", c.name, r)
+			}
+		}
+		if judged < 5 {
+			t.Fatalf("%s: only %d records judged; daemonLog writes five that consult the blob", c.name, judged)
+		}
+	}
+}
+
+// secretForms are the spellings of a secret a replay must never print: as
+// written, in either case, quoted, and hex or base64 encoded, and every
+// five-character piece of it.
+func secretForms(secret string) []string {
+	forms := []string{secret, strings.ToUpper(secret), strings.ToLower(secret), fmt.Sprintf("%q", secret),
+		hex.EncodeToString([]byte(secret)), base64.StdEncoding.EncodeToString([]byte(secret)),
+		base64.RawURLEncoding.EncodeToString([]byte(secret))}
+	for i := 0; i+5 <= len(secret); i++ {
+		forms = append(forms, secret[i:i+5], strings.ToLower(secret[i:i+5]), strings.ToUpper(secret[i:i+5]))
+	}
+	return forms
+}
+
+// A blob replay took from outside the log carries the rule text the log
+// redacted: a record it diverges from names what differs on the log's side
+// only, and no result, whatever its status, prints any of the secret. The
+// daemon logs a command a secret rule decided with that rule redacted and the
+// record marked redacted, so it stays unverifiable; a log edited to drop the
+// mark diverges, without printing the rule the blob matched. A blob is
+// verified only by the exact hash its record names: a blob event and records
+// that name it in another case, or by a prefix of it, stay unverifiable.
+func TestAVerbatimBlobNeverPrintsWhatTheLogRedacted(t *testing.T) {
+	const secret = "Xk9vQ7pLm2Zr"
+	b := engine.Blob{Bundle: "sha256:policy", Platform: "arista_eos",
+		Normalize: engine.Normalize{PipeToken: "|", StripCR: true}, Privilege: "admin",
+		Attributes: []string{"priv-lvl=15", "home-directory*/home/{username}"},
+		Rules: []engine.Rule{
+			{Verdict: engine.Permit, Rule: "snmp-server **", Role: "snmp"},
+			{Verdict: engine.Deny, Rule: "snmp-server community /^(public)?(" + secret + ")?$/ **", Role: "no_community"},
+		}}
+	body, hash, err := engine.Encode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := engine.Decode(hash, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := engine.Compile(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := []byte(strings.ReplaceAll(string(body), "/^(public)?("+secret+")?$/", platform.Redacted))
+	if strings.Contains(string(shown), secret) || string(shown) == string(body) {
+		t.Fatal("the fixture's secret is not in the blob to redact")
+	}
+	raw := []string{"service=shell", "cmd=snmp-server", "cmd-arg=community", "cmd-arg=public", "cmd-arg=ro"}
+	o := prog.Command(raw)
+	if o.Reason != decision.NoPermitDominatesDeny || o.Deny == nil {
+		t.Fatalf("the fixture's command is not decided by the secret deny: %+v", o)
+	}
+	attrs, err := decoded.SessionAttributes(engine.Values{Principal: "user:alice@example.com", Username: "alice",
+		Device: "leaf-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := &decision.Device{Name: "leaf-01", Platform: "arista_eos"}
+	write := func(named string, edit func(cmd, session *decision.Record)) string {
+		// As the daemon logs it: the deny's secret word redacted, and the
+		// record marked.
+		pol := o.Policy(b.Bundle, named)
+		pol.MatchedDeny.Rule = []string{"snmp-server", "community", platform.Redacted, "**"}
+		cmd := decision.Record{TS: time.Now(), Event: decision.EventAuthorizeCommand, Verdict: decision.VerdictDeny,
+			Reason: o.Reason, Principal: "user:alice@example.com", Device: device,
+			Request: &decision.Request{Raw: raw, Redacted: true}, Policy: pol}
+		session := decision.Record{TS: time.Now(), Event: decision.EventAuthorizeSession,
+			Verdict: decision.VerdictPermit, Reason: decoded.SessionReason(), Principal: "user:alice@example.com",
+			Device: device, Session: &decision.Session{Username: "alice"}, Reply: &decision.Reply{Attributes: attrs},
+			Policy: &decision.Policy{Bundle: b.Bundle, Blob: named}}
+		edit(&cmd, &session)
+		var log bytes.Buffer
+		sink := decision.NewJSONLines(&log)
+		sink.Emit(decision.Record{TS: time.Now(), Event: decision.EventBlob,
+			Blob: &decision.Blob{Hash: named, Body: shown, Redacted: true}})
+		sink.Emit(cmd)
+		sink.Emit(session)
+		return log.String()
+	}
+	src := func(decision.Record, time.Time) ([]byte, bool) { return body, true }
+	for _, c := range []struct {
+		name              string
+		named             string
+		edit              func(cmd, session *decision.Record)
+		command, sessions Status
+	}{
+		{"as logged", hash, func(*decision.Record, *decision.Record) {}, Unverifiable, Agree},
+		{"the redacted mark dropped", hash, func(cmd, _ *decision.Record) { cmd.Request.Redacted = false },
+			Diverge, Agree},
+		{"another deny named, and the reply edited", hash, func(cmd, session *decision.Record) {
+			cmd.Request.Redacted = false
+			cmd.Policy.MatchedDeny = &decision.PolicyRule{Rule: []string{"snmp-server", "**"}, Role: "other"}
+			session.Reply.Attributes = []string{"priv-lvl=15"}
+		}, Diverge, Diverge},
+		{"verdicts edited", hash, func(cmd, session *decision.Record) {
+			cmd.Request.Redacted = false
+			cmd.Verdict, cmd.Reason = decision.VerdictPermit, decision.PermitDominates
+			session.Reason = decision.ProjectionFailClosed
+		}, Diverge, Diverge},
+		{"another case", strings.ToUpper(hash), func(cmd, _ *decision.Record) { cmd.Request.Redacted = false },
+			Unverifiable, Unverifiable},
+		{"a prefix", hash[:len(hash)-8], func(cmd, _ *decision.Record) { cmd.Request.Redacted = false },
+			Unverifiable, Unverifiable},
+	} {
+		log := write(c.named, c.edit)
+		// The logged side carries no secret: only the replayed side can.
+		if strings.Contains(log, secret) {
+			t.Fatalf("%s: the fixture's log carries the secret", c.name)
+		}
+		for _, only := range []int{0, 2, 3} {
+			res, err := ReplayWith(strings.NewReader(log), only, src)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res) == 0 {
+				t.Fatalf("%s: no results", c.name)
+			}
+			for _, r := range res {
+				want := map[string]Status{decision.EventAuthorizeCommand: c.command,
+					decision.EventAuthorizeSession: c.sessions}[r.Event]
+				if r.Status != want {
+					t.Fatalf("%s, line %d: %+v", c.name, only, r)
+				}
+				if c.named != hash && !strings.Contains(r.Detail, "the policy and inventory files give no blob that "+
+					"hashes to it") {
+					t.Fatalf("%s: the detail does not say the files gave no blob: %+v", c.name, r)
+				}
+				printed := fmt.Sprintf("%+v %v %s", r, r, r.Detail)
+				for _, f := range secretForms(secret) {
+					if strings.Contains(printed, f) {
+						t.Fatalf("%s: a result prints %q: %s", c.name, f, printed)
+					}
+				}
+			}
+		}
+	}
+}
+
+// The session side of the same guard (final review m5): a blob whose
+// attributes carry a secret, logged redacted and supplied verbatim by the
+// files, diverges from a session record whose reply was edited, or whose
+// values the attributes cannot take, and the detail names the log's side
+// only: no attribute the blob gives, and none of the secret.
+func TestAVerbatimBlobNeverPrintsItsSessionAttributes(t *testing.T) {
+	const secret = "Xk9vQ7pLm2Zr"
+	b := engine.Blob{Bundle: "sha256:policy", Platform: "arista_eos",
+		Normalize: engine.Normalize{PipeToken: "|", StripCR: true}, Privilege: "admin",
+		Attributes: []string{"priv-lvl=15", "x-" + secret + "*/home/{username}"}}
+	body, hash, err := engine.Encode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := []byte(strings.ReplaceAll(string(body), secret, platform.Redacted))
+	if string(shown) == string(body) {
+		t.Fatal("the fixture's secret is not in the blob to redact")
+	}
+	device := &decision.Device{Name: "leaf-01", Platform: "arista_eos"}
+	src := func(decision.Record, time.Time) ([]byte, bool) { return body, true }
+	for _, c := range []struct {
+		name, username string
+		logged         []string
+		want           string
+	}{
+		{"the reply edited", "alice", []string{"priv-lvl=15"}, "the session attributes do not"},
+		{"values the attributes cannot take", "al=ice", []string{"priv-lvl=15"}, "do not fit this record's values"},
+	} {
+		var log bytes.Buffer
+		sink := decision.NewJSONLines(&log)
+		sink.Emit(decision.Record{TS: time.Now(), Event: decision.EventBlob,
+			Blob: &decision.Blob{Hash: hash, Body: shown, Redacted: true}})
+		sink.Emit(decision.Record{TS: time.Now(), Event: decision.EventAuthorizeSession,
+			Verdict: decision.VerdictPermit, Reason: b.SessionReason(), Principal: "user:alice@example.com",
+			Device: device, Session: &decision.Session{Username: c.username},
+			Reply: &decision.Reply{Attributes: c.logged}, Policy: &decision.Policy{Bundle: b.Bundle, Blob: hash}})
+		if strings.Contains(log.String(), secret) {
+			t.Fatalf("%s: the fixture's log carries the secret", c.name)
+		}
+		res, err := ReplayWith(strings.NewReader(log.String()), 0, src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var session *Result
+		for i := range res {
+			if res[i].Event == decision.EventAuthorizeSession {
+				session = &res[i]
+			}
+		}
+		if session == nil || session.Status != Diverge || !strings.Contains(session.Detail, c.want) {
+			t.Fatalf("%s: %+v", c.name, res)
+		}
+		printed := fmt.Sprintf("%+v %v %s", *session, *session, session.Detail)
+		for _, f := range append(secretForms(secret), "x-", "/home/") {
+			if strings.Contains(printed, f) {
+				t.Fatalf("%s: the result prints %q from the blob: %s", c.name, f, printed)
+			}
 		}
 	}
 }

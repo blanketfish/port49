@@ -45,7 +45,9 @@ func newReloadRig(t *testing.T, policyBody string) *reloadRig {
 	stderr = io.Discard
 	rig.cfg = brokerConfig(t, policyBody)
 	rig.cfg.Broker.PolicyWatchInterval = time.Second
-	rig.cfg.InventoryFile = filepath.Join(t.TempDir(), "inventory.yaml")
+	rig.cfg.MaxRemovedPercent = 10 // config.Load's default
+	// safeDir: the inventory is read behind the policy file's fence.
+	rig.cfg.InventoryFile = filepath.Join(safeDir(t), "inventory.yaml")
 	if err := os.WriteFile(rig.cfg.InventoryFile, []byte("devices: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -107,20 +109,21 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 // counted.
 func TestAPolicyEditIsLoadedOnceTwoReadsAgree(t *testing.T) {
 	rig := newReloadRig(t, minimalPolicy)
-	before := rig.b.Policy.Load().Bundle
+	before := rig.b.Policy.Load().Source
 	rig.write(t, showOnly)
 	rig.with(func() { rig.r.poll(context.Background()) })
-	if rig.b.Policy.Load().Bundle != before {
+	if rig.b.Policy.Load().Source != before {
 		t.Fatal("one read of a new file must not load it")
 	}
 	rig.with(func() { rig.r.poll(context.Background()) })
-	if got := rig.b.Policy.Load().Bundle; got != engine.HashOf([]byte(showOnly)) {
+	if got := rig.b.Policy.Load().Source; got != engine.HashOf([]byte(showOnly)) {
 		t.Fatalf("the second agreeing read loads it: bundle %s", got)
 	}
 	if n := testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("applied")); n != 1 {
 		t.Fatalf("port49_policy_reloads_total{outcome=applied} = %v", n)
 	}
-	if want := "port49d: policy reloaded (file changed): " + engine.HashOf([]byte(showOnly)) + " replaces " + before; !strings.Contains(rig.out.String(), want) {
+	if want := "port49d: policy reloaded (file changed): " + engine.HashOf([]byte(showOnly)) + " replaces " + before +
+		" (bundle " + rig.b.Policy.Load().Bundle + ")"; !strings.Contains(rig.out.String(), want) {
 		t.Fatalf("stderr %q, want %q", rig.out.String(), want)
 	}
 }
@@ -131,12 +134,12 @@ func TestAPolicyEditIsLoadedOnceTwoReadsAgree(t *testing.T) {
 // the file is put back.
 func TestAPolicyThatDoesNotLoadIsRefusedAndTheOldOneServes(t *testing.T) {
 	rig := newReloadRig(t, minimalPolicy)
-	before := rig.b.Policy.Load().Bundle
+	before := rig.b.Policy.Load().Source
 	rig.write(t, strings.Replace(minimalPolicy, "privilege: admin", "privilege: root", 1))
 	for i := 0; i < 5; i++ {
 		rig.with(func() { rig.r.poll(context.Background()) })
 	}
-	if rig.b.Policy.Load().Bundle != before {
+	if rig.b.Policy.Load().Source != before {
 		t.Fatal("a refused file must leave the policy in force")
 	}
 	if n := testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("refused")); n != 1 {
@@ -167,7 +170,7 @@ func TestSIGHUPLoadsAtOnce(t *testing.T) {
 	}
 	rig.write(t, showOnly)
 	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
-	if rig.b.Policy.Load().Bundle != engine.HashOf([]byte(showOnly)) {
+	if rig.b.Policy.Load().Source != engine.HashOf([]byte(showOnly)) {
 		t.Fatal("SIGHUP puts the file in force at once")
 	}
 }
@@ -286,7 +289,7 @@ func TestARefreshTheStoreStopsIsRetried(t *testing.T) {
 	rig.b.Store = failingStore{rig.st}
 	rig.write(t, showOnly)
 	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
-	if rig.b.Policy.Load().Bundle != engine.HashOf([]byte(showOnly)) {
+	if rig.b.Policy.Load().Source != engine.HashOf([]byte(showOnly)) {
 		t.Fatal("the policy is in force whether or not the refresh finished")
 	}
 	if !strings.Contains(rig.out.String(), "port49d: policy refresh stopped") ||
@@ -336,7 +339,7 @@ func TestTheWatchLoadsTheBytesItsReadsAgreedOn(t *testing.T) {
 	rig.with(func() {
 		rig.r.load(context.Background(), "file changed", []byte(showOnly), engine.HashOf([]byte(showOnly)), nil)
 	})
-	if got := rig.b.Policy.Load().Bundle; got != engine.HashOf([]byte(showOnly)) {
+	if got := rig.b.Policy.Load().Source; got != engine.HashOf([]byte(showOnly)) {
 		t.Fatalf("bundle %s: the agreed bytes are what is loaded", got)
 	}
 }
@@ -347,7 +350,7 @@ func TestTheWatchLoadsTheBytesItsReadsAgreedOn(t *testing.T) {
 // putting the mode right is a change the watch sees (spec §5.1.3).
 func TestAPolicyFileOthersCouldWriteIsRefusedAtAReload(t *testing.T) {
 	rig := newReloadRig(t, minimalPolicy)
-	before := rig.b.Policy.Load().Bundle
+	before := rig.b.Policy.Load().Source
 	rig.write(t, showOnly)
 	if err := os.Chmod(rig.cfg.Broker.PolicyFile, 0o622); err != nil {
 		t.Fatal(err)
@@ -355,7 +358,7 @@ func TestAPolicyFileOthersCouldWriteIsRefusedAtAReload(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		rig.with(func() { rig.r.poll(context.Background()) })
 	}
-	if rig.b.Policy.Load().Bundle != before || testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 ||
+	if rig.b.Policy.Load().Source != before || testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 ||
 		testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("refused")) != 1 {
 		t.Fatalf("an unsafe file is refused once and the policy in force serves: %q", rig.out.String())
 	}
@@ -368,7 +371,7 @@ func TestAPolicyFileOthersCouldWriteIsRefusedAtAReload(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		rig.with(func() { rig.r.poll(context.Background()) })
 	}
-	if rig.b.Policy.Load().Bundle != engine.HashOf([]byte(showOnly)) || testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
+	if rig.b.Policy.Load().Source != engine.HashOf([]byte(showOnly)) || testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
 		t.Fatalf("the file with its mode put right loads: %q", rig.out.String())
 	}
 }
@@ -392,21 +395,6 @@ func TestTheRefreshIsScheduledAtTheNextGrantExpiry(t *testing.T) {
 		lapse.UTC().Format(time.RFC3339)+"}", 1))
 	if !rig.r.due.Equal(lapse) {
 		t.Fatalf("due %v, want the expiry %v", rig.r.due, lapse)
-	}
-}
-
-// The inventory is read once, at start, until plan 6: a reload after an
-// inventory edit says so, once, rather than leaving an operator to believe
-// SIGHUP applied it.
-func TestAnInventoryEditIsSaidNotApplied(t *testing.T) {
-	rig := newReloadRig(t, minimalPolicy)
-	if err := os.WriteFile(rig.cfg.InventoryFile, []byte("devices: [{name: leaf2, platform: arista_eos}]\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
-	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
-	if n := strings.Count(rig.out.String(), "has changed since start and is not reloaded"); n != 1 {
-		t.Fatalf("said %d times: %q", n, rig.out.String())
 	}
 }
 
@@ -490,7 +478,7 @@ func TestAFileThatNeverStopsChangingIsSaid(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		rig.with(func() { rig.r.poll(context.Background()) })
 	}
-	if rig.b.Policy.Load().Bundle == engine.HashOf([]byte(minimalPolicy)) || testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
+	if rig.b.Policy.Load().Source == engine.HashOf([]byte(minimalPolicy)) || testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 {
 		t.Fatalf("a file that settles loads and clears the alarm: %q", rig.out.String())
 	}
 }
@@ -517,19 +505,19 @@ func TestBlipsBetweenReadsOfThePolicyInForceRaiseNoAlarm(t *testing.T) {
 // serving, and the refusal is said once.
 func TestADeletedPolicyFileIsRefusedAndTheOldOneServes(t *testing.T) {
 	rig := newReloadRig(t, minimalPolicy)
-	before := rig.b.Policy.Load().Bundle
+	before := rig.b.Policy.Load().Source
 	if err := os.Remove(rig.cfg.Broker.PolicyFile); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 4; i++ {
 		rig.with(func() { rig.r.poll(context.Background()) })
 	}
-	if rig.b.Policy.Load().Bundle != before || testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 ||
+	if rig.b.Policy.Load().Source != before || testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 ||
 		strings.Count(rig.out.String(), "refused") != 1 || !strings.Contains(rig.out.String(), "no such file") {
 		t.Fatalf("stderr: %q", rig.out.String())
 	}
 	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
-	if rig.b.Policy.Load().Bundle != before || testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("refused")) != 2 {
+	if rig.b.Policy.Load().Source != before || testutil.ToFloat64(rig.m.PolicyReloads.WithLabelValues("refused")) != 2 {
 		t.Fatalf("a SIGHUP with the file gone is refused too: %q", rig.out.String())
 	}
 }
@@ -608,5 +596,93 @@ func TestTheSummarySaysWhatASessionOnlyPlatformKeeps(t *testing.T) {
 	}
 	if got := summary(broker.RefreshReport{Revoked: 3}); strings.Contains(got, "until logout") {
 		t.Fatalf("summary: %q", got)
+	}
+}
+
+// Task 12 m3, end to end: with a named pipe swapped in at port49d.yaml's path
+// after start, SIGHUP still reloads the policy, and shutdown still returns,
+// so the spool drains rather than waiting on the reloader for good.
+func TestRunDrainsAfterSIGHUPWithANamedPipeAsItsConfig(t *testing.T) {
+	var out syncBuffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfgPath := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			cancel()
+			<-done
+		}
+	}()
+	waitFor(t, &out, "port49d: listening on ")
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(cfgPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, &out, "inventory.max_removed_percent not re-read from "+cfgPath)
+	waitFor(t, &out, "port49d: policy reload (SIGHUP)")
+	cancel() // what SIGTERM does to run's context
+	select {
+	case <-done:
+		stopped = true
+	case <-time.After(10 * time.Second):
+		t.Fatalf("shutdown did not return: %s", out.String())
+	}
+}
+
+// Task 10: a device admission refuses is the operator's 3am signal in three
+// places, all said at start: its own stderr line with why, the listening
+// line's admitted count, which leaves it out, and the gauge.
+func TestRunSaysARefusedDeviceAtStart(t *testing.T) {
+	var out syncBuffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfgPath := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(cfgPath), "inventory.yaml"), []byte(`
+devices:
+  - {name: leaf1, platform: arista_eos, addresses: [127.0.0.1]}
+  - {name: leaf2, platform: arista_eos, addresses: [10.9.9.9]}
+key_groups:
+  - {match: {cidr: 127.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	waitFor(t, &out, "port49d: listening on ")
+	if !strings.Contains(out.String(), "port49d: admission: device leaf2 (arista_eos) is refused: ") {
+		t.Fatalf("the refused device was not named at start: %s", out.String())
+	}
+	if !regexp.MustCompile(`port49d: listening on \S+, metrics on \S+, 1 devices admitted\n`).MatchString(out.String()) {
+		t.Fatalf("the listening line does not count one admitted device: %s", out.String())
+	}
+	m := regexp.MustCompile(`metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())
+	if m == nil {
+		t.Fatalf("stderr: %q", out.String())
+	}
+	resp, err := http.Get("http://" + m[1] + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^port49_devices_admission_refused 1$`).Match(body) {
+		t.Fatalf("port49_devices_admission_refused is not 1:\n%s", body)
 	}
 }

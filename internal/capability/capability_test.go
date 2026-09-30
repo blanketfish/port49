@@ -333,6 +333,24 @@ func TestTheSessionEndsAtThePlatformsExecStop(t *testing.T) {
 	}
 }
 
+// A juniper_junos variant's exec STOP is Junos's: read under its own name its
+// cmd=logout would be a command, and the session would never end (spec §8;
+// plan 6a M4).
+func TestAVariantsSessionEndsAtItsBasesExecStop(t *testing.T) {
+	var l logb
+	l.command("srx-1", "a", decision.VerdictPermit, "configure")
+	l.account("srx-1", "a", "resolved", "logout")
+	l.command("srx-1", "a", decision.VerdictPermit, "show", "version")
+	devices := []Device{{Name: "srx-1", Platform: "srx_variant", WirePlatform: "juniper_junos", Supports: eos}}
+	if r := Infer(l.recs, devices, Options{}).Rows[0]; r.ConfigSilent != 1 {
+		t.Fatalf("%+v", r)
+	}
+	devices[0].WirePlatform = ""
+	if r := Infer(l.recs, devices, Options{}).Rows[0]; r.ConfigSilent == 1 {
+		t.Fatal("read under its own name the variant's logout still ends the session, so this test proves nothing")
+	}
+}
+
 // Row and Report marshal with snake_case keys, as all port49 data does.
 func TestReportKeysAreSnakeCase(t *testing.T) {
 	var l logb

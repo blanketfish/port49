@@ -1,0 +1,43 @@
+{
+  "step": "status",
+  "method": "GET",
+  "path": "/api/status/",
+  "status": 200,
+  "headers": {
+    "Allow": "GET, HEAD, OPTIONS",
+    "Api-Version": "3.7",
+    "Content-Length": "486",
+    "Content-Type": "application/json",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Date": "Wed, 30 Sep 2026 06:42:10 GMT",
+    "Referrer-Policy": "same-origin",
+    "Server": "Unit/1.31.1",
+    "Vary": "HX-Request, Cookie, origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Request-Id": "05f13a17-d232-4572-8a58-6597e5220642"
+  },
+  "body": {
+    "django-version": "4.2.11",
+    "installed-apps": {
+      "debug_toolbar": "4.3.0",
+      "django_filters": "24.2",
+      "django_prometheus": "2.3.1",
+      "django_rq": "2.10.2",
+      "django_tables2": "2.7.0",
+      "drf_spectacular": "0.27.2",
+      "drf_spectacular_sidecar": "2024.5.1",
+      "graphene_django": "3.0.0",
+      "graphiql_debug_toolbar": "0.2.0",
+      "mptt": "0.14.0",
+      "rest_framework": "3.14.0",
+      "social_django": "5.4.1",
+      "taggit": "5.0.1",
+      "timezone_field": "6.1.0"
+    },
+    "netbox-version": "3.7.8",
+    "plugins": {},
+    "python-version": "3.11.4",
+    "rq-workers-running": 0
+  }
+}

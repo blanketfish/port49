@@ -82,6 +82,19 @@ func (l *Limiter) Malformed(src netip.Addr) time.Duration {
 	return backoff(l.cfg.MalformedBackoffBase, l.cfg.MalformedBackoffMax, f.count)
 }
 
+// Holding reports whether src is inside the backoff its last strike earned:
+// port49d refuses such a source at Accept, at once, rather than hold one of
+// its connections silent (L28 branch H).
+func (l *Limiter) Holding(src netip.Addr) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	f, ok := l.bad[src]
+	if !ok || f.count == 0 {
+		return false
+	}
+	return l.now().Before(f.last.Add(backoff(l.cfg.MalformedBackoffBase, l.cfg.MalformedBackoffMax, f.count)))
+}
+
 // AuthFailure records a failed authentication for (nas, username) and returns
 // the delay to apply before the FAIL reply. Counts reset after the window.
 func (l *Limiter) AuthFailure(nas, username string) time.Duration {

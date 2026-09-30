@@ -44,6 +44,7 @@ type conn struct {
 	src      netip.Addr
 	dev      admission.Resolved
 	admitted bool
+	refused  bool // in inventory, and admission refused it (spec §10)
 	keys     keyring.Set
 
 	version  int  // 0 until the first packet validates; then the only version this connection uses
@@ -80,6 +81,59 @@ func (s *conn) quarantine(h wire.Header) {
 	s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagDeviceQuarantined)).Inc()
 }
 
+// refusedAdmission records a packet from a device the inventory names and
+// admission refuses — no key group admits it, two tie on it, or its key_ref is
+// one port49d holds no key for — and closes the connection with nothing read
+// past the header and no strike (spec §10). The fault is port49's
+// configuration, not the device's, so the device falls to its local method at
+// once, as for a quarantine; the start line and `port49 policy test` say why.
+func (s *conn) refusedAdmission(h wire.Header) {
+	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated,
+		Device: &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform},
+		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagAdmissionRefused),
+			KeyRef: s.dev.KeyRef, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
+	s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagAdmissionRefused)).Inc()
+}
+
+// readmitted asks admission in force about this connection's source at the
+// time of this packet, so a reload that refuses, removes, renames, re-keys or
+// re-platforms the device ends its open connections rather than leaving them
+// on the admission they began with: a busy single-connect connection resets
+// its idle timer on every packet and so has no end (spec §10). A platform or
+// `based_on:` change counts: the connection would be denied
+// blob_platform_mismatch at every command, and its records redacted under a
+// platform no longer in force. It returns the diagnosis naming why, or ""
+// while the connection's admission still holds.
+func (s *conn) readmitted() keyring.Diagnosis {
+	now, found := s.d.Admission.Lookup(s.src)
+	switch {
+	case !found:
+		return keyring.DiagUnadmittedSource
+	case now.Refused != "":
+		return keyring.DiagAdmissionRefused
+	case now.Device.Name != s.dev.Device.Name || now.KeyRef != s.dev.KeyRef ||
+		now.Device.Platform != s.dev.Device.Platform || now.WirePlatform != s.dev.WirePlatform:
+		return keyring.DiagAdmissionWithdrawn
+	}
+	return ""
+}
+
+// admissionWithdrawn records a packet on a connection whose admission a
+// reload withdrew and closes it with a reset, with nothing read past the
+// header and no strike: the change is port49d's, not the device's. The
+// record names the device and key_ref the connection was admitted as, and
+// device_unknown, since that admission is no longer one port49d knows (spec
+// §5.7). How a device takes this reset is unmeasured (L29).
+func (s *conn) admissionWithdrawn(h wire.Header, diag keyring.Diagnosis) {
+	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Reason: decision.DeviceUnknown,
+		Device: &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform},
+		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(diag), KeyRef: s.dev.KeyRef,
+			Version: s.version, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
+	s.d.Metrics.Unvalidated.WithLabelValues(string(diag)).Inc()
+	s.d.Metrics.ConnectionEvents.WithLabelValues("admission_closed").Inc()
+	reset(s.c)
+}
+
 // quarantined asks the policy about this connection's device at the time of
 // this packet, so a single-connection session opened before a grant's expiry
 // is closed from it, and one opened during a quarantine is served once it ends.
@@ -109,6 +163,26 @@ func (s *conn) backoff(ctx context.Context, event string) {
 	case <-t.C:
 	case <-ctx.Done():
 	}
+}
+
+// reset makes c's close a TCP reset rather than a FIN. On a server's FIN the
+// C8000V waits out its own timeout before it falls to local; a reset it acts
+// on at once (tests/lab/results/L28-fin-cisco_iosxe.md, L28-cisco_iosxe.md).
+func reset(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetLinger(0)
+	}
+}
+
+// keyMiss closes a connection whose packet no accepted key validates — a
+// first packet, or one past its version's retire_after — as L28 branch H
+// does: the record, a strike, and a reset at once, never a silent hold. The
+// next connection inside the strike's backoff is refused at Accept.
+func (s *conn) keyMiss(h wire.Header, obf []byte, diag keyring.Diagnosis, version int) {
+	s.unvalidated(h, obf, diag, version)
+	s.d.Limits.Malformed(s.src)
+	reset(s.c)
+	s.d.Metrics.ConnectionEvents.WithLabelValues("key_miss_closed").Inc()
 }
 
 // protocolError closes a connection whose key validated but whose packet
@@ -156,8 +230,17 @@ func (s *conn) serve(ctx context.Context) {
 		// malformed_backoff so an operator can tell "unknown device" from
 		// "known device sending garbage" at a glance.
 		if !s.admitted {
+			if s.refused {
+				s.refusedAdmission(h)
+				return
+			}
 			s.unvalidated(h, nil, keyring.DiagUnadmittedSource, 0)
 			s.backoff(ctx, "unadmitted_source")
+			return
+		}
+
+		if diag := s.readmitted(); diag != "" {
+			s.admissionWithdrawn(h, diag)
 			return
 		}
 
@@ -233,23 +316,43 @@ func (s *conn) serve(ctx context.Context) {
 
 // deobfuscate turns the packet body into cleartext. The first packet decides
 // which key version this connection speaks; every later packet is held to that
-// one, so a device cannot walk the keyring packet by packet.
+// one, so a device cannot walk the keyring packet by packet. Each packet is
+// judged at its own time: a connection opened before its version's
+// retire_after is refused at the first packet past it, so holding a
+// connection open never extends a key's life.
 func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]byte, bool) {
 	if s.version == 0 {
-		r := s.keys.Resolve(h, obf)
+		r := s.keys.Resolve(h, obf, s.d.Now())
 		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(r.Version), string(r.Diagnosis)).Inc()
 		if r.Diagnosis != keyring.DiagValidated {
 			// A retired version identifies the sender in the record and nothing
-			// more: no admission, no reply.
-			s.unvalidated(h, obf, r.Diagnosis, r.Version)
-			s.backoff(ctx, "malformed_backoff")
+			// more: no admission, no reply. The strike is counted, and the next
+			// connection inside its backoff is refused at Accept; this one is
+			// closed at once with a reset, never held silent (L28 branch H).
+			if s.d.Held != nil {
+				s.d.Held.Put(s.dev.Device.Name, s.src, h, obf, s.d.Now())
+			}
+			s.keyMiss(h, obf, r.Diagnosis, r.Version)
 			return nil, false
 		}
 		s.version = r.Version
+		if s.d.KeySeen != nil {
+			s.d.KeySeen(s.dev.Device.Name, s.keys.Ref, r.Version)
+		}
 		if h.Flags&wire.FlagSingleConnect != 0 {
 			s.single = true
 		}
 		return r.Body, true
+	}
+	if s.pastDate(s.d.Now()) {
+		// matches_retired here means the connection's version is past its
+		// retire_after; this packet is not trial-decrypted, since nothing it
+		// could say would change the answer (spec §10). It is closed as a
+		// first-packet miss is: struck, and reset at once.
+		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(s.version),
+			string(keyring.DiagMatchesRetired)).Inc()
+		s.keyMiss(h, obf, keyring.DiagMatchesRetired, s.version)
+		return nil, false
 	}
 	body := wire.Obfuscate(h, s.keys.Secret(s.version), obf)
 	if !keyring.Validates(h, body) {
@@ -258,6 +361,17 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		return nil, false
 	}
 	return body, true
+}
+
+// pastDate reports whether the version this connection validated under has
+// been retired since, by its retire_after passing.
+func (s *conn) pastDate(now time.Time) bool {
+	for i, v := range s.keys.Versions {
+		if v.Number == s.version {
+			return s.keys.State(i, now) == "retired"
+		}
+	}
+	return true
 }
 
 // write sends one reply, obfuscated with the version that validated the request.
@@ -280,7 +394,8 @@ func (s *conn) write(h wire.Header, body []byte) bool {
 // protoErr reports a packet this connection cannot answer at all, which closes
 // it without a reply.
 func (s *conn) dispatch(ctx context.Context, h wire.Header, body []byte) (reply []byte, done, protoErr bool) {
-	peer := authen.Peer{NAS: s.dev.Device.Name, NASAddr: s.src.String(), Platform: s.dev.Device.Platform}
+	peer := authen.Peer{NAS: s.dev.Device.Name, NASAddr: s.src.String(), Platform: s.dev.Device.Platform,
+		KeyRef: s.dev.KeyRef, KeyVersion: s.version, WirePlatform: s.dev.WirePlatform}
 	start := s.d.Now()
 	defer func() { s.d.Metrics.Latency.WithLabelValues(exchange(h.Type)).Observe(s.d.Now().Sub(start).Seconds()) }()
 

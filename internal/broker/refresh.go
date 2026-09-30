@@ -134,10 +134,18 @@ type RefreshReport struct {
 // either half, and is returned: port49d is shutting down.
 func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, error) {
 	cur := b.Policy.Load()
+	// sameSource is an inventory-only swap: every policy since the last
+	// complete refresh was read from the file in force, so a context whose
+	// blob differs from the new one only in the bundle it names is left as
+	// it is (spec §5.1.3; plan 6a Decided 3).
+	sameSource := true
+	for _, pr := range priors {
+		sameSource = sameSource && pr.Policy.Source == cur.Source
+	}
 	var rep RefreshReport
 	for {
 		rep.At = b.Now()
-		busy := b.refreshContexts(ctx, cur, rep.At, &rep)
+		busy := b.refreshContexts(ctx, cur, priors, rep.At, &rep, sameSource)
 		if busy != nil && !errors.Is(busy, store.ErrConflict) {
 			return rep, fmt.Errorf("refreshing live contexts: %w", busy)
 		}
@@ -214,8 +222,17 @@ func (m minted) keeps(o minted) bool {
 // runs straight after the swap to keep that window short.
 func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now time.Time, priors []Prior,
 	rep *RefreshReport) error {
-	names := make([]string, 0, len(b.Devices))
-	for name := range b.Devices {
+	seen := map[string]bool{}
+	for _, d := range cur.Devices() {
+		seen[d.Name] = true
+	}
+	for _, pr := range priors {
+		for _, d := range pr.Policy.Devices() {
+			seen[d.Name] = true
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -237,15 +254,22 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 				return err
 			}
 			for _, name := range names {
-				d := b.Devices[name]
+				d, known := pr.Policy.Device(name)
+				if !known {
+					continue // the prior did not know it, so it minted nothing for it
+				}
 				for _, at := range instants {
 					was, ok := mintedFor(pr.Policy, principal, d, at)
 					if !ok {
 						continue // nothing was minted then, so nothing is superseded
 					}
-					is, seen := current[[2]string{principal, name}]
-					if !seen {
-						is.m, is.ok = mintedFor(cur, principal, d, now)
+					is, computed := current[[2]string{principal, name}]
+					if !computed {
+						// A device the inventory in force no longer names mints
+						// nothing now, so every token for it is superseded.
+						if nd, ok := cur.Device(name); ok {
+							is.m, is.ok = mintedFor(cur, principal, nd, now)
+						}
 						current[[2]string{principal, name}] = is
 					}
 					if is.ok && was.keeps(is.m) {
@@ -296,7 +320,8 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 // after every attempt does not: it is left for the retry, the pass goes on,
 // and the conflict is returned at the end so the caller runs it again — one
 // busy session must not hold every session after it on the superseded policy.
-func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, now time.Time, rep *RefreshReport) error {
+func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
+	rep *RefreshReport, sameSource bool) error {
 	principals, err := b.Store.ActivePrincipals(ctx)
 	if err != nil {
 		return err
@@ -312,7 +337,7 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, now ti
 			return err
 		}
 		for _, ref := range refs {
-			switch err := b.refreshContext(ctx, cur, now, principal, ref, rep, quarantined); {
+			switch err := b.refreshContext(ctx, cur, priors, now, principal, ref, rep, quarantined, sameSource); {
 			case errors.Is(err, store.ErrConflict):
 				if busy == nil {
 					busy = err
@@ -338,10 +363,11 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, now ti
 // refreshContext re-resolves one context and writes the answer, reading again
 // and deciding again when a write landed between its read and its own, up to
 // store.MaxJoinAttempts times. quarantined collects the ctx_ids the pass
-// leaves for a quarantine.
-func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now time.Time, principal string,
-	ref store.ContextRef, rep *RefreshReport, quarantined map[string]bool) error {
+// leaves for a quarantine. sameSource is an inventory-only swap (Refresh).
+func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
+	principal string, ref store.ContextRef, rep *RefreshReport, quarantined map[string]bool, sameSource bool) error {
 	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
+	known, plat := knownPlatform(cur, priors, ref.NAS)
 	for attempt := 0; attempt < store.MaxJoinAttempts; attempt++ {
 		c, err := b.Store.GetContext(ctx, k)
 		var unreadable *store.UnreadableContextError
@@ -365,11 +391,11 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now tim
 				ref.Username, ref.NAS, principal, err)
 			rec := decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
 				Reason:  decision.BlobUnavailable,
-				Device:  &decision.Device{Name: ref.NAS, Platform: b.Devices[ref.NAS].Platform},
+				Device:  &decision.Device{Name: ref.NAS, Platform: plat},
 				Session: &decision.Session{Username: ref.Username},
 				Policy:  &decision.Policy{Bundle: cur.Bundle}}
 			return b.revoke(ctx, k, now, refreshStep{revoke: true, rec: rec, outcome: "failed",
-				sessionOnly: sessionOnly(cur, b.Devices[ref.NAS].Platform)}, rep)
+				sessionOnly: sessionOnly(known, plat)}, rep)
 		case err != nil:
 			return err
 		}
@@ -380,7 +406,19 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now tim
 			return nil
 		}
 		step := b.decideRefresh(cur, now, principal, ref, c)
-		step.sessionOnly = sessionOnly(cur, b.Devices[ref.NAS].Platform)
+		step.sessionOnly = sessionOnly(known, plat)
+		if step.rec.Device != nil && step.rec.Device.Platform == "" {
+			step.rec.Device.Platform = plat
+		}
+		if sameSource && step.write != nil && step.rec.Session.PrivilegeClamped == nil &&
+			step.write.MaxPrivilege == c.MaxPrivilege && step.write.Enable == c.Enable &&
+			b.sameButBundle(ctx, c.BlobHash, step.write.BlobHash, step.body) {
+			// An inventory-only swap that left this context's answer as it
+			// was: nothing is written and nothing recorded, and it goes on
+			// naming the bundle that compiled it, which is still true.
+			b.count(rep, "unchanged")
+			return nil
+		}
 		switch {
 		case step.revoke:
 			return b.revoke(ctx, k, now, step, rep)
@@ -424,6 +462,44 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, now tim
 		store.MaxJoinAttempts, store.ErrConflict)
 }
 
+// sameButBundle reports whether the blob a context names is the new one but
+// for the bundle, read from the store. A blob the store cannot give is not:
+// the context takes the new one, failing toward the write.
+func (b *Broker) sameButBundle(ctx context.Context, oldHash, newHash string, newBody []byte) bool {
+	raw, err := b.Store.GetBlob(ctx, oldHash)
+	if err != nil {
+		return false
+	}
+	old, err := engine.Decode(oldHash, raw)
+	if err != nil {
+		return false
+	}
+	nb, err := engine.Decode(newHash, newBody)
+	if err != nil {
+		return false
+	}
+	old.Bundle = nb.Bundle
+	_, h, err := engine.Encode(old)
+	return err == nil && h == newHash
+}
+
+// knownPlatform is a device's platform, and the policy that names it: the
+// policy in force, or, for a device its inventory no longer names, the latest
+// prior that did (Task 11 M3). A context on a device an inventory reload
+// removed is then judged reached or not by what the device was, not counted
+// out of reach for want of a platform; one no policy names is (cur, "").
+func knownPlatform(cur *policy.Policy, priors []Prior, name string) (*policy.Policy, string) {
+	if d, ok := cur.Device(name); ok {
+		return cur, d.Platform
+	}
+	for i := len(priors) - 1; i >= 0; i-- {
+		if d, ok := priors[i].Policy.Device(name); ok {
+			return priors[i].Policy, d.Platform
+		}
+	}
+	return cur, ""
+}
+
 // revoke marks the context revoked at at through SetRevokedAt, the setter that
 // writes the mark alone and keeps the later of two, and records and counts it.
 // It does not compare: a revocation is right whoever the record belongs to by
@@ -462,6 +538,15 @@ func (b *Broker) unreached(step refreshStep, rep *RefreshReport) {
 	which := "ctx_id " + step.rec.Session.CtxID
 	if step.rec.Session.CtxID == "" {
 		which = fmt.Sprintf("username %q", step.rec.Session.Username)
+	}
+	if step.rec.Device.Platform == "" {
+		// A device the inventory in force no longer names, or names with no
+		// platform: its live session is assumed out of reach, as the
+		// operator must hear for one that is.
+		log.Printf("broker: refresh: the context on %q (%s) was %s, but the inventory in force gives the device "+
+			"no platform, so whether it authorizes commands is not known: its live session may keep what it had "+
+			"at login until logout (spec §13 decision 21)", step.rec.Device.Name, which, step.outcome)
+		return
 	}
 	log.Printf("broker: refresh: the context on %q (%s) was %s, but %s does not authorize commands: its live "+
 		"session keeps what it had at login until logout (spec §13 decision 21)", step.rec.Device.Name, which,
@@ -525,11 +610,11 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 		rec.Verdict, rec.Reason = decision.VerdictDeny, decision.BlobUnavailable
 		return refreshStep{revoke: true, rec: rec, outcome: "failed"}
 	}
-	dev, ok := b.Devices[ref.NAS]
+	dev, ok := cur.Device(ref.NAS)
 	if !ok {
-		// Inventory is read once, at start, so a live context on a device it
-		// does not name was written by a daemon reading another inventory.
-		// Nothing can be minted for it here.
+		// A context on a device the inventory in force no longer names:
+		// nothing can be minted for it, so it is revoked (plan 4b's hand-off:
+		// a device leaving inventory is a narrowing like any other).
 		return revoke()
 	}
 	rec.Device.Platform = dev.Platform
@@ -543,6 +628,11 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 	case errors.Is(err, policy.ErrDeviceQuarantined):
 		rec.Verdict, rec.Reason = decision.VerdictDeny, decision.DeviceQuarantined
 		return refreshStep{rec: rec, outcome: "quarantined"}
+	case errors.Is(err, policy.ErrDeviceRefused):
+		// Not live (spec §5.7, device_unknown): the device cannot reach
+		// port49d, so the context is revoked as for a removed device.
+		rec.Verdict, rec.Reason = decision.VerdictDeny, decision.DeviceUnknown
+		return refreshStep{revoke: true, rec: rec, outcome: "revoked"}
 	case err != nil:
 		return fault("resolving the policy in force", err)
 	case res.Username != c.Username:

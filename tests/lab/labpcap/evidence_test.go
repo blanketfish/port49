@@ -73,6 +73,10 @@ func TestCommittedEvidenceMatchesTheCaptures(t *testing.T) {
 	var pairs, diff, credBytes, alreadyFill, shapeTripped int
 	for _, cp := range names {
 		base := filepath.Base(cp)
+		opt := opt
+		if k := labcreds.CaptureKey(base); k != "" {
+			opt.Key = k // L28's rotation capture, taken under the device's new key
+		}
 		in, err := os.ReadFile(cp)
 		if err != nil {
 			t.Fatal(err)

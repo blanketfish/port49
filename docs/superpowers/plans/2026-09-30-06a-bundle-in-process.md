@@ -230,7 +230,10 @@ which is an encryption-at-rest rotation alarm, not a device-key one. Task 21 rec
 7. **`retire_after` is a date and is inclusive.** `retire_after: 2026-10-01` admits through the end
    of that day UTC and refuses from `2026-10-02T00:00:00Z`: past it the version identifies and
    never admits, as a retired one does. It is allowed on `accept` versions only. A connection
-   validated before the instant keeps its key for its life (the per-connection cache, spec §10).
+   validated before the instant keeps its version only until that instant; past it, every later
+   packet is treated as a new connection's would be (spec §10). A busy single-connect connection
+   resets its idle timer on every packet, so "for its life" would have no bound. How a device
+   reacts to that close is L29, open, split from L28 in Task 21. (Amended in Task 14's review.)
 8. **Every validated record names its key.** `device.key_ref` and `device.key_version` on the
    redeem, authorization and accounting records; `keys status` groups the log by them. A new
    per-connection record would double the log.
@@ -524,9 +527,10 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   `retire_after` is a date, inclusive: `retire_after: 2026-10-01` admits through the end of that
   day UTC, and from `2026-10-02T00:00:00Z` the version identifies a device and never admits one,
   as a retired version does. It is written on `accept` versions only; `current` carries none, and
-  a `retired` version is refused already. A connection validated before the instant keeps its key
-  for its life. port49d says at start, and `port49 policy test --config` reports, a version whose
-  date has passed and an `accept` version with none.
+  a `retired` version is refused already. A connection validated before the instant keeps its
+  version only until that instant (amended in Task 14's review; spec §10 has the text). port49d
+  says at start, and `port49 policy test --config` reports, a version whose date has passed and
+  an `accept` version with none.
 
   The key sets, `retire_after` included, live in port49d.yaml beside the references to their
   secrets (`secret_env`), where they have been since plan 1, rather than in the policy file, which
@@ -1299,21 +1303,24 @@ never "fixed" by guessing a different call without recording that too.
   — so neither run's fixtures overwrite the other's. Which spelling each version refused is the
   finding, and the note cites both directories.
 
-- [ ] **Step 4: Run it, per product and version.** For each of the four stacks:
+- [ ] **Step 4: Run it, per product and version.** For each of the four stacks, with
+  `tests/lab/sot/run.sh` (its `README.md` beside it lists every variable):
 
   ```bash
-  export L27_TOKEN=$(openssl rand -hex 20) L27_WEBHOOK_SECRET=l27-lab-webhook-secret
-  docker compose -f tests/lab/sot/compose/netbox-4.yml up -d
-  until curl -fsS -H "Authorization: Token $L27_TOKEN" http://127.0.0.1:18080/api/status/ >/dev/null; do sleep 10; done
-  GW=$(docker network inspect port49-l27-netbox4_default --format '{{(index .IPAM.Config 0).Gateway}}')
-  go run ./tests/lab/cmd/sot-record -product netbox -url http://127.0.0.1:18080 \
-    -out tests/lab/sot/fixtures/netbox-4 -webhook-listen "$GW:18999" \
-    2>&1 | tee tests/lab/logs/l27-netbox-4.log
-  docker compose -f tests/lab/sot/compose/netbox-4.yml down -v
+  tests/lab/sot/run.sh netbox-4          # likewise netbox-3.7, nautobot-1.6, nautobot-2
+  tests/lab/sot/run.sh netbox-3.7 legacy # the -prefer-legacy rerun, fixtures/<stack>-legacy
   ```
 
+  The script generates every database password, secret key, admin password and API token fresh per
+  run into a 0600 env file outside the repository (the compose files read `${L27_…:?}` and hold no
+  value), and never prints one. NetBox 4's token is v2: netbox-docker 5.1.1 provisions it from a
+  12-character key, a 40-character token and a pepper, and the recorder sends
+  `Authorization: Bearer nbt_<key>.<token>` (`-auth-scheme Bearer`); every other stack uses
+  `Token <40 hex>`. The script brings the stack up, gives `/api/status/` 10 minutes, runs the
+  recorder under a 10-minute timeout, logs to `tests/lab/logs/l27-<stack>.log` (the compose log beside
+  it, credentials replaced by `<redacted>`), and runs `docker compose down -v` on every exit.
   Compose puts each stack on its own network, `<name>_default`, and the worker reaches the host on
-  that network's gateway, so the listener binds it, read per stack as above. If the host firewall
+  that network's gateway, so the listener binds it; the script reads it per stack. If the host firewall
   drops the worker's connection to it, the deliveries count is zero and the worker's log says
   so: open the port for that bridge and rerun the stack. Run the Task-level watchdog (above) beside each. Expected:
   the recorder's last line counts at least one webhook delivery. Zero deliveries is a finding (the
@@ -8263,8 +8270,16 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   policy file under the same key, then delete it from the inventory file. Until you add it, port49d
   reads it from the inventory file and says so at every start and reload. While both carry it, the
   policy's wins and a notice names the inventory's as ignored. Deleting it from the inventory
-  first is refused by the bound, since it would refuse every device. port49d with no `broker:`
-  block (the lab's mode) keeps reading it from the inventory file.
+  first is refused by the bound, since it would refuse every device. If that wrong order is
+  followed by a restart, the start is refused, saying the bundle admits none of the devices and
+  naming the fix: add `key_groups` to the policy file. port49d with no `broker:` block (the lab's
+  mode) keeps reading it from the inventory file.
+- **A `key_ref` must be a name:** `^[a-z][a-z0-9_]{0,63}$`, in port49d.yaml's `keys:`, in a key
+  group and in a device's pin. One that is not, most likely a secret pasted where the name goes, is
+  refused without being printed: a `keys:` entry refuses port49d.yaml by its line, a key group
+  its file by its position, and a pin refuses that device alone. Rename any key that is not
+  lowercase letters, digits and `_` before upgrading. A YAML decode error in port49d.yaml or the
+  inventory file prints its line and a category, never the file's text.
 - **The inventory file is read like the policy file.** With a `broker:` block, it and its directory
   must be writable by port49d's user or root alone, it must be a regular file, and it must be
   64 MiB or smaller. Otherwise the start is refused, or a reload is refused once while the bundle
@@ -8285,34 +8300,72 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `port49_inventory_file_refused` is 1. For a deliberate large removal, raise the bound in
   port49d.yaml and send `SIGHUP`, which re-reads it; then lower it again. A policy test naming a
   device the inventory no longer has fails `port49 policy test`, and never a reload.
+- **A reload reaches open connections.** A device an inventory or policy reload refuses, removes,
+  renames, moves to another `key_ref`, or gives another platform or `based_on:` base loses its
+  open connections at their next packet: reset,
+  with no reply and no strike, and one `unvalidated` record naming the device and key it was
+  admitted as, reason `device_unknown` (`port49_connection_events_total{event="admission_closed"}`).
+  Moving a device off a suspect key therefore stops that key on the device at once, not when its
+  single-connect connection ends. What a device does with the reset is unmeasured (spec §15 L29).
+- **Change the key groups and the inventory make-before-break.** Each file is loaded as its own
+  swap, policy first, with a refresh between. To re-address devices together with their CIDR
+  group, add the new group beside the old one, move the inventory, then drop the old group. Done
+  in one step, the bundle between the two swaps revokes the contexts of devices the final one
+  admits, and a whole-fleet re-address, where each file alone admits none, is refused at every
+  reload until a restart loads the two together. `port49 inventory diff --new-policy` fails a change that would stop half-applied.
 - **A policy reload is bounded too.** A policy whose `key_groups` would refuse admission to more
   than `inventory.max_removed_percent` of the devices admitted now is refused, naming them, and the
   policy in force keeps serving, with `port49_policy_file_refused` at 1; nobody is logged out.
   `port49 policy diff` fails on such an edit, and `port49 policy test` fails on any device
   admission refuses, so CI catches it first. `port49 explain` on a refused device says it is
   refused and why.
+- **port49d.yaml must be a regular file**, at start and at `SIGHUP`, and so must the inventory
+  file with no `broker:` block: a named pipe or a device there is refused rather than read. The
+  admin socket's path is taken over only from a socket nothing listens on; one port49d cannot dial
+  for any other reason, such as another user's, refuses the start by name.
 - **New config keys:** `inventory: {max_removed_percent: N}`; `retire_after: YYYY-MM-DD` on `accept`
   key versions (admits through that day UTC); `admin_socket: /run/port49/port49d.sock` (off by
   default).
 - **New metrics:** `port49_devices_admission_refused`, `port49_inventory_reloads_total{outcome}`,
   `port49_inventory_file_refused`, `port49_inventory_snapshot_age_seconds`,
   `port49_inventory_changes_total{kind}`, `port49_key_version_devices{key_ref,version}`,
-  `port49_key_retirement_seconds{key_ref,version}`.
+  `port49_key_retirement_seconds{key_ref,version}`. `port49_key_version_devices` counts only
+  devices seen since port49d started, and every restart (each rotation step is one) resets it to
+  0 until devices reconnect, so the idle stragglers a retirement locks out are the last it counts.
+  `port49 keys status`, which reads the decision log, is the authority before retiring a version;
+  gate an alert on the metric on port49d's uptime (the example in spec §10, "Retirement is
+  enforced"). A device a reload removes, refuses or moves to another `key_ref` drops out of the
+  count at that swap.
 - **The decision log:** `bundle` is now the bundle id (the policy file's hash and the inventory's,
   combined), not the policy file's hash; every validated record's `device` block carries `key_ref`
   and `key_version`; a new report event, `inventory_change`, records an address added to an existing
   device, a device's `key_ref` changing, a device newly admitted, and a device joining or leaving a
-  `security_log: true` scope. A new diagnosis,
-  `admission_refused`.
+  `security_log: true` scope. Two new diagnoses: `admission_refused`, a device the inventory names
+  and admission refuses, and `admission_withdrawn`, an open connection whose device a reload renamed,
+  re-keyed or re-platformed.
 - **New commands:** `port49 keys status`, `port49 keys show`, `port49 keys diagnose` (needs
   `admin_socket`), `port49 inventory diff`; `port49 policy test --config` adds the key checks;
   `port49 policy replay --policy --inventory` verifies a redacted blob's records.
+  - `policy test --config` reads only port49d.yaml's `keys:` block. It is not a port49d.yaml
+    validator: a file it passes can still refuse port49d's start.
+  - `inventory diff` without `--config` does not check key_refs against port49d.yaml's keys; it
+    says so on its output and does not fail for it. Pass `--config` in CI.
 - **A scope can pin devices by name:** `match: {name: [leaf-01, leaf-02]}`.
 - **`based_on: juniper_junos` now loads**, and the variant is read, and redacted, as Junos.
-- **A key miss** (L28): what the device does is in `tests/lab/results/L28-*.md`; on branch H,
-  port49d closes the connection at once and refuses the source's next connection inside its
-  backoff (`held_refused`, `key_miss_closed` in `port49_connection_events_total`). That refusal
-  applies to any source that struck, whatever the strike, not a key miss alone.
+- **A key miss** (L28, closed): port49d resets the connection at once, with no reply, and refuses
+  the source's next connections inside its backoff (by default 100 ms doubling to 5 s) with a
+  reset too (`key_miss_closed`, `held_refused` in `port49_connection_events_total`). A device
+  presenting an unknown, retired or expired key then has its token logins refused and its
+  break-glass login and commands as fast as with port49d stopped, measured on EOS, NX-OS, IOS-XE
+  and vJunos-router (`tests/lab/results/L28-*.md`). A packet past its key version's
+  `retire_after` on an open connection is closed the same way; what a device does with that close
+  is unmeasured (spec §15 L29, open).
+  - The log carries one `unvalidated` record per strike. Attempts refused inside a backoff leave
+    no record, only the `held_refused` count, which has no device label.
+  - The refusal applies to any source that struck, whatever the strike, not a key miss alone. A
+    strike from a device's address resets every connection from that address for up to 5 s. That
+    includes a second AAA client on the same address still on the old key mid-rotation, or a
+    shell on the device.
 
 ## Self-review against the spec
 
@@ -8326,10 +8379,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   move is safe in every order (Tasks 4, 10, 12). A refused device is not minted for (Tasks 4, 11).
 - **§10 "Source-of-truth write access" for the file itself:** the inventory file's write fence
   (Task 11a).
-- **§10 "Key rotation":** try-and-validate and the per-connection cache are plan 1's and unchanged;
-  version sets gain `retire_after` (Task 14); phase-out (Tasks 8, 14, 15); unvalidated sources
-  (Tasks 10, 15); retired never admits (Task 14's test); cross-group probing manual (Task 16);
-  retirement enforced and CI (Tasks 14, 17); no per-device keys (nothing built).
+- **§10 "Key rotation":** try-and-validate and the per-connection cache are plan 1's, the cache now
+  bounded by `retire_after` (Task 14); version sets gain `retire_after` (Task 14); phase-out
+  (Tasks 8, 14, 15); unvalidated sources (Tasks 10, 15); retired never admits (Task 14's test);
+  cross-group probing manual (Task 16); retirement enforced and CI (Tasks 14, 17); no per-device
+  keys (nothing built).
 - **§10 "Device records":** Task 3 (`transport`), Task 1 (text).
 - **§10 "How a daemon refreshes its snapshot":** build then swap, validate locally, never expires,
   summary line, key resolution local (Tasks 10, 12); the pull, persistence and readiness are 6b's.
@@ -8343,5 +8397,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   inventory itself reloaded (Task 12); the remote-store items move to plan 7 (Task 21).
 - **Reason codes:** none added. `device_unknown`'s meaning is extended to a refused device on `mint`
   and `refresh`, and a diagnosis (`admission_refused`) and a report event (`inventory_change`) are
-  added, all in the spec first (Task 1).
+  added, all in the spec first (Task 1). The final fix wave extended `device_unknown` to an open
+  connection whose admission a reload withdrew and added the diagnosis `admission_withdrawn`, spec
+  first too.
 - **The pre-flight review:** every finding is resolved (the section at the top); none is left.

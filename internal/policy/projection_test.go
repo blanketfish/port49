@@ -271,8 +271,8 @@ func TestACeilingOnJunos(t *testing.T) {
 // Each composition is projected once per policy, however many devices it
 // lands on: 1,000 SRXs and 20 subjects load within 2 s (I12; spec §8).
 func TestProjectionLoadTime(t *testing.T) {
-	if testing.Short() {
-		t.Skip("load-time bound")
+	if testing.Short() || raceBuild {
+		t.Skip("load-time bound; the race detector's slowdown alone breaks it")
 	}
 	e := projectedEnv(platform.BitDeliveryUserPermissions)
 	e.Devices = nil

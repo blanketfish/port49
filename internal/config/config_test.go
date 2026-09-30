@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"os"
@@ -92,8 +94,10 @@ func TestLoadRefusesUnknownKeys(t *testing.T) {
 	if err == nil {
 		t.Fatal("a misspelled config key must be refused at load")
 	}
-	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "per_nas_conections") {
-		t.Fatalf("the error must name the file and the key, got %v", err)
+	// The line, not the key: a decode error quotes nothing from the document
+	// (TestADecodeErrorQuotesNothingFromTheDocument).
+	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "an unknown field") {
+		t.Fatalf("the error must name the file and the fault, got %v", err)
 	}
 }
 
@@ -392,8 +396,9 @@ platforms:
 	if err == nil {
 		t.Fatal("a misspelled key inside a platform block must be refused at load")
 	}
-	if !strings.Contains(err.Error(), "session_service") {
-		t.Fatalf("the error must name the key, got %v", err)
+	// The line, not the key: a decode error quotes nothing from the document.
+	if !strings.Contains(err.Error(), "line ") || !strings.Contains(err.Error(), "an unknown field") {
+		t.Fatalf("the error must say where and what, got %v", err)
 	}
 }
 
@@ -457,7 +462,8 @@ func TestEnableUsernameMovedToThePolicyFile(t *testing.T) {
 	invPath := write(t, "inventory.yaml", inv)
 	body := fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: principal}}\n"
 	c, err := Load(write(t, "c.yaml", body))
-	if err != nil || len(c.Notices) != 1 ||
+	// The sample's accept version has no retire_after, which is a notice of its own.
+	if err != nil || len(c.Notices) != 2 ||
 		!strings.Contains(c.Notices[0], "platforms.cisco_iosxe.enable_username moved to the policy file") {
 		t.Fatalf("principal: %q %v", c.Notices, err)
 	}
@@ -612,7 +618,9 @@ func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unset encryption secret must be refused")
 	}
-	for _, want := range []string{"PORT49_ENC_V2", `"v2"`, "encryption.current", "is not set"} {
+	// Not the variable's name: a secret pasted as secret_env can look like one
+	// (TestASecretEnvThatIsNoNameIsNotPrinted). The file names it at this block.
+	for _, want := range []string{`"v2"`, "encryption.current", "is not set"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("an unset encryption secret must be refused by name: the error must contain %q, got %v", want, err)
 		}
@@ -626,7 +634,7 @@ func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
 	if err == nil {
 		t.Fatal("a non-32-byte key must be refused")
 	}
-	for _, want := range []string{"PORT49_ENC_V2", `"v2"`, "32 bytes", "got 9"} {
+	for _, want := range []string{`"v2"`, "32 bytes", "got 9"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("a short key must be refused by name and length: the error must contain %q, got %v", want, err)
 		}
@@ -636,8 +644,9 @@ func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
 	t.Setenv("PORT49_ENC_V2", "22222222222222222222222222222222")
 	body = fmt.Sprintf(sampleNoEncryption, invPath) +
 		"\nencryption:\n  current:  {id: v2, secret_env: PORT49_ENC_V2}\n  previous: {id: v1, secret_env: PORT49_ENC_V1}\n"
-	if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "PORT49_ENC_V1") {
-		t.Fatalf("a named-but-unset previous key must be refused by name: %v", err)
+	if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "encryption.previous") ||
+		!strings.Contains(err.Error(), "is not set") {
+		t.Fatalf("a named-but-unset previous key must be refused by its block: %v", err)
 	}
 }
 
@@ -855,5 +864,285 @@ func TestMaxSessionAge(t *testing.T) {
 		if _, err := MaxSessionAge([]byte(raw)); err == nil {
 			t.Errorf("%q: read", raw)
 		}
+	}
+}
+
+// With a broker the policy assigns keys, and a device no group admits is
+// refused on its own at the policy load, never the daemon (spec §10; plan 6a
+// Decided 5). Without one, TestLoadRefusesDeviceMatchingNoKeyGroup holds.
+func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
+	setKeyEnv(t)
+	orphan := write(t, "orphan.yaml", "devices:\n  - {name: orphan, addresses: [10.99.99.1]}\n")
+	body := fmt.Sprintf(sample, orphan) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
+		"client_ca_file: ca, policy_file: p}\n"
+	cfg, err := Load(write(t, "f.yaml", body))
+	if err != nil {
+		t.Fatalf("a broker config refused an orphan device: %v", err)
+	}
+	if cfg.Admission != nil {
+		t.Fatalf("admission %v", cfg.Admission)
+	}
+	if got := cfg.KeyRefs(); len(got) != 1 || got[0] != "prod_key" {
+		t.Fatalf("KeyRefs: %q", got)
+	}
+}
+
+// With a broker the inventory is live and read behind the policy file's
+// fence (port49d's fencedInventory, plan 6a C2), so Load does not read it at
+// all: a plain read first would hang on a FIFO, or read a link to a huge file
+// whole, before the fence could refuse it. An inventory fault — an address
+// claimed twice — is found there, naming the file.
+func TestWithABrokerLoadDoesNotReadTheInventory(t *testing.T) {
+	setKeyEnv(t)
+	missing := filepath.Join(t.TempDir(), "never-read.yaml")
+	body := fmt.Sprintf(sample, missing) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
+		"client_ca_file: ca, policy_file: p}\n"
+	cfg, err := Load(write(t, "f.yaml", body))
+	if err != nil {
+		t.Fatalf("a broker config read inventory_file: %v", err)
+	}
+	if cfg.InventoryFile != missing || len(cfg.Inventory.Devices) != 0 {
+		t.Fatalf("inventory_file %q, inventory %+v", cfg.InventoryFile, cfg.Inventory)
+	}
+}
+
+func TestInventoryMaxRemovedPercent(t *testing.T) {
+	setKeyEnv(t)
+	i := write(t, "inv.yaml", inv)
+	cfg, err := Load(write(t, "a.yaml", fmt.Sprintf(sample, i)))
+	if err != nil || cfg.MaxRemovedPercent != 10 {
+		t.Fatalf("default: %d, %v", cfg.MaxRemovedPercent, err)
+	}
+	cfg, err = Load(write(t, "b.yaml", fmt.Sprintf(sample, i)+"inventory: {max_removed_percent: 100}\n"))
+	if err != nil || cfg.MaxRemovedPercent != 100 {
+		t.Fatalf("100: %d, %v", cfg.MaxRemovedPercent, err)
+	}
+	if _, err := Load(write(t, "c.yaml", fmt.Sprintf(sample, i)+"inventory: {max_removed_percent: 150}\n")); err == nil {
+		t.Fatal("150 loaded")
+	}
+}
+
+// SIGHUP re-reads the one key (plan 6a, I1): as strictly as Load, so a typo
+// is an error rather than the default, and an explicit 0 is not the default.
+func TestInventoryBound(t *testing.T) {
+	for body, want := range map[string]int{"": 10, "inventory: {max_removed_percent: 0}\n": 0,
+		"inventory: {max_removed_percent: 35}\n": 35} {
+		if got, err := InventoryBound([]byte(body)); err != nil || got != want {
+			t.Fatalf("%q: %d, %v", body, got, err)
+		}
+	}
+	for _, body := range []string{"inventory: {max_removed_percnt: 35}\n", "inventory: {max_removed_percent: -1}\n"} {
+		if _, err := InventoryBound([]byte(body)); err == nil {
+			t.Fatalf("%q read", body)
+		}
+	}
+}
+
+// retire_after is a date, admitting through that day UTC (plan 6a Decided 7),
+// on accept versions only; a passed one and a missing one are said at start.
+func TestRetireAfter(t *testing.T) {
+	setKeyEnv(t)
+	i := write(t, "inv.yaml", inv)
+	body := strings.Replace(fmt.Sprintf(sample, i), "accept:  [{version: 2, secret_env: T_PROD_V2}]",
+		"accept:  [{version: 2, secret_env: T_PROD_V2, retire_after: 2000-01-01}]", 1)
+	cfg, err := Load(write(t, "a.yaml", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC); !cfg.Keys["prod_key"].Accept[0].RetireAt.Equal(want) {
+		t.Fatalf("RetireAt %v", cfg.Keys["prod_key"].Accept[0].RetireAt)
+	}
+	if !strings.Contains(strings.Join(cfg.Notices, "\n"), "retire_after 2000-01-01 has passed") {
+		t.Fatalf("notices: %q", cfg.Notices)
+	}
+	if ks := cfg.Keyring()["prod_key"]; !ks.Versions[1].RetireAt.Equal(cfg.Keys["prod_key"].Accept[0].RetireAt) {
+		t.Fatal("the keyring does not carry the date")
+	}
+	cfg, err = Load(write(t, "b.yaml", fmt.Sprintf(sample, i)))
+	if err != nil || !strings.Contains(strings.Join(cfg.Notices, "\n"), "has no retire_after") {
+		t.Fatalf("a missing date: %q, %v", cfg.Notices, err)
+	}
+	for _, bad := range []string{
+		strings.Replace(fmt.Sprintf(sample, i), "current: {version: 3, secret_env: T_PROD_V3}",
+			"current: {version: 3, secret_env: T_PROD_V3, retire_after: 2999-01-01}", 1),
+		strings.Replace(body, "retire_after: 2000-01-01", "retire_after: soon", 1),
+		strings.Replace(fmt.Sprintf(sample, i), "retired: [{version: 1, secret_env: T_PROD_V1}]",
+			"retired: [{version: 1, secret_env: T_PROD_V1, retire_after: 2999-01-01}]", 1),
+	} {
+		if _, err := Load(write(t, "c.yaml", bad)); err == nil {
+			t.Fatalf("loaded: %s", bad)
+		}
+	}
+	sets, err := KeySets([]byte(body))
+	if err != nil || len(sets["prod_key"].Accept) != 1 || sets["prod_key"].Accept[0].RetireAt.IsZero() {
+		t.Fatalf("KeySets: %+v, %v", sets, err)
+	}
+}
+
+// The secrets the leak tests paste into port49d.yaml: one with punctuation,
+// one an anchor or tag can hold, and one carrying a backtick.
+const (
+	leakDash  = "Sx9-qT4v!Lm2@pR7zK0w#Yh5"
+	leakAlnum = "Qa8ZmN3tBv6cXe1Wr4Ju"
+	leakTick  = "K`p7Rw2!Hd9@Tg4#Vn6$Fj3"
+)
+
+// leakShapes are the ways an operator can paste a secret into port49d.yaml's
+// keys block that yaml.v3 or the key checks could quote back.
+var leakShapes = []struct{ name, body, secret string }{
+	{"a value where a mapping goes", "keys:\n  prod_key:\n    current: " + leakDash + "\n", leakDash},
+	{"a value where a number goes", "keys:\n  prod_key:\n    current: {version: " + leakAlnum + ", secret_env: T_PROD_V3}\n", leakAlnum},
+	{"the secret as a key", "keys:\n  prod_key:\n    current:\n      version: 3\n      secret_env: T_PROD_V3\n      " +
+		leakDash + ": x\n", leakDash},
+	{"the secret as a flow key", "keys:\n  prod_key:\n    current: {version: 3, " + leakAlnum + "}\n", leakAlnum},
+	{"the secret in retire_after", "keys:\n  prod_key:\n    current: {version: 3, secret_env: T_PROD_V3}\n" +
+		"    accept: [{version: 2, secret_env: T_PROD_V2, retire_after: \"" + leakDash + "\"}]\n", leakDash},
+	{"the secret as an anchor", "keys:\n  prod_key:\n    current: *" + leakAlnum + "\n", leakAlnum},
+	{"the secret as a tag", "keys:\n  prod_key:\n    current: !" + leakAlnum + " x\n", leakAlnum},
+	{"the secret with a backtick", "keys:\n  prod_key:\n    current: " + leakTick + "\n", leakTick},
+	{"the secret in secret_env", "keys:\n  prod_key:\n    current: {version: 3, secret_env: \"" + leakDash + "\"}\n", leakDash},
+	{"the secret in an unclosed quote", "keys:\n  prod_key:\n    current: {version: 3, secret_env: \"" + leakDash + "\n", leakDash},
+}
+
+// leaked is the first form of secret found in out, or "": the secret in any
+// case, quoted or escaped, as hex or base64, or any five characters of it (a
+// yaml.v3 error quotes a value's first seven).
+func leaked(out, secret string) string {
+	forms := []string{fmt.Sprintf("%q", secret), hex.EncodeToString([]byte(secret)),
+		base64.StdEncoding.EncodeToString([]byte(secret)), base64.RawURLEncoding.EncodeToString([]byte(secret))}
+	for i := 0; i+5 <= len(secret); i++ {
+		forms = append(forms, secret[i:i+5])
+	}
+	low := strings.ToLower(out)
+	for _, f := range forms {
+		if strings.Contains(low, strings.ToLower(f)) {
+			return f
+		}
+	}
+	return ""
+}
+
+// A port49d.yaml decode error names the file, the line and a fixed category,
+// never text from the document: a secret pasted where the file names only its
+// environment variable would reach the log and a terminal.
+func TestADecodeErrorQuotesNothingFromTheDocument(t *testing.T) {
+	for _, sh := range leakShapes {
+		t.Run(sh.name, func(t *testing.T) {
+			p := write(t, "port49d.yaml", sh.body)
+			_, loadErr := Load(p)
+			_, setsErr := KeySets([]byte(sh.body))
+			_, ageErr := MaxSessionAge([]byte(sh.body))
+			_, boundErr := InventoryBound([]byte(sh.body))
+			for name, err := range map[string]error{"Load": loadErr, "KeySets": setsErr, "MaxSessionAge": ageErr,
+				"InventoryBound": boundErr} {
+				if err == nil {
+					continue // the shape is one only the key checks see
+				}
+				if f := leaked(err.Error(), sh.secret); f != "" {
+					t.Errorf("%s printed %q: %v", name, f, err)
+				}
+			}
+			if setsErr == nil {
+				t.Fatal("KeySets took it")
+			}
+		})
+	}
+}
+
+// The error still says where: the file, the line and what kind of fault.
+func TestADecodeErrorSaysWhereAndWhat(t *testing.T) {
+	cases := []struct{ body, want string }{
+		{"keys:\n  prod_key:\n    current: x\n", "line 3: a value of the wrong type"},
+		{"keys:\n  prod_key:\n    current: {version: 3, secret_env: A}\n    bogus: 1\n", "line 4: an unknown field"},
+		{"keys:\n  prod_key:\n    current: *nope\n", "an unknown anchor or alias"},
+		{"keys: [\n", "a yaml syntax error"},
+	}
+	for _, c := range cases {
+		p := write(t, "port49d.yaml", c.body)
+		_, err := Load(p)
+		if err == nil || !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("want the file and %q, got %v", c.want, err)
+		}
+	}
+	_, err := KeySets([]byte("keys:\n  prod_key:\n    current: {version: 3, secret_env: A}\n" +
+		"    accept: [{version: 2, secret_env: B, retire_after: soon}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "key prod_key version 2: retire_after is not a date") {
+		t.Errorf("retire_after: %v", err)
+	}
+}
+
+// A secret_env is checked as a name before it is looked up, so a secret
+// pasted there is not printed as a variable that is not set.
+func TestASecretEnvThatIsNoNameIsNotPrinted(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	for _, name := range []string{"PORT49_ENC_V2", "T_PROD_V3"} {
+		body := strings.Replace(fmt.Sprintf(sample, invPath), "secret_env: "+name, `secret_env: "`+leakDash+`"`, 1)
+		_, err := Load(write(t, "port49d.yaml", body))
+		if err == nil || !strings.Contains(err.Error(), "secret_env is not an environment variable name") {
+			t.Fatalf("%s: want the name refused, got %v", name, err)
+		}
+		if f := leaked(err.Error(), leakDash); f != "" {
+			t.Fatalf("%s: printed %q: %v", name, f, err)
+		}
+		// An alphanumeric secret reads as a variable's name, so it reaches the
+		// lookup; the lookup's error does not print the name either.
+		body = strings.Replace(fmt.Sprintf(sample, invPath), "secret_env: "+name, "secret_env: "+leakAlnum, 1)
+		_, err = Load(write(t, "port49d.yaml", body))
+		if err == nil || !strings.Contains(err.Error(), "is not set") {
+			t.Fatalf("%s: want the variable unset, got %v", name, err)
+		}
+		if f := leaked(err.Error(), leakAlnum); f != "" {
+			t.Fatalf("%s: printed %q: %v", name, f, err)
+		}
+	}
+}
+
+// A key_ref is a name the reports print, so one that is not a name, most
+// likely a secret pasted as the key, is refused at load without being printed.
+func TestAKeyRefThatIsNoNameIsRefusedUnprinted(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	// A second key beside prod_key, so the load gets as far as the start
+	// notices, which name every key with no retire_after.
+	body := strings.Replace(fmt.Sprintf(sample, invPath), "limits:", "  "+leakAlnum+":\n"+
+		"    current: {version: 5, secret_env: T_PROD_V3}\n    accept: [{version: 4, secret_env: T_PROD_V2}]\nlimits:", 1)
+	c, err := Load(write(t, "port49d.yaml", body))
+	if err == nil || !strings.Contains(err.Error(), "on line 9 is not a valid key_ref name") {
+		t.Fatalf("want the key_ref refused by line, got %v (notices %q)", err, c.Notices)
+	}
+	if f := leaked(err.Error()+strings.Join(c.Notices, "\n"), leakAlnum); f != "" {
+		t.Fatalf("printed %q: %v", f, err)
+	}
+	_, err = KeySets([]byte("keys:\n  " + leakAlnum + ":\n    current: {version: 3, secret_env: X}\n"))
+	if err == nil || !strings.Contains(err.Error(), "on line 2 is not a valid key_ref name") || leaked(err.Error(), leakAlnum) != "" {
+		t.Fatalf("KeySets: %v", err)
+	}
+}
+
+// Without a broker every device must be admitted at start, so a pin that is
+// not a key_ref name refuses the start, without printing the pin.
+func TestANoBrokerPinThatIsNoNameIsRefusedUnprinted(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", strings.Replace(inv, "key_groups:", "  - {name: pasted, platform: arista_eos, "+
+		"addresses: [127.0.0.9], key_ref: "+leakAlnum+"}\nkey_groups:", 1))
+	_, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
+	if err == nil || !strings.Contains(err.Error(), "not a valid key_ref name") || leaked(err.Error(), leakAlnum) != "" {
+		t.Fatalf("%v", err)
+	}
+}
+
+// admin_socket is off unless set (plan 6a owner decision 2), and Load
+// carries the path it names.
+func TestLoadCarriesAdminSocketOffByDefault(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil || c.AdminSocket != "" {
+		t.Fatalf("%q, %v", c.AdminSocket, err)
+	}
+	c, err = Load(write(t, "admin.yaml", "admin_socket: /run/port49/port49d.sock\n"+fmt.Sprintf(sample, invPath)))
+	if err != nil || c.AdminSocket != "/run/port49/port49d.sock" {
+		t.Fatalf("%q, %v", c.AdminSocket, err)
 	}
 }

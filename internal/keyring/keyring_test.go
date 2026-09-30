@@ -2,6 +2,7 @@ package keyring
 
 import (
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
@@ -28,7 +29,7 @@ func TestResolveCurrentAndAccepted(t *testing.T) {
 		secret []byte
 		want   int
 	}{{[]byte("v3-secret"), 3}, {[]byte("v2-secret"), 2}} {
-		r := set().Resolve(h, wire.Obfuscate(h, v.secret, body))
+		r := set().Resolve(h, wire.Obfuscate(h, v.secret, body), time.Time{})
 		if r.Diagnosis != DiagValidated || r.Version != v.want || string(r.Body) != string(body) {
 			t.Fatalf("secret %s: %+v", v.secret, r)
 		}
@@ -37,7 +38,7 @@ func TestResolveCurrentAndAccepted(t *testing.T) {
 
 func TestResolveRetiredIdentifiesButNeverAdmits(t *testing.T) {
 	h, body := start(t)
-	r := set().Resolve(h, wire.Obfuscate(h, []byte("v1-secret"), body))
+	r := set().Resolve(h, wire.Obfuscate(h, []byte("v1-secret"), body), time.Time{})
 	if r.Diagnosis != DiagMatchesRetired || r.Version != 1 {
 		t.Fatalf("%+v", r)
 	}
@@ -48,7 +49,7 @@ func TestResolveRetiredIdentifiesButNeverAdmits(t *testing.T) {
 
 func TestResolveUnknownKey(t *testing.T) {
 	h, body := start(t)
-	r := set().Resolve(h, wire.Obfuscate(h, []byte("nope"), body))
+	r := set().Resolve(h, wire.Obfuscate(h, []byte("nope"), body), time.Time{})
 	if r.Diagnosis != DiagNoKnownKey || r.Body != nil {
 		t.Fatalf("%+v", r)
 	}
@@ -57,7 +58,7 @@ func TestResolveUnknownKey(t *testing.T) {
 func TestResolveNeverParsesUnencrypted(t *testing.T) {
 	h, body := start(t)
 	h.Flags = wire.FlagUnencrypted
-	if r := set().Resolve(h, body); r.Diagnosis != DiagUnencrypted || r.Body != nil {
+	if r := set().Resolve(h, body, time.Time{}); r.Diagnosis != DiagUnencrypted || r.Body != nil {
 		t.Fatalf("%+v", r)
 	}
 }
@@ -65,7 +66,7 @@ func TestResolveNeverParsesUnencrypted(t *testing.T) {
 func TestResolveNotTACACS(t *testing.T) {
 	h, body := start(t)
 	h.MajorVersion = 0x4
-	if r := set().Resolve(h, body); r.Diagnosis != DiagNotTACACS {
+	if r := set().Resolve(h, body, time.Time{}); r.Diagnosis != DiagNotTACACS {
 		t.Fatalf("%+v", r)
 	}
 }

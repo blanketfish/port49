@@ -614,7 +614,10 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    `port49_policy_reloads_total{outcome}` as `refused` (`applied` and `unchanged` beside it), and
    `port49_policy_file_refused` holds at 1 until a file loads or the old one is put back. A typo
    never takes the fleet down, and that includes a file that parses but that no platform can
-   compile (§10). Nothing is half-applied. The timer is
+   compile (§10). So is a file that refuses admission to more than
+   `inventory.max_removed_percent` of the devices the policy in force admits, or that admits no
+   device at all whatever the bound (§10). Nothing is
+   half-applied. The timer is
    `broker.policy_watch_interval` (default 5s, 1s to 5m). A change it finds is loaded once
    two reads in a row agree, and what is loaded is the bytes those two reads agreed on, so an
    edit is in force within two intervals of its write; a `SIGHUP` loads what is on disk at
@@ -697,7 +700,7 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    idle TTL are not touched: nothing about the operator's authentication or the directory was
    re-verified, and a reload is not activity.
 
-Every edit changes the bundle (§5.7), so every live context takes a new blob at a reload and
+Every policy edit changes the bundle (§5.7), so every live context takes a new blob at a reload and
 the records decided after it name the policy that was in force. The one exception is a login
 redeeming a token kept across the reload (below): its context takes the superseded bundle's
 blob, whose answer is the same, and whose `blob` record is already in the log (§5.1.1), so its
@@ -707,7 +710,8 @@ the context's `ctx_id`, so the record before a command's changed answer says why
 | The refresh | `verdict` | `reason` |
 |---|---|---|
 | wrote the policy in force into the context | `permit` | `grants_matched` |
-| revoked it: no grant left on the device, or the subject's username changed | `deny` | `no_grants_matched` |
+| revoked it: no grant left on the device, the subject's username changed, or the device left the inventory | `deny` | `no_grants_matched` |
+| revoked it: admission refuses the device — no key group admits it, two tie on it, or its key is not held (§10) | `deny` | `device_unknown` |
 | revoked it: the policy in force could not be resolved or compiled for it | `deny` | `blob_unavailable` |
 | revoked it: the context could not be opened (the record names no principal) | `deny` | `blob_unavailable` |
 | left it as it was: the device is quarantined (recorded once per context per bundle) | `deny` | `device_quarantined` |
@@ -715,6 +719,12 @@ the context's `ctx_id`, so the record before a command's changed answer says why
 Each context is counted once per pass in `port49_context_refreshes_total{outcome}`: `updated`,
 `unchanged`, `revoked`, `quarantined`, `failed`. A context already on the answer, and one a
 store error stopped the pass at, has no record (§5.7).
+
+A swap that changed only the inventory — every policy since the last complete refresh read from
+one policy file — leaves a context as it is when its blob differs from the new one only in the
+bundle it names: the answer did not change, so nothing is written and nothing is recorded, and
+the context goes on naming the bundle that compiled it, which is still true. A policy edit keeps
+the rule above: every live context takes the new bundle's blob.
 
 **Unspent tokens are the other half.** A token carries the blob, ceiling and `enable`
 mechanism of the policy that minted it, and a redemption writes them into the context it
@@ -1066,6 +1076,10 @@ scopes:
       humans:   [cve_2026_xxxx]
       machines: [cve_2026_xxxx]
 ```
+
+Two match keys read the device record rather than its attributes: `platform`, its platform, and
+`name`, its inventory name, which pins a scope to named devices (§10). An attribute named either
+is not read by a scope. `name` takes a string or a list, never a comparison.
 
 `attached_roles` is not a special deny path — the same role machinery, composed into every
 grant that lands on the scope — which is why there is still only one place to deny a command.
@@ -1646,10 +1660,11 @@ for `copy`, a deny matched the destination more specifically, and dominance fail
 **Log inputs and policy identity, not a narrative.** The matched rules are included because
 they make a record readable on its own, but the blob hash is what makes it provable. A replay
 that disagrees with the logged verdict is itself a finding — version skew, or tampering — so
-`bundle` and `blob` are mandatory on every record that consulted policy. Until the inventory
-service publishes versioned bundles (§10), `bundle` is the `sha256:` of the policy file the
-blob was compiled from, a string; the blob carries it, so a daemon that never reads the policy
-still logs it.
+`bundle` and `blob` are mandatory on every record that consulted policy.
+`bundle` is the bundle's name (§10): `sha256:` over the policy file's hash and the inventory's
+canonical form, a string, since plan 6a; before it, the policy file's hash. The blob carries it,
+so a daemon that never reads the policy still logs it. A blob names the bundle it was compiled
+under, which a later bundle that changed nothing for that context does not rewrite (§5.1.3).
 
 **Keep the raw arguments alongside the normalized vector.** Normalization (§3) is where
 matcher bugs live. A record holding only the vector erases the evidence of its own
@@ -1668,14 +1683,19 @@ placeholder filled (§6). A replay re-derives it from the blob and the record's 
 `session.username`, `principal` and `device.name` and compares, so an altered session reply is
 a divergence like an altered verdict (plan 4).
 
+`device.key_ref` and `device.key_version` are on every record of an exchange a key validated —
+`redeem`, `authorize_session`, `authorize_command`, `escalate`, `account` — naming the key group
+and the version that admitted it, so a rotation's phase-out is read from the log (§10, `port49
+keys status`).
+
 **Never suppress permits.** Sampling, or logging denies only, looks thrifty and destroys the
 artifact: *what did Alice run on Tuesday* is answered entirely by permits. Volume is the cost
 of the product, not a problem to optimize away.
 
 #### Events
 
-One envelope. Six decision events, one at each point a decision is made, plus three report
-events (`account`, `account_gap`, `blob`) that share the envelope and carry no verdict:
+One envelope. Six decision events, one at each point a decision is made, plus four report
+events (`account`, `account_gap`, `blob`, `inventory_change`) that share the envelope and carry no verdict:
 
 | `event` | Emitted by | Decides |
 |---|---|---|
@@ -1705,6 +1725,17 @@ it says a device did not ask (§9). The count is held in memory, so a restart lo
 yet written, and port49d logs the held counts by stage when it shuts down;
 `port49_accounting_spool_drops_total{stage}`
 is the alarm, and this record is the log's own witness.
+
+A tenth, `inventory_change`, is a report too: one record per security-relevant change a bundle
+swap made — `{"change": {"kind": "address_added", "address": ..., "from_bundle": ...,
+"to_bundle": ...}}` for an address added to a device already in inventory, and `scope_joined`
+or `scope_left` with `"scope"` for a device entering or leaving a scope with `security_log:
+true` (§5.5, §10), `key_ref_changed` with `"from"` and `"to"` for a device's key assignment
+changing, `admission_changed` with `"to": "admitted"` for a device already in inventory becoming
+admitted, and `device_added` with `"to": "admitted"` for a device added and admitted, whose
+addresses are new capture targets. Its `device` block names the device. It is what makes a
+source-of-truth edit that moves privilege visible in the log it moved (§10), and
+`port49_inventory_changes_total{kind}` is its alarm.
 
 `escalate` exists as its own event because the device-facing username on those platforms is
 `$enab{level}$`, not a person. The record carries the principal resolved from login context,
@@ -1758,7 +1789,7 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; arrives with the remote store, plan 6/7). The log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; arrives with the remote store, plan 7). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
@@ -1777,7 +1808,7 @@ not an unvalidated body. A connection with no verified chain names no one.
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `max_session_age`, and the caller must authenticate again (§13, decision 17) |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6) |
-| `device_unknown` | the source address is not in the admission trie (§10) |
+| `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
 | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
@@ -1841,6 +1872,12 @@ content is emitted once, when the broker first writes it (§5.1.1). Replay reads
 the store owes the auditor nothing, and the blob a record names sits in the same
 tamper-evident stream as the record. Blobs are small, immutable, and shared across every login
 that resolved to the same policy, so the log cost is one event per policy version per platform.
+
+A blob event redacted before it was written (§5.8) makes every record naming it unverifiable
+from the log alone. `port49 policy replay --policy <file> --inventory <file>` recompiles such a
+blob from the files for the record's principal and device at the blob event's time, and uses
+it only when the files name the record's bundle and the recompiled blob hashes to the name the
+record carries.
 
 #### Correlation
 
@@ -3511,13 +3548,13 @@ platforms:
 `replace: true` on a platform block discards the built-in and starts from the generic adapter
 (below), save what the set measured about the device, which the block must restate (below). `based_on:` declares a variant of a platform the pinned set ships, under a new name,
 using the same vocabulary as `parent:` on privilege levels; a name the set does not ship starts
-from the generic adapter. What port49d reads off the wire — `session_services`, the exec
-records' commands and the system users — is still keyed by the platform's name until plan 6
-carries it to a variant, so a variant would get an unknown platform's; `based_on:` a platform
-whose facts differ from those — `juniper_junos`, whose sessions arrive as `junos-exec` and whose
-exec records carry `cmd=login` — is refused at load, naming them (final review M8). A variant
-of a platform whose only such fact is its session discriminator loads: without one the daemon
-binds a record by username alone, the safe direction (§5.8).
+from the generic adapter. A variant is the same device under another name, so everything
+port49 keys by a shipped platform's name is read for it as its base's: the `session_services` it may arrive with, its
+exec records' commands, its system users, its session discriminator (§5.8), the built-in
+redaction patterns (§5.8) and the keyword tree (§8, decision 27). The admission index carries the
+base's name beside each device's for the daemon (plan 6a). Keyed by its own name, a
+`juniper_junos` variant would be refused every session `service_unsupported`, have its login
+records read as commands, and have its records logged without Junos's own redaction patterns.
 
 ```yaml
   whitebox_nos:
@@ -3583,7 +3620,8 @@ differently-cased interface name would walk past the deny (§4).
 Four adapter fields are the daemon's rather than the policy's — `session_services`,
 `session_discriminator`, `exec_commands` and `system_users` are read on the wire, including by
 a daemon with no policy — and stay built in, `session_services` settable in `port49d.yaml` as
-before, until plan 6's bundle carries adapters to the daemon. `enable_username` moved the other
+before. Plan 6a's bundle does not carry them to the daemon; a `based_on:` variant reads its
+base's (§8, "User-editable, day one"). `enable_username` moved the other
 way in plan 5, to the policy file, where the offline tools see it: `port49d.yaml` still loads
 `principal`, the only value it ever took, with a notice saying where the key went, and
 refuses any other value by name.
@@ -3649,7 +3687,7 @@ written before pinning existed never changes on upgrade, and moves forward only 
 newer set. A set the binary does not ship is refused at load, by name. Upgrading the binary
 changes nothing about rendering. It can change two things the pin does not hold. The first is
 the four daemon fields above (`session_services`, `session_discriminator`, `exec_commands` and
-`system_users`). They are built in and in no set, so they are unpinned until plan 6. A release
+`system_users`). They are built in and in no set, so they are unpinned; plan 6a's bundle does not carry them. A release
 that changes `system_users` changes how accounting is attributed, and its release notes MUST
 say so. The second is the redaction patterns (§5.8), which are unpinned by design.
 `port49 platform upgrade --to V` moves the pin (with
@@ -3875,10 +3913,11 @@ moves.
 
 A joint check that no platform could pass is the policy's own error, not a device's: a class
 no platform defines, or a `max_privilege` no platform can number, refuses the policy at load.
-One that fails for some platforms quarantines the devices on them. Until the inventory service
-publishes bundles (plan 6), `port49d` applies quarantine when it loads the policy: each
-quarantined device is logged at start with its cause, its mints are refused
-`device_quarantined`, and its connections are closed without a reply (plan 4).
+One that fails for some platforms quarantines the devices on them. port49d builds the bundle
+itself from `inventory_file` and `broker.policy_file` (plan 6a), and plan 6b's inventory service
+publishes it: each quarantined device is logged with its cause at start and at every reload that
+loads, its mints are refused `device_quarantined`, and its connections are closed without a
+reply (plan 4).
 
 **A quarantined device gets silence, not FAIL.** The daemon closes the connection without a
 reply, exactly as for `device_unknown`. The device then declares the server dead and falls to
@@ -3900,6 +3939,16 @@ A consumer runs on exactly one bundle version at a time, so a decision is always
 to a single, nameable state of the world. `bundle/diff` then covers policy change, inventory
 drift, and platform-set movement in one review artifact rather than three.
 
+**The bundle's name is a content hash.** `bundle` on every record and blob is `sha256:` over the
+policy file's `sha256:` and the inventory's canonical form — its devices in name order, each
+device's addresses sorted, its key groups if the inventory file still carries any — so every
+port49d reading the same two files names the same bundle, and a reformatted inventory file is
+the same bundle. The policy file's own hash is kept beside it, and port49d's lines name both.
+The name does not cover port49d.yaml's `keys:`: two daemons holding different key names load
+the same bundle and may refuse different devices (below), and each says so at load.
+The loaded policy carries the admission index, the device table and the quarantine with it, and
+one pointer swaps all four (§13, decision 28).
+
 This also closes a gap the documents otherwise leave open: **how policy reaches the broker**
 was previously unspecified.
 
@@ -3908,9 +3957,9 @@ was previously unspecified.
 | Component | Consumes | Why |
 |---|---|---|
 | broker | inventory, policy, platform set | resolves and compiles decisions |
-| daemon | inventory only — addresses and `key_ref` | to admit a connection and select a key |
+| daemon | addresses, and the `key_ref` the bundle resolved from the policy's key groups | to admit a connection and select a key |
 
-The daemon deliberately does **not** consume policy or platform definitions. It receives
+The daemon deliberately does **not** evaluate policy or platform definitions. It receives
 compiled decisions through blobs (§5.1.2) instead, so a version mismatch between broker and
 daemon cannot change how a command is evaluated. The bundle carries facts; the blob carries
 decisions.
@@ -3933,7 +3982,7 @@ little, provided key *assignment* is controlled.
 | Secret manager | the key material | environment, Vault, or equivalent |
 
 ```yaml
-# policy repository — intent
+# the policy file — key assignment is reviewed policy
 key_groups:
   - {match: {cidr: 10.0.0.0/8},       key_ref: prod_key}
   - {match: {attributes: {env: lab}}, key_ref: lab_key}
@@ -3944,8 +3993,45 @@ A device racked in a known site is admitted automatically with the correct key. 
 appearing in an unexpected range matches no key group and is refused. The fleet list is
 maintained once, in the source of truth, while the admission *decision* stays in review.
 
+`key_groups:` is a block of the policy file. An inventory file that still carries one is read
+where the policy has none, with a notice at every load. Where both carry one, the policy's wins
+and the notice names the inventory's as ignored, so the inventory's writer never assigns a key
+beside the reviewed policy. To move the block, add it to the policy file, then delete it from
+the inventory file: no device is refused at any step, and a restart or reload between the two
+loads. Deleting it from the inventory first would leave every device refused, and the reload is
+refused by the bound (below). A group matches on a CIDR or on attributes, never both; a CIDR
+with host bits set is refused.
+
+**A `key_ref` is a name: `^[a-z][a-z0-9_]{0,63}$`**, lowercase letters, digits and `_`, starting
+with a letter, at most 64 characters. The shape holds wherever one is written: a key under
+port49d.yaml's `keys:`, a key group in either file, and a pin on a device record. Every report
+prints a `key_ref` (`port49 keys status`, the start notices, the decision log), so one that is not
+a name, most likely a secret pasted where the name goes, is refused without being printed: a key
+under `keys:` refuses the file by its line, a key group refuses its file by its position, and a
+pin refuses that device alone (below). A secret that is all lowercase hex and 64 characters or
+fewer matches the shape and cannot be told from a name; the shape narrows the mistake, it does not
+close it.
+
+**A device is refused on its own, never the daemon.** A device no group admits, one two groups tie
+on (below), one assigned a `key_ref` port49d.yaml defines no key for, one pinning a `key_ref` that
+is not a name (above; the pin is not printed), and one whose `transport` port49d does not serve
+(below), are each refused admission: named at start and at every reload that loads, counted in
+`port49_devices_admission_refused`, and every packet from them closed after the header, with nothing
+decrypted, no reply, no strike, and the report bucket `admission_refused` (below). The rest of the
+fleet loads. The broker refuses to mint for a refused device (`device_unknown`, §5.7), and a policy
+refresh revokes its live contexts: it cannot reach port49d, so a token for it would only be a login
+that silently falls to its local method (the close is a quarantine's, measured on four images:
+`tests/lab/results/quarantine-*.md`). One case refuses the start rather than a device: a bundle that
+admits none of a non-empty inventory — key groups declared in neither file, say — which no device
+caused. The same bundle at a reload, of either file, is refused whatever
+`inventory.max_removed_percent` says (below). port49d with no `broker:` block has no policy and
+keeps plan 1's behaviour: the inventory file's key groups, read at start, and a start refused by
+either fault.
+
 RFC 9887 replaces the shared key with mutual TLS, so a device record MUST be able to express
-both.
+both: `transport: tcp` (the default, RFC 8907 under a shared key) or `transport: tls`. Until
+plan 11 serves RFC 9887, a device with `transport: tls` is refused admission, as is one whose
+`transport` is neither; the file and the rest of the fleet load (above).
 
 #### Addresses must resolve to one device
 
@@ -3974,11 +4060,15 @@ an attribute group covering the same device. Resolution is by tier, most specifi
 3  the longest matching CIDR prefix
 ```
 
-**Two groups matching in the same tier is a policy load error**, naming both. This follows the
-same rule as the matcher (§4): where two rules genuinely disagree about which is more
-specific, refusing to guess is the only conservative answer, and a device silently admitted
-under the wrong key group is admitted under the wrong *key* — which fails at the worst moment
-and looks like an outage (design document §12).
+**Two groups that tie for every device they could match — one prefix twice, one attribute set
+twice — are a policy load error**, naming both. This follows the same rule as the matcher (§4):
+where two rules genuinely disagree about which is more specific, refusing to guess is the only
+conservative answer, and a device silently admitted under the wrong key group is admitted under
+the wrong *key* — which fails at the worst moment and looks like an outage (design document §12).
+A tie that exists only for some devices — `{site: campus}` and `{role: leaf}` on a device carrying
+both, or two addresses of one device in two groups' prefixes — refuses that device as above, and
+`port49 policy test` fails on it (plan 6a, owner decision 1): a sync can create one, and refusing
+the policy there would block every inventory change fleet-wide.
 
 The device-pinned tier exists so an overlap can be resolved explicitly rather than by
 contorting the CIDR layout.
@@ -4043,12 +4133,32 @@ day 21    `port49 keys status` shows zero devices on v2
 day 22    retire v2 in a reviewed change
 ```
 
+`retire_after` is a date, inclusive: `retire_after: 2026-10-01` admits through the end of that
+day UTC, and from `2026-10-02T00:00:00Z` the version identifies a device and never admits one,
+as a retired version does. It is written on `accept` versions only; `current` carries none, and
+a `retired` version is refused already. A connection validated before the instant keeps its
+version only until that instant: past it, every later packet on the connection is treated as a
+new connection's first packet would be: a `matches_retired` record, a strike, and the
+connection reset at once with no reply (below, "Devices presenting a key that does not
+validate"). "For the connection's life" would have no bound, because a busy single-connect
+connection resets its idle timer on every packet and so can stay open indefinitely. What a
+device does when its open connection is closed this way is unmeasured (L29, open): L28 measured
+only the first packet of a connection. port49d says at start, and `port49 policy test --config`
+reports, a version whose date has passed and an `accept` version with none.
+
+The key sets, `retire_after` included, live in port49d.yaml beside the references to their
+secrets (`secret_env`), where they have been since plan 1, rather than in the policy file, which
+CI and every operator can read. Retirement and extension are therefore reviewed changes of
+port49d.yaml's repository. Moving key sets into the policy repository waits on secret references
+that name no secret (`secret_ref:`, plan 12).
+
 #### Phase-out has to be observable
 
 Step 21 is the one that does not exist in current practice, and its absence is why rotations
 get abandoned half-finished — nobody can prove the old key is unused, so it is never removed.
-The daemon records which `key_ref` and version validated each connection, which makes the
-question answerable:
+The daemon writes the `key_ref` and version that validated the exchange on every record it
+makes for it (`device.key_ref`, `device.key_version`, §5.7), and `port49 keys status` reads them
+from the decision log, which makes the question answerable:
 
 ```
 $ port49 keys status
@@ -4106,6 +4216,13 @@ miss, and the report keeps it apart so a codec gap or an unusual device is seen 
 body is still not logged; the record carries the header fields, and a body hash only where
 that hash is of the bytes as they arrived on the wire, never of a deobfuscated body.
 
+A sixth, `admission_refused`, is a device the inventory names and admission refuses (above). The
+device is not at fault, so it is kept apart from both the key report and the noise. A seventh,
+`admission_withdrawn`, is a packet on an open connection whose device a reload renamed, moved to
+another `key_ref`, or gave another platform or `based_on:` base ("How a daemon refreshes its
+snapshot"); a reload that refuses or removes the device is recorded under `admission_refused` or
+`unadmitted_source`, with no strike either way.
+
 **Retired versions are retained for diagnosis and never for admission.** This is what turns
 "something is wrong with leaf-19" into "leaf-19 was missed in the rotation". The rule is
 absolute and MUST be enforced structurally rather than by convention:
@@ -4117,12 +4234,16 @@ How many retired versions are kept for diagnosis is configurable, and keeping no
 for a deployment that would rather not hold the material at all — at the cost of this column
 reading `no known key matches` for every straggler.
 
-**Cross-group probing is manual.** `port49 keys diagnose <device>` may test key material from
-*other* key groups, which names a real misconfiguration exactly — a lab device presenting the
-production key, say, which is a finding in its own right regardless of the rotation. It MUST
-NOT run automatically on validation failure: the listener is unauthenticated, and probing
-every key group on every malformed packet is a CPU amplifier available to anyone who can reach
-port 49.
+**Cross-group probing is manual.** `port49 keys diagnose <device>` tests the key material of
+every group port49d holds, retired versions included, on the last packet from that device that
+no key it is assigned validated. That packet is in port49d's memory, one per admitted device,
+kept only while `admin_socket` is configured and never logged, and `keys diagnose` asks for the
+trial over that socket: a Unix socket, mode 0600, that refuses any peer whose uid is not
+port49d's or root's, and serves this one read-only operation (plan 6a, owner decision 2). It
+names a real misconfiguration exactly — a lab device presenting the production key, say, which
+is a finding in its own right regardless of the rotation. It MUST NOT run automatically on
+validation failure: the listener is unauthenticated, and probing every key group on every
+malformed packet is a CPU amplifier available to anyone who can reach port 49.
 
 **What this cannot distinguish.** A wrong key on the device and wrong key material in the
 secret manager present identically — nothing validated, and the packet cannot say why. The
@@ -4138,16 +4259,65 @@ Two properties fall out of counting attempts per source:
 - **An unvalidated body MUST NOT be logged.** It is undecodable and attacker-controlled.
   Record the cleartext header fields, the source, and a hash of the body — never its content.
 
+**A key miss is closed at once, with a reset, and so is a source inside its backoff.** A connection
+whose packet no accepted version validates — a first packet, or one past its version's
+`retire_after` (above) — gets one `unvalidated` record, one strike against its source, and a TCP
+reset at once, with no reply (`port49_connection_events_total{event="key_miss_closed"}`). A strike
+earns the source a backoff, by default 100 ms doubling to 5 s (`limits.malformed_backoff_base`,
+`limits.malformed_backoff_max`); a new connection from it inside that backoff is refused at Accept
+with a reset, and leaves no record, only `port49_connection_events_total{event="held_refused"}`,
+which carries no device label. So the log holds one record per strike, and attempts refused inside a
+backoff are counted, not recorded. The refusal follows any strike, not a key miss alone: a
+`malformed_after_validation`, `not_tacacs` or unadmitted source's strike refuses it the same way.
+**A strike from a device's address resets every connection from that address for up to 5 s** (the
+default ceiling): a second AAA client on the same address still on the old key mid-rotation, or a
+shell on the device, strikes for the device, and the device's own connections inside that backoff
+are refused too.
+
+This replaces the first build's hold, measured on vEOS-lab 4.31.2F, Nexus 9300v 10.4(2)F,
+Catalyst 8000V 17.13.01a and vJunos-router 23.4R2-S2.1 on 2026-09-30 (L28): holding a key miss
+silent for the backoff stalled a break-glass session's three commands to 25–28 s on the Cisco and
+Arista images and 5.9 s on vJunos-router, against 0.4–2.7 s with port49d stopped
+(`tests/lab/results/L28-held-*.md`). Closing at once with a FIN still stalled the C8000V, which
+waits out its own 5 s timeout on a server's FIN (`tests/lab/results/L28-fin-cisco_iosxe.md`). With
+the reset, a device presenting an unknown, a retired or an expired key logs break-glass in and
+runs its commands in the time port49d stopped gives, on all four images, and its token logins are
+refused (`tests/lab/results/L28-arista_eos.md`, `L28-cisco_nxos.md`, `L28-cisco_iosxe.md`,
+`L28-juniper_vjunos-router.md`).
+
 #### Retirement is enforced, and that is the point
 
 `retire_after` is a date, and past it the version is refused. This is the tension worth
 stating plainly: **automatic retirement is what prevents a key living for nine years, and
 retiring a key still in use locks those devices out.** Both halves are true, and the design
 resolves it by making the deadline visible long before it arrives rather than by softening it.
+The lockout's shape is measured (L28, on four images): a device still presenting the version
+once it has passed has every token login refused, while break-glass logs in and runs its commands
+as with port49d stopped (above, "A key miss is closed at once").
 
 - Alarm severity escalates as `retire_after` approaches while devices still present the
   version, and the remaining device list is in the alarm.
-- Retirement and extension are both reviewed changes in the policy repository. Extending is
+
+  port49d exports `port49_key_version_devices{key_ref,version}` (devices whose latest validated
+  connection used the version) and `port49_key_retirement_seconds{key_ref,version}` (seconds
+  until `retire_after` passes, negative once it has). The device count covers **only devices
+  seen since port49d started**. Keys are read only at start, so each step of a rotation
+  restarts port49d, and every restart resets the count to 0 until devices reconnect. The idle
+  stragglers are the ones that stay uncounted longest, and they are the devices a retirement
+  locks out. A removed device keeps counting toward its last version until the next restart.
+  `port49 keys status`, which reads the decision log, is the authority before a version is
+  retired. The metric is not. An alert built on the metric should wait until port49d has been
+  up long enough to cover the fleet's reconnect interval, for example:
+
+  ```
+  port49_key_version_devices > 0
+    and on(key_ref, version) port49_key_retirement_seconds < 7 * 86400
+    and on(job, instance) (time() - process_start_time_seconds) > 86400
+  ```
+
+  Seeding the count from the decision log at start, so a restart does not blank it, is future
+  work.
+- Retirement and extension are both reviewed changes, of port49d.yaml's repository (above). Extending is
   legitimate; forgetting is what the date prevents.
 - CI MUST refuse a policy whose `accept` set is empty for a `key_ref` still assigned by a key
   group, and MUST report any version whose `retire_after` has already passed. `current` is
@@ -4191,6 +4361,7 @@ port49 cannot reach.
     addresses: [10.0.1.5, 10.0.1.6, 2001:db8::5]
     platform: arista_eos
     attributes: {site: dc1, role: leaf, os_version: "4.31.2F"}
+    transport: tcp
 ```
 
 **Every address a device may source from must be listed.** TACACS is commonly sourced from a
@@ -4198,6 +4369,10 @@ loopback or dedicated management interface that is not the device's primary addr
 device sourcing from an unlisted interface fails device binding, and the failure will not
 obviously trace back to inventory. `ip tacacs source-interface` — or the platform equivalent
 — MUST be pinned in the reference AAA configuration.
+
+`name`, `platform`, `addresses` and `attributes` are the facts; `key_ref` pins a key (tier 1);
+`transport` is above. An inventory is refused whole when it does not parse, names a device twice
+or with no name, or gives one address to two devices.
 
 ### Connectors and sync cadence
 
@@ -4265,10 +4440,24 @@ every 30s:
   parse → build index → validate → atomic pointer swap
 ```
 
-**Build fully, then swap.** The snapshot is parsed and indexed into a prefix trie
-(`address or CIDR → device, key_ref`) before anything is exchanged, then swapped by a single
-atomic pointer store. Readers take no lock, and in-flight connections complete against the
-snapshot they began with. Never mutate in place.
+**Build fully, then swap.** The snapshot is parsed and indexed into a prefix trie (`address or CIDR
+→ device, key_ref`) before anything is exchanged, then swapped by a single atomic pointer store.
+Readers take no lock. Never mutate in place. A connection does not complete against the snapshot it
+began with: every packet asks admission in force for its source again, and a connection whose device
+the new snapshot refuses, removes, renames, moves to another `key_ref`, or gives another platform or
+wire platform (a `based_on:` edit or removal) is closed at that packet, after the header, with a TCP
+reset and no reply, and no strike, since the change is port49d's and not the device's. One
+`unvalidated` record names the device and `key_ref` the connection was admitted as, reason
+`device_unknown` (§5.7), and why: `admission_refused`, `unadmitted_source`, or `admission_withdrawn`
+for a rename, a new `key_ref` or a new platform;
+`port49_connection_events_total{event="admission_closed"}` counts it. "Complete against the snapshot
+they began with" would have no bound, because a busy single-connect connection resets its idle timer
+on every packet and so can stay open indefinitely: a device moved off a compromised key would keep
+speaking it, a removed one would keep being answered under its old name, and one given another
+platform would be denied `blob_platform_mismatch` at every command, its records redacted under a
+platform no longer in force (a deleted variant's name has no patterns but the default's). The same
+reasoning ended a key version at `retire_after` on an open connection ("Version sets, and no
+cutover"). What a device does with this reset is unmeasured (§15 L29, open).
 
 **Validate locally before swapping.** The service already applies bounded-change safety, but
 the daemon MUST NOT trust the payload: reject a snapshot that fails to parse, that is empty,
@@ -4307,6 +4496,48 @@ device rather than the ten-thousandth.
 **Every swap logs a summary** — `snapshot v1841 → v1842: +3 devices, -1, 2 changed` — so an
 unexpected fleet change is visible in the daemon's own logs, not only in the service's.
 
+**Until plan 6b, the snapshot is `inventory_file`.** port49d watches it as it watches the policy
+file (§5.1.3): it loads a changed file once two reads a watch interval apart agree, at once on
+`SIGHUP`, and says a refusal once per distinct content. It validates as above and refuses an
+empty file and one that removes more than `inventory.max_removed_percent` of the devices in
+force (default 10; 100 turns the bound off), counting a device that goes from admitted to
+refused as removed. Whatever the bound, it refuses a file whose bundle admits none of its
+devices, as a start is refused (above): the bundle in force keeps serving,
+`port49_inventory_file_refused` is 1, and the one line that says so names the deliberate path,
+which is to stop port49d. It builds a bundle from the file and the policy in force,
+swaps the two in one pointer, and runs the refresh a policy reload runs (§5.1.3): a device
+removed from inventory has its live contexts revoked, and one leaving a scope is narrowed like
+any other. `port49_inventory_snapshot_age_seconds` is the time since the file in force was last
+read and found unchanged or loaded; `port49_inventory_file_refused` is 1 while the file on disk
+is one port49d refused. `SIGHUP` also re-reads `inventory.max_removed_percent` from port49d.yaml,
+so a deliberate large removal is: raise it, send `SIGHUP`, and lower it again.
+
+**A policy reload is held to the same bound.** Key groups are policy, and a refused device's live
+contexts are revoked and its tokens deleted, so a `key_groups` edit that misses the fleet would
+otherwise log everyone out within seconds, and a revert would not bring the sessions back. A
+policy reload that refuses admission to more than `inventory.max_removed_percent` of the devices
+the policy in force admits is refused, naming them; the policy in force keeps serving and
+`port49_policy_file_refused` is 1, and raising the bound and sending `SIGHUP` applies a deliberate
+change. A policy reload whose bundle admits no device of a non-empty inventory is refused
+whatever the bound, as a start is (above): the policy in force keeps serving, the refusal is
+said once, and its line names the deliberate path to take the whole fleet off, which is to stop
+port49d.
+
+**The inventory file is privilege-granting, and read as the policy file is.** Its attributes and
+names decide scope membership, its addresses are handed to SSH clients by the mint, and a
+record's `key_ref` pins a key; a live reload makes an edit effective within seconds. So it is
+read behind the policy file's fence (§5.1.3): refused, at start and at every reload, when the
+file, the directory holding it, or a directory holding a symbolic link on its path could have
+been written by anyone but port49d's user or root, when it is not a regular file, or when it is
+larger than 64 MiB. Directories above those are not checked: the deployment must keep them
+writable by root alone, as it must for the policy file's (plan 12). At a reload the refusal is said
+once and the bundle in force keeps serving; at start it refuses the start. The deployment
+documents owe the same warning for this path as for the policy file's (plan 12).
+
+A test in the policy's `tests:` naming a device the inventory no longer has fails `port49
+policy test`, and never a load or a reload: CI owns that fix, and an inventory change must not
+wait on it.
+
 ### Source-of-truth write access is privilege-granting
 
 If scopes match on synced attributes (§5.5), whoever can change a device's `role` or
@@ -4318,8 +4549,14 @@ Mitigations, designed in rather than documented afterward:
 - Scope-membership changes MUST appear in the sync diff and be reviewable, and so MUST an
   address added to an existing device — the mint response carries that address back for the
   operator's SSH client to connect to, so a rogue address on a real device's record is a
-  credential-capture path (design document §17).
-- A scope MUST be able to pin a device set explicitly instead of by attribute.
+  credential-capture path (design document §17). `port49 inventory diff` prints both, and every
+  bundle swap writes one `inventory_change` record (§5.7) for each address added to a device
+  already in inventory and each device joining or leaving a scope with `security_log: true`.
+  A device's `key_ref` changing, and a device becoming admitted, are recorded the same way: a
+  record's pin can move a device onto a weaker or a shared key.
+- A scope MUST be able to pin a device set explicitly instead of by attribute:
+  `match: {name: [leaf-01, leaf-02]}` reads the device's inventory name, as `platform` reads
+  its platform (§5.5).
 - Scopes carrying denies SHOULD set `security_log: true`, so membership changes are logged
   and alerted as security events rather than routine inventory churn.
 - Attributes used for security scoping SHOULD come from an attested path rather than a
@@ -4820,15 +5057,53 @@ It is the same evaluator the daemon runs. Beyond answering an auditor, a capture
 replayed against a candidate build turns "did this release change anyone's access" into a
 diff — which is the only form of that question a reviewer can actually check.
 
-**`port49 keys status`** counts devices per accepted key version, names those still presenting
-an old one, and lists sources whose packets validated against nothing — separating a retired
-version, unknown material, an unadmitted source, and traffic that is not TACACS+ at all (§10).
-It is the instrument a rotation is driven by, and its output belongs in the pull request that
-retires a version. **`port49 keys diagnose <device>`** tests other key groups' material to
-name a misconfiguration exactly; it is manual because the equivalent automatic probe would be
-a CPU amplifier on an unauthenticated listener. **`port49 keys show <device>`** resolves which
-`key_ref` a device matches; rendering the secret itself is a separately-authorized operation,
-since a group key is shared across the devices in its group.
+**`port49 keys status --policy <file> --inventory <file> --config <port49d.yaml> [--since D]
+<log>...`** reads the decision log (§5.7, `device.key_ref`, `device.key_version`, and the
+`unvalidated` records) and counts devices per key version, names those whose latest validated
+exchange used a version other than `current`, with when, lists inventory devices never seen, and
+lists sources whose packets validated against nothing — separating a retired version, unknown
+material, an unadmitted source, a refused device, and traffic that is not TACACS+ at all (§10).
+It reads no secret: `--config` gives the key names, versions and dates. It is the instrument a
+rotation is driven by, and its output belongs in the pull request that retires a version.
+**`port49 keys diagnose <device>`** asks port49d, over `admin_socket`, to try every key it holds
+on the last packet from that device that did not validate, and names the group and version that
+matched; it is manual because the equivalent automatic probe would be a CPU amplifier on an
+unauthenticated listener (§10). **`port49 keys show --policy <file> --inventory <file> [--config
+<port49d.yaml>] <device>`** resolves which `key_ref` a device matches, by which tier and group,
+and, with `--config`, which version to provision; rendering the secret itself is a
+separately-authorized operation this build does not offer, since a group key is shared across the
+devices in its group. `keys show` and `keys status` name a key by its `key_ref` and version only, and
+a `key_ref` has §10's shape (`^[a-z][a-z0-9_]{0,63}$`): one that is not a name is refused, not
+printed, since it is most likely a secret pasted there, and neither command prints a
+port49d.yaml parse error's text, only its line and a fixed category. A secret that is all
+lowercase hex and 64 characters or fewer passes the shape.
+
+**`port49 inventory diff --policy <file> [--new-policy <file>] <old-inventory> <new-inventory>`**
+prints what a change to the inventory does to the bundle: devices added, removed and changed,
+addresses added to existing devices, `key_ref` and admission changes, and every scope membership
+change, the `security_log` ones marked — the review artifact §10 requires. It exits 1 when
+port49d would refuse the new inventory (empty, a collision, admitting no device, or more removed
+or newly refused than `--max-removed-percent`, default 10). `--config <port49d.yaml>` reads that
+bound and the `key_ref`s the file defines instead, no secret read, so a device assigned an
+undefined key is refused as port49d refuses it. With `--new-policy` naming a different policy,
+port49d runs two bounded reloads; the diff shows each order step by step, each reload's changes
+marked as that swap logs them, and exits 1 when neither order takes both, and when either order
+takes its first file and refuses the second: port49d then stays on the bundle between until the
+first file changes again. Without `--config`, a bundle with no key groups admits only pinned
+devices, as port49d reads it, and every verdict says the `key_ref`s went unchecked against
+port49d.yaml. An inventory decode error is printed as its line and a fixed category, and a bad
+address or CIDR by its position, never its text.
+
+**`port49 policy test --config <port49d.yaml>`** adds the key checks §10 requires of CI: it fails
+on a key group naming a `key_ref` the file does not define, and on a device assigned one. It
+reads §10's "a policy whose `accept` set is empty for a `key_ref` still assigned by a key group"
+as that case: `current` is always accepted, so the set is empty only where the key is not
+defined at all. It reports an `accept` version whose `retire_after` has passed and one with none.
+Without `--config` it still fails on every device admission refuses where key groups are
+declared: a tie, and a device no group admits, since port49d serves neither. It fails on a test
+naming a device the inventory does not have, which a load no longer refuses (§10).
+**`port49 policy diff`** fails on a device the new policy refuses admission and the old admitted,
+naming it: the edit port49d's reload would refuse over `inventory.max_removed_percent` (§10).
 
 **Access review** is a rendering of the flat grant table, not an investigation:
 `port49 access review --subject <name>` lists every grant row the subject appears in, with
@@ -5290,6 +5565,16 @@ images (`L9-abbreviations-juniper_*.md`). The ruling amends
 decision 22's "regexes for what bits cannot separate" to regexes over keywords only. (§8, §12,
 §15)
 
+**28. The bundle is one pointer, built in port49d until the inventory service publishes it.**
+*Plan 6a, 2026-09-30.* The policy loaded against the inventory carries the admission index, the
+device table, the quarantine and the policy, and `policy.Live` swaps it whole, so no mint, packet
+or refresh sees one version's inventory and another's policy (§10). Its name is a content hash
+(§10). port49d builds it from `inventory_file` and `broker.policy_file`, watches both, and bounds
+an inventory reload as a sync is bounded. Key groups are policy. A device a group cannot admit is
+refused on its own, never the daemon. An inventory-only swap leaves a context whose answer did
+not change as it is (§5.1.3). Plan 6b adds the service as a second source of the same bundle;
+whether port49d then takes the policy from it is an owner decision recorded in plan 6a.
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -5623,15 +5908,29 @@ Beyond those already listed in the design document's §14:
 
 **Inventory and capability**
 
-- **Snapshot refresh**: atomic swap; in-flight connections complete against the prior
-  snapshot; a malformed, empty, or over-shrinking snapshot is rejected and the previous one
-  retained.
+- **Snapshot refresh**: atomic swap; an open connection whose device the new snapshot refuses,
+  removes, renames, re-keys or re-platforms is reset at its next packet with no reply and no strike,
+  and one whose device it leaves as it was is untouched; a malformed, empty, or over-shrinking
+  snapshot is rejected and the previous one retained.
 - **Snapshot never expires**: a daemon with a stale snapshot and an unreachable inventory
   service continues authenticating, alarming on age.
 - **Cold start**: a daemon with no snapshot stays unready while existing replicas keep
   serving; a daemon restarted with the inventory service down starts from its persisted
   bundle, and one scheduled onto a fresh node starts from the shared object-store copy.
 - **Unresolvable `key_ref`** fails that device closed, not the daemon.
+- **A device no key group admits**, and one two groups tie on, is refused admission on its own
+  and its packets closed after the header as `admission_refused`; the rest of the fleet loads.
+- **An inventory-only reload** leaves a live context whose answer did not change unwritten and
+  unrecorded, revokes one on a device removed from inventory, and writes one `inventory_change`
+  record per address added, per `key_ref` change, per device newly admitted and per
+  `security_log` scope membership change.
+- **The key-group move never refuses the fleet:** with the block in both files the policy's
+  wins; deleting it from the inventory first is refused by the bound; a restart between the two
+  edits loads.
+- **The inventory file's fence:** a group-writable inventory file refuses the start, and at a
+  reload is refused once while the bundle in force keeps serving.
+- **A `based_on:` variant** of `juniper_junos` is authorized as `junos-exec`, its `cmd=login`
+  record read as an exec record, and its records redacted with Junos's patterns.
 
 **Key rotation**
 
@@ -5766,6 +6065,10 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L26** | The Junos operational CLI keyword tree under `show`: at each command path, the words proven keywords — offered by completion there, and shown a keyword by `\| display xml rpc` (an element named as the word, none holding it as text, or a path still asking for a `<command>`) — and whether an argument may be typed there; anything without that evidence is an argument. The pipe is first proven to run nothing. Walked over the break-glass CLI, seeds first, bounded in breadth, depth, nodes and commands. Scope: the images captured, and no hidden argument. | Which denies and allows the projection may send (decision 27; §8); `platforms/keywords/<set>/juniper_junos.yaml` | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26-juniper_vjunos-router.md`, `L26-juniper_vsrx.md`. The pipe ran nothing on either image, and neither walk stopped at a bound: vJunos-router 23.4R2-S2.1, 136 nodes and 755 keywords; vSRX 21.4R3.15, 118 nodes and 668. Both images were walked twice: vJunos-router's rerun reproduced its first tree byte for byte, and vSRX's runs disagreed, so a keyword is one only where every run on every image proves it: set 1.1.0's tree intersects every committed run (three trees), 528 keywords, and adds L26b's seven (535, frozen with the set). Nothing under `show configuration` is proven. Scope: these two images, and no hidden argument; see below |
 | **L26b** | Whether a word is a keyword to `deny-commands`, by the deny itself: a deny naming the word at its path refuses the command, the CLI's caret under the word, while a paired control without the deny runs it with positive evidence. Probed: the words after `show` that L26 offered and did not prove (`cli`, `host`, `ingress-replication`, `policy`, `task`), `exit`, `save`, `set cli`, and every `show configuration` hierarchy the image offers. | The L26b overlays laid over L26's trees (`tests/lab/results/L26b-keywords-juniper_*.yaml`), and so set 1.1.0's keyword tree; whether a deny naming a `show configuration` hierarchy may be sent (decision 27; §8) | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26b-juniper_vjunos-router.md`, `L26b-juniper_vsrx.md`. Proven on both images: `show cli`, `show host`, `show ingress-replication`, `show policy`, `show task`, `set cli` and `exit`. `save` is proven on vJunos-router and unproven on vSRX, so it is not a keyword in the set. **A deny naming a `show configuration` hierarchy is not enforced**: every offered hierarchy, 32 on vJunos-router and 25 on vSRX, ran under a deny naming it; see below |
 | **L26c** | Whether a projected Junos CLI session reaches a native RPC with the NETCONF service off: `xml-mode netconf need-trailer` and `xml-mode netconf`, then `<get-software-information/>`, `<get-configuration/>` and a `<command>` RPC; `op url`; `start shell`; the NETCONF subsystem on port 22 with `netconf ssh` deleted; and whether the fail-closed reply's `deny-commands .*` refuses those entry points. Beside it, unmeasured: whether a deny naming the entry points (`xml-mode`, `op`) binds, with their abbreviations and through a class's own deny list; whether an RPC reaches past a deny beneath `view-configuration`; the SSH exec channel (`ssh <device> xml-mode …`); and `scp`. | `JunosFacts.DenyBindsRPCs`, false in set 1.1.0 and provisional on this row: port49 assumes a deny beneath a sent bit or the baseline guards the CLI only, so it fails closed (§8, option C); whether the management-services allowlist is sufficient (§8) | Junos (vSRX / vJunos-router in containerlab) | open — measured 2026-09-25 on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (`tests/lab/results/L26c-juniper_*.md`), the two agreeing: under a projected class (`view`, a rendered deny naming `show configuration`), `xml-mode netconf` returned a hello and `<get-software-information/>` ran, as in the control; `<get-configuration/>` returned an empty `<configuration>` there and in the control alike, `view` lacking `view-configuration`; a `<command>show configuration</command>` RPC was refused, which the control's own bits leave unisolated here (over NETCONF the deny refused one the control ran, `L12-netconf-juniper_*.md`); `op url` was accepted up to the copy; `start shell` was refused by the bits, as in the control; `deny-commands .*` refused `xml-mode` and `op url`; and with `netconf ssh` deleted port 22's NETCONF subsystem was refused in every class, break-glass included. The run failed its four `view`-only `get-configuration` cells (reclassified since as bits-limited, not rerun); the `xml-mode` probes ran before `netconf ssh` was deleted; and `view` alone cannot set a deny against RPC reach: a rerun is owed (L26c review I-1, I-4). The questions beside it are open. The owner reported on 2026-09-25, from SRX hardware (Junos 23.4R2-S8.7, no capture, `tests/lab/results/L26c-operator-juniper_srx.md`): `<get-configuration/>` through `xml-mode netconf` passed a deny of `show configuration` beneath `view-configuration`; a deny of `show version` refused `<get-software-information/>`; no sent deny naming `xml-mode` refused it, while `^.*$` did (with every other command); accounting recorded the entry as `cmd=xml-mode netconf <cr>`; and with the NETCONF service (`netconf ssh`, port 830) deactivated, `xml-mode netconf` from an SSH CLI session on port 22 still opened NETCONF and `<get-configuration/>` returned the configuration, so the management-services allowlist does not close `xml-mode`. On 2026-09-28 the owner reported the same with the deny set on the local class, and that `deny-commands "junoscript"`, set on the class or sent by TACACS+, refused `xml-mode netconf` while `show version` still ran: Junos appears to authorize `xml-mode` as `junoscript`. Without a capture these do not close the row |
+| **L27** | What NetBox and Nautobot's APIs return for a device, per product and major version: where the version is reported (`/api/status/`, the `API-Version` header on `/api/`); the field names for role, platform, site or location, primary address, custom fields and tags, over REST and over one GraphQL query; which GraphQL query shape each version takes, and whether one query returns every interface address; how REST paginates; and what a device create, update and delete webhook carries — its headers and body, and whether `X-Hook-Signature` is HMAC-SHA512 of the body under the webhook's secret. | Plan 6b's connectors: version detection and mapping profiles, GraphQL first with REST as the fallback, webhook authentication (§10, "Connectors and sync cadence") | NetBox 3.7 and 4.x; Nautobot 1.6 and 2.x | closed — measured 2026-09-30; tests/lab/results/L27-netbox.md, L27-nautobot.md. NetBox 3.7.8 and 4.7.1, Nautobot 1.6.32 and 2.4.43; fixtures in `tests/lab/sot/fixtures/`. One GraphQL query returned every interface address on all four, each in its own query shape; every webhook signature was HMAC-SHA512 of the body. *Unmeasured:* a non-null pagination `next` (each run held one device) and Nautobot 3.x, split to L30; see below |
+| **L28** | What a device does when port49d cannot validate its key on a connection's first packet. For a key port49d does not hold, one it holds only as retired, and one past its `retire_after`: whether a break-glass login succeeds and how long it takes, how long a command in an open break-glass session takes, and whether a token login is refused. And that a second version accepted beside the current one lets the device work unchanged, and that the device given the current key works at once with no port49d change. Measured first with port49d holding the connection for the per-source backoff and closing it without a reply, then closing it at once with a FIN, then as port49d does now: one record and a strike, the connection reset at once with no reply, and the source's next connections inside its backoff refused at Accept with a reset (§10, "A key miss is closed at once"). An open connection passing its version's `retire_after` is L29's. | Key rotation's no-cutover claim and the retirement lockout's shape (§10 "Retirement is enforced"); the design document's "a key mismatch is indistinguishable from an outage" (§12); whether a key miss should be closed at once, as a quarantine is | EOS, NX-OS, IOS-XE, Junos | closed — measured 2026-09-30; tests/lab/results/L28-arista_eos.md, L28-cisco_nxos.md, L28-cisco_iosxe.md, L28-juniper_vjunos-router.md. The hold stalled break-glass on all four images (`L28-held-*.md`) and a FIN still stalled the C8000V (`L28-fin-cisco_iosxe.md`), so port49d now resets (branch H). With the reset, break-glass logs in and runs its commands in the time port49d stopped gives on all four, and every token login is refused, for an unknown, a retired and an expired key; a second accepted version logs token users in at v1, and the device given the new key logs in at v2 with no port49d change; see below |
+| **L29** | What a device does when port49d resets an open connection mid-session: at its first packet past the connection's key version's `retire_after` (§10, "Version sets, and no cutover"), and at its first packet after a reload refused, removed, renamed, re-keyed or re-platformed its device (§10, "How a daemon refreshes its snapshot"). For each: whether the command or login in flight fails or falls to the local method, and how long it takes; for `retire_after`, whether the device's next connection, refused at Accept inside the strike's backoff and then presenting the retired key, behaves as L28 measured; for a reload, which strikes nothing, whether the next connection is refused at once as a refused device's is. The `retire_after` case needs a run whose connection is open across 00:00:00Z the day after `retire_after`; the reload case needs only a `SIGHUP` between two commands. | That ending a key version at `retire_after` on an open connection costs the device what a first-packet key miss does (§10; plan 6a Decided 7, amended in its Task 14), and that ending an open connection on a reload costs it what a quarantine's close does (§10; plan 6a final review I1) | EOS, NX-OS, IOS-XE, Junos | open — added 2026-09-30 (plan 6a Task 21), split from L28, which measured the first packet only; the reload case added in plan 6a's final fix wave. Owner: plan 6b, the next plan with a device lab run (spec §14's quarantine through a sync), whose syncs make the reload case routine |
+| **L30** | How NetBox and Nautobot page a device list that does not fit one page, and what Nautobot 3.x returns: for NetBox 3.7 and 4.x and Nautobot 1.6 and 2.x, a REST list holding more devices than its `limit`, whether `next` is an absolute URL, which host and scheme it carries behind a proxy, whether following it to the end returns every device once, and how GraphQL pages the same list, if at all; and for Nautobot 3.x, every L27 question (version source, field names, GraphQL shape, pagination, webhook body and signature). | Plan 6b's connectors: following `next` rather than building offsets, and whether Nautobot 3.x needs its own profile (§10, "Connectors and sync cadence") | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x | open — added 2026-09-30 (plan 6a final fix wave), split from L27, whose runs each held one device. Owner: plan 6b |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -7312,6 +7615,58 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   still owed for each. The run failed four cells since reclassified, and its
   `xml-mode` probes ran before `netconf ssh` was deleted, so a rerun is owed (L26c review I-1,
   I-4).
+- **L27** — added by plan 6a and measured 2026-09-30 on beehive, each product's two versions in
+  its own Compose stack (`tests/lab/results/L27-netbox.md`, `L27-nautobot.md`; fixtures in
+  `tests/lab/sot/fixtures/`, checked by `TestL27FixturesAreWhatTheNotesSay`). Per version: where
+  the version is reported, the role field, the GraphQL shape that returned every interface
+  address, and whether the webhook signature is HMAC-SHA512 of the body.
+
+  | version | version source | role field | GraphQL shape that returned every interface address | signature HMAC-SHA512 of the body |
+  |---|---|---|---|---|
+  | NetBox 3.7.8 | `/api/status/` `netbox-version`; `Api-Version: 3.7` | `role` to write; REST reads carry `role` and `device_role`, the same object | `device_list(name: "…") { … role { slug } … }` | yes, 3 of 3 |
+  | NetBox 4.7.1 | `/api/status/` `netbox-version`; `Api-Version: 4.7` | `role` only | `device_list(filters: {name: {exact: "…"}}) { … role { slug } … }` | yes, 3 of 3 |
+  | Nautobot 1.6.32 | `/api/status/` `nautobot-version`; `Api-Version` is **`1.2`**, not the release | `device_role` (`/api/dcim/device-roles/`), with `site` | `devices(name: "…") { … device_role { slug } site { slug } … _custom_field_data … }` | yes, 3 of 3 |
+  | Nautobot 2.4.43 | `/api/status/` `nautobot-version`; `Api-Version: 2.4` | `role` (`/api/extras/roles/`), with `location`; REST at default depth nests every related object as `{id, object_type, url}`, no name, and `?depth=1` inlines them | `devices(name: "…") { … role { name } location { name } … _custom_field_data … }` (no `slug`) | yes, 3 of 3 |
+
+  So the version to pick a profile by is `/api/status/`, never `Api-Version` alone. REST paginates
+  with `count`, `next`, `previous` and `results` on all four. Webhooks carry the change in the body;
+  NetBox 4.7 drops `model`, `username` and `request_id` for `object_type` and `request`. Delivery
+  order is not change order on Nautobot (both versions delivered `deleted` first in this run), so 6b
+  orders by the body's `timestamp`, never by arrival. *Unmeasured, split to L30 (owned by plan 6b):*
+  a non-null `next` (each run held one device when it paged), and Nautobot 3.x (Docker Hub carries a
+  3.2 line the row does not name).
+- **L28** — added by plan 6a and measured 2026-09-30 on vEOS-lab 4.31.2F, Nexus 9300v 10.4(2)F,
+  Catalyst 8000V 17.13.01a and vJunos-router 23.4R2-S2.1 (`tests/lab/results/L28-arista_eos.md`,
+  `L28-cisco_nxos.md`, `L28-cisco_iosxe.md`, `L28-juniper_vjunos-router.md`;
+  `tests/lab/l28_test.go`). Each phase restarts port49d with the device still on the lab key and
+  compares it with port49d stopped. Three builds were measured:
+
+  | port49d | break-glass plus three commands, `unknown` phase | with port49d stopped | notes |
+  |---|---|---|---|
+  | holds the miss for the backoff, then closes | EOS 27.4 s, NX-OS 25.2 s, IOS-XE 27.6 s, vJunos-router 5.9 s | 0.39 s, 2.66 s, 1.28 s, 1.48 s | `L28-held-*.md` |
+  | closes at once with a FIN | IOS-XE 11.0 s, and 5.02 s to log in (0.02 s stopped): it waits out its own 5 s timeout on the FIN | 1.28 s | `L28-fin-cisco_iosxe.md` |
+  | resets at once (as built) | EOS 0.32 s, NX-OS 2.64 s, IOS-XE 1.27 s, vJunos-router 0.47 s | 0.37 s, 2.62 s, 1.28 s, 0.49 s | `L28-*.md` |
+
+  Under the reset, the unknown, retired and expired phases each match the stopped phase on every
+  image, and each token login is refused. With the old key accepted beside the new one
+  (`retire_after: 2999-12-31`), token logins validate at v1 and the break-glass account is
+  refused by port49 on EOS, NX-OS and IOS-XE, which is their configuration asking port49 first;
+  vJunos-router logs it in. Given the new key, the device's token login validated at v2 at once,
+  and `port49 keys status` over the run's log names the device on v2 and lists its
+  unvalidated sources by diagnosis. On IOS-XE the harness's liveness probe before three phases
+  reached port49 only at its second or third attempt (30–54 s); why is not established.
+  *Unmeasured:* the mid-connection close, split to L29; transports other than SSH; vSRX.
+- **L29** — added 2026-09-30 by plan 6a Task 21, split from L28. port49d resets an open connection
+  at its first packet past its version's `retire_after`, as it does a first-packet miss (§10), and
+  nothing about the device's reaction to that is measured: every L28 phase started port49d with the
+  date already past or not yet reached. Measuring it needs a run that holds a connection open across
+  00:00:00Z. The final fix wave added the reload case: a reload that refuses, removes, renames,
+  re-keys or re-platforms a device resets its open connections at their next packet with no strike
+  (§10, "How a daemon refreshes its snapshot"), also unmeasured; a `SIGHUP` between two commands in
+  one session measures it. Owned by plan 6b, the next plan with a device lab run.
+- **L30** — added 2026-09-30 by plan 6a's final fix wave, split from L27: its runs each held one
+  device, so no list paged and `next` was always null, and Nautobot 3.x was not run. Plan 6b's
+  pagination code and any Nautobot 3.x profile cite it until it closes.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.

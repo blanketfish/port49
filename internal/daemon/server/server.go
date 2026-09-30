@@ -27,14 +27,31 @@ import (
 	"github.com/rhwendt/port49/internal/keyring"
 )
 
+// Admitter answers which device a source address is and which key_ref admits
+// it (spec §10). port49d passes the policy in force's index. It is read at
+// each Accept and again at every packet, so a reload reaches the next
+// connection, and one that refuses, removes, renames, re-keys or
+// re-platforms a device ends that device's open connections at their next
+// packet; *admission.Trie is one.
+type Admitter interface {
+	Lookup(netip.Addr) (admission.Resolved, bool)
+}
+
 type Deps struct {
-	Admission *admission.Trie
+	Admission Admitter
 	// Quarantined reports whether an admitted device is quarantined by the
 	// loaded policy at now (spec §10): (*policy.Policy).Quarantined, or nil
 	// with no broker. It is asked at every packet, with Now, because a grant's
 	// expiry can start or end a quarantine while a connection is open.
 	Quarantined func(device string, now time.Time) (cause string, ok bool)
 	Keys        map[string]keyring.Set
+	// KeySeen marks the key version each admitted device's connection
+	// validated under (keyring.Seen.Mark); nil marks nothing.
+	KeySeen func(device, keyRef string, version int)
+	// Held keeps each admitted device's last unvalidated packet for `port49
+	// keys diagnose` (spec §10); nil keeps nothing. port49d sets it only with
+	// admin_socket configured.
+	Held        *keyring.Held
 	Authen      *authen.Handler
 	Author      *author.Handler
 	Acct        *acct.Handler
@@ -99,11 +116,23 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			c.Close()
 			continue
 		}
+		if d.Limits.Holding(src) {
+			release()
+			d.Metrics.ConnectionEvents.WithLabelValues("held_refused").Inc()
+			reset(c)
+			c.Close()
+			continue
+		}
 		d.Metrics.Connections.WithLabelValues("open").Inc()
 
-		dev, admitted := d.Admission.Lookup(src)
-		cc := &conn{d: d, c: c, src: src, dev: dev, admitted: admitted,
-			keys: d.Keys[dev.KeyRef], sessions: map[uint32]*authen.Session{}}
+		// Admitted is Refused == "", never an index hit or a key_ref alone: a
+		// refused device is in the index, and is given no key (spec §10).
+		dev, found := d.Admission.Lookup(src)
+		cc := &conn{d: d, c: c, src: src, dev: dev, admitted: found && dev.Refused == "",
+			refused: found && dev.Refused != "", sessions: map[uint32]*authen.Session{}}
+		if cc.admitted {
+			cc.keys = d.Keys[dev.KeyRef]
+		}
 
 		wg.Add(1)
 		go func() {

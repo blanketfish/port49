@@ -2,6 +2,7 @@ package keyring
 
 import (
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
@@ -53,7 +54,7 @@ func FuzzResolve(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, typ, seq, flags uint8, sid uint32, obf []byte) {
 		h := wire.Header{MajorVersion: 0xc, Type: wire.Type(typ), SeqNo: seq, Flags: flags, SessionID: sid, Length: uint32(len(obf))}
-		r := s.Resolve(h, obf)
+		r := s.Resolve(h, obf, time.Time{})
 		if r.Diagnosis != DiagValidated && r.Body != nil {
 			t.Fatalf("a body was returned for diagnosis %q; only a validated packet may carry one", r.Diagnosis)
 		}

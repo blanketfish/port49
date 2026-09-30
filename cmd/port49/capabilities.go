@@ -59,7 +59,7 @@ func devicesCapabilities(args []string, stdout, stderr io.Writer) int {
 	// Examples echoed from the log are redacted as port49d redacts a record:
 	// the platform's built-in patterns and the policy's own (spec §5.8).
 	opt := capability.Options{Redactor: func(name string) []platform.Redaction {
-		return append(platform.Redactions(name), p.Dialect(name).Redact...)
+		return append(platform.Redactions(p.WirePlatform(name)), p.Dialect(name).Redact...)
 	}}
 	if *since > 0 && len(recs) > 0 {
 		newest := recs[0].TS
@@ -73,7 +73,8 @@ func devicesCapabilities(args []string, stdout, stderr io.Writer) int {
 	now := time.Now()
 	var devices []capability.Device
 	for _, d := range p.Devices() {
-		cd := capability.Device{Name: d.Name, Platform: d.Platform, Supports: p.Dialect(d.Platform).Supports}
+		cd := capability.Device{Name: d.Name, Platform: d.Platform, WirePlatform: p.WirePlatform(d.Platform),
+			Supports: p.Dialect(d.Platform).Supports}
 		cd.Quarantine, _ = p.Quarantined(d.Name, now)
 		devices = append(devices, cd)
 	}

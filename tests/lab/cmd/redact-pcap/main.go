@@ -78,7 +78,8 @@ func run() error {
 		return fmt.Errorf("%w; the captures and the seed-token file come from one `make lab` run, so "+
 			"redact them before the next run truncates it, or pass -seed-tokens", err)
 	}
-	opt := labpcap.Options{Key: *key, Secrets: secrets, Subnet: sn}
+	// L28's rotation capture was taken under the device's new key, not -key.
+	opt := labpcap.Options{Key: *key, KeyFor: labcreds.CaptureKey, Secrets: secrets, Subnet: sn}
 
 	if *scan {
 		return runScan(*in, opt)
@@ -135,7 +136,11 @@ func runScan(in string, opt labpcap.Options) error {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", filepath.Base(n), err)
 			continue
 		}
-		d, err := f.Decode(opt.Key, nil)
+		key := opt.Key
+		if k := opt.KeyFor(filepath.Base(n)); k != "" {
+			key = k
+		}
+		d, err := f.Decode(key, nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", filepath.Base(n), err)
 			continue

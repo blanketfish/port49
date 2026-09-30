@@ -228,7 +228,14 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 	var out []TestResult
 	for _, t := range p.tests {
 		r := TestResult{Test: t}
-		d, _ := p.device(t.Device)
+		d, ok := p.device(t.Device)
+		if !ok {
+			// The inventory no longer names it: CI fails the test, and the
+			// load that built this policy did not (plan 6a, I3).
+			r.Err = fmt.Errorf("device %q is not in the inventory", t.Device)
+			out = append(out, r)
+			continue
+		}
 		var res Resolution
 		var o engine.Outcome
 		var err error
@@ -244,6 +251,8 @@ func (p *Policy) RunTests(now time.Time) []TestResult {
 			r.MintError = "device_unconfigured"
 		case errors.Is(err, ErrDeviceQuarantined):
 			r.Reason = decision.DeviceQuarantined
+		case errors.Is(err, ErrDeviceRefused):
+			r.Reason = decision.DeviceUnknown
 		case err != nil:
 			r.Err = err
 		default:

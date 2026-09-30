@@ -1,0 +1,188 @@
+[
+  {
+    "step": "graphql_0",
+    "method": "POST",
+    "path": "/graphql/",
+    "request": {
+      "query": "{ device_list(filters: {name: {exact: \"leaf-01\"}}) { name platform { slug } site { slug } role { slug } primary_ip4 { address } custom_fields tags { slug } interfaces { name ip_addresses { address } } } }"
+    },
+    "status": 200,
+    "headers": {
+      "Content-Language": "en",
+      "Content-Length": "369",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
+      "Referrer-Policy": "same-origin",
+      "Server": "granian",
+      "Vary": "HX-Request, Accept-Language, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN",
+      "X-Request-Id": "83928d18-a519-4f85-80a7-105c975ec0be"
+    },
+    "body": {
+      "data": {
+        "device_list": [
+          {
+            "name": "leaf-01",
+            "platform": {
+              "slug": "eos"
+            },
+            "site": {
+              "slug": "dc1"
+            },
+            "role": {
+              "slug": "leaf"
+            },
+            "primary_ip4": {
+              "address": "10.0.1.5/32"
+            },
+            "custom_fields": {
+              "os_version": "4.31.2F"
+            },
+            "tags": [
+              {
+                "slug": "port49"
+              }
+            ],
+            "interfaces": [
+              {
+                "name": "Loopback0",
+                "ip_addresses": [
+                  {
+                    "address": "10.0.1.6/32"
+                  }
+                ]
+              },
+              {
+                "name": "Management1",
+                "ip_addresses": [
+                  {
+                    "address": "10.0.1.5/32"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "step": "graphql_1",
+    "method": "POST",
+    "path": "/graphql/",
+    "request": {
+      "query": "{ device_list(filters: {name: \"leaf-01\"}) { name platform { slug } site { slug } role { slug } primary_ip4 { address } custom_fields tags { slug } interfaces { name ip_addresses { address } } } }"
+    },
+    "status": 200,
+    "headers": {
+      "Content-Language": "en",
+      "Content-Length": "136",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
+      "Referrer-Policy": "same-origin",
+      "Server": "granian",
+      "Vary": "HX-Request, Accept-Language, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN",
+      "X-Request-Id": "6ef777a5-2b1e-4f6b-b0f6-7beca70ede40"
+    },
+    "body": {
+      "data": null,
+      "errors": [
+        {
+          "message": "Expected value of type 'StrFilterLookup', found \"leaf-01\".",
+          "locations": [
+            {
+              "line": 1,
+              "column": 31
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "step": "graphql_2",
+    "method": "POST",
+    "path": "/graphql/",
+    "request": {
+      "query": "{ device_list(name: \"leaf-01\") { name platform { slug } site { slug } device_role { slug } primary_ip4 { address } custom_fields tags { slug } interfaces { name ip_addresses { address } } } }"
+    },
+    "status": 200,
+    "headers": {
+      "Content-Language": "en",
+      "Content-Length": "279",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
+      "Referrer-Policy": "same-origin",
+      "Server": "granian",
+      "Vary": "HX-Request, Accept-Language, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN",
+      "X-Request-Id": "238d7e80-c858-4b56-8d03-b18d894b2f76"
+    },
+    "body": {
+      "data": null,
+      "errors": [
+        {
+          "message": "Unknown argument 'name' on field 'Query.device_list'.",
+          "locations": [
+            {
+              "line": 1,
+              "column": 15
+            }
+          ]
+        },
+        {
+          "message": "Cannot query field 'device_role' on type 'DeviceType'. Did you mean 'device_type' or 'devicebays'?",
+          "locations": [
+            {
+              "line": 1,
+              "column": 71
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "step": "graphql_3",
+    "method": "POST",
+    "path": "/graphql/",
+    "request": {
+      "query": "{ device_list(name: \"leaf-01\") { name platform { slug } site { slug } role { slug } primary_ip4 { address } custom_fields tags { slug } interfaces { name ip_addresses { address } } } }"
+    },
+    "status": 200,
+    "headers": {
+      "Content-Language": "en",
+      "Content-Length": "129",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
+      "Referrer-Policy": "same-origin",
+      "Server": "granian",
+      "Vary": "HX-Request, Accept-Language, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "SAMEORIGIN",
+      "X-Request-Id": "41510e8e-f7c6-462e-a126-d9ff60d5d5ad"
+    },
+    "body": {
+      "data": null,
+      "errors": [
+        {
+          "message": "Unknown argument 'name' on field 'Query.device_list'.",
+          "locations": [
+            {
+              "line": 1,
+              "column": 15
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

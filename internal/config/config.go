@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -25,11 +27,17 @@ import (
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store/crypt"
+	"github.com/rhwendt/port49/internal/yamlfault"
 )
 
 type KeyVersion struct {
 	Version   int    `yaml:"version"`
 	SecretEnv string `yaml:"secret_env"`
+	// RetireAfter is the last day, UTC, the version admits (spec §10):
+	// accept versions only. RetireAt is it parsed, the first instant the
+	// version is refused — midnight after that day. Zero is none.
+	RetireAfter string    `yaml:"retire_after"`
+	RetireAt    time.Time `yaml:"-"`
 }
 
 type KeySet struct {
@@ -237,6 +245,15 @@ type fileConfig struct {
 	Token          TokenConfig               `yaml:"token"`
 	Broker         *BrokerConfig             `yaml:"broker"`
 	Lab            *LabConfig                `yaml:"lab"`
+	InventoryOpts  inventoryYAML             `yaml:"inventory"`
+	AdminSocket    string                    `yaml:"admin_socket"`
+}
+
+// inventoryYAML is how port49d bounds an inventory reload (spec §10). The
+// pointer tells an absent key (the default) from an explicit 0, which refuses
+// every removal.
+type inventoryYAML struct {
+	MaxRemovedPercent *int `yaml:"max_removed_percent"`
 }
 
 type Config struct {
@@ -260,6 +277,19 @@ type Config struct {
 	Broker *BrokerConfig
 	Lab    *LabConfig
 
+	// AdminSocket is where port49d answers `port49 keys diagnose` (plan 6a
+	// owner decision 2): a Unix socket, 0600, for port49d's user and root.
+	// Empty, the default, is off, and no packet is held.
+	AdminSocket string
+
+	// MaxRemovedPercent refuses an inventory reload that takes more than this
+	// share of the devices in force out of service — removed, or kept and
+	// newly refused admission (spec §10, bounded change): default 10, 100
+	// turns the bound off. An empty inventory is refused whatever it says.
+	// It is read at start and re-read at every SIGHUP (InventoryBound), so a
+	// deliberate large removal is: raise it, send SIGHUP, lower it again.
+	MaxRemovedPercent int
+
 	// SessionServices is the resolved authorization-`service` table: every
 	// built-in platform, with any operator override already applied. It is
 	// resolved here rather than at each authorization so the daemon never
@@ -272,7 +302,9 @@ type Config struct {
 	Notices []string
 
 	// Inventory and Admission are read and built once, here, so the daemon
-	// never re-reads the file and the two can never disagree.
+	// never re-reads the file and the two can never disagree. Admission is
+	// nil with a broker: port49d admits from the policy in force
+	// (policy.Policy.Admission).
 	Inventory admission.Inventory
 	Admission *admission.Trie
 
@@ -308,7 +340,7 @@ func MaxSessionAge(raw []byte) (time.Duration, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", err)
+		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
 	}
 	d := orD(f.Session.MaxSessionAgeDefault, DefaultMaxSessionAge)
 	if d <= 0 {
@@ -317,8 +349,68 @@ func MaxSessionAge(raw []byte) (time.Duration, error) {
 	return d, nil
 }
 
+// InventoryBound reads inventory.max_removed_percent from a port49d.yaml's
+// bytes, with Load's default and range: what port49d re-reads at SIGHUP. It
+// resolves no secret and decodes as strictly as Load, so a typo is an error,
+// never the default.
+func InventoryBound(raw []byte) (int, error) {
+	var f fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	}
+	return inventoryBound(f.InventoryOpts)
+}
+
+func inventoryBound(o inventoryYAML) (int, error) {
+	if o.MaxRemovedPercent == nil {
+		return 10, nil
+	}
+	if p := *o.MaxRemovedPercent; p < 0 || p > 100 {
+		return 0, fmt.Errorf("config: inventory.max_removed_percent must be between 0 and 100; got %d", p)
+	}
+	return *o.MaxRemovedPercent, nil
+}
+
+// MaxConfigSize bounds a read of port49d.yaml, a file of a few kilobytes.
+const MaxConfigSize = 1 << 20
+
+// maxInventorySize bounds Load's read of the inventory file with no broker:
+// a 10,000-device inventory is a few megabytes.
+const maxInventorySize = 64 << 20
+
+// ReadRegular reads path if it is a regular file of at most max bytes. It
+// opens non-blocking and checks the opened file, so a named pipe or a device
+// at the path is refused rather than blocking the read until something
+// writes to it, and a path pointed at something large is not read whole
+// (plan 6a Task 11a, Task 12 m3). It is not the policy file's owner and mode
+// fence.
+func ReadRegular(path string, max int64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > max {
+		return nil, fmt.Errorf("%s is larger than %d bytes", path, max)
+	}
+	return raw, nil
+}
+
 func Load(path string) (Config, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := ReadRegular(path, MaxConfigSize)
 	if err != nil {
 		return Config{}, err
 	}
@@ -337,7 +429,7 @@ func Load(path string) (Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, err)
+		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, decodeFault(err))
 	}
 
 	malformedWindow, err := window("malformed_window", f.Limits.MalformedWindow)
@@ -365,6 +457,7 @@ func Load(path string) (Config, error) {
 		ContextIdleTTL: orD(f.ContextIdleTTL, 12*time.Hour),
 		Accounting:     f.Accounting,
 		Lab:            f.Lab,
+		AdminSocket:    f.AdminSocket,
 		// staleness_ceiling has no default: 0 means the check is off, which is
 		// what SessionConfig.StalenessCeiling argues for.
 		Session: SessionConfig{
@@ -405,6 +498,9 @@ func Load(path string) (Config, error) {
 	}
 	if c.InventoryFile == "" {
 		return Config{}, fmt.Errorf("config: inventory_file is required")
+	}
+	if c.MaxRemovedPercent, err = inventoryBound(f.InventoryOpts); err != nil {
+		return Config{}, err
 	}
 	if err := checkPositive(c); err != nil {
 		return Config{}, err
@@ -454,24 +550,30 @@ func Load(path string) (Config, error) {
 		c.Broker = &b
 	}
 
+	if c.Keys, err = checkKeySets(c.Keys, raw); err != nil {
+		return Config{}, err
+	}
 	for ref, ks := range c.Keys {
-		seen := map[int]bool{}
 		for _, v := range allVersions(ks) {
-			if v.Version < 1 {
-				return Config{}, fmt.Errorf("config: key %s: every version number must be 1 or greater", ref)
-			}
-			if seen[v.Version] {
-				return Config{}, fmt.Errorf("config: key %s: version %d appears twice", ref, v.Version)
-			}
-			seen[v.Version] = true
-			if v.SecretEnv == "" {
-				return Config{}, fmt.Errorf("config: key %s version %d: secret_env is required", ref, v.Version)
-			}
 			s, ok := os.LookupEnv(v.SecretEnv)
 			if !ok || s == "" {
-				return Config{}, fmt.Errorf("config: key %s version %d: environment variable %s is not set", ref, v.Version, v.SecretEnv)
+				return Config{}, fmt.Errorf("config: key %s version %d: its secret_env names an environment variable "+
+					"that is not set", ref, v.Version)
 			}
 			c.secrets[v.SecretEnv] = s
+		}
+	}
+	now := time.Now()
+	for _, ref := range sortedKeySets(c.Keys) {
+		for _, v := range c.Keys[ref].Accept {
+			switch {
+			case v.RetireAt.IsZero():
+				c.Notices = append(c.Notices, fmt.Sprintf("key %s version %d has no retire_after; an indefinitely "+
+					"accepted version is what rotation exists to prevent (spec §10)", ref, v.Version))
+			case !now.Before(v.RetireAt):
+				c.Notices = append(c.Notices, fmt.Sprintf("key %s version %d: retire_after %s has passed, so it "+
+					"identifies devices and admits none; move it to retired, or remove it", ref, v.Version, v.RetireAfter))
+			}
 		}
 	}
 
@@ -504,6 +606,10 @@ func Load(path string) (Config, error) {
 			}
 			continue
 		}
+		if !envName.MatchString(k.ref.SecretEnv) {
+			return Config{}, fmt.Errorf("config: %s: secret_env is not an environment variable name (letters, "+
+				"digits and _): it names the variable holding the key, never the key", k.what)
+		}
 		if k.ref.ID == "" {
 			return Config{}, fmt.Errorf("config: %s: id is required: it is written into every record the key "+
 				"seals and is its authenticated data, so a record cannot be opened without it", k.what)
@@ -516,12 +622,12 @@ func Load(path string) (Config, error) {
 		// editing a systemd file at 3am.
 		s, ok := os.LookupEnv(k.ref.SecretEnv)
 		if !ok || s == "" {
-			return Config{}, fmt.Errorf("config: %s (id %q): environment variable %s is not set",
-				k.what, k.ref.ID, k.ref.SecretEnv)
+			return Config{}, fmt.Errorf("config: %s (id %q): its secret_env names an environment variable that "+
+				"is not set", k.what, k.ref.ID)
 		}
 		if len(s) != 32 {
-			return Config{}, fmt.Errorf("config: %s (id %q): %s must be exactly 32 bytes for AES-256, got %d",
-				k.what, k.ref.ID, k.ref.SecretEnv, len(s))
+			return Config{}, fmt.Errorf("config: %s (id %q): the variable its secret_env names must hold exactly "+
+				"32 bytes for AES-256, got %d", k.what, k.ref.ID, len(s))
 		}
 		c.secrets[k.ref.SecretEnv] = s
 	}
@@ -535,16 +641,44 @@ func Load(path string) (Config, error) {
 			"never tried", f.Encryption.Current.ID)
 	}
 
-	inv, err := admission.LoadFile(c.InventoryFile)
+	if c.Broker != nil {
+		// With a broker the inventory is live, and port49d reads it behind
+		// the policy file's fence (fencedInventory, plan 6a C2), so it is not
+		// read here at all: a plain read first would hang on a FIFO, or read
+		// a link to a huge file whole, before the fence could refuse it. Key
+		// groups are the policy's (spec §10), and port49d admits from the
+		// policy loaded against that inventory, which refuses a device a group
+		// cannot admit on its own, never the daemon (policy.Policy.Admission;
+		// plan 6a Decided 5).
+		return c, nil
+	}
+	rawInv, err := ReadRegular(c.InventoryFile, maxInventorySize)
 	if err != nil {
 		return Config{}, err
 	}
+	inv, err := admission.ParseFile(rawInv, c.InventoryFile)
+	if err != nil {
+		return Config{}, err
+	}
+	// Names and addresses are the inventory's own faults, and an inventory
+	// that has one cannot be used at all: refused at start (spec §10).
+	if err := admission.Validate(inv.Devices); err != nil {
+		return Config{}, err
+	}
+	c.Inventory = inv
+	// No broker: plan 1's mode, the lab's. The inventory's own key groups
+	// are read once, here, and a device none admits refuses the start.
 	for _, g := range inv.KeyGroups {
 		if _, ok := c.Keys[g.KeyRef]; !ok {
 			return Config{}, fmt.Errorf("config: key group references key_ref %q which is not in keys", g.KeyRef)
 		}
 	}
 	for _, d := range inv.Devices {
+		if d.KeyRef != "" && !admission.KeyRefShape.MatchString(d.KeyRef) {
+			// Not printed: a pin that is not a name may be a secret.
+			return Config{}, fmt.Errorf("config: device %q pins a key_ref that is not a valid key_ref name (%s)",
+				d.Name, admission.KeyRefShapeRule)
+		}
 		if d.KeyRef != "" {
 			if _, ok := c.Keys[d.KeyRef]; !ok {
 				return Config{}, fmt.Errorf("config: device %q pins key_ref %q which is not in keys", d.Name, d.KeyRef)
@@ -562,7 +696,9 @@ func Load(path string) (Config, error) {
 	for _, d := range inv.Devices {
 		resolved := false
 		for _, a := range d.Addresses {
-			if r, ok := trie.Lookup(a); ok && r.KeyRef != "" {
+			// Admitted is Refused == "", never an index hit or a key_ref
+			// alone (Task 3 review M3).
+			if r, ok := trie.Lookup(a); ok && r.Refused == "" && r.KeyRef != "" {
 				resolved = true
 				break
 			}
@@ -573,6 +709,17 @@ func Load(path string) (Config, error) {
 	}
 	c.Inventory, c.Admission = inv, trie
 	return c, nil
+}
+
+// KeyRefs names every key_ref keys defines, sorted and never nil: a device
+// the policy assigns any other is refused admission (spec §10). Names only.
+func (c Config) KeyRefs() []string {
+	out := make([]string, 0, len(c.Keys))
+	for ref := range c.Keys {
+		out = append(out, ref)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // EncryptionKeys is the two-key window: writes use Current, reads try Current
@@ -646,13 +793,137 @@ func (c Config) Keyring() map[string]keyring.Set {
 		set := keyring.Set{Ref: ref}
 		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: []byte(c.secrets[ks.Current.SecretEnv])})
 		for _, v := range ks.Accept {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretEnv])})
+			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretEnv]),
+				RetireAt: v.RetireAt})
 		}
 		for _, v := range ks.Retired {
 			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretEnv]), Retired: true})
 		}
 		out[ref] = set
 	}
+	return out
+}
+
+// checkKeySets validates keys without reading a secret: every version
+// numbered from 1 and once, a secret_env named, and retire_after a date on an
+// accept version only. It returns the sets with RetireAt filled.
+func checkKeySets(keys map[string]KeySet, raw []byte) (map[string]KeySet, error) {
+	if err := checkKeyRefs(keys, raw); err != nil {
+		return nil, err
+	}
+	out := make(map[string]KeySet, len(keys))
+	for ref, ks := range keys {
+		seen := map[int]bool{}
+		for _, v := range allVersions(ks) {
+			if v.Version < 1 {
+				return nil, fmt.Errorf("config: key %s: every version number must be 1 or greater", ref)
+			}
+			if seen[v.Version] {
+				return nil, fmt.Errorf("config: key %s: version %d appears twice", ref, v.Version)
+			}
+			seen[v.Version] = true
+			if v.SecretEnv == "" {
+				return nil, fmt.Errorf("config: key %s version %d: secret_env is required", ref, v.Version)
+			}
+			if !envName.MatchString(v.SecretEnv) {
+				return nil, fmt.Errorf("config: key %s version %d: secret_env is not an environment variable name "+
+					"(letters, digits and _): it names the variable holding the secret, never the secret", ref, v.Version)
+			}
+		}
+		if ks.Current.RetireAfter != "" {
+			return nil, fmt.Errorf("config: key %s: current version %d has retire_after; current is what devices "+
+				"are provisioned with, so retire it by making another version current (spec §10)", ref, ks.Current.Version)
+		}
+		for _, v := range ks.Retired {
+			if v.RetireAfter != "" {
+				return nil, fmt.Errorf("config: key %s: retired version %d has retire_after; a retired version is "+
+					"refused already", ref, v.Version)
+			}
+		}
+		accept := make([]KeyVersion, len(ks.Accept))
+		for i, v := range ks.Accept {
+			if v.RetireAfter != "" {
+				day, err := time.Parse("2006-01-02", v.RetireAfter)
+				if err != nil {
+					return nil, fmt.Errorf("config: key %s version %d: retire_after is not a date (YYYY-MM-DD)",
+						ref, v.Version)
+				}
+				v.RetireAt = day.AddDate(0, 0, 1) // admits through the named day, UTC
+			}
+			accept[i] = v
+		}
+		ks.Accept = accept
+		out[ref] = ks
+	}
+	return out, nil
+}
+
+// KeySets reads port49d.yaml's keys: block as Load does, without reading a
+// secret: the names, versions and dates `port49 keys status` and `port49
+// policy test --config` read, in CI or anywhere else no key is.
+func KeySets(raw []byte) (map[string]KeySet, error) {
+	var f fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	}
+	return checkKeySets(f.Keys, raw)
+}
+
+// checkKeyRefs refuses a key under keys: that is not a key_ref name
+// (admission.KeyRefShape), by its line in raw and never by the name: every
+// report prints a key_ref, and one that is not a name is most likely a secret.
+func checkKeyRefs(keys map[string]KeySet, raw []byte) error {
+	var bad []string
+	for ref := range keys {
+		if !admission.KeyRefShape.MatchString(ref) {
+			bad = append(bad, ref)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	line := 0
+	var doc yaml.Node
+	if yaml.Unmarshal(raw, &doc) == nil && len(doc.Content) == 1 {
+		top := doc.Content[0]
+		for i := 0; i+1 < len(top.Content); i += 2 {
+			if top.Content[i].Value != "keys" {
+				continue
+			}
+			for j, keys := 0, top.Content[i+1]; j+1 < len(keys.Content); j += 2 {
+				if !admission.KeyRefShape.MatchString(keys.Content[j].Value) && (line == 0 || keys.Content[j].Line < line) {
+					line = keys.Content[j].Line
+				}
+			}
+		}
+	}
+	where := "a key under keys:"
+	if line > 0 {
+		where = fmt.Sprintf("a key under keys: on line %d", line)
+	}
+	return fmt.Errorf("config: %s is not a valid key_ref name (%s): it names the key, never holds it",
+		where, admission.KeyRefShapeRule)
+}
+
+// decodeFault is a port49d.yaml decode error as it is shown: each fault's
+// line and a fixed category, and no text from the document (yamlfault).
+func decodeFault(err error) error { return yamlfault.Of(err) }
+
+// envName is what an environment variable's name looks like. A secret_env
+// that is not one is refused without being printed: it is most likely the
+// secret, pasted where its variable's name goes.
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// sortedKeySets names keys' refs, sorted, so the start notices read the same
+// every time.
+func sortedKeySets(keys map[string]KeySet) []string {
+	out := make([]string, 0, len(keys))
+	for ref := range keys {
+		out = append(out, ref)
+	}
+	sort.Strings(out)
 	return out
 }
 

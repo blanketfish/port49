@@ -3,9 +3,12 @@
 package metrics
 
 import (
+	"strconv"
 	"sync/atomic"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 type Metrics struct {
@@ -19,9 +22,15 @@ type Metrics struct {
 	// "refused_cap" (the per-source connection cap), "idle_closed" (the idle
 	// timeout, which also fires on a stall partway through a packet),
 	// "malformed_backoff" (a strike from an admitted source), "unadmitted_source"
-	// (a strike from an address not in the inventory), "panic" (a connection
-	// recovered from a panic), and "accept_error" (Accept failed and the
-	// listener is being retried).
+	// (a strike from an address not in the inventory), "key_miss_closed" (a
+	// first packet no accepted key validated, or one past its version's
+	// retire_after: struck and reset at once, L28), "held_refused" (a source
+	// inside the backoff its last strike earned, reset at Accept, L28),
+	// "admission_closed" (an open connection whose device a reload refused,
+	// removed, renamed, re-keyed or re-platformed: reset at its next packet,
+	// no strike),
+	// "panic" (a connection recovered from a panic), and "accept_error"
+	// (Accept failed and the listener is being retried).
 	ConnectionEvents *prometheus.CounterVec
 	AuthFailures     prometheus.Counter // port49_authentication_failures_total
 	SpoolDepth       prometheus.Gauge   // port49_accounting_spool_depth
@@ -75,6 +84,12 @@ type Metrics struct {
 	// leave; the gauge is what an alert watches, and it names no device.
 	DevicesQuarantined prometheus.GaugeFunc
 	quarantined        atomic.Pointer[func() int]
+	// port49_devices_admission_refused: how many inventory devices the bundle
+	// in force refuses admission — no key group admits them, two tie on
+	// them, or their key_ref is one port49d holds no key for (spec §10). Each
+	// is named at start and at every reload; the gauge names none.
+	DevicesAdmissionRefused prometheus.GaugeFunc
+	admissionRefused        atomic.Pointer[func() int]
 	// port49_context_refreshes_total{outcome}: live login contexts a policy
 	// refresh visited, by what it did to each (spec §5.1.3) — "updated" (the
 	// policy in force written into it), "unchanged", "revoked" (no grant left
@@ -111,10 +126,89 @@ type Metrics struct {
 	// beside port49_policy_file_refused: an edit that loaded, and has not yet
 	// reached every live session.
 	PolicyRefreshPending prometheus.Gauge
+	// port49_inventory_reloads_total{outcome}: attempts to put a changed
+	// inventory_file in force (plan 6a) — "applied", "unchanged" (the same
+	// devices, respelled), or "refused" (it could not be read behind the
+	// fence, did not parse, repeated a name or an address, was empty,
+	// admitted no device, or took more than max_removed_percent out of
+	// service; the bundle in force keeps serving). The watch counts a refused
+	// file once per distinct content.
+	InventoryReloads *prometheus.CounterVec
+	// port49_inventory_file_refused: 1 while inventory_file on disk is one
+	// port49d refused, or one that has changed at every read for six reads
+	// running; 0 once a file loads or the file in force is put back.
+	InventoryFileRefused prometheus.Gauge
+	// port49_inventory_snapshot_age_seconds: how long since inventory_file was
+	// last read and found in force, or loaded (spec §10). Staleness is an
+	// alarm, never a fail-closed: the snapshot never expires.
+	InventorySnapshotAge prometheus.GaugeFunc
+	// port49_inventory_changes_total{kind}: security-relevant changes a bundle
+	// swap made (spec §10) — "address_added" (an address on a device already
+	// in inventory, which a mint hands to an SSH client), "scope_joined" and
+	// "scope_left" (a scope with security_log: true), "key_ref_changed" (a
+	// device moved onto another key), "admission_changed" (a device already
+	// in inventory newly admitted) and "device_added" (a device added and
+	// admitted). Each is an inventory_change record naming the device; the
+	// label is the kind only.
+	InventoryChanges *prometheus.CounterVec
+	inventoryAge     atomic.Pointer[func() float64]
+	keys             atomic.Pointer[keyWatch]
 }
+
+// KeySample is one key version at a scrape: how many devices' latest
+// validated connection used it, and when it retires (zero: never).
+type KeySample struct {
+	KeyRef   string
+	Version  int
+	Devices  int
+	RetireAt time.Time
+}
+
+type keyWatch struct {
+	sample func() []KeySample
+	now    func() time.Time
+}
+
+// keyCollector reports port49_key_version_devices{key_ref,version} and
+// port49_key_retirement_seconds{key_ref,version} at each scrape (spec §10:
+// "alarm severity escalates as retire_after approaches while devices still
+// present the version"). Labels are the key_ref and the version only; the
+// devices are named by `port49 keys status`.
+type keyCollector struct {
+	m                *Metrics
+	devices, retires *prometheus.Desc
+}
+
+func (k keyCollector) Describe(ch chan<- *prometheus.Desc) { ch <- k.devices; ch <- k.retires }
+
+func (k keyCollector) Collect(ch chan<- prometheus.Metric) {
+	w := k.m.keys.Load()
+	if w == nil {
+		return
+	}
+	now := w.now()
+	for _, s := range w.sample() {
+		v := strconv.Itoa(s.Version)
+		ch <- prometheus.MustNewConstMetric(k.devices, prometheus.GaugeValue, float64(s.Devices), s.KeyRef, v)
+		if !s.RetireAt.IsZero() {
+			ch <- prometheus.MustNewConstMetric(k.retires, prometheus.GaugeValue, s.RetireAt.Sub(now).Seconds(), s.KeyRef, v)
+		}
+	}
+}
+
+// WatchKeys sets what the key series report at each scrape.
+func (m *Metrics) WatchKeys(sample func() []KeySample, now func() time.Time) {
+	m.keys.Store(&keyWatch{sample: sample, now: now})
+}
+
+// WatchInventoryAge sets what port49_inventory_snapshot_age_seconds reports.
+func (m *Metrics) WatchInventoryAge(age func() float64) { m.inventoryAge.Store(&age) }
 
 // CountQuarantined sets what port49_devices_quarantined reports at each scrape.
 func (m *Metrics) CountQuarantined(count func() int) { m.quarantined.Store(&count) }
+
+// CountAdmissionRefused sets what port49_devices_admission_refused reports.
+func (m *Metrics) CountAdmissionRefused(count func() int) { m.admissionRefused.Store(&count) }
 
 func New(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
@@ -169,7 +263,20 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 while the policy file on disk is one port49d refused, or has not stopped changing, and an older policy is serving."}),
 		PolicyRefreshPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_refresh_pending",
 			Help: "1 from a policy swap or grant expiry until its settle pass has carried it into every live login context."}),
+		InventoryReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_reloads_total",
+			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
+		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",
+			Help: "1 while the inventory file on disk is one port49d refused, or has not stopped changing."}),
+		InventoryChanges: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_changes_total",
+			Help: "Security-relevant changes a bundle swap made, by kind."}, []string{"kind"}),
 	}
+	m.InventorySnapshotAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_inventory_snapshot_age_seconds",
+		Help: "Seconds since the inventory file was last read and found in force, or loaded."}, func() float64 {
+		if age := m.inventoryAge.Load(); age != nil {
+			return (*age)()
+		}
+		return 0
+	})
 	m.DevicesQuarantined = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_quarantined",
 		Help: "Inventory devices the loaded policy quarantines now."}, func() float64 {
 		if count := m.quarantined.Load(); count != nil {
@@ -177,10 +284,27 @@ func New(reg prometheus.Registerer) *Metrics {
 		}
 		return 0
 	})
+	m.DevicesAdmissionRefused = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_admission_refused",
+		Help: "Inventory devices the bundle in force refuses admission."}, func() float64 {
+		if count := m.admissionRefused.Load(); count != nil {
+			return float64((*count)())
+		}
+		return 0
+	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
-		m.DevicesQuarantined, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
-		m.PolicyRefreshPending)
+		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
+		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
+		m.InventoryChanges)
+	// process_start_time_seconds among them: an alert on
+	// port49_key_version_devices gates on uptime, because the count starts
+	// at 0 with every restart (spec §10). No labels.
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	reg.MustRegister(keyCollector{m: m,
+		devices: prometheus.NewDesc("port49_key_version_devices",
+			"Devices whose latest validated connection since start used this key version.", []string{"key_ref", "version"}, nil),
+		retires: prometheus.NewDesc("port49_key_retirement_seconds",
+			"Seconds until a key version's retire_after passes; negative once it has.", []string{"key_ref", "version"}, nil)})
 	return m
 }

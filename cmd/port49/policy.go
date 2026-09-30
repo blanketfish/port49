@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -13,8 +14,10 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/replay"
@@ -25,15 +28,6 @@ import (
 // CI runs them; they never ask a broker.
 type policyFiles struct{ policy, inventory string }
 
-// offlineEnv is the environment the offline tools load a policy in: the
-// inventory, and nothing else. Every adapter fact a joint check reads — the
-// enable username that `enable: auto` needs included — is in the policy
-// file's platform set and `platforms:` blocks, which port49d loads the same
-// way, so CI answers what port49d answers (plan 4 pre-flight N5).
-func offlineEnv(devices []admission.Device) policy.Env {
-	return policy.Env{Devices: devices}
-}
-
 func (f *policyFiles) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.policy, "policy", "", "the policy file")
 	fs.StringVar(&f.inventory, "inventory", "", "the inventory file the daemon admits from (inventory_file)")
@@ -42,12 +36,27 @@ func (f *policyFiles) register(fs *flag.FlagSet) {
 // missing reports a usage error: a policy tool needs both files.
 func (f *policyFiles) missing() bool { return f.policy == "" || f.inventory == "" }
 
+// load builds the bundle from the two files as port49d does (bundle.Load),
+// so a bundle a tool names is the one port49d's records carry.
 func (f *policyFiles) load() (*policy.Policy, error) {
-	inv, err := admission.LoadFile(f.inventory)
-	if err != nil {
-		return nil, err
+	return f.loadWith(nil)
+}
+
+// loadWith is load with the key_refs port49d.yaml defines
+// (policy.Env.KeyRefs), so a device assigned any other is refused as port49d
+// refuses it.
+func (f *policyFiles) loadWith(keyRefs []string) (*policy.Policy, error) {
+	return bundle.Load(f.policy, f.inventory, policy.Env{KeyRefs: keyRefs})
+}
+
+// diffFault says which side of a diff failed to load, and which of its two
+// files is at fault: an inventory fault names the inventory, not the policy.
+func diffFault(side string, err error) string {
+	var inv *bundle.InventoryError
+	if errors.As(err, &inv) {
+		return fmt.Sprintf("%s inventory %s: %v", side, inv.Path, inv.Err)
 	}
-	return policy.Load(f.policy, offlineEnv(inv.Devices))
+	return fmt.Sprintf("%s: %v", side, err)
 }
 
 // explainCmd resolves a hypothetical decision and prints exactly one reason
@@ -113,14 +122,18 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
 // inventory — every load-time check is a failure here — prints what CI must
 // report, the shadowed-deny report, then runs the file's tests. It exits 1 if
 // the policy does not load, any test fails, a deny is shadowed and no test
-// exercises it, a device is quarantined now or at a later expiry, or a
+// exercises it, a device is quarantined now or at a later expiry, a
 // composition gets a projection's fail-closed reply (spec §8, "CI MUST refuse
-// the policy"; §13 decision 26).
+// the policy"; §13 decision 26), admission refuses a device (spec §10), or,
+// given --config (port49d.yaml, no secret read), a key group names a key_ref
+// it does not define.
 func policyTest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 policy test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var files policyFiles
 	files.register(fs)
+	cfgPath := fs.String("config", "", "port49d.yaml, for the key checks CI owes (spec §10): only its keys: block is read and "+
+		"checked, so this is not a port49d.yaml validator; no secret is read")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -133,7 +146,17 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	out, errOut, flush := redactOutput(stdout, stderr)
 	defer flush()
 	stderr = errOut
-	p, err := files.load()
+	var sets map[string]config.KeySet
+	var refs []string
+	if *cfgPath != "" {
+		var err error
+		if sets, err = readKeySets(*cfgPath); err != nil {
+			fmt.Fprintln(stderr, "port49 policy test:", err)
+			return 1
+		}
+		refs = keyRefsOf(sets)
+	}
+	p, err := files.loadWith(refs)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy test:", err)
 		return 1
@@ -155,6 +178,38 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		for _, e := range q.Entries {
 			fmt.Fprintf(stdout, "quarantine: %s (%s): %s\n", q.Device, q.Platform, quarantineLine(e, now))
 		}
+	}
+	// Admission (spec §10). Every refused device fails the gate — a tie
+	// (plan 6a owner decision 1), a device no group admits, and a key_ref
+	// port49d.yaml defines no key for — since port49d serves none of them and
+	// a policy edit that refuses the fleet must not pass CI (N1). A device in
+	// an unexpected range is removed from the inventory, or given a group, in
+	// review. port49d always assesses admission, so a bundle with no key
+	// groups in either file admits only devices pinned on their records, and
+	// its start and reloads refuse one that admits none (I1): CI judges it as
+	// port49d does, --config or not. An inventory with no devices has
+	// nothing to judge, as port49d's own check has not.
+	admissionFails := 0
+	refusals := p.AdmissionRefusals()
+	if len(p.KeyGroups()) == 0 && len(p.Devices()) > 0 {
+		line := "admission: neither the policy nor the inventory declares key_groups, so only a device pinned to a " +
+			"key_ref on its inventory record is admitted"
+		if len(refusals) == len(p.Devices()) {
+			line += fmt.Sprintf("; port49d admits none of the %d device(s), and its start and every reload refuse "+
+				"this bundle", len(p.Devices()))
+		}
+		fmt.Fprintln(stdout, line+"; add a key_groups block to the policy file (spec §10)")
+	}
+	for _, r := range refusals {
+		admissionFails++
+		fmt.Fprintf(stdout, "admission: %s (%s) refused: %s\n", r.Device.Name, r.Device.Platform, r.Refused)
+	}
+	keyFaults := 0
+	for _, line := range keyReports(sets, p, now) {
+		if strings.HasPrefix(line, "keys: ") {
+			keyFaults++
+		}
+		fmt.Fprintln(stdout, line)
 	}
 	findings := p.Lint(now)
 	for _, f := range findings {
@@ -264,10 +319,45 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "%d tests, %d failed; %d shadowed denies, %d unacknowledged; %d quarantined, %d "+
 		"projection refusals\n", len(results), failed, len(shadows), unacknowledged, quarantined, refused)
-	if failed > 0 || unacknowledged > 0 || quarantined > 0 || refused > 0 {
+	if admissionFails+keyFaults > 0 {
+		fmt.Fprintf(stdout, "%d admission refusal(s), %d key fault(s)\n", admissionFails, keyFaults)
+	}
+	if failed > 0 || unacknowledged > 0 || quarantined > 0 || refused > 0 || admissionFails > 0 || keyFaults > 0 {
 		return 1
 	}
 	return 0
+}
+
+// keyReports are the key checks CI owes (spec §10, "Retirement is enforced"):
+// a key group naming a key_ref port49d.yaml does not define fails, and an
+// accept version past its retire_after, or with none, is reported. With no
+// port49d.yaml there is nothing to check.
+func keyReports(sets map[string]config.KeySet, p *policy.Policy, now time.Time) []string {
+	if sets == nil {
+		return nil
+	}
+	var out []string
+	for _, g := range p.KeyGroups() {
+		if _, ok := sets[g.KeyRef]; !ok {
+			out = append(out, fmt.Sprintf("keys: key group %s names key_ref %s, which port49d.yaml does not define; "+
+				"every device it matches fails closed", g, g.KeyRef))
+		}
+	}
+	for _, ref := range keyRefsOf(sets) {
+		for _, v := range sets[ref].Accept {
+			switch {
+			case v.RetireAt.IsZero():
+				out = append(out, fmt.Sprintf("report: key %s version %d has no retire_after; an indefinitely accepted "+
+					"version is what rotation exists to prevent", ref, v.Version))
+			case !now.Before(v.RetireAt):
+				out = append(out, fmt.Sprintf("report: key %s version %d: retire_after %s has passed; it admits no "+
+					"device", ref, v.Version, v.RetireAfter))
+			default:
+				out = append(out, fmt.Sprintf("report: key %s version %d: retire_after %s", ref, v.Version, v.RetireAfter))
+			}
+		}
+	}
+	return out
 }
 
 // policyDiff is the effective-permission diff and the privilege-expansion
@@ -301,19 +391,14 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	out, errOut, flush := redactOutput(stdout, stderr)
 	defer flush()
 	stderr = errOut
-	inv, err := admission.LoadFile(*inventory)
+	before, err := bundle.Load(*oldPath, *inventory, policy.Env{})
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 policy diff:", err)
+		fmt.Fprintln(stderr, "port49 policy diff:", diffFault("--old", err))
 		return 1
 	}
-	before, err := policy.Load(*oldPath, offlineEnv(inv.Devices))
+	after, err := bundle.Load(*newPath, *inventory, policy.Env{})
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 policy diff: --old:", err)
-		return 1
-	}
-	after, err := policy.Load(*newPath, offlineEnv(inv.Devices))
-	if err != nil {
-		fmt.Fprintln(stderr, "port49 policy diff: --new:", err)
+		fmt.Fprintln(stderr, "port49 policy diff:", diffFault("--new", err))
 		return 1
 	}
 	out.learn(before, after)
@@ -321,6 +406,24 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	stdout = out
 	now := time.Now()
 	d := policy.Compare(before, after, now)
+	// A key_groups edit that refuses devices the old policy admitted is the
+	// edit port49d's reload bound catches (bundle.CheckAdmission): CI fails
+	// it first, naming each.
+	newlyRefused := bundle.NewlyRefused(before, after)
+	if len(newlyRefused) > 0 && len(before.KeyGroups()) > 0 && len(after.KeyGroups()) == 0 {
+		fmt.Fprintln(stdout, "REFUSED: admission: the key_groups block was removed, and the inventory declares "+
+			"none, so port49d admits only devices pinned to a key_ref on their records; restore the block "+
+			"(spec §10)")
+	}
+	const shownRefused = 20 // a fleet's worth of lines buries the cause
+	for i, r := range newlyRefused {
+		if i == shownRefused {
+			fmt.Fprintf(stdout, "REFUSED: admission: and %d more devices newly refused\n", len(newlyRefused)-i)
+			break
+		}
+		fmt.Fprintf(stdout, "REFUSED: admission: %s (%s) is newly refused: %s\n", r.Device.Name, r.Device.Platform,
+			r.Refused)
+	}
 	// A change that first holds at a later grant expiry says when.
 	from := func(at time.Time) string {
 		if at.After(now) {
@@ -518,13 +621,14 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
 		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d unacknowledged "+
 		"principal or username changes; %d devices newly quarantined, %d released; %d mints newly refused; "+
-		"%d unresolved; %d unacknowledged adapter edits; %d projection refusals\n", len(d.Changes), widen, narrow,
+		"%d unresolved; %d unacknowledged adapter edits; %d projection refusals; %d devices newly refused "+
+		"admission\n", len(d.Changes), widen, narrow,
 		d.Unacknowledged(), d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(),
 		len(d.Quarantined), len(d.Released), len(d.Refused), len(d.Unresolved), d.UnacknowledgedAdapters(),
-		len(d.ProjectionRefusals))
+		len(d.ProjectionRefusals), len(newlyRefused))
 	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
 		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 ||
-		d.UnacknowledgedAdapters() > 0 || len(d.ProjectionRefusals) > 0 {
+		d.UnacknowledgedAdapters() > 0 || len(d.ProjectionRefusals) > 0 || len(newlyRefused) > 0 {
 		return 1
 	}
 	return 0
@@ -587,12 +691,35 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 policy replay", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	only := fs.Int("line", 0, "replay only the record on this line of the log")
+	var files policyFiles
+	files.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprint(stderr, usage)
 		return 2
+	}
+	var src replay.Source
+	if files.policy != "" || files.inventory != "" {
+		if files.missing() {
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+		// The files carry what a redacted blob event hid: every line is
+		// redacted as explain's and policy test's are, beside replay never
+		// printing the blob it rebuilds (spec §5.8).
+		out, errOut, flush := redactOutput(stdout, stderr)
+		defer flush()
+		stdout, stderr = out, errOut
+		p, err := files.load()
+		if err != nil {
+			fmt.Fprintln(stderr, "port49 policy replay:", err)
+			return 1
+		}
+		out.learn(p)
+		errOut.learn(p)
+		src = blobSource(p)
 	}
 	in := io.Reader(os.Stdin)
 	if name := fs.Arg(0); name != "-" {
@@ -604,7 +731,7 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
 		defer f.Close()
 		in = f
 	}
-	results, err := replay.Replay(in, *only)
+	results, err := replay.ReplayWith(in, *only, src)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy replay:", err)
 		return 1
@@ -640,6 +767,31 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// blobSource recompiles a record's blob from the policy and inventory files,
+// for the record's principal on its device at the time the blob was compiled
+// (spec §5.8). It gives nothing where the files name another bundle: the blob
+// is then not the one the record was decided by.
+func blobSource(p *policy.Policy) replay.Source {
+	return func(rec decision.Record, at time.Time) ([]byte, bool) {
+		if rec.Policy == nil || rec.Policy.Bundle != p.Bundle || rec.Device == nil {
+			return nil, false
+		}
+		d, ok := p.Device(rec.Device.Name)
+		if !ok {
+			return nil, false
+		}
+		res, err := p.Resolve(rec.Principal, d, at)
+		if err != nil {
+			return nil, false
+		}
+		body, _, err := engine.Encode(res.Blob)
+		if err != nil {
+			return nil, false
+		}
+		return body, true
+	}
 }
 
 // accessReview renders the flat grant table for one subject (spec §12): every
@@ -732,12 +884,12 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 grants remove:", err)
 		return 1
 	}
-	inv, err := admission.LoadFile(files.inventory)
+	inv, err := bundle.LoadInventory(files.inventory)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 grants remove:", err)
 		return 1
 	}
-	after, err := policy.Parse(out, offlineEnv(inv.Devices))
+	after, err := bundle.Parse(out, inv, policy.Env{})
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 grants remove: the policy without %s does not load, so nothing was written: %v\n",
 			*subject, err)

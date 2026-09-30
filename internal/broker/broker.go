@@ -26,7 +26,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
@@ -54,11 +53,7 @@ type Broker struct {
 	// Policy is the policy in force. port49d swaps it when the file changes
 	// (plan 4b), and a request resolves against the one version it held from
 	// its first mint to its last, never half of each.
-	Policy *policy.Live
-	// Devices is the inventory by name: the admission snapshot the daemon
-	// admits from (plan 3, Decided 15). A target is named, never addressed,
-	// and a name inventory does not know is refused (design §17).
-	Devices       map[string]admission.Device
+	Policy        *policy.Live
 	Minter        *token.Minter
 	Store         store.Store
 	Log           decision.Emitter
@@ -253,7 +248,7 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 			Device: &decision.Device{Name: name, Platform: platform}})
 		return api.MintItem{Device: name, Verdict: decision.VerdictDeny, Reason: string(reason)}
 	}
-	dev, ok := b.Devices[name]
+	dev, ok := pol.Device(name)
 	if !ok {
 		// The same answer as a device with no grant: the API must not tell a
 		// caller which devices exist (design §17). The record names the
@@ -281,6 +276,12 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		// compiled for it, and the daemon closes its connections without a
 		// reply, so no token is minted to present there (spec §10).
 		return deny(decision.DeviceQuarantined, dev.Platform), nil
+	case errors.Is(err, policy.ErrDeviceRefused):
+		// Admission refuses this device (spec §10): its packets are closed
+		// after the header, so a token for it would only be a login that
+		// falls to its local method. Asked after the grants, as a
+		// quarantine is, so no caller learns which devices exist.
+		return deny(decision.DeviceUnknown, dev.Platform), nil
 	case err != nil:
 		// The policy's load-time checks compile every subject on every device
 		// in inventory and quarantine the ones that fail, so this is a broker

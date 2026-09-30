@@ -1,0 +1,35 @@
+{
+  "step": "api_root",
+  "method": "GET",
+  "path": "/api/",
+  "status": 200,
+  "headers": {
+    "Allow": "GET, HEAD, OPTIONS",
+    "Api-Version": "4.7",
+    "Content-Language": "en",
+    "Content-Length": "561",
+    "Content-Type": "application/json",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Date": "Wed, 30 Sep 2026 06:38:01 GMT",
+    "Referrer-Policy": "same-origin",
+    "Server": "granian",
+    "Vary": "HX-Request, Accept-Language, Cookie, origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Request-Id": "909f8d6c-09f6-4238-bfa1-6d459fac9ce3"
+  },
+  "body": {
+    "circuits": "http://127.0.0.1:18080/api/circuits/",
+    "core": "http://127.0.0.1:18080/api/core/",
+    "dcim": "http://127.0.0.1:18080/api/dcim/",
+    "extras": "http://127.0.0.1:18080/api/extras/",
+    "ipam": "http://127.0.0.1:18080/api/ipam/",
+    "plugins": "http://127.0.0.1:18080/api/plugins/",
+    "status": "http://127.0.0.1:18080/api/status/",
+    "tenancy": "http://127.0.0.1:18080/api/tenancy/",
+    "users": "http://127.0.0.1:18080/api/users/",
+    "virtualization": "http://127.0.0.1:18080/api/virtualization/",
+    "vpn": "http://127.0.0.1:18080/api/vpn/",
+    "wireless": "http://127.0.0.1:18080/api/wireless/"
+  }
+}

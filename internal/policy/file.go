@@ -22,6 +22,7 @@ type file struct {
 	Grants          []fileGrant             `yaml:"grants"`
 	Tests           []fileTest              `yaml:"tests"`
 	Acknowledge     []fileAck               `yaml:"acknowledge"`
+	KeyGroups       []fileKeyGroup          `yaml:"key_groups"`
 }
 
 // filePlatform is one block under `platforms:` (spec §8, "User-editable, day
@@ -44,6 +45,17 @@ type fileAck struct {
 	Field    string `yaml:"field"`
 	Sha256   string `yaml:"sha256"`
 	Reason   string `yaml:"reason"`
+}
+
+// fileKeyGroup is one key_groups entry (spec §10): which CIDR or attribute
+// pattern maps to which key_ref. Key assignment is reviewed policy, so it
+// lives here and not in the inventory (plan 6a).
+type fileKeyGroup struct {
+	Match struct {
+		CIDR       string            `yaml:"cidr"`
+		Attributes map[string]string `yaml:"attributes"`
+	} `yaml:"match"`
+	KeyRef string `yaml:"key_ref"`
 }
 
 type fileLevel struct {

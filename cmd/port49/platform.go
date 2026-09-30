@@ -15,7 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
@@ -229,7 +229,12 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 	stdout.Write(body)
 	if !export {
 		fmt.Fprintln(stdout, "# built-in redaction, applied before any record is written and not part of a set (spec §5.8):")
-		for _, r := range platform.Redactions(platformName) {
+		// A variant's built-in redaction is its base's (spec §8).
+		builtIn := platformName
+		if p != nil {
+			builtIn = p.WirePlatform(platformName)
+		}
+		for _, r := range platform.Redactions(builtIn) {
 			fmt.Fprintf(stdout, "#   %s\n", redactionLine(r))
 		}
 		fmt.Fprintln(stdout, "# and a URL's password (scheme://user:password@host) and a credential in its query string "+
@@ -266,7 +271,7 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 	out, errOut, flush := redactOutput(stdout, stderr)
 	defer flush()
 	stdout, stderr = out, errOut
-	inv, err := admission.LoadFile(files.inventory)
+	inv, err := bundle.LoadInventory(files.inventory)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 platform upgrade:", err)
 		return 1
@@ -276,7 +281,7 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 platform upgrade:", err)
 		return 1
 	}
-	before, err := policy.Parse(raw, offlineEnv(inv.Devices))
+	before, err := bundle.Parse(raw, inv, policy.Env{})
 	if err != nil {
 		// Nothing to compare against: a pin this binary no longer ships is
 		// moved by the binary that still ships it (spec §8).
@@ -290,7 +295,7 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 platform upgrade:", err)
 		return 1
 	}
-	after, err := policy.Parse(moved, offlineEnv(inv.Devices))
+	after, err := bundle.Parse(moved, inv, policy.Env{})
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 platform upgrade: the policy does not load on platform set %s, so nothing was "+
 			"written: %v\n", *to, err)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
@@ -26,8 +27,8 @@ const alice = "user:alice@example.com"
 // replaced, read at the instant of the swap.
 func (f *fixture) reload(t *testing.T, body string) []Prior {
 	t.Helper()
-	pol, err := policy.Parse([]byte(body), policy.Env{Devices: []admission.Device{f.b.Devices["leaf1"],
-		f.b.Devices["nx1"], f.b.Devices["bare"]}, Now: f.b.Now()})
+	pol, err := policy.Parse([]byte(body), policy.Env{Devices: []admission.Device{f.devices["leaf1"],
+		f.devices["nx1"], f.devices["bare"]}, Now: f.b.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +511,7 @@ func TestASupersededPolicyIsJudgedAtEveryExpiryItSpanned(t *testing.T) {
 		t.Fatalf("mint after the lapse: %+v", it)
 	}
 	pol, err := policy.Parse([]byte(edit(t, roleList, readOnly)+extra+"}\n"), policy.Env{Devices: []admission.Device{
-		f.b.Devices["leaf1"], f.b.Devices["nx1"], f.b.Devices["bare"]}, Now: f.b.Now()})
+		f.devices["leaf1"], f.devices["nx1"], f.devices["bare"]}, Now: f.b.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -928,7 +929,7 @@ func TestARefreshNamesTheContextsASessionOnlyPlatformKeeps(t *testing.T) {
 	sessionOnly.Supports = []string{"session"}
 	pol, err := policy.Parse([]byte(edit(t, "  - {subject: netops, scope: all_devices, "+aliceGrant+"}\n",
 		"  - {subject: idle, scope: all_devices, roles: [network_admin]}\n")), policy.Env{
-		Devices:  []admission.Device{f.b.Devices["leaf1"], f.b.Devices["nx1"], f.b.Devices["bare"]},
+		Devices:  []admission.Device{f.devices["leaf1"], f.devices["nx1"], f.devices["bare"]},
 		Dialects: map[string]platform.Dialect{"arista_eos": sessionOnly}, Now: f.b.Now()})
 	if err != nil {
 		t.Fatal(err)
@@ -950,6 +951,48 @@ func TestARefreshNamesTheContextsASessionOnlyPlatformKeeps(t *testing.T) {
 	if !strings.Contains(out.String(), before.CtxID) || !strings.Contains(out.String(), "until logout") ||
 		strings.Contains(out.String(), "ctx-nx1-alice") {
 		t.Fatalf("the process log names the unreached context, and only it: %q", out.String())
+	}
+}
+
+// A context on a device the inventory in force no longer names is judged
+// reached or not by the platform the policy before it knew (Task 11 M3): on a
+// platform that authorizes commands it is not counted as a session left
+// until logout, and on one that does not it is, named with its platform.
+func TestARemovedDeviceIsJudgedByItsPlatformBefore(t *testing.T) {
+	for _, supports := range [][]string{nil, {"session"}} {
+		f := newFixture(t, 8)
+		f.login(t, alice, "leaf1", "alice")
+		dialects := map[string]platform.Dialect{}
+		if supports != nil {
+			d, _ := platform.DialectFor("arista_eos")
+			d.Supports = supports
+			dialects["arista_eos"] = d
+		}
+		parse := func(devices ...admission.Device) *policy.Policy {
+			pol, err := policy.Parse([]byte(testPolicy), policy.Env{Devices: devices, Dialects: dialects, Now: f.b.Now()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return pol
+		}
+		f.b.Policy.Swap(parse(f.devices["leaf1"], f.devices["nx1"]))
+		before := f.b.Policy.Swap(parse(f.devices["nx1"]))
+		var out bytes.Buffer
+		log.SetOutput(&out)
+		t.Cleanup(func() { log.SetOutput(os.Stderr) })
+		rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: before, At: f.b.Now()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+			t.Fatalf("the context on the removed device is live: %+v", c)
+		}
+		switch {
+		case supports == nil && rep.Unreached != 0:
+			t.Fatalf("an EOS context counted unreached: %+v, %q", rep, out.String())
+		case supports != nil && (rep.Unreached != 1 || !strings.Contains(out.String(), "arista_eos does not authorize")):
+			t.Fatalf("a session-only context: %+v, %q", rep, out.String())
+		}
 	}
 }
 
@@ -985,5 +1028,252 @@ func TestARetryAfterASupersedeIsNotAnsweredWithTheDeletedToken(t *testing.T) {
 	}
 	if replay := decodeMint(t, f.post(bg, f.state(f.alice), body, "retry-1")).Results[0]; replay.Login != again.Login {
 		t.Fatalf("a retry after the fresh mint replays it: %+v", replay)
+	}
+}
+
+// An inventory change that leaves a context's answer as it was writes nothing
+// and records nothing: its blob differs from the new one only in the bundle
+// it names (spec §5.1.3; plan 6a Decided 3). Every inventory change would
+// otherwise rewrite and record every live context.
+func TestAnInventoryOnlySwapLeavesAnUnchangedContextAlone(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	before := f.context(t, "leaf1", "alice")
+	old := f.b.Policy.Load()
+	extra := admission.Device{Name: "leaf9", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.19")}}
+	pol, err := policy.Parse([]byte(testPolicy), policy.Env{Devices: append(old.Devices(), extra), Now: f.b.Now(),
+		Bundle: "sha256:" + strings.Repeat("b", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.log.Reset()
+	rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}})
+	if err != nil || rep.Updated != 0 || rep.Unchanged != 1 {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+	if after := f.context(t, "leaf1", "alice"); after.BlobHash != before.BlobHash {
+		t.Fatalf("the context was rewritten: %s → %s", before.BlobHash, after.BlobHash)
+	}
+	if strings.Contains(f.log.String(), `"event":"refresh"`) {
+		t.Fatalf("an unchanged context was recorded: %s", f.log.String())
+	}
+}
+
+// A policy edit keeps plan 4b's rule: every live context takes the new
+// bundle's blob, and each is recorded.
+func TestAPolicyEditStillRewritesEveryContext(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	rep, err := f.b.Refresh(context.Background(), f.reload(t, testPolicy+"\n# an edit\n"))
+	if err != nil || rep.Updated != 1 {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+}
+
+// I2: a device admission refuses is not live. The mint denies it
+// device_unknown, after the grants check, and a refresh revokes its context
+// and supersedes its tokens, as for a device the inventory no longer names.
+func TestARefusedDeviceIsNotMintedForAndItsContextIsRevoked(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "") // an unspent token
+	old := f.b.Policy.Load()
+	// leaf1 keeps its record, and a key group now admits only nx1's range.
+	pol, err := policy.Parse([]byte(testPolicy+"key_groups: [{match: {cidr: 172.100.100.31/32}, key_ref: k}]\n"),
+		policy.Env{Devices: old.Devices(), Now: f.b.Now(), KeyRefs: []string{"k"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	priors := []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}}
+	it := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")).Results[0]
+	if it.Verdict != "deny" || it.Reason != "device_unknown" {
+		t.Fatalf("a refused device was minted for: %+v", it)
+	}
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.Revoked != 1 {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+	if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+		t.Fatal("the context on the refused device is live")
+	}
+	var reasons []any
+	for _, r := range f.records(t) {
+		if r["event"] == "refresh" {
+			reasons = append(reasons, r["reason"])
+		}
+	}
+	if len(reasons) != 1 || reasons[0] != "device_unknown" {
+		t.Fatalf("the refresh recorded %v, not one device_unknown", reasons)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
+		t.Fatalf("%d token(s) for the refused device survive", len(toks))
+	}
+}
+
+// A device the inventory in force no longer names has its contexts revoked
+// and its unspent tokens superseded (plan 4b's hand-off to plan 6).
+func TestADeviceRemovedFromInventoryIsRevokedAndItsTokensGo(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")
+	old := f.b.Policy.Load()
+	var rest []admission.Device
+	for _, d := range old.Devices() {
+		if d.Name != "leaf1" {
+			rest = append(rest, d)
+		}
+	}
+	pol, err := policy.Parse([]byte(testPolicy), policy.Env{Devices: rest, Now: f.b.Now(), Bundle: "sha256:" + strings.Repeat("c", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}})
+	if err != nil || rep.Revoked != 1 {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+	if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+		t.Fatal("the context on the removed device is live")
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
+		t.Fatalf("%d token(s) for the removed device survive", len(toks))
+	}
+}
+
+// swap loads body against devs, into a bundle named by fill, and swaps it in
+// as an inventory reload does, returning what the refresh compares against.
+// keyRefs are the keys port49d holds (policy.Env.KeyRefs).
+func (f *fixture) swap(t *testing.T, body string, devs []admission.Device, keyRefs []string, fill string) []Prior {
+	t.Helper()
+	pol, err := policy.Parse([]byte(body), policy.Env{Devices: devs, KeyRefs: keyRefs, Now: f.b.Now(),
+		Bundle: "sha256:" + strings.Repeat(fill, 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}}
+}
+
+// withLeaf1 is the fixture's inventory with leaf1 replaced by change(leaf1).
+func (f *fixture) withLeaf1(change func(*admission.Device)) []admission.Device {
+	out := []admission.Device{f.devices["leaf1"], f.devices["nx1"], f.devices["bare"]}
+	leaf1 := out[0]
+	leaf1.Attributes = map[string]string{}
+	for k, v := range f.devices["leaf1"].Attributes {
+		leaf1.Attributes[k] = v
+	}
+	change(&leaf1)
+	out[0] = leaf1
+	return out
+}
+
+// refreshRecords is the reasons of the `refresh` records logged since the
+// last reset.
+func (f *fixture) refreshRecords(t *testing.T) []any {
+	t.Helper()
+	var reasons []any
+	for _, r := range f.records(t) {
+		if r["event"] == "refresh" {
+			reasons = append(reasons, r["reason"])
+		}
+	}
+	return reasons
+}
+
+// The skip's safety half (plan 6a Decided 3): an inventory-only swap that
+// changes what decides a context's reply rewrites it and records it. Only an
+// unchanged answer is left alone; the policy file being the same is not
+// enough.
+func TestAnInventoryOnlySwapThatChangesAContextRewritesIt(t *testing.T) {
+	// siteLab adds a scope on the site attribute, which denies debug to
+	// netops on the devices it selects.
+	siteLab := edit(t,
+		"  - {name: all_devices, match: {}}\n",
+		"  - {name: all_devices, match: {}}\n  - {name: lab, match: {site: lab}, on_missing: include}\n",
+		roleList, roleList+"  - {name: no_debug, deny: [\"debug **\"]}\n") +
+		"  - {subject: netops, scope: lab, roles: [no_debug]}\n"
+	for _, c := range []struct {
+		name          string
+		body          string
+		before, after func(*admission.Device)
+	}{
+		{"the device moves platform", testPolicy,
+			func(*admission.Device) {},
+			func(d *admission.Device) { d.Platform = "cisco_nxos" }},
+		{"a scope no longer selects it", siteLab,
+			func(d *admission.Device) { d.Attributes["site"] = "lab" },
+			func(d *admission.Device) { d.Attributes["site"] = "campus" }},
+		{"a scope newly selects it", siteLab,
+			func(d *admission.Device) { d.Attributes["site"] = "campus" },
+			func(d *admission.Device) { d.Attributes["site"] = "lab" }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, 8)
+			f.swap(t, c.body, f.withLeaf1(c.before), nil, "a")
+			before := f.login(t, alice, "leaf1", "alice")
+			f.log.Reset()
+			rep, err := f.b.Refresh(context.Background(), f.swap(t, c.body, f.withLeaf1(c.after), nil, "b"))
+			if err != nil || rep.Updated != 1 || rep.Unchanged != 0 {
+				t.Fatalf("%+v, %v", rep, err)
+			}
+			if after := f.context(t, "leaf1", "alice"); after.BlobHash == before.BlobHash {
+				t.Fatal("the context was left on the blob its old inventory record compiled")
+			}
+			if got := f.refreshRecords(t); len(got) != 1 || got[0] != "grants_matched" {
+				t.Fatalf("the refresh recorded %v, not one grants_matched", got)
+			}
+		})
+	}
+}
+
+// A device's key_ref is not in its reply: a move to another key port49d
+// holds leaves its context as it was, and a move to one it holds no key for
+// refuses the device, whose context is revoked device_unknown (spec §10).
+func TestAnInventoryOnlyKeyRefChange(t *testing.T) {
+	pin := func(k string) func(*admission.Device) { return func(d *admission.Device) { d.KeyRef = k } }
+	for _, c := range []struct {
+		name             string
+		to               string
+		updated, revoked int
+		unchanged        int
+		reasons          []any
+	}{
+		{"to another key held", "k2", 0, 0, 1, nil},
+		{"to a key not held", "k3", 0, 1, 0, []any{"device_unknown"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, 8)
+			held := []string{"k1", "k2"}
+			f.swap(t, testPolicy, f.withLeaf1(pin("k1")), held, "a")
+			before := f.login(t, alice, "leaf1", "alice")
+			f.log.Reset()
+			rep, err := f.b.Refresh(context.Background(), f.swap(t, testPolicy, f.withLeaf1(pin(c.to)), held, "b"))
+			if err != nil || rep.Updated != c.updated || rep.Revoked != c.revoked || rep.Unchanged != c.unchanged {
+				t.Fatalf("%+v, %v", rep, err)
+			}
+			after := f.context(t, "leaf1", "alice")
+			if c.revoked == 0 && (after.BlobHash != before.BlobHash || !after.RevokedAt.IsZero()) {
+				t.Fatalf("the context was changed: %+v", after)
+			}
+			if c.revoked == 1 && after.RevokedAt.IsZero() {
+				t.Fatal("the context on the refused device is live")
+			}
+			if got := f.refreshRecords(t); len(got) != len(c.reasons) || (len(got) == 1 && got[0] != c.reasons[0]) {
+				t.Fatalf("the refresh recorded %v, not %v", got, c.reasons)
+			}
+		})
+	}
+}
+
+// Design §17 at the broker: a caller with no grant on a refused device is
+// answered no_grants_matched, as for a device that does not exist, so the
+// refusal tells it nothing.
+func TestARefusedDeviceIsNoGrantsMatchedToACallerWithNoGrant(t *testing.T) {
+	f := newFixture(t, 8)
+	f.swap(t, testPolicy, f.withLeaf1(func(d *admission.Device) { d.KeyRef = "k9" }), []string{"k1"}, "a")
+	carol := f.client(t, "carol@example.com", f.now.Add(24*time.Hour))
+	for _, dev := range []string{"leaf1", "nosuch"} {
+		it := decodeMint(t, f.post(context.Background(), f.state(carol), `{"devices":["`+dev+`"]}`, "")).Results[0]
+		if it.Verdict != "deny" || it.Reason != "no_grants_matched" {
+			t.Fatalf("%s: %+v", dev, it)
+		}
 	}
 }

@@ -180,7 +180,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	port := string(req.Port)
 	vector := Vector(cmd, cmdArgs)
 	rec := decision.Record{TS: h.now(), Event: decision.EventAuthorizeCommand,
-		Device:  &decision.Device{NAS: peer.NASAddr, Name: peer.NAS, Platform: peer.Platform},
+		Device:  peer.Device(),
 		Session: &decision.Session{Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
 		Request: &decision.Request{Service: kv["service"], Raw: raw, Vector: vector}}
 	if cmd == "" {
@@ -254,7 +254,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	// `junos-exec`, and Junos renames it per device with `set system
 	// tacplus-options service-name`, so the list is configurable too
 	// (spec §5.2, §8; §15, L10).
-	if !h.authorizes(peer.Platform, kv["service"]) {
+	if !h.authorizes(peer.Wire(), kv["service"]) {
 		// server_msg is never built from device-supplied bytes; the service
 		// value the NAS sent is already recorded in request.service and
 		// request.raw on this record.

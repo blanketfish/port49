@@ -63,6 +63,10 @@ const (
 	// neither asks port49 about a command nor has them projected into its
 	// session reply: they decide nothing there (spec §9, "CI").
 	FindingUnenforcedRules = "unenforced_rules"
+	// FindingPinAbsent is a scope pinning a name the inventory lacks: it
+	// selects nothing there. A warning, not a failure, since a device may be
+	// pinned before it is onboarded (spec §10).
+	FindingPinAbsent = "pin_absent"
 )
 
 // Lint computes the findings at now, ordered by kind and then message so two
@@ -150,6 +154,15 @@ func (p *Policy) Lint(now time.Time) []Finding {
 				add(FindingIncomparableVersion, "scope %q includes %s because its version could not be compared "+
 					"(%s); name the version explicitly, match it by regex, or exclude it by another attribute "+
 					"(spec §5.5)", name, d.Name, s.comparedValues(d))
+			}
+		}
+	}
+	for name, s := range p.scopes {
+		for _, pin := range s.Match["name"].Equal {
+			if !slices.ContainsFunc(p.env.Devices, func(d admission.Device) bool { return d.Name == pin }) {
+				add(FindingPinAbsent, "scope %q pins %q, which is not in the inventory, so it selects nothing there: "+
+					"a warning, not a failure, since a device may be pinned before it is onboarded; if the name is a "+
+					"typo, a deny the scope carries never applies (spec §10)", name, pin)
 			}
 		}
 	}
@@ -370,7 +383,7 @@ func (p *Policy) RuleSecretLiterals() []Finding {
 				var on []string
 				var shown []string
 				for _, plat := range sortedKeys(platforms) {
-					patterns := append(platform.Redactions(plat), p.dialect(plat).Redact...)
+					patterns := append(platform.Redactions(p.WirePlatform(plat)), p.dialect(plat).Redact...)
 					if words, ok := platform.RedactRule(patterns, strings.Fields(rule)); ok {
 						on, shown = append(on, plat), words
 					}

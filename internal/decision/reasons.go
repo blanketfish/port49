@@ -79,6 +79,10 @@ const (
 	// and could not write, by stage, so a reader of the log knows the stream
 	// has a hole there (spec §5.7, §9).
 	EventAccountGap = "account_gap"
+	// EventInventoryChange is not a decision: a security-relevant change a
+	// bundle swap made, written by the component that swapped (spec §5.7,
+	// §10).
+	EventInventoryChange = "inventory_change"
 )
 
 // EventRefresh is the broker carrying the policy in force into a live login
