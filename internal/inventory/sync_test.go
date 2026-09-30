@@ -375,3 +375,21 @@ func TestAQuarantinedDeviceIsPublishedAndSaid(t *testing.T) {
 		t.Fatalf("%+v %s", res, rig.out)
 	}
 }
+
+// Restore takes the sync lock, so it is safe whenever it is called, not only
+// before the first Sync (run under -race).
+func TestRestoreIsSafeBesideASync(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 20; i++ {
+			rig.s.Restore()
+		}
+	}()
+	for i := 0; i < 20; i++ {
+		rig.sync(t)
+	}
+	<-done
+}

@@ -99,8 +99,10 @@ func (s *Syncer) keys() []ed25519.PublicKey {
 // copy and the mirror's, so a restart serves at once and continues the
 // sequence (Decided 3). A copy that does not open is said and passed over:
 // the service's job is to publish, and every port49d bounds what it publishes
-// next.
+// next. It holds the sync lock, so it is safe beside a sync.
 func (s *Syncer) Restore() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	keys := s.keys()
 	var best *Published
 	for _, c := range []struct {
