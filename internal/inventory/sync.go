@@ -170,7 +170,7 @@ func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Resul
 	}
 	bounded, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	res := s.sync(bounded, only)
+	res := s.sync(bounded, ctx, only)
 	if res.Outcome == OutcomeFailed && ctx.Err() != nil {
 		return res
 	}
@@ -187,7 +187,9 @@ func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Resul
 	return res
 }
 
-func (s *Syncer) sync(ctx context.Context, only []string) Result {
+// sync fetches under ctx, the bounded one; caller is Sync's own, whose end
+// (a shutdown) is no source's error.
+func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 	prev := s.current.Load()
 	held := func(r Result) Result {
 		if prev != nil {
@@ -216,7 +218,9 @@ func (s *Syncer) sync(ctx context.Context, only []string) Result {
 		if !cached || len(only) == 0 || slices.Contains(only, src.Name()) {
 			var err error
 			if got, err = src.Fetch(ctx); err != nil {
-				s.Metrics.SourceErrors.WithLabelValues(src.Name()).Inc()
+				if caller.Err() == nil {
+					s.Metrics.SourceErrors.WithLabelValues(src.Name()).Inc()
+				}
 				return held(Result{Outcome: OutcomeFailed, Reason: "source " + src.Name() + ": " + oneLine(err)})
 			}
 			// Kept only once fetched whole: a failed fetch leaves the last one.

@@ -569,7 +569,8 @@ func TestASyncItsCallerCancelsIsQuiet(t *testing.T) {
 		t.Fatalf("said: %s", rig.out)
 	}
 	if testutil.ToFloat64(rig.s.Metrics.SyncFailing) != 0 ||
-		testutil.ToFloat64(rig.s.Metrics.Syncs.WithLabelValues("schedule", OutcomeFailed)) != 0 {
+		testutil.ToFloat64(rig.s.Metrics.Syncs.WithLabelValues("schedule", OutcomeFailed)) != 0 ||
+		testutil.ToFloat64(rig.s.Metrics.SourceErrors.WithLabelValues("a")) != 0 {
 		t.Fatal("a canceled sync was counted")
 	}
 	if cur := rig.s.Current(); cur == nil || cur.Doc.Sequence != 1 {
@@ -593,6 +594,9 @@ func TestASyncPastItsOwnDeadlineIsAFailure(t *testing.T) {
 	}
 	if testutil.ToFloat64(rig.s.Metrics.SyncFailing) != 1 {
 		t.Fatal("port49_inventory_sync_failing is not 1")
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceErrors.WithLabelValues("a")) != 1 {
+		t.Fatal("port49_inventory_source_errors_total{source=a} is not 1")
 	}
 	if cur := rig.s.Current(); cur == nil || cur.Doc.Sequence != 1 {
 		t.Fatalf("the bundle published moved: %v", cur)
