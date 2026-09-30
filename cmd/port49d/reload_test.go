@@ -598,3 +598,42 @@ func TestTheSummarySaysWhatASessionOnlyPlatformKeeps(t *testing.T) {
 		t.Fatalf("summary: %q", got)
 	}
 }
+
+// Task 12 m3, end to end: with a named pipe swapped in at port49d.yaml's path
+// after start, SIGHUP still reloads the policy, and shutdown still returns,
+// so the spool drains rather than waiting on the reloader for good.
+func TestRunDrainsAfterSIGHUPWithANamedPipeAsItsConfig(t *testing.T) {
+	var out syncBuffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfgPath := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	stopped := false
+	defer func() {
+		if !stopped {
+			cancel()
+			<-done
+		}
+	}()
+	waitFor(t, &out, "port49d: listening on ")
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(cfgPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, &out, "inventory.max_removed_percent not re-read from "+cfgPath)
+	waitFor(t, &out, "port49d: policy reload (SIGHUP)")
+	cancel() // what SIGTERM does to run's context
+	select {
+	case <-done:
+		stopped = true
+	case <-time.After(10 * time.Second):
+		t.Fatalf("shutdown did not return: %s", out.String())
+	}
+}

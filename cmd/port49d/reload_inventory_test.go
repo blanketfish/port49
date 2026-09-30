@@ -684,3 +684,43 @@ func TestAPolicySwapThatMovesPrivilegeIsLogged(t *testing.T) {
 		t.Fatalf("the policy swap's line does not name the policy file: %s", rig.out.String())
 	}
 }
+
+// Task 12 m3: a named pipe put at port49d.yaml's path is refused at SIGHUP,
+// never read: a reloader blocked on it would stop every poll and refresh,
+// and SIGTERM would wait on it for good. The bound in force is kept, said.
+func TestABoundReadFromANamedPipeKeepsTheBoundAndDoesNotHang(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.r.cfgPath = filepath.Join(t.TempDir(), "port49d.yaml")
+	if err := syscall.Mkfifo(rig.r.cfgPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SIGHUP blocked on a named pipe at port49d.yaml's path")
+	}
+	out := rig.out.String()
+	if rig.r.cfg.MaxRemovedPercent != 10 || strings.Count(out, "inventory.max_removed_percent not re-read") != 1 ||
+		!strings.Contains(out, "is not a regular file") || !strings.Contains(out, "keeping 10%") {
+		t.Fatalf("bound %d: %s", rig.r.cfg.MaxRemovedPercent, out)
+	}
+}
+
+// A port49d.yaml past the size bound is not read into memory at SIGHUP.
+func TestABoundReadFromAnOversizedFileKeepsTheBound(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.r.cfgPath = filepath.Join(t.TempDir(), "port49d.yaml")
+	big := "inventory: {max_removed_percent: 100}\n" + strings.Repeat("#\n", maxConfigSize)
+	if err := os.WriteFile(rig.r.cfgPath, []byte(big), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	if rig.r.cfg.MaxRemovedPercent != 10 || !strings.Contains(rig.out.String(), "larger than") {
+		t.Fatalf("bound %d: %s", rig.r.cfg.MaxRemovedPercent, rig.out.String())
+	}
+}

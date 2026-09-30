@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
@@ -267,6 +269,10 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 	}
 }
 
+// maxConfigSize bounds SIGHUP's read of port49d.yaml, a file of a few
+// kilobytes, so a path pointed at something large is not read into memory.
+const maxConfigSize = 1 << 20
+
 // rereadBound re-reads inventory.max_removed_percent from port49d.yaml, the
 // one key SIGHUP re-reads, so a deliberate large removal needs no restart
 // (plan 6a, I1). A file that does not read keeps the bound in force, said.
@@ -274,7 +280,7 @@ func (r *reloader) rereadBound() {
 	if r.cfgPath == "" {
 		return
 	}
-	raw, err := os.ReadFile(r.cfgPath)
+	raw, err := readConfigFile(r.cfgPath)
 	var n int
 	if err == nil {
 		n, err = config.InventoryBound(raw)
@@ -288,6 +294,34 @@ func (r *reloader) rereadBound() {
 			r.cfg.MaxRemovedPercent)
 		r.cfg.MaxRemovedPercent = n
 	}
+}
+
+// readConfigFile reads port49d.yaml at SIGHUP: a regular file only, opened
+// non-blocking and read to at most maxConfigSize, so a named pipe or a device
+// put at the path is refused rather than blocking the reloader, and with it
+// every poll, every refresh and shutdown (plan 6a Task 12, m3). It is not the
+// policy file's owner and mode fence: the file carries one number here.
+func readConfigFile(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxConfigSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxConfigSize {
+		return nil, fmt.Errorf("%s is larger than %d bytes", path, maxConfigSize)
+	}
+	return raw, nil
 }
 
 // load puts raw, the policy file's content read as version v, in force and
