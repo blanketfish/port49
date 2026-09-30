@@ -31,9 +31,10 @@ revised 2026-09-25** after its pre-flight review and the owner's ruling of that 
 one lab, one lab-and-docs), **executed 2026-09-25, and Task 19**, the differential lab test, **on 2026-09-29**, and amended in flight with decision 27 and four lab tasks (3b,
 L26b, L26c, the L26 rerun); reviewed per task and whole-branch; **merged 2026-09-29** (PR #14). It closed L23, L24, L26 and L26b;
 Task 19, run 2026-09-29, closed L9, L10 and L12; L25 and the new L26c stay open (Plan 5b — As
-built, below). **6a written 2026-09-30** (`2026-09-30-06a-bundle-in-process.md`, twenty-one
-tasks: one docs, one lab, seventeen code, one lab, one lab-and-docs; plan 6 is split at the seam
-below, and three owner decisions are listed at its top). 6b and 7–13 not yet.
+built, below). **6a written 2026-09-30, revised the same day** after its pre-flight review
+(`2026-09-30-06a-bundle-in-process.md`, twenty-two tasks: one docs, one lab, eighteen code, one
+lab, one lab-and-docs; plan 6 is split at the seam below, and three owner decisions are listed at
+its top). 6b and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -937,7 +938,10 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   both new: L27 (what NetBox and Nautobot return, recorded as fixtures for 6b) and L28 (what a
   device does on a key miss, and a rotation end to end). Owner decisions at the plan's top: a
   device-level key-group tie refuses the device; `keys diagnose` over a local socket; and, for 6b,
-  whether port49d takes the policy from the service.
+  whether port49d takes the policy from the service. Revised after its pre-flight review: the
+  inventory file is read behind the policy file's write fence; the key-group move is safe in every
+  order; `SIGHUP` re-reads the bound; the broker refuses to mint for a refused device
+  (`device_unknown`); a test on an absent device fails CI and never a reload.
 - **Plan 6b — the inventory service; written after 6a merges, against L27's fixtures.**
   `cmd/port49-inventory` with the §10 API over mutual TLS, the NetBox, Nautobot and file connectors
   (version detection, GraphQL first, REST fallback, the slug alias table, filters), the four sync

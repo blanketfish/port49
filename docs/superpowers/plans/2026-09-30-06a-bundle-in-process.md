@@ -71,9 +71,70 @@ changes only the task named.
    compromise of it can already move devices between scopes and add addresses (a
    credential-capture path, §10), and taking policy from it too would let it grant anyone
    anything. **Default:** port49d builds the bundle from its own policy file and the service's
-   inventory, as it builds it from two files in this plan, and the service's bundle carries the
-   policy hash it was built against, so a mismatch is said and alarmed, never applied.
-   *Alternative:* the spec as written, the policy from the service over mutual TLS. Plan 6b.
+   inventory, as it builds it from two files in this plan. The service's bundle carries the
+   policy hash it was built against. When that hash differs from the policy in force, port49d
+   still applies the service's inventory, against its own policy, and says the mismatch and
+   raises an alarm: nothing the service sends ever changes the policy, and a policy rollout that
+   reaches port49d before the service never stalls inventory sync. *Alternative:* the spec as
+   written, the policy from the service over mutual TLS. Plan 6b.
+
+## Revised after the pre-flight review (2026-09-30)
+
+The pre-flight review (`.superpowers/sdd/2026-09-30-06a-bundle-in-process/preflight.md`) found
+three critical and seven important problems. The controller ruled each; the plan below is written
+to the rulings.
+
+- **C1 (a `tests:` block no longer loaded; `Device` declared twice).** `Parse` fills a name index
+  of the inventory first, and `admit` is a `Parse` step right after `buildKeyGroups`, before
+  `buildTests`. The one `Device` is the existing `internal/policy/tests.go:357`, which reads the
+  index through `device`. Task 4.
+- **C2 (the live inventory file had no write fence).** `cmd/port49d/policyfile.go`'s checks are
+  generalized in place (`readGuarded`), and with a broker the inventory file is read through them at
+  start and at every reload, with its own size bound (64 MiB). A refused read keeps the last good inventory, is said once, and
+  sets `port49_inventory_file_refused`. New Task 11a; Tasks 1 and 12.
+- **C3 (the key-group migration refused the fleet).** When both files carry `key_groups`, the
+  policy's block wins, and a notice names the ignored inventory block. The documented order (add
+  the block to the policy, then delete it from the inventory) never refuses a device. Every other
+  order is either harmless or stopped by the bound (I4). A start whose bundle admits no device at
+  all is refused, since that is no device's fault. Tasks 4, 10, 12, with a test for each order,
+  including a restart mid-migration.
+- **I1 (the large-removal escape hatch did not exist).** `SIGHUP` re-reads
+  `inventory.max_removed_percent` from port49d.yaml with the reload. Decided 6, the `Config`
+  comment and `Check`'s text now say the same thing. Task 12 tests it by writing port49d.yaml and
+  sending the reload. Tasks 7, 12.
+- **I2 (the broker minted for a refused device).** `policy.Resolve` refuses a device that admission
+  refuses (`ErrDeviceRefused`) wherever admission is assessed. The mint denies it `device_unknown`,
+  an existing §5.7 reason whose meaning Task 1 extends to cover a device that admission refuses.
+  The refresh revokes its contexts, and the supersede deletes its tokens. Tasks 1, 4, 11.
+- **I3 (a policy test naming a removed device refused every reload).** `buildTests` no longer
+  checks the device. `RunTests` fails a test on an absent device, so `port49 policy test` does, and
+  `Parse` and a reload never do. Tasks 4, 17.
+- **I4 (the bound ignored devices newly refused).** `bundle.Check` counts devices that go from
+  admitted to refused toward the bound, as it counts removals, and names them. Task 7.
+- **I5 (a key change was silent).** `key_ref_changed`, and `admission_changed` to `admitted`, are
+  security changes, each with an `inventory_change` record and a counter. Tasks 1, 7, 13.
+- **I6 (the L27 recorder).** There is now a legacy-twin map per product, the Nautobot `primary`
+  PATCH names the device's UUID, each run has its own fixture directory, and the webhook listener
+  binds the gateway of each stack's own network. Task 2.
+- **I7 (tools that did not load the bundle).** `policy diff`, `platform upgrade` and `grants
+  remove` load through `bundle.Parse` as port49d does. `offlineEnv` is removed. Task 6.
+- **Minors:**
+  - M1: the start hashes the bytes `config.Load` read. Task 12.
+  - M2 and M3: Task 1 says where `retire_after` lives, and why, and how CI reads "an empty
+    `accept` set".
+  - M4: `devices capabilities` reads a variant's exec records as its base's. `serverMsg` needs no
+    change, since port49d's redactor maps the name already. Task 9.
+  - M5: inventory faults name `inventory_file`. Task 12.
+  - M6: the admin socket's unwind closes the broker listener, and `Listen` refuses a socket another
+    process answers on. Task 16.
+  - M7: owner decision 3 now says the inventory is applied while the hashes differ.
+  - M8: the §10 text says `bundle.ID` does not cover port49d.yaml's keys. Task 1.
+  - M9: the replay, socket and redaction tests assert what they claim. Tasks 9, 16, 19.
+  - M10: branch H's `Holding` covers every strike, which the note and the operator notes say.
+    Task 20.
+  - M11: the as-built notes state the crypt alarm's move and why. Task 21.
+  - M12: the webhook listener binds each stack's own gateway. Task 2.
+  - None is left.
 
 ## Why this plan is 6a, and what 6b is
 
@@ -107,31 +168,50 @@ which is an encryption-at-rest rotation alarm, not a device-key one. Task 21 rec
    port49d reading the same two files names the same bundle, and a reformatted inventory file is
    the same bundle. `bundle` on every record and blob is this string (spec §5.7 already calls it a
    string until versioned bundles). Plan 6b may add a sequence number beside it; it will not
-   change this one. `policy.Policy.Source` keeps the policy file's own hash, which the reloader
+   change this one. The name does not cover port49d.yaml's `keys:`: two daemons with different
+   key names load the same bundle and may refuse different devices, which each says at load. `policy.Policy.Source` keeps the policy file's own hash, which the reloader
    compares file versions by.
 3. **An inventory-only swap does not churn live contexts.** A refresh whose priors all share the
    policy file in force reads a context's blob from the store and compares it with the new one,
    the bundle aside; equal, the context is left as it is and nothing is recorded. A policy edit
    keeps plan 4b's rule, every live context takes the new bundle's blob. Without this, every
    inventory change would write one `refresh` record and one blob per live context.
-4. **Key groups move into the policy file.** `key_groups:` is a policy block, validated at load.
-   An inventory file that still has one is read, with a notice at every load, where the policy
-   has none; one with both is refused. port49d with no `broker:` block has no policy, keeps its
-   plan 1 behaviour and reads the inventory's key groups, once, at start: that mode is the lab's.
+4. **Key groups move into the policy file, and the move never refuses the fleet.** `key_groups:` is
+   a policy block, validated at load. An inventory file that still has one is read, with a notice
+   at every load, where the policy has none. Where both have one, the policy's wins and the notice
+   names the inventory's as ignored: the inventory's writer loses key assignment, which is the
+   anti-escalation direction, and a restart or reload in the middle of the move loads. The
+   documented order is to add the block to the policy file, then delete it from the inventory
+   file. Deleting it from the inventory first leaves every device refused, so the reload is
+   refused by the bound (Decided 6). port49d with no `broker:` block has no policy, keeps its plan 1
+   behaviour and reads the inventory's key groups, once, at start: that mode is the lab's.
 5. **A device is refused, not the daemon.** A device no group admits, one a tie refuses, and one
    assigned a `key_ref` port49d.yaml defines no key for are each refused admission on their own,
    named at start and at every reload, and their packets closed after the header with the new
    diagnosis `admission_refused` and no strike (spec §10: "fails that device closed — not the
    daemon"). Today `config.Load` refuses to start on either, which turns one stray device in a
    synced inventory into a total outage at the next restart. The legacy no-broker mode keeps
-   today's start-time refusal.
+   today's start-time refusal. There is one exception: a start whose bundle admits none of a
+   non-empty inventory is refused, naming the commonest cause. That happens, for example, when
+   key groups are declared in neither file. It is no device's fault, and a daemon that admits
+   nothing is a misconfiguration. Wherever admission is assessed (key groups declared, or
+   port49d's key names known), the broker also refuses to mint for a refused device, denying it
+   `device_unknown` (§5.7, extended in Task 1), and the refresh revokes its contexts. A refused
+   device cannot reach port49d, so a token for it would only be a login that silently falls to
+   the local method.
 6. **The inventory file is watched, and a reload is bounded.** Two agreeing reads, `SIGHUP`, and a
    refusal said once per content, exactly as the policy file. A snapshot that does not parse,
    names a device twice or an address twice, is empty, or removes more than
    `inventory.max_removed_percent` of the devices in force (default 10; 100 turns it off) is
-   refused and the bundle in force keeps serving. An operator removing a fifth of the fleet on
-   purpose raises the knob for that reload, which is a reviewed config change, rather than
-   restarting, which would end every live context.
+   refused, and the bundle in force keeps serving. Devices that stay in the inventory but go from
+   admitted to refused count toward the bound as removals do: either way the device stops being
+   served. An operator removing a fifth of the fleet on purpose raises
+   `inventory.max_removed_percent` in port49d.yaml and sends `SIGHUP`. The reload re-reads that
+   one key, so no restart is needed, which matters because a restart ends every live context. The
+   inventory file is read behind the policy file's write fence (owner and mode checks, a size
+   bound), because it decides scope membership, capture addresses and key pins within seconds.
+   A test in the policy's `tests:` that names a device the inventory no longer has fails `port49
+   policy test`, and never a reload.
 7. **`retire_after` is a date and is inclusive.** `retire_after: 2026-10-01` admits through the end
    of that day UTC and refuses from `2026-10-02T00:00:00Z`: past it the version identifies and
    never admits, as a retired one does. It is allowed on `accept` versions only. A connection
@@ -139,10 +219,13 @@ which is an encryption-at-rest rotation alarm, not a device-key one. Task 21 rec
 8. **Every validated record names its key.** `device.key_ref` and `device.key_version` on the
    redeem, authorization and accounting records; `keys status` groups the log by them. A new
    per-connection record would double the log.
-9. **Security events are `inventory_change` records.** Every swap diffs the bundles; a device
-   joining or leaving a `security_log: true` scope, and an address added to a device already in
-   inventory, is one record and one `port49_inventory_changes_total{kind}` count (spec §10: "MUST
-   appear in the sync diff and be reviewable", and "logged and alerted as security events").
+9. **Security events are `inventory_change` records.** Every swap diffs the bundles. Each of these
+   is one record and one `port49_inventory_changes_total{kind}` count: a device joining or leaving
+   a `security_log: true` scope; an address added to a device already in inventory; a device's
+   `key_ref` changed, since a pin in the inventory can move a device onto a weaker or shared key;
+   and a device newly admitted, including one going from refused to admitted, since a device
+   starts receiving port49's answers there. The spec says these changes "MUST appear in the sync
+   diff and be reviewable" and are "logged and alerted as security events" (§10).
 10. **A scope pins devices by name with `match: {name: [...]}`.** `name` reads the device's
     inventory name as `platform` reads its platform (spec §10: "A scope MUST be able to pin a
     device set explicitly"). A comparison on it is refused.
@@ -171,10 +254,16 @@ The owner's rule is to trace a mechanism on a bad day first.
   after the header (`"diagnosis":"admission_refused"`) and it falls to its local method. Nothing
   else changed.
 - **3am, a bad inventory edit drops half the fleet:** `port49d: inventory reload (inventory file
-  changed) refused; still serving bundle sha256:9f…: the new inventory removes 41 of 80 devices
-  (51%), more than inventory.max_removed_percent (10%); fix the file, or raise the bound for this
-  reload and send SIGHUP`. `port49_inventory_file_refused` is 1 and
+  changed) refused; still serving bundle sha256:9f…: the new inventory removes 41 of 80 devices and
+  refuses 0 more (51%), more than inventory.max_removed_percent (10%); fix the file, or, if the
+  change is meant, raise inventory.max_removed_percent in port49d.yaml and send SIGHUP`. `port49_inventory_file_refused` is 1 and
   `port49_inventory_snapshot_age_seconds` climbs. Everyone keeps working on the bundle in force.
+- **Someone deletes `key_groups:` from the inventory before adding it to the policy:** the reload
+  is refused, since every device would be newly refused, and the line names the order: add the
+  block to the policy file first. Nothing stops serving.
+- **Someone makes the inventory file group-writable:** `port49d: inventory reload (inventory file
+  changed) refused; still serving bundle …: the file … is writable by group …`, once, with
+  `port49_inventory_file_refused` at 1. At start the same file refuses the start.
 - **Someone adds `10.66.0.1` to leaf-01's addresses:** the reload line, and an
   `{"event":"inventory_change","device":{"name":"leaf-01",...},"change":{"kind":"address_added",
   "address":"10.66.0.1",...}}` record; `port49_inventory_changes_total{kind="address_added"}` goes
@@ -300,6 +389,9 @@ internal/config/config.go                     MOD  broker mode admits from the p
 internal/daemon/metrics/metrics.go            MOD  admission refused (Task 10); inventory reloads/refused/age (Task 12);
                                                    inventory changes (Task 13); key collector (Task 14)
 internal/broker/broker.go, refresh.go         MOD  devices from the held policy; the inventory-only compare (Task 11)
+cmd/port49d/policyfile.go, _other.go          MOD  readGuarded, readInventoryFile; fencedInventory in main.go (Task 11a)
+tests/lab/harness_test.go                     MOD  a private copy of inventory_file under a broker (Task 11a)
+internal/capability/capability.go             MOD  a variant's exec records read as its base's (Task 9)
 cmd/port49d/main.go, reload.go                MOD  parseBundle, live admission (Task 10); the inventory watch (Task 12);
                                                    security events (Task 13); key gauges (Task 14); admin socket (Task 16)
 internal/keystatus/keystatus.go               NEW  Infer, Report (Task 15)
@@ -313,11 +405,11 @@ tests/lab/results/L27-*.md, L28-*.md          NEW  written by the lab runs
 docs/superpowers/plans/README.md              MOD  plan 6a as built, plan 6b's brief (Task 21)
 ```
 
-Twenty-one tasks:
+Twenty-two tasks:
 - **Task 1** is docs.
 - **Task 2** is a lab measurement (L27), independent of the code; run it early, since plan 6b's
   plan is written from its fixtures.
-- **Tasks 3–19** are code. Every one leaves `make test` green.
+- **Tasks 3–19, with 11a**, are code. Every one leaves `make test` green.
 - **Task 20** is a lab measurement (L28) that needs Tasks 14 and 15.
 - **Task 21** is lab closure and docs.
 
@@ -352,6 +444,8 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   device's addresses sorted, its key groups if the inventory file still carries any — so every
   port49d reading the same two files names the same bundle, and a reformatted inventory file is
   the same bundle. The policy file's own hash is kept beside it, and port49d's lines name both.
+  The name does not cover port49d.yaml's `keys:`: two daemons holding different key names load
+  the same bundle and may refuse different devices (below), and each says so at load.
   The loaded policy carries the admission index, the device table and the quarantine with it, and
   one pointer swaps all four (§13, decision 28).
   ```
@@ -362,17 +456,26 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
 
   ```markdown
   `key_groups:` is a block of the policy file. An inventory file that still carries one is read
-  where the policy has none, with a notice at every load, and a pair that both carry one is
-  refused, naming the move. A group matches on a CIDR or on attributes, never both; a CIDR with
-  host bits set is refused.
+  where the policy has none, with a notice at every load. Where both carry one, the policy's wins
+  and the notice names the inventory's as ignored, so the inventory's writer never assigns a key
+  beside the reviewed policy. To move the block, add it to the policy file, then delete it from
+  the inventory file: no device is refused at any step, and a restart or reload between the two
+  loads. Deleting it from the inventory first would leave every device refused, and the reload is
+  refused by the bound (below). A group matches on a CIDR or on attributes, never both; a CIDR
+  with host bits set is refused.
 
   **A device is refused on its own, never the daemon.** A device no group admits, one two groups
   tie on (below), and one assigned a `key_ref` port49d.yaml defines no key for, are each refused
   admission: named at start and at every reload that loads, counted in
   `port49_devices_admission_refused`, and every packet from them closed after the header, with
   nothing decrypted, no reply, no strike, and the report bucket `admission_refused` (below). The
-  rest of the fleet loads. port49d with no `broker:` block has no policy and keeps plan 1's
-  behaviour: the inventory file's key groups, read at start, and a start refused by either fault.
+  rest of the fleet loads. The broker refuses to mint for a refused device (`device_unknown`,
+  §5.7), and a policy refresh revokes its live contexts: it cannot reach port49d, so a token for
+  it would only be a login that silently falls to its local method. One case refuses the start
+  rather than a device: a bundle that admits none of a non-empty inventory — key groups declared in
+  neither file, say — which no device caused. port49d with no `broker:` block has no policy and
+  keeps plan 1's behaviour: the inventory file's key groups, read at start, and a start refused by
+  either fault.
   ```
 
   In "Key group matching is deterministic", replace the paragraph beginning "**Two groups matching
@@ -409,6 +512,12 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   a `retired` version is refused already. A connection validated before the instant keeps its key
   for its life. port49d says at start, and `port49 policy test --config` reports, a version whose
   date has passed and an `accept` version with none.
+
+  The key sets, `retire_after` included, live in port49d.yaml beside the references to their
+  secrets (`secret_env`), where they have been since plan 1, rather than in the policy file, which
+  CI and every operator can read. Retirement and extension are therefore reviewed changes of
+  port49d.yaml's repository. Moving key sets into the policy repository waits on secret references
+  that name no secret (`secret_ref:`, plan 12).
   ```
 
   In "Phase-out has to be observable", replace "The daemon records which `key_ref` and version
@@ -460,12 +569,27 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   file (§5.1.3): it loads a changed file once two reads a watch interval apart agree, at once on
   `SIGHUP`, and says a refusal once per distinct content. It validates as above and refuses an
   empty file and one that removes more than `inventory.max_removed_percent` of the devices in
-  force (default 10; 100 turns the bound off), builds a bundle from it and the policy in force,
+  force (default 10; 100 turns the bound off), counting a device that goes from admitted to
+  refused as removed. It builds a bundle from the file and the policy in force,
   swaps the two in one pointer, and runs the refresh a policy reload runs (§5.1.3): a device
   removed from inventory has its live contexts revoked, and one leaving a scope is narrowed like
   any other. `port49_inventory_snapshot_age_seconds` is the time since the file in force was last
   read and found unchanged or loaded; `port49_inventory_file_refused` is 1 while the file on disk
-  is one port49d refused.
+  is one port49d refused. `SIGHUP` also re-reads `inventory.max_removed_percent` from port49d.yaml,
+  so a deliberate large removal is: raise it, send `SIGHUP`, and lower it again.
+
+  **The inventory file is privilege-granting, and read as the policy file is.** Its attributes and
+  names decide scope membership, its addresses are handed to SSH clients by the mint, and a
+  record's `key_ref` pins a key; a live reload makes an edit effective within seconds. So it is
+  read behind the policy file's fence (§5.1.3): refused, at start and at every reload, when the
+  file or any directory on its path could have been written by anyone but port49d's user or root,
+  when it is not a regular file, or when it is larger than 64 MiB. At a reload the refusal is said
+  once and the bundle in force keeps serving; at start it refuses the start. The deployment
+  documents owe the same warning for this path as for the policy file's (plan 12).
+
+  A test in the policy's `tests:` naming a device the inventory no longer has fails `port49
+  policy test`, and never a load or a reload: CI owns that fix, and an inventory change must not
+  wait on it.
   ```
 
 - [ ] **Step 5: §10, "Source-of-truth write access is privilege-granting".** Replace its first two
@@ -478,6 +602,8 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
     credential-capture path (design document §17). `port49 inventory diff` prints both, and every
     bundle swap writes one `inventory_change` record (§5.7) for each address added to a device
     already in inventory and each device joining or leaving a scope with `security_log: true`.
+    A device's `key_ref` changing, and a device becoming admitted, are recorded the same way: a
+    record's pin can move a device onto a weaker or a shared key.
   - A scope MUST be able to pin a device set explicitly instead of by attribute:
     `match: {name: [leaf-01, leaf-02]}` reads the device's inventory name, as `platform` reads
     its platform (§5.5).
@@ -520,9 +646,17 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   swap made — `{"change": {"kind": "address_added", "address": ..., "from_bundle": ...,
   "to_bundle": ...}}` for an address added to a device already in inventory, and `scope_joined`
   or `scope_left` with `"scope"` for a device entering or leaving a scope with `security_log:
-  true` (§5.5, §10). Its `device` block names the device. It is what makes a source-of-truth edit
+  true` (§5.5, §10), `key_ref_changed` with `"from"` and `"to"` for a device's key assignment
+  changing, and `admission_changed` with `"to": "admitted"` for a device becoming admitted. Its
+  `device` block names the device. It is what makes a source-of-truth edit
   that moves privilege visible in the log it moved (§10), and
   `port49_inventory_changes_total{kind}` is its alarm.
+  ```
+
+  In the reason table, replace the `device_unknown` row's meaning with:
+
+  ```markdown
+  | `device_unknown` | the source address is not in the admission trie (§10). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method. As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
   ```
 
   In §5.1.3, after the paragraph that says a refresh finding a context already on the answer
@@ -590,9 +724,13 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   `--max-removed-percent`, default 10).
 
   **`port49 policy test --config <port49d.yaml>`** adds the key checks §10 requires of CI: it fails
-  on a device assigned a `key_ref` the file defines no key for, and reports an `accept` version
-  whose `retire_after` has passed and one with none. Without `--config` it still fails on a key
-  group tie and reports devices no group admits.
+  on a key group naming a `key_ref` the file does not define, and on a device assigned one. It
+  reads §10's "a policy whose `accept` set is empty for a `key_ref` still assigned by a key group"
+  as that case: `current` is always accepted, so the set is empty only where the key is not
+  defined at all. It reports an `accept` version whose `retire_after` has passed and one with none.
+  Without `--config` it still fails on a key group tie and reports devices no group admits. It
+  fails on a test naming a device the inventory does not have, which a load no longer refuses
+  (§10).
   ```
 
 - [ ] **Step 9: §13, a new decision, and §14.** After decision 27, add:
@@ -617,7 +755,13 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
     and its packets closed after the header as `admission_refused`; the rest of the fleet loads.
   - **An inventory-only reload** leaves a live context whose answer did not change unwritten and
     unrecorded, revokes one on a device removed from inventory, and writes one `inventory_change`
-    record per address added and per `security_log` scope membership change.
+    record per address added, per `key_ref` change, per device newly admitted and per
+    `security_log` scope membership change.
+  - **The key-group move never refuses the fleet:** with the block in both files the policy's
+    wins; deleting it from the inventory first is refused by the bound; a restart between the two
+    edits loads.
+  - **The inventory file's fence:** a group-writable inventory file refuses the start, and at a
+    reload is refused once while the bundle in force keeps serving.
   - **A `based_on:` variant** of `juniper_junos` is authorized as `junos-exec`, its `cmd=login`
     record read as an exec record, and its records redacted with Junos's patterns.
   ```
@@ -823,17 +967,21 @@ never "fixed" by guessing a different call without recording that too.
   	return x
   }
 
-  // legacyTwin names, for -prefer-legacy, the step an older version took in
-  // place of each: NetBox 3.7's device_role spelling, Nautobot 1.6's site.
-  var legacyTwin = map[string]string{"device": "device_v3", "custom_field": "custom_field_v3",
-  	"role": "role_v1", "location": "site_v1", "site": "site_v1"}
+  // legacyTwin names, per product, for -prefer-legacy, the step an older
+  // version took in place of each: NetBox 3.7's device_role and content_types
+  // spellings, Nautobot 1.6's site and device_role. Each twin is a step that
+  // product's seedFor defines.
+  var legacyTwin = map[string]map[string]string{
+  	"netbox":   {"device": "device_v3", "custom_field": "custom_field_v3"},
+  	"nautobot": {"device": "device_v1", "role": "role_v1", "location": "site_v1", "site": "site_v1"},
+  }
 
   // lookup is the recorded value of "step.field", or the legacy twin's where
   // -prefer-legacy is set and the twin succeeded.
   func (r *recorder) lookup(ref string) (any, bool) {
   	step, field, _ := strings.Cut(ref, ".")
   	if r.legacy {
-  		if twin, ok := legacyTwin[step]; ok {
+  		if twin, ok := legacyTwin[r.product][step]; ok {
   			if got, ok := r.ids[twin+"."+field]; ok {
   				return got, true
   			}
@@ -1041,7 +1189,8 @@ never "fixed" by guessing a different call without recording that too.
   			{"loop_ip", "POST", "/api/ipam/ip-addresses/", map[string]any{"address": "10.0.1.6/32", "status": "Active"}},
   			{"mgmt_bind", "POST", "/api/ipam/ip-address-to-interface/", map[string]any{"ip_address": "@mgmt_ip.id", "interface": "@mgmt.id"}},
   			{"loop_bind", "POST", "/api/ipam/ip-address-to-interface/", map[string]any{"ip_address": "@loop_ip.id", "interface": "@loopback.id"}},
-  			{"primary", "PATCH", "/api/dcim/devices/leaf-01/", map[string]any{"primary_ip4": "@mgmt_ip.id"}},
+  			// A Nautobot detail URL takes the object's UUID, never its name.
+  			{"primary", "PATCH", "/api/dcim/devices/@device.id/", map[string]any{"primary_ip4": "@mgmt_ip.id"}},
   		}
   	}
   	return []step{
@@ -1117,9 +1266,10 @@ never "fixed" by guessing a different call without recording that too.
 
   Where a version took the `_v1`/`_v3` step and refused the first, the steps after it named an
   object that does not exist: run that stack again from a fresh `docker compose up` with
-  `-prefer-legacy`, which resolves `@device`, `@role`, `@site`, `@location` and `@custom_field` to
-  the twin's value (`legacyTwin`), and keep both runs' `seed.json` (the second as
-  `seed-legacy.json`), since which spelling each version refused is the finding.
+  `-prefer-legacy`, which resolves the names in that product's `legacyTwin` map to the twin's
+  value, and give the rerun its own directory — `-out tests/lab/sot/fixtures/<product>-<version>-legacy`
+  — so neither run's fixtures overwrite the other's. Which spelling each version refused is the
+  finding, and the note cites both directories.
 
 - [ ] **Step 4: Run it, per product and version.** For each of the four stacks:
 
@@ -1127,14 +1277,17 @@ never "fixed" by guessing a different call without recording that too.
   export L27_TOKEN=$(openssl rand -hex 20) L27_WEBHOOK_SECRET=l27-lab-webhook-secret
   docker compose -f tests/lab/sot/compose/netbox-4.yml up -d
   until curl -fsS -H "Authorization: Token $L27_TOKEN" http://127.0.0.1:18080/api/status/ >/dev/null; do sleep 10; done
+  GW=$(docker network inspect port49-l27-netbox4_default --format '{{(index .IPAM.Config 0).Gateway}}')
   go run ./tests/lab/cmd/sot-record -product netbox -url http://127.0.0.1:18080 \
-    -out tests/lab/sot/fixtures/netbox-4 -webhook-listen 172.17.0.1:18999 \
+    -out tests/lab/sot/fixtures/netbox-4 -webhook-listen "$GW:18999" \
     2>&1 | tee tests/lab/logs/l27-netbox-4.log
   docker compose -f tests/lab/sot/compose/netbox-4.yml down -v
   ```
 
-  `172.17.0.1` is the Docker bridge gateway, which the container reaches the host on; confirm it
-  with `docker network inspect bridge`. Run the Task-level watchdog (above) beside each. Expected:
+  Compose puts each stack on its own network, `<name>_default`, and the worker reaches the host on
+  that network's gateway, so the listener binds it, read per stack as above. If the host firewall
+  drops the worker's connection to it, the deliveries count is zero and the worker's log says
+  so: open the port for that bridge and rerun the stack. Run the Task-level watchdog (above) beside each. Expected:
   the recorder's last line counts at least one webhook delivery. Zero deliveries is a finding (the
   worker's log says why); record it, never retry until one appears.
 
@@ -1649,7 +1802,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 **Files:**
 - Modify: `internal/policy/file.go` (the `key_groups` block)
-- Modify: `internal/policy/load.go` (`Env`, `Policy`, `Parse`, `refusedKeys`)
+- Modify: `internal/policy/load.go` (`Env`, `Policy`, `Parse`, `refusedKeys`, `device`, `buildTests`)
+- Modify: `internal/policy/resolve.go` (`ErrDeviceRefused`, `resolveNow`), `internal/policy/tests.go` (`RunTests`)
 - Create: `internal/policy/admit.go`
 - Test: `internal/policy/admit_test.go`
 
@@ -1665,7 +1819,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `func (p *Policy) KeyAssignment(name string) (admission.Assignment, bool)`
   - `func (p *Policy) KeyGroups() []admission.KeyGroup`
   - `func (p *Policy) Notices() []string`
-  - `func (p *Policy) Device(name string) (admission.Device, bool)` — O(1).
+  - `func (p *Policy) AdmissionAssessed() bool` — true where key groups are declared (either file) or
+    `Env.KeyRefs` is known; only then does admission refuse anything a caller acts on.
+  - `policy.ErrDeviceRefused`, returned by `Resolve` and `ResolveSubject` for a device admission
+    refuses, where admission is assessed, after the grants check as for a quarantine.
+  - The existing `func (p *Policy) Device(name string) (admission.Device, bool)`
+    (`internal/policy/tests.go:357`) is unchanged, and `device` becomes an O(1) index read.
   - Each refused device's `Refusal` code and its text: `matches no key group, so no key admits it
     (spec §10)`; `is assigned key_ref <ref>, which port49d.yaml defines no key for, so it fails closed
     (spec §10)`; and a tie, `device "<name>" matches key groups ...`. Later tasks decide by the code
@@ -1792,7 +1951,8 @@ func TestKeyGroupLoadErrors(t *testing.T) {
 }
 
 // The inventory file's key groups apply, with a notice, until they are moved;
-// a pair of files that both carry them is refused (plan 6a Decided 4).
+// where both files carry them the policy's win and the inventory's are named
+// ignored, so no step of the move refuses a device (plan 6a Decided 4, C3).
 func TestInventoryKeyGroupsApplyWithANoticeUntilMoved(t *testing.T) {
 	e := env()
 	e.InventoryKeyGroups = []admission.KeyGroup{{CIDR: netip.MustParsePrefix("10.0.0.0/8"), KeyRef: "prod_key"}}
@@ -1806,11 +1966,78 @@ func TestInventoryKeyGroupsApplyWithANoticeUntilMoved(t *testing.T) {
 	if n := p.Notices(); len(n) != 1 || !strings.Contains(n[0], "move the block into the policy file") {
 		t.Fatalf("notices: %q", n)
 	}
-	if _, err := Parse([]byte(keyGrouped), e); err == nil || !strings.Contains(err.Error(), "delete the inventory file's block") {
-		t.Fatalf("both files: %v", err)
+	// Both files: the policy's block wins, and the notice names the other.
+	e.InventoryKeyGroups = []admission.KeyGroup{{CIDR: netip.MustParsePrefix("10.0.0.0/8"), KeyRef: "old_key"}}
+	p, err = Parse([]byte(keyGrouped), e)
+	if err != nil {
+		t.Fatalf("both files refused: %v", err)
+	}
+	if r, _ := p.Admitted("leaf-01"); r.KeyRef != "prod_key" {
+		t.Fatalf("the inventory's group won: %+v", r)
+	}
+	if n := p.Notices(); len(n) != 1 || !strings.Contains(n[0], "ignored") {
+		t.Fatalf("notices: %q", n)
+	}
+}
+
+// C1: a policy with a tests: block loads (good has one), and the tests
+// resolve their devices through the index filled before buildTests.
+func TestAPolicyWithTestsLoadsAndItsTestsFindTheirDevices(t *testing.T) {
+	p := mustParse(t, good)
+	if len(p.Tests()) == 0 {
+		t.Fatal("good has tests")
+	}
+	for _, r := range p.RunTests(noon) {
+		if r.Err != nil {
+			t.Fatalf("%+v", r)
+		}
+	}
+}
+
+// I3: a test naming a device the inventory no longer has fails the test run,
+// never the load, so an inventory change never waits on a policy edit.
+func TestATestOnAnAbsentDeviceFailsTheRunNotTheLoad(t *testing.T) {
+	body := strings.Replace(good, "device: leaf-01,", "device: leaf-gone,", 1)
+	p, err := Parse([]byte(body), env())
+	if err != nil {
+		t.Fatalf("the load refused a test on an absent device: %v", err)
+	}
+	res := p.RunTests(noon)
+	if len(res) == 0 || res[0].Err == nil || !strings.Contains(res[0].Err.Error(), `device "leaf-gone" is not in the inventory`) {
+		t.Fatalf("%+v", res)
+	}
+}
+
+// I2: where admission is assessed, a refused device resolves to
+// ErrDeviceRefused after the grants check; where it is not (no key groups and
+// no key names), nothing changes.
+func TestARefusedDeviceDoesNotResolve(t *testing.T) {
+	e := env()
+	e.Devices = append(e.Devices, admission.Device{Name: "stray", Platform: "arista_eos",
+		Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.9")}})
+	p, err := Parse([]byte(keyGrouped), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stray, _ := p.Device("stray")
+	if _, err := p.Resolve("user:alice@example.com", stray, noon); !errors.Is(err, ErrDeviceRefused) {
+		t.Fatalf("stray: %v", err)
+	}
+	if _, err := p.Resolve("user:nobody@example.com", stray, noon); !errors.Is(err, ErrNoGrants) {
+		t.Fatalf("no grant is answered first: %v", err)
+	}
+	unassessed := mustParse(t, good)
+	if unassessed.AdmissionAssessed() {
+		t.Fatal("no key groups and no key names is assessed")
+	}
+	leaf, _ := unassessed.Device("leaf-01")
+	if _, err := unassessed.Resolve("user:alice@example.com", leaf, noon); err != nil {
+		t.Fatalf("an unassessed policy refused: %v", err)
 	}
 }
 ```
+
+  (add `errors` to the file's imports).
 
 - [ ] **Step 2: Run them to see them fail**
 
@@ -1849,14 +2076,17 @@ type fileKeyGroup struct {
 	KeyRefs []string
 	// InventoryKeyGroups are the key groups an inventory file still carries
 	// (admission.Inventory.KeyGroups). They apply where this file has none,
-	// with a notice, and a file that has its own is refused beside them
-	// (plan 6a Decided 4).
+	// with a notice; where it has its own, this file's win and the notice
+	// names these ignored (plan 6a Decided 4).
 	InventoryKeyGroups []admission.KeyGroup
 ```
 
   Add to `Policy` after `quarantine`:
 
 ```go
+	// devIndex is the inventory by name, filled first thing in Parse, so
+	// every step — buildTests included — finds a device in O(1).
+	devIndex map[string]admission.Device
 	// keyGroups assign each device its key_ref (spec §10), and admitted and
 	// assigned are the answer for each inventory device, by name; trie
 	// indexes admitted by address. notices are what a load says without
@@ -1868,28 +2098,79 @@ type fileKeyGroup struct {
 	notices   []string
 ```
 
-  In `Parse`, insert `p.buildKeyGroups` into the step list after `p.buildPlatforms`, and replace
-  the final `p.checkDevices()` / `return p, nil` with:
+  In `Parse`, fill the index right after `p := &Policy{...}` is built:
 
 ```go
-	p.checkDevices()
-	if err := p.admit(); err != nil {
-		return nil, err
+	p.devIndex = make(map[string]admission.Device, len(env.Devices))
+	for _, d := range env.Devices {
+		p.devIndex[d.Name] = d
 	}
-	return p, nil
 ```
+
+  and insert `p.buildKeyGroups, p.admit` into the step list right after `p.buildPlatforms`, so the
+  list begins `p.buildPlatforms, p.buildKeyGroups, p.admit, p.buildLevels, ...`. `admit` needs only
+  the inventory, the key groups and (Task 9) the platform blocks, all built by then, and everything
+  after it can read admission. The final `p.checkDevices()` / `return p, nil` is unchanged.
 
   In `refusedKeys`, delete the `KeyGroups any \`yaml:"key_groups"\`` field and the `switch` case
-  that refuses it (key groups now load here). Replace the private `device` method with a call
-  through `Device`:
+  that refuses it (key groups now load here). Replace the private `device` method's linear scan
+  (`load.go:1462`) with the index:
 
 ```go
-func (p *Policy) device(name string) (admission.Device, bool) { return p.Device(name) }
+func (p *Policy) device(name string) (admission.Device, bool) {
+	d, ok := p.devIndex[name]
+	return d, ok
+}
 ```
 
-  `Device` reads `p.admitted`, which `admit` fills after `checkDevices`; `checkDevices` and the
-  steps before it do not call `device` (they range over `p.env.Devices`), so the order is safe.
-  Confirm with `grep -n "p.device(" internal/policy/*.go`: every caller runs after `Parse` returns.
+  The one exported `Device` stays where it is, `internal/policy/tests.go:357`, reading through
+  `device`; `admit.go` declares none. The callers of `device` are `buildTests` (`load.go:1372`, a
+  `Parse` step, which runs after the index is filled), `review.go:47`, `explain.go:58`,
+  `diff.go:847` and `:1172`, `tests.go:231` and `Device`: all read the index.
+
+  **A test on an absent device fails the run, not the load (I3).** In `buildTests`, delete the
+  check at `load.go:1372`–`1374` (`if _, ok := p.device(t.Device); !ok { return ... "is not in the
+  inventory" }`). In `RunTests` (`tests.go:227`), replace `d, _ := p.device(t.Device)` with:
+
+```go
+		d, ok := p.device(t.Device)
+		if !ok {
+			// The inventory no longer names it: CI fails the test, and the
+			// load that built this policy did not (plan 6a, I3).
+			r.Err = fmt.Errorf("device %q is not in the inventory", t.Device)
+			out = append(out, r)
+			continue
+		}
+```
+
+  and in its `switch` on the resolution's error, before the `err != nil` case:
+
+```go
+		case errors.Is(err, ErrDeviceRefused):
+			r.Reason = decision.DeviceUnknown
+```
+
+  **A refused device does not resolve (I2).** In `resolve.go`, beside `ErrDeviceQuarantined`:
+
+```go
+// ErrDeviceRefused is a device the inventory names and admission refuses
+// (spec §10): no key group admits it, two tie on it, or its key_ref is one
+// port49d holds no key for. It cannot reach port49d, so nothing is minted for
+// it, and a refresh revokes its contexts; the mint denies it device_unknown
+// (spec §5.7). The wrapped message names the cause.
+var ErrDeviceRefused = errors.New("policy: admission refuses the device")
+```
+
+  and in `resolveNow`, after the quarantine check:
+
+```go
+	if r, ok := p.admitted[d.Name]; ok && r.Refused != "" && p.AdmissionAssessed() {
+		return Resolution{}, fmt.Errorf("%w: %s", ErrDeviceRefused, r.Refused)
+	}
+```
+
+  `resolve` (no quarantine, read by the joint checks, the diff and lint) is unchanged, so what a
+  policy would compile for a refused device is still reported.
 
 - [ ] **Step 5: `internal/policy/admit.go`:**
 
@@ -1915,8 +2196,11 @@ import (
 func (p *Policy) buildKeyGroups(f file) error {
 	switch {
 	case len(f.KeyGroups) > 0 && len(p.env.InventoryKeyGroups) > 0:
-		return errors.New("key_groups: the inventory file carries key_groups too; key assignment is reviewed " +
-			"policy (spec §10), so delete the inventory file's block")
+		// Mid-migration: this file's block wins, so a reload or restart
+		// between adding it here and deleting it there loads (plan 6a C3).
+		p.notices = append(p.notices, fmt.Sprintf("key_groups: the inventory file's block (%d group(s)) is "+
+			"ignored, since the policy file has its own; delete it from the inventory file (spec §10)",
+			len(p.env.InventoryKeyGroups)))
 	case len(f.KeyGroups) == 0:
 		p.keyGroups = slices.Clone(p.env.InventoryKeyGroups)
 		if len(p.keyGroups) > 0 {
@@ -1985,7 +2269,8 @@ func matchKey(m map[string]string) string {
 // tier, or why it is refused — no group matches it, two tie on it, or its
 // key_ref is not one port49d.yaml defines (Env.KeyRefs). A refused device is
 // refused alone; the policy and the rest of the fleet load (plan 6a Decided 5).
-func (p *Policy) admit() error {
+// It is a Parse step, after buildKeyGroups and before buildTests.
+func (p *Policy) admit(file) error {
 	p.admitted = make(map[string]admission.Resolved, len(p.env.Devices))
 	p.assigned = make(map[string]admission.Assignment, len(p.env.Devices))
 	entries := make([]admission.Resolved, 0, len(p.env.Devices))
@@ -2050,12 +2335,15 @@ func (p *Policy) KeyGroups() []admission.KeyGroup { return slices.Clone(p.keyGro
 // start and at every reload that loads.
 func (p *Policy) Notices() []string { return slices.Clone(p.notices) }
 
-// Device is an inventory device by name.
-func (p *Policy) Device(name string) (admission.Device, bool) {
-	r, ok := p.admitted[name]
-	return r.Device, ok
-}
+// AdmissionAssessed reports whether admission decides anything here: key
+// groups are declared, in either file, or port49d's key names are known
+// (Env.KeyRefs, which port49d always sets). An offline tool given neither —
+// most of the test corpus — resolves every device as before.
+func (p *Policy) AdmissionAssessed() bool { return len(p.keyGroups) > 0 || p.env.KeyRefs != nil }
 ```
+
+  `errors` stays imported: `buildKeyGroups` no longer uses it, so drop it from `admit.go`'s imports
+  if the compiler says it is unused.
 
 - [ ] **Step 6: Run the package's tests**
 
@@ -2178,7 +2466,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Create: `internal/bundle/bundle.go`
 - Test: `internal/bundle/bundle_test.go`
 - Modify: `internal/policy/load.go` (`Env.Bundle`, `Policy.Source`, `raw`, `Raw`, `Inventory`)
-- Modify: `cmd/port49/policy.go` (`policyFiles.load`)
+- Modify: `cmd/port49/policy.go` (`policyFiles.load`, `policyDiff`, `grantsRemove`, `offlineEnv` removed),
+  `cmd/port49/platform.go` (`platform upgrade`)
+- Test: `cmd/port49/policy_test.go`
 - Modify: `cmd/port49d/main.go` (`parsePolicy` becomes `parseBundle`), `cmd/port49d/reload.go`
 - Modify: `cmd/port49d/reload_test.go` (file versions compare `Source`)
 
@@ -2462,8 +2752,56 @@ func (f *policyFiles) load() (*policy.Policy, error) {
 }
 ```
 
-  (import `github.com/rhwendt/port49/internal/bundle`; drop the `admission` import if the compiler
-  says it is unused there). In `cmd/port49d/main.go` replace `parsePolicy` with:
+  (import `github.com/rhwendt/port49/internal/bundle`). The other tools that load a policy against
+  an inventory load it the same way, so every bundle string a tool prints is port49d's for those
+  files, and a policy still reading its key groups from the inventory sees them (I7). Delete
+  `offlineEnv` and replace its four callers:
+
+  - `policyDiff` (`cmd/port49/policy.go:309`, `:314`): `before, err := bundle.Load(*oldPath,
+    *inventory, policy.Env{})` and `after, err := bundle.Load(*newPath, *inventory, policy.Env{})`;
+    the `admission.LoadFile` before them goes, since `bundle.Load` reads the inventory.
+  - `grantsRemove` (`cmd/port49/policy.go:740`): `after, err := bundle.Parse(out, inv, policy.Env{})`,
+    with `inv` the `admission.LoadFile` result it already has.
+  - `platform upgrade` (`cmd/port49/platform.go:279`, `:293`): `before, err := bundle.Parse(raw,
+    inv, policy.Env{})` and `after, err := bundle.Parse(moved, inv, policy.Env{})`.
+
+  `grep -n 'offlineEnv\|policy.Load(\|policy.Parse(' cmd/port49/*.go | grep -v _test` then lists
+  nothing. Add to `cmd/port49/policy_test.go`:
+
+```go
+// I7: every tool names the bundle port49d names for the same two files.
+func TestPolicyDiffLoadsTheBundleAsPort49dDoes(t *testing.T) {
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "policy.yaml")
+	inv := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(pol, []byte("scopes: [{name: all_devices, match: {}}]\n"+
+		"roles: [{name: r, privilege: readonly, permit: [show **]}]\n"+
+		"subjects: [{name: s, identity: [\"user:alice@example.com\"], username: alice, token_ttl: 60s}]\n"+
+		"grants: [{subject: s, scope: all_devices, roles: [r]}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte("devices: [{name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}]\n"+
+		"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", pol, "--new", pol, "--inventory", inv}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	p, err := bundle.Load(pol, inv, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := p.Admitted("leaf-01"); r.KeyRef != "prod_key" {
+		t.Fatalf("the inventory's key groups were not read: %+v", r)
+	}
+	if !strings.HasPrefix(p.Bundle, "sha256:") || p.Bundle == p.Source {
+		t.Fatalf("bundle %s source %s", p.Bundle, p.Source)
+	}
+}
+```
+
+  In `cmd/port49d/main.go` replace `parsePolicy` with:
 
 ```go
 // parseBundle builds the bundle from the policy file's bytes and an
@@ -2539,6 +2877,7 @@ package bundle
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -2609,6 +2948,22 @@ func TestDiffSaysWhatChangedAndWhichChangesAreSecurity(t *testing.T) {
 	if len(rep.Security()) != 2 {
 		t.Fatalf("security: %+v", rep.Security())
 	}
+	// I5: a pin moving a device to another key, and a device becoming
+	// admitted, are security changes.
+	pinned := dev("leaf-02", "10.0.1.2", map[string]string{"site": "dc1"})
+	pinned.KeyRef = "lab_key"
+	stray := dev("stray", "192.0.2.8", nil)
+	before := mustBundle(t, dev("leaf-02", "10.0.1.2", map[string]string{"site": "dc1"}), stray)
+	stray.Addresses = []netip.Addr{netip.MustParseAddr("10.0.1.8")}
+	after := mustBundle(t, pinned, stray)
+	var kinds []string
+	for _, c := range Diff(before, after, time.Now()).Security() {
+		kinds = append(kinds, c.Kind+" "+c.Device)
+	}
+	if got := strings.Join(kinds, ","); !strings.Contains(got, "key_ref_changed leaf-02") ||
+		!strings.Contains(got, "admission_changed stray") {
+		t.Fatalf("security: %s", got)
+	}
 	if s := rep.Summary(); !strings.Contains(s, "+1 device(s), -1, 1 changed") || !strings.Contains(s, old.Bundle) {
 		t.Fatalf("summary: %s", s)
 	}
@@ -2624,8 +2979,18 @@ func TestCheckRefusesAnEmptyOrOverShrinkingInventory(t *testing.T) {
 		t.Fatalf("one of ten at 10%%: %v", err)
 	}
 	err := Check(old, mustBundle(t, ten[2:]...), 10)
-	if err == nil || !strings.Contains(err.Error(), "removes 2 of 10 devices (20%)") {
+	if err == nil || !strings.Contains(err.Error(), "removes 2 of 10 devices and refuses 0 more (20%)") ||
+		!strings.Contains(err.Error(), "send SIGHUP") {
 		t.Fatalf("two of ten at 10%%: %v", err)
+	}
+	// I4: the same ten kept, two moved out of every key group, is the same
+	// loss of service and is refused the same way, naming them.
+	moved := append([]admission.Device(nil), ten...)
+	moved[0].Addresses = []netip.Addr{netip.MustParseAddr("192.0.2.1")}
+	moved[1].Addresses = []netip.Addr{netip.MustParseAddr("192.0.2.2")}
+	err = Check(old, mustBundle(t, moved...), 10)
+	if err == nil || !strings.Contains(err.Error(), "refuses 2 more") || !strings.Contains(err.Error(), "d0, d1") {
+		t.Fatalf("two of ten newly refused at 10%%: %v", err)
 	}
 	if err := Check(old, mustBundle(t, ten[2:]...), 100); err != nil {
 		t.Fatalf("the bound off: %v", err)
@@ -2702,8 +3067,8 @@ type Change struct {
 	// Security marks what the log must carry as an inventory_change record:
 	// an address added to a device already in inventory — the mint response
 	// hands it to an SSH client, so a rogue one is a credential-capture path —
-	// and a device joining or leaving a scope with security_log: true (spec
-	// §5.5, §10).
+	// a device joining or leaving a scope with security_log: true (spec §5.5,
+	// §10), a device's key_ref changing, and a device becoming admitted.
 	Security bool
 }
 
@@ -2755,11 +3120,17 @@ func Diff(old, new *policy.Policy, now time.Time) Report {
 			}
 			ro, _ := old.Admitted(name)
 			rn, _ := new.Admitted(name)
+			// A key_ref change moves the device onto another key — a pin in
+			// the inventory can pick a weaker or a shared one — and a device
+			// becoming admitted starts being answered: both are security
+			// changes (plan 6a, I5).
 			if ro.KeyRef != rn.KeyRef {
-				add(Change{Kind: KeyRefChanged, Device: name, Platform: n.Platform, From: ro.KeyRef, To: rn.KeyRef})
+				add(Change{Kind: KeyRefChanged, Device: name, Platform: n.Platform, From: ro.KeyRef, To: rn.KeyRef,
+					Security: true})
 			}
 			if so, sn := admissionState(old, name, now), admissionState(new, name, now); so != sn {
-				add(Change{Kind: AdmissionChanged, Device: name, Platform: n.Platform, From: so, To: sn})
+				add(Change{Kind: AdmissionChanged, Device: name, Platform: n.Platform, From: so, To: sn,
+					Security: sn == "admitted"})
 			}
 		}
 	}
@@ -2813,7 +3184,9 @@ func (r Report) Security() []Change {
 
 // Check is what port49d refuses a new inventory for beyond Parse's refusals
 // (spec §10, bounded change): an inventory with no device, and one that
-// removes more than maxRemovedPercent of the devices in old. 100 turns the
+// takes more than maxRemovedPercent of the devices in old out of service —
+// removed, or kept and newly refused admission, which a dropped key-group
+// block or a mistyped pin does to a whole fleet (plan 6a, I4). 100 turns the
 // share off; nothing turns the empty check off.
 func Check(old, new *policy.Policy, maxRemovedPercent int) error {
 	if len(new.Devices()) == 0 {
@@ -2825,17 +3198,34 @@ func Check(old, new *policy.Policy, maxRemovedPercent int) error {
 		return nil
 	}
 	after := byName(new.Devices())
-	removed := 0
+	removed, refused := 0, 0
+	var named []string
 	for _, d := range old.Devices() {
 		if _, ok := after[d.Name]; !ok {
 			removed++
+			continue
+		}
+		ro, _ := old.Admitted(d.Name)
+		rn, _ := new.Admitted(d.Name)
+		if new.AdmissionAssessed() && ro.Refused == "" && rn.Refused != "" {
+			refused++
+			if len(named) < 5 {
+				named = append(named, d.Name)
+			}
 		}
 	}
-	if removed*100 > was*maxRemovedPercent {
-		return fmt.Errorf("the new inventory removes %d of %d devices (%d%%), more than inventory.max_removed_percent "+
-			"(%d%%); fix the file, or make the removal in steps under the bound, or raise the bound and restart "+
-			"port49d (a restart ends every live login while the store is in memory)", removed, was, removed*100/was,
-			maxRemovedPercent)
+	if gone := removed + refused; gone*100 > was*maxRemovedPercent {
+		msg := fmt.Sprintf("the new inventory removes %d of %d devices and refuses %d more (%d%%), more than "+
+			"inventory.max_removed_percent (%d%%)", removed, was, refused, gone*100/was, maxRemovedPercent)
+		if refused > 0 {
+			msg += fmt.Sprintf("; newly refused: %s", strings.Join(named, ", "))
+			if refused > len(named) {
+				msg += fmt.Sprintf(" and %d more", refused-len(named))
+			}
+			msg += " (if key_groups was deleted from the inventory file, add it to the policy file first)"
+		}
+		return errors.New(msg + "; fix the file, or, if the change is meant, raise inventory.max_removed_percent " +
+			"in port49d.yaml and send SIGHUP, which re-reads it with the reload")
 	}
 	return nil
 }
@@ -2932,9 +3322,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Consumes: `admission.Resolved.WirePlatform` (Task 3).
 - Produces:
   - `decision.Device.KeyRef string` (`key_ref`), `KeyVersion int` (`key_version`), both omitempty.
-  - `decision.EventInventoryChange = "inventory_change"`; `decision.Change{Kind, Scope, Address,
-    FromBundle, ToBundle string}` with JSON keys `kind`, `scope`, `address`, `from_bundle`,
-    `to_bundle`; `Record.Change *Change` (`change`).
+  - `decision.EventInventoryChange = "inventory_change"`; `decision.Change{Kind, Scope, Address, From, To,
+    FromBundle, ToBundle string}` with JSON keys `kind`, `scope`, `address`, `from`, `to`,
+    `from_bundle`, `to_bundle`; `Record.Change *Change` (`change`).
   - `authen.Peer.KeyRef string`, `KeyVersion int`, `WirePlatform string`;
     `func (p Peer) Wire() string`; `func (p Peer) Device() *decision.Device`.
 
@@ -3018,9 +3408,13 @@ type Device struct {
 // leaving a scope with security_log: true. The record's device block names
 // the device.
 type Change struct {
-	Kind       string `json:"kind"`
-	Scope      string `json:"scope,omitempty"`
-	Address    string `json:"address,omitempty"`
+	Kind    string `json:"kind"`
+	Scope   string `json:"scope,omitempty"`
+	Address string `json:"address,omitempty"`
+	// From and To are a key_ref change's two key_refs, and an admission
+	// change's two states.
+	From       string `json:"from,omitempty"`
+	To         string `json:"to,omitempty"`
 	FromBundle string `json:"from_bundle"`
 	ToBundle   string `json:"to_bundle"`
 }
@@ -3099,6 +3493,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Modify: `internal/platform/platform.go` (delete `WireFactsDiffer`), `internal/platform/platform_test.go`
 - Modify: `internal/daemon/author/author.go`, `internal/daemon/acct/acct.go` (`peer.Wire()`)
 - Modify: `cmd/port49d/main.go` (`redactorFor`), `cmd/port49/capabilities.go`, `cmd/port49/platform.go`
+- Modify: `internal/capability/capability.go` (`Device.WirePlatform`, `isExec`)
 - Test: `internal/policy/platforms_test.go`, `internal/daemon/author/author_test.go`,
   `internal/daemon/acct/acct_test.go`, `cmd/port49d/redact_test.go`
 
@@ -3183,8 +3578,12 @@ func TestAVariantIsRedactedAsItsBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := redactorFor(policy.NewLive(pol))("srx_variant")
-	if want := platform.Redactions("juniper_junos"); len(got) < len(want) {
-		t.Fatalf("the variant gets %d patterns, Junos %d", len(got), len(want))
+	want := platform.Redactions("juniper_junos")
+	if len(got) < len(want) || !reflect.DeepEqual(got[:len(want)], want) {
+		t.Fatalf("the variant's patterns do not begin with Junos's: got %d, Junos %d", len(got), len(want))
+	}
+	if reflect.DeepEqual(platform.Redactions("srx_variant"), want) {
+		t.Fatal("the default list equals Junos's, so this test proves nothing")
 	}
 }
 ```
@@ -3240,7 +3639,15 @@ func (p *Policy) WirePlatform(name string) string {
 	}
 ```
 
-  In `cmd/port49/capabilities.go` the redactor becomes `append(platform.Redactions(p.WirePlatform(name)),
+  `internal/capability/capability.go`'s `Device` gains `WirePlatform string \`json:"wire_platform,omitempty"\``
+  ("the base a variant's exec records are read as, spec §8; empty is Platform"), and its two
+  `isExec(d.Platform, ...)` calls (`capability.go:219`, `:232`) read `isExec(d.wire(), ...)` with
+  `func (d Device) wire() string { if d.WirePlatform != "" { return d.WirePlatform }; return d.Platform }`,
+  so `devices capabilities` reads a Junos variant's `cmd=login` as its exec record (M4). The author
+  handler's `serverMsg(peer.Platform, ...)` stays keyed by the variant's name: the redactor port49d
+  hands it, `redactorFor`, maps the name through `WirePlatform` itself. In
+  `cmd/port49/capabilities.go` each `capability.Device` gains `WirePlatform: p.WirePlatform(d.Platform)`,
+  and the redactor becomes `append(platform.Redactions(p.WirePlatform(name)),
   p.Dialect(name).Redact...)`, and in `cmd/port49/platform.go`'s show path, where a policy is
   loaded (`p != nil`), list `platform.Redactions(p.WirePlatform(platformName))`; with no policy,
   `platformName` as today.
@@ -3523,7 +3930,44 @@ func (c Config) KeyRefs() []string {
   admits from the policy in force (policy.Policy.Admission)."
 
 - [ ] **Step 6: port49d.** In `cmd/port49d/main.go`, `parseBundle` passes the key names:
-  `bundle.Parse(raw, inv, policy.Env{KeyRefs: cfg.KeyRefs()})`. Add:
+  `bundle.Parse(raw, inv, policy.Env{KeyRefs: cfg.KeyRefs()})`. `loadPolicy`, the start's load,
+  refuses a bundle that admits none of a non-empty inventory (plan 6a Decided 5, C3): no device
+  caused that, and a daemon admitting nothing is a misconfiguration to say at start, not a fleet to
+  close silently. After its `parseBundle`:
+
+```go
+	if n := len(pol.Devices()); n > 0 && len(pol.AdmissionRefusals()) == n {
+		r := pol.AdmissionRefusals()[0]
+		return nil, fmt.Errorf("broker.policy_file %s with inventory_file %s admits none of the %d device(s) in "+
+			"the inventory (%s: %s); if key_groups was deleted from the inventory file, add it to the policy file",
+			cfg.Broker.PolicyFile, cfg.InventoryFile, n, r.Device.Name, r.Refused)
+	}
+```
+
+  A reload never reaches this: the bound (Task 12) refuses a snapshot that newly refuses the fleet.
+  Add to `cmd/port49d/broker_test.go`:
+
+```go
+// C3: a restart in the middle of the key-group move loads (both files carry
+// the block, the policy's wins), and a start whose bundle admits nothing is
+// refused with the fix named.
+func TestTheKeyGroupMoveNeverStopsAStartThatCouldServe(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy+"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]\n")
+	cfg.Inventory.Devices[0].KeyRef = ""
+	cfg.Inventory.Devices[0].Addresses = []netip.Addr{netip.MustParseAddr("10.0.0.1")}
+	cfg.Inventory.KeyGroups = []admission.KeyGroup{{CIDR: netip.MustParsePrefix("10.0.0.0/8"), KeyRef: "lab_key"}}
+	if err := buildWith(cfg); err != nil {
+		t.Fatalf("both files carry the block: %v", err)
+	}
+	none := brokerConfig(t, minimalPolicy)
+	none.Inventory.Devices[0].KeyRef = ""
+	if err := buildWith(none); err == nil || !strings.Contains(err.Error(), "admits none of the 1 device(s)") {
+		t.Fatalf("a bundle admitting nothing: %v", err)
+	}
+}
+```
+
+  Add:
 
 ```go
 // liveAdmission is the policy in force's admission index, read at each
@@ -3598,16 +4042,20 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ### Task 11: The broker reads its devices from the policy it holds, and an inventory-only swap leaves an unchanged context alone
 
 **Files:**
-- Modify: `internal/broker/broker.go` (drop `Devices`; `mintOne`)
-- Modify: `internal/broker/refresh.go` (devices from the policies; `sameSource`; `sameButBundle`)
+- Modify: `internal/broker/broker.go` (drop `Devices`; `mintOne`, a refused device denied `device_unknown`)
+- Modify: `internal/broker/refresh.go` (devices from the policies; a refused device's contexts revoked;
+  `sameSource`; `sameButBundle`)
 - Modify: `cmd/port49d/main.go` (`buildBroker`)
 - Modify: `internal/broker/fixture_test.go`, `engine_test.go`, `refresh_test.go` (a `devices` field)
 - Test: `internal/broker/refresh_test.go`
 
 **Interfaces:**
 - Consumes: `(*policy.Policy).Device`, `Devices`, `Source` (Tasks 4, 6).
+- Consumes also: `policy.ErrDeviceRefused` (Task 4).
 - Produces: `broker.Broker` has no `Devices` field: a mint, the refresh and its records read the
-  device from the policy they hold, so a swap changes the device table with the policy.
+  device from the policy they hold, so a swap changes the device table with the policy. A device
+  admission refuses is not live: no mint (`device_unknown`), its contexts revoked, its tokens
+  superseded (plan 6a, I2).
 
 - [ ] **Step 1: The fixture keeps its own device table.** In `internal/broker/fixture_test.go`, add
   `devices map[string]admission.Device` to `fixture`, set `f.devices = devices` in `newFixture`,
@@ -3659,6 +4107,33 @@ func TestAPolicyEditStillRewritesEveryContext(t *testing.T) {
 	}
 }
 
+// I2: a device admission refuses is not live. The mint denies it
+// device_unknown, after the grants check, and a refresh revokes its context
+// and supersedes its tokens, as for a device the inventory no longer names.
+func TestARefusedDeviceIsNotMintedForAndItsContextIsRevoked(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	old := f.b.Policy.Load()
+	// leaf1 keeps its record, and a key group now admits only nx1's range.
+	pol, err := policy.Parse([]byte(testPolicy+"key_groups: [{match: {cidr: 172.100.100.31/32}, key_ref: k}]\n"),
+		policy.Env{Devices: old.Devices(), Now: f.b.Now(), KeyRefs: []string{"k"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	priors := []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}}
+	it := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")).Results[0]
+	if it.Verdict != "deny" || it.Reason != "device_unknown" {
+		t.Fatalf("a refused device was minted for: %+v", it)
+	}
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.Revoked != 1 {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+	if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+		t.Fatal("the context on the refused device is live")
+	}
+}
+
 // A device the inventory in force no longer names has its contexts revoked
 // and its unspent tokens superseded (plan 4b's hand-off to plan 6).
 func TestADeviceRemovedFromInventoryIsRevokedAndItsTokensGo(t *testing.T) {
@@ -3704,6 +4179,30 @@ the field; then `Updated 1, Unchanged 0` for the inventory-only swap.
 ```go
 	dev, ok := pol.Device(name)
 ```
+
+  and, in the `switch` on `pol.Resolve`'s error, after the `ErrDeviceQuarantined` case:
+
+```go
+	case errors.Is(err, policy.ErrDeviceRefused):
+		// Admission refuses this device (spec §10): its packets are closed
+		// after the header, so a token for it would only be a login that
+		// falls to its local method. Asked after the grants, as a
+		// quarantine is, so no caller learns which devices exist.
+		return deny(decision.DeviceUnknown, dev.Platform), nil
+```
+
+  In `refresh.go`'s `decideRefresh`, after the `ErrDeviceQuarantined` case:
+
+```go
+	case errors.Is(err, policy.ErrDeviceRefused):
+		// Not live (spec §5.7, device_unknown): the device cannot reach
+		// port49d, so the context is revoked as for a removed device.
+		rec.Verdict, rec.Reason = decision.VerdictDeny, decision.DeviceUnknown
+		return refreshStep{revoke: true, rec: rec, outcome: "revoked"}
+```
+
+  `mintedFor` already treats any `Resolve` error as "mints nothing", so the supersede deletes a
+  refused device's tokens with no change.
 
   In `internal/broker/refresh.go`:
 
@@ -3846,6 +4345,200 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 ---
 
+### Task 11a: The inventory file is read behind the policy file's write fence
+
+**Files:**
+- Modify: `cmd/port49d/policyfile.go`, `cmd/port49d/policyfile_other.go` (`readGuarded`,
+  `readInventoryFile`)
+- Modify: `cmd/port49d/main.go` (`fencedInventory`, called at start with a broker)
+- Modify: `tests/lab/harness_test.go` (`privatePolicy` copies `inventory_file` too)
+- Test: `cmd/port49d/policyfile_test.go`, `cmd/port49d/broker_test.go`
+
+**Interfaces:**
+- Consumes: `admission.ParseFile`, `admission.Validate` (Task 3); `engine.HashOf`.
+- Produces:
+  - `func readGuarded(path string, max int64, what string) ([]byte, error)` — `readPolicyFile`'s
+    checks (resolvePolicyPath's link walk, the directory and file owner and mode, a regular file,
+    non-blocking open) with the size bound and the noun passed in. `readPolicyFile(path)` is
+    `readGuarded(path, maxPolicySize, "policy file")`.
+  - `const maxInventorySize = 64 << 20`; `func readInventoryFile(path string) ([]byte, error)`.
+  - `func fencedInventory(cfg config.Config) (admission.Inventory, string, error)` — the inventory
+    as the fence read it, and the version (`engine.HashOf` of those bytes) the reloader starts from.
+
+The inventory file decides privilege once it is reloaded live (Task 12): its attributes and names
+decide scope membership, its addresses are handed to SSH clients, and a record's `key_ref` pins a
+key. `broker.policy_file` is read through `readPolicyFile` for exactly that reason (plan 4b), so the
+inventory file is read through the same checks, at start and at every reload (C2). Without a
+broker, port49d reads the inventory once at start and never again, as in plan 1, and the lab's
+standing config reads the repository's file: the fence applies with a broker, where the file is
+live.
+
+- [ ] **Step 1: Write the failing tests.** Append to `cmd/port49d/policyfile_test.go`:
+
+```go
+// C2: the inventory file is read behind the policy file's fence, with its
+// own size bound.
+func TestTheInventoryFileIsFenced(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(path, []byte("devices: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := readInventoryFile(path); err != nil || string(raw) != "devices: []\n" {
+		t.Fatalf("a private file: %q, %v", raw, err)
+	}
+	if err := os.Chmod(path, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readInventoryFile(path); err == nil || !strings.Contains(err.Error(), "the file "+path) {
+		t.Fatalf("a group-writable file: %v", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(path, maxInventorySize+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readInventoryFile(path); err == nil || !strings.Contains(err.Error(), "not an inventory file") {
+		t.Fatalf("an oversized file: %v", err)
+	}
+}
+```
+
+  and to `cmd/port49d/broker_test.go`:
+
+```go
+// C2 at start: with a broker, a group-writable inventory file refuses the
+// start, and a private one is what the reloader starts from.
+func TestAStartReadsTheInventoryBehindTheFence(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	cfg.InventoryFile = filepath.Join(t.TempDir(), "inventory.yaml")
+	body := "devices: [{name: leaf1, platform: arista_eos, key_ref: lab_key}]\n"
+	if err := os.WriteFile(cfg.InventoryFile, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inv, v, err := fencedInventory(cfg)
+	if err != nil || len(inv.Devices) != 1 || v != engine.HashOf([]byte(body)) {
+		t.Fatalf("%+v %s %v", inv, v, err)
+	}
+	if err := os.Chmod(cfg.InventoryFile, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fencedInventory(cfg); err == nil || !strings.Contains(err.Error(), "inventory_file") {
+		t.Fatalf("a world-writable inventory started: %v", err)
+	}
+}
+```
+
+- [ ] **Step 2: Run them to see them fail**
+
+Run: `go test ./cmd/port49d/ -run 'Fence' -count=1`
+Expected: FAIL to compile — `undefined: readInventoryFile`, `maxInventorySize`, `fencedInventory`.
+
+- [ ] **Step 3: Generalize the read.** In `cmd/port49d/policyfile.go`, rename `readPolicyFile`'s
+  body into `readGuarded(path string, max int64, what string) ([]byte, error)`, replacing
+  `maxPolicySize` with `max` in its two uses and the refusal's text with
+  `fmt.Errorf("%s is larger than %d bytes; it is not a%s %s", target, max, article(what), what)`
+  (`article` returns `"n"` before a vowel, else `""`), and keep:
+
+```go
+// maxInventorySize bounds the inventory file's read. A 10,000-device
+// inventory is a few megabytes; the bound is there so a link aimed at a
+// multi-gigabyte file is not read into memory at every poll.
+const maxInventorySize = 64 << 20
+
+// readPolicyFile reads broker.policy_file behind the fence (readGuarded).
+func readPolicyFile(path string) ([]byte, error) { return readGuarded(path, maxPolicySize, "policy file") }
+
+// readInventoryFile reads inventory_file behind the same fence: with a broker
+// it is reloaded live and decides scope membership, the addresses a mint
+// hands out and key pins, so whoever can write it decides access within
+// seconds, as for the policy file (spec §10; plan 6a C2).
+func readInventoryFile(path string) ([]byte, error) {
+	return readGuarded(path, maxInventorySize, "inventory file")
+}
+```
+
+  The existing `TestPolicyFile...` tests keep passing: the policy file's refusal still reads "is
+  larger than 1048576 bytes; it is not a policy file". In `policyfile_other.go`, add the matching
+  refusal:
+
+```go
+// readInventoryFile refuses on every system but Linux, as readPolicyFile does.
+func readInventoryFile(string) ([]byte, error) {
+	return nil, errors.New("port49d reads inventory_file with a broker on Linux only: the check of who could " +
+		"have written it is Linux's")
+}
+```
+
+- [ ] **Step 4: The start reads through it.** In `cmd/port49d/main.go`:
+
+```go
+// fencedInventory reads inventory_file behind the fence (readInventoryFile)
+// and returns it with the version the reloader starts from: the hash of the
+// bytes loaded, so an edit between config.Load's read and this one is loaded,
+// never skipped (plan 6a, M1). config.Load has read the file once already,
+// plainly; with a broker these bytes replace what it read.
+func fencedInventory(cfg config.Config) (admission.Inventory, string, error) {
+	raw, err := readInventoryFile(cfg.InventoryFile)
+	if err != nil {
+		return admission.Inventory{}, "", fmt.Errorf("inventory_file %s: %w", cfg.InventoryFile, err)
+	}
+	inv, err := admission.ParseFile(raw, cfg.InventoryFile)
+	if err != nil {
+		return admission.Inventory{}, "", err
+	}
+	if err := admission.Validate(inv.Devices); err != nil {
+		return admission.Inventory{}, "", fmt.Errorf("inventory_file %s: %w", cfg.InventoryFile, err)
+	}
+	return inv, engine.HashOf(raw), nil
+}
+```
+
+  In `run`, right after `config.Load` and before anything reads `cfg.Inventory`, replace the
+  `_, inventoryAtStart, _ := fileVersion(cfg.InventoryFile)` line with:
+
+```go
+	// With a broker the inventory is live, so it is read behind the policy
+	// file's fence, and the reloader starts from the bytes loaded (M1).
+	inventoryAtStart := ""
+	if cfg.Broker != nil {
+		inv, v, err := fencedInventory(cfg)
+		if err != nil {
+			return err
+		}
+		cfg.Inventory, inventoryAtStart = inv, v
+	}
+```
+
+  (`inventoryAtStart` is already handed to the reloader: `r.inventory = inventoryAtStart`.)
+
+- [ ] **Step 5: The lab's derived broker configs carry a private inventory.** In
+  `tests/lab/harness_test.go`'s `privatePolicy`, after the policy copy and only when a
+  `policy_file:` line was found (a broker config), copy the file the top-level `inventory_file:`
+  line names into the same private directory the same way (`0700` directory, `0600` file) and
+  point the line at the copy. The anchor is `"inventory_file: "` at the start of a line. The
+  standing config, which has no broker, is untouched.
+
+- [ ] **Step 6: Run the tests, everything, and commit**
+
+Run: `go test ./cmd/port49d/ -count=1 && make test && make vet && make build && GOOS=darwin go build ./cmd/port49d/ && go vet -tags lab ./tests/lab/...`
+Expected: PASS; the darwin build proves the stub.
+
+```bash
+git add cmd/port49d tests/lab/harness_test.go
+git commit -m "feat(port49d): read the inventory file behind the policy file's write fence
+
+With a broker the inventory is reloaded live and decides scope membership,
+capture addresses and key pins, so it gets the policy file's owner, mode and
+size checks at start and at every reload (plan 6a pre-flight C2).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+```
+
+---
+
 ### Task 12: port49d reloads its inventory, bounded, and refreshes live sessions
 
 **Files:**
@@ -3859,7 +4552,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Consumes: `admission.ParseFile` (Task 3); `bundle.Diff`, `Check`, `Report.Summary` (Task 7);
   `parseBundle`, `(*policy.Policy).Raw`, `Inventory` (Task 6).
 - Produces:
-  - `config.Config.MaxRemovedPercent int` (default 10, 0–100).
+  - `config.Config.MaxRemovedPercent int` (default 10, 0–100); `func config.InventoryBound(raw []byte) (int, error)`.
+  - `reloader.cfgPath`, `reloader.rereadBound()` (SIGHUP re-reads the bound), `inventoryVersion(path)`
+    (the fenced read, Task 11a's `readInventoryFile`).
   - `metrics.InventoryReloads` (`port49_inventory_reloads_total{outcome}`), `InventoryFileRefused`
     (`port49_inventory_file_refused`), `InventorySnapshotAge`
     (`port49_inventory_snapshot_age_seconds`) and `func (m *Metrics) WatchInventoryAge(age func() float64)`.
@@ -3874,6 +4569,7 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -3939,13 +4635,19 @@ func TestAnInventoryThatDropsTooManyDevicesIsRefused(t *testing.T) {
 	}
 	out := rig.out.String()
 	if strings.Count(out, "inventory reload (inventory file changed) refused; still serving bundle") != 1 ||
-		!strings.Contains(out, "removes 1 of 2 devices (50%)") {
+		!strings.Contains(out, "removes 1 of 2 devices and refuses 0 more (50%)") ||
+		!strings.Contains(out, "raise inventory.max_removed_percent in port49d.yaml and send SIGHUP") {
 		t.Fatalf("the refusal: %s", out)
 	}
 	if testutil.ToFloat64(rig.m.InventoryFileRefused) != 1 {
 		t.Fatal("port49_inventory_file_refused is not 1")
 	}
-	rig.r.cfg.MaxRemovedPercent = 100
+	// I1, the operator's path, through the real reload: raise the bound in
+	// port49d.yaml and send SIGHUP; nothing is set in memory.
+	rig.r.cfgPath = filepath.Join(t.TempDir(), "port49d.yaml")
+	if err := os.WriteFile(rig.r.cfgPath, []byte("inventory: {max_removed_percent: 100}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
 	if _, ok := rig.b.Policy.Load().Device("leaf2"); ok {
 		t.Fatalf("SIGHUP with the bound raised did not apply: %s", rig.out.String())
@@ -3953,6 +4655,107 @@ func TestAnInventoryThatDropsTooManyDevicesIsRefused(t *testing.T) {
 	if testutil.ToFloat64(rig.m.InventoryFileRefused) != 0 {
 		t.Fatal("port49_inventory_file_refused stayed 1")
 	}
+	if !strings.Contains(rig.out.String(), "inventory.max_removed_percent is now 100%") {
+		t.Fatalf("the re-read bound was not said: %s", rig.out.String())
+	}
+}
+
+// C2 on a reload: an inventory file others could write is refused once, the
+// bundle in force keeps serving, and the alarm is set; put right, it loads.
+func TestAnInventoryFileOthersCouldWriteIsRefusedAtAReload(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.writeInventory(t, twoDevices)
+	if err := os.Chmod(rig.cfg.InventoryFile, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	rig.pollTwice()
+	rig.pollTwice()
+	if _, ok := rig.b.Policy.Load().Device("leaf2"); ok {
+		t.Fatal("a group-writable inventory was applied")
+	}
+	if n := strings.Count(rig.out.String(), "inventory reload (inventory file changed) refused"); n != 1 ||
+		testutil.ToFloat64(rig.m.InventoryFileRefused) != 1 {
+		t.Fatalf("said %d times: %s", n, rig.out.String())
+	}
+	if err := os.Chmod(rig.cfg.InventoryFile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.pollTwice()
+	if _, ok := rig.b.Policy.Load().Device("leaf2"); !ok {
+		t.Fatalf("the file put right was not loaded: %s", rig.out.String())
+	}
+}
+
+// C3: the key-group move, in every order, never refuses the fleet. The
+// inventory starts with the block and unpinned devices.
+const withGroups = `devices:
+  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: leaf2, platform: arista_eos, addresses: [10.0.0.2]}
+key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
+`
+const withoutGroups = `devices:
+  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: leaf2, platform: arista_eos, addresses: [10.0.0.2]}
+`
+const policyWithGroups = minimalPolicy + "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]\n"
+
+func migrationRig(t *testing.T) *reloadRig {
+	t.Helper()
+	rig := newReloadRig(t, minimalPolicy)
+	rig.writeInventory(t, withGroups)
+	rig.pollTwice()
+	if len(rig.b.Policy.Load().AdmissionRefusals()) != 0 {
+		t.Fatalf("the starting point refuses: %+v", rig.b.Policy.Load().AdmissionRefusals())
+	}
+	return rig
+}
+
+func TestTheKeyGroupMoveInEveryOrder(t *testing.T) {
+	admitsAll := func(t *testing.T, rig *reloadRig, when string) {
+		t.Helper()
+		pol := rig.b.Policy.Load()
+		if len(pol.Devices()) != 2 || len(pol.AdmissionRefusals()) != 0 {
+			t.Fatalf("%s: %d devices, refused %+v\n%s", when, len(pol.Devices()), pol.AdmissionRefusals(), rig.out.String())
+		}
+	}
+	t.Run("policy first, as documented", func(t *testing.T) {
+		rig := migrationRig(t)
+		rig.write(t, policyWithGroups)
+		rig.pollTwice()
+		admitsAll(t, rig, "both files carry the block")
+		if !strings.Contains(rig.out.String(), "is ignored, since the policy file has its own") {
+			t.Fatalf("no notice: %s", rig.out.String())
+		}
+		rig.writeInventory(t, withoutGroups)
+		rig.pollTwice()
+		admitsAll(t, rig, "the move done")
+	})
+	t.Run("inventory first", func(t *testing.T) {
+		rig := migrationRig(t)
+		rig.writeInventory(t, withoutGroups)
+		rig.pollTwice()
+		admitsAll(t, rig, "the refused step")
+		if !strings.Contains(rig.out.String(), "add it to the policy file first") {
+			t.Fatalf("the refusal does not name the order: %s", rig.out.String())
+		}
+		rig.write(t, policyWithGroups)
+		rig.pollTwice()
+		admitsAll(t, rig, "the policy then carries it")
+		// The policy reload clears the inventory's refusal, so the edit
+		// refused before is tried again, against the new policy, and loads.
+		rig.pollTwice()
+		if !strings.Contains(rig.out.String(), "port49d: inventory reloaded") {
+			t.Fatalf("the refused inventory was not retried: %s", rig.out.String())
+		}
+		admitsAll(t, rig, "the move done")
+	})
+	t.Run("both edits, then SIGHUP", func(t *testing.T) {
+		rig := migrationRig(t)
+		rig.write(t, policyWithGroups)
+		rig.writeInventory(t, withoutGroups)
+		rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+		admitsAll(t, rig, "after SIGHUP")
+	})
 }
 
 func TestAnEmptyOrMalformedInventoryIsRefused(t *testing.T) {
@@ -4029,23 +4832,48 @@ type inventoryYAML struct {
   `Config` gains:
 
 ```go
-	// MaxRemovedPercent refuses an inventory reload that removes more than
-	// this share of the devices in force (spec §10, bounded change): default
-	// 10, 100 turns the bound off. An empty inventory is refused whatever it
-	// says. It is read at start, so raising it for a deliberate large removal
-	// is a restart, which ends every live login while the store is in memory.
+	// MaxRemovedPercent refuses an inventory reload that takes more than this
+	// share of the devices in force out of service — removed, or kept and
+	// newly refused admission (spec §10, bounded change): default 10, 100
+	// turns the bound off. An empty inventory is refused whatever it says.
+	// It is read at start and re-read at every SIGHUP (InventoryBound), so a
+	// deliberate large removal is: raise it, send SIGHUP, lower it again.
 	MaxRemovedPercent int
+```
+
+  and a reader for the one key, as `MaxSessionAge` reads its one:
+
+```go
+// InventoryBound reads inventory.max_removed_percent from a port49d.yaml's
+// bytes, with Load's default and range: what port49d re-reads at SIGHUP. It
+// resolves no secret and decodes as strictly as Load, so a typo is an error,
+// never the default.
+func InventoryBound(raw []byte) (int, error) {
+	var f fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", err)
+	}
+	return inventoryBound(f.InventoryOpts)
+}
+
+func inventoryBound(o inventoryYAML) (int, error) {
+	if o.MaxRemovedPercent == nil {
+		return 10, nil
+	}
+	if p := *o.MaxRemovedPercent; p < 0 || p > 100 {
+		return 0, fmt.Errorf("config: inventory.max_removed_percent must be between 0 and 100; got %d", p)
+	}
+	return *o.MaxRemovedPercent, nil
+}
 ```
 
   and `Load`, beside the other defaults:
 
 ```go
-	c.MaxRemovedPercent = 10
-	if p := f.InventoryOpts.MaxRemovedPercent; p != nil {
-		if *p < 0 || *p > 100 {
-			return Config{}, fmt.Errorf("config: inventory.max_removed_percent must be between 0 and 100; got %d", *p)
-		}
-		c.MaxRemovedPercent = *p
+	if c.MaxRemovedPercent, err = inventoryBound(f.InventoryOpts); err != nil {
+		return Config{}, err
 	}
 ```
 
@@ -4101,10 +4929,13 @@ func (m *Metrics) WatchInventoryAge(age func() float64) { m.inventoryAge.Store(&
 - [ ] **Step 5: The reloader.** In `cmd/port49d/reload.go`, the struct's inventory fields become:
 
 ```go
-	// inventory is the inventory file's version in force (fileVersion), and
-	// invPending, invRefused and invChanging are what pending, refused and
-	// changing are to the policy file, for the inventory file.
+	// inventory is the inventory file's version in force (inventoryVersion),
+	// and invPending, invRefused and invChanging are what pending, refused
+	// and changing are to the policy file, for the inventory file.
 	inventory, invPending, invRefused string
+	// cfgPath is port49d.yaml, whose inventory.max_removed_percent SIGHUP
+	// re-reads (plan 6a, I1); run sets it.
+	cfgPath string
 	invChanging                       int
 	// invSeen is when the inventory file was last read and found in force,
 	// or loaded: port49_inventory_snapshot_age_seconds reads it at scrape.
@@ -4119,9 +4950,22 @@ func (m *Metrics) WatchInventoryAge(age func() float64) { m.inventoryAge.Store(&
 	m.WatchInventoryAge(func() float64 { return now().Sub(time.Unix(0, r.invSeen.Load())).Seconds() })
 ```
 
-  Rename the present `poll` to `pollPolicy`, and add:
+  and `run` sets `r.cfgPath = cfgPath` beside `r.inventory = inventoryAtStart`. Rename the present
+  `poll` to `pollPolicy`, and add:
 
 ```go
+// inventoryVersion is policyVersion for inventory_file: read behind the fence
+// (readInventoryFile), so a file someone else could have written is a
+// version of its own — refused, and said once — and putting its mode right
+// is a change the watch sees.
+func inventoryVersion(path string) ([]byte, string, error) {
+	raw, err := readInventoryFile(path)
+	if err != nil {
+		return nil, "unreadable: " + err.Error(), err
+	}
+	return raw, engine.HashOf(raw), nil
+}
+
 // poll reads both files, the policy first.
 func (r *reloader) poll(ctx context.Context) {
 	r.pollPolicy(ctx)
@@ -4132,7 +4976,7 @@ func (r *reloader) poll(ctx context.Context) {
 // is loaded once two reads in a row agree, a refused one is said once, and
 // one that never settles is said and alarmed.
 func (r *reloader) pollInventory(ctx context.Context) {
-	raw, v, err := fileVersion(r.cfg.InventoryFile)
+	raw, v, err := inventoryVersion(r.cfg.InventoryFile)
 	switch {
 	case v == r.inventory:
 		r.invSeen.Store(r.now().UnixNano())
@@ -4170,7 +5014,12 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 	if err == nil {
 		var inv admission.Inventory
 		if inv, err = admission.ParseFile(raw, r.cfg.InventoryFile); err == nil {
-			if pol, err = parseBundle(r.cfg, old.Raw(), inv); err == nil {
+			// Named as the inventory's fault, not the policy file's, since
+			// the policy in force loaded before (plan 6a, M5).
+			if pol, err = bundle.Parse(old.Raw(), inv, policy.Env{KeyRefs: r.cfg.KeyRefs()}); err != nil {
+				err = fmt.Errorf("inventory_file %s, loaded against the policy in force: %w", r.cfg.InventoryFile,
+					quotesCut{err})
+			} else {
 				err = bundle.Check(old, pol, r.cfg.MaxRemovedPercent)
 			}
 		}
@@ -4228,11 +5077,35 @@ func (r *reloader) after(ctx context.Context, rep bundle.Report, pol *policy.Pol
 
 ```go
 func (r *reloader) reload(ctx context.Context, trigger string) {
+	r.rereadBound()
 	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
 	r.load(ctx, trigger, raw, v, err)
-	iraw, iv, ierr := fileVersion(r.cfg.InventoryFile)
+	iraw, iv, ierr := inventoryVersion(r.cfg.InventoryFile)
 	if iv != r.inventory {
 		r.loadInventory(ctx, trigger, iraw, iv, ierr)
+	}
+}
+
+// rereadBound re-reads inventory.max_removed_percent from port49d.yaml, the
+// one key SIGHUP re-reads, so a deliberate large removal needs no restart
+// (plan 6a, I1). A file that does not read keeps the bound in force, said.
+func (r *reloader) rereadBound() {
+	if r.cfgPath == "" {
+		return
+	}
+	raw, err := os.ReadFile(r.cfgPath)
+	var n int
+	if err == nil {
+		n, err = config.InventoryBound(raw)
+	}
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.max_removed_percent not re-read from %s (%s); keeping %d%%\n",
+			r.cfgPath, oneLine(err), r.cfg.MaxRemovedPercent)
+	case n != r.cfg.MaxRemovedPercent:
+		fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.max_removed_percent is now %d%% (was %d%%)\n", n,
+			r.cfg.MaxRemovedPercent)
+		r.cfg.MaxRemovedPercent = n
 	}
 }
 ```
@@ -4243,6 +5116,10 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 ```go
 	r.metrics.PolicyReloads.WithLabelValues("applied").Inc()
 	now := r.swap(pol)
+	// An inventory edit refused against the policy replaced — the key-group
+	// move done in the wrong order, say — is tried again against this one at
+	// the next polls (plan 6a, C3).
+	r.invRefused = ""
 	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s (bundle %s); %d device(s) quarantined now, %d before\n",
 		trigger, pol.Source, old.Source, pol.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
 	r.after(ctx, bundle.Diff(old, pol, now), pol, now)
@@ -4321,8 +5198,10 @@ Expected: FAIL to compile — `rig.m.InventoryChanges undefined`.
 	// port49_inventory_changes_total{kind}: security-relevant changes a bundle
 	// swap made (spec §10) — "address_added" (an address on a device already
 	// in inventory, which a mint hands to an SSH client), "scope_joined" and
-	// "scope_left" (a scope with security_log: true). Each is an
-	// inventory_change record naming the device; the label is the kind only.
+	// "scope_left" (a scope with security_log: true), "key_ref_changed" (a
+	// device moved onto another key) and "admission_changed" (a device newly
+	// admitted). Each is an inventory_change record naming the device; the
+	// label is the kind only.
 	InventoryChanges *prometheus.CounterVec
 ```
 
@@ -4347,8 +5226,8 @@ func (r *reloader) securityEvents(rep bundle.Report, now time.Time) int {
 	for _, c := range changes {
 		r.broker.Log.Emit(decision.Record{TS: now, Event: decision.EventInventoryChange,
 			Device: &decision.Device{Name: c.Device, Platform: c.Platform},
-			Change: &decision.Change{Kind: c.Kind, Scope: c.Scope, Address: c.Address, FromBundle: rep.From,
-				ToBundle: rep.To}})
+			Change: &decision.Change{Kind: c.Kind, Scope: c.Scope, Address: c.Address, From: c.From, To: c.To,
+				FromBundle: rep.From, ToBundle: rep.To}})
 		r.metrics.InventoryChanges.WithLabelValues(c.Kind).Inc()
 	}
 	return len(changes)
@@ -5654,6 +6533,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -5683,8 +6563,13 @@ func TestTheSocketIsPrivateAndAnswersItsOwner(t *testing.T) {
 	defer c.Close()
 	json.NewEncoder(c).Encode(Request{Op: "keys_diagnose", Device: "leaf-19"})
 	var r Response
-	if err := json.NewDecoder(c).Decode(&r); err != nil || r.Error == "" {
+	// The answer is the diagnosis's own ("holds no unvalidated packet"),
+	// never "refused: ...": the peer check ran and let our uid through.
+	if err := json.NewDecoder(c).Decode(&r); err != nil || !strings.Contains(r.Error, "holds no unvalidated packet") {
 		t.Fatalf("%+v, %v", r, err)
+	}
+	if _, err := Listen(p); err == nil || !strings.Contains(err.Error(), "another process answers") {
+		t.Fatalf("a second Listen on a live socket: %v", err)
 	}
 }
 ```
@@ -5889,12 +6774,18 @@ type Server struct {
 
 const maxRequest = 4096
 
-// Listen opens the socket at path, mode 0600. A stale socket at path is
-// removed; anything else there is refused, never removed.
+// Listen opens the socket at path, mode 0600. A stale socket at path — one
+// nothing answers on — is removed. A socket another process answers on, a
+// second port49d sharing the path, is refused and left alone, and so is
+// anything at path that is not a socket.
 func Listen(path string) (net.Listener, error) {
 	if fi, err := os.Lstat(path); err == nil {
 		if fi.Mode()&os.ModeSocket == 0 {
 			return nil, fmt.Errorf("%s exists and is not a socket; port49d will not remove it", path)
+		}
+		if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
+			c.Close()
+			return nil, fmt.Errorf("another process answers on %s; give each port49d its own admin_socket", path)
 		}
 		if err := os.Remove(path); err != nil {
 			return nil, err
@@ -6052,6 +6943,9 @@ func peerAllowed(net.Conn) error {
 		deps.Held = held
 		aln, err := admin.Listen(cfg.AdminSocket)
 		if err != nil {
+			if bln != nil {
+				bln.Close()
+			}
 			ln.Close()
 			mln.Close()
 			stopSpool()
@@ -6070,8 +6964,9 @@ func peerAllowed(net.Conn) error {
 	}
 ```
 
-  `deps` is a value handed to `server.Serve` later, so set `deps.Held` before that call (move the
-  block above `go func() { serveErr <- server.Serve(ctx, ln, deps) }()`). In `cmd/port49/keys.go`,
+  Place the block after the broker listener binds, so `bln` exists to close (M6), and before
+  `go func() { serveErr <- server.Serve(ctx, ln, deps) }()`, since `deps` is a value that call
+  copies. In `cmd/port49/keys.go`,
   `keysCmd` gains `case "diagnose": return keysDiagnose(args[1:], stdout, stderr)`, and:
 
 ```go
@@ -6187,11 +7082,37 @@ func TestPolicyTestJudgesAdmissionAndKeys(t *testing.T) {
 }
 ```
 
-  (`keysPolicy` and `keysConfig` are `keys_test.go`'s.)
+  and:
+
+```go
+// I3: a test on a device the inventory no longer has fails CI, where the
+// load that port49d would make succeeds.
+func TestPolicyTestFailsATestOnAnAbsentDevice(t *testing.T) {
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "p.yaml")
+	inv := filepath.Join(dir, "i.yaml")
+	body := keysPolicy + "tests: [{subject: s, device: leaf-gone, command: \"show version\", expect: permit}]\n"
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte(keysInventory), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errOut)
+	if code != 1 || !strings.Contains(out.String()+errOut.String(), `device "leaf-gone" is not in the inventory`) {
+		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
+	}
+}
+```
+
+  (`keysPolicy`, `keysInventory` and `keysConfig` are `keys_test.go`'s.) The absent device reaches
+  `policyTest` through `RunTests`' `Err` (Task 4), which the existing `r.Err != nil` branch
+  (`cmd/port49/policy.go:227`) prints and counts as a failure: no new code here.
 
 - [ ] **Step 2: Run it to see it fail**
 
-Run: `go test ./cmd/port49/ -run TestPolicyTestJudgesAdmissionAndKeys -count=1`
+Run: `go test ./cmd/port49/ -run 'TestPolicyTestJudgesAdmissionAndKeys|TestPolicyTestFailsATestOnAnAbsentDevice' -count=1`
 Expected: FAIL — `flag provided but not defined: -config`, and no `report: stray` line.
 
 - [ ] **Step 3: Implement.** In `policyTest`, register `cfgPath := fs.String("config", "",
@@ -6538,10 +7459,20 @@ func TestAVerbatimBlobFromOutsideTheLogReplaysARedactedBlobsRecords(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
+		// daemonLog's last record, carol's, was decided before any policy
+		// ran and is not_replayed whatever the source: it is left out.
+		judged := 0
 		for _, r := range res[:len(res)-1] {
-			if r.Event != decision.EventBlob && r.Status != c.want {
+			if r.Event == decision.EventBlob {
+				continue
+			}
+			judged++
+			if r.Status != c.want {
 				t.Fatalf("%s: %+v", c.name, r)
 			}
+		}
+		if judged < 5 {
+			t.Fatalf("%s: only %d records judged; daemonLog writes five that consult the blob", c.name, judged)
 		}
 	}
 }
@@ -6974,7 +7905,11 @@ func (l *Limiter) Holding(src netip.Addr) bool {
 		}
 ```
 
-  and in `conn.go`'s `deobfuscate`, the first-packet miss strikes and closes instead of holding:
+  `Holding` refuses a source inside the backoff its last strike earned, whatever the strike: a key
+  miss, and equally `malformed_after_validation`, `not_tacacs` or an unadmitted source's (M10).
+  The L28 note and the operator-facing notes say so: on branch H, any source that struck is refused
+  at Accept for its backoff, so it never holds a connection silent. And in `conn.go`'s
+  `deobfuscate`, the first-packet miss strikes and closes instead of holding:
 
 ```go
 		if r.Diagnosis != keyring.DiagValidated {
@@ -7035,10 +7970,15 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   listing, as plan 5b's does: what shipped task by task where it differs from this plan; the owner
   decisions as ruled; which branch L28 took; the rows closed and left open; and "Carried, for later
   plans", including at least: the object-store mirror, persisted bundle and cold-start readiness
-  (6b); the bundle document and its integer sequence (6b); `secret_ref:` resolvers (plan 12);
-  go-dark on a store outage, the warm context cache, plan 4b's remote-store items and the
-  `crypt_open_failures_total{record="token"}` alarm (plan 7); `key_ref` as a device label in
-  per-device-pin deployments (plan 12, unchanged).
+  (6b); the bundle document and its integer sequence (6b); owner decision 3's mismatch alarm (6b);
+  `secret_ref:` resolvers, and key sets moving to the policy repository with them (plan 12);
+  go-dark on a store outage, the warm context cache and plan 4b's remote-store items (plan 7); the
+  `crypt_open_failures_total{record="token"}` alarm, which plan 2's hand-off gave to "plan 6 with
+  key rotation reporting, or plan 7": plan 7, since it guards the encryption-at-rest rotation, not
+  the device keys 6a reports on (M11); `key_ref` as a device label in per-device-pin deployments
+  (plan 12, unchanged). Add to plan 4b's "Hands to plan 12" that `inventory_file`'s path is the
+  deployment's to protect exactly as `broker.policy_file`'s is, since it is read behind the same
+  fence and decides access within seconds (C2).
 
 - [ ] **Step 4: Commit**
 
@@ -7056,20 +7996,32 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 ## Operator-facing notes (for the pull request body)
 
-- **Key groups move into the policy file.** Move the inventory file's `key_groups:` block into the
-  policy file under the same key. Until you do, port49d reads it from the inventory file and says
-  so at every start and reload; a pair of files that both carry one is refused. port49d with no
-  `broker:` block (the lab's mode) keeps reading it from the inventory file.
+- **Key groups move into the policy file.** Add the inventory file's `key_groups:` block to the
+  policy file under the same key, then delete it from the inventory file. Until you add it, port49d
+  reads it from the inventory file and says so at every start and reload. While both carry it, the
+  policy's wins and a notice names the inventory's as ignored. Deleting it from the inventory
+  first is refused by the bound, since it would refuse every device. port49d with no `broker:`
+  block (the lab's mode) keeps reading it from the inventory file.
+- **The inventory file is read like the policy file.** With a `broker:` block, it and its directory
+  must be writable by port49d's user or root alone, it must be a regular file, and it must be
+  64 MiB or smaller. Otherwise the start is refused, or a reload is refused once while the bundle
+  in force keeps serving. Fix the modes before upgrading: an inventory file written by a
+  config-management group is refused.
 - **A device no key group admits no longer stops port49d.** With a `broker:` block, it is refused
   on its own: named at start and at every reload (`port49d: admission: device X (P) is refused:
   ...`), counted in `port49_devices_admission_refused`, and its packets closed after the header as
   `"diagnosis":"admission_refused"`. So is a device two groups tie on, and one assigned a `key_ref`
-  `keys:` does not define.
+  `keys:` does not define. The broker refuses to mint for such a device (`device_unknown`), and a
+  refresh revokes its live contexts. A start whose bundle admits no device at all is refused, naming
+  the fix.
 - **The inventory file is watched.** An edit is live within two `broker.policy_watch_interval`s,
   or at once on `SIGHUP`, and every live session is refreshed as after a policy edit: a removed
   device's contexts are revoked. An edit that is empty, malformed, repeats a name or an address, or
-  removes more than `inventory.max_removed_percent` (default 10) of the devices is refused, said
-  once, and `port49_inventory_file_refused` is 1. Raising the bound is a restart.
+  takes more than `inventory.max_removed_percent` (default 10) of the devices out of service —
+  removed, or kept and newly refused admission — is refused, said once, and
+  `port49_inventory_file_refused` is 1. For a deliberate large removal, raise the bound in
+  port49d.yaml and send `SIGHUP`, which re-reads it; then lower it again. A policy test naming a
+  device the inventory no longer has fails `port49 policy test`, and never a reload.
 - **New config keys:** `inventory: {max_removed_percent: N}`; `retire_after: YYYY-MM-DD` on `accept`
   key versions (admits through that day UTC); `admin_socket: /run/port49/port49d.sock` (off by
   default).
@@ -7080,7 +8032,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - **The decision log:** `bundle` is now the bundle id (the policy file's hash and the inventory's,
   combined), not the policy file's hash; every validated record's `device` block carries `key_ref`
   and `key_version`; a new report event, `inventory_change`, records an address added to an existing
-  device and a device joining or leaving a `security_log: true` scope. A new diagnosis,
+  device, a device's `key_ref` changing, a device newly admitted, and a device joining or leaving a
+  `security_log: true` scope. A new diagnosis,
   `admission_refused`.
 - **New commands:** `port49 keys status`, `port49 keys show`, `port49 keys diagnose` (needs
   `admin_socket`), `port49 inventory diff`; `port49 policy test --config` adds the key checks;
@@ -7089,7 +8042,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - **`based_on: juniper_junos` now loads**, and the variant is read, and redacted, as Junos.
 - **A key miss** (L28): what the device does is in `tests/lab/results/L28-*.md`; on branch H,
   port49d closes the connection at once and refuses the source's next connection inside its
-  backoff (`held_refused`, `key_miss_closed` in `port49_connection_events_total`).
+  backoff (`held_refused`, `key_miss_closed` in `port49_connection_events_total`). That refusal
+  applies to any source that struck, whatever the strike, not a key miss alone.
 
 ## Self-review against the spec
 
@@ -7099,7 +8053,10 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   daemon admits from it). Quarantine publication: the bundle carries it, and the daemon reads it
   from the same pointer (Task 10; plan 4b's `Live.Quarantined`). `bundle/diff`: Tasks 7, 18.
 - **§10 "Admission and keys", "Addresses must resolve to one device", "Key group matching is
-  deterministic":** Tasks 3, 4, 10, 17; owner decision 1 for the device-level tie.
+  deterministic":** Tasks 3, 4, 10, 17; owner decision 1 for the device-level tie. The key-group
+  move is safe in every order (Tasks 4, 10, 12). A refused device is not minted for (Tasks 4, 11).
+- **§10 "Source-of-truth write access" for the file itself:** the inventory file's write fence
+  (Task 11a).
 - **§10 "Key rotation":** try-and-validate and the per-connection cache are plan 1's and unchanged;
   version sets gain `retire_after` (Task 14); phase-out (Tasks 8, 14, 15); unvalidated sources
   (Tasks 10, 15); retired never admits (Task 14's test); cross-group probing manual (Task 16);
@@ -7115,5 +8072,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - **Plan 5a's debts:** replay (Task 19), `based_on:` wire facts (Task 9, with redaction).
 - **Plan 4b's hand-off:** re-run the joint checks and `Refresh` on an inventory swap (Task 12); the
   inventory itself reloaded (Task 12); the remote-store items move to plan 7 (Task 21).
-- **Reason codes:** none added; one diagnosis (`admission_refused`) and one report event
-  (`inventory_change`), both in the spec first (Task 1).
+- **Reason codes:** none added. `device_unknown`'s meaning is extended to a refused device on `mint`
+  and `refresh`, and a diagnosis (`admission_refused`) and a report event (`inventory_change`) are
+  added, all in the spec first (Task 1).
+- **The pre-flight review:** every finding is resolved (the section at the top); none is left.
