@@ -343,8 +343,13 @@ func LoadFile(path string) (Inventory, error) {
 }
 
 // ParseFile is LoadFile for bytes already read, named by path in its errors:
-// port49d loads exactly the bytes its watch agreed on (plan 6a).
+// port49d loads exactly the bytes its watch agreed on (plan 6a). An empty
+// path names nothing, for a caller whose own error already names the file.
 func ParseFile(raw []byte, path string) (Inventory, error) {
+	at := ""
+	if path != "" {
+		at = path + ": "
+	}
 	// KnownFields: an unknown key here is a typo with teeth. `keyref:` for
 	// `key_ref:` silently un-pins a device onto a group key, and the first
 	// packet from it reads `no_known_key_matches` — the 3am discovery this
@@ -355,7 +360,7 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
 		// A line and a category, never the file's text: a record's key_ref
 		// pin is where a secret gets pasted (yamlfault).
-		return Inventory{}, fmt.Errorf("admission: %s: %w; check the key spelling against the inventory schema", path,
+		return Inventory{}, fmt.Errorf("admission: %s%w; check the key spelling against the inventory schema", at,
 			yamlfault.Of(err))
 	}
 	var inv Inventory
@@ -370,7 +375,7 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 			// netip's error quotes the value; the index says where it is.
 			a, err := netip.ParseAddr(s)
 			if err != nil {
-				return Inventory{}, fmt.Errorf("admission: %s: device %q: addresses[%d] is not an IP address", path,
+				return Inventory{}, fmt.Errorf("admission: %sdevice %q: addresses[%d] is not an IP address", at,
 					d.Name, i)
 			}
 			dev.Addresses = append(dev.Addresses, a)
@@ -379,27 +384,27 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 	}
 	for i, g := range f.KeyGroups {
 		if g.KeyRef != "" && !KeyRefShape.MatchString(g.KeyRef) {
-			return Inventory{}, fmt.Errorf("admission: %s: key_groups[%d]: key_ref is not a valid key_ref name (%s): "+
-				"it names the key, never holds it", path, i, KeyRefShapeRule)
+			return Inventory{}, fmt.Errorf("admission: %skey_groups[%d]: key_ref is not a valid key_ref name (%s): "+
+				"it names the key, never holds it", at, i, KeyRefShapeRule)
 		}
 		kg := KeyGroup{Attributes: g.Match.Attributes, KeyRef: g.KeyRef}
 		if g.Match.CIDR != "" {
 			p, err := netip.ParsePrefix(g.Match.CIDR)
 			if err != nil {
-				return Inventory{}, fmt.Errorf("admission: %s: key_groups[%d] (%s): match.cidr is not a CIDR prefix",
-					path, i, g.KeyRef)
+				return Inventory{}, fmt.Errorf("admission: %skey_groups[%d] (%s): match.cidr is not a CIDR prefix",
+					at, i, g.KeyRef)
 			}
 			kg.CIDR = p
 		}
 		if kg.KeyRef == "" {
-			return Inventory{}, fmt.Errorf("admission: %s: a key group has no key_ref; every group must name the key it admits", path)
+			return Inventory{}, fmt.Errorf("admission: %sa key group has no key_ref; every group must name the key it admits", at)
 		}
 		// A group with neither match term is not a narrow group, it is a
 		// catch-all: attrsMatch against an empty want is vacuously true, so it
 		// would claim every device in the attribute tier and quietly admit the
 		// fleet under one key.
 		if !kg.CIDR.IsValid() && len(kg.Attributes) == 0 {
-			return Inventory{}, fmt.Errorf("admission: %s: key group %q matches on neither cidr nor attributes; give it one or remove it", path, kg.KeyRef)
+			return Inventory{}, fmt.Errorf("admission: %skey group %q matches on neither cidr nor attributes; give it one or remove it", at, kg.KeyRef)
 		}
 		inv.KeyGroups = append(inv.KeyGroups, kg)
 	}

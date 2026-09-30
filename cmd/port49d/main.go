@@ -286,7 +286,7 @@ func fencedInventory(cfg config.Config) (admission.Inventory, string, error) {
 	if err != nil {
 		return admission.Inventory{}, "", &bundle.InventoryError{Path: cfg.InventoryFile, Err: err}
 	}
-	inv, err := admission.ParseFile(raw, cfg.InventoryFile)
+	inv, err := admission.ParseFile(raw, "") // the InventoryError names the file
 	if err == nil {
 		err = admission.Validate(inv.Devices)
 	}

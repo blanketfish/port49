@@ -753,3 +753,14 @@ func TestRevertingToTheInventoryInForceClearsTheAlarm(t *testing.T) {
 		t.Fatal("the revert swapped a bundle")
 	}
 }
+
+// An inventory fault names the file once (final review m9).
+func TestAnInventoryFaultNamesTheFileOnce(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.writeInventory(t, "devices:\n  - {name: leaf1, platform: arista_eos, addresses: [nope], key_ref: lab_key}\n")
+	rig.pollTwice()
+	out := rig.out.String()
+	if !strings.Contains(out, "addresses[0] is not an IP address") || strings.Count(out, rig.cfg.InventoryFile) != 1 {
+		t.Fatalf("stderr: %s", out)
+	}
+}

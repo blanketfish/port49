@@ -426,7 +426,7 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 // is named as the inventory's, not the policy file's: the policy in force
 // loaded before (plan 6a, M5).
 func (r *reloader) inventoryBundle(old *policy.Policy, raw []byte) (*policy.Policy, error) {
-	inv, err := admission.ParseFile(raw, r.cfg.InventoryFile)
+	inv, err := admission.ParseFile(raw, "") // the error below names the file
 	if err != nil {
 		return nil, fmt.Errorf("inventory_file %s: %w", r.cfg.InventoryFile, quotesCut{err})
 	}
