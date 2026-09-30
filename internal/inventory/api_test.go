@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -145,6 +147,18 @@ func TestAReaderCannotSyncAndASyncerCan(t *testing.T) {
 	}
 	if !strings.Contains(rig.out.String(), "port49-inventory: sync requested by user:alice@example.com") {
 		t.Fatalf("the request is not said: %s", rig.out)
+	}
+}
+
+// A sync the API runs is counted under the fixed trigger "api", whatever the
+// request carries: a trigger is a metric label, and a request value would
+// make it unbounded.
+func TestAnAPISyncIsCountedUnderTheFixedTrigger(t *testing.T) {
+	rig := newAPIRig(t)
+	rig.do(t, rig.syncer, "POST", "/v1/sync?trigger=evil&source=a", map[string]string{"X-Trigger": "evil"})
+	if n := testutil.CollectAndCount(rig.s.Metrics.Syncs); n != 1 ||
+		testutil.ToFloat64(rig.s.Metrics.Syncs.WithLabelValues("api", OutcomePublished)) != 1 {
+		t.Fatalf("%d series; api/published %v", n, testutil.ToFloat64(rig.s.Metrics.Syncs.WithLabelValues("api", OutcomePublished)))
 	}
 }
 
