@@ -243,7 +243,7 @@ func printChanges(w io.Writer, rep bundle.Report, to *policy.Policy) {
 		addresses[d.Name] = strings.Join(as, ", ")
 	}
 	for _, c := range rep.Changes {
-		fmt.Fprintln(w, changeLine(c, addresses[c.Device]))
+		fmt.Fprintln(w, c.Line(addresses[c.Device]))
 	}
 }
 
@@ -262,36 +262,6 @@ func flagSet(fs *flag.FlagSet, name string) bool {
 	set := false
 	fs.Visit(func(f *flag.Flag) { set = set || f.Name == name })
 	return set
-}
-
-// changeLine is one change, `!` first where the log would carry it as a
-// security event. addresses is the device's in the new inventory, for an
-// added device: each is a new place a mint sends an operator.
-func changeLine(c bundle.Change, addresses string) string {
-	mark := " "
-	if c.Security {
-		mark = "!"
-	}
-	switch c.Kind {
-	case bundle.DeviceAdded:
-		return fmt.Sprintf("%s device added %s (%s) at %s: %s", mark, c.Device, c.Platform, addresses, c.To)
-	case bundle.DeviceRemoved:
-		return fmt.Sprintf("%s device removed %s (%s)", mark, c.Device, c.Platform)
-	case bundle.AddressAdded:
-		return fmt.Sprintf("%s address added %s: %s", mark, c.Device, c.Address)
-	case bundle.AddressRemoved:
-		return fmt.Sprintf("%s address removed %s: %s", mark, c.Device, c.Address)
-	case bundle.ScopeJoined, bundle.ScopeLeft:
-		verb, tag := "joined", ""
-		if c.Kind == bundle.ScopeLeft {
-			verb = "left"
-		}
-		if c.Security {
-			tag = " (security_log)"
-		}
-		return fmt.Sprintf("%s scope %s%s: %s %s", mark, c.Scope, tag, c.Device, verb)
-	}
-	return fmt.Sprintf("%s %s %s: %s → %s", mark, c.Kind, c.Device, c.From, c.To)
 }
 
 // inventoryKeygen is `port49 inventory keygen`: the inventory service's

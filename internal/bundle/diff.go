@@ -32,13 +32,53 @@ const (
 // Change is one thing a swap changed. From and To are the before and after
 // where the kind has them.
 type Change struct {
-	Kind, Device, Platform, Scope, Address, From, To string
+	Kind     string `json:"kind,omitempty"`
+	Device   string `json:"device,omitempty"`
+	Platform string `json:"platform,omitempty"`
+	Scope    string `json:"scope,omitempty"`
+	Address  string `json:"address,omitempty"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to,omitempty"`
 	// Security marks what the log must carry as an inventory_change record:
 	// an address added to a device already in inventory — the mint response
 	// hands it to an SSH client, so a rogue one is a credential-capture path —
 	// a device joining or leaving a scope with security_log: true (spec §5.5,
 	// §10), a device's key_ref changing, and a device becoming admitted.
-	Security bool
+	Security bool `json:"security"`
+}
+
+// Line is c on one line, `!` first where the log would carry it as a
+// security event. addresses is the device's in the new inventory, for an
+// added device: each is a new place a mint sends an operator. Empty, where
+// the caller has none to give, the line leaves them out.
+func (c Change) Line(addresses string) string {
+	mark := " "
+	if c.Security {
+		mark = "!"
+	}
+	switch c.Kind {
+	case DeviceAdded:
+		if addresses == "" {
+			return fmt.Sprintf("%s device added %s (%s): %s", mark, c.Device, c.Platform, c.To)
+		}
+		return fmt.Sprintf("%s device added %s (%s) at %s: %s", mark, c.Device, c.Platform, addresses, c.To)
+	case DeviceRemoved:
+		return fmt.Sprintf("%s device removed %s (%s)", mark, c.Device, c.Platform)
+	case AddressAdded:
+		return fmt.Sprintf("%s address added %s: %s", mark, c.Device, c.Address)
+	case AddressRemoved:
+		return fmt.Sprintf("%s address removed %s: %s", mark, c.Device, c.Address)
+	case ScopeJoined, ScopeLeft:
+		verb, tag := "joined", ""
+		if c.Kind == ScopeLeft {
+			verb = "left"
+		}
+		if c.Security {
+			tag = " (security_log)"
+		}
+		return fmt.Sprintf("%s scope %s%s: %s %s", mark, c.Scope, tag, c.Device, verb)
+	}
+	return fmt.Sprintf("%s %s %s: %s → %s", mark, c.Kind, c.Device, c.From, c.To)
 }
 
 // Report is what one swap changed.
