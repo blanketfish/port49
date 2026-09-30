@@ -229,7 +229,12 @@ func platformShow(args []string, stdout, stderr io.Writer, export bool) int {
 	stdout.Write(body)
 	if !export {
 		fmt.Fprintln(stdout, "# built-in redaction, applied before any record is written and not part of a set (spec §5.8):")
-		for _, r := range platform.Redactions(platformName) {
+		// A variant's built-in redaction is its base's (spec §8).
+		builtIn := platformName
+		if p != nil {
+			builtIn = p.WirePlatform(platformName)
+		}
+		for _, r := range platform.Redactions(builtIn) {
 			fmt.Fprintf(stdout, "#   %s\n", redactionLine(r))
 		}
 		fmt.Fprintln(stdout, "# and a URL's password (scheme://user:password@host) and a credential in its query string "+

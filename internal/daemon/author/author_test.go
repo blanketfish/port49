@@ -1051,3 +1051,18 @@ func TestARuleLiteralSecretIsNeverEchoed(t *testing.T) {
 		t.Fatalf("%v", m)
 	}
 }
+
+// A juniper_junos variant arrives as junos-exec, as its base does; keyed by
+// its own name it would get the fallback `shell` and be refused every
+// session (spec §8; plan 6a).
+func TestAVariantIsAuthorizedAsItsBase(t *testing.T) {
+	h, log := setupOn(t, platform.Defaults())
+	variant := authen.Peer{NAS: "leaf-01", NASAddr: "10.0.0.1", Platform: "srx_variant", WirePlatform: "juniper_junos"}
+	resp := h.Handle(context.Background(), variant, req("alice", "", "service=junos-exec"))
+	if resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("a variant's session was refused: %+v", resp)
+	}
+	if r := lastRecord(t, log); r["reason"] != "context_matched" {
+		t.Fatalf("%v", r)
+	}
+}

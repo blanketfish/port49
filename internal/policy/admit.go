@@ -99,6 +99,7 @@ func (p *Policy) admit(file) error {
 	entries := make([]admission.Resolved, 0, len(p.env.Devices))
 	for _, d := range p.env.Devices {
 		r := admission.Resolve(d, p.keyGroups)
+		r.WirePlatform = p.WirePlatform(d.Platform)
 		if r.Refused == "" && p.env.KeyRefs != nil && !slices.Contains(p.env.KeyRefs, r.KeyRef) {
 			// A refused entry carries no key_ref, since a reader takes one as
 			// admitted; the text names the key instead (Task 3 review M3).
@@ -172,4 +173,16 @@ func (p *Policy) Raw() []byte { return slices.Clone(p.raw) }
 // devices and any key groups the inventory file still carried.
 func (p *Policy) Inventory() admission.Inventory {
 	return admission.Inventory{Devices: slices.Clone(p.env.Devices), KeyGroups: slices.Clone(p.env.InventoryKeyGroups)}
+}
+
+// WirePlatform is the shipped platform whose facts port49 reads for name
+// (spec §8): the one a `based_on:` block names, or name itself. A variant
+// is the same device under another name, so its session services, exec
+// records, system users, session discriminator, built-in redaction and
+// keyword tree are its base's.
+func (p *Policy) WirePlatform(name string) string {
+	if b, ok := p.overrides[name]; ok && b.BasedOn != "" {
+		return b.BasedOn
+	}
+	return name
 }

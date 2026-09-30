@@ -377,7 +377,8 @@ func redactorFor(live *policy.Live) platform.Redactor {
 		return platform.BuiltInRedactor
 	}
 	return func(name string) []platform.Redaction {
-		return append(platform.Redactions(name), live.Load().Dialect(name).Redact...)
+		pol := live.Load()
+		return append(platform.Redactions(pol.WirePlatform(name)), pol.Dialect(name).Redact...)
 	}
 }
 

@@ -40,9 +40,20 @@ type Device struct {
 	Name     string   `json:"name"`
 	Platform string   `json:"platform"`
 	Supports []string `json:"supports"`
+	// WirePlatform is the base a variant's exec records are read as (spec
+	// §8); empty is Platform.
+	WirePlatform string `json:"wire_platform,omitempty"`
 	// Quarantine is the first cause the device is quarantined for at the
 	// report's end, empty where it is admitted (spec §10).
 	Quarantine string `json:"quarantine,omitempty"`
+}
+
+// wire is the platform whose exec records d's are read as.
+func (d Device) wire() string {
+	if d.WirePlatform != "" {
+		return d.WirePlatform
+	}
+	return d.Platform
 }
 
 // Options bound the inference. The zero value takes every record and the
@@ -216,7 +227,7 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 					}
 				}
 			case decision.EventAccount:
-				if r.Flags == "stop" && r.Session != nil && r.AcctRecord != nil && isExec(d.Platform, r.AcctRecord.Raw) {
+				if r.Flags == "stop" && r.Session != nil && r.AcctRecord != nil && isExec(d.wire(), r.AcctRecord.Raw) {
 					row.ConfigSilent += pending[r.Session.CtxID]
 					delete(pending, r.Session.CtxID)
 				}
@@ -229,7 +240,7 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 					row.System++
 				}
 				if !slices.Contains(d.Supports, Commands) || r.Attribution != "resolved" || r.Session == nil ||
-					r.AcctRecord == nil || isExec(d.Platform, r.AcctRecord.Raw) {
+					r.AcctRecord == nil || isExec(d.wire(), r.AcctRecord.Raw) {
 					continue
 				}
 				cmd := text(r.AcctRecord.Vector)

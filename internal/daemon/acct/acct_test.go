@@ -752,3 +752,17 @@ func TestTheSpoolFileNeverHoldsASecret(t *testing.T) {
 		t.Fatalf("the spool file: %s", b)
 	}
 }
+
+// A juniper_junos variant's `cmd=logout` is its exec record, bound on
+// session_pid, as Junos's is (spec §5.8, §8; plan 6a).
+func TestAVariantsLogoutIsAnExecRecord(t *testing.T) {
+	h, st, _, stop := setup(t)
+	variant := authen.Peer{NAS: "leaf-01", NASAddr: "10.0.0.1", Platform: "srx_variant", WirePlatform: "juniper_junos"}
+	putCtx(t, st, store.Context{CtxID: "ctx1", SessionDiscriminators: []string{store.HashDiscriminator("28913")}})
+	h.Handle(context.Background(), variant, acct(wire.AcctFlagStop, "alice", "0", "task_id=1", "session_pid = 28913",
+		"service=shell", "cmd=logout", "elapsed_time=0"))
+	stop()
+	if c := ctxOf(t, st); c.AccountingState != store.AccountingStateClosing {
+		t.Fatalf("the variant's logout did not close the session: %+v", c)
+	}
+}

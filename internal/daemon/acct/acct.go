@@ -103,12 +103,12 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 	// Which record is an exec record, and what separates two sessions of one
 	// user, are both per platform (spec §5.8). A platform with no
 	// discriminator leaves `seen` empty and takes the username-only branch.
-	disc, hasDisc := platform.SessionDiscriminator(peer.Platform)
+	disc, hasDisc := platform.SessionDiscriminator(peer.Wire())
 	seen := ""
 	if hasDisc {
 		seen = avOf(raw, disc)
 	}
-	exec := platform.IsExecRecord(peer.Platform, avOf(raw, "cmd"))
+	exec := platform.IsExecRecord(peer.Wire(), avOf(raw, "cmd"))
 	// START|WATCHDOG (0x0a) is a legal flag combination and the wire decoder
 	// accepts it — Cisco IOS sends interim updates that way. It is an update
 	// about a session already running, not a session beginning, so it must not
@@ -133,7 +133,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 		attribution = "foreign"
 	case resolved:
 		attribution = "resolved"
-	case h.isSystemUser(peer.Platform, canonical):
+	case h.isSystemUser(peer.Wire(), canonical):
 		// The device acting on its own behalf, not a session port49 failed to
 		// authenticate (§5.8). Never foreign; countable on its own.
 		attribution = "system"

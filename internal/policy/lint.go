@@ -370,7 +370,7 @@ func (p *Policy) RuleSecretLiterals() []Finding {
 				var on []string
 				var shown []string
 				for _, plat := range sortedKeys(platforms) {
-					patterns := append(platform.Redactions(plat), p.dialect(plat).Redact...)
+					patterns := append(platform.Redactions(p.WirePlatform(plat)), p.dialect(plat).Redact...)
 					if words, ok := platform.RedactRule(patterns, strings.Fields(rule)); ok {
 						on, shown = append(on, plat), words
 					}

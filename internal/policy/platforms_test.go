@@ -12,6 +12,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/projection"
 )
 
 // withDevice is the test inventory with one more device, of a platform the
@@ -167,11 +168,6 @@ func TestAPlatformBlockIsRefusedByName(t *testing.T) {
 		{"replace and based_on", "  x: {replace: true, based_on: arista_eos}\n", "platforms.x: replace starts from nothing"},
 		{"based_on a shipped name", "  cisco_nxos: {based_on: arista_eos}\n", "platforms.cisco_nxos: based_on declares a variant"},
 		{"based_on nothing shipped", "  x: {based_on: arista}\n", `platforms.x: based_on "arista" is not a platform in set 1.0.0`},
-		// The daemon's wire facts are keyed by platform name until plan 6: a
-		// Junos variant would be sent every session as shell, and its
-		// login and logout records read as commands (final review M8).
-		{"based_on a platform whose wire facts a variant loses", "  srx_variant: {based_on: juniper_junos}\n",
-			"platforms.srx_variant: based_on juniper_junos is refused: port49d reads juniper_junos's session service"},
 		{"an invalid adapter", "  x: {entity_classes: {mgmt: ['(']}}\n", "platforms.x.entity_classes.mgmt"},
 		{"an unknown key", "  arista_eos: {entity_class: {}}\n", "an unknown field in type policy.filePlatform"},
 		{"the attributes key", "  all: {supports: [session]}\n", "platforms.all: all is reserved"},
@@ -615,5 +611,80 @@ func TestSetPlatformSetRefusesCROnlyLineEndings(t *testing.T) {
 	out, err := SetPlatformSet(raw, "1.1.0")
 	if err == nil || out != nil || !strings.Contains(err.Error(), "line endings") {
 		t.Fatalf("%q, %v", out, err)
+	}
+}
+
+// A variant is the same device under another name: port49d reads its wire
+// facts, redaction and keyword tree as its base's (spec §8; plan 6a).
+func TestAJunosVariantLoadsAndIsReadAsJunos(t *testing.T) {
+	e := env()
+	e.Devices = append(e.Devices, admission.Device{Name: "srx-var-1", Platform: "srx_variant",
+		Addresses: []netip.Addr{netip.MustParseAddr("10.0.5.50")}})
+	p, err := Parse([]byte(good+"platforms:\n  srx_variant: {based_on: juniper_junos}\n"), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.WirePlatform("srx_variant"); got != "juniper_junos" {
+		t.Fatalf("WirePlatform: %q", got)
+	}
+	if got := p.WirePlatform("arista_eos"); got != "arista_eos" {
+		t.Fatalf("a shipped platform is its own: %q", got)
+	}
+	if r, _ := p.Admitted("srx-var-1"); r.WirePlatform != "juniper_junos" {
+		t.Fatalf("the admission index does not carry the base: %+v", r)
+	}
+}
+
+// A rule carrying a value Junos's own patterns hide (platforms/redact.yaml,
+// not the default list) is one the variant's session reply never sends and
+// lint names, as it does on Junos: keyed by its own name the variant would
+// log the hash whole (spec §5.8; plan 6a).
+func TestAVariantsRuleSecretIsHiddenAsJunoss(t *testing.T) {
+	const hash = "$6$Vq9rT2xK$Zm8pL0wQyS3cN5vB7aHjE1uO4iR6tY"
+	const rule = "set system root-authentication encrypted-password " + hash
+	e := env()
+	e.Devices = []admission.Device{{Name: "srx-var-1", Platform: "srx_variant",
+		Addresses: []netip.Addr{netip.MustParseAddr("10.0.5.50")}}}
+	p, err := Parse([]byte(`
+platform_set: 1.1.0
+platforms:
+  srx_variant: {based_on: juniper_junos}
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: r, privilege: admin, permit: ["**"], deny: ["`+rule+`"]}
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+`), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, hidden := platform.Redact(platform.Redactions("srx_variant"), []string{rule}); hidden {
+		t.Fatal("the default list hides the hash, so this test proves nothing")
+	}
+	var found []string
+	for _, f := range p.RuleSecretLiterals() {
+		found = append(found, f.Message)
+	}
+	if len(found) != 1 || !strings.Contains(found[0], "on srx_variant") {
+		t.Fatalf("lint does not read the variant's redaction as Junos's: %q", found)
+	}
+	for _, m := range found {
+		if strings.Contains(strings.ToLower(m), strings.ToLower(hash)) {
+			t.Fatalf("the finding prints the hash: %q", m)
+		}
+	}
+	d, ok := p.device("srx-var-1")
+	if !ok {
+		t.Fatal("srx-var-1")
+	}
+	res, err := p.ResolveSubject("s", d, noon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Projection.FailClosed != projection.FailSecretRule {
+		t.Fatalf("the variant's reply would carry the hash: %+v", res.Projection)
+	}
+	if sent := strings.ToLower(strings.Join(res.Projection.Attributes, " ")); strings.Contains(sent, "vq9rt2xk") {
+		t.Fatalf("the reply carries the hash: %q", res.Projection.Attributes)
 	}
 }

@@ -273,10 +273,10 @@ func (p *Policy) project(c composition, b engine.Blob, dialect platform.Dialect)
 func (p *Policy) projectOnce(c composition, b engine.Blob, dialect platform.Dialect) (projection.Result, error) {
 	in := projection.Input{Platform: b.Platform, Dialect: dialect, Rules: b.Rules, Classes: b.Classes,
 		Normalize: b.Normalize, Facts: projection.FactsFor(dialect.CommandProjection),
-		Keywords: setKeywords(p.set, b.Platform)}
+		Keywords: setKeywords(p.set, p.WirePlatform(b.Platform))}
 	// The reply is logged whole, in the authorize_session record and the
 	// blob event, so a rule redaction would hide is never sent (spec §5.8).
-	patterns := append(platform.Redactions(b.Platform), dialect.Redact...)
+	patterns := append(platform.Redactions(p.WirePlatform(b.Platform)), dialect.Redact...)
 	in.Secret = func(rule string) bool {
 		_, hidden := platform.RedactRule(patterns, strings.Fields(rule))
 		return hidden

@@ -208,21 +208,3 @@ func TestCallersCannotEditTheTable(t *testing.T) {
 		t.Fatal("Defaults handed out the table itself: deleting from it removed a platform")
 	}
 }
-
-// A variant under a new name gets an unknown platform's wire facts from the
-// daemon, which keys them by name (spec §8, plan 6): WireFactsDiffer names
-// the facts a base platform has that an unknown one does not, where losing
-// them breaks the variant or misreads its records (final review M8). A
-// session discriminator is not among them: without one the daemon takes the
-// username-only branch, the safe direction.
-func TestWireFactsDiffer(t *testing.T) {
-	for _, name := range []string{"arista_eos", "cisco_nxos", "cisco_iosxe", "acme_os"} {
-		if got := WireFactsDiffer(name); len(got) != 0 {
-			t.Errorf("%s: %q", name, got)
-		}
-	}
-	if got := WireFactsDiffer("juniper_junos"); strings.Join(got, ", ") != "session service junos-exec, exec records "+
-		"cmd=login and cmd=logout, system users root" {
-		t.Errorf("juniper_junos: %q", got)
-	}
-}

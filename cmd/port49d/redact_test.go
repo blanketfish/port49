@@ -88,3 +88,43 @@ func TestAWidenedDenyLineNeverPrintsARuleSecret(t *testing.T) {
 		t.Fatalf("stderr: %s", out.String())
 	}
 }
+
+// A variant keyed by its own name would get only the default redaction list,
+// and Junos's own patterns (platforms/redact.yaml) would not apply to its
+// records: a secret in the log (spec §5.8; plan 6a Decided 11).
+func TestAVariantIsRedactedAsItsBase(t *testing.T) {
+	pol, err := policy.Parse([]byte(minimalPolicy+"platforms:\n  srx_variant: {based_on: juniper_junos}\n"), policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := redactorFor(policy.NewLive(pol))("srx_variant")
+	want := platform.Redactions("juniper_junos")
+	if len(got) < len(want) || !reflect.DeepEqual(got[:len(want)], want) {
+		t.Fatalf("the variant's patterns do not begin with Junos's: got %d, Junos %d", len(got), len(want))
+	}
+	if reflect.DeepEqual(platform.Redactions("srx_variant"), want) {
+		t.Fatal("the default list equals Junos's, so this test proves nothing")
+	}
+	// A record the variant sends with a hash only Junos's patterns hide, in
+	// any case and abbreviated, as the device accepts it, never reaches the
+	// log (spec §5.8).
+	const hash = "$6$Vq9rT2xK$Zm8pL0wQyS3cN5vB7aHjE1uO4iR6tY"
+	for _, line := range []string{
+		"set system root-authentication encrypted-password " + hash,
+		"SET SYSTEM ROOT-AUTHENTICATION ENCRYPTED-PASSWORD " + hash,
+		"set system root-authentication encrypted-pass " + hash,
+		"set system root-authentication plain-text-password-value " + hash,
+		"set snmp v3 usm local-engine user u authentication-sha256 authentication-password " + hash,
+		"set snmp v3 usm local-engine user u privacy-aes128 privacy-password " + hash,
+	} {
+		raw := []string{"task_id=1", "service=shell", "cmd=" + line}
+		if _, hidden := platform.Redact(platform.Redactions("srx_variant"), []string{line}); hidden {
+			t.Fatalf("%s: the default list hides it, so this case proves nothing", line)
+		}
+		outRaw, outVec, _ := platform.RedactRecord(got, raw, []string{line})
+		if joined := strings.ToLower(strings.Join(append(outRaw, outVec...), " ")); strings.Contains(joined,
+			strings.ToLower(hash)) || strings.Contains(joined, "vq9rt2xk") {
+			t.Errorf("%s: the variant's record carries the hash: %q %q", line, outRaw, outVec)
+		}
+	}
+}
