@@ -199,16 +199,19 @@ func (s *Syncer) reseal() (bool, error) {
 		return false, nil
 	}
 	doc := cur.Doc
-	doc.Sequence++
+	seq, err := s.nextSequence(cur)
+	doc.Sequence = seq
 	doc.PublishedAt = s.Now().UTC()
-	raw, err := bundle.Seal(doc, s.Key)
+	var raw []byte
+	if err == nil {
+		raw, err = bundle.Seal(doc, s.Key)
+	}
 	if err == nil {
 		err = s.State.Save(Published{Raw: raw, Doc: doc, Inv: cur.Inv})
 	}
 	if err != nil {
-		return false, fmt.Errorf("bundle %d is signed by another key than the signing key %s, and its re-sealing as "+
-			"bundle %d could not be kept: state_dir %s: %s", cur.Doc.Sequence, bundle.KeyIDOf(own), doc.Sequence,
-			s.State.Dir, oneLine(err))
+		return false, fmt.Errorf("bundle %d is signed by another key than the signing key %s, and its re-sealing "+
+			"could not be kept: state_dir %s: %s", cur.Doc.Sequence, bundle.KeyIDOf(own), s.State.Dir, oneLine(err))
 	}
 	s.publish(&Published{Raw: raw, Doc: doc, Inv: cur.Inv})
 	fmt.Fprintf(s.Log, "port49-inventory: bundle %d is signed by another key than the signing key %s; re-sealed as "+
@@ -368,9 +371,9 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 	if prev != nil && prev.Doc.Bundle == next.Bundle && maps.EqualFunc(prev.Doc.Sources, sources, slices.Equal[[]string]) {
 		return held(Result{Outcome: OutcomeUnchanged, Quarantined: quarantined, LeftOut: leftOut})
 	}
-	seq := int64(1)
-	if prev != nil {
-		seq = prev.Doc.Sequence + 1
+	seq, err := s.nextSequence(prev)
+	if err != nil {
+		return held(Result{Outcome: OutcomeFailed, Reason: "state_dir " + s.State.Dir + ": " + oneLine(err)})
 	}
 	doc := bundle.NewDocument(seq, now, policyRaw, next.PlatformSet(), inv, sources)
 	raw, err := bundle.Seal(doc, s.Key)
@@ -391,6 +394,23 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 	rep := bundle.Diff(prevPol, next, now)
 	return Result{Outcome: OutcomePublished, Sequence: seq, Bundle: next.Bundle, Summary: rep.Summary(), Changes: rep.Changes,
 		Quarantined: quarantined, LeftOut: leftOut}
+}
+
+// nextSequence is the sequence the next bundle is published as: above the
+// bundle in force, prev, and above every one state_dir keeps. They differ
+// only after a Save that wrote published.json and then failed — a full
+// disk — which leaves bundle N+1 there but not in force; publishing N+1
+// again would be refused as not above it at every sync until a restart
+// (final review Minor 2).
+func (s *Syncer) nextSequence(prev *Published) (int64, error) {
+	floor, err := s.State.floor()
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		floor = max(floor, prev.Doc.Sequence)
+	}
+	return floor + 1, nil
 }
 
 // mirror brings the mirror's copy level with the bundle published,

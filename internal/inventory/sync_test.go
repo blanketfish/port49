@@ -688,3 +688,24 @@ func TestAPolicyFileOthersCanWriteFailsTheSync(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+// Final review Minor 2: a Save that wrote published.json and then failed —
+// a full disk — leaves bundle N+1 there but not in force; the next sync
+// publishes above it rather than failing on "not above" until a restart.
+func TestASaveThatFailsBetweenItsWritesDoesNotWedgeTheService(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	rig.src.inv = devices(4)
+	hist := filepath.Join(rig.s.State.Dir, "history")
+	if err := os.Chmod(hist, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	res := rig.sync(t)
+	os.Chmod(hist, 0o700)
+	if res.Outcome != OutcomeFailed || rig.s.Current().Doc.Sequence != 1 {
+		t.Fatalf("the fixture's Save did not fail between its writes: %+v", res)
+	}
+	if res := rig.sync(t); res.Outcome != OutcomePublished || res.Sequence != 3 {
+		t.Fatalf("wedged: %+v", res)
+	}
+}
