@@ -67,8 +67,9 @@ func (f *fetcher) once(ctx context.Context) (received, bool) {
 	defer cancel()
 	v, err := f.client.Version(cctx)
 	if err == nil && f.etag != "" && v.ETag == f.etag {
+		// Counted by the reloader, which alone knows whether the etag
+		// confirmed is the document in force or one it refused.
 		f.answered()
-		f.metrics.InventoryFetches.WithLabelValues("unchanged").Inc()
 		return received{etag: v.ETag, unchanged: true}, true
 	}
 	var raw []byte
@@ -94,8 +95,7 @@ func (f *fetcher) once(ctx context.Context) (received, bool) {
 	f.answered()
 	if notModified {
 		// Not the header's etag: the one asked with (f.etag), which is what
-		// the service said is unchanged.
-		f.metrics.InventoryFetches.WithLabelValues("unchanged").Inc()
+		// the service said is unchanged. Counted by the reloader.
 		return received{etag: f.etag, unchanged: true}, true
 	}
 	// The etag is port49d's own hash of the bytes, never the header's: it is

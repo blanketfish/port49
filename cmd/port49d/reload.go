@@ -119,6 +119,9 @@ type reloader struct {
 	// never fires and a poke is dropped (startFetcher).
 	docs <-chan received
 	poke chan<- struct{}
+	// rejudged is the etag of the document a SIGHUP judged again and asked
+	// the fetcher for once more, until the next whole document arrives.
+	rejudged string
 	// docRefused is the etag of the document last refused, so a refusal is
 	// said once per document; persistSaid is the persist failure last said;
 	// persistOwed is set while latestRaw may not be state_dir's copy — a
@@ -422,6 +425,7 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 		if d := r.latest; d != nil && d.etag != r.inForce {
 			r.docRefused = ""
 			r.loadDocument(ctx, trigger, *d)
+			r.rejudged = d.etag // the poke below fetches it again (receive)
 		}
 		select {
 		case r.poke <- struct{}{}:
@@ -608,7 +612,28 @@ func (r *reloader) rereadBound() {
 // SIGHUP asks for — is a confirmation too. The service confirming a document
 // refused only for being published ahead of this clock judges it again, as
 // cold start judges such a copy at each pass (spec §10).
+//
+// An unchanged answer is counted here, not by the fetcher: "unchanged" when
+// it confirms the document in force, and "refused" when it confirms one
+// port49d refused, which is not the healthy fetch "unchanged" reads as
+// beside port49_inventory_bundle_refused at 1 (final review Minor 5).
+//
+// The fetch a SIGHUP asks for brings back, whole, the document that SIGHUP
+// has just judged (reload): refused again under the same keys and bound, it
+// is held and neither judged, said nor counted a second time (final review
+// Minor 6).
 func (r *reloader) receive(ctx context.Context, d received) {
+	rejudged := r.rejudged
+	if !d.unchanged {
+		r.rejudged = ""
+	}
+	if d.unchanged {
+		outcome := "unchanged"
+		if d.etag != r.inForce {
+			outcome = "refused"
+		}
+		r.metrics.InventoryFetches.WithLabelValues(outcome).Inc()
+	}
 	if d.etag == r.inForce {
 		r.confirmed()
 		return
@@ -620,6 +645,9 @@ func (r *reloader) receive(ctx context.Context, d received) {
 		return
 	}
 	r.latest = &d
+	if d.etag == rejudged && d.etag == r.docRefused {
+		return
+	}
 	r.loadDocument(ctx, "inventory service", d)
 }
 

@@ -593,3 +593,63 @@ func TestARefusedPolicyReloadKeepsTheMismatchAlarmed(t *testing.T) {
 		t.Fatalf("a refused policy reload cleared the alarm: %s", out)
 	}
 }
+
+// Final review Minor 5: the service confirming a document port49d refused
+// is not counted as an unchanged fetch, which reads as healthy beside
+// port49_inventory_bundle_refused at 1; it is counted as refused.
+func TestAConfirmedRefusedDocumentIsNotCountedUnchanged(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	rig.receive(rig.doc(t, 1, groupedPolicy, 10))
+	over := rig.doc(t, 2, groupedPolicy, 5)
+	svc := &scriptService{raw: over.raw}
+	f := newFetcher(svc, []ed25519.PublicKey{rig.pub})
+	f.metrics, f.etag = rig.m, rig.r.inForce
+	for i := 0; i < 3; i++ {
+		d, ok := f.once(context.Background())
+		if !ok {
+			t.Fatal("nothing handed over")
+		}
+		rig.receive(d)
+	}
+	if testutil.ToFloat64(rig.m.InventoryBundleRefused) != 1 {
+		t.Fatalf("the fixture's document was not refused: %s", rig.out.String())
+	}
+	if n := testutil.ToFloat64(rig.m.InventoryFetches.WithLabelValues("unchanged")); n != 0 {
+		t.Fatalf("fetches_total{unchanged} is %v with the service's document refused", n)
+	}
+	if n := testutil.ToFloat64(rig.m.InventoryFetches.WithLabelValues("refused")); n != 2 {
+		t.Fatalf("fetches_total{refused} is %v, want 2", n)
+	}
+	// Once the document in force is what the service confirms, it is
+	// unchanged again.
+	rig.sighupWithBound(t, 100)
+	d, _ := f.once(context.Background())
+	rig.receive(d)
+	if n := testutil.ToFloat64(rig.m.InventoryFetches.WithLabelValues("unchanged")); n != 1 {
+		t.Fatalf("fetches_total{unchanged} is %v once the document is in force", n)
+	}
+}
+
+// Final review Minor 6: the fetch a SIGHUP asks for brings back the document
+// that SIGHUP has just judged; refused again under the same keys and bound,
+// it is counted and said once, not twice.
+func TestASIGHUPCountsARefusedDocumentOnce(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	rig.receive(rig.doc(t, 1, groupedPolicy, 10))
+	over := rig.doc(t, 2, groupedPolicy, 5)
+	rig.receive(over)
+	before := testutil.ToFloat64(rig.m.InventoryReloads.WithLabelValues("refused"))
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	rig.receive(over) // the poke's fetch: the same bytes, whole
+	if n := testutil.ToFloat64(rig.m.InventoryReloads.WithLabelValues("refused")) - before; n != 1 {
+		t.Fatalf("a SIGHUP counted the document held %v times", n)
+	}
+	if n := strings.Count(rig.out.String(), "refused; still serving"); n != 2 {
+		t.Fatalf("said %d times, want once for the document and once for the SIGHUP: %s", n, rig.out.String())
+	}
+	// A new document after it is judged as ever.
+	rig.receive(rig.doc(t, 3, groupedPolicy, 4))
+	if n := testutil.ToFloat64(rig.m.InventoryReloads.WithLabelValues("refused")) - before; n != 2 {
+		t.Fatalf("the next document was not counted: %v", n)
+	}
+}
