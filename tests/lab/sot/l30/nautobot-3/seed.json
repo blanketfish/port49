@@ -1,0 +1,1276 @@
+[
+  {
+    "step": "location_type",
+    "method": "POST",
+    "path": "/api/dcim/location-types/",
+    "request": {
+      "content_types": [
+        "dcim.device"
+      ],
+      "name": "Site"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "577",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/dcim/location-types/0c303461-060a-43e4-b5c7-1103fa8e0c6c/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "0c303461-060a-43e4-b5c7-1103fa8e0c6c",
+      "object_type": "dcim.locationtype",
+      "display": "Site",
+      "url": "http://127.0.0.1:18030/api/dcim/location-types/0c303461-060a-43e4-b5c7-1103fa8e0c6c/",
+      "natural_slug": "site_0c30",
+      "tree_depth": null,
+      "content_types": [
+        "dcim.device"
+      ],
+      "name": "Site",
+      "description": "",
+      "nestable": false,
+      "parent": null,
+      "created": "2026-09-30T15:51:50.648679Z",
+      "last_updated": "2026-09-30T15:51:50.648703Z",
+      "notes_url": "http://127.0.0.1:18030/api/dcim/location-types/0c303461-060a-43e4-b5c7-1103fa8e0c6c/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {}
+    }
+  },
+  {
+    "step": "location",
+    "method": "POST",
+    "path": "/api/dcim/locations/",
+    "request": {
+      "location_type": "0c303461-060a-43e4-b5c7-1103fa8e0c6c",
+      "name": "dc1",
+      "status": "Active"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "1087",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/dcim/locations/15deec3d-deed-408a-a164-053941680d6d/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "15deec3d-deed-408a-a164-053941680d6d",
+      "object_type": "dcim.location",
+      "display": "dc1",
+      "url": "http://127.0.0.1:18030/api/dcim/locations/15deec3d-deed-408a-a164-053941680d6d/",
+      "natural_slug": "dc1_15de",
+      "tree_depth": null,
+      "time_zone": null,
+      "name": "dc1",
+      "description": "",
+      "facility": "",
+      "asn": null,
+      "physical_address": "",
+      "shipping_address": "",
+      "latitude": null,
+      "longitude": null,
+      "contact_name": "",
+      "contact_phone": "",
+      "contact_email": "",
+      "comments": "",
+      "parent": null,
+      "location_type": {
+        "id": "0c303461-060a-43e4-b5c7-1103fa8e0c6c",
+        "object_type": "dcim.locationtype",
+        "url": "http://127.0.0.1:18030/api/dcim/location-types/0c303461-060a-43e4-b5c7-1103fa8e0c6c/"
+      },
+      "status": {
+        "id": "8b8e5f10-f12e-444a-800f-143a041254ce",
+        "object_type": "extras.status",
+        "url": "http://127.0.0.1:18030/api/extras/statuses/8b8e5f10-f12e-444a-800f-143a041254ce/"
+      },
+      "tenant": null,
+      "created": "2026-09-30T15:51:50.748253Z",
+      "last_updated": "2026-09-30T15:51:50.748269Z",
+      "notes_url": "http://127.0.0.1:18030/api/dcim/locations/15deec3d-deed-408a-a164-053941680d6d/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {},
+      "tags": []
+    }
+  },
+  {
+    "step": "site_v1",
+    "method": "POST",
+    "path": "/api/dcim/sites/",
+    "request": {
+      "name": "dc1",
+      "slug": "dc1",
+      "status": "active"
+    },
+    "status": 404,
+    "headers": {
+      "Content-Length": "24",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "detail": "Not found."
+    }
+  },
+  {
+    "step": "manufacturer",
+    "method": "POST",
+    "path": "/api/dcim/manufacturers/",
+    "request": {
+      "name": "Arista",
+      "slug": "arista"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "500",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/dcim/manufacturers/4c34efe4-5bbf-4769-812c-5051de5ced21/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "4c34efe4-5bbf-4769-812c-5051de5ced21",
+      "object_type": "dcim.manufacturer",
+      "display": "Arista",
+      "url": "http://127.0.0.1:18030/api/dcim/manufacturers/4c34efe4-5bbf-4769-812c-5051de5ced21/",
+      "natural_slug": "arista_4c34",
+      "name": "Arista",
+      "description": "",
+      "created": "2026-09-30T15:51:50.990037Z",
+      "last_updated": "2026-09-30T15:51:50.990044Z",
+      "notes_url": "http://127.0.0.1:18030/api/dcim/manufacturers/4c34efe4-5bbf-4769-812c-5051de5ced21/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {}
+    }
+  },
+  {
+    "step": "device_type",
+    "method": "POST",
+    "path": "/api/dcim/device-types/",
+    "request": {
+      "manufacturer": "4c34efe4-5bbf-4769-812c-5051de5ced21",
+      "model": "vEOS",
+      "slug": "veos"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "830",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/dcim/device-types/34a1b45e-449e-4064-8775-a632959ee9ab/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "34a1b45e-449e-4064-8775-a632959ee9ab",
+      "object_type": "dcim.devicetype",
+      "display": "Arista vEOS",
+      "url": "http://127.0.0.1:18030/api/dcim/device-types/34a1b45e-449e-4064-8775-a632959ee9ab/",
+      "natural_slug": "arista_veos_34a1",
+      "subdevice_role": null,
+      "front_image": null,
+      "rear_image": null,
+      "model": "vEOS",
+      "part_number": "",
+      "u_height": 1,
+      "is_full_depth": true,
+      "comments": "",
+      "manufacturer": {
+        "id": "4c34efe4-5bbf-4769-812c-5051de5ced21",
+        "object_type": "dcim.manufacturer",
+        "url": "http://127.0.0.1:18030/api/dcim/manufacturers/4c34efe4-5bbf-4769-812c-5051de5ced21/"
+      },
+      "device_family": null,
+      "created": "2026-09-30T15:51:51.026199Z",
+      "last_updated": "2026-09-30T15:51:51.026208Z",
+      "notes_url": "http://127.0.0.1:18030/api/dcim/device-types/34a1b45e-449e-4064-8775-a632959ee9ab/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {},
+      "tags": []
+    }
+  },
+  {
+    "step": "role",
+    "method": "POST",
+    "path": "/api/extras/roles/",
+    "request": {
+      "content_types": [
+        "dcim.device"
+      ],
+      "name": "leaf"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "539",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/extras/roles/e64f3b8f-5d60-472f-aa27-c36b05fa5a9b/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "e64f3b8f-5d60-472f-aa27-c36b05fa5a9b",
+      "object_type": "extras.role",
+      "display": "leaf",
+      "url": "http://127.0.0.1:18030/api/extras/roles/e64f3b8f-5d60-472f-aa27-c36b05fa5a9b/",
+      "natural_slug": "leaf_e64f",
+      "content_types": [
+        "dcim.device"
+      ],
+      "name": "leaf",
+      "color": "9e9e9e",
+      "description": "",
+      "weight": null,
+      "created": "2026-09-30T15:51:51.062848Z",
+      "last_updated": "2026-09-30T15:51:51.062856Z",
+      "notes_url": "http://127.0.0.1:18030/api/extras/roles/e64f3b8f-5d60-472f-aa27-c36b05fa5a9b/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {}
+    }
+  },
+  {
+    "step": "role_v1",
+    "method": "POST",
+    "path": "/api/dcim/device-roles/",
+    "request": {
+      "name": "leaf",
+      "slug": "leaf"
+    },
+    "status": 404,
+    "headers": {
+      "Content-Length": "24",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "detail": "Not found."
+    }
+  },
+  {
+    "step": "platform",
+    "method": "POST",
+    "path": "/api/dcim/platforms/",
+    "request": {
+      "name": "eos",
+      "network_driver": "arista_eos",
+      "slug": "eos"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "903",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/dcim/platforms/bd52f8be-201e-4125-9a41-5db25b93d5a4/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "bd52f8be-201e-4125-9a41-5db25b93d5a4",
+      "object_type": "dcim.platform",
+      "display": "eos",
+      "url": "http://127.0.0.1:18030/api/dcim/platforms/bd52f8be-201e-4125-9a41-5db25b93d5a4/",
+      "natural_slug": "eos_bd52",
+      "network_driver_mappings": {
+        "aerleon": "arista",
+        "ansible": "arista.eos.eos",
+        "capirca": "arista",
+        "forward_networks": "ARISTA_EOS",
+        "hier_config": "eos",
+        "librenms": "arista_eos",
+        "napalm": "eos",
+        "netmiko": "arista_eos",
+        "netutils_parser": "arista_eos",
+        "nist": "arista:eos",
+        "ntc_templates": "arista_eos",
+        "pyntc": "arista_eos_eapi",
+        "scrapli": "arista_eos"
+      },
+      "name": "eos",
+      "network_driver": "arista_eos",
+      "napalm_driver": "",
+      "napalm_args": null,
+      "description": "",
+      "manufacturer": null,
+      "created": "2026-09-30T15:51:51.096169Z",
+      "last_updated": "2026-09-30T15:51:51.096177Z",
+      "notes_url": "http://127.0.0.1:18030/api/dcim/platforms/bd52f8be-201e-4125-9a41-5db25b93d5a4/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {}
+    }
+  },
+  {
+    "step": "tag",
+    "method": "POST",
+    "path": "/api/extras/tags/",
+    "request": {
+      "content_types": [
+        "dcim.device"
+      ],
+      "name": "port49",
+      "slug": "port49"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "528",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/extras/tags/4ec0777a-f5d6-4390-82bb-d248f4182855/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "4ec0777a-f5d6-4390-82bb-d248f4182855",
+      "object_type": "extras.tag",
+      "display": "port49",
+      "url": "http://127.0.0.1:18030/api/extras/tags/4ec0777a-f5d6-4390-82bb-d248f4182855/",
+      "natural_slug": "port49_4ec0",
+      "content_types": [
+        "dcim.device"
+      ],
+      "name": "port49",
+      "color": "9e9e9e",
+      "description": "",
+      "created": "2026-09-30T15:51:51.127067Z",
+      "last_updated": "2026-09-30T15:51:51.127075Z",
+      "notes_url": "http://127.0.0.1:18030/api/extras/tags/4ec0777a-f5d6-4390-82bb-d248f4182855/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {}
+    }
+  },
+  {
+    "step": "custom_field",
+    "method": "POST",
+    "path": "/api/extras/custom-fields/",
+    "request": {
+      "content_types": [
+        "dcim.device"
+      ],
+      "key": "os_version",
+      "label": "os_version",
+      "name": "os_version",
+      "type": "text"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "769",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/extras/custom-fields/e3b20cd8-f01d-4b08-a5af-24137597a427/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "e3b20cd8-f01d-4b08-a5af-24137597a427",
+      "object_type": "extras.customfield",
+      "display": "os_version",
+      "url": "http://127.0.0.1:18030/api/extras/custom-fields/e3b20cd8-f01d-4b08-a5af-24137597a427/",
+      "natural_slug": "os-version_e3b2",
+      "content_types": [
+        "dcim.device"
+      ],
+      "type": {
+        "value": "text",
+        "label": "Text"
+      },
+      "filter_logic": {
+        "value": "loose",
+        "label": "Loose"
+      },
+      "label": "os_version",
+      "grouping": "",
+      "key": "os_version",
+      "description": "",
+      "required": false,
+      "default": null,
+      "weight": 100,
+      "validation_minimum": null,
+      "validation_maximum": null,
+      "validation_regex": "",
+      "advanced_ui": false,
+      "scope_filter": {},
+      "created": "2026-09-30T15:51:51.154991Z",
+      "last_updated": "2026-09-30T15:51:51.154999Z",
+      "notes_url": "http://127.0.0.1:18030/api/extras/custom-fields/e3b20cd8-f01d-4b08-a5af-24137597a427/notes/"
+    }
+  },
+  {
+    "step": "device",
+    "method": "POST",
+    "path": "/api/dcim/devices/",
+    "request": {
+      "custom_fields": {
+        "os_version": "4.31.2F"
+      },
+      "device_type": "34a1b45e-449e-4064-8775-a632959ee9ab",
+      "location": "15deec3d-deed-408a-a164-053941680d6d",
+      "name": "leaf-01",
+      "platform": "bd52f8be-201e-4125-9a41-5db25b93d5a4",
+      "role": "e64f3b8f-5d60-472f-aa27-c36b05fa5a9b",
+      "status": "Active",
+      "tags": [
+        "4ec0777a-f5d6-4390-82bb-d248f4182855"
+      ]
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "2094",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/dcim/devices/4c25f5aa-9ccc-4db9-9e9a-625e572c13c4/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "4c25f5aa-9ccc-4db9-9e9a-625e572c13c4",
+      "object_type": "dcim.device",
+      "display": "leaf-01",
+      "url": "http://127.0.0.1:18030/api/dcim/devices/4c25f5aa-9ccc-4db9-9e9a-625e572c13c4/",
+      "natural_slug": "leaf-01__dc1_4c25",
+      "face": null,
+      "local_config_context_data": null,
+      "local_config_context_data_owner_object_id": null,
+      "name": "leaf-01",
+      "serial": "",
+      "asset_tag": null,
+      "position": null,
+      "device_redundancy_group_priority": null,
+      "vc_position": null,
+      "vc_priority": null,
+      "comments": "",
+      "local_config_context_schema": null,
+      "local_config_context_data_owner_content_type": null,
+      "device_type": {
+        "id": "34a1b45e-449e-4064-8775-a632959ee9ab",
+        "object_type": "dcim.devicetype",
+        "url": "http://127.0.0.1:18030/api/dcim/device-types/34a1b45e-449e-4064-8775-a632959ee9ab/"
+      },
+      "status": {
+        "id": "8b8e5f10-f12e-444a-800f-143a041254ce",
+        "object_type": "extras.status",
+        "url": "http://127.0.0.1:18030/api/extras/statuses/8b8e5f10-f12e-444a-800f-143a041254ce/"
+      },
+      "role": {
+        "id": "e64f3b8f-5d60-472f-aa27-c36b05fa5a9b",
+        "object_type": "extras.role",
+        "url": "http://127.0.0.1:18030/api/extras/roles/e64f3b8f-5d60-472f-aa27-c36b05fa5a9b/"
+      },
+      "tenant": null,
+      "platform": {
+        "id": "bd52f8be-201e-4125-9a41-5db25b93d5a4",
+        "object_type": "dcim.platform",
+        "url": "http://127.0.0.1:18030/api/dcim/platforms/bd52f8be-201e-4125-9a41-5db25b93d5a4/"
+      },
+      "location": {
+        "id": "15deec3d-deed-408a-a164-053941680d6d",
+        "object_type": "dcim.location",
+        "url": "http://127.0.0.1:18030/api/dcim/locations/15deec3d-deed-408a-a164-053941680d6d/"
+      },
+      "rack": null,
+      "primary_ip4": null,
+      "primary_ip6": null,
+      "virtual_chassis": null,
+      "device_redundancy_group": null,
+      "software_version": null,
+      "secrets_group": null,
+      "controller_managed_device_group": null,
+      "created": "2026-09-30T15:51:51.236207Z",
+      "last_updated": "2026-09-30T15:51:51.236216Z",
+      "notes_url": "http://127.0.0.1:18030/api/dcim/devices/4c25f5aa-9ccc-4db9-9e9a-625e572c13c4/notes/",
+      "custom_fields": {
+        "os_version": "4.31.2F"
+      },
+      "computed_fields": {},
+      "relationships": {},
+      "tags": [
+        {
+          "id": "4ec0777a-f5d6-4390-82bb-d248f4182855",
+          "object_type": "extras.tag",
+          "url": "http://127.0.0.1:18030/api/extras/tags/4ec0777a-f5d6-4390-82bb-d248f4182855/"
+        }
+      ],
+      "parent_bay": null,
+      "config_context": {}
+    }
+  },
+  {
+    "step": "device_v1",
+    "method": "POST",
+    "path": "/api/dcim/devices/",
+    "request": {
+      "custom_fields": {
+        "os_version": "4.31.2F"
+      },
+      "device_role": null,
+      "device_type": "34a1b45e-449e-4064-8775-a632959ee9ab",
+      "name": "leaf-01",
+      "platform": "bd52f8be-201e-4125-9a41-5db25b93d5a4",
+      "site": null,
+      "status": "active",
+      "tags": [
+        "4ec0777a-f5d6-4390-82bb-d248f4182855"
+      ]
+    },
+    "status": 400,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "163",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "status": [
+        "Related object not found using the provided attributes: {'name': 'active'}"
+      ],
+      "role": [
+        "This field is required."
+      ],
+      "location": [
+        "This field is required."
+      ]
+    }
+  },
+  {
+    "step": "mgmt",
+    "method": "POST",
+    "path": "/api/dcim/interfaces/",
+    "request": {
+      "device": "4c25f5aa-9ccc-4db9-9e9a-625e572c13c4",
+      "name": "Management1",
+      "status": "Active",
+      "type": "virtual"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE",
+      "Api-Version": "3.2",
+      "Content-Length": "1325",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/dcim/interfaces/6a0b084b-670a-45af-b82a-ca528e609b79/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "6a0b084b-670a-45af-b82a-ca528e609b79",
+      "object_type": "dcim.interface",
+      "display": "Management1",
+      "url": "http://127.0.0.1:18030/api/dcim/interfaces/6a0b084b-670a-45af-b82a-ca528e609b79/",
+      "cable": null,
+      "cable_peer_type": null,
+      "cable_peer": null,
+      "natural_slug": "leaf-01__dc1__management1_6a0b",
+      "connected_endpoint_type": null,
+      "connected_endpoint": null,
+      "connected_endpoint_reachable": null,
+      "type": {
+        "value": "virtual",
+        "label": "Virtual"
+      },
+      "port_type": null,
+      "mode": null,
+      "mac_address": "",
+      "speed": null,
+      "duplex": null,
+      "name": "Management1",
+      "label": "",
+      "description": "",
+      "enabled": true,
+      "mtu": null,
+      "mgmt_only": false,
+      "breakout_position": null,
+      "device": {
+        "id": "4c25f5aa-9ccc-4db9-9e9a-625e572c13c4",
+        "object_type": "dcim.device",
+        "url": "http://127.0.0.1:18030/api/dcim/devices/4c25f5aa-9ccc-4db9-9e9a-625e572c13c4/"
+      },
+      "module": null,
+      "status": {
+        "id": "8b8e5f10-f12e-444a-800f-143a041254ce",
+        "object_type": "extras.status",
+        "url": "http://127.0.0.1:18030/api/extras/statuses/8b8e5f10-f12e-444a-800f-143a041254ce/"
+      },
+      "role": null,
+      "parent_interface": null,
+      "bridge": null,
+      "lag": null,
+      "untagged_vlan": null,
+      "vrf": null,
+      "created": "2026-09-30T15:51:51.366510Z",
+      "last_updated": "2026-09-30T15:51:51.366517Z",
+      "notes_url": "http://127.0.0.1:18030/api/dcim/interfaces/6a0b084b-670a-45af-b82a-ca528e609b79/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {},
+      "tags": []
+    }
+  },
+  {
+    "step": "mgmt_v1",
+    "method": "POST",
+    "path": "/api/dcim/interfaces/",
+    "request": {
+      "device": "4c25f5aa-9ccc-4db9-9e9a-625e572c13c4",
+      "name": "Management1",
+      "status": "active",
+      "type": "virtual"
+    },
+    "status": 400,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE",
+      "Api-Version": "3.2",
+      "Content-Length": "89",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "status": [
+        "Related object not found using the provided attributes: {'name': 'active'}"
+      ]
+    }
+  },
+  {
+    "step": "loopback",
+    "method": "POST",
+    "path": "/api/dcim/interfaces/",
+    "request": {
+      "device": "4c25f5aa-9ccc-4db9-9e9a-625e572c13c4",
+      "name": "Loopback0",
+      "status": "Active",
+      "type": "virtual"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE",
+      "Api-Version": "3.2",
+      "Content-Length": "1319",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/dcim/interfaces/5db5ac46-8b89-40b7-bd41-85f487cf697f/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "5db5ac46-8b89-40b7-bd41-85f487cf697f",
+      "object_type": "dcim.interface",
+      "display": "Loopback0",
+      "url": "http://127.0.0.1:18030/api/dcim/interfaces/5db5ac46-8b89-40b7-bd41-85f487cf697f/",
+      "cable": null,
+      "cable_peer_type": null,
+      "cable_peer": null,
+      "natural_slug": "leaf-01__dc1__loopback0_5db5",
+      "connected_endpoint_type": null,
+      "connected_endpoint": null,
+      "connected_endpoint_reachable": null,
+      "type": {
+        "value": "virtual",
+        "label": "Virtual"
+      },
+      "port_type": null,
+      "mode": null,
+      "mac_address": "",
+      "speed": null,
+      "duplex": null,
+      "name": "Loopback0",
+      "label": "",
+      "description": "",
+      "enabled": true,
+      "mtu": null,
+      "mgmt_only": false,
+      "breakout_position": null,
+      "device": {
+        "id": "4c25f5aa-9ccc-4db9-9e9a-625e572c13c4",
+        "object_type": "dcim.device",
+        "url": "http://127.0.0.1:18030/api/dcim/devices/4c25f5aa-9ccc-4db9-9e9a-625e572c13c4/"
+      },
+      "module": null,
+      "status": {
+        "id": "8b8e5f10-f12e-444a-800f-143a041254ce",
+        "object_type": "extras.status",
+        "url": "http://127.0.0.1:18030/api/extras/statuses/8b8e5f10-f12e-444a-800f-143a041254ce/"
+      },
+      "role": null,
+      "parent_interface": null,
+      "bridge": null,
+      "lag": null,
+      "untagged_vlan": null,
+      "vrf": null,
+      "created": "2026-09-30T15:51:51.436471Z",
+      "last_updated": "2026-09-30T15:51:51.436479Z",
+      "notes_url": "http://127.0.0.1:18030/api/dcim/interfaces/5db5ac46-8b89-40b7-bd41-85f487cf697f/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {},
+      "tags": []
+    }
+  },
+  {
+    "step": "loopback_v1",
+    "method": "POST",
+    "path": "/api/dcim/interfaces/",
+    "request": {
+      "device": "4c25f5aa-9ccc-4db9-9e9a-625e572c13c4",
+      "name": "Loopback0",
+      "status": "active",
+      "type": "virtual"
+    },
+    "status": 400,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS, TRACE",
+      "Api-Version": "3.2",
+      "Content-Length": "89",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "status": [
+        "Related object not found using the provided attributes: {'name': 'active'}"
+      ]
+    }
+  },
+  {
+    "step": "prefix",
+    "method": "POST",
+    "path": "/api/ipam/prefixes/",
+    "request": {
+      "prefix": "10.0.0.0/8",
+      "status": "Active"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "1088",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/ipam/prefixes/deac9584-ef88-4934-b889-3b37c4abfcb7/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "deac9584-ef88-4934-b889-3b37c4abfcb7",
+      "object_type": "ipam.prefix",
+      "display": "10.0.0.0/8: Global",
+      "url": "http://127.0.0.1:18030/api/ipam/prefixes/deac9584-ef88-4934-b889-3b37c4abfcb7/",
+      "natural_slug": "global_10-0-0-0_8_deac",
+      "prefix": "10.0.0.0/8",
+      "type": {
+        "value": "network",
+        "label": "Network"
+      },
+      "network": "10.0.0.0",
+      "broadcast": "10.255.255.255",
+      "prefix_length": 8,
+      "ip_version": 4,
+      "date_allocated": null,
+      "description": "",
+      "status": {
+        "id": "8b8e5f10-f12e-444a-800f-143a041254ce",
+        "object_type": "extras.status",
+        "url": "http://127.0.0.1:18030/api/extras/statuses/8b8e5f10-f12e-444a-800f-143a041254ce/"
+      },
+      "role": null,
+      "parent": null,
+      "namespace": {
+        "id": "e7b51be0-1469-45e5-87ea-eae8043a3a19",
+        "object_type": "ipam.namespace",
+        "url": "http://127.0.0.1:18030/api/ipam/namespaces/e7b51be0-1469-45e5-87ea-eae8043a3a19/"
+      },
+      "tenant": null,
+      "vlan": null,
+      "rir": null,
+      "created": "2026-09-30T15:51:51.497385Z",
+      "last_updated": "2026-09-30T15:51:51.497393Z",
+      "tags": [],
+      "notes_url": "http://127.0.0.1:18030/api/ipam/prefixes/deac9584-ef88-4934-b889-3b37c4abfcb7/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {}
+    }
+  },
+  {
+    "step": "mgmt_ip",
+    "method": "POST",
+    "path": "/api/ipam/ip-addresses/",
+    "request": {
+      "address": "10.0.1.5/32",
+      "status": "Active"
+    },
+    "status": 400,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "59",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "__all__": [
+        "One of parent or namespace must be provided"
+      ]
+    }
+  },
+  {
+    "step": "mgmt_ip_v1",
+    "method": "POST",
+    "path": "/api/ipam/ip-addresses/",
+    "request": {
+      "address": "10.0.1.5/32",
+      "assigned_object_id": "6a0b084b-670a-45af-b82a-ca528e609b79",
+      "assigned_object_type": "dcim.interface",
+      "status": "active"
+    },
+    "status": 400,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "89",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "status": [
+        "Related object not found using the provided attributes: {'name': 'active'}"
+      ]
+    }
+  },
+  {
+    "step": "loop_ip",
+    "method": "POST",
+    "path": "/api/ipam/ip-addresses/",
+    "request": {
+      "address": "10.0.1.6/32",
+      "status": "Active"
+    },
+    "status": 400,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "59",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "__all__": [
+        "One of parent or namespace must be provided"
+      ]
+    }
+  },
+  {
+    "step": "loop_ip_v1",
+    "method": "POST",
+    "path": "/api/ipam/ip-addresses/",
+    "request": {
+      "address": "10.0.1.6/32",
+      "assigned_object_id": "5db5ac46-8b89-40b7-bd41-85f487cf697f",
+      "assigned_object_type": "dcim.interface",
+      "status": "active"
+    },
+    "status": 400,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "89",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "status": [
+        "Related object not found using the provided attributes: {'name': 'active'}"
+      ]
+    }
+  },
+  {
+    "step": "mgmt_ip_parent",
+    "method": "POST",
+    "path": "/api/ipam/ip-addresses/",
+    "request": {
+      "address": "10.0.1.5/32",
+      "parent": "deac9584-ef88-4934-b889-3b37c4abfcb7",
+      "status": "Active"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "993",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/ipam/ip-addresses/18f3433b-fc39-4563-9e7e-7f454c5c7ace/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "18f3433b-fc39-4563-9e7e-7f454c5c7ace",
+      "object_type": "ipam.ipaddress",
+      "display": "10.0.1.5/32",
+      "url": "http://127.0.0.1:18030/api/ipam/ip-addresses/18f3433b-fc39-4563-9e7e-7f454c5c7ace/",
+      "natural_slug": "global_10-0-1-5_18f3",
+      "address": "10.0.1.5/32",
+      "host": "10.0.1.5",
+      "mask_length": 32,
+      "type": "host",
+      "ip_version": 4,
+      "dns_name": "",
+      "description": "",
+      "status": {
+        "id": "8b8e5f10-f12e-444a-800f-143a041254ce",
+        "object_type": "extras.status",
+        "url": "http://127.0.0.1:18030/api/extras/statuses/8b8e5f10-f12e-444a-800f-143a041254ce/"
+      },
+      "role": null,
+      "parent": {
+        "id": "deac9584-ef88-4934-b889-3b37c4abfcb7",
+        "object_type": "ipam.prefix",
+        "url": "http://127.0.0.1:18030/api/ipam/prefixes/deac9584-ef88-4934-b889-3b37c4abfcb7/"
+      },
+      "tenant": null,
+      "nat_inside": null,
+      "created": "2026-09-30T15:51:51.585899Z",
+      "last_updated": "2026-09-30T15:51:51.585907Z",
+      "tags": [],
+      "notes_url": "http://127.0.0.1:18030/api/ipam/ip-addresses/18f3433b-fc39-4563-9e7e-7f454c5c7ace/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {}
+    }
+  },
+  {
+    "step": "loop_ip_parent",
+    "method": "POST",
+    "path": "/api/ipam/ip-addresses/",
+    "request": {
+      "address": "10.0.1.6/32",
+      "parent": "deac9584-ef88-4934-b889-3b37c4abfcb7",
+      "status": "Active"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "993",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/ipam/ip-addresses/8bd18e15-d020-472f-9d5f-1d00ad133340/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "8bd18e15-d020-472f-9d5f-1d00ad133340",
+      "object_type": "ipam.ipaddress",
+      "display": "10.0.1.6/32",
+      "url": "http://127.0.0.1:18030/api/ipam/ip-addresses/8bd18e15-d020-472f-9d5f-1d00ad133340/",
+      "natural_slug": "global_10-0-1-6_8bd1",
+      "address": "10.0.1.6/32",
+      "host": "10.0.1.6",
+      "mask_length": 32,
+      "type": "host",
+      "ip_version": 4,
+      "dns_name": "",
+      "description": "",
+      "status": {
+        "id": "8b8e5f10-f12e-444a-800f-143a041254ce",
+        "object_type": "extras.status",
+        "url": "http://127.0.0.1:18030/api/extras/statuses/8b8e5f10-f12e-444a-800f-143a041254ce/"
+      },
+      "role": null,
+      "parent": {
+        "id": "deac9584-ef88-4934-b889-3b37c4abfcb7",
+        "object_type": "ipam.prefix",
+        "url": "http://127.0.0.1:18030/api/ipam/prefixes/deac9584-ef88-4934-b889-3b37c4abfcb7/"
+      },
+      "tenant": null,
+      "nat_inside": null,
+      "created": "2026-09-30T15:51:51.653829Z",
+      "last_updated": "2026-09-30T15:51:51.653839Z",
+      "tags": [],
+      "notes_url": "http://127.0.0.1:18030/api/ipam/ip-addresses/8bd18e15-d020-472f-9d5f-1d00ad133340/notes/",
+      "custom_fields": {},
+      "computed_fields": {},
+      "relationships": {}
+    }
+  },
+  {
+    "step": "mgmt_bind",
+    "method": "POST",
+    "path": "/api/ipam/ip-address-to-interface/",
+    "request": {
+      "interface": "6a0b084b-670a-45af-b82a-ca528e609b79",
+      "ip_address": "18f3433b-fc39-4563-9e7e-7f454c5c7ace"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "816",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/ipam/ip-address-to-interface/4798abcc-b5f1-414c-adbf-8eeb92b48a74/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "4798abcc-b5f1-414c-adbf-8eeb92b48a74",
+      "object_type": "ipam.ipaddresstointerface",
+      "display": "10.0.1.5/32 leaf-01 Management1",
+      "url": "http://127.0.0.1:18030/api/ipam/ip-address-to-interface/4798abcc-b5f1-414c-adbf-8eeb92b48a74/",
+      "natural_slug": "global_10-0-1-5_leaf-01__dc1__management1_4798",
+      "is_source": false,
+      "is_destination": false,
+      "is_default": false,
+      "is_preferred": false,
+      "is_primary": false,
+      "is_secondary": false,
+      "is_standby": false,
+      "ip_address": {
+        "id": "18f3433b-fc39-4563-9e7e-7f454c5c7ace",
+        "object_type": "ipam.ipaddress",
+        "url": "http://127.0.0.1:18030/api/ipam/ip-addresses/18f3433b-fc39-4563-9e7e-7f454c5c7ace/"
+      },
+      "interface": {
+        "id": "6a0b084b-670a-45af-b82a-ca528e609b79",
+        "object_type": "dcim.interface",
+        "url": "http://127.0.0.1:18030/api/dcim/interfaces/6a0b084b-670a-45af-b82a-ca528e609b79/"
+      },
+      "vm_interface": null
+    }
+  },
+  {
+    "step": "loop_bind",
+    "method": "POST",
+    "path": "/api/ipam/ip-address-to-interface/",
+    "request": {
+      "interface": "5db5ac46-8b89-40b7-bd41-85f487cf697f",
+      "ip_address": "8bd18e15-d020-472f-9d5f-1d00ad133340"
+    },
+    "status": 201,
+    "headers": {
+      "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "812",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Location": "http://127.0.0.1:18030/api/ipam/ip-address-to-interface/47e34a87-3508-4878-8d74-a65af4504aea/",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "47e34a87-3508-4878-8d74-a65af4504aea",
+      "object_type": "ipam.ipaddresstointerface",
+      "display": "10.0.1.6/32 leaf-01 Loopback0",
+      "url": "http://127.0.0.1:18030/api/ipam/ip-address-to-interface/47e34a87-3508-4878-8d74-a65af4504aea/",
+      "natural_slug": "global_10-0-1-6_leaf-01__dc1__loopback0_47e3",
+      "is_source": false,
+      "is_destination": false,
+      "is_default": false,
+      "is_preferred": false,
+      "is_primary": false,
+      "is_secondary": false,
+      "is_standby": false,
+      "ip_address": {
+        "id": "8bd18e15-d020-472f-9d5f-1d00ad133340",
+        "object_type": "ipam.ipaddress",
+        "url": "http://127.0.0.1:18030/api/ipam/ip-addresses/8bd18e15-d020-472f-9d5f-1d00ad133340/"
+      },
+      "interface": {
+        "id": "5db5ac46-8b89-40b7-bd41-85f487cf697f",
+        "object_type": "dcim.interface",
+        "url": "http://127.0.0.1:18030/api/dcim/interfaces/5db5ac46-8b89-40b7-bd41-85f487cf697f/"
+      },
+      "vm_interface": null
+    }
+  },
+  {
+    "step": "primary",
+    "method": "PATCH",
+    "path": "/api/dcim/devices/4c25f5aa-9ccc-4db9-9e9a-625e572c13c4/",
+    "request": {
+      "primary_ip4": "18f3433b-fc39-4563-9e7e-7f454c5c7ace"
+    },
+    "status": 200,
+    "headers": {
+      "Allow": "GET, PUT, PATCH, DELETE, HEAD, OPTIONS",
+      "Api-Version": "3.2",
+      "Content-Length": "2257",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "id": "4c25f5aa-9ccc-4db9-9e9a-625e572c13c4",
+      "object_type": "dcim.device",
+      "display": "leaf-01",
+      "url": "http://127.0.0.1:18030/api/dcim/devices/4c25f5aa-9ccc-4db9-9e9a-625e572c13c4/",
+      "natural_slug": "leaf-01__dc1_4c25",
+      "face": null,
+      "local_config_context_data": null,
+      "local_config_context_data_owner_object_id": null,
+      "name": "leaf-01",
+      "serial": "",
+      "asset_tag": null,
+      "position": null,
+      "device_redundancy_group_priority": null,
+      "vc_position": null,
+      "vc_priority": null,
+      "comments": "",
+      "local_config_context_schema": null,
+      "local_config_context_data_owner_content_type": null,
+      "device_type": {
+        "id": "34a1b45e-449e-4064-8775-a632959ee9ab",
+        "object_type": "dcim.devicetype",
+        "url": "http://127.0.0.1:18030/api/dcim/device-types/34a1b45e-449e-4064-8775-a632959ee9ab/"
+      },
+      "status": {
+        "id": "8b8e5f10-f12e-444a-800f-143a041254ce",
+        "object_type": "extras.status",
+        "url": "http://127.0.0.1:18030/api/extras/statuses/8b8e5f10-f12e-444a-800f-143a041254ce/"
+      },
+      "role": {
+        "id": "e64f3b8f-5d60-472f-aa27-c36b05fa5a9b",
+        "object_type": "extras.role",
+        "url": "http://127.0.0.1:18030/api/extras/roles/e64f3b8f-5d60-472f-aa27-c36b05fa5a9b/"
+      },
+      "tenant": null,
+      "platform": {
+        "id": "bd52f8be-201e-4125-9a41-5db25b93d5a4",
+        "object_type": "dcim.platform",
+        "url": "http://127.0.0.1:18030/api/dcim/platforms/bd52f8be-201e-4125-9a41-5db25b93d5a4/"
+      },
+      "location": {
+        "id": "15deec3d-deed-408a-a164-053941680d6d",
+        "object_type": "dcim.location",
+        "url": "http://127.0.0.1:18030/api/dcim/locations/15deec3d-deed-408a-a164-053941680d6d/"
+      },
+      "rack": null,
+      "primary_ip4": {
+        "id": "18f3433b-fc39-4563-9e7e-7f454c5c7ace",
+        "object_type": "ipam.ipaddress",
+        "url": "http://127.0.0.1:18030/api/ipam/ip-addresses/18f3433b-fc39-4563-9e7e-7f454c5c7ace/"
+      },
+      "primary_ip6": null,
+      "virtual_chassis": null,
+      "device_redundancy_group": null,
+      "software_version": null,
+      "secrets_group": null,
+      "controller_managed_device_group": null,
+      "created": "2026-09-30T15:51:51.236207Z",
+      "last_updated": "2026-09-30T15:51:51.948848Z",
+      "notes_url": "http://127.0.0.1:18030/api/dcim/devices/4c25f5aa-9ccc-4db9-9e9a-625e572c13c4/notes/",
+      "custom_fields": {
+        "os_version": "4.31.2F"
+      },
+      "computed_fields": {},
+      "relationships": {},
+      "tags": [
+        {
+          "id": "4ec0777a-f5d6-4390-82bb-d248f4182855",
+          "object_type": "extras.tag",
+          "url": "http://127.0.0.1:18030/api/extras/tags/4ec0777a-f5d6-4390-82bb-d248f4182855/"
+        }
+      ],
+      "parent_bay": null,
+      "config_context": {}
+    }
+  }
+]

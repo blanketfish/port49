@@ -1,0 +1,199 @@
+[
+  {
+    "step": "graphql_0",
+    "method": "POST",
+    "path": "/api/graphql/",
+    "request": {
+      "query": "{ devices(name: \"leaf-01\") { name platform { name network_driver } location { name } role { name } primary_ip4 { address } _custom_field_data tags { name } interfaces { name ip_addresses { address } } } }"
+    },
+    "status": 200,
+    "headers": {
+      "Allow": "POST, OPTIONS",
+      "Api-Version": "2.4",
+      "Content-Length": "404",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "data": {
+        "devices": [
+          {
+            "name": "leaf-01",
+            "platform": {
+              "name": "eos",
+              "network_driver": "arista_eos"
+            },
+            "location": {
+              "name": "dc1"
+            },
+            "role": {
+              "name": "leaf"
+            },
+            "primary_ip4": {
+              "address": "10.0.1.5/32"
+            },
+            "_custom_field_data": {
+              "os_version": "4.31.2F"
+            },
+            "tags": [
+              {
+                "name": "port49"
+              }
+            ],
+            "interfaces": [
+              {
+                "name": "Loopback0",
+                "ip_addresses": [
+                  {
+                    "address": "10.0.1.6/32"
+                  }
+                ]
+              },
+              {
+                "name": "Management1",
+                "ip_addresses": [
+                  {
+                    "address": "10.0.1.5/32"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "step": "graphql_1",
+    "method": "POST",
+    "path": "/api/graphql/",
+    "request": {
+      "query": "{ devices(name: \"leaf-01\") { name platform { slug } site { slug } device_role { slug } primary_ip4 { address } custom_fields tags { slug } interfaces { name ip_addresses { address } } } }"
+    },
+    "status": 400,
+    "headers": {
+      "Allow": "POST, OPTIONS",
+      "Api-Version": "2.4",
+      "Content-Length": "630",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "errors": [
+        {
+          "message": "Cannot query field \"slug\" on type \"PlatformType\".",
+          "locations": [
+            {
+              "line": 1,
+              "column": 46
+            }
+          ]
+        },
+        {
+          "message": "Cannot query field \"site\" on type \"DeviceType\".",
+          "locations": [
+            {
+              "line": 1,
+              "column": 53
+            }
+          ]
+        },
+        {
+          "message": "Cannot query field \"device_role\" on type \"DeviceType\". Did you mean \"device_type\" or \"device_bays\"?",
+          "locations": [
+            {
+              "line": 1,
+              "column": 67
+            }
+          ]
+        },
+        {
+          "message": "Cannot query field \"custom_fields\" on type \"DeviceType\". Did you mean \"_custom_field_data\"?",
+          "locations": [
+            {
+              "line": 1,
+              "column": 112
+            }
+          ]
+        },
+        {
+          "message": "Cannot query field \"slug\" on type \"TagType\".",
+          "locations": [
+            {
+              "line": 1,
+              "column": 133
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "step": "graphql_2",
+    "method": "POST",
+    "path": "/api/graphql/",
+    "request": {
+      "query": "{ devices(name: \"leaf-01\") { name platform { slug network_driver } site { slug } device_role { slug } primary_ip4 { address } _custom_field_data tags { slug } interfaces { name ip_addresses { address } } } }"
+    },
+    "status": 400,
+    "headers": {
+      "Allow": "POST, OPTIONS",
+      "Api-Version": "2.4",
+      "Content-Length": "480",
+      "Content-Type": "application/json",
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Referrer-Policy": "same-origin",
+      "Vary": "Accept, Cookie, origin",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY"
+    },
+    "body": {
+      "errors": [
+        {
+          "message": "Cannot query field \"slug\" on type \"PlatformType\".",
+          "locations": [
+            {
+              "line": 1,
+              "column": 46
+            }
+          ]
+        },
+        {
+          "message": "Cannot query field \"site\" on type \"DeviceType\".",
+          "locations": [
+            {
+              "line": 1,
+              "column": 68
+            }
+          ]
+        },
+        {
+          "message": "Cannot query field \"device_role\" on type \"DeviceType\". Did you mean \"device_type\" or \"device_bays\"?",
+          "locations": [
+            {
+              "line": 1,
+              "column": 82
+            }
+          ]
+        },
+        {
+          "message": "Cannot query field \"slug\" on type \"TagType\".",
+          "locations": [
+            {
+              "line": 1,
+              "column": 153
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

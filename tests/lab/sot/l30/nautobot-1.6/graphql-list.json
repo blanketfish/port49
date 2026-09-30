@@ -1,0 +1,35 @@
+[
+  {
+    "errors": null,
+    "first": {
+      "name": "leaf-01",
+      "status": {
+        "name": "Active"
+      }
+    },
+    "names": 120,
+    "query": "{ devices { name status { name } } }",
+    "status": 200,
+    "step": "graphql_list_0"
+  },
+  {
+    "errors": null,
+    "first": {
+      "name": "leaf-01"
+    },
+    "names": 50,
+    "query": "{ devices(limit: 50, offset: 0) { name } }",
+    "status": 200,
+    "step": "graphql_list_1"
+  },
+  {
+    "errors": null,
+    "first": {
+      "name": "leaf-051"
+    },
+    "names": 50,
+    "query": "{ devices(limit: 50, offset: 50) { name } }",
+    "status": 200,
+    "step": "graphql_list_2"
+  }
+]

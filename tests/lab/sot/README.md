@@ -1,15 +1,18 @@
-# L27: NetBox and Nautobot fixtures
+# L27 and L30: NetBox and Nautobot fixtures
 
 What NetBox's and Nautobot's APIs return for one device, recorded from real stacks (spec §15 L27,
-plan 6a Task 2). Plan 6b's connector tests replay `fixtures/`; the notes are
-`tests/lab/results/L27-netbox.md` and `tests/lab/results/L27-nautobot.md`.
+plan 6a Task 2), and how their device lists page, with Nautobot 3.x's answers to every L27 question
+(spec §15 L30, plan 6b Task 2). The connector tests replay `fixtures/` and `l30/`; the notes are
+`tests/lab/results/L27-netbox.md`, `L27-nautobot.md`, `L30-netbox.md` and `L30-nautobot.md`.
 
 | path | what |
 |---|---|
-| `compose/<stack>.yml` | one product at one version, its Postgres and Valkey, images pinned by digest, API on `127.0.0.1` |
+| `compose/<stack>.yml` | one product at one version, its Postgres and Valkey, images pinned by digest, API on `127.0.0.1`; an nginx reverse proxy in the `l30` profile on `127.0.0.1:<port+1000>` |
+| `compose/l30-proxy.conf` | the proxy's config: forwards the client's `Host` and sets `X-Forwarded-Proto: https` (`run.sh` points it at the stack's product) |
 | `run.sh` | records one stack end to end: credentials, up, wait, record, `down -v` |
-| `../cmd/sot-record/` | the recorder: seeds leaf-01, reads it over REST and GraphQL, round-trips a webhook |
-| `fixtures/<stack>[-legacy]/` | the recorded exchanges, one JSON file per read |
+| `../cmd/sot-record/` | the recorder: seeds leaf-01, reads it over REST and GraphQL, round-trips a webhook; with `-devices`, bulk-creates more, follows the REST list's `next` to its end, reads one page through the proxy, and lists over GraphQL |
+| `fixtures/<stack>[-legacy]/` | L27: the recorded exchanges, one JSON file per read |
+| `l30/<stack>/` | L30: every L27 file, plus `seed-bulk.json`, `rest-pages.json`, `rest-page-proxied.json`, `graphql-list.json` |
 
 ## Running
 
@@ -23,12 +26,17 @@ tests/lab/sot/run.sh netbox-4
 tests/lab/sot/run.sh nautobot-1.6
 tests/lab/sot/run.sh nautobot-1.6 legacy
 tests/lab/sot/run.sh nautobot-2
+tests/lab/sot/run.sh netbox-3.7 l30       # L30: 120 devices, pages of 50, the proxy; l30/netbox-3.7
+tests/lab/sot/run.sh netbox-4 l30
+tests/lab/sot/run.sh nautobot-1.6 l30     # adds -prefer-legacy: 1.6 took only the legacy spelling (L27)
+tests/lab/sot/run.sh nautobot-2 l30
+tests/lab/sot/run.sh nautobot-3 l30       # also every L27 file for Nautobot 3.x
 make lab-unit                              # the notes still name every recorded version and directory
 ```
 
 Each run takes 2–4 minutes once the images are pulled. The script gives `/api/status/` 10 minutes and
 the recorder 10 minutes, and tears the stack down with `down -v` on every exit, failure included. The
-log is `tests/lab/logs/l27-<stack>.log`, with the compose log beside it and every generated credential
+log is `tests/lab/logs/l27-<stack>.log` (`l30-<stack>.log` for an `l30` run), with the compose log beside it and every generated credential
 in it replaced by `<redacted>`.
 
 ## Credentials
@@ -48,7 +56,7 @@ Set `L27_ENV_DIR=<dir>` to keep the env file after the run, for a count-only aud
 reached a committed file:
 
 ```bash
-for v in $(cut -d= -f2- "$L27_ENV_DIR"/*.env); do grep -rFc -- "$v" tests/lab/sot tests/lab/results/L27-*.md; done \
+for v in $(cut -d= -f2- "$L27_ENV_DIR"/*.env); do grep -rFc -- "$v" tests/lab/sot tests/lab/results/L27-*.md tests/lab/results/L30-*.md; done \
   | awk -F: '{s+=$NF} END{print s+0}'   # must print 0
 ```
 
@@ -62,5 +70,6 @@ or webhook delivery echoes (including a token the product issues during the run)
 | stack | flags |
 |---|---|
 | `netbox-4` | `-auth-scheme Bearer -probe-v1-token` (also issues a v1 token over the API and tries it: `auth-v1.json`) |
-| `nautobot-2` | `-depth1-read` (also reads the device with `?depth=1`: `rest-device-depth1.json`) |
+| `nautobot-2`, `nautobot-3` | `-depth1-read` (also reads the device with `?depth=1`: `rest-device-depth1.json`) |
 | `… legacy` | `-prefer-legacy` |
+| `… l30` | `-devices 120 -page-limit 50 -proxy http://127.0.0.1:<port+1000>`, and `--profile l30` to compose; `nautobot-1.6 l30` adds `-prefer-legacy` |
