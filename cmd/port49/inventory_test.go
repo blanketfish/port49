@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rhwendt/port49/internal/keyfile"
 )
 
 const diffPolicy = `
@@ -356,5 +358,48 @@ func TestInventoryDiffMarksEachReloadStep(t *testing.T) {
 	}
 	if !strings.Contains(got, "ok: port49d would take both, in either order") {
 		t.Errorf("missing the verdict:\n%s", got)
+	}
+}
+
+func TestInventoryKeygenWritesAPairOnceAndNamesIt(t *testing.T) {
+	dir := t.TempDir()
+	var out, errOut bytes.Buffer
+	if code := run([]string{"inventory", "keygen", "--dir", dir}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	fi, err := os.Stat(filepath.Join(dir, "signing.key"))
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("signing.key: %v %v", fi, err)
+	}
+	priv, err := keyfile.LoadEd25519(filepath.Join(dir, "signing.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubPEM, _ := os.ReadFile(filepath.Join(dir, "signing.pub"))
+	pub, err := keyfile.ParseEd25519Public(pubPEM, "signing.pub")
+	if err != nil || !pub.Equal(priv.Public()) {
+		t.Fatalf("signing.pub: %v", err)
+	}
+	if !strings.Contains(out.String(), keyfile.Ed25519KeyID(pub)) {
+		t.Fatalf("the key id is not printed: %s", out.String())
+	}
+	// Never over an existing key: that would strand every port49d verifying
+	// against the old public half.
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"inventory", "keygen", "--dir", dir}, &out, &errOut); code != 1 ||
+		!strings.Contains(errOut.String(), "already exists") {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	// One file present: refused before either is written, so no lone new
+	// private key is left beside an old public one (conflict scan F14).
+	lone := t.TempDir()
+	os.WriteFile(filepath.Join(lone, "signing.pub"), []byte("old"), 0o644)
+	errOut.Reset()
+	if code := run([]string{"inventory", "keygen", "--dir", lone}, &out, &errOut); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(lone, "signing.key")); err == nil {
+		t.Fatal("a lone signing.key was left")
 	}
 }

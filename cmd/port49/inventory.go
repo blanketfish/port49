@@ -2,22 +2,29 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/policy"
 )
 
 func inventoryCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "diff" {
 		return inventoryDiff(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "keygen" {
+		return inventoryKeygen(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
@@ -285,4 +292,72 @@ func changeLine(c bundle.Change, addresses string) string {
 		return fmt.Sprintf("%s scope %s%s: %s %s", mark, c.Scope, tag, c.Device, verb)
 	}
 	return fmt.Sprintf("%s %s %s: %s → %s", mark, c.Kind, c.Device, c.From, c.To)
+}
+
+// inventoryKeygen is `port49 inventory keygen`: the inventory service's
+// signing key pair (spec §13, decision 30). signing.key goes to the service
+// alone, signing.pub to every port49d's inventory.service.verify_key_files.
+// Neither file is ever overwritten: a new key beside a daemon still holding
+// the old public half would strand it on the bundle in force.
+func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("port49 inventory keygen", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	dir := flags.String("dir", "", "the directory to write signing.key and signing.pub into")
+	if err := flags.Parse(args); err != nil || *dir == "" || flags.NArg() != 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
+		return 1
+	}
+	privPEM, pubPEM, err := keyfile.EncodeEd25519(priv)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
+		return 1
+	}
+	// Refuse before writing either, so a refusal never leaves one new file
+	// beside an old one (conflict scan F14).
+	for _, name := range []string{"signing.key", "signing.pub"} {
+		if _, err := os.Lstat(filepath.Join(*dir, name)); err == nil {
+			fmt.Fprintf(stderr, "port49 inventory keygen: %s already exists; a new key is written beside no old one\n",
+				filepath.Join(*dir, name))
+			return 1
+		}
+	}
+	var written []string
+	undo := func() {
+		for _, w := range written {
+			os.Remove(w)
+		}
+	}
+	for _, f := range []struct {
+		name string
+		body []byte
+		mode os.FileMode
+	}{{"signing.key", privPEM, 0o600}, {"signing.pub", pubPEM, 0o644}} {
+		path := filepath.Join(*dir, f.name)
+		// O_EXCL still: a file that appeared since the check is not overwritten.
+		out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, f.mode)
+		if err != nil {
+			undo()
+			fmt.Fprintln(stderr, "port49 inventory keygen:", err)
+			return 1
+		}
+		written = append(written, path)
+		_, werr := out.Write(f.body)
+		if cerr := out.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			undo() // the first file is removed if the second fails
+			fmt.Fprintln(stderr, "port49 inventory keygen:", werr)
+			return 1
+		}
+	}
+	fmt.Fprintf(stdout, "port49 inventory keygen: wrote %s (0600: port49-inventory's signing_key_file) and %s "+
+		"(every port49d's inventory.service.verify_key_files); key_id %s\n", filepath.Join(*dir, "signing.key"),
+		filepath.Join(*dir, "signing.pub"), keyfile.Ed25519KeyID(priv.Public().(ed25519.PublicKey)))
+	return 0
 }
