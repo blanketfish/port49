@@ -709,3 +709,25 @@ func TestASaveThatFailsBetweenItsWritesDoesNotWedgeTheService(t *testing.T) {
 		t.Fatalf("wedged: %+v", res)
 	}
 }
+
+// Final review Minor 3: a service whose clock stepped back publishes after
+// the bundle in force all the same, and says so: port49d refuses a document
+// not later than the one it holds.
+func TestAClockThatSteppedBackStillPublishesLater(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	start := time.Now().Truncate(time.Second)
+	rig.s.Now = func() time.Time { return start }
+	rig.sync(t)
+	rig.s.Now = func() time.Time { return start.Add(-time.Hour) }
+	rig.src.inv = devices(4)
+	if res := rig.sync(t); res.Outcome != OutcomePublished || res.Sequence != 2 {
+		t.Fatalf("%+v", res)
+	}
+	if at := rig.s.Current().Doc.PublishedAt; !at.After(start) {
+		t.Fatalf("bundle 2 is published %s, not after bundle 1's %s", at, start)
+	}
+	if !strings.Contains(rig.out.String(), "this host's clock ") ||
+		!strings.Contains(rig.out.String(), "is not after bundle 1's published_at") {
+		t.Fatalf("not said: %s", rig.out)
+	}
+}

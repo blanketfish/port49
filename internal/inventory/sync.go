@@ -201,7 +201,7 @@ func (s *Syncer) reseal() (bool, error) {
 	doc := cur.Doc
 	seq, err := s.nextSequence(cur)
 	doc.Sequence = seq
-	doc.PublishedAt = s.Now().UTC()
+	doc.PublishedAt = s.publishedAt(cur, s.Now()).UTC()
 	var raw []byte
 	if err == nil {
 		raw, err = bundle.Seal(doc, s.Key)
@@ -375,7 +375,7 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 	if err != nil {
 		return held(Result{Outcome: OutcomeFailed, Reason: "state_dir " + s.State.Dir + ": " + oneLine(err)})
 	}
-	doc := bundle.NewDocument(seq, now, policyRaw, next.PlatformSet(), inv, sources)
+	doc := bundle.NewDocument(seq, s.publishedAt(prev, now), policyRaw, next.PlatformSet(), inv, sources)
 	raw, err := bundle.Seal(doc, s.Key)
 	if err != nil {
 		return held(Result{Outcome: OutcomeFailed, Reason: "sealing bundle " + fmt.Sprint(seq) + ": " + oneLine(err)})
@@ -411,6 +411,24 @@ func (s *Syncer) nextSequence(prev *Published) (int64, error) {
 		floor = max(floor, prev.Doc.Sequence)
 	}
 	return floor + 1, nil
+}
+
+// publishedAt is when the next bundle is published: now, or, when this
+// host's clock has stepped back to or before the bundle in force's
+// published_at, a second after it, said. port49d refuses a document not
+// later than the one it holds, so a stable fleet would otherwise leave every
+// port49d refusing, and its snapshot ageing, until the fleet next changed
+// (final review Minor 3).
+func (s *Syncer) publishedAt(prev *Published, now time.Time) time.Time {
+	if prev == nil || now.After(prev.Doc.PublishedAt) {
+		return now
+	}
+	at := prev.Doc.PublishedAt.Add(time.Second)
+	fmt.Fprintf(s.Log, "port49-inventory: this host's clock (%s) is not after bundle %d's published_at (%s); the "+
+		"next bundle is published at %s so every port49d takes it as later: check this host's NTP\n",
+		now.UTC().Format(time.RFC3339), prev.Doc.Sequence, prev.Doc.PublishedAt.Format(time.RFC3339),
+		at.Format(time.RFC3339))
+	return at
 }
 
 // mirror brings the mirror's copy level with the bundle published,
