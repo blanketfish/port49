@@ -81,7 +81,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: eos, 
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pol, err := policy.Load(path, policy.Env{Devices: []admission.Device{f.b.Devices["leaf1"], f.b.Devices["nx1"]}})
+	pol, err := policy.Load(path, policy.Env{Devices: []admission.Device{f.devices["leaf1"], f.devices["nx1"]}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pol, err := policy.Load(path, policy.Env{Devices: []admission.Device{f.b.Devices["leaf1"]}})
+	pol, err := policy.Load(path, policy.Env{Devices: []admission.Device{f.devices["leaf1"]}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,8 +142,8 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 // fault rather than the broker's (engine.ErrSubstitution).
 func TestASessionReplyThatWouldCarryASeparatorIsRefusedAtMint(t *testing.T) {
 	f := newFixture(t, 8)
-	odd := admission.Device{Name: "sw=1", Platform: "arista_eos", Addresses: f.b.Devices["leaf1"].Addresses}
-	f.b.Devices[odd.Name] = odd
+	odd := admission.Device{Name: "sw=1", Platform: "arista_eos", Addresses: f.devices["leaf1"].Addresses}
+	f.devices[odd.Name] = odd
 	path := filepath.Join(t.TempDir(), "policy.yaml")
 	body := `
 scopes: [{name: all_devices, match: {}}]
@@ -188,7 +188,7 @@ func TestTheNextMintAnswersFromASwappedPolicy(t *testing.T) {
 	}
 	body := strings.Replace(testPolicy, "  - {subject: netops, scope: all_devices, roles: [network_admin, no_reload], max_privilege: admin}\n",
 		"  - {subject: idle, scope: all_devices, roles: [network_admin]}\n", 1)
-	pol, err := policy.Parse([]byte(body), policy.Env{Devices: []admission.Device{f.b.Devices["leaf1"]}})
+	pol, err := policy.Parse([]byte(body), policy.Env{Devices: []admission.Device{f.devices["leaf1"]}})
 	if err != nil {
 		t.Fatal(err)
 	}

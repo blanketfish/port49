@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"net/netip"
 	"os"
 	"strings"
 	"testing"
@@ -26,8 +27,8 @@ const alice = "user:alice@example.com"
 // replaced, read at the instant of the swap.
 func (f *fixture) reload(t *testing.T, body string) []Prior {
 	t.Helper()
-	pol, err := policy.Parse([]byte(body), policy.Env{Devices: []admission.Device{f.b.Devices["leaf1"],
-		f.b.Devices["nx1"], f.b.Devices["bare"]}, Now: f.b.Now()})
+	pol, err := policy.Parse([]byte(body), policy.Env{Devices: []admission.Device{f.devices["leaf1"],
+		f.devices["nx1"], f.devices["bare"]}, Now: f.b.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +511,7 @@ func TestASupersededPolicyIsJudgedAtEveryExpiryItSpanned(t *testing.T) {
 		t.Fatalf("mint after the lapse: %+v", it)
 	}
 	pol, err := policy.Parse([]byte(edit(t, roleList, readOnly)+extra+"}\n"), policy.Env{Devices: []admission.Device{
-		f.b.Devices["leaf1"], f.b.Devices["nx1"], f.b.Devices["bare"]}, Now: f.b.Now()})
+		f.devices["leaf1"], f.devices["nx1"], f.devices["bare"]}, Now: f.b.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -928,7 +929,7 @@ func TestARefreshNamesTheContextsASessionOnlyPlatformKeeps(t *testing.T) {
 	sessionOnly.Supports = []string{"session"}
 	pol, err := policy.Parse([]byte(edit(t, "  - {subject: netops, scope: all_devices, "+aliceGrant+"}\n",
 		"  - {subject: idle, scope: all_devices, roles: [network_admin]}\n")), policy.Env{
-		Devices:  []admission.Device{f.b.Devices["leaf1"], f.b.Devices["nx1"], f.b.Devices["bare"]},
+		Devices:  []admission.Device{f.devices["leaf1"], f.devices["nx1"], f.devices["bare"]},
 		Dialects: map[string]platform.Dialect{"arista_eos": sessionOnly}, Now: f.b.Now()})
 	if err != nil {
 		t.Fatal(err)
@@ -985,5 +986,113 @@ func TestARetryAfterASupersedeIsNotAnsweredWithTheDeletedToken(t *testing.T) {
 	}
 	if replay := decodeMint(t, f.post(bg, f.state(f.alice), body, "retry-1")).Results[0]; replay.Login != again.Login {
 		t.Fatalf("a retry after the fresh mint replays it: %+v", replay)
+	}
+}
+
+// An inventory change that leaves a context's answer as it was writes nothing
+// and records nothing: its blob differs from the new one only in the bundle
+// it names (spec §5.1.3; plan 6a Decided 3). Every inventory change would
+// otherwise rewrite and record every live context.
+func TestAnInventoryOnlySwapLeavesAnUnchangedContextAlone(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	before := f.context(t, "leaf1", "alice")
+	old := f.b.Policy.Load()
+	extra := admission.Device{Name: "leaf9", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.19")}}
+	pol, err := policy.Parse([]byte(testPolicy), policy.Env{Devices: append(old.Devices(), extra), Now: f.b.Now(),
+		Bundle: "sha256:" + strings.Repeat("b", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.log.Reset()
+	rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}})
+	if err != nil || rep.Updated != 0 || rep.Unchanged != 1 {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+	if after := f.context(t, "leaf1", "alice"); after.BlobHash != before.BlobHash {
+		t.Fatalf("the context was rewritten: %s → %s", before.BlobHash, after.BlobHash)
+	}
+	if strings.Contains(f.log.String(), `"event":"refresh"`) {
+		t.Fatalf("an unchanged context was recorded: %s", f.log.String())
+	}
+}
+
+// A policy edit keeps plan 4b's rule: every live context takes the new
+// bundle's blob, and each is recorded.
+func TestAPolicyEditStillRewritesEveryContext(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	rep, err := f.b.Refresh(context.Background(), f.reload(t, testPolicy+"\n# an edit\n"))
+	if err != nil || rep.Updated != 1 {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+}
+
+// I2: a device admission refuses is not live. The mint denies it
+// device_unknown, after the grants check, and a refresh revokes its context
+// and supersedes its tokens, as for a device the inventory no longer names.
+func TestARefusedDeviceIsNotMintedForAndItsContextIsRevoked(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "") // an unspent token
+	old := f.b.Policy.Load()
+	// leaf1 keeps its record, and a key group now admits only nx1's range.
+	pol, err := policy.Parse([]byte(testPolicy+"key_groups: [{match: {cidr: 172.100.100.31/32}, key_ref: k}]\n"),
+		policy.Env{Devices: old.Devices(), Now: f.b.Now(), KeyRefs: []string{"k"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	priors := []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}}
+	it := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")).Results[0]
+	if it.Verdict != "deny" || it.Reason != "device_unknown" {
+		t.Fatalf("a refused device was minted for: %+v", it)
+	}
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.Revoked != 1 {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+	if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+		t.Fatal("the context on the refused device is live")
+	}
+	var reasons []any
+	for _, r := range f.records(t) {
+		if r["event"] == "refresh" {
+			reasons = append(reasons, r["reason"])
+		}
+	}
+	if len(reasons) != 1 || reasons[0] != "device_unknown" {
+		t.Fatalf("the refresh recorded %v, not one device_unknown", reasons)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
+		t.Fatalf("%d token(s) for the refused device survive", len(toks))
+	}
+}
+
+// A device the inventory in force no longer names has its contexts revoked
+// and its unspent tokens superseded (plan 4b's hand-off to plan 6).
+func TestADeviceRemovedFromInventoryIsRevokedAndItsTokensGo(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")
+	old := f.b.Policy.Load()
+	var rest []admission.Device
+	for _, d := range old.Devices() {
+		if d.Name != "leaf1" {
+			rest = append(rest, d)
+		}
+	}
+	pol, err := policy.Parse([]byte(testPolicy), policy.Env{Devices: rest, Now: f.b.Now(), Bundle: "sha256:" + strings.Repeat("c", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}})
+	if err != nil || rep.Revoked != 1 {
+		t.Fatalf("%+v, %v", rep, err)
+	}
+	if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+		t.Fatal("the context on the removed device is live")
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
+		t.Fatalf("%d token(s) for the removed device survive", len(toks))
 	}
 }

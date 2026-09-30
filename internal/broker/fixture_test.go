@@ -49,6 +49,9 @@ type fixture struct {
 	ca    *testpki.CA
 	alice tls.Certificate
 	mu    sync.Mutex
+	// devices is the inventory the fixture's policy is loaded against, by
+	// name, for tests that load another policy over it.
+	devices map[string]admission.Device
 }
 
 // newFixture's clock starts at the real time: Task 10's handshakes verify
@@ -76,12 +79,13 @@ func newFixture(t *testing.T, candidateCap int) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.devices = devices
 	if f.ca, err = testpki.NewCA("port49 test ca", f.now.Add(-time.Hour), f.now.Add(48*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	f.alice = f.client(t, "alice@example.com", f.now.Add(24*time.Hour))
 	log := decision.NewJSONLines(f.log)
-	f.b = &Broker{Policy: policy.NewLive(pol), Devices: devices,
+	f.b = &Broker{Policy: policy.NewLive(pol),
 		Minter: token.NewMinter(f.st, log, rand.Reader, token.TagKey([]byte("k")), clock, candidateCap),
 		Store:  f.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: clock,
 		MaxSessionAge: 12 * time.Hour, BatchMax: 4}

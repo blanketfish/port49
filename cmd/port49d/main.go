@@ -223,22 +223,8 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 				"logins will fail\n", leaf.NotBefore.UTC().Format(time.RFC3339), cfg.Broker.TLSCertFile)
 		}
 	}
-	// The broker mints by name, and a token redeems on any device the name
-	// tags. Two entries sharing one would collapse, last wins: a blob compiled
-	// for one platform would be answered on the other, sending attributes that
-	// device may not know while port49 logs permit. IOS-XE refuses the session
-	// over any attribute it does not recognise, optional or mandatory, and every
-	// command whose reply carries one (tests/lab/results/L18-cisco_iosxe.md).
-	// admission.LoadFile does not refuse the repeat, so the broker does.
-	devices := make(map[string]admission.Device, len(cfg.Inventory.Devices))
-	for _, d := range cfg.Inventory.Devices {
-		if _, seen := devices[d.Name]; seen {
-			return nil, nil, fmt.Errorf("inventory names device %q twice; the broker mints by name", d.Name)
-		}
-		devices[d.Name] = d
-	}
-	b := &broker.Broker{Policy: policy.NewLive(pol), Devices: devices, Minter: minter, Store: st, Log: log, Metrics: m,
-		Now: time.Now, MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax}
+	b := &broker.Broker{Policy: policy.NewLive(pol), Minter: minter, Store: st, Log: log, Metrics: m, Now: time.Now,
+		MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax}
 	// The blob event's rule text is redacted as the daemon's records are,
 	// with the policy in force's patterns (spec §5.8).
 	b.Redact = redactorFor(b.Policy)
