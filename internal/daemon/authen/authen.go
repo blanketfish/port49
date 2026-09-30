@@ -30,6 +30,27 @@ type Peer struct {
 	NAS      string
 	NASAddr  string
 	Platform string
+	// KeyRef and KeyVersion are the key that validated this connection,
+	// which every record of it names (spec §5.7).
+	KeyRef     string
+	KeyVersion int
+	// WirePlatform is the shipped platform whose wire facts this device's
+	// packets are read by: its own, or the base of a based_on variant (spec
+	// §8). Empty is Platform.
+	WirePlatform string
+}
+
+// Wire is the platform whose wire facts apply to this peer.
+func (p Peer) Wire() string {
+	if p.WirePlatform != "" {
+		return p.WirePlatform
+	}
+	return p.Platform
+}
+
+// Device is the device block of every record this peer's exchanges write.
+func (p Peer) Device() *decision.Device {
+	return &decision.Device{NAS: p.NASAddr, Name: p.NAS, Platform: p.Platform, KeyRef: p.KeyRef, KeyVersion: p.KeyVersion}
 }
 
 type Handler struct {
@@ -173,7 +194,7 @@ func (s *Session) verifyCHAP(ctx context.Context, data []byte) (wire.AuthenReply
 // credHash is ignored.
 func (s *Session) newRecord(method string, credHash [32]byte) decision.Record {
 	rec := decision.Record{TS: s.h.now(), Event: decision.EventRedeem,
-		Device: &decision.Device{NAS: s.peer.NASAddr, Name: s.peer.NAS, Platform: s.peer.Platform},
+		Device: s.peer.Device(),
 		Session: &decision.Session{Port: string(s.start.Port), RemAddr: string(s.start.RemAddr),
 			Privilege: s.start.PrivLvl, Username: Canonical(s.user)}}
 	if method != "" {

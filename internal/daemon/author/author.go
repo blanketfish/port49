@@ -180,7 +180,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	port := string(req.Port)
 	vector := Vector(cmd, cmdArgs)
 	rec := decision.Record{TS: h.now(), Event: decision.EventAuthorizeCommand,
-		Device:  &decision.Device{NAS: peer.NASAddr, Name: peer.NAS, Platform: peer.Platform},
+		Device:  peer.Device(),
 		Session: &decision.Session{Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
 		Request: &decision.Request{Service: kv["service"], Raw: raw, Vector: vector}}
 	if cmd == "" {

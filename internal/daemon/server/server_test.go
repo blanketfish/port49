@@ -1131,3 +1131,21 @@ func TestBodyReadTimeoutIsCountedAsIdleClosed(t *testing.T) {
 		t.Fatalf("idle_closed metric was not incremented for a body read timeout")
 	}
 }
+
+// Spec §5.7, §10: every record of a validated exchange names the key that
+// validated it, which is what `port49 keys status` reads a rotation from.
+func TestAValidatedExchangeNamesItsKey(t *testing.T) {
+	log := &syncBuffer{}
+	addr, _, _ := startServer(t, log)
+	c := dial(t, addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), RemAddr: []byte("198.51.100.4"),
+		Data: []byte("p49_e2e")}.Encode(), 0)
+	c.recv(t)
+	if !waitFor(t, func() bool { return log.contains(`"event":"redeem"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	if !log.contains(`"key_ref":"prod_key"`) || !log.contains(`"key_version":2`) {
+		t.Fatalf("the redeem record does not name its key: %s", log.String())
+	}
+}

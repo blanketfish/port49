@@ -280,7 +280,8 @@ func (s *conn) write(h wire.Header, body []byte) bool {
 // protoErr reports a packet this connection cannot answer at all, which closes
 // it without a reply.
 func (s *conn) dispatch(ctx context.Context, h wire.Header, body []byte) (reply []byte, done, protoErr bool) {
-	peer := authen.Peer{NAS: s.dev.Device.Name, NASAddr: s.src.String(), Platform: s.dev.Device.Platform}
+	peer := authen.Peer{NAS: s.dev.Device.Name, NASAddr: s.src.String(), Platform: s.dev.Device.Platform,
+		KeyRef: s.dev.KeyRef, KeyVersion: s.version, WirePlatform: s.dev.WirePlatform}
 	start := s.d.Now()
 	defer func() { s.d.Metrics.Latency.WithLabelValues(exchange(h.Type)).Observe(s.d.Now().Sub(start).Seconds()) }()
 

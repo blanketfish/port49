@@ -35,6 +35,8 @@ type Record struct {
 	Unvalidated *Unvalidated `json:"unvalidated,omitempty"`
 	ServerMsg   string       `json:"server_msg,omitempty"`
 	Gap         *Gap         `json:"gap,omitempty"`
+	// Change is the inventory_change record's body (spec §5.7, §10).
+	Change *Change `json:"change,omitempty"`
 	// IndexError names what a failed index write cost, on the record for the
 	// session that lost it. Revocation must report the contexts it could not
 	// reach (spec §5.6), and this is the only place that says which they are.
@@ -63,6 +65,11 @@ type Device struct {
 	NAS      string `json:"nas"`
 	Name     string `json:"name"`
 	Platform string `json:"platform"`
+	// KeyRef and KeyVersion name the key that validated the exchange: set on
+	// every record of a validated exchange, and on none other (spec §5.7,
+	// §10). `port49 keys status` reads a rotation's phase-out from them.
+	KeyRef     string `json:"key_ref,omitempty"`
+	KeyVersion int    `json:"key_version,omitempty"`
 }
 
 type Session struct {
@@ -219,6 +226,22 @@ type Gap struct {
 	Stage   string `json:"stage"`
 	Records int    `json:"records"`
 	Since   string `json:"since"`
+}
+
+// Change is one security-relevant change a bundle swap made (spec §10): an
+// address added to a device already in inventory, or a device joining or
+// leaving a scope with security_log: true. The record's device block names
+// the device.
+type Change struct {
+	Kind    string `json:"kind"`
+	Scope   string `json:"scope,omitempty"`
+	Address string `json:"address,omitempty"`
+	// From and To are a key_ref change's two key_refs, and an admission
+	// change's two states.
+	From       string `json:"from,omitempty"`
+	To         string `json:"to,omitempty"`
+	FromBundle string `json:"from_bundle"`
+	ToBundle   string `json:"to_bundle"`
 }
 
 // Unvalidated is what is recorded for a packet no key validated: cleartext header

@@ -141,7 +141,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AcctReq
 
 	rec := decision.Record{TS: h.now(), Event: decision.EventAccount, Flags: flagsName(req.Flags),
 		Attribution: attribution, TaskID: avOf(raw, "task_id"),
-		Device:  &decision.Device{NAS: peer.NASAddr, Name: peer.NAS, Platform: peer.Platform},
+		Device:  peer.Device(),
 		Session: &decision.Session{Username: canonical, Port: port, RemAddr: string(req.RemAddr), Privilege: req.PrivLvl},
 		AcctRecord: &decision.AcctRecord{Raw: raw, Vector: vector, PrivLvl: req.PrivLvl,
 			StartTime: num(avOf(raw, "start_time")), StopTime: num(avOf(raw, "stop_time")),

@@ -116,3 +116,20 @@ func TestWriteFailureIsCounted(t *testing.T) {
 func TestNoFailureHookIsFine(t *testing.T) {
 	NewJSONLines(failingWriter{err: errors.New("closed")}).Emit(Record{Event: EventAccount})
 }
+
+func TestAnInventoryChangeRecordEncodes(t *testing.T) {
+	var buf bytes.Buffer
+	NewJSONLines(&buf).Emit(Record{TS: time.Unix(0, 0), Event: EventInventoryChange,
+		Device: &Device{Name: "leaf-01", Platform: "arista_eos"},
+		Change: &Change{Kind: "address_added", Address: "10.66.0.1", FromBundle: "sha256:a", ToBundle: "sha256:b"}})
+	got := buf.String()
+	for _, want := range []string{`"event":"inventory_change"`, `"kind":"address_added"`, `"address":"10.66.0.1"`,
+		`"from_bundle":"sha256:a"`, `"to_bundle":"sha256:b"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "key_ref") {
+		t.Errorf("a record no key validated names no key: %s", got)
+	}
+}
