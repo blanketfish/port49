@@ -3883,7 +3883,7 @@ against one trust anchor and names the caller by the leaf's one URI SAN, verbati
 identity (design document §7), or, where there is none, `user:` and its one email SAN,
 lower-cased; a certificate with several of either is refused, since ambiguity fails closed. Two
 lists in the service's configuration decide what a caller may do: `readers` may read the bundle,
-its version, a diff, one device and health; `syncers` may do all of that and `POST /v1/sync`
+its version, a diff and one device; `syncers` may do all of that and `POST /v1/sync`
 (design document §17: reading a snapshot is not the right to trigger a sync). Probes read
 `/healthz` and `/readyz` on the service's plain metrics listener, which carries no fleet data.
 
@@ -4041,7 +4041,7 @@ and the notice names the inventory's as ignored, so the inventory's writer never
 beside the reviewed policy. To move the block, add it to the policy file, then delete it from
 the inventory file: no device is refused at any step, and a restart or reload between the two
 loads. Deleting it from the inventory first would leave every device refused, and the reload is
-refused by the bound (below). A group matches on a CIDR or on attributes, never both; a CIDR
+refused by the bound (below). A group matches on a CIDR, on attributes, or on a device name, exactly one; a CIDR
 with host bits set is refused.
 
 **A `key_ref` is a name: `^[a-z][a-z0-9_]{0,63}$`**, lowercase letters, digits and `_`, starting
@@ -4436,7 +4436,7 @@ against a hypothetical device all need an inventory that is not a live source of
 
 Four triggers, not one (the webhook is plan 6c's, with the connectors):
 
-- **Scheduled full sync every 10 minutes.** That is the window a newly-racked device sits
+- **Scheduled full sync, each source at its `interval` (default 10 minutes).** That is the window a newly-racked device sits
   un-admittable if a webhook is missed, which is about the tolerance before it becomes a
   ticket.
 - **Webhook-driven refresh.** Both products emit outbound webhooks on device create and
@@ -4495,7 +4495,7 @@ sync:
   #   token_secret_ref: vault:port49/prod/netbox   # resolved like a key secret_ref, never inline
   #   interval: 10m
   #   filter: {status: active, has_primary_ip: true}
-  #   map: {site: site.slug, role: role.slug, platform: platform.slug, os_version: custom_fields.os_version}
+  #   map: {site: site.slug, role: role.slug, platform: platform.slug, os_version: custom_fields.os_version}  # NetBox 4.x profile; 3.7 uses device_role
 ```
 
 A device whose name is not 1–255 bytes of printable ASCII without a space, or whose platform or
@@ -4569,8 +4569,10 @@ crash loop or a node replacement — precisely when capacity matters. Two mechan
 At start port49d verifies both copies and starts from the one published later (`published_at`,
 which survives a sequence reset). It asks
 the service at start only when it has neither, and until a bundle arrives it keeps its TACACS+
-listener closed, so a device finds the connection refused and falls to its next server or its
-local method at once (§15, L4), and `/readyz` on the metrics listener answers 503. It says why
+listener closed, so a device finds the connection refused and falls to its local method at once, measured over
+SSH with port49d stopped (§15, L4; `tests/lab/results/quarantine-arista_eos.md`,
+`quarantine-cisco_nxos.md`, `quarantine-cisco_iosxe.md`, `quarantine-juniper_vjunos-router.md`);
+a second server is unmeasured (L4, open), and `/readyz` on the metrics listener answers 503. It says why
 once per distinct reason and asks again every `poll_interval`.
 
 Both are cold and cached; neither puts the inventory service on a request path. Without at
@@ -5701,17 +5703,20 @@ inventory; the policy stays port49d's own (decision 29).
 owner decision 3, built in plan 6b, 2026-09-30.* The service's bundle names the policy it was
 built against and carries none. port49d builds its bundle from its own `broker.policy_file` and
 the service's inventory, and a hash mismatch is said and alarmed (`port49_inventory_policy_mismatch`),
-never applied: the service holds third-party credentials and connectors, and a compromise of it
+and the inventory is applied against port49d's own policy; the service's policy is never applied: the service holds third-party credentials and connectors, and a compromise of it
 must not reach the grants.
 
 **30. The bundle document is signed, and assigns no key.** *Plan 6b, 2026-09-30, owner decisions
-1 and 3 at their defaults.* The service signs each document with ed25519 and port49d verifies every
+1 to 3 at their defaults.* The service signs each document with ed25519 and port49d verifies every
 copy — the API's, its own persisted one, the mirror's — against the keys in
 `inventory.service.verify_key_files`, so a shared mirror mount's writers cannot forge an
 inventory. A document carries neither key groups nor pins: key assignment is reviewed policy, and a
 synced source's writer choosing a device's key is an escalation with no diff; a pin is a policy key
 group matching the device's name, at tier 1 (§10). The service reads its own state and mirror against its own
 `verify_key_files`, so rotating its signing key keeps its sequence and its bound.
+The mirror is a directory the deployment mounts (`mirror_dir`), not an object-store API: no
+object-store credential sits beside port49d, and the signature is what makes a shared mount safe to
+read.
 
 ### Deferred, with reasons
 
