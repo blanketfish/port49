@@ -164,7 +164,13 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "%s: key_ref %s, by the %s tier (%s)\n", name, r.KeyRef, as.Tier, as.Group)
 	if ks, ok := sets[r.KeyRef]; ok {
 		fmt.Fprintf(stdout, "  provision version %d (current)\n", ks.Current.Version)
+		now := time.Now()
 		for _, v := range ks.Accept {
+			if !v.RetireAt.IsZero() && !now.Before(v.RetireAt) {
+				fmt.Fprintf(stdout, "  version %d retired: retire_after %s has passed, so it admits none\n",
+					v.Version, v.RetireAfter)
+				continue
+			}
 			line := fmt.Sprintf("  also accepted: version %d", v.Version)
 			if v.RetireAfter != "" {
 				line += ", retire_after " + v.RetireAfter

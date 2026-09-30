@@ -169,3 +169,21 @@ func TestKeysShowNamesTheGroupsOfATie(t *testing.T) {
 		}
 	}
 }
+
+// An accept version past its retire_after admits nothing (spec §10), so keys
+// show does not call it accepted.
+func TestKeysShowDoesNotCallAPastVersionAccepted(t *testing.T) {
+	pol, inv, _, _ := keysFiles(t)
+	past := filepath.Join(t.TempDir(), "port49d.yaml")
+	if err := os.WriteFile(past, []byte(strings.Replace(keysConfig, "2026-10-01", "2020-01-01", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"keys", "show", "--policy", pol, "--inventory", inv, "--config", past, "leaf-19"}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "also accepted: version 2") ||
+		!strings.Contains(out.String(), "version 2 retired: retire_after 2020-01-01 has passed, so it admits none") {
+		t.Fatalf("%s", out.String())
+	}
+}
