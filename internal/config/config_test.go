@@ -970,3 +970,22 @@ func TestRetireAfter(t *testing.T) {
 		t.Fatalf("KeySets: %+v, %v", sets, err)
 	}
 }
+
+// A decode error names the line and the type, never the value: yaml.v3 quotes
+// a value's first characters, and a secret pasted where port49d.yaml names
+// only its environment variable would reach the log and a terminal.
+func TestADecodeErrorDoesNotEchoTheValue(t *testing.T) {
+	const secret = "Sx9-qT4v!Lm2@pR7zK0w#Yh5"
+	raw := []byte("keys:\n  prod_key:\n    current: " + secret + "\n")
+	p := write(t, "port49d.yaml", string(raw))
+	_, loadErr := Load(p)
+	_, setsErr := KeySets(raw)
+	_, ageErr := MaxSessionAge(raw)
+	_, boundErr := InventoryBound(raw)
+	for name, err := range map[string]error{"Load": loadErr, "KeySets": setsErr, "MaxSessionAge": ageErr,
+		"InventoryBound": boundErr} {
+		if err == nil || !strings.Contains(err.Error(), "line 3") || strings.Contains(err.Error(), secret[:4]) {
+			t.Errorf("%s: want the line and no value, got %v", name, err)
+		}
+	}
+}

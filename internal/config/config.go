@@ -11,9 +11,11 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -331,7 +333,7 @@ func MaxSessionAge(raw []byte) (time.Duration, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", err)
+		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", unquoted(err))
 	}
 	d := orD(f.Session.MaxSessionAgeDefault, DefaultMaxSessionAge)
 	if d <= 0 {
@@ -349,7 +351,7 @@ func InventoryBound(raw []byte) (int, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", err)
+		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", unquoted(err))
 	}
 	return inventoryBound(f.InventoryOpts)
 }
@@ -384,7 +386,7 @@ func Load(path string) (Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, err)
+		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, unquoted(err))
 	}
 
 	malformedWindow, err := window("malformed_window", f.Limits.MalformedWindow)
@@ -799,9 +801,20 @@ func KeySets(raw []byte) (map[string]KeySet, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", err)
+		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", unquoted(err))
 	}
 	return checkKeySets(f.Keys)
+}
+
+// quotedValue is how a yaml.v3 decode error quotes the value it could not
+// decode: `Sx9-qT4...`.
+var quotedValue = regexp.MustCompile(" `[^`]*`")
+
+// unquoted is a decode error without the values it quotes: its line and type
+// are what an operator fixes the file by, and the value may be a secret
+// pasted where the file names only its environment variable.
+func unquoted(err error) error {
+	return errors.New(quotedValue.ReplaceAllString(err.Error(), ""))
 }
 
 // sortedKeySets names keys' refs, sorted, so the start notices read the same
