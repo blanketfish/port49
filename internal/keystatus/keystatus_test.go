@@ -66,3 +66,16 @@ func TestInferNamesTheDevicesARotationStallsOn(t *testing.T) {
 		t.Fatalf("--since kept an older record: %+v", rep.Rows[1])
 	}
 }
+
+// A record marked unvalidated is not evidence of a version in use, even with
+// a device and key version on it: the log is file input.
+func TestAnUnvalidatedRecordIsNeverAVersionInUse(t *testing.T) {
+	recs := []decision.Record{{TS: t0, Event: decision.EventUnvalidated,
+		Device: &decision.Device{Name: "leaf-01", KeyRef: "prod_key", KeyVersion: 1}}}
+	devices := []Device{{Name: "leaf-01", KeyRef: "prod_key"}}
+	keys := []Key{{Ref: "prod_key", Versions: []Version{{Number: 1, State: "retired"}}}}
+	rep := Infer(recs, devices, keys, Options{Now: t0})
+	if len(rep.Rows) != 1 || len(rep.Rows[0].Devices) != 0 || len(rep.Unseen) != 1 {
+		t.Fatalf("%+v", rep)
+	}
+}

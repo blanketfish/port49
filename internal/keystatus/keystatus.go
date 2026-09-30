@@ -115,7 +115,9 @@ func Infer(recs []decision.Record, devices []Device, keys []Key, opt Options) Re
 			}
 			continue
 		}
-		if r.Device == nil || r.Device.Name == "" || r.Device.KeyVersion == 0 {
+		// An unvalidated record is never a version in use, whatever else it
+		// carries.
+		if r.Event == decision.EventUnvalidated || r.Device == nil || r.Device.Name == "" || r.Device.KeyVersion == 0 {
 			continue
 		}
 		if l, ok := last[r.Device.Name]; !ok || r.TS.After(l.at) {
