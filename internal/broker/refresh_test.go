@@ -954,6 +954,48 @@ func TestARefreshNamesTheContextsASessionOnlyPlatformKeeps(t *testing.T) {
 	}
 }
 
+// A context on a device the inventory in force no longer names is judged
+// reached or not by the platform the policy before it knew (Task 11 M3): on a
+// platform that authorizes commands it is not counted as a session left
+// until logout, and on one that does not it is, named with its platform.
+func TestARemovedDeviceIsJudgedByItsPlatformBefore(t *testing.T) {
+	for _, supports := range [][]string{nil, {"session"}} {
+		f := newFixture(t, 8)
+		f.login(t, alice, "leaf1", "alice")
+		dialects := map[string]platform.Dialect{}
+		if supports != nil {
+			d, _ := platform.DialectFor("arista_eos")
+			d.Supports = supports
+			dialects["arista_eos"] = d
+		}
+		parse := func(devices ...admission.Device) *policy.Policy {
+			pol, err := policy.Parse([]byte(testPolicy), policy.Env{Devices: devices, Dialects: dialects, Now: f.b.Now()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return pol
+		}
+		f.b.Policy.Swap(parse(f.devices["leaf1"], f.devices["nx1"]))
+		before := f.b.Policy.Swap(parse(f.devices["nx1"]))
+		var out bytes.Buffer
+		log.SetOutput(&out)
+		t.Cleanup(func() { log.SetOutput(os.Stderr) })
+		rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: before, At: f.b.Now()}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := f.context(t, "leaf1", "alice"); c.RevokedAt.IsZero() {
+			t.Fatalf("the context on the removed device is live: %+v", c)
+		}
+		switch {
+		case supports == nil && rep.Unreached != 0:
+			t.Fatalf("an EOS context counted unreached: %+v, %q", rep, out.String())
+		case supports != nil && (rep.Unreached != 1 || !strings.Contains(out.String(), "arista_eos does not authorize")):
+			t.Fatalf("a session-only context: %+v, %q", rep, out.String())
+		}
+	}
+}
+
 // An idempotent retry after a refresh superseded the tokens it would replay
 // must not answer permit with a token that no longer exists (final review
 // m2): the operator would be handed a dead token and then see token_not_found
