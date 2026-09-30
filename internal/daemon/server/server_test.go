@@ -857,17 +857,20 @@ func TestAQuarantineTakesEffectAtTheExpiryAndEndsWithIt(t *testing.T) {
 	clock.Store(&lapsed)
 	login(held, 2, "p49_b")
 	closedAtOnce(t, held)
-	fresh := dial(t, ts.addr, []byte("k2"))
-	login(fresh, 3, "p49_b")
-	closedAtOnce(t, fresh)
+	// A new connection inside the decline window that close opened is refused
+	// at Accept, before it writes, and leaves no record (spec §15 L31).
+	refusedAtAccept(t, &net.Dialer{}, ts.addr)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 1 {
+		t.Fatalf("declined_refused = %v", n)
+	}
 	if !waitFor(t, func() bool {
-		return testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")) == 2
+		return testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")) == 1
 	}) {
 		t.Fatalf("unvalidated{device_quarantined} = %v", testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")))
 	}
 
-	// Once the quarantine's span ends the device is served again. The two
-	// connections just closed hold both of the source's per-NAS slots until
+	// Once the quarantine's span ends the device is served again. The
+	// connections just closed hold the source's per-NAS slots until
 	// each one's goroutine releases its slot, which it does just after the
 	// socket closes (and after Connections{open} falls): a dial in that
 	// window is refused at the cap, a test race and not the quarantine's
@@ -886,6 +889,14 @@ func TestAQuarantineTakesEffectAtTheExpiryAndEndsWithIt(t *testing.T) {
 	again := dial(t, ts.addr, []byte("k2"))
 	login(again, 4, "p49_c")
 	passes(again)
+	// The window was still open (5 s) and was dropped because the quarantine
+	// ended, not because it expired.
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 1 {
+		t.Fatalf("declined_refused = %v after the quarantine ended", n)
+	}
+	if lim.Declined(netip.MustParseAddr("127.0.0.1")) {
+		t.Fatal("the window survived the end of the quarantine")
+	}
 }
 
 func TestPerNASCapRefusesThirdConnection(t *testing.T) {
@@ -1296,6 +1307,301 @@ func TestARefusedEntryIsNeverValidatedUnderItsKey(t *testing.T) {
 	}
 }
 
+// A refused device's first connection is recorded and reset at once, and its
+// next connection is refused at Accept, before it writes, with no record and
+// no strike (spec §10, "A declined source is refused at Accept"; §15 L31).
+func TestARefusedDevicesNextConnectionIsRefusedAtAccept(t *testing.T) {
+	log := &syncBuffer{}
+	lim := slowBackoff()
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
+		trie, err := admission.NewTrie([]admission.Resolved{{Device: leaf01,
+			Refused: "matches no key group, so no key admits it (spec §10)", Refusal: admission.RefusedNoGroup}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Admission = trie
+		d.Limits = lim
+	})
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want the refused device's connection reset, got %v", err)
+	}
+	refusedAtAccept(t, &net.Dialer{}, ts.addr)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 1 {
+		t.Fatalf("declined_refused = %v", n)
+	}
+	if n := testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("admission_refused")); n != 1 {
+		t.Fatalf("unvalidated{admission_refused} = %v: one record, for the first connection only", n)
+	}
+	if lim.Holding(netip.MustParseAddr("127.0.0.1")) ||
+		testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("held_refused")) != 0 {
+		t.Fatal("a refused device took a strike")
+	}
+}
+
+// The same for a quarantined device.
+func TestAQuarantinedDevicesNextConnectionIsRefusedAtAccept(t *testing.T) {
+	log := &syncBuffer{}
+	now := time.Now()
+	pol := quarantinePolicy(t, now.Add(-time.Hour), now.Add(-time.Minute), now.Add(time.Hour))
+	lim := slowBackoff()
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
+		d.Quarantined = pol.Quarantined
+		d.Limits = lim
+	})
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want the quarantined device's connection reset, got %v", err)
+	}
+	refusedAtAccept(t, &net.Dialer{}, ts.addr)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 1 {
+		t.Fatalf("declined_refused = %v", n)
+	}
+	if n := testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")); n != 1 {
+		t.Fatalf("unvalidated{device_quarantined} = %v: one record, for the first connection only", n)
+	}
+	if lim.Holding(netip.MustParseAddr("127.0.0.1")) {
+		t.Fatal("a quarantined device took a strike")
+	}
+}
+
+// A reload that admits a refused device again serves its next connection at
+// once, inside the window its refusal opened: the window never outlasts its
+// reason.
+func TestAReloadThatAdmitsARefusedDeviceServesItInsideTheWindow(t *testing.T) {
+	log := &syncBuffer{}
+	st := memory.New(time.Now)
+	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "e2e", Secret: []byte("p49_e2e"), Kind: store.KindLogin, Principal: "user:alice@example.com",
+			ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	adm := &swapAdmitter{}
+	adm.swap(t, admission.Resolved{Device: leaf01, Refused: "matches no key group, so no key admits it (spec §10)",
+		Refusal: admission.RefusedNoGroup})
+	lim := slowBackoff()
+	ts := newTestServerWith(t, log, st, nil, func(d *Deps) {
+		d.Admission = adm
+		d.Limits = lim
+	})
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode()
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, start, 0)
+	closedAtOnce(t, c)
+	if !lim.Declined(netip.MustParseAddr("127.0.0.1")) {
+		t.Fatal("the refusal opened no decline window")
+	}
+	adm.swap(t, admission.Resolved{Device: leaf01, KeyRef: "prod_key"})
+	c = dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, start, 0)
+	if _, body := c.recv(t); body == nil {
+		t.Fatal("no reply")
+	} else if r, _ := wire.DecodeAuthenReply(body); r.Status != wire.AuthenStatusPass {
+		t.Fatalf("the admitted device was not served: %+v", r)
+	}
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 0 {
+		t.Fatalf("declined_refused = %v: an admitted device was refused at Accept", n)
+	}
+	if lim.Declined(netip.MustParseAddr("127.0.0.1")) {
+		t.Fatal("the window survived the admission")
+	}
+}
+
+// A connection accepted while its device was refused, whose packet arrives
+// only after a reload admitted the device, is declined on its Accept-time
+// snapshot and reopens a window. The next Accept asks again and serves the
+// device: a stale connection can never refuse an admitted one.
+func TestAStaleRefusedConnectionCannotRefuseTheAdmittedDevice(t *testing.T) {
+	log := &syncBuffer{}
+	st := memory.New(time.Now)
+	for _, id := range []string{"a", "b"} {
+		if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+			store.Token{ID: id, Secret: []byte("p49_" + id), Kind: store.KindLogin, Principal: "user:alice@example.com",
+				ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	adm := &swapAdmitter{}
+	adm.swap(t, admission.Resolved{Device: leaf01, Refused: "matches no key group, so no key admits it (spec §10)",
+		Refusal: admission.RefusedNoGroup})
+	lim := slowBackoff()
+	ts := newTestServerWith(t, log, st, nil, func(d *Deps) {
+		d.Admission = adm
+		d.Limits = lim
+	})
+	login := func(c *client, tok string) {
+		c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+			Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte(tok)}.Encode(), 0)
+	}
+	passes := func(c *client) {
+		t.Helper()
+		if _, body := c.recv(t); body == nil {
+			t.Fatal("no reply")
+		} else if r, _ := wire.DecodeAuthenReply(body); r.Status != wire.AuthenStatusPass {
+			t.Fatalf("%+v", r)
+		}
+	}
+	src := netip.MustParseAddr("127.0.0.1")
+
+	// Accepted while refused, with nothing sent yet.
+	stale := dial(t, ts.addr, []byte("k2"))
+	if !waitFor(t, func() bool { return testutil.ToFloat64(ts.metrics.Connections.WithLabelValues("open")) == 1 }) {
+		t.Fatal("the stale connection was never accepted")
+	}
+	adm.swap(t, admission.Resolved{Device: leaf01, KeyRef: "prod_key"})
+	fresh := dial(t, ts.addr, []byte("k2"))
+	login(fresh, "p49_a")
+	passes(fresh)
+
+	// The stale connection's packet is declined on its Accept-time snapshot,
+	// and reopens a window. Its token is never read, so p49_b stays unspent.
+	login(stale, "p49_b")
+	closedAtOnce(t, stale)
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"admission_refused"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	if !lim.Declined(src) {
+		t.Fatal("the stale connection's decline opened no window")
+	}
+	// Both earlier connections release their per-NAS slots just after their
+	// sockets close; wait for one, as TestAQuarantineTakesEffectAtTheExpiryAndEndsWithIt does.
+	if !waitFor(t, func() bool {
+		release, ok := lim.Acquire(src)
+		if ok {
+			release()
+		}
+		return ok
+	}) {
+		t.Fatal("no per-NAS slot came free")
+	}
+	third := dial(t, ts.addr, []byte("k2"))
+	login(third, "p49_b")
+	passes(third)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 0 {
+		t.Fatalf("declined_refused = %v: the admitted device was refused at Accept", n)
+	}
+	if lim.Declined(src) {
+		t.Fatal("the reopened window survived the admitted device's next Accept")
+	}
+}
+
+// reloadAfterLookup is a swapAdmitter that runs a reload once, just after the
+// first Lookup it answers once armed: a reload that lands between Accept's
+// re-ask of admission and its Undecline.
+type reloadAfterLookup struct {
+	swapAdmitter
+	reload atomic.Pointer[func()]
+}
+
+func (a *reloadAfterLookup) Lookup(addr netip.Addr) (admission.Resolved, bool) {
+	r, ok := a.swapAdmitter.Lookup(addr)
+	if f := a.reload.Swap(nil); f != nil {
+		(*f)()
+	}
+	return r, ok
+}
+
+// Accept's Declined, re-ask and Undecline are not one atomic step (Task 4
+// ruling 4). A reload that refuses the device again just after Accept asked
+// and found it admitted fails closed: the connection is served on an
+// admitted snapshot, but its first packet asks admission again, is declined
+// with one record and nothing read, and reopens the window. That is one
+// refusal more than an atomic check would give, and no credential is ever
+// tried; the next connection is refused at Accept.
+func TestAReloadBetweenAcceptsReAskAndUndeclineFailsClosed(t *testing.T) {
+	log := &syncBuffer{}
+	st := memory.New(time.Now)
+	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "e2e", Secret: []byte("p49_e2e"), Kind: store.KindLogin, Principal: "user:alice@example.com",
+			ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	refused := admission.Resolved{Device: leaf01, Refused: "matches no key group, so no key admits it (spec §10)",
+		Refusal: admission.RefusedNoGroup}
+	adm := &reloadAfterLookup{}
+	adm.swap(t, refused)
+	lim := slowBackoff()
+	ts := newTestServerWith(t, log, st, nil, func(d *Deps) {
+		d.Admission = adm
+		d.Limits = lim
+	})
+	src := netip.MustParseAddr("127.0.0.1")
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode()
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, start, 0)
+	closedAtOnce(t, c)
+	if !lim.Declined(src) {
+		t.Fatal("the refusal opened no decline window")
+	}
+
+	// A reload admits the device, and another refuses it again just after the
+	// next Accept has asked.
+	adm.swap(t, admission.Resolved{Device: leaf01, KeyRef: "prod_key"})
+	again := func() { adm.swap(t, refused) }
+	adm.reload.Store(&again)
+	if !waitFor(t, func() bool {
+		release, ok := lim.Acquire(src)
+		if ok {
+			release()
+		}
+		return ok
+	}) {
+		t.Fatal("no per-NAS slot came free")
+	}
+	c = dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, start, 0)
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if n, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want the connection reset with no reply, got %d bytes, %v", n, err)
+	}
+	if adm.reload.Load() != nil {
+		t.Fatal("the reload never ran between Accept's re-ask and its Undecline")
+	}
+	if !waitFor(t, func() bool {
+		return testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("admission_refused")) == 2
+	}) {
+		t.Fatalf("unvalidated{admission_refused} = %v", testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("admission_refused")))
+	}
+	// Declined by serve's own re-ask, on a connection Accept served.
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("admission_closed")); n != 1 {
+		t.Fatalf("admission_closed = %v", n)
+	}
+	if log.contains(`"event":"redeem"`) || log.contains(`"diagnosis":"validated"`) || log.contains("p49_e2e") {
+		t.Fatalf("the refused device's credential was tried: %s", log.String())
+	}
+	if toks, err := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); err != nil ||
+		len(toks) != 1 {
+		t.Fatalf("the token was spent: %d left, %v", len(toks), err)
+	}
+	if !lim.Declined(src) {
+		t.Fatal("the late decline reopened no window")
+	}
+	if !waitFor(t, func() bool {
+		release, ok := lim.Acquire(src)
+		if ok {
+			release()
+		}
+		return ok
+	}) {
+		t.Fatal("no per-NAS slot came free")
+	}
+	refusedAtAccept(t, &net.Dialer{}, ts.addr)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 1 {
+		t.Fatalf("declined_refused = %v", n)
+	}
+	if lim.Holding(src) {
+		t.Fatal("the late decline struck the source")
+	}
+}
+
 // A validated connection marks its device's key version, and an accept
 // version past its date is refused as a retired one is.
 func TestKeyVersionsAreMarkedAndADatePastRefuses(t *testing.T) {
@@ -1530,8 +1836,8 @@ func reloadFrom(t *testing.T, first admission.Resolved, reload func(*swapAdmitte
 
 // resetWithNoStrike asserts the open connection was reset at once with no
 // reply, one record naming why (device_unknown, diag) and the device it was
-// admitted as, and no strike: the next connection from the source is not
-// refused at Accept.
+// admitted as, and no strike: the source is not struck. Its next connection
+// may meet a decline window, which each caller asserts.
 func resetWithNoStrike(t *testing.T, c *client, ts *testServer, log *syncBuffer, diag string) {
 	t.Helper()
 	began := time.Now()
@@ -1587,12 +1893,13 @@ func TestAReloadThatRefusesTheDeviceResetsItsOpenConnection(t *testing.T) {
 			Refusal: admission.RefusedNoGroup})
 	})
 	resetWithNoStrike(t, c, ts, log, "admission_refused")
-	// The next connection is not held for a strike; it is refused as a
-	// refused device's always is.
-	c = dial(t, ts.addr, []byte("k2"))
-	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
-		Service: wire.AuthenServiceLogin, User: []byte("alice")}.Encode(), 0)
-	closedAtOnce(t, c)
+	// The reset opens a decline window, not a strike: the next connection is
+	// refused at Accept, before it writes (spec §15 L31), and counted as
+	// declined, not held.
+	refusedAtAccept(t, &net.Dialer{}, ts.addr)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 1 {
+		t.Fatalf("declined_refused = %v", n)
+	}
 	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("held_refused")); n != 0 {
 		t.Fatalf("held_refused = %v: the reload's close struck the source", n)
 	}
@@ -1603,6 +1910,13 @@ func TestAReloadThatRemovesTheDeviceResetsItsOpenConnection(t *testing.T) {
 		a.swap(t, admission.Resolved{Device: leaf02, KeyRef: "prod_key"})
 	})
 	resetWithNoStrike(t, c, ts, log, "unadmitted_source")
+	refusedAtAccept(t, &net.Dialer{}, ts.addr)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 1 {
+		t.Fatalf("declined_refused = %v", n)
+	}
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("held_refused")); n != 0 {
+		t.Fatalf("held_refused = %v: the reload's close struck the source", n)
+	}
 }
 
 func TestAReloadThatRenamesTheDeviceResetsItsOpenConnection(t *testing.T) {
@@ -1612,6 +1926,15 @@ func TestAReloadThatRenamesTheDeviceResetsItsOpenConnection(t *testing.T) {
 		a.swap(t, admission.Resolved{Device: renamed, KeyRef: "prod_key"})
 	})
 	resetWithNoStrike(t, c, ts, log, "admission_withdrawn")
+	c = dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	if _, body := c.recv(t); body == nil {
+		t.Fatal("a renamed device's next connection got no reply")
+	}
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 0 {
+		t.Fatalf("declined_refused = %v: a still-admitted device was declined", n)
+	}
 }
 
 // Moving a device off a key_ref is the answer to a suspected key compromise,

@@ -30,6 +30,9 @@ type Metrics struct {
 	// the inventory does not name, a removed device's retries included, so
 	// the event that opened it says which: "key_miss_closed",
 	// "malformed_backoff" or "unadmitted_source"),
+	// "declined_refused" (a source inside the decline window a refused or
+	// quarantined device, or a reload's refusal or removal, opened: reset at
+	// Accept while still declined, no strike, L31),
 	// "admission_closed" (an open connection whose device a reload refused,
 	// removed, renamed, re-keyed or re-platformed: reset at its next packet,
 	// no strike),

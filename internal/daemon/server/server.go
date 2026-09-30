@@ -123,12 +123,36 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			c.Close()
 			continue
 		}
-		d.Metrics.Connections.WithLabelValues("open").Inc()
-
 		// Admitted is Refused == "", never an index hit or a key_ref alone: a
 		// refused device is in the index, and is given no key (spec §10).
 		dev, found := d.Admission.Lookup(src)
-		cc := &conn{d: d, c: c, src: src, dev: dev, admitted: found && dev.Refused == "",
+		admitted := found && dev.Refused == ""
+		// A source inside a decline window is refused at Accept, before the
+		// device writes, but only while port49d still declines it. A reload
+		// that admits it again, or the end of its quarantine, drops the
+		// window, and this connection is served (spec §10, "A declined source
+		// is refused at Accept").
+		//
+		// Declined, the re-ask and Undecline are not one atomic step, and a
+		// reload can land between them. That fails closed: this connection
+		// keeps the admission it was just given, serve asks admission and the
+		// quarantine again at every packet, and declines the packet if either
+		// has changed, reopening the window. At worst the device meets one
+		// decline more than an atomic check would give it, never an admission
+		// port49d does not hold. A refusal here opens no new window.
+		if d.Limits.Declined(src) {
+			if declining(d, dev, admitted) {
+				release()
+				d.Metrics.ConnectionEvents.WithLabelValues("declined_refused").Inc()
+				reset(c)
+				c.Close()
+				continue
+			}
+			d.Limits.Undecline(src)
+		}
+		d.Metrics.Connections.WithLabelValues("open").Inc()
+
+		cc := &conn{d: d, c: c, src: src, dev: dev, admitted: admitted,
 			refused: found && dev.Refused != "", sessions: map[uint32]*authen.Session{}}
 		if cc.admitted {
 			cc.keys = d.Keys[dev.KeyRef]
@@ -167,4 +191,19 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			cc.serve(ctx)
 		}()
 	}
+}
+
+// declining reports whether port49d would decline a packet from dev as
+// admission and the policy stand now: a source the inventory does not name, a
+// device admission refuses, or a quarantined one. It is asked only at an
+// Accept inside a decline window.
+func declining(d Deps, dev admission.Resolved, admitted bool) bool {
+	if !admitted {
+		return true
+	}
+	if d.Quarantined == nil {
+		return false
+	}
+	_, q := d.Quarantined(dev.Device.Name, d.Now())
+	return q
 }

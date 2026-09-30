@@ -82,9 +82,9 @@ func (s *conn) quarantine(h wire.Header) {
 }
 
 // refusedAdmission records a packet from a device the inventory names and
-// admission refuses — no key group admits it, two tie on it, or its key_ref is
-// one port49d holds no key for — and closes the connection with nothing read
-// past the header and no strike (spec §10). The fault is port49's
+// admission refuses: no key group admits it, two tie on it, or its key_ref is
+// one port49d holds no key for. Nothing is read past the header and there is
+// no strike (spec §10); decline closes the connection. The fault is port49's
 // configuration, not the device's, so the device falls to its local method at
 // once, as for a quarantine; the start line and `port49 policy test` say why.
 func (s *conn) refusedAdmission(h wire.Header) {
@@ -123,7 +123,9 @@ func (s *conn) readmitted() keyring.Diagnosis {
 // header and no strike: the change is port49d's, not the device's. The
 // record names the device and key_ref the connection was admitted as, and
 // device_unknown, since that admission is no longer one port49d knows (spec
-// §5.7). How a device takes this reset is unmeasured (L29).
+// §5.7). A reload that refused or removed the device also opens a decline
+// window (decline), as a refusal does. How a device takes this reset is
+// unmeasured (L29).
 func (s *conn) admissionWithdrawn(h wire.Header, diag keyring.Diagnosis) {
 	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Reason: decision.DeviceUnknown,
 		Device: &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform},
@@ -131,7 +133,13 @@ func (s *conn) admissionWithdrawn(h wire.Header, diag keyring.Diagnosis) {
 			Version: s.version, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
 	s.d.Metrics.Unvalidated.WithLabelValues(string(diag)).Inc()
 	s.d.Metrics.ConnectionEvents.WithLabelValues("admission_closed").Inc()
-	reset(s.c)
+	if diag == keyring.DiagAdmissionWithdrawn {
+		// Renamed, re-keyed or re-platformed: still admitted, so its next
+		// connection is served and there is nothing to decline.
+		reset(s.c)
+		return
+	}
+	s.decline()
 }
 
 // quarantined asks the policy about this connection's device at the time of
@@ -197,6 +205,19 @@ func (s *conn) unadmitted(h wire.Header) {
 	s.d.Metrics.ConnectionEvents.WithLabelValues("unadmitted_source").Inc()
 }
 
+// decline closes a connection port49d declines through no fault of the
+// device's: admission refuses it, it is quarantined, or a reload refused or
+// removed it. The close is a key miss's without the strike: a reset at once,
+// and a window in which the source's next connections are refused at Accept,
+// before the device writes (spec §10, "A declined source is refused at
+// Accept"; §15 L31). The caller has written the record. The window is
+// opened before the reset, so it is in force by the time the device sees the
+// reset.
+func (s *conn) decline() {
+	s.d.Limits.Decline(s.src)
+	reset(s.c)
+}
+
 // protocolError closes a connection whose key validated but whose packet
 // port49 cannot answer: a CONTINUE naming a session this connection never
 // started, a seq_no of 255, or more unfinished sessions than maxLiveSessions
@@ -244,6 +265,7 @@ func (s *conn) serve(ctx context.Context) {
 		if !s.admitted {
 			if s.refused {
 				s.refusedAdmission(h)
+				s.decline()
 				return
 			}
 			s.unadmitted(h)
@@ -258,19 +280,17 @@ func (s *conn) serve(ctx context.Context) {
 		// A quarantined device gets silence, not FAIL (spec §10; §13 decision
 		// 20): one header read, nothing decrypted, no reply, so the device
 		// declares the server dead and falls to its local method exactly as in
-		// an outage. It is closed at once, not held for the limiter's backoff:
-		// a server that stays silent costs the device ~5 s per command on
-		// IOS-XE, EOS and NX-OS, every session (tests/lab/results/L4-error-*.md).
-		// With single-connection off the close costs it what a refused
-		// connection does: break-glass logs in and runs, and an open session
-		// runs on the local fall-through (four images, 2026-09-24,
-		// tests/lab/results/quarantine-*.md). With it on, IOS-XE and NX-OS wait
-		// out their 5 s timeout after a reset that follows their request, and
-		// nothing here refuses the retry at Accept, so break-glass costs 16-21 s
-		// (spec §15 L31, open). The device is not suspect, so it takes no
-		// strike, and nothing throttles the records: one per connection.
+		// an outage. A server that stays silent costs the device ~5 s per
+		// command on IOS-XE, EOS and NX-OS (tests/lab/results/L4-error-*.md),
+		// so the close is a reset at once. With single-connection on, IOS-XE
+		// and NX-OS also wait out that timeout after a reset that follows their
+		// request, unless the retry is refused at Accept, so the close opens a
+		// decline window (spec §15 L31). The device is not suspect, so it takes
+		// no strike, and its connections inside the window are counted, not
+		// recorded.
 		if s.quarantined() {
 			s.quarantine(h)
+			s.decline()
 			return
 		}
 
