@@ -44,9 +44,11 @@ func keysFiles(t *testing.T) (policyPath, inventoryPath, configPath, logPath str
 		}
 		return p
 	}
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	keysNow = func() time.Time { return now }
+	t.Cleanup(func() { keysNow = time.Now })
 	var log bytes.Buffer
 	sink := decision.NewJSONLines(&log)
-	now := time.Now()
 	sink.Emit(decision.Record{TS: now.Add(-time.Minute), Event: decision.EventRedeem,
 		Device: &decision.Device{Name: "leaf-01", Platform: "arista_eos", KeyRef: "prod_key", KeyVersion: 3}})
 	sink.Emit(decision.Record{TS: now.Add(-2 * time.Minute), Event: decision.EventRedeem,
@@ -62,7 +64,9 @@ func TestKeysStatusNamesTheDeviceOnTheOldVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "rotation not finished: leaf-19") {
+	// At keysFiles' clock, version 2 is still accepted: it admits through
+	// 2026-10-01.
+	if !strings.Contains(out.String(), "rotation not finished: leaf-19") || !strings.Contains(out.String(), "      2  accept ") {
 		t.Fatalf("%s", out.String())
 	}
 }
@@ -93,9 +97,9 @@ func secretForms(secret string) []string {
 		base64.StdEncoding.EncodeToString([]byte(secret)), base64.RawStdEncoding.EncodeToString([]byte(secret)),
 		base64.URLEncoding.EncodeToString([]byte(secret)), base64.RawURLEncoding.EncodeToString([]byte(secret))}
 	// A truncated echo is a leak too: a YAML type error prints a value's
-	// first seven characters.
-	for i := 0; i+6 <= len(secret); i++ {
-		forms = append(forms, secret[i:i+6])
+	// first seven characters, and a backtick in it can cut that to five.
+	for i := 0; i+5 <= len(secret); i++ {
+		forms = append(forms, secret[i:i+5])
 	}
 	return forms
 }
@@ -108,31 +112,40 @@ func TestKeysNeverPrintASecret(t *testing.T) {
 	t.Setenv("NEVER_READ_V2", v2)
 	pol, inv, cfg, log := keysFiles(t)
 	dir := t.TempDir()
-	// An operator who pastes the secret where port49d.yaml names only its
-	// environment variable: the decode error must not echo it.
-	inline := filepath.Join(dir, "inline.yaml")
-	if err := os.WriteFile(inline, []byte("keys:\n  prod_key:\n    current: "+v3+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	misplaced := filepath.Join(dir, "misplaced.yaml")
-	if err := os.WriteFile(misplaced, []byte("keys:\n  prod_key:\n    current: {version: "+v3+", secret_env: X}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	cases := [][]string{
 		{"keys", "status", "--policy", pol, "--inventory", inv, "--config", cfg, log},
 		{"keys", "status", "--policy", pol, "--inventory", inv, "--config", cfg, "--since", "90s", log},
 		{"keys", "show", "--policy", pol, "--inventory", inv, "--config", cfg, "leaf-19"},
 		{"keys", "show", "--policy", pol, "--inventory", inv, "--config", cfg, "nobody"},
-		{"keys", "show", "--policy", pol, "--inventory", inv, "--config", inline, "leaf-19"},
-		{"keys", "show", "--policy", pol, "--inventory", inv, "--config", misplaced, "leaf-19"},
-		{"keys", "status", "--policy", pol, "--inventory", inv, "--config", inline, log},
-		{"keys", "status", "--policy", pol, "--inventory", inv, "--config", misplaced, log},
-		{"keys", "show", "--bogus"},
 	}
+	// An operator who pastes the secret into port49d.yaml, in each place a
+	// decode error or a key check could quote it back.
+	const alnum, tick = "Wd7ZkP2mRq9TxL4vNc8B", "H`j5Ns8!Pw3@Zb6#Fq1$Gm7"
+	secrets := []string{v3, v2, alnum, tick}
+	for i, body := range []string{
+		"keys:\n  prod_key:\n    current: " + v3 + "\n",
+		"keys:\n  prod_key:\n    current: {version: " + alnum + ", secret_env: X}\n",
+		"keys:\n  prod_key:\n    current:\n      version: 3\n      secret_env: X\n      " + v3 + ": x\n",
+		"keys:\n  prod_key:\n    current: {version: 3, " + alnum + "}\n",
+		"keys:\n  prod_key:\n    current: {version: 3, secret_env: X}\n" +
+			"    accept: [{version: 2, secret_env: Y, retire_after: \"" + v3 + "\"}]\n",
+		"keys:\n  prod_key:\n    current: *" + alnum + "\n",
+		"keys:\n  prod_key:\n    current: !" + alnum + " x\n",
+		"keys:\n  prod_key:\n    current: " + tick + "\n",
+		"keys:\n  prod_key:\n    current: {version: 3, secret_env: \"" + v3 + "\"}\n",
+	} {
+		bad := filepath.Join(dir, fmt.Sprintf("bad-%d.yaml", i))
+		if err := os.WriteFile(bad, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cases = append(cases, []string{"keys", "show", "--policy", pol, "--inventory", inv, "--config", bad, "leaf-19"},
+			[]string{"keys", "status", "--policy", pol, "--inventory", inv, "--config", bad, log})
+	}
+	cases = append(cases, []string{"keys", "show", "--bogus"})
 	for _, args := range cases {
 		var out, errOut bytes.Buffer
 		run(args, &out, &errOut)
-		for _, secret := range []string{v3, v2} {
+		for _, secret := range secrets {
 			for _, form := range secretForms(secret) {
 				if strings.Contains(out.String(), form) || strings.Contains(errOut.String(), form) {
 					t.Errorf("%v printed the secret as %q:\nstdout: %s\nstderr: %s", args[1:3], form, out.String(), errOut.String())

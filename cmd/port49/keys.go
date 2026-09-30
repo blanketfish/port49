@@ -12,6 +12,10 @@ import (
 	"github.com/rhwendt/port49/internal/keystatus"
 )
 
+// keysNow is the clock the key commands read a version's state by; tests
+// fix it.
+var keysNow = time.Now
+
 // keysCmd is `port49 keys` (spec §12): status and show read files and the
 // log offline; diagnose asks port49d.
 func keysCmd(args []string, stdout, stderr io.Writer) int {
@@ -33,7 +37,11 @@ func readKeySets(path string) (map[string]config.KeySet, error) {
 	if err != nil {
 		return nil, err
 	}
-	return config.KeySets(raw)
+	sets, err := config.KeySets(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return sets, nil
 }
 
 // keyRefsOf is the key_refs sets defines, sorted and never nil.
@@ -97,7 +105,7 @@ func keysStatus(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 keys status:", err)
 		return 1
 	}
-	opt := keystatus.Options{Now: time.Now()}
+	opt := keystatus.Options{Now: keysNow()}
 	if *since > 0 && len(recs) > 0 {
 		newest := recs[0].TS
 		for _, r := range recs {
@@ -164,7 +172,7 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "%s: key_ref %s, by the %s tier (%s)\n", name, r.KeyRef, as.Tier, as.Group)
 	if ks, ok := sets[r.KeyRef]; ok {
 		fmt.Fprintf(stdout, "  provision version %d (current)\n", ks.Current.Version)
-		now := time.Now()
+		now := keysNow()
 		for _, v := range ks.Accept {
 			if !v.RetireAt.IsZero() && !now.Before(v.RetireAt) {
 				fmt.Fprintf(stdout, "  version %d retired: retire_after %s has passed, so it admits none\n",
