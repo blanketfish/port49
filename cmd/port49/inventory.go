@@ -85,25 +85,16 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "refused: port49d would not load the new inventory: %s\n", loadFault(err))
 		return 1
 	}
-	rep := bundle.Diff(old, new, time.Now())
-	fmt.Fprintln(stdout, rep.Summary())
-	if new.Bundle == old.Bundle {
-		fmt.Fprintf(stdout, "unchanged: the same inventory, respelled; bundle %s stays in force\n", old.Bundle)
-		return 0
-	}
-	addresses := map[string]string{}
-	for _, d := range new.Devices() {
-		as := make([]string, len(d.Addresses))
-		for i, a := range d.Addresses {
-			as[i] = a.String()
-		}
-		addresses[d.Name] = strings.Join(as, ", ")
-	}
-	for _, c := range rep.Changes {
-		fmt.Fprintln(stdout, changeLine(c, addresses[c.Device]))
-	}
+	now := time.Now()
 	if bytes.Equal(old.Raw(), new.Raw()) {
 		// One file changed: one inventory reload, against the policy in force.
+		rep := bundle.Diff(old, new, now)
+		fmt.Fprintln(stdout, rep.Summary())
+		if new.Bundle == old.Bundle {
+			fmt.Fprintf(stdout, "unchanged: the same inventory, respelled; bundle %s stays in force\n", old.Bundle)
+			return 0
+		}
+		printChanges(stdout, rep, new)
 		if err := bundle.Check(old, new, bound); err != nil {
 			fmt.Fprintf(stdout, "refused: %v\n", err)
 			return 1
@@ -112,21 +103,22 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	// Both files changed: two reloads, each loading its file against the
-	// other in force and bounded. A reload refused is tried again once the
-	// other file lands (plan 6a, C3), so port49d ends on the new bundle if
-	// either order passes both of its bounds.
-	policyFirst := reloadOrder(
+	// other in force, bounded, and logged as its own swap. A reload refused is
+	// tried again once the other file lands (plan 6a, C3), so port49d ends on
+	// the new bundle if either order passes both of its bounds. Each order is
+	// shown step by step, as port49d would log it: a device that joins a scope
+	// in one step and leaves it in the next is two inventory_change records.
+	fmt.Fprintln(stdout, bundle.Diff(old, new, now).Summary())
+	policyFirst := reloadOrder(stdout, now, "policy file first", old, new,
 		func() (*policy.Policy, error) { return bundle.Load(*newPol, oldInv, env) },
 		func(mid *policy.Policy) error { return bundle.CheckAdmission(old, mid, bound) },
 		func(mid *policy.Policy) error { return bundle.Check(mid, new, bound) },
 		"policy", "inventory")
-	inventoryFirst := reloadOrder(
+	inventoryFirst := reloadOrder(stdout, now, "inventory file first", old, new,
 		func() (*policy.Policy, error) { return bundle.Load(*polPath, newInv, env) },
 		func(mid *policy.Policy) error { return bundle.Check(old, mid, bound) },
 		func(mid *policy.Policy) error { return bundle.CheckAdmission(mid, new, bound) },
 		"inventory", "policy")
-	fmt.Fprintf(stdout, "policy file first: %s\n", verdict(policyFirst))
-	fmt.Fprintf(stdout, "inventory file first: %s\n", verdict(inventoryFirst))
 	switch {
 	case policyFirst == nil && inventoryFirst == nil:
 		fmt.Fprintf(stdout, "ok: port49d would take both, in either order (inventory.max_removed_percent %d%%)\n", bound)
@@ -144,30 +136,61 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// reloadOrder is two reloads in turn, first then second, as port49d runs
-// them: the first file's loaded against the other in force (load) and
-// bounded (firstCheck), then the second's (secondCheck). nil is both taken.
-func reloadOrder(load func() (*policy.Policy, error), firstCheck, secondCheck func(*policy.Policy) error,
+// reloadOrder prints two reloads in turn under heading, first then second,
+// as port49d runs them: the first file's loaded against the other in force
+// (load) and bounded (firstCheck), then the second's (secondCheck). Each step
+// taken is printed with its changes, the security ones marked as that swap's
+// inventory_change records; a step refused swaps nothing and logs nothing.
+// It ends with the verdict line, and returns nil when both are taken.
+func reloadOrder(w io.Writer, now time.Time, heading string, old, new *policy.Policy,
+	load func() (*policy.Policy, error), firstCheck, secondCheck func(*policy.Policy) error,
 	first, second string) error {
-	mid, err := load()
+	fmt.Fprintf(w, "%s:\n", heading)
+	err := func() error {
+		mid, err := load()
+		if err != nil {
+			return fmt.Errorf("the %s reload is refused: port49d would not load it against the %s in force: %s",
+				first, second, loadFault(err))
+		}
+		if err := firstCheck(mid); err != nil {
+			return fmt.Errorf("the %s reload is refused: %w", first, err)
+		}
+		step(w, now, first, old, mid)
+		if err := secondCheck(mid); err != nil {
+			return fmt.Errorf("the %s reload after it is refused: %w", second, err)
+		}
+		step(w, now, second, mid, new)
+		return nil
+	}()
 	if err != nil {
-		return fmt.Errorf("the %s reload is refused: port49d would not load it against the %s in force: %s",
-			first, second, loadFault(err))
+		fmt.Fprintf(w, "%s: %v\n", heading, err)
+		return err
 	}
-	if err := firstCheck(mid); err != nil {
-		return fmt.Errorf("the %s reload is refused: %w", first, err)
-	}
-	if err := secondCheck(mid); err != nil {
-		return fmt.Errorf("the %s reload after it is refused: %w", second, err)
-	}
+	fmt.Fprintf(w, "%s: taken\n", heading)
 	return nil
 }
 
-func verdict(err error) string {
-	if err == nil {
-		return "taken"
+// step prints one reload port49d takes: its summary line and its changes.
+func step(w io.Writer, now time.Time, file string, from, to *policy.Policy) {
+	rep := bundle.Diff(from, to, now)
+	fmt.Fprintf(w, "the %s reload: %s\n", file, rep.Summary())
+	printChanges(w, rep, to)
+}
+
+// printChanges is rep's changes, one per line, with to's addresses for an
+// added device.
+func printChanges(w io.Writer, rep bundle.Report, to *policy.Policy) {
+	addresses := map[string]string{}
+	for _, d := range to.Devices() {
+		as := make([]string, len(d.Addresses))
+		for i, a := range d.Addresses {
+			as[i] = a.String()
+		}
+		addresses[d.Name] = strings.Join(as, ", ")
 	}
-	return err.Error()
+	for _, c := range rep.Changes {
+		fmt.Fprintln(w, changeLine(c, addresses[c.Device]))
+	}
 }
 
 // loadFault is a load error with the file at fault named: an inventory

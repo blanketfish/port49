@@ -157,7 +157,7 @@ func TestInventoryDiffWithANewPolicySaysTheOrder(t *testing.T) {
 		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
 	}
 	for _, want := range []string{"policy file first: taken",
-		"inventory file first: the inventory reload is refused: the new inventory removes 0 of 2 devices and refuses 2 more",
+		"inventory file first: the inventory reload is refused: the new inventory admits none of the 2 device(s)",
 		"ok: port49d would take both"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in\n%s", want, out.String())
@@ -166,7 +166,7 @@ func TestInventoryDiffWithANewPolicySaysTheOrder(t *testing.T) {
 	// The key groups deleted from both files: one policy, so one reload.
 	out.Reset()
 	if code := run([]string{"inventory", "diff", "--policy", oldPol, "--new-policy", oldPol, old, new}, &out, &errOut); code != 1 ||
-		!strings.Contains(out.String(), "refused: the new inventory removes 0 of 2 devices and refuses 2 more") {
+		!strings.Contains(out.String(), "refused: the new inventory admits none of the 2 device(s)") {
 		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
 	}
 	// Neither order: the new policy deletes the key groups too.
@@ -207,5 +207,65 @@ func TestInventoryDiffNeverPrintsASecret(t *testing.T) {
 				t.Errorf("the decode error does not name its line and category:\n%s", all)
 			}
 		})
+	}
+}
+
+// Without --config, a bundle with key groups in neither file admits only
+// pinned devices, as port49d reads it and `policy test` judges it: one that
+// pins none is refused whatever the bound.
+func TestInventoryDiffRefusesTheKeyGroupsDeletedWithoutConfig(t *testing.T) {
+	_, _, _, write := diffFiles(t)
+	pol := write("bare.yaml", strings.Replace(diffPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n", "", 1))
+	devices := "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n" +
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2]}\n"
+	old := write("old.yaml", devices+"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n")
+	new := write("new.yaml", devices)
+	var out, errOut bytes.Buffer
+	if code := run([]string{"inventory", "diff", "--policy", pol, "--max-removed-percent", "100", old, new},
+		&out, &errOut); code != 1 || !strings.Contains(out.String(), "refused: the new inventory admits none of the 2 device(s)") {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	// One device pinned is admitted: not admit-none, and at 100 the bound is off.
+	pinned := write("pinned.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1], key_ref: prod_key}\n"+
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2]}\n")
+	out.Reset()
+	if code := run([]string{"inventory", "diff", "--policy", pol, "--max-removed-percent", "100", old, pinned},
+		&out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+}
+
+// Under --new-policy each reload's changes are shown as port49d logs that
+// swap: a device the inventory moves into a security_log scope that the new
+// policy then narrows away from it joins and leaves, two records, though the
+// two ends of the change show no membership change at all.
+func TestInventoryDiffMarksEachReloadStep(t *testing.T) {
+	_, pol, _, write := diffFiles(t)
+	narrowed := write("narrowed.yaml", strings.Replace(diffPolicy, "match: {site: campus}", "match: {site: other}", 1))
+	old := write("old.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1], attributes: {site: dc1}}\n"+
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2]}\n")
+	new := write("new.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1], attributes: {site: campus}}\n"+
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2]}\n")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"inventory", "diff", "--policy", pol, "--new-policy", narrowed, old, new}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	got := out.String()
+	inv := strings.Index(got, "inventory file first:\n")
+	if inv < 0 {
+		t.Fatalf("no inventory-first heading:\n%s", got)
+	}
+	policyFirst, inventoryFirst := got[:inv], got[inv:]
+	if strings.Contains(policyFirst, "scope campus") {
+		t.Errorf("policy first, leaf-01 never enters campus:\n%s", got)
+	}
+	join := strings.Index(inventoryFirst, "! scope campus (security_log): leaf-01 joined")
+	polStep := strings.Index(inventoryFirst, "the policy reload: ")
+	leave := strings.Index(inventoryFirst, "! scope campus (security_log): leaf-01 left")
+	if join < 0 || polStep < 0 || leave < 0 || !(join < polStep && polStep < leave) {
+		t.Errorf("inventory first, leaf-01 joins in the inventory reload and leaves in the policy reload:\n%s", got)
+	}
+	if !strings.Contains(got, "ok: port49d would take both, in either order") {
+		t.Errorf("missing the verdict:\n%s", got)
 	}
 }

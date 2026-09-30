@@ -5039,8 +5039,9 @@ would refuse the new inventory (empty, a collision, admitting no device, or more
 refused than `--max-removed-percent`, default 10). `--config <port49d.yaml>` reads that bound
 and the `key_ref`s the file defines instead, no secret read, so a device assigned an undefined
 key is refused as port49d refuses it. With `--new-policy` naming a different policy, port49d runs
-two bounded reloads; the diff says for each order whether both are taken, and exits 1 only when
-neither order is. An inventory decode error is printed as its line and a fixed category, and a
+two bounded reloads; the diff shows each order step by step, each reload's changes marked as
+that swap logs them, says whether both are taken, and exits 1 only when neither order is. Without
+`--config`, a bundle with no key groups admits only pinned devices, as port49d reads it. An inventory decode error is printed as its line and a fixed category, and a
 bad address or CIDR by its position, never its text.
 
 **`port49 policy test --config <port49d.yaml>`** adds the key checks §10 requires of CI: it fails

@@ -224,10 +224,13 @@ func CheckAdmission(old, new *policy.Policy, maxRemovedPercent int) error {
 // admitsNone refuses a bundle that admits no device of a non-empty inventory,
 // whatever the bound, as a start is (spec §10): that is no device's fault, and
 // taking the whole fleet off is done by stopping port49d, not by a reload.
-// what is the file the reload read: "inventory" or "policy".
+// what is the file the reload read: "inventory" or "policy". A bundle an
+// offline tool loaded unassessed — no key groups, no key_refs — is read as
+// port49d, always assessing, reads it: only its pinned devices are admitted
+// (AdmissionRefusals; plan 6a, I1), as `policy test` judges it.
 func admitsNone(what string, p *policy.Policy) error {
 	n := len(p.Devices())
-	if n == 0 || !p.AdmissionAssessed() || len(p.AdmissionRefusals()) < n {
+	if n == 0 || len(p.AdmissionRefusals()) < n {
 		return nil
 	}
 	check := "check key_groups and the key_refs port49d.yaml defines"
