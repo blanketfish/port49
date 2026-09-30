@@ -838,6 +838,11 @@ func (l *lab) netconfDialPort(user, password, port string) (*netconfConn, string
 	deviceHello, err := n.read(45 * time.Second)
 	if err != nil {
 		n.Close()
+		// Keep what the device did say: Junos refuses a user whose class
+		// denies NETCONF with an error line before closing (L26c junoscript).
+		if deviceHello != "" {
+			return nil, "", fmt.Errorf("the device sent no NETCONF hello (sent %q): %w", deviceHello, err)
+		}
 		return nil, "", fmt.Errorf("the device sent no NETCONF hello: %w", err)
 	}
 	if err := n.write(netconfClientHello); err != nil {
