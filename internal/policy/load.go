@@ -1079,6 +1079,10 @@ func (p *Policy) buildScopes(f file) error {
 			if key == "" {
 				return fmt.Errorf("scope %q: a match key is empty", s.Name)
 			}
+			if key == "name" && v.Cmp != nil {
+				return fmt.Errorf("scope %q: match.name pins devices by inventory name: list them, as a string "+
+					"or a list, not a comparison (spec §10)", s.Name)
+			}
 			if v.Equal == nil && v.Cmp == nil {
 				return fmt.Errorf("scope %q: match.%s: a match value is a string, a list or a comparison", s.Name, key)
 			}

@@ -222,3 +222,31 @@ grants:
 		t.Fatalf("the grant's own scope is reported: %+v", c)
 	}
 }
+
+// Spec §10: a scope MUST be able to pin a device set explicitly instead of by
+// attribute. `name` reads the inventory name, as `platform` reads the
+// platform; an attribute named `name` is not read.
+func TestAScopePinsDevicesByName(t *testing.T) {
+	body := strings.Replace(good, "  - {name: all_devices, match: {}}\n",
+		"  - {name: all_devices, match: {}}\n  - {name: pinned, match: {name: [leaf-01, xe-01]}}\n", 1)
+	body = strings.Replace(body, "tests:\n", "  - {subject: alice, scope: pinned, roles: [read_only]}\ntests:\n", 1)
+	e := env()
+	// campus-sw-7 carries an attribute named name, which a scope never reads.
+	e.Devices[1].Attributes = map[string]string{"site": "campus", "name": "leaf-01"}
+	p, err := Parse([]byte(body), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := p.scopes["pinned"]
+	for _, d := range e.Devices {
+		got, _ := s.selects(d)
+		want := d.Name == "leaf-01" || d.Name == "xe-01"
+		if got != want {
+			t.Errorf("%s: selected %v, want %v", d.Name, got, want)
+		}
+	}
+	_, err = Parse([]byte(strings.Replace(good, "match: {}", `match: {name: {lt: "m"}}`, 1)), env())
+	if err == nil || !strings.Contains(err.Error(), "match.name pins devices by inventory name") {
+		t.Fatalf("a comparison on name: %v", err)
+	}
+}

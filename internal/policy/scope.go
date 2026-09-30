@@ -24,8 +24,13 @@ func (s *Scope) selects(d admission.Device) (selected, byIncomparable bool) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		value, present := d.Attributes[key]
-		if key == "platform" {
+		switch key {
+		case "platform":
 			value, present = d.Platform, d.Platform != ""
+		case "name":
+			// The inventory name, which pins a scope to named devices
+			// (spec §10); an attribute of that name is not read.
+			value, present = d.Name, true
 		}
 		if !present {
 			if s.OnMissing != "include" {
