@@ -102,7 +102,8 @@ func TestTheFirstSyncPublishesBundleOneEverywhere(t *testing.T) {
 			t.Fatalf("%v %v", p, err)
 		}
 	}
-	if !strings.Contains(rig.out.String(), "port49-inventory: sync (schedule): published bundle 1 (sha256:") {
+	if !strings.Contains(rig.out.String(), "port49-inventory: sync (schedule): published bundle 1 (sha256:") ||
+		!strings.Contains(rig.out.String(), "): first bundle: +3 device(s); 0 quarantined") {
 		t.Fatalf("the line: %s", rig.out)
 	}
 	if testutil.ToFloat64(rig.s.Metrics.Published) != 1 || testutil.ToFloat64(rig.s.Metrics.Devices) != 3 {
@@ -188,7 +189,10 @@ func TestNewlyRefusedDevicesCountTowardTheBound(t *testing.T) {
 func TestAServicePolicyEditAlonePublishesUnbounded(t *testing.T) {
 	rig := newSyncRig(t, syncPolicy, devices(10))
 	rig.sync(t)
-	os.WriteFile(rig.s.PolicyFile, []byte(strings.Replace(syncPolicy, "10.0.0.0/8", "10.0.0.0/29", 1)), 0o600)
+	if err := os.WriteFile(rig.s.PolicyFile, []byte(strings.Replace(syncPolicy, "10.0.0.0/8", "10.0.0.0/29", 1)),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
 	if res := rig.sync(t); res.Outcome != "published" || res.Sequence != 2 {
 		t.Fatalf("%+v %s", res, rig.out)
 	}
@@ -306,10 +310,16 @@ func TestASyncOfOneSourceKeepsTheOthersLatestFetch(t *testing.T) {
 
 func TestADeviceInTwoSourcesIsRefused(t *testing.T) {
 	rig := newSyncRig(t, syncPolicy, devices(2))
-	rig.s.Sources = append(rig.s.Sources, &memSource{name: "b", inv: devices(1)})
+	b := devices(2)
+	b.Devices[1].Name = "bad name"
+	rig.s.Sources = append(rig.s.Sources, &memSource{name: "b", inv: b})
 	if res := rig.sync(t); res.Outcome != "refused" || !strings.Contains(res.Reason,
 		"device leaf-01 is in both source a and source b") {
 		t.Fatalf("%+v", res)
+	}
+	// Counted though the sync was refused: every source was read.
+	if testutil.ToFloat64(rig.s.Metrics.LeftOut) != 1 {
+		t.Fatal("port49_inventory_devices_left_out is not 1")
 	}
 }
 
@@ -382,14 +392,126 @@ func TestRestoreIsSafeBesideASync(t *testing.T) {
 	rig := newSyncRig(t, syncPolicy, devices(3))
 	rig.sync(t)
 	done := make(chan struct{})
+	errs := make(chan error, 20)
 	go func() {
 		defer close(done)
 		for i := 0; i < 20; i++ {
-			rig.s.Restore()
+			errs <- rig.s.Restore()
 		}
 	}()
 	for i := 0; i < 20; i++ {
 		rig.sync(t)
 	}
 	<-done
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Review Important 1: with state_dir lost and a mirror that does not open
+// (here a signing-key rotation without the old key in VerifyKeys), the
+// service does not start again at bundle 1, unbounded, over the mirror's
+// newer copy: it refuses to start, and the mirror stays.
+func TestALostStateDirAndAMirrorThatDoesNotOpenRefuseTheStart(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(4))
+	rig.sync(t)
+	rig.src.inv.Devices[0].Addresses = append(rig.src.inv.Devices[0].Addresses, netip.MustParseAddr("10.9.0.1"))
+	if res := rig.sync(t); res.Sequence != 2 {
+		t.Fatalf("%+v", res)
+	}
+	before, _ := rig.s.State.MirrorRaw()
+	if err := os.RemoveAll(rig.s.State.Dir); err != nil {
+		t.Fatal(err)
+	}
+	_, newKey, _ := ed25519.GenerateKey(rand.Reader)
+	rotated := rig.syncer(newKey)
+	err := rotated.Restore()
+	mirror := filepath.Join(rig.s.State.MirrorDir, "bundle.json")
+	if err == nil || !strings.Contains(err.Error(), mirror) || !strings.Contains(err.Error(), "move it aside") {
+		t.Fatalf("the start was not refused: %v", err)
+	}
+	if strings.Contains(err.Error(), "leaf-0") {
+		t.Fatalf("the error quotes the copy: %v", err)
+	}
+	// Should the service start regardless, the 75% cut is published to
+	// state_dir alone: the mirror's newer copy is never written over.
+	rig.src.inv = devices(1)
+	rotated.Sync(context.Background(), "startup")
+	if after, _ := rig.s.State.MirrorRaw(); !bytes.Equal(before, after) {
+		t.Fatal("the mirror's bundle 2 was written over")
+	}
+	if testutil.ToFloat64(rotated.Metrics.MirrorBehind) != 1 {
+		t.Fatal("port49_inventory_mirror_behind is not 1")
+	}
+}
+
+// A mirror that is not there at all is a fresh start, as before.
+func TestNoCopyAnywhereIsAFreshStart(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(1))
+	if err := rig.s.Restore(); err != nil || rig.s.Current() != nil {
+		t.Fatalf("%v %v", rig.s.Current(), err)
+	}
+}
+
+// A bundle the service could not keep is not published.
+func TestAFailedSavePublishesNothing(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only directory")
+	}
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	if err := os.Chmod(rig.s.State.Dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(rig.s.State.Dir, 0o700) })
+	rig.src.inv = devices(4)
+	if res := rig.sync(t); res.Outcome != "failed" || res.Sequence != 1 || !strings.Contains(res.Reason, "state_dir") {
+		t.Fatalf("%+v", res)
+	}
+	if rig.s.Current().Doc.Sequence != 1 || testutil.ToFloat64(rig.s.Metrics.Published) != 1 {
+		t.Fatal("a bundle not kept was served")
+	}
+	if p, err := rig.s.State.Mirror(rig.pubs()); err != nil || p.Doc.Sequence != 1 {
+		t.Fatalf("the mirror: %v %v", p, err)
+	}
+}
+
+// A source that fails is not fetched again by another source's sync, and
+// its fetch that failed never replaces its last good one.
+func TestAFailingSourceKeepsItsLastFetchThroughAnotherSourcesSync(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(2))
+	b := &memSource{name: "b", inv: admission.Inventory{Devices: []admission.Device{{Name: "leaf-b",
+		Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("10.1.0.1")},
+		Transport: admission.TransportTCP}}}}
+	rig.s.Sources = append(rig.s.Sources, b)
+	rig.sync(t)
+	b.err = errors.New("dial tcp: connection refused")
+	if res := rig.s.Sync(context.Background(), "schedule", "b"); res.Outcome != "failed" {
+		t.Fatalf("%+v", res)
+	}
+	rig.src.inv = devices(3)
+	res := rig.s.Sync(context.Background(), "schedule", "a")
+	if res.Outcome != "published" || len(rig.s.Current().Inv.Devices) != 4 {
+		t.Fatalf("%+v: %d devices, want a's three and b's one", res, len(rig.s.Current().Inv.Devices))
+	}
+}
+
+// A device newly left out is said even when the bundle is unchanged, once.
+func TestADeviceNewlyLeftOutIsSaidOnAnUnchangedSync(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	rig.src.inv.Devices = append(rig.src.inv.Devices, admission.Device{Name: "bad\tname", Platform: "arista_eos",
+		Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.9")}, Transport: admission.TransportTCP})
+	rig.out.Reset()
+	for i := 0; i < 2; i++ {
+		if res := rig.sync(t); res.Outcome != "unchanged" {
+			t.Fatalf("%+v", res)
+		}
+	}
+	if n := strings.Count(rig.out.String(), "port49-inventory: bundle 1: left out: source a: device #3"); n != 1 {
+		t.Fatalf("said %d times: %q", n, rig.out)
+	}
 }

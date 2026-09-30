@@ -78,6 +78,9 @@ type Syncer struct {
 	// said is the last refusal or failure said, and mirrorSaid the last mirror
 	// fault, so each is said once.
 	said, mirrorSaid string
+	// leftOutSaid is the devices left out as last said, so an unchanged
+	// sync says only those newly left out.
+	leftOutSaid []string
 	// fetched is each source's latest fetch, which a sync of another source
 	// merges with (spec §10: each source on its own interval).
 	fetched map[string]admission.Inventory
@@ -97,9 +100,11 @@ func (s *Syncer) keys() []ed25519.PublicKey {
 
 // Restore serves what the service last published, the newer of state_dir's
 // copy and the mirror's, so a restart serves at once and continues the
-// sequence (Decided 3). A copy that does not open is said and passed over:
-// the service's job is to publish, and every port49d bounds what it publishes
-// next. It holds the sync lock, so it is safe beside a sync.
+// sequence (Decided 3). A copy that is there but does not open or verify is
+// an error, and the service does not start: passed over, with state_dir lost,
+// it would start the sequence again at 1, unbounded, below the copy every
+// port49d holds (review of Task 9, Important 1). A copy that is not there at
+// all is a fresh start. It holds the sync lock, so it is safe beside a sync.
 func (s *Syncer) Restore() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -111,8 +116,10 @@ func (s *Syncer) Restore() error {
 	}{{"state_dir " + s.State.Dir, s.State.Latest}, {"mirror_dir " + s.State.MirrorDir, s.State.Mirror}} {
 		p, err := c.get(keys)
 		if err != nil {
-			fmt.Fprintf(s.Log, "port49-inventory: %s: %s; passed over\n", c.what, oneLine(err))
-			continue
+			// Open's and the fence's errors name the file and quote nothing in it.
+			return fmt.Errorf("port49-inventory: %s holds a bundle the service cannot open: %s; the service does "+
+				"not start below it: if a signing key was rotated, add the old key to verify_key_files; to start "+
+				"fresh, move it aside", c.what, oneLine(err))
 		}
 		if p != nil && (best == nil || p.Doc.Sequence > best.Doc.Sequence) {
 			best = p
@@ -182,6 +189,11 @@ func (s *Syncer) sync(ctx context.Context, only []string) Result {
 	sources := map[string][]string{}
 	owner := map[string]string{}
 	var leftOut []string
+	type owned struct {
+		src string
+		d   admission.Device
+	}
+	var kept []owned
 	if s.fetched == nil {
 		s.fetched = map[string]admission.Inventory{}
 	}
@@ -202,16 +214,20 @@ func (s *Syncer) sync(ctx context.Context, only []string) Result {
 				leftOut = append(leftOut, fmt.Sprintf("source %s: device %s %s", src.Name(), deviceLabel(i, d.Name), why))
 				continue
 			}
-			if o, dup := owner[d.Name]; dup {
-				return held(Result{Outcome: OutcomeRefused, Reason: fmt.Sprintf("device %s is in both source %s and source %s; "+
-					"a device name is one device", d.Name, o, src.Name())})
-			}
-			owner[d.Name] = src.Name()
-			inv.Devices = append(inv.Devices, d)
-			sources[src.Name()] = append(sources[src.Name()], d.Name)
+			kept = append(kept, owned{src.Name(), d})
 		}
 	}
+	// Counted once every source is read, before any refusal below.
 	s.Metrics.LeftOut.Set(float64(len(leftOut)))
+	for _, k := range kept {
+		if o, dup := owner[k.d.Name]; dup {
+			return held(Result{Outcome: OutcomeRefused, Reason: fmt.Sprintf("device %s is in both source %s and source %s; "+
+				"a device name is one device", k.d.Name, o, k.src)})
+		}
+		owner[k.d.Name] = k.src
+		inv.Devices = append(inv.Devices, k.d)
+		sources[k.src] = append(sources[k.src], k.d.Name)
+	}
 	for _, names := range sources {
 		slices.Sort(names)
 	}
@@ -261,10 +277,11 @@ func (s *Syncer) sync(ctx context.Context, only []string) Result {
 		return held(Result{Outcome: OutcomeFailed, Reason: "state_dir " + s.State.Dir + ": " + oneLine(err)})
 	}
 	s.publish(p)
-	rep := bundle.Report{To: next.Bundle, Added: len(inv.Devices)}
-	if prevPol != nil {
-		rep = bundle.Diff(prevPol, next, now)
+	if prevPol == nil {
+		return Result{Outcome: OutcomePublished, Sequence: seq, Bundle: next.Bundle,
+			Summary: fmt.Sprintf("first bundle: +%d device(s)", len(inv.Devices)), Quarantined: quarantined, LeftOut: leftOut}
 	}
+	rep := bundle.Diff(prevPol, next, now)
 	return Result{Outcome: OutcomePublished, Sequence: seq, Bundle: next.Bundle, Summary: rep.Summary(), Changes: rep.Changes,
 		Quarantined: quarantined, LeftOut: leftOut}
 }
@@ -335,12 +352,21 @@ func (s *Syncer) say(trigger string, res Result) {
 		for _, l := range res.LeftOut {
 			fmt.Fprintf(s.Log, "port49-inventory: bundle %d: left out: %s\n", res.Sequence, l)
 		}
+		s.leftOutSaid = res.LeftOut
 	case OutcomeUnchanged:
 		if s.said != "" {
 			s.said = ""
 			fmt.Fprintf(s.Log, "port49-inventory: sync (%s): the sources and the policy are as bundle %d has them "+
 				"again\n", trigger, res.Sequence)
 		}
+		// A device left out that leaves the bundle as it was is said too,
+		// once: the gauge alone would not name it.
+		for _, l := range res.LeftOut {
+			if !slices.Contains(s.leftOutSaid, l) {
+				fmt.Fprintf(s.Log, "port49-inventory: bundle %d: left out: %s\n", res.Sequence, l)
+			}
+		}
+		s.leftOutSaid = res.LeftOut
 	default:
 		if key := res.Outcome + "\x00" + res.Reason; key != s.said {
 			s.said = key

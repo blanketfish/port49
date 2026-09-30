@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
@@ -182,10 +183,33 @@ func (s State) At(seq int64, keys []ed25519.PublicKey) (*Published, error) {
 // WriteMirror writes the copy daemons read at a cold start (spec §10). 0640:
 // the fleet list and its addresses are for the daemons' group, not the
 // world (pre-flight minor 7); the deployment gives port49d that group.
+//
+// Its sequence never goes back, as Save's does not: a copy there at or above
+// raw's sequence is kept, and writing another is refused, so a service that
+// lost state_dir never writes bundle 1 over bundle N, the one copy left. The
+// copy's sequence is read without its signature (bundle.UnverifiedSequence):
+// a value it states can only refuse more. A copy that cannot be read is not
+// written over; one that reads but does not parse holds no sequence, and is.
 func (s State) WriteMirror(raw []byte) error {
 	// An empty dir would put the temporary file in os.TempDir.
 	if s.MirrorDir == "" {
 		return errors.New("inventory: no mirror_dir is set")
+	}
+	seq, err := bundle.UnverifiedSequence(raw)
+	if err != nil {
+		return err
+	}
+	have, err := s.MirrorRaw()
+	if err != nil {
+		return err
+	}
+	if held, err := bundle.UnverifiedSequence(have); have != nil && err == nil && seq <= held {
+		if bytes.Equal(have, raw) {
+			return nil
+		}
+		return fmt.Errorf("inventory: %s holds bundle %d, and bundle %d is not above it; the mirror's sequence never "+
+			"goes back: move it aside if the service is meant to start fresh", filepath.Join(s.MirrorDir, mirrorName),
+			held, seq)
 	}
 	return WriteAtomic(s.MirrorDir, mirrorName, raw, 0o640)
 }

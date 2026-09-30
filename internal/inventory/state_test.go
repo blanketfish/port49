@@ -400,3 +400,30 @@ func TestSaveWithNoStateDirIsRefused(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// The mirror's sequence never goes back, as state_dir's does not: a copy at
+// or above the one written stays, whatever key signed it (review Important 1).
+func TestTheMirrorIsNeverWrittenBelowWhatItHolds(t *testing.T) {
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	s := State{Dir: stateDir(t), MirrorDir: t.TempDir()}
+	two := published(t, key, 2, "leaf-01", "leaf-02")
+	if err := s.WriteMirror(two.Raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteMirror(two.Raw); err != nil {
+		t.Fatalf("the same copy again: %v", err)
+	}
+	for _, p := range []Published{published(t, other, 1, "leaf-01"), published(t, other, 2, "leaf-01")} {
+		err := s.WriteMirror(p.Raw)
+		if err == nil || !strings.Contains(err.Error(), "holds bundle 2") {
+			t.Fatalf("bundle %d over bundle 2: %v", p.Doc.Sequence, err)
+		}
+	}
+	if raw, _ := s.MirrorRaw(); string(raw) != string(two.Raw) {
+		t.Fatal("the mirror's copy was replaced")
+	}
+	if err := s.WriteMirror(published(t, other, 3, "leaf-01").Raw); err != nil {
+		t.Fatalf("bundle 3: %v", err)
+	}
+}
