@@ -190,6 +190,15 @@ func (l *lab) offeredIn(c *cliConn, enter, ask, cfg []string, leave, back string
 // version`, each timed as l28Phase times them, as two table rows.
 func (l *lab) timedLogins(t *testing.T) string {
 	t.Helper()
+	rows, _, _, _ := l.timeLogins(t)
+	return rows
+}
+
+// timeLogins is timedLogins plus when the break-glass session began, how long
+// it took, and whether it logged in and ran its commands, for a test that
+// holds it to a bar and reads the capture over its interval (L31).
+func (l *lab) timeLogins(t *testing.T) (rows string, bgFrom time.Time, bgTook time.Duration, bgOK bool) {
+	t.Helper()
 	user, secret := l.nextLogin(t)
 	t0 := time.Now()
 	tok := "logged in"
@@ -199,15 +208,36 @@ func (l *lab) timedLogins(t *testing.T) string {
 		c.Close()
 	}
 	tokTook := time.Since(t0)
-	t1 := time.Now()
-	bg := "logged in and ran them"
-	if _, err := l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version", "show version",
-		"show version"); err != nil {
-		bg = "not observed: " + oneLine(err.Error())
-	}
-	bgTook := time.Since(t1)
+	bgFrom = time.Now()
+	outs, err := l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version", "show version",
+		"show version")
+	bgTook = time.Since(bgFrom)
+	bg, bgOK := breakglassRan(l.p.name, outs, err, 3)
 	return fmt.Sprintf("| next token login (`%s`) | %s in %s |\n| break-glass login plus three `show version` | %s in %s |\n",
-		user, tok, tokTook.Round(10*time.Millisecond), bg, bgTook.Round(10*time.Millisecond))
+		user, tok, tokTook.Round(10*time.Millisecond), bg, bgTook.Round(10*time.Millisecond)), bgFrom, bgTook, bgOK
+}
+
+// breakglassRan reads a break-glass session's outputs: it ran its commands
+// only if it logged in, every one of the want commands answered, and none
+// answered with platform's refusal text (l29Refusals). A session that logged
+// in and was refused every command is not one that ran them.
+func breakglassRan(platform string, outs []string, err error, want int) (string, bool) {
+	if err != nil {
+		return "not observed: " + oneLine(err.Error()), false
+	}
+	for _, out := range outs {
+		if l29Refused(platform, out) {
+			for _, line := range strings.Split(out, "\n") {
+				if l29Refused(platform, line) {
+					return "refused: " + oneLine(line), false
+				}
+			}
+		}
+	}
+	if len(outs) != want {
+		return fmt.Sprintf("ran %d of %d", len(outs), want), false
+	}
+	return "logged in and ran them", true
 }
 
 // firstLine is s's first non-empty line, for a table cell.

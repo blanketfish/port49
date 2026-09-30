@@ -26,17 +26,19 @@ type failure struct {
 }
 
 type Limiter struct {
-	cfg    Config
-	now    func() time.Time
-	mu     sync.Mutex
-	open   map[netip.Addr]int
-	bad    map[netip.Addr]failure // malformed strikes per source
-	auth   map[string]failure     // key: nas + "\x00" + username
-	writes int                    // incremented on every Malformed/AuthFailure; triggers sweep at sweepEvery
+	cfg      Config
+	now      func() time.Time
+	mu       sync.Mutex
+	open     map[netip.Addr]int
+	bad      map[netip.Addr]failure // malformed strikes per source
+	declined map[netip.Addr]failure // declines per source (Decline): not strikes, a window of their own
+	auth     map[string]failure     // key: nas + "\x00" + username
+	writes   int                    // incremented on every Malformed/Decline/AuthFailure; triggers sweep at sweepEvery
 }
 
 func New(c Config, now func() time.Time) *Limiter {
-	return &Limiter{cfg: c, now: now, open: map[netip.Addr]int{}, bad: map[netip.Addr]failure{}, auth: map[string]failure{}}
+	return &Limiter{cfg: c, now: now, open: map[netip.Addr]int{}, bad: map[netip.Addr]failure{},
+		declined: map[netip.Addr]failure{}, auth: map[string]failure{}}
 }
 
 // Acquire takes a connection slot for src. ok is false when the per-NAS cap is
@@ -67,19 +69,7 @@ func (l *Limiter) Acquire(src netip.Addr) (func(), bool) {
 func (l *Limiter) Malformed(src netip.Addr) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	f := l.bad[src]
-	now := l.now()
-	if l.cfg.MalformedWindow > 0 && now.Sub(f.last) > l.cfg.MalformedWindow {
-		f.count = 0
-	}
-	f.count++
-	f.last = now
-	l.bad[src] = f
-	l.writes++
-	if l.writes%1024 == 0 {
-		l.sweepLocked(now)
-	}
-	return backoff(l.cfg.MalformedBackoffBase, l.cfg.MalformedBackoffMax, f.count)
+	return backoff(l.cfg.MalformedBackoffBase, l.cfg.MalformedBackoffMax, l.countLocked(l.bad, src))
 }
 
 // Holding reports whether src is inside the backoff its last strike earned:
@@ -88,7 +78,60 @@ func (l *Limiter) Malformed(src netip.Addr) time.Duration {
 func (l *Limiter) Holding(src netip.Addr) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	f, ok := l.bad[src]
+	return l.inWindowLocked(l.bad, src)
+}
+
+// Decline records that port49d declined a packet from src through no fault
+// of the source's: admission refuses its device, the device is quarantined,
+// or a reload refused or removed it. It opens a window, on the strike's
+// schedule, in which the source's next connections are refused at Accept
+// before the device writes (spec §10, "A declined source is refused at
+// Accept"; §15 L31). It is not a strike: Holding and Malformed never see it.
+func (l *Limiter) Decline(src netip.Addr) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.countLocked(l.declined, src)
+}
+
+// Declined reports whether src is inside the window its last decline opened.
+// The caller refuses the connection only while port49d still declines src,
+// and otherwise calls Undecline: a window never outlasts its reason.
+func (l *Limiter) Declined(src netip.Addr) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.inWindowLocked(l.declined, src)
+}
+
+// Undecline drops src's decline window and count, for a source port49d no
+// longer declines: a reload admitted it again, or its quarantine ended.
+func (l *Limiter) Undecline(src netip.Addr) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.declined, src)
+}
+
+// countLocked counts one more event from src in m and returns the count,
+// which starts over once MalformedWindow has passed with none.
+func (l *Limiter) countLocked(m map[netip.Addr]failure, src netip.Addr) int {
+	f := m[src]
+	now := l.now()
+	if l.cfg.MalformedWindow > 0 && now.Sub(f.last) > l.cfg.MalformedWindow {
+		f.count = 0
+	}
+	f.count++
+	f.last = now
+	m[src] = f
+	l.writes++
+	if l.writes%1024 == 0 {
+		l.sweepLocked(now)
+	}
+	return f.count
+}
+
+// inWindowLocked reports whether src's last event in m is younger than the
+// backoff its count earns.
+func (l *Limiter) inWindowLocked(m map[netip.Addr]failure, src netip.Addr) bool {
+	f, ok := m[src]
 	if !ok || f.count == 0 {
 		return false
 	}
@@ -117,11 +160,13 @@ func (l *Limiter) AuthFailure(nas, username string) time.Duration {
 }
 
 func (l *Limiter) sweepLocked(now time.Time) {
-	// Delete malformed-strike entries older than MalformedWindow.
+	// Delete malformed-strike and decline entries older than MalformedWindow.
 	if l.cfg.MalformedWindow > 0 {
-		for src, f := range l.bad {
-			if now.Sub(f.last) > l.cfg.MalformedWindow {
-				delete(l.bad, src)
+		for _, m := range []map[netip.Addr]failure{l.bad, l.declined} {
+			for src, f := range m {
+				if now.Sub(f.last) > l.cfg.MalformedWindow {
+					delete(m, src)
+				}
 			}
 		}
 	}

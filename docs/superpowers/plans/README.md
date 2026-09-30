@@ -44,7 +44,7 @@ top. **Executed 2026-09-30** on `feature/inventory-service`, reviewed per task a
 with a fix wave; Task 20's midnight nights were dropped by the owner's ruling. It closed L29 and
 L30, and spec §14's quarantine through a sync passed on four images; it opened L31, slow Cisco
 break-glass with single-connection on (Plan 6b — As built, below); **merged 2026-09-30 (PR #17)**. Next,
-`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions). 6c and 7–13 not yet.
+`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); ready to merge. Next is 6c; 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -984,7 +984,11 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   re-admission takes effect at once. Retries inside the window are counted, not recorded, so spec
   §10's "one record per connection" for the quarantine close and the `conn.go` comment change with
   it. Lab: IOS-XE and NX-OS with single-connection on, removed, refused and quarantined, against
-  port49d stopped; the run closes L31.
+  port49d stopped; the run closes L31. **Executed 2026-09-30**, closing L31 (As built, below). What
+  shipped differs from this text in three places: the window is not cleared at a reload but
+  re-checked at every Accept against the admission and policy in force, which covers a quarantine
+  that ends without a reload too; the lab bar is the rekeyed control (a key miss) plus 1.5 s, with
+  port49d stopped measured beside it; and vEOS ran as a no-regression check.
 - **Plan 6c — the NetBox and Nautobot connectors; written after 6b merges, against L27's and L30's
   fixtures.** Version detection by `/api/status/`, GraphQL first, the REST fallback (`?depth=1` on
   Nautobot 2.x, following `next` as L30 finds it), the slug alias table, filters and maps, source
@@ -1229,7 +1233,7 @@ vJunos-router held a connection open across some changes only: its committed not
 evidence, varied in which phases held one open. **L30 closed** 2026-09-30 (`L30-netbox.md`,
 `L30-nautobot.md`), with which of `Host` and `X-Forwarded-Host` a product reads, and a proxied
 `next` followed, named as unmeasured outside its question. **Spec §14's quarantine through a sync
-passed** on all four (`quarantine-sync-*.md`). **L31 opened** (open; closes in `fix/breakglass-reset`): with single-connection on, break-glass on
+passed** on all four (`quarantine-sync-*.md`). **L31 opened** (closed since by `fix/breakglass-reset`, as built below): with single-connection on, break-glass on
 IOS-XE and NX-OS costs 16–41 s after a de-admitted device's reset (`L31-breakglass-cisco-singleconnection.md`). The C8000V's
 liveness probe again reached port49 only at its second or third attempt before two of six phases
 (30 s, 54 s); why is still not established.
@@ -1246,7 +1250,47 @@ liveness probe again reached port49 only at its second or third attempt before t
   after a reload removed or refused the device, and 16.7 s and 20.3 s through a quarantine sync.
   The cause is analysed in `L31-breakglass-cisco-singleconnection.md`: with single-connection on,
   a reset after the request is waited out, and those paths never refuse the retries at Accept.
+  Done: closed 2026-09-30 (below).
 - **Later, unassigned:** the C8000V's slow liveness probe (above).
+
+### Fix `fix/breakglass-reset` — As built
+
+Executed 2026-09-30 on `fix/breakglass-reset`, each task reviewed; the ledger is
+`.superpowers/sdd/2026-09-30-06b1-breakglass-reset/progress.md`. A pre-flight review revised the
+plan first (8ee966f). The window is cleared by re-asking admission and the policy at Accept, not
+at a reload, which covers a quarantine that ends without one, and it counts as its own event,
+`declined_refused`, not `held_refused`.
+
+- **Task 1 (docs):** spec §10's "A declined source is refused at Accept, and takes no strike", the
+  refused-device, quarantine and reload paragraphs, a §14 bullet, and design §11 (e2d9765,
+  26d666d; review minors 4573df8).
+- **Task 2 (limits):** `Decline`, `Declined` and `Undecline`, a decline window on the strike's
+  schedule and settings that is never a strike (6729c45, 9fd5c7e).
+- **Task 3 (server):** an unadmitted source closes as a key miss does: record, strike, reset at
+  once, never held; its retries are refused at Accept as `held_refused` (2db70ee).
+- **Task 4 (server):** refused, quarantined, and reload-refused or removed connections record,
+  reset at once and open a decline window; Accept re-asks admission and the policy inside it, and
+  counts refusals as `declined_refused` (9e19e94). A quarantine landing between Accept's re-ask and
+  `Undecline` fails closed (34b770a).
+- **Task 5 (lab harness):** `TestL31BreakGlass` (dfec85f). Its review found the premises counted
+  from the token login, not the break-glass interval, and a refused break-glass scored as a pass;
+  both were fixed against the brief (b998ae9), and the runs were pinned there.
+- **Task 6 (lab):** L31 on the N9Kv, the C8000V and vEOS with single-connection on (cfd34fd).
+  Break-glass removed, refused and quarantined took 2.62, 2.58 and 2.61 s on the N9Kv against the
+  control's 2.61 s, 1.28, 1.78 and 1.78 s on the C8000V against 1.28 s, and 0.33, 0.32 and 0.32 s
+  on vEOS against 0.34 s; every declined phase's retries were refused at Accept.
+- **Task 7 (docs):** **L31 closed** (spec §15), with the §10 sentences, the L29 and L31 notes and
+  the `conn.go` quarantine comment giving the measured times; this section.
+
+**Carried:** the C8000V's slow liveness probe (Plan 6b, above), still unassigned. vJunos-router did
+not run L31: it was unaffected before the fix, and the fix only adds refusals at Accept.
+
+**Follow-up, unassigned (final review M4):** the per-NAS cap's refusal at Accept
+(`internal/daemon/server/server.go`, `refused_cap`) closes with a FIN, not a reset. This predates
+this branch and is not a regression. A FIN that comes before the device writes is unmeasured on
+IOS-XE and NX-OS with single-connection on, and L28 found the C8000V waits out a FIN that follows
+its request. The default cap of 32 makes it unlikely for one device. Either reset before the close
+at the cap, or add a lab register row and measure it first.
 
 ## Plan 7 — Broker in full (§19 step 7)
 
