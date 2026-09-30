@@ -54,3 +54,33 @@ func TestRunRefusesAnInventoryFIFOWithoutHanging(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 }
+
+// Each wrapper passes port49d's own cap and names its file in the refusal:
+// one byte over is refused, exactly the cap is read.
+func TestTheWrappersReadToTheirOwnCaps(t *testing.T) {
+	for _, c := range []struct {
+		read func(string) ([]byte, error)
+		max  int64
+		want string
+	}{
+		{readPolicyFile, maxPolicySize, "not a policy file"},
+		{readInventoryFile, maxInventorySize, "not an inventory file"},
+	} {
+		path := filepath.Join(safeDir(t), "file.yaml")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Truncate(path, c.max+1); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.read(path); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: over the cap: %v", c.want, err)
+		}
+		if err := os.Truncate(path, c.max); err != nil {
+			t.Fatal(err)
+		}
+		if raw, err := c.read(path); err != nil || int64(len(raw)) != c.max {
+			t.Errorf("%s: exactly the cap: %d, %v", c.want, len(raw), err)
+		}
+	}
+}

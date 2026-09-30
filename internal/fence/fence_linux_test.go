@@ -64,8 +64,8 @@ func policyAt(t *testing.T, perm, dirPerm os.FileMode) string {
 }
 
 // Whoever can write the policy decides every operator's access (spec
-// §5.1.3), so a file or a directory anyone but port49d's user could write is
-// refused, naming what to fix.
+// §5.1.3), so a file or a directory anyone but the user this process runs as
+// could write is refused, naming what to fix.
 func TestAPolicyFileOthersCouldWriteIsRefused(t *testing.T) {
 	for name, c := range map[string]struct {
 		perm, dirPerm os.FileMode
@@ -87,7 +87,7 @@ func TestAPolicyFileOthersCouldWriteIsRefused(t *testing.T) {
 	}
 }
 
-// A file owned by neither port49d's user nor root is refused.
+// A file owned by neither the user this process runs as nor root is refused.
 func TestAPolicyFileAnotherUserOwnsIsRefused(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("as root every file is owned by an accepted uid")
@@ -194,7 +194,7 @@ func TestALinkInADirectoryOthersCanWriteIsRefused(t *testing.T) {
 // 02777 with fsGroup) and is mounted read-only, so nobody in the pod can
 // write it (tests/lab/results/configmap-mounts.md). A directory others could
 // write by its mode is accepted when its filesystem is read-only, and only
-// then; its owner must still be port49d's user or root.
+// then; its owner must still be the user this process runs as, or root.
 func TestAWritableDirectoryOnAReadOnlyMountIsAccepted(t *testing.T) {
 	dir := configMap(t) // the timestamped directory holding the file stays 0755, as measured
 	if err := os.Chmod(dir, 0o777); err != nil {
@@ -352,7 +352,7 @@ func TestAPolicySymlinkIsJudgedByItsTarget(t *testing.T) {
 	}
 }
 
-// A directory owned by neither port49d's user nor root is refused even when
+// A directory owned by neither the user this process runs as nor root is refused even when
 // the file in it is safe: its owner can chmod it and replace the file. No
 // second uid exists to own one in a test, so the owner lookup is swapped for
 // directories alone.
@@ -521,22 +521,67 @@ func TestAnInventoryFIFOIsRefused(t *testing.T) {
 	}
 }
 
+// verifyKeyAt writes an ed25519 public key PEM with mode perm in dir and
+// returns its path.
+func verifyKeyAt(t *testing.T, dir, name string, perm os.FileMode) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pubPEM, err := keyfile.EncodeEd25519(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, pubPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Chmod, not the create mode: the umask would narrow that.
+	if err := os.Chmod(p, perm); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 // Pre-flight M3: a verify key others could write is refused, as a policy
 // file is.
 func TestAVerifyKeyOthersCouldWriteIsRefused(t *testing.T) {
-	dir := t.TempDir()
-	os.Chmod(dir, 0o755)
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	_, pubPEM, _ := keyfile.EncodeEd25519(priv)
-	p := filepath.Join(dir, "signing.pub")
-	os.WriteFile(p, pubPEM, 0o664)
-	os.Chmod(p, 0o664)
+	p := verifyKeyAt(t, safeDir(t), "signing.pub", 0o664)
 	if _, err := ReadVerifyKeys("verify_key_files", []string{p}); err == nil ||
 		!strings.Contains(err.Error(), "verify_key_files[0]") || !strings.Contains(err.Error(), "writable by others") {
 		t.Fatalf("got %v", err)
 	}
-	os.Chmod(p, 0o644)
+	if err := os.Chmod(p, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if keys, err := ReadVerifyKeys("verify_key_files", []string{p}); err != nil || len(keys) != 1 {
+		t.Fatalf("%v %v", keys, err)
+	}
+}
+
+// A verify key that does not parse is refused naming its index and file,
+// never quoting what the file holds; the bad key's index is its own, not the
+// first.
+func TestAVerifyKeyThatDoesNotParseNamesItsIndexNotItsBytes(t *testing.T) {
+	dir := safeDir(t)
+	good := verifyKeyAt(t, dir, "good.pub", 0o644)
+	bad := filepath.Join(dir, "bad.pub")
+	const junk = "not-a-key-c29tZSBieXRlcw"
+	if err := os.WriteFile(bad, []byte(junk+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ReadVerifyKeys("verify_key_files", []string{good, bad})
+	if err == nil || !strings.Contains(err.Error(), "verify_key_files[1]") || !strings.Contains(err.Error(), bad) ||
+		strings.Contains(err.Error(), junk) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// An empty list reads nothing and refuses nothing: refusing a bundle source
+// with no verify key is the caller's (Tasks 11, 13).
+func TestNoVerifyKeysIsAnEmptyList(t *testing.T) {
+	if keys, err := ReadVerifyKeys("verify_key_files", nil); err != nil || len(keys) != 0 {
 		t.Fatalf("%v %v", keys, err)
 	}
 }
