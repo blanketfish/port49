@@ -51,6 +51,17 @@ func (f *fakeService) Bundle(_ context.Context, _ string) ([]byte, string, bool,
 	return f.bundles[i], bundle.ETag(f.bundles[i]), false, nil
 }
 
+// coldStart is the copy coldCopies would start from, before the policy's
+// word (startCopy).
+func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []ed25519.PublicKey,
+	c fetchClient, m *metrics.Metrics, rd *readiness) (*inventory.Published, string, error) {
+	picks, err := coldCopies(ctx, svc, keys, c, m, rd)
+	if err != nil {
+		return nil, "", err
+	}
+	return picks[0].p, picks[0].from, nil
+}
+
 func sealedDoc(t *testing.T, key ed25519.PrivateKey, seq int64, n int) []byte {
 	t.Helper()
 	return sealedDocAt(t, key, seq, n, time.Now())
@@ -217,8 +228,9 @@ func TestAPersistedCopyOthersCouldWriteIsPassedOver(t *testing.T) {
 	}
 }
 
-// With neither copy, port49d waits for the service, says why once per
-// reason, and persists what it gets.
+// With neither copy, port49d waits for the service and says why once per
+// reason. What it gets is persisted only once the policy and the broker have
+// taken it (persistStart; final review I2), never by the wait itself.
 func TestWithNoCopyItWaitsForTheServiceSayingWhyOnce(t *testing.T) {
 	svc, key, keys := coldRig(t)
 	svc.MirrorDir = ""
@@ -236,6 +248,10 @@ func TestWithNoCopyItWaitsForTheServiceSayingWhyOnce(t *testing.T) {
 		!strings.Contains(out.String(), "TACACS+ is not served until one arrives, and /readyz answers 503") {
 		t.Fatalf("said %d times: %s", n, out.String())
 	}
+	if _, err := os.Stat(filepath.Join(svc.StateDir, "bundle.json")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("persisted before the policy took it: %v", err)
+	}
+	persistStart(svc, coldPick{p, from}, testMetrics())
 	fi, err := os.Stat(filepath.Join(svc.StateDir, "bundle.json"))
 	if err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("not persisted: %v %v", fi, err)
@@ -622,10 +638,12 @@ func TestAPersistThatFailsIsAlarmed(t *testing.T) {
 	defer func() { stderr = e }()
 	stderr = &out
 	m := testMetrics()
-	if _, from, err := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{sealedDoc(t, key, 1, 1)}},
-		m, nil); err != nil || from != "the service" {
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{sealedDoc(t, key, 1, 1)}},
+		m, nil)
+	if err != nil || from != "the service" {
 		t.Fatalf("%q %v", from, err)
 	}
+	persistStart(svc, coldPick{p, from}, m)
 	if testutil.ToFloat64(m.InventoryPersistFailed) != 1 || !strings.Contains(out.String(), "a restart with the service down") {
 		t.Fatalf("not alarmed: %s", out.String())
 	}

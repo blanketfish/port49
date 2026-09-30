@@ -542,12 +542,21 @@ func run(parent context.Context, cfgPath string) error {
 		// age: NaN, never the 0 that reads as fresh, for however long the
 		// wait lasts. The reloader dates it from the document it starts from.
 		m.WatchInventoryAge(func() float64 { return math.NaN() })
-		if startDoc, startFrom, err = coldStart(ctx, cfg.InventoryService, verifyKeysAtStart, client, m, rd); err != nil {
+		picks, err := coldCopies(ctx, cfg.InventoryService, verifyKeysAtStart, client, m, rd)
+		if err != nil {
 			if ctx.Err() != nil {
 				return nil // stopped while waiting for a bundle: nothing was served
 			}
 			return err
 		}
+		// The copy the policy in force takes, the newer first; it is
+		// persisted only once buildBroker below has accepted it (I2).
+		pick, err := startCopy(cfg, picks, m)
+		if err != nil {
+			return err
+		}
+		sayStart(cfg.InventoryService, pick)
+		startDoc, startFrom = pick.p, pick.from
 		cfg.Inventory = startDoc.Inv
 		inventoryFrom = fmt.Sprintf("the inventory service's bundle %d", startDoc.Doc.Sequence)
 		m.InventoryBundleSequence.Set(float64(startDoc.Doc.Sequence))
@@ -637,6 +646,9 @@ func run(parent context.Context, cfgPath string) error {
 		stopSpool()
 		<-spoolDone
 		return err
+	}
+	if startDoc != nil {
+		persistStart(cfg.InventoryService, coldPick{startDoc, startFrom}, m)
 	}
 
 	// The seeded pair is a credential. It goes to a file the operator named, at

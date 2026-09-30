@@ -15,6 +15,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/rhwendt/port49/internal/policy"
 )
 
 // fetchClient is what port49d asks the inventory service: the version, and
@@ -151,12 +152,21 @@ type coldCopy struct {
 	read func() (*inventory.Published, error)
 }
 
-// coldStart is port49d's first inventory with inventory.service (spec §10,
-// "Cold start"; Decided 5): the newer of its persisted copy and the mirror's,
-// and with neither, the service, asked every poll_interval until it answers.
-// Only that last case waits, and while it does port49d serves no TACACS+ and
-// /readyz answers 503 with why (rd), since the caller has not opened the
-// listener. Each reason it is still waiting is said once.
+// coldPick is a copy cold start could start from, and where it came from.
+type coldPick struct {
+	p    *inventory.Published
+	from string // "the persisted copy", "the mirror's copy", "the service"
+}
+
+// coldCopies is port49d's first inventory with inventory.service (spec §10,
+// "Cold start"; Decided 5): its persisted copy and the mirror's, newer
+// first — the start's choice, then what it falls back to when the policy
+// refuses that (startCopy) — and with neither, the service, asked every
+// poll_interval until it answers. Only that last case waits, and while it
+// does port49d serves no TACACS+ and /readyz answers 503 with why (rd), since
+// the caller has not opened the listener. Each reason it is still waiting is
+// said once. It persists nothing: a copy is kept only once the policy and
+// the broker have accepted it (persistStart; final review I2).
 //
 // Newer is the later published_at. A tie keeps the persisted copy: it is
 // port49d's own, already on disk, so nothing is rewritten.
@@ -178,8 +188,8 @@ type coldCopy struct {
 // Every copy is opened against keys before any field of it is read. The
 // document's own bundle ID is never printed or trusted: the one in force is
 // the one port49d computes from its policy and the document's inventory.
-func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []ed25519.PublicKey,
-	c fetchClient, m *metrics.Metrics, rd *readiness) (*inventory.Published, string, error) {
+func coldCopies(ctx context.Context, svc *config.InventoryServiceConfig, keys []ed25519.PublicKey,
+	c fetchClient, m *metrics.Metrics, rd *readiness) ([]coldPick, error) {
 	copies := []coldCopy{{name: "the persisted copy", dir: svc.StateDir,
 		read: func() (*inventory.Published, error) { return readPersisted(svc.StateDir, keys) }}}
 	if svc.MirrorDir != "" {
@@ -232,32 +242,35 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
 		why[cp.name] = oneLine(err)
 		return nil
 	}
-	var best *inventory.Published
-	from := ""
-	// choose takes the newer of what judge made of cps, the earlier on a tie.
+	var picks []coldPick
+	// choose keeps what judge made of cps, newer first, the earlier on a tie.
 	choose := func(cps []coldCopy, again bool) {
 		for _, cp := range cps {
 			p := judge(cp, again)
-			if p == nil || (best != nil && !p.Doc.PublishedAt.After(best.Doc.PublishedAt)) {
+			if p == nil {
+				continue
+			}
+			if len(picks) == 0 || !p.Doc.PublishedAt.After(picks[0].p.Doc.PublishedAt) {
+				picks = append(picks, coldPick{p, cp.name})
 				continue
 			}
 			// Newer is later publication: a sequence starts again at 1
 			// after a service reset, a publication time does not
-			// (pre-flight minor 11).
-			if best != nil { // only the mirror's copy follows the persisted one
-				fmt.Fprintf(stderr, "port49d: inventory: the mirror's bundle %d, published %s, is published later "+
-					"than the persisted copy's bundle %d, published %s\n", p.Doc.Sequence,
-					p.Doc.PublishedAt.Format(time.RFC3339), best.Doc.Sequence, best.Doc.PublishedAt.Format(time.RFC3339))
-			}
-			best, from = p, cp.name
+			// (pre-flight minor 11). Only the mirror's copy follows the
+			// persisted one.
+			best := picks[0].p
+			fmt.Fprintf(stderr, "port49d: inventory: the mirror's bundle %d, published %s, is published later "+
+				"than the persisted copy's bundle %d, published %s\n", p.Doc.Sequence,
+				p.Doc.PublishedAt.Format(time.RFC3339), best.Doc.Sequence, best.Doc.PublishedAt.Format(time.RFC3339))
+			picks = append([]coldPick{{p, cp.name}}, picks...)
 		}
 	}
 	choose(copies, false)
 	if ctx.Err() != nil {
-		return nil, "", ctx.Err()
+		return nil, ctx.Err()
 	}
 	said := ""
-	for best == nil {
+	for len(picks) == 0 {
 		rd.waiting()
 		rctx, cancel := context.WithTimeout(ctx, requestTimeout)
 		raw, _, _, err := c.Bundle(rctx, "")
@@ -269,7 +282,7 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
 				oerr = publishedInFuture(p, coldNow())
 			}
 			if oerr == nil {
-				best, from = p, "the service"
+				picks = []coldPick{{p, "the service"}}
 				break
 			}
 			m.InventoryBundleRefused.Set(1)
@@ -281,7 +294,7 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
 			err = fmt.Errorf("its bundle is refused: %w", oerr)
 		}
 		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
+			return nil, ctx.Err()
 		}
 		if line := fmt.Sprintf("port49d: inventory: no bundle yet (persisted copy: %s; mirror: %s; service at %s: %s); "+
 			"TACACS+ is not served until one arrives, and /readyz answers 503 (spec §10, cold start)",
@@ -291,7 +304,7 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
 		}
 		select {
 		case <-ctx.Done():
-			return nil, "", ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(svc.PollInterval):
 		}
 		// A copy refused only for the clock is judged again, read afresh
@@ -300,27 +313,81 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
 		ahead = nil
 		choose(again, true)
 		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
+			return nil, ctx.Err()
 		}
-		if best != nil && !refusedOther && len(ahead) == 0 {
+		if len(picks) > 0 && !refusedOther && len(ahead) == 0 {
 			// Every refusal was of the clock, and the clock has caught up.
 			m.InventoryBundleRefused.Set(0)
 		}
 	}
-	if from == "the service" {
+	if picks[0].from == "the service" {
 		// The service sent the document now in force: whatever copy was
 		// refused on the way is behind it.
 		m.InventoryBundleRefused.Set(0)
 	}
-	if from != "the persisted copy" {
-		if err := persistBundle(svc.StateDir, best.Raw); err != nil {
-			m.InventoryPersistFailed.Set(1)
-			fmt.Fprintf(stderr, "port49d: inventory: state_dir %s: %s; a restart with the service down will "+
-				"need the mirror\n", svc.StateDir, oneLine(err))
-		}
+	return picks, nil
+}
+
+// startCopy is the copy the start serves (final review I2): the first of
+// picks, newest first, that the policy in force loads with (loadPolicy, the
+// start's own check), and, for the mirror's copy, that port49d's own
+// inventory.max_removed_percent allows against the persisted copy, as it
+// bounds a document the service sends. A copy passed over is said, with why,
+// and alarmed; the fetcher offers the service's document through the bounded
+// reload. Taking the newer copy blindly would exit on a policy that has not
+// yet caught up with the source of truth — the whole-fleet re-address — and,
+// had it been persisted, every restart after.
+//
+// With no copy the policy takes, the start fails on the last copy's
+// refusal; each before it is said.
+func startCopy(cfg config.Config, picks []coldPick, m *metrics.Metrics) (coldPick, error) {
+	pols := make([]*policy.Policy, len(picks))
+	errs := make([]error, len(picks))
+	for i, pk := range picks {
+		c := cfg
+		c.Inventory = pk.p.Inv
+		pols[i], errs[i] = loadPolicy(c, fmt.Sprintf("the inventory service's bundle %d", pk.p.Doc.Sequence))
 	}
+	for i, pk := range picks {
+		err := errs[i]
+		if err == nil && pk.from == "the mirror's copy" {
+			for j := i + 1; j < len(picks); j++ {
+				if picks[j].from == "the persisted copy" && errs[j] == nil {
+					err = bundle.CheckFrom(pols[j], pols[i], cfg.MaxRemovedPercent, "fix the source of truth")
+				}
+			}
+		}
+		if err == nil {
+			return pk, nil
+		}
+		if i == len(picks)-1 {
+			return coldPick{}, err
+		}
+		m.InventoryBundleRefused.Set(1)
+		fmt.Fprintf(stderr, "port49d: inventory: %s, bundle %d, is not taken: %s; trying %s, bundle %d\n", pk.from,
+			pk.p.Doc.Sequence, oneLine(quotesCut{err}), picks[i+1].from, picks[i+1].p.Doc.Sequence)
+	}
+	return coldPick{}, errors.New("port49d: inventory: no copy to start from") // picks is never empty
+}
+
+// persistStart keeps the copy the start serves as port49d's own, once the
+// policy and the broker have accepted it; the persisted copy is already
+// there. A failure is said and alarmed, and the reloader tries again at the
+// first confirmation (startDocument).
+func persistStart(svc *config.InventoryServiceConfig, pk coldPick, m *metrics.Metrics) {
+	if pk.from == "the persisted copy" {
+		return
+	}
+	if err := persistBundle(svc.StateDir, pk.p.Raw); err != nil {
+		m.InventoryPersistFailed.Set(1)
+		fmt.Fprintf(stderr, "port49d: inventory: state_dir %s: %s; a restart with the service down will "+
+			"need the mirror\n", svc.StateDir, oneLine(err))
+	}
+}
+
+// sayStart is the start's line for the copy it serves.
+func sayStart(svc *config.InventoryServiceConfig, pk coldPick) {
 	fmt.Fprintf(stderr, "port49d: inventory: starting from bundle %d (%s), published %s; the service at %s is "+
-		"asked every %s\n", best.Doc.Sequence, from, best.Doc.PublishedAt.Format(time.RFC3339), svc.URL,
+		"asked every %s\n", pk.p.Doc.Sequence, pk.from, pk.p.Doc.PublishedAt.Format(time.RFC3339), svc.URL,
 		svc.PollInterval)
-	return best, from, nil
 }
