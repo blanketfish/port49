@@ -8300,12 +8300,28 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `port49_inventory_file_refused` is 1. For a deliberate large removal, raise the bound in
   port49d.yaml and send `SIGHUP`, which re-reads it; then lower it again. A policy test naming a
   device the inventory no longer has fails `port49 policy test`, and never a reload.
+- **A reload reaches open connections.** A device an inventory or policy reload refuses, removes,
+  renames or moves to another `key_ref` loses its open connections at their next packet: reset,
+  with no reply and no strike, and one `unvalidated` record naming the device and key it was
+  admitted as, reason `device_unknown` (`port49_connection_events_total{event="admission_closed"}`).
+  Moving a device off a suspect key therefore stops that key on the device at once, not when its
+  single-connect connection ends. What a device does with the reset is unmeasured (spec §15 L29).
+- **Change the key groups and the inventory make-before-break.** Each file is loaded as its own
+  swap, policy first, with a refresh between. To re-address devices together with their CIDR
+  group, add the new group beside the old one, move the inventory, then drop the old group. Done
+  in one step, the bundle between the two swaps revokes the contexts of devices the final one
+  admits, and a whole-fleet re-address, where each file alone admits none, is refused at every
+  reload until a restart loads the two together. `port49 inventory diff --new-policy` fails a change that would stop half-applied.
 - **A policy reload is bounded too.** A policy whose `key_groups` would refuse admission to more
   than `inventory.max_removed_percent` of the devices admitted now is refused, naming them, and the
   policy in force keeps serving, with `port49_policy_file_refused` at 1; nobody is logged out.
   `port49 policy diff` fails on such an edit, and `port49 policy test` fails on any device
   admission refuses, so CI catches it first. `port49 explain` on a refused device says it is
   refused and why.
+- **port49d.yaml must be a regular file**, at start and at `SIGHUP`, and so must the inventory
+  file with no `broker:` block: a named pipe or a device there is refused rather than read. The
+  admin socket's path is taken over only from a socket nothing listens on; one port49d cannot dial
+  for any other reason, such as another user's, refuses the start by name.
 - **New config keys:** `inventory: {max_removed_percent: N}`; `retire_after: YYYY-MM-DD` on `accept`
   key versions (admits through that day UTC); `admin_socket: /run/port49/port49d.sock` (off by
   default).
@@ -8317,13 +8333,15 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   0 until devices reconnect, so the idle stragglers a retirement locks out are the last it counts.
   `port49 keys status`, which reads the decision log, is the authority before retiring a version;
   gate an alert on the metric on port49d's uptime (the example in spec §10, "Retirement is
-  enforced").
+  enforced"). A device a reload removes, refuses or moves to another `key_ref` drops out of the
+  count at that swap.
 - **The decision log:** `bundle` is now the bundle id (the policy file's hash and the inventory's,
   combined), not the policy file's hash; every validated record's `device` block carries `key_ref`
   and `key_version`; a new report event, `inventory_change`, records an address added to an existing
   device, a device's `key_ref` changing, a device newly admitted, and a device joining or leaving a
-  `security_log: true` scope. A new diagnosis,
-  `admission_refused`.
+  `security_log: true` scope. Two new diagnoses: `admission_refused`, a device the inventory names
+  and admission refuses, and `admission_changed`, an open connection whose device a reload renamed
+  or re-keyed.
 - **New commands:** `port49 keys status`, `port49 keys show`, `port49 keys diagnose` (needs
   `admin_socket`), `port49 inventory diff`; `port49 policy test --config` adds the key checks;
   `port49 policy replay --policy --inventory` verifies a redacted blob's records.
@@ -8378,5 +8396,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   inventory itself reloaded (Task 12); the remote-store items move to plan 7 (Task 21).
 - **Reason codes:** none added. `device_unknown`'s meaning is extended to a refused device on `mint`
   and `refresh`, and a diagnosis (`admission_refused`) and a report event (`inventory_change`) are
-  added, all in the spec first (Task 1).
+  added, all in the spec first (Task 1). The final fix wave extended `device_unknown` to an open
+  connection whose admission a reload withdrew and added the diagnosis `admission_changed`, spec
+  first too.
 - **The pre-flight review:** every finding is resolved (the section at the top); none is left.

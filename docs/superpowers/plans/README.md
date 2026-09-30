@@ -34,8 +34,10 @@ Task 19, run 2026-09-29, closed L9, L10 and L12; L25 and the new L26c stay open 
 built, below). **6a written 2026-09-30, revised the same day** after its pre-flight review
 (`2026-09-30-06a-bundle-in-process.md`, twenty-two tasks: one docs, one lab, eighteen code, one
 lab, one lab-and-docs; plan 6 is split at the seam below, and three owner decisions are listed at
-its top), and **executed 2026-09-30** on `feature/bundle-in-process`, reviewed per task. It closed L27 and L28 and opened L29 (Plan 6a — As built,
-below); not merged yet. 6b and 7–13 not yet.
+its top), and **executed 2026-09-30** on `feature/bundle-in-process`, reviewed per task and
+whole-branch, with a final fix wave. It closed L27 and L28 and opened L29 and L30 (Plan 6a — As
+built, below); **not merged yet** <!-- at merge: replace "not merged yet" with "merged <date> (PR #N)" -->.
+6b and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -928,7 +930,8 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
 **Split into 6a and 6b (2026-09-30).** The seam is the bundle's source:
 
 - **Plan 6a — `2026-09-30-06a-bundle-in-process.md`. Written 2026-09-30; executed 2026-09-30
-  (as built, below), not merged yet.** Everything that
+  (as built, below); not merged yet.** <!-- at merge: replace "not merged yet" with "merged <date> (PR #N)" -->
+  Everything that
   consumes a bundle, with the bundle built in port49d from `inventory_file` and
   `broker.policy_file`: `bundle.ID` (a content hash) and `bundle.Parse`; the loaded policy as the
   one pointer that carries admission, devices, quarantine and policy (new decision 28); key groups
@@ -1006,6 +1009,29 @@ text, task by task:
   policy's redaction.
 - **Task 20** took **branch H** (below). A packet past `retire_after` on an open connection is
   closed as a first-packet miss is, with a strike and a reset.
+- **Final review and fix wave** (`final-review.md`, `fixwave-report.md` beside the ledger).
+  - **I1: a reload ends an open connection whose admission it withdrew.** Every packet looks its
+    source up again in the admission in force, beside the quarantine and `retire_after` checks.
+    A device refused, removed, renamed or moved to another `key_ref` is reset at its next packet,
+    with no reply and no strike, and one `unvalidated` record, reason `device_unknown`, diagnosis
+    `admission_refused`, `unadmitted_source` or the new `admission_changed`
+    (`port49_connection_events_total{event="admission_closed"}`). Spec §10's "in-flight
+    connections complete against the snapshot they began with" was amended as Task 14 amended
+    Decided 7: a busy single-connect connection has no end, and a device moved off a compromised
+    key kept speaking it. How a device takes the reset is L29's, which gained the reload case.
+  - port49d.yaml, at start and at `SIGHUP`, and the inventory at start with no broker, are read as
+    regular files only, non-blocking and bounded (`config.ReadRegular`): a named pipe at either
+    path hung the start, or blocked the reloader and with it shutdown.
+  - The admin socket is stale only when its dial is refused (`ECONNREFUSED`); any other dial
+    error, such as another uid's socket (`EACCES`), refuses the start and removes nothing.
+  - A swap forgets the `port49_key_version_devices` marks, and the packets held for
+    `keys diagnose`, of devices the new bundle no longer admits under the `key_ref` they were seen
+    on (a re-keyed device's held packet is kept).
+  - An inventory fault names the file once.
+  - Tests added: reverting to the inventory in force clears `port49_inventory_file_refused`; the
+    refused device's start line, admitted count and gauge; both session-side replay guards (each
+    fails with its guard removed); `policy diff`'s 20-line cap; a key group's bad `cidr` printed
+    by position. `TestProjectionLoadTime` skips under `-race`, as the engine's timed tests do.
 
 **Owner decisions, as ruled** (the anti-escalation defaults; Ryan may override): 1, a key-group tie
 that exists only against the inventory refuses that device alone; 2, `keys diagnose` over a 0600
@@ -1022,16 +1048,23 @@ times on all four (`L28-*.md`). One record per strike; attempts refused inside a
 only the `held_refused` count. Accepted in review: a strike from a device's address resets that
 address's connections for up to 5 s (denial of service, not escalation; spec §10 says so).
 
-**Rows:** L27 and L28 closed 2026-09-30. L29 opened: what a device does when an open connection
-passes its key version's `retire_after`, which needs a run across midnight UTC; split from L28,
-which measured first packets only.
+**Rows:** L27 and L28 closed 2026-09-30. L29 opened: what a device does when port49d resets an open
+connection, at its key version's `retire_after` (a run across midnight UTC) or after a reload
+withdrew its admission (a `SIGHUP` between two commands); split from L28, which measured first
+packets only. L30 opened in the fix wave for L27's unmeasured parts: a non-null pagination `next`,
+and Nautobot 3.x. Both are plan 6b's.
 
 **Carried, for later plans:**
 
 - **Plan 6b:** the object-store mirror, the persisted last good bundle and cold-start readiness;
   the bundle document and its integer sequence; owner decision 3's policy-hash mismatch notice and
-  alarm; L27's gaps, a non-null pagination `next` and Nautobot 3.x (Docker Hub has a 3.2 line),
-  and its findings: Nautobot 1.6's `Api-Version` is `1.2`, so detect by `/api/status/`; Nautobot
+  alarm; `SIGHUP` trying the combined bundle when both files changed, so a whole-fleet re-address
+  does not deadlock and an intermediate bundle revokes nothing the final one admits (final review
+  m7; until then the operator notes give the make-before-break order); **L29** (6b is the next
+  plan with a device lab run, spec §14's quarantine through a sync, and its syncs make the reload
+  case routine), and with it why the C8000V's liveness probe reached port49d only at its second or
+  third attempt in L28 (Task 21 review m4); **L30**, L27's gaps: a non-null pagination `next` and
+  Nautobot 3.x (Docker Hub has a 3.2 line); and L27's findings: Nautobot 1.6's `Api-Version` is `1.2`, so detect by `/api/status/`; Nautobot
   2.x REST at default depth names no related object, so read `?depth=1` or GraphQL; Nautobot
   delivers webhooks out of change order, so order by the body's `timestamp`.
 - **Plan 7:** go-dark on a store outage, the warm context cache, and plan 4b's remote-store items.
@@ -1046,7 +1079,14 @@ which measured first packets only.
   refresh's blob comparison (one blob read and two decodes per live context, which a per-pass cache
   would cut; Task 11, M2).
 - **Later, unassigned:** seeding `port49_key_version_devices` from the decision log at start, so a
-  restart does not blank it (spec §10).
+  restart does not blank it (spec §10). The offline tools (`port49 policy test`, `policy diff`,
+  `inventory diff`) still read the inventory with a plain read: a named pipe there hangs the tool, not
+  port49d.
+- **Where the final review's carries went:** Task 12 m1 (an open connection kept its admission),
+  fixed as I1; Task 12 m2 (the revert test), Task 10 (the gauge and start lines), Task 19 (two
+  replay guards) and Task 17 (the cap), tested; Task 12 m3 (`SIGHUP`'s unfenced read) and Task
+  11a (`config.Load`'s pre-fence read), fixed; Task 16's stale detection, fixed; Task 16's
+  non-root CI, plan 12 (above); final review m6, m9 and m10, fixed; m7, plan 6b (above); m8, L30.
 
 ## Plan 7 — Broker in full (§19 step 7)
 

@@ -4012,20 +4012,19 @@ pin refuses that device alone (below). A secret that is all lowercase hex and 64
 fewer matches the shape and cannot be told from a name; the shape narrows the mistake, it does not
 close it.
 
-**A device is refused on its own, never the daemon.** A device no group admits, one two groups
-tie on (below), one assigned a `key_ref` port49d.yaml defines no key for, one pinning a `key_ref`
-that is not a name (above; the pin is not printed), and one whose
-`transport` port49d does not serve (below), are each refused
-admission: named at start and at every reload that loads, counted in
-`port49_devices_admission_refused`, and every packet from them closed after the header, with
-nothing decrypted, no reply, no strike, and the report bucket `admission_refused` (below). The
-rest of the fleet loads. The broker refuses to mint for a refused device (`device_unknown`,
-§5.7), and a policy refresh revokes its live contexts: it cannot reach port49d, so a token for
-it would only be a login that silently falls to its local method (the close is a quarantine's,
-measured on four images: `tests/lab/results/quarantine-*.md`). One case refuses the start
-rather than a device: a bundle that admits none of a non-empty inventory — key groups declared in
-neither file, say — which no device caused. The same bundle at a reload, of either file, is
-refused whatever `inventory.max_removed_percent` says (below). port49d with no `broker:` block has no policy and
+**A device is refused on its own, never the daemon.** A device no group admits, one two groups tie
+on (below), one assigned a `key_ref` port49d.yaml defines no key for, one pinning a `key_ref` that
+is not a name (above; the pin is not printed), and one whose `transport` port49d does not serve
+(below), are each refused admission: named at start and at every reload that loads, counted in
+`port49_devices_admission_refused`, and every packet from them closed after the header, with nothing
+decrypted, no reply, no strike, and the report bucket `admission_refused` (below). The rest of the
+fleet loads. The broker refuses to mint for a refused device (`device_unknown`, §5.7), and a policy
+refresh revokes its live contexts: it cannot reach port49d, so a token for it would only be a login
+that silently falls to its local method (the close is a quarantine's, measured on four images:
+`tests/lab/results/quarantine-*.md`). One case refuses the start rather than a device: a bundle that
+admits none of a non-empty inventory — key groups declared in neither file, say — which no device
+caused. The same bundle at a reload, of either file, is refused whatever
+`inventory.max_removed_percent` says (below). port49d with no `broker:` block has no policy and
 keeps plan 1's behaviour: the inventory file's key groups, read at start, and a start refused by
 either fault.
 
@@ -4259,20 +4258,20 @@ Two properties fall out of counting attempts per source:
 - **An unvalidated body MUST NOT be logged.** It is undecodable and attacker-controlled.
   Record the cleartext header fields, the source, and a hash of the body — never its content.
 
-**A key miss is closed at once, with a reset, and so is a source inside its backoff.** A
-connection whose packet no accepted version validates — a first packet, or one past its
-version's `retire_after` (above) — gets one `unvalidated` record, one strike against its source,
-and a TCP reset at once, with no reply (`port49_connection_events_total{event="key_miss_closed"}`).
-A strike earns the source a backoff, by default 100 ms doubling to 5 s
-(`limits.malformed_backoff_base`, `limits.malformed_backoff_max`); a new connection from it inside that
-backoff is refused at Accept with a reset, and leaves no record, only
-`port49_connection_events_total{event="held_refused"}`, which carries no device label. So the log
-holds one record per strike, and attempts refused inside a backoff are counted, not recorded. The
-refusal follows any strike, not a key miss alone: a `malformed_after_validation`, `not_tacacs` or
-unadmitted source's strike refuses it the same way. **A strike from a device's address resets
-every connection from that address for up to 5 s** (the default ceiling): a second AAA client on the same address still
-on the old key mid-rotation, or a shell on the device, strikes for the device, and the device's
-own connections inside that backoff are refused too.
+**A key miss is closed at once, with a reset, and so is a source inside its backoff.** A connection
+whose packet no accepted version validates — a first packet, or one past its version's
+`retire_after` (above) — gets one `unvalidated` record, one strike against its source, and a TCP
+reset at once, with no reply (`port49_connection_events_total{event="key_miss_closed"}`). A strike
+earns the source a backoff, by default 100 ms doubling to 5 s (`limits.malformed_backoff_base`,
+`limits.malformed_backoff_max`); a new connection from it inside that backoff is refused at Accept
+with a reset, and leaves no record, only `port49_connection_events_total{event="held_refused"}`,
+which carries no device label. So the log holds one record per strike, and attempts refused inside a
+backoff are counted, not recorded. The refusal follows any strike, not a key miss alone: a
+`malformed_after_validation`, `not_tacacs` or unadmitted source's strike refuses it the same way.
+**A strike from a device's address resets every connection from that address for up to 5 s** (the
+default ceiling): a second AAA client on the same address still on the old key mid-rotation, or a
+shell on the device, strikes for the device, and the device's own connections inside that backoff
+are refused too.
 
 This replaces the first build's hold, measured on vEOS-lab 4.31.2F, Nexus 9300v 10.4(2)F,
 Catalyst 8000V 17.13.01a and vJunos-router 23.4R2-S2.1 on 2026-09-30 (L28): holding a key miss
@@ -5905,10 +5904,10 @@ Beyond those already listed in the design document's §14:
 
 **Inventory and capability**
 
-- **Snapshot refresh**: atomic swap; an open connection whose device the new snapshot
-  refuses, removes, renames or re-keys is reset at its next packet with no reply and no strike,
-  and one whose device it leaves as it was is untouched; a malformed, empty, or over-shrinking snapshot is rejected and the previous one
-  retained.
+- **Snapshot refresh**: atomic swap; an open connection whose device the new snapshot refuses,
+  removes, renames or re-keys is reset at its next packet with no reply and no strike, and one whose
+  device it leaves as it was is untouched; a malformed, empty, or over-shrinking snapshot is
+  rejected and the previous one retained.
 - **Snapshot never expires**: a daemon with a stale snapshot and an unreachable inventory
   service continues authenticating, alarming on age.
 - **Cold start**: a daemon with no snapshot stays unready while existing replicas keep
@@ -7626,12 +7625,12 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   | Nautobot 2.4.43 | `/api/status/` `nautobot-version`; `Api-Version: 2.4` | `role` (`/api/extras/roles/`), with `location`; REST at default depth nests every related object as `{id, object_type, url}`, no name, and `?depth=1` inlines them | `devices(name: "…") { … role { name } location { name } … _custom_field_data … }` (no `slug`) | yes, 3 of 3 |
 
   So the version to pick a profile by is `/api/status/`, never `Api-Version` alone. REST paginates
-  with `count`, `next`, `previous` and `results` on all four. Webhooks carry the change in the
-  body; NetBox 4.7 drops `model`, `username` and `request_id` for `object_type` and `request`.
-  Delivery order is not change order on Nautobot (both versions delivered `deleted` first in this
-  run), so 6b orders by the body's `timestamp`, never by arrival. *Unmeasured, split to L30 (owned by
-  plan 6b):* a non-null `next` (each run held one device when it paged), and Nautobot 3.x (Docker
-  Hub carries a 3.2 line the row does not name).
+  with `count`, `next`, `previous` and `results` on all four. Webhooks carry the change in the body;
+  NetBox 4.7 drops `model`, `username` and `request_id` for `object_type` and `request`. Delivery
+  order is not change order on Nautobot (both versions delivered `deleted` first in this run), so 6b
+  orders by the body's `timestamp`, never by arrival. *Unmeasured, split to L30 (owned by plan 6b):*
+  a non-null `next` (each run held one device when it paged), and Nautobot 3.x (Docker Hub carries a
+  3.2 line the row does not name).
 - **L28** — added by plan 6a and measured 2026-09-30 on vEOS-lab 4.31.2F, Nexus 9300v 10.4(2)F,
   Catalyst 8000V 17.13.01a and vJunos-router 23.4R2-S2.1 (`tests/lab/results/L28-arista_eos.md`,
   `L28-cisco_nxos.md`, `L28-cisco_iosxe.md`, `L28-juniper_vjunos-router.md`;
