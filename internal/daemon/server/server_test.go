@@ -1309,3 +1309,20 @@ func TestAKeyMissIsClosedAtOnceAndAHeldSourceRefusedAtAccept(t *testing.T) {
 		t.Fatalf("held_refused = %v", n)
 	}
 }
+
+// L28 branch H on IOS-XE: the C8000V ignores a FIN from the server and waits
+// out its own 5 s timeout, then falls to local only after it; a reset it
+// acts on at once, as it does on a quarantine's close
+// (tests/lab/results/L28-cisco_iosxe.md). So a key miss is closed with a
+// reset, whose body port49d has read.
+func TestAKeyMissIsClosedWithAReset(t *testing.T) {
+	log := &syncBuffer{}
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) { d.Limits = slowBackoff() })
+	c := dial(t, ts.addr, []byte("wrong"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want the key miss closed with a reset, got %v", err)
+	}
+}

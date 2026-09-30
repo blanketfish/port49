@@ -112,6 +112,15 @@ func (s *conn) quarantined() bool {
 // behind it. event is the ConnectionEvents label: callers pass a diagnosis
 // distinct from "malformed_backoff" when the strike isn't itself a malformed
 // packet (an unadmitted source), so the two are distinguishable in metrics.
+// reset makes c's close a TCP reset rather than a FIN. The C8000V ignores a
+// server's FIN and waits out its own timeout before it falls to local; a
+// reset it acts on at once (tests/lab/results/L28-cisco_iosxe.md).
+func reset(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetLinger(0)
+	}
+}
+
 func (s *conn) backoff(ctx context.Context, event string) {
 	d := s.d.Limits.Malformed(s.src)
 	s.d.Metrics.ConnectionEvents.WithLabelValues(event).Inc()
@@ -264,12 +273,13 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 			// A retired version identifies the sender in the record and nothing
 			// more: no admission, no reply. The strike is counted, and the next
 			// connection inside its backoff is refused at Accept; this one is
-			// closed at once, never held silent (L28 branch H).
+			// closed at once with a reset, never held silent (L28 branch H).
 			if s.d.Held != nil {
 				s.d.Held.Put(s.dev.Device.Name, s.src, h, obf, s.d.Now())
 			}
 			s.unvalidated(h, obf, r.Diagnosis, r.Version)
 			s.d.Limits.Malformed(s.src)
+			reset(s.c)
 			s.d.Metrics.ConnectionEvents.WithLabelValues("key_miss_closed").Inc()
 			return nil, false
 		}

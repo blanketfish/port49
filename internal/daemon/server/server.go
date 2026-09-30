@@ -117,6 +117,7 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		if d.Limits.Holding(src) {
 			release()
 			d.Metrics.ConnectionEvents.WithLabelValues("held_refused").Inc()
+			reset(c)
 			c.Close()
 			continue
 		}
