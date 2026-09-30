@@ -37,6 +37,8 @@ const usage = `usage:
   port49 policy test --policy FILE --inventory FILE [--config PORT49D_YAML]
   port49 policy replay [--line N] LOGFILE|-
   port49 policy diff --old FILE --new FILE --inventory FILE
+  port49 inventory diff --policy FILE [--new-policy FILE] [--max-removed-percent N | --config PORT49D_YAML]
+                        OLD_INVENTORY NEW_INVENTORY
   port49 access review --policy FILE --inventory FILE --subject NAME
   port49 grants remove --policy FILE --inventory FILE --subject NAME [--write | --pr [--remote R] [--base B]]
   port49 platform list [--set VERSION | --policy FILE --inventory FILE]
@@ -70,6 +72,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return explainCmd(args[1:], stdout, stderr)
 	case "policy":
 		return policyCmd(args[1:], stdout, stderr)
+	case "inventory":
+		return inventoryCmd(args[1:], stdout, stderr)
 	case "access":
 		if len(args) > 1 && args[1] == "review" {
 			return accessReview(args[2:], stdout, stderr)

@@ -5035,8 +5035,13 @@ lowercase hex and 64 characters or fewer passes the shape.
 prints what a change to the inventory does to the bundle: devices added, removed and changed,
 addresses added to existing devices, `key_ref` and admission changes, and every scope membership
 change, the `security_log` ones marked — the review artifact §10 requires. It exits 1 when port49d
-would refuse the new inventory (empty, a collision, or more removed than
-`--max-removed-percent`, default 10).
+would refuse the new inventory (empty, a collision, admitting no device, or more removed or newly
+refused than `--max-removed-percent`, default 10). `--config <port49d.yaml>` reads that bound
+and the `key_ref`s the file defines instead, no secret read, so a device assigned an undefined
+key is refused as port49d refuses it. With `--new-policy` naming a different policy, port49d runs
+two bounded reloads; the diff says for each order whether both are taken, and exits 1 only when
+neither order is. An inventory decode error is printed as its line and a fixed category, and a
+bad address or CIDR by its position, never its text.
 
 **`port49 policy test --config <port49d.yaml>`** adds the key checks §10 requires of CI: it fails
 on a key group naming a `key_ref` the file does not define, and on a device assigned one. It
