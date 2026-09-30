@@ -59,7 +59,29 @@ const (
 	// secret list would be worse than dropping it: a prefix that cannot match
 	// still reads as coverage.
 	TokenPrefix = "p49_"
+
+	// RotationKey is the second shared secret, published like Key: the one
+	// L28 gives a device to carry it through a key rotation
+	// (tests/lab/l28_test.go). PORT49_L28_NEW_KEY overrides it.
+	RotationKey = "l28-rotated-lab-key"
+
+	// RotationCapture begins the name of every capture taken after a device
+	// was given RotationKey: its bodies are obfuscated under that key, not
+	// Key, and redacted under it (CaptureKey).
+	RotationCapture = "L28-rotation-"
 )
+
+// CaptureKey is the shared secret the capture named name (a base name,
+// `L28-rotation-arista_eos.pcap`) was taken under, or "" for Key.
+func CaptureKey(name string) string {
+	if !strings.HasPrefix(name, RotationCapture) {
+		return ""
+	}
+	if k := os.Getenv("PORT49_L28_NEW_KEY"); k != "" {
+		return k
+	}
+	return RotationKey
+}
 
 // SeedToken is one line of the seed-token file port49d writes at start, named
 // by `lab.seed_token_file`. Enable is empty unless the seed asked for an enable

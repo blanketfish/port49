@@ -331,7 +331,7 @@ func writeEvidence() error {
 	if err != nil {
 		return err
 	}
-	res, err := labpcap.RedactDir(in, out, labpcap.Options{Key: key, Secrets: secrets, Subnet: subnet})
+	res, err := labpcap.RedactDir(in, out, labpcap.Options{Key: key, KeyFor: labcreds.CaptureKey, Secrets: secrets, Subnet: subnet})
 	if err != nil {
 		return fmt.Errorf("evidence: %w", err)
 	}
@@ -1892,8 +1892,12 @@ func (l *lab) captureLine(t *testing.T) string {
 		line += fmt.Sprintf(" — %d packets to or from the device, countable with "+
 			"`tcpdump -r %s -n 'net %s' | wc -l`.", device, l.evidencePath, labSubnet)
 	}
+	key := "the lab key (`tests/lab/README.md`)"
+	if labcreds.CaptureKey(filepath.Base(l.evidencePath)) != "" {
+		key = "the rotation key (`labcreds.RotationKey`, or `PORT49_L28_NEW_KEY`)"
+	}
 	return line + " A redacted copy of this run's capture: credential bytes overwritten with `x`, " +
-		"everything else byte-identical, decodable with the lab key (`tests/lab/README.md`)."
+		"everything else byte-identical, decodable with " + key + "."
 }
 
 // withAdminCLI runs fn against a break-glass CLI with port49d **stopped**, and

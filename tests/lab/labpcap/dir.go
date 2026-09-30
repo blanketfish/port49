@@ -39,7 +39,13 @@ func RedactDir(inDir, outDir string, opt Options) ([]FileResult, error) {
 	out := make([]FileResult, 0, len(names))
 	for _, in := range names {
 		r := FileResult{Name: filepath.Base(in), In: in, Out: filepath.Join(outDir, filepath.Base(in))}
-		r.Stats, r.Err = redactOne(in, r.Out, opt)
+		o := opt
+		if opt.KeyFor != nil {
+			if k := opt.KeyFor(r.Name); k != "" {
+				o.Key = k
+			}
+		}
+		r.Stats, r.Err = redactOne(in, r.Out, o)
 		out = append(out, r)
 	}
 	return out, nil
