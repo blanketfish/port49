@@ -1,13 +1,10 @@
 # The inventory spec §11's example runs against (policy_test's corpus). Spec §11
 # names leaf-01 and srx-fw-04; the rest are there to be outside a scope, or to
-# make the srx_unpatched report say something. §11's two key groups are here
-# because key groups live in the inventory file until plan 6.
+# make the srx_unpatched report say something. §11's key groups are in the
+# policy, as spec §10 has them.
 devices:
   - {name: leaf-01,     platform: arista_eos,    addresses: [10.1.1.1], attributes: {site: dc1, role: leaf}}
   - {name: campus-sw-7, platform: arista_eos,    addresses: [10.1.2.7], attributes: {site: campus}}
   - {name: srx-fw-04,   platform: juniper_junos, addresses: [10.1.5.4], attributes: {site: edge, os_version: 21.4R3-S4}}
   - {name: srx-fw-05,   platform: juniper_junos, addresses: [10.1.5.5], attributes: {site: edge, os_version: 22.2R1}}
   - {name: srx-fw-22,   platform: juniper_junos, addresses: [10.1.5.22], attributes: {site: edge, os_version: 21.4X75-D40}}
-key_groups:
-  - {match: {cidr: 10.0.0.0/8},       key_ref: prod_key}
-  - {match: {attributes: {env: lab}}, key_ref: lab_key}
