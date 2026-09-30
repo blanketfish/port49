@@ -252,10 +252,13 @@ func (s *conn) serve(ctx context.Context) {
 
 // deobfuscate turns the packet body into cleartext. The first packet decides
 // which key version this connection speaks; every later packet is held to that
-// one, so a device cannot walk the keyring packet by packet.
+// one, so a device cannot walk the keyring packet by packet. Each packet is
+// judged at its own time: a connection opened before its version's
+// retire_after is refused at the first packet past it, so holding a
+// connection open never extends a key's life.
 func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]byte, bool) {
 	if s.version == 0 {
-		r := s.keys.Resolve(h, obf)
+		r := s.keys.Resolve(h, obf, s.d.Now())
 		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(r.Version), string(r.Diagnosis)).Inc()
 		if r.Diagnosis != keyring.DiagValidated {
 			// A retired version identifies the sender in the record and nothing
@@ -265,10 +268,20 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 			return nil, false
 		}
 		s.version = r.Version
+		if s.d.KeySeen != nil {
+			s.d.KeySeen(s.dev.Device.Name, s.keys.Ref, r.Version)
+		}
 		if h.Flags&wire.FlagSingleConnect != 0 {
 			s.single = true
 		}
 		return r.Body, true
+	}
+	if s.pastDate(s.d.Now()) {
+		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(s.version),
+			string(keyring.DiagMatchesRetired)).Inc()
+		s.unvalidated(h, obf, keyring.DiagMatchesRetired, s.version)
+		s.backoff(ctx, "malformed_backoff")
+		return nil, false
 	}
 	body := wire.Obfuscate(h, s.keys.Secret(s.version), obf)
 	if !keyring.Validates(h, body) {
@@ -277,6 +290,17 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		return nil, false
 	}
 	return body, true
+}
+
+// pastDate reports whether the version this connection validated under has
+// been retired since, by its retire_after passing.
+func (s *conn) pastDate(now time.Time) bool {
+	for i, v := range s.keys.Versions {
+		if v.Number == s.version {
+			return s.keys.State(i, now) == "retired"
+		}
+	}
+	return true
 }
 
 // write sends one reply, obfuscated with the version that validated the request.

@@ -3,6 +3,7 @@ package metrics
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -152,4 +153,27 @@ func isLowercaseSnakeCase(s string) bool {
 	}
 	// Only lowercase, digits, and underscores allowed.
 	return !strings.ContainsAny(s, " \t\n")
+}
+
+func TestKeySeriesAreSampledAtScrape(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	m := New(reg)
+	now := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	m.WatchKeys(func() []KeySample {
+		return []KeySample{{KeyRef: "prod_key", Version: 3, Devices: 8},
+			{KeyRef: "prod_key", Version: 2, Devices: 1, RetireAt: now.Add(48 * time.Hour)}}
+	}, func() time.Time { return now })
+	want := `
+# HELP port49_key_retirement_seconds Seconds until a key version's retire_after passes; negative once it has.
+# TYPE port49_key_retirement_seconds gauge
+port49_key_retirement_seconds{key_ref="prod_key",version="2"} 172800
+# HELP port49_key_version_devices Devices whose latest validated connection since start used this key version.
+# TYPE port49_key_version_devices gauge
+port49_key_version_devices{key_ref="prod_key",version="2"} 1
+port49_key_version_devices{key_ref="prod_key",version="3"} 8
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), "port49_key_version_devices",
+		"port49_key_retirement_seconds"); err != nil {
+		t.Fatal(err)
+	}
 }

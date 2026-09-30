@@ -43,6 +43,9 @@ type Deps struct {
 	// expiry can start or end a quarantine while a connection is open.
 	Quarantined func(device string, now time.Time) (cause string, ok bool)
 	Keys        map[string]keyring.Set
+	// KeySeen marks the key version each admitted device's connection
+	// validated under (keyring.Seen.Mark); nil marks nothing.
+	KeySeen     func(device, keyRef string, version int)
 	Authen      *authen.Handler
 	Author      *author.Handler
 	Acct        *acct.Handler

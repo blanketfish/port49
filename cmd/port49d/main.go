@@ -41,6 +41,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/server"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
@@ -602,7 +603,19 @@ func run(parent context.Context, cfgPath string) error {
 		admit = liveAdmission{live}
 		m.CountAdmissionRefused(func() int { return len(live.Load().AdmissionRefusals()) })
 	}
-	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: cfg.Keyring(),
+	keySets := cfg.Keyring()
+	seen := &keyring.Seen{}
+	m.WatchKeys(func() []metrics.KeySample {
+		var out []metrics.KeySample
+		for _, ref := range cfg.KeyRefs() {
+			for _, v := range keySets[ref].Versions {
+				out = append(out, metrics.KeySample{KeyRef: ref, Version: v.Number, Devices: seen.Count(ref, v.Number),
+					RetireAt: v.RetireAt})
+			}
+		}
+		return out
+	}, time.Now)
+	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keySets, KeySeen: seen.Mark,
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.

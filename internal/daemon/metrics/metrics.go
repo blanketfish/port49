@@ -3,7 +3,9 @@
 package metrics
 
 import (
+	"strconv"
 	"sync/atomic"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -143,6 +145,53 @@ type Metrics struct {
 	// label is the kind only.
 	InventoryChanges *prometheus.CounterVec
 	inventoryAge     atomic.Pointer[func() float64]
+	keys             atomic.Pointer[keyWatch]
+}
+
+// KeySample is one key version at a scrape: how many devices' latest
+// validated connection used it, and when it retires (zero: never).
+type KeySample struct {
+	KeyRef   string
+	Version  int
+	Devices  int
+	RetireAt time.Time
+}
+
+type keyWatch struct {
+	sample func() []KeySample
+	now    func() time.Time
+}
+
+// keyCollector reports port49_key_version_devices{key_ref,version} and
+// port49_key_retirement_seconds{key_ref,version} at each scrape (spec §10:
+// "alarm severity escalates as retire_after approaches while devices still
+// present the version"). Labels are the key_ref and the version only; the
+// devices are named by `port49 keys status`.
+type keyCollector struct {
+	m                *Metrics
+	devices, retires *prometheus.Desc
+}
+
+func (k keyCollector) Describe(ch chan<- *prometheus.Desc) { ch <- k.devices; ch <- k.retires }
+
+func (k keyCollector) Collect(ch chan<- prometheus.Metric) {
+	w := k.m.keys.Load()
+	if w == nil {
+		return
+	}
+	now := w.now()
+	for _, s := range w.sample() {
+		v := strconv.Itoa(s.Version)
+		ch <- prometheus.MustNewConstMetric(k.devices, prometheus.GaugeValue, float64(s.Devices), s.KeyRef, v)
+		if !s.RetireAt.IsZero() {
+			ch <- prometheus.MustNewConstMetric(k.retires, prometheus.GaugeValue, s.RetireAt.Sub(now).Seconds(), s.KeyRef, v)
+		}
+	}
+}
+
+// WatchKeys sets what the key series report at each scrape.
+func (m *Metrics) WatchKeys(sample func() []KeySample, now func() time.Time) {
+	m.keys.Store(&keyWatch{sample: sample, now: now})
 }
 
 // WatchInventoryAge sets what port49_inventory_snapshot_age_seconds reports.
@@ -241,5 +290,10 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
 		m.InventoryChanges)
+	reg.MustRegister(keyCollector{m: m,
+		devices: prometheus.NewDesc("port49_key_version_devices",
+			"Devices whose latest validated connection since start used this key version.", []string{"key_ref", "version"}, nil),
+		retires: prometheus.NewDesc("port49_key_retirement_seconds",
+			"Seconds until a key version's retire_after passes; negative once it has.", []string{"key_ref", "version"}, nil)})
 	return m
 }

@@ -1217,3 +1217,59 @@ func TestARefusedEntryIsNeverValidatedUnderItsKey(t *testing.T) {
 		t.Fatalf("a refused device's packet was validated: %s", log.String())
 	}
 }
+
+// A validated connection marks its device's key version, and an accept
+// version past its date is refused as a retired one is.
+func TestKeyVersionsAreMarkedAndADatePastRefuses(t *testing.T) {
+	log := &syncBuffer{}
+	var seen keyring.Seen
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
+		d.Keys = map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
+			{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), RetireAt: time.Now().Add(-time.Hour)}}}}
+		d.KeySeen = seen.Mark
+	})
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	c.recv(t)
+	if !waitFor(t, func() bool { return seen.Count("prod_key", 2) == 1 }) {
+		t.Fatal("the validated version was not marked")
+	}
+	c = dial(t, ts.addr, []byte("k1"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"matches_retired"`) }) {
+		t.Fatalf("a version past its date admitted: %s", log.String())
+	}
+}
+
+// A single-connection opened under an accept version before its date does not
+// outlive the date: the first packet after it is refused as a retired one is,
+// with no reply, so a long-held connection never extends a key's life.
+func TestAnOpenConnectionDoesNotOutliveItsVersionsDate(t *testing.T) {
+	log := &syncBuffer{}
+	at := time.Now().Add(time.Hour)
+	var clock atomic.Int64
+	clock.Store(at.Add(-time.Minute).UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()) }
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
+		d.Keys = map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
+			{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), RetireAt: at}}}}
+		d.Now = now
+	})
+	c := dial(t, ts.addr, []byte("k1"))
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode()
+	c.send(t, wire.TypeAuthen, start, wire.FlagSingleConnect)
+	c.recv(t)
+	clock.Store(at.UnixNano())
+	c.sid, c.seq = c.sid+1, 1
+	c.send(t, wire.TypeAuthen, start, wire.FlagSingleConnect)
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"matches_retired"`) }) {
+		t.Fatalf("a connection outlived its version's date: %s", log.String())
+	}
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if n, err := c.conn.Read(make([]byte, 1)); err == nil {
+		t.Fatalf("a reply (%d bytes) under a version past its date", n)
+	}
+}

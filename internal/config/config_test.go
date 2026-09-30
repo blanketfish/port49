@@ -457,7 +457,8 @@ func TestEnableUsernameMovedToThePolicyFile(t *testing.T) {
 	invPath := write(t, "inventory.yaml", inv)
 	body := fmt.Sprintf(sample, invPath) + "\nplatforms: {cisco_iosxe: {enable_username: principal}}\n"
 	c, err := Load(write(t, "c.yaml", body))
-	if err != nil || len(c.Notices) != 1 ||
+	// The sample's accept version has no retire_after, which is a notice of its own.
+	if err != nil || len(c.Notices) != 2 ||
 		!strings.Contains(c.Notices[0], "platforms.cisco_iosxe.enable_username moved to the policy file") {
 		t.Fatalf("principal: %q %v", c.Notices, err)
 	}
@@ -926,5 +927,44 @@ func TestInventoryBound(t *testing.T) {
 		if _, err := InventoryBound([]byte(body)); err == nil {
 			t.Fatalf("%q read", body)
 		}
+	}
+}
+
+// retire_after is a date, admitting through that day UTC (plan 6a Decided 7),
+// on accept versions only; a passed one and a missing one are said at start.
+func TestRetireAfter(t *testing.T) {
+	setKeyEnv(t)
+	i := write(t, "inv.yaml", inv)
+	body := strings.Replace(fmt.Sprintf(sample, i), "accept:  [{version: 2, secret_env: T_PROD_V2}]",
+		"accept:  [{version: 2, secret_env: T_PROD_V2, retire_after: 2000-01-01}]", 1)
+	cfg, err := Load(write(t, "a.yaml", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2000, 1, 2, 0, 0, 0, 0, time.UTC); !cfg.Keys["prod_key"].Accept[0].RetireAt.Equal(want) {
+		t.Fatalf("RetireAt %v", cfg.Keys["prod_key"].Accept[0].RetireAt)
+	}
+	if !strings.Contains(strings.Join(cfg.Notices, "\n"), "retire_after 2000-01-01 has passed") {
+		t.Fatalf("notices: %q", cfg.Notices)
+	}
+	if ks := cfg.Keyring()["prod_key"]; !ks.Versions[1].RetireAt.Equal(cfg.Keys["prod_key"].Accept[0].RetireAt) {
+		t.Fatal("the keyring does not carry the date")
+	}
+	cfg, err = Load(write(t, "b.yaml", fmt.Sprintf(sample, i)))
+	if err != nil || !strings.Contains(strings.Join(cfg.Notices, "\n"), "has no retire_after") {
+		t.Fatalf("a missing date: %q, %v", cfg.Notices, err)
+	}
+	for _, bad := range []string{
+		strings.Replace(fmt.Sprintf(sample, i), "current: {version: 3, secret_env: T_PROD_V3}",
+			"current: {version: 3, secret_env: T_PROD_V3, retire_after: 2999-01-01}", 1),
+		strings.Replace(body, "retire_after: 2000-01-01", "retire_after: soon", 1),
+	} {
+		if _, err := Load(write(t, "c.yaml", bad)); err == nil {
+			t.Fatalf("loaded: %s", bad)
+		}
+	}
+	sets, err := KeySets([]byte(body))
+	if err != nil || len(sets["prod_key"].Accept) != 1 || sets["prod_key"].Accept[0].RetireAt.IsZero() {
+		t.Fatalf("KeySets: %+v, %v", sets, err)
 	}
 }

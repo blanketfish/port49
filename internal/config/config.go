@@ -30,6 +30,11 @@ import (
 type KeyVersion struct {
 	Version   int    `yaml:"version"`
 	SecretEnv string `yaml:"secret_env"`
+	// RetireAfter is the last day, UTC, the version admits (spec §10):
+	// accept versions only. RetireAt is it parsed, the first instant the
+	// version is refused — midnight after that day. Zero is none.
+	RetireAfter string    `yaml:"retire_after"`
+	RetireAt    time.Time `yaml:"-"`
 }
 
 type KeySet struct {
@@ -499,24 +504,29 @@ func Load(path string) (Config, error) {
 		c.Broker = &b
 	}
 
+	if c.Keys, err = checkKeySets(c.Keys); err != nil {
+		return Config{}, err
+	}
 	for ref, ks := range c.Keys {
-		seen := map[int]bool{}
 		for _, v := range allVersions(ks) {
-			if v.Version < 1 {
-				return Config{}, fmt.Errorf("config: key %s: every version number must be 1 or greater", ref)
-			}
-			if seen[v.Version] {
-				return Config{}, fmt.Errorf("config: key %s: version %d appears twice", ref, v.Version)
-			}
-			seen[v.Version] = true
-			if v.SecretEnv == "" {
-				return Config{}, fmt.Errorf("config: key %s version %d: secret_env is required", ref, v.Version)
-			}
 			s, ok := os.LookupEnv(v.SecretEnv)
 			if !ok || s == "" {
 				return Config{}, fmt.Errorf("config: key %s version %d: environment variable %s is not set", ref, v.Version, v.SecretEnv)
 			}
 			c.secrets[v.SecretEnv] = s
+		}
+	}
+	now := time.Now()
+	for _, ref := range sortedKeySets(c.Keys) {
+		for _, v := range c.Keys[ref].Accept {
+			switch {
+			case v.RetireAt.IsZero():
+				c.Notices = append(c.Notices, fmt.Sprintf("key %s version %d has no retire_after; an indefinitely "+
+					"accepted version is what rotation exists to prevent (spec §10)", ref, v.Version))
+			case !now.Before(v.RetireAt):
+				c.Notices = append(c.Notices, fmt.Sprintf("key %s version %d: retire_after %s has passed, so it "+
+					"identifies devices and admits none; move it to retired, or remove it", ref, v.Version, v.RetireAfter))
+			}
 		}
 	}
 
@@ -723,13 +733,85 @@ func (c Config) Keyring() map[string]keyring.Set {
 		set := keyring.Set{Ref: ref}
 		set.Versions = append(set.Versions, keyring.Version{Number: ks.Current.Version, Secret: []byte(c.secrets[ks.Current.SecretEnv])})
 		for _, v := range ks.Accept {
-			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretEnv])})
+			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretEnv]),
+				RetireAt: v.RetireAt})
 		}
 		for _, v := range ks.Retired {
 			set.Versions = append(set.Versions, keyring.Version{Number: v.Version, Secret: []byte(c.secrets[v.SecretEnv]), Retired: true})
 		}
 		out[ref] = set
 	}
+	return out
+}
+
+// checkKeySets validates keys without reading a secret: every version
+// numbered from 1 and once, a secret_env named, and retire_after a date on an
+// accept version only. It returns the sets with RetireAt filled.
+func checkKeySets(keys map[string]KeySet) (map[string]KeySet, error) {
+	out := make(map[string]KeySet, len(keys))
+	for ref, ks := range keys {
+		seen := map[int]bool{}
+		for _, v := range allVersions(ks) {
+			if v.Version < 1 {
+				return nil, fmt.Errorf("config: key %s: every version number must be 1 or greater", ref)
+			}
+			if seen[v.Version] {
+				return nil, fmt.Errorf("config: key %s: version %d appears twice", ref, v.Version)
+			}
+			seen[v.Version] = true
+			if v.SecretEnv == "" {
+				return nil, fmt.Errorf("config: key %s version %d: secret_env is required", ref, v.Version)
+			}
+		}
+		if ks.Current.RetireAfter != "" {
+			return nil, fmt.Errorf("config: key %s: current version %d has retire_after; current is what devices "+
+				"are provisioned with, so retire it by making another version current (spec §10)", ref, ks.Current.Version)
+		}
+		for _, v := range ks.Retired {
+			if v.RetireAfter != "" {
+				return nil, fmt.Errorf("config: key %s: retired version %d has retire_after; a retired version is "+
+					"refused already", ref, v.Version)
+			}
+		}
+		accept := make([]KeyVersion, len(ks.Accept))
+		for i, v := range ks.Accept {
+			if v.RetireAfter != "" {
+				day, err := time.Parse("2006-01-02", v.RetireAfter)
+				if err != nil {
+					return nil, fmt.Errorf("config: key %s version %d: retire_after %q is not a date (YYYY-MM-DD)",
+						ref, v.Version, v.RetireAfter)
+				}
+				v.RetireAt = day.AddDate(0, 0, 1) // admits through the named day, UTC
+			}
+			accept[i] = v
+		}
+		ks.Accept = accept
+		out[ref] = ks
+	}
+	return out, nil
+}
+
+// KeySets reads port49d.yaml's keys: block as Load does, without reading a
+// secret: the names, versions and dates `port49 keys status` and `port49
+// policy test --config` read, in CI or anywhere else no key is.
+func KeySets(raw []byte) (map[string]KeySet, error) {
+	var f fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", err)
+	}
+	return checkKeySets(f.Keys)
+}
+
+// sortedKeySets names keys' refs, sorted, so the start notices read the same
+// every time.
+func sortedKeySets(keys map[string]KeySet) []string {
+	out := make([]string, 0, len(keys))
+	for ref := range keys {
+		out = append(out, ref)
+	}
+	sort.Strings(out)
 	return out
 }
 
