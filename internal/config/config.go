@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -372,8 +373,44 @@ func inventoryBound(o inventoryYAML) (int, error) {
 	return *o.MaxRemovedPercent, nil
 }
 
+// MaxConfigSize bounds a read of port49d.yaml, a file of a few kilobytes.
+const MaxConfigSize = 1 << 20
+
+// maxInventorySize bounds Load's read of the inventory file with no broker:
+// a 10,000-device inventory is a few megabytes.
+const maxInventorySize = 64 << 20
+
+// ReadRegular reads path if it is a regular file of at most max bytes. It
+// opens non-blocking and checks the opened file, so a named pipe or a device
+// at the path is refused rather than blocking the read until something
+// writes to it, and a path pointed at something large is not read whole
+// (plan 6a Task 11a, Task 12 m3). It is not the policy file's owner and mode
+// fence.
+func ReadRegular(path string, max int64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > max {
+		return nil, fmt.Errorf("%s is larger than %d bytes", path, max)
+	}
+	return raw, nil
+}
+
 func Load(path string) (Config, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := ReadRegular(path, MaxConfigSize)
 	if err != nil {
 		return Config{}, err
 	}
@@ -615,7 +652,11 @@ func Load(path string) (Config, error) {
 		// plan 6a Decided 5).
 		return c, nil
 	}
-	inv, err := admission.LoadFile(c.InventoryFile)
+	rawInv, err := ReadRegular(c.InventoryFile, maxInventorySize)
+	if err != nil {
+		return Config{}, err
+	}
+	inv, err := admission.ParseFile(rawInv, c.InventoryFile)
 	if err != nil {
 		return Config{}, err
 	}

@@ -15,6 +15,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/keyring"
@@ -718,7 +719,7 @@ func TestABoundReadFromANamedPipeKeepsTheBoundAndDoesNotHang(t *testing.T) {
 func TestABoundReadFromAnOversizedFileKeepsTheBound(t *testing.T) {
 	rig := newReloadRig(t, minimalPolicy)
 	rig.r.cfgPath = filepath.Join(t.TempDir(), "port49d.yaml")
-	big := "inventory: {max_removed_percent: 100}\n" + strings.Repeat("#\n", maxConfigSize)
+	big := "inventory: {max_removed_percent: 100}\n" + strings.Repeat("#\n", config.MaxConfigSize)
 	if err := os.WriteFile(rig.r.cfgPath, []byte(big), 0o600); err != nil {
 		t.Fatal(err)
 	}
