@@ -17,7 +17,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 )
@@ -96,6 +96,11 @@ type Syncer struct {
 // maxPolicy bounds the service's read of its policy copy, as port49d bounds
 // its own.
 const maxPolicy = 1 << 20
+
+// readPolicy reads the service's policy copy behind the write fence, as
+// port49d reads its own (final review Minor 1): whoever can write it decides
+// what the service's bound refuses.
+func readPolicy(path string) ([]byte, error) { return fence.Read(path, maxPolicy, "policy file") }
 
 // Current is the bundle published, or nil before the first.
 func (s *Syncer) Current() *Published { return s.current.Load() }
@@ -281,7 +286,7 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 		}
 		return r
 	}
-	policyRaw, err := config.ReadRegular(s.PolicyFile, maxPolicy)
+	policyRaw, err := readPolicy(s.PolicyFile)
 	if err != nil {
 		return held(Result{Outcome: OutcomeFailed, Reason: "policy_file " + s.PolicyFile + ": " + oneLine(err)})
 	}
@@ -557,7 +562,7 @@ func (s *Syncer) Diff(from int64) (bundle.Report, int64, error) {
 	if err != nil {
 		return bundle.Report{}, 0, err
 	}
-	raw, err := config.ReadRegular(s.PolicyFile, maxPolicy)
+	raw, err := readPolicy(s.PolicyFile)
 	if err != nil {
 		return bundle.Report{}, 0, err
 	}
@@ -599,7 +604,7 @@ func (s *Syncer) Describe(addr netip.Addr) (DeviceView, bool) {
 		for _, a := range d.Addresses {
 			v.Addresses = append(v.Addresses, a.String())
 		}
-		if raw, err := config.ReadRegular(s.PolicyFile, maxPolicy); err == nil {
+		if raw, err := readPolicy(s.PolicyFile); err == nil {
 			if pol, err := bundle.Parse(raw, cur.Inv, policy.Env{}); err == nil {
 				v.Admission = "admitted"
 				if r, _ := pol.Admitted(d.Name); r.Refused != "" {

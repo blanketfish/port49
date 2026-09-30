@@ -64,6 +64,11 @@ func newSyncRig(t *testing.T, policyBody string, inv admission.Inventory) *syncR
 	t.Helper()
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
 	dir := t.TempDir()
+	// 0755 whatever the umask: policy_file is read behind the fence, which
+	// refuses a group-writable directory.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	pol := filepath.Join(dir, "policy.yaml")
 	if err := os.WriteFile(pol, []byte(policyBody), 0o600); err != nil {
 		t.Fatal(err)
@@ -668,5 +673,18 @@ func TestASyncPastItsOwnDeadlineIsAFailure(t *testing.T) {
 	}
 	if cur := rig.s.Current(); cur == nil || cur.Doc.Sequence != 1 {
 		t.Fatalf("the bundle published moved: %v", cur)
+	}
+}
+
+// Final review Minor 1: the service's policy_file is read behind the write
+// fence, as port49d reads its own: whoever could write it could weaken the
+// service's bound.
+func TestAPolicyFileOthersCanWriteFailsTheSync(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	if err := os.Chmod(rig.s.PolicyFile, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if res := rig.sync(t); res.Outcome != OutcomeFailed || !strings.Contains(res.Reason, "writable by others") {
+		t.Fatalf("%+v", res)
 	}
 }
