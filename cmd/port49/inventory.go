@@ -2,19 +2,23 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/policy"
 )
@@ -22,6 +26,9 @@ import (
 func inventoryCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "diff" {
 		return inventoryDiff(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "sync" {
+		return inventorySync(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "keygen" {
 		return inventoryKeygen(args[1:], stdout, stderr)
@@ -35,7 +42,8 @@ func inventoryCmd(args []string, stdout, stderr io.Writer) int {
 // scope membership, the security lines marked `!` as port49d writes them
 // inventory_change records — and whether port49d would load it, by the
 // checks its reload runs (bundle.Check; with --new-policy,
-// bundle.CheckAdmission for the policy's reload too).
+// bundle.CheckAdmission for the policy's reload too). With --service it is
+// the service's diff instead: from bundle --from to the one it publishes.
 func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 inventory diff", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -44,7 +52,21 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 	maxRemoved := fs.Int("max-removed-percent", 10, "port49d.yaml's inventory.max_removed_percent")
 	cfgPath := fs.String("config", "", "port49d.yaml: the key_refs it defines and inventory.max_removed_percent, "+
 		"as port49d reads them; no secret is read")
+	svc := serviceFlags(fs)
+	from := fs.Int64("from", 0, "with --service: the sequence of the bundle to diff from")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if svc.url != "" {
+		if flagSet(fs, "policy") || flagSet(fs, "new-policy") || flagSet(fs, "max-removed-percent") ||
+			flagSet(fs, "config") || fs.NArg() != 0 || !svc.complete() || *from < 1 {
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+		return serviceDiff(svc, *from, stdout, stderr)
+	}
+	if svc.any() || flagSet(fs, "from") {
+		fmt.Fprint(stderr, usage)
 		return 2
 	}
 	if *polPath == "" || fs.NArg() != 2 || *maxRemoved < 0 || *maxRemoved > 100 {
@@ -345,4 +367,137 @@ func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
 		"(every port49d's inventory.service.verify_key_files); key_id %s\n", filepath.Join(*dir, "signing.key"),
 		filepath.Join(*dir, "signing.pub"), keyfile.Ed25519KeyID(priv.Public().(ed25519.PublicKey)))
 	return 0
+}
+
+// service is the flags that name the inventory service and the client's
+// certificate for it.
+type service struct{ url, ca, cert, key string }
+
+func serviceFlags(fs *flag.FlagSet) *service {
+	s := &service{}
+	fs.StringVar(&s.url, "service", "", "the inventory service, https://host[:port]")
+	fs.StringVar(&s.ca, "ca", "", "the CA file that issues the service's certificate, and nothing else")
+	fs.StringVar(&s.cert, "cert", "", "the client certificate the service names you by")
+	fs.StringVar(&s.key, "key", "", "its private key (owner-only)")
+	return s
+}
+
+func (s *service) complete() bool { return s.url != "" && s.ca != "" && s.cert != "" && s.key != "" }
+func (s *service) any() bool      { return s.url != "" || s.ca != "" || s.cert != "" || s.key != "" }
+
+// syncWait is how long `port49 inventory sync` waits for the service's
+// answer: longer than the sync_timeout default, 5m, which bounds the sync
+// itself (conflict scan F16). A variable for the test.
+var syncWait = 6 * time.Minute
+
+// inventorySync is `port49 inventory sync`: the service syncs now, as its
+// timer would, and says what it did. It exits 0 when the service published
+// or found nothing changed, 1 otherwise.
+func inventorySync(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("port49 inventory sync", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	svc := serviceFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if !svc.complete() || fs.NArg() != 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	c, err := inventory.NewClient(svc.url, svc.ca, svc.cert, svc.key)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory sync:", err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), syncWait)
+	defer cancel()
+	res, err := c.Sync(ctx)
+	if err != nil {
+		var ne net.Error
+		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+			fmt.Fprintf(stderr, "port49 inventory sync: no answer within %v; the service may still finish the sync: "+
+				"its log, or port49 inventory diff --service, says what it did\n", syncWait)
+			return 1
+		}
+		fmt.Fprintln(stderr, "port49 inventory sync:", err)
+		return 1
+	}
+	return printResult(stdout, res)
+}
+
+// serviceDiff is `port49 inventory diff --service`: what changed from bundle
+// from to the one the service publishes, as the service judges it.
+func serviceDiff(svc *service, from int64, stdout, stderr io.Writer) int {
+	c, err := inventory.NewClient(svc.url, svc.ca, svc.cert, svc.key)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory diff:", err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	d, err := c.Diff(ctx, from)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory diff:", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "bundle %d → %d: %s\n", d.From, d.To, printable(d.Summary))
+	for _, c := range d.Changes {
+		fmt.Fprintln(stdout, printable(c.Line("")))
+	}
+	return 0
+}
+
+// printResult is a sync's outcome as `port49 inventory sync` prints it, and
+// its exit code: 0 for published and unchanged, 1 otherwise. Every string
+// is the service's, so each is printed through printable.
+func printResult(w io.Writer, res inventory.Result) int {
+	switch res.Outcome {
+	case "published":
+		fmt.Fprintf(w, "published bundle %d (%s): %s; %d quarantined\n", res.Sequence, printable(res.Bundle),
+			printable(res.Summary), len(res.Quarantined))
+		for _, c := range res.Changes {
+			fmt.Fprintln(w, printable(c.Line("")))
+		}
+		for _, q := range res.Quarantined {
+			fmt.Fprintf(w, "  device %s (%s) is quarantined against the service's policy: %s\n", printable(q.Device),
+				printable(q.Platform), printable(q.Cause))
+		}
+		for _, l := range res.LeftOut {
+			fmt.Fprintf(w, "  left out: %s\n", printable(l))
+		}
+		return 0
+	case "unchanged":
+		fmt.Fprintf(w, "unchanged: bundle %d is current\n", res.Sequence)
+		return 0
+	}
+	still := "no bundle is published yet"
+	if res.Sequence > 0 {
+		still = fmt.Sprintf("still publishing bundle %d", res.Sequence)
+	}
+	fmt.Fprintf(w, "%s; %s: %s\n", printable(res.Outcome), still, printable(res.Reason))
+	return 1
+}
+
+// maxPrinted bounds one string of the service's printed.
+const maxPrinted = 4096
+
+// printable is s from the service as one line of text: a control character
+// or an invalid byte is `?`, never terminal control or a forged line, and a
+// string past maxPrinted bytes is cut and marked.
+func printable(s string) string {
+	cut := len(s) > maxPrinted
+	if cut {
+		s = s[:maxPrinted]
+	}
+	s = strings.ToValidUTF8(s, "?")
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return '?'
+		}
+		return r
+	}, s)
+	if cut {
+		s += "…"
+	}
+	return s
 }

@@ -39,6 +39,9 @@ const usage = `usage:
   port49 policy diff --old FILE --new FILE --inventory FILE
   port49 inventory diff --policy FILE [--new-policy FILE] [--max-removed-percent N | --config PORT49D_YAML]
                         OLD_INVENTORY NEW_INVENTORY
+  port49 inventory diff --service URL --ca FILE --cert FILE --key FILE --from SEQUENCE
+  port49 inventory sync --service URL --ca FILE --cert FILE --key FILE
+                        (waits up to 6 minutes for the service's answer)
   port49 inventory keygen --dir DIR
   port49 access review --policy FILE --inventory FILE --subject NAME
   port49 grants remove --policy FILE --inventory FILE --subject NAME [--write | --pr [--remote R] [--base B]]
