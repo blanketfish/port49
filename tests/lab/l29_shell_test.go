@@ -190,6 +190,14 @@ func (l *lab) offeredIn(c *cliConn, enter, ask, cfg []string, leave, back string
 // version`, each timed as l28Phase times them, as two table rows.
 func (l *lab) timedLogins(t *testing.T) string {
 	t.Helper()
+	rows, _, _ := l.timeLogins(t)
+	return rows
+}
+
+// timeLogins is timedLogins plus the break-glass session's time and whether
+// it logged in and ran its commands, for a test that holds it to a bar (L31).
+func (l *lab) timeLogins(t *testing.T) (rows string, bgTook time.Duration, bgOK bool) {
+	t.Helper()
 	user, secret := l.nextLogin(t)
 	t0 := time.Now()
 	tok := "logged in"
@@ -201,13 +209,14 @@ func (l *lab) timedLogins(t *testing.T) string {
 	tokTook := time.Since(t0)
 	t1 := time.Now()
 	bg := "logged in and ran them"
-	if _, err := l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version", "show version",
-		"show version"); err != nil {
+	_, err := l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version", "show version",
+		"show version")
+	if err != nil {
 		bg = "not observed: " + oneLine(err.Error())
 	}
-	bgTook := time.Since(t1)
+	bgTook = time.Since(t1)
 	return fmt.Sprintf("| next token login (`%s`) | %s in %s |\n| break-glass login plus three `show version` | %s in %s |\n",
-		user, tok, tokTook.Round(10*time.Millisecond), bg, bgTook.Round(10*time.Millisecond))
+		user, tok, tokTook.Round(10*time.Millisecond), bg, bgTook.Round(10*time.Millisecond)), bgTook, err == nil
 }
 
 // firstLine is s's first non-empty line, for a table cell.
