@@ -1149,3 +1149,71 @@ func TestAValidatedExchangeNamesItsKey(t *testing.T) {
 		t.Fatalf("the redeem record does not name its key: %s", log.String())
 	}
 }
+
+// A device admission refuses — no key group admits it, two tie, or its
+// key_ref is one port49d holds no key for — is closed after the header, at
+// once, with nothing decrypted and no strike, and recorded apart from both
+// the key report and noise (spec §10, admission_refused).
+func TestARefusedDeviceIsClosedAtOnceAndNamed(t *testing.T) {
+	log := &syncBuffer{}
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
+		dev := admission.Device{Name: "leaf-01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
+		trie, err := admission.NewTrie([]admission.Resolved{{Device: dev,
+			Refused: "matches no key group, so no key admits it (spec §10)"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Admission = trie
+		d.Limits = slowBackoff()
+	})
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	closedAtOnce(t, c)
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"admission_refused"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	if !log.contains(`"name":"leaf-01"`) || log.contains("p49_e2e") {
+		t.Fatalf("the record names the device, and never the credential: %s", log.String())
+	}
+	if n := testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("admission_refused")); n != 1 {
+		t.Fatalf("unvalidated{admission_refused} = %v", n)
+	}
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("malformed_backoff")); n != 0 {
+		t.Fatalf("a refused device is not a strike: %v", n)
+	}
+}
+
+// "Admitted" is Refused == "", never a KeyRef or an index hit (Task 3 review
+// M3): an entry that is refused and still carries a key_ref port49d holds —
+// which admission never builds, since a refused entry fails closed — is
+// closed all the same, and its packet is never tried under that key.
+func TestARefusedEntryIsNeverValidatedUnderItsKey(t *testing.T) {
+	log := &syncBuffer{}
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
+		dev := admission.Device{Name: "leaf-01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
+		trie, err := admission.NewTrie([]admission.Resolved{{Device: dev, KeyRef: "prod_key",
+			Refused: "has transport tls, RFC 9887, which port49d does not serve until plan 11", Refusal: admission.RefusedTransport}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Admission = trie
+		d.Limits = slowBackoff()
+	})
+	c := dial(t, ts.addr, []byte("k2")) // prod_key's current secret
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	closedAtOnce(t, c)
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"admission_refused"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	for _, diag := range []keyring.Diagnosis{keyring.DiagValidated, keyring.DiagMatchesRetired, keyring.DiagNoKnownKey,
+		keyring.DiagUnadmittedSource} {
+		if n := testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues(string(diag))); n != 0 {
+			t.Fatalf("unvalidated{%s} = %v: the packet was tried under a key", diag, n)
+		}
+	}
+	if log.contains(`"event":"redeem"`) || log.contains(`"diagnosis":"validated"`) {
+		t.Fatalf("a refused device's packet was validated: %s", log.String())
+	}
+}

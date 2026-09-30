@@ -19,6 +19,7 @@ import (
 	stdlog "log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"strings"
@@ -265,7 +266,24 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
 	}
-	return parseBundle(cfg, raw, cfg.Inventory)
+	pol, err := parseBundle(cfg, raw, cfg.Inventory)
+	if err != nil {
+		return nil, err
+	}
+	// A start whose bundle admits none of a non-empty inventory is refused
+	// (plan 6a Decided 5, C3): no device caused that, and a daemon admitting
+	// nothing is a misconfiguration to say at start, not a fleet to close
+	// silently. A reload never reaches this: bundle.CheckAdmission refuses a
+	// snapshot that newly refuses the fleet, in the same words.
+	if n := len(pol.Devices()); n > 0 && len(pol.AdmissionRefusals()) == n {
+		r := pol.AdmissionRefusals()[0]
+		return nil, fmt.Errorf("broker.policy_file %s with inventory_file %s: %w", cfg.Broker.PolicyFile,
+			cfg.InventoryFile, quotesCut{fmt.Errorf("the bundle admits none of the %d device(s) in the inventory "+
+				"(%s: %s); check key_groups and the key_refs port49d.yaml defines, and if key_groups was deleted "+
+				"from the inventory file, add it to the policy file; to take the whole fleet off deliberately, "+
+				"stop port49d", n, r.Device.Name, r.Refused)})
+	}
+	return pol, nil
 }
 
 // parseBundle builds the bundle from the policy file's bytes and an
@@ -273,7 +291,7 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
 // the other in force, so the version it remembers refusing is the version it
 // refused.
 func parseBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
-	pol, err := bundle.Parse(raw, inv, policy.Env{})
+	pol, err := bundle.Parse(raw, inv, policy.Env{KeyRefs: cfg.KeyRefs()})
 	if err != nil {
 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, quotesCut{err})
 	}
@@ -366,6 +384,23 @@ func sayPolicy(pol *policy.Policy, now time.Time) {
 	for _, f := range pol.RuleSecretLiterals() {
 		say("port49d: broker: %s", f.Message)
 	}
+	// A device admission refuses is refused alone (spec §10): named, with
+	// why, so the line says what to fix.
+	for _, r := range pol.AdmissionRefusals() {
+		say("port49d: admission: device %s (%s) is refused: %s", r.Device.Name, r.Device.Platform, r.Refused)
+	}
+	for _, n := range pol.Notices() {
+		say("port49d: policy: %s", n)
+	}
+}
+
+// liveAdmission is the policy in force's admission index, read at each
+// Accept: a reload reaches the next connection, and a connection finishes on
+// the index it began with (spec §10).
+type liveAdmission struct{ live *policy.Live }
+
+func (a liveAdmission) Lookup(addr netip.Addr) (admission.Resolved, bool) {
+	return a.live.Load().Admission().Lookup(addr)
 }
 
 // redactorFor is the redaction port49d applies before any record is written
@@ -543,7 +578,14 @@ func run(parent context.Context, cfgPath string) error {
 	// The drain redacts too: a spool file an earlier build left holds records
 	// it never redacted (spec §5.8).
 	spool.WithRedactor(redactorFor(live))
-	deps := server.Deps{Admission: cfg.Admission, Quarantined: watchQuarantine(live, m, time.Now), Keys: cfg.Keyring(),
+	// With a broker, admission is the policy in force's (spec §10); without
+	// one, the index config.Load built from the inventory's own key groups.
+	admit := server.Admitter(cfg.Admission)
+	if live != nil {
+		admit = liveAdmission{live}
+		m.CountAdmissionRefused(func() int { return len(live.Load().AdmissionRefusals()) })
+	}
+	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: cfg.Keyring(),
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
@@ -608,8 +650,12 @@ func run(parent context.Context, cfgPath string) error {
 	}
 	// The bound address, not the configured one: `:49` says nothing about
 	// which address answered, and `:0` says nothing about which port.
+	admitted := len(cfg.Inventory.Devices)
+	if live != nil {
+		admitted -= len(live.Load().AdmissionRefusals())
+	}
 	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
-		ln.Addr(), mln.Addr(), len(cfg.Inventory.Devices))
+		ln.Addr(), mln.Addr(), admitted)
 
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {

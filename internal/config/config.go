@@ -272,7 +272,9 @@ type Config struct {
 	Notices []string
 
 	// Inventory and Admission are read and built once, here, so the daemon
-	// never re-reads the file and the two can never disagree.
+	// never re-reads the file and the two can never disagree. Admission is
+	// nil with a broker: port49d admits from the policy in force
+	// (policy.Policy.Admission).
 	Inventory admission.Inventory
 	Admission *admission.Trie
 
@@ -539,6 +541,22 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// Names and addresses are the inventory's own faults, and an inventory
+	// that has one cannot be used at all: refused at start, as a reload
+	// refuses it (spec §10).
+	if err := admission.Validate(inv.Devices); err != nil {
+		return Config{}, err
+	}
+	c.Inventory = inv
+	if c.Broker != nil {
+		// With a broker, key groups are the policy's (spec §10), and port49d
+		// admits from the policy loaded against this inventory, which refuses
+		// a device a group cannot admit on its own, never the daemon
+		// (policy.Policy.Admission; plan 6a Decided 5).
+		return c, nil
+	}
+	// No broker: plan 1's mode, the lab's. The inventory's own key groups
+	// are read once, here, and a device none admits refuses the start.
 	for _, g := range inv.KeyGroups {
 		if _, ok := c.Keys[g.KeyRef]; !ok {
 			return Config{}, fmt.Errorf("config: key group references key_ref %q which is not in keys", g.KeyRef)
@@ -562,7 +580,9 @@ func Load(path string) (Config, error) {
 	for _, d := range inv.Devices {
 		resolved := false
 		for _, a := range d.Addresses {
-			if r, ok := trie.Lookup(a); ok && r.KeyRef != "" {
+			// Admitted is Refused == "", never an index hit or a key_ref
+			// alone (Task 3 review M3).
+			if r, ok := trie.Lookup(a); ok && r.Refused == "" && r.KeyRef != "" {
 				resolved = true
 				break
 			}
@@ -573,6 +593,17 @@ func Load(path string) (Config, error) {
 	}
 	c.Inventory, c.Admission = inv, trie
 	return c, nil
+}
+
+// KeyRefs names every key_ref keys defines, sorted and never nil: a device
+// the policy assigns any other is refused admission (spec §10). Names only.
+func (c Config) KeyRefs() []string {
+	out := make([]string, 0, len(c.Keys))
+	for ref := range c.Keys {
+		out = append(out, ref)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // EncryptionKeys is the two-key window: writes use Current, reads try Current

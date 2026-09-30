@@ -75,6 +75,12 @@ type Metrics struct {
 	// leave; the gauge is what an alert watches, and it names no device.
 	DevicesQuarantined prometheus.GaugeFunc
 	quarantined        atomic.Pointer[func() int]
+	// port49_devices_admission_refused: how many inventory devices the bundle
+	// in force refuses admission — no key group admits them, two tie on
+	// them, or their key_ref is one port49d holds no key for (spec §10). Each
+	// is named at start and at every reload; the gauge names none.
+	DevicesAdmissionRefused prometheus.GaugeFunc
+	admissionRefused        atomic.Pointer[func() int]
 	// port49_context_refreshes_total{outcome}: live login contexts a policy
 	// refresh visited, by what it did to each (spec §5.1.3) — "updated" (the
 	// policy in force written into it), "unchanged", "revoked" (no grant left
@@ -115,6 +121,9 @@ type Metrics struct {
 
 // CountQuarantined sets what port49_devices_quarantined reports at each scrape.
 func (m *Metrics) CountQuarantined(count func() int) { m.quarantined.Store(&count) }
+
+// CountAdmissionRefused sets what port49_devices_admission_refused reports.
+func (m *Metrics) CountAdmissionRefused(count func() int) { m.admissionRefused.Store(&count) }
 
 func New(reg prometheus.Registerer) *Metrics {
 	m := &Metrics{
@@ -177,10 +186,17 @@ func New(reg prometheus.Registerer) *Metrics {
 		}
 		return 0
 	})
+	m.DevicesAdmissionRefused = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_admission_refused",
+		Help: "Inventory devices the bundle in force refuses admission."}, func() float64 {
+		if count := m.admissionRefused.Load(); count != nil {
+			return float64((*count)())
+		}
+		return 0
+	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
-		m.DevicesQuarantined, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
+		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending)
 	return m
 }

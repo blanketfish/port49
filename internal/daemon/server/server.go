@@ -27,8 +27,16 @@ import (
 	"github.com/rhwendt/port49/internal/keyring"
 )
 
+// Admitter answers which device a source address is and which key_ref admits
+// it (spec §10). port49d passes the policy in force's index, read at each
+// Accept, so a reload reaches the next connection and a connection finishes
+// on the index it began with; *admission.Trie is one.
+type Admitter interface {
+	Lookup(netip.Addr) (admission.Resolved, bool)
+}
+
 type Deps struct {
-	Admission *admission.Trie
+	Admission Admitter
 	// Quarantined reports whether an admitted device is quarantined by the
 	// loaded policy at now (spec §10): (*policy.Policy).Quarantined, or nil
 	// with no broker. It is asked at every packet, with Now, because a grant's
@@ -101,9 +109,14 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		}
 		d.Metrics.Connections.WithLabelValues("open").Inc()
 
-		dev, admitted := d.Admission.Lookup(src)
-		cc := &conn{d: d, c: c, src: src, dev: dev, admitted: admitted,
-			keys: d.Keys[dev.KeyRef], sessions: map[uint32]*authen.Session{}}
+		// Admitted is Refused == "", never an index hit or a key_ref alone: a
+		// refused device is in the index, and is given no key (spec §10).
+		dev, found := d.Admission.Lookup(src)
+		cc := &conn{d: d, c: c, src: src, dev: dev, admitted: found && dev.Refused == "",
+			refused: found && dev.Refused != "", sessions: map[uint32]*authen.Session{}}
+		if cc.admitted {
+			cc.keys = d.Keys[dev.KeyRef]
+		}
 
 		wg.Add(1)
 		go func() {

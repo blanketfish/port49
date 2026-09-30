@@ -857,3 +857,27 @@ func TestMaxSessionAge(t *testing.T) {
 		}
 	}
 }
+
+// With a broker the policy assigns keys, and a device no group admits is
+// refused on its own at the policy load, never the daemon (spec §10; plan 6a
+// Decided 5). Without one, TestLoadRefusesDeviceMatchingNoKeyGroup holds.
+func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
+	setKeyEnv(t)
+	orphan := write(t, "orphan.yaml", "devices:\n  - {name: orphan, addresses: [10.99.99.1]}\n")
+	body := fmt.Sprintf(sample, orphan) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
+		"client_ca_file: ca, policy_file: p}\n"
+	cfg, err := Load(write(t, "f.yaml", body))
+	if err != nil {
+		t.Fatalf("a broker config refused an orphan device: %v", err)
+	}
+	if cfg.Admission != nil || len(cfg.Inventory.Devices) != 1 {
+		t.Fatalf("admission %v, inventory %+v", cfg.Admission, cfg.Inventory)
+	}
+	if got := cfg.KeyRefs(); len(got) != 1 || got[0] != "prod_key" {
+		t.Fatalf("KeyRefs: %q", got)
+	}
+	dup := write(t, "dup.yaml", "devices:\n  - {name: a, addresses: [10.0.0.1]}\n  - {name: b, addresses: [10.0.0.1]}\n")
+	if _, err := Load(write(t, "g.yaml", strings.Replace(body, orphan, dup, 1))); err == nil {
+		t.Fatal("an address claimed twice is the inventory's fault and refuses the start")
+	}
+}

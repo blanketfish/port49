@@ -80,7 +80,7 @@ func TestAWidenedDenyLineNeverPrintsARuleSecret(t *testing.T) {
 	stderr = &out
 	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`,
 		`permit: ["**"], deny: ["snmp-server community Hunter2 /tftp/"]}`, 1))
-	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "ntp1", Platform: "meinberg_lantime"})
+	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "ntp1", Platform: "meinberg_lantime", KeyRef: "lab_key"})
 	if err := buildWith(cfg); err != nil {
 		t.Fatal(err)
 	}

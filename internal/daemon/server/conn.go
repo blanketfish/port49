@@ -44,6 +44,7 @@ type conn struct {
 	src      netip.Addr
 	dev      admission.Resolved
 	admitted bool
+	refused  bool // in inventory, and admission refused it (spec §10)
 	keys     keyring.Set
 
 	version  int  // 0 until the first packet validates; then the only version this connection uses
@@ -78,6 +79,20 @@ func (s *conn) quarantine(h wire.Header) {
 		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagDeviceQuarantined),
 			KeyRef: s.dev.KeyRef, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
 	s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagDeviceQuarantined)).Inc()
+}
+
+// refusedAdmission records a packet from a device the inventory names and
+// admission refuses — no key group admits it, two tie on it, or its key_ref is
+// one port49d holds no key for — and closes the connection with nothing read
+// past the header and no strike (spec §10). The fault is port49's
+// configuration, not the device's, so the device falls to its local method at
+// once, as for a quarantine; the start line and `port49 policy test` say why.
+func (s *conn) refusedAdmission(h wire.Header) {
+	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated,
+		Device: &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform},
+		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(keyring.DiagAdmissionRefused),
+			KeyRef: s.dev.KeyRef, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
+	s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagAdmissionRefused)).Inc()
 }
 
 // quarantined asks the policy about this connection's device at the time of
@@ -156,6 +171,10 @@ func (s *conn) serve(ctx context.Context) {
 		// malformed_backoff so an operator can tell "unknown device" from
 		// "known device sending garbage" at a glance.
 		if !s.admitted {
+			if s.refused {
+				s.refusedAdmission(h)
+				return
+			}
 			s.unvalidated(h, nil, keyring.DiagUnadmittedSource, 0)
 			s.backoff(ctx, "unadmitted_source")
 			return
