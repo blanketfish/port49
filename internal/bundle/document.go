@@ -158,6 +158,21 @@ func Open(raw []byte, keys []ed25519.PublicKey) (Document, admission.Inventory, 
 	return d, inv, nil
 }
 
+// UnverifiedSequence is the sequence raw's document states, read without
+// verifying its signature. It is for a floor alone — the inventory service's
+// check that it never saves below what it holds — where an unverified value
+// can only refuse more; nothing else it says is to be believed.
+func UnverifiedSequence(raw []byte) (int64, error) {
+	var e envelope
+	var d struct {
+		Sequence int64 `json:"sequence"`
+	}
+	if len(raw) > MaxDocument || json.Unmarshal(raw, &e) != nil || json.Unmarshal(e.Document, &d) != nil {
+		return 0, errors.New("bundle: the sealed document does not parse")
+	}
+	return d.Sequence, nil
+}
+
 // strict decodes one JSON value into v, refusing unknown fields and anything
 // after it.
 func strict(raw []byte, v any) error {

@@ -184,7 +184,7 @@ func TestAnOversizedStateFileIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Close()
-	if _, err := OpenFile(path, []ed25519.PublicKey{pub}); err == nil || !strings.Contains(err.Error(), "larger than") {
+	if _, err := OpenSignedFile(path, []ed25519.PublicKey{pub}); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -263,8 +263,8 @@ func TestALinkedMirrorIsRefused(t *testing.T) {
 	if raw, err := s.MirrorRaw(); err == nil || raw != nil {
 		t.Fatalf("mirror bytes: %v", err)
 	}
-	if p, err := OpenFile(filepath.Join(s.MirrorDir, "bundle.json"), []ed25519.PublicKey{pub}); err == nil || p != nil {
-		t.Fatalf("OpenFile: %v", err)
+	if p, err := OpenSignedFile(filepath.Join(s.MirrorDir, "bundle.json"), []ed25519.PublicKey{pub}); err == nil || p != nil {
+		t.Fatalf("OpenSignedFile: %v", err)
 	}
 }
 
@@ -301,5 +301,102 @@ func TestAReplayedOlderStateCannotLowerTheSequence(t *testing.T) {
 	}
 	if p, err := s.Latest(keys); err != nil || p.Doc.Sequence != 4 {
 		t.Fatalf("after 4: %v %v", p, err)
+	}
+}
+
+// History without published.json is not a fresh install: Latest refuses, so
+// the service does not start the sequence again at 1.
+func TestHistoryWithoutAPublishedBundleIsRefused(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	s := State{Dir: stateDir(t), Keep: 5}
+	for seq := int64(1); seq <= 3; seq++ {
+		if err := s.Save(published(t, key, seq, "leaf-01")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Remove(filepath.Join(s.Dir, "published.json")); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Latest([]ed25519.PublicKey{pub}); err == nil || !strings.Contains(err.Error(), "is missing") ||
+		!strings.Contains(err.Error(), "holds bundle 3") {
+		t.Fatalf("latest: bundle %t, %v", p != nil, err)
+	}
+}
+
+// A crash between Save's two writes leaves published.json at N and the
+// history at N-1. Another document at N is refused: bundle N is never two
+// different documents.
+func TestSaveAfterACrashTakesItsFloorFromThePublishedBundle(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	s := State{Dir: stateDir(t), Keep: 5}
+	for seq := int64(1); seq <= 2; seq++ {
+		if err := s.Save(published(t, key, seq, "leaf-01")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	crashed := published(t, key, 3, "leaf-01")
+	if err := WriteAtomic(s.Dir, "published.json", crashed.Raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Latest([]ed25519.PublicKey{pub}); err != nil || p.Doc.Sequence != 3 {
+		t.Fatalf("after the crash: bundle %t, %v", p != nil, err)
+	}
+	if err := s.Save(published(t, key, 3, "leaf-01", "leaf-02")); err == nil ||
+		!strings.Contains(err.Error(), "bundle 3 is not above bundle 3") {
+		t.Fatalf("another bundle 3: %v", err)
+	}
+	if err := s.Save(published(t, key, 4, "leaf-01", "leaf-02")); err != nil {
+		t.Fatal(err)
+	}
+	// A published.json that does not parse is no floor of zero.
+	if err := WriteAtomic(s.Dir, "published.json", []byte("SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(published(t, key, 5, "leaf-01")); err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("an unparsable published.json: %v", err)
+	}
+}
+
+// Only a name Save writes is a sequence. A stray file — signed, padded, or not
+// a number — is skipped: it neither stops pruning nor sets the floor.
+func TestAStrayHistoryNameIsSkipped(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	s := State{Dir: stateDir(t), Keep: 2}
+	if err := s.Save(published(t, key, 1, "leaf-01")); err != nil {
+		t.Fatal(err)
+	}
+	stray := []string{"+7.json", "007.json", "-3.json", "0.json", "notes.json", "8"}
+	for _, name := range stray {
+		if err := os.WriteFile(filepath.Join(s.Dir, "history", name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for seq := int64(2); seq <= 4; seq++ {
+		if err := s.Save(published(t, key, seq, "leaf-01")); err != nil {
+			t.Fatalf("save %d: %v", seq, err)
+		}
+	}
+	names, err := os.ReadDir(filepath.Join(s.Dir, "history"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, n := range names {
+		got = append(got, n.Name())
+	}
+	want := []string{"+7.json", "-3.json", "0.json", "007.json", "3.json", "4.json", "8", "notes.json"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("history holds %v, want %v", got, want)
+	}
+	if p, err := s.Latest([]ed25519.PublicKey{pub}); err != nil || p.Doc.Sequence != 4 {
+		t.Fatalf("latest: bundle %t, %v", p != nil, err)
+	}
+}
+
+func TestSaveWithNoStateDirIsRefused(t *testing.T) {
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	if err := (State{Keep: 2}).Save(published(t, key, 1, "leaf-01")); err == nil ||
+		!strings.Contains(err.Error(), "no state_dir") {
+		t.Fatalf("got %v", err)
 	}
 }

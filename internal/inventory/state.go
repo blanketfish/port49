@@ -42,16 +42,24 @@ const (
 // Save keeps p as the bundle published, then in the history, pruned to the
 // newest Keep. published.json is written first: a crash between the two
 // loses a diff, never the bundle being served. A sequence not above every
-// one kept is refused: the sequence never goes back.
+// one kept, published.json's included, is refused: the sequence never goes
+// back, and bundle N is never two different documents.
 func (s State) Save(p Published) error {
+	// An empty dir would write published.json and history/ in the working
+	// directory.
+	if s.Dir == "" {
+		return errors.New("inventory: no state_dir is set")
+	}
 	if err := os.MkdirAll(filepath.Join(s.Dir, historyDir), 0o700); err != nil {
 		return err
 	}
-	if seqs, err := s.history(); err != nil {
+	floor, err := s.floor()
+	if err != nil {
 		return err
-	} else if n := len(seqs); n > 0 && p.Doc.Sequence <= seqs[n-1] {
+	}
+	if p.Doc.Sequence <= floor {
 		return fmt.Errorf("inventory: bundle %d is not above bundle %d, the newest kept; the sequence never goes back",
-			p.Doc.Sequence, seqs[n-1])
+			p.Doc.Sequence, floor)
 	}
 	if err := WriteAtomic(s.Dir, publishedName, p.Raw, 0o600); err != nil {
 		return err
@@ -73,7 +81,40 @@ func (s State) Save(p Published) error {
 	return nil
 }
 
-// history is every sequence kept, oldest first.
+// floor is the highest sequence kept: the history's newest, or
+// published.json's when a crash between Save's two writes left it ahead.
+// published.json's is read without its signature, behind the fence: a value
+// it states can only raise the floor, and so refuse more. One that does not
+// parse is an error, not a floor of zero.
+func (s State) floor() (int64, error) {
+	var floor int64
+	seqs, err := s.history()
+	if err != nil {
+		return 0, err
+	}
+	if n := len(seqs); n > 0 {
+		floor = seqs[n-1]
+	}
+	path := filepath.Join(s.Dir, publishedName)
+	raw, err := fence.ReadNoLink(path, bundle.MaxDocument, "bundle")
+	if errors.Is(err, fs.ErrNotExist) {
+		return floor, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	seq, err := bundle.UnverifiedSequence(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", path, err)
+	}
+	return max(floor, seq), nil
+}
+
+// history is every sequence kept, oldest first. A name that is not a
+// sequence as Save writes it — canonical decimal above zero, no sign, no leading zero —
+// is skipped, not refused: nothing but the service writes this 0700
+// directory, so a stray file there is an operator's, and it must neither stop
+// the service publishing nor be pruned by a name it does not have.
 func (s State) history() ([]int64, error) {
 	names, err := os.ReadDir(filepath.Join(s.Dir, historyDir))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -84,7 +125,8 @@ func (s State) history() ([]int64, error) {
 	}
 	var seqs []int64
 	for _, n := range names {
-		if seq, err := strconv.ParseInt(strings.TrimSuffix(n.Name(), ".json"), 10, 64); err == nil {
+		seq, err := strconv.ParseInt(strings.TrimSuffix(n.Name(), ".json"), 10, 64)
+		if err == nil && seq > 0 && n.Name() == strconv.FormatInt(seq, 10)+".json" {
 			seqs = append(seqs, seq)
 		}
 	}
@@ -97,19 +139,29 @@ func (s State) history() ([]int64, error) {
 func (s State) Latest(keys []ed25519.PublicKey) (*Published, error) {
 	path := filepath.Join(s.Dir, publishedName)
 	p, err := openIfPresent(fence.ReadNoLink, path, keys)
-	if p == nil || err != nil {
-		return p, err
+	if err != nil {
+		return nil, err
+	}
+	seqs, err := s.history()
+	if err != nil {
+		return nil, err
+	}
+	n := len(seqs)
+	if p == nil {
+		if n == 0 {
+			return nil, nil
+		}
+		// History without published.json is not a fresh install: starting
+		// on nothing would start the sequence again at 1.
+		return nil, fmt.Errorf("%s is missing, but %s holds bundle %d: the published bundle is gone, and the "+
+			"service does not start the sequence again", path, filepath.Join(s.Dir, historyDir), seqs[n-1])
 	}
 	// A published.json below the history's newest is an older document put
 	// back in its place: serving it would roll the sequence back, and every
 	// daemon holding the newer one would refuse what follows. Refused, so the
 	// service does not start on it; Save writes published.json first, so a
 	// crash never leaves it behind the history.
-	seqs, err := s.history()
-	if err != nil {
-		return nil, err
-	}
-	if n := len(seqs); n > 0 && seqs[n-1] > p.Doc.Sequence {
+	if n > 0 && seqs[n-1] > p.Doc.Sequence {
 		return nil, fmt.Errorf("%s holds bundle %d, but %s holds bundle %d: an older bundle is in the "+
 			"published one's place, and the sequence is not rolled back", path, p.Doc.Sequence,
 			filepath.Join(s.Dir, historyDir), seqs[n-1])
@@ -171,11 +223,15 @@ func openIfPresent(read reader, path string, keys []ed25519.PublicKey) (*Publish
 	return p, err
 }
 
-// OpenFile reads a sealed copy whose signature alone vouches for it — a
-// mirror's — as a regular file, not through a link in its name, of at most
+// OpenSignedFile reads a sealed copy whose signature alone vouches for it,
+// as a regular file, not through a link in its name, of at most
 // bundle.MaxDocument bytes, and opens it against keys. Its error names the
 // file and, from bundle.Open, quotes nothing in it.
-func OpenFile(path string, keys []ed25519.PublicKey) (*Published, error) {
+//
+// It checks no owner or mode: it is for a copy on a shared mount the fence
+// cannot hold, a mirror_dir, and never for a file the fence must hold — the
+// service's state, or port49d's persisted copy, which fence.Read reads.
+func OpenSignedFile(path string, keys []ed25519.PublicKey) (*Published, error) {
 	return openWith(fence.ReadSigned, path, keys)
 }
 

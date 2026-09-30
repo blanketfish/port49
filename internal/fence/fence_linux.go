@@ -103,7 +103,18 @@ func ReadNoLink(path string, max int64, what string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return readIn(dir, filepath.Base(abs), max, what)
+	raw, err := readIn(dir, filepath.Base(abs), max, what)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, linkRefused(filepath.Join(dir, filepath.Base(abs)), what, err)
+	}
+	return raw, err
+}
+
+// linkRefused is the refusal of a link in a file's own name, wrapping err so
+// errors.Is(err, syscall.ELOOP) still holds.
+func linkRefused(path, what string, err error) error {
+	return fmt.Errorf("%s is a symbolic link; a%s %s is read only as a file of its own: %w", path, article(what),
+		what, err)
 }
 
 // ReadSigned reads a file whose bytes a signature vouches for, from a shared
@@ -113,8 +124,7 @@ func ReadNoLink(path string, max int64, what string) ([]byte, error) {
 func ReadSigned(path string, max int64, what string) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if errors.Is(err, syscall.ELOOP) {
-		return nil, fmt.Errorf("%s is a symbolic link; a%s %s is read only as a file of its own", path,
-			article(what), what)
+		return nil, linkRefused(path, what, err)
 	}
 	if err != nil {
 		return nil, err
@@ -133,10 +143,6 @@ func readIn(dir, base string, max int64, what string) ([]byte, error) {
 	}
 	defer d.Close()
 	fd, err := syscall.Openat(int(d.Fd()), base, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
-	if errors.Is(err, syscall.ELOOP) {
-		return nil, fmt.Errorf("%s is a symbolic link; a%s %s is read only as a file of its own", target,
-			article(what), what)
-	}
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: target, Err: err}
 	}
