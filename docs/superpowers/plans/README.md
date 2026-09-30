@@ -44,7 +44,7 @@ top. **Executed 2026-09-30** on `feature/inventory-service`, reviewed per task a
 with a fix wave; Task 20's midnight nights were dropped by the owner's ruling. It closed L29 and
 L30, and spec §14's quarantine through a sync passed on four images; it opened L31, slow Cisco
 break-glass with single-connection on (Plan 6b — As built, below); **merged 2026-09-30 (PR #17)**. Next,
-`fix/breakglass-reset`, which closes L31. 6c and 7–13 not yet.
+`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions). 6c and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -972,7 +972,7 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   (ed25519) and verified; the mirror a directory, not an object-store API; nothing the service sends
   assigns a key, and the pin tier moves into the reviewed policy as a key group matching a device name
   (revised after the pre-flight review: a `/32` group is tier 3 and is not a pin).
-- **Fix `fix/breakglass-reset` — right after 6b merges, before 6c.** Closes **L31** (spec §15;
+- **Fix `fix/breakglass-reset` — `2026-09-30-06b1-breakglass-reset.md`. Written 2026-09-30.** Right after 6b merges, before 6c. Closes **L31** (spec §15;
   `tests/lab/results/L31-breakglass-cisco-singleconnection.md`). With single-connection on,
   IOS-XE and NX-OS wait out their 5 s timeout after a reset that follows their request, so
   break-glass costs 16–21 s on a refused or quarantined device and 30–41 s on a removed one. Give
