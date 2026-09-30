@@ -134,8 +134,10 @@ every finding is fixed below, with the review's fix unless the line says otherwi
   untested); the line regex takes padded names; the lab policy's `key_groups` is block style; a
   lab-unit test runs every phase's edit on the real `inventory-lab.yaml`.
 - **Minors.** 1: Task 1 edits the "key references" paragraph, the tier table, "Device records" and
-  L30's Decides column. 2: one top-level `interval` is a spec change, said in decision 30; a
-  per-source `interval` is refused by the strict decode. 3: the API logs a fixed route name and says a
+  L30's Decides column. 2: *reversed by the owner's rule (no spec function changes without a tested
+  technical reason):* each source keeps its own `interval`, as spec §10's example has it, defaulting
+  to a top-level `interval`; a sync of any source rebuilds the merged bundle from every source's
+  latest fetch (Tasks 5, 9, 11). 3: the API logs a fixed route name and says a
   refusal once per reason and caller. 4: the rotation hint is given only for an unknown signing key;
   a signature that does not verify is called out for investigation (`bundle.ErrUnknownKey`). 5: every
   ask of the service has a 30 s deadline and dials with a 10 s one. 6: *departing from the review's
@@ -489,7 +491,9 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   (design document §17: reading a snapshot is not the right to trigger a sync). Probes read
   `/healthz` and `/readyz` on the service's plain metrics listener, which carries no fleet data.
 
-  **Four triggers are built in two plans.** The schedule (`interval`, default 10 minutes), startup,
+  **Four triggers are built in two plans.** The schedule (each source's `interval`, default the
+  top-level `interval`, default 10 minutes; a sync of one source rebuilds the merged bundle from every
+  source's latest fetch), startup,
   and `port49 inventory sync` are plan 6b's, with the file connector; the NetBox and Nautobot
   connectors and their authenticated webhooks are plan 6c's, written against the fixtures L27 and
   L30 recorded.
@@ -600,18 +604,20 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   policy_file: /etc/port49-inventory/policy.yaml
   state_dir: /var/lib/port49-inventory
   mirror_dir: /mnt/port49-bundle
-  interval: 10m
+  interval: 10m                     # a source's default
   safety: {max_removed_percent: 10}
   sync:
     - name: lab_file
       type: file
       path: /etc/port49-inventory/inventory.yaml
+      interval: 10m
       safety: {max_removed_percent: 10}
     # plan 6c:
     # - name: netbox_prod
     #   type: netbox
     #   url: https://netbox.example.com
     #   token_secret_ref: vault:port49/prod/netbox   # resolved like a key secret_ref, never inline
+    #   interval: 10m
     #   filter: {status: active, has_primary_ip: true}
     #   map: {site: site.slug, role: role.slug, platform: platform.slug, os_version: custom_fields.os_version}
   ```
@@ -718,9 +724,7 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   `inventory.service.verify_key_files`, so a shared mirror mount's writers cannot forge an
   inventory. A document carries neither key groups nor pins: key assignment is reviewed policy, and a
   synced source's writer choosing a device's key is an escalation with no diff; a pin is a policy key
-  group matching the device's name, at tier 1 (§10). The service holds one `interval` for every
-  source, where §10's first example had one per source: the sources merge into one bundle, so one
-  schedule publishes it. The service reads its own state and mirror against its own
+  group matching the device's name, at tier 1 (§10). The service reads its own state and mirror against its own
   `verify_key_files`, so rotating its signing key keeps its sequence and its bound.
   ```
 
@@ -2196,7 +2200,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Consumes: `config.ReadRegular`, `config.MaxConfigSize`; `yamlfault.Of`; `admission.KeyRefShape` (a
   source's name has a `key_ref`'s shape: a name every line prints).
 - Produces:
-  - `type inventory.SourceConfig struct { Name, Type, Path string; MaxRemovedPercent int }`.
+  - `type inventory.SourceConfig struct { Name, Type, Path string; Interval time.Duration;
+    MaxRemovedPercent int }` — each source's own `interval` (spec §10), default the top-level one.
   - `type inventory.Config struct { Listen, MetricsListen, TLSCertFile, TLSKeyFile, ClientCAFile,
     SigningKeyFile, PolicyFile, StateDir, MirrorDir string; Readers, Syncers, VerifyKeyFiles []string;
     Interval, SyncTimeout time.Duration; MaxRemovedPercent int; Sync []SourceConfig }`.
@@ -2253,12 +2258,21 @@ func TestTheMinimalConfigLoadsWithItsDefaults(t *testing.T) {
 	}
 }
 
-// One schedule publishes the one bundle: a per-source interval (spec §10's
-// first example) is refused by the strict decode, by its line (decision 30).
-func TestAPerSourceIntervalIsRefused(t *testing.T) {
-	_, err := loadString(t, strings.Replace(minimalConfig, "path: /etc/i/inventory.yaml}",
+// Spec §10: each source syncs on its own interval, defaulting to the
+// top-level one.
+func TestAPerSourceIntervalOverridesTheDefault(t *testing.T) {
+	c, err := loadString(t, strings.Replace(minimalConfig, "path: /etc/i/inventory.yaml}",
 		"path: /etc/i/inventory.yaml, interval: 5m}", 1))
-	if err == nil || !strings.Contains(err.Error(), "an unknown field") {
+	if err != nil || c.Sync[0].Interval != 5*time.Minute {
+		t.Fatalf("%+v %v", c.Sync, err)
+	}
+	c, err = loadString(t, minimalConfig)
+	if err != nil || c.Sync[0].Interval != 10*time.Minute {
+		t.Fatalf("the default: %+v %v", c.Sync, err)
+	}
+	if _, err := loadString(t, strings.Replace(minimalConfig, "path: /etc/i/inventory.yaml}",
+		"path: /etc/i/inventory.yaml, interval: 5s}", 1)); err == nil ||
+		!strings.Contains(err.Error(), "sync[0].interval must be between 1m and 24h") {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -2335,7 +2349,10 @@ import (
 // cadence"). The file source is this plan's; netbox and nautobot are plan
 // 6c's.
 type SourceConfig struct {
-	Name, Type, Path  string
+	Name, Type, Path string
+	// Interval is how often this source is synced (spec §10), default the
+	// top-level interval.
+	Interval          time.Duration
 	MaxRemovedPercent int
 }
 
@@ -2385,10 +2402,11 @@ type fileConfig struct {
 	Interval       time.Duration `yaml:"interval"`
 	Safety         safetyYAML    `yaml:"safety"`
 	Sync           []struct {
-		Name   string     `yaml:"name"`
-		Type   string     `yaml:"type"`
-		Path   string     `yaml:"path"`
-		Safety safetyYAML `yaml:"safety"`
+		Name     string        `yaml:"name"`
+		Type     string        `yaml:"type"`
+		Path     string        `yaml:"path"`
+		Interval time.Duration `yaml:"interval"`
+		Safety   safetyYAML    `yaml:"safety"`
 	} `yaml:"sync"`
 }
 
@@ -2481,7 +2499,15 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return Config{}, err
 		}
-		c.Sync = append(c.Sync, SourceConfig{Name: s.Name, Type: s.Type, Path: s.Path, MaxRemovedPercent: p})
+		iv := s.Interval
+		if iv == 0 {
+			iv = c.Interval
+		}
+		if iv < time.Minute || iv > 24*time.Hour {
+			return Config{}, fmt.Errorf("port49-inventory: sync[%d].interval must be between 1m and 24h; got %s", i, iv)
+		}
+		c.Sync = append(c.Sync, SourceConfig{Name: s.Name, Type: s.Type, Path: s.Path, Interval: iv,
+			MaxRemovedPercent: p})
 	}
 	return c, nil
 }
@@ -3244,7 +3270,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     Metrics *Metrics; Now func() time.Time; Log io.Writer }` — `VerifyKeys` are the further keys its
     own state and mirror are read against (M6); `Timeout` is `sync_timeout` (minor 10).
   - `func (s *Syncer) Restore() error`; `func (s *Syncer) Current() *Published`;
-    `func (s *Syncer) Sync(ctx context.Context, trigger string) Result`;
+    `func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Result` — fetches the
+    sources named in `only` (every source when none, and any not fetched yet) and rebuilds the merged
+    bundle with every other source's latest fetch: each source syncs on its own `interval` (spec §10);
     `func (s *Syncer) Diff(from int64) (bundle.Report, error)`;
     `func (s *Syncer) Describe(addr netip.Addr) (DeviceView, bool)`.
   - `type inventory.Result struct { Outcome string; Sequence int64; Bundle, Summary string; Changes
@@ -3559,6 +3587,27 @@ func TestAFailingSourceKeepsTheBundleAndIsSaidOnce(t *testing.T) {
 	}
 }
 
+// Spec §10: each source syncs on its own interval. A sync of one source
+// fetches it alone and rebuilds the bundle with the other's latest fetch.
+func TestASyncOfOneSourceKeepsTheOthersLatestFetch(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(2))
+	b := &memSource{name: "b", inv: admission.Inventory{Devices: []admission.Device{{Name: "leaf-b",
+		Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("10.1.0.1")},
+		Transport: admission.TransportTCP}}}}
+	rig.s.Sources = append(rig.s.Sources, b)
+	rig.sync(t)
+	rig.src.inv = devices(3) // source a changes, but only b is due
+	b.inv.Devices = append(b.inv.Devices, admission.Device{Name: "leaf-b2", Platform: "arista_eos",
+		Addresses: []netip.Addr{netip.MustParseAddr("10.1.0.2")}, Transport: admission.TransportTCP})
+	res := rig.s.Sync(context.Background(), "schedule", "b")
+	if res.Outcome != "published" || len(rig.s.Current().Inv.Devices) != 4 {
+		t.Fatalf("%+v: %d devices, want a's two and b's two", res, len(rig.s.Current().Inv.Devices))
+	}
+	if res := rig.s.Sync(context.Background(), "schedule", "a"); len(rig.s.Current().Inv.Devices) != 5 {
+		t.Fatalf("%+v", res)
+	}
+}
+
 func TestADeviceInTwoSourcesIsRefused(t *testing.T) {
 	rig := newSyncRig(t, syncPolicy, devices(2))
 	rig.s.Sources = append(rig.s.Sources, &memSource{name: "b", inv: devices(1)})
@@ -3856,6 +3905,9 @@ type Syncer struct {
 	// said is the last refusal or failure said, and mirrorSaid the last mirror
 	// fault, so each is said once.
 	said, mirrorSaid string
+	// fetched is each source's latest fetch, which a sync of another source
+	// merges with (spec §10: each source on its own interval).
+	fetched map[string]admission.Inventory
 }
 
 // maxPolicy bounds the service's read of its policy copy, as port49d bounds
@@ -3911,9 +3963,12 @@ func (s *Syncer) publish(p *Published) {
 }
 
 // Sync runs one sync for trigger, under Timeout, says what it did, and
-// returns it. Whatever it found, the mirror is brought level with the bundle
-// published (M7).
-func (s *Syncer) Sync(ctx context.Context, trigger string) Result {
+// returns it. It fetches the sources named in only — every source when only
+// is empty, and any source not fetched since start — and rebuilds the merged
+// bundle from every source's latest fetch, so each source syncs on its own
+// interval (spec §10). Whatever it found, the mirror is brought level with
+// the bundle published (M7).
+func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Result {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	timeout := s.Timeout
@@ -3922,7 +3977,7 @@ func (s *Syncer) Sync(ctx context.Context, trigger string) Result {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	res := s.sync(ctx)
+	res := s.sync(ctx, only)
 	if cur := s.current.Load(); cur != nil {
 		s.mirror(cur.Raw)
 	}
@@ -3936,7 +3991,7 @@ func (s *Syncer) Sync(ctx context.Context, trigger string) Result {
 	return res
 }
 
-func (s *Syncer) sync(ctx context.Context) Result {
+func (s *Syncer) sync(ctx context.Context, only []string) Result {
 	prev := s.current.Load()
 	held := func(r Result) Result {
 		if prev != nil {
@@ -3952,11 +4007,19 @@ func (s *Syncer) sync(ctx context.Context) Result {
 	sources := map[string][]string{}
 	owner := map[string]string{}
 	var leftOut []string
+	if s.fetched == nil {
+		s.fetched = map[string]admission.Inventory{}
+	}
 	for _, src := range s.Sources {
-		got, err := src.Fetch(ctx)
-		if err != nil {
-			s.Metrics.SourceErrors.WithLabelValues(src.Name()).Inc()
-			return held(Result{Outcome: OutcomeFailed, Reason: "source " + src.Name() + ": " + oneLine(err)})
+		got, cached := s.fetched[src.Name()]
+		if !cached || len(only) == 0 || slices.Contains(only, src.Name()) {
+			var err error
+			if got, err = src.Fetch(ctx); err != nil {
+				s.Metrics.SourceErrors.WithLabelValues(src.Name()).Inc()
+				return held(Result{Outcome: OutcomeFailed, Reason: "source " + src.Name() + ": " + oneLine(err)})
+			}
+			// Kept only once fetched whole: a failed fetch leaves the last one.
+			s.fetched[src.Name()] = got
 		}
 		for i, d := range got.Devices {
 			// The one rule port49d's Open applies (pre-flight M2).
@@ -4772,7 +4835,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 What an operator sees at start: `port49-inventory: API on 127.0.0.1:8443 (mutual TLS; 1 reader(s),
 2 syncer(s)), metrics on [::]:9050; signing key ed25519:3f9a…; 1 source(s): lab_file (file)`, then
-`serving bundle 1842 …` or `no bundle published yet …`, then the startup sync's line. `/readyz` is 200
+`serving bundle 1842 …` or `no bundle published yet …`, then the startup sync's line. Each source is
+then synced on its own `interval`; startup, `SIGHUP` and `POST /v1/sync` sync every source. `/readyz` is 200
 once a bundle is published or restored; until then the API's reads answer 503 `no_bundle`.
 
 - [ ] **Step 1: Write the failing tests.** Create `cmd/port49-inventory/main_test.go`:
@@ -5114,8 +5178,28 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	}
 
 	s.Sync(ctx, "startup")
-	tick := time.NewTicker(cfg.Interval)
-	defer tick.Stop()
+	// Each source on its own interval (spec §10): a ticker per source names
+	// the source due, and that sync rebuilds the bundle with every other
+	// source's latest fetch.
+	due := make(chan string)
+	for _, c := range cfg.Sync {
+		go func(name string, every time.Duration) {
+			tick := time.NewTicker(every)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+					select {
+					case due <- name:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}(c.Name, c.Interval)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -5129,8 +5213,8 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 				return nil
 			}
 			return fmt.Errorf("listen %s: %w", cfg.Listen, err)
-		case <-tick.C:
-			s.Sync(ctx, "schedule")
+		case name := <-due:
+			s.Sync(ctx, "schedule", name)
 		case <-hup:
 			s.Sync(ctx, "signal")
 		}
@@ -9017,7 +9101,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ## Operator-facing notes (for the pull request body)
 
 - **A new service, `port49-inventory`.** It syncs the inventory from its sources (this release: a
-  file in port49d's inventory schema; NetBox and Nautobot come in plan 6c), every `interval` (10m),
+  file in port49d's inventory schema; NetBox and Nautobot come in plan 6c), each on its own `interval`
+  (default 10m),
   at start, at `SIGHUP`, and on `port49 inventory sync`. It publishes one signed bundle over a
   mutual-TLS API, keeps it in `state_dir`, and writes it to `mirror_dir` when set. Config:
   `port49-inventory.yaml` (spec §10 has the example). Run `port49 inventory keygen --dir DIR` once for
@@ -9069,7 +9154,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   whole-fleet re-address loads and no session is lost between them. The make-before-break order is no
   longer needed.
 - **New config keys:** port49-inventory.yaml (all of it, `verify_key_files` and `sync_timeout`
-  included; one top-level `interval`, not one per source); port49d.yaml `inventory.service.*`; policy
+  included; `interval` per source, as spec §10 has it, with a top-level default); port49d.yaml `inventory.service.*`; policy
   `key_groups` `match: {name: …}`.
 - **New metrics, the service:** `port49_inventory_syncs_total{trigger,outcome}`,
   `port49_inventory_sync_refused`, `port49_inventory_sync_failing`,
