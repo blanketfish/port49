@@ -98,6 +98,22 @@ func TestAMirrorDirBesideStateDirLoads(t *testing.T) {
 	}
 }
 
+// A mirror_dir whose name is a prefix of state_dir's does not hold it.
+func TestAStateDirBesideMirrorDirLoads(t *testing.T) {
+	c, err := loadString(t, minimalConfig+"mirror_dir: /var/lib/port49\n")
+	if err != nil || c.MirrorDir != "/var/lib/port49" {
+		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+// A trailing empty document is still a second document.
+func TestATrailingEmptyDocumentIsRefused(t *testing.T) {
+	_, err := loadString(t, minimalConfig+"---\n")
+	if err == nil || !strings.Contains(err.Error(), "one YAML document") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 // A second document is refused in fixed text: none of its values are echoed.
 func TestASecondDocumentIsRefusedWithoutItsText(t *testing.T) {
 	_, err := loadString(t, minimalConfig+"---\nsigning_key: SECRET\n")
@@ -165,6 +181,7 @@ func TestWhatTheServiceCannotRunWithoutIsRefused(t *testing.T) {
 		"mirror_dir is state_dir":          {"state_dir:", "mirror_dir: /var/lib/port49-inventory/\nstate_dir:", "mirror_dir must be outside state_dir"},
 		"mirror_dir inside state_dir":      {"state_dir:", "mirror_dir: /var/lib/port49-inventory/mirror\nstate_dir:", "mirror_dir must be outside state_dir"},
 		"a second document":                {"state_dir:", "---\nstate_dir:", "one YAML document"},
+		"state_dir inside mirror_dir":      {"state_dir:", "mirror_dir: /var/lib\nstate_dir:", "state_dir must be outside mirror_dir"},
 	} {
 		_, err := loadString(t, strings.Replace(minimalConfig, c.from, c.to, 1))
 		if err == nil || !strings.Contains(err.Error(), c.want) {

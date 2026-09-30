@@ -155,6 +155,10 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("port49-inventory: mirror_dir must be outside state_dir; the mirror is a " +
 			"separate copy, not a part of the state")
 	}
+	if c.MirrorDir != "" && within(c.MirrorDir, c.StateDir) {
+		return Config{}, fmt.Errorf("port49-inventory: state_dir must be outside mirror_dir; the mirror is a " +
+			"separate copy, and the state is not a part of it")
+	}
 	for _, l := range []struct{ key, v string }{{"listen", c.Listen}, {"metrics_listen", c.MetricsListen}} {
 		if _, port, err := net.SplitHostPort(l.v); err != nil || port == "" {
 			return Config{}, fmt.Errorf("port49-inventory: %s must be host:port, such as 127.0.0.1:8443 or :8443", l.key)
