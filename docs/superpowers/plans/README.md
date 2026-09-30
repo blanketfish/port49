@@ -42,8 +42,9 @@ seventeen code, two lab, one lab-and-docs); it splits again at the source, leavi
 Nautobot connectors and the webhook trigger to plan 6c, and three owner decisions are listed at its
 top. **Executed 2026-09-30** on `feature/inventory-service`, reviewed per task and whole-branch,
 with a fix wave; Task 20's midnight nights were dropped by the owner's ruling. It closed L29 and
-L30, and spec §14's quarantine through a sync passed on four images (Plan 6b — As built, below);
-**ready to merge**. 6c and 7–13 not yet.
+L30, and spec §14's quarantine through a sync passed on four images; it opened L31, slow Cisco
+break-glass with single-connection on (Plan 6b — As built, below); **ready to merge**. Next,
+`fix/breakglass-reset`, which closes L31. 6c and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -971,6 +972,19 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   (ed25519) and verified; the mirror a directory, not an object-store API; nothing the service sends
   assigns a key, and the pin tier moves into the reviewed policy as a key group matching a device name
   (revised after the pre-flight review: a `/32` group is tier 3 and is not a pin).
+- **Fix `fix/breakglass-reset` — right after 6b merges, before 6c.** Closes **L31** (spec §15;
+  `tests/lab/results/L31-breakglass-cisco-singleconnection.md`). With single-connection on,
+  IOS-XE and NX-OS wait out their 5 s timeout after a reset that follows their request, so
+  break-glass costs 16–21 s on a refused or quarantined device and 30–41 s on a removed one. Give
+  the unadmitted, refused and quarantined paths (`internal/daemon/server/conn.go:233-238`,
+  `:261-262`) L28's shape: record the first connection, reset it at once, and refuse the source's
+  next connections at Accept for a short window. The unadmitted path takes a `keyMiss`-style close
+  in place of `backoff`. Refused and quarantined, which take no strike by spec, get a strike-free
+  window checked beside `Holding` (`server.go:119`) and cleared at every reload, so a fix or
+  re-admission takes effect at once. Retries inside the window are counted, not recorded, so spec
+  §10's "one record per connection" for the quarantine close and the `conn.go` comment change with
+  it. Lab: IOS-XE and NX-OS with single-connection on, removed, refused and quarantined, against
+  port49d stopped; the run closes L31.
 - **Plan 6c — the NetBox and Nautobot connectors; written after 6b merges, against L27's and L30's
   fixtures.** Version detection by `/api/status/`, GraphQL first, the REST fallback (`?depth=1` on
   Nautobot 2.x, following `next` as L30 finds it), the slug alias table, filters and maps, source
@@ -1215,7 +1229,8 @@ vJunos-router held a connection open across some changes only: its committed not
 evidence, varied in which phases held one open. **L30 closed** 2026-09-30 (`L30-netbox.md`,
 `L30-nautobot.md`), with which of `Host` and `X-Forwarded-Host` a product reads, and a proxied
 `next` followed, named as unmeasured outside its question. **Spec §14's quarantine through a sync
-passed** on all four (`quarantine-sync-*.md`). No row is left open by this plan. The C8000V's
+passed** on all four (`quarantine-sync-*.md`). **L31 opened** (open; closes in `fix/breakglass-reset`): with single-connection on, break-glass on
+IOS-XE and NX-OS costs 16–41 s after a de-admitted device's reset (`L31-breakglass-cisco-singleconnection.md`). The C8000V's
 liveness probe again reached port49 only at its second or third attempt before two of six phases
 (30 s, 54 s); why is still not established.
 
@@ -1227,11 +1242,11 @@ liveness probe again reached port49 only at its second or third attempt before t
   spelling per product; Nautobot 3.2.6 dropping `cluster` and `software_image_files`.
 - **Plan 12:** port49d.yaml's loader, and `config.InventoryServiceOf`, ignore a second YAML
   document (Plan 12, above).
-- **Later, unassigned (a lab question, not yet a register row):** why break-glass on the N9Kv and
-  the C8000V took 17–41 s after a reload removed or refused the device, and 16.7 s and 20.3 s
-  through a quarantine sync, against under 3 s with port49d stopped and under a second in the
-  2026-09-24 quarantine runs. Single-connection was on in the 2026-09-30 runs; nothing else is
-  isolated. Also the C8000V's slow liveness probe (above).
+- **`fix/breakglass-reset` (above), L31:** break-glass on the N9Kv and the C8000V took 17–41 s
+  after a reload removed or refused the device, and 16.7 s and 20.3 s through a quarantine sync.
+  The cause is analysed in `L31-breakglass-cisco-singleconnection.md`: with single-connection on,
+  a reset after the request is waited out, and those paths never refuse the retries at Accept.
+- **Later, unassigned:** the C8000V's slow liveness probe (above).
 
 ## Plan 7 — Broker in full (§19 step 7)
 
