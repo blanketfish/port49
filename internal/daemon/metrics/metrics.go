@@ -169,6 +169,11 @@ type Metrics struct {
 	// refused; the bundle in force keeps serving. The first document from the
 	// service applied or confirmed in force clears it.
 	InventoryBundleRefused prometheus.Gauge
+	// port49_inventory_policy_mismatch: 1 while the inventory service built
+	// the document in force against a policy other than the one in force.
+	// The service's policy is never applied: its inventory is loaded against
+	// port49d's own (spec §13, decision 29). A rollout holds it briefly.
+	InventoryPolicyMismatch prometheus.Gauge
 	// port49_inventory_mirror_unreadable: 1 when the start could not read
 	// inventory.service.mirror_dir's copy — it did not answer within the
 	// deadline, or the read failed — as against a copy it read and refused
@@ -304,6 +309,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 while the document in force could not be written to inventory.service.state_dir."}),
 		InventoryBundleRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_bundle_refused",
 			Help: "1 while a document port49d was given did not open or was refused; the bundle in force keeps serving."}),
+		InventoryPolicyMismatch: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_policy_mismatch",
+			Help: "1 while the inventory service built the document in force against a policy other than the one in force."}),
 		InventoryMirrorUnreadable: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_mirror_unreadable",
 			Help: "1 when the start could not read mirror_dir's copy: it hung past the deadline, or the read failed; " +
 				"it holds until the next start."}),
@@ -340,7 +347,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
-		m.InventoryMirrorUnreadable, m.InventoryFetches)
+		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches)
 	// process_start_time_seconds among them: an alert on
 	// port49_key_version_devices gates on uptime, because the count starts
 	// at 0 with every restart (spec §10). No labels.

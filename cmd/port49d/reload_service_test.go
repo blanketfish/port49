@@ -25,8 +25,6 @@ import (
 	"github.com/rhwendt/port49/internal/keyfile"
 )
 
-var _ = engine.HashOf // Task 16's tests use it
-
 const groupedPolicy = minimalPolicy + "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]\n"
 
 type serviceRig struct {
@@ -492,5 +490,70 @@ func TestTheFetcherFeedsRunAndIsJoinedAtShutdown(t *testing.T) {
 	if _, ok := rig.b.Policy.Load().Device("leaf2"); !ok || strings.Contains(out, "did not answer") ||
 		strings.Contains(out, "refused;") {
 		t.Fatalf("%s", out)
+	}
+}
+
+// Decision 29: a document built against another policy is applied against
+// the policy in force, said once per pair, and alarmed until they agree.
+func TestAPolicyMismatchIsSaidAndAlarmedAndTheInventoryApplied(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	other := groupedPolicy + "# the service's copy is a commit ahead\n"
+	rig.receive(rig.doc(t, 1, other, 2))
+	rig.receive(rig.doc(t, 2, other, 3))
+	if len(rig.b.Policy.Load().Devices()) != 3 {
+		t.Fatalf("the inventory was not applied: %s", rig.out.String())
+	}
+	if rig.b.Policy.Load().Source != engine.HashOf([]byte(groupedPolicy)) {
+		t.Fatal("the policy in force changed")
+	}
+	out := rig.out.String()
+	if n := strings.Count(out, "port49d: inventory: the service built bundle "); n != 1 ||
+		!strings.Contains(out, "against policy "+engine.HashOf([]byte(other))) ||
+		!strings.Contains(out, "nothing the service sends changes the policy") {
+		t.Fatalf("said %d times: %s", n, out)
+	}
+	if testutil.ToFloat64(rig.m.InventoryPolicyMismatch) != 1 {
+		t.Fatal("port49_inventory_policy_mismatch is not 1")
+	}
+	// port49d's own policy reload brings it level: said, and cleared.
+	rig.write(t, other)
+	rig.pollTwice()
+	if testutil.ToFloat64(rig.m.InventoryPolicyMismatch) != 0 ||
+		!strings.Contains(rig.out.String(), "port49d: inventory: the service's policy and the policy in force agree again") {
+		t.Fatalf("not cleared: %s", rig.out.String())
+	}
+}
+
+func TestAMatchingPolicyRaisesNothing(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	rig.receive(rig.doc(t, 1, groupedPolicy, 2))
+	if testutil.ToFloat64(rig.m.InventoryPolicyMismatch) != 0 || strings.Contains(rig.out.String(), "service built") {
+		t.Fatalf("%s", rig.out.String())
+	}
+}
+
+// The other way the alarm clears (decision 29): the service's next document
+// is built against the policy in force. A mismatch is never a refusal.
+func TestAMatchingDocumentClearsTheMismatch(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	rig.receive(rig.doc(t, 1, groupedPolicy+"# ahead\n", 2))
+	if testutil.ToFloat64(rig.m.InventoryPolicyMismatch) != 1 || testutil.ToFloat64(rig.m.InventoryBundleRefused) != 0 {
+		t.Fatalf("not alarmed, or refused: %s", rig.out.String())
+	}
+	rig.receive(rig.doc(t, 2, groupedPolicy, 2))
+	if testutil.ToFloat64(rig.m.InventoryPolicyMismatch) != 0 ||
+		!strings.Contains(rig.out.String(), "port49d: inventory: the service's policy and the policy in force agree again") {
+		t.Fatalf("not cleared: %s", rig.out.String())
+	}
+}
+
+// The start's document is judged as a pulled one is (decision 29).
+func TestTheStartsDocumentIsJudgedForAPolicyMismatch(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	d := rig.doc(t, 1, groupedPolicy+"# ahead\n", 2)
+	rig.with(func() { rig.r.startDocument(d.pub, "the persisted copy") })
+	if testutil.ToFloat64(rig.m.InventoryPolicyMismatch) != 1 ||
+		!strings.Contains(rig.out.String(), "port49d: inventory: the service built bundle 1 against policy ") {
+		t.Fatalf("not said at start: %s", rig.out.String())
 	}
 }

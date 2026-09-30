@@ -124,6 +124,10 @@ type reloader struct {
 	// confirmation writes it (pre-flight M7).
 	docRefused, persistSaid string
 	persistOwed             bool
+	// docPolicy is the policy_sha256 the document in force was built
+	// against, and mismatch the pair of hashes last said to differ, so a
+	// mismatch is said once per pair (sayPolicyMatch).
+	docPolicy, mismatch string
 	// latest is the last document the service sent, held so SIGHUP can try it
 	// again under a raised bound or new verify keys; latestAhead is set while
 	// its only refusal was a published_at ahead of this clock.
@@ -166,6 +170,7 @@ func (r *reloader) startDocument(p *inventory.Published, from string) {
 		return
 	}
 	r.inForce, r.seq, r.inForceAt, r.latestRaw = bundle.ETag(p.Raw), p.Doc.Sequence, p.Doc.PublishedAt, p.Raw
+	r.docPolicy = p.Doc.PolicySHA256
 	// The persisted copy is state_dir's already; any other may not have
 	// been written there (cold start says so if it failed).
 	r.persistOwed = from != "the persisted copy"
@@ -174,6 +179,36 @@ func (r *reloader) startDocument(p *inventory.Published, from string) {
 		seen = p.Doc.PublishedAt
 	}
 	r.invSeen.Store(seen.UnixNano())
+	r.sayPolicyMatch()
+}
+
+// sayPolicyMatch compares the policy the service built the document in force
+// against with the policy in force (spec §13, decision 29). A difference is
+// never applied — the inventory is loaded against port49d's own policy — but
+// it is said once per pair of hashes, and port49_inventory_policy_mismatch is
+// 1 until they agree, which is said too. A rollout in progress holds it
+// briefly; one that stays names a service or a daemon deployed from another
+// commit of the policy repository.
+func (r *reloader) sayPolicyMatch() {
+	if r.docPolicy == "" {
+		return
+	}
+	mine := r.broker.Policy.Load().Source
+	if r.docPolicy == mine {
+		r.metrics.InventoryPolicyMismatch.Set(0)
+		if r.mismatch != "" {
+			r.mismatch = ""
+			fmt.Fprintf(stderr, "port49d: inventory: the service's policy and the policy in force agree again (%s)\n", mine)
+		}
+		return
+	}
+	r.metrics.InventoryPolicyMismatch.Set(1)
+	if key := r.docPolicy + " " + mine; key != r.mismatch {
+		r.mismatch = key
+		fmt.Fprintf(stderr, "port49d: inventory: the service built bundle %d against policy %s, and the policy in "+
+			"force is %s; its inventory is applied against the policy in force, and nothing the service sends changes "+
+			"the policy (spec §13, decision 29)\n", r.seq, r.docPolicy, mine)
+	}
 }
 
 // inventoryVersion is policyVersion for inventory_file: read behind the fence
@@ -520,12 +555,14 @@ func (r *reloader) loadDocument(ctx context.Context, trigger string, d received)
 			"reset; applying it (spec §10)\n", r.seq, pub.Doc.Sequence)
 	}
 	r.inForce, r.seq, r.inForceAt, r.latestRaw = bundle.ETag(d.raw), pub.Doc.Sequence, pub.Doc.PublishedAt, d.raw
+	r.docPolicy = pub.Doc.PolicySHA256
 	r.invSeen.Store(r.now().UnixNano())
 	r.metrics.InventoryBundleSequence.Set(float64(r.seq))
 	r.persist(d.raw)
 	if pol.Bundle == old.Bundle {
 		// The same devices under a new sequence: nothing to swap.
 		r.metrics.InventoryReloads.WithLabelValues("unchanged").Inc()
+		r.sayPolicyMatch()
 		return
 	}
 	r.metrics.InventoryReloads.WithLabelValues("applied").Inc()
@@ -535,6 +572,7 @@ func (r *reloader) loadDocument(ctx context.Context, trigger string, d received)
 	fmt.Fprintf(stderr, "port49d: inventory reloaded (%s): %s; %d device(s) quarantined now, %d before; %d refused "+
 		"admission\n", label, rep.Summary(), quarantinedAt(pol, now), quarantinedAt(old, now), len(pol.AdmissionRefusals()))
 	r.after(ctx, "inventory", rep, pol, now)
+	r.sayPolicyMatch()
 }
 
 // persist keeps raw as port49d's copy, atomically (persistBundle); a failure
@@ -650,6 +688,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s (bundle %s); %d device(s) quarantined now, %d before\n",
 		trigger, pol.Source, old.Source, pol.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
 	r.after(ctx, "policy", bundle.Diff(old, pol, now), pol, now)
+	r.sayPolicyMatch()
 }
 
 // loadInventory builds a bundle from raw, the inventory file read as version
