@@ -197,3 +197,76 @@ func TestAnOversizedDocumentIsRefusedUnread(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestAFlippedSignatureByteIsRefused(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	var e envelope
+	if err := json.Unmarshal(sealed(t, docInventory(), key), &e); err != nil {
+		t.Fatal(err)
+	}
+	e.Signature[0] ^= 1
+	raw, _ := json.Marshal(e)
+	if _, _, err := Open(raw, []ed25519.PublicKey{pub}); err == nil || !strings.Contains(err.Error(), "does not verify") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// Signed bytes that decode to a good document but are not spelled as the
+// service writes them are refused: what was verified is what was read.
+func TestASignedDocumentNotInTheServicesSpellingIsRefused(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	good, _ := json.Marshal(NewDocument(1, time.Now(), []byte(docPolicy), "1.1.0", docInventory(), nil))
+	for name, body := range map[string]string{
+		"duplicate key": strings.Replace(string(good), `"sequence":1`, `"sequence":99,"sequence":1`, 1),
+		"case-varied":   strings.Replace(string(good), `"platform_set"`, `"PLATFORM_SET"`, 1),
+	} {
+		if body == string(good) {
+			t.Fatalf("%s: the test's replacement did not apply", name)
+		}
+		if _, _, err := Open(sealBody(t, []byte(body), key), []ed25519.PublicKey{pub}); err == nil ||
+			!strings.Contains(err.Error(), "not in the form port49 writes") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestANonCanonicalInventoryIsRefused(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDocument(1, time.Now(), []byte(docPolicy), "1.1.0", docInventory(), nil)
+	// Valid, and the default it spells, but not the canonical form.
+	inv := strings.Replace(string(d.Inventory), `"addresses":["10.0.0.1","10.0.0.2"]}`,
+		`"addresses":["10.0.0.1","10.0.0.2"],"transport":"tcp"}`, 1)
+	if inv == string(d.Inventory) {
+		t.Fatal("the test's replacement did not apply")
+	}
+	d.Inventory = json.RawMessage(inv)
+	body, _ := json.Marshal(d)
+	if _, _, err := Open(sealBody(t, body, key), []ed25519.PublicKey{pub}); err == nil ||
+		!strings.Contains(err.Error(), "not in canonical form") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAZeroPublishedAtIsRefused(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	d := NewDocument(1, time.Now(), []byte(docPolicy), "1.1.0", docInventory(), nil)
+	d.PublishedAt = time.Time{}
+	body, _ := json.Marshal(d)
+	if _, _, err := Open(sealBody(t, body, key), []ed25519.PublicKey{pub}); err == nil ||
+		!strings.Contains(err.Error(), "published_at") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A verify key of the wrong length is passed over, never handed to Verify.
+func TestAShortVerifyKeyIsSkipped(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	raw := sealed(t, docInventory(), key)
+	short := ed25519.PublicKey(pub[:16])
+	if _, _, err := Open(raw, []ed25519.PublicKey{short}); !errors.Is(err, ErrUnknownKey) {
+		t.Fatalf("short only: %v", err)
+	}
+	if _, _, err := Open(raw, []ed25519.PublicKey{short, pub}); err != nil {
+		t.Fatal(err)
+	}
+}

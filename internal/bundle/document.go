@@ -106,7 +106,8 @@ func Open(raw []byte, keys []ed25519.PublicKey) (Document, admission.Inventory, 
 	}
 	var pub ed25519.PublicKey
 	for _, k := range keys {
-		if KeyIDOf(k) == e.KeyID {
+		// ed25519.Verify panics on a key of any other length.
+		if len(k) == ed25519.PublicKeySize && KeyIDOf(k) == e.KeyID {
 			pub = k
 		}
 	}
@@ -124,12 +125,18 @@ func Open(raw []byte, keys []ed25519.PublicKey) (Document, admission.Inventory, 
 	if d.Format != DocumentFormat {
 		return Document{}, admission.Inventory{}, fmt.Errorf("bundle: the document is not in format %s", DocumentFormat)
 	}
+	// The service writes the document as json.Marshal does. One spelled
+	// otherwise — a duplicate key, a field name in another case — is not the
+	// service's, and what was verified must be exactly what was read.
+	if again, err := json.Marshal(d); err != nil || !bytes.Equal(again, e.Document) {
+		return Document{}, admission.Inventory{}, errors.New("bundle: the signed document is not in the form port49 writes")
+	}
 	// Every field a line prints is checked for shape first (pre-flight
 	// minor 9): the start line, the swap line and the mismatch line name them.
 	if !hashShape.MatchString(d.Bundle) || !hashShape.MatchString(d.PolicySHA256) || !NameOK(d.PlatformSet) ||
-		d.Sequence < 1 {
+		d.Sequence < 1 || d.PublishedAt.IsZero() {
 		return Document{}, admission.Inventory{}, errors.New("bundle: the document's bundle, policy_sha256, " +
-			"platform_set or sequence is not of the form port49 writes")
+			"platform_set, sequence or published_at is not of the form port49 writes")
 	}
 	for name, devices := range d.Sources {
 		if !NameOK(name) {
@@ -139,8 +146,8 @@ func Open(raw []byte, keys []ed25519.PublicKey) (Document, admission.Inventory, 
 		// them: DeviceProblem's name rule, as for the inventory.
 		for _, dev := range devices {
 			if !NameOK(dev) {
-				return Document{}, admission.Inventory{}, errors.New("bundle: the document lists a device under a " +
-					"source whose name is not 1 to 255 bytes of printable ASCII without a space")
+				return Document{}, admission.Inventory{}, errors.New("bundle: the document lists, under a source, a " +
+					"device name that is not 1 to 255 bytes of printable ASCII without a space")
 			}
 		}
 	}
