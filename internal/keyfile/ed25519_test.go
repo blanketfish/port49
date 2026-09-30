@@ -1,6 +1,7 @@
 package keyfile
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -76,5 +77,53 @@ func TestAnythingButAnEd25519KeyIsRefusedWithoutEchoingIt(t *testing.T) {
 	if _, err := ParseEd25519Public([]byte("SECRET-not-a-public-key"), "x.pub"); err == nil ||
 		strings.Contains(err.Error(), "SECRET") {
 		t.Errorf("public: %v", err)
+	}
+}
+
+// A key file is one block and nothing else: pem.Decode skips text before a
+// block and returns what follows it, so a second key concatenated into one
+// verify key file would otherwise be dropped without a word.
+func TestAKeyFileHoldsOneBlockAndNothingElse(t *testing.T) {
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	privPEM, pubPEM, _ := EncodeEd25519(priv)
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	otherPriv, otherPub, _ := EncodeEd25519(other)
+	cat := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+	for name, c := range map[string]struct {
+		priv, pub []byte
+		want      string
+	}{
+		"a second block": {cat(privPEM, otherPriv), cat(pubPEM, otherPub), "more than one PEM block"},
+		"text after":     {cat(privPEM, []byte("SECRET-trailer\n")), cat(pubPEM, []byte("SECRET-trailer\n")), "more than one PEM block"},
+		"text before":    {cat([]byte("SECRET-preamble\n"), privPEM), cat([]byte("SECRET-preamble\n"), pubPEM), "text before its PEM block"},
+	} {
+		if _, err := LoadEd25519(writeKey(t, c.priv, 0o600)); err == nil || !strings.Contains(err.Error(), c.want) ||
+			strings.Contains(err.Error(), "SECRET") {
+			t.Errorf("%s, private: %v", name, err)
+		}
+		if _, err := ParseEd25519Public(c.pub, "x.pub"); err == nil || !strings.Contains(err.Error(), c.want) ||
+			strings.Contains(err.Error(), "SECRET") {
+			t.Errorf("%s, public: %v", name, err)
+		}
+	}
+	// Surrounding whitespace is no text.
+	if _, err := ParseEd25519Public(cat([]byte("\n  \n"), pubPEM, []byte("\n\n")), "x.pub"); err != nil {
+		t.Errorf("whitespace: %v", err)
+	}
+}
+
+// A verify key of another kind, and the private half handed over by
+// mistake, are refused.
+func TestAVerifyKeyMustBeAnEd25519PublicKey(t *testing.T) {
+	ec, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, _ := x509.MarshalPKIXPublicKey(ec.Public())
+	if _, err := ParseEd25519Public(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), "x.pub"); err == nil ||
+		!strings.Contains(err.Error(), "not ed25519") {
+		t.Errorf("ecdsa: %v", err)
+	}
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	privPEM, _, _ := EncodeEd25519(priv)
+	if _, err := ParseEd25519Public(privPEM, "x.pub"); err == nil || !strings.Contains(err.Error(), "no PUBLIC KEY block") {
+		t.Errorf("private: %v", err)
 	}
 }

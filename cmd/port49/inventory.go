@@ -307,6 +307,15 @@ func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	// Refuse before writing either, so a refusal never leaves one new file
+	// beside an old one (conflict scan F14).
+	for _, name := range []string{"signing.key", "signing.pub"} {
+		if _, err := os.Lstat(filepath.Join(*dir, name)); err == nil {
+			fmt.Fprintf(stderr, "port49 inventory keygen: %s already exists; a new key is written beside no old one\n",
+				filepath.Join(*dir, name))
+			return 1
+		}
+	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
@@ -316,15 +325,6 @@ func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
 		return 1
-	}
-	// Refuse before writing either, so a refusal never leaves one new file
-	// beside an old one (conflict scan F14).
-	for _, name := range []string{"signing.key", "signing.pub"} {
-		if _, err := os.Lstat(filepath.Join(*dir, name)); err == nil {
-			fmt.Fprintf(stderr, "port49 inventory keygen: %s already exists; a new key is written beside no old one\n",
-				filepath.Join(*dir, name))
-			return 1
-		}
 	}
 	var written []string
 	undo := func() {
@@ -346,7 +346,15 @@ func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		written = append(written, path)
-		_, werr := out.Write(f.body)
+		// The mode exactly, whatever the umask: signing.pub is meant to be
+		// copied out, signing.key read by its owner alone.
+		werr := out.Chmod(f.mode)
+		if werr == nil {
+			_, werr = out.Write(f.body)
+		}
+		if werr == nil {
+			werr = out.Sync()
+		}
 		if cerr := out.Close(); werr == nil {
 			werr = cerr
 		}
@@ -355,6 +363,13 @@ func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "port49 inventory keygen:", werr)
 			return 1
 		}
+	}
+	// The directory too, so a crash after the success line cannot lose
+	// either name.
+	if err := syncDir(*dir); err != nil {
+		undo()
+		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
+		return 1
 	}
 	fmt.Fprintf(stdout, "port49 inventory keygen: wrote %s (0600: port49-inventory's signing_key_file) and %s "+
 		"(every port49d's inventory.service.verify_key_files); key_id %s\n", filepath.Join(*dir, "signing.key"),

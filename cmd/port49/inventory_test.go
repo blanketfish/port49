@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -375,13 +376,24 @@ func TestInventoryKeygenWritesAPairOnceAndNamesIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pubPEM, _ := os.ReadFile(filepath.Join(dir, "signing.pub"))
+	if fi, err := os.Stat(filepath.Join(dir, "signing.pub")); err != nil || fi.Mode().Perm() != 0o644 {
+		t.Fatalf("signing.pub: %v %v", fi, err)
+	}
+	pubPEM, err := os.ReadFile(filepath.Join(dir, "signing.pub"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	pub, err := keyfile.ParseEd25519Public(pubPEM, "signing.pub")
 	if err != nil || !pub.Equal(priv.Public()) {
 		t.Fatalf("signing.pub: %v", err)
 	}
 	if !strings.Contains(out.String(), keyfile.Ed25519KeyID(pub)) {
 		t.Fatalf("the key id is not printed: %s", out.String())
+	}
+	// Neither output carries the private key (the message is not printed:
+	// it would be the key).
+	if strings.Contains(out.String()+errOut.String(), "PRIVATE") {
+		t.Fatal("keygen printed a PRIVATE KEY block")
 	}
 	// Never over an existing key: that would strand every port49d verifying
 	// against the old public half.
@@ -391,15 +403,40 @@ func TestInventoryKeygenWritesAPairOnceAndNamesIt(t *testing.T) {
 		!strings.Contains(errOut.String(), "already exists") {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
-	// One file present: refused before either is written, so no lone new
-	// private key is left beside an old public one (conflict scan F14).
-	lone := t.TempDir()
-	os.WriteFile(filepath.Join(lone, "signing.pub"), []byte("old"), 0o644)
-	errOut.Reset()
-	if code := run([]string{"inventory", "keygen", "--dir", lone}, &out, &errOut); code != 1 {
-		t.Fatalf("exit %d", code)
+	// One file present, either one: refused before either is written, so no
+	// lone new half is left beside an old one (conflict scan F14).
+	for present, absent := range map[string]string{"signing.pub": "signing.key", "signing.key": "signing.pub"} {
+		lone := t.TempDir()
+		if err := os.WriteFile(filepath.Join(lone, present), []byte("old"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		errOut.Reset()
+		if code := run([]string{"inventory", "keygen", "--dir", lone}, &out, &errOut); code != 1 ||
+			!strings.Contains(errOut.String(), "already exists") {
+			t.Fatalf("%s present: exit %d: %s", present, code, errOut.String())
+		}
+		if _, err := os.Stat(filepath.Join(lone, absent)); err == nil {
+			t.Fatalf("%s present: a lone %s was written", present, absent)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(lone, "signing.key")); err == nil {
-		t.Fatal("a lone signing.key was left")
+}
+
+// A directory that cannot be synced is a failure, and the pair is removed:
+// no key is reported, or left, that a crash could lose.
+func TestInventoryKeygenRemovesThePairWhenTheDirectoryWontSync(t *testing.T) {
+	old := syncDir
+	syncDir = func(string) error { return errors.New("injected sync failure") }
+	t.Cleanup(func() { syncDir = old })
+	dir := t.TempDir()
+	var out, errOut bytes.Buffer
+	if code := run([]string{"inventory", "keygen", "--dir", dir}, &out, &errOut); code != 1 ||
+		!strings.Contains(errOut.String(), "injected sync failure") || out.Len() != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	for _, name := range []string{"signing.key", "signing.pub"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			t.Errorf("%s was left", name)
+		}
 	}
 }

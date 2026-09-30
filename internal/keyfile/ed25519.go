@@ -1,6 +1,7 @@
 package keyfile
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/x509"
@@ -17,7 +18,10 @@ func LoadEd25519(path string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	blk, _ := pem.Decode(raw)
+	blk, err := onePEMBlock(raw, path)
+	if err != nil {
+		return nil, err
+	}
 	if blk == nil || blk.Type != "PRIVATE KEY" {
 		return nil, fmt.Errorf("keyfile: %s holds no PKCS#8 PRIVATE KEY block", path)
 	}
@@ -40,7 +44,10 @@ func LoadEd25519(path string) (ed25519.PrivateKey, error) {
 // (config.VerifyKeys), never a plain read. path names it in errors, which
 // never quote raw.
 func ParseEd25519Public(raw []byte, path string) (ed25519.PublicKey, error) {
-	blk, _ := pem.Decode(raw)
+	blk, err := onePEMBlock(raw, path)
+	if err != nil {
+		return nil, err
+	}
 	if blk == nil || blk.Type != "PUBLIC KEY" {
 		return nil, fmt.Errorf("keyfile: %s holds no PUBLIC KEY block", path)
 	}
@@ -53,6 +60,26 @@ func ParseEd25519Public(raw []byte, path string) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("keyfile: %s holds a key that is not ed25519", path)
 	}
 	return pub, nil
+}
+
+// onePEMBlock is raw's PEM block, or nil if it holds none, refusing any text
+// before it and anything but whitespace after it: pem.Decode skips both, so
+// a verify_key_files entry holding two keys would silently load only the
+// first. Its errors never quote raw.
+func onePEMBlock(raw []byte, path string) (*pem.Block, error) {
+	blk, rest := pem.Decode(raw)
+	if blk == nil {
+		return nil, nil
+	}
+	if !bytes.HasPrefix(bytes.TrimLeft(raw, " \t\r\n"), []byte("-----BEGIN ")) {
+		return nil, fmt.Errorf("keyfile: %s has text before its PEM block; a key file holds one block and nothing else",
+			path)
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, fmt.Errorf("keyfile: %s holds more than one PEM block, or text after it; a key file holds one "+
+			"block and nothing else", path)
+	}
+	return blk, nil
 }
 
 // EncodeEd25519 is priv as `port49 inventory keygen` writes it: the private
