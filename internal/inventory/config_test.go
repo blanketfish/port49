@@ -73,6 +73,47 @@ func TestASourceBoundOverridesTheDefault(t *testing.T) {
 	}
 }
 
+// A source without its own bound takes the top-level one, not the default.
+func TestASourceInheritsTheTopLevelBound(t *testing.T) {
+	c, err := loadString(t, minimalConfig+"safety: {max_removed_percent: 5}\n")
+	if err != nil || c.Bounds()["lab_file"] != 5 {
+		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+func TestVerifyKeyFilesAreRead(t *testing.T) {
+	c, err := loadString(t, minimalConfig+"verify_key_files: [/etc/i/old-signing.pub, /etc/i/older-signing.pub]\n")
+	if err != nil || len(c.VerifyKeyFiles) != 2 || c.VerifyKeyFiles[0] != "/etc/i/old-signing.pub" ||
+		c.VerifyKeyFiles[1] != "/etc/i/older-signing.pub" {
+		t.Fatalf("%+v %v", c.VerifyKeyFiles, err)
+	}
+}
+
+// A mirror_dir beside state_dir, not inside it, is fine; a sibling with
+// state_dir's name as a prefix is not inside it.
+func TestAMirrorDirBesideStateDirLoads(t *testing.T) {
+	c, err := loadString(t, minimalConfig+"mirror_dir: /var/lib/port49-inventory-mirror\n")
+	if err != nil || c.MirrorDir != "/var/lib/port49-inventory-mirror" {
+		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+// A second document is refused in fixed text: none of its values are echoed.
+func TestASecondDocumentIsRefusedWithoutItsText(t *testing.T) {
+	_, err := loadString(t, minimalConfig+"---\nsigning_key: SECRET\n")
+	if err == nil || strings.Contains(err.Error(), "SECRET") || !strings.Contains(err.Error(), "one YAML document") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A path is named by its key, never quoted: a mis-pasted secret is not echoed.
+func TestABadPathIsNamedWithoutItsText(t *testing.T) {
+	_, err := loadString(t, minimalConfig+"verify_key_files: [SECRET]\n")
+	if err == nil || strings.Contains(err.Error(), "SECRET") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 // A secret pasted under a mistyped key is not echoed: the line and a
 // category (yamlfault).
 func TestAnUnknownKeyIsNamedByLineWithoutItsText(t *testing.T) {
@@ -95,6 +136,35 @@ func TestWhatTheServiceCannotRunWithoutIsRefused(t *testing.T) {
 		"a bad identity":    {`"user:alice@example.com"`, `"alice"`, "syncers[0]"},
 		"interval too fast": {"state_dir:", "interval: 10s\nstate_dir:", "interval must be between 1m and 24h"},
 		"sync_timeout":      {"state_dir:", "sync_timeout: 2h\nstate_dir:", "sync_timeout must be between 10s and 1h"},
+		"no listen":         {"listen: 127.0.0.1:8443\n", "", "listen is required"},
+		"no tls_cert_file":  {"tls_cert_file: /etc/i/server.pem\n", "", "tls_cert_file is required"},
+		"no tls_key_file":   {"tls_key_file: /etc/i/server-key.pem\n", "", "tls_key_file is required"},
+		"no client_ca_file": {"client_ca_file: /etc/i/ca.pem\n", "", "client_ca_file is required"},
+		"no policy_file":    {"policy_file: /etc/i/policy.yaml\n", "", "policy_file is required"},
+		"source bound over 100": {"path: /etc/i/inventory.yaml}", "path: /etc/i/inventory.yaml, safety: {max_removed_percent: 101}}",
+			"sync[0].safety.max_removed_percent must be between 0 and 100"},
+		"negative bound": {"state_dir:", "safety: {max_removed_percent: -1}\nstate_dir:",
+			"safety.max_removed_percent must be between 0 and 100"},
+		"duplicate source": {"path: /etc/i/inventory.yaml}\n", "path: /etc/i/inventory.yaml}\n" +
+			"  - {name: lab_file, type: file, path: /etc/i/other.yaml}\n", "sync[1].name must be unique"},
+		"control character in an identity": {`"user:alice@example.com"`, `"user:al\x1bice@example.com"`, "syncers[0]"},
+		"DEL in an identity":               {`"spiffe://example.com/port49d"`, `"spiffe://example.com/port\x7f49d"`, "readers[0]"},
+		"relative state_dir":               {"state_dir: /var/lib/port49-inventory", "state_dir: var/lib/port49-inventory", "state_dir must be an absolute path"},
+		"relative tls_cert_file":           {"tls_cert_file: /etc/i/server.pem", "tls_cert_file: server.pem", "tls_cert_file must be an absolute path"},
+		"relative tls_key_file":            {"tls_key_file: /etc/i/server-key.pem", "tls_key_file: server-key.pem", "tls_key_file must be an absolute path"},
+		"relative client_ca_file":          {"client_ca_file: /etc/i/ca.pem", "client_ca_file: ca.pem", "client_ca_file must be an absolute path"},
+		"relative signing_key_file":        {"signing_key_file: /etc/i/signing.key", "signing_key_file: signing.key", "signing_key_file must be an absolute path"},
+		"relative policy_file":             {"policy_file: /etc/i/policy.yaml", "policy_file: policy.yaml", "policy_file must be an absolute path"},
+		"relative mirror_dir":              {"state_dir:", "mirror_dir: mirror\nstate_dir:", "mirror_dir must be an absolute path"},
+		"relative source path":             {"path: /etc/i/inventory.yaml}", "path: inventory.yaml}", "sync[0].path must be an absolute path"},
+		"empty verify_key_files entry":     {"state_dir:", "verify_key_files: [\"/etc/i/old.pub\", \"\"]\nstate_dir:", "verify_key_files[1] must be an absolute path"},
+		"relative verify_key_files entry":  {"state_dir:", "verify_key_files: [old.pub]\nstate_dir:", "verify_key_files[0] must be an absolute path"},
+		"listen with no port":              {"listen: 127.0.0.1:8443", "listen: \"8443\"", "listen must be host:port"},
+		"listen with an empty port":        {"listen: 127.0.0.1:8443", "listen: \"127.0.0.1:\"", "listen must be host:port"},
+		"metrics_listen with no port":      {"state_dir:", "metrics_listen: localhost\nstate_dir:", "metrics_listen must be host:port"},
+		"mirror_dir is state_dir":          {"state_dir:", "mirror_dir: /var/lib/port49-inventory/\nstate_dir:", "mirror_dir must be outside state_dir"},
+		"mirror_dir inside state_dir":      {"state_dir:", "mirror_dir: /var/lib/port49-inventory/mirror\nstate_dir:", "mirror_dir must be outside state_dir"},
+		"a second document":                {"state_dir:", "---\nstate_dir:", "one YAML document"},
 	} {
 		_, err := loadString(t, strings.Replace(minimalConfig, c.from, c.to, 1))
 		if err == nil || !strings.Contains(err.Error(), c.want) {

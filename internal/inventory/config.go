@@ -8,7 +8,10 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -84,8 +87,9 @@ type fileConfig struct {
 }
 
 // identityShape is a caller as CallerOf names one: `user:` and an email, or a
-// URI with a scheme; printable, no space.
-var identityShape = regexp.MustCompile(`^(user:[^@\s]+@[^@\s]+|[a-z][a-z0-9+.-]*://\S+)$`)
+// URI with a scheme; printable ASCII, no space, no control character, so a
+// matched identity is safe to print.
+var identityShape = regexp.MustCompile(`^(user:[!-?A-~]+@[!-?A-~]+|[a-z][a-z0-9+.-]*://[!-~]+)$`)
 
 // Load reads port49-inventory.yaml as port49d reads its own: a regular file,
 // bounded, strictly decoded, a decode error printed as its line and a
@@ -101,6 +105,12 @@ func Load(path string) (Config, error) {
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
 		return Config{}, fmt.Errorf("port49-inventory: %s: %w; check the key spelling against the "+
 			"port49-inventory.yaml schema", path, yamlfault.Of(err))
+	}
+	// A second document after --- would be ignored silently: refused, in
+	// fixed text, so none of it is echoed.
+	if err := dec.Decode(new(yaml.Node)); err != io.EOF {
+		return Config{}, fmt.Errorf("port49-inventory: %s: holds more than one YAML document; "+
+			"port49-inventory.yaml is one YAML document", path)
 	}
 	c := Config{Listen: f.Listen, MetricsListen: f.MetricsListen, TLSCertFile: f.TLSCertFile, TLSKeyFile: f.TLSKeyFile,
 		ClientCAFile: f.ClientCAFile, Readers: f.Readers, Syncers: f.Syncers, SigningKeyFile: f.SigningKeyFile,
@@ -123,6 +133,31 @@ func Load(path string) (Config, error) {
 		{"policy_file", c.PolicyFile}, {"state_dir", c.StateDir}} {
 		if req.v == "" {
 			return Config{}, fmt.Errorf("port49-inventory: %s is required", req.key)
+		}
+	}
+	// Every path is absolute: a relative one resolves against the working
+	// directory, which under systemd is /. The key is named, never the value.
+	paths := []struct{ key, v string }{{"tls_cert_file", c.TLSCertFile}, {"tls_key_file", c.TLSKeyFile},
+		{"client_ca_file", c.ClientCAFile}, {"signing_key_file", c.SigningKeyFile}, {"policy_file", c.PolicyFile},
+		{"state_dir", c.StateDir}}
+	if c.MirrorDir != "" {
+		paths = append(paths, struct{ key, v string }{"mirror_dir", c.MirrorDir})
+	}
+	for i, v := range c.VerifyKeyFiles {
+		paths = append(paths, struct{ key, v string }{fmt.Sprintf("verify_key_files[%d]", i), v})
+	}
+	for _, p := range paths {
+		if !filepath.IsAbs(p.v) {
+			return Config{}, fmt.Errorf("port49-inventory: %s must be an absolute path", p.key)
+		}
+	}
+	if c.MirrorDir != "" && within(c.StateDir, c.MirrorDir) {
+		return Config{}, fmt.Errorf("port49-inventory: mirror_dir must be outside state_dir; the mirror is a " +
+			"separate copy, not a part of the state")
+	}
+	for _, l := range []struct{ key, v string }{{"listen", c.Listen}, {"metrics_listen", c.MetricsListen}} {
+		if _, port, err := net.SplitHostPort(l.v); err != nil || port == "" {
+			return Config{}, fmt.Errorf("port49-inventory: %s must be host:port, such as 127.0.0.1:8443 or :8443", l.key)
 		}
 	}
 	if c.Interval < time.Minute || c.Interval > 24*time.Hour {
@@ -162,6 +197,9 @@ func Load(path string) (Config, error) {
 			if s.Path == "" {
 				return Config{}, fmt.Errorf("port49-inventory: sync[%d] (%s): path is required for a file source", i, s.Name)
 			}
+			if !filepath.IsAbs(s.Path) {
+				return Config{}, fmt.Errorf("port49-inventory: sync[%d].path must be an absolute path", i)
+			}
 		case "netbox", "nautobot":
 			return Config{}, fmt.Errorf("port49-inventory: sync[%d] (%s): type %s is not built yet (plan 6c); "+
 				"this build has the file source", i, s.Name, s.Type)
@@ -183,6 +221,12 @@ func Load(path string) (Config, error) {
 			MaxRemovedPercent: p})
 	}
 	return c, nil
+}
+
+// within reports whether dir is base or a directory under it.
+func within(base, dir string) bool {
+	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(dir))
+	return err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))))
 }
 
 func bound(key string, s safetyYAML, def int) (int, error) {
