@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base32"
@@ -521,15 +522,18 @@ func run(parent context.Context, cfgPath string) error {
 
 	var startDoc *inventory.Published
 	var startFrom string
+	var verifyKeysAtStart []ed25519.PublicKey
+	var client *inventory.Client
 	if cfg.InventoryService != nil {
 		// Spec §10, cold start: a copy, or the service; until one, no
 		// listener and /readyz 503 (Decided 5). The verify keys and the
 		// client are the fetcher's to go on with after the start.
-		verifyKeysAtStart, err := config.VerifyKeys(cfg.InventoryService.VerifyKeyFiles)
+		var err error
+		verifyKeysAtStart, err = config.VerifyKeys(cfg.InventoryService.VerifyKeyFiles)
 		if err != nil {
 			return err
 		}
-		client, err := inventory.NewClient(cfg.InventoryService.URL, cfg.InventoryService.CAFile,
+		client, err = inventory.NewClient(cfg.InventoryService.URL, cfg.InventoryService.CAFile,
 			cfg.InventoryService.TLSCertFile, cfg.InventoryService.TLSKeyFile)
 		if err != nil {
 			return fmt.Errorf("inventory.service: %w", err)
@@ -790,7 +794,18 @@ func run(parent context.Context, cfgPath string) error {
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
 		r.startDocument(startDoc, startFrom)
 		r.seen, r.held = seen, deps.Held
+		var fetchDone <-chan struct{}
+		if cfg.InventoryService != nil {
+			// The fetcher asks the service every poll_interval from here on;
+			// startDocument above is the start's one call (conflict scan F11).
+			keys := verifyKeysAtStart
+			r.verifyKeys.Store(&keys)
+			fetchDone = startFetcher(ctx, r, client, m)
+		}
 		r.run(ctx, hup)
+		if fetchDone != nil {
+			<-fetchDone // ctx is done: the fetcher returns without a line (F8)
+		}
 	}()
 
 	serveErr := make(chan error, 1)

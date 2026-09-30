@@ -175,8 +175,13 @@ type Metrics struct {
 	// (port49_inventory_bundle_refused). Only a start reads the mirror, so it
 	// holds until the next start.
 	InventoryMirrorUnreadable prometheus.Gauge
-	inventoryAge              atomic.Pointer[func() float64]
-	keys                      atomic.Pointer[keyWatch]
+	// port49_inventory_fetches_total{outcome}: each time port49d asked the
+	// inventory service — "unchanged" (the service confirmed the etag held),
+	// "received" (a document that opened under the verify keys), "invalid"
+	// (a document that did not) and "failed" (the service did not answer).
+	InventoryFetches *prometheus.CounterVec
+	inventoryAge     atomic.Pointer[func() float64]
+	keys             atomic.Pointer[keyWatch]
 }
 
 // KeySample is one key version at a scrape: how many devices' latest
@@ -302,6 +307,9 @@ func New(reg prometheus.Registerer) *Metrics {
 		InventoryMirrorUnreadable: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_mirror_unreadable",
 			Help: "1 when the start could not read mirror_dir's copy: it hung past the deadline, or the read failed; " +
 				"it holds until the next start."}),
+		InventoryFetches: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_fetches_total",
+			Help: "Asks of the inventory service, by outcome: unchanged, received, invalid or failed."},
+			[]string{"outcome"}),
 	}
 	m.InventorySnapshotAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_inventory_snapshot_age_seconds",
 		Help: "Seconds since the inventory snapshot in force was last confirmed or loaded; NaN while there is none, " +
@@ -332,7 +340,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
-		m.InventoryMirrorUnreadable)
+		m.InventoryMirrorUnreadable, m.InventoryFetches)
 	// process_start_time_seconds among them: an alert on
 	// port49_key_version_devices gates on uptime, because the count starts
 	// at 0 with every restart (spec §10). No labels.

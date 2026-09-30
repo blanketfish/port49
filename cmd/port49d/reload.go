@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
@@ -103,11 +104,32 @@ type reloader struct {
 	// or loaded: port49_inventory_snapshot_age_seconds reads it at scrape.
 	invSeen atomic.Int64
 	// Service mode (inventory.service): inForce is the etag of the document
-	// in force, seq its sequence, and latestRaw its sealed bytes, which a
-	// persist that failed is retried with (pre-flight M7).
+	// in force, seq its sequence, inForceAt its published_at, and latestRaw
+	// its sealed bytes, which a persist that failed is retried with
+	// (pre-flight M7).
 	inForce   string
 	seq       int64
+	inForceAt time.Time
 	latestRaw []byte
+	// docs is what the fetcher hands over, and poke asks it to fetch the
+	// document again at SIGHUP; both nil in file mode, where a receive
+	// never fires and a poke is dropped (startFetcher).
+	docs <-chan received
+	poke chan<- struct{}
+	// docRefused is the etag of the document last refused, so a refusal is
+	// said once per document; persistSaid is the persist failure last said;
+	// persistOwed is set while latestRaw may not be state_dir's copy — a
+	// start from a copy other than the persisted one, whose persist at start
+	// may have failed, or a persist that failed since — so the service's next
+	// confirmation writes it (pre-flight M7).
+	docRefused, persistSaid string
+	persistOwed             bool
+	// latest is the last document the service sent, held so SIGHUP can try it
+	// again under a raised bound or new verify keys.
+	latest *received
+	// verifyKeys are the service's public keys in force: the fetcher opens
+	// under them, and SIGHUP replaces them (rereadVerifyKeys).
+	verifyKeys atomic.Pointer[[]ed25519.PublicKey]
 	// stopped is set while the last refresh pass did not complete, so the
 	// one that does says so whatever it found.
 	stopped bool
@@ -141,7 +163,10 @@ func (r *reloader) startDocument(p *inventory.Published, from string) {
 	if p == nil {
 		return
 	}
-	r.inForce, r.seq, r.latestRaw = bundle.ETag(p.Raw), p.Doc.Sequence, p.Raw
+	r.inForce, r.seq, r.inForceAt, r.latestRaw = bundle.ETag(p.Raw), p.Doc.Sequence, p.Doc.PublishedAt, p.Raw
+	// The persisted copy is state_dir's already; any other may not have
+	// been written there (cold start says so if it failed).
+	r.persistOwed = from != "the persisted copy"
 	seen := r.now()
 	if from != "the service" {
 		seen = p.Doc.PublishedAt
@@ -189,6 +214,8 @@ func (r *reloader) run(ctx context.Context, hup <-chan os.Signal) {
 			return
 		case <-hup:
 			r.reload(ctx, "SIGHUP")
+		case d := <-r.docs:
+			r.receive(ctx, d)
 		case <-tick.C:
 			r.poll(ctx)
 		case <-timer.C:
@@ -292,15 +319,28 @@ func (r *reloader) pollInventory(ctx context.Context) {
 }
 
 // reload reads each file once and loads what it read: SIGHUP's path, with no
-// second read, because the operator asked. It re-reads the bound first, so
-// raising it and sending SIGHUP applies a change refused over it, and it
-// loads the inventory whenever its version is not the one in force, so a
-// refused inventory is tried again.
+// second read, because the operator asked. It re-reads the bound and the
+// verify keys first, so raising the bound, or adding the service's new key,
+// and sending SIGHUP applies a change refused before, and it loads the
+// inventory whenever its version is not the one in force, so a refused
+// inventory is tried again. In service mode that is the latest document the
+// service sent, and the fetcher is asked to fetch the document again.
 func (r *reloader) reload(ctx context.Context, trigger string) {
 	r.rereadBound()
+	r.rereadVerifyKeys()
+	r.reopenLatest()
+	// (Task 17: the combined check of both sources goes here.)
 	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
 	r.load(ctx, trigger, raw, v, err)
 	if r.cfg.InventoryService != nil {
+		if d := r.latest; d != nil && d.etag != r.inForce {
+			r.docRefused = ""
+			r.loadDocument(ctx, trigger, *d)
+		}
+		select {
+		case r.poke <- struct{}{}:
+		default:
+		}
 		return
 	}
 	iraw, iv, ierr := inventoryVersion(r.cfg.InventoryFile)
@@ -333,6 +373,182 @@ func (r *reloader) rereadBound() {
 		fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.max_removed_percent is now %d%% (was %d%%)\n", n,
 			r.cfg.MaxRemovedPercent)
 		r.cfg.MaxRemovedPercent = n
+	}
+}
+
+// receive is one thing the fetcher handed over: a confirmation of the
+// document in force, which keeps the snapshot young, or a document, which is
+// loaded as a reload. The document in force sent whole again — the fetch a
+// SIGHUP asks for — is a confirmation too.
+func (r *reloader) receive(ctx context.Context, d received) {
+	if d.unchanged || (d.err == nil && d.etag == r.inForce) {
+		if d.etag == r.inForce {
+			r.confirmed()
+		}
+		return
+	}
+	r.latest = &d
+	r.loadDocument(ctx, "inventory service", d)
+}
+
+// confirmed is the service confirming the document in force: the snapshot
+// is young again, nothing it sent is pending refusal, a cold start's refused
+// copy is behind us (Task 14), and a persist owed is tried again, at every
+// confirmation rather than only at the next document (pre-flight M7).
+func (r *reloader) confirmed() {
+	r.invSeen.Store(r.now().UnixNano())
+	r.docRefused = ""
+	r.metrics.InventoryBundleRefused.Set(0)
+	if r.persistOwed && r.latestRaw != nil {
+		r.persist(r.latestRaw)
+	}
+}
+
+// loadDocument puts the service's document in force, as loadInventory puts a
+// file (spec §10): parsed against the policy in force, bounded by
+// inventory.max_removed_percent, swapped in one pointer, its security changes
+// recorded, the refresh run, and the document persisted. One that does not
+// open or does not pass changes nothing, is said once per document, and
+// holds port49_inventory_bundle_refused at 1.
+//
+// A document must be later than the one in force: a higher sequence, or a
+// later published_at, which a service whose state_dir was reset still has
+// (Decided 3). One that is neither is an older genuine document replayed, and
+// is refused; so is one published more than maxPublishedSkew ahead of this
+// clock, which would outrank every later copy at a cold start (spec §10).
+func (r *reloader) loadDocument(ctx context.Context, trigger string, d received) {
+	old := r.broker.Policy.Load()
+	label := trigger
+	var pol *policy.Policy
+	err := d.err
+	if err == nil {
+		label = fmt.Sprintf("%s, bundle %d", trigger, d.pub.Doc.Sequence)
+		err = publishedInFuture(d.pub, r.now())
+		if err == nil && d.pub.Doc.Sequence <= r.seq && !d.pub.Doc.PublishedAt.After(r.inForceAt) {
+			err = fmt.Errorf("bundle %d, published %s, is not later than bundle %d in force, published %s: an "+
+				"older document sent again; investigate the service and whoever can answer as it",
+				d.pub.Doc.Sequence, d.pub.Doc.PublishedAt.Format(time.RFC3339), r.seq, r.inForceAt.Format(time.RFC3339))
+		}
+		if err == nil {
+			pol, err = bundle.Parse(old.Raw(), d.pub.Inv, policy.Env{KeyRefs: r.cfg.KeyRefs()})
+		}
+		if err == nil {
+			err = bundle.CheckFrom(old, pol, r.cfg.MaxRemovedPercent, "fix the source of truth")
+		}
+	} else if errors.Is(err, bundle.ErrUnknownKey) {
+		err = fmt.Errorf("the document does not open (%w); if the service's signing key was rotated, add its "+
+			"public key to inventory.service.verify_key_files and send SIGHUP", err)
+	} else {
+		// Not a rotation: a signature that does not verify under a key
+		// port49d holds is tampering or a foreign signer (pre-flight minor 4).
+		err = fmt.Errorf("the document does not open (%w); it was not signed by any key port49d holds for the "+
+			"service: investigate", err)
+	}
+	if err != nil {
+		r.metrics.InventoryReloads.WithLabelValues("refused").Inc()
+		r.metrics.InventoryBundleRefused.Set(1)
+		if d.etag != r.docRefused {
+			r.docRefused = d.etag
+			fmt.Fprintf(stderr, "port49d: inventory reload (%s) refused; still serving bundle %s (%d): %s\n", label,
+				old.Bundle, r.seq, oneLine(quotesCut{err}))
+		}
+		return
+	}
+	r.docRefused = ""
+	r.metrics.InventoryBundleRefused.Set(0)
+	if d.pub.Doc.Sequence < r.seq {
+		fmt.Fprintf(stderr, "port49d: inventory: the service's sequence went back from %d to %d: its state_dir was "+
+			"reset; applying it (spec §10)\n", r.seq, d.pub.Doc.Sequence)
+	}
+	r.inForce, r.seq, r.inForceAt, r.latestRaw = d.etag, d.pub.Doc.Sequence, d.pub.Doc.PublishedAt, d.pub.Raw
+	r.invSeen.Store(r.now().UnixNano())
+	r.metrics.InventoryBundleSequence.Set(float64(r.seq))
+	r.persist(d.pub.Raw)
+	if pol.Bundle == old.Bundle {
+		// The same devices under a new sequence: nothing to swap.
+		r.metrics.InventoryReloads.WithLabelValues("unchanged").Inc()
+		return
+	}
+	r.metrics.InventoryReloads.WithLabelValues("applied").Inc()
+	now := r.swap(pol)
+	r.refused = ""
+	rep := bundle.Diff(old, pol, now)
+	fmt.Fprintf(stderr, "port49d: inventory reloaded (%s): %s; %d device(s) quarantined now, %d before; %d refused "+
+		"admission\n", label, rep.Summary(), quarantinedAt(pol, now), quarantinedAt(old, now), len(pol.AdmissionRefusals()))
+	r.after(ctx, "inventory", rep, pol, now)
+}
+
+// persist keeps raw as port49d's copy, atomically (persistBundle); a failure
+// is said once and alarmed, owed to the next confirmation, and serving goes
+// on.
+func (r *reloader) persist(raw []byte) {
+	if err := persistBundle(r.cfg.InventoryService.StateDir, raw); err != nil {
+		r.persistOwed = true
+		if r.metrics.InventoryPersistFailed.Set(1); r.persistSaid != oneLine(err) {
+			r.persistSaid = oneLine(err)
+			fmt.Fprintf(stderr, "port49d: inventory: state_dir %s: %s; a restart with the service down would start "+
+				"from an older copy\n", r.cfg.InventoryService.StateDir, r.persistSaid)
+		}
+		return
+	}
+	r.persistSaid, r.persistOwed = "", false
+	r.metrics.InventoryPersistFailed.Set(0)
+}
+
+// rereadVerifyKeys re-reads inventory.service.verify_key_files from
+// port49d.yaml at SIGHUP (Decided 12), behind the write fence
+// (config.VerifyKeys). A file that does not read keeps the keys in force,
+// said. The inventory source is read at start only: a port49d.yaml whose
+// inventory.service block was removed, or whose other keys changed, is said
+// and changes nothing — never read as no verify keys.
+func (r *reloader) rereadVerifyKeys() {
+	if r.cfgPath == "" {
+		return
+	}
+	raw, err := config.ReadRegular(r.cfgPath, config.MaxConfigSize)
+	var svc *config.InventoryServiceConfig
+	if err == nil {
+		svc, err = config.InventoryServiceOf(raw)
+	}
+	if r.cfg.InventoryService == nil {
+		if err == nil && svc != nil {
+			fmt.Fprintf(stderr, "port49d: SIGHUP: %s has an inventory.service block; the inventory source is read at "+
+				"start only; still reading inventory_file %s\n", r.cfgPath, r.cfg.InventoryFile)
+		}
+		return
+	}
+	var keys []ed25519.PublicKey
+	if err == nil && svc != nil {
+		keys, err = config.VerifyKeys(svc.VerifyKeyFiles)
+	}
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.service.verify_key_files not re-read from %s (%s); keeping "+
+			"the keys in force\n", r.cfgPath, oneLine(err))
+	case svc == nil:
+		fmt.Fprintf(stderr, "port49d: SIGHUP: %s has no inventory.service block; the inventory source is read at "+
+			"start only; keeping the service and the keys in force\n", r.cfgPath)
+	default:
+		r.verifyKeys.Store(&keys)
+		fmt.Fprintf(stderr, "port49d: SIGHUP: %d inventory verify key(s) in force\n", len(keys))
+		if cur := r.cfg.InventoryService; svc.URL != cur.URL || svc.CAFile != cur.CAFile ||
+			svc.TLSCertFile != cur.TLSCertFile || svc.TLSKeyFile != cur.TLSKeyFile || svc.StateDir != cur.StateDir ||
+			svc.MirrorDir != cur.MirrorDir || svc.PollInterval != cur.PollInterval {
+			fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.service in %s differs from the one in force beyond "+
+				"verify_key_files; those keys are read at start only, so still asking %s every %s\n", r.cfgPath,
+				cur.URL, cur.PollInterval)
+		}
+	}
+}
+
+// reopenLatest opens the latest document received again under the verify
+// keys now in force, when it was refused for its signature: a SIGHUP that
+// added the service's new key applies the document it could not open.
+func (r *reloader) reopenLatest() {
+	if d, keys := r.latest, r.verifyKeys.Load(); d != nil && d.err != nil && keys != nil {
+		if doc, inv, err := bundle.Open(d.raw, *keys); err == nil {
+			d.pub, d.err = &inventory.Published{Raw: d.raw, Doc: doc, Inv: inv}, nil
+		}
 	}
 }
 

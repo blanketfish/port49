@@ -220,3 +220,36 @@ func TestCheckRefusesAnEmptyOrOverShrinkingInventory(t *testing.T) {
 		t.Fatalf("empty: %v", err)
 	}
 }
+
+func TestCheckFromNamesTheFixAndHintsOnlyWhereKeyGroupsWere(t *testing.T) {
+	// A policy and inventories as the file's other Check tests build them;
+	// old carries no inventory key groups.
+	old, new := checkPair(t, 10, 5) // ten devices, then five
+	err := CheckFrom(old, new, 10, "fix the source of truth")
+	if err == nil || !strings.Contains(err.Error(), "fix the source of truth") ||
+		strings.Contains(err.Error(), "key_groups was deleted") {
+		t.Fatalf("got %v", err)
+	}
+	// Devices newly refused, from an inventory with no key groups of its
+	// own: named, with no hint about a block it never had.
+	moved := old.Inventory().Devices
+	moved[0].Addresses = []netip.Addr{netip.MustParseAddr("192.0.2.1")}
+	moved[1].Addresses = []netip.Addr{netip.MustParseAddr("192.0.2.2")}
+	err = CheckFrom(old, mustBundle(t, moved...), 10, "fix the source of truth")
+	if err == nil || !strings.Contains(err.Error(), "newly refused: d0, d1") ||
+		strings.Contains(err.Error(), "key_groups was deleted") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// checkPair is a bundle of before devices and one of the first after of
+// them, as TestCheckRefusesAnEmptyOrOverShrinkingInventory builds them: the
+// key groups are the policy's, so the inventory carries none.
+func checkPair(t *testing.T, before, after int) (*policy.Policy, *policy.Policy) {
+	t.Helper()
+	var devs []admission.Device
+	for i := 0; i < before; i++ {
+		devs = append(devs, dev(fmt.Sprintf("d%d", i), fmt.Sprintf("10.0.2.%d", i+1), nil))
+	}
+	return mustBundle(t, devs...), mustBundle(t, devs[:after]...)
+}

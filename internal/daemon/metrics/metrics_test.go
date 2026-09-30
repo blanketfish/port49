@@ -39,6 +39,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.PolicyRefreshPending.Set(0)
 	m.InventoryReloads.WithLabelValues("applied").Inc()
 	m.InventoryFileRefused.Set(0)
+	m.InventoryFetches.WithLabelValues("unchanged").Inc()
 	m.WatchInventoryAge(func() float64 { return 1 })
 
 	// Gather all metrics from registry.
@@ -78,6 +79,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_inventory_persist_failed":          false,
 		"port49_inventory_bundle_refused":          false,
 		"port49_inventory_mirror_unreadable":       false,
+		"port49_inventory_fetches_total":           false,
 		// The key-version alert gates on uptime with it (spec §10).
 		"process_start_time_seconds": false,
 	}
