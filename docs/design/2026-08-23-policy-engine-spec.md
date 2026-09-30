@@ -7918,14 +7918,14 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   for command. Before two of the six C8000V phases the harness's liveness probe reached port49 only
   at its second or third attempt (30 s, 54 s), as in L28; why is still not established.
 
-  vJunos-router held a connection open across some changes and not others. Across four valid runs
-  (at commits adc5746, 088f18a, 2f9ff4b and 6fcce47) removed was measured in every run, refused in
-  three and re-platformed in one. In the other phases no connection was open across the change —
-  the device's accounting arrived on new connections, and where the capture and port49d's record
-  disagreed about an idle connection the phase does not count — so no session could be affected. The
-  committed note is the fourth run's: removed and refused measured, and a banner naming the three
-  phases with no open connection. The earlier runs' notes were replaced by the next run's; their
-  per-phase readings are in plan 6b's execution ledger.
+  vJunos-router held a connection open across some changes and not others. The evidence is the
+  committed note, `L29-reload-juniper_vjunos-router.md` (run at 6fcce47): removed and refused
+  measured, and a banner naming the three phases (renamed, re-platformed, re-keyed) in which no
+  connection was open across the change — the device's accounting arrived on new connections, or
+  the capture and port49d's record disagreed about an idle connection, which does not count — so no
+  session could be affected. Three earlier vJunos runs, whose notes were replaced, were observed in
+  the lab log to vary run to run in which phases held a connection open; they are not register
+  evidence.
 - **L30** — added 2026-09-30 by plan 6a's final fix wave, split from L27: its runs each held one
   device, so no list paged and `next` was always null, and Nautobot 3.x was not run. Plan 6c's
   pagination code and any Nautobot 3.x profile cite it until it closes.

@@ -1210,8 +1210,9 @@ so.
 the reset everywhere. Where port49d no longer serves the device, break-glass logs in: in up to
 2.1 s on vEOS and vJunos-router, and up to 30 s on the C8000V and 41 s on the N9Kv. Where it still
 serves the device under a new name or platform, its FAIL is final on EOS, NX-OS and IOS-XE.
-vJunos-router held a connection open across some changes only: removed was measured in every run,
-refused in three of four and re-platformed in one. **L30 closed** 2026-09-30 (`L30-netbox.md`,
+vJunos-router held a connection open across some changes only: its committed note (the run at
+6fcce47) measures removed and refused; earlier runs, observed in the lab log and not register
+evidence, varied in which phases held one open. **L30 closed** 2026-09-30 (`L30-netbox.md`,
 `L30-nautobot.md`), with which of `Host` and `X-Forwarded-Host` a product reads, and a proxied
 `next` followed, named as unmeasured outside its question. **Spec §14's quarantine through a sync
 passed** on all four (`quarantine-sync-*.md`). No row is left open by this plan. The C8000V's
