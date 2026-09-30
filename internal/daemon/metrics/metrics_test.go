@@ -74,12 +74,22 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_inventory_reloads_total":           false,
 		"port49_inventory_file_refused":            false,
 		"port49_inventory_snapshot_age_seconds":    false,
+		// The key-version alert gates on uptime with it (spec §10).
+		"process_start_time_seconds": false,
 	}
 
 	// Check that all expected metrics are present and all gathered metrics are snake_case.
 	gatheredNames := make(map[string]bool)
 	for _, fam := range families {
 		gatheredNames[fam.GetName()] = true
+		// The process collector's series describe port49d itself, never a device.
+		if strings.HasPrefix(fam.GetName(), "process_") {
+			for _, m := range fam.GetMetric() {
+				if len(m.GetLabel()) != 0 {
+					t.Errorf("%s carries labels %v", fam.GetName(), m.GetLabel())
+				}
+			}
+		}
 
 		// Check metric name is lowercase snake_case.
 		if !isLowercaseSnakeCase(fam.GetName()) {

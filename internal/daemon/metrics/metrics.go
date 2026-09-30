@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 )
 
 type Metrics struct {
@@ -290,6 +291,10 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
 		m.InventoryChanges)
+	// process_start_time_seconds among them: an alert on
+	// port49_key_version_devices gates on uptime, because the count starts
+	// at 0 with every restart (spec §10). No labels.
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	reg.MustRegister(keyCollector{m: m,
 		devices: prometheus.NewDesc("port49_key_version_devices",
 			"Devices whose latest validated connection since start used this key version.", []string{"key_ref", "version"}, nil),

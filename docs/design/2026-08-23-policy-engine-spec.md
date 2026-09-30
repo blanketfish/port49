@@ -4126,12 +4126,13 @@ day 22    retire v2 in a reviewed change
 `retire_after` is a date, inclusive: `retire_after: 2026-10-01` admits through the end of that
 day UTC, and from `2026-10-02T00:00:00Z` the version identifies a device and never admits one,
 as a retired version does. It is written on `accept` versions only; `current` carries none, and
-a `retired` version is refused already. A connection validated before the instant keeps its version only until
-that instant: past it, every later packet on the connection is treated as a new connection's
-first packet would be, a `matches_retired` record, the per-source backoff and a close with no
-reply. "For the connection's life" would have no bound, because a busy single-connect
-connection resets its idle timer on every packet and so can stay open indefinitely. What a
-device does when its open connection is closed this way is unmeasured (L28, open). port49d says at start, and `port49 policy test --config` reports, a version whose
+a `retired` version is refused already. A connection validated before the instant keeps its
+version only until that instant: past it, every later packet on the connection is treated as a
+new connection's first packet would be, a `matches_retired` record, the per-source backoff and
+a close with no reply. "For the connection's life" would have no bound, because a busy
+single-connect connection resets its idle timer on every packet and so can stay open
+indefinitely. What a device does when its open connection is closed this way is unmeasured
+(L28, open). port49d says at start, and `port49 policy test --config` reports, a version whose
 date has passed and an `accept` version with none.
 
 The key sets, `retire_after` included, live in port49d.yaml beside the references to their
@@ -4267,7 +4268,7 @@ resolves it by making the deadline visible long before it arrives rather than by
   ```
   port49_key_version_devices > 0
     and on(key_ref, version) port49_key_retirement_seconds < 7 * 86400
-    and on() (time() - process_start_time_seconds{job="port49d"}) > 86400
+    and on(job, instance) (time() - process_start_time_seconds) > 86400
   ```
 
   Seeding the count from the decision log at start, so a restart does not blank it, is future

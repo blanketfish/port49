@@ -528,8 +528,9 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   day UTC, and from `2026-10-02T00:00:00Z` the version identifies a device and never admits one,
   as a retired version does. It is written on `accept` versions only; `current` carries none, and
   a `retired` version is refused already. A connection validated before the instant keeps its
-  version only until that instant (amended in Task 14's review; spec §10 has the text). port49d says at start, and `port49 policy test --config` reports, a version whose
-  date has passed and an `accept` version with none.
+  version only until that instant (amended in Task 14's review; spec §10 has the text). port49d
+  says at start, and `port49 policy test --config` reports, a version whose date has passed and
+  an `accept` version with none.
 
   The key sets, `retire_after` included, live in port49d.yaml beside the references to their
   secrets (`secret_env`), where they have been since plan 1, rather than in the policy file, which
@@ -8332,10 +8333,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   move is safe in every order (Tasks 4, 10, 12). A refused device is not minted for (Tasks 4, 11).
 - **§10 "Source-of-truth write access" for the file itself:** the inventory file's write fence
   (Task 11a).
-- **§10 "Key rotation":** try-and-validate and the per-connection cache are plan 1's and unchanged;
-  version sets gain `retire_after` (Task 14); phase-out (Tasks 8, 14, 15); unvalidated sources
-  (Tasks 10, 15); retired never admits (Task 14's test); cross-group probing manual (Task 16);
-  retirement enforced and CI (Tasks 14, 17); no per-device keys (nothing built).
+- **§10 "Key rotation":** try-and-validate and the per-connection cache are plan 1's, the cache now
+  bounded by `retire_after` (Task 14); version sets gain `retire_after` (Task 14); phase-out
+  (Tasks 8, 14, 15); unvalidated sources (Tasks 10, 15); retired never admits (Task 14's test);
+  cross-group probing manual (Task 16); retirement enforced and CI (Tasks 14, 17); no per-device
+  keys (nothing built).
 - **§10 "Device records":** Task 3 (`transport`), Task 1 (text).
 - **§10 "How a daemon refreshes its snapshot":** build then swap, validate locally, never expires,
   summary line, key resolution local (Tasks 10, 12); the pull, persistence and readiness are 6b's.
