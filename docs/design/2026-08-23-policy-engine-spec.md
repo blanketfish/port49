@@ -3950,7 +3950,16 @@ timeout; IOS-XE still asks per command and is told no at once, about 0.27s
 correct policy for the device, not that the device is suspect, and port49 cannot block the
 console or a local account under either shape — so the choice is only whether the failure
 looks like a rejection or an outage, and the outage is the one whose consequences are known.
-Clearing it is the policy or adapter change CI named, followed by the next sync.
+Clearing it is the policy or adapter change CI named: port49d applies it from its own
+`broker.policy_file` at the reload (decision 29), and the service's next sync reports the device
+no longer quarantined. Through the inventory service's syncs, on the same four images on
+2026-09-30 (`tests/lab/results/quarantine-sync-*.md`), a sync introducing a device its platform
+failed quarantined it, the rest of the sync applied, its connections were closed
+`device_quarantined`, its mints refused, break-glass logged in and ran its commands, and the fix
+admitted it again. Break-glass took 0.32 s on vEOS and 0.47 s on vJunos-router, but 16.7 s on the
+N9Kv and 20.3 s on the C8000V. Those runs followed L29's in the same deploy, which leaves
+single-connection on; the 2026-09-24 runs above took under a second, and why the two differ is not
+established.
 
 A consumer runs on exactly one bundle version at a time, so a decision is always attributable
 to a single, nameable state of the world. `bundle/diff` then covers policy change, inventory
@@ -3992,6 +4001,17 @@ reviewed policy). A pin is a policy key group matching the device by name (below
 does not verify, does not parse, carries a key assignment, or names a device with a control
 character or an unusable name is refused, said once, and alarmed
 (`port49_inventory_bundle_refused`), and the bundle in force keeps serving.
+
+**The service's state directory is its sequence's trust anchor, and read behind the fence.** It
+reads `state_dir`'s published bundle and history behind the policy file's write fence, with a link
+in a file's own name refused rather than followed, and its `policy_file` behind the same fence;
+the mirror only as port49d does (below). It refuses to start rather than publish below what it
+already published: on a `state_dir` copy it cannot open, on a published bundle older than its
+history's newest, and, with `state_dir` empty, on a mirror copy it cannot open or a mirror mount
+that does not answer in 10 s. Each refusal names the fix — add the old key to `verify_key_files`
+after a rotation, mend the mount, or move the copy aside to start fresh. Beside a good `state_dir`,
+a mirror it cannot open or read is said, `port49_inventory_mirror_behind` is 1, and the service
+serves `state_dir`'s bundle.
 
 **Consumers take what they need**, which is not the same thing:
 
@@ -4574,7 +4594,11 @@ crash loop or a node replacement — precisely when capacity matters. Two mechan
    location is a directory the deployment mounts (`mirror_dir` on both sides): port49 speaks no
    object-store API. The copy is signed, so whoever can write the store can replay an older
    genuine bundle and never forge one; the start line names the sequence and publication time it
-   started from, and the first pull replaces it.
+   started from, and a later pull replaces it (below). The mirror's file is opened without
+   following a link in its own name and must be a regular file no larger than a document may be, so a mount that
+   presents it through a symbolic link, as a Kubernetes ConfigMap mount does, is refused: that
+   fails closed, and the mirror must be a real volume. The service writes it mode 0640, so port49d
+   needs the mount's group, and never replaces it with a lower sequence than the copy there.
 
 At start port49d verifies both copies and starts from the one published later (`published_at`,
 which survives a sequence reset). It asks
@@ -4616,7 +4640,11 @@ so a deliberate large removal is: raise it, send `SIGHUP`, and lower it again.
 absent: port49d.yaml naming both is refused, as is `inventory.service` without a `broker:` block.
 A document is a reload like a file's: parsed against the policy in force, bounded by
 `inventory.max_removed_percent` (`fix the source of truth, or, …`), swapped in one pointer, its
-security changes written as `inventory_change` records, and followed by the refresh. A refused one
+security changes written as `inventory_change` records, and followed by the refresh. It is applied
+only when it is later than the document in force, by `published_at` and then `sequence`: an older
+genuine document sent again, by whoever can answer as the service, is refused. `published_at` is
+signed and survives a reset of the service's state, so a service that starts again from sequence 1
+publishes later and is applied, and a sequence that goes backwards is applied only then. A refused one
 is said once per document, `port49_inventory_bundle_refused` is 1 until the service confirms the
 bundle in force or sends a new document, and `SIGHUP` tries the
 document held again after the bound is raised. `SIGHUP` also re-reads
@@ -6032,7 +6060,10 @@ Beyond those already listed in the design document's §14:
 - **Quarantine**: a sync introducing a device whose platform fails joint validation publishes
   the bundle with that device quarantined, the rest of the sync applies, a connection from
   the device is closed without a reply and logged `device_quarantined`, the device falls to
-  its local method in the lab, and the next sync after the named fix admits it.
+  its local method in the lab, and the named fix admits it: port49d takes the fix from its own
+  `broker.policy_file` (decision 29), and the service's next sync reports the device clear.
+  Passed through the inventory service's syncs on vEOS, the N9Kv, the C8000V and vJunos-router on
+  2026-09-30 (plan 6b Task 19, `tests/lab/results/quarantine-sync-*.md`).
 - **Unencrypted flag**: a packet with `TAC_PLUS_UNENCRYPTED_FLAG` set is refused before its
   body is parsed and lands in its own report bucket.
 - **Fall-through on FAIL** is asserted absent per platform under the reference AAA
