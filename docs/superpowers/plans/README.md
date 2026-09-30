@@ -31,7 +31,9 @@ revised 2026-09-25** after its pre-flight review and the owner's ruling of that 
 one lab, one lab-and-docs), **executed 2026-09-25, and Task 19**, the differential lab test, **on 2026-09-29**, and amended in flight with decision 27 and four lab tasks (3b,
 L26b, L26c, the L26 rerun); reviewed per task and whole-branch; **merged 2026-09-29** (PR #14). It closed L23, L24, L26 and L26b;
 Task 19, run 2026-09-29, closed L9, L10 and L12; L25 and the new L26c stay open (Plan 5b — As
-built, below). 6–13 not yet.
+built, below). **6a written 2026-09-30** (`2026-09-30-06a-bundle-in-process.md`, twenty-one
+tasks: one docs, one lab, seventeen code, one lab, one lab-and-docs; plan 6 is split at the seam
+below, and three owner decisions are listed at its top). 6b and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -917,6 +919,36 @@ publishes, from the store, or from `--policy <file>`, checked against the hash t
 Also owed: a `based_on:` variant's wire facts. port49d keys `session_services`, the exec records'
 commands and the system users by platform name, so 5a refuses `based_on: juniper_junos` at load
 (spec §8; 5a final review M8). This plan carries those facts to a variant and lifts the refusal.
+
+**Split into 6a and 6b (2026-09-30).** The seam is the bundle's source:
+
+- **Plan 6a — `2026-09-30-06a-bundle-in-process.md`. Written 2026-09-30.** Everything that
+  consumes a bundle, with the bundle built in port49d from `inventory_file` and
+  `broker.policy_file`: `bundle.ID` (a content hash) and `bundle.Parse`; the loaded policy as the
+  one pointer that carries admission, devices, quarantine and policy (new decision 28); key groups
+  moved into the policy file; a device no group admits refused on its own, never the daemon
+  (`admission_refused`); the inventory file watched and reloaded, bounded
+  (`inventory.max_removed_percent`), with the refresh after it and an inventory-only swap leaving
+  unchanged contexts alone; `inventory_change` records for addresses added and `security_log` scope
+  changes; scopes pinned by `name`; `retire_after`, `device.key_ref`/`key_version` on every
+  validated record, `port49 keys status`, `keys show` and `keys diagnose` (over a 0600 admin
+  socket); `policy test --config`; `port49 inventory diff`; `based_on:` variants read, and
+  redacted, as their base; `policy replay --policy --inventory` for a redacted blob. Two lab rows,
+  both new: L27 (what NetBox and Nautobot return, recorded as fixtures for 6b) and L28 (what a
+  device does on a key miss, and a rotation end to end). Owner decisions at the plan's top: a
+  device-level key-group tie refuses the device; `keys diagnose` over a local socket; and, for 6b,
+  whether port49d takes the policy from the service.
+- **Plan 6b — the inventory service; written after 6a merges, against L27's fixtures.**
+  `cmd/port49-inventory` with the §10 API over mutual TLS, the NetBox, Nautobot and file connectors
+  (version detection, GraphQL first, REST fallback, the slug alias table, filters), the four sync
+  triggers (10-minute schedule, authenticated webhooks, `port49 inventory sync`, startup), bounded
+  change in the service, the bundle document and its sequence number, port49d's 30 s pull with
+  ETag, the persisted last good bundle, the shared mirror, cold-start readiness, and spec §14's
+  quarantine-through-a-sync lab assertion.
+
+**Go-dark on a store outage is plan 7's**, with the remote store (plan 4's "Hands to plan 6": "plan
+6 or 7, whichever brings the remote store"; plan 6 builds none), and so are the warm context
+cache, plan 4b's remote-store items, and the `crypt_open_failures_total{record="token"}` alarm.
 
 ## Plan 7 — Broker in full (§19 step 7)
 
