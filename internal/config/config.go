@@ -333,7 +333,7 @@ func MaxSessionAge(raw []byte) (time.Duration, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", unquoted(err))
+		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
 	}
 	d := orD(f.Session.MaxSessionAgeDefault, DefaultMaxSessionAge)
 	if d <= 0 {
@@ -351,7 +351,7 @@ func InventoryBound(raw []byte) (int, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", unquoted(err))
+		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
 	}
 	return inventoryBound(f.InventoryOpts)
 }
@@ -386,7 +386,7 @@ func Load(path string) (Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, unquoted(err))
+		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, decodeFault(err))
 	}
 
 	malformedWindow, err := window("malformed_window", f.Limits.MalformedWindow)
@@ -560,6 +560,10 @@ func Load(path string) (Config, error) {
 					k.what, k.ref.ID)
 			}
 			continue
+		}
+		if !envName.MatchString(k.ref.SecretEnv) {
+			return Config{}, fmt.Errorf("config: %s: secret_env is not an environment variable name (letters, "+
+				"digits and _): it names the variable holding the key, never the key", k.what)
 		}
 		if k.ref.ID == "" {
 			return Config{}, fmt.Errorf("config: %s: id is required: it is written into every record the key "+
@@ -764,6 +768,10 @@ func checkKeySets(keys map[string]KeySet) (map[string]KeySet, error) {
 			if v.SecretEnv == "" {
 				return nil, fmt.Errorf("config: key %s version %d: secret_env is required", ref, v.Version)
 			}
+			if !envName.MatchString(v.SecretEnv) {
+				return nil, fmt.Errorf("config: key %s version %d: secret_env is not an environment variable name "+
+					"(letters, digits and _): it names the variable holding the secret, never the secret", ref, v.Version)
+			}
 		}
 		if ks.Current.RetireAfter != "" {
 			return nil, fmt.Errorf("config: key %s: current version %d has retire_after; current is what devices "+
@@ -780,8 +788,8 @@ func checkKeySets(keys map[string]KeySet) (map[string]KeySet, error) {
 			if v.RetireAfter != "" {
 				day, err := time.Parse("2006-01-02", v.RetireAfter)
 				if err != nil {
-					return nil, fmt.Errorf("config: key %s version %d: retire_after %q is not a date (YYYY-MM-DD)",
-						ref, v.Version, v.RetireAfter)
+					return nil, fmt.Errorf("config: key %s version %d: retire_after is not a date (YYYY-MM-DD)",
+						ref, v.Version)
 				}
 				v.RetireAt = day.AddDate(0, 0, 1) // admits through the named day, UTC
 			}
@@ -801,21 +809,70 @@ func KeySets(raw []byte) (map[string]KeySet, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", unquoted(err))
+		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
 	}
 	return checkKeySets(f.Keys)
 }
 
-// quotedValue is how a yaml.v3 decode error quotes the value it could not
-// decode: `Sx9-qT4...`.
-var quotedValue = regexp.MustCompile(" `[^`]*`")
-
-// unquoted is a decode error without the values it quotes: its line and type
-// are what an operator fixes the file by, and the value may be a secret
-// pasted where the file names only its environment variable.
-func unquoted(err error) error {
-	return errors.New(quotedValue.ReplaceAllString(err.Error(), ""))
+// decodeFault is a port49d.yaml decode error as it is shown: each fault's
+// line and a fixed category, and no text from the document. yaml.v3 quotes a
+// value, a field name, an anchor or a tag from the file in its errors, and any
+// of those may be a secret pasted where the file names only its environment
+// variable. The line is what an operator fixes the file by.
+func decodeFault(err error) error {
+	var te *yaml.TypeError
+	if !errors.As(err, &te) {
+		return errors.New(faultAt(err.Error(), syntaxCategory(err.Error())))
+	}
+	parts := make([]string, len(te.Errors))
+	for i, e := range te.Errors {
+		parts[i] = faultAt(e, typeCategory(e))
+	}
+	return errors.New(strings.Join(parts, "; "))
 }
+
+// faultLine is the line yaml.v3 opens a message with, before any document
+// text.
+var faultLine = regexp.MustCompile(`^(?:yaml: )?line (\d+):`)
+
+func faultAt(msg, category string) string {
+	if m := faultLine.FindStringSubmatch(msg); m != nil {
+		return "line " + m[1] + ": " + category
+	}
+	return category
+}
+
+// typeCategory names one *yaml.TypeError entry. It reads the message only to
+// choose among fixed strings; a secret that happens to contain one of these
+// phrases changes the category, never what is printed.
+func typeCategory(msg string) string {
+	msg = faultLine.ReplaceAllString(msg, "")
+	switch {
+	case strings.HasPrefix(msg, " cannot unmarshal "):
+		return "a value of the wrong type"
+	case strings.Contains(msg, " already set in type "), strings.HasPrefix(msg, " mapping key "):
+		return "a key given twice"
+	case strings.HasPrefix(msg, " field "):
+		return "an unknown field"
+	}
+	return "a value that does not fit the schema"
+}
+
+func syntaxCategory(msg string) string {
+	switch {
+	case strings.HasPrefix(msg, "yaml: unknown anchor"), strings.HasPrefix(msg, "yaml: anchor"),
+		strings.Contains(msg, "aliasing"):
+		return "an unknown anchor or alias"
+	case strings.Contains(msg, " tag"):
+		return "an unknown tag"
+	}
+	return "a yaml syntax error"
+}
+
+// envName is what an environment variable's name looks like. A secret_env
+// that is not one is refused without being printed: it is most likely the
+// secret, pasted where its variable's name goes.
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // sortedKeySets names keys' refs, sorted, so the start notices read the same
 // every time.

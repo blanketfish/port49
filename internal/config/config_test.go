@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net/netip"
 	"os"
@@ -92,8 +94,10 @@ func TestLoadRefusesUnknownKeys(t *testing.T) {
 	if err == nil {
 		t.Fatal("a misspelled config key must be refused at load")
 	}
-	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "per_nas_conections") {
-		t.Fatalf("the error must name the file and the key, got %v", err)
+	// The line, not the key: a decode error quotes nothing from the document
+	// (TestADecodeErrorQuotesNothingFromTheDocument).
+	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "an unknown field") {
+		t.Fatalf("the error must name the file and the fault, got %v", err)
 	}
 }
 
@@ -392,8 +396,9 @@ platforms:
 	if err == nil {
 		t.Fatal("a misspelled key inside a platform block must be refused at load")
 	}
-	if !strings.Contains(err.Error(), "session_service") {
-		t.Fatalf("the error must name the key, got %v", err)
+	// The line, not the key: a decode error quotes nothing from the document.
+	if !strings.Contains(err.Error(), "line ") || !strings.Contains(err.Error(), "an unknown field") {
+		t.Fatalf("the error must say where and what, got %v", err)
 	}
 }
 
@@ -971,21 +976,111 @@ func TestRetireAfter(t *testing.T) {
 	}
 }
 
-// A decode error names the line and the type, never the value: yaml.v3 quotes
-// a value's first characters, and a secret pasted where port49d.yaml names
-// only its environment variable would reach the log and a terminal.
-func TestADecodeErrorDoesNotEchoTheValue(t *testing.T) {
-	const secret = "Sx9-qT4v!Lm2@pR7zK0w#Yh5"
-	raw := []byte("keys:\n  prod_key:\n    current: " + secret + "\n")
-	p := write(t, "port49d.yaml", string(raw))
-	_, loadErr := Load(p)
-	_, setsErr := KeySets(raw)
-	_, ageErr := MaxSessionAge(raw)
-	_, boundErr := InventoryBound(raw)
-	for name, err := range map[string]error{"Load": loadErr, "KeySets": setsErr, "MaxSessionAge": ageErr,
-		"InventoryBound": boundErr} {
-		if err == nil || !strings.Contains(err.Error(), "line 3") || strings.Contains(err.Error(), secret[:4]) {
-			t.Errorf("%s: want the line and no value, got %v", name, err)
+// The secrets the leak tests paste into port49d.yaml: one with punctuation,
+// one an anchor or tag can hold, and one carrying a backtick.
+const (
+	leakDash  = "Sx9-qT4v!Lm2@pR7zK0w#Yh5"
+	leakAlnum = "Qa8ZmN3tBv6cXe1Wr4Ju"
+	leakTick  = "K`p7Rw2!Hd9@Tg4#Vn6$Fj3"
+)
+
+// leakShapes are the ways an operator can paste a secret into port49d.yaml's
+// keys block that yaml.v3 or the key checks could quote back.
+var leakShapes = []struct{ name, body, secret string }{
+	{"a value where a mapping goes", "keys:\n  prod_key:\n    current: " + leakDash + "\n", leakDash},
+	{"a value where a number goes", "keys:\n  prod_key:\n    current: {version: " + leakAlnum + ", secret_env: T_PROD_V3}\n", leakAlnum},
+	{"the secret as a key", "keys:\n  prod_key:\n    current:\n      version: 3\n      secret_env: T_PROD_V3\n      " +
+		leakDash + ": x\n", leakDash},
+	{"the secret as a flow key", "keys:\n  prod_key:\n    current: {version: 3, " + leakAlnum + "}\n", leakAlnum},
+	{"the secret in retire_after", "keys:\n  prod_key:\n    current: {version: 3, secret_env: T_PROD_V3}\n" +
+		"    accept: [{version: 2, secret_env: T_PROD_V2, retire_after: \"" + leakDash + "\"}]\n", leakDash},
+	{"the secret as an anchor", "keys:\n  prod_key:\n    current: *" + leakAlnum + "\n", leakAlnum},
+	{"the secret as a tag", "keys:\n  prod_key:\n    current: !" + leakAlnum + " x\n", leakAlnum},
+	{"the secret with a backtick", "keys:\n  prod_key:\n    current: " + leakTick + "\n", leakTick},
+	{"the secret in secret_env", "keys:\n  prod_key:\n    current: {version: 3, secret_env: \"" + leakDash + "\"}\n", leakDash},
+	{"the secret in an unclosed quote", "keys:\n  prod_key:\n    current: {version: 3, secret_env: \"" + leakDash + "\n", leakDash},
+}
+
+// leaked is the first form of secret found in out, or "": the secret in any
+// case, quoted or escaped, as hex or base64, or any five characters of it (a
+// yaml.v3 error quotes a value's first seven).
+func leaked(out, secret string) string {
+	forms := []string{fmt.Sprintf("%q", secret), hex.EncodeToString([]byte(secret)),
+		base64.StdEncoding.EncodeToString([]byte(secret)), base64.RawURLEncoding.EncodeToString([]byte(secret))}
+	for i := 0; i+5 <= len(secret); i++ {
+		forms = append(forms, secret[i:i+5])
+	}
+	low := strings.ToLower(out)
+	for _, f := range forms {
+		if strings.Contains(low, strings.ToLower(f)) {
+			return f
+		}
+	}
+	return ""
+}
+
+// A port49d.yaml decode error names the file, the line and a fixed category,
+// never text from the document: a secret pasted where the file names only its
+// environment variable would reach the log and a terminal.
+func TestADecodeErrorQuotesNothingFromTheDocument(t *testing.T) {
+	for _, sh := range leakShapes {
+		t.Run(sh.name, func(t *testing.T) {
+			p := write(t, "port49d.yaml", sh.body)
+			_, loadErr := Load(p)
+			_, setsErr := KeySets([]byte(sh.body))
+			_, ageErr := MaxSessionAge([]byte(sh.body))
+			_, boundErr := InventoryBound([]byte(sh.body))
+			for name, err := range map[string]error{"Load": loadErr, "KeySets": setsErr, "MaxSessionAge": ageErr,
+				"InventoryBound": boundErr} {
+				if err == nil {
+					continue // the shape is one only the key checks see
+				}
+				if f := leaked(err.Error(), sh.secret); f != "" {
+					t.Errorf("%s printed %q: %v", name, f, err)
+				}
+			}
+			if setsErr == nil {
+				t.Fatal("KeySets took it")
+			}
+		})
+	}
+}
+
+// The error still says where: the file, the line and what kind of fault.
+func TestADecodeErrorSaysWhereAndWhat(t *testing.T) {
+	cases := []struct{ body, want string }{
+		{"keys:\n  prod_key:\n    current: x\n", "line 3: a value of the wrong type"},
+		{"keys:\n  prod_key:\n    current: {version: 3, secret_env: A}\n    bogus: 1\n", "line 4: an unknown field"},
+		{"keys:\n  prod_key:\n    current: *nope\n", "an unknown anchor or alias"},
+		{"keys: [\n", "a yaml syntax error"},
+	}
+	for _, c := range cases {
+		p := write(t, "port49d.yaml", c.body)
+		_, err := Load(p)
+		if err == nil || !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("want the file and %q, got %v", c.want, err)
+		}
+	}
+	_, err := KeySets([]byte("keys:\n  prod_key:\n    current: {version: 3, secret_env: A}\n" +
+		"    accept: [{version: 2, secret_env: B, retire_after: soon}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "key prod_key version 2: retire_after is not a date") {
+		t.Errorf("retire_after: %v", err)
+	}
+}
+
+// A secret_env is checked as a name before it is looked up, so a secret
+// pasted there is not printed as a variable that is not set.
+func TestASecretEnvThatIsNoNameIsNotPrinted(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	for _, name := range []string{"PORT49_ENC_V2", "T_PROD_V3"} {
+		body := strings.Replace(fmt.Sprintf(sample, invPath), "secret_env: "+name, `secret_env: "`+leakDash+`"`, 1)
+		_, err := Load(write(t, "port49d.yaml", body))
+		if err == nil || !strings.Contains(err.Error(), "secret_env is not an environment variable name") {
+			t.Fatalf("%s: want the name refused, got %v", name, err)
+		}
+		if f := leaked(err.Error(), leakDash); f != "" {
+			t.Fatalf("%s: printed %q: %v", name, f, err)
 		}
 	}
 }
