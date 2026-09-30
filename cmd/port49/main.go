@@ -35,7 +35,7 @@ const usage = `usage:
   port49 explain --policy FILE --inventory FILE (--subject NAME | --principal ID) --device NAME
                  [--command "LINE"] [--show-attributes]
   port49 policy test --policy FILE --inventory FILE [--config PORT49D_YAML]
-  port49 policy replay [--line N] LOGFILE|-
+  port49 policy replay [--line N] [--policy FILE --inventory FILE] LOGFILE|-
   port49 policy diff --old FILE --new FILE --inventory FILE
   port49 inventory diff --policy FILE [--new-policy FILE] [--max-removed-percent N | --config PORT49D_YAML]
                         OLD_INVENTORY NEW_INVENTORY

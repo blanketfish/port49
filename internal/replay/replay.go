@@ -14,6 +14,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/rhwendt/port49/internal/decision"
@@ -56,6 +57,12 @@ var replayable = map[decision.Reason]bool{
 	decision.ProjectionFailClosed: true,
 }
 
+// Source supplies a blob verbatim from outside the log (spec §5.7, §5.8):
+// for a record naming a blob whose event was redacted, and the time that
+// blob was compiled (its event's ts), the exact bytes, or false. Replay uses
+// them only when they hash to the name the record carries.
+type Source func(rec decision.Record, compiledAt time.Time) ([]byte, bool)
+
 // Replay reads a decision log and replays every authorization record that
 // consulted a blob, and reports every other authorization record as Skipped.
 // only, when non-zero, restricts it to the record on that line. A line that
@@ -66,7 +73,15 @@ var replayable = map[decision.Reason]bool{
 // decision 19 writes the blob first, so those are rare. Results come back in
 // line order.
 func Replay(r io.Reader, only int) ([]Result, error) {
-	rp := replayer{only: only, programs: map[string]*program{}, pending: map[string][]numbered{}}
+	return ReplayWith(r, only, nil)
+}
+
+// ReplayWith is Replay, and a record naming a blob whose event was redacted
+// is replayed against the blob src gives for it, where src is set and that
+// blob hashes to the name the record carries.
+func ReplayWith(r io.Reader, only int, src Source) ([]Result, error) {
+	rp := replayer{only: only, programs: map[string]*program{}, pending: map[string][]numbered{},
+		source: src, verbatim: map[string]*program{}}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
 	n := 1
@@ -112,6 +127,10 @@ type replayer struct {
 	// pending holds the records read before their blob event, by hash.
 	pending map[string][]numbered
 	out     []Result
+	// source gives a redacted blob verbatim; verbatim caches each one it
+	// gave that hashed to its name, by that hash.
+	source   Source
+	verbatim map[string]*program
 }
 
 type numbered struct {
@@ -128,6 +147,12 @@ type program struct {
 	// redacted is set for a blob event logged with its rule text redacted
 	// (spec §5.8): not the blob its hash names, and no divergence either.
 	redacted bool
+	// at is when the blob was compiled: its event's ts.
+	at time.Time
+	// verbatim is set for a program a Source gave for a redacted event. Its
+	// rules carry what the log redacted, so a divergence prints the log's
+	// side of the difference and never the program's.
+	verbatim bool
 }
 
 // rank orders two copies of one blob event: a verbatim one that compiles,
@@ -145,7 +170,7 @@ func (p *program) rank() int {
 func (rp *replayer) read(n int, rec decision.Record) {
 	switch {
 	case rec.Event == decision.EventBlob && rec.Blob != nil:
-		rp.blob(n, rec.Blob.Hash, rec.Blob.Body, rec.Blob.Redacted)
+		rp.blob(n, rec.Blob.Hash, rec.Blob.Body, rec.Blob.Redacted, rec.TS)
 	case rec.Event == decision.EventAuthorizeCommand || rec.Event == decision.EventAuthorizeSession:
 		if rp.only != 0 && rp.only != n {
 			return
@@ -179,8 +204,8 @@ func (rp *replayer) read(n int, rec decision.Record) {
 // it. Every blob event is checked against its name whether or not a record
 // names it: a bad one is a divergence on its own line, and does not displace
 // a good copy read earlier.
-func (rp *replayer) blob(n int, hash string, body []byte, redacted bool) {
-	p := &program{redacted: redacted}
+func (rp *replayer) blob(n int, hash string, body []byte, redacted bool, at time.Time) {
+	p := &program{redacted: redacted, at: at}
 	b, err := engine.Decode(hash, body)
 	switch {
 	case redacted:
@@ -230,9 +255,47 @@ func printable(s string) string {
 
 // judge replays one record against its blob's program.
 func (rp *replayer) judge(nr numbered, p *program) {
-	status, detail := one(nr.rec, p)
+	v := rp.withVerbatim(nr.rec, p)
+	status, detail := one(nr.rec, v)
+	if v.redacted && rp.source != nil {
+		detail += "; the policy and inventory files give no blob that hashes to it"
+	}
 	rp.emit(nr, status, detail)
 }
+
+// withVerbatim is p, or, where p's blob event was redacted and a Source is
+// set, the program compiled from the verbatim blob the Source gives for this
+// record, checked against the hash the record names. A Source that cannot
+// give it, or gives other bytes, leaves p, and the record stays unverifiable.
+func (rp *replayer) withVerbatim(rec decision.Record, p *program) *program {
+	if !p.redacted || rp.source == nil || rec.Policy == nil {
+		return p
+	}
+	hash := rec.Policy.Blob
+	if v, ok := rp.verbatim[hash]; ok {
+		return v
+	}
+	body, ok := rp.source(rec, p.at)
+	if !ok {
+		return p
+	}
+	b, err := engine.Decode(hash, body)
+	if err != nil {
+		return p
+	}
+	prog, err := engine.Compile(b)
+	if err != nil {
+		return p
+	}
+	v := &program{blob: b, prog: prog, at: p.at, verbatim: true}
+	rp.verbatim[hash] = v
+	return v
+}
+
+// unshown ends a divergence against a verbatim program: what it replayed is
+// rule text the log redacted, and is not printed (spec §5.8).
+const unshown = "; the replayed side is from the blob the policy and inventory files give, whose rule text the " +
+	"log redacts, and is not shown (spec §5.8)"
 
 // one replays a single record.
 func one(rec decision.Record, p *program) (Status, string) {
@@ -267,6 +330,9 @@ func one(rec decision.Record, p *program) (Status, string) {
 			v.Device = rec.Device.Name
 		}
 		if attrs, err = b.SessionAttributes(v); err != nil {
+			if p.verbatim {
+				return Diverge, "the blob's session attributes do not fit this record's values" + unshown
+			}
 			return Diverge, "the blob's session attributes do not fit this record's values: " + err.Error()
 		}
 		reason = b.SessionReason()
@@ -296,6 +362,10 @@ func one(rec decision.Record, p *program) (Status, string) {
 		if rec.Reply != nil {
 			logged = rec.Reply.Attributes
 		}
+		if !slices.Equal(logged, attrs) && p.verbatim {
+			return Diverge, fmt.Sprintf("the verdict agrees but the session attributes do not: logged %q", logged) +
+				unshown
+		}
 		if !slices.Equal(logged, attrs) {
 			return Diverge, fmt.Sprintf("the verdict agrees but the session attributes do not: logged %q, replayed %q",
 				logged, attrs)
@@ -304,6 +374,9 @@ func one(rec decision.Record, p *program) (Status, string) {
 	if pol != nil {
 		logged, _ := json.Marshal(rec.Policy)
 		replayed, _ := json.Marshal(pol)
+		if string(logged) != string(replayed) && p.verbatim {
+			return Diverge, fmt.Sprintf("the verdict agrees but the matched rules do not: logged %s", logged) + unshown
+		}
 		if string(logged) != string(replayed) {
 			return Diverge, fmt.Sprintf("the verdict agrees but the matched rules do not: logged %s, replayed %s",
 				logged, replayed)

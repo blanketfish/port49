@@ -2,16 +2,20 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 )
 
@@ -1439,4 +1443,156 @@ func TestPolicyTestOnAnEmptyInventorySaysNothingOfAdmission(t *testing.T) {
 	if strings.Contains(out.String()+errOut.String(), "admission") {
 		t.Fatalf("%s%s", out.String(), errOut.String())
 	}
+}
+
+func TestPolicyReplayTakesBothFilesOrNeither(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"policy", "replay", "--policy", "p.yaml", "-"}, &out, &errOut); code != 2 {
+		t.Fatalf("one file exits %d", code)
+	}
+	if code := run([]string{"policy", "replay", "--inventory", "i.yaml", "-"}, &out, &errOut); code != 2 ||
+		!strings.Contains(errOut.String(), "port49 policy replay [--line N] [--policy FILE --inventory FILE] LOGFILE|-") {
+		t.Fatalf("the other file exits %d\n%s", code, errOut.String())
+	}
+}
+
+// A log whose blob event was redacted replays from the policy and inventory
+// files: its records agree, where without them they are unverifiable, and
+// nothing replay prints carries the value the log redacted, even for a
+// record edited to drop its redacted mark, which diverges.
+func TestPolicyReplayVerifiesARedactedBlobFromTheFiles(t *testing.T) {
+	const secret = "Xk9vQ7pLm2Zr"
+	pol, inv := policyFixture(t)
+	raw, err := os.ReadFile(pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withSecret := strings.Replace(string(raw), `permit: ["**"]}`,
+		`permit: ["**"], deny: ["snmp-server community /^(public)?(`+secret+`)?$/ **"]}`, 1)
+	if withSecret == string(raw) {
+		t.Fatal("the fixture's admin role was not found to edit")
+	}
+	if err := os.WriteFile(pol, []byte(withSecret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := bundle.Load(pol, inv, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, ok := p.Device("leaf-01")
+	if !ok {
+		t.Fatal("no leaf-01")
+	}
+	compiled := time.Now().UTC().Truncate(time.Second)
+	res, err := p.Resolve("user:ops@example.com", d, compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, hash, err := engine.Encode(res.Blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), secret) {
+		t.Fatal("the fixture's blob does not carry the secret")
+	}
+	blob, err := engine.Decode(hash, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := engine.Compile(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := blob.SessionAttributes(engine.Values{Principal: "user:ops@example.com", Username: "ops",
+		Device: "leaf-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := strings.ReplaceAll(string(body), "/^(public)?("+secret+")?$/", platform.Redacted)
+	device := &decision.Device{Name: "leaf-01", Platform: "arista_eos"}
+	write := func(edit func(*decision.Record)) string {
+		command := []string{"service=shell", "cmd=snmp-server", "cmd-arg=community", "cmd-arg=public", "cmd-arg=<cr>"}
+		o := prog.Command(command)
+		if o.Reason != decision.NoPermitDominatesDeny {
+			t.Fatalf("the secret deny does not decide the command: %+v", o)
+		}
+		logged := o.Policy(p.Bundle, hash)
+		logged.MatchedDeny.Rule = []string{"snmp-server", "community", platform.Redacted, "**"}
+		redacted := []string{"service=shell", "cmd=snmp-server", "cmd-arg=community", "cmd-arg=" + platform.Redacted,
+			"cmd-arg=<cr>"}
+		show := []string{"service=shell", "cmd=show", "cmd-arg=version", "cmd-arg=<cr>"}
+		cmd := decision.Record{TS: compiled, Event: decision.EventAuthorizeCommand, Verdict: decision.VerdictDeny,
+			Reason: o.Reason, Principal: "user:ops@example.com", Device: device,
+			Request: &decision.Request{Raw: redacted, Redacted: true}, Policy: logged}
+		edit(&cmd)
+		var log bytes.Buffer
+		sink := decision.NewJSONLines(&log)
+		sink.Emit(decision.Record{TS: compiled, Event: decision.EventBlob,
+			Blob: &decision.Blob{Hash: hash, Body: []byte(shown), Redacted: true}})
+		sink.Emit(decision.Record{TS: compiled, Event: decision.EventAuthorizeSession,
+			Verdict: decision.VerdictPermit, Reason: blob.SessionReason(), Principal: "user:ops@example.com",
+			Device: device, Session: &decision.Session{Username: "ops"}, Reply: &decision.Reply{Attributes: attrs},
+			Policy: &decision.Policy{Bundle: p.Bundle, Blob: hash}})
+		s := prog.Command(show)
+		sink.Emit(decision.Record{TS: compiled, Event: decision.EventAuthorizeCommand,
+			Verdict: decision.VerdictPermit, Reason: s.Reason, Principal: "user:ops@example.com", Device: device,
+			Request: &decision.Request{Raw: show}, Policy: s.Policy(p.Bundle, hash)})
+		sink.Emit(cmd)
+		path := filepath.Join(t.TempDir(), "decisions.jsonl")
+		if strings.Contains(log.String(), secret) {
+			t.Fatal("the fixture's log carries the secret")
+		}
+		if err := os.WriteFile(path, log.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	check := func(name string, args []string, code int, want string) {
+		t.Helper()
+		var out, errb bytes.Buffer
+		got := run(append([]string{"policy", "replay"}, args...), &out, &errb)
+		printed := out.String() + errb.String()
+		if got != code || !strings.Contains(printed, want) {
+			t.Fatalf("%s: code %d\n%s", name, got, printed)
+		}
+		for _, f := range []string{secret, strings.ToLower(secret), strings.ToUpper(secret), secret[:5], secret[4:9],
+			secret[7:], hex.EncodeToString([]byte(secret)), base64.StdEncoding.EncodeToString([]byte(secret))} {
+			if strings.Contains(strings.ToLower(printed), strings.ToLower(f)) {
+				t.Fatalf("%s: replay prints %q:\n%s", name, f, printed)
+			}
+		}
+	}
+	files := []string{"--policy", pol, "--inventory", inv}
+	asLogged := write(func(*decision.Record) {})
+	check("no files", []string{asLogged}, 1, "replayed 3 records: 0 agree, 0 diverge, 3 unverifiable")
+	check("the files", append(files, asLogged), 1, "replayed 3 records: 2 agree, 0 diverge, 1 unverifiable")
+	check("the files, --line 4", append(files, "--line", "4", asLogged), 1,
+		"line 4 authorize_command: unverifiable the record was redacted before it was written")
+	// An edit that drops the redacted mark and restores the command replays
+	// against the verbatim blob, whose deny names the secret: it diverges, and
+	// what the blob matched is not printed.
+	unmarked := write(func(cmd *decision.Record) {
+		cmd.Request = &decision.Request{Raw: []string{"service=shell", "cmd=snmp-server", "cmd-arg=community",
+			"cmd-arg=public", "cmd-arg=<cr>"}}
+	})
+	check("unmarked", append(files, "--line", "4", unmarked), 1,
+		"line 4 authorize_command: diverge the verdict agrees but the matched rules do not")
+	check("unmarked, all", append(files, unmarked), 1, "replayed 3 records: 2 agree, 1 diverge, 0 unverifiable")
+	// Files that name another bundle give no blob: the blob they give
+	// leaf-01 names that bundle, not the one the record was decided by.
+	other, err := os.ReadFile(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv2 := filepath.Join(t.TempDir(), "inventory.yaml")
+	another := strings.Replace(string(other), "devices:\n", "devices:\n  - {name: leaf-02, platform: arista_eos, "+
+		"addresses: [10.0.0.2]}\n", 1)
+	if another == string(other) {
+		t.Fatal("the fixture's devices were not found to edit")
+	}
+	if err := os.WriteFile(inv2, []byte(another), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check("another bundle", []string{"--policy", pol, "--inventory", inv2, asLogged}, 1,
+		"replayed 3 records: 0 agree, 0 diverge, 3 unverifiable")
 }

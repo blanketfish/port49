@@ -17,6 +17,7 @@ import (
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/replay"
@@ -690,12 +691,35 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 policy replay", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	only := fs.Int("line", 0, "replay only the record on this line of the log")
+	var files policyFiles
+	files.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprint(stderr, usage)
 		return 2
+	}
+	var src replay.Source
+	if files.policy != "" || files.inventory != "" {
+		if files.missing() {
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+		// The files carry what a redacted blob event hid: every line is
+		// redacted as explain's and policy test's are, beside replay never
+		// printing the blob it rebuilds (spec §5.8).
+		out, errOut, flush := redactOutput(stdout, stderr)
+		defer flush()
+		stdout, stderr = out, errOut
+		p, err := files.load()
+		if err != nil {
+			fmt.Fprintln(stderr, "port49 policy replay:", err)
+			return 1
+		}
+		out.learn(p)
+		errOut.learn(p)
+		src = blobSource(p)
 	}
 	in := io.Reader(os.Stdin)
 	if name := fs.Arg(0); name != "-" {
@@ -707,7 +731,7 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
 		defer f.Close()
 		in = f
 	}
-	results, err := replay.Replay(in, *only)
+	results, err := replay.ReplayWith(in, *only, src)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy replay:", err)
 		return 1
@@ -743,6 +767,31 @@ func policyReplay(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// blobSource recompiles a record's blob from the policy and inventory files,
+// for the record's principal on its device at the time the blob was compiled
+// (spec §5.8). It gives nothing where the files name another bundle: the blob
+// is then not the one the record was decided by.
+func blobSource(p *policy.Policy) replay.Source {
+	return func(rec decision.Record, at time.Time) ([]byte, bool) {
+		if rec.Policy == nil || rec.Policy.Bundle != p.Bundle || rec.Device == nil {
+			return nil, false
+		}
+		d, ok := p.Device(rec.Device.Name)
+		if !ok {
+			return nil, false
+		}
+		res, err := p.Resolve(rec.Principal, d, at)
+		if err != nil {
+			return nil, false
+		}
+		body, _, err := engine.Encode(res.Blob)
+		if err != nil {
+			return nil, false
+		}
+		return body, true
+	}
 }
 
 // accessReview renders the flat grant table for one subject (spec §12): every
