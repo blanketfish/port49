@@ -191,3 +191,87 @@ func TestBuildRefusesDisagreeingAddresses(t *testing.T) {
 		t.Fatalf("both addresses should resolve to unified_key: %v, %v", r1, r2)
 	}
 }
+
+func TestAssignNamesTheTierAndTheGroup(t *testing.T) {
+	inv, err := LoadFile("testdata/inventory.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]Device{}
+	for _, d := range inv.Devices {
+		byName[d.Name] = d
+	}
+	for _, c := range []struct {
+		device string
+		want   Assignment
+	}{
+		{"leaf-01", Assignment{KeyRef: "prod_key", Tier: TierCIDR, Group: "cidr 10.0.0.0/8 → prod_key"}},
+		{"lab-sw-1", Assignment{KeyRef: "lab_key", Tier: TierAttribute, Group: "attributes {env: lab} → lab_key"}},
+		{"pinned-1", Assignment{KeyRef: "special_key", Tier: TierPin, Group: "key_ref pinned on the device record"}},
+	} {
+		got, err := Assign(byName[c.device], inv.KeyGroups)
+		if err != nil || got != c.want {
+			t.Errorf("%s: %+v, %v; want %+v", c.device, got, err, c.want)
+		}
+	}
+	stray := Device{Name: "stray", Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.1")}}
+	if got, err := Assign(stray, inv.KeyGroups); err != nil || got != (Assignment{}) {
+		t.Errorf("a device no group matches is the zero assignment, not an error: %+v, %v", got, err)
+	}
+}
+
+func TestAssignRefusesATieOnTheDevice(t *testing.T) {
+	groups := []KeyGroup{{Attributes: map[string]string{"site": "campus"}, KeyRef: "a"},
+		{Attributes: map[string]string{"role": "leaf"}, KeyRef: "b"}}
+	both := Device{Name: "both", Attributes: map[string]string{"site": "campus", "role": "leaf"}}
+	if _, err := Assign(both, groups); err == nil || !strings.Contains(err.Error(), "attribute tier") {
+		t.Fatalf("want the attribute-tier tie, got %v", err)
+	}
+}
+
+// A refused device is still in the index, so its packets are told apart from
+// an unknown source's (spec §10's admission_refused bucket).
+func TestNewTrieIndexesARefusedDevice(t *testing.T) {
+	d := Device{Name: "stray", Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.1")}}
+	tr, err := NewTrie([]Resolved{{Device: d, Refused: "matches no key group"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok := tr.Lookup(netip.MustParseAddr("192.0.2.1"))
+	if !ok || r.Refused == "" || r.Device.Name != "stray" {
+		t.Fatalf("got %+v, %v", r, ok)
+	}
+	a := Device{Name: "a", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
+	b := Device{Name: "b", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
+	if _, err := NewTrie([]Resolved{{Device: a}, {Device: b}}); err == nil {
+		t.Fatal("two devices on one address were indexed")
+	}
+}
+
+func TestValidateNamesBothDevicesOfACollision(t *testing.T) {
+	err := Validate([]Device{{Name: "a", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}},
+		{Name: "b", Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}})
+	if err == nil || !strings.Contains(err.Error(), `"a"`) || !strings.Contains(err.Error(), `"b"`) {
+		t.Fatalf("want both named, got %v", err)
+	}
+	if err := Validate([]Device{{Name: "a"}, {Name: "a"}}); err == nil {
+		t.Fatal("a repeated name passed")
+	}
+}
+
+func TestParseFileTransport(t *testing.T) {
+	parse := func(transport string) error {
+		_, err := ParseFile([]byte("devices: [{name: a, platform: arista_eos, addresses: [10.0.0.1], transport: "+
+			transport+"}]\n"), "inventory.yaml")
+		return err
+	}
+	if err := parse("tcp"); err != nil {
+		t.Fatalf("tcp: %v", err)
+	}
+	if err := parse("tls"); err == nil || !strings.Contains(err.Error(), "plan 11") {
+		t.Fatalf("tls: %v", err)
+	}
+	if err := parse("udp"); err == nil || !strings.Contains(err.Error(), `transport "udp"`) {
+		t.Fatalf("udp: %v", err)
+	}
+}

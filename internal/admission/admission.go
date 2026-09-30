@@ -9,8 +9,16 @@ import (
 	"net/netip"
 	"os"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
+)
+
+// Transport is how a device speaks TACACS+ (spec §10: a device record MUST
+// be able to express both).
+const (
+	TransportTCP = "tcp" // RFC 8907, obfuscated under a shared key; the default
+	TransportTLS = "tls" // RFC 9887; refused at load until plan 11 serves it
 )
 
 type Device struct {
@@ -19,6 +27,7 @@ type Device struct {
 	Addresses  []netip.Addr
 	Attributes map[string]string
 	KeyRef     string // tier 1 pin; empty when not pinned
+	Transport  string // "" is TransportTCP
 }
 
 type KeyGroup struct {
@@ -35,6 +44,61 @@ type Inventory struct {
 type Resolved struct {
 	Device Device
 	KeyRef string
+	// WirePlatform is the shipped platform whose wire facts port49d reads for
+	// this device (spec §8): its own, or the one a `based_on:` variant names.
+	// Empty is Device.Platform.
+	WirePlatform string
+	// Refused says why a device in the inventory is not admitted — no key
+	// group matches it, two tie on it, or its key_ref is one port49d holds no
+	// key for (spec §10). Empty is admitted. A refused device is in the index
+	// all the same, so its packets are told apart from an unknown source's.
+	Refused string
+	// Refusal is which of the three it is (RefusedNoGroup, RefusedTie,
+	// RefusedUnknownKey), for a reader that decides by it: `port49 policy
+	// test` fails on a tie and an unknown key and reports the other.
+	Refusal string
+}
+
+// Why admission refused a device (spec §10).
+const (
+	RefusedNoGroup    = "no_key_group"
+	RefusedTie        = "key_group_tie"
+	RefusedUnknownKey = "key_ref_undefined"
+)
+
+// Tier is which rule assigned a device its key_ref, most specific first
+// (spec §10, "Key group matching is deterministic").
+type Tier string
+
+const (
+	TierPin       Tier = "pin"
+	TierAttribute Tier = "attribute"
+	TierCIDR      Tier = "cidr"
+)
+
+// Assignment is a device's key_ref, the tier that chose it and the rule that
+// did, as `port49 keys show` prints it.
+type Assignment struct {
+	KeyRef string
+	Tier   Tier
+	Group  string
+}
+
+// String renders a group as `keys show` and the refusal lines name it.
+func (g KeyGroup) String() string {
+	if g.CIDR.IsValid() {
+		return fmt.Sprintf("cidr %s → %s", g.CIDR, g.KeyRef)
+	}
+	keys := make([]string, 0, len(g.Attributes))
+	for k := range g.Attributes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + ": " + g.Attributes[k]
+	}
+	return fmt.Sprintf("attributes {%s} → %s", strings.Join(parts, ", "), g.KeyRef)
 }
 
 // Trie is a map from address to resolved device; the key_ref is decided at build
@@ -43,51 +107,48 @@ type Trie struct {
 	byAddr map[netip.Addr]Resolved
 }
 
-func Build(inv Inventory) (*Trie, error) {
-	t := &Trie{byAddr: make(map[netip.Addr]Resolved)}
-	owner := make(map[netip.Addr]string)
-	// The device name is a namespace, not a label: store.TokenKey and
-	// store.ContextKey are keyed on it, so two devices sharing a name (the
-	// empty string included) share a token namespace, and a token minted for
-	// one redeems on the other. Refuse both here, next to the address
-	// collision, rather than discovering it as a cross-device redemption.
-	named := make(map[string]bool, len(inv.Devices))
-	for _, d := range inv.Devices {
+// Validate refuses an inventory that cannot be used at all: a device with no
+// name or a name used twice, and one address claimed by two devices.
+//
+// The device name is a namespace, not a label: store.TokenKey and
+// store.ContextKey are keyed on it, so two devices sharing a name (the empty
+// string included) share a token namespace, and a token minted for one
+// redeems on the other. An address claimed twice would bind one device's
+// sessions to another in every record (spec §10, "Addresses must resolve to
+// one device"): the snapshot is refused, never a winner picked.
+func Validate(devices []Device) error {
+	named := make(map[string]bool, len(devices))
+	for _, d := range devices {
 		if d.Name == "" {
-			return nil, fmt.Errorf("admission: a device with addresses %v has no name; give every device a unique name", d.Addresses)
+			return fmt.Errorf("admission: a device with addresses %v has no name; give every device a unique name", d.Addresses)
 		}
 		if named[d.Name] {
-			return nil, fmt.Errorf("admission: two devices are both named %q; device names are token namespaces and must be unique", d.Name)
+			return fmt.Errorf("admission: two devices are both named %q; device names are token namespaces and must be unique", d.Name)
 		}
 		named[d.Name] = true
 	}
-	for _, d := range inv.Devices {
-		keyRef, err := resolveKeyRef(d, inv.KeyGroups)
-		if err != nil {
-			return nil, err
-		}
+	owner := make(map[netip.Addr]string)
+	for _, d := range devices {
 		for _, a := range d.Addresses {
 			if prev, dup := owner[a]; dup {
-				return nil, fmt.Errorf("admission: address %s claimed by both %q and %q", a, prev, d.Name)
+				return fmt.Errorf("admission: address %s claimed by both %q and %q", a, prev, d.Name)
 			}
 			owner[a] = d.Name
-			if keyRef == "" {
-				continue // in inventory, but no group admits it: refused (spec §10)
-			}
-			t.byAddr[a] = Resolved{Device: d, KeyRef: keyRef}
 		}
 	}
-	return t, nil
+	return nil
 }
 
-func (t *Trie) Lookup(a netip.Addr) (Resolved, bool) {
-	r, ok := t.byAddr[a]
-	return r, ok
-}
-
-func resolveKeyRef(d Device, groups []KeyGroup) (string, error) {
+// Assign is d's key_ref by tier (spec §10): a pin on the record, then an
+// attribute group, then the longest matching CIDR, which every one of the
+// device's addresses must agree on. No group matching is the zero
+// Assignment, and the caller refuses the device. Two groups tying in one tier
+// is an error naming both: refusing to guess is the only conservative answer,
+// since a device admitted under the wrong group is admitted under the wrong
+// key.
+func Assign(d Device, groups []KeyGroup) (Assignment, error) {
 	if d.KeyRef != "" {
-		return d.KeyRef, nil // tier 1
+		return Assignment{KeyRef: d.KeyRef, Tier: TierPin, Group: "key_ref pinned on the device record"}, nil // tier 1
 	}
 	var attrHits []KeyGroup
 	for _, g := range groups {
@@ -96,15 +157,14 @@ func resolveKeyRef(d Device, groups []KeyGroup) (string, error) {
 		}
 	}
 	if len(attrHits) > 1 {
-		return "", fmt.Errorf("admission: device %q matches key groups %q and %q in the attribute tier", d.Name, attrHits[0].KeyRef, attrHits[1].KeyRef)
+		return Assignment{}, fmt.Errorf("admission: device %q matches key groups %q and %q in the attribute tier", d.Name, attrHits[0].KeyRef, attrHits[1].KeyRef)
 	}
 	if len(attrHits) == 1 {
-		return attrHits[0].KeyRef, nil // tier 2
+		return Assignment{KeyRef: attrHits[0].KeyRef, Tier: TierAttribute, Group: attrHits[0].String()}, nil // tier 2
 	}
-	// Tier 3: longest prefix across all the device's addresses must agree.
-	// Each address resolves to its longest matching CIDR group; all must have the same KeyRef.
-	var addressKeys []string        // key_ref for each address that matched
-	var addressCIDRs []netip.Prefix // CIDR of winning group for each address
+	// Tier 3: each address resolves to its longest matching CIDR group, and
+	// every address that matched must resolve to the same key_ref.
+	var winners []KeyGroup
 	for _, a := range d.Addresses {
 		var hits []KeyGroup
 		for _, g := range groups {
@@ -117,22 +177,63 @@ func resolveKeyRef(d Device, groups []KeyGroup) (string, error) {
 			continue
 		}
 		if len(hits) > 1 && hits[0].CIDR.Bits() == hits[1].CIDR.Bits() {
-			return "", fmt.Errorf("admission: device %q address %s matches key groups %q and %q at equal prefix length", d.Name, a, hits[0].KeyRef, hits[1].KeyRef)
+			return Assignment{}, fmt.Errorf("admission: device %q address %s matches key groups %q and %q at equal prefix length", d.Name, a, hits[0].KeyRef, hits[1].KeyRef)
 		}
-		addressKeys = append(addressKeys, hits[0].KeyRef)
-		addressCIDRs = append(addressCIDRs, hits[0].CIDR)
+		winners = append(winners, hits[0])
 	}
-	// All addresses that matched must have resolved to the same key_ref.
-	if len(addressKeys) > 0 {
-		firstKey := addressKeys[0]
-		for i := 1; i < len(addressKeys); i++ {
-			if addressKeys[i] != firstKey {
-				return "", fmt.Errorf("admission: device %q: addresses resolve to different keys: %s (%s) and %s (%s)", d.Name, addressCIDRs[0], addressKeys[0], addressCIDRs[i], addressKeys[i])
+	if len(winners) == 0 {
+		return Assignment{}, nil
+	}
+	for _, w := range winners[1:] {
+		if w.KeyRef != winners[0].KeyRef {
+			return Assignment{}, fmt.Errorf("admission: device %q: addresses resolve to different keys: %s (%s) and %s (%s)", d.Name, winners[0].CIDR, winners[0].KeyRef, w.CIDR, w.KeyRef)
+		}
+	}
+	return Assignment{KeyRef: winners[0].KeyRef, Tier: TierCIDR, Group: winners[0].String()}, nil
+}
+
+// NewTrie indexes entries by every address each carries, a refused entry's
+// included. Two entries on one address is an error: Validate refuses that
+// inventory first, so reaching it here is a caller's defect.
+func NewTrie(entries []Resolved) (*Trie, error) {
+	t := &Trie{byAddr: make(map[netip.Addr]Resolved)}
+	for _, r := range entries {
+		for _, a := range r.Device.Addresses {
+			if prev, dup := t.byAddr[a]; dup {
+				return nil, fmt.Errorf("admission: address %s claimed by both %q and %q", a, prev.Device.Name, r.Device.Name)
 			}
+			t.byAddr[a] = r
 		}
-		return firstKey, nil
 	}
-	return "", nil
+	return t, nil
+}
+
+// Build is the admission index port49d with no broker reads (plan 1): the
+// inventory file's own key groups, a tie refused whole, and a device no
+// group admits left out of the index, as it always was. With a broker, the
+// policy file assigns keys and refuses a device on its own
+// (policy.Policy.Admission).
+func Build(inv Inventory) (*Trie, error) {
+	if err := Validate(inv.Devices); err != nil {
+		return nil, err
+	}
+	entries := make([]Resolved, 0, len(inv.Devices))
+	for _, d := range inv.Devices {
+		as, err := Assign(d, inv.KeyGroups)
+		if err != nil {
+			return nil, err
+		}
+		if as.KeyRef == "" {
+			continue // in inventory, but no group admits it: refused (spec §10)
+		}
+		entries = append(entries, Resolved{Device: d, KeyRef: as.KeyRef})
+	}
+	return NewTrie(entries)
+}
+
+func (t *Trie) Lookup(a netip.Addr) (Resolved, bool) {
+	r, ok := t.byAddr[a]
+	return r, ok
 }
 
 func attrsMatch(have, want map[string]string) bool {
@@ -152,6 +253,7 @@ type fileInventory struct {
 		Addresses  []string          `yaml:"addresses"`
 		Attributes map[string]string `yaml:"attributes"`
 		KeyRef     string            `yaml:"key_ref"`
+		Transport  string            `yaml:"transport"`
 	} `yaml:"devices"`
 	KeyGroups []struct {
 		Match struct {
@@ -167,6 +269,12 @@ func LoadFile(path string) (Inventory, error) {
 	if err != nil {
 		return Inventory{}, err
 	}
+	return ParseFile(raw, path)
+}
+
+// ParseFile is LoadFile for bytes already read, named by path in its errors:
+// port49d loads exactly the bytes its watch agreed on (plan 6a).
+func ParseFile(raw []byte, path string) (Inventory, error) {
 	// KnownFields: an unknown key here is a typo with teeth. `keyref:` for
 	// `key_ref:` silently un-pins a device onto a group key, and the first
 	// packet from it reads `no_known_key_matches` — the 3am discovery this
@@ -179,7 +287,15 @@ func LoadFile(path string) (Inventory, error) {
 	}
 	var inv Inventory
 	for _, d := range f.Devices {
-		dev := Device{Name: d.Name, Platform: d.Platform, Attributes: d.Attributes, KeyRef: d.KeyRef}
+		switch d.Transport {
+		case "", TransportTCP:
+		case TransportTLS:
+			return Inventory{}, fmt.Errorf("admission: %s: device %q: transport tls is RFC 9887, which port49d "+
+				"does not serve until plan 11; remove the key or set it to tcp", path, d.Name)
+		default:
+			return Inventory{}, fmt.Errorf("admission: %s: device %q: transport %q is not tcp or tls", path, d.Name, d.Transport)
+		}
+		dev := Device{Name: d.Name, Platform: d.Platform, Attributes: d.Attributes, KeyRef: d.KeyRef, Transport: d.Transport}
 		for _, s := range d.Addresses {
 			a, err := netip.ParseAddr(s)
 			if err != nil {
