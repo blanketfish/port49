@@ -539,6 +539,29 @@ func TestTheKeyGroupMoveNeverStopsAStartThatCouldServe(t *testing.T) {
 	}
 }
 
+// The admits-none refusal says where to look for the inventory's source:
+// the inventory file in file mode, the source of truth and the service's
+// sync log in service mode, never the other's.
+func TestAStartAdmittingNoneAdvisesByTheInventorySource(t *testing.T) {
+	file := brokerConfig(t, minimalPolicy)
+	file.Inventory.Devices[0].KeyRef = ""
+	_, err := loadPolicy(file, "inventory_file "+file.InventoryFile)
+	if err == nil || !strings.Contains(err.Error(), "with inventory_file "+file.InventoryFile) ||
+		!strings.Contains(err.Error(), "deleted from the inventory file, add it to the policy file") ||
+		strings.Contains(err.Error(), "sync log") {
+		t.Fatalf("file mode: %v", err)
+	}
+	svc := brokerConfig(t, minimalPolicy)
+	svc.Inventory.Devices[0].KeyRef = ""
+	svc.InventoryFile, svc.InventoryService = "", &config.InventoryServiceConfig{URL: "https://inv.test:8443"}
+	_, err = loadPolicy(svc, "the inventory service's bundle 7")
+	if err == nil || !strings.Contains(err.Error(), "with the inventory service's bundle 7") ||
+		!strings.Contains(err.Error(), "check the source of truth it syncs from and the service's sync log") ||
+		strings.Contains(err.Error(), "inventory_file") || strings.Contains(err.Error(), "the inventory file") {
+		t.Fatalf("service mode: %v", err)
+	}
+}
+
 // C2 at start: with a broker, a world-writable inventory file refuses the
 // start, and a private one is what the reloader starts from.
 func TestAStartReadsTheInventoryBehindTheFence(t *testing.T) {

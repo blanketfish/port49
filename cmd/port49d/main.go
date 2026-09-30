@@ -269,11 +269,18 @@ func loadPolicy(cfg config.Config, inventoryFrom string) (*policy.Policy, error)
 	// snapshot that newly refuses the fleet, in the same words.
 	if n := len(pol.Devices()); n > 0 && len(pol.AdmissionRefusals()) == n {
 		r := pol.AdmissionRefusals()[0]
+		// Where to look depends on where the inventory came from: an
+		// inventory_file an operator edits, or the service's bundle, whose
+		// devices come from the source of truth.
+		fix := "if key_groups was deleted from the inventory file, add it to the policy file"
+		if cfg.InventoryService != nil {
+			fix = "the inventory came from the inventory service, so check the source of truth it syncs from " +
+				"and the service's sync log for what changed"
+		}
 		return nil, fmt.Errorf("broker.policy_file %s with %s: %w", cfg.Broker.PolicyFile,
 			inventoryFrom, quotesCut{fmt.Errorf("the bundle admits none of the %d device(s) in the inventory "+
-				"(%s: %s); check key_groups and the key_refs port49d.yaml defines, and if key_groups was deleted "+
-				"from the inventory file, add it to the policy file; to take the whole fleet off deliberately, "+
-				"stop port49d", n, r.Device.Name, r.Refused)})
+				"(%s: %s); check key_groups and the key_refs port49d.yaml defines, and %s; to take the whole "+
+				"fleet off deliberately, stop port49d", n, r.Device.Name, r.Refused, fix)})
 	}
 	return pol, nil
 }
