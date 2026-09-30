@@ -8,6 +8,7 @@
 package fence
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -85,18 +86,77 @@ func Read(path string, max int64, what string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir, base := filepath.Dir(target), filepath.Base(target)
+	return readIn(filepath.Dir(target), filepath.Base(target), max, what)
+}
+
+// ReadNoLink is Read for a file this process writes itself, whose own name is
+// never a link: the inventory service's state, the trust anchor for its
+// sequence. A link in its place is refused, not followed, so nobody can point
+// published.json at an older, validly signed document elsewhere; links on the
+// way to its directory are followed and fenced as Read's are.
+func ReadNoLink(path string, max int64, what string) ([]byte, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := resolvePolicyPath(filepath.Dir(abs))
+	if err != nil {
+		return nil, err
+	}
+	return readIn(dir, filepath.Base(abs), max, what)
+}
+
+// ReadSigned reads a file whose bytes a signature vouches for, from a shared
+// mount the fence cannot hold to its owner rule: the inventory service's
+// mirror. Only the shape is checked: its name is not a link (O_NOFOLLOW), it
+// is a regular file, opened non-blocking, and at most max bytes are read.
+func ReadSigned(path string, max int64, what string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, fmt.Errorf("%s is a symbolic link; a%s %s is read only as a file of its own", path,
+			article(what), what)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return readChecked(f, path, max, what, nil)
+}
+
+// readIn opens base in dir, following a link in neither place, and reads it
+// if Read's rule holds of it and of dir.
+func readIn(dir, base string, max int64, what string) ([]byte, error) {
+	target := filepath.Join(dir, base)
 	d, di, err := openDir(dir)
 	if err != nil {
 		return nil, err
 	}
 	defer d.Close()
 	fd, err := syscall.Openat(int(d.Fd()), base, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, fmt.Errorf("%s is a symbolic link; a%s %s is read only as a file of its own", target,
+			article(what), what)
+	}
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: target, Err: err}
 	}
 	f := os.NewFile(uintptr(fd), target)
 	defer f.Close()
+	return readChecked(f, target, max, what, func(fi fs.FileInfo) error {
+		if err := writableByUsAlone("the file "+target, fi); err != nil {
+			return err
+		}
+		// The directory holding the file is never excused by a read-only
+		// mount (dirWritableByUsAlone is for a link's directory alone): a
+		// read-only bind of a host directory others can write is writable on
+		// the host.
+		return writableByUsAlone("the directory "+dir, di)
+	})
+}
+
+// readChecked reads the open file f, named target, if it is a regular file
+// that check (when set) passes, to at most max bytes.
+func readChecked(f *os.File, target string, max int64, what string, check func(fs.FileInfo) error) ([]byte, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -104,14 +164,10 @@ func Read(path string, max int64, what string) ([]byte, error) {
 	if !fi.Mode().IsRegular() {
 		return nil, fmt.Errorf("%s is not a regular file", target)
 	}
-	if err := writableByUsAlone("the file "+target, fi); err != nil {
-		return nil, err
-	}
-	// The directory holding the file is never excused by a read-only mount
-	// (dirWritableByUsAlone is for a link's directory alone): a read-only
-	// bind of a host directory others can write is writable on the host.
-	if err := writableByUsAlone("the directory "+dir, di); err != nil {
-		return nil, err
+	if check != nil {
+		if err := check(fi); err != nil {
+			return nil, err
+		}
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {

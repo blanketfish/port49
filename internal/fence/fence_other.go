@@ -11,3 +11,9 @@ import "errors"
 func Read(_ string, _ int64, what string) ([]byte, error) {
 	return nil, errors.New("port49 reads " + what + " on Linux only: the check of who could have written it is Linux's")
 }
+
+// ReadNoLink refuses off Linux, as Read does.
+func ReadNoLink(path string, max int64, what string) ([]byte, error) { return Read(path, max, what) }
+
+// ReadSigned refuses off Linux, as Read does: O_NOFOLLOW is not everywhere.
+func ReadSigned(path string, max int64, what string) ([]byte, error) { return Read(path, max, what) }

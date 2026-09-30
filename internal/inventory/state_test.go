@@ -30,9 +30,13 @@ func published(t *testing.T, key ed25519.PrivateKey, seq int64, devices ...strin
 	return Published{Raw: raw, Doc: doc, Inv: inv}
 }
 
+// stateDir is a state_dir Save creates, 0700 as the service's is: the fence
+// refuses one others can write, and t.TempDir follows the umask.
+func stateDir(t *testing.T) string { return filepath.Join(t.TempDir(), "state") }
+
 func TestSavedStateIsTheLatestAndKeepsHistory(t *testing.T) {
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
-	s := State{Dir: filepath.Join(t.TempDir(), "state"), Keep: 2}
+	s := State{Dir: stateDir(t), Keep: 2}
 	if p, err := s.Latest([]ed25519.PublicKey{pub}); p != nil || err != nil {
 		t.Fatalf("empty state: %v %v", p, err)
 	}
@@ -67,7 +71,7 @@ func TestSavedStateIsTheLatestAndKeepsHistory(t *testing.T) {
 func TestStateThatDoesNotVerifyIsAnError(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	_, other, _ := ed25519.GenerateKey(rand.Reader)
-	s := State{Dir: t.TempDir(), Keep: 2}
+	s := State{Dir: stateDir(t), Keep: 2}
 	if err := s.Save(published(t, other, 1, "leaf-01")); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +91,7 @@ func TestStateSignedByAnUnlistedKeyIsRefused(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	listed, _, _ := ed25519.GenerateKey(rand.Reader)
 	_, unlisted, _ := ed25519.GenerateKey(rand.Reader)
-	s := State{Dir: t.TempDir(), MirrorDir: t.TempDir(), Keep: 2}
+	s := State{Dir: stateDir(t), MirrorDir: t.TempDir(), Keep: 2}
 	p := published(t, unlisted, 4, "leaf-01")
 	if err := s.Save(p); err != nil {
 		t.Fatal(err)
@@ -114,7 +118,7 @@ func TestStateSignedByAnUnlistedKeyIsRefused(t *testing.T) {
 func TestARotationKeepsTheSequenceAndTheHistory(t *testing.T) {
 	oldPub, oldKey, _ := ed25519.GenerateKey(rand.Reader)
 	newPub, newKey, _ := ed25519.GenerateKey(rand.Reader)
-	s := State{Dir: t.TempDir(), Keep: 5}
+	s := State{Dir: stateDir(t), Keep: 5}
 	for seq := int64(1); seq <= 2; seq++ {
 		if err := s.Save(published(t, oldKey, seq, "leaf-01")); err != nil {
 			t.Fatal(err)
@@ -144,7 +148,7 @@ func TestARotationKeepsTheSequenceAndTheHistory(t *testing.T) {
 
 func TestTheMirrorRoundTrips(t *testing.T) {
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
-	s := State{Dir: t.TempDir(), MirrorDir: t.TempDir(), Keep: 2}
+	s := State{Dir: stateDir(t), MirrorDir: t.TempDir(), Keep: 2}
 	if raw, err := s.MirrorRaw(); raw != nil || err != nil {
 		t.Fatalf("empty mirror: %v %v", raw, err)
 	}
@@ -171,8 +175,7 @@ func TestTheMirrorRoundTrips(t *testing.T) {
 // by its size, without being read whole.
 func TestAnOversizedStateFileIsRefused(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "published.json")
+	path := filepath.Join(t.TempDir(), "bundle.json")
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -183,5 +186,120 @@ func TestAnOversizedStateFileIsRefused(t *testing.T) {
 	f.Close()
 	if _, err := OpenFile(path, []ed25519.PublicKey{pub}); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// The state is the trust anchor for the sequence, so it is read behind the
+// fence: a link in published.json's or a history file's place, or a state
+// file others could write, is refused rather than read.
+func TestStateBehindALinkOrWritableByOthersIsRefused(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	keys := []ed25519.PublicKey{pub}
+	s := State{Dir: stateDir(t), Keep: 5}
+	for seq := int64(1); seq <= 2; seq++ {
+		if err := s.Save(published(t, key, seq, "leaf-01")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An older, validly signed copy elsewhere, linked into published.json's
+	// place.
+	old := filepath.Join(t.TempDir(), "old.json")
+	if err := os.WriteFile(old, published(t, key, 1, "leaf-01").Raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pubPath := filepath.Join(s.Dir, "published.json")
+	os.Remove(pubPath)
+	if err := os.Symlink(old, pubPath); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Latest(keys); err == nil || !strings.Contains(err.Error(), "is a symbolic link") {
+		t.Fatalf("a linked published.json: bundle %t, %v", p != nil, err)
+	}
+	histPath := filepath.Join(s.Dir, "history", "2.json")
+	os.Remove(histPath)
+	if err := os.Symlink(old, histPath); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.At(2, keys); err == nil || !strings.Contains(err.Error(), "is a symbolic link") {
+		t.Fatalf("a linked history file: bundle %t, %v", p != nil, err)
+	}
+
+	s = State{Dir: stateDir(t), Keep: 5}
+	if err := s.Save(published(t, key, 1, "leaf-01")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(s.Dir, "published.json"), 0o620); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Latest(keys); err == nil || !strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("a group-writable published.json: bundle %t, %v", p != nil, err)
+	}
+	if err := os.Chmod(filepath.Join(s.Dir, "published.json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(s.Dir, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Latest(keys); err == nil || !strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("a group-writable state_dir: bundle %t, %v", p != nil, err)
+	}
+}
+
+// The mirror is a shared mount, trusted by its signature, but its name is
+// never followed as a link.
+func TestALinkedMirrorIsRefused(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	s := State{Dir: stateDir(t), MirrorDir: t.TempDir()}
+	elsewhere := filepath.Join(t.TempDir(), "bundle.json")
+	if err := os.WriteFile(elsewhere, published(t, key, 3, "leaf-01").Raw, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(s.MirrorDir, "bundle.json")); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Mirror([]ed25519.PublicKey{pub}); err == nil || !strings.Contains(err.Error(), "is a symbolic link") {
+		t.Fatalf("mirror: bundle %t, %v", p != nil, err)
+	}
+	if raw, err := s.MirrorRaw(); err == nil || raw != nil {
+		t.Fatalf("mirror bytes: %v", err)
+	}
+	if p, err := OpenFile(filepath.Join(s.MirrorDir, "bundle.json"), []ed25519.PublicKey{pub}); err == nil || p != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+}
+
+// An older, validly signed document put back in published.json's place does
+// not roll the sequence back: Latest refuses it, so the service does not start
+// on it, and Save refuses a sequence not above every one kept.
+func TestAReplayedOlderStateCannotLowerTheSequence(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	keys := []ed25519.PublicKey{pub}
+	s := State{Dir: stateDir(t), Keep: 5}
+	for seq := int64(1); seq <= 3; seq++ {
+		if err := s.Save(published(t, key, seq, "leaf-01")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old, err := os.ReadFile(filepath.Join(s.Dir, "history", "1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAtomic(s.Dir, "published.json", old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Latest(keys); err == nil || !strings.Contains(err.Error(), "holds bundle 1") ||
+		!strings.Contains(err.Error(), "holds bundle 3") {
+		t.Fatalf("replayed: bundle %t, %v", p != nil, err)
+	}
+	for _, seq := range []int64{2, 3} {
+		if err := s.Save(published(t, key, seq, "leaf-01")); err == nil || !strings.Contains(err.Error(), "never goes back") {
+			t.Fatalf("save %d: %v", seq, err)
+		}
+	}
+	if err := s.Save(published(t, key, 4, "leaf-01")); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.Latest(keys); err != nil || p.Doc.Sequence != 4 {
+		t.Fatalf("after 4: %v %v", p, err)
 	}
 }

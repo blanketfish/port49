@@ -13,7 +13,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
-	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/fence"
 )
 
 // Published is one bundle the service published: the sealed bytes, and what
@@ -41,10 +41,17 @@ const (
 
 // Save keeps p as the bundle published, then in the history, pruned to the
 // newest Keep. published.json is written first: a crash between the two
-// loses a diff, never the bundle being served.
+// loses a diff, never the bundle being served. A sequence not above every
+// one kept is refused: the sequence never goes back.
 func (s State) Save(p Published) error {
 	if err := os.MkdirAll(filepath.Join(s.Dir, historyDir), 0o700); err != nil {
 		return err
+	}
+	if seqs, err := s.history(); err != nil {
+		return err
+	} else if n := len(seqs); n > 0 && p.Doc.Sequence <= seqs[n-1] {
+		return fmt.Errorf("inventory: bundle %d is not above bundle %d, the newest kept; the sequence never goes back",
+			p.Doc.Sequence, seqs[n-1])
 	}
 	if err := WriteAtomic(s.Dir, publishedName, p.Raw, 0o600); err != nil {
 		return err
@@ -69,6 +76,9 @@ func (s State) Save(p Published) error {
 // history is every sequence kept, oldest first.
 func (s State) history() ([]int64, error) {
 	names, err := os.ReadDir(filepath.Join(s.Dir, historyDir))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -85,12 +95,32 @@ func (s State) history() ([]int64, error) {
 // Latest is the bundle published, or nil when the service has published none.
 // keys are every key the service accepts for its own state (pre-flight M6).
 func (s State) Latest(keys []ed25519.PublicKey) (*Published, error) {
-	return openIfPresent(filepath.Join(s.Dir, publishedName), keys)
+	path := filepath.Join(s.Dir, publishedName)
+	p, err := openIfPresent(fence.ReadNoLink, path, keys)
+	if p == nil || err != nil {
+		return p, err
+	}
+	// A published.json below the history's newest is an older document put
+	// back in its place: serving it would roll the sequence back, and every
+	// daemon holding the newer one would refuse what follows. Refused, so the
+	// service does not start on it; Save writes published.json first, so a
+	// crash never leaves it behind the history.
+	seqs, err := s.history()
+	if err != nil {
+		return nil, err
+	}
+	if n := len(seqs); n > 0 && seqs[n-1] > p.Doc.Sequence {
+		return nil, fmt.Errorf("%s holds bundle %d, but %s holds bundle %d: an older bundle is in the "+
+			"published one's place, and the sequence is not rolled back", path, p.Doc.Sequence,
+			filepath.Join(s.Dir, historyDir), seqs[n-1])
+	}
+	return p, nil
 }
 
 // At is bundle seq from the history.
 func (s State) At(seq int64, keys []ed25519.PublicKey) (*Published, error) {
-	p, err := openIfPresent(filepath.Join(s.Dir, historyDir, strconv.FormatInt(seq, 10)+".json"), keys)
+	p, err := openIfPresent(fence.ReadNoLink, filepath.Join(s.Dir, historyDir, strconv.FormatInt(seq, 10)+".json"),
+		keys)
 	if err == nil && p == nil {
 		return nil, fmt.Errorf("bundle %d is no longer kept; the service keeps the last %d", seq, max(s.Keep, 1))
 	}
@@ -114,7 +144,7 @@ func (s State) MirrorRaw() ([]byte, error) {
 	if s.MirrorDir == "" {
 		return nil, nil
 	}
-	raw, err := config.ReadRegular(filepath.Join(s.MirrorDir, mirrorName), bundle.MaxDocument)
+	raw, err := fence.ReadSigned(filepath.Join(s.MirrorDir, mirrorName), bundle.MaxDocument, "bundle")
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -126,22 +156,31 @@ func (s State) Mirror(keys []ed25519.PublicKey) (*Published, error) {
 	if s.MirrorDir == "" {
 		return nil, nil
 	}
-	return openIfPresent(filepath.Join(s.MirrorDir, mirrorName), keys)
+	return openIfPresent(fence.ReadSigned, filepath.Join(s.MirrorDir, mirrorName), keys)
 }
 
-func openIfPresent(path string, keys []ed25519.PublicKey) (*Published, error) {
-	p, err := OpenFile(path, keys)
+// reader is a bounded read of a file: fence.ReadNoLink for the service's own
+// state, fence.ReadSigned for a copy only its signature vouches for.
+type reader func(path string, max int64, what string) ([]byte, error)
+
+func openIfPresent(read reader, path string, keys []ed25519.PublicKey) (*Published, error) {
+	p, err := openWith(read, path, keys)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	return p, err
 }
 
-// OpenFile reads a sealed copy as a regular file of at most
-// bundle.MaxDocument bytes and opens it against keys. Its error names the
+// OpenFile reads a sealed copy whose signature alone vouches for it — a
+// mirror's — as a regular file, not through a link in its name, of at most
+// bundle.MaxDocument bytes, and opens it against keys. Its error names the
 // file and, from bundle.Open, quotes nothing in it.
 func OpenFile(path string, keys []ed25519.PublicKey) (*Published, error) {
-	raw, err := config.ReadRegular(path, bundle.MaxDocument)
+	return openWith(fence.ReadSigned, path, keys)
+}
+
+func openWith(read reader, path string, keys []ed25519.PublicKey) (*Published, error) {
+	raw, err := read(path, bundle.MaxDocument, "bundle")
 	if err != nil {
 		return nil, err
 	}
