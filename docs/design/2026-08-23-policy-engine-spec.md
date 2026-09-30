@@ -4614,9 +4614,15 @@ document held again after the bound is raised. `SIGHUP` also re-reads
 whoever can write a verify key accepts any inventory it signs; so a signing-key rotation needs no
 restart. `port49_inventory_snapshot_age_seconds` is the time since the service last confirmed the
 document in force, or one was loaded; a start from the persisted copy or the mirror counts it from
-that document's `published_at`, so a restart never makes an old snapshot look fresh. The mirror is
+that document's `published_at`, so a restart never makes an old snapshot look fresh; until a start
+has a snapshot it has no age, and the gauge reads NaN. The mirror is
 read under a 10 s deadline at start: a hung mount is passed over, said, and never holds up a start
-from the persisted copy.
+from the persisted copy. A copy that could not be read — a mirror that hung, a read that failed, a
+persisted copy the fence refuses — is said with why and is not a refusal; a mirror that could not
+be read sets `port49_inventory_mirror_unreadable` to 1 until the next start. A document that was
+read and failed verification or its checks, from either copy or the service, sets
+`port49_inventory_bundle_refused`; so does one whose `published_at` is more than 5 minutes ahead of
+port49d's clock, which would otherwise outrank every later copy.
 
 **A reload of either source tries both together when both have moved.** At `SIGHUP`, and whenever
 a load of one is refused while the other holds a settled version not in force, port49d builds the

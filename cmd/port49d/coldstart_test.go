@@ -5,6 +5,9 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -19,6 +22,7 @@ import (
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/inventory"
 )
 
@@ -79,12 +83,12 @@ func TestColdStartTakesTheNewerCopyAndNeverAsksTheService(t *testing.T) {
 	if err := persistBundle(svc.StateDir, sealedDocAt(t, key, 3, 1, time.Now().Add(-time.Hour))); err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(svc.MirrorDir, "bundle.json"), sealedDoc(t, key, 5, 2), 0o644)
+	mustMirror(t, svc.MirrorDir, sealedDoc(t, key, 5, 2))
 	var out syncBuffer
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &out
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics())
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics(), nil)
 	if err != nil || p.Doc.Sequence != 5 || from != "the mirror's copy" {
 		t.Fatalf("%v %q %v", p, from, err)
 	}
@@ -94,13 +98,13 @@ func TestColdStartTakesTheNewerCopyAndNeverAsksTheService(t *testing.T) {
 // which a service reset starts again at 1.
 func TestColdStartPrefersTheLaterPublicationOverTheHigherSequence(t *testing.T) {
 	svc, key, keys := coldRig(t)
-	persistBundle(svc.StateDir, sealedDocAt(t, key, 40, 1, time.Now().Add(-48*time.Hour)))
-	os.WriteFile(filepath.Join(svc.MirrorDir, "bundle.json"), sealedDoc(t, key, 2, 2), 0o644)
+	mustPersist(t, svc.StateDir, sealedDocAt(t, key, 40, 1, time.Now().Add(-48*time.Hour)))
+	mustMirror(t, svc.MirrorDir, sealedDoc(t, key, 2, 2))
 	var out syncBuffer
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &out
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics())
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics(), nil)
 	if err != nil || p.Doc.Sequence != 2 || from != "the mirror's copy" ||
 		!strings.Contains(out.String(), "published later than the persisted copy") {
 		t.Fatalf("%v %q %v %s", p, from, err, out.String())
@@ -111,7 +115,7 @@ func TestColdStartPrefersTheLaterPublicationOverTheHigherSequence(t *testing.T) 
 // said, and the start goes on from the persisted copy.
 func TestAHungMirrorNeverHoldsUpAStartFromThePersistedCopy(t *testing.T) {
 	svc, key, keys := coldRig(t)
-	persistBundle(svc.StateDir, sealedDoc(t, key, 3, 1))
+	mustPersist(t, svc.StateDir, sealedDoc(t, key, 3, 1))
 	hang := make(chan struct{})
 	defer close(hang)
 	defer func(r func(string, []ed25519.PublicKey) (*inventory.Published, error), d time.Duration) {
@@ -124,7 +128,7 @@ func TestAHungMirrorNeverHoldsUpAStartFromThePersistedCopy(t *testing.T) {
 	defer func() { stderr = e }()
 	stderr = &out
 	start := time.Now()
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics())
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics(), nil)
 	if err != nil || from != "the persisted copy" || p.Doc.Sequence != 3 || time.Since(start) > 5*time.Second ||
 		!strings.Contains(out.String(), "the mirror's copy is passed over: mirror_dir "+svc.MirrorDir+" did not answer in") {
 		t.Fatalf("%v %q %v %s", p, from, err, out.String())
@@ -151,6 +155,31 @@ func TestAStartFromACopyCountsTheAgeFromItsPublication(t *testing.T) {
 	}
 }
 
+// mustPersist is persistBundle, failing the test on a setup error.
+func mustPersist(t *testing.T, dir string, raw []byte) {
+	t.Helper()
+	if err := persistBundle(dir, raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// mustMirror writes raw as the mirror's copy in dir, failing the test on a
+// setup error.
+func mustMirror(t *testing.T, dir string, raw []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "bundle.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seqOf is p's sequence for a failure message, 0 for none.
+func seqOf(p *inventory.Published) int64 {
+	if p == nil {
+		return 0
+	}
+	return p.Doc.Sequence
+}
+
 func testMetrics() *metrics.Metrics { return metrics.New(prometheus.NewRegistry()) }
 
 // A copy the service did not sign is passed over, said, and alarmed (spec
@@ -158,14 +187,14 @@ func testMetrics() *metrics.Metrics { return metrics.New(prometheus.NewRegistry(
 func TestACopyThatDoesNotVerifyIsPassedOver(t *testing.T) {
 	svc, key, keys := coldRig(t)
 	_, other, _ := ed25519.GenerateKey(rand.Reader)
-	persistBundle(svc.StateDir, sealedDoc(t, key, 3, 1))
-	os.WriteFile(filepath.Join(svc.MirrorDir, "bundle.json"), sealedDoc(t, other, 9, 2), 0o644)
+	mustPersist(t, svc.StateDir, sealedDoc(t, key, 3, 1))
+	mustMirror(t, svc.MirrorDir, sealedDoc(t, other, 9, 2))
 	var out syncBuffer
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &out
 	m := testMetrics()
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, m)
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, m, nil)
 	if err != nil || p.Doc.Sequence != 3 || from != "the persisted copy" ||
 		!strings.Contains(out.String(), "which no verify key holds") {
 		t.Fatalf("%v %q %v %s", p, from, err, out.String())
@@ -178,8 +207,10 @@ func TestACopyThatDoesNotVerifyIsPassedOver(t *testing.T) {
 // The persisted copy is port49d's own and read behind the write fence.
 func TestAPersistedCopyOthersCouldWriteIsPassedOver(t *testing.T) {
 	svc, key, keys := coldRig(t)
-	persistBundle(svc.StateDir, sealedDoc(t, key, 3, 1))
-	os.Chmod(filepath.Join(svc.StateDir, "bundle.json"), 0o664)
+	mustPersist(t, svc.StateDir, sealedDoc(t, key, 3, 1))
+	if err := os.Chmod(filepath.Join(svc.StateDir, "bundle.json"), 0o664); err != nil {
+		t.Fatal(err)
+	}
 	if p, err := readPersisted(svc.StateDir, keys); p != nil || err == nil || !strings.Contains(err.Error(), "writable by others") {
 		t.Fatalf("%v %v", p, err)
 	}
@@ -195,7 +226,7 @@ func TestWithNoCopyItWaitsForTheServiceSayingWhyOnce(t *testing.T) {
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &out
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{nil, nil, nil, doc}}, testMetrics())
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{nil, nil, nil, doc}}, testMetrics(), nil)
 	if err != nil || p.Doc.Sequence != 1 || from != "the service" {
 		t.Fatalf("%v %q %v", p, from, err)
 	}
@@ -218,7 +249,7 @@ func TestColdStartEndsWithItsContext(t *testing.T) {
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &syncBuffer{}
-	if _, _, err := coldStart(ctx, svc, keys, &fakeService{bundles: [][]byte{nil}}, testMetrics()); !errors.Is(err,
+	if _, _, err := coldStart(ctx, svc, keys, &fakeService{bundles: [][]byte{nil}}, testMetrics(), nil); !errors.Is(err,
 		context.DeadlineExceeded) {
 		t.Fatalf("got %v", err)
 	}
@@ -230,12 +261,12 @@ func TestAStartFromTheServiceClearsTheRefusedAlarm(t *testing.T) {
 	svc, key, keys := coldRig(t)
 	svc.MirrorDir = ""
 	_, other, _ := ed25519.GenerateKey(rand.Reader)
-	persistBundle(svc.StateDir, sealedDoc(t, other, 3, 1))
+	mustPersist(t, svc.StateDir, sealedDoc(t, other, 3, 1))
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &syncBuffer{}
 	m := testMetrics()
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{sealedDoc(t, key, 4, 1)}}, m)
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{sealedDoc(t, key, 4, 1)}}, m, nil)
 	if err != nil || from != "the service" || p.Doc.Sequence != 4 {
 		t.Fatalf("%v %q %v", p, from, err)
 	}
@@ -247,7 +278,7 @@ func TestAStartFromTheServiceClearsTheRefusedAlarm(t *testing.T) {
 // A mirror that did not answer gave no document, so nothing was refused.
 func TestAHungMirrorIsNotARefusal(t *testing.T) {
 	svc, key, keys := coldRig(t)
-	persistBundle(svc.StateDir, sealedDoc(t, key, 3, 1))
+	mustPersist(t, svc.StateDir, sealedDoc(t, key, 3, 1))
 	hang := make(chan struct{})
 	defer close(hang)
 	defer func(r func(string, []ed25519.PublicKey) (*inventory.Published, error), d time.Duration) {
@@ -259,12 +290,190 @@ func TestAHungMirrorIsNotARefusal(t *testing.T) {
 	defer func() { stderr = e }()
 	stderr = &syncBuffer{}
 	m := testMetrics()
-	if _, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, m); err != nil ||
+	if _, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, m, nil); err != nil ||
 		from != "the persisted copy" {
 		t.Fatalf("%q %v", from, err)
 	}
 	if testutil.ToFloat64(m.InventoryBundleRefused) != 0 {
 		t.Fatal("a hung mirror is alarmed as a refused bundle")
+	}
+	if testutil.ToFloat64(m.InventoryMirrorUnreadable) != 1 {
+		t.Fatal("port49_inventory_mirror_unreadable is not 1 for a mirror that hung")
+	}
+}
+
+// A mirror whose read fails — here a directory where the copy should be —
+// is unreadable, not refused: no document was judged.
+func TestAMirrorThatDoesNotReadIsUnreadableNotRefused(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	mustPersist(t, svc.StateDir, sealedDoc(t, key, 3, 1))
+	if err := os.Mkdir(filepath.Join(svc.MirrorDir, "bundle.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	m := testMetrics()
+	if _, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, m, nil); err != nil ||
+		from != "the persisted copy" || !strings.Contains(out.String(), "the mirror's copy is passed over: ") {
+		t.Fatalf("%q %v %s", from, err, out.String())
+	}
+	if testutil.ToFloat64(m.InventoryMirrorUnreadable) != 1 || testutil.ToFloat64(m.InventoryBundleRefused) != 0 {
+		t.Fatalf("unreadable %v, refused %v", testutil.ToFloat64(m.InventoryMirrorUnreadable),
+			testutil.ToFloat64(m.InventoryBundleRefused))
+	}
+}
+
+// A persisted copy the fence refuses was never read as a document: said,
+// with why, and not counted as refused (the rule in coldStart's comment).
+func TestAPersistedCopyTheFenceRefusesIsNotCountedRefused(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	mustPersist(t, svc.StateDir, sealedDocAt(t, key, 3, 1, time.Now().Add(-time.Hour)))
+	if err := os.Chmod(filepath.Join(svc.StateDir, "bundle.json"), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	mustMirror(t, svc.MirrorDir, sealedDocAt(t, key, 2, 1, time.Now().Add(-2*time.Hour)))
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	m := testMetrics()
+	if _, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, m, nil); err != nil ||
+		from != "the mirror's copy" || !strings.Contains(out.String(), "the persisted copy is passed over: ") ||
+		!strings.Contains(out.String(), "writable by others") {
+		t.Fatalf("%q %v %s", from, err, out.String())
+	}
+	if testutil.ToFloat64(m.InventoryBundleRefused) != 0 {
+		t.Fatal("a copy the fence refused, never read as a document, is counted as a refused bundle")
+	}
+}
+
+// Ruling 1's second half: the mirror is a shared mount the owner fence
+// cannot hold, so a copy group- and world-writable, in a directory the same,
+// owned by another user, is still taken — its signature vouches for it.
+func TestAMirrorCopyTheOwnerFenceWouldRefuseIsTakenOnItsSignature(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	if err := os.Chmod(svc.MirrorDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(svc.MirrorDir, "bundle.json")
+	mustMirror(t, svc.MirrorDir, sealedDoc(t, key, 5, 2))
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	defer func(o func(fs.FileInfo) (uint32, bool)) { fence.FileOwner = o }(fence.FileOwner)
+	fence.FileOwner = func(fs.FileInfo) (uint32, bool) { return uint32(os.Geteuid()) + 1, true }
+	if _, err := fence.Read(path, bundle.MaxDocument, "bundle"); err == nil {
+		t.Fatal("the fixture passes the owner fence, so it proves nothing")
+	}
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &syncBuffer{}
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics(), nil)
+	if err != nil || from != "the mirror's copy" || p.Doc.Sequence != 5 {
+		t.Fatalf("bundle %d %q %v", seqOf(p), from, err)
+	}
+}
+
+// A tie in published_at keeps the persisted copy, whatever the sequences:
+// it is port49d's own, and nothing is rewritten.
+func TestATieInPublicationKeepsThePersistedCopy(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	at := time.Now().Add(-time.Hour).Truncate(time.Second)
+	mustPersist(t, svc.StateDir, sealedDocAt(t, key, 3, 1, at))
+	mustMirror(t, svc.MirrorDir, sealedDocAt(t, key, 9, 2, at))
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &syncBuffer{}
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics(), nil)
+	if err != nil || from != "the persisted copy" || p.Doc.Sequence != 3 {
+		t.Fatalf("bundle %d %q %v", seqOf(p), from, err)
+	}
+}
+
+// A copy published more than maxPublishedSkew ahead of this clock is refused
+// and alarmed: it would beat every later copy, and date the snapshot ahead.
+func TestACopyPublishedInTheFutureIsRefused(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	mustPersist(t, svc.StateDir, sealedDocAt(t, key, 3, 1, time.Now().Add(-time.Hour)))
+	mustMirror(t, svc.MirrorDir, sealedDocAt(t, key, 9, 2, time.Now().Add(time.Hour)))
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	m := testMetrics()
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, m, nil)
+	if err != nil || from != "the persisted copy" || p.Doc.Sequence != 3 ||
+		!strings.Contains(out.String(), "the mirror's copy is refused: ") ||
+		!strings.Contains(out.String(), "more than 5m0s after this host's clock") {
+		t.Fatalf("bundle %d %q %v %s", seqOf(p), from, err, out.String())
+	}
+	if testutil.ToFloat64(m.InventoryBundleRefused) != 1 {
+		t.Fatal("port49_inventory_bundle_refused is not 1 for a copy published in the future")
+	}
+}
+
+// The service's document is held to the same rule; the next one, dated
+// right, is taken and clears the alarm.
+func TestADocumentFromTheServicePublishedInTheFutureIsRefused(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	svc.MirrorDir = ""
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	m := testMetrics()
+	c := &fakeService{bundles: [][]byte{sealedDocAt(t, key, 2, 1, time.Now().Add(time.Hour)), sealedDoc(t, key, 3, 1)}}
+	p, from, err := coldStart(context.Background(), svc, keys, c, m, nil)
+	if err != nil || from != "the service" || p.Doc.Sequence != 3 ||
+		!strings.Contains(out.String(), "its bundle is refused: bundle 2 is published ") {
+		t.Fatalf("bundle %d %q %v %s", seqOf(p), from, err, out.String())
+	}
+	if testutil.ToFloat64(m.InventoryBundleRefused) != 0 {
+		t.Fatal("the service's good document did not clear the alarm")
+	}
+}
+
+// Within the skew, a document dated a little ahead is taken, and its age is
+// 0, never negative.
+func TestTheSnapshotAgeIsNeverNegative(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	raw := sealedDocAt(t, key, 7, 1, rig.now.Add(2*time.Minute))
+	doc, inv, err := bundle.Open(raw, []ed25519.PublicKey{key.Public().(ed25519.PublicKey)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rig.r.startDocument(&inventory.Published{Raw: raw, Doc: doc, Inv: inv}, "the mirror's copy")
+	if age := testutil.ToFloat64(rig.m.InventorySnapshotAge); age != 0 {
+		t.Fatalf("age %v, want 0", age)
+	}
+}
+
+// /readyz says why it is not ready, in fixed text, and a different line
+// when draining than while waiting for a first bundle.
+func TestReadyzSaysWhy(t *testing.T) {
+	rd := newReadiness()
+	get := func() (int, string) {
+		w := httptest.NewRecorder()
+		rd.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		return w.Code, strings.TrimSpace(w.Body.String())
+	}
+	for _, step := range []struct {
+		do   func()
+		code int
+		body string
+	}{
+		{func() {}, 503, "starting: the TACACS+ listener is not open yet"},
+		{rd.waiting, 503, "waiting for a first bundle from the inventory service"},
+		{rd.serving, 200, "serving"},
+		{rd.draining, 503, "draining: port49d is shutting down, and the TACACS+ listener is closed or closing"},
+	} {
+		step.do()
+		if code, body := get(); code != step.code || body != step.body {
+			t.Fatalf("%d %q, want %d %q", code, body, step.code, step.body)
+		}
 	}
 }
 
@@ -282,7 +491,7 @@ func TestAPersistThatFailsIsAlarmed(t *testing.T) {
 	stderr = &out
 	m := testMetrics()
 	if _, from, err := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{sealedDoc(t, key, 1, 1)}},
-		m); err != nil || from != "the service" {
+		m, nil); err != nil || from != "the service" {
 		t.Fatalf("%q %v", from, err)
 	}
 	if testutil.ToFloat64(m.InventoryPersistFailed) != 1 || !strings.Contains(out.String(), "a restart with the service down") {

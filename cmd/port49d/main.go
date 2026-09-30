@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	stdlog "log"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -505,21 +506,15 @@ func run(parent context.Context, cfgPath string) error {
 		return fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
 	}
 	defer mln.Close()
-	// ready is set while the TACACS+ listener serves: /readyz answers 200
-	// then, and 503 before it opens and from the start of shutdown.
-	var ready atomic.Bool
+	// rd is /readyz: 200 while the TACACS+ listener serves, and 503 with
+	// why before it opens and from the start of shutdown.
+	rd := newReadiness()
 	metricsErr := make(chan error, 1)
 	go func() {
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-			if ready.Load() {
-				w.WriteHeader(http.StatusOK)
-				return
-			}
-			http.Error(w, "not serving TACACS+", http.StatusServiceUnavailable)
-		})
+		mux.Handle("/readyz", rd)
 		metricsErr <- http.Serve(mln, mux)
 	}()
 	fmt.Fprintf(stderr, "port49d: metrics on %s\n", mln.Addr())
@@ -539,7 +534,11 @@ func run(parent context.Context, cfgPath string) error {
 		if err != nil {
 			return fmt.Errorf("inventory.service: %w", err)
 		}
-		if startDoc, startFrom, err = coldStart(ctx, cfg.InventoryService, verifyKeysAtStart, client, m); err != nil {
+		// No snapshot is in force until the start has one, so it has no
+		// age: NaN, never the 0 that reads as fresh, for however long the
+		// wait lasts. The reloader dates it from the document it starts from.
+		m.WatchInventoryAge(func() float64 { return math.NaN() })
+		if startDoc, startFrom, err = coldStart(ctx, cfg.InventoryService, verifyKeysAtStart, client, m, rd); err != nil {
 			if ctx.Err() != nil {
 				return nil // stopped while waiting for a bundle: nothing was served
 			}
@@ -762,7 +761,7 @@ func run(parent context.Context, cfgPath string) error {
 	}
 	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
 		ln.Addr(), mln.Addr(), admitted)
-	ready.Store(true)
+	rd.serving()
 
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {
@@ -800,21 +799,21 @@ func run(parent context.Context, cfgPath string) error {
 	var runErr error
 	select {
 	case err := <-metricsErr:
-		ready.Store(false)
+		rd.draining()
 		runErr = fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
 		cancel()
 		<-serveErr
 	case err := <-brokerErr:
-		ready.Store(false)
+		rd.draining()
 		runErr = fmt.Errorf("broker listener on %s: %w", cfg.Broker.Listen, err)
 		cancel()
 		<-serveErr
 	case err := <-serveErr:
-		ready.Store(false)
+		rd.draining()
 		runErr = err
 		cancel()
 	case <-ctx.Done():
-		ready.Store(false)
+		rd.draining()
 		fmt.Fprintln(stderr, "port49d: signal received, draining")
 		<-serveErr
 	}
@@ -833,6 +832,44 @@ func run(parent context.Context, cfgPath string) error {
 	fmt.Fprintln(stderr, "port49d: accounting spool drained, exiting")
 	mln.Close()
 	return runErr
+}
+
+// readiness is /readyz: 200 "serving" while the TACACS+ listener serves,
+// and otherwise 503 with a fixed line saying why — starting, waiting for a
+// first bundle, or draining — for a probe's log or a curl at 3am.
+type readiness struct{ why atomic.Pointer[string] }
+
+// The fixed lines /readyz answers.
+const (
+	readyStarting = "starting: the TACACS+ listener is not open yet"
+	readyWaiting  = "waiting for a first bundle from the inventory service"
+	readyDraining = "draining: port49d is shutting down, and the TACACS+ listener is closed or closing"
+	readyServing  = "serving"
+)
+
+func newReadiness() *readiness {
+	r := &readiness{}
+	r.set(readyStarting)
+	return r
+}
+
+func (r *readiness) set(why string) {
+	if r != nil {
+		r.why.Store(&why)
+	}
+}
+
+func (r *readiness) waiting()  { r.set(readyWaiting) }
+func (r *readiness) serving()  { r.set(readyServing) }
+func (r *readiness) draining() { r.set(readyDraining) }
+
+func (r *readiness) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	why := *r.why.Load()
+	if why == readyServing {
+		fmt.Fprintln(w, why)
+		return
+	}
+	http.Error(w, why, http.StatusServiceUnavailable)
 }
 
 // assignedKeyRef is the key_ref a device is assigned now, for keys diagnose:

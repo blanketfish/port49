@@ -138,9 +138,12 @@ type Metrics struct {
 	// port49d refused, or one that has changed at every read for six reads
 	// running; 0 once a file loads or the file in force is put back.
 	InventoryFileRefused prometheus.Gauge
-	// port49_inventory_snapshot_age_seconds: how long since inventory_file was
-	// last read and found in force, or loaded (spec §10). Staleness is an
-	// alarm, never a fail-closed: the snapshot never expires.
+	// port49_inventory_snapshot_age_seconds: how long since the inventory
+	// snapshot in force was last confirmed or loaded (spec §10) — inventory_file
+	// read and found in force, or the service confirming its document; a start
+	// from a copy counts from its published_at. NaN while a cold start has no
+	// snapshot yet. Staleness is an alarm, never a fail-closed: the snapshot
+	// never expires.
 	InventorySnapshotAge prometheus.GaugeFunc
 	// port49_inventory_changes_total{kind}: security-relevant changes a bundle
 	// swap made (spec §10) — "address_added" (an address on a device already
@@ -163,8 +166,14 @@ type Metrics struct {
 	// refused; the bundle in force keeps serving. The first document from the
 	// service applied or confirmed in force clears it.
 	InventoryBundleRefused prometheus.Gauge
-	inventoryAge           atomic.Pointer[func() float64]
-	keys                   atomic.Pointer[keyWatch]
+	// port49_inventory_mirror_unreadable: 1 when the start could not read
+	// inventory.service.mirror_dir's copy — it did not answer within the
+	// deadline, or the read failed — as against a copy it read and refused
+	// (port49_inventory_bundle_refused). Only a start reads the mirror, so it
+	// holds until the next start.
+	InventoryMirrorUnreadable prometheus.Gauge
+	inventoryAge              atomic.Pointer[func() float64]
+	keys                      atomic.Pointer[keyWatch]
 }
 
 // KeySample is one key version at a scrape: how many devices' latest
@@ -287,9 +296,11 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 while the document in force could not be written to inventory.service.state_dir."}),
 		InventoryBundleRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_bundle_refused",
 			Help: "1 while a document port49d was given did not open or was refused; the bundle in force keeps serving."}),
+		InventoryMirrorUnreadable: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_mirror_unreadable",
+			Help: "1 when the start could not read mirror_dir's copy: it hung past the deadline, or the read failed."}),
 	}
 	m.InventorySnapshotAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_inventory_snapshot_age_seconds",
-		Help: "Seconds since the inventory file was last read and found in force, or loaded."}, func() float64 {
+		Help: "Seconds since the inventory snapshot in force was last confirmed or loaded; NaN while there is none."}, func() float64 {
 		if age := m.inventoryAge.Load(); age != nil {
 			return (*age)()
 		}
@@ -314,7 +325,8 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
-		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused)
+		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
+		m.InventoryMirrorUnreadable)
 	// process_start_time_seconds among them: an alert on
 	// port49_key_version_devices gates on uptime, because the count starts
 	// at 0 with every restart (spec §10). No labels.

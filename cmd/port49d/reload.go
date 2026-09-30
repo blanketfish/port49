@@ -125,7 +125,9 @@ func newReloader(cfg config.Config, b *broker.Broker, m *metrics.Metrics, now fu
 	r.expiry, _ = b.Policy.Load().NextChange(start)
 	r.reschedule()
 	r.invSeen.Store(start.UnixNano())
-	m.WatchInventoryAge(func() float64 { return now().Sub(time.Unix(0, r.invSeen.Load())).Seconds() })
+	// Never negative: a document dated a little ahead of this clock, within
+	// maxPublishedSkew, is as fresh as can be, not younger than now.
+	m.WatchInventoryAge(func() float64 { return max(now().Sub(time.Unix(0, r.invSeen.Load())).Seconds(), 0) })
 	return r
 }
 

@@ -270,10 +270,29 @@ func openWith(read reader, path string, keys []ed25519.PublicKey) (*Published, e
 	}
 	doc, inv, err := bundle.Open(raw, keys)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, NotOpened(path, err)
 	}
 	return &Published{Raw: raw, Doc: doc, Inv: inv}, nil
 }
+
+// ErrNotOpened marks a copy that was read and then refused by bundle.Open —
+// its signature, its format or its checks — as against one that could not be
+// read at all: a caller alarms the first and only says the second.
+var ErrNotOpened = errors.New("the document does not open")
+
+// notOpened is bundle.Open's refusal of the file at path, reading as
+// "path: refusal", and matching both the refusal and ErrNotOpened.
+type notOpened struct {
+	path string
+	err  error
+}
+
+func (e *notOpened) Error() string   { return e.path + ": " + e.err.Error() }
+func (e *notOpened) Unwrap() []error { return []error{e.err, ErrNotOpened} }
+
+// NotOpened wraps err, bundle.Open's refusal of the file at path, so that
+// errors.Is(err, ErrNotOpened) holds; its text is "path: err".
+func NotOpened(path string, err error) error { return &notOpened{path: path, err: err} }
 
 // WriteAtomic writes body to dir/name so that a reader sees the old file or
 // the new one, whole: a temporary file in dir, synced, renamed over name,

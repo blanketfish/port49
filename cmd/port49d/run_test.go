@@ -424,8 +424,24 @@ func TestRunWithNoBundleServesNoTACACSAndIsNotReady(t *testing.T) {
 	if metrics == nil {
 		t.Fatalf("the metrics address is not said: %s", out.String())
 	}
-	if resp, err := http.Get("http://" + metrics[1] + "/readyz"); err != nil || resp.StatusCode != 503 {
-		t.Fatalf("readyz: %v %v", resp, err)
+	resp, err := http.Get("http://" + metrics[1] + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 503 || strings.TrimSpace(string(body)) != "waiting for a first bundle from the inventory service" {
+		t.Fatalf("readyz: %d %q", resp.StatusCode, body)
+	}
+	// No snapshot, no age: NaN, never the 0 that reads as fresh.
+	resp, err = http.Get("http://" + metrics[1] + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(body), "\nport49_inventory_snapshot_age_seconds NaN\n") {
+		t.Fatalf("snapshot age during the wait:\n%s", body)
 	}
 	if strings.Contains(out.String(), "port49d: listening on") {
 		t.Fatal("TACACS+ is listening with no bundle")
@@ -441,7 +457,7 @@ func TestRunStartsFromThePersistedCopyWithTheServiceDown(t *testing.T) {
 	b := brokerConfig(t, minimalPolicy+"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: k}]\n").Broker
 	svc, key, _ := coldRig(t)
 	svc.URL, svc.MirrorDir = "https://127.0.0.1:1", ""
-	persistBundle(svc.StateDir, sealedDoc(t, key, 7, 2))
+	mustPersist(t, svc.StateDir, sealedDoc(t, key, 7, 2))
 	cfgPath := writeServiceRunConfig(t, b, svc, "", keyPath(t, key))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
