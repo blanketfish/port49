@@ -4126,8 +4126,12 @@ day 22    retire v2 in a reviewed change
 `retire_after` is a date, inclusive: `retire_after: 2026-10-01` admits through the end of that
 day UTC, and from `2026-10-02T00:00:00Z` the version identifies a device and never admits one,
 as a retired version does. It is written on `accept` versions only; `current` carries none, and
-a `retired` version is refused already. A connection validated before the instant keeps its key
-for its life. port49d says at start, and `port49 policy test --config` reports, a version whose
+a `retired` version is refused already. A connection validated before the instant keeps its version only until
+that instant: past it, every later packet on the connection is treated as a new connection's
+first packet would be, a `matches_retired` record, the per-source backoff and a close with no
+reply. "For the connection's life" would have no bound, because a busy single-connect
+connection resets its idle timer on every packet and so can stay open indefinitely. What a
+device does when its open connection is closed this way is unmeasured (L28, open). port49d says at start, and `port49 policy test --config` reports, a version whose
 date has passed and an `accept` version with none.
 
 The key sets, `retire_after` included, live in port49d.yaml beside the references to their
@@ -4248,6 +4252,26 @@ resolves it by making the deadline visible long before it arrives rather than by
 
 - Alarm severity escalates as `retire_after` approaches while devices still present the
   version, and the remaining device list is in the alarm.
+
+  port49d exports `port49_key_version_devices{key_ref,version}` (devices whose latest validated
+  connection used the version) and `port49_key_retirement_seconds{key_ref,version}` (seconds
+  until `retire_after` passes, negative once it has). The device count covers **only devices
+  seen since port49d started**. Keys are read only at start, so each step of a rotation
+  restarts port49d, and every restart resets the count to 0 until devices reconnect. The idle
+  stragglers are the ones that stay uncounted longest, and they are the devices a retirement
+  locks out. A removed device keeps counting toward its last version until the next restart.
+  `port49 keys status`, which reads the decision log, is the authority before a version is
+  retired. The metric is not. An alert built on the metric should wait until port49d has been
+  up long enough to cover the fleet's reconnect interval, for example:
+
+  ```
+  port49_key_version_devices > 0
+    and on(key_ref, version) port49_key_retirement_seconds < 7 * 86400
+    and on() (time() - process_start_time_seconds{job="port49d"}) > 86400
+  ```
+
+  Seeding the count from the decision log at start, so a restart does not blank it, is future
+  work.
 - Retirement and extension are both reviewed changes, of port49d.yaml's repository (above). Extending is
   legitimate; forgetting is what the date prevents.
 - CI MUST refuse a policy whose `accept` set is empty for a `key_ref` still assigned by a key

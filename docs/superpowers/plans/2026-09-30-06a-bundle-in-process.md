@@ -230,7 +230,10 @@ which is an encryption-at-rest rotation alarm, not a device-key one. Task 21 rec
 7. **`retire_after` is a date and is inclusive.** `retire_after: 2026-10-01` admits through the end
    of that day UTC and refuses from `2026-10-02T00:00:00Z`: past it the version identifies and
    never admits, as a retired one does. It is allowed on `accept` versions only. A connection
-   validated before the instant keeps its key for its life (the per-connection cache, spec §10).
+   validated before the instant keeps its version only until that instant; past it, every later
+   packet is treated as a new connection's would be (spec §10). A busy single-connect connection
+   resets its idle timer on every packet, so "for its life" would have no bound. How a device
+   reacts to that close is L28, open. (Amended in Task 14's review.)
 8. **Every validated record names its key.** `device.key_ref` and `device.key_version` on the
    redeem, authorization and accounting records; `keys status` groups the log by them. A new
    per-connection record would double the log.
@@ -524,8 +527,8 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   `retire_after` is a date, inclusive: `retire_after: 2026-10-01` admits through the end of that
   day UTC, and from `2026-10-02T00:00:00Z` the version identifies a device and never admits one,
   as a retired version does. It is written on `accept` versions only; `current` carries none, and
-  a `retired` version is refused already. A connection validated before the instant keeps its key
-  for its life. port49d says at start, and `port49 policy test --config` reports, a version whose
+  a `retired` version is refused already. A connection validated before the instant keeps its
+  version only until that instant (amended in Task 14's review; spec §10 has the text). port49d says at start, and `port49 policy test --config` reports, a version whose
   date has passed and an `accept` version with none.
 
   The key sets, `retire_after` included, live in port49d.yaml beside the references to their
