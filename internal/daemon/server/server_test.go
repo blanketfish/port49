@@ -1326,3 +1326,63 @@ func TestAKeyMissIsClosedWithAReset(t *testing.T) {
 		t.Fatalf("want the key miss closed with a reset, got %v", err)
 	}
 }
+
+// A packet past its version's retire_after on an open connection is treated
+// as a new connection's first packet would be (spec §10), and so closed as a
+// first-packet miss is under L28 branch H: a matches_retired record, a
+// strike, and a reset at once, never a silent hold for the backoff. How a
+// device reacts to it is unmeasured.
+func TestAPacketPastItsDateIsClosedWithAReset(t *testing.T) {
+	log := &syncBuffer{}
+	at := time.Now().Add(time.Hour)
+	var clock atomic.Int64
+	clock.Store(at.Add(-time.Minute).UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()) }
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
+		d.Keys = map[string]keyring.Set{"prod_key": {Ref: "prod_key", Versions: []keyring.Version{
+			{Number: 2, Secret: []byte("k2")}, {Number: 1, Secret: []byte("k1"), RetireAt: at}}}}
+		d.Now = now
+		d.Limits = slowBackoff()
+	})
+	c := dial(t, ts.addr, []byte("k1"))
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode()
+	c.send(t, wire.TypeAuthen, start, wire.FlagSingleConnect)
+	c.recv(t)
+	clock.Store(at.UnixNano())
+	c.sid, c.seq = c.sid+1, 1
+	c.send(t, wire.TypeAuthen, start, wire.FlagSingleConnect)
+	began := time.Now()
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want a reset, got %v", err)
+	}
+	if held := time.Since(began); held > 500*time.Millisecond {
+		t.Fatalf("the connection was held %s before it was reset", held)
+	}
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"matches_retired"`) }) {
+		t.Fatalf("no matches_retired record: %s", log.String())
+	}
+	// The strike: the next connection from this source is refused at Accept.
+	closedAtOnce(t, dial(t, ts.addr, []byte("k2")))
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("held_refused")); n != 1 {
+		t.Fatalf("held_refused = %v; the packet past its date was not struck", n)
+	}
+}
+
+// L28 branch H: a source refused at Accept inside its backoff is reset, as a
+// key miss is, so the C8000V falls to local at once rather than at its timeout
+// (tests/lab/results/L28-fin-cisco_iosxe.md).
+func TestAHeldSourceIsRefusedWithAReset(t *testing.T) {
+	log := &syncBuffer{}
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) { d.Limits = slowBackoff() })
+	c := dial(t, ts.addr, []byte("wrong"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	closedAtOnce(t, c)
+	c = dial(t, ts.addr, []byte("k2"))
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want the held source refused with a reset, got %v", err)
+	}
+}

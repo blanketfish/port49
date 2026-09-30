@@ -112,15 +112,6 @@ func (s *conn) quarantined() bool {
 // behind it. event is the ConnectionEvents label: callers pass a diagnosis
 // distinct from "malformed_backoff" when the strike isn't itself a malformed
 // packet (an unadmitted source), so the two are distinguishable in metrics.
-// reset makes c's close a TCP reset rather than a FIN. The C8000V ignores a
-// server's FIN and waits out its own timeout before it falls to local; a
-// reset it acts on at once (tests/lab/results/L28-cisco_iosxe.md).
-func reset(c net.Conn) {
-	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetLinger(0)
-	}
-}
-
 func (s *conn) backoff(ctx context.Context, event string) {
 	d := s.d.Limits.Malformed(s.src)
 	s.d.Metrics.ConnectionEvents.WithLabelValues(event).Inc()
@@ -133,6 +124,26 @@ func (s *conn) backoff(ctx context.Context, event string) {
 	case <-t.C:
 	case <-ctx.Done():
 	}
+}
+
+// reset makes c's close a TCP reset rather than a FIN. On a server's FIN the
+// C8000V waits out its own timeout before it falls to local; a reset it acts
+// on at once (tests/lab/results/L28-fin-cisco_iosxe.md, L28-cisco_iosxe.md).
+func reset(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetLinger(0)
+	}
+}
+
+// keyMiss closes a connection whose packet no accepted key validates — a
+// first packet, or one past its version's retire_after — as L28 branch H
+// does: the record, a strike, and a reset at once, never a silent hold. The
+// next connection inside the strike's backoff is refused at Accept.
+func (s *conn) keyMiss(h wire.Header, obf []byte, diag keyring.Diagnosis, version int) {
+	s.unvalidated(h, obf, diag, version)
+	s.d.Limits.Malformed(s.src)
+	reset(s.c)
+	s.d.Metrics.ConnectionEvents.WithLabelValues("key_miss_closed").Inc()
 }
 
 // protocolError closes a connection whose key validated but whose packet
@@ -277,10 +288,7 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 			if s.d.Held != nil {
 				s.d.Held.Put(s.dev.Device.Name, s.src, h, obf, s.d.Now())
 			}
-			s.unvalidated(h, obf, r.Diagnosis, r.Version)
-			s.d.Limits.Malformed(s.src)
-			reset(s.c)
-			s.d.Metrics.ConnectionEvents.WithLabelValues("key_miss_closed").Inc()
+			s.keyMiss(h, obf, r.Diagnosis, r.Version)
 			return nil, false
 		}
 		s.version = r.Version
@@ -295,11 +303,11 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 	if s.pastDate(s.d.Now()) {
 		// matches_retired here means the connection's version is past its
 		// retire_after; this packet is not trial-decrypted, since nothing it
-		// could say would change the answer (spec §10).
+		// could say would change the answer (spec §10). It is closed as a
+		// first-packet miss is: struck, and reset at once.
 		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(s.version),
 			string(keyring.DiagMatchesRetired)).Inc()
-		s.unvalidated(h, obf, keyring.DiagMatchesRetired, s.version)
-		s.backoff(ctx, "malformed_backoff")
+		s.keyMiss(h, obf, keyring.DiagMatchesRetired, s.version)
 		return nil, false
 	}
 	body := wire.Obfuscate(h, s.keys.Secret(s.version), obf)
