@@ -233,7 +233,7 @@ which is an encryption-at-rest rotation alarm, not a device-key one. Task 21 rec
    validated before the instant keeps its version only until that instant; past it, every later
    packet is treated as a new connection's would be (spec §10). A busy single-connect connection
    resets its idle timer on every packet, so "for its life" would have no bound. How a device
-   reacts to that close is L28, open. (Amended in Task 14's review.)
+   reacts to that close is L29, open, split from L28 in Task 21. (Amended in Task 14's review.)
 8. **Every validated record names its key.** `device.key_ref` and `device.key_version` on the
    redeem, authorization and accounting records; `keys status` groups the log by them. A new
    per-connection record would double the log.
@@ -8270,8 +8270,16 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   policy file under the same key, then delete it from the inventory file. Until you add it, port49d
   reads it from the inventory file and says so at every start and reload. While both carry it, the
   policy's wins and a notice names the inventory's as ignored. Deleting it from the inventory
-  first is refused by the bound, since it would refuse every device. port49d with no `broker:`
-  block (the lab's mode) keeps reading it from the inventory file.
+  first is refused by the bound, since it would refuse every device. If that wrong order is
+  followed by a restart, the start is refused, saying the bundle admits none of the devices and
+  naming the fix: add `key_groups` to the policy file. port49d with no `broker:` block (the lab's
+  mode) keeps reading it from the inventory file.
+- **A `key_ref` must be a name:** `^[a-z][a-z0-9_]{0,63}$`, in port49d.yaml's `keys:`, in a key
+  group and in a device's pin. One that is not, most likely a secret pasted where the name goes, is
+  refused without being printed: a `keys:` entry refuses port49d.yaml by its line, a key group
+  its file by its position, and a pin refuses that device alone. Rename any key that is not
+  lowercase letters, digits and `_` before upgrading. A YAML decode error in port49d.yaml or the
+  inventory file prints its line and a category, never the file's text.
 - **The inventory file is read like the policy file.** With a `broker:` block, it and its directory
   must be writable by port49d's user or root alone, it must be a regular file, and it must be
   64 MiB or smaller. Otherwise the start is refused, or a reload is refused once while the bundle
@@ -8304,7 +8312,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - **New metrics:** `port49_devices_admission_refused`, `port49_inventory_reloads_total{outcome}`,
   `port49_inventory_file_refused`, `port49_inventory_snapshot_age_seconds`,
   `port49_inventory_changes_total{kind}`, `port49_key_version_devices{key_ref,version}`,
-  `port49_key_retirement_seconds{key_ref,version}`.
+  `port49_key_retirement_seconds{key_ref,version}`. `port49_key_version_devices` counts only
+  devices seen since port49d started, and every restart (each rotation step is one) resets it to
+  0 until devices reconnect, so the idle stragglers a retirement locks out are the last it counts.
+  `port49 keys status`, which reads the decision log, is the authority before retiring a version;
+  gate an alert on the metric on port49d's uptime (the example in spec §10, "Retirement is
+  enforced").
 - **The decision log:** `bundle` is now the bundle id (the policy file's hash and the inventory's,
   combined), not the policy file's hash; every validated record's `device` block carries `key_ref`
   and `key_version`; a new report event, `inventory_change`, records an address added to an existing
@@ -8314,13 +8327,20 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - **New commands:** `port49 keys status`, `port49 keys show`, `port49 keys diagnose` (needs
   `admin_socket`), `port49 inventory diff`; `port49 policy test --config` adds the key checks;
   `port49 policy replay --policy --inventory` verifies a redacted blob's records.
+  - `policy test --config` reads only port49d.yaml's `keys:` block. It is not a port49d.yaml
+    validator: a file it passes can still refuse port49d's start.
+  - `inventory diff` without `--config` does not check key_refs against port49d.yaml's keys; it
+    says so on its output and does not fail for it. Pass `--config` in CI.
 - **A scope can pin devices by name:** `match: {name: [leaf-01, leaf-02]}`.
 - **`based_on: juniper_junos` now loads**, and the variant is read, and redacted, as Junos.
-- **A key miss** (L28): what the device does is in `tests/lab/results/L28-*.md`. port49d resets
-  the connection at once, with no reply, and refuses the source's next connections inside its
-  backoff (100 ms doubling to 5 s) with a reset too (`key_miss_closed`, `held_refused` in
-  `port49_connection_events_total`). A packet past its key version's `retire_after` on an open
-  connection is closed the same way; what a device does with that close is unmeasured.
+- **A key miss** (L28, closed): port49d resets the connection at once, with no reply, and refuses
+  the source's next connections inside its backoff (by default 100 ms doubling to 5 s) with a
+  reset too (`key_miss_closed`, `held_refused` in `port49_connection_events_total`). A device
+  presenting an unknown, retired or expired key then has its token logins refused and its
+  break-glass login and commands as fast as with port49d stopped, measured on EOS, NX-OS, IOS-XE
+  and vJunos-router (`tests/lab/results/L28-*.md`). A packet past its key version's
+  `retire_after` on an open connection is closed the same way; what a device does with that close
+  is unmeasured (spec §15 L29, open).
   - The log carries one `unvalidated` record per strike. Attempts refused inside a backoff leave
     no record, only the `held_refused` count, which has no device label.
   - The refusal applies to any source that struck, whatever the strike, not a key miss alone. A

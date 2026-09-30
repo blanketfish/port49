@@ -34,7 +34,8 @@ Task 19, run 2026-09-29, closed L9, L10 and L12; L25 and the new L26c stay open 
 built, below). **6a written 2026-09-30, revised the same day** after its pre-flight review
 (`2026-09-30-06a-bundle-in-process.md`, twenty-two tasks: one docs, one lab, eighteen code, one
 lab, one lab-and-docs; plan 6 is split at the seam below, and three owner decisions are listed at
-its top). 6b and 7–13 not yet.
+its top), and **executed 2026-09-30** on `feature/bundle-in-process`, reviewed per task. It closed L27 and L28 and opened L29 (Plan 6a — As built,
+below); not merged yet. 6b and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -474,7 +475,10 @@ of a directory holding a link, never the file's own directory, is excused on a r
 (`tests/lab/results/configmap-mounts.md`). The excuse trusts whoever writes the mount's source,
 so the deployment docs must say: do not mount the policy from FUSE, or from a host path others
 can write (re-review n1). They must also say to use `fsGroup` or `defaultMode: 0444` for a
-non-root `port49d`, and that an edit takes about 55 s to reach the pod.
+non-root `port49d`, and that an edit takes about 55 s to reach the pod. **`inventory_file`'s path
+is the deployment's to protect exactly as `broker.policy_file`'s is** (plan 6a, pre-flight C2):
+since plan 6a it is read behind the same fence, with a broker, and it decides scope membership,
+capture addresses and key pins within seconds.
 **The refresh's cost** (4b final review I3): one `mintedBy` compile measured 17.8 µs on the
 fixture's three-role policy. The token scan runs principals × devices × instants for each
 superseded policy, so 500 principals by 5,000 devices is about 45 s per instant per prior, and
@@ -923,7 +927,8 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
 
 **Split into 6a and 6b (2026-09-30).** The seam is the bundle's source:
 
-- **Plan 6a — `2026-09-30-06a-bundle-in-process.md`. Written 2026-09-30.** Everything that
+- **Plan 6a — `2026-09-30-06a-bundle-in-process.md`. Written 2026-09-30; executed 2026-09-30
+  (as built, below), not merged yet.** Everything that
   consumes a bundle, with the bundle built in port49d from `inventory_file` and
   `broker.policy_file`: `bundle.ID` (a content hash) and `bundle.Parse`; the loaded policy as the
   one pointer that carries admission, devices, quarantine and policy (new decision 28); key groups
@@ -949,11 +954,99 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   triggers (10-minute schedule, authenticated webhooks, `port49 inventory sync`, startup), bounded
   change in the service, the bundle document and its sequence number, port49d's 30 s pull with
   ETag, the persisted last good bundle, the shared mirror, cold-start readiness, and spec §14's
-  quarantine-through-a-sync lab assertion.
+  quarantine-through-a-sync lab assertion. Also owner decision 3's mismatch alarm and L27's gaps
+  (Plan 6a — As built, "Carried").
 
 **Go-dark on a store outage is plan 7's**, with the remote store (plan 4's "Hands to plan 6": "plan
 6 or 7, whichever brings the remote store"; plan 6 builds none), and so are the warm context
 cache, plan 4b's remote-store items, and the `crypt_open_failures_total{record="token"}` alarm.
+
+### Plan 6a — As built
+
+Executed 2026-09-30 on `feature/bundle-in-process`, twenty-two tasks, each reviewed; the ledger is
+`.superpowers/sdd/2026-09-30-06a-bundle-in-process/progress.md`. What differs from the plan's
+text, task by task:
+
+- **Task 3.** A device whose `transport` is `tls`, or neither `tcp` nor `tls`, refuses that device
+  alone (`refused_transport`), not the inventory file; spec §10 was edited to say so.
+  `admission.Resolve` decides one device (transport, then key group), and the admit step adds
+  only the unknown-key check.
+- **Task 4.** A refused entry never carries a `KeyRef`: the daemon and the config read a non-empty
+  `KeyRef` as admitted, so a refusal names the undefined key in its text instead.
+- **Tasks 7, 10, 12.** A bundle that admits none of a non-empty inventory is refused at start
+  **and at both reloads**, the inventory's and the policy's, whatever
+  `inventory.max_removed_percent` says, in the same words, naming `stop port49d` as the deliberate
+  path. A quarantined device counts as admitted for the bound.
+- **Task 11a** (added by the pre-flight review) fenced the inventory file at start; Task 12 fenced
+  it at every reload, keeping the last good inventory and raising `port49_inventory_file_refused`.
+- **Task 12.** The key-group move done in the wrong order (deleted from the inventory first) and
+  followed by a restart refuses the start, naming the fix: a device sees the same fallback whether
+  port49d is down or admits nothing, and the refusal is louder.
+- **Task 14.** A key version ends at `retire_after` **even on an open connection**: each packet is
+  judged at its own time, and the first past the date is refused. The plan had the version last
+  the connection's life; a busy single-connect connection never idles out, so that had no bound.
+  Spec §10 and Decided 7 were amended. `port49_key_version_devices` counts only since start (spec
+  §10 says so, with an uptime-gated alert example), and the process collector is exported for it.
+- **Task 15.** `key_ref` is constrained to `^[a-z][a-z0-9_]{0,63}$` wherever one is written,
+  since every report prints it; YAML decode errors in port49d.yaml and the inventory print the
+  line and a category only (`internal/yamlfault`); a missing environment variable is named by its
+  key, not its variable; the clock is injected. Three fix rounds, each closing a path by which a
+  pasted secret could reach output.
+- **Task 16.** The other-uid refusal test (`TestAnotherUIDIsRefused`) needs root; the controller
+  ran it with `sudo -n` and it passed. Non-root CI skips it.
+- **Task 17.** A scope pinning a name the inventory lacks is a **warning** in `policy test`, not a
+  failure: onboarding a device before it is in inventory is legitimate.
+- **Task 18.** An unknown field is reported by line. Without `--config`, `inventory diff` warns
+  that key_refs are unchecked and does not fail on it, and its admit-none check uses `policy
+  test`'s. Under `--new-policy`, security marks are per step, and a two-file change that stops
+  half-applied in one order exits 1.
+- **Task 19** fixed a leak in the plan's code: when a record's `redacted` mark has been edited out
+  of the log, a divergence printed the verbatim blob's rule text, secret included. Against a blob
+  from the files, replay now prints only the log's side, and its output goes through the loaded
+  policy's redaction.
+- **Task 20** took **branch H** (below). A packet past `retire_after` on an open connection is
+  closed as a first-packet miss is, with a strike and a reset.
+
+**Owner decisions, as ruled** (the anti-escalation defaults; Ryan may override): 1, a key-group tie
+that exists only against the inventory refuses that device alone; 2, `keys diagnose` over a 0600
+`SO_PEERCRED` Unix socket, off by default; 3, for 6b, port49d keeps its own policy file and takes
+only the inventory from the service. **Key groups:** where both files carry them, the policy's win
+and a notice names the inventory's as ignored.
+
+**L28 took branch H.** The hold stalled break-glass on all four images (`L28-held-*.md`: three
+commands 25–28 s on EOS, NX-OS and IOS-XE, 5.9 s on vJunos-router). port49d now strikes a key
+miss and resets it at once, and refuses a source inside its backoff at Accept with a reset
+(`key_miss_closed`, `held_refused`). A FIN was tried first and still cost the C8000V its own 5 s
+timeout (`L28-fin-cisco_iosxe.md`), so the close is a reset. Break-glass is now at port49d-stopped
+times on all four (`L28-*.md`). One record per strike; attempts refused inside a backoff leave
+only the `held_refused` count. Accepted in review: a strike from a device's address resets that
+address's connections for up to 5 s (denial of service, not escalation; spec §10 says so).
+
+**Rows:** L27 and L28 closed 2026-09-30. L29 opened: what a device does when an open connection
+passes its key version's `retire_after`, which needs a run across midnight UTC; split from L28,
+which measured first packets only.
+
+**Carried, for later plans:**
+
+- **Plan 6b:** the object-store mirror, the persisted last good bundle and cold-start readiness;
+  the bundle document and its integer sequence; owner decision 3's policy-hash mismatch notice and
+  alarm; L27's gaps, a non-null pagination `next` and Nautobot 3.x (Docker Hub has a 3.2 line),
+  and its findings: Nautobot 1.6's `Api-Version` is `1.2`, so detect by `/api/status/`; Nautobot
+  2.x REST at default depth names no related object, so read `?depth=1` or GraphQL; Nautobot
+  delivers webhooks out of change order, so order by the body's `timestamp`.
+- **Plan 7:** go-dark on a store outage, the warm context cache, and plan 4b's remote-store items.
+  The `crypt_open_failures_total{record="token"}` alarm, which plan 2 handed to "plan 6 with key
+  rotation reporting, or plan 7", goes to plan 7: it guards the encryption-at-rest rotation, not
+  the device keys 6a reports on (M11).
+- **Plan 12:** `secret_ref:` resolvers, and the key sets moving into the policy repository with
+  them; `key_ref` as a device label in per-device-pin deployments (unchanged, and now on
+  `port49_key_version_devices` and `port49_key_retirement_seconds` too); the write fence's
+  unchecked ancestor directories and ACLs, now for `inventory_file` as well as the policy file;
+  running `TestAnotherUIDIsRefused` in CI with root; measuring, at fleet size, the inventory-only
+  refresh's blob comparison (one blob read and two decodes per live context, which a per-pass cache
+  would cut; Task 11, M2).
+- **Later, unassigned:** seeding `port49_key_version_devices` from the decision log at start, so a
+  restart does not blank it (spec §10).
 
 ## Plan 7 — Broker in full (§19 step 7)
 
@@ -986,6 +1079,10 @@ built it (plan 4's "Hands to plan 6"). Also owed by plan 3's reviews:
   by principal or by certificate (spec §5.1.4) is this plan's, and it must also
   refuse mints on, or close, that principal's held broker connections; otherwise a token
   minted after the revocation lifts it (decision 15).
+
+**Carried from plan 6a:** go-dark on a store outage, the warm context cache, plan 4b's
+remote-store items, and the `crypt_open_failures_total{record="token"}` alarm (Plan 6a — As
+built, "Carried").
 
 ## Plan 8 — Workload certificates (§19 step 8)
 
@@ -1045,6 +1142,12 @@ Carried here from plan 1's review:
   into one series per device — both a cardinality problem and, against design §15's "device
   identity never appears in metric labels", a correctness one. Say which it is and bound it
   when the alarms are written.
+
+**Carried from plan 6a** (Plan 6a — As built, "Carried"): `secret_ref:` resolvers, with the key
+sets moving into the policy repository; `key_ref` on `port49_key_version_devices` and
+`port49_key_retirement_seconds` as well as above; the write fence's ancestor directories and
+ACLs, for `inventory_file` as for the policy file; `TestAnotherUIDIsRefused` run in CI as root;
+the inventory-only refresh's cost at fleet size.
 
 ## Plan 13 — User and admin documentation
 
