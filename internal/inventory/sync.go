@@ -166,6 +166,9 @@ func (s *Syncer) Restore(ctx context.Context) error {
 		}
 	}
 	if best == nil {
+		// The mirror was read, and is empty: nothing is published for it to
+		// be behind.
+		s.Metrics.MirrorBehind.Set(0)
 		fmt.Fprintln(s.Log, "port49-inventory: no bundle published yet; the first sync publishes bundle 1, bounded "+
 			"by each port49d")
 		return nil

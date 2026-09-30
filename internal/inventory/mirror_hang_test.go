@@ -131,3 +131,15 @@ func TestAHungMirrorShowsAndHoldsUpNoSync(t *testing.T) {
 		t.Fatal("the sync waiting on the mirror did not end with its context")
 	}
 }
+
+// A fresh start reads an empty mirror: nothing is published for it to be
+// behind, so mirror_behind, set before the read, is 0 again.
+func TestAFreshStartIsNotMirrorBehind(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	if err := rig.s.Restore(context.Background()); err != nil || rig.s.Current() != nil {
+		t.Fatalf("%v %v", rig.s.Current(), err)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.MirrorBehind) != 0 {
+		t.Fatal("port49_inventory_mirror_behind is 1 with nothing published")
+	}
+}
