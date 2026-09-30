@@ -82,11 +82,16 @@ changes only the tasks named.
    (Task 3a). Spec §10 already allows it ("a group matching a single device name is legal", under
    "Per-device keys are not supported"). Two name groups for one device are a policy load error, as
    any tier tie is; with `inventory_file`, a record pin and a name group that disagree refuse that
-   device alone. Two limits to state plainly: the service mode has no inventory `key_groups` fallback
-   (spec §10's "read where the policy has none" applies to `inventory_file` only); and attribute
-   groups still let a source writer move a device among the keys the policy maps to attributes, so
-   this decision narrows that escalation class rather than closing it, and the spec's mitigation
-   for the rest is plan 6a's `key_ref_changed` record. port49d's own `inventory_file` mode keeps
+   device alone. The service mode has no inventory `key_groups` fallback (spec §10's "read where the
+   policy has none" applies to `inventory_file` only).
+   **What this decision does not close.** Attribute key groups (tier 2) already let whoever writes the
+   source of truth move a device among the keys the policy maps to attributes: change a device's
+   `env: lab` to `env: prod` in NetBox and its key follows, with no policy diff. This decision narrows
+   that escalation — a source writer can no longer pick *any* key in `keys:` for a device — but does
+   not close it. The mitigation for what remains is the `inventory_change` record plan 6a already
+   writes when a device's `key_ref` changes (`key_ref_changed`, counted in
+   `port49_inventory_changes_total{kind="key_ref_changed"}`), which every swap from the service writes
+   exactly as a file reload does (Task 15). port49d's own `inventory_file` mode keeps
    record pins, as plan 6a built. **Default:** refused on both sides, and the policy name group as the
    pin. *Alternative:* carry pins from the file source. Tasks 1, 3a, 4, 7. *(Revised after the
    pre-flight review, B1: the first draft offered a `/32` group as a pin's equivalent, which it is
@@ -149,7 +154,8 @@ and spec §14's quarantine through a sync. Task 20 does not. It measures behavio
 (`retire_after` on an open connection) and depends on none of Tasks 3–19, so it is **executed
 straight after Task 2**: its test and the shell helpers it shares with Task 19 are committed on
 `feature/inventory-service` first, and its four nights start while the code tasks run. The lab is
-single-occupant: no night overlaps Task 2's stacks or Task 19's runs. Nights that land after the
+single-occupant: no Task 20 night shares a night with any part of Task 2, and none overlaps Task
+19's runs. Nights that land after the
 merge come through a `lab/l29-midnight` branch and pull request, since evidence is not docs, and L29
 stays open until every platform has both its notes (lab register rule 3).
 
@@ -8667,7 +8673,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 **Execute this task straight after Task 2**, before Task 3 ("The merge gate", at the top): it
 measures behaviour plan 6a shipped and needs none of this plan's code, so its test and shell helpers
 are committed on `feature/inventory-service` first and its four nights run while the code tasks go
-on. It never shares the lab with Task 2's stacks or Task 19's runs.
+on. **A Task 20 night is never the same night as any part of Task 2**, nor overlaps Task 19's runs:
+the lab is single-occupant, and Task 2's Docker stacks run by day on days with no night scheduled
+across them.
 
 **Files:**
 - Create: `tests/lab/l29_shell_test.go` (`labShell`, `l.shell`, `singleConnection`, `timedLogins`,
@@ -8929,7 +8937,8 @@ echo $! > tests/lab/logs/l29-midnight-eos.pid
   then `make evidence`, and the next night the next platform (`nxos`, `iosxe`, `junos`). A night that
   misses its midnight — the device late, a stall — is run again the next night; it is never read as a
   result. Nothing else runs on beehive's Docker from the start of a night's run to its end: no night
-  overlaps Task 2's stacks or Task 19's runs, which the controller schedules by day.
+  shares a night with any part of Task 2, or overlaps Task 19's runs; the controller schedules those by
+  day, and a Task 2 stack still running at 22:30Z postpones that night's run to the next night.
 
 - [ ] **Step 4: Commit** each night's note and evidence as it lands — on `feature/inventory-service`
   while the branch is open, and after its merge on a `lab/l29-midnight` branch through a pull request,
