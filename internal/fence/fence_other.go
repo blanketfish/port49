@@ -1,0 +1,13 @@
+//go:build !linux
+
+package fence
+
+import "errors"
+
+// Read refuses on every system but Linux: the check that nobody else could
+// have written the file is made on descriptors (openat, O_PATH) used on Linux
+// alone, and a file that cannot be checked is not read. port49 builds here so
+// the rest of it can be worked on.
+func Read(_ string, _ int64, what string) ([]byte, error) {
+	return nil, errors.New("port49 reads " + what + " on Linux only: the check of who could have written it is Linux's")
+}
