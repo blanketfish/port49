@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,9 @@ import (
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
 const twoDevices = `devices:
@@ -762,5 +765,33 @@ func TestAnInventoryFaultNamesTheFileOnce(t *testing.T) {
 	out := rig.out.String()
 	if !strings.Contains(out, "addresses[0] is not an IP address") || strings.Count(out, rig.cfg.InventoryFile) != 1 {
 		t.Fatalf("stderr: %s", out)
+	}
+}
+
+// Final review m6: a swap forgets a device the new bundle no longer admits
+// under the key_ref it was seen on, in the key-version count and the packets
+// held for keys diagnose.
+func TestASwapForgetsWhatItNoLongerAdmits(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.writeInventory(t, twoDevices)
+	rig.pollTwice()
+	rig.r.seen, rig.r.held = &keyring.Seen{}, &keyring.Held{}
+	for _, d := range []string{"leaf1", "leaf2"} {
+		rig.r.seen.Mark(d, "lab_key", 1)
+		rig.r.held.Put(d, netip.MustParseAddr("10.0.0.1"), wire.Header{}, []byte("x"), rig.now)
+	}
+	rig.writeInventory(t, "devices:\n  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1], key_ref: lab_key}\n")
+	rig.sighupWithBound(t, 100)
+	if _, ok := rig.b.Policy.Load().Device("leaf2"); ok {
+		t.Fatalf("leaf2 was not removed: %s", rig.out.String())
+	}
+	if n := rig.r.seen.Count("lab_key", 1); n != 1 {
+		t.Fatalf("key_version_devices counts %d; leaf2 is gone", n)
+	}
+	if _, ok := rig.r.held.Get("leaf2"); ok {
+		t.Fatal("keys diagnose still answers for a removed device")
+	}
+	if _, ok := rig.r.held.Get("leaf1"); !ok {
+		t.Fatal("a device still admitted lost its held packet")
 	}
 }

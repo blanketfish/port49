@@ -1,6 +1,7 @@
 package keyring
 
 import (
+	"net/netip"
 	"testing"
 	"time"
 
@@ -34,5 +35,29 @@ func TestAVersionPastItsDateIdentifiesAndNeverAdmits(t *testing.T) {
 	}
 	if set.State(0, at) != "current" || set.State(1, at.Add(-time.Second)) != "accept" || set.State(1, at) != "retired" {
 		t.Fatal("State")
+	}
+}
+
+// Keep drops a device the bundle in force no longer admits under the key_ref
+// it was seen on, so port49_key_version_devices and keys diagnose do not
+// count or answer for a device removed, refused or re-keyed (final review m6).
+func TestKeepDropsWhatTheBundleNoLongerAdmits(t *testing.T) {
+	var s Seen
+	var h Held
+	for _, d := range []string{"leaf-01", "leaf-02", "leaf-03"} {
+		s.Mark(d, "prod", 2)
+		h.Put(d, netip.MustParseAddr("192.0.2.1"), wire.Header{}, []byte("x"), time.Now())
+	}
+	assigned := map[string]string{"leaf-01": "prod", "leaf-02": "other"} // leaf-03 removed or refused
+	keep := func(d string) string { return assigned[d] }
+	s.Keep(keep)
+	h.Keep(keep)
+	if n := s.Count("prod", 2); n != 1 {
+		t.Fatalf("Count = %d; want leaf-01 alone", n)
+	}
+	for d, want := range map[string]bool{"leaf-01": true, "leaf-02": true, "leaf-03": false} {
+		if _, ok := h.Get(d); ok != want {
+			t.Fatalf("held %s: %v, want %v", d, ok, want)
+		}
 	}
 }

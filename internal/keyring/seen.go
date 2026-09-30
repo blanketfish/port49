@@ -37,3 +37,17 @@ func (s *Seen) Count(ref string, version int) int {
 	}
 	return n
 }
+
+// Keep forgets every device that assigned, the bundle in force's key_ref for
+// a device ("" for one it does not admit), no longer gives the key_ref it was
+// seen on: a device removed, refused or re-keyed is not counted on a key it
+// can no longer use until it reconnects (plan 6a final review m6).
+func (s *Seen) Keep(assigned func(device string) string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for d, a := range s.last {
+		if assigned(d) != a.ref {
+			delete(s.last, d)
+		}
+	}
+}

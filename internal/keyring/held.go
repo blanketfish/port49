@@ -45,3 +45,17 @@ func (h *Held) Get(device string) (HeldPacket, bool) {
 	p, ok := h.m[device]
 	return p, ok
 }
+
+// Keep drops the packet of every device assigned, the bundle in force's
+// key_ref for a device, says is no longer admitted (""), so keys diagnose
+// answers only for a device port49d admits. A re-keyed device's packet is
+// kept: diagnose tries every key port49d holds (plan 6a final review m6).
+func (h *Held) Keep(assigned func(device string) string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for d := range h.m {
+		if assigned(d) == "" {
+			delete(h.m, d)
+		}
+	}
+}

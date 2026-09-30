@@ -736,6 +736,7 @@ func run(parent context.Context, cfgPath string) error {
 		}
 		r := newReloader(cfg, brk, m, time.Now)
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
+		r.seen, r.held = seen, deps.Held
 		r.run(ctx, hup)
 	}()
 

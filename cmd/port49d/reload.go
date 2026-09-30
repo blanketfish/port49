@@ -18,6 +18,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -93,6 +94,12 @@ type reloader struct {
 	// cfgPath is port49d.yaml, whose inventory.max_removed_percent SIGHUP
 	// re-reads (plan 6a, I1); run sets it.
 	cfgPath string
+	// seen and held are the daemon's key-version marks and the packets it
+	// holds for keys diagnose; each swap forgets the devices the new bundle
+	// no longer admits under the key_ref they were seen on (plan 6a final
+	// review m6). Either may be nil; run sets them.
+	seen *keyring.Seen
+	held *keyring.Held
 	// invSeen is when the inventory file was last read and found in force,
 	// or loaded: port49_inventory_snapshot_age_seconds reads it at scrape.
 	invSeen atomic.Int64
@@ -447,6 +454,16 @@ func (r *reloader) inventoryBundle(old *policy.Policy, raw []byte) (*policy.Poli
 // expiry is read from pol, and a settle pass is owed.
 func (r *reloader) swap(pol *policy.Policy) time.Time {
 	r.broker.Policy.Swap(pol)
+	assigned := func(device string) string {
+		a, _ := pol.Admitted(device)
+		return a.KeyRef
+	}
+	if r.seen != nil {
+		r.seen.Keep(assigned)
+	}
+	if r.held != nil {
+		r.held.Keep(assigned)
+	}
 	now := r.now()
 	r.priors[len(r.priors)-1].Until = now
 	r.priors = append(r.priors, broker.Prior{Policy: pol, At: now})
