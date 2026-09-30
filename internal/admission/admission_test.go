@@ -367,3 +367,46 @@ func TestAnInventoryKeyGroupKeyRefThatIsNoNameIsRefusedUnprinted(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// A name group is tier 1: it outranks an attribute group, and a device with
+// addresses in two CIDR groups for different keys takes it whole.
+func TestANameGroupPinsTheDeviceAtTierOne(t *testing.T) {
+	d := Device{Name: "leaf-01", Attributes: map[string]string{"env": "lab"},
+		Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("192.168.1.1")}}
+	groups := []KeyGroup{
+		{Attributes: map[string]string{"env": "lab"}, KeyRef: "lab_key"},
+		{CIDR: netip.MustParsePrefix("10.0.0.0/8"), KeyRef: "prod_key"},
+		{CIDR: netip.MustParsePrefix("192.168.0.0/16"), KeyRef: "other_key"},
+		{Name: "leaf-01", KeyRef: "pin_key"},
+	}
+	as, err := Assign(d, groups)
+	if err != nil || as.KeyRef != "pin_key" || as.Tier != TierPin || as.Group != "name leaf-01 → pin_key" {
+		t.Fatalf("%+v %v", as, err)
+	}
+	// Without the name group the same device is refused: its addresses
+	// disagree at tier 3 — the multi-address case the pin tier exists for.
+	d.Attributes = nil
+	if _, err := Assign(d, groups[1:3]); err == nil {
+		t.Fatal("the addresses' disagreement was not refused")
+	}
+}
+
+func TestTwoNameGroupsForOneDeviceTie(t *testing.T) {
+	d := Device{Name: "leaf-01"}
+	if _, err := Assign(d, []KeyGroup{{Name: "leaf-01", KeyRef: "a"}, {Name: "leaf-01", KeyRef: "b"}}); err == nil ||
+		!strings.Contains(err.Error(), "in the pin tier") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// With inventory_file, a record pin and a name group that name different
+// keys refuse the device; the same key is no conflict.
+func TestARecordPinAndANameGroupMustAgree(t *testing.T) {
+	groups := []KeyGroup{{Name: "leaf-01", KeyRef: "b"}}
+	if _, err := Assign(Device{Name: "leaf-01", KeyRef: "a"}, groups); err == nil {
+		t.Fatal("a disagreement was not refused")
+	}
+	if as, err := Assign(Device{Name: "leaf-01", KeyRef: "b"}, groups); err != nil || as.KeyRef != "b" {
+		t.Fatalf("%+v %v", as, err)
+	}
+}

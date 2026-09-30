@@ -47,11 +47,12 @@ type fileAck struct {
 	Reason   string `yaml:"reason"`
 }
 
-// fileKeyGroup is one key_groups entry (spec §10): which CIDR or attribute
-// pattern maps to which key_ref. Key assignment is reviewed policy, so it
+// fileKeyGroup is one key_groups entry (spec §10): which device name, CIDR or
+// attribute pattern maps to which key_ref. Key assignment is reviewed policy, so it
 // lives here and not in the inventory (plan 6a).
 type fileKeyGroup struct {
 	Match struct {
+		Name       string            `yaml:"name"`
 		CIDR       string            `yaml:"cidr"`
 		Attributes map[string]string `yaml:"attributes"`
 	} `yaml:"match"`

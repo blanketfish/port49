@@ -10,11 +10,14 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 )
 
-// buildKeyGroups reads key_groups (spec §10). A group matches on a CIDR or on
-// attributes, never both, since each tier is its own rule. Two groups that tie
-// for every device they could match — one prefix twice, one attribute set
-// twice — are the policy's own error and refused, naming both; a tie only
-// some devices meet refuses those devices (admit; plan 6a owner decision 1).
+// buildKeyGroups reads key_groups (spec §10). A group matches on exactly one
+// of a device name, a CIDR or attributes, since each tier is its own rule. Two
+// groups that tie for every device they could match — one name twice, one
+// prefix twice, one attribute set twice — are the policy's own error and
+// refused, naming both; a tie only some devices meet refuses those devices
+// (admit; plan 6a owner decision 1). A name group naming a device the
+// inventory lacks is kept, as a scope's pinned name is: a device racked later
+// takes it.
 func (p *Policy) buildKeyGroups(f file) error {
 	switch {
 	case len(f.KeyGroups) > 0 && len(p.env.InventoryKeyGroups) > 0:
@@ -31,6 +34,7 @@ func (p *Policy) buildKeyGroups(f file) error {
 		}
 		return nil
 	}
+	names := map[string]string{}
 	cidrs := map[netip.Prefix]string{}
 	attrs := map[string]string{}
 	for i, g := range f.KeyGroups {
@@ -42,7 +46,12 @@ func (p *Policy) buildKeyGroups(f file) error {
 			return fmt.Errorf("%s: key_ref is not a valid key_ref name (%s): it names the key, never holds it",
 				at, admission.KeyRefShapeRule)
 		}
-		kg := admission.KeyGroup{Attributes: g.Match.Attributes, KeyRef: g.KeyRef}
+		kg := admission.KeyGroup{Name: g.Match.Name, Attributes: g.Match.Attributes, KeyRef: g.KeyRef}
+		// Not quoted: a value that is no name is not echoed.
+		if kg.Name != "" && (len(kg.Name) > 255 ||
+			strings.IndexFunc(kg.Name, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0) {
+			return fmt.Errorf("%s: match.name is not a device name", at)
+		}
 		if g.Match.CIDR != "" {
 			// netip's error quotes the value; the position says where it is.
 			pfx, err := netip.ParsePrefix(g.Match.CIDR)
@@ -54,12 +63,23 @@ func (p *Policy) buildKeyGroups(f file) error {
 			}
 			kg.CIDR = pfx
 		}
+		terms := 0
+		for _, given := range []bool{kg.Name != "", kg.CIDR.IsValid(), len(kg.Attributes) > 0} {
+			if given {
+				terms++
+			}
+		}
 		switch {
-		case kg.CIDR.IsValid() && len(kg.Attributes) > 0:
-			return fmt.Errorf("%s: match on cidr or on attributes, not both: each tier is its own group (spec §10)", at)
-		case !kg.CIDR.IsValid() && len(kg.Attributes) == 0:
-			return fmt.Errorf("%s: matches on neither cidr nor attributes, so it would admit the whole fleet under %s; "+
+		case terms > 1:
+			return fmt.Errorf("%s: match on exactly one of name, cidr or attributes: each tier is its own group (spec §10)", at)
+		case terms == 0:
+			return fmt.Errorf("%s: matches on neither name, cidr nor attributes, so it would admit the whole fleet under %s; "+
 				"give it one", at, kg.KeyRef)
+		case kg.Name != "":
+			if prev, dup := names[kg.Name]; dup {
+				return fmt.Errorf("%s: %s and %s tie for device %s (spec §10); keep one", at, prev, kg, kg.Name)
+			}
+			names[kg.Name] = kg.String()
 		case kg.CIDR.IsValid():
 			if prev, dup := cidrs[kg.CIDR]; dup {
 				return fmt.Errorf("%s: %s and %s tie for every device in %s (spec §10); keep one", at, prev, kg, kg.CIDR)

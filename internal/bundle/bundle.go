@@ -43,6 +43,7 @@ type canonDevice struct {
 }
 
 type canonGroup struct {
+	Name       string            `json:"name,omitempty"`
 	CIDR       string            `json:"cidr,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 	KeyRef     string            `json:"key_ref"`
@@ -80,7 +81,7 @@ func canonical(inv admission.Inventory) []byte {
 	slices.SortFunc(devs, func(a, b canonDevice) int { return strings.Compare(a.Name, b.Name) })
 	groups := make([]canonGroup, len(inv.KeyGroups))
 	for i, g := range inv.KeyGroups {
-		groups[i] = canonGroup{KeyRef: g.KeyRef}
+		groups[i] = canonGroup{Name: g.Name, KeyRef: g.KeyRef}
 		if g.CIDR.IsValid() {
 			groups[i].CIDR = g.CIDR.Masked().String()
 		}
