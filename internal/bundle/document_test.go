@@ -258,13 +258,21 @@ func TestAZeroPublishedAtIsRefused(t *testing.T) {
 	}
 }
 
-// A verify key of the wrong length is passed over, never handed to Verify.
+// A verify key of the wrong length is passed over, never handed to Verify,
+// which panics on one. key_id is the unsigned envelope's, so a sender can
+// name any held key, the short one included.
 func TestAShortVerifyKeyIsSkipped(t *testing.T) {
 	pub, key, _ := ed25519.GenerateKey(rand.Reader)
 	raw := sealed(t, docInventory(), key)
 	short := ed25519.PublicKey(pub[:16])
-	if _, _, err := Open(raw, []ed25519.PublicKey{short}); !errors.Is(err, ErrUnknownKey) {
-		t.Fatalf("short only: %v", err)
+	var e envelope
+	if err := json.Unmarshal(raw, &e); err != nil {
+		t.Fatal(err)
+	}
+	e.KeyID = KeyIDOf(short)
+	named, _ := json.Marshal(e)
+	if _, _, err := Open(named, []ed25519.PublicKey{short, pub}); !errors.Is(err, ErrUnknownKey) {
+		t.Fatalf("naming the short key: %v", err)
 	}
 	if _, _, err := Open(raw, []ed25519.PublicKey{short, pub}); err != nil {
 		t.Fatal(err)
