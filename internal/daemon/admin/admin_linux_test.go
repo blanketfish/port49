@@ -144,3 +144,46 @@ func TestAnotherUIDIsRefused(t *testing.T) {
 		t.Fatalf("%q, %v", out, err)
 	}
 }
+
+// Only a refused dial marks a socket stale (final review m4). One this uid
+// cannot dial — another uid's port49d's 0600 socket, say — is refused by
+// name and left in place, never unlinked and taken over.
+func TestListenLeavesASocketItCannotDial(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root dials a 0000 socket; TestOnlyARefusedDialIsStale carries the rule")
+	}
+	p := filepath.Join(t.TempDir(), "port49d.sock")
+	live, err := net.Listen("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	if err := os.Chmod(p, 0); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := Listen(p)
+	if err == nil {
+		ln.Close()
+		t.Fatal("a socket this uid cannot dial was taken over")
+	}
+	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("the refusal does not name the path and why: %v", err)
+	}
+	if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("the socket was removed: %v", err)
+	}
+}
+
+func TestOnlyARefusedDialIsStale(t *testing.T) {
+	op := func(errno syscall.Errno) error {
+		return &net.OpError{Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", errno)}
+	}
+	if !stale(op(syscall.ECONNREFUSED)) {
+		t.Fatal("ECONNREFUSED is a socket nothing answers on")
+	}
+	for _, e := range []syscall.Errno{syscall.EACCES, syscall.EPERM, syscall.EAGAIN, syscall.ETIMEDOUT} {
+		if stale(op(e)) {
+			t.Fatalf("%v read as stale", e)
+		}
+	}
+}

@@ -8,10 +8,12 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/rhwendt/port49/internal/keyring"
@@ -41,18 +43,25 @@ type Server struct {
 const maxRequest = 4096
 
 // Listen opens the socket at path, mode 0600. A stale socket at path — one
-// nothing answers on — is removed. A socket another process answers on, a
-// second port49d sharing the path, is refused and left alone, and so is
-// anything at path that is not a socket: a symlink is never followed, and
-// no mode is ever set through the path.
+// whose dial is refused, so nothing listens on it — is removed. Any other
+// socket is refused and left alone: one another process answers on, a second
+// port49d sharing the path, and one this uid cannot dial at all, such as
+// another uid's port49d's 0600 socket, whose dial fails with EACCES. So is
+// anything at path that is not a socket: a symlink is never followed, and no
+// mode is ever set through the path.
 func Listen(path string) (net.Listener, error) {
 	if fi, err := os.Lstat(path); err == nil {
 		if fi.Mode()&os.ModeSocket == 0 {
 			return nil, fmt.Errorf("%s exists and is not a socket; port49d will not remove it", path)
 		}
-		if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
+		c, err := net.DialTimeout("unix", path, time.Second)
+		if err == nil {
 			c.Close()
 			return nil, fmt.Errorf("another process answers on %s; give each port49d its own admin_socket", path)
+		}
+		if !stale(err) {
+			return nil, fmt.Errorf("%s is a socket port49d cannot tell is stale (%v); port49d will not remove it",
+				path, errors.Unwrap(err))
 		}
 		if err := os.Remove(path); err != nil {
 			return nil, err
@@ -61,6 +70,13 @@ func Listen(path string) (net.Listener, error) {
 		return nil, err
 	}
 	return listenPrivate(path)
+}
+
+// stale reports whether a dial error says nothing listens on the socket:
+// ECONNREFUSED alone. Anything else, a permission refused or a listener too
+// busy to accept, may be a live port49d's socket.
+func stale(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED)
 }
 
 // Serve answers until ctx ends.
