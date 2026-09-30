@@ -174,29 +174,47 @@ func (l *lab) l28Phase(t *testing.T, name, keys, expect string) string {
 	if expect != "" && !hasDiag(diags, expect) {
 		t.Errorf("phase %s: no %s record reached the log: %v", name, expect, diags)
 	}
-	return fmt.Sprintf("### Phase: %s\n\n```yaml\n%s```\n\n| step | outcome | took |\n|---|---|---|\n"+
+	return fmt.Sprintf("### Phase: %s\n\n%s\n\n```yaml\n%s```\n\n| step | outcome | took |\n|---|---|---|\n"+
 		"| break-glass login | %s | %s |\n| break-glass login plus three `show version` | %s | %s |\n"+
 		"| token login (`%s`) | %s | %s |\n\nUnvalidated records by diagnosis/type: %v. Validated records by key "+
-		"version: %v.\n\n%s\n\n", name, shown, bg, bgTook.Round(10*time.Millisecond), cmd, cmdTook.Round(10*time.Millisecond),
-		user, tok, tokTook.Round(10*time.Millisecond), diags, versions, live)
+		"version: %v.\n\n", name, live, shown, bg, bgTook.Round(10*time.Millisecond), cmd, cmdTook.Round(10*time.Millisecond),
+		user, tok, tokTook.Round(10*time.Millisecond), diags, versions)
 }
 
 // l28Live restarts port49d on cfg, a config that validates the device's
-// key, and waits until the device is seen asking it (l4WaitServerLive).
-// IOS-XE marks a server that timed out dead for authentication for about a
-// minute (tests/lab/results/L4-error-cisco_iosxe.md), and a key miss held
-// past its timeout is such a timeout: without this, one phase's hold would
-// be measured as the next phase's skipped server.
+// key, and probes with a login until one reaches it, so each phase starts
+// from a device that is asking port49. On the first IOS-XE run a phase
+// began while the device sent port49 nothing and was measured as a skipped
+// server; after some phases no probe reaches port49 for about 30 s, and why
+// is not established. The line says only what the probes saw.
 func (l *lab) l28Live(t *testing.T, cfg string) string {
 	t.Helper()
 	l.l28Restart(t, cfg)
 	t0 := time.Now()
-	why := l.l4WaitServerLive(150 * time.Second)
-	if why == "" {
-		why = "The device was asking port49 at the first probe."
+	deadline := t0.Add(150 * time.Second)
+	for attempt := 1; ; attempt++ {
+		off := l.mark()
+		if c, err := l.dial(l4ProbeUser, l4ProbePassword, 30*time.Second); err == nil {
+			c.Close()
+		}
+		recs := l.waitForRecords(off, 15*time.Second, func(rs []map[string]any) bool {
+			return redeemFor(rs, l4ProbeUser) != nil
+		})
+		took := time.Since(t0).Round(time.Second)
+		switch {
+		case redeemFor(recs, l4ProbeUser) != nil && attempt == 1:
+			return fmt.Sprintf("Before this phase, with port49d validating the device's key: the first probe "+
+				"login reached port49 (%s).", took)
+		case redeemFor(recs, l4ProbeUser) != nil:
+			return fmt.Sprintf("Before this phase, with port49d validating the device's key: no probe login "+
+				"reached port49 until probe attempt %d; why is not established (%s).", attempt, took)
+		case !time.Now().Before(deadline):
+			t.Errorf("no probe login reached port49 within %s; the next step would measure a device not "+
+				"asking port49", took)
+			return fmt.Sprintf("Before this phase: **no probe login reached port49 in %s**.", took)
+		}
+		time.Sleep(5 * time.Second)
 	}
-	return fmt.Sprintf("Before this step, with port49d validating the device's key: %s (%s.)", why,
-		time.Since(t0).Round(time.Second))
 }
 
 // l28Types names an unvalidated record's header type (RFC 8907 §4.1).

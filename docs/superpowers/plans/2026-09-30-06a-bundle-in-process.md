@@ -8316,10 +8316,17 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `port49 policy replay --policy --inventory` verifies a redacted blob's records.
 - **A scope can pin devices by name:** `match: {name: [leaf-01, leaf-02]}`.
 - **`based_on: juniper_junos` now loads**, and the variant is read, and redacted, as Junos.
-- **A key miss** (L28): what the device does is in `tests/lab/results/L28-*.md`; on branch H,
-  port49d closes the connection at once and refuses the source's next connection inside its
-  backoff (`held_refused`, `key_miss_closed` in `port49_connection_events_total`). That refusal
-  applies to any source that struck, whatever the strike, not a key miss alone.
+- **A key miss** (L28): what the device does is in `tests/lab/results/L28-*.md`. port49d resets
+  the connection at once, with no reply, and refuses the source's next connections inside its
+  backoff (100 ms doubling to 5 s) with a reset too (`key_miss_closed`, `held_refused` in
+  `port49_connection_events_total`). A packet past its key version's `retire_after` on an open
+  connection is closed the same way; what a device does with that close is unmeasured.
+  - The log carries one `unvalidated` record per strike. Attempts refused inside a backoff leave
+    no record, only the `held_refused` count, which has no device label.
+  - The refusal applies to any source that struck, whatever the strike, not a key miss alone. A
+    strike from a device's address resets every connection from that address for up to 5 s. That
+    includes a second AAA client on the same address still on the old key mid-rotation, or a
+    shell on the device.
 
 ## Self-review against the spec
 

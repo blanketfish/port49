@@ -31,7 +31,7 @@ port49d built from `a60d123` (`make build`).
 
 Unvalidated records by diagnosis/type: map[]. Validated records by key version: map[].
 
-Before this step, with port49d validating the device's key: The device was asking port49 at the first probe. (6s.)
+Before the phase above, with port49d validating the device's key: The device was asking port49 at the first probe. (6s.)
 
 ### Phase: unknown
 
@@ -48,7 +48,7 @@ Before this step, with port49d validating the device's key: The device was askin
 
 Unvalidated records by diagnosis/type: map[no_known_key_matches/acct:2 no_known_key_matches/authen:2 no_known_key_matches/author:1]. Validated records by key version: map[].
 
-Before this step, with port49d validating the device's key: The device had stopped asking port49 after the previous cell took the server down, and was seen asking again only on probe attempt 2. (30s.)
+Before the phase above, with port49d validating the device's key: No probe login reached port49 until probe attempt 2; why is not established. (30s.)
 
 ### Phase: retired
 
@@ -66,7 +66,7 @@ Before this step, with port49d validating the device's key: The device had stopp
 
 Unvalidated records by diagnosis/type: map[matches_retired/authen:1 matches_retired/author:2]. Validated records by key version: map[].
 
-Before this step, with port49d validating the device's key: The device was asking port49 at the first probe. (6s.)
+Before the phase above, with port49d validating the device's key: The device was asking port49 at the first probe. (6s.)
 
 ### Phase: expired
 
@@ -84,7 +84,7 @@ Before this step, with port49d validating the device's key: The device was askin
 
 Unvalidated records by diagnosis/type: map[matches_retired/authen:3 matches_retired/author:2]. Validated records by key version: map[].
 
-Before this step, with port49d validating the device's key: The device had stopped asking port49 after the previous cell took the server down, and was seen asking again only on probe attempt 2. (30s.)
+Before the phase above, with port49d validating the device's key: No probe login reached port49 until probe attempt 2; why is not established. (30s.)
 
 ### Phase: accepted
 
@@ -102,13 +102,13 @@ Before this step, with port49d validating the device's key: The device had stopp
 
 Unvalidated records by diagnosis/type: map[]. Validated records by key version: map[v1:5].
 
-Before this step, with port49d validating the device's key: The device was asking port49 at the first probe. (6s.)
+Before the phase above, with port49d validating the device's key: The device was asking port49 at the first probe. (6s.)
 
 Capture of the phases above: `tests/lab/evidence/L28-cisco_iosxe.pcap` — 933 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L28-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 
 ### Rotation: the device given the new key
 
-Before this step, with port49d validating the device's key: The device had stopped asking port49 after the previous cell took the server down, and was seen asking again only on probe attempt 3. (54s.)
+Before this login, with port49d validating the device's key: No probe login reached port49 until probe attempt 3; why is not established. (54s.)
 
 Token login (`alice06`) after the device's key changed, with port49d accepting v1 and v2: logged in; 1 record(s) carried `key_version` 2.
 
