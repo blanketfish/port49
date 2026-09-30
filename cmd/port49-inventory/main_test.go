@@ -8,15 +8,20 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -57,15 +62,24 @@ func newFixture(t *testing.T, keyMode os.FileMode) fixture {
 		t.Fatal(err)
 	}
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	privPEM, _, _ := keyfile.EncodeEd25519(priv)
+	privPEM, _, err := keyfile.EncodeEd25519(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	key := filepath.Join(f.dir, "signing.key")
-	os.WriteFile(key, privPEM, keyMode)
-	os.Chmod(key, keyMode)
-	os.WriteFile(filepath.Join(f.dir, "policy.yaml"), []byte(servicePolicy), 0o600)
+	if err := os.WriteFile(key, privPEM, keyMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(key, keyMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, "policy.yaml"), []byte(servicePolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	f.source = filepath.Join(f.dir, "inventory.yaml")
 	f.writeSource(t, 1)
 	f.cfg = filepath.Join(f.dir, "port49-inventory.yaml")
-	os.WriteFile(f.cfg, []byte(fmt.Sprintf(`
+	if err := os.WriteFile(f.cfg, []byte(fmt.Sprintf(`
 listen: 127.0.0.1:0
 metrics_listen: 127.0.0.1:0
 tls_cert_file: %[1]s/%[2]s
@@ -78,7 +92,9 @@ policy_file: %[7]s
 state_dir: %[8]s
 sync: [{name: lab_file, type: file, path: %[9]s}]
 `, f.pki, testpki.InvServerCert, testpki.InvServerKey, testpki.InvCA, testpki.InvDaemonID, key,
-		filepath.Join(f.dir, "policy.yaml"), filepath.Join(f.dir, "state"), f.source)), 0o600)
+		filepath.Join(f.dir, "policy.yaml"), filepath.Join(f.dir, "state"), f.source)), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	return f
 }
 
@@ -299,6 +315,87 @@ func TestShutdownClosesEverythingAndSaysNothingFalse(t *testing.T) {
 	c := &http.Client{Timeout: 2 * time.Second}
 	if _, err := c.Get("http://" + a[1] + "/healthz"); err == nil {
 		t.Fatal("metrics still listening")
+	}
+	if conn, err := net.DialTimeout("tcp", a[0], 2*time.Second); err == nil {
+		conn.Close()
+		t.Fatal("API still listening")
+	}
+}
+
+// heldSource answers its first fetch, then holds every later one until its
+// ctx is done, telling held when it starts holding.
+type heldSource struct {
+	fetches atomic.Int32
+	held    chan struct{}
+}
+
+func (h *heldSource) Name() string { return "lab_file" }
+func (h *heldSource) Fetch(ctx context.Context) (admission.Inventory, error) {
+	if h.fetches.Add(1) == 1 {
+		return admission.Inventory{Devices: []admission.Device{{Name: "leaf-01", Platform: "arista_eos",
+			Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}, Transport: admission.TransportTCP}}}, nil
+	}
+	h.held <- struct{}{}
+	<-ctx.Done()
+	return admission.Inventory{}, ctx.Err()
+}
+
+// A shutdown ends a POST /v1/sync in flight at once, not at sync_timeout,
+// and says nothing of it.
+func TestShutdownEndsAnAPISyncInFlight(t *testing.T) {
+	f := newFixture(t, 0o600)
+	src := &heldSource{held: make(chan struct{}, 1)}
+	orig := newSources
+	defer func() { newSources = orig }()
+	newSources = func([]inventory.SourceConfig) ([]inventory.Source, error) { return []inventory.Source{src}, nil }
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e; onListening = nil }()
+	stderr = &out
+	addrs := make(chan [2]string, 1)
+	onListening = func(api, metrics string) { addrs <- [2]string{api, metrics} }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, f.cfg, make(chan os.Signal)) }()
+	var a [2]string
+	select {
+	case a = <-addrs:
+	case err := <-done:
+		t.Fatalf("run: %v; %s", err, &out)
+	case <-time.After(10 * time.Second):
+		t.Fatalf("not listening: %s", &out)
+	}
+	waitFor(t, &out, "sync (startup): published bundle 1 ")
+	syncer := f.client(t, testpki.InvOperatorCert, testpki.InvOperatorKey)
+	posted := make(chan error, 1)
+	go func() {
+		resp, err := syncer.Post("https://"+a[0]+"/v1/sync", "application/json", nil)
+		if err == nil {
+			resp.Body.Close()
+		}
+		posted <- err
+	}()
+	select {
+	case <-src.held:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the API sync never reached the source: %s", &out)
+	}
+	began := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("run did not return: %s", &out)
+	}
+	if d := time.Since(began); d >= grace {
+		t.Fatalf("shutdown waited %v, the full grace: the API sync was not canceled", d)
+	}
+	<-posted
+	if said := out.String(); strings.Contains(said, "failed") || strings.Contains(said, "context canceled") {
+		t.Fatalf("a false line at shutdown: %s", said)
 	}
 }
 

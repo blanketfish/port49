@@ -54,6 +54,9 @@ var stderr io.Writer = os.Stderr
 // onListening is told the bound addresses; a test's hook, nil otherwise.
 var onListening func(api, metrics string)
 
+// newSources builds the configured sources; a test swaps it.
+var newSources = inventory.NewSources
+
 // maxConns caps the API's connections: its callers are a fleet of port49d
 // polling every 30 s and a few operators.
 const maxConns = 512
@@ -75,10 +78,10 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	}
 	cert, anchor, err := broker.LoadTLS(cfg.TLSCertFile, cfg.TLSKeyFile, cfg.ClientCAFile)
 	if err != nil {
-		return fmt.Errorf("TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w", cfg.TLSCertFile,
-			cfg.TLSKeyFile, cfg.ClientCAFile, err)
+		// LoadTLS's errors name the file at fault; its prefix is the broker's.
+		return fmt.Errorf("TLS: %s", strings.TrimPrefix(err.Error(), "broker: "))
 	}
-	sources, err := inventory.NewSources(cfg.Sync)
+	sources, err := newSources(cfg.Sync)
 	if err != nil {
 		return err
 	}
@@ -112,6 +115,12 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	if err != nil {
 		return err
 	}
+	// Every ticker and every API request, a POST /v1/sync's among them, runs
+	// under ctx: a shutdown cancels a sync in flight at once, and the
+	// Syncer says nothing of a sync its caller ended.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	srv.BaseContext = func(net.Listener) context.Context { return ctx }
 
 	mln, err := net.Listen("tcp", cfg.MetricsListen)
 	if err != nil {
@@ -142,7 +151,6 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	go func() { apiErr <- srv.ServeTLS(broker.Limit(ln, maxConns), "", "") }()
 
 	// Every ticker stops with ctx, and is joined, before run returns.
-	ctx, cancel := context.WithCancel(ctx)
 	var tickers sync.WaitGroup
 	// shutdown closes both listeners, waits for the API's requests, and
 	// joins every goroutine run started. apiDone and metricsDone say whether
@@ -156,7 +164,9 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 			// requests, and a sync in one stops at its next context check.
 			srv.Close()
 		}
-		_ = msrv.Shutdown(shut)
+		if err := msrv.Shutdown(shut); err != nil {
+			msrv.Close()
+		}
 		reqs.wait()
 		if !apiDone {
 			<-apiErr
@@ -243,7 +253,9 @@ func (f *inflight) wrap(h http.Handler) http.Handler {
 		f.mu.Lock()
 		if f.closed {
 			f.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
+			io.WriteString(w, `{"error":"shutting_down"}`+"\n")
 			return
 		}
 		f.wg.Add(1)
