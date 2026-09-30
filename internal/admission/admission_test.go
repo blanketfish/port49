@@ -259,19 +259,58 @@ func TestValidateNamesBothDevicesOfACollision(t *testing.T) {
 	}
 }
 
-func TestParseFileTransport(t *testing.T) {
-	parse := func(transport string) error {
-		_, err := ParseFile([]byte("devices: [{name: a, platform: arista_eos, addresses: [10.0.0.1], transport: "+
-			transport+"}]\n"), "inventory.yaml")
-		return err
+// An unsupported transport refuses its device alone, never the file: a sync
+// can write one, and refusing the file would stop every inventory change
+// fleet-wide (spec §10).
+func TestAnUnsupportedTransportRefusesTheDeviceAlone(t *testing.T) {
+	inv, err := ParseFile([]byte(`devices:
+  - {name: plain, platform: arista_eos, addresses: [10.0.0.1]}
+  - {name: tcp-1, platform: arista_eos, addresses: [10.0.0.2], transport: tcp}
+  - {name: tls-1, platform: arista_eos, addresses: [10.0.0.3], transport: tls}
+  - {name: udp-1, platform: arista_eos, addresses: [10.0.0.4], transport: udp}
+key_groups:
+  - {match: {cidr: 10.0.0.0/8}, key_ref: prod_key}
+`), "inventory.yaml")
+	if err != nil {
+		t.Fatalf("one device's transport refused the file: %v", err)
 	}
-	if err := parse("tcp"); err != nil {
-		t.Fatalf("tcp: %v", err)
+	byName := map[string]Device{}
+	for _, d := range inv.Devices {
+		byName[d.Name] = d
 	}
-	if err := parse("tls"); err == nil || !strings.Contains(err.Error(), "plan 11") {
-		t.Fatalf("tls: %v", err)
+	if byName["plain"].Transport != TransportTCP {
+		t.Errorf("an absent transport is %q, want tcp", byName["plain"].Transport)
 	}
-	if err := parse("udp"); err == nil || !strings.Contains(err.Error(), `transport "udp"`) {
-		t.Fatalf("udp: %v", err)
+	for _, name := range []string{"plain", "tcp-1"} {
+		if r := Resolve(byName[name], inv.KeyGroups); r.Refused != "" || r.KeyRef != "prod_key" {
+			t.Errorf("%s: %+v", name, r)
+		}
+	}
+	for name, why := range map[string]string{"tls-1": "plan 11", "udp-1": `transport "udp"`} {
+		r := Resolve(byName[name], inv.KeyGroups)
+		if r.Refusal != RefusedTransport || r.KeyRef != "" || !strings.Contains(r.Refused, why) {
+			t.Errorf("%s: want refused_transport naming %s, got %+v", name, why, r)
+		}
+	}
+	tr, err := Build(inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for addr, admitted := range map[string]bool{"10.0.0.1": true, "10.0.0.2": true, "10.0.0.3": false, "10.0.0.4": false} {
+		if _, ok := tr.Lookup(netip.MustParseAddr(addr)); ok != admitted {
+			t.Errorf("%s: admitted %v, want %v", addr, ok, admitted)
+		}
+	}
+}
+
+func TestResolveRefusesATieAndANoMatch(t *testing.T) {
+	groups := []KeyGroup{{Attributes: map[string]string{"site": "campus"}, KeyRef: "a"},
+		{Attributes: map[string]string{"role": "leaf"}, KeyRef: "b"}}
+	both := Device{Name: "both", Attributes: map[string]string{"site": "campus", "role": "leaf"}}
+	if r := Resolve(both, groups); r.Refusal != RefusedTie || r.KeyRef != "" || !strings.Contains(r.Refused, "attribute tier") {
+		t.Errorf("tie: %+v", r)
+	}
+	if r := Resolve(Device{Name: "none"}, groups); r.Refusal != RefusedNoGroup || r.KeyRef != "" || r.Refused == "" {
+		t.Errorf("no match: %+v", r)
 	}
 }

@@ -4003,7 +4003,8 @@ refused by the bound (below). A group matches on a CIDR or on attributes, never 
 with host bits set is refused.
 
 **A device is refused on its own, never the daemon.** A device no group admits, one two groups
-tie on (below), and one assigned a `key_ref` port49d.yaml defines no key for, are each refused
+tie on (below), one assigned a `key_ref` port49d.yaml defines no key for, and one whose
+`transport` port49d does not serve (below), are each refused
 admission: named at start and at every reload that loads, counted in
 `port49_devices_admission_refused`, and every packet from them closed after the header, with
 nothing decrypted, no reply, no strike, and the report bucket `admission_refused` (below). The
@@ -4018,8 +4019,9 @@ keeps plan 1's behaviour: the inventory file's key groups, read at start, and a 
 either fault.
 
 RFC 9887 replaces the shared key with mutual TLS, so a device record MUST be able to express
-both: `transport: tcp` (the default, RFC 8907 under a shared key) or `transport: tls`. `tls` is
-refused at load until plan 11 serves it.
+both: `transport: tcp` (the default, RFC 8907 under a shared key) or `transport: tls`. Until
+plan 11 serves RFC 9887, a device with `transport: tls` is refused admission, as is one whose
+`transport` is neither; the file and the rest of the fleet load (above).
 
 #### Addresses must resolve to one device
 

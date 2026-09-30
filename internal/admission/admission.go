@@ -18,7 +18,7 @@ import (
 // be able to express both).
 const (
 	TransportTCP = "tcp" // RFC 8907, obfuscated under a shared key; the default
-	TransportTLS = "tls" // RFC 9887; refused at load until plan 11 serves it
+	TransportTLS = "tls" // RFC 9887; its device refused until plan 11 serves it
 )
 
 type Device struct {
@@ -48,19 +48,20 @@ type Resolved struct {
 	// this device (spec §8): its own, or the one a `based_on:` variant names.
 	// Empty is Device.Platform.
 	WirePlatform string
-	// Refused says why a device in the inventory is not admitted — no key
-	// group matches it, two tie on it, or its key_ref is one port49d holds no
-	// key for (spec §10). Empty is admitted. A refused device is in the index
+	// Refused says why a device in the inventory is not admitted — its
+	// transport is one port49d does not serve, no key group matches it, two
+	// tie on it, or its key_ref is one port49d holds no key for (spec §10). Empty is admitted. A refused device is in the index
 	// all the same, so its packets are told apart from an unknown source's.
 	Refused string
-	// Refusal is which of the three it is (RefusedNoGroup, RefusedTie,
-	// RefusedUnknownKey), for a reader that decides by it: `port49 policy
+	// Refusal is which of the four it is (RefusedTransport, RefusedNoGroup,
+	// RefusedTie, RefusedUnknownKey), for a reader that decides by it: `port49 policy
 	// test` fails on a tie and an unknown key and reports the other.
 	Refusal string
 }
 
 // Why admission refused a device (spec §10).
 const (
+	RefusedTransport  = "refused_transport"
 	RefusedNoGroup    = "no_key_group"
 	RefusedTie        = "key_group_tie"
 	RefusedUnknownKey = "key_ref_undefined"
@@ -192,6 +193,43 @@ func Assign(d Device, groups []KeyGroup) (Assignment, error) {
 	return Assignment{KeyRef: winners[0].KeyRef, Tier: TierCIDR, Group: winners[0].String()}, nil
 }
 
+// transportRefusal is why port49d cannot serve d's transport, or "" when it
+// can. It refuses the device, never the file: a sync can write one, and
+// refusing the file would stop every inventory change fleet-wide (spec §10).
+func transportRefusal(d Device) string {
+	switch d.Transport {
+	case "", TransportTCP:
+		return ""
+	case TransportTLS:
+		return "has transport tls, RFC 9887, which port49d does not serve until plan 11; remove the key or set it to tcp"
+	default:
+		return fmt.Sprintf("has transport %q, which is not tcp or tls", d.Transport)
+	}
+}
+
+// Resolve is one device's admission from its record and the key groups: its
+// key_ref, or why it is refused — a transport port49d does not serve, two
+// groups tying on it, or no group matching it (spec §10). It fails closed: a
+// refused entry carries no key_ref. Whether port49d holds a key for the
+// key_ref is the caller's to check (RefusedUnknownKey).
+func Resolve(d Device, groups []KeyGroup) Resolved {
+	r := Resolved{Device: d}
+	if why := transportRefusal(d); why != "" {
+		r.Refused, r.Refusal = why, RefusedTransport
+		return r
+	}
+	as, err := Assign(d, groups)
+	switch {
+	case err != nil:
+		r.Refused, r.Refusal = strings.TrimPrefix(err.Error(), "admission: "), RefusedTie
+	case as.KeyRef == "":
+		r.Refused, r.Refusal = "matches no key group, so no key admits it (spec §10)", RefusedNoGroup
+	default:
+		r.KeyRef = as.KeyRef
+	}
+	return r
+}
+
 // NewTrie indexes entries by every address each carries, a refused entry's
 // included. Two entries on one address is an error: Validate refuses that
 // inventory first, so reaching it here is a caller's defect.
@@ -210,7 +248,8 @@ func NewTrie(entries []Resolved) (*Trie, error) {
 
 // Build is the admission index port49d with no broker reads (plan 1): the
 // inventory file's own key groups, a tie refused whole, and a device no
-// group admits left out of the index, as it always was. With a broker, the
+// group admits, or whose transport port49d does not serve, left out of the
+// index, as it always was. With a broker, the
 // policy file assigns keys and refuses a device on its own
 // (policy.Policy.Admission).
 func Build(inv Inventory) (*Trie, error) {
@@ -219,6 +258,9 @@ func Build(inv Inventory) (*Trie, error) {
 	}
 	entries := make([]Resolved, 0, len(inv.Devices))
 	for _, d := range inv.Devices {
+		if transportRefusal(d) != "" {
+			continue // refused alone (spec §10)
+		}
 		as, err := Assign(d, inv.KeyGroups)
 		if err != nil {
 			return nil, err
@@ -287,19 +329,16 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 	}
 	var inv Inventory
 	for _, d := range f.Devices {
-		switch d.Transport {
-		case "", TransportTCP:
-		case TransportTLS:
-			return Inventory{}, fmt.Errorf("admission: %s: device %q: transport tls is RFC 9887, which port49d "+
-				"does not serve until plan 11; remove the key or set it to tcp", path, d.Name)
-		default:
-			return Inventory{}, fmt.Errorf("admission: %s: device %q: transport %q is not tcp or tls", path, d.Name, d.Transport)
+		// An unsupported transport is kept as written: Resolve refuses the
+		// device, not the file. Absent is tcp, in one spelling.
+		if d.Transport == "" {
+			d.Transport = TransportTCP
 		}
 		dev := Device{Name: d.Name, Platform: d.Platform, Attributes: d.Attributes, KeyRef: d.KeyRef, Transport: d.Transport}
 		for _, s := range d.Addresses {
 			a, err := netip.ParseAddr(s)
 			if err != nil {
-				return Inventory{}, fmt.Errorf("admission: device %q: %w", d.Name, err)
+				return Inventory{}, fmt.Errorf("admission: %s: device %q: %w", path, d.Name, err)
 			}
 			dev.Addresses = append(dev.Addresses, a)
 		}
