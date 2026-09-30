@@ -4139,12 +4139,13 @@ day UTC, and from `2026-10-02T00:00:00Z` the version identifies a device and nev
 as a retired version does. It is written on `accept` versions only; `current` carries none, and
 a `retired` version is refused already. A connection validated before the instant keeps its
 version only until that instant: past it, every later packet on the connection is treated as a
-new connection's first packet would be, a `matches_retired` record, the per-source backoff and
-a close with no reply. "For the connection's life" would have no bound, because a busy
-single-connect connection resets its idle timer on every packet and so can stay open
-indefinitely. What a device does when its open connection is closed this way is unmeasured
-(L28, open). port49d says at start, and `port49 policy test --config` reports, a version whose
-date has passed and an `accept` version with none.
+new connection's first packet would be: a `matches_retired` record, a strike, and the
+connection reset at once with no reply (below, "Devices presenting a key that does not
+validate"). "For the connection's life" would have no bound, because a busy single-connect
+connection resets its idle timer on every packet and so can stay open indefinitely. What a
+device does when its open connection is closed this way is unmeasured (L29, open): L28 measured
+only the first packet of a connection. port49d says at start, and `port49 policy test --config`
+reports, a version whose date has passed and an `accept` version with none.
 
 The key sets, `retire_after` included, live in port49d.yaml beside the references to their
 secrets (`secret_env`), where they have been since plan 1, rather than in the policy file, which
@@ -4255,12 +4256,41 @@ Two properties fall out of counting attempts per source:
 - **An unvalidated body MUST NOT be logged.** It is undecodable and attacker-controlled.
   Record the cleartext header fields, the source, and a hash of the body — never its content.
 
+**A key miss is closed at once, with a reset, and so is a source inside its backoff.** A
+connection whose packet no accepted version validates — a first packet, or one past its
+version's `retire_after` (above) — gets one `unvalidated` record, one strike against its source,
+and a TCP reset at once, with no reply (`port49_connection_events_total{event="key_miss_closed"}`).
+A strike earns the source a backoff, by default 100 ms doubling to 5 s
+(`limits.malformed_backoff_base`, `limits.malformed_backoff_max`); a new connection from it inside that
+backoff is refused at Accept with a reset, and leaves no record, only
+`port49_connection_events_total{event="held_refused"}`, which carries no device label. So the log
+holds one record per strike, and attempts refused inside a backoff are counted, not recorded. The
+refusal follows any strike, not a key miss alone: a `malformed_after_validation`, `not_tacacs` or
+unadmitted source's strike refuses it the same way. **A strike from a device's address resets
+every connection from that address for up to 5 s** (the default ceiling): a second AAA client on the same address still
+on the old key mid-rotation, or a shell on the device, strikes for the device, and the device's
+own connections inside that backoff are refused too.
+
+This replaces the first build's hold, measured on vEOS-lab 4.31.2F, Nexus 9300v 10.4(2)F,
+Catalyst 8000V 17.13.01a and vJunos-router 23.4R2-S2.1 on 2026-09-30 (L28): holding a key miss
+silent for the backoff stalled a break-glass session's three commands to 25–28 s on the Cisco and
+Arista images and 5.9 s on vJunos-router, against 0.4–2.7 s with port49d stopped
+(`tests/lab/results/L28-held-*.md`). Closing at once with a FIN still stalled the C8000V, which
+waits out its own 5 s timeout on a server's FIN (`tests/lab/results/L28-fin-cisco_iosxe.md`). With
+the reset, a device presenting an unknown, a retired or an expired key logs break-glass in and
+runs its commands in the time port49d stopped gives, on all four images, and its token logins are
+refused (`tests/lab/results/L28-arista_eos.md`, `L28-cisco_nxos.md`, `L28-cisco_iosxe.md`,
+`L28-juniper_vjunos-router.md`).
+
 #### Retirement is enforced, and that is the point
 
 `retire_after` is a date, and past it the version is refused. This is the tension worth
 stating plainly: **automatic retirement is what prevents a key living for nine years, and
 retiring a key still in use locks those devices out.** Both halves are true, and the design
 resolves it by making the deadline visible long before it arrives rather than by softening it.
+The lockout's shape is measured (L28, on four images): a device still presenting the version
+once it has passed has every token login refused, while break-glass logs in and runs its commands
+as with port49d stopped (above, "A key miss is closed at once").
 
 - Alarm severity escalates as `retire_after` approaches while devices still present the
   version, and the remaining device list is in the alarm.
@@ -6017,8 +6047,9 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L26** | The Junos operational CLI keyword tree under `show`: at each command path, the words proven keywords — offered by completion there, and shown a keyword by `\| display xml rpc` (an element named as the word, none holding it as text, or a path still asking for a `<command>`) — and whether an argument may be typed there; anything without that evidence is an argument. The pipe is first proven to run nothing. Walked over the break-glass CLI, seeds first, bounded in breadth, depth, nodes and commands. Scope: the images captured, and no hidden argument. | Which denies and allows the projection may send (decision 27; §8); `platforms/keywords/<set>/juniper_junos.yaml` | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26-juniper_vjunos-router.md`, `L26-juniper_vsrx.md`. The pipe ran nothing on either image, and neither walk stopped at a bound: vJunos-router 23.4R2-S2.1, 136 nodes and 755 keywords; vSRX 21.4R3.15, 118 nodes and 668. Both images were walked twice: vJunos-router's rerun reproduced its first tree byte for byte, and vSRX's runs disagreed, so a keyword is one only where every run on every image proves it: set 1.1.0's tree intersects every committed run (three trees), 528 keywords, and adds L26b's seven (535, frozen with the set). Nothing under `show configuration` is proven. Scope: these two images, and no hidden argument; see below |
 | **L26b** | Whether a word is a keyword to `deny-commands`, by the deny itself: a deny naming the word at its path refuses the command, the CLI's caret under the word, while a paired control without the deny runs it with positive evidence. Probed: the words after `show` that L26 offered and did not prove (`cli`, `host`, `ingress-replication`, `policy`, `task`), `exit`, `save`, `set cli`, and every `show configuration` hierarchy the image offers. | The L26b overlays laid over L26's trees (`tests/lab/results/L26b-keywords-juniper_*.yaml`), and so set 1.1.0's keyword tree; whether a deny naming a `show configuration` hierarchy may be sent (decision 27; §8) | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26b-juniper_vjunos-router.md`, `L26b-juniper_vsrx.md`. Proven on both images: `show cli`, `show host`, `show ingress-replication`, `show policy`, `show task`, `set cli` and `exit`. `save` is proven on vJunos-router and unproven on vSRX, so it is not a keyword in the set. **A deny naming a `show configuration` hierarchy is not enforced**: every offered hierarchy, 32 on vJunos-router and 25 on vSRX, ran under a deny naming it; see below |
 | **L26c** | Whether a projected Junos CLI session reaches a native RPC with the NETCONF service off: `xml-mode netconf need-trailer` and `xml-mode netconf`, then `<get-software-information/>`, `<get-configuration/>` and a `<command>` RPC; `op url`; `start shell`; the NETCONF subsystem on port 22 with `netconf ssh` deleted; and whether the fail-closed reply's `deny-commands .*` refuses those entry points. Beside it, unmeasured: whether a deny naming the entry points (`xml-mode`, `op`) binds, with their abbreviations and through a class's own deny list; whether an RPC reaches past a deny beneath `view-configuration`; the SSH exec channel (`ssh <device> xml-mode …`); and `scp`. | `JunosFacts.DenyBindsRPCs`, false in set 1.1.0 and provisional on this row: port49 assumes a deny beneath a sent bit or the baseline guards the CLI only, so it fails closed (§8, option C); whether the management-services allowlist is sufficient (§8) | Junos (vSRX / vJunos-router in containerlab) | open — measured 2026-09-25 on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (`tests/lab/results/L26c-juniper_*.md`), the two agreeing: under a projected class (`view`, a rendered deny naming `show configuration`), `xml-mode netconf` returned a hello and `<get-software-information/>` ran, as in the control; `<get-configuration/>` returned an empty `<configuration>` there and in the control alike, `view` lacking `view-configuration`; a `<command>show configuration</command>` RPC was refused, which the control's own bits leave unisolated here (over NETCONF the deny refused one the control ran, `L12-netconf-juniper_*.md`); `op url` was accepted up to the copy; `start shell` was refused by the bits, as in the control; `deny-commands .*` refused `xml-mode` and `op url`; and with `netconf ssh` deleted port 22's NETCONF subsystem was refused in every class, break-glass included. The run failed its four `view`-only `get-configuration` cells (reclassified since as bits-limited, not rerun); the `xml-mode` probes ran before `netconf ssh` was deleted; and `view` alone cannot set a deny against RPC reach: a rerun is owed (L26c review I-1, I-4). The questions beside it are open. The owner reported on 2026-09-25, from SRX hardware (Junos 23.4R2-S8.7, no capture, `tests/lab/results/L26c-operator-juniper_srx.md`): `<get-configuration/>` through `xml-mode netconf` passed a deny of `show configuration` beneath `view-configuration`; a deny of `show version` refused `<get-software-information/>`; no sent deny naming `xml-mode` refused it, while `^.*$` did (with every other command); accounting recorded the entry as `cmd=xml-mode netconf <cr>`; and with the NETCONF service (`netconf ssh`, port 830) deactivated, `xml-mode netconf` from an SSH CLI session on port 22 still opened NETCONF and `<get-configuration/>` returned the configuration, so the management-services allowlist does not close `xml-mode`. On 2026-09-28 the owner reported the same with the deny set on the local class, and that `deny-commands "junoscript"`, set on the class or sent by TACACS+, refused `xml-mode netconf` while `show version` still ran: Junos appears to authorize `xml-mode` as `junoscript`. Without a capture these do not close the row |
-| **L27** | What NetBox and Nautobot's APIs return for a device, per product and major version: where the version is reported (`/api/status/`, the `API-Version` header on `/api/`); the field names for role, platform, site or location, primary address, custom fields and tags, over REST and over one GraphQL query; which GraphQL query shape each version takes, and whether one query returns every interface address; how REST paginates; and what a device create, update and delete webhook carries — its headers and body, and whether `X-Hook-Signature` is HMAC-SHA512 of the body under the webhook's secret. | Plan 6b's connectors: version detection and mapping profiles, GraphQL first with REST as the fallback, webhook authentication (§10, "Connectors and sync cadence") | NetBox 3.7 and 4.x; Nautobot 1.6 and 2.x | open — added 2026-09-30 (plan 6a Task 2) |
-| **L28** | What a device does when port49d cannot validate its key, with port49d as built: it reads the body, records its header, holds the connection for the per-source backoff (100 ms doubling to 5 s) and closes it without a reply. For a key port49d does not hold, and for one it holds only as retired: whether a break-glass login succeeds and how long it takes, how long a command in an open break-glass session takes, and whether a token login is refused. And that a second version accepted beside the current one lets the device work unchanged, and that the device given the current key works at once with no port49d change. | Key rotation's no-cutover claim and the retirement lockout's shape (§10 "Retirement is enforced"); the design document's "a key mismatch is indistinguishable from an outage" (§12); whether a key miss should be closed at once, as a quarantine is | EOS, NX-OS, IOS-XE, Junos | open — added 2026-09-30 (plan 6a Task 20) |
+| **L27** | What NetBox and Nautobot's APIs return for a device, per product and major version: where the version is reported (`/api/status/`, the `API-Version` header on `/api/`); the field names for role, platform, site or location, primary address, custom fields and tags, over REST and over one GraphQL query; which GraphQL query shape each version takes, and whether one query returns every interface address; how REST paginates; and what a device create, update and delete webhook carries — its headers and body, and whether `X-Hook-Signature` is HMAC-SHA512 of the body under the webhook's secret. | Plan 6b's connectors: version detection and mapping profiles, GraphQL first with REST as the fallback, webhook authentication (§10, "Connectors and sync cadence") | NetBox 3.7 and 4.x; Nautobot 1.6 and 2.x | closed — measured 2026-09-30; tests/lab/results/L27-netbox.md, L27-nautobot.md. NetBox 3.7.8 and 4.7.1, Nautobot 1.6.32 and 2.4.43; fixtures in `tests/lab/sot/fixtures/`. One GraphQL query returned every interface address on all four, each in its own query shape; every webhook signature was HMAC-SHA512 of the body. *Unmeasured:* a non-null pagination `next` (each run held one device) and Nautobot 3.x; see below |
+| **L28** | What a device does when port49d cannot validate its key on a connection's first packet. For a key port49d does not hold, one it holds only as retired, and one past its `retire_after`: whether a break-glass login succeeds and how long it takes, how long a command in an open break-glass session takes, and whether a token login is refused. And that a second version accepted beside the current one lets the device work unchanged, and that the device given the current key works at once with no port49d change. Measured first with port49d holding the connection for the per-source backoff and closing it without a reply, then closing it at once with a FIN, then as port49d does now: one record and a strike, the connection reset at once with no reply, and the source's next connections inside its backoff refused at Accept with a reset (§10, "A key miss is closed at once"). An open connection passing its version's `retire_after` is L29's. | Key rotation's no-cutover claim and the retirement lockout's shape (§10 "Retirement is enforced"); the design document's "a key mismatch is indistinguishable from an outage" (§12); whether a key miss should be closed at once, as a quarantine is | EOS, NX-OS, IOS-XE, Junos | closed — measured 2026-09-30; tests/lab/results/L28-arista_eos.md, L28-cisco_nxos.md, L28-cisco_iosxe.md, L28-juniper_vjunos-router.md. The hold stalled break-glass on all four images (`L28-held-*.md`) and a FIN still stalled the C8000V (`L28-fin-cisco_iosxe.md`), so port49d now resets (branch H). With the reset, break-glass logs in and runs its commands in the time port49d stopped gives on all four, and every token login is refused, for an unknown, a retired and an expired key; a second accepted version logs token users in at v1, and the device given the new key logs in at v2 with no port49d change; see below |
+| **L29** | What a device does when port49d resets an open connection at its first packet past the connection's key version's `retire_after` (§10, "Version sets, and no cutover"): whether the command or login in flight fails or falls to the local method, how long it takes, and whether the device's next connection, refused at Accept inside the strike's backoff and then presenting the retired key, behaves as L28 measured. Needs a run whose connection is open across 00:00:00Z the day after `retire_after`. | That ending a key version at `retire_after` on an open connection costs the device what a first-packet key miss does (§10; plan 6a Decided 7, amended in its Task 14) | EOS, NX-OS, IOS-XE, Junos | open — added 2026-09-30 (plan 6a Task 21), split from L28, which measured the first packet only |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -7565,6 +7596,52 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   still owed for each. The run failed four cells since reclassified, and its
   `xml-mode` probes ran before `netconf ssh` was deleted, so a rerun is owed (L26c review I-1,
   I-4).
+- **L27** — added by plan 6a and measured 2026-09-30 on beehive, each product's two versions in
+  its own Compose stack (`tests/lab/results/L27-netbox.md`, `L27-nautobot.md`; fixtures in
+  `tests/lab/sot/fixtures/`, checked by `TestL27FixturesAreWhatTheNotesSay`). Per version: where
+  the version is reported, the role field, the GraphQL shape that returned every interface
+  address, and whether the webhook signature is HMAC-SHA512 of the body.
+
+  | version | version source | role field | GraphQL shape that returned every interface address | signature HMAC-SHA512 of the body |
+  |---|---|---|---|---|
+  | NetBox 3.7.8 | `/api/status/` `netbox-version`; `Api-Version: 3.7` | `role` to write; REST reads carry `role` and `device_role`, the same object | `device_list(name: "…") { … role { slug } … }` | yes, 3 of 3 |
+  | NetBox 4.7.1 | `/api/status/` `netbox-version`; `Api-Version: 4.7` | `role` only | `device_list(filters: {name: {exact: "…"}}) { … role { slug } … }` | yes, 3 of 3 |
+  | Nautobot 1.6.32 | `/api/status/` `nautobot-version`; `Api-Version` is **`1.2`**, not the release | `device_role` (`/api/dcim/device-roles/`), with `site` | `devices(name: "…") { … device_role { slug } site { slug } … _custom_field_data … }` | yes, 3 of 3 |
+  | Nautobot 2.4.43 | `/api/status/` `nautobot-version`; `Api-Version: 2.4` | `role` (`/api/extras/roles/`), with `location`; REST at default depth nests every related object as `{id, object_type, url}`, no name, and `?depth=1` inlines them | `devices(name: "…") { … role { name } location { name } … _custom_field_data … }` (no `slug`) | yes, 3 of 3 |
+
+  So the version to pick a profile by is `/api/status/`, never `Api-Version` alone. REST paginates
+  with `count`, `next`, `previous` and `results` on all four. Webhooks carry the change in the
+  body; NetBox 4.7 drops `model`, `username` and `request_id` for `object_type` and `request`.
+  Delivery order is not change order on Nautobot (both versions delivered `deleted` first in this
+  run), so 6b orders by the body's `timestamp`, never by arrival. *Unmeasured, carried to plan
+  6b:* a non-null `next` (each run held one device when it paged), and Nautobot 3.x (Docker Hub
+  carries a 3.2 line the row does not name).
+- **L28** — added by plan 6a and measured 2026-09-30 on vEOS-lab 4.31.2F, Nexus 9300v 10.4(2)F,
+  Catalyst 8000V 17.13.01a and vJunos-router 23.4R2-S2.1 (`tests/lab/results/L28-arista_eos.md`,
+  `L28-cisco_nxos.md`, `L28-cisco_iosxe.md`, `L28-juniper_vjunos-router.md`;
+  `tests/lab/l28_test.go`). Each phase restarts port49d with the device still on the lab key and
+  compares it with port49d stopped. Three builds were measured:
+
+  | port49d | break-glass plus three commands, `unknown` phase | with port49d stopped | notes |
+  |---|---|---|---|
+  | holds the miss for the backoff, then closes | EOS 27.4 s, NX-OS 25.2 s, IOS-XE 27.6 s, vJunos-router 5.9 s | 0.39 s, 2.66 s, 1.28 s, 1.48 s | `L28-held-*.md` |
+  | closes at once with a FIN | IOS-XE 11.0 s, and 5.02 s to log in (0.02 s stopped): it waits out its own 5 s timeout on the FIN | 1.28 s | `L28-fin-cisco_iosxe.md` |
+  | resets at once (as built) | EOS 0.32 s, NX-OS 2.64 s, IOS-XE 1.27 s, vJunos-router 0.47 s | 0.37 s, 2.62 s, 1.28 s, 0.49 s | `L28-*.md` |
+
+  Under the reset, the unknown, retired and expired phases each match the stopped phase on every
+  image, and each token login is refused. With the old key accepted beside the new one
+  (`retire_after: 2999-12-31`), token logins validate at v1 and the break-glass account is
+  refused by port49 on EOS, NX-OS and IOS-XE, which is their configuration asking port49 first;
+  vJunos-router logs it in. Given the new key, the device's token login validated at v2 at once,
+  and `port49 keys status` over the run's log names the device on v2 and lists its
+  unvalidated sources by diagnosis. On IOS-XE the harness's liveness probe before three phases
+  reached port49 only at its second or third attempt (30–54 s); why is not established.
+  *Unmeasured:* the mid-connection close, split to L29; transports other than SSH; vSRX.
+- **L29** — added 2026-09-30 by plan 6a Task 21, split from L28. port49d resets an open
+  connection at its first packet past its version's `retire_after`, as it does a first-packet
+  miss (§10), and nothing about the device's reaction to that is measured: every L28 phase
+  started port49d with the date already past or not yet reached. Measuring it needs a run that
+  holds a connection open across 00:00:00Z.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
