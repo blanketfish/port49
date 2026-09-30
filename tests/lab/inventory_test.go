@@ -315,16 +315,31 @@ func (l *lab) errMark() int64 {
 // returns false: the caller records "not observed", which fails the run.
 func (l *lab) waitForLine(t *testing.T, from int64, want string, within time.Duration) (time.Time, bool) {
 	t.Helper()
+	_, seen, ok := l.waitForLineBracket(t, from, want, within)
+	return seen, ok
+}
+
+// waitForLineBracket is waitForLine that also returns the last poll at which
+// the line was not yet there: port49d wrote it in (before, seen]. The lines
+// carry no timestamp, so this bracket, 25ms wide, is the instant a reload
+// was applied (L29's change instant, controller's ruling (a)).
+func (l *lab) waitForLineBracket(t *testing.T, from int64, want string, within time.Duration) (before, seen time.Time, ok bool) {
+	t.Helper()
 	deadline := time.Now().Add(within)
 	for {
+		now := time.Now()
 		if raw, err := os.ReadFile(l.errPath); err == nil && int64(len(raw)) >= from &&
 			strings.Contains(string(raw[from:]), want) {
-			return time.Now(), true
+			if before.IsZero() {
+				before = now
+			}
+			return before, now, true
 		}
-		if !time.Now().Before(deadline) {
+		if !now.Before(deadline) {
 			t.Logf("l29: port49d did not say %q within %s", want, within)
-			return time.Time{}, false
+			return time.Time{}, time.Time{}, false
 		}
-		time.Sleep(250 * time.Millisecond)
+		before = now
+		time.Sleep(25 * time.Millisecond)
 	}
 }

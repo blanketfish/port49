@@ -266,6 +266,59 @@ func TestL29ConnectionsReadsEachConnectionsReset(t *testing.T) {
 	}
 }
 
+// The change instant is when port49d applied the reload, not the sync's
+// start (controller's ruling (a)). Connection 57608 of vJunos-router's
+// renamed phase (run 2, 2026-09-30, 088f18a): the sync began 21:11:39.237,
+// the device opened 57608 at 21:11:40.625 and sent on it at 21:11:40.626,
+// port49d applied the reload at its next 5s poll, and reset 57608 at
+// 21:11:45.632. Read against the sync's start it is a first-packet miss;
+// read against the apply it is an open connection reset.
+func TestL29ConnectionsReadsAgainstTheApplyInstant(t *testing.T) {
+	const dev, srv = "172.100.100.21", "172.100.100.1"
+	at := func(h, m, s, ms int) time.Time { return time.Date(2026, 9, 30, h, m, s, ms*1_000_000, time.UTC) }
+	buf := make([]byte, 24)
+	binary.LittleEndian.PutUint32(buf[0:4], 0xa1b2c3d4)
+	binary.LittleEndian.PutUint16(buf[4:6], 2)
+	binary.LittleEndian.PutUint16(buf[6:8], 4)
+	binary.LittleEndian.PutUint32(buf[16:20], 262144)
+	binary.LittleEndian.PutUint32(buf[20:24], 276)
+	seg := func(when time.Time, src, dst string, sport, dport uint16, flags byte, payload int) {
+		tcp := make([]byte, 20+payload)
+		binary.BigEndian.PutUint16(tcp[0:2], sport)
+		binary.BigEndian.PutUint16(tcp[2:4], dport)
+		tcp[12], tcp[13] = 5<<4, flags
+		ip := make([]byte, 20)
+		ip[0], ip[8], ip[9] = 0x45, 64, 6
+		binary.BigEndian.PutUint16(ip[2:4], uint16(20+len(tcp)))
+		copy(ip[12:16], net.ParseIP(src).To4())
+		copy(ip[16:20], net.ParseIP(dst).To4())
+		sll := make([]byte, 20)
+		binary.BigEndian.PutUint16(sll[0:2], 0x0800)
+		pkt := append(append(sll, ip...), tcp...)
+		hdr := make([]byte, 16)
+		binary.LittleEndian.PutUint32(hdr[0:4], uint32(when.Unix()))
+		binary.LittleEndian.PutUint32(hdr[4:8], uint32(when.Nanosecond()/1000))
+		binary.LittleEndian.PutUint32(hdr[8:12], uint32(len(pkt)))
+		binary.LittleEndian.PutUint32(hdr[12:16], uint32(len(pkt)))
+		buf = append(append(buf, hdr...), pkt...)
+	}
+	seg(at(21, 11, 40, 625), dev, srv, 57608, 49, 0x02, 0)
+	seg(at(21, 11, 40, 626), dev, srv, 57608, 49, 0x18, 40)
+	seg(at(21, 11, 45, 632), dev, srv, 57608, 49, 0x18, 40)
+	seg(at(21, 11, 45, 632), srv, dev, 49, 57608, 0x14, 0)
+	path := filepath.Join(t.TempDir(), "c.pcap")
+	if err := os.WriteFile(path, buf, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, mid, idle := l29Connections(path, dev, at(21, 11, 39, 237)); mid != 0 || idle != 0 {
+		t.Errorf("against the sync's start: %d mid, %d idle; want 0 and 0 (a first-packet miss)", mid, idle)
+	}
+	got, mid, _ := l29Connections(path, dev, at(21, 11, 45, 600))
+	if mid != 1 || !strings.Contains(got, "| 57608 |") || !strings.Contains(got, "**reset mid-connection**") {
+		t.Errorf("against the apply: %d mid; want 57608 reset mid-connection\n%s", mid, got)
+	}
+}
+
 // The capture the ruling was made on: vJunos-router's refused phase on
 // 2026-09-30 (a copy of its redacted evidence, kept beside the policy so a
 // re-run's evidence does not replace it). Connection 46436 was opened 7.5s

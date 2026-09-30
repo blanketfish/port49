@@ -45,7 +45,9 @@ const l29Reading = "**Reading the records and the captures.** port49d writes one
 	"second comes from the device's own output in the open session. A phase with no such record, or whose capture " +
 	"holds no connection reset mid-connection, measured L28's first-packet case and fails. A connection open " +
 	"before the change with nothing sent on it, and reset at its first packet after it, is a reset of an open " +
-	"connection too, and counts when port49d's device_unknown record names it so.\n\n"
+	"connection too, and counts when port49d's device_unknown record names it so. \"The change\" in the capture " +
+	"tables is the instant port49d applied the reload (its reload line, read to within 25ms), not the sync's start: " +
+	"port49d resets a connection only once it has applied the change.\n\n"
 
 // l29Phase is one change to the device under test. change makes it and
 // returns what it did, for the note, and the port49d line it must produce
@@ -201,7 +203,12 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 	offChange, errOff := l.mark(), l.errMark()
 	did, wait := ph.change(t, l, li, policy)
 	fmt.Fprintf(&b, "The change: %s\n\n", did)
-	appliedAt, ok := l.waitForLine(t, errOff, wait, 30*time.Second)
+	// The change instant is when port49d applied the reload (its line), not
+	// the sync's start: port49d resets a connection only after it applies
+	// the change, so a connection opened before then and reset after is an
+	// open connection reset (controller's ruling (a)). The earlier end of
+	// the bracket is taken, so nothing sent after the apply reads as before.
+	appliedBefore, appliedAt, ok := l.waitForLineBracket(t, errOff, wait, 30*time.Second)
 	if !ok {
 		fail("%s: port49d did not say %q within 30s of the change: the reload under test did not happen", ph.name, wait)
 		return b.String()
@@ -238,7 +245,7 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 	next := l.timedLogins(t)
 	nextRecs := l29FromDevice(l.drainRecords(offNext, 10*time.Second), l.p.addr)
 	capLine := l.captureLine(t)
-	conns, mid, idle := l29Connections(l.capAbs, l.p.addr, changeAt)
+	conns, mid, idle := l29Connections(l.capAbs, l.p.addr, appliedBefore)
 	// An idle open connection meets the premise only beside port49d's
 	// record that it was admitted before the change (withdrawn, above).
 	if mid == 0 && (idle == 0 || withdrawn == nil) {
@@ -262,8 +269,10 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 		}
 	}
 	stop()
-	fmt.Fprintf(&b, "Times are the host's, UTC: the change began %s; port49d said `%s` by %s; the command in flight "+
-		"was sent at %s.\n\n", l29Clock(changeAt), wait, l29Clock(appliedAt), l29Clock(sentAt))
+	fmt.Fprintf(&b, "Times are the host's, UTC: the sync (or policy edit) began %s; port49d applied the reload, "+
+		"saying `%s`, between %s and %s, and the change instant the capture is read against is %s; the command in "+
+		"flight was sent at %s.\n\n", l29Clock(changeAt), wait, l29Clock(appliedBefore), l29Clock(appliedAt),
+		l29Clock(appliedBefore), l29Clock(sentAt))
 	fmt.Fprintf(&b, "| step | outcome |\n|---|---|\n| token session (`%s`), `show version` before the change | ran in %s |\n"+
 		"| first `show version` after the change, same session | %s |\n| second `show version`, same session | %s |\n%s\n",
 		user, before, first, second, next)
