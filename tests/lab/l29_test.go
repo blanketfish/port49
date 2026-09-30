@@ -244,7 +244,16 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 	if mid == 0 && (idle == 0 || withdrawn == nil) {
 		fail("%s: the capture holds no connection open across the change that port49d reset after it: no reset "+
 			"of an open connection was captured", ph.name)
-		if withdrawn == nil {
+		switch {
+		case withdrawn == nil && idle > 0:
+			// The capture shows a connection open before the change and
+			// reset at its first packet, but port49d recorded that packet as
+			// a first packet: the two disagree, and the note says so rather
+			// than choosing.
+			fmt.Fprintf(&b, "**Observation: the record and the capture disagree.** The capture holds %d connection(s) "+
+				"open (idle) before the change and reset at its first packet after it, but port49d wrote no "+
+				"device_unknown record for any (records: %s).\n\n", idle, l29Tally(fromDevice))
+		case withdrawn == nil:
 			// Said plainly as the observation, not only as a failed check.
 			fmt.Fprintf(&b, "**Observation: the device held no connection open across this change.** port49d wrote "+
 				"no device_unknown record, and the capture holds no connection open before the change that port49d "+
