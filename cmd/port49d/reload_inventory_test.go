@@ -724,3 +724,32 @@ func TestABoundReadFromAnOversizedFileKeepsTheBound(t *testing.T) {
 		t.Fatalf("bound %d: %s", rig.r.cfg.MaxRemovedPercent, rig.out.String())
 	}
 }
+
+// Task 12 m2: an operator who answers a refused inventory by putting back the
+// one in force clears the alarm at the next poll, said once, with no swap.
+// (SIGHUP skips an inventory whose version is the one in force, so on that
+// path the alarm clears at the next poll, one interval later.)
+func TestRevertingToTheInventoryInForceClearsTheAlarm(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.writeInventory(t, twoDevices)
+	rig.pollTwice()
+	serving := rig.b.Policy.Load().Bundle
+	rig.writeInventory(t, "devices:\n  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1], key_ref: lab_key}\n")
+	rig.pollTwice()
+	if testutil.ToFloat64(rig.m.InventoryFileRefused) != 1 {
+		t.Fatalf("the over-shrinking inventory was not refused: %s", rig.out.String())
+	}
+	rig.writeInventory(t, twoDevices)
+	rig.with(func() { rig.r.poll(context.Background()) })
+	if testutil.ToFloat64(rig.m.InventoryFileRefused) != 0 {
+		t.Fatalf("the revert left port49_inventory_file_refused at 1: %s", rig.out.String())
+	}
+	rig.pollTwice()
+	if n := strings.Count(rig.out.String(), "is the inventory in force again (bundle "+serving+")"); n != 1 {
+		t.Fatalf("said %d times: %s", n, rig.out.String())
+	}
+	if rig.b.Policy.Load().Bundle != serving ||
+		testutil.ToFloat64(rig.m.InventoryReloads.WithLabelValues("applied")) != 1 {
+		t.Fatal("the revert swapped a bundle")
+	}
+}
