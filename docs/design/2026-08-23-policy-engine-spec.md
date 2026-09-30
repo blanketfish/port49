@@ -4382,7 +4382,8 @@ refuses only a connection whose first packet port49d would decline or strike any
 inside the window, port49d asks admission in force and the policy again. If a reload has admitted the
 source again, or its quarantine has ended, the window is dropped and the connection is served. So a
 fix takes effect at the next connection, and a window never outlasts its reason. A decline is not a
-strike: it never refuses a connection that would be served, and never lengthens a strike's backoff.
+strike: it never lengthens a strike's backoff, and never refuses a connection that would be served,
+except one retry racing the reload that admits the source, which fails closed.
 Once the source is admitted, its window and count are dropped at its first connection inside the
 window; otherwise the count lapses after `limits.malformed_window`. As with a strike, the log holds
 one record for
@@ -4399,7 +4400,8 @@ as transient and wait out their 5 s timeout on every AAA exchange. A reset that 
 write makes them fall to their local method at once (§15 L31,
 `tests/lab/results/L31-breakglass-cisco-singleconnection.md`). With the window, break-glass on a
 removed, refused or quarantined device took 1.28–1.78 s on the C8000V and 2.58–2.62 s on the N9Kv,
-the key miss's time (`L31-cisco_iosxe.md`, `L31-cisco_nxos.md`).
+against a key miss's 1.28 s and 2.61 s: within the bar of the key miss plus 1.5 s, and at most 0.5 s
+over it (`L31-cisco_iosxe.md`, `L31-cisco_nxos.md`).
 
 #### Retirement is enforced, and that is the point
 
@@ -4607,9 +4609,9 @@ port49d stopped. The slow cases came from the connections after the reset, which
 after the device's request and never refused at Accept. A reset for a reload that refused or
 removed the device now opens a decline window, so those connections are refused at Accept ("A
 declined source is refused at Accept"), and break-glass with single-connection on took 1.28 s
-removed and 1.78 s refused on the C8000V, and 2.62 s and 2.58 s on the N9Kv, the key miss's time
-(§15 L31, `tests/lab/results/L31-cisco_iosxe.md`, `L31-cisco_nxos.md`). A rename, re-key or
-re-platform opens none: that device is still admitted. Where port49d still serves the device under a new name or platform, its FAIL is
+removed and 1.78 s refused on the C8000V, and 2.62 s and 2.58 s on the N9Kv, against a key miss's
+1.28 s and 2.61 s (§15 L31, `tests/lab/results/L31-cisco_iosxe.md`, `L31-cisco_nxos.md`). A
+rename, re-key or re-platform opens none: that device is still admitted. Where port49d still serves the device under a new name or platform, its FAIL is
 final on EOS, NX-OS and IOS-XE, so break-glass is not let in there, as with any served device (L4).
 
 **Validate locally before swapping.** The service already applies bounded-change safety, but
@@ -8057,12 +8059,15 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   the C8000V (control 5), 11 in each phase on the N9Kv (control 11), and 11, 10 and 13 on vEOS
   (control 12). The refused connections left no record. Each declined phase left five `unvalidated`
   records on the C8000V against its 6–10 refusals, six on the N9Kv against 11 (plus one `account`
-  record, as in the control), and three on vEOS against 12–15 refusals since the change. The removed
-  phase's records read `unadmitted_source`, the refused phase's `admission_refused` and the
-  quarantined phase's `device_quarantined`, as §10 says. vEOS's 0.32–0.33 s sits inside the
-  0.32–2.1 s it took before the fix (`L29-reload-arista_eos.md`, `quarantine-sync-arista_eos.md`):
-  no regression. The Cisco times are the key miss's, so a declined device now costs break-glass
-  what a refused connection does.
+  record, as in the control, from the probe login before the change took effect; the notes count
+  records from just before the change), and three on vEOS against 12–15 refusals since the change.
+  The removed phase's records read `unadmitted_source`, the refused phase's `admission_refused`
+  and the quarantined phase's `device_quarantined`, as §10 says. vEOS's 0.32–0.33 s sits inside
+  the 0.32–2.1 s it took before the fix (`L29-reload-arista_eos.md`, `quarantine-sync-arista_eos.md`):
+  no regression. The N9Kv's times are the key miss's; the C8000V's removed time is too, and its
+  refused and quarantined times are 0.5 s over it, inside the bar, because IOS-XE retries 100–200 ms
+  after a reset against a first window of 100 ms. A declined device now costs break-glass about
+  what a refused connection does, where it cost 16–41 s.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.

@@ -286,8 +286,8 @@ func (s *conn) serve(ctx context.Context) {
 		// and NX-OS also wait out that timeout after a reset that follows their
 		// request, unless the retry is refused at Accept, so the close opens a
 		// decline window. With it, break-glass on a quarantined Cisco device
-		// takes a key miss's time, 1.78 s on the C8000V and 2.61 s on the N9Kv,
-		// where it took 16-21 s before (spec §15 L31,
+		// took 1.78 s on the C8000V and 2.61 s on the N9Kv, against a key
+		// miss's 1.28 s and 2.61 s, where it took 16-21 s before (spec §15 L31,
 		// tests/lab/results/L31-cisco_*.md). The device is not suspect, so it
 		// takes no strike, and its connections inside the window are counted,
 		// not recorded.

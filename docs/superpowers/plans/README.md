@@ -1285,6 +1285,13 @@ at a reload, which covers a quarantine that ends without one, and it counts as i
 **Carried:** the C8000V's slow liveness probe (Plan 6b, above), still unassigned. vJunos-router did
 not run L31: it was unaffected before the fix, and the fix only adds refusals at Accept.
 
+**Follow-up, unassigned (final review M4):** the per-NAS cap's refusal at Accept
+(`internal/daemon/server/server.go`, `refused_cap`) closes with a FIN, not a reset. This predates
+this branch and is not a regression. A FIN that comes before the device writes is unmeasured on
+IOS-XE and NX-OS with single-connection on, and L28 found the C8000V waits out a FIN that follows
+its request. The default cap of 32 makes it unlikely for one device. Either reset before the close
+at the cap, or add a lab register row and measure it first.
+
 ## Plan 7 — Broker in full (§19 step 7)
 
 Design §7 (OIDC public client with PKCE, certificate-to-directory mapping, directory

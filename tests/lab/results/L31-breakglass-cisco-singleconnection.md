@@ -26,7 +26,7 @@
   length). No body byte was decoded or printed.
 - **Status:** the pre-fix analysis, kept as history. L31 closed 2026-09-30 with
   `fix/breakglass-reset`: `L31-cisco_iosxe.md`, `L31-cisco_nxos.md` and `L31-arista_eos.md` measure
-  break-glass at the key miss's time on every declined path.
+  break-glass on every declined path within 0.5 s of the key miss's time (the bar is +1.5 s).
 
 ## Claim
 
