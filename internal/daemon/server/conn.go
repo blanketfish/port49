@@ -277,6 +277,9 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		return r.Body, true
 	}
 	if s.pastDate(s.d.Now()) {
+		// matches_retired here means the connection's version is past its
+		// retire_after; this packet is not trial-decrypted, since nothing it
+		// could say would change the answer (spec §10).
 		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(s.version),
 			string(keyring.DiagMatchesRetired)).Inc()
 		s.unvalidated(h, obf, keyring.DiagMatchesRetired, s.version)

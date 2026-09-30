@@ -958,6 +958,8 @@ func TestRetireAfter(t *testing.T) {
 		strings.Replace(fmt.Sprintf(sample, i), "current: {version: 3, secret_env: T_PROD_V3}",
 			"current: {version: 3, secret_env: T_PROD_V3, retire_after: 2999-01-01}", 1),
 		strings.Replace(body, "retire_after: 2000-01-01", "retire_after: soon", 1),
+		strings.Replace(fmt.Sprintf(sample, i), "retired: [{version: 1, secret_env: T_PROD_V1}]",
+			"retired: [{version: 1, secret_env: T_PROD_V1, retire_after: 2999-01-01}]", 1),
 	} {
 		if _, err := Load(write(t, "c.yaml", bad)); err == nil {
 			t.Fatalf("loaded: %s", bad)
